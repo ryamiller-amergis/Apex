@@ -1,0 +1,433 @@
+/* FEAT-002 — Shared styles for AvatarEditor, AvatarPreview, AvatarCropDialog,
+   and RemoveAvatarDialog. */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  max-width: 360px;
+}
+
+/* ── Preview ─────────────────────────────────────────────────────── */
+
+.previewShell {
+  position: relative;
+  width: 96px;
+  height: 96px;
+  flex-shrink: 0;
+}
+
+.previewImage,
+.previewInitials {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: block;
+}
+
+.previewImage {
+  object-fit: cover;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.previewInitials {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-color);
+  color: #fff;
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+
+.previewEditBadge {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2px solid var(--bg-secondary);
+  background: var(--accent-color);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: all 0.2s ease;
+}
+
+.previewEditBadge:hover:not(:disabled) {
+  background: var(--accent-hover);
+  transform: scale(1.05);
+}
+
+.previewEditBadge:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.previewEditBadge:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+/* ── Actions ─────────────────────────────────────────────────────── */
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.btnPrimary,
+.btnSecondary,
+.btnDanger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 1px solid transparent;
+  text-decoration: none;
+  user-select: none;
+}
+
+.btnPrimary {
+  background: var(--accent-color);
+  color: #fff;
+  border-color: var(--accent-color);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--accent-color) 35%, transparent);
+}
+
+.btnPrimary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.btnSecondary {
+  background: color-mix(in srgb, var(--bg-tertiary) 80%, var(--bg-primary));
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+
+.btnSecondary:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 8%, var(--bg-secondary));
+}
+
+.btnDanger {
+  background: transparent;
+  color: var(--error-color);
+  border-color: color-mix(in srgb, var(--error-color) 35%, var(--border-color));
+}
+
+.btnDanger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--error-color) 10%, transparent);
+  border-color: var(--error-color);
+}
+
+.btnPrimary:focus-visible,
+.btnSecondary:focus-visible,
+.btnDanger:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.btnSecondary:disabled,
+.btnDanger:disabled,
+.btnPrimary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.fileInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.fileInput:focus-visible ~ .btnPrimary,
+.fileInput:focus ~ .btnPrimary,
+.fileInput:focus-visible ~ .btnSecondary,
+.fileInput:focus ~ .btnSecondary {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.instructions {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* ── Status region ───────────────────────────────────────────────── */
+
+.statusSuccess,
+.statusError {
+  font-size: 0.85rem;
+  min-height: 1.2em;
+}
+
+.statusSuccess {
+  color: var(--success-color);
+}
+
+.statusError {
+  color: var(--error-color);
+  font-weight: 500;
+}
+
+/* ── Dialogs (crop + remove) ─────────────────────────────────────── */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+  animation: fadeIn 0.15s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.dialog {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 24px;
+  width: 100%;
+  max-width: 420px;
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dialogTitle {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.dialogBody {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.55;
+  margin: 0;
+}
+
+.dialogError {
+  font-size: 0.8rem;
+  color: var(--error-color);
+  margin: 0;
+}
+
+.dialogActions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.btnCancel {
+  padding: 8px 18px;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btnCancel:hover:not(:disabled) {
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
+}
+
+.btnConfirm {
+  padding: 8px 18px;
+  background: var(--accent-color);
+  color: #fff;
+  border: none;
+  border-radius: 7px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease, opacity 0.2s ease;
+}
+
+.btnConfirm:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.btnDelete {
+  padding: 8px 18px;
+  background: var(--error-color);
+  color: #fff;
+  border: none;
+  border-radius: 7px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease, opacity 0.2s ease;
+}
+
+.btnDelete:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.btnCancel:disabled,
+.btnConfirm:disabled,
+.btnDelete:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* ── Crop stage: fixed square frame, draggable photo underneath ───── */
+
+.cropHint {
+  margin: -4px 0 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.cropStage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background-color: #0b0f14;
+  overflow: hidden;
+  user-select: none;
+  touch-action: none;
+  outline: none;
+}
+
+.cropPreviewPan {
+  cursor: grab;
+}
+
+.cropPreviewDragging {
+  cursor: grabbing;
+}
+
+.cropStage:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.cropImage {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: none;
+  pointer-events: none;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.cropImageContained {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: none;
+  pointer-events: none;
+  transform-origin: 0 0;
+  user-select: none;
+}
+
+.cropDim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+
+/* Draggable selection square over the full photo. */
+.cropFrameDraggable {
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  border: 2px solid rgba(255, 255, 255, 0.95);
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+  touch-action: none;
+  outline: none;
+  will-change: transform;
+}
+
+.cropFrameDraggable:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+/* Legacy full-stage frame (unused by new dialog; kept for safety). */
+.cropFrame {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
+
+.cropSizeLabel {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.cropSizeInput {
+  width: 100%;
+  accent-color: var(--accent-color);
+}
+
+/* Responsive — phone */
+@media (max-width: 480px) {
+  .dialog {
+    max-width: 100%;
+  }
+
+  .dialogActions {
+    flex-direction: column;
+  }
+
+  .btnCancel,
+  .btnConfirm,
+  .btnDelete {
+    width: 100%;
+    text-align: center;
+  }
+}

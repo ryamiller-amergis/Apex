@@ -72,3 +72,60 @@ shared_storage_account_name = null
 # }
 
 pdf_blob_container_name = "pdf-artifacts"
+
+# ---------------------------------------------------------------------------
+# Load Test module — FEAT-002
+# Resource names follow the Apex convention {type}-apex-lt-{environment}.
+# Null values derive the standard name automatically:
+#   sbns-apex-lt-dev  sbns-apex-lt-prd   Service Bus namespace
+#   cae-apex-lt-dev   cae-apex-lt-prd    Container Apps Environment
+#   caj-apex-lt-dev   caj-apex-lt-prd    Container Apps Job
+#   mi-apex-lt-runner-dev  mi-apex-lt-runner-prd  Runner managed identity
+#   lt-artifacts                          Blob container (all environments)
+# Override only for global-name collisions or multi-region deployments.
+# ---------------------------------------------------------------------------
+
+# lt_servicebus_namespace_name = null   # derives "sbns-apex-lt-dev"
+# lt_servicebus_queue_name     = null   # derives "lt-dispatch"
+# lt_container_app_env_name    = null   # derives "cae-apex-lt-dev"
+# lt_container_app_job_name    = null   # derives "caj-apex-lt-dev"
+# lt_runner_identity_name      = null   # derives "mi-apex-lt-runner-dev"
+# lt_blob_container_name       = null   # derives "lt-artifacts"
+
+# Platform concurrency cap (1–2; default 2 per PRD guardrail).
+# lt_max_executions = 2
+
+# Runner image — update to pinned ACR digest after Lane B (image build) completes.
+# Format: <acr>.azurecr.io/apex-lt-runner:<tag>@sha256:<digest>
+# lt_runner_image = "grafana/k6:latest"  # placeholder until CI publishes apex-lt-k6
+# lt_acr_name = null                     # derives acrapexlt{environment}
+# Grant GitHub Actions deploy SP AcrPush (object ID):
+# lt_acr_push_principal_ids = ["00000000-0000-0000-0000-000000000000"]
+# Disable if the apply principal cannot manage staging-slot RBAC or staging
+# load-test dispatch is not required:
+# lt_enable_staging_slot_rbac = false
+
+# VNet subnet for runner egress to non-prod targets (A-007).
+# Required before load tests can reach VNet-peered allowlisted hosts.
+# lt_vnet_subnet_id = "/subscriptions/.../subnets/snet-apex-lt-dev"
+
+# Key Vault for target auth secret injection at runner execution time.
+# lt_key_vault_id = "/subscriptions/.../vaults/kv-apex-dev"
+
+# Apex API callback URL (fallback on the Container Apps Job; dispatch message
+# callbackBaseUrl from the API takes precedence).
+# Dev:  https://app-scrum-dev.azurewebsites.net
+# Prod: https://app-apex-prd.azurewebsites.net
+# lt_apex_callback_base_url = "https://app-scrum-dev.azurewebsites.net"
+#
+# Short-term runner ingest auth (shared bearer). Prefer GitHub secret
+# LT_RUNNER_CALLBACK_TOKEN for App Service; optionally set here for the job:
+# lt_runner_callback_token = "generate-a-long-random-string"
+#
+# Long-term MI path (requires Graph Application.ReadWrite.* on apply identity):
+# lt_enable_entra_ingest_app = true
+# lt_callback_token_audience = null   # → api://apex-lt-ingest-{environment}
+#
+# App Service sticky callback host (via deploy pipeline):
+#   LT_APEX_CALLBACK_BASE_URL = staging host vs prod host per slot
+

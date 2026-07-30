@@ -33,7 +33,12 @@ export async function createInterview(opts: {
   designDocApproverIds?: string[];
   designPrototypeApproverIds?: string[];
   testCaseApproverIds?: string[];
+  prototypeStageEnabled?: boolean;
+  testCasesEnabled?: boolean;
 }): Promise<{ interviewId: string; threadId: string }> {
+  const prototypeStageEnabled = opts.prototypeStageEnabled !== false;
+  const testCasesEnabled = opts.testCasesEnabled !== false;
+
   const [row] = await db
     .insert(interviews)
     .values({
@@ -47,12 +52,14 @@ export async function createInterview(opts: {
       status: 'in_progress',
       prdOwnerId: opts.prdOwnerId ?? null,
       designDocOwnerId: opts.designDocOwnerId ?? null,
-      designPrototypeOwnerId: opts.designPrototypeOwnerId ?? null,
-      testCaseOwnerId: opts.testCaseOwnerId ?? null,
+      designPrototypeOwnerId: prototypeStageEnabled ? (opts.designPrototypeOwnerId ?? null) : null,
+      testCaseOwnerId: testCasesEnabled ? (opts.testCaseOwnerId ?? null) : null,
       prdApproverIds: opts.prdApproverIds ?? null,
       designDocApproverIds: opts.designDocApproverIds ?? null,
-      designPrototypeApproverIds: opts.designPrototypeApproverIds ?? null,
-      testCaseApproverIds: opts.testCaseApproverIds ?? null,
+      designPrototypeApproverIds: prototypeStageEnabled ? (opts.designPrototypeApproverIds ?? null) : null,
+      testCaseApproverIds: testCasesEnabled ? (opts.testCaseApproverIds ?? null) : null,
+      prototypeStageEnabled,
+      testCasesEnabled,
     })
     .returning({ id: interviews.id });
 
@@ -86,7 +93,7 @@ export async function createInterview(opts: {
       );
     }
 
-    if (opts.designPrototypeOwnerId) {
+    if (prototypeStageEnabled && opts.designPrototypeOwnerId) {
       notificationPromises.push(
         createNotification(opts.designPrototypeOwnerId, {
           type: 'user-action',
@@ -97,7 +104,7 @@ export async function createInterview(opts: {
       );
     }
 
-    if (opts.testCaseOwnerId) {
+    if (testCasesEnabled && opts.testCaseOwnerId) {
       notificationPromises.push(
         createNotification(opts.testCaseOwnerId, {
           type: 'user-action',
@@ -112,9 +119,21 @@ export async function createInterview(opts: {
     const reviewerAssignments: Array<{ userIds: string[] | undefined; title: string; role: string }> = [
       { userIds: opts.prdApproverIds, title: 'Assigned as PRD Reviewer', role: 'PRD reviewer' },
       { userIds: opts.designDocApproverIds, title: 'Assigned as Design Doc Reviewer', role: 'Design Doc reviewer' },
-      { userIds: opts.designPrototypeApproverIds, title: 'Assigned as Design Prototype Reviewer', role: 'Design Prototype reviewer' },
-      { userIds: opts.testCaseApproverIds, title: 'Assigned as QA Reviewer', role: 'QA reviewer' },
     ];
+    if (prototypeStageEnabled) {
+      reviewerAssignments.push({
+        userIds: opts.designPrototypeApproverIds,
+        title: 'Assigned as Design Prototype Reviewer',
+        role: 'Design Prototype reviewer',
+      });
+    }
+    if (testCasesEnabled) {
+      reviewerAssignments.push({
+        userIds: opts.testCaseApproverIds,
+        title: 'Assigned as QA Reviewer',
+        role: 'QA reviewer',
+      });
+    }
     for (const { userIds, title, role } of reviewerAssignments) {
       for (const userId of userIds ?? []) {
         notificationPromises.push(

@@ -2,7 +2,6 @@ import { telemetryClient } from './services/telemetry';
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import fs from 'fs';
 import path from 'path';
 import session from 'express-session';
 import passport from 'passport';
@@ -51,17 +50,18 @@ import featureRequestRoutes from './routes/featureRequests';
 import askApexRoutes from './routes/askApex';
 import { standupScheduler } from './services/standupScheduler';
 import { aiCostScheduler } from './services/aiCostScheduler';
-import { resolveDataRoot } from './utils/dataDir';
-
-type FileStoreFactory = (
-  sessionMiddleware: typeof session,
-) => new (options: { path: string; ttl?: number; retries?: number }) => session.Store;
+import { createSessionOptions, createSessionStore } from './sessionStore';
 import uiLabRoutes from './routes/uiLab';
 import pdfRoutes from './routes/pdf';
 import aiCostRoutes from './routes/aiCost';
 import e2eSetupRoutes from './routes/e2eSetup';
 import designModuleRoutes from './routes/designModule';
+import loadTestsRoutes from './routes/loadTests';
+import loadTestTargetsRoutes from './routes/loadTestTargets';
+import loadTestRunsInternalRoutes from './routes/loadTestRunsInternal';
+import profileRoutes from './routes/profile';
 import { startPdfProcessingPoller } from './services/pdfAssemblyService';
+import { startLoadTestRunReaper } from './services/loadTestRunService';
 
 // ── E2E mode guard ────────────────────────────────────────────────────────────
 // When E2E_MODE=true, background services and schedulers are suppressed so
@@ -98,36 +98,11 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Session configuration — in production use a file store on /home/data so OAuth
-// state and login sessions survive load balancing across App Service instances.
-const sessionCookie = {
-  secure: process.env.NODE_ENV === 'production',
-  httpOnly: true,
-  maxAge: 24 * 60 * 60 * 1000, // 24 hours
-  sameSite: 'lax' as const,
-  path: '/',
-};
-
-const sessionsDir = path.join(resolveDataRoot(), 'sessions');
-fs.mkdirSync(sessionsDir, { recursive: true });
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const createFileStore = require('session-file-store') as FileStoreFactory;
-const FileStore = createFileStore(session);
-const sessionStore = new FileStore({
-  path: sessionsDir,
-  ttl: 86400,
-  retries: 0,
-});
-console.log(`[session] Using file store at ${sessionsDir}`);
-
-app.use(session({
-  secret: process.env.SESSION_SECRET || 'your-secret-key-change-this',
-  store: sessionStore,
-  resave: false,
-  saveUninitialized: true, // required so OAuth state is persisted before the Azure AD redirect
-  name: 'connect.sid',
-  cookie: sessionCookie,
-}));
+// Production sessions default to PostgreSQL so OAuth state and authenticated
+// sessions survive instance recycling. SESSION_STORE=file keeps the established
+// Azure Files-backed store available as an emergency fallback.
+const { store: sessionStore } = createSessionStore();
+app.use(session(createSessionOptions(sessionStore)));
 
 // Initialize Passport
 app.use(passport.initialize());
@@ -164,12 +139,19 @@ const internalOnlyPaths = [
 // external monitoring. req.path is relative to /api (prefix is stripped by Express).
 const unauthenticatedPaths = ['/health', '/health/db', '/health/agents'];
 
+// Load-test runner ingest/validate — session-free; auth is requireLoadTestRunnerAuth
+// on loadTestRunsInternalRoutes (LT_RUNNER_CALLBACK_TOKEN or runner MI JWT).
+const loadTestRunnerCallbackPaths = ['/internal/load-test-runs'];
+
 app.use('/api', (req, res, next) => {
   const isLocalhost = req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1';
   const isInternalPath = internalOnlyPaths.some(p => req.path.startsWith(p));
   const isHealthPath = unauthenticatedPaths.some(p => req.path === p);
+  const isLoadTestRunnerCallback = loadTestRunnerCallbackPaths.some((p) =>
+    req.path.startsWith(p),
+  );
 
-  if (isHealthPath) return next();
+  if (isHealthPath || isLoadTestRunnerCallback) return next();
 
   if (isInternalPath) {
     if (isLocalhost) return next();
@@ -207,8 +189,13 @@ app.use('/api/feature-flags', ensureAuthenticated, featureFlagRoutes);
 app.use('/api/ui-lab', ensureAuthenticated, uiLabRoutes);
 app.use('/api/pdf', pdfRoutes);
 app.use('/api/feature-requests', ensureAuthenticated, featureRequestRoutes);
+app.use('/api/profile', ensureAuthenticated, profileRoutes);
 app.use('/api/ask-apex', ensureAuthenticated, askApexRoutes);
 app.use('/api/design-modules', ensureAuthenticated, designModuleRoutes);
+app.use('/api/projects/:projectId/load-tests', ensureAuthenticated, loadTestsRoutes);
+app.use('/api/projects/:projectId/load-test-targets', ensureAuthenticated, loadTestTargetsRoutes);
+// Runner ingest — session-free; auth is LT_RUNNER_CALLBACK_TOKEN (FEAT-007 / A-009).
+app.use('/api/internal/load-test-runs', loadTestRunsInternalRoutes);
 app.use('/api/admin', adminRouter);
 mountAdoMcp(app);
 mountGitHubMcp(app);
@@ -334,6 +321,7 @@ const server = app.listen(PORT, () => {
   // and re-check every 60s for work orphaned by rolling deployments.
   startRecoveryLoop();
   startReaper();
+  startLoadTestRunReaper();
   initPgNotify().catch((err) => console.error('[startup] initPgNotify failed:', err.message));
 
   // Graceful shutdown: drain connections on SIGTERM/SIGINT before exiting.

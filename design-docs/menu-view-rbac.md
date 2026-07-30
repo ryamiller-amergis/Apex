@@ -36,7 +36,7 @@ Only the **Admin** nav button is gated with `can('admin:roles')` in [`AppHeader.
 | `chat:view` | chat | Access Agent Studio | Y | Y | |
 | `cost:view` | cost | *(already exists)* | Y | | Y |
 
-**Home** remains always visible -- no permission key needed (fallback page).
+**Home** is now gated by two controls: the `home:view` RBAC permission (granted to all roles by default) and the `agent-home` feature flag (enabled for everyone by default). Both must be satisfied for the Home nav button to appear and for `/home` to be accessible. When Home is denied, users are redirected to their first accessible module (sidebar order), or to the project selector if no module is accessible. See `migrations/20260724110000_add-home-access-controls.sql`.
 
 ## Architecture
 

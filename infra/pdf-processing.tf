@@ -17,3 +17,14 @@ resource "azurerm_role_assignment" "api_pdf_blob_contributor" {
   role_definition_name = "Storage Blob Data Contributor"
   principal_id         = local.pdf_api_principal_id
 }
+
+# The production staging slot uses the same production Blob account for narrow
+# pre-swap smoke tests. Its system-assigned identity is slot-specific and does
+# not move during a swap, so manage its existing Blob grant explicitly.
+resource "azurerm_role_assignment" "staging_pdf_blob_contributor" {
+  count = var.enable_staging_slot ? 1 : 0
+
+  scope                = azurerm_storage_account.shared.id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = azurerm_linux_web_app_slot.staging[0].identity[0].principal_id
+}

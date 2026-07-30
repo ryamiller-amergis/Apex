@@ -121,6 +121,9 @@ Platform admins can create and manage feature flags for targeted rollout.
 
 A developer-focused view for managing personal work items and development sessions (visible to users in the Developer group).
 
+- **Apex PRD features** appear as PRD → Epic → Feature rows from approved PRDs. Each feature offers **View Context** (read-only PRD, backlog, design doc, tech spec, assumptions, and sandboxed prototype), **Start Local Development**, **Mark Complete**, and **Clear Progress** when in progress. Cloud Start/Resume/Close session actions are not offered on Apex feature rows.
+- **Non-Apex projects** continue to list ADO assigned work items with Start Development / Resume Session / local development actions unchanged.
+
 ### 13. What's New / Changelog
 
 - **Auto-popup** — What's New modal opens automatically after each deployment if there's a new release
@@ -247,7 +250,7 @@ A developer-focused view for managing personal work items and development sessio
 
 | Nav Item | Route | Permission | Description |
 |----------|-------|------------|-------------|
-| Home | `/home` | (any authenticated user) | Agent chat home with skill pills for guided conversations |
+| Home | `/home` | `home:view` permission + `agent-home` feature flag (both granted to all roles by default) | Agent chat home with skill pills for guided conversations |
 | Calendar | `/calendar` | `calendar:view` + menu enabled | Work item calendar with drag-and-drop scheduling |
 | Planning | `/planning/*` | `planning:view` + menu enabled | Analytics tabs: Dev Stats, QA Metrics, AI Analysis, Roadmap, Releases |
 | Cloud Cost | `/cloud-cost` | `cost:view` + menu enabled | Azure cloud cost visualization |

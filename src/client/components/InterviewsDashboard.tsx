@@ -21,7 +21,6 @@ import type {
 import type { DesignPrototypeSummary, DesignPrototypeStatus } from '../../shared/types/designPrototype';
 import {
   derivePrdReadiness,
-  type PrdReadinessSeverity,
 } from '../../shared/utils/prdReadiness';
 import { useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
@@ -82,13 +81,15 @@ function prdStatusLabel(status: PrdStatus): string {
   }
 }
 
-function prdReadinessBadgeClass(severity: PrdReadinessSeverity): string {
-  switch (severity) {
-    case 'info': return styles.badgeGenerating;
-    case 'warning': return styles.badgePendingReview;
-    case 'error': return styles.badgeRevisionRequested;
-    case 'success': return styles.badgeApproved;
-    case 'neutral': return styles.badgeDraft;
+function prdBadgeClass(status: PrdStatus): string {
+  switch (status) {
+    case 'generating': return styles.badgeGenerating;
+    case 'validating': return styles.badgeValidating;
+    case 'draft': return styles.badgeDraft;
+    case 'pending_review': return styles.badgePendingReview;
+    case 'reviewer_approved': return styles.badgePendingReview;
+    case 'approved': return styles.badgeApproved;
+    case 'revision_requested': return styles.badgeRevisionRequested;
   }
 }
 
@@ -165,7 +166,11 @@ interface InterviewCardProps {
 const InterviewCard: React.FC<InterviewCardProps> = ({ interview, canDelete, onDelete }) => {
   const navigate = useNavigate();
   return (
-    <div className={styles.card} onClick={() => navigate(`/backlog/interview/${interview.id}`)}>
+    <div
+      className={styles.card}
+      data-testid="interview-card"
+      onClick={() => navigate(`/backlog/interview/${interview.id}`)}
+    >
       <div className={styles.cardHeader}>
         <h3 className={styles.cardTitle}>{interview.title}</h3>
         {canDelete && (
@@ -211,7 +216,10 @@ interface PrdCardProps {
 
 const PrdCard: React.FC<PrdCardProps> = ({ prd, canDelete, onDelete }) => {
   const navigate = useNavigate();
-  const readiness = derivePrdReadiness(prd, prd.latestTestCase, prd.validationScoreThreshold ?? undefined);
+  const readiness = derivePrdReadiness(prd, prd.latestTestCase, prd.validationScoreThreshold ?? undefined, {
+    testCasesRequired: prd.testCasesRequired !== false,
+    prdValidationEnabled: prd.prdValidationEnabled === true,
+  });
   const coverage = prd.latestTestCase?.coverageSummary;
   return (
     <div className={styles.card} onClick={() => navigate(`/backlog/prd/${prd.id}`)}>
@@ -235,11 +243,8 @@ const PrdCard: React.FC<PrdCardProps> = ({ prd, canDelete, onDelete }) => {
         )}
       </div>
       <div className={styles.cardFooter}>
-        <span
-          className={`${styles.badge} ${prdReadinessBadgeClass(readiness.severity)}`}
-          title={readiness.description}
-        >
-          {readiness.label}
+        <span className={`${styles.badge} ${prdBadgeClass(prd.status)}`}>
+          {prdStatusLabel(prd.status)}
         </span>
         <div className={styles.cardFooterRight}>
           {prd.skillSettingsName && (
@@ -256,9 +261,11 @@ const PrdCard: React.FC<PrdCardProps> = ({ prd, canDelete, onDelete }) => {
           {prd.reviewerId && (
             <span className={styles.cardPrdBadge}>Reviewer assigned</span>
           )}
-          <span className={styles.cardPrdBadge} title="Human review lifecycle">
-            PRD: {prdStatusLabel(prd.status)}
-          </span>
+          {(readiness.severity === 'warning' || readiness.severity === 'error' || readiness.severity === 'info') && (
+            <span className={styles.cardPrdBadge} title={readiness.description}>
+              {readiness.label}
+            </span>
+          )}
           <span className={styles.cardDate}>{formatDate(prd.createdAt)}</span>
         </div>
       </div>
@@ -615,7 +622,10 @@ export const InterviewsDashboard: React.FC = () => {
   });
 
   const { data: skillConfig } = useProjectSkillConfig(selectedProject || null);
-  const prototypeEnabled = skillConfig?.prototypeStageEnabled !== false;
+  const interviewSkillOptions = skillConfig?.interviewSkillOptions ?? [];
+  const prototypeEnabled = interviewSkillOptions.length > 0
+    ? interviewSkillOptions.some((o) => o.wantsDesignPrototype !== false)
+    : skillConfig?.prototypeStageEnabled !== false;
 
   const canManage = can('interviews:manage');
   const canStartInterview = permissionsLoaded && canManage && isInAnyGroup(['BA', 'Manager', 'Product-Owner']);
@@ -677,7 +687,7 @@ export const InterviewsDashboard: React.FC = () => {
   };
 
   return (
-    <div className={styles.dashboard}>
+    <div className={styles.dashboard} data-testid="interviews-dashboard">
       <div className={styles.header}>
         <h1 className={styles.heading}>Interviews & PRDs</h1>
         {canManage && (
@@ -687,6 +697,7 @@ export const InterviewsDashboard: React.FC = () => {
               onClick={() => navigate('/backlog/interview/new')}
               type="button"
               disabled={!canStartInterview}
+              data-testid="start-interview-btn"
             >
               + Start New Interview
             </button>
@@ -699,6 +710,7 @@ export const InterviewsDashboard: React.FC = () => {
           className={`${styles.tab} ${activeTab === 'interviews' ? styles.active : ''}`}
           onClick={() => setActiveTab('interviews')}
           type="button"
+          data-testid="tab-interviews"
         >
           Interviews ({interviews.length})
         </button>
@@ -706,6 +718,7 @@ export const InterviewsDashboard: React.FC = () => {
           className={`${styles.tab} ${activeTab === 'prds' ? styles.active : ''}`}
           onClick={() => setActiveTab('prds')}
           type="button"
+          data-testid="tab-prds"
         >
           PRDs ({prds.length})
         </button>
@@ -714,6 +727,7 @@ export const InterviewsDashboard: React.FC = () => {
             className={`${styles.tab} ${activeTab === 'design-prototypes' ? styles.active : ''}`}
             onClick={() => setActiveTab('design-prototypes')}
             type="button"
+            data-testid="tab-design-prototypes"
           >
             Design Prototypes ({prototypes.length})
           </button>
@@ -722,6 +736,7 @@ export const InterviewsDashboard: React.FC = () => {
           className={`${styles.tab} ${activeTab === 'design-docs' ? styles.active : ''}`}
           onClick={() => setActiveTab('design-docs')}
           type="button"
+          data-testid="tab-design-docs"
         >
           Design Docs ({designDocs.length})
         </button>

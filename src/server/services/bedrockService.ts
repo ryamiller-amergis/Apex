@@ -2647,6 +2647,142 @@ ${commentLines}
   return fenced ? fenced[1].trim() : text.trim();
 }
 
+/**
+ * Regenerate a single region inside an already-proposed markdown document.
+ * Returns the complete revised proposed markdown.
+ */
+export async function regenerateMarkdownRegionWithBedrock(
+  documentLabel: string,
+  fullProposed: string,
+  targetOld: string,
+  targetNew: string,
+  feedback: string,
+  modelId?: string | null,
+  maxTokens?: number | null,
+  usageCtx?: BedrockUsageContext,
+): Promise<string> {
+  const prompt = `You are a senior engineer reviewing a proposed ${documentLabel} revision section by section.
+The reviewer rejected the current wording for ONE change region and asked for a different fix.
+
+## Full proposed ${documentLabel} (current draft)
+
+${fullProposed || '(empty)'}
+
+## Targeted change region
+
+### Previous live text
+${targetOld || '(empty / insertion)'}
+
+### Current proposed text (to revise)
+${targetNew || '(empty / deletion)'}
+
+## Reviewer feedback
+
+${feedback}
+
+## Instructions
+
+- Revise ONLY the targeted region to satisfy the reviewer feedback.
+- Keep every other part of the document unchanged.
+- Produce the complete revised document as clean markdown.
+- Do NOT add a preamble, summary, or explanation — output ONLY the revised markdown.`;
+
+  const resolvedModel = modelId ?? MODEL_ID;
+  const resolvedMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
+  const text = await invokeModel(
+    prompt,
+    undefined,
+    resolvedModel,
+    resolvedMaxTokens,
+    undefined,
+    usageCtx ?? { feature: 'prd-review', project: 'unknown' },
+  );
+  const fenced = text.match(/```(?:markdown)?\s*([\s\S]*?)\s*```/);
+  return fenced ? fenced[1].trim() : text.trim();
+}
+
+/**
+ * Regenerate a single region inside an already-proposed PRD markdown document.
+ * Returns the complete revised proposed markdown.
+ */
+export async function regeneratePrdContentRegionWithBedrock(
+  fullProposed: string,
+  targetOld: string,
+  targetNew: string,
+  feedback: string,
+  modelId?: string | null,
+  maxTokens?: number | null,
+  usageCtx?: BedrockUsageContext,
+): Promise<string> {
+  return regenerateMarkdownRegionWithBedrock(
+    'PRD',
+    fullProposed,
+    targetOld,
+    targetNew,
+    feedback,
+    modelId,
+    maxTokens,
+    usageCtx,
+  );
+}
+
+/**
+ * Regenerate a single backlog item inside an already-proposed backlog JSON.
+ * Returns the complete revised backlog object, or null if the model output is invalid JSON.
+ */
+export async function regeneratePrdBacklogItemWithBedrock(
+  proposedBacklog: unknown,
+  itemPath: string,
+  targetOld: string,
+  targetNew: string,
+  feedback: string,
+  modelId?: string | null,
+  maxTokens?: number | null,
+  usageCtx?: BedrockUsageContext,
+): Promise<unknown> {
+  const backlogStr = JSON.stringify(proposedBacklog, null, 2);
+  const prompt = `You are a senior product owner. A proposed backlog revision is under section-by-section review.
+The reviewer rejected the current change for ONE backlog item and asked for a different fix.
+
+## Full proposed backlog JSON
+
+\`\`\`json
+${backlogStr}
+\`\`\`
+
+## Targeted backlog item
+
+Path: ${itemPath || '(unknown)'}
+
+### Previous live summary
+${targetOld || '(not present)'}
+
+### Current proposed summary
+${targetNew || '(removed)'}
+
+## Reviewer feedback
+
+${feedback}
+
+## Instructions
+
+- Revise ONLY the targeted backlog item (and its fields) to satisfy the reviewer feedback.
+- Keep every other epic/feature/item unchanged.
+- Output ONLY the complete revised backlog as valid JSON (no markdown fences, no preamble, no explanation).
+- Preserve the exact same JSON structure and all existing fields elsewhere.`;
+
+  const resolvedModel = modelId ?? MODEL_ID;
+  const resolvedMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
+  const text = await invokeModel(prompt, undefined, resolvedModel, resolvedMaxTokens, undefined, usageCtx ?? { feature: 'prd-review', project: 'unknown' });
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  const cleaned = fenced ? fenced[1].trim() : text.trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    return null;
+  }
+}
+
 /** Apply ADR review comments and return the complete revised ADR markdown. */
 export async function fixAdrContentWithBedrock(
   adrContent: string,

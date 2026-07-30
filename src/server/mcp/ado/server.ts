@@ -17,13 +17,21 @@ import {
 } from '../../services/wikiCatalog';
 import { AzureDevOpsService } from '../../services/azureDevOps';
 import { getThread } from '../../services/chatAgentService';
-import { updateDesignDocContent, syncDesignDocContent, getDesignDoc } from '../../services/designDocService';
+import { syncDesignDocContent, getDesignDoc, stageDesignDocProposedContent } from '../../services/designDocService';
 import { resolvePrdCommentWithApply } from '../../services/prdService';
 import { addTestCaseToPrd } from '../../services/testCaseService';
 import { stageAdrProposedContent } from '../../services/adrService';
 import { db } from '../../db/drizzle';
 import { eq } from 'drizzle-orm';
 import { prds } from '../../db/schema';
+import type { ContentSnapshot, PrdValidationBaseline } from '../../../shared/types/interview';
+
+function isActiveFixThread(
+  baseline: { fixThreadId?: string } | null | undefined,
+  threadId: string,
+): boolean {
+  return !!baseline?.fixThreadId && baseline.fixThreadId === threadId;
+}
 
 // ── Exported handlers (testable units) ────────────────────────────────────────
 
@@ -39,10 +47,40 @@ export async function handleUpdatePrd(params: {
   }
   try {
     const now = new Date().toISOString();
+    // Only the active Fix-with-Apex validation/coverage thread writes live.
+    // The normal PRD assistant always stages proposed_* for owner review —
+    // even if a leftover fixBaseline row still exists on the PRD.
+    const prdRow = await db.query.prds.findFirst({
+      where: eq(prds.id, params.prdId),
+      columns: { fixBaseline: true, prdAssistantThreadId: true },
+    });
+    if (!prdRow) {
+      return { content: [{ type: 'text', text: JSON.stringify({ error: 'PRD not found' }) }] };
+    }
+    const baseline = (prdRow?.fixBaseline as PrdValidationBaseline | null) ?? null;
+    const fixMode = isActiveFixThread(baseline, params.threadId);
+    const assistantMode = prdRow.prdAssistantThreadId === params.threadId;
+    if (!fixMode && !assistantMode) {
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({ error: 'Thread is not authorized to update this PRD' }),
+        }],
+      };
+    }
+
     if (params.section === 'content') {
       await db
         .update(prds)
-        .set({ proposedContent: params.content, updatedAt: now })
+        .set(
+          fixMode
+            ? {
+                content: params.content,
+                proposedContent: null,
+                updatedAt: now,
+              }
+            : { proposedContent: params.content, updatedAt: now },
+        )
         .where(eq(prds.id, params.prdId));
     } else {
       let parsed: unknown;
@@ -53,11 +91,21 @@ export async function handleUpdatePrd(params: {
       }
       await db
         .update(prds)
-        .set({ proposedBacklogJson: parsed as any, updatedAt: now })
+        .set(
+          fixMode
+            ? {
+                backlogJson: parsed as any,
+                proposedBacklogJson: null,
+                updatedAt: now,
+              }
+            : { proposedBacklogJson: parsed as any, updatedAt: now },
+        )
         .where(eq(prds.id, params.prdId));
     }
-    console.log(`[MCP] update_prd: saved ${params.section} for prd ${params.prdId}`);
-    return { content: [{ type: 'text', text: JSON.stringify({ ok: true, section: params.section }) }] };
+    console.log(
+      `[MCP] update_prd: saved ${params.section} for prd ${params.prdId} (fixMode=${fixMode})`,
+    );
+    return { content: [{ type: 'text', text: JSON.stringify({ ok: true, section: params.section, fixMode }) }] };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[MCP] update_prd: FAILED ${params.section} for prd ${params.prdId} — ${message}`);
@@ -81,6 +129,43 @@ export async function handleUpdateAdr(params: {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[MCP] update_adr: FAILED for adr ${params.adrId} — ${message}`);
+    return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
+  }
+}
+
+export async function handleUpdateDesignDoc(params: {
+  threadId: string;
+  docId: string;
+  section: 'design' | 'tech-spec' | 'assumptions';
+  content: string;
+}): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
+  const thread = await getThread(params.threadId);
+  if (!thread) {
+    return { content: [{ type: 'text', text: JSON.stringify({ error: 'Thread not found' }) }] };
+  }
+  const opts =
+    params.section === 'design' ? { designContent: params.content } :
+    params.section === 'tech-spec' ? { techSpecContent: params.content } :
+    { assumptionsContent: params.content };
+  try {
+    const doc = await getDesignDoc(params.docId);
+    const baseline = (doc?.fixBaseline as ContentSnapshot | null) ?? null;
+    // Fix-validation thread writes live; normal assistant stages proposed_* for review.
+    const fixMode = isActiveFixThread(baseline, params.threadId);
+    if (fixMode) {
+      await syncDesignDocContent(params.docId, opts);
+    } else {
+      await stageDesignDocProposedContent(params.docId, thread.userId, opts);
+    }
+    console.log(
+      `[MCP] update_design_doc: saved ${params.section} for doc ${params.docId} (fixMode=${fixMode})`,
+    );
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ ok: true, section: params.section, fixMode }) }],
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[MCP] update_design_doc: FAILED ${params.section} for doc ${params.docId} — ${message}`);
     return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
   }
 }
@@ -295,43 +380,17 @@ export function createAdoMcpServer(): McpServer {
 
   server.tool(
     'update_design_doc',
-    'Update one section of the current design doc (design, tech-spec, or assumptions) and save it to the database. ' +
+    'Update one section of the current design doc (design, tech-spec, or assumptions) and save it as a proposed draft for the owner to review. ' +
     'Call this when the user explicitly asks you to apply, save, or write changes to the doc. ' +
-    'Only one section can be updated per call — make multiple calls to update multiple sections.',
+    'Only one section can be updated per call — make multiple calls to update multiple sections. ' +
+    'After calling this tool, changes appear as a proposed diff the owner can accept or reject section by section.',
     {
       threadId: z.string().describe('The current session thread ID (from .ai-pilot/session.json)'),
       docId: z.string().describe('The design doc ID (from .ai-pilot/kickoff-context.md)'),
       section: z.enum(['design', 'tech-spec', 'assumptions']).describe('Which section to update'),
       content: z.string().describe('The full new markdown content for the section'),
     },
-    async ({ threadId, docId, section, content }) => {
-      const thread = await getThread(threadId);
-      if (!thread) {
-        return { content: [{ type: 'text', text: JSON.stringify({ error: 'Thread not found' }) }] };
-      }
-      const opts =
-        section === 'design'      ? { designContent: content } :
-        section === 'tech-spec'   ? { techSpecContent: content } :
-                                    { assumptionsContent: content };
-      try {
-        // Check if the doc is in fix mode (has fixBaseline set). If so, the
-        // update was initiated by the fix-validation flow and the thread may
-        // have been created by a different user (e.g. a reviewer). Use the
-        // auth-free syncDesignDocContent to avoid permission mismatches.
-        const doc = await getDesignDoc(docId);
-        if (doc?.fixBaseline) {
-          await syncDesignDocContent(docId, opts);
-        } else {
-          await updateDesignDocContent(docId, thread.userId, opts);
-        }
-        console.log(`[MCP] update_design_doc: saved ${section} for doc ${docId} (fixMode=${!!doc?.fixBaseline})`);
-        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, section }) }] };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(`[MCP] update_design_doc: FAILED ${section} for doc ${docId} — ${message}`);
-        return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
-      }
-    },
+    async (params) => handleUpdateDesignDoc(params),
   );
 
   // ── PRD write-back ──────────────────────────────────────────────────────────

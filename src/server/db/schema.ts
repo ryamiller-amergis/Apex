@@ -25,7 +25,7 @@ import type {
   ChatThreadKickoff,
   SseEvent,
 } from '../../shared/types/chat';
-import type { ContentSnapshot, PrdValidationBaseline, TestCaseCoverageSummary, ValidationScorecard } from '../../shared/types/interview';
+import type { ContentSnapshot, DesignDocValidationOverride, PrdReadinessOverride, PrdValidationBaseline, TestCaseCoverageSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { DesignPrototypeHistoryEntry } from '../../shared/types/designPrototype';
 import type { UiLabHistoryEntry } from '../../shared/types/uiLab';
 import type { DevSessionSetupPhase } from '../../shared/types/devWorkbench';
@@ -37,6 +37,19 @@ import type { ProjectAccessRequestStatus } from '../../shared/types/platformAdmi
 import type { FlagLifecycle, FlagRuleType, FlagAuditAction } from '../../shared/types/featureFlags';
 import type { WorkItemType } from '../../shared/types/featureRequest';
 import type { DesignModuleIconKey } from '../../shared/types/designModule';
+import type {
+  LoadProfile,
+  LoadTestEngine,
+  LoadTestExecutionSnapshot,
+  LoadTestFlowType,
+  LoadTestRunSource,
+  LoadTestScriptSource,
+  FlowStep,
+  RunStatus,
+  Threshold,
+  ThresholdResult,
+  ArtifactRef,
+} from '../../shared/types/loadTest';
 
 // ── Tables ────────────────────────────────────────────────────────────────────
 
@@ -155,6 +168,21 @@ export const appUsers = pgTable('app_users', {
   dismissedBetaProdAnnouncement: boolean('dismissed_beta_prod_announcement').notNull().default(false),
 });
 
+/**
+ * One-to-one personal profile content keyed by Azure AD object ID.
+ * Optional bio and avatar metadata live here — not on app_users (RBAC identity cache).
+ */
+export const userProfiles = pgTable('user_profiles', {
+  userOid: text('user_oid').primaryKey().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  bio: text('bio'),
+  avatarBlobKey: text('avatar_blob_key'),
+  avatarUpdatedAt: timestamp('avatar_updated_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  userOidIdx: index('idx_user_profiles_user_oid').on(t.userOid),
+}));
+
 export const appRoles = pgTable('app_roles', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').unique().notNull(),
@@ -200,13 +228,24 @@ export const appUserProjectRoles = pgTable('app_user_project_roles', {
 
 // ── RBAC Relations ────────────────────────────────────────────────────────────
 
-export const appUsersRelations = relations(appUsers, ({ many }) => ({
+export const appUsersRelations = relations(appUsers, ({ many, one }) => ({
   userRoles: many(appUserRoles),
   projectRoles: many(appUserProjectRoles),
   groupMemberships: many(appGroupMembers),
   projectAssignments: many(userProjectAssignments),
   projectAccessRequests: many(projectAccessRequests),
   featureRequests: many(featureRequests),
+  profile: one(userProfiles, {
+    fields: [appUsers.oid],
+    references: [userProfiles.userOid],
+  }),
+}));
+
+export const userProfilesRelations = relations(userProfiles, ({ one }) => ({
+  user: one(appUsers, {
+    fields: [userProfiles.userOid],
+    references: [appUsers.oid],
+  }),
 }));
 
 export const appRolesRelations = relations(appRoles, ({ many }) => ({
@@ -341,6 +380,8 @@ export const interviews = pgTable('interviews', {
   designPrototypeApproverIds: jsonb('design_prototype_approver_ids').$type<string[]>(),
   testCaseApproverIds: jsonb('test_case_approver_ids').$type<string[]>(),
   skillSettingsId: uuid('skill_settings_id'),
+  prototypeStageEnabled: boolean('prototype_stage_enabled').notNull().default(true),
+  testCasesEnabled: boolean('test_cases_enabled').notNull().default(true),
   status: text('status').notNull().default('in_progress'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -392,6 +433,7 @@ export const prds = pgTable('prds', {
   validationReportMd: text('validation_report_md'),
   validationPhase: text('validation_phase'),
   fixBaseline: jsonb('fix_baseline').$type<PrdValidationBaseline>(),
+  readinessOverride: jsonb('readiness_override').$type<PrdReadinessOverride>(),
   skillSettingsId: uuid('skill_settings_id'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -425,6 +467,7 @@ export const designDocs = pgTable('design_docs', {
   validationReportMd: text('validation_report_md'),
   validationPhase: text('validation_phase'),
   fixBaseline: jsonb('fix_baseline').$type<ContentSnapshot>(),
+  validationOverride: jsonb('validation_override').$type<DesignDocValidationOverride>(),
   authorId: text('author_id').notNull(),
   title: text('title').notNull().default('Untitled Design Doc'),
   model: text('model'),
@@ -585,6 +628,7 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   designPlanBedrockModelId: text('design_plan_bedrock_model_id'),
   designPlanBedrockMaxTokens: integer('design_plan_bedrock_max_tokens'),
   prdValidationScoreThreshold: integer('prd_validation_score_threshold'),
+  designDocValidationScoreThreshold: integer('design_doc_validation_score_threshold'),
   uiLabBedrockModelId: text('ui_lab_bedrock_model_id'),
   uiLabBedrockMaxTokens: integer('ui_lab_bedrock_max_tokens'),
   uiLabBedrockTimeoutMs: integer('ui_lab_bedrock_timeout_ms'),
@@ -618,6 +662,12 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   cursorServiceAccountId: text('cursor_service_account_id'),
   calendarAssistantSkillPath: text('calendar_assistant_skill_path'),
   calendarAssistantModel: text('calendar_assistant_model'),
+  loadTestGenerationSkillPath: text('load_test_generation_skill_path'),
+  loadTestGenerationModel: text('load_test_generation_model'),
+  designModuleSkillPath: text('design_module_skill_path'),
+  designModuleModel: text('design_module_model'),
+  designModuleScopingSkillPath: text('design_module_scoping_skill_path'),
+  designModuleScopingModel: text('design_module_scoping_model'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (t) => ({
@@ -747,7 +797,8 @@ export const appSettings = pgTable('app_settings', {
 
 export const designModules = pgTable('design_modules', {
   id: uuid('id').primaryKey().defaultRandom(),
-  slug: text('slug').notNull().unique(),
+  project: text('project').notNull().default('Apex'),
+  slug: text('slug').notNull(),
   label: text('label').notNull(),
   description: text('description'),
   iconKey: text('icon_key').$type<DesignModuleIconKey>().notNull().default('default'),
@@ -757,12 +808,15 @@ export const designModules = pgTable('design_modules', {
   sourceCommit: text('source_commit'),
   lastGeneratedAt: timestamp('last_generated_at', { withTimezone: true, mode: 'string' }),
   generatedByModel: text('generated_by_model'),
+  scopingThreadId: text('scoping_thread_id'),
   sortOrder: integer('sort_order').notNull().default(0),
   createdBy: text('created_by'),
   updatedBy: text('updated_by'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
+  projectSlugUnique: uniqueIndex('design_modules_project_slug_key').on(t.project, t.slug),
+  projectIdx: index('idx_design_modules_project').on(t.project),
   sortOrderIdx: index('idx_design_modules_sort_order').on(t.sortOrder, t.label),
 }));
 
@@ -1230,7 +1284,7 @@ export const featureRequestAdrs = pgTable('feature_request_adrs', {
   featureRequestId: uuid('feature_request_id').notNull()
     .references(() => featureRequests.id, { onDelete: 'cascade' }),
   adrId: uuid('adr_id').notNull()
-    .references(() => adrs.id, { onDelete: 'restrict' }),
+    .references(() => adrs.id, { onDelete: 'cascade' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
   pk: primaryKey({ columns: [t.featureRequestId, t.adrId] }),
@@ -1537,3 +1591,85 @@ export const workItemChangeProposalsRelations = relations(workItemChangeProposal
 
 // Add calendar assistant columns to projectSkillSettings (applied via migration)
 // Drizzle schema mirrors columns added in 20260715170000_calendar-work-item-assistant.sql
+
+// ── Load Testing Module ───────────────────────────────────────────────────────
+
+export const loadTests = pgTable('load_test', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: text('project_id').notNull(),
+  name: text('name').notNull(),
+  description: text('description'),
+  targetUrl: text('target_url').notNull(),
+  environment: text('environment').notNull(),
+  engine: text('engine').$type<LoadTestEngine>().notNull().default('k6'),
+  flowType: text('flow_type').$type<LoadTestFlowType>().notNull().default('single'),
+  scriptSource: text('script_source').$type<LoadTestScriptSource>().notNull().default('form_builder'),
+  script: text('script').notNull(),
+  loadProfile: jsonb('load_profile').$type<LoadProfile>().notNull(),
+  clientThresholds: jsonb('client_thresholds').$type<Threshold[]>().notNull().default([]),
+  flowSteps: jsonb('flow_steps').$type<FlowStep[] | null>(),
+  runSource: text('run_source').$type<LoadTestRunSource>(),
+  secretRefs: jsonb('secret_refs').$type<Record<string, string>>(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  createdBy: text('created_by').notNull(),
+  updatedBy: text('updated_by').notNull(),
+}, (t) => ({
+  projectIdIdx: index('idx_load_test_project_id').on(t.projectId),
+  projectCreatedIdx: index('idx_load_test_project_created').on(t.projectId, t.createdAt),
+}));
+
+export const loadTestRuns = pgTable('load_test_run', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: text('project_id').notNull(),
+  loadTestId: uuid('load_test_id').notNull().references(() => loadTests.id, { onDelete: 'restrict' }),
+  status: text('status').$type<RunStatus>().notNull().default('queued'),
+  runSource: text('run_source').$type<LoadTestRunSource>().notNull().default('app'),
+  queuedAt: timestamp('queued_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }),
+  completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
+  heartbeatAt: timestamp('heartbeat_at', { withTimezone: true, mode: 'string' }),
+  dispatchMessageId: text('dispatch_message_id'),
+  cancelRequested: boolean('cancel_requested').notNull().default(false),
+  overallResult: text('overall_result').$type<'passed' | 'failed'>(),
+  thresholdResults: jsonb('threshold_results').$type<ThresholdResult[]>(),
+  summaryArtifactRef: jsonb('summary_artifact_ref').$type<ArtifactRef>(),
+  timeseriesArtifactRef: jsonb('timeseries_artifact_ref').$type<ArtifactRef>(),
+  errorDetail: text('error_detail'),
+  targetKey: text('target_key'),
+  executionSnapshot: jsonb('execution_snapshot').$type<LoadTestExecutionSnapshot>(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectIdIdx: index('idx_load_test_run_project_id').on(t.projectId),
+  projectCreatedIdx: index('idx_load_test_run_project_created').on(t.projectId, t.createdAt),
+  loadTestIdIdx: index('idx_load_test_run_load_test_id').on(t.loadTestId),
+  statusHeartbeatIdx: index('idx_load_test_run_status_heartbeat').on(t.status, t.heartbeatAt),
+}));
+
+export const loadTestTargets = pgTable('load_test_target', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: text('project_id').notNull(),
+  baseUrl: text('base_url').notNull(),
+  environmentLabel: text('environment_label').notNull(),
+  isReachable: boolean('is_reachable').notNull().default(true),
+  isActive: boolean('is_active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  createdBy: text('created_by').notNull(),
+  updatedBy: text('updated_by').notNull(),
+}, (t) => ({
+  projectIdIdx: index('idx_load_test_target_project_id').on(t.projectId),
+  projectBaseUrlUq: uniqueIndex('uq_load_test_target_project_base_url').on(t.projectId, t.baseUrl),
+}));
+
+export const loadTestsRelations = relations(loadTests, ({ many }) => ({
+  runs: many(loadTestRuns),
+}));
+
+export const loadTestRunsRelations = relations(loadTestRuns, ({ one }) => ({
+  loadTest: one(loadTests, {
+    fields: [loadTestRuns.loadTestId],
+    references: [loadTests.id],
+  }),
+}));

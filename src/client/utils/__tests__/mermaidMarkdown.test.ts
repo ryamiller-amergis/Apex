@@ -70,6 +70,54 @@ describe('mermaidMarkdown', () => {
     expect(normalizeMermaidBlocks(markdown)).toBe(markdown);
   });
 
+  it('adds mermaid language tag to text fenced code blocks with mermaid content', () => {
+    const markdown = [
+      '## Proposed Architecture',
+      '',
+      '```text',
+      'flowchart LR',
+      '  A["Web client"] --> B["API"]',
+      '```',
+    ].join('\n');
+
+    expect(normalizeMermaidBlocks(markdown)).toBe([
+      '## Proposed Architecture',
+      '',
+      '```mermaid',
+      'flowchart LR',
+      '  A["Web client"] --> B["API"]',
+      '```',
+    ].join('\n'));
+  });
+
+  it('adds mermaid language tag to plaintext fenced code blocks with mermaid content', () => {
+    const markdown = [
+      '```plaintext',
+      'sequenceDiagram',
+      '  A->>B: Hello',
+      '```',
+    ].join('\n');
+
+    expect(normalizeMermaidBlocks(markdown)).toBe([
+      '```mermaid',
+      'sequenceDiagram',
+      '  A->>B: Hello',
+      '```',
+    ].join('\n'));
+  });
+
+  it('does not rewrite non-mermaid text fenced code blocks', () => {
+    const markdown = [
+      '```text',
+      'Which direction do you want next?',
+      '',
+      'a. First option',
+      '```',
+    ].join('\n');
+
+    expect(normalizeMermaidBlocks(markdown)).toBe(markdown);
+  });
+
   it('handles tilde fences with mermaid content', () => {
     const markdown = [
       '~~~',

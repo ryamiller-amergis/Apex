@@ -10,6 +10,11 @@ import {
   Legend,
 } from 'recharts';
 import styles from './AiCostComparison.module.css';
+import {
+  BRAND_MARK_INNER,
+  BRAND_MARK_LEFT_LEG,
+  BRAND_MARK_RIGHT_LEG,
+} from './brandMark';
 import { useAiCostComparison } from '../hooks/useAiCostAnalytics';
 import type { ProjectComparisonProject } from '../../shared/types/aiCostAnalytics';
 
@@ -92,9 +97,9 @@ function getPresetDates(preset: DatePreset): { from: string; to: string } {
 
 const ApexIcon: React.FC<{ size?: number }> = ({ size = 16 }) => (
   <svg viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ width: size, height: size }}>
-    <path d="M20 72L43 22H56L34 72H20Z" fill="#fff" />
-    <path d="M52 22L78 72H61L43 38L52 22Z" fill="#fff" opacity="0.9" />
-    <path d="M40 72L49 54L58 72H40Z" fill="rgba(255,255,255,0.5)" />
+    <path d={BRAND_MARK_RIGHT_LEG} fill="#fff" />
+    <path d={BRAND_MARK_LEFT_LEG} fill="#fff" opacity="0.9" />
+    <path d={BRAND_MARK_INNER} fill="rgba(255,255,255,0.5)" />
   </svg>
 );
 

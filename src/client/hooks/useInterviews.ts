@@ -397,6 +397,8 @@ export function useCreateInterview() {
       designDocApproverIds?: string[];
       designPrototypeApproverIds?: string[];
       testCaseApproverIds?: string[];
+      prototypeStageEnabled?: boolean;
+      testCasesEnabled?: boolean;
     }
   >({
     mutationFn: (body) =>
@@ -1016,9 +1018,75 @@ export function useAcceptFixPrdValidation() {
         method: 'POST',
       }),
     onSuccess: (_data, prdId) => {
+      qc.setQueryData<Prd>(['prd', prdId], (old) =>
+        old ? { ...old, fixBaseline: null } : old,
+      );
       void qc.invalidateQueries({ queryKey: ['prd', prdId] });
       void qc.invalidateQueries({ queryKey: ['prds'] });
       qc.removeQueries({ queryKey: ['prd-validation-report', prdId] });
+    },
+  });
+}
+
+export function useFixPrdCoverage() {
+  const qc = useQueryClient();
+  return useMutation<{ threadId: string }, Error, string>({
+    mutationFn: (prdId) =>
+      apiFetch(`/api/interviews/prds/${prdId}/fix-coverage`, {
+        method: 'POST',
+      }),
+    onSuccess: (_data, prdId) => {
+      void qc.invalidateQueries({ queryKey: ['prd', prdId] });
+    },
+  });
+}
+
+export function useAcceptFixPrdCoverage() {
+  const qc = useQueryClient();
+  return useMutation<{ ok: boolean }, Error, string>({
+    mutationFn: (prdId) =>
+      apiFetch(`/api/interviews/prds/${prdId}/fix-coverage/accept`, {
+        method: 'POST',
+      }),
+    onSuccess: (_data, prdId) => {
+      qc.setQueryData<Prd>(['prd', prdId], (old) =>
+        old ? { ...old, fixBaseline: null } : old,
+      );
+      void qc.invalidateQueries({ queryKey: ['prd', prdId] });
+      void qc.invalidateQueries({ queryKey: ['prd-test-cases', prdId] });
+      void qc.invalidateQueries({ queryKey: ['prds'] });
+    },
+  });
+}
+
+export function useOverridePrdReadiness() {
+  const qc = useQueryClient();
+  return useMutation<{ override: unknown }, Error, { prdId: string; reason: string }>({
+    mutationFn: ({ prdId, reason }) =>
+      apiFetch(`/api/interviews/prds/${prdId}/override-readiness`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason }),
+      }),
+    onSuccess: (_data, { prdId }) => {
+      void qc.invalidateQueries({ queryKey: ['prd', prdId] });
+      void qc.invalidateQueries({ queryKey: ['prds'] });
+    },
+  });
+}
+
+export function useOverrideDesignDocValidation() {
+  const qc = useQueryClient();
+  return useMutation<{ override: unknown }, Error, { designDocId: string; reason: string }>({
+    mutationFn: ({ designDocId, reason }) =>
+      apiFetch(`/api/interviews/design-docs/${designDocId}/override-validation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason }),
+      }),
+    onSuccess: (_data, { designDocId }) => {
+      void qc.invalidateQueries({ queryKey: ['design-doc', designDocId] });
+      void qc.invalidateQueries({ queryKey: ['design-docs'] });
     },
   });
 }
@@ -1031,6 +1099,25 @@ export function useRevertPrdSection() {
         method: 'PATCH',
       }),
     onSuccess: (_data, prdId) => {
+      qc.setQueryData<Prd>(['prd', prdId], (old) =>
+        old ? { ...old, fixBaseline: null, proposedContent: null, proposedBacklogJson: null } : old,
+      );
+      void qc.invalidateQueries({ queryKey: ['prd', prdId] });
+    },
+  });
+}
+
+export function useDismissPrdFixSession() {
+  const qc = useQueryClient();
+  return useMutation<{ ok: boolean }, Error, string>({
+    mutationFn: (prdId) =>
+      apiFetch(`/api/interviews/prds/${prdId}/fix-session/dismiss`, {
+        method: 'POST',
+      }),
+    onSuccess: (_data, prdId) => {
+      qc.setQueryData<Prd>(['prd', prdId], (old) =>
+        old ? { ...old, fixBaseline: null, proposedContent: null, proposedBacklogJson: null } : old,
+      );
       void qc.invalidateQueries({ queryKey: ['prd', prdId] });
     },
   });
@@ -1050,6 +1137,53 @@ export function useApplyProposedPrd(prdId: string) {
       qc.invalidateQueries({
         queryKey: ['unresolved-comment-count', 'prd', prdId],
       });
+    },
+  });
+}
+
+export function useApplyProposedPrdSelective(prdId: string) {
+  const qc = useQueryClient();
+  return useMutation<void, Error, { content?: string; backlogJson?: unknown }>({
+    mutationFn: (body) =>
+      apiFetch(`/api/interviews/prds/${prdId}/apply-proposed-selective`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['prd', prdId] });
+      qc.invalidateQueries({ queryKey: ['prd-test-cases', prdId] });
+      qc.invalidateQueries({ queryKey: ['review-comments', 'prd', prdId] });
+      qc.invalidateQueries({
+        queryKey: ['unresolved-comment-count', 'prd', prdId],
+      });
+    },
+  });
+}
+
+export type RegenerateProposedPrdSectionInput = {
+  section: 'content' | 'backlog';
+  oldText: string;
+  newText: string;
+  feedback: string;
+  itemPath?: string;
+};
+
+export function useRegenerateProposedPrdSection(prdId: string) {
+  const qc = useQueryClient();
+  return useMutation<
+    { proposedContent?: string | null; proposedBacklogJson?: unknown },
+    Error,
+    RegenerateProposedPrdSectionInput
+  >({
+    mutationFn: (body) =>
+      apiFetch(`/api/interviews/prds/${prdId}/regenerate-proposed-section`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['prd', prdId] });
     },
   });
 }
@@ -1148,6 +1282,61 @@ export function useApplyProposedDesignDoc(designDocId: string) {
       qc.invalidateQueries({
         queryKey: ['unresolved-comment-count', 'design_doc', designDocId],
       });
+    },
+  });
+}
+
+export function useApplyProposedDesignDocSelective(designDocId: string) {
+  const qc = useQueryClient();
+  return useMutation<
+    void,
+    Error,
+    { designContent?: string; techSpecContent?: string; assumptionsContent?: string }
+  >({
+    mutationFn: (body) =>
+      apiFetch(`/api/interviews/design-docs/${designDocId}/apply-proposed-selective`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['design-doc', designDocId] });
+      qc.invalidateQueries({
+        queryKey: ['review-comments', 'design_doc', designDocId],
+      });
+      qc.invalidateQueries({
+        queryKey: ['unresolved-comment-count', 'design_doc', designDocId],
+      });
+    },
+  });
+}
+
+export type RegenerateProposedDesignDocSectionInput = {
+  section: 'design' | 'tech_spec' | 'assumptions';
+  oldText: string;
+  newText: string;
+  feedback: string;
+};
+
+export function useRegenerateProposedDesignDocSection(designDocId: string) {
+  const qc = useQueryClient();
+  return useMutation<
+    {
+      proposedDesignContent?: string | null;
+      proposedTechSpecContent?: string | null;
+      proposedAssumptionsContent?: string | null;
+    },
+    Error,
+    RegenerateProposedDesignDocSectionInput
+  >({
+    mutationFn: (body) =>
+      apiFetch(`/api/interviews/design-docs/${designDocId}/regenerate-proposed-section`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['design-doc', designDocId] });
     },
   });
 }

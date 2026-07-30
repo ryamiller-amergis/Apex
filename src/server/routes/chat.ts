@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import {
   createThread,
   listThreadSummaries,
+  searchThreadSummaries,
   sendMessage,
   subscribeToThread,
   cancelRun,
@@ -10,10 +11,11 @@ import {
   readOutputBacklog,
   isPrdReady,
   getThread,
+  recoverStaleRunningThread,
 } from '../services/chatAgentService';
 import { db } from '../db/drizzle';
 import { eq, desc } from 'drizzle-orm';
-import { agentRuns, chatThreads, prds } from '../db/schema';
+import { agentRuns, prds } from '../db/schema';
 import { toggleFlag } from '../services/chatThreadRepository';
 import { resolveThreadAccess, canWriteThread } from '../services/threadAccessService';
 import { getUserId } from '../utils/requestUser';
@@ -120,7 +122,9 @@ export function buildRunStatusResponse(
       ? 'hard_timeout'
       : row.lastError?.startsWith('Never claimed')
         ? 'never_claimed'
-        : null;
+        : row.lastError?.includes('run aborted')
+          ? 'progress_timeout'
+          : null;
   return {
     runId: row.id,
     status: row.status,
@@ -139,6 +143,28 @@ export function buildRunStatusResponse(
 interface ThreadRequest extends Request {
   thread?: ChatThread;
   threadAccess?: ThreadAccess;
+}
+
+class HttpError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : 'Unexpected error';
+}
+
+function errorStatus(err: unknown, fallback = 500): number {
+  if (err instanceof HttpError) return err.status;
+  if (err && typeof err === 'object' && 'status' in err) {
+    const status = (err as { status?: unknown }).status;
+    if (typeof status === 'number') return status;
+  }
+  return fallback;
 }
 
 /**
@@ -182,40 +208,28 @@ async function requireThreadWrite(req: Request, res: Response, next: NextFunctio
 function readAttachments(raw: unknown): ChatAttachment[] {
   if (raw === undefined) return [];
   if (!Array.isArray(raw)) {
-    const err = new Error('attachments must be an array');
-    (err as any).status = 400;
-    throw err;
+    throw new HttpError('attachments must be an array', 400);
   }
   if (raw.length > MAX_CHAT_ATTACHMENTS) {
-    const err = new Error(`up to ${MAX_CHAT_ATTACHMENTS} attachments are allowed`);
-    (err as any).status = 413;
-    throw err;
+    throw new HttpError(`up to ${MAX_CHAT_ATTACHMENTS} attachments are allowed`, 413);
   }
 
   let totalBytes = 0;
   return raw.map((attachment, index) => {
     const a = attachment as Partial<ChatAttachment>;
     if (!a.id || !a.name || typeof a.content !== 'string') {
-      const err = new Error(`attachment ${index + 1} is invalid`);
-      (err as any).status = 400;
-      throw err;
+      throw new HttpError(`attachment ${index + 1} is invalid`, 400);
     }
     const size = Number(a.size);
     if (!Number.isFinite(size) || size < 0) {
-      const err = new Error(`attachment ${a.name} has an invalid size`);
-      (err as any).status = 400;
-      throw err;
+      throw new HttpError(`attachment ${a.name} has an invalid size`, 400);
     }
     if (size > MAX_CHAT_ATTACHMENT_BYTES) {
-      const err = new Error(`attachment ${a.name} is too large`);
-      (err as any).status = 413;
-      throw err;
+      throw new HttpError(`attachment ${a.name} is too large`, 413);
     }
     totalBytes += size;
     if (totalBytes > MAX_CHAT_ATTACHMENT_TOTAL_BYTES) {
-      const err = new Error('attachments are too large');
-      (err as any).status = 413;
-      throw err;
+      throw new HttpError('attachments are too large', 413);
     }
     return {
       id: a.id,
@@ -230,18 +244,36 @@ function readAttachments(raw: unknown): ChatAttachment[] {
 /**
  * GET /api/chat/threads
  * List thread summaries for the current user.
- * Query params: limit (default 50), offset (default 0)
+ * Query params: limit (default 50), offset (default 0), project, optional q (search term),
+ * optional flaggedOnly (honored when searching).
  */
 router.get('/threads', async (req: Request, res: Response) => {
   const limit = Math.min(Number(req.query.limit) || 50, 200);
   const offset = Number(req.query.offset) || 0;
   const project = typeof req.query.project === 'string' ? req.query.project : undefined;
+  const rawQ = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+  const flaggedOnly =
+    req.query.flaggedOnly === 'true' || req.query.flaggedOnly === '1';
+
   try {
+    // BR-003 / A-004: terms under 2 chars do not trigger search
+    if (rawQ.length >= 2) {
+      const results = await searchThreadSummaries(getUserId(req), {
+        term: rawQ,
+        limit,
+        offset,
+        project,
+        flaggedOnly: flaggedOnly || undefined,
+      });
+      res.json(results);
+      return;
+    }
+
     const summaries = await listThreadSummaries(getUserId(req), { limit, offset, project });
     res.json(summaries);
-  } catch (err: any) {
-    console.error('[chat] listThreadSummaries error:', err.message);
-    res.status(500).json({ error: err.message ?? 'Failed to list threads' });
+  } catch (err: unknown) {
+    console.error('[chat] listThreadSummaries error:', errorMessage(err));
+    res.status(500).json({ error: errorMessage(err) || 'Failed to list threads' });
   }
 });
 
@@ -261,9 +293,9 @@ router.post('/threads', async (req: Request, res: Response) => {
       skipAutoKickoff: Boolean(body.skipAutoKickoff),
     });
     res.status(201).json({ threadId: thread.id });
-  } catch (err: any) {
-    console.error('[chat] createThread error:', err.message);
-    res.status(500).json({ error: err.message ?? 'Failed to create thread' });
+  } catch (err: unknown) {
+    console.error('[chat] createThread error:', errorMessage(err));
+    res.status(500).json({ error: errorMessage(err) || 'Failed to create thread' });
   }
 });
 
@@ -273,7 +305,7 @@ router.post('/threads', async (req: Request, res: Response) => {
  * Augments the response with a computed `prdReady` flag based on file existence.
  */
 router.get('/threads/:id', requireThreadRead, (req: Request, res: Response) => {
-  const thread = (req as any).thread as ChatThread;
+  const thread = (req as ThreadRequest).thread!;
   res.json({ ...thread, prdReady: isPrdReady(thread.id) });
 });
 
@@ -282,7 +314,7 @@ router.get('/threads/:id', requireThreadRead, (req: Request, res: Response) => {
  * Server-Sent Events stream for real-time agent output.
  */
 router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: Response) => {
-  const thread = (req as any).thread as ChatThread;
+  const thread = (req as ThreadRequest).thread!;
   const streamStartedAt = Date.now();
   const myWorkContext = thread.kickoff?.mode === 'development'
     ? await getMyWorkSessionContext(req.params.id).catch(() => null)
@@ -441,20 +473,26 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
   let attachments: ChatAttachment[];
   try {
     attachments = readAttachments(body.attachments);
-  } catch (err: any) {
-    return res.status(err.status ?? 400).json({ error: err.message });
+  } catch (err: unknown) {
+    return res.status(errorStatus(err, 400)).json({ error: errorMessage(err) });
   }
   if (!body.text?.trim() && attachments.length === 0) {
     return res.status(400).json({ error: 'text or attachments are required' });
   }
 
-  const thread = (req as any).thread as ChatThread;
-  if (thread.status === 'running') return res.status(409).json({ error: 'Agent is already running' });
+  const thread = (req as ThreadRequest).thread!;
+  if (thread.status === 'running') {
+    const gate = await recoverStaleRunningThread(req.params.id);
+    if (gate === 'running') {
+      return res.status(409).json({ error: 'Agent is already running' });
+    }
+    // Dead run cleared — accept the message.
+  }
 
   // Fire-and-forget: response streams via SSE, this returns 202 immediately
   res.status(202).json({ ok: true });
-  sendMessage(req.params.id, body.text ?? '', body.model, attachments).catch((err) => {
-    console.error(`[chat] sendMessage error for thread ${req.params.id}:`, err.message);
+  sendMessage(req.params.id, body.text ?? '', body.model, attachments).catch((err: unknown) => {
+    console.error(`[chat] sendMessage error for thread ${req.params.id}:`, errorMessage(err));
   });
 });
 
@@ -466,8 +504,8 @@ router.post('/threads/:id/cancel', requireThreadWrite, async (req: Request, res:
   try {
     await cancelRun(req.params.id);
     res.json({ ok: true });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message ?? 'Failed to cancel' });
+  } catch (err: unknown) {
+    res.status(500).json({ error: errorMessage(err) || 'Failed to cancel' });
   }
 });
 
@@ -507,8 +545,8 @@ router.put('/threads/:id/prd', requireThreadWrite, async (req: Request, res: Res
     }
     await db.update(prds).set({ content, updatedAt: new Date().toISOString() }).where(eq(prds.id, prdRow.id));
     res.json({ ok: true });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message ?? 'Failed to write PRD' });
+  } catch (err: unknown) {
+    res.status(500).json({ error: errorMessage(err) || 'Failed to write PRD' });
   }
 });
 
@@ -525,9 +563,9 @@ router.patch('/threads/:id/flag', requireThreadWrite, async (req: Request, res: 
   try {
     const result = await toggleFlag(req.params.id, flagged);
     res.json(result);
-  } catch (err: any) {
-    console.error('[chat] toggleFlag error:', err.message);
-    res.status(500).json({ error: err.message ?? 'Failed to toggle flag' });
+  } catch (err: unknown) {
+    console.error('[chat] toggleFlag error:', errorMessage(err));
+    res.status(500).json({ error: errorMessage(err) || 'Failed to toggle flag' });
   }
 });
 
@@ -557,9 +595,9 @@ router.get('/threads/:id/run-status', requireThreadRead, async (req: Request, re
       .limit(1);
 
     res.json(buildRunStatusResponse(row ?? null));
-  } catch (err: any) {
-    console.error('[chat] run-status error:', err.message);
-    res.status(500).json({ error: err.message ?? 'Failed to fetch run status' });
+  } catch (err: unknown) {
+    console.error('[chat] run-status error:', errorMessage(err));
+    res.status(500).json({ error: errorMessage(err) || 'Failed to fetch run status' });
   }
 });
 
@@ -571,8 +609,8 @@ router.delete('/threads/:id', requireThreadWrite, async (req: Request, res: Resp
   try {
     await permanentlyDeleteThread(req.params.id);
     res.json({ ok: true });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message ?? 'Failed to delete thread' });
+  } catch (err: unknown) {
+    res.status(500).json({ error: errorMessage(err) || 'Failed to delete thread' });
   }
 });
 

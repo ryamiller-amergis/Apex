@@ -196,7 +196,13 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
                 </div>
               );
             })}
-            {isRunning && !streamingText && <div className={styles.typingIndicator}><span /><span /><span /></div>}
+            {isRunning && !streamingText && (
+              <div className={styles.typingIndicator} aria-label="Assistant is thinking">
+                <span className={styles.typingDot} />
+                <span className={styles.typingDot} />
+                <span className={styles.typingDot} />
+              </div>
+            )}
             {streamingText && (
               <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}>
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>

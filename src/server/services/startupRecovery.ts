@@ -4,7 +4,12 @@ import { db } from '../db/drizzle';
 import { prds, designDocs, testCases, devSessions } from '../db/schema';
 import { hydrateThread, isThreadIdle, sendMessage } from './chatAgentService';
 import { isThreadRunAlive } from './agentRunReaperService';
-import { startPrdWatcher, isPrdValidationWatcherActive, rehydratePrdValidationWatcher } from './prdService';
+import {
+  startPrdWatcher,
+  isPrdWatcherActive,
+  isPrdValidationWatcherActive,
+  rehydratePrdValidationWatcher,
+} from './prdService';
 import {
   startSingleFeatureDocWatcher,
   startValidationWatcher,
@@ -83,6 +88,47 @@ export async function recoverStaleDevSessionSetups(
 }
 
 /**
+ * Reset interview chat_threads stuck in `running` only when no live agent_runs
+ * row remains. Multi-instance deployments otherwise race and clearStaleRun a
+ * healthy interview mid-turn (active_run_id wiped while the owner keeps going).
+ */
+export async function recoverStuckInterviewThreads(): Promise<number> {
+  let recovered = 0;
+  const stuckInterviews = await findRunningInterviewThreads();
+  for (const row of stuckInterviews) {
+    if (await isThreadRunAlive(row.threadId)) {
+      console.log(
+        `[recovery] Interview thread still has a live run — leaving running` +
+          ` (threadId=${row.threadId}, interviewId=${row.interviewId}` +
+          `, activeRunId=${row.activeRunId ?? 'none'})`,
+      );
+      continue;
+    }
+
+    console.log(
+      `[recovery] Interview thread stuck in running with no live agent run` +
+        ` (threadId=${row.threadId}, interviewId=${row.interviewId}` +
+        `, activeRunId=${row.activeRunId ?? 'none'})`,
+    );
+
+    const ok = await hydrateThread(row.threadId);
+    if (ok) {
+      await clearStaleRun(row.threadId);
+      recovered++;
+      console.log(
+        `[recovery] Reset stuck interview thread to idle (threadId=${row.threadId})`,
+      );
+    } else {
+      console.warn(
+        `[recovery] Could not hydrate interview thread` +
+          ` (threadId=${row.threadId}, interviewId=${row.interviewId})`,
+      );
+    }
+  }
+  return recovered;
+}
+
+/**
  * Query the database for PRDs and design docs stuck in transient statuses
  * (generating, validating) and restart their watchers.  This handles:
  *   - Server restarts / deploys that kill in-memory watchers
@@ -111,6 +157,7 @@ export async function recoverInFlightWork(): Promise<void> {
   });
   for (const prd of generatingPrds) {
     if (!prd.chatThreadId) continue;
+    if (isPrdWatcherActive(prd.id)) continue;
     const ok = await hydrateThread(prd.chatThreadId);
     if (ok) {
       startPrdWatcher(prd.id, prd.chatThreadId);
@@ -299,27 +346,10 @@ export async function recoverInFlightWork(): Promise<void> {
   }
 
   // ── Interview threads stuck in 'running' ──────────────────────────────────
-  const stuckInterviews = await findRunningInterviewThreads();
-  for (const row of stuckInterviews) {
-    console.log(
-      `[recovery] Interview thread stuck in running` +
-        ` (threadId=${row.threadId}, interviewId=${row.interviewId}` +
-        `, activeRunId=${row.activeRunId ?? 'none'})`
-    );
-
-    const ok = await hydrateThread(row.threadId);
-    if (ok) {
-      await clearStaleRun(row.threadId);
-      recovered++;
-      console.log(
-        `[recovery] Reset stuck interview thread to idle (threadId=${row.threadId})`
-      );
-    } else {
-      console.warn(
-        `[recovery] Could not hydrate interview thread` +
-          ` (threadId=${row.threadId}, interviewId=${row.interviewId})`
-      );
-    }
+  try {
+    recovered += await recoverStuckInterviewThreads();
+  } catch (err) {
+    console.error('[recovery] Failed to recover stuck interview threads:', err);
   }
 
   // ── Design prototypes stuck in generating/regenerating ────────────────────
@@ -384,6 +414,45 @@ export function startRecoveryLoop(): void {
   }, RECOVERY_INTERVAL_MS);
 }
 
+function isPipeClosedError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const code = (err as { code?: unknown }).code;
+  return code === 'EPIPE' || code === 'ERR_STREAM_DESTROYED';
+}
+
+/**
+ * Prevent Cursor SDK local-CLI pipe failures (EPIPE) from taking down the whole
+ * App Service process. Prod 2026-07-28: unhandled EPIPE from @cursor/sdk crashed
+ * Node while design-doc agents were running, then apt-blocked restart prolonged
+ * the outage.
+ *
+ * Non-EPIPE fatals still exit after logging so Azure can recycle cleanly.
+ */
+export function registerProcessGuards(): void {
+  process.on('uncaughtException', (err) => {
+    if (isPipeClosedError(err)) {
+      console.error(
+        '[process] Ignoring uncaught EPIPE/stream error (Cursor SDK CLI pipe likely closed):',
+        err,
+      );
+      return;
+    }
+    console.error('[process] Uncaught exception — exiting after log:', err);
+    process.exit(1);
+  });
+
+  process.on('unhandledRejection', (reason) => {
+    if (isPipeClosedError(reason)) {
+      console.error(
+        '[process] Ignoring unhandled EPIPE/stream rejection (Cursor SDK CLI pipe likely closed):',
+        reason,
+      );
+      return;
+    }
+    console.error('[process] Unhandled promise rejection:', reason);
+  });
+}
+
 /**
  * Register SIGTERM / SIGINT handlers for graceful shutdown.
  * Stops accepting new connections and waits for in-flight requests
@@ -391,6 +460,8 @@ export function startRecoveryLoop(): void {
  */
 export function registerGracefulShutdown(server: Server): void {
   let shuttingDown = false;
+
+  registerProcessGuards();
 
   const shutdown = (signal: string) => {
     if (shuttingDown) return;

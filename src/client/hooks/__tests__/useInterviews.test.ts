@@ -36,7 +36,14 @@ import {
   useMarkPrdValidationReady,
   useFixPrdValidation,
   useAcceptFixPrdValidation,
+  useFixPrdCoverage,
+  useAcceptFixPrdCoverage,
+  useOverridePrdReadiness,
   useRevertPrdSection,
+  useDismissPrdFixSession,
+  useOverrideDesignDocValidation,
+  useApplyProposedPrdSelective,
+  useRegenerateProposedPrdSection,
   useGenerateTestCases,
   useRecalculateTestCaseCoverage,
 } from '../useInterviews';
@@ -848,6 +855,59 @@ describe('PRD validation hooks', () => {
     );
   });
 
+  it('POSTs to start and accept PRD coverage fixes', async () => {
+    mockFetchOk({ threadId: 'cov-thread-1' });
+    const { wrapper } = createWrapper();
+
+    const { result: fixResult } = renderHook(() => useFixPrdCoverage(), { wrapper });
+
+    await act(async () => {
+      fixResult.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(fixResult.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/fix-coverage',
+      expect.objectContaining({ method: 'POST' }),
+    );
+
+    mockFetchOk({ ok: true });
+    const { result: acceptResult } = renderHook(() => useAcceptFixPrdCoverage(), { wrapper });
+
+    await act(async () => {
+      acceptResult.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(acceptResult.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      '/api/interviews/prds/prd-1/fix-coverage/accept',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('POSTs a readiness override with a reason', async () => {
+    mockFetchOk({ override: { reason: 'ship it', states: ['coverage_gaps'] } });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useOverridePrdReadiness(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate({ prdId: 'prd-1', reason: 'ship it' });
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/override-readiness',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ reason: 'ship it' }),
+      }),
+    );
+  });
+
   it('PATCHes to revert the PRD validation baseline', async () => {
     mockFetchOk({ ok: true });
     const { wrapper } = createWrapper();
@@ -863,6 +923,97 @@ describe('PRD validation hooks', () => {
     expect(global.fetch).toHaveBeenCalledWith(
       '/api/interviews/prds/prd-1/revert-section',
       expect.objectContaining({ method: 'PATCH' }),
+    );
+  });
+
+  it('POSTs to dismiss a PRD fix session', async () => {
+    mockFetchOk({ ok: true });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useDismissPrdFixSession(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate('prd-1');
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/fix-session/dismiss',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('POSTs a design-doc validation override with a reason', async () => {
+    mockFetchOk({ override: { reason: 'accepted risk' } });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useOverrideDesignDocValidation(), { wrapper });
+
+    await act(async () => {
+      result.current.mutate({ designDocId: 'dd-1', reason: 'accepted risk' });
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/design-docs/dd-1/override-validation',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ reason: 'accepted risk' }),
+      }),
+    );
+  });
+
+  it('POSTs selective PRD proposed apply with merged body', async () => {
+    mockFetchOk({ ok: true });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useApplyProposedPrdSelective('prd-1'), { wrapper });
+
+    await act(async () => {
+      result.current.mutate({ content: '# Merged', backlogJson: { items: [] } });
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/apply-proposed-selective',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ content: '# Merged', backlogJson: { items: [] } }),
+      }),
+    );
+  });
+
+  it('POSTs PRD section regenerate feedback', async () => {
+    mockFetchOk({ proposedContent: '# Revised' });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useRegenerateProposedPrdSection('prd-1'), { wrapper });
+
+    await act(async () => {
+      result.current.mutate({
+        section: 'content',
+        oldText: 'old',
+        newText: 'new',
+        feedback: 'Tighten wording',
+      });
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/prds/prd-1/regenerate-proposed-section',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          section: 'content',
+          oldText: 'old',
+          newText: 'new',
+          feedback: 'Tighten wording',
+        }),
+      }),
     );
   });
 });

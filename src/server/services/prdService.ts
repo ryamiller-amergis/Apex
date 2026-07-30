@@ -6,7 +6,7 @@ import { prds, appUsers, chatThreads, interviews, testCases, designDocs, designP
 
 const authorUser = alias(appUsers, 'author_user');
 const prdOwnerUser = alias(appUsers, 'prd_owner_user');
-import type { Prd, PrdStatus, PrdSummary, PrdValidationBaseline, ReviewPrdRequest, TestCaseSummary, ValidationScorecard } from '../../shared/types/interview';
+import type { Prd, PrdStatus, PrdSummary, PrdValidationBaseline, PrdReadinessOverride, ReviewPrdRequest, TestCaseSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { CreatePrdAdoItemsRequest, CreatePrdAdoItemsResponse, SelectedBacklogEpic, SelectedBacklogFeature, SelectedBacklogPBI, GlobalBusinessRule, DependencyGraphNode } from '../../shared/types/interview';
 import { readOutputPrd, readOutputBacklog, sendMessage, createThread as createChatThread } from './chatAgentService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
@@ -20,10 +20,12 @@ import { listDesignDocs } from '../services/designDocService';
 import { extractFeatures } from '../services/designPrototypeService';
 import { stampAdoIds } from '../../shared/utils/backlogTransform';
 import { derivePrdReadiness } from '../../shared/utils/prdReadiness';
+import { buildOverrideHistory } from '../../shared/utils/validationOverride';
 import { BACKLOG_USER_TYPE_CONVENTIONS_MD } from '../../shared/utils/backlogUserTypeConventions';
-import { getTestCases, listLatestTestCaseSummariesForPrds } from './testCaseService';
+import { getTestCases, listLatestTestCaseSummariesForPrds, getUncoveredCoverageItems, recalculateTestCaseCoverage } from './testCaseService';
 import { getSkillConfig, resolveSkillConfig, getSkillSettingsName } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
+import { resolvePrototypeStageEnabled } from '../../shared/utils/prototypeStage';
 import {
   autoStartDocumentValidation,
   cancelDocumentValidation,
@@ -204,6 +206,8 @@ export async function listPrds(
       authorDisplayName: authorUser.displayName,
       prdOwnerId: interviews.prdOwnerId,
       prdOwnerDisplayName: prdOwnerUser.displayName,
+      prototypeStageEnabled: interviews.prototypeStageEnabled,
+      testCasesEnabled: interviews.testCasesEnabled,
     })
     .from(prds)
     .leftJoin(appUsers, eq(prds.reviewerId, appUsers.oid))
@@ -219,27 +223,44 @@ export async function listPrds(
 
   const projects = [...new Set(rows.map(({ prd }) => prd.project))];
   const thresholdByProject = new Map<string, number | null>();
+  const validationEnabledByProject = new Map<string, boolean>();
   await Promise.all(projects.map(async (p) => {
     const cfg = await getSkillConfig(p);
     thresholdByProject.set(p, cfg?.prdValidationScoreThreshold ?? null);
+    validationEnabledByProject.set(p, !!cfg?.prdValidationSkillPath);
   }));
 
   const uniqueSettingsIds = [...new Set(rows.map(({ prd }) => prd.skillSettingsId).filter(Boolean))] as string[];
   const settingsNameEntries = await Promise.all(uniqueSettingsIds.map(async (id) => [id, await getSkillSettingsName(id)] as const));
   const settingsNameMap = new Map(settingsNameEntries);
 
-  return rows.map(({ prd, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName }) => ({
-    ...rowToPrdSummary(
-      prd,
-      reviewerDisplayName,
-      authorDisplayName,
-      prdOwnerId,
-      prdOwnerDisplayName,
-      latestTestCases.get(prd.id) ?? null,
-      prd.skillSettingsId ? settingsNameMap.get(prd.skillSettingsId) ?? null : null,
-    ),
-    validationScoreThreshold: thresholdByProject.get(prd.project) ?? null,
+  const skillConfigByKey = new Map<string, Awaited<ReturnType<typeof resolveSkillConfig>>>();
+  await Promise.all(rows.map(async ({ prd }) => {
+    const key = `${prd.project}::${prd.skillSettingsId ?? ''}`;
+    if (skillConfigByKey.has(key)) return;
+    skillConfigByKey.set(key, await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined }));
   }));
+
+  return rows.map(({ prd, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName, prototypeStageEnabled, testCasesEnabled }) => {
+    const skillConfig = skillConfigByKey.get(`${prd.project}::${prd.skillSettingsId ?? ''}`);
+    return {
+      ...rowToPrdSummary(
+        prd,
+        reviewerDisplayName,
+        authorDisplayName,
+        prdOwnerId,
+        prdOwnerDisplayName,
+        latestTestCases.get(prd.id) ?? null,
+        prd.skillSettingsId ? settingsNameMap.get(prd.skillSettingsId) ?? null : null,
+        {
+          prototypeStageEnabled: resolvePrototypeStageEnabled(prototypeStageEnabled, skillConfig),
+          testCasesEnabled,
+        },
+      ),
+      validationScoreThreshold: thresholdByProject.get(prd.project) ?? null,
+      prdValidationEnabled: validationEnabledByProject.get(prd.project) ?? false,
+    };
+  });
 }
 
 export async function getPrd(id: string): Promise<Prd | null> {
@@ -250,6 +271,8 @@ export async function getPrd(id: string): Promise<Prd | null> {
       authorDisplayName: authorUser.displayName,
       prdOwnerId: interviews.prdOwnerId,
       prdOwnerDisplayName: prdOwnerUser.displayName,
+      prototypeStageEnabled: interviews.prototypeStageEnabled,
+      testCasesEnabled: interviews.testCasesEnabled,
     })
     .from(prds)
     .leftJoin(appUsers, eq(prds.reviewerId, appUsers.oid))
@@ -260,14 +283,44 @@ export async function getPrd(id: string): Promise<Prd | null> {
     .limit(1);
 
   if (rows.length === 0) return null;
-  const { prd: row, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName } = rows[0];
-  const [latestTestCase, skillConfig, skillSettingsName] = await Promise.all([
+  const {
+    prd: row,
+    reviewerDisplayName,
+    authorDisplayName,
+    prdOwnerId,
+    prdOwnerDisplayName,
+    prototypeStageEnabled,
+    testCasesEnabled,
+  } = rows[0];
+  const [latestTestCase, skillConfig, skillSettingsName, kickoffSkillPath] = await Promise.all([
     getTestCases(id),
     resolveSkillConfig({ project: row.project, settingsId: row.skillSettingsId ?? undefined }),
     getSkillSettingsName(row.skillSettingsId),
+    row.chatThreadId
+      ? db.query.chatThreads.findFirst({
+          where: eq(chatThreads.id, row.chatThreadId),
+          columns: { kickoff: true },
+        }).then((t) => t?.kickoff?.skillPath ?? null)
+      : Promise.resolve(null),
   ]);
   return {
-    ...rowToPrdSummary(row, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName, latestTestCase, skillSettingsName),
+    ...rowToPrdSummary(
+      row,
+      reviewerDisplayName,
+      authorDisplayName,
+      prdOwnerId,
+      prdOwnerDisplayName,
+      latestTestCase,
+      skillSettingsName,
+      {
+        prototypeStageEnabled: resolvePrototypeStageEnabled(
+          prototypeStageEnabled,
+          skillConfig,
+          kickoffSkillPath,
+        ),
+        testCasesEnabled: testCasesEnabled ?? true,
+      },
+    ),
     content: row.content,
     backlogJson: row.backlogJson ?? undefined,
     prdAssistantThreadId: row.prdAssistantThreadId ?? null,
@@ -280,6 +333,7 @@ export async function getPrd(id: string): Promise<Prd | null> {
     validationReportMd: row.validationReportMd ?? null,
     validationPhase: row.validationPhase ?? null,
     fixBaseline: (row.fixBaseline as PrdValidationBaseline | null) ?? null,
+    readinessOverride: (row.readinessOverride as PrdReadinessOverride | null) ?? null,
     prdValidationEnabled: !!skillConfig?.prdValidationSkillPath,
     validationScoreThreshold: skillConfig?.prdValidationScoreThreshold ?? null,
     fixCommentId: row.fixCommentId ?? null,
@@ -332,6 +386,89 @@ export async function updatePrdBacklog(
     .where(eq(prds.id, id));
 }
 
+/**
+ * Inherit kickoff approver selections onto a PRD entering pending_review and
+ * create assignment rows. Used by both manual submit and auto-promotion after
+ * validation passes.
+ */
+async function applyKickoffApproversForReview(
+  prdId: string,
+  interviewId: string | null,
+  assignedBy: string,
+  opts?: {
+    prdApproverIds?: string[];
+    designDocApproverIds?: string[];
+    designPrototypeApproverIds?: string[];
+    qaApproverIds?: string[];
+  },
+): Promise<{
+  designDocApproverIds?: string[];
+  designPrototypeApproverIds?: string[];
+  testCasesRequired: boolean;
+}> {
+  let interviewWorkflow: {
+    prdApproverIds: string[] | null;
+    designDocApproverIds: string[] | null;
+    designPrototypeApproverIds: string[] | null;
+    testCaseApproverIds: string[] | null;
+    testCasesEnabled: boolean | null;
+  } | null = null;
+  let testCasesRequired = true;
+  if (interviewId) {
+    interviewWorkflow = await db.query.interviews.findFirst({
+      where: eq(interviews.id, interviewId),
+      columns: {
+        prdApproverIds: true,
+        designDocApproverIds: true,
+        designPrototypeApproverIds: true,
+        testCaseApproverIds: true,
+        testCasesEnabled: true,
+      },
+    }) ?? null;
+    testCasesRequired = interviewWorkflow?.testCasesEnabled !== false;
+  }
+
+  let effectivePrdApproverIds = opts?.prdApproverIds;
+  let effectiveDdApproverIds = opts?.designDocApproverIds;
+  let effectivePrototypeApproverIds = opts?.designPrototypeApproverIds;
+  let effectiveQaApproverIds = opts?.qaApproverIds;
+
+  if ((!effectivePrdApproverIds || effectivePrdApproverIds.length === 0) && interviewWorkflow) {
+    if (interviewWorkflow.prdApproverIds && interviewWorkflow.prdApproverIds.length > 0) {
+      effectivePrdApproverIds = interviewWorkflow.prdApproverIds;
+    }
+    if (!effectiveDdApproverIds || effectiveDdApproverIds.length === 0) {
+      effectiveDdApproverIds = interviewWorkflow.designDocApproverIds ?? undefined;
+    }
+    if (!effectivePrototypeApproverIds || effectivePrototypeApproverIds.length === 0) {
+      effectivePrototypeApproverIds = interviewWorkflow.designPrototypeApproverIds ?? undefined;
+    }
+    if (!effectiveQaApproverIds || effectiveQaApproverIds.length === 0) {
+      effectiveQaApproverIds = interviewWorkflow.testCaseApproverIds ?? undefined;
+    }
+  }
+
+  if (effectivePrdApproverIds && effectivePrdApproverIds.length > 0) {
+    await assignApprovers(prdId, 'prd', effectivePrdApproverIds, assignedBy);
+  }
+
+  if (testCasesRequired && effectiveQaApproverIds && effectiveQaApproverIds.length > 0) {
+    await assignApprovers(prdId, 'test_case', effectiveQaApproverIds, assignedBy);
+  }
+
+  return {
+    designDocApproverIds:
+      effectiveDdApproverIds && effectiveDdApproverIds.length > 0
+        ? effectiveDdApproverIds
+        : undefined,
+    designPrototypeApproverIds:
+      effectivePrototypeApproverIds && effectivePrototypeApproverIds.length > 0
+        ? effectivePrototypeApproverIds
+        : undefined,
+    testCasesRequired,
+  };
+}
+
 export async function submitForReview(
   id: string,
   requestingUserId: string,
@@ -353,6 +490,14 @@ export async function submitForReview(
   }
   if (!row.content) throw conflict('PRD content must be non-empty before submitting for review');
   const skillConfig = await resolveSkillConfig({ project: row.project, settingsId: row.skillSettingsId ?? undefined });
+  let testCasesRequired = true;
+  if (row.interviewId) {
+    const interviewWorkflow = await db.query.interviews.findFirst({
+      where: eq(interviews.id, row.interviewId),
+      columns: { testCasesEnabled: true },
+    });
+    testCasesRequired = interviewWorkflow?.testCasesEnabled !== false;
+  }
   const readiness = derivePrdReadiness(
     {
       status: row.status as PrdStatus,
@@ -362,34 +507,17 @@ export async function submitForReview(
     },
     await getTestCases(id),
     skillConfig?.prdValidationScoreThreshold ?? undefined,
+    {
+      testCasesRequired,
+      prdValidationEnabled: !!skillConfig?.prdValidationSkillPath,
+      overriddenStates: (row.readinessOverride as PrdReadinessOverride | null)?.states,
+    },
   );
   if (!readiness.readyForReviewActions) {
     throw conflict(readiness.blockingReason ?? 'PRD QA readiness must complete before review');
   }
 
-  let effectivePrdApproverIds = opts?.prdApproverIds;
-  let effectiveDdApproverIds = opts?.designDocApproverIds;
-  let effectivePrototypeApproverIds = opts?.designPrototypeApproverIds;
-  let effectiveQaApproverIds = opts?.qaApproverIds;
-
-  if ((!effectivePrdApproverIds || effectivePrdApproverIds.length === 0) && row.interviewId) {
-    const interview = await db.query.interviews.findFirst({
-      where: eq(interviews.id, row.interviewId),
-      columns: { prdApproverIds: true, designDocApproverIds: true, designPrototypeApproverIds: true, testCaseApproverIds: true },
-    });
-    if (interview?.prdApproverIds && interview.prdApproverIds.length > 0) {
-      effectivePrdApproverIds = interview.prdApproverIds;
-    }
-    if (!effectiveDdApproverIds || effectiveDdApproverIds.length === 0) {
-      effectiveDdApproverIds = interview?.designDocApproverIds ?? undefined;
-    }
-    if (!effectivePrototypeApproverIds || effectivePrototypeApproverIds.length === 0) {
-      effectivePrototypeApproverIds = interview?.designPrototypeApproverIds ?? undefined;
-    }
-    if (!effectiveQaApproverIds || effectiveQaApproverIds.length === 0) {
-      effectiveQaApproverIds = interview?.testCaseApproverIds ?? undefined;
-    }
-  }
+  const kickoff = await applyKickoffApproversForReview(id, row.interviewId, requestingUserId, opts);
 
   const updates: Partial<typeof prds.$inferInsert> = {
     status: 'pending_review',
@@ -398,23 +526,15 @@ export async function submitForReview(
     updatedAt: new Date().toISOString(),
   };
 
-  if (effectiveDdApproverIds && effectiveDdApproverIds.length > 0) {
-    updates.designDocApproverIds = effectiveDdApproverIds;
+  if (kickoff.designDocApproverIds) {
+    updates.designDocApproverIds = kickoff.designDocApproverIds;
   }
 
-  if (effectivePrototypeApproverIds && effectivePrototypeApproverIds.length > 0) {
-    updates.designPrototypeApproverIds = effectivePrototypeApproverIds;
+  if (kickoff.designPrototypeApproverIds) {
+    updates.designPrototypeApproverIds = kickoff.designPrototypeApproverIds;
   }
 
   await db.update(prds).set(updates).where(eq(prds.id, id));
-
-  if (effectivePrdApproverIds && effectivePrdApproverIds.length > 0) {
-    await assignApprovers(id, 'prd', effectivePrdApproverIds, requestingUserId);
-  }
-
-  if (effectiveQaApproverIds && effectiveQaApproverIds.length > 0) {
-    await assignApprovers(id, 'test_case', effectiveQaApproverIds, requestingUserId);
-  }
 }
 
 export async function withdrawFromReview(id: string, requestingUserId: string): Promise<void> {
@@ -461,6 +581,14 @@ export async function reviewPrd(
   if (!row) throw notFound('PRD not found');
   if (row.status !== 'pending_review') throw conflict(`Cannot review PRD from status '${row.status}'`);
   const reviewSkillConfig = await resolveSkillConfig({ project: row.project, settingsId: row.skillSettingsId ?? undefined });
+  let reviewTestCasesRequired = true;
+  if (row.interviewId) {
+    const interview = await db.query.interviews.findFirst({
+      where: eq(interviews.id, row.interviewId),
+      columns: { testCasesEnabled: true },
+    });
+    reviewTestCasesRequired = interview?.testCasesEnabled !== false;
+  }
   const readiness = derivePrdReadiness(
     {
       status: row.status as PrdStatus,
@@ -470,6 +598,11 @@ export async function reviewPrd(
     },
     await getTestCases(id),
     reviewSkillConfig?.prdValidationScoreThreshold ?? undefined,
+    {
+      testCasesRequired: reviewTestCasesRequired,
+      prdValidationEnabled: !!reviewSkillConfig?.prdValidationSkillPath,
+      overriddenStates: (row.readinessOverride as PrdReadinessOverride | null)?.states,
+    },
   );
   if (!readiness.readyForReviewActions) {
     throw conflict(readiness.blockingReason ?? 'PRD QA readiness must complete before approval');
@@ -601,6 +734,10 @@ function stopPrdWatcher(prdId: string): void {
   }
 }
 
+export function isPrdWatcherActive(prdId: string): boolean {
+  return activePrdWatchers.has(prdId);
+}
+
 export function startPrdWatcher(prdId: string, chatThreadId: string): void {
   stopPrdWatcher(prdId);
   let attempts = 0;
@@ -649,9 +786,32 @@ export function startPrdWatcher(prdId: string, chatThreadId: string): void {
         await syncPrdContent(prdId, content, backlog);
         console.log(`[prdWatcher] Sync complete — PRD is now draft (prdId=${prdId})`);
         try {
-          const { triggerTestCaseGeneration } = await import('./testCaseService');
-          const testCaseStarted = await triggerTestCaseGeneration(prdId, chatThreadId);
-          if (!testCaseStarted) cleanupWorkspace(chatThreadId);
+          const prdRowAfterSync = await db.query.prds.findFirst({
+            where: eq(prds.id, prdId),
+            columns: { interviewId: true },
+          });
+          let testCasesEnabled = true;
+          if (prdRowAfterSync?.interviewId) {
+            const interview = await db.query.interviews.findFirst({
+              where: eq(interviews.id, prdRowAfterSync.interviewId),
+              columns: { testCasesEnabled: true },
+            });
+            testCasesEnabled = interview?.testCasesEnabled !== false;
+          }
+
+          if (!testCasesEnabled) {
+            console.log(`[prdWatcher] Test cases disabled for interview — skipping generation (prdId=${prdId})`);
+            cleanupWorkspace(chatThreadId);
+            try {
+              await autoStartPrdValidation(prdId);
+            } catch (err) {
+              console.error(`[prdWatcher] Auto PRD validation failed (prdId=${prdId})`, err);
+            }
+          } else {
+            const { triggerTestCaseGeneration } = await import('./testCaseService');
+            const testCaseStarted = await triggerTestCaseGeneration(prdId, chatThreadId);
+            if (!testCaseStarted) cleanupWorkspace(chatThreadId);
+          }
         } catch (err) {
           console.error(`[prdWatcher] Auto test-case generation failed (prdId=${prdId})`, err);
           cleanupWorkspace(chatThreadId);
@@ -673,6 +833,7 @@ function rowToPrdSummary(
   prdOwnerName?: string | null,
   latestTestCase?: TestCaseSummary | null,
   skillSettingsName?: string | null,
+  workflowFlags?: { prototypeStageEnabled?: boolean | null; testCasesEnabled?: boolean | null },
 ): PrdSummary {
   const effectiveOwnerId = prdOwnerId ?? row.authorId;
   const effectiveOwnerName = prdOwnerName ?? authorName ?? undefined;
@@ -697,6 +858,9 @@ function rowToPrdSummary(
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     latestTestCase: latestTestCase ?? null,
+    validationScore: row.validationScore ?? null,
+    prototypeStageEnabled: workflowFlags?.prototypeStageEnabled ?? true,
+    testCasesRequired: workflowFlags?.testCasesEnabled !== false,
   };
 }
 
@@ -1262,10 +1426,18 @@ void assertValidPrdStatus;
 /**
  * Promote proposed PRD content/backlog to live, resolve related review comments,
  * sync backlog test-case counts, and re-run validation when configured.
+ *
+ * When `mergedContent` / `mergedBacklogJson` are provided (selective wizard Finish),
+ * those values are written to live instead of blindly COALESCE-ing the proposed columns.
  */
 export async function applyProposedPrdChanges(
   prdId: string,
-  options: { resolvedBy: string; fixCommentId?: string | null },
+  options: {
+    resolvedBy: string;
+    fixCommentId?: string | null;
+    mergedContent?: string;
+    mergedBacklogJson?: unknown;
+  },
 ): Promise<{ applied: boolean }> {
   const prdRow = await db.query.prds.findFirst({
     where: eq(prds.id, prdId),
@@ -1283,18 +1455,59 @@ export async function applyProposedPrdChanges(
 
   const fixCommentId =
     options.fixCommentId !== undefined ? options.fixCommentId : prdRow.fixCommentId;
-  const backlogWillUpdate = prdRow.proposedBacklogJson != null;
 
-  await db.execute(sql`
-    UPDATE prds
-    SET content = COALESCE(proposed_content, content),
-        backlog_json = COALESCE(proposed_backlog_json, backlog_json),
-        proposed_content = NULL,
-        proposed_backlog_json = NULL,
-        fix_comment_id = NULL,
-        updated_at = NOW()
-    WHERE id = ${prdId}
-  `);
+  const useMerged =
+    options.mergedContent !== undefined || options.mergedBacklogJson !== undefined;
+
+  const backlogWillUpdate = useMerged
+    ? options.mergedBacklogJson !== undefined
+    : prdRow.proposedBacklogJson != null;
+
+  if (useMerged) {
+    // Write explicit merged values, then promote any remaining proposed side not in the payload.
+    await db
+      .update(prds)
+      .set({
+        ...(options.mergedContent !== undefined ? { content: options.mergedContent } : {}),
+        ...(options.mergedBacklogJson !== undefined
+          ? { backlogJson: options.mergedBacklogJson as any }
+          : {}),
+        proposedContent: null,
+        proposedBacklogJson: null,
+        fixCommentId: null,
+        updatedAt: new Date().toISOString(),
+      } as any)
+      .where(eq(prds.id, prdId));
+
+    if (options.mergedContent === undefined && prdRow.proposedContent != null) {
+      await db.execute(sql`
+        UPDATE prds
+        SET content = COALESCE(${prdRow.proposedContent}, content),
+            updated_at = NOW()
+        WHERE id = ${prdId}
+      `);
+    }
+    if (options.mergedBacklogJson === undefined && prdRow.proposedBacklogJson != null) {
+      await db
+        .update(prds)
+        .set({
+          backlogJson: prdRow.proposedBacklogJson as any,
+          updatedAt: new Date().toISOString(),
+        } as any)
+        .where(eq(prds.id, prdId));
+    }
+  } else {
+    await db.execute(sql`
+      UPDATE prds
+      SET content = COALESCE(proposed_content, content),
+          backlog_json = COALESCE(proposed_backlog_json, backlog_json),
+          proposed_content = NULL,
+          proposed_backlog_json = NULL,
+          fix_comment_id = NULL,
+          updated_at = NOW()
+      WHERE id = ${prdId}
+    `);
+  }
 
   if (backlogWillUpdate) {
     const { syncPrdBacklogTestCaseCounts } = await import('./testCaseService');
@@ -1327,9 +1540,20 @@ export async function applyProposedPrdChanges(
       );
   }
 
-  void autoStartPrdValidation(prdId).catch((err) =>
-    console.error(`[prd] autoStartPrdValidation after apply-proposed failed (prdId=${prdId})`, err),
-  );
+  // Never re-validate mid Fix-with-Apex — accept-fix owns that kickoff.
+  const afterApply = await db.query.prds.findFirst({
+    where: eq(prds.id, prdId),
+    columns: { fixBaseline: true },
+  });
+  if (afterApply?.fixBaseline) {
+    console.log(
+      `[prd] Skipping autoStartPrdValidation after apply-proposed — fix session active (prdId=${prdId})`,
+    );
+  } else {
+    void autoStartPrdValidation(prdId, { force: true }).catch((err) =>
+      console.error(`[prd] autoStartPrdValidation after apply-proposed failed (prdId=${prdId})`, err),
+    );
+  }
 
   return { applied: true };
 }
@@ -1364,13 +1588,24 @@ export async function resolvePrdCommentWithApply(
 // ── PRD Validation ────────────────────────────────────────────────────────────
 
 const activePrdValidationWatchers = new Map<string, boolean>();
+const activePrdValidationStarts = new Set<string>();
 
 export async function arePrdValidationArtifactsReady(prdId: string): Promise<boolean> {
   const prdRow = await db.query.prds.findFirst({
     where: eq(prds.id, prdId),
-    columns: { content: true, backlogJson: true },
+    columns: { content: true, backlogJson: true, interviewId: true },
   });
   if (!prdRow || !prdRow.content || !prdRow.backlogJson) return false;
+
+  let testCasesRequired = true;
+  if (prdRow.interviewId) {
+    const interview = await db.query.interviews.findFirst({
+      where: eq(interviews.id, prdRow.interviewId),
+      columns: { testCasesEnabled: true },
+    });
+    testCasesRequired = interview?.testCasesEnabled !== false;
+  }
+  if (!testCasesRequired) return true;
 
   const tc = await db.query.testCases.findFirst({
     where: and(eq(testCases.prdId, prdId), eq(testCases.status, 'ready')),
@@ -1410,6 +1645,17 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
       ].join('\n');
     },
     updateDbForValidationStart: async (threadId: string) => {
+      // Never clear/replace the displayed score while Fix-with-Apex owns the session.
+      const current = await db.query.prds.findFirst({
+        where: eq(prds.id, prd.id),
+        columns: { fixBaseline: true },
+      });
+      if (current?.fixBaseline) {
+        console.log(
+          `[prd] Skipping validation start write — fix session active (prdId=${prd.id})`,
+        );
+        return;
+      }
       await db.update(prds)
         .set({
           validationThreadId: threadId,
@@ -1423,7 +1669,26 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
         .where(eq(prds.id, prd.id));
     },
     updateDbForValidationResult: async (scorecard: ValidationScorecard, reportMd: string) => {
+      // Stale watchers must not flip validationScore mid Fix-with-Apex review.
+      const current = await db.query.prds.findFirst({
+        where: eq(prds.id, prd.id),
+        columns: { fixBaseline: true, status: true },
+      });
+      if (current?.fixBaseline) {
+        console.log(
+          `[prd] Skipping validation result write — fix session active (prdId=${prd.id})`,
+        );
+        if (current.status === 'validating') {
+          await db.update(prds)
+            .set({ status: 'draft', updatedAt: new Date().toISOString() })
+            .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')));
+        }
+        return;
+      }
       const newStatus: PrdStatus = scorecard.is_ready ? 'pending_review' : 'draft';
+      const kickoff = newStatus === 'pending_review'
+        ? await applyKickoffApproversForReview(prd.id, prd.interviewId, prd.authorId)
+        : null;
       await db.update(prds)
         .set({
           validationScore: Math.round(scorecard.overall_score),
@@ -1431,6 +1696,12 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
           validationPhase: scorecard.review_phase,
           validationReportMd: reportMd,
           status: newStatus,
+          ...(kickoff?.designDocApproverIds
+            ? { designDocApproverIds: kickoff.designDocApproverIds }
+            : {}),
+          ...(kickoff?.designPrototypeApproverIds
+            ? { designPrototypeApproverIds: kickoff.designPrototypeApproverIds }
+            : {}),
           updatedAt: new Date().toISOString(),
         })
         .where(eq(prds.id, prd.id));
@@ -1467,18 +1738,43 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
   };
 }
 
-export async function autoStartPrdValidation(prdId: string): Promise<void> {
-  const prd = await getPrd(prdId);
-  if (!prd) return;
+export async function autoStartPrdValidation(
+  prdId: string,
+  options?: { force?: boolean },
+): Promise<void> {
+  if (activePrdValidationStarts.has(prdId)) return;
+  activePrdValidationStarts.add(prdId);
 
-  const skillConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
-  if (!skillConfig?.prdValidationSkillPath) return;
+  try {
+    const prd = await getPrd(prdId);
+    if (!prd || prd.status === 'validating') return;
+    if (!options?.force && prd.validationThreadId) {
+      console.log(
+        `[prd] Skipping automatic validation restart — validation was already attempted (prdId=${prdId})`,
+      );
+      return;
+    }
 
-  const ready = await arePrdValidationArtifactsReady(prdId);
-  if (!ready) return;
+    // Fix-with-Apex owns re-validation via acceptFixPrdValidation. Do not kick off
+    // a validation thread while the agent is still applying (or awaiting review of) edits.
+    if (prd.fixBaseline) {
+      console.log(
+        `[prd] Skipping autoStartPrdValidation — fix session active (prdId=${prdId})`,
+      );
+      return;
+    }
 
-  const adapter = createPrdValidationAdapter(prd);
-  await autoStartDocumentValidation(adapter);
+    const skillConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
+    if (!skillConfig?.prdValidationSkillPath) return;
+
+    const ready = await arePrdValidationArtifactsReady(prdId);
+    if (!ready) return;
+
+    const adapter = createPrdValidationAdapter(prd);
+    await autoStartDocumentValidation(adapter);
+  } finally {
+    activePrdValidationStarts.delete(prdId);
+  }
 }
 
 export async function cancelPrdValidation(prdId: string, requestingUserId: string): Promise<void> {
@@ -1499,6 +1795,17 @@ export async function syncPrdValidationResult(prdId: string): Promise<{ score: n
   const prd = await getPrd(prdId);
   if (!prd || !prd.validationThreadId) return null;
 
+  // Fix-with-Apex review must keep the pre-fix score until Accept & Re-validate.
+  if (prd.fixBaseline) {
+    console.log(
+      `[prd] Skipping syncPrdValidationResult — fix session active (prdId=${prdId})`,
+    );
+    return {
+      score: prd.validationScore ?? null,
+      is_ready: prd.validationScorecard?.is_ready ?? false,
+    };
+  }
+
   const { readOutputValidationScorecard, readOutputValidationScorecardMd } = await import('./chatAgentService');
   const scorecardRaw = readOutputValidationScorecard(prd.validationThreadId);
   if (!scorecardRaw) {
@@ -1511,6 +1818,9 @@ export async function syncPrdValidationResult(prdId: string): Promise<{ score: n
   const scorecard = JSON.parse(scorecardRaw) as ValidationScorecard;
   const reportMd = readOutputValidationScorecardMd(prd.validationThreadId) ?? generateFallbackReport(scorecard);
   const newStatus: PrdStatus = scorecard.is_ready ? 'pending_review' : 'draft';
+  const kickoff = newStatus === 'pending_review'
+    ? await applyKickoffApproversForReview(prd.id, prd.interviewId, prd.authorId)
+    : null;
 
   await db.update(prds)
     .set({
@@ -1519,9 +1829,21 @@ export async function syncPrdValidationResult(prdId: string): Promise<{ score: n
       validationPhase: scorecard.review_phase,
       validationReportMd: reportMd,
       status: newStatus,
+      ...(kickoff?.designDocApproverIds
+        ? { designDocApproverIds: kickoff.designDocApproverIds }
+        : {}),
+      ...(kickoff?.designPrototypeApproverIds
+        ? { designPrototypeApproverIds: kickoff.designPrototypeApproverIds }
+        : {}),
       updatedAt: new Date().toISOString(),
     })
     .where(eq(prds.id, prdId));
+
+  if (newStatus === 'pending_review') {
+    notifyApproversDocumentReady(prdId, 'prd').catch((err) =>
+      console.error(`[syncPrdValidationResult] Failed to notify approvers (prdId=${prdId})`, err),
+    );
+  }
 
   return { score: scorecard.overall_score, is_ready: scorecard.is_ready };
 }
@@ -1537,6 +1859,8 @@ export async function markPrdValidationReady(prdId: string, requestingUserId: st
     (err as any).status = 409;
     throw err;
   }
+
+  await applyKickoffApproversForReview(prdId, row.interviewId, requestingUserId);
 
   await db.update(prds)
     .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
@@ -1606,8 +1930,15 @@ export async function triggerFixPrdValidation(
   }
 
   baseline.fixThreadId = threadId;
+  // Clear leftover proposed drafts so Fix-with-Apex owns the accept/revert UX
+  // (live writes via update_prd in fix mode; no parallel proposed-changes banner).
   await db.update(prds)
-    .set({ fixBaseline: baseline, updatedAt: new Date().toISOString() })
+    .set({
+      fixBaseline: baseline,
+      proposedContent: null,
+      proposedBacklogJson: null,
+      updatedAt: new Date().toISOString(),
+    })
     .where(eq(prds.id, prdId));
 
   const scorecard = prd.validationScorecard;
@@ -1649,6 +1980,22 @@ export async function acceptFixPrdValidation(prdId: string): Promise<void> {
   const row = await db.query.prds.findFirst({ where: eq(prds.id, prdId) });
   if (!row) throw notFound('PRD not found');
 
+  // Promote any residual proposed drafts (older assistant path) before clearing
+  // the fix session — fix-mode MCP writes are already live.
+  const hasProposed =
+    row.proposedContent != null || row.proposedBacklogJson != null;
+  if (hasProposed) {
+    await db.execute(sql`
+      UPDATE prds
+      SET content = COALESCE(proposed_content, content),
+          backlog_json = COALESCE(proposed_backlog_json, backlog_json),
+          proposed_content = NULL,
+          proposed_backlog_json = NULL,
+          updated_at = NOW()
+      WHERE id = ${prdId}
+    `);
+  }
+
   await db.update(prds)
     .set({ fixBaseline: null, updatedAt: new Date().toISOString() })
     .where(eq(prds.id, prdId));
@@ -1657,7 +2004,240 @@ export async function acceptFixPrdValidation(prdId: string): Promise<void> {
     console.error(`[prdFix] AI notification failed (prdId=${prdId}):`, err),
   );
 
-  await autoStartPrdValidation(prdId);
+  await autoStartPrdValidation(prdId, { force: true });
+}
+
+/**
+ * Record an authorized readiness override so review can proceed despite unresolved gaps.
+ * Captures the currently blocking readiness state(s) for audit.
+ */
+export async function overridePrdReadiness(
+  prdId: string,
+  userId: string,
+  reason: string,
+  userDisplayName?: string,
+): Promise<PrdReadinessOverride> {
+  const trimmed = reason.trim();
+  if (!trimmed) {
+    const err = new Error('A reason is required to override readiness');
+    (err as any).status = 400;
+    throw err;
+  }
+
+  const prd = await getPrd(prdId);
+  if (!prd) throw notFound('PRD not found');
+  if (prd.status !== 'draft' && prd.status !== 'revision_requested' && prd.status !== 'pending_review') {
+    throw conflict(`Cannot override readiness from status '${prd.status}'`);
+  }
+
+  const skillConfig = await resolveSkillConfig({
+    project: prd.project,
+    settingsId: prd.skillSettingsId ?? undefined,
+  });
+  const readiness = derivePrdReadiness(
+    {
+      status: prd.status,
+      content: prd.content,
+      validationScore: prd.validationScore,
+      validationScorecard: prd.validationScorecard,
+    },
+    await getTestCases(prdId),
+    skillConfig?.prdValidationScoreThreshold ?? undefined,
+    {
+      testCasesRequired: prd.testCasesRequired !== false,
+      prdValidationEnabled: !!skillConfig?.prdValidationSkillPath,
+    },
+  );
+
+  if (readiness.readyForReviewActions) {
+    throw conflict('PRD is already ready for review; no override is needed');
+  }
+
+  const priorStates = prd.readinessOverride?.states ?? [];
+  const states = Array.from(new Set([...priorStates, readiness.state]));
+  const at = new Date().toISOString();
+  const trimmedName = userDisplayName?.trim();
+  const summary = `Overrode readiness state: ${readiness.state.replace(/_/g, ' ')}`;
+  const history = buildOverrideHistory(
+    prd.readinessOverride,
+    {
+      reason: trimmed,
+      userId,
+      ...(trimmedName ? { userDisplayName: trimmedName } : {}),
+      at,
+      summary,
+    },
+    prd.readinessOverride
+      ? `Overrode readiness state(s): ${(prd.readinessOverride.states ?? []).join(', ').replace(/_/g, ' ')}`
+      : summary,
+  );
+  const override: PrdReadinessOverride = {
+    reason: trimmed,
+    userId,
+    ...(trimmedName ? { userDisplayName: trimmedName } : {}),
+    at,
+    states,
+    history,
+  };
+
+  await db.update(prds)
+    .set({ readinessOverride: override, updatedAt: new Date().toISOString() })
+    .where(eq(prds.id, prdId));
+
+  return override;
+}
+
+export async function triggerFixCoverageGaps(
+  prdId: string,
+  userId: string,
+): Promise<{ threadId: string }> {
+  const prd = await getPrd(prdId);
+  if (!prd) throw notFound('PRD not found');
+
+  if (prd.status !== 'draft' && prd.status !== 'revision_requested') {
+    throw conflict(`Cannot fix coverage from status '${prd.status}'`);
+  }
+
+  const uncovered = await getUncoveredCoverageItems(prdId);
+  if (uncovered.length === 0) {
+    throw conflict('No uncovered acceptance criteria or business rules to fix');
+  }
+
+  const baseline: PrdValidationBaseline = {
+    content: prd.content || '',
+    backlogJson: prd.backlogJson,
+    capturedAt: new Date().toISOString(),
+  };
+
+  const skillConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
+  const globalModel = await getDefaultModel();
+  const model = skillConfig?.prdAssistantModel ?? globalModel;
+
+  let threadId = prd.prdAssistantThreadId ?? null;
+
+  if (!threadId) {
+    const context = [
+      '# PRD Assistant Context',
+      `prd_id: ${prdId}`,
+      '',
+      '> Use the `update_prd` MCP tool to apply edits back to the database.',
+      '> Use the `add_test_case` MCP tool to add real QA test cases with steps and traceability.',
+      '',
+      '## PRD Content',
+      prd.content || '(empty)',
+      '',
+      '## Backlog JSON',
+      '```json',
+      JSON.stringify(prd.backlogJson ?? {}, null, 2),
+      '```',
+    ].join('\n');
+
+    const thread = await createChatThread(userId, {
+      project: prd.project,
+      repo: skillConfig?.skillRepo ?? prd.project,
+      branch: skillConfig?.skillBranch ?? 'main',
+      skillProvider: skillConfig?.skillProvider ?? undefined,
+      skillPath: skillConfig?.prdAssistantSkillPath ?? undefined,
+      freeformContext: context,
+      model,
+    }, { skipAutoKickoff: true });
+
+    threadId = thread.id;
+    await db.update(prds)
+      .set({ prdAssistantThreadId: thread.id, updatedAt: new Date().toISOString() })
+      .where(eq(prds.id, prdId));
+  }
+
+  baseline.fixThreadId = threadId;
+  await db.update(prds)
+    .set({
+      fixBaseline: baseline,
+      proposedContent: null,
+      proposedBacklogJson: null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(prds.id, prdId));
+
+  const acItems = uncovered.filter((i) => i.kind === 'acceptance_criteria');
+  const brItems = uncovered.filter((i) => i.kind === 'business_rule');
+
+  const prompt = [
+    '# Fix PRD Test-Case Coverage Gaps',
+    '',
+    `There are **${uncovered.length}** uncovered item(s) (${acItems.length} acceptance criteria, ${brItems.length} business rules).`,
+    '',
+    '## Your Task',
+    '',
+    'Add QA test cases that cover every uncovered item below. For each item, call the `add_test_case` MCP tool with:',
+    '- `pbiId` — the PBI id for the item',
+    '- `title` — a clear test-case title',
+    '- `steps` — an ordered array of concrete test steps',
+    '- `acceptanceCriteriaIndex` and/or `businessRules` — full traceability for the uncovered item',
+    '',
+    'Do NOT only bump counts via `update_prd`. Prefer `add_test_case` so coverage is recalculated from real cases.',
+    '',
+    BACKLOG_USER_TYPE_CONVENTIONS_MD,
+    '',
+    '## Uncovered Acceptance Criteria',
+    '',
+    ...(acItems.length === 0
+      ? ['(none)', '']
+      : acItems.map((item, i) => [
+          `### AC ${i + 1}`,
+          `- **PBI ID:** ${item.pbiId ?? '(unknown)'}`,
+          `- **Index:** ${item.index ?? '(unknown)'}`,
+          `- **Text:** ${item.text ?? '(no text)'}`,
+          '',
+        ].join('\n'))),
+    '## Uncovered Business Rules',
+    '',
+    ...(brItems.length === 0
+      ? ['(none)', '']
+      : brItems.map((item, i) => [
+          `### BR ${i + 1}`,
+          `- **Rule ID:** ${item.id ?? '(unknown)'}`,
+          `- **PBI ID:** ${item.pbiId ?? '(n/a)'}`,
+          `- **Text:** ${item.text ?? '(no text)'}`,
+          '',
+        ].join('\n'))),
+  ].join('\n');
+
+  void sendMessage(threadId, prompt).catch((err) => {
+    console.error(`[prd] fix-coverage sendMessage error for thread ${threadId}:`, err);
+  });
+
+  return { threadId };
+}
+
+export async function acceptFixCoverageGaps(prdId: string): Promise<void> {
+  const row = await db.query.prds.findFirst({ where: eq(prds.id, prdId) });
+  if (!row) throw notFound('PRD not found');
+
+  // Same as acceptFixPrdValidation: promote residual proposed drafts so coverage
+  // fix reviewing never requires a second Accept Changes click.
+  const hasProposed =
+    row.proposedContent != null || row.proposedBacklogJson != null;
+  if (hasProposed) {
+    await db.execute(sql`
+      UPDATE prds
+      SET content = COALESCE(proposed_content, content),
+          backlog_json = COALESCE(proposed_backlog_json, backlog_json),
+          proposed_content = NULL,
+          proposed_backlog_json = NULL,
+          updated_at = NOW()
+      WHERE id = ${prdId}
+    `);
+  }
+
+  await recalculateTestCaseCoverage(prdId);
+
+  await db.update(prds)
+    .set({ fixBaseline: null, updatedAt: new Date().toISOString() })
+    .where(eq(prds.id, prdId));
+
+  notifyAiCompletion('prd_fix_complete', prdId, { title: row.title }).catch(err =>
+    console.error(`[prdFixCoverage] AI notification failed (prdId=${prdId}):`, err),
+  );
 }
 
 export async function revertPrdSection(prdId: string, requestingUserId: string): Promise<void> {
@@ -1675,6 +2255,31 @@ export async function revertPrdSection(prdId: string, requestingUserId: string):
       content: baseline.content,
       backlogJson: baseline.backlogJson as any,
       fixBaseline: null,
+      proposedContent: null,
+      proposedBacklogJson: null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(prds.id, prdId));
+}
+
+/**
+ * Clear a Fix-with-Apex session without restoring baseline or re-validating.
+ * Keeps current live content (including no-op sessions) so Fix with Apex returns.
+ */
+export async function dismissPrdFixSession(prdId: string, requestingUserId: string): Promise<void> {
+  const row = await db.query.prds.findFirst({ where: eq(prds.id, prdId) });
+  if (!row) throw notFound('PRD not found');
+  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
+    throw forbidden('Only the author can dismiss a fix session');
+  }
+
+  if (!row.fixBaseline) throw conflict('No active fix session to dismiss');
+
+  await db.update(prds)
+    .set({
+      fixBaseline: null,
+      proposedContent: null,
+      proposedBacklogJson: null,
       updatedAt: new Date().toISOString(),
     })
     .where(eq(prds.id, prdId));

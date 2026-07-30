@@ -52,16 +52,21 @@ export class SidebarPage {
 
   /** Click a module nav item by view key (uses data-testid). */
   async clickModule(view: ModuleView): Promise<void> {
+    // Changelog / What's New can auto-open after permissions load and intercept
+    // pointer events even while the nav item itself stays "visible".
+    await dismissOverlays(this.page);
     await this.page.getByTestId(`nav-item-${view}`).click();
   }
 
   /** Click the Home button (no testid — matched by role/name). */
   async clickHome(): Promise<void> {
+    await dismissOverlays(this.page);
     await this.nav().getByRole('button', { name: 'Home' }).click();
   }
 
   /** Click the Admin button (no testid — matched by role/name). */
   async clickAdmin(): Promise<void> {
+    await dismissOverlays(this.page);
     await this.nav().getByRole('button', { name: 'Admin' }).click();
   }
 

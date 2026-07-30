@@ -211,6 +211,7 @@ export interface SsePhaseEvent {
 export type AgentRunHealth =
   | 'healthy'
   | 'progress_stale'
+  | 'progress_timeout'
   | 'long_running'
   | 'worker_lost'
   | 'hard_timeout'
@@ -320,6 +321,40 @@ export interface ChatThreadSummary {
   createdAt: string;
   lastActivityAt: string;
 }
+
+/** Matched visible message context for chat history search (FEAT-001). */
+export interface ChatThreadMatch {
+  messageId: string;
+  role: 'user' | 'agent';
+  /** Plain ~120-char excerpt around the first hit; no emphasis */
+  snippet: string;
+  /** ISO timestamp of the matched message */
+  matchedAt: string;
+}
+
+/**
+ * Thread summary enriched with search match context.
+ * `match` is present for visible message hits; `titleOnly` is true when only the title matched.
+ */
+export interface ChatThreadSearchResult extends ChatThreadSummary {
+  match?: ChatThreadMatch;
+  titleOnly?: boolean;
+}
+
+/** Options when opening a chat thread from history (FEAT-003 / TBI-005). */
+export interface SelectChatThreadOptions {
+  /** When set, the opened thread scrolls to and briefly highlights this message. */
+  focusMessageId?: string;
+}
+
+/**
+ * Shared thread-selection callback used by the history sidebar consumers
+ * (Home agent view and chat slide-out panel).
+ */
+export type SelectChatThreadHandler = (
+  threadId: string,
+  options?: SelectChatThreadOptions,
+) => void;
 
 // ── REST request/response shapes ──────────────────────────────────────────────
 

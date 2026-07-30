@@ -2,6 +2,8 @@ import { Application, Request, Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createAdoMcpServer } from './server';
 import { mountCalendarAssistantMcp } from '../calendarAssistant/express';
+import { failMcpHttpResponse, handleMcpPost } from '../mcpRequestLog';
+import { McpTimeoutError, resolveMcpHttpTimeoutMs } from '../mcpTimeout';
 
 /**
  * Mount the ADO MCP server as a Streamable HTTP transport on the given Express app.
@@ -22,15 +24,25 @@ export function mountAdoMcp(app: Application, basePath = '/mcp/ado-skills'): voi
   app.post(basePath, async (req: Request, res: Response) => {
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined, // stateless mode
+      enableJsonResponse: true,
     });
 
     const server = createAdoMcpServer();
+    const timeoutMs = resolveMcpHttpTimeoutMs();
 
     try {
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-    } catch (err: any) {
-      console.error('[mcp/ado] Request error:', err.message);
+      await handleMcpPost('mcp/ado', req.body, async () => {
+        await server.connect(transport);
+        await transport.handleRequest(req, res, req.body);
+      }, { timeoutMs, res });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[mcp/ado] Request error:', message);
+      if (err instanceof McpTimeoutError) {
+        failMcpHttpResponse(res, req.body, message);
+        await transport.close().catch(() => undefined);
+        return;
+      }
       if (!res.headersSent) {
         res.status(500).json({ error: 'MCP server error' });
       }
@@ -42,7 +54,7 @@ export function mountAdoMcp(app: Application, basePath = '/mcp/ado-skills'): voi
     res.json({ ok: true, server: 'ado-skills', version: '1.0.0' });
   });
 
-  console.log(`[mcp/ado] Mounted at POST ${basePath}`);
+  console.log(`[mcp/ado] Mounted at POST ${basePath} (httpTimeoutMs=${resolveMcpHttpTimeoutMs()})`);
 
   // Mount the session-bound calendar assistant MCP alongside ado-skills.
   // URL: POST /mcp/calendar-assistant/:sessionId

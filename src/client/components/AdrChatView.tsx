@@ -14,6 +14,7 @@ import {
   useAssignAdrReviewers,
   useCreateAdrComment,
   useCreateAdr,
+  useDeleteAdr,
   useDeleteAdrComment,
   useFixAdrCommentWithAi,
   useFixAdrWithAi,
@@ -31,7 +32,9 @@ import { AdrAssistantPanel } from './AdrAssistantPanel';
 import { ProposedAdrChangesReview } from './ProposedAdrChangesReview';
 import { AdrReviewerModal } from './AdrReviewerModal';
 import { AnnotationLayer } from './AnnotationLayer';
+import { MarkdownWithMermaid } from './MarkdownWithMermaid';
 import { ReviewCommentSidebar } from './ReviewCommentSidebar';
+import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { useChatAttachments, formatAttachmentSize } from '../hooks/useChatAttachments';
 import { useSpeechInput } from '../hooks/useSpeechInput';
 import type { ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
@@ -51,6 +54,7 @@ const NewAdrCompose: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [showReviewerModal, setShowReviewerModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const titleInputRef = useRef<HTMLInputElement>(null);
   const { selectedProject, selectedSkillSettingsId, authenticatedUser } = useAppShell();
   const navigate = useNavigate();
   const { data: skillConfig } = useProjectSkillConfig(selectedProject || null, selectedSkillSettingsId);
@@ -75,6 +79,10 @@ const NewAdrCompose: React.FC = () => {
     ?? repos.find((candidate) => candidate.name === repo)?.defaultBranch
     ?? 'main';
   const pending = startChat.isPending || createAdr.isPending;
+
+  useEffect(() => {
+    titleInputRef.current?.focus();
+  }, []);
 
   useEffect(() => {
     setModel(skillConfig?.adrModel ?? globalDefault?.value ?? DEFAULT_MODEL_ID);
@@ -160,11 +168,11 @@ const NewAdrCompose: React.FC = () => {
             <label className={styles.composeTitleLabel} htmlFor="adr-title">Title</label>
             <input
               id="adr-title"
+              ref={titleInputRef}
               className={styles.composeTitleInput}
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               placeholder="Short decision title"
-              autoFocus
             />
           </div>
           <textarea
@@ -265,7 +273,9 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const [newCommentBody, setNewCommentBody] = useState('');
   const [fixingCommentId, setFixingCommentId] = useState<string | null>(null);
   const [reviewerModalOpen, setReviewerModalOpen] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const commentInputRef = useRef<HTMLTextAreaElement>(null);
   const navigate = useNavigate();
   const { can, userId } = useAppShell();
   const { data: adr, isLoading, isError } = useAdr(id);
@@ -280,6 +290,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   });
   const generateAdr = useGenerateAdr();
   const updateAdr = useUpdateAdr();
+  const deleteAdr = useDeleteAdr();
   const createComment = useCreateAdrComment(id);
   const replyToComment = useReplyToAdrComment(id);
   const resolveComment = useResolveAdrComment(id);
@@ -324,6 +335,16 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   }, [messages.length, streamingText]);
 
   useEffect(() => {
+    if (!pendingSelector) return;
+    commentInputRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPendingSelector(null);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [pendingSelector]);
+
+  useEffect(() => {
     if (adr?.status !== 'generating') return;
     setGenerationNow(Date.now());
     const intervalId = window.setInterval(() => setGenerationNow(Date.now()), 1_000);
@@ -334,14 +355,38 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     if (!adr || !text.trim() || isRunning || chatLocked) return;
     setInput('');
     setError(null);
-    const response = await fetch(`/api/chat/threads/${adr.chatThreadId}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ text: text.trim(), model: adr.model }),
-    });
-    if (!response.ok) setError('Failed to send message');
+    try {
+      const response = await fetch(`/api/chat/threads/${adr.chatThreadId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ text: text.trim(), model: adr.model }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as { error?: string };
+        setError(body.error ?? `Failed to send message (${response.status})`);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Failed to send message');
+    }
   }, [adr, isRunning, chatLocked]);
+
+  const cancelActiveRun = useCallback(async () => {
+    if (!adr?.chatThreadId) return;
+    setError(null);
+    try {
+      const response = await fetch(`/api/chat/threads/${adr.chatThreadId}/cancel`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as { error?: string };
+        setError(body.error ?? `Failed to stop agent (${response.status})`);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Failed to stop agent');
+    }
+  }, [adr?.chatThreadId]);
 
   if (isLoading) return <div className={styles.loadingState}>Loading ADR…</div>;
   if (isError || !adr) return <div className={styles.errorState}>ADR not found.</div>;
@@ -477,9 +522,48 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
               Mark Superseded
             </button>
           )}
+          {isAuthor && can('adr:delete') && (
+            <button
+              className={styles.actionBtnDanger}
+              onClick={() => setShowDeleteModal(true)}
+              disabled={deleteAdr.isPending}
+              type="button"
+              title="Delete this ADR"
+            >
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="2 4 4 4 14 4" />
+                <path d="M13 4l-.7 9.3A1 1 0 0 1 12.3 14H3.7a1 1 0 0 1-1-.7L2 4" />
+                <path d="M6.5 7v4M9.5 7v4" />
+                <path d="M5.5 4V2.7A.7.7 0 0 1 6.2 2h3.6a.7.7 0 0 1 .7.7V4" />
+              </svg>
+              Delete
+            </button>
+          )}
         </div>
       </div>
-      {error && <div className={styles.sendError}>{error}</div>}
+      {error && (
+        <div className={styles.sendError}>
+          <span>{error}</span>
+          {error.toLowerCase().includes('already running') && (
+            <button
+              type="button"
+              className={styles.sendErrorDismiss}
+              onClick={() => void cancelActiveRun()}
+              title="Stop the stuck agent"
+            >
+              Stop
+            </button>
+          )}
+          <button
+            type="button"
+            className={styles.sendErrorDismiss}
+            onClick={() => setError(null)}
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      )}
       {adr.content && (
         <div className={styles.adrMetadataSummary}>
           <span><strong>Owner:</strong> {adr.ownerName}</span>
@@ -492,6 +576,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
         adrId={adr.id}
         currentContent={adr.content}
         proposedContent={adr.proposedContent}
+        fixCommentId={adr.fixCommentId}
       />
       {adr.content && (
         <div className={styles.adrReviewLayout}>
@@ -506,12 +591,12 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                 readOnly={adr.status === 'accepted'}
               >
                 <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant} ${styles.adrMarkdown}`}>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{adr.content}</ReactMarkdown>
+                  <MarkdownWithMermaid content={adr.content} />
                 </div>
               </AnnotationLayer>
             ) : (
               <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant} ${styles.adrMarkdown}`}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{adr.content}</ReactMarkdown>
+                <MarkdownWithMermaid content={adr.content} />
               </div>
             )}
           </div>
@@ -609,7 +694,21 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
               placeholder={isRunning ? 'Architect is thinking…' : 'Continue the ADR interview…'}
               disabled={isRunning}
             />
-            <button className={styles.sendBtn} type="button" disabled={!input.trim() || isRunning} onClick={() => void send(input)}>→</button>
+            {isRunning ? (
+              <button
+                className={`${styles.sendBtn} ${styles.stopBtn}`}
+                type="button"
+                onClick={() => void cancelActiveRun()}
+                aria-label="Stop"
+                title="Stop"
+              >
+                <svg viewBox="0 0 20 20" fill="currentColor">
+                  <rect x="4" y="4" width="12" height="12" rx="2" />
+                </svg>
+              </button>
+            ) : (
+              <button className={styles.sendBtn} type="button" disabled={!input.trim()} onClick={() => void send(input)}>→</button>
+            )}
           </div>
         </div>
       ))}
@@ -619,20 +718,17 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
           role="dialog"
           aria-modal="true"
           aria-labelledby="adr-comment-title"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) setPendingSelector(null);
-          }}
         >
           <div className={styles.commentModalCard}>
             <h3 className={styles.commentModalTitle} id="adr-comment-title">Add ADR Comment</h3>
             <blockquote className={styles.commentModalQuote}>{pendingSelector.selector.exact}</blockquote>
             <textarea
+              ref={commentInputRef}
               className={styles.commentModalInput}
               value={newCommentBody}
               onChange={(event) => setNewCommentBody(event.target.value)}
               placeholder="Write your review comment…"
               rows={3}
-              autoFocus
             />
             <div className={styles.commentModalActions}>
               <button className={styles.actionBtn} type="button" onClick={() => setPendingSelector(null)}>Cancel</button>
@@ -669,6 +765,24 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
               onError: (caught) => setError(caught.message),
             });
           }}
+        />
+      )}
+      {showDeleteModal && (
+        <ConfirmDeleteModal
+          title="Delete ADR"
+          itemName={adr.title}
+          description="Are you sure you want to permanently delete the ADR"
+          isPending={deleteAdr.isPending}
+          onConfirm={() => {
+            deleteAdr.mutate(id, {
+              onSuccess: () => navigate('/adr'),
+              onError: (caught) => {
+                setShowDeleteModal(false);
+                setError(caught.message);
+              },
+            });
+          }}
+          onCancel={() => setShowDeleteModal(false)}
         />
       )}
     </div>

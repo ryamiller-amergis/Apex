@@ -1,3 +1,8 @@
+import type { PrdReadinessOverride } from '../utils/prdReadiness';
+import type { ValidationOverrideAuditEntry } from '../utils/validationOverride';
+
+export type { PrdReadinessOverride };
+
 export type InterviewStatus = 'in_progress' | 'complete' | 'archived';
 
 export interface InterviewSummary {
@@ -57,7 +62,15 @@ export interface PrdSummary {
   createdAt: string;
   updatedAt: string;
   latestTestCase?: TestCaseSummary | null;
+  /** Persisted PRD validation score; used by list cards for readiness without loading the full scorecard. */
+  validationScore?: number | null;
   validationScoreThreshold?: number | null;
+  /** Resolved from the interview snapshot at creation (fallback: project default). */
+  prototypeStageEnabled?: boolean;
+  /** Resolved from the interview snapshot; when false, PRD review is not blocked on test cases. */
+  testCasesRequired?: boolean;
+  /** Whether PRD validation is enabled for this project (prdValidationSkillPath is configured). */
+  prdValidationEnabled?: boolean;
 }
 
 export interface Prd extends PrdSummary {
@@ -69,13 +82,12 @@ export interface Prd extends PrdSummary {
   /** Design doc approver user OIDs stored on the PRD; used to pre-assign reviewers when design docs are submitted. */
   designDocApproverIds?: string[];
   validationThreadId?: string | null;
-  validationScore?: number | null;
   validationScorecard?: ValidationScorecard | null;
   validationReportMd?: string | null;
   validationPhase?: string | null;
   fixBaseline?: PrdValidationBaseline | null;
-  /** Whether PRD validation is enabled for this project (prdValidationSkillPath is configured). */
-  prdValidationEnabled?: boolean;
+  /** Soft-blocker override allowing review despite unresolved readiness gaps. */
+  readinessOverride?: PrdReadinessOverride | null;
   /** Set while a single-comment Apex fix is in progress or awaiting review. */
   fixCommentId?: string | null;
 }
@@ -129,6 +141,9 @@ export interface CreateInterviewRequest {
   designDocApproverIds?: string[];
   designPrototypeApproverIds?: string[];
   testCaseApproverIds?: string[];
+  /** Snapshot of resolved per-skill / project defaults at interview start. */
+  prototypeStageEnabled?: boolean;
+  testCasesEnabled?: boolean;
 }
 
 export interface CreateInterviewResponse {
@@ -244,6 +259,17 @@ export interface PrdValidationBaseline {
 
 export type DesignDocStatus = 'generating' | 'generation_failed' | 'validating' | 'draft' | 'pending_review' | 'reviewer_approved' | 'approved' | 'revision_requested';
 
+export interface DesignDocValidationOverride {
+  reason: string;
+  userId: string;
+  userDisplayName?: string;
+  at: string;
+  validationScore: number | null;
+  validationThreshold: number;
+  /** Full audit trail including the current override (newest last). */
+  history?: ValidationOverrideAuditEntry[];
+}
+
 export interface DesignDocSummary {
   id: string;
   prdId: string;
@@ -257,9 +283,13 @@ export interface DesignDocSummary {
   validationThreadId?: string | null;
   validationScore?: number | null;
   validationScorecard?: ValidationScorecard | null;
+  /** Project-configured minimum score (%) for design-doc validation gates. Defaults to 90 when unset. */
+  validationScoreThreshold?: number | null;
   validationReportMd?: string | null;
   validationPhase?: string | null;
   fixBaseline?: ContentSnapshot | null;
+  /** Active validation-score override with audit history. */
+  validationOverride?: DesignDocValidationOverride | null;
   authorId: string;
   authorName?: string;
   ownerId?: string;

@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { chatThreads, designModules } from '../db/schema';
 import { getDefaultModel } from './appSettingsService';
@@ -18,6 +18,7 @@ import {
 } from '../../shared/types/designModule';
 
 const DESIGN_MODULE_SKILL_PATH = '.cursor/skills/design-module-doc/SKILL.md';
+export const DEFAULT_DESIGN_MODULE_SKILL_PATH = DESIGN_MODULE_SKILL_PATH;
 const OUTPUT_FILE = 'design-module.md';
 const WATCHER_INTERVAL_MS = 5_000;
 const WATCHER_MAX_ATTEMPTS = 720;
@@ -97,7 +98,7 @@ function validateInput(
   }
 }
 
-function globToRegExp(glob: string): RegExp {
+export function globToRegExp(glob: string): RegExp {
   const normalized = normalizeRelativePath(glob);
   let pattern = '^';
   for (let index = 0; index < normalized.length; index += 1) {
@@ -121,7 +122,7 @@ function globToRegExp(glob: string): RegExp {
   return new RegExp(`${pattern}$`);
 }
 
-function walkRepository(root: string): string[] {
+export function walkRepository(root: string): string[] {
   const files: string[] = [];
   const visit = (directory: string): void => {
     let entries: fs.Dirent[];
@@ -140,6 +141,28 @@ function walkRepository(root: string): string[] {
   };
   visit(root);
   return files;
+}
+
+/**
+ * Lightweight per-pattern file match for live scoping preview (no content hash).
+ * Validates globs the same way as fingerprinting.
+ */
+export function resolveGlobFiles(
+  sourceGlobs: string[],
+  repositoryRoot = process.cwd()
+): { pattern: string; files: string[] }[] {
+  validateSourceGlobs(sourceGlobs);
+  const allFiles = walkRepository(repositoryRoot);
+  return sourceGlobs.map((glob) => {
+    const pattern = normalizeRelativePath(glob.trim());
+    const matcher = globToRegExp(pattern);
+    return {
+      pattern,
+      files: allFiles
+        .filter((file) => matcher.test(file))
+        .sort((a, b) => a.localeCompare(b)),
+    };
+  });
 }
 
 export function computeFingerprint(
@@ -179,7 +202,21 @@ export function getSourceCommit(repositoryRoot = process.cwd()): string | null {
   }
 }
 
+function isLocalProject(project: string): boolean {
+  return project === 'Apex';
+}
+
 function withStaleness(row: typeof designModules.$inferSelect): DesignModule {
+  if (!isLocalProject(row.project)) {
+    return {
+      ...row,
+      iconKey: row.iconKey,
+      hasContent: Boolean(row.content?.trim()),
+      isStale: !row.content?.trim(),
+      sourceAvailable: false,
+    };
+  }
+
   const current = computeFingerprint(row.sourceGlobs);
   const currentCommit = current.sourceAvailable ? null : getSourceCommit();
   const sourceChanged = current.sourceAvailable
@@ -202,6 +239,7 @@ function toSummary(module: DesignModule): DesignModuleSummary {
     content: _content,
     sourceFingerprint: _sourceFingerprint,
     sourceCommit: _sourceCommit,
+    scopingThreadId: _scopingThreadId,
     createdBy: _createdBy,
     updatedBy: _updatedBy,
     ...summary
@@ -209,17 +247,18 @@ function toSummary(module: DesignModule): DesignModuleSummary {
   return summary;
 }
 
-export async function listModules(): Promise<DesignModuleSummary[]> {
+export async function listModules(project: string): Promise<DesignModuleSummary[]> {
   const rows = await db
     .select()
     .from(designModules)
-    .orderBy(asc(designModules.sortOrder), asc(designModules.label));
+    .where(eq(designModules.project, project))
+    .orderBy(asc(designModules.label));
   return rows.map((row) => toSummary(withStaleness(row)));
 }
 
-export async function getModule(slug: string): Promise<DesignModule | null> {
+export async function getModule(project: string, slug: string): Promise<DesignModule | null> {
   const row = await db.query.designModules.findFirst({
-    where: eq(designModules.slug, slug),
+    where: and(eq(designModules.project, project), eq(designModules.slug, slug)),
   });
   return row ? withStaleness(row) : null;
 }
@@ -229,11 +268,13 @@ export async function createModule(
   actorId: string
 ): Promise<DesignModule> {
   validateInput(input, true);
-  const fingerprint = computeFingerprint(input.sourceGlobs);
+  const local = isLocalProject(input.project);
+  const fingerprint = local ? computeFingerprint(input.sourceGlobs) : { fingerprint: null };
   try {
     const [created] = await db
       .insert(designModules)
       .values({
+        project: input.project,
         slug: input.slug,
         label: input.label.trim(),
         description: input.description?.trim() || null,
@@ -242,7 +283,8 @@ export async function createModule(
           normalizeRelativePath(glob.trim())
         ),
         sourceFingerprint: fingerprint.fingerprint,
-        sourceCommit: getSourceCommit(),
+        sourceCommit: local ? getSourceCommit() : null,
+        scopingThreadId: input.scopingThreadId?.trim() || null,
         sortOrder: input.sortOrder ?? 0,
         createdBy: actorId,
         updatedBy: actorId,
@@ -251,12 +293,13 @@ export async function createModule(
     return withStaleness(created);
   } catch (error) {
     if ((error as { code?: string }).code === '23505')
-      throw serviceError('A module with that slug already exists', 409);
+      throw serviceError('A module with that slug already exists in this project', 409);
     throw error;
   }
 }
 
 export async function updateModule(
+  project: string,
   slug: string,
   input: UpdateDesignModuleInput,
   actorId: string
@@ -276,27 +319,30 @@ export async function updateModule(
       normalizeRelativePath(glob.trim())
     );
   }
+  if (input.scopingThreadId !== undefined) {
+    patch.scopingThreadId = input.scopingThreadId?.trim() || null;
+  }
   if (input.sortOrder !== undefined) patch.sortOrder = input.sortOrder;
 
   try {
     const [updated] = await db
       .update(designModules)
       .set(patch)
-      .where(eq(designModules.slug, slug))
+      .where(and(eq(designModules.project, project), eq(designModules.slug, slug)))
       .returning();
     if (!updated) throw serviceError('Design module not found', 404);
     return withStaleness(updated);
   } catch (error) {
     if ((error as { code?: string }).code === '23505')
-      throw serviceError('A module with that slug already exists', 409);
+      throw serviceError('A module with that slug already exists in this project', 409);
     throw error;
   }
 }
 
-export async function deleteModule(slug: string): Promise<boolean> {
+export async function deleteModule(project: string, slug: string): Promise<boolean> {
   const deleted = await db
     .delete(designModules)
-    .where(eq(designModules.slug, slug))
+    .where(and(eq(designModules.project, project), eq(designModules.slug, slug)))
     .returning({ id: designModules.id });
   return deleted.length > 0;
 }
@@ -375,7 +421,7 @@ export async function regenerateModule(
   options: { force?: boolean; project: string; actorId: string }
 ): Promise<RegenerateDesignModuleResult> {
   const row = await db.query.designModules.findFirst({
-    where: eq(designModules.slug, slug),
+    where: and(eq(designModules.project, options.project), eq(designModules.slug, slug)),
   });
   if (!row) throw serviceError('Design module not found', 404);
 
@@ -390,9 +436,13 @@ export async function regenerateModule(
       409
     );
 
-  const fingerprint = computeFingerprint(row.sourceGlobs);
-  const sourceCommit = getSourceCommit();
+  const local = isLocalProject(options.project);
+  const fingerprint = local ? computeFingerprint(row.sourceGlobs) : { fingerprint: null };
+  const sourceCommit = local ? getSourceCommit() : null;
+  const skillPath =
+    skillConfig.designModuleSkillPath?.trim() || DESIGN_MODULE_SKILL_PATH;
   const model =
+    skillConfig.designModuleModel ??
     skillConfig.designDocModel ??
     skillConfig.defaultModel ??
     (await getDefaultModel());
@@ -413,7 +463,7 @@ export async function regenerateModule(
       repo: skillConfig.skillRepo,
       branch: skillConfig.skillBranch ?? 'main',
       skillProvider: skillConfig.skillProvider,
-      skillPath: DESIGN_MODULE_SKILL_PATH,
+      skillPath,
       freeformContext,
       model,
     },

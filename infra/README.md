@@ -15,8 +15,9 @@ This directory contains Terraform configuration for provisioning Azure resources
 - **App Service Plan**: Linux-based plan with Node.js support (B1 tier)
 - **App Service**: Linux web app running Node.js 24 LTS
 - **Application Insights**: Monitoring and telemetry
-- **Shared async Blob storage**: One private Storage Account per environment; modules isolate via containers (PDF starts with `pdf-artifacts`, keyed per `{userId}/{sessionId}/...`)
+- **Shared async Blob storage**: One private Storage Account per environment; modules isolate via containers (PDF starts with `pdf-artifacts`, load-test adds `lt-artifacts`)
 - **Managed-identity access**: The cross-cutting Apex App Service identity is scoped to the shared Storage Account. PDF assembly stays in the Apex application; job delivery uses the Postgres queue (Service Bus deferred).
+- **Load Test infrastructure** (FEAT-002): Dedicated Service Bus namespace, Container Apps Job, and managed identities — see [Load Test module](#load-test-module-feat-002) below.
 
 ## Shared async platform conventions
 
@@ -197,7 +198,11 @@ App setting contract for the Apex application (wire via deploy pipeline / App Se
 | `PDF_BLOB_ACCOUNT_NAME` | `shared_storage_account_name` / `pdf_storage_account_name` output | Apex app |
 | `PDF_BLOB_CONTAINER_NAME` | `pdf_blob_container_name` output | Apex app |
 
-The cross-cutting Apex managed identity receives Storage Account-scoped Blob contributor. No connection strings or shared keys are emitted.
+The production Apex app and its staging deployment slot each have a distinct
+system-assigned managed identity. Both receive Storage Account-scoped Blob
+contributor so narrow pre-swap PDF smoke tests use the same production Blob
+boundary without connection strings or shared keys. Slot identities do not
+move during swaps; Terraform must retain the staging identity and its RBAC grant.
 
 When adding the system identity to an existing App Service with AzureRM 3.x,
 provisioning is intentionally two-stage:
@@ -208,6 +213,10 @@ provisioning is intentionally two-stage:
 
 Do not deploy the Blob-backed application settings until the second plan shows
 `azurerm_role_assignment.api_pdf_blob_contributor` will be created.
+When enabling the production staging slot, the plan must also retain the slot's
+system identity and manage
+`azurerm_role_assignment.staging_pdf_blob_contributor`; removing the identity
+would cause staging PDF requests to fail with Blob authorization errors.
 
 #### Extending for another module
 
@@ -231,6 +240,213 @@ Complete the following smoke checks before marking the infrastructure ready:
 
 1. From the Apex App Service identity, upload/read/delete a test blob under a `{userId}/{sessionId}/` prefix in `pdf-artifacts`.
 2. Attempt anonymous Blob access from an unassigned principal; access must fail.
+
+---
+
+## Load Test module (FEAT-002)
+
+Isolated Azure infrastructure for on-demand k6 load tests. Load generation
+runs in a dedicated **Container Apps Job** (outside the Apex App Service plan)
+and dispatches via a dedicated **Service Bus namespace** so load bursts never
+share capacity with latency-sensitive Apex workloads.
+
+### Resource naming
+
+Resources follow the Apex convention `{type}-apex-lt-{environment}`:
+
+| Resource | Dev name | Prod name |
+|----------|----------|-----------|
+| Service Bus namespace | `sbns-apex-lt-dev` | `sbns-apex-lt-prd` |
+| Dispatch queue | `lt-dispatch` | `lt-dispatch` |
+| Container Apps Environment | `cae-apex-lt-dev` | `cae-apex-lt-prd` |
+| Container Apps Job | `caj-apex-lt-dev` | `caj-apex-lt-prd` |
+| Runner managed identity | `mi-apex-lt-runner-dev` | `mi-apex-lt-runner-prd` |
+| Blob container | `lt-artifacts` | `lt-artifacts` |
+
+### Resource placement
+
+Load-test data-plane resources follow the data lifecycle, while executable
+compute and its identity follow the application lifecycle:
+
+| Resource group | Resources |
+|----------------|-----------|
+| Data (`resource_group_name`; prod `rg-apex-prd-data`) | Service Bus namespace/queue, shared Storage Account, `lt-artifacts`, lifecycle policy |
+| App (`app_service_resource_group_name`, otherwise data RG; prod `rg-apex-prd-app`) | Container Apps Environment, Container Apps Job, runner managed identity |
+
+The compute resources use `app_service_location`; Service Bus and Blob continue
+to use the main data location. In environments without a dedicated app resource
+group (current dev), both groups resolve to the same resource group.
+
+### Provisioned resources
+
+| Resource | Purpose |
+|----------|---------|
+| `azurerm_servicebus_namespace.load_test` | Dedicated dispatch namespace; not shared with other async workloads |
+| `azurerm_servicebus_queue.lt_dispatch` | KEDA trigger queue; DLQ auto-created at `lt-dispatch/$DeadLetterQueue` |
+| `azurerm_servicebus_namespace_authorization_rule.lt_keda_listen` | SAS with Manage for the KEDA scaler (`lt-keda-listen`; Listen-only 401s on queue metrics) |
+| `azurerm_storage_container.lt_artifacts` | Blob container on the shared storage account; holds summary + time-series artifacts |
+| `azurerm_storage_management_policy.lt_artifacts_lifecycle` | ~90-day deletion policy scoped to the `lt-artifacts/` prefix |
+| `azurerm_container_app_environment.load_test` | VNet-integrated CAE for non-prod target reachability |
+| `azurerm_container_registry.lt` | Basic ACR for `apex-lt-k6` runner images (CI publish) |
+| `azurerm_container_app_job.load_test_runner` | KEDA-scaled k6 runner; max-executions enforces platform concurrency cap |
+| `azurerm_user_assigned_identity.lt_runner` | Runner MI: queue receive + blob contribute + Key Vault Secrets User + AcrPull |
+
+### Identity and RBAC
+
+| Identity | Roles | Scope |
+|----------|-------|-------|
+| Runner MI (`mi-apex-lt-runner-*`) | Azure Service Bus Data **Receiver** | `lt-dispatch` queue |
+| Runner MI | Storage Blob Data **Contributor** | `lt-artifacts` container |
+| Runner MI | Key Vault Secrets **User** | `var.lt_key_vault_id` (when set) |
+| Apex API (App Service system identity) | Azure Service Bus Data **Sender** | `lt-dispatch` queue |
+| Apex API | Storage Blob Data **Reader** | `lt-artifacts` container |
+| Apex staging slot (when enabled and `lt_enable_staging_slot_rbac=true`) | Azure Service Bus Data **Sender** | `lt-dispatch` queue |
+| Apex staging slot (when enabled and `lt_enable_staging_slot_rbac=true`) | Storage Blob Data **Reader** | `lt-artifacts` container |
+
+Set `lt_enable_staging_slot_rbac = false` when the Terraform apply principal
+cannot manage role assignments or staging does not need to dispatch load tests.
+This leaves the staging slot in place without provisioning its load-test RBAC.
+
+### Terraform outputs (app config contract for FEAT-007/008)
+
+```bash
+terraform output lt_servicebus_namespace_name   # sbns-apex-lt-dev
+terraform output lt_servicebus_namespace_fqdn   # sbns-apex-lt-dev.servicebus.windows.net
+terraform output lt_servicebus_queue_name        # lt-dispatch
+terraform output lt_servicebus_dlq_name          # lt-dispatch/$DeadLetterQueue
+terraform output lt_data_resource_group_name
+terraform output lt_compute_resource_group_name
+terraform output lt_container_app_environment_name
+terraform output lt_container_app_job_name
+terraform output lt_blob_account_name
+terraform output lt_blob_container_name          # lt-artifacts
+terraform output lt_runner_identity_client_id
+terraform output lt_runner_identity_principal_id
+```
+
+App setting keys expected by the Apex API (FEAT-007):
+
+| App setting | Value source |
+|-------------|-------------|
+| `LT_SERVICEBUS_NAMESPACE` | `lt_servicebus_namespace_name` output |
+| `LT_SERVICEBUS_QUEUE_NAME` | `lt_servicebus_queue_name` output |
+| `LT_BLOB_ACCOUNT_NAME` | `lt_blob_account_name` output |
+| `LT_BLOB_CONTAINER_NAME` | `lt_blob_container_name` output |
+| `LT_APEX_CALLBACK_BASE_URL` | Host that should receive runner ingest (sticky per slot: staging URL vs prod URL) |
+| `LT_RUNNER_CALLBACK_TOKEN` | Short-term shared ingest bearer (GitHub secret → App Service / job) |
+| `LT_CALLBACK_TOKEN_AUDIENCE` | Long-term only — when `lt_enable_entra_ingest_app=true` |
+| `LT_RUNNER_ALLOWED_CLIENT_IDS` | Long-term only — runner MI client ID |
+
+### Runner callback auth
+
+**Short-term (default):** shared bearer `LT_RUNNER_CALLBACK_TOKEN` on App Service and
+the Container Apps Job. Set via GitHub environment secret `LT_RUNNER_CALLBACK_TOKEN`
+(deploy / pr-tests pipelines) and optionally `var.lt_runner_callback_token` for the job.
+
+**Long-term:** set `lt_enable_entra_ingest_app = true` after the apply identity has
+Graph `Application.ReadWrite.*` + `AppRoleAssignment.ReadWrite.All`. Terraform then
+creates `apex-lt-ingest-{environment}` + `LoadTest.Runner` role assignment; wire
+`LT_CALLBACK_TOKEN_AUDIENCE` / `LT_RUNNER_ALLOWED_CLIENT_IDS` and remove the shared
+secret.
+
+### KEDA scale-rule authentication
+
+The Container Apps Job event trigger must supply a Service Bus **connection**
+setting. Putting `clientId` in scale-rule metadata alone is not enough — KEDA
+fails with `error parsing azure service bus metadata: no connection setting given`
+and never starts executions (runs stay `dispatched`).
+
+Until the module is on **azurerm >= 4.73** (which supports scale-rule
+`identity_id`), Terraform wires a namespace SAS with **Manage** rights
+(`lt-keda-listen`) into a job secret `lt-keda-sb-connection` and references it
+from the scale rule `authentication` block (`trigger_parameter = connection`).
+KEDA's Service Bus scaler calls the management API for queue length — Listen-only
+returns `401 Manage,EntityRead claims required` and jobs never start.
+Runner **message receive** still uses the user-assigned MI (Data Receiver) —
+the SAS is only for KEDA queue-length polling.
+
+Smoke signal: Container Apps system logs must **not** show repeating
+`KEDAScalerFailed` / `ScaledJobCheckFailed` after apply.
+
+### Concurrency guardrail
+
+`lt_max_executions` (default **2**) sets the KEDA `max-executions` on the
+Container Apps Job. This enforces the PRD platform-wide concurrency limit of
+1–2. Messages beyond the cap wait on the Service Bus queue rather than
+launching extra executions.
+
+### VNet integration (required for non-prod target reachability)
+
+Provide `lt_vnet_subnet_id` pointing to a subnet delegated to
+`Microsoft.App/environments`. Without it, the CAE is provisioned without VNet
+integration (suitable for initial stand-up / validation); runner egress to
+VNet-peered non-prod targets will fail until the subnet is wired.
+
+```bash
+# Example var for dev
+lt_vnet_subnet_id = "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/snet-apex-lt-dev"
+```
+
+### Runner image (Lane B)
+
+Terraform provisions a dedicated Basic ACR (`acrapexlt{environment}`) and wires
+the Container Apps Job to pull via the runner MI (`AcrPull` + `registry` block).
+
+CI publishes the Apex runner on every PR deploy (`pr-tests.yml`) and production
+staging deploy (`deploy.yml`) via `scripts/ci/publish-lt-k6-runner.sh`:
+
+1. `docker build -f runners/load-test-k6/Dockerfile` (requires prior `npm run build`)
+2. Push `apex-lt-k6:<git-sha>` and `:latest` to the env ACR
+3. `az containerapp job update --image …:<git-sha>`
+
+Terraform **ignores** job image drift after apply so CI updates are not reverted.
+The initial `var.lt_runner_image` placeholder (`grafana/k6:latest`) is only used
+until the first successful publish.
+
+**GitHub environment variables** (set per `dev` / `prd`):
+
+| Variable | Example (dev) |
+|----------|----------------|
+| `LT_ACR_NAME` | `acrapexltdev` |
+| `LT_CONTAINER_APP_JOB_NAME` | `caj-apex-lt-dev` |
+| `LT_RESOURCE_GROUP` | `rg-scrum-dev` (optional; PR defaults to this, prod defaults to `RESOURCE_GROUP_NAME`) |
+
+Grant the deploy SP **AcrPush** on the ACR (Terraform:
+`lt_acr_push_principal_ids = ["<sp-object-id>"]`, or one-time
+`az role assignment create --role AcrPush …`).
+
+```bash
+terraform output lt_acr_name
+terraform output lt_acr_login_server
+```
+
+Optional: pin a digest in `lt_runner_image` for a controlled roll-forward; CI will
+still overwrite the live job image on the next deploy.
+
+### Non-prod verification (load-test module)
+
+After confirming `default` workspace and `MSS-DevTest` subscription:
+
+```bash
+terraform fmt -check
+terraform validate
+terraform plan
+
+# After apply:
+terraform output lt_servicebus_namespace_name
+terraform output lt_container_app_job_name
+terraform output lt_runner_identity_client_id
+```
+
+Smoke checks:
+1. Verify Service Bus namespace name starts with `sbns-apex-lt-` and is **not** the shared async namespace.
+2. Confirm Container Apps Job `caj-apex-lt-dev` references the expected runner image.
+3. Confirm KEDA scale rule `lt-servicebus-keda` is present on the job, binds to `lt-dispatch`, and authenticates via secret `lt-keda-sb-connection` (not metadata `clientId` alone).
+4. Confirm `max_executions` is 1 or 2. Confirm system logs are free of `KEDAScalerFailed`.
+5. Confirm `lt-artifacts` container exists on the shared storage account with the 90-day lifecycle rule.
+6. **Negative check:** Attempt queue receive and blob write with a non-module identity; both must be denied by Azure RBAC (VT-04).
+
+---
 
 ## Deployment
 

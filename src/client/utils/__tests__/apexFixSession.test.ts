@@ -1,6 +1,9 @@
 import {
+  agentErrorFromChatThreadStatus,
+  cancelChatThread,
   clearApexFixInProgress,
   fetchChatThreadStatus,
+  isTerminalChatThreadStatus,
   markApexFixInProgress,
   readApexFixInProgress,
 } from '../apexFixSession';
@@ -69,5 +72,48 @@ describe('apexFixSession', () => {
     global.fetch = jest.fn().mockResolvedValue({ ok: false }) as jest.Mock;
 
     await expect(fetchChatThreadStatus('thread-1')).resolves.toBeNull();
+  });
+
+  it('cancels a chat thread via POST', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true }) as jest.Mock;
+
+    await cancelChatThread('thread-1');
+
+    expect(global.fetch).toHaveBeenCalledWith('/api/chat/threads/thread-1/cancel', {
+      method: 'POST',
+      credentials: 'include',
+    });
+  });
+});
+
+describe('isTerminalChatThreadStatus', () => {
+  it.each(['idle', 'failed', 'cancelled', 'error', 'IDLE', 'Failed', 'unknown'])(
+    'treats %s as terminal',
+    (status) => {
+      expect(isTerminalChatThreadStatus(status)).toBe(true);
+    },
+  );
+
+  it.each(['running', 'streaming', 'Running', 'STREAMING'])(
+    'treats %s as non-terminal',
+    (status) => {
+      expect(isTerminalChatThreadStatus(status)).toBe(false);
+    },
+  );
+});
+
+describe('agentErrorFromChatThreadStatus', () => {
+  it('returns undefined for successful idle', () => {
+    expect(agentErrorFromChatThreadStatus('idle')).toBeUndefined();
+  });
+
+  it('returns lastError for failed/error when provided', () => {
+    expect(agentErrorFromChatThreadStatus('failed', 'boom')).toBe('boom');
+    expect(agentErrorFromChatThreadStatus('error', 'boom')).toBe('boom');
+  });
+
+  it('returns a default message for failed/cancelled without lastError', () => {
+    expect(agentErrorFromChatThreadStatus('failed')).toMatch(/could not complete/i);
+    expect(agentErrorFromChatThreadStatus('cancelled')).toMatch(/cancelled/i);
   });
 });

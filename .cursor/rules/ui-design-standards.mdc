@@ -34,6 +34,12 @@ border: 1px solid #ddd;
 | Shadows | `--shadow-sm`, `--shadow-md` |
 | Status | `--success-color`, `--error-color` |
 
+## Form Inputs
+
+- Prefer `--bg-secondary` for field backgrounds (use `--bg-tertiary` when the field sits on a `--bg-secondary` card).
+- Keep the **same** background on `:focus` and `:-webkit-autofill` — do not allow the browser to flash white.
+- For discrete numeric values, use `NumberStepper` (`src/client/components/NumberStepper.tsx`) instead of `<input type="number">`.
+
 ## Dark Mode
 
 Dark mode is handled automatically by `[data-theme="dark"]` in `App.css`. Do not add manual dark-mode overrides via inline styles or JavaScript theme checks:

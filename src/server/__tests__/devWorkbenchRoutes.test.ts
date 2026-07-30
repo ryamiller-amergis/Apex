@@ -108,6 +108,11 @@ jest.mock('uuid', () => ({
   v4: jest.fn(() => 'session-abc'),
 }));
 
+const mockGetApexFeatureContext = jest.fn();
+jest.mock('../services/devWorkbenchFeatureContextService', () => ({
+  getApexFeatureContext: (...args: unknown[]) => mockGetApexFeatureContext(...args),
+}));
+
 const mockFindFirst = jest.fn();
 const mockSelectWhere = jest.fn();
 const mockInsertValues = jest.fn().mockResolvedValue(undefined);
@@ -345,11 +350,16 @@ describe('POST /api/dev-workbench/start', () => {
       setWorkItemState: jest.fn().mockResolvedValue(undefined),
     };
     MockAzureDevOpsService.mockImplementation(() => mockAdo as unknown as AzureDevOpsService);
-    bootstrapDevelopmentDependencies.mockImplementationOnce(async (_workspace: string, options: any) => {
-      await options.onPhase('dependencies_preparing', 'Preparing locked dependencies');
-      await options.onPhase('dependencies_ready', 'Dependencies are ready');
-      return { cacheKey: 'cache', cacheDir: '/tmp/cache', cacheHit: false };
-    });
+    bootstrapDevelopmentDependencies.mockImplementationOnce(
+      async (
+        _workspace: string,
+        options: import('../services/dependencyBootstrapService').DependencyBootstrapOptions,
+      ) => {
+        await options.onPhase?.('dependencies_preparing', 'Preparing locked dependencies');
+        await options.onPhase?.('dependencies_ready', 'Dependencies are ready');
+        return { cacheKey: 'cache', cacheDir: '/tmp/cache', cacheHit: false };
+      },
+    );
 
     const res = await request(buildApp())
       .post('/api/dev-workbench/start')
@@ -988,6 +998,23 @@ describe('POST /api/dev-workbench/features/complete', () => {
     );
   });
 
+  it('promotes an active session to completed instead of inserting', async () => {
+    mockFindFirst
+      .mockResolvedValueOnce(undefined) // no completed
+      .mockResolvedValueOnce({ id: 'active-session', status: 'in_progress' });
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/features/complete')
+      .send({ prdId: 'prd-1', featureId: 'FEAT-001', project: 'Apex' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, sessionId: 'active-session' });
+    expect(mockUpdateSet).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'completed' }),
+    );
+    expect(mockInsertValues).not.toHaveBeenCalled();
+  });
+
   it('returns the existing session if the feature is already complete', async () => {
     mockFindFirst.mockResolvedValue({ id: 'existing-session' });
 
@@ -1019,6 +1046,140 @@ describe('POST /api/dev-workbench/features/complete', () => {
 
     expect(res.status).toBe(500);
     expect(res.body.error).toMatch(/failed to mark feature/i);
+  });
+});
+
+describe('GET /api/dev-workbench/features/:prdId/:featureId/context', () => {
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    mockGroupMembershipGranted = true;
+    jest.clearAllMocks();
+  });
+
+  it('returns 400 when project query is missing', async () => {
+    const res = await request(buildApp()).get(
+      '/api/dev-workbench/features/prd-1/FEAT-001/context',
+    );
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/project/i);
+    expect(mockGetApexFeatureContext).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 for a non-Apex project', async () => {
+    const res = await request(buildApp()).get(
+      '/api/dev-workbench/features/prd-1/FEAT-001/context?project=MaxView',
+    );
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Apex/i);
+    expect(mockGetApexFeatureContext).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when the service reports not found', async () => {
+    mockGetApexFeatureContext.mockResolvedValue(null);
+
+    const res = await request(buildApp()).get(
+      '/api/dev-workbench/features/prd-1/FEAT-001/context?project=Apex',
+    );
+
+    expect(res.status).toBe(404);
+    expect(mockGetApexFeatureContext).toHaveBeenCalledWith('Apex', 'prd-1', 'FEAT-001');
+  });
+
+  it('returns the feature context payload on success', async () => {
+    const payload = {
+      prdId: 'prd-1',
+      prdTitle: 'Notifications',
+      prdContent: '# PRD',
+      epicTitle: 'Epic',
+      featureId: 'FEAT-001',
+      featureTitle: 'Prefs',
+      featurePriority: 'Must',
+      backlogItems: [],
+      designDocument: null,
+      prototype: null,
+    };
+    mockGetApexFeatureContext.mockResolvedValue(payload);
+
+    const res = await request(buildApp()).get(
+      '/api/dev-workbench/features/prd-1/FEAT-001/context?project=Apex',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(payload);
+  });
+
+  it('inherits the Developer group membership gate', async () => {
+    mockGroupMembershipGranted = false;
+
+    const res = await request(buildApp()).get(
+      '/api/dev-workbench/features/prd-1/FEAT-001/context?project=Apex',
+    );
+
+    expect(res.status).toBe(403);
+    expect(mockGetApexFeatureContext).not.toHaveBeenCalled();
+  });
+
+  it('inherits the dev-workbench:view permission gate', async () => {
+    mockPermissionGranted = false;
+
+    const res = await request(buildApp()).get(
+      '/api/dev-workbench/features/prd-1/FEAT-001/context?project=Apex',
+    );
+
+    expect(res.status).toBe(403);
+    expect(mockGetApexFeatureContext).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/dev-workbench/features/start-local', () => {
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    mockGroupMembershipGranted = true;
+    jest.clearAllMocks();
+  });
+
+  it('creates a synthetic in_progress session for local development', async () => {
+    mockFindFirst.mockResolvedValue(undefined);
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/features/start-local')
+      .send({ prdId: 'prd-1', featureId: 'FEAT-001', project: 'Apex' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, sessionId: 'session-abc', status: 'in_progress' });
+    expect(mockInsertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'session-abc',
+        project: 'Apex',
+        authorId: 'user-1',
+        prdId: 'prd-1',
+        featureId: 'FEAT-001',
+        status: 'in_progress',
+      }),
+    );
+  });
+
+  it('returns the existing active session without inserting', async () => {
+    mockFindFirst
+      .mockResolvedValueOnce(undefined) // not completed
+      .mockResolvedValueOnce({ id: 'existing-active', status: 'in_progress' });
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/features/start-local')
+      .send({ prdId: 'prd-1', featureId: 'FEAT-001', project: 'Apex' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, sessionId: 'existing-active', status: 'in_progress' });
+    expect(mockInsertValues).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when required fields are missing', async () => {
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/features/start-local')
+      .send({ featureId: 'FEAT-001' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/required/i);
   });
 });
 

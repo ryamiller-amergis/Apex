@@ -1,9 +1,10 @@
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { chatMessageAttachments, chatMessages, chatThreads, interviews, prds } from '../db/schema';
+import { chatMessageAttachments, chatMessages, chatThreads, interviews } from '../db/schema';
 import type {
   ChatMessage,
   ChatThread,
+  ChatThreadSearchResult,
   ChatThreadSummary,
 } from '../../shared/types/chat';
 import {
@@ -12,6 +13,71 @@ import {
   normalizeMessagePreview,
   skillPathToProcessLabel,
 } from '../../shared/utils/threadHistoryLabel';
+
+const SNIPPET_WINDOW = 120;
+
+/** Escape `%`, `_`, and `\` so ILIKE performs a plain substring match. */
+export function escapeIlikePattern(term: string): string {
+  return term.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+}
+
+/**
+ * Center a ~120-char window on the first case-insensitive hit.
+ * Clamp to message bounds; ellipsis only when the window is clipped (A-007).
+ */
+export function deriveMatchSnippet(text: string, term: string, window = SNIPPET_WINDOW): string {
+  if (!text) return '';
+  if (text.length <= window) return text;
+
+  const lowerText = text.toLowerCase();
+  const lowerTerm = term.toLowerCase();
+  const hitIndex = lowerText.indexOf(lowerTerm);
+  const anchor = hitIndex >= 0 ? hitIndex : 0;
+  const half = Math.floor(window / 2);
+
+  let start = Math.max(0, anchor - half);
+  const end = Math.min(text.length, start + window);
+  start = Math.max(0, end - window);
+
+  let snippet = text.slice(start, end);
+  if (start > 0) snippet = `...${snippet}`;
+  if (end < text.length) snippet = `${snippet}...`;
+  return snippet;
+}
+
+function resultRows<T>(result: unknown): T[] {
+  if (Array.isArray(result)) return result as T[];
+  if (result && typeof result === 'object' && Array.isArray((result as { rows?: unknown }).rows)) {
+    return (result as { rows: T[] }).rows;
+  }
+  return [];
+}
+
+interface SearchThreadRow {
+  id: string;
+  user_id: string;
+  title: string | null;
+  status: string;
+  kickoff: ChatThread['kickoff'] | null;
+  flagged: boolean;
+  flagged_at: string | null;
+  created_at: string;
+  last_activity_at: string;
+  message_id: string | null;
+  match_role: string | null;
+  message_text: string | null;
+  matched_at: string | null;
+  title_only: boolean;
+  first_user_message: string | null;
+}
+
+export interface SearchThreadsOpts {
+  term: string;
+  limit?: number;
+  offset?: number;
+  project?: string;
+  flaggedOnly?: boolean;
+}
 
 // ── upsertThread ──────────────────────────────────────────────────────────────
 
@@ -149,6 +215,161 @@ export async function listThreadsByUser(
     createdAt: row.createdAt,
     lastActivityAt: row.lastActivityAt,
   }));
+}
+
+// ── searchThreads ─────────────────────────────────────────────────────────────
+
+/**
+ * User-scoped chat history search (FEAT-001 / TBI-002).
+ * Matches thread title + visible user/agent message text; one row per thread.
+ */
+export async function searchThreads(
+  userId: string,
+  opts: SearchThreadsOpts,
+): Promise<ChatThreadSearchResult[]> {
+  const term = opts.term.trim();
+  const limit = opts.limit ?? 50;
+  const offset = opts.offset ?? 0;
+  const pattern = `%${escapeIlikePattern(term)}%`;
+
+  const projectFilter = opts.project
+    ? sql`AND t.kickoff->>'project' = ${opts.project}`
+    : sql``;
+  const flaggedFilter = opts.flaggedOnly
+    ? sql`AND t.flagged = true`
+    : sql``;
+
+  const result = await db.execute(sql`
+    WITH scoped_threads AS (
+      SELECT t.*
+      FROM chat_threads t
+      WHERE t.user_id = ${userId}
+        AND NOT EXISTS (
+          SELECT 1 FROM interviews WHERE interviews.chat_thread_id = t.id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM prds WHERE prds.chat_thread_id = t.id
+        )
+        ${projectFilter}
+        ${flaggedFilter}
+    ),
+    message_hits AS (
+      SELECT DISTINCT ON (m.thread_id)
+        m.thread_id,
+        m.id AS message_id,
+        m.role AS match_role,
+        m.text AS message_text,
+        m.ts AS matched_at
+      FROM chat_messages m
+      INNER JOIN scoped_threads st ON st.id = m.thread_id
+      WHERE m.role IN ('user', 'agent')
+        AND m.hidden = false
+        AND m.text ILIKE ${pattern} ESCAPE '\\'
+      ORDER BY m.thread_id, m.ts DESC
+    ),
+    title_hits AS (
+      SELECT st.id AS thread_id
+      FROM scoped_threads st
+      WHERE st.title ILIKE ${pattern} ESCAPE '\\'
+        AND NOT EXISTS (
+          SELECT 1 FROM message_hits mh WHERE mh.thread_id = st.id
+        )
+    ),
+    matched AS (
+      SELECT
+        st.id,
+        st.user_id,
+        st.title,
+        st.status,
+        st.kickoff,
+        st.flagged,
+        st.flagged_at,
+        st.created_at,
+        st.last_activity_at,
+        mh.message_id,
+        mh.match_role,
+        mh.message_text,
+        mh.matched_at,
+        false AS title_only,
+        mh.matched_at AS sort_at
+      FROM scoped_threads st
+      INNER JOIN message_hits mh ON mh.thread_id = st.id
+
+      UNION ALL
+
+      SELECT
+        st.id,
+        st.user_id,
+        st.title,
+        st.status,
+        st.kickoff,
+        st.flagged,
+        st.flagged_at,
+        st.created_at,
+        st.last_activity_at,
+        NULL::uuid AS message_id,
+        NULL::text AS match_role,
+        NULL::text AS message_text,
+        NULL::timestamptz AS matched_at,
+        true AS title_only,
+        st.last_activity_at AS sort_at
+      FROM scoped_threads st
+      INNER JOIN title_hits th ON th.thread_id = st.id
+    )
+    SELECT
+      m.*,
+      (
+        SELECT msg.text FROM chat_messages msg
+        WHERE msg.thread_id = m.id
+          AND msg.role = 'user'
+          AND msg.text <> 'Begin.'
+        ORDER BY msg.ts ASC
+        LIMIT 1
+      ) AS first_user_message
+    FROM matched m
+    ORDER BY m.sort_at DESC
+    LIMIT ${limit}
+    OFFSET ${offset}
+  `);
+
+  return resultRows<SearchThreadRow>(result).map((row) => mapSearchRow(row, term));
+}
+
+function mapSearchRow(row: SearchThreadRow, term: string): ChatThreadSearchResult {
+  const summary: ChatThreadSearchResult = {
+    id: row.id,
+    userId: row.user_id,
+    title: row.title ?? 'Untitled',
+    status: row.status as ChatThreadSummary['status'],
+    kickoff: {
+      project: row.kickoff?.project ?? '',
+      repo: row.kickoff?.repo ?? '',
+      skillPath: row.kickoff?.skillPath,
+      pillLabel: row.kickoff?.pillLabel,
+      pillDescription: row.kickoff?.pillDescription,
+    },
+    flagged: row.flagged,
+    flaggedAt: row.flagged_at ?? undefined,
+    messagePreview: normalizeMessagePreview(row.first_user_message) ?? undefined,
+    createdAt: row.created_at,
+    lastActivityAt: row.last_activity_at,
+  };
+
+  if (row.title_only || !row.message_id || !row.message_text || !row.matched_at) {
+    return { ...summary, titleOnly: true };
+  }
+
+  const role = row.match_role === 'agent' ? 'agent' : 'user';
+  return {
+    ...summary,
+    titleOnly: false,
+    match: {
+      messageId: row.message_id,
+      role,
+      snippet: deriveMatchSnippet(row.message_text, term),
+      matchedAt: row.matched_at,
+    },
+  };
 }
 
 // ── loadFullThread ────────────────────────────────────────────────────────────

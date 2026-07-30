@@ -124,6 +124,7 @@ resource "azurerm_linux_web_app" "main" {
     app_setting_names = [
       "AZURE_REDIRECT_URL",
       "APPLICATIONINSIGHTS_CONNECTION_STRING",
+      "LT_APEX_CALLBACK_BASE_URL",
     ]
   }
 
@@ -160,6 +161,13 @@ resource "azurerm_linux_web_app_slot" "staging" {
   app_service_id = azurerm_linux_web_app.main.id
   https_only     = true
   tags           = merge(var.tags, { Environment = var.environment, Slot = var.staging_slot_name })
+
+  # Slot identities are not swapped with application code. Keep a dedicated
+  # system identity on staging so pre-swap PDF smoke tests retain managed-
+  # identity access to the production shared Blob account.
+  identity {
+    type = "SystemAssigned"
+  }
 
   site_config {
     always_on = true

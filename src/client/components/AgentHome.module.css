@@ -57,18 +57,9 @@
 
 .composeLogo {
   width: max-content;
-  font-size: 3.2rem;
+  font-size: 2.8rem;
   color: var(--text-primary);
   opacity: 0.9;
-}
-
-.composeLogo > svg {
-  display: none;
-}
-
-.composeLogo svg {
-  width: 100%;
-  height: auto;
 }
 
 .composeHeading {
@@ -161,7 +152,7 @@
   left: 0;
   right: 0;
   margin-bottom: 4px;
-  background: var(--brand-primary);
+  background: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: 10px;
   box-shadow: 0 -4px 16px var(--shadow-md);
@@ -361,7 +352,7 @@
 }
 
 .attachBtn:hover:not(:disabled) {
-  background: var(--brand-primary);
+  background: var(--bg-primary);
   color: var(--text-primary);
   border-color: var(--accent-color);
 }
@@ -392,7 +383,7 @@
 }
 
 .micBtn:hover:not(:disabled) {
-  background: var(--brand-primary);
+  background: var(--bg-primary);
   color: var(--text-primary);
   border-color: var(--accent-color);
 }
@@ -445,7 +436,7 @@
 
 .modelSelect:hover:not(:disabled),
 .modelSelect:focus {
-  background: var(--brand-primary);
+  background: var(--bg-primary);
   border-color: var(--accent-color);
   color: var(--text-primary);
 }
@@ -540,7 +531,7 @@
   padding: 5px 10px 5px 5px;
   border: 1px solid var(--border-color);
   border-radius: 999px;
-  background: var(--brand-primary);
+  background: var(--bg-primary);
 }
 
 .contextMeterRing {
@@ -565,7 +556,7 @@
   position: absolute;
   inset: 4px;
   border-radius: 50%;
-  background: var(--brand-primary);
+  background: var(--bg-primary);
 }
 
 .contextMeterRing span {
@@ -596,7 +587,7 @@
   padding: 0 14px;
   border: 1px solid var(--border-color);
   border-radius: 999px;
-  background: var(--brand-primary);
+  background: var(--bg-primary);
   color: var(--text-primary);
   font-size: 0.82rem;
   font-weight: 700;
@@ -628,7 +619,7 @@
 .chatInputBar {
   padding: 0 24px 16px;
   border-top: 1px solid var(--border-color);
-  background: var(--brand-primary);
+  background: var(--bg-primary);
   padding-top: 12px;
 }
 
@@ -920,6 +911,23 @@
   40%           { transform: translateY(-6px); }
 }
 
+/* ── Jump-to-match transient highlight (FEAT-003 / PBI-003) ───────────────── */
+
+.messageHighlighted {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 3px;
+  border-radius: 8px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 35%, transparent), var(--shadow-md);
+  background: color-mix(in srgb, var(--accent-color) 12%, var(--bg-primary));
+  animation: messageFocusPulse 0.6s ease;
+}
+
+@keyframes messageFocusPulse {
+  0% { outline-width: 1px; outline-offset: 1px; }
+  50% { outline-width: 3px; outline-offset: 5px; }
+  100% { outline-width: 2px; outline-offset: 3px; }
+}
+
 /* ── Streaming cursor ──────────────────────────────────────────────────────── */
 
 .cursor {
@@ -968,7 +976,7 @@
 .messageCopyIconBtn:hover {
   border-color: var(--accent-color);
   color: var(--text-primary);
-  background: var(--brand-primary);
+  background: var(--bg-primary);
 }
 
 .messageCopyIconBtn svg {
@@ -1117,7 +1125,7 @@
 .choiceBlock {
   margin-top: 0;
   border-top: 1px solid var(--border-color-light);
-  background: var(--brand-primary);
+  background: var(--bg-primary);
 }
 
 .choiceBlock + .choiceBlock {
@@ -1229,7 +1237,7 @@
 
 .choiceFreeform:focus {
   outline: none;
-  background: var(--brand-primary);
+  background: var(--bg-primary);
 }
 
 .choiceFreeformLocked {

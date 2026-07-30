@@ -19,6 +19,13 @@ jest.mock('../services/designModuleService', () => ({
   listModules: jest.fn(),
   regenerateModule: jest.fn(),
   updateModule: jest.fn(),
+  resolveGlobFiles: jest.fn(),
+}));
+
+jest.mock('../services/designModuleScopingService', () => ({
+  startScoping: jest.fn(),
+  getScopingResult: jest.fn(),
+  cancelScoping: jest.fn(),
 }));
 
 const service = jest.requireMock('../services/designModuleService') as {
@@ -28,6 +35,15 @@ const service = jest.requireMock('../services/designModuleService') as {
   listModules: jest.Mock;
   regenerateModule: jest.Mock;
   updateModule: jest.Mock;
+  resolveGlobFiles: jest.Mock;
+};
+
+const scopingService = jest.requireMock(
+  '../services/designModuleScopingService'
+) as {
+  startScoping: jest.Mock;
+  getScopingResult: jest.Mock;
+  cancelScoping: jest.Mock;
 };
 
 function buildApp() {
@@ -42,29 +58,109 @@ describe('design module routes', () => {
     jest.clearAllMocks();
   });
 
-  it('lists module summaries', async () => {
+  it('requires project query param for listing', async () => {
+    const response = await request(buildApp()).get('/api/design-modules');
+    expect(response.status).toBe(400);
+    expect(service.listModules).not.toHaveBeenCalled();
+  });
+
+  it('lists module summaries scoped by project', async () => {
     service.listModules.mockResolvedValue([
       { slug: 'chat-home', label: 'Chat Home' },
     ]);
-    const response = await request(buildApp()).get('/api/design-modules');
+    const response = await request(buildApp()).get(
+      '/api/design-modules?project=Apex'
+    );
     expect(response.status).toBe(200);
     expect(response.body).toEqual([{ slug: 'chat-home', label: 'Chat Home' }]);
+    expect(service.listModules).toHaveBeenCalledWith('Apex');
   });
 
-  it('creates a module with the authenticated actor', async () => {
-    service.createModule.mockResolvedValue({ slug: 'rbac', label: 'RBAC' });
+  it('requires project query param for get by slug', async () => {
+    const response = await request(buildApp()).get(
+      '/api/design-modules/chat-home'
+    );
+    expect(response.status).toBe(400);
+    expect(service.getModule).not.toHaveBeenCalled();
+  });
+
+  it('gets a module scoped by project', async () => {
+    service.getModule.mockResolvedValue({ slug: 'rbac', label: 'RBAC' });
+    const response = await request(buildApp()).get(
+      '/api/design-modules/rbac?project=Apex'
+    );
+    expect(response.status).toBe(200);
+    expect(service.getModule).toHaveBeenCalledWith('Apex', 'rbac');
+  });
+
+  it('creates a module with required project', async () => {
+    service.createModule.mockResolvedValue({
+      slug: 'rbac',
+      label: 'RBAC',
+      project: 'Apex',
+    });
+    service.regenerateModule.mockResolvedValue({
+      started: true,
+      threadId: 'thread-gen-1',
+    });
     const body = {
       slug: 'rbac',
       label: 'RBAC',
       description: 'Access control',
       iconKey: 'rbac',
       sourceGlobs: ['src/server/services/rbacService.ts'],
+      project: 'Apex',
     };
     const response = await request(buildApp())
       .post('/api/design-modules')
       .send(body);
     expect(response.status).toBe(201);
     expect(service.createModule).toHaveBeenCalledWith(body, 'user-1');
+    expect(service.regenerateModule).toHaveBeenCalledWith('rbac', {
+      project: 'Apex',
+      force: true,
+      actorId: 'user-1',
+    });
+    expect(response.body.generation).toEqual({
+      started: true,
+      threadId: 'thread-gen-1',
+    });
+  });
+
+  it('rejects create without project', async () => {
+    const response = await request(buildApp())
+      .post('/api/design-modules')
+      .send({
+        slug: 'rbac',
+        label: 'RBAC',
+        iconKey: 'rbac',
+        sourceGlobs: ['src/server/services/rbacService.ts'],
+      });
+    expect(response.status).toBe(400);
+    expect(service.createModule).not.toHaveBeenCalled();
+  });
+
+  it('still creates the module when auto-generation fails to start', async () => {
+    service.createModule.mockResolvedValue({
+      slug: 'rbac',
+      label: 'RBAC',
+      project: 'Apex',
+    });
+    service.regenerateModule.mockRejectedValue(new Error('No skill config'));
+    const response = await request(buildApp())
+      .post('/api/design-modules')
+      .send({
+        slug: 'rbac',
+        label: 'RBAC',
+        iconKey: 'rbac',
+        sourceGlobs: ['src/server/services/rbacService.ts'],
+        project: 'Apex',
+      });
+    expect(response.status).toBe(201);
+    expect(response.body.generation).toEqual({
+      started: false,
+      error: 'No skill config',
+    });
   });
 
   it('requires a project before regeneration', async () => {
@@ -91,11 +187,107 @@ describe('design module routes', () => {
     });
   });
 
+  it('requires project for update', async () => {
+    const response = await request(buildApp())
+      .put('/api/design-modules/rbac')
+      .send({ label: 'New RBAC' });
+    expect(response.status).toBe(400);
+    expect(service.updateModule).not.toHaveBeenCalled();
+  });
+
+  it('updates a module scoped by project', async () => {
+    service.updateModule.mockResolvedValue({
+      slug: 'rbac',
+      label: 'New RBAC',
+      project: 'Apex',
+    });
+    const response = await request(buildApp())
+      .put('/api/design-modules/rbac?project=Apex')
+      .send({ label: 'New RBAC' });
+    expect(response.status).toBe(200);
+    expect(service.updateModule).toHaveBeenCalledWith(
+      'Apex',
+      'rbac',
+      { label: 'New RBAC' },
+      'user-1'
+    );
+  });
+
+  it('requires project for delete', async () => {
+    const response = await request(buildApp()).delete(
+      '/api/design-modules/rbac'
+    );
+    expect(response.status).toBe(400);
+    expect(service.deleteModule).not.toHaveBeenCalled();
+  });
+
   it('returns 404 when deleting an unknown module', async () => {
     service.deleteModule.mockResolvedValue(false);
     const response = await request(buildApp()).delete(
-      '/api/design-modules/missing'
+      '/api/design-modules/missing?project=Apex'
     );
     expect(response.status).toBe(404);
+    expect(service.deleteModule).toHaveBeenCalledWith('Apex', 'missing');
+  });
+
+  it('starts AI scoping and returns 202', async () => {
+    scopingService.startScoping.mockResolvedValue({ threadId: 'thread-9' });
+    const response = await request(buildApp())
+      .post('/api/design-modules/scoping')
+      .send({
+        project: 'Apex',
+        name: 'Load Testing',
+        description: 'k6',
+      });
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({ threadId: 'thread-9' });
+    expect(scopingService.startScoping).toHaveBeenCalledWith(
+      'Apex',
+      expect.objectContaining({ name: 'Load Testing' }),
+      'user-1'
+    );
+  });
+
+  it('requires project for scoping', async () => {
+    const response = await request(buildApp())
+      .post('/api/design-modules/scoping')
+      .send({ name: 'Load Testing' });
+    expect(response.status).toBe(400);
+    expect(scopingService.startScoping).not.toHaveBeenCalled();
+  });
+
+  it('returns scoping poll result', async () => {
+    scopingService.getScopingResult.mockResolvedValue({
+      status: 'pending',
+    });
+    const response = await request(buildApp()).get(
+      '/api/design-modules/scoping/thread-9/result'
+    );
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ status: 'pending' });
+  });
+
+  it('previews matched files for source globs', async () => {
+    service.resolveGlobFiles.mockReturnValue([
+      { pattern: 'src/a.ts', files: ['src/a.ts'] },
+    ]);
+    const response = await request(buildApp())
+      .post('/api/design-modules/preview-globs')
+      .send({ sourceGlobs: ['src/a.ts'] });
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      matches: [{ pattern: 'src/a.ts', files: ['src/a.ts'] }],
+    });
+  });
+
+  it('returns empty matches for non-Apex project preview', async () => {
+    const response = await request(buildApp())
+      .post('/api/design-modules/preview-globs')
+      .send({ sourceGlobs: ['src/a.ts'], project: 'MaxView' });
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      matches: [{ pattern: 'src/a.ts', files: [] }],
+    });
+    expect(service.resolveGlobFiles).not.toHaveBeenCalled();
   });
 });

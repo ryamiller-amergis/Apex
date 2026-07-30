@@ -16,6 +16,11 @@ import {
   ReferenceLine,
 } from 'recharts';
 import styles from './AiCostAnalytics.module.css';
+import {
+  BRAND_MARK_INNER,
+  BRAND_MARK_LEFT_LEG,
+  BRAND_MARK_RIGHT_LEG,
+} from './brandMark';
 import { AiCostDrillDown, type DrillDownDimension } from './AiCostDrillDown';
 import { AiCostComparison } from './AiCostComparison';
 import {
@@ -426,9 +431,9 @@ const ExecutiveBriefBanner: React.FC<ExecutiveBriefBannerProps> = ({ project, on
         <div className={styles.briefBannerLeft}>
           <span className={styles.briefBannerBadge}>
             <svg viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ width: 12, height: 12 }}>
-              <path d="M20 72L43 22H56L34 72H20Z" fill="#fff" />
-              <path d="M52 22L78 72H61L43 38L52 22Z" fill="#fff" opacity="0.9" />
-              <path d="M40 72L49 54L58 72H40Z" fill="rgba(255,255,255,0.5)" />
+              <path d={BRAND_MARK_RIGHT_LEG} fill="#fff" />
+              <path d={BRAND_MARK_LEFT_LEG} fill="#fff" opacity="0.9" />
+              <path d={BRAND_MARK_INNER} fill="rgba(255,255,255,0.5)" />
             </svg>
             {brief?.briefType === 'afternoon' ? 'Apex Afternoon Update' : 'Apex Daily Brief'}
           </span>

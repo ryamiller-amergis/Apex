@@ -32,6 +32,7 @@ const AdrCard: React.FC<{
         {canDelete && (
           <button
             className={styles.cardDeleteBtn}
+            title="Delete ADR"
             type="button"
             aria-label={`Delete ADR "${adr.title}"`}
             onClick={(event) => {
@@ -39,7 +40,12 @@ const AdrCard: React.FC<{
               onDelete(adr);
             }}
           >
-            ×
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="2 4 4 4 14 4" />
+              <path d="M13 4l-.7 9.3A1 1 0 0 1 12.3 14H3.7a1 1 0 0 1-1-.7L2 4" />
+              <path d="M6.5 7v4M9.5 7v4" />
+              <path d="M5.5 4V2.7A.7.7 0 0 1 6.2 2h3.6a.7.7 0 0 1 .7.7V4" />
+            </svg>
           </button>
         )}
       </div>

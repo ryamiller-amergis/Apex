@@ -21,6 +21,14 @@ jest.mock('../db/drizzle', () => {
   return {
     db: {
       update: jest.fn().mockImplementation(makeUpdateChain),
+      query: {
+        prds: {
+          findFirst: jest.fn().mockResolvedValue({
+            fixBaseline: null,
+            prdAssistantThreadId: 'thread-1',
+          }),
+        },
+      },
     },
   };
 });
@@ -31,6 +39,21 @@ jest.mock('../services/chatAgentService', () => ({
 
 jest.mock('../services/adrService', () => ({
   stageAdrProposedContent: jest.fn(),
+}));
+
+jest.mock('../services/designDocService', () => ({
+  getDesignDoc: jest.fn(),
+  syncDesignDocContent: jest.fn(),
+  stageDesignDocProposedContent: jest.fn(),
+  updateDesignDocContent: jest.fn(),
+}));
+
+jest.mock('../services/prdService', () => ({
+  resolvePrdCommentWithApply: jest.fn(),
+}));
+
+jest.mock('../services/testCaseService', () => ({
+  addTestCaseToPrd: jest.fn(),
 }));
 
 // ── Imports ───────────────────────────────────────────────────────────────────
@@ -52,6 +75,10 @@ describe('handleUpdatePrd', () => {
       set: jest.fn().mockReturnThis(),
       where: jest.fn().mockResolvedValue(undefined),
     }));
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      fixBaseline: null,
+      prdAssistantThreadId: 'thread-1',
+    });
   });
 
   it('returns error when thread not found', async () => {
@@ -84,7 +111,7 @@ describe('handleUpdatePrd', () => {
     });
 
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed).toEqual({ ok: true, section: 'content' });
+    expect(parsed).toEqual({ ok: true, section: 'content', fixMode: false });
     expect(mockSet).toHaveBeenCalledWith(
       expect.objectContaining({ proposedContent: '# Proposed content' }),
     );
@@ -106,9 +133,126 @@ describe('handleUpdatePrd', () => {
     });
 
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed).toEqual({ ok: true, section: 'backlog' });
+    expect(parsed).toEqual({ ok: true, section: 'backlog', fixMode: false });
     expect(mockSet).toHaveBeenCalledWith(
       expect.objectContaining({ proposedBacklogJson: backlogObj }),
+    );
+  });
+
+  it('rejects validation and other non-assistant threads', async () => {
+    mockGetThread.mockResolvedValue({ id: 'validation-thread', userId: 'user-1' });
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      fixBaseline: null,
+      prdAssistantThreadId: 'assistant-thread',
+    });
+
+    const result = await handleUpdatePrd({
+      threadId: 'validation-thread',
+      prdId: 'prd-1',
+      section: 'content',
+      content: '# Validation should not stage this',
+    });
+
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Thread is not authorized to update this PRD',
+    });
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it('writes live content (not proposed) when called from the active fix thread', async () => {
+    mockGetThread.mockResolvedValue({ id: 'thread-1', userId: 'user-1' });
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      prdAssistantThreadId: 'thread-1',
+      fixBaseline: {
+        content: '# old',
+        capturedAt: '2026-01-01T00:00:00Z',
+        fixThreadId: 'thread-1',
+      },
+    });
+
+    const mockSet = jest.fn().mockReturnThis();
+    const mockWhere = jest.fn().mockResolvedValue(undefined);
+    mockDb.update.mockReturnValue({ set: mockSet, where: mockWhere });
+
+    const result = await handleUpdatePrd({
+      threadId: 'thread-1',
+      prdId: 'prd-1',
+      section: 'content',
+      content: '# Fixed content',
+    });
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed).toEqual({ ok: true, section: 'content', fixMode: true });
+    expect(mockSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: '# Fixed content',
+        proposedContent: null,
+      }),
+    );
+    expect(mockSet).not.toHaveBeenCalledWith(
+      expect.objectContaining({ proposedContent: '# Fixed content' }),
+    );
+  });
+
+  it('stages proposed content when fixBaseline exists but thread is the normal assistant', async () => {
+    mockGetThread.mockResolvedValue({ id: 'assistant-thread', userId: 'user-1' });
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      prdAssistantThreadId: 'assistant-thread',
+      fixBaseline: {
+        content: '# old',
+        capturedAt: '2026-01-01T00:00:00Z',
+        fixThreadId: 'fix-thread',
+      },
+    });
+
+    const mockSet = jest.fn().mockReturnThis();
+    const mockWhere = jest.fn().mockResolvedValue(undefined);
+    mockDb.update.mockReturnValue({ set: mockSet, where: mockWhere });
+
+    const result = await handleUpdatePrd({
+      threadId: 'assistant-thread',
+      prdId: 'prd-1',
+      section: 'content',
+      content: '# Assistant proposal',
+    });
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed).toEqual({ ok: true, section: 'content', fixMode: false });
+    expect(mockSet).toHaveBeenCalledWith(
+      expect.objectContaining({ proposedContent: '# Assistant proposal' }),
+    );
+  });
+
+  it('writes live backlog (not proposed) when called from the active fix thread', async () => {
+    mockGetThread.mockResolvedValue({ id: 'thread-1', userId: 'user-1' });
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      prdAssistantThreadId: 'thread-1',
+      fixBaseline: {
+        content: '# old',
+        capturedAt: '2026-01-01T00:00:00Z',
+        fixThreadId: 'thread-1',
+      },
+    });
+
+    const mockSet = jest.fn().mockReturnThis();
+    const mockWhere = jest.fn().mockResolvedValue(undefined);
+    mockDb.update.mockReturnValue({ set: mockSet, where: mockWhere });
+
+    const backlogObj = { epics: [{ title: 'Fixed Epic' }] };
+    const result = await handleUpdatePrd({
+      threadId: 'thread-1',
+      prdId: 'prd-1',
+      section: 'backlog',
+      content: JSON.stringify(backlogObj),
+    });
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed).toEqual({ ok: true, section: 'backlog', fixMode: true });
+    expect(mockSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backlogJson: backlogObj,
+        proposedBacklogJson: null,
+      }),
     );
   });
 

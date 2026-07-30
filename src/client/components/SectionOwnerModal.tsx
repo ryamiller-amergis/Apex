@@ -175,6 +175,10 @@ interface SectionOwnerModalProps {
   }) => void;
   onCancel: () => void;
   isSubmitting?: boolean;
+  /** When false, hide Design Prototype owner/reviewer fields. Defaults to true. */
+  prototypeStageEnabled?: boolean;
+  /** When false, hide Test Case owner/reviewer fields. Defaults to true. */
+  testCasesEnabled?: boolean;
 }
 
 function renderPoolChips(
@@ -256,6 +260,8 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
   onConfirm,
   onCancel,
   isSubmitting = false,
+  prototypeStageEnabled = true,
+  testCasesEnabled = true,
 }) => {
   const [step, setStep] = useState<1 | 2>(1);
   const [prdOwnerId, setPrdOwnerId] = useState('');
@@ -327,12 +333,21 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
   }, [onCancel]);
 
   const allOwnersSelected =
-    !!prdOwnerId && !!designDocOwnerId && !!designPrototypeOwnerId && !!testCaseOwnerId;
+    !!prdOwnerId &&
+    !!designDocOwnerId &&
+    (!prototypeStageEnabled || !!designPrototypeOwnerId) &&
+    (!testCasesEnabled || !!testCaseOwnerId);
 
   const hasPrdPool = prdPool && (prdPool.individuals.length > 0 || prdPool.groups.length > 0);
   const hasDdPool = ddPool && (ddPool.individuals.length > 0 || ddPool.groups.length > 0);
-  const hasProtoPool = protoPool && (protoPool.individuals.length > 0 || protoPool.groups.length > 0);
-  const hasQaPool = qaPool && (qaPool.individuals.length > 0 || qaPool.groups.length > 0);
+  const hasProtoPool =
+    prototypeStageEnabled &&
+    protoPool &&
+    (protoPool.individuals.length > 0 || protoPool.groups.length > 0);
+  const hasQaPool =
+    testCasesEnabled &&
+    qaPool &&
+    (qaPool.individuals.length > 0 || qaPool.groups.length > 0);
 
   const canConfirm =
     allOwnersSelected &&
@@ -347,12 +362,16 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
     onConfirm({
       prdOwnerId,
       designDocOwnerId,
-      designPrototypeOwnerId,
-      testCaseOwnerId,
+      designPrototypeOwnerId: prototypeStageEnabled ? designPrototypeOwnerId : undefined,
+      testCaseOwnerId: testCasesEnabled ? testCaseOwnerId : undefined,
       prdApproverIds: prdApproverIds.length > 0 ? prdApproverIds : undefined,
       designDocApproverIds: designDocApproverIds.length > 0 ? designDocApproverIds : undefined,
-      designPrototypeApproverIds: designPrototypeApproverIds.length > 0 ? designPrototypeApproverIds : undefined,
-      testCaseApproverIds: testCaseApproverIds.length > 0 ? testCaseApproverIds : undefined,
+      designPrototypeApproverIds:
+        prototypeStageEnabled && designPrototypeApproverIds.length > 0
+          ? designPrototypeApproverIds
+          : undefined,
+      testCaseApproverIds:
+        testCasesEnabled && testCaseApproverIds.length > 0 ? testCaseApproverIds : undefined,
     });
   };
 
@@ -437,41 +456,45 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
               )}
             </div>
 
-            <div className={styles.field}>
-              <label className={styles.label} htmlFor="so-proto-owner">
-                Design Prototype Owner (UI/UX) *
-              </label>
-              {isLoading || groupsLoading ? (
-                <span className={styles.loadingText}>Loading users…</span>
-              ) : (
-                <UserCombobox
-                  id="so-proto-owner"
-                  users={protoOwnerUsers}
-                  selectedId={designPrototypeOwnerId}
-                  onSelect={setDesignPrototypeOwnerId}
-                  placeholder="Search by name or email…"
-                  disabled={isSubmitting}
-                />
-              )}
-            </div>
+            {prototypeStageEnabled && (
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="so-proto-owner">
+                  Design Prototype Owner (UI/UX) *
+                </label>
+                {isLoading || groupsLoading ? (
+                  <span className={styles.loadingText}>Loading users…</span>
+                ) : (
+                  <UserCombobox
+                    id="so-proto-owner"
+                    users={protoOwnerUsers}
+                    selectedId={designPrototypeOwnerId}
+                    onSelect={setDesignPrototypeOwnerId}
+                    placeholder="Search by name or email…"
+                    disabled={isSubmitting}
+                  />
+                )}
+              </div>
+            )}
 
-            <div className={styles.field}>
-              <label className={styles.label} htmlFor="so-qa-owner">
-                Test Case Owner (QA) *
-              </label>
-              {isLoading || groupsLoading ? (
-                <span className={styles.loadingText}>Loading users…</span>
-              ) : (
-                <UserCombobox
-                  id="so-qa-owner"
-                  users={qaOwnerUsers}
-                  selectedId={testCaseOwnerId}
-                  onSelect={setTestCaseOwnerId}
-                  placeholder="Search by name or email…"
-                  disabled={isSubmitting}
-                />
-              )}
-            </div>
+            {testCasesEnabled && (
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="so-qa-owner">
+                  Test Case Owner (QA) *
+                </label>
+                {isLoading || groupsLoading ? (
+                  <span className={styles.loadingText}>Loading users…</span>
+                ) : (
+                  <UserCombobox
+                    id="so-qa-owner"
+                    users={qaOwnerUsers}
+                    selectedId={testCaseOwnerId}
+                    onSelect={setTestCaseOwnerId}
+                    placeholder="Search by name or email…"
+                    disabled={isSubmitting}
+                  />
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -499,27 +522,31 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
               )}
             </div>
 
-            <div className={styles.field}>
-              <label className={styles.label}>Design Prototype Reviewers *</label>
-              {protoPoolLoading ? (
-                <span className={styles.loadingText}>Loading…</span>
-              ) : !protoPool || (protoPool.individuals.length === 0 && protoPool.groups.length === 0) ? (
-                <span className={styles.noApprovers}>No approvers configured</span>
-              ) : (
-                renderPoolChips(protoPool, designPrototypeApproverIds, toggleProtoApprover)
-              )}
-            </div>
+            {prototypeStageEnabled && (
+              <div className={styles.field}>
+                <label className={styles.label}>Design Prototype Reviewers *</label>
+                {protoPoolLoading ? (
+                  <span className={styles.loadingText}>Loading…</span>
+                ) : !protoPool || (protoPool.individuals.length === 0 && protoPool.groups.length === 0) ? (
+                  <span className={styles.noApprovers}>No approvers configured</span>
+                ) : (
+                  renderPoolChips(protoPool, designPrototypeApproverIds, toggleProtoApprover)
+                )}
+              </div>
+            )}
 
-            <div className={styles.field}>
-              <label className={styles.label}>QA Reviewers *</label>
-              {qaPoolLoading ? (
-                <span className={styles.loadingText}>Loading…</span>
-              ) : !qaPool || (qaPool.individuals.length === 0 && qaPool.groups.length === 0) ? (
-                <span className={styles.noApprovers}>No approvers configured</span>
-              ) : (
-                renderPoolChips(qaPool, testCaseApproverIds, toggleQaApprover)
-              )}
-            </div>
+            {testCasesEnabled && (
+              <div className={styles.field}>
+                <label className={styles.label}>QA Reviewers *</label>
+                {qaPoolLoading ? (
+                  <span className={styles.loadingText}>Loading…</span>
+                ) : !qaPool || (qaPool.individuals.length === 0 && qaPool.groups.length === 0) ? (
+                  <span className={styles.noApprovers}>No approvers configured</span>
+                ) : (
+                  renderPoolChips(qaPool, testCaseApproverIds, toggleQaApprover)
+                )}
+              </div>
+            )}
           </div>
         )}
 

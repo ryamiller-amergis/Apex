@@ -4,9 +4,13 @@
   left: 0;
   right: 0;
   bottom: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
   background: rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(4px);
   z-index: 2000;
+  cursor: pointer;
   animation: fadeIn 0.2s ease-out;
 }
 
@@ -132,6 +136,32 @@
   cursor: pointer;
   user-select: none;
   gap: 16px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+}
+
+.changelog-unseen-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 20px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent-color);
+}
+
+.changelog-unseen-divider::before,
+.changelog-unseen-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-color);
 }
 
 .changelog-entry-header:hover {

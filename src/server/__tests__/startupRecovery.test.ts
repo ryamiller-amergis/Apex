@@ -17,6 +17,7 @@ jest.mock('../services/chatAgentService', () => ({
 }));
 jest.mock('../services/prdService', () => ({
   startPrdWatcher: jest.fn(),
+  isPrdWatcherActive: jest.fn(),
   isPrdValidationWatcherActive: jest.fn(),
   rehydratePrdValidationWatcher: jest.fn(),
 }));
@@ -42,8 +43,19 @@ jest.mock('../services/pdfAssemblyService', () => ({
 jest.mock('../services/featureRequestAnalysisService', () => ({
   recoverAnalyzingFeatureRequests: jest.fn(),
 }));
+jest.mock('../services/agentRunReaperService', () => ({
+  isThreadRunAlive: jest.fn(),
+}));
 
-import { recoverStaleDevSessionSetups } from '../services/startupRecovery';
+import { recoverStaleDevSessionSetups, recoverStuckInterviewThreads } from '../services/startupRecovery';
+import { findRunningInterviewThreads, clearStaleRun } from '../services/chatThreadRepository';
+import { hydrateThread } from '../services/chatAgentService';
+import { isThreadRunAlive } from '../services/agentRunReaperService';
+
+const mockedFindRunning = findRunningInterviewThreads as jest.MockedFunction<typeof findRunningInterviewThreads>;
+const mockedClearStale = clearStaleRun as jest.MockedFunction<typeof clearStaleRun>;
+const mockedHydrate = hydrateThread as jest.MockedFunction<typeof hydrateThread>;
+const mockedIsAlive = isThreadRunAlive as jest.MockedFunction<typeof isThreadRunAlive>;
 
 describe('recoverStaleDevSessionSetups', () => {
   beforeEach(() => {
@@ -100,5 +112,39 @@ describe('recoverStaleDevSessionSetups', () => {
 
     expect(recovered).toBe(0);
     expect(mockUpdateSet).not.toHaveBeenCalled();
+  });
+});
+
+describe('recoverStuckInterviewThreads', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('leaves live interview runs alone', async () => {
+    mockedFindRunning.mockResolvedValue([
+      { threadId: 't1', interviewId: 'i1', activeRunId: 'run-1' },
+    ]);
+    mockedIsAlive.mockResolvedValue(true);
+
+    const recovered = await recoverStuckInterviewThreads();
+
+    expect(recovered).toBe(0);
+    expect(mockedHydrate).not.toHaveBeenCalled();
+    expect(mockedClearStale).not.toHaveBeenCalled();
+  });
+
+  it('resets interviews with no live agent run', async () => {
+    mockedFindRunning.mockResolvedValue([
+      { threadId: 't1', interviewId: 'i1', activeRunId: 'run-1' },
+    ]);
+    mockedIsAlive.mockResolvedValue(false);
+    mockedHydrate.mockResolvedValue(true);
+    mockedClearStale.mockResolvedValue(undefined);
+
+    const recovered = await recoverStuckInterviewThreads();
+
+    expect(recovered).toBe(1);
+    expect(mockedHydrate).toHaveBeenCalledWith('t1');
+    expect(mockedClearStale).toHaveBeenCalledWith('t1');
   });
 });

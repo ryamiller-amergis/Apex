@@ -664,16 +664,28 @@ export const FixValidationPanel: React.FC<FixValidationPanelProps> = ({
   );
 };
 
-// ── Fixing Progress View (shown during AI fix) ───────────────────────────────
+// ── Fixing Progress Strip (compact inline status; prefer ApexFixRunningBanner) ─
 
-export const FixingProgressView: React.FC<{ onCancel: () => void }> = ({ onCancel }) => (
-  <div className={styles.fixingOverlay}>
+export interface FixingProgressViewProps {
+  onCancel: () => void;
+  title?: string;
+  hint?: string;
+}
+
+/** @deprecated Prefer ApexFixRunningBanner with onCancel — kept as a slim inline fallback. */
+export const FixingProgressView: React.FC<FixingProgressViewProps> = ({
+  onCancel,
+  title = 'Apex is fixing validation gaps…',
+  hint = 'Typically 1–3 min',
+}) => (
+  <div className={styles.fixingStrip} role="status" aria-live="polite">
+    <span className={styles.fixingPulse} aria-hidden="true" />
     <svg className={styles.fixingSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M21 12a9 9 0 1 1-6.219-8.56" />
     </svg>
-    <div className={styles.fixingTitle}>Apex is fixing validation gaps…</div>
-    <div className={styles.fixingSub}>
-      The assistant is reviewing each gap and rewriting the affected sections. This typically takes 1–3 minutes depending on the number of gaps.
+    <div className={styles.fixingStripText}>
+      <span className={styles.fixingTitle}>{title}</span>
+      {hint && <span className={styles.fixingHint}>{hint}</span>}
     </div>
     <button className={styles.fixingCancelBtn} onClick={onCancel} type="button">
       Cancel

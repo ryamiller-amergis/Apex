@@ -32,6 +32,19 @@ This document provides the component usage rules, spacing scale, typography syst
 - Required fields: asterisk suffix on label, never rely on placeholder alone.
 - Error state: show `error` prop + `helperText` with reason.
 - Do NOT use placeholder text as a substitute for a label.
+- **Input backgrounds**: use `--bg-secondary` (or `--bg-tertiary` inside secondary cards). On `:focus` / `:autofill`, keep the **same** token — never let the browser flash to white/`#fff`.
+- **Numeric values**: use the shared `NumberStepper` (`src/client/components/NumberStepper.tsx`) — a compact `−` / value / `+` control (same interaction pattern as PDF preview zoom). Do **not** use `<input type="number">` (native spinner arrows are banned in Apex forms).
+
+### NumberStepper
+
+| Prop | Purpose |
+|------|---------|
+| `value` / `onChange` | Controlled integer (or stepped) value |
+| `min` / `max` / `step` | Clamp bounds |
+| `unit` | Optional short unit under the value (`min`, `VUs`, `RPS`) |
+| `disabled` | Disables both buttons |
+
+Use for VUs, durations, counts, zoom-like quantities, and any other discrete numeric field in forms.
 
 ### Data Display
 

@@ -550,10 +550,10 @@
   font-size: 13px;
 }
 
-/* Scrollbar styling */
+/* Scrollbar styling — uses global theme scrollbar tokens */
 .roadmap-timeline {
   scrollbar-width: thin;
-  scrollbar-color: #7B68EE var(--card-background);
+  scrollbar-color: var(--scrollbar-thumb) var(--card-background, var(--bg-secondary));
 }
 
 .roadmap-timeline::-webkit-scrollbar {
@@ -562,22 +562,22 @@
 }
 
 .roadmap-timeline::-webkit-scrollbar-track {
-  background: var(--card-background);
+  background: var(--card-background, var(--bg-secondary));
   border-radius: 6px;
 }
 
 .roadmap-timeline::-webkit-scrollbar-thumb {
-  background: #7B68EE;
+  background: var(--scrollbar-thumb);
   border-radius: 6px;
-  border: 2px solid var(--card-background);
+  border: 2px solid var(--card-background, var(--bg-secondary));
 }
 
 .roadmap-timeline::-webkit-scrollbar-thumb:hover {
-  background: #6A58DE;
+  background: var(--scrollbar-thumb-hover);
 }
 
 .roadmap-timeline::-webkit-scrollbar-corner {
-  background: var(--card-background);
+  background: var(--card-background, var(--bg-secondary));
 }
 
 /* Responsive adjustments */

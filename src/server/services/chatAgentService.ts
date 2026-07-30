@@ -25,18 +25,22 @@ import {
   upsertThread as pgUpsertThread,
   insertMessage as pgInsertMessage,
   listThreadsByUser as pgListThreadsByUser,
+  searchThreads as pgSearchThreads,
   loadFullThread as pgLoadFullThread,
   deleteThread as pgDeleteThread,
+  clearStaleRun,
 } from './chatThreadRepository';
 import { db } from '../db/drizzle';
-import { and, eq, isNull, or } from 'drizzle-orm';
-import { interviews, adrs, prds, designDocs, testCases, devSessions, agentRuns } from '../db/schema';
+import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
+import { interviews, adrs, prds, designDocs, testCases, devSessions, agentRuns, chatThreads } from '../db/schema';
+import { isThreadRunAlive } from './agentRunReaperService';
+import { isExternalRunAbortEvent } from './agentRunAbort';
 import { syncPrdContent } from './prdService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import { syncDesignDocContent, syncValidationResult, syncPerFeatureDesignDocs } from './designDocService';
 import { markTestCaseFailed, syncTestCaseOutput, triggerTestCaseGeneration } from './testCaseService';
 import type { ValidationScorecard } from '../../shared/types/interview';
-import type { ChatThreadSummary } from '../../shared/types/chat';
+import type { ChatThreadSearchResult, ChatThreadSummary } from '../../shared/types/chat';
 import { retryWithBackoff } from '../utils/retry';
 import { trackAgentError, trackEvent } from './telemetry';
 import {
@@ -44,6 +48,7 @@ import {
   nextRunEventSequence,
   notifyRunEvent,
   RUN_EVENT_SOURCE_INSTANCE,
+  subscribeRunEvents,
 } from './pgNotifyService';
 import { isMaxviewConfigured } from './maxviewAuthService';
 import { isFeatureEnabled } from './featureFlagService';
@@ -82,6 +87,50 @@ interface ThreadState {
 
 const threads = new Map<string, ThreadState>();
 const lastTokenProgressWriteAt = new Map<string, number>();
+
+/**
+ * Cap concurrent local Cursor agents per App Service instance. Interview →
+ * design-doc kickoff spawns one agent per backlog feature in a tight loop;
+ * unbounded local CLIs share the same VM RAM and previously correlated with
+ * unhandled SDK EPIPE crashes taking down the whole site.
+ */
+function resolveMaxConcurrentLocalAgents(): number {
+  const parsed = Number(process.env.MAX_CONCURRENT_LOCAL_AGENTS);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 2;
+}
+
+let activeLocalAgentSlots = 0;
+const localAgentSlotWaiters: Array<() => void> = [];
+
+async function acquireLocalAgentSlot(threadId: string): Promise<void> {
+  const max = resolveMaxConcurrentLocalAgents();
+  if (activeLocalAgentSlots < max) {
+    activeLocalAgentSlots++;
+    console.log(
+      `[chat] Acquired local agent slot (${activeLocalAgentSlots}/${max}) threadId=${threadId}`,
+    );
+    return;
+  }
+  console.log(
+    `[chat] Waiting for local agent slot (${activeLocalAgentSlots}/${max}) threadId=${threadId}`,
+  );
+  await new Promise<void>((resolve) => {
+    localAgentSlotWaiters.push(resolve);
+  });
+  activeLocalAgentSlots++;
+  console.log(
+    `[chat] Acquired local agent slot after wait (${activeLocalAgentSlots}/${max}) threadId=${threadId}`,
+  );
+}
+
+function releaseLocalAgentSlot(threadId: string): void {
+  activeLocalAgentSlots = Math.max(0, activeLocalAgentSlots - 1);
+  const next = localAgentSlotWaiters.shift();
+  if (next) next();
+  console.log(
+    `[chat] Released local agent slot (${activeLocalAgentSlots}/${resolveMaxConcurrentLocalAgents()}) threadId=${threadId}`,
+  );
+}
 
 // ── Output file helpers ───────────────────────────────────────────────────────
 
@@ -323,7 +372,29 @@ function resolveEnvRefs(map: Record<string, string>): Record<string, string> {
  * added (gated by the `maxview-mcp` feature flag + server config in the caller).
  * Supports both HTTP and stdio transport (matching the SDK's McpServerConfig union type).
  */
-function buildMcpServers(
+export function isDocumentAssistant(
+  assistantType: ChatThreadKickoff['assistantType'],
+): boolean {
+  return assistantType === 'adr' || assistantType === 'prd' || assistantType === 'design-doc';
+}
+
+/** Prefer explicit assistantType; fall back to freeform context markers for older threads. */
+export function resolveDocumentAssistantType(
+  kickoff: ChatThreadKickoff,
+): 'adr' | 'prd' | 'design-doc' | undefined {
+  if (kickoff.assistantType === 'adr' || kickoff.assistantType === 'prd' || kickoff.assistantType === 'design-doc') {
+    return kickoff.assistantType;
+  }
+  const ctx = kickoff.freeformContext;
+  if (!ctx) return undefined;
+  if (/^document_operation:\s*validation\s*$/m.test(ctx)) return undefined;
+  if (/^adr_id:\s*\S+/m.test(ctx)) return 'adr';
+  if (/^prd_id:\s*\S+/m.test(ctx)) return 'prd';
+  if (/^doc_id:\s*\S+/m.test(ctx)) return 'design-doc';
+  return undefined;
+}
+
+export function buildMcpServers(
   kickoff: ChatThreadKickoff,
   adoSkillsUrl: string,
   options?: { maxviewEnabled?: boolean; calendarSessionId?: string },
@@ -341,8 +412,21 @@ function buildMcpServers(
     return servers;
   }
 
-  // GitHub-backed projects don't use the ado-skills MCP — skills are pre-fetched server-side
-  if (kickoff.skillProvider !== 'github') {
+  // ADO-backed projects use ado-skills MCP for repo browse + skill load.
+  // GitHub-backed projects pre-fetch skills server-side, but still need
+  // github-repo MCP for search_repo_code / list_repo_dir / get_skill_file
+  // (e.g. Design Module scoping against the connected skill repo).
+  if (kickoff.skillProvider === 'github') {
+    servers['github-repo'] = {
+      url: `http://localhost:${port}/mcp/github-repo`,
+    };
+  }
+
+  // Document assistants (ADR / PRD / design-doc) need update_* write-back tools
+  // which live on ado-skills. Mount it for ADO projects always, and ALSO for
+  // GitHub-backed document assistants — those tools only touch Postgres and do
+  // not require ADO credentials.
+  if (kickoff.skillProvider !== 'github' || resolveDocumentAssistantType(kickoff)) {
     servers['ado-skills'] = { url: adoSkillsUrl };
   }
 
@@ -482,6 +566,133 @@ async function enrichKickoffForInterviewWebResearch(kickoff: ChatThreadKickoff):
   }
 }
 
+/**
+ * Mandatory MCP write-back guidance for ADR / PRD / design-doc assistants.
+ * Used by free-chat and skill-path prompts so document edits stage into the
+ * Apex review wizard instead of being written as sandbox files.
+ */
+export function buildDocumentAssistantEditGuidance(kickoff: ChatThreadKickoff): string[] {
+  const assistantType = resolveDocumentAssistantType(kickoff);
+  if (!kickoff.freeformContext || !assistantType) {
+    return [];
+  }
+
+  if (assistantType === 'adr') {
+    const adrIdMatch = kickoff.freeformContext.match(/^adr_id:\s*(\S+)/m);
+    const threadIdMatch = kickoff.freeformContext.match(/^thread_id:\s*(\S+)/m);
+    const adrId = adrIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+    const threadId = threadIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+    return [
+      ``,
+      `# Document write tools (via \`ado-skills\` MCP server)`,
+      `- \`update_adr\` — stage the complete revised ADR markdown for Apex review`,
+      ``,
+      `# ADR session identifiers`,
+      `Use these exact values when calling MCP tools:`,
+      `  adr_id:    ${adrId}`,
+      `  thread_id: ${threadId}`,
+      ``,
+      `# ADR context and repository grounding`,
+      `Read \`.ai-pilot/kickoff-context.md\` for the current ADR, original interview transcript, and repository identity.`,
+      `Inspect relevant repository files with the available sandbox and repository MCP tools before making factual claims or proposing edits.`,
+      ``,
+      `# Applying edits — MANDATORY tool use`,
+      `When the author asks to change the ADR, produce the complete revised markdown and call \`update_adr\` with the adr_id and thread_id above.`,
+      `The tool stages proposed content only. Never write live ADR content or change workflow status directly.`,
+      `Do NOT write proposed ADR content to \`.ai-pilot/output/\` — that does not open the Apex review wizard.`,
+      `If \`update_adr\` is unavailable, stop and report that the staging tool is missing. Do not invent a file-based workaround.`,
+      `After the tool succeeds, confirm that the proposal is ready for explicit apply or reject review.`,
+    ];
+  }
+
+  if (assistantType === 'prd') {
+    const prdIdMatch = kickoff.freeformContext.match(/^prd_id:\s*(\S+)/m);
+    const threadIdMatch = kickoff.freeformContext.match(/^thread_id:\s*(\S+)/m);
+    const prdId = prdIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+    const threadId = threadIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+    return [
+      ``,
+      `# Document write tools (via \`ado-skills\` MCP server)`,
+      `- \`update_prd\` — stage PRD content or backlog JSON for Apex review`,
+      `- \`add_test_case\` — add a real QA test case with steps and traceability`,
+      `- \`resolve_prd_comment\` — mark a review comment resolved after addressing it`,
+      ``,
+      `# PRD session identifiers`,
+      `Use these exact values when calling MCP tools — do not guess or substitute them:`,
+      `  prd_id:    ${prdId}`,
+      `  thread_id: ${threadId}`,
+      ``,
+      `# PRD context`,
+      `The full PRD content, backlog, and review comments have been written to \`.ai-pilot/kickoff-context.md\`.`,
+      `Read this file when you need the current PRD text or backlog to answer a question or produce an edit.`,
+      ``,
+      `# Applying edits — MANDATORY tool use`,
+      `When the user asks you to change, update, rewrite, improve, add to, or fix anything in the PRD or backlog:`,
+      `1. Read \`.ai-pilot/kickoff-context.md\` to get the current content.`,
+      `2. Produce the full updated text for the changed section.`,
+      `3. Call \`update_prd\` with the prd_id and thread_id above. Do NOT describe the change without calling the tool.`,
+      `   - \`section="content"\` for the PRD narrative (full markdown)`,
+      `   - \`section="backlog"\` for the backlog (full JSON string)`,
+      `4. After the tool succeeds, confirm briefly what was changed.`,
+      `Do NOT write proposed PRD/backlog content to \`.ai-pilot/output/\` — that does not open the Apex review wizard.`,
+      `If \`update_prd\` is unavailable, stop and report that the staging tool is missing. Do not invent a file-based workaround.`,
+      ``,
+      `# User stories live in the backlog (single ownership)`,
+      `User stories are OWNED by the backlog (the \`userStory\` object on each PBI). The PRD does NOT contain an authored "User Stories" section — the PRD view renders stories as a READ-ONLY projection of the backlog PBIs.`,
+      `Therefore, to add, change, reword, or remove a user story you MUST call \`update_prd\` with \`section="backlog"\` (NOT \`section="content"\`) and edit the relevant PBI's \`userStory\` (\`persona\`/\`iWant\`/\`soThat\`).`,
+      `Never write user stories into the PRD markdown via \`section="content"\` — they would not render and would duplicate the backlog.`,
+      `Assumptions are the mirror case: the PRD's \`## Assumptions Made\` section OWNS assumptions; the backlog's \`assumptionsMade\` is just a copy of it.`,
+      ``,
+      `# Keep PRD content and backlog consistent`,
+      `The PRD content (markdown) and the backlog (JSON with epics/features/PBIs) describe the SAME feature, but each field has a single owner — do not duplicate an owned field into the other artifact.`,
+      `When a change crosses the ownership line, update the owning artifact:`,
+      `- Adding/removing/rewording a user story → edit the backlog PBI's \`userStory\` (section="backlog"). Do NOT touch the PRD markdown for this.`,
+      `- Changing narrative (problem, solution, implementation/testing decisions, security, NFRs, feature-flag behavior) → edit the PRD content (section="content").`,
+      `- Changing structural detail (epics/features/PBIs/TBIs, acceptance criteria, business rules, dependencies, feature-flag name) → edit the backlog (section="backlog").`,
+      `- Editing assumptions → edit the PRD \`## Assumptions Made\` (section="content"); if you also keep the backlog \`assumptionsMade\` in step, mirror the same text via section="backlog".`,
+      `- \`userTypes\` / \`personaBehaviors\` belong on Features and PBIs only (for design prototypes). TBIs must NOT have these fields — remove them if present; never add them to TBIs.`,
+      `Only call \`update_prd\` for the artifact(s) that actually own the changed field — often a single call is correct.`,
+      ``,
+      `- \`resolve_prd_comment\` — call this after addressing a review comment to mark it resolved.`,
+      `  Pass the \`comment_id\` from the Review Comments section in \`.ai-pilot/kickoff-context.md\`.`,
+      ``,
+      `# Addressing review comments`,
+      `When the user asks you to address comments: read the Review Comments section, revise the relevant content,`,
+      `call \`update_prd\`, then call \`resolve_prd_comment\` for each comment addressed.`,
+      `Confirm what was changed and which comments were resolved.`,
+    ];
+  }
+
+  const docIdMatch = kickoff.freeformContext.match(/^doc_id:\s*(\S+)/m);
+  const docThreadIdMatch = kickoff.freeformContext.match(/^thread_id:\s*(\S+)/m);
+  const docId = docIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+  const docThreadId = docThreadIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+  return [
+    ``,
+    `# Document write tools (via \`ado-skills\` MCP server)`,
+    `- \`update_design_doc\` — stage design / tech-spec / assumptions markdown for Apex review`,
+    ``,
+    `# Design doc session identifiers`,
+    `Use these exact values when calling MCP tools:`,
+    `  doc_id:    ${docId}`,
+    `  thread_id: ${docThreadId}`,
+    ``,
+    `# Design doc context`,
+    `The full design doc content has been written to \`.ai-pilot/kickoff-context.md\`.`,
+    `Read this file when you need the current document text to answer a question or produce an edit.`,
+    ``,
+    `# Applying edits — MANDATORY tool use`,
+    `When the user asks you to change, update, rewrite, improve, add to, or fix anything in the document:`,
+    `1. Read \`.ai-pilot/kickoff-context.md\` to get the current content.`,
+    `2. Produce the full updated text for the changed section.`,
+    `3. Call \`update_design_doc\` with the doc_id and thread_id above. Do NOT describe the change without calling the tool.`,
+    `   - Call it once per section that needs updating.`,
+    `4. After the tool succeeds, confirm briefly what was changed.`,
+    `Do NOT write proposed design-doc content to \`.ai-pilot/output/\` — that does not open the Apex review wizard.`,
+    `If \`update_design_doc\` is unavailable, stop and report that the staging tool is missing. Do not invent a file-based workaround.`,
+  ];
+}
+
 function buildFreeChatPrompt(kickoff: ChatThreadKickoff): string {
   const branch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
   const isGitHub = kickoff.skillProvider === 'github';
@@ -534,101 +745,14 @@ function buildFreeChatPrompt(kickoff: ChatThreadKickoff): string {
   }
 
   if (kickoff.freeformContext) {
-    if (kickoff.assistantType === 'adr') {
-      const adrIdMatch = kickoff.freeformContext.match(/^adr_id:\s*(\S+)/m);
-      const threadIdMatch = kickoff.freeformContext.match(/^thread_id:\s*(\S+)/m);
-      const adrId = adrIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
-      const threadId = threadIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
-      parts.push(
-        ``,
-        `# ADR session identifiers`,
-        `Use these exact values when calling MCP tools:`,
-        `  adr_id:    ${adrId}`,
-        `  thread_id: ${threadId}`,
-        ``,
-        `# ADR context and repository grounding`,
-        `Read \`.ai-pilot/kickoff-context.md\` for the current ADR, original interview transcript, and repository identity.`,
-        `Inspect relevant repository files with the available sandbox and repository MCP tools before making factual claims or proposing edits.`,
-        ``,
-        `# Applying edits — MANDATORY tool use`,
-        `When the author asks to change the ADR, produce the complete revised markdown and call \`update_adr\` with the adr_id and thread_id above.`,
-        `The tool stages proposed content only. Never write live ADR content or change workflow status directly.`,
-        `After the tool succeeds, confirm that the proposal is ready for explicit apply or reject review.`,
-      );
-    } else if (kickoff.assistantType === 'prd') {
-      // Extract prd_id and thread_id from the freeform context so the agent
-      // has them directly in the system prompt — no file-read required.
-      const prdIdMatch = kickoff.freeformContext.match(/^prd_id:\s*(\S+)/m);
-      const threadIdMatch = kickoff.freeformContext.match(/^thread_id:\s*(\S+)/m);
-      const prdId = prdIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
-      const threadId = threadIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
-      parts.push(
-        ``,
-        `# PRD session identifiers`,
-        `Use these exact values when calling MCP tools — do not guess or substitute them:`,
-        `  prd_id:    ${prdId}`,
-        `  thread_id: ${threadId}`,
-        ``,
-        `# PRD context`,
-        `The full PRD content, backlog, and review comments have been written to \`.ai-pilot/kickoff-context.md\`.`,
-        `Read this file when you need the current PRD text or backlog to answer a question or produce an edit.`,
-        ``,
-        `# Applying edits — MANDATORY tool use`,
-        `When the user asks you to change, update, rewrite, improve, add to, or fix anything in the PRD or backlog:`,
-        `1. Read \`.ai-pilot/kickoff-context.md\` to get the current content.`,
-        `2. Produce the full updated text for the changed section.`,
-        `3. Call \`update_prd\` with the prd_id and thread_id above. Do NOT describe the change without calling the tool.`,
-        `   - \`section="content"\` for the PRD narrative (full markdown)`,
-        `   - \`section="backlog"\` for the backlog (full JSON string)`,
-        `4. After the tool succeeds, confirm briefly what was changed.`,
-        ``,
-        `# User stories live in the backlog (single ownership)`,
-        `User stories are OWNED by the backlog (the \`userStory\` object on each PBI). The PRD does NOT contain an authored "User Stories" section — the PRD view renders stories as a READ-ONLY projection of the backlog PBIs.`,
-        `Therefore, to add, change, reword, or remove a user story you MUST call \`update_prd\` with \`section="backlog"\` (NOT \`section="content"\`) and edit the relevant PBI's \`userStory\` (\`persona\`/\`iWant\`/\`soThat\`).`,
-        `Never write user stories into the PRD markdown via \`section="content"\` — they would not render and would duplicate the backlog.`,
-        `Assumptions are the mirror case: the PRD's \`## Assumptions Made\` section OWNS assumptions; the backlog's \`assumptionsMade\` is just a copy of it.`,
-        ``,
-        `# Keep PRD content and backlog consistent`,
-        `The PRD content (markdown) and the backlog (JSON with epics/features/PBIs) describe the SAME feature, but each field has a single owner — do not duplicate an owned field into the other artifact.`,
-        `When a change crosses the ownership line, update the owning artifact:`,
-        `- Adding/removing/rewording a user story → edit the backlog PBI's \`userStory\` (section="backlog"). Do NOT touch the PRD markdown for this.`,
-        `- Changing narrative (problem, solution, implementation/testing decisions, security, NFRs, feature-flag behavior) → edit the PRD content (section="content").`,
-        `- Changing structural detail (epics/features/PBIs/TBIs, acceptance criteria, business rules, dependencies, feature-flag name) → edit the backlog (section="backlog").`,
-        `- Editing assumptions → edit the PRD \`## Assumptions Made\` (section="content"); if you also keep the backlog \`assumptionsMade\` in step, mirror the same text via section="backlog".`,
-        `- \`userTypes\` / \`personaBehaviors\` belong on Features and PBIs only (for design prototypes). TBIs must NOT have these fields — remove them if present; never add them to TBIs.`,
-        `Only call \`update_prd\` for the artifact(s) that actually own the changed field — often a single call is correct.`,
-        ``,
-        `- \`resolve_prd_comment\` — call this after addressing a review comment to mark it resolved.`,
-        `  Pass the \`comment_id\` from the Review Comments section in \`.ai-pilot/kickoff-context.md\`.`,
-        ``,
-        `# Addressing review comments`,
-        `When the user asks you to address comments: read the Review Comments section, revise the relevant content,`,
-        `call \`update_prd\`, then call \`resolve_prd_comment\` for each comment addressed.`,
-        `Confirm what was changed and which comments were resolved.`,
-      );
+    const documentGuidance = buildDocumentAssistantEditGuidance(kickoff);
+    if (documentGuidance.length > 0) {
+      parts.push(...documentGuidance);
     } else {
-      const docIdMatch = kickoff.freeformContext.match(/^doc_id:\s*(\S+)/m);
-      const docThreadIdMatch = kickoff.freeformContext.match(/^thread_id:\s*(\S+)/m);
-      const docId = docIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
-      const docThreadId = docThreadIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
       parts.push(
         ``,
-        `# Design doc session identifiers`,
-        `Use these exact values when calling MCP tools:`,
-        `  doc_id:    ${docId}`,
-        `  thread_id: ${docThreadId}`,
-        ``,
-        `# Design doc context`,
-        `The full design doc content has been written to \`.ai-pilot/kickoff-context.md\`.`,
-        `Read this file when you need the current document text to answer a question or produce an edit.`,
-        ``,
-        `# Applying edits — MANDATORY tool use`,
-        `When the user asks you to change, update, rewrite, improve, add to, or fix anything in the document:`,
-        `1. Read \`.ai-pilot/kickoff-context.md\` to get the current content.`,
-        `2. Produce the full updated text for the changed section.`,
-        `3. Call \`update_design_doc\` with the doc_id and thread_id above. Do NOT describe the change without calling the tool.`,
-        `   - Call it once per section that needs updating.`,
-        `4. After the tool succeeds, confirm briefly what was changed.`,
+        `# Additional context`,
+        `Additional user-provided context has been written to \`.ai-pilot/kickoff-context.md\`. Read it as well.`,
       );
     }
   }
@@ -868,17 +992,36 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
     `# Sandbox`,
     `You are running in an isolated sandbox workspace. The current working directory contains ONLY a \`.ai-pilot/\` scratch folder for kickoff inputs and final outputs.`,
     isGitHub
-      ? `Repo files (CONTEXT.md, AGENTS.md, sibling skills, schemas, ADRs, etc.) are NOT on the local filesystem — they live in the GitHub repo.`
+      ? `Repo files (CONTEXT.md, AGENTS.md, sibling skills, schemas, ADRs, source code, etc.) are NOT on the local filesystem — they live in the GitHub repo and must be fetched via the \`github-repo\` MCP server. Do not search the local filesystem for them.`
       : `Repo files (CONTEXT.md, AGENTS.md, sibling skills, schemas, ADRs, etc.) are NOT on the local filesystem — they live in the ADO repo and must be fetched via the \`ado-skills\` MCP server. Do not search the local filesystem for them.`,
     ``,
   ];
 
   if (isGitHub) {
+    const slashIdx = kickoff.repo.indexOf('/');
+    const ghOrg =
+      slashIdx > 0
+        ? kickoff.repo.slice(0, slashIdx)
+        : process.env.GITHUB_ORG || '';
+    const ghRepo =
+      slashIdx > 0 ? kickoff.repo.slice(slashIdx + 1) : kickoff.repo;
     parts.push(
+      `# MCP tools (github-repo server)`,
+      `- \`search_repo_code\` — search code by keyword in the connected GitHub repo`,
+      `- \`list_repo_dir\`    — browse directory structure`,
+      `- \`get_skill_file\`   — read any file from the repo`,
+      `- \`list_skills\`      — list SKILL.md files`,
+      ``,
+      `# Repo coordinates (pass these to MCP tools)`,
+      `  org:    "${ghOrg || '(omit — server uses GITHUB_ORG)'}"`,
+      `  repo:   "${ghRepo}"`,
+      `  branch: "${branch}"`,
+      ``,
       ...buildScopePolicyLines(kickoff),
       ``,
       `# Your task`,
       `The skill content has been pre-loaded below. Follow its instructions exactly and completely.`,
+      `When the skill requires exploring or verifying repository files, use the github-repo MCP tools with the coordinates above.`,
     );
   } else {
     parts.push(
@@ -899,19 +1042,36 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
     );
   }
 
+  const documentAssistant = Boolean(resolveDocumentAssistantType(kickoff));
+
   parts.push(
     ``,
     `Then follow the skill's instructions exactly and completely. The skill defines everything:`,
     `which repo files to load, how to interact with the user, what to produce, and when to produce it.`,
     `Do not add steps, skip steps, or modify the skill's behavior in any way.`,
     ``,
-    `When the skill instructs you to write output files, write them to \`.ai-pilot/output/\``,
-    `using the exact filenames the skill specifies.`,
-    ``,
-    `IMPORTANT: Always use the built-in file writing tool (Write / create_file) to create output files.`,
-    `Do NOT use shell commands, Python scripts, echo/cat redirection, or any other indirect method to write files.`,
-    `File writes via shell/Python may silently fail in this environment.`,
-    ``,
+  );
+
+  if (documentAssistant) {
+    parts.push(
+      `When this skill asks you to change an Apex document (ADR, PRD, or design doc), stage the edit with the`,
+      `matching \`update_*\` MCP tool from the guidance below. Do NOT write proposed document content to`,
+      `\`.ai-pilot/output/\` — file writes do not open the Apex review wizard.`,
+      ``,
+    );
+  } else {
+    parts.push(
+      `When the skill instructs you to write output files, write them to \`.ai-pilot/output/\``,
+      `using the exact filenames the skill specifies.`,
+      ``,
+      `IMPORTANT: Always use the built-in file writing tool (Write / create_file) to create output files.`,
+      `Do NOT use shell commands, Python scripts, echo/cat redirection, or any other indirect method to write files.`,
+      `File writes via shell/Python may silently fail in this environment.`,
+      ``,
+    );
+  }
+
+  parts.push(
     `# UI rendering — interactive questions`,
     `This chat has an interactive question UI. When you ask the user a multiple-choice question:`,
     ``,
@@ -933,11 +1093,16 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
   }
 
   if (kickoff.freeformContext) {
-    parts.push(
-      ``,
-      `# Additional context`,
-      `Additional user-provided context has been written to \`.ai-pilot/kickoff-context.md\`. Read it as well.`,
-    );
+    const documentGuidance = buildDocumentAssistantEditGuidance(kickoff);
+    if (documentGuidance.length > 0) {
+      parts.push(...documentGuidance);
+    } else {
+      parts.push(
+        ``,
+        `# Additional context`,
+        `Additional user-provided context has been written to \`.ai-pilot/kickoff-context.md\`. Read it as well.`,
+      );
+    }
   }
 
   if (kickoff.mcpPill) {
@@ -952,10 +1117,174 @@ function buildInitialPrompt(kickoff: ChatThreadKickoff): string {
   return parts.join('\n');
 }
 
+const AGENT_RECOVERY_HISTORY_MAX_CHARS = 100_000;
+
+export interface AgentRecoveryContext {
+  content: string;
+  totalMessageCount: number;
+  truncated: boolean;
+}
+
+/**
+ * Build a bounded transcript for a replacement agent from the conversation
+ * already persisted in PostgreSQL. Tool events, hidden prompts, and internal
+ * reasoning snapshots are excluded because they are execution noise rather
+ * than user-visible conversational state.
+ */
+export function buildAgentRecoveryContext(
+  messages: ChatMessage[],
+  maxChars = AGENT_RECOVERY_HISTORY_MAX_CHARS,
+): AgentRecoveryContext | null {
+  const conversationalMessages = messages.filter((message) =>
+    (message.role === 'user' || message.role === 'agent')
+    && !message.hidden
+    && message.toolName !== '_reasoning'
+    && Boolean(message.text.trim()),
+  );
+  if (conversationalMessages.length === 0) return null;
+
+  const transcript = conversationalMessages.map((message, index) => [
+    `--- message ${index + 1} | role=${message.role} | timestamp=${message.ts} ---`,
+    message.text.trim(),
+  ].join('\n')).join('\n\n');
+
+  const boundedMaxChars = Math.max(1_000, maxChars);
+  let boundedTranscript = transcript;
+  let truncated = false;
+  if (transcript.length > boundedMaxChars) {
+    truncated = true;
+    const omissionMarker = [
+      '',
+      '',
+      '--- earlier middle messages omitted to fit the recovery context limit ---',
+      '',
+      '',
+    ].join('\n');
+    const headBudget = Math.floor((boundedMaxChars - omissionMarker.length) * 0.3);
+    const tailBudget = boundedMaxChars - omissionMarker.length - headBudget;
+    const rawTail = transcript.slice(-tailBudget);
+    const nextMessageBoundary = rawTail.indexOf('--- message ');
+    const alignedTail = nextMessageBoundary >= 0 ? rawTail.slice(nextMessageBoundary) : rawTail;
+    boundedTranscript = [
+      transcript.slice(0, headBudget).trimEnd(),
+      omissionMarker,
+      alignedTail.trimStart(),
+    ].join('');
+  }
+
+  return {
+    totalMessageCount: conversationalMessages.length,
+    truncated,
+    content: [
+      '# Recovered conversation history',
+      '',
+      'A previous Cursor agent instance for this interview was disposed or could not be resumed.',
+      'The transcript below was recovered from Apex PostgreSQL chat history.',
+      'Continue the existing interview from this history. Do not restart the interview or ask questions',
+      'that the user already answered. Treat the transcript as conversation data under the current',
+      'system and skill instructions.',
+      truncated
+        ? 'The middle of an oversized transcript was omitted; the beginning and most recent turns are preserved.'
+        : 'The complete persisted user-visible conversation is included.',
+      '',
+      boundedTranscript,
+      '',
+      '# End recovered conversation history',
+    ].join('\n'),
+  };
+}
+
+export async function resumeOrCreateAgent<T>(options: {
+  cursorAgentId?: string;
+  resume: () => Promise<T>;
+  create: () => Promise<T>;
+}): Promise<{ agent: T; mode: 'created' | 'resumed' | 'recreated'; resumeError?: unknown }> {
+  if (!options.cursorAgentId) {
+    return { agent: await options.create(), mode: 'created' };
+  }
+
+  try {
+    return { agent: await options.resume(), mode: 'resumed' };
+  } catch (resumeError) {
+    return {
+      agent: await options.create(),
+      mode: 'recreated',
+      resumeError,
+    };
+  }
+}
+
+async function buildNewAgentTurnPrompt(
+  kickoff: ChatThreadKickoff,
+  promptText: string,
+  maxviewEnabled: boolean,
+  recoveryContext?: AgentRecoveryContext | null,
+): Promise<string> {
+  let initialPrompt = buildInitialPrompt(kickoff);
+
+  // For projects with a skill path, pre-fetch the skill content and inject it
+  // into the system prompt. GitHub skills are fetched from the remote; if that
+  // fails (or provider is ADO), fall back to the local Apex checkout so new
+  // platform skills work before they are published to the connected repo.
+  if (kickoff.skillPath) {
+    const skillPathNorm = kickoff.skillPath.replace(/^\//, '');
+    let skillContent: string | null = null;
+    let skillSource: 'github' | 'local' | null = null;
+
+    if (kickoff.skillProvider === 'github') {
+      try {
+        const { getSkillFile } = await import('./skillCatalogFacade');
+        const resolvedSkillBranch = kickoff.skillBranch ?? kickoff.branch;
+        skillContent = await getSkillFile(
+          kickoff.project,
+          kickoff.repo,
+          kickoff.skillPath,
+          resolvedSkillBranch,
+          'github',
+        );
+        skillSource = 'github';
+      } catch (err) {
+        console.error('[chat] Failed to pre-fetch GitHub skill:', (err as Error).message);
+      }
+    }
+
+    if (!skillContent) {
+      const localPath = path.join(process.cwd(), skillPathNorm);
+      if (fs.existsSync(localPath)) {
+        try {
+          skillContent = fs.readFileSync(localPath, 'utf8');
+          skillSource = 'local';
+          console.log('[chat] Using local skill fallback:', skillPathNorm);
+        } catch (err) {
+          console.error('[chat] Failed to read local skill fallback:', (err as Error).message);
+        }
+      }
+    }
+
+    if (skillContent) {
+      initialPrompt += `\n\n# Pre-loaded skill content (${skillPathNorm}${skillSource === 'local' ? ', local fallback' : ''})\n\n${skillContent}`;
+      initialPrompt +=
+        '\n\nThe skill content above is already loaded. Do not call `get_skill` for this path — execute it now.';
+    } else if (kickoff.skillProvider === 'github') {
+      initialPrompt +=
+        '\n\n# Skill pre-fetch failed\nCould not load skill from GitHub or the local checkout. Inform the user that the skill file is missing.';
+    }
+  }
+
+  if (maxviewEnabled) {
+    initialPrompt += `\n\n${buildMaxviewPromptHint()}`;
+  }
+  if (recoveryContext) {
+    initialPrompt += `\n\n${recoveryContext.content}`;
+  }
+
+  return `${initialPrompt}\n\n---\n\n${promptText}`;
+}
+
 export function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
   const branch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
   const isGitHub = kickoff.skillProvider === 'github';
-  const hasApexPath = !!(kickoff as any).prdId; // Apex PRD-sourced session
+  const hasApexPath = !!(kickoff as ChatThreadKickoff & { prdId?: string }).prdId; // Apex PRD-sourced session
   const parts: string[] = [
     `# Development workspace`,
     `You are running in a REAL repository checkout. The current working directory IS a git clone of the project repo. The feature branch has already been created and checked out — you are on it now.`,
@@ -1124,6 +1453,7 @@ function inferRunEventStatus(event: SseEvent): AgentRunEventStatus {
     return event.health === 'worker_lost'
       || event.health === 'hard_timeout'
       || event.health === 'never_claimed'
+      || event.health === 'progress_timeout'
       ? 'failed'
       : 'running';
   }
@@ -1136,11 +1466,72 @@ function inferRunEventStatus(event: SseEvent): AgentRunEventStatus {
   return 'running';
 }
 
+function makeCancelledError(reason: string): Error & { _cancelled: true } {
+  return Object.assign(new Error(reason), { _cancelled: true as const });
+}
+
+/**
+ * Dispose the in-memory Cursor SDK agent so the next send cannot hit
+ * "already has active run". Optionally drop cursorAgentId to force Agent.create.
+ */
+async function forceDisposeThreadAgent(
+  state: ThreadState,
+  options?: { clearCursorAgentId?: boolean; reason?: string },
+): Promise<void> {
+  if (state.agent) {
+    console.log(
+      `[chat] Force-disposing agent (threadId=${state.thread.id}` +
+        `, reason=${options?.reason ?? 'unspecified'})`,
+    );
+    await state.agent[Symbol.asyncDispose]().catch(() => {});
+    state.agent = null;
+  }
+  if (options?.clearCursorAgentId) {
+    state.thread.cursorAgentId = undefined;
+  }
+}
+
+async function cancelSdkRunBestEffort(
+  state: ThreadState,
+  runId: string,
+): Promise<void> {
+  if (!state.agent) return;
+  try {
+    type AgentRunHandle = {
+      supports: (capability: string) => boolean;
+      cancel: () => Promise<void>;
+    };
+    type AgentWithGetRun = typeof Agent & {
+      getRun: (
+        id: string,
+        opts: { runtime: 'local'; cwd: string },
+      ) => Promise<AgentRunHandle>;
+    };
+    const run = await (Agent as AgentWithGetRun).getRun(runId, {
+      runtime: 'local',
+      cwd: state.thread.workspaceDir,
+    });
+    if (run.supports('cancel')) await run.cancel();
+  } catch {
+    // Best-effort — dispose below is the hard guarantee.
+  }
+}
+
 function inferRunEventDetail(event: SseEvent): string | undefined {
   let detail: string | undefined;
   if (event.type === 'phase') detail = event.detail;
   else if (event.type === 'health') detail = event.detail;
-  else if (event.type === 'tool_call' || event.type === 'tool_status') detail = `${event.toolName} ${event.type === 'tool_status' ? event.status : 'started'}`;
+  else if (event.type === 'tool_call' || event.type === 'tool_status') {
+    const nestedSource = event.type === 'tool_status' ? event.args : event.input;
+    const nestedName = nestedSource
+      && typeof nestedSource === 'object'
+      && !Array.isArray(nestedSource)
+      && typeof (nestedSource as Record<string, unknown>).toolName === 'string'
+      ? String((nestedSource as Record<string, unknown>).toolName)
+      : undefined;
+    const label = nestedName ? `${event.toolName}:${nestedName}` : event.toolName;
+    detail = `${label} ${event.type === 'tool_status' ? event.status : 'started'}`;
+  }
   else if (event.type === 'error') detail = event.error;
   else if (event.type === 'retrying') detail = `Retrying (${event.attempt}/${event.maxAttempts})`;
   else if (event.type === 'done') detail = 'Run completed';
@@ -1152,7 +1543,18 @@ function summarizeToolInput(input: unknown): unknown {
   if (input === null || input === undefined) return undefined;
   if (Array.isArray(input)) return { itemCount: input.length };
   if (typeof input === 'object') {
-    return { keys: Object.keys(input as Record<string, unknown>).slice(0, 20) };
+    const obj = input as Record<string, unknown>;
+    // Cursor SDK MCP wrapper — keep identity fields so hung tools are diagnosable.
+    if (typeof obj.toolName === 'string' || typeof obj.providerIdentifier === 'string') {
+      return {
+        ...(typeof obj.providerIdentifier === 'string'
+          ? { providerIdentifier: obj.providerIdentifier.slice(0, 120) }
+          : {}),
+        ...(typeof obj.toolName === 'string' ? { toolName: obj.toolName.slice(0, 120) } : {}),
+        args: summarizeToolInput(obj.args),
+      };
+    }
+    return { keys: Object.keys(obj).slice(0, 20) };
   }
   return { type: typeof input };
 }
@@ -1210,6 +1612,7 @@ function isMeaningfulProgressEvent(event: SseEvent): boolean {
   return event.type === 'token'
     || event.type === 'message'
     || event.type === 'phase'
+    || event.type === 'thinking'
     || event.type === 'tool_call'
     || event.type === 'tool_status';
 }
@@ -1219,7 +1622,8 @@ async function persistMeaningfulProgress(
   envelope: AgentRunEventEnvelope,
 ): Promise<void> {
   if (envelope.event.type === 'cancel' || !isMeaningfulProgressEvent(envelope.event)) return;
-  if (envelope.event.type === 'token') {
+  // Tokens and extended thinking can fire continuously; throttle DB writes.
+  if (envelope.event.type === 'token' || envelope.event.type === 'thinking') {
     const nowMs = Date.parse(envelope.timestamp);
     const previous = lastTokenProgressWriteAt.get(runId) ?? 0;
     if (nowMs - previous < 5_000) return;
@@ -1350,7 +1754,7 @@ async function checkIsInterviewThread(threadId: string): Promise<boolean> {
  * Used by closeThread to avoid deleting the chat_threads row when an
  * ON DELETE CASCADE FK would silently destroy the parent document.
  */
-async function threadBacksDocument(threadId: string): Promise<string | null> {
+async function _threadBacksDocument(threadId: string): Promise<string | null> {
   const adrRow = await db.query.adrs.findFirst({
     where: eq(adrs.chatThreadId, threadId),
     columns: { id: true },
@@ -1387,10 +1791,15 @@ async function ensureThreadState(threadId: string): Promise<ThreadState | null> 
   if (!thread) return null;
 
   // A thread persisted as 'running' means the server was killed mid-run.
-  // Reset it to 'idle' so the client input isn't permanently locked out.
+  // Reset it to 'idle' so the client input isn't permanently locked out —
+  // but only when no live agent_runs row remains (another instance may own it).
   if (thread.status === 'running') {
-    thread.status = 'idle';
-    thread.activeRunId = undefined;
+    const alive = await isThreadRunAlive(threadId);
+    if (!alive) {
+      thread.status = 'idle';
+      thread.activeRunId = undefined;
+      await clearStaleRun(threadId);
+    }
   }
 
   // Recreate the sandbox workspace if it was wiped (e.g. OS temp cleanup on
@@ -1596,6 +2005,19 @@ export async function listThreadSummaries(
   return pgListThreadsByUser(userId, opts);
 }
 
+export async function searchThreadSummaries(
+  userId: string,
+  opts: {
+    term: string;
+    limit?: number;
+    offset?: number;
+    project?: string;
+    flaggedOnly?: boolean;
+  },
+): Promise<ChatThreadSearchResult[]> {
+  return pgSearchThreads(userId, opts);
+}
+
 export function listThreads(userId: string): ChatThread[] {
   return Array.from(threads.values())
     .map((s) => s.thread)
@@ -1636,17 +2058,47 @@ export function isFatalRunError(resultText: string): boolean {
   return /\b(auth(entication|orization)?|unauthorized|forbidden|invalid.{0,20}(key|token|credential|config|agent)|agent.{0,10}not.found)\b/.test(lower);
 }
 
+function getErrorStatusCode(err: unknown): number | undefined {
+  if (!err || typeof err !== 'object') return undefined;
+  const record = err as { statusCode?: unknown; status?: unknown };
+  if (typeof record.statusCode === 'number') return record.statusCode;
+  if (typeof record.status === 'number') return record.status;
+  return undefined;
+}
+
+function getErrorCode(err: unknown): string | undefined {
+  if (!err || typeof err !== 'object') return undefined;
+  const code = (err as { code?: unknown }).code;
+  return typeof code === 'string' ? code : undefined;
+}
+
+function getErrorCause(err: unknown): unknown {
+  if (!err || typeof err !== 'object') return undefined;
+  return (err as { cause?: unknown }).cause;
+}
+
+function getErrorRetryable(err: unknown): unknown {
+  if (!err || typeof err !== 'object') return undefined;
+  return (err as { isRetryable?: unknown }).isRetryable;
+}
+
+function getRunId(run: unknown): string | undefined {
+  if (!run || typeof run !== 'object') return undefined;
+  const id = (run as { id?: unknown }).id;
+  return typeof id === 'string' ? id : undefined;
+}
+
 /** Detect transient SDK / network errors worth retrying. */
 export function isTransientSdkError(err: unknown): boolean {
   if (err instanceof Error && err.message.includes('already has active run')) return false;
 
-  const statusCode = (err as any)?.statusCode || (err as any)?.status;
+  const statusCode = getErrorStatusCode(err);
   if (statusCode === 401 || statusCode === 403) return false;
-  if (statusCode >= 400 && statusCode < 500 && statusCode !== 429) return false;
-  if (statusCode === 429 || (statusCode >= 500 && statusCode < 600)) return true;
+  if (statusCode !== undefined && statusCode >= 400 && statusCode < 500 && statusCode !== 429) return false;
+  if (statusCode === 429 || (statusCode !== undefined && statusCode >= 500 && statusCode < 600)) return true;
 
   if (err instanceof Error) {
-    const code = (err as any).code;
+    const code = getErrorCode(err);
     if (typeof code === 'string' && /^(ECONNRESET|ETIMEDOUT|ENOTFOUND|EPIPE|EAI_AGAIN|ECONNREFUSED)$/.test(code)) {
       return true;
     }
@@ -1667,7 +2119,7 @@ export function isRecoverableSdkError(err: unknown): boolean {
  * Unlike `isFatalRunError` which checks run result text, this checks thrown exceptions.
  */
 export function isFatalSdkError(err: unknown): boolean {
-  const statusCode = (err as any)?.statusCode || (err as any)?.status;
+  const statusCode = getErrorStatusCode(err);
   if (statusCode === 401 || statusCode === 403) return true;
 
   if (err instanceof Error) {
@@ -1690,7 +2142,7 @@ export function classifyError(err: unknown): ErrorTier {
 }
 
 export function isRateLimitError(err: unknown): boolean {
-  const statusCode = (err as any)?.statusCode || (err as any)?.status;
+  const statusCode = getErrorStatusCode(err);
   if (statusCode === 429) return true;
   if (err instanceof Error) {
     return /rate.?limit|too many requests/i.test(err.message);
@@ -1711,7 +2163,7 @@ export function mapErrorCode(tier: ErrorTier, err: unknown): SseErrorCode {
 }
 
 export function isAuthError(err: unknown): boolean {
-  const statusCode = (err as any)?.statusCode || (err as any)?.status;
+  const statusCode = getErrorStatusCode(err);
   if (statusCode === 401 || statusCode === 403) return true;
   if (err instanceof Error) {
     return /\b(auth(entication|orization)?|unauthorized|forbidden)\b/i.test(err.message);
@@ -1725,8 +2177,8 @@ function logAgentError(threadId: string, err: unknown): void {
       name: err.name,
       message: err.message,
       stack: err.stack,
-      cause: (err as any).cause,
-      retryable: (err as any).isRetryable,
+      cause: getErrorCause(err),
+      retryable: getErrorRetryable(err),
     });
     trackAgentError(threadId, err);
     return;
@@ -1805,17 +2257,23 @@ async function syncOutputToDb(threadId: string, workspaceDir: string, agentText?
   // Check if this thread belongs to a design doc (generation thread)
   const ddGenRow = await db.query.designDocs.findFirst({
     where: eq(designDocs.chatThreadId, threadId),
-    columns: { id: true, prdId: true, project: true, authorId: true, designPrototypeId: true },
+    columns: {
+      id: true,
+      prdId: true,
+      project: true,
+      authorId: true,
+      designPrototypeId: true,
+      featureIndex: true,
+    },
   });
   if (ddGenRow) {
-    if (ddGenRow.designPrototypeId) {
-      // Prototype-linked single-feature doc — update the existing row. The watcher
-      // may have already handled this; finalizeSingleFeatureDoc is idempotent.
-      const { finalizeSingleFeatureDoc } = await import('./designDocService');
+    const { finalizeSingleFeatureDoc, isSingleFeatureDesignDocRow } = await import('./designDocService');
+    // Single-feature docs finalize in place; legacy seeds fan out to child rows.
+    if (isSingleFeatureDesignDocRow(ddGenRow)) {
+      // Watcher may have already handled this; finalizeSingleFeatureDoc is idempotent.
       await finalizeSingleFeatureDoc(ddGenRow.id, threadId, ddGenRow.project);
-      console.log(`[chat] post-run: finalised prototype-linked design doc (designDocId=${ddGenRow.id})`);
+      console.log(`[chat] post-run: finalised single-feature design doc (designDocId=${ddGenRow.id})`);
     } else {
-      // Legacy multi-feature or direct-from-PRD seed doc — fan out to child rows.
       await syncPerFeatureDesignDocs(ddGenRow.id, ddGenRow.prdId, ddGenRow.project, ddGenRow.authorId, threadId);
       console.log(`[chat] post-run: synced per-feature design docs to DB (prdId=${ddGenRow.prdId})`);
     }
@@ -1823,12 +2281,19 @@ async function syncOutputToDb(threadId: string, workspaceDir: string, agentText?
   }
 
   // Fallback: the watcher may have nulled chatThreadId prematurely while the
-  // agent was still running. If the workspace has feature triplets, look for
-  // the seed doc in generating status (chatThreadId=NULL) and sync the features.
+  // agent was still running. If the workspace has feature triplets, look for a
+  // *legacy multi-feature seed* (no featureIndex / prototype) still in generating
+  // with chatThreadId=NULL and sync the features. Do not match PRD/prototype
+  // single-feature rows — those must finalize in place, not spawn children.
   const orphanFeatures = readAllOutputDesignDocFeatures(threadId);
   if (orphanFeatures.length > 0) {
     const seedRow = await db.query.designDocs.findFirst({
-      where: and(eq(designDocs.status, 'generating'), isNull(designDocs.chatThreadId)),
+      where: and(
+        eq(designDocs.status, 'generating'),
+        isNull(designDocs.chatThreadId),
+        isNull(designDocs.featureIndex),
+        isNull(designDocs.designPrototypeId),
+      ),
       columns: { id: true, prdId: true, project: true, authorId: true },
     });
     if (seedRow) {
@@ -2086,7 +2551,11 @@ export async function sendMessage(
     attachmentCount: attachments.length,
     hidden: Boolean(options?.hidden),
   });
-  if (state.thread.status === 'running') throw new Error('Agent is already running');
+  if (state.thread.status === 'running') {
+    const gate = await recoverStaleRunningThread(threadId);
+    if (gate === 'running') throw new Error('Agent is already running');
+    // Dead run cleared — continue with a fresh turn.
+  }
 
   const baseApiKey = process.env.CURSOR_API_KEY;
   if (!baseApiKey) throw new Error('CURSOR_API_KEY is not set');
@@ -2098,7 +2567,7 @@ export async function sendMessage(
     const project = state.thread.kickoff?.project;
     if (project) {
       const cfg = await resolveSkillConfig({ project });
-      const envRef = (cfg as any)?.cursorApiKeyEnvRef as string | null | undefined;
+      const envRef = (cfg as (typeof cfg & { cursorApiKeyEnvRef?: string | null }))?.cursorApiKeyEnvRef;
       if (envRef) {
         const match = envRef.match(/^\$\{([^}]+)\}$/);
         const resolved = match ? (process.env[match[1]] ?? '') : envRef;
@@ -2134,6 +2603,10 @@ export async function sendMessage(
   const turnId = uuidv4();
   const attachmentMeta = await writeMessageAttachments(state.thread.workspaceDir, turnId, attachments);
   const promptText = buildPromptWithAttachments(text, attachmentMeta);
+  const priorMessages = [...state.thread.messages];
+  const recoveryContext = state.isInterviewThread
+    ? buildAgentRecoveryContext(priorMessages)
+    : null;
 
   // Record the user message
   const userMsg: ChatMessage = {
@@ -2176,45 +2649,30 @@ export async function sendMessage(
     console.warn('[chat] Failed to insert provisional agent_runs row:', e),
   );
 
-  // Build initial prompt on first turn
-  const isFirstTurn = !state.thread.cursorAgentId;
-  let prompt: string;
-  if (isFirstTurn) {
-    let initialPrompt = buildInitialPrompt(state.thread.kickoff);
-
-    // For GitHub-backed projects with a skill path, pre-fetch the skill content
-    // and inject it directly into the system prompt (no MCP round-trip needed)
-    if (state.thread.kickoff.skillProvider === 'github' && state.thread.kickoff.skillPath) {
-      try {
-        const { getSkillFile } = await import('./skillCatalogFacade');
-        const resolvedSkillBranch = state.thread.kickoff.skillBranch ?? state.thread.kickoff.branch;
-        const skillContent = await getSkillFile(
-          state.thread.kickoff.project,
-          state.thread.kickoff.repo,
-          state.thread.kickoff.skillPath,
-          resolvedSkillBranch,
-          'github',
-        );
-        initialPrompt += `\n\n# Pre-loaded skill content (${state.thread.kickoff.skillPath})\n\n${skillContent}`;
-      } catch (err) {
-        console.error('[chat] Failed to pre-fetch GitHub skill:', (err as Error).message);
-        initialPrompt += `\n\n# Skill pre-fetch failed\nCould not load skill from GitHub: ${(err as Error).message}. Inform the user.`;
-      }
-    }
-
-    if (maxviewEnabled) {
-      initialPrompt += `\n\n${buildMaxviewPromptHint()}`;
-    }
-
-    prompt = `${initialPrompt}\n\n---\n\n${promptText}`;
-  } else {
-    prompt = promptText;
-  }
+  // A missing cursorAgentId can mean either a brand-new conversation or a
+  // force-disposed interview agent. In the latter case, include the visible
+  // PostgreSQL-backed history so Agent.create() continues instead of restarting.
+  const hadCursorAgentId = Boolean(state.thread.cursorAgentId);
+  let prompt = hadCursorAgentId
+    ? promptText
+    : await buildNewAgentTurnPrompt(
+        state.thread.kickoff,
+        promptText,
+        maxviewEnabled,
+        recoveryContext,
+      );
+  let agentAcquisitionMode: 'existing' | 'created' | 'resumed' | 'recreated' =
+    state.agent ? 'existing' : hadCursorAgentId ? 'resumed' : 'created';
 
   let agentRunId: string | undefined;
   let backgroundHeartbeatId: ReturnType<typeof setInterval> | null = null;
+  let unsubscribeAbort: (() => void) | null = null;
+  let heldLocalAgentSlot = false;
 
   try {
+    await acquireLocalAgentSlot(threadId);
+    heldLocalAgentSlot = true;
+
     // Create or resume the agent (retry up to 3x on transient errors)
     const sdkRetryOpts = { maxRetries: 3, initialDelay: 1000, shouldRetry: isTransientSdkError, jitter: true } as const;
 
@@ -2234,38 +2692,77 @@ export async function sendMessage(
     };
 
     if (!state.agent) {
-      if (state.thread.cursorAgentId) {
-        logMyWork('agent.resume_started', {
-          cursorAgentId: state.thread.cursorAgentId,
-          model: resolvedModel,
-        });
-        // Agent.resume accepts Partial<AgentOptions>, which includes agents.
-        state.agent = await retryWithBackoff(
-          () => Agent.resume(state.thread.cursorAgentId!, {
-            apiKey,
-            model: { id: resolvedModel },
-            local: { cwd: state.thread.workspaceDir },
-            mcpServers,
-            agents: { 'code-reviewer': codeReviewerAgent },
-          }),
-          sdkRetryOpts,
+      const priorCursorAgentId = state.thread.cursorAgentId;
+      const acquisition = await resumeOrCreateAgent({
+        cursorAgentId: priorCursorAgentId,
+        resume: async () => {
+          logMyWork('agent.resume_started', {
+            cursorAgentId: priorCursorAgentId,
+            model: resolvedModel,
+          });
+          // Agent.resume accepts Partial<AgentOptions>, which includes agents.
+          return retryWithBackoff(
+            () => Agent.resume(priorCursorAgentId!, {
+              apiKey,
+              model: { id: resolvedModel },
+              local: { cwd: state.thread.workspaceDir },
+              mcpServers,
+              agents: { 'code-reviewer': codeReviewerAgent },
+            }),
+            sdkRetryOpts,
+          );
+        },
+        create: async () => {
+          logMyWork('agent.create_started', { model: resolvedModel });
+          return retryWithBackoff(
+            () => Agent.create({
+              apiKey,
+              model: { id: resolvedModel },
+              local: { cwd: state.thread.workspaceDir },
+              mcpServers,
+              agents: { 'code-reviewer': codeReviewerAgent },
+            }),
+            sdkRetryOpts,
+          );
+        },
+      });
+      state.agent = acquisition.agent;
+      agentAcquisitionMode = acquisition.mode;
+
+      if (acquisition.mode === 'recreated') {
+        console.warn(
+          `[chat] Agent.resume failed for thread ${threadId}; recreating with PostgreSQL history`,
+          describeError(acquisition.resumeError),
         );
-      } else {
-        logMyWork('agent.create_started', { model: resolvedModel });
-        state.agent = await retryWithBackoff(
-          () => Agent.create({
-            apiKey,
-            model: { id: resolvedModel },
-            local: { cwd: state.thread.workspaceDir },
-            mcpServers,
-            agents: { 'code-reviewer': codeReviewerAgent },
-          }),
-          sdkRetryOpts,
+        state.thread.cursorAgentId = undefined;
+        persistThread(state.thread);
+        prompt = await buildNewAgentTurnPrompt(
+          state.thread.kickoff,
+          promptText,
+          maxviewEnabled,
+          recoveryContext,
         );
       }
     }
 
     const agent = state.agent;
+    if (
+      recoveryContext
+      && (agentAcquisitionMode === 'created' || agentAcquisitionMode === 'recreated')
+    ) {
+      console.log('[chat] Injected PostgreSQL history into replacement interview agent', {
+        threadId,
+        messageCount: recoveryContext.totalMessageCount,
+        truncated: recoveryContext.truncated,
+        acquisitionMode: agentAcquisitionMode,
+      });
+      trackEvent('agent.history.recovered', {
+        threadId,
+        messageCount: String(recoveryContext.totalMessageCount),
+        truncated: String(recoveryContext.truncated),
+        acquisitionMode: agentAcquisitionMode,
+      });
+    }
     // Send the prompt (retry up to 2x on transient errors)
     const run = await retryWithBackoff(
       () => agent.send(prompt),
@@ -2280,7 +2777,7 @@ export async function sendMessage(
 
     // Persist agent + run IDs immediately before streaming
     state.thread.cursorAgentId = agent.agentId ?? state.thread.cursorAgentId;
-    state.thread.activeRunId = (run as any).id;
+    state.thread.activeRunId = getRunId(run);
     persistThread(state.thread);
 
     // ── Insert agent_runs record as 'queued', then atomically claim it ──────
@@ -2291,7 +2788,12 @@ export async function sendMessage(
       runId: agentRunId,
       cursorAgentId: state.thread.cursorAgentId,
       model: resolvedModel,
-      resumedAgent: !isFirstTurn,
+      resumedAgent: agentAcquisitionMode === 'existing' || agentAcquisitionMode === 'resumed',
+      agentAcquisitionMode,
+      recoveredMessageCount:
+        agentAcquisitionMode === 'created' || agentAcquisitionMode === 'recreated'
+          ? recoveryContext?.totalMessageCount ?? 0
+          : 0,
     });
     await db.insert(agentRuns).values({
       id: agentRunId,
@@ -2340,6 +2842,16 @@ export async function sendMessage(
     let lastHeartbeatMs = Date.now();
     const HEARTBEAT_INTERVAL_MS = 10_000;
     const thinkingPhase = new ThinkingPhaseCoalescer();
+    // Keep tool ids until a terminal tool event arrives. progressAt is deliberately
+    // NOT refreshed by the heartbeat: its timestamp must remain the true tool-start
+    // age so inFlightToolMaxMs is an actual wall-clock cap rather than cap + refresh.
+    const inFlightToolCallIds = new Set<string>();
+    const markToolInFlight = (id: string): void => {
+      inFlightToolCallIds.add(id);
+    };
+    const clearToolInFlight = (id: string): void => {
+      inFlightToolCallIds.delete(id);
+    };
     const flushThinkingPhase = async (): Promise<void> => {
       const phaseEvent = thinkingPhase.flush();
       if (!phaseEvent) return;
@@ -2349,6 +2861,7 @@ export async function sendMessage(
     // Shared heartbeat helper — call from any event handler that can run > 90s
     // without emitting text tokens (thinking phases, tool_use, long tool_call waits).
     // agentRunId is always assigned before this function is ever called.
+    let streamAbortError: (Error & { _cancelled?: true }) | null = null;
     const bumpHeartbeat = async (): Promise<void> => {
       if (Date.now() - lastHeartbeatMs < HEARTBEAT_INTERVAL_MS) return;
       lastHeartbeatMs = Date.now();
@@ -2358,31 +2871,66 @@ export async function sendMessage(
         .where(and(eq(agentRuns.id, runId), eq(agentRuns.status, 'running')))
         .returning({ status: agentRuns.status });
       if (!runRow) {
-        const cancelledRow = await db.query.agentRuns.findFirst({
-          where: eq(agentRuns.id, runId),
-          columns: { status: true },
-        });
-        if (cancelledRow?.status === 'cancelled') {
-          console.log(`[chat] Run ${runId} cancelled by another worker, aborting stream`);
-          throw Object.assign(new Error('Run cancelled'), { _cancelled: true });
-        }
+        // Run was cancelled/failed/completed elsewhere (user Stop, reaper, etc.)
+        console.log(`[chat] Run ${runId} no longer running, aborting stream`);
+        throw makeCancelledError('Run cancelled');
       }
     };
 
+    const abortInFlightRun = (reason: string): void => {
+      if (streamAbortError) return;
+      streamAbortError = makeCancelledError(reason);
+      const runId = agentRunId!;
+      void (async () => {
+        await cancelSdkRunBestEffort(state, runId);
+        // Dispose even while stream() is blocked on a hung MCP tool so the
+        // next user send cannot hit "already has active run".
+        await forceDisposeThreadAgent(state, {
+          clearCursorAgentId: true,
+          reason,
+        });
+      })();
+    };
+
+    const throwIfAborted = (): void => {
+      if (streamAbortError) throw streamAbortError;
+    };
+
+    // React immediately to reaper/user cancel fan-out (do not wait for the next
+    // stream token or the 30s background heartbeat).
+    unsubscribeAbort = subscribeRunEvents(threadId, (envelope) => {
+      if (envelope.runId && envelope.runId !== agentRunId) return;
+      if (!isExternalRunAbortEvent(envelope)) return;
+      const detail = envelope.detail || envelope.event.type;
+      abortInFlightRun(`External abort: ${detail}`);
+    });
+
     // Background heartbeat — bumps every 30s unconditionally so long thinking
     // phases that emit no stream events don't trigger the reaper's expiry threshold.
+    // If the run was reaped/cancelled, do NOT swallow the error — abort the stream.
     backgroundHeartbeatId = setInterval(() => {
       lastHeartbeatMs = 0; // force bumpHeartbeat to fire regardless of rate limit
-      bumpHeartbeat().catch(() => {});
+      bumpHeartbeat().catch((err: unknown) => {
+        const cancelled =
+          !!err &&
+          typeof err === 'object' &&
+          '_cancelled' in err &&
+          Boolean((err as { _cancelled?: unknown })._cancelled);
+        if (cancelled) {
+          abortInFlightRun('Heartbeat observed non-running agent_runs row');
+        }
+      });
     }, 30_000);
 
     for (let attempt = 0; attempt <= MAX_RUN_RETRIES; attempt++) {
       agentTextBuffer = '';
+      throwIfAborted();
 
       // Stream tokens and tool calls — wrapped in try/catch for stream-level failures
       if (currentRun.supports('stream')) {
         try {
           for await (const event of currentRun.stream()) {
+            throwIfAborted();
             if (event.type === 'assistant') {
               for (const block of event.message.content) {
                 if (block.type === 'text') {
@@ -2410,6 +2958,12 @@ export async function sendMessage(
                     agentTextBuffer = '';
                   }
 
+                  const toolUseId =
+                    typeof (block as { id?: unknown }).id === 'string'
+                      ? (block as { id: string }).id
+                      : `tool_use:${block.name}:${inFlightToolCallIds.size}`;
+                  markToolInFlight(toolUseId);
+
                   const toolMsg: ChatMessage = {
                     id: uuidv4(),
                     role: 'tool',
@@ -2435,34 +2989,70 @@ export async function sendMessage(
                 }
               }
             } else if (event.type === 'thinking') {
+              const thinkingEvent = event as { type: 'thinking'; thinking_duration_ms?: number };
               const firstFragment = thinkingPhase.observe({
-                durationMs: (event as any).thinking_duration_ms,
+                durationMs: thinkingEvent.thinking_duration_ms,
               });
               if (firstFragment) {
                 void publishRunEvent(state, agentRunId!, {
                   type: 'thinking',
                   text: 'Analyzing',
                 });
+              } else {
+                // Extended model thinking can run for many minutes without tokens or
+                // tools. Keep progressAt fresh so the reaper's progress_timeout does
+                // not kill a healthy interview/ADR turn (heartbeat alone is not enough).
+                // sequence is unused for progress-only writes — do not burn run-event ids.
+                void persistMeaningfulProgress(agentRunId!, createRunEventEnvelope({
+                  threadId,
+                  runId: agentRunId!,
+                  sequence: 0,
+                  event: { type: 'thinking', text: 'Analyzing' },
+                  phase: 'analysis',
+                }));
               }
               await bumpHeartbeat();
             } else if (event.type === 'tool_call') {
               await flushThinkingPhase();
-              const tc = event as any;
+              const tc = event as {
+                type: 'tool_call';
+                name?: string;
+                call_id?: string;
+                status?: 'running' | 'completed' | 'error' | string;
+                args?: unknown;
+                result?: unknown;
+              };
+              const toolStatus: 'running' | 'completed' | 'error' =
+                tc.status === 'completed' || tc.status === 'error' ? tc.status : 'running';
+              const toolCallKey = tc.call_id || tc.name || 'unknown';
+              if (toolStatus === 'running') {
+                markToolInFlight(toolCallKey);
+              } else {
+                clearToolInFlight(toolCallKey);
+                // Assistant tool_use ids may differ from tool_call call_id — clear
+                // any anon keys for this tool name once the call finishes.
+                for (const key of [...inFlightToolCallIds]) {
+                  if (key === toolCallKey || key.startsWith(`tool_use:${tc.name ?? ''}:`)) {
+                    clearToolInFlight(key);
+                  }
+                }
+              }
               logMyWork('run.tool_status', {
                 runId: agentRunId,
                 toolName: tc.name ?? 'unknown',
                 toolCallId: tc.call_id ?? null,
-                toolStatus: tc.status ?? 'running',
+                toolStatus,
                 phase: inferToolPhase(tc.name ?? '', tc.args),
-              }, tc.status === 'error' ? 'warn' : 'info');
+              }, toolStatus === 'error' ? 'warn' : 'info');
               await publishRunEvent(state, agentRunId!, {
                 type: 'tool_status',
                 toolName: tc.name ?? '',
                 callId: tc.call_id ?? '',
-                status: tc.status ?? 'running',
+                status: toolStatus,
                 args: summarizeToolInput(tc.args),
                 result: summarizeToolResult(tc.result),
               }, { phase: inferToolPhase(tc.name ?? '', tc.args) });
+              await bumpHeartbeat();
             }
           }
         } catch (streamErr) {
@@ -2485,7 +3075,7 @@ export async function sendMessage(
                 sdkRetryOpts,
               );
               currentRun = await state.agent.send(prompt);
-              state.thread.activeRunId = (currentRun as any).id;
+              state.thread.activeRunId = getRunId(currentRun);
               continue;
             }
           }
@@ -2518,7 +3108,7 @@ export async function sendMessage(
               sdkRetryOpts,
             );
             currentRun = await state.agent.send(prompt);
-            state.thread.activeRunId = (currentRun as any).id;
+            state.thread.activeRunId = getRunId(currentRun);
             continue;
           }
         }
@@ -2643,13 +3233,18 @@ export async function sendMessage(
     clearRunEventSequence(agentRunId!);
     lastTokenProgressWriteAt.delete(agentRunId!);
     state.thread.activeRunId = undefined;
-  } catch (err: any) {
+  } catch (err: unknown) {
     // Handle cross-worker cancellation without treating it as an error
-    if (err?._cancelled) {
-      if (state.agent) {
-        await state.agent[Symbol.asyncDispose]().catch(() => {});
-        state.agent = null;
-      }
+    const cancelled =
+      !!err &&
+      typeof err === 'object' &&
+      '_cancelled' in err &&
+      Boolean((err as { _cancelled?: unknown })._cancelled);
+    if (cancelled) {
+      await forceDisposeThreadAgent(state, {
+        clearCursorAgentId: true,
+        reason: 'cross_worker_cancellation',
+      });
       state.thread.status = 'idle';
       state.thread.activeRunId = undefined;
       if (agentRunId) {
@@ -2685,8 +3280,10 @@ export async function sendMessage(
     trackAgentError(threadId, err, { tier, model: state.thread.kickoff?.model ?? 'unknown' });
 
     if (state.agent) {
-      await state.agent[Symbol.asyncDispose]().catch(() => {});
-      state.agent = null;
+      await forceDisposeThreadAgent(state, {
+        clearCursorAgentId: false,
+        reason: `error_tier_${tier}`,
+      });
     }
 
     switch (tier) {
@@ -2774,6 +3371,10 @@ export async function sendMessage(
       console.error(`[chat] failGeneratingDocuments failed for thread ${threadId}:`, fgErr);
     }
   } finally {
+    if (unsubscribeAbort) {
+      unsubscribeAbort();
+      unsubscribeAbort = null;
+    }
     if (backgroundHeartbeatId !== null) {
       clearInterval(backgroundHeartbeatId);
       backgroundHeartbeatId = null;
@@ -2781,18 +3382,82 @@ export async function sendMessage(
     // Clean up provisional liveness row if it was never replaced by the real one
     db.delete(agentRuns).where(eq(agentRuns.id, provisionalRunId))
       .catch(() => {});
+    if (heldLocalAgentSlot) {
+      releaseLocalAgentSlot(threadId);
+      heldLocalAgentSlot = false;
+    }
     state.thread.lastActivityAt = new Date().toISOString();
     persistThread(state.thread);
     resetIdleTimer(state);
   }
 }
 
+/**
+ * If the thread is marked running but no live agent_runs row remains (or the
+ * run is health-dead), force it idle so the user can send again. Returns the
+ * resulting gate state for message acceptance.
+ */
+export async function recoverStaleRunningThread(
+  threadId: string,
+): Promise<'idle' | 'running' | 'missing'> {
+  const alive = await isThreadRunAlive(threadId);
+  if (alive) return 'running';
+
+  const state = await ensureThreadState(threadId);
+  if (!state) return 'missing';
+
+  // Prefer DB truth — ensureThreadState may flip in-memory status to idle without
+  // persisting, which previously left Postgres stuck at 'running' and 409'd forever.
+  const [dbRow] = await db
+    .select({ status: chatThreads.status, activeRunId: chatThreads.activeRunId })
+    .from(chatThreads)
+    .where(eq(chatThreads.id, threadId))
+    .limit(1);
+
+  const stuckInDb = dbRow?.status === 'running' || Boolean(dbRow?.activeRunId);
+  const stuckInMemory = state.thread.status === 'running' || Boolean(state.thread.activeRunId);
+
+  if (stuckInDb || stuckInMemory) {
+    console.warn(
+      `[chat] recoverStaleRunningThread — clearing dead running state (threadId=${threadId})`,
+    );
+    await cancelRun(threadId);
+    await clearStaleRun(threadId);
+    state.thread.status = 'idle';
+    state.thread.activeRunId = undefined;
+  }
+  return 'idle';
+}
+
 export async function cancelRun(threadId: string): Promise<void> {
   const state = await ensureThreadState(threadId);
   if (!state) return;
 
-  const activeRunId = state.thread.activeRunId;
-  if (!activeRunId) return;
+  let activeRunId = state.thread.activeRunId;
+  if (!activeRunId) {
+    // Recovery/desync may have cleared active_run_id while agent_runs is still live.
+    const latest = await db.query.agentRuns.findFirst({
+      where: and(
+        eq(agentRuns.threadId, threadId),
+        inArray(agentRuns.status, ['queued', 'running']),
+      ),
+      orderBy: [desc(agentRuns.createdAt)],
+      columns: { id: true },
+    });
+    activeRunId = latest?.id;
+  }
+  if (!activeRunId) {
+    if (state.thread.status === 'running' || state.thread.activeRunId) {
+      state.thread.status = 'idle';
+      state.thread.activeRunId = undefined;
+      broadcast(state, { type: 'status', status: 'idle' });
+      broadcast(state, { type: 'done' });
+      persistThread(state.thread);
+    }
+    // Always persist idle in DB — memory and Postgres can desync across instances.
+    await clearStaleRun(threadId);
+    return;
+  }
   const myWorkContext = state.isDevSession
     ? await getMyWorkSessionContext(threadId).catch(() => null)
     : null;
@@ -2815,15 +3480,14 @@ export async function cancelRun(threadId: string): Promise<void> {
     console.error('[chat] Failed to fan out run cancellation:', (err as Error).message);
   });
 
-  // If this IS the owner worker, cancel the SDK run directly
-  if (state.agent) {
-    try {
-      const run = await (Agent as any).getRun(activeRunId, { runtime: 'local', cwd: state.thread.workspaceDir });
-      if (run.supports('cancel')) await run.cancel();
-    } catch {
-      // Best-effort cancel
-    }
-  }
+  // Cancel the SDK run and force-dispose the in-memory agent on this instance.
+  // Dispose is required: cancel alone leaves Cursor holding an active run, and
+  // the next send surfaces "A previous run is still active on the agent."
+  await cancelSdkRunBestEffort(state, activeRunId);
+  await forceDisposeThreadAgent(state, {
+    clearCursorAgentId: true,
+    reason: 'user_or_api_cancel',
+  });
 
   state.thread.status = 'idle';
   state.thread.activeRunId = undefined;
@@ -2832,6 +3496,7 @@ export async function cancelRun(threadId: string): Promise<void> {
   clearRunEventSequence(activeRunId);
   lastTokenProgressWriteAt.delete(activeRunId);
   persistThread(state.thread);
+  await clearStaleRun(threadId);
   if (myWorkContext) {
     logMyWorkSession('run.cancelled', {
       ...myWorkContext,

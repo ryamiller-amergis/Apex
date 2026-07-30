@@ -12,6 +12,14 @@ import type { SkillEntry, SkillDetail, SupportingFile, SkillFrontmatter } from '
 import { parseFrontmatter } from './skillCatalog';
 
 const GITHUB_API = 'https://api.github.com';
+/** Bound outbound GitHub HTTP calls so MCP tools cannot hang the agent stream forever. */
+const GITHUB_FETCH_TIMEOUT_MS = Number(process.env.GITHUB_FETCH_TIMEOUT_MS) > 0
+  ? Number(process.env.GITHUB_FETCH_TIMEOUT_MS)
+  : 30_000;
+const CODE_SEARCH_MIN_INTERVAL_MS = Number(process.env.GITHUB_CODE_SEARCH_MIN_INTERVAL_MS) >= 0
+  ? Number(process.env.GITHUB_CODE_SEARCH_MIN_INTERVAL_MS)
+  : 6_000;
+const CODE_SEARCH_RATE_LIMIT_FALLBACK_MS = 60_000;
 const SKILL_ROOTS = ['skills', '.cursor/skills'];
 
 // ── Cache ────────────────────────────────────────────────────────────────────
@@ -50,6 +58,10 @@ const branchCache = makeCache<string[]>();
 const skillListCache = makeCache<SkillEntry[]>();
 const skillDetailCache = makeCache<SkillDetail>();
 const fileContentCache = makeCache<string>();
+const codeSearchCache = makeCache<CodeSearchResult[]>();
+let activeCodeSearch: { key: string; promise: Promise<CodeSearchResult[]> } | null = null;
+let lastCodeSearchStartedAt = 0;
+let codeSearchBlockedUntil = 0;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -82,6 +94,28 @@ function getDefaultOrg(): string {
   return process.env.GITHUB_ORG || '';
 }
 
+class GitHubApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+    readonly retryAfterMs?: number,
+  ) {
+    super(message);
+    this.name = 'GitHubApiError';
+  }
+}
+
+function resolveRetryAfterMs(response: Response): number | undefined {
+  const retryAfter = Number(response.headers?.get('retry-after'));
+  if (Number.isFinite(retryAfter) && retryAfter > 0) return retryAfter * 1_000;
+
+  const resetEpochSeconds = Number(response.headers?.get('x-ratelimit-reset'));
+  if (Number.isFinite(resetEpochSeconds) && resetEpochSeconds > 0) {
+    return Math.max(1_000, resetEpochSeconds * 1_000 - Date.now());
+  }
+  return undefined;
+}
+
 async function ghFetch<T>(path: string, textMatchAccept = false): Promise<T> {
   const token = getToken();
   const url = path.startsWith('http') ? path : `${GITHUB_API}${path}`;
@@ -94,10 +128,15 @@ async function ghFetch<T>(path: string, textMatchAccept = false): Promise<T> {
       Accept: accept,
       'User-Agent': 'ai-pilot-skill-catalog',
     },
+    signal: AbortSignal.timeout(GITHUB_FETCH_TIMEOUT_MS),
   });
   if (!response.ok) {
     const body = await response.text().catch(() => '');
-    throw new Error(`GitHub API ${response.status} ${response.statusText}: ${body}`.trim());
+    throw new GitHubApiError(
+      response.status,
+      `GitHub API ${response.status} ${response.statusText}: ${body}`.trim(),
+      resolveRetryAfterMs(response),
+    );
   }
   return response.json() as Promise<T>;
 }
@@ -111,6 +150,7 @@ async function ghFetchRaw(path: string): Promise<string> {
       Accept: 'application/vnd.github.v3.raw',
       'User-Agent': 'ai-pilot-skill-catalog',
     },
+    signal: AbortSignal.timeout(GITHUB_FETCH_TIMEOUT_MS),
   });
   if (!response.ok) {
     const body = await response.text().catch(() => '');
@@ -193,6 +233,7 @@ export async function createPullRequest(opts: {
         base: opts.targetBranch,
         body: opts.description ?? '',
       }),
+      signal: AbortSignal.timeout(GITHUB_FETCH_TIMEOUT_MS),
     },
   );
 
@@ -407,22 +448,79 @@ export async function searchRepoCode(
 ): Promise<CodeSearchResult[]> {
   const resolvedOrg = org || getDefaultOrg();
   if (!resolvedOrg) throw new Error('GitHub org is required');
+  if (!query.trim()) return [];
 
-  const q = encodeURIComponent(`${query} repo:${resolvedOrg}/${repo}`);
-  const response = await ghFetch<{
-    items: Array<{
-      name: string;
-      path: string;
-      html_url: string;
-      text_matches?: Array<{ fragment: string }>;
-    }>;
-  }>(`/search/code?q=${q}&per_page=${limit}`, true);
+  // GitHub code search is capped ~10 req/min; cache identical interview lookups.
+  const cacheKey = `codesearch:${resolvedOrg}:${repo}:${branch ?? 'default'}:${query}:${limit}`;
+  const cached = codeSearchCache.get(cacheKey);
+  if (cached) return cached;
 
-  return response.items.map((item) => ({
-    path: `/${item.path}`,
-    url: item.html_url,
-    matches: (item.text_matches ?? []).map((m) => ({ fragment: m.fragment })),
-  }));
+  // Debounce identical concurrent requests. Reject a different overlapping
+  // search quickly instead of queuing behind a potentially wedged GitHub call
+  // until the outer MCP timeout fires.
+  if (activeCodeSearch) {
+    if (activeCodeSearch.key === cacheKey) return activeCodeSearch.promise;
+    throw new Error(
+      'GitHub code search is already running; use list_repo_dir/get_skill_file or retry shortly',
+    );
+  }
+
+  const now = Date.now();
+  if (now < codeSearchBlockedUntil) {
+    const retrySeconds = Math.max(1, Math.ceil((codeSearchBlockedUntil - now) / 1_000));
+    throw new Error(`GitHub code search is rate-limited; retry after ${retrySeconds}s`);
+  }
+  const elapsedSinceLastSearch = now - lastCodeSearchStartedAt;
+  if (elapsedSinceLastSearch < CODE_SEARCH_MIN_INTERVAL_MS) {
+    const retryMs = CODE_SEARCH_MIN_INTERVAL_MS - elapsedSinceLastSearch;
+    throw new Error(
+      `GitHub code search is throttled; use list_repo_dir/get_skill_file or retry after ${Math.ceil(retryMs / 1_000)}s`,
+    );
+  }
+
+  const promise = (async (): Promise<CodeSearchResult[]> => {
+    lastCodeSearchStartedAt = Date.now();
+    try {
+      // Branch is best-effort only — GitHub code search indexes the default branch
+      // and does not support a reliable branch qualifier; keep it in the cache key only.
+      const q = encodeURIComponent(`${query} repo:${resolvedOrg}/${repo}`);
+      const response = await ghFetch<{
+        items: Array<{
+          name: string;
+          path: string;
+          html_url: string;
+          text_matches?: Array<{ fragment: string }>;
+        }>;
+      }>(`/search/code?q=${q}&per_page=${limit}`, true);
+
+      const results = (response.items ?? []).map((item) => ({
+        path: `/${item.path}`,
+        url: item.html_url,
+        matches: (item.text_matches ?? []).map((m) => ({ fragment: m.fragment })),
+      }));
+      codeSearchCache.set(cacheKey, results);
+      return results;
+    } catch (err) {
+      const isRateLimited = err instanceof GitHubApiError
+        && err.status === 403
+        && (err.retryAfterMs !== undefined || /rate.?limit/i.test(err.message));
+      if (isRateLimited) {
+        codeSearchBlockedUntil = Date.now()
+          + (err.retryAfterMs ?? CODE_SEARCH_RATE_LIMIT_FALLBACK_MS);
+        throw new Error(
+          `GitHub code search rate-limited (403); retry later or use list_repo_dir/get_skill_file`,
+        );
+      }
+      throw err;
+    }
+  })();
+
+  activeCodeSearch = { key: cacheKey, promise };
+  try {
+    return await promise;
+  } finally {
+    if (activeCodeSearch?.promise === promise) activeCodeSearch = null;
+  }
 }
 
 export function invalidateCache(org?: string, repo?: string) {
@@ -431,13 +529,16 @@ export function invalidateCache(org?: string, repo?: string) {
     skillListCache.invalidate(`skills:${resolvedOrg}:${repo}`);
     skillDetailCache.invalidate(`detail:${resolvedOrg}:${repo}`);
     fileContentCache.invalidate(`file:${resolvedOrg}:${repo}`);
+    codeSearchCache.invalidate(`codesearch:${resolvedOrg}:${repo}`);
   } else if (resolvedOrg) {
     repoCache.invalidate(`repos:${resolvedOrg}`);
     skillListCache.invalidate(`skills:${resolvedOrg}`);
     skillDetailCache.invalidate(`detail:${resolvedOrg}`);
     fileContentCache.invalidate(`file:${resolvedOrg}`);
+    codeSearchCache.invalidate(`codesearch:${resolvedOrg}`);
   } else {
     repoCache.invalidate('repos:');
+    codeSearchCache.invalidate('codesearch:');
   }
 }
 
