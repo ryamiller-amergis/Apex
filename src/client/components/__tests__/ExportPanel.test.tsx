@@ -237,7 +237,7 @@ describe('ExportPanel', () => {
 
     const button = screen.getByTestId('pdf-export-button');
     expect(button).toHaveAttribute('aria-busy', 'true');
-    expect(button).toHaveAttribute('aria-label', 'Exporting document');
+    expect(button).toHaveAttribute('aria-label', 'Exporting PDF');
   });
 
   it('NFR-a11y: export button has correct aria-label when ready', () => {

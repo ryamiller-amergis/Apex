@@ -128,3 +128,13 @@ export async function countEditableFields(pdfBytes: Uint8Array): Promise<number>
     return 0;
   }
 }
+
+// Jest picks up every *.ts under __tests__/ — keep a smoke test so this helper
+// module is a valid suite (and catches fixture regressions).
+describe('pdfTestFixtures', () => {
+  it('creates a single-field AcroForm PDF', async () => {
+    const bytes = await createSingleFieldPdf();
+    expect(bytes.byteLength).toBeGreaterThan(0);
+    expect(await countEditableFields(bytes)).toBe(1);
+  });
+});

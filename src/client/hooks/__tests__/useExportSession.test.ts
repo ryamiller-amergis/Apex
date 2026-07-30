@@ -106,7 +106,9 @@ describe('useExportSession queued workflow', () => {
       });
     });
 
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({});
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({
+      format: 'pdf',
+    });
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       '/api/pdf/sessions/session-1/export',
@@ -196,6 +198,7 @@ describe('useExportSession queued workflow', () => {
     });
 
     expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({
+      format: 'pdf',
       filename: 'custom.pdf',
       pages: [0, 2],
     });

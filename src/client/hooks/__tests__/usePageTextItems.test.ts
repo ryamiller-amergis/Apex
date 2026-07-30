@@ -47,7 +47,7 @@ describe('usePageTextItems', () => {
     await waitFor(() => expect(result.current.status).toBe('ready'));
 
     expect(result.current.items[0]).toMatchObject({
-      fontFamily: 'Times-Roman',
+      fontFamily: 'Merriweather',
       bold: true,
       italic: true,
       fontSize: 16,
