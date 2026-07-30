@@ -111,7 +111,7 @@ overall = (prd_score × 0.50) + (backlog_score × 0.50)
 |-------|--------|-----------|
 | Template token scan | `\{[A-Za-z][^}]*\}` in non-code content | No Residual Template Tokens |
 | `[TBD]` / `TODO` / `FIXME` scan | Any match | No Residual Template Tokens |
-| Persona enum compliance | Persona not in Apex groups enum (`Product-Owner`, `BA`, `UI/UX`, `Manager`, `Developer`, `QA`, `Platform Admin`, `Project Admin`, `Authenticated User`) | User story contract; Personas |
+| Persona enum compliance | Persona not in Apex groups enum (`Product-Owner`, `BA`, `UI/UX`, `Manager`, `Developer`, `QA`, `Platform Admin`, `Project Admin`, `Authenticated User`). Super Admin ≡ Platform Admin — not a mismatch. | User story contract; Personas |
 | Feature ↔ PBI persona alignment | PBI persona not in `affectedPersonas`; generic labels | Feature structure; PBI structure |
 | User story ↔ PBI traceability | Authored PRD `## User Stories` or orphan PBI story | User story contract; PBI structure |
 | PRD scope traceability | Backlog item not grounded in PRD narrative | Feature structure; PBI structure |
