@@ -245,6 +245,8 @@ describe('walkthroughAnchorSyncExtraction (Phase 3 fixtures)', () => {
       expect(ids).toEqual(['live-button']);
       expect(result.diagnostics.filesScanned).toBe(1);
       expect(result.diagnostics.provider).toBe('local');
+      expect(result.diagnostics.committedTruth).toBe(false);
+      expect(result.diagnostics.branch).toBeNull();
     } finally {
       fs.rmSync(tmpRoot, { recursive: true, force: true });
     }
@@ -272,6 +274,7 @@ describe('walkthroughAnchorSyncExtraction (Phase 3 fixtures)', () => {
       expect(result.diagnostics.filesScanned).toBe(1);
       expect(result.diagnostics.bytesRead).toBeGreaterThan(0);
       expect(result.diagnostics.durationMs).toBeGreaterThanOrEqual(0);
+      expect(result.diagnostics.committedTruth).toBe(false);
     } finally {
       fs.rmSync(tmpRoot, { recursive: true, force: true });
     }

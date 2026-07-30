@@ -20,6 +20,7 @@ import {
 } from './chatAgentService';
 import { resolveSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
+import { getWalkthroughAiOptions } from './walkthroughAiOptionsService';
 import {
   listAnchors,
   listAuthoringAnchorEntries,
@@ -373,7 +374,10 @@ export async function startGeneration(
     throw new WalkthroughAiError('INTENT_INVALID', 'intent is required');
   }
 
-  const skillPath = validateSkillPath(request.skillPath);
+  const savedOptions = await getWalkthroughAiOptions().catch(() => null);
+  const skillPath = validateSkillPath(
+    request.skillPath?.trim() || savedOptions?.walkthroughGenerationSkillPath,
+  );
 
   // Walkthroughs teach Apex itself. Their audience project is request.projectId,
   // but repository grounding always comes from the Apex project's connection.
@@ -395,6 +399,7 @@ export async function startGeneration(
   const globalModel = await getDefaultModel();
   const model =
     request.model?.trim() ||
+    savedOptions?.walkthroughGenerationModel?.trim() ||
     skillConfig?.developmentModel ||
     globalModel;
 

@@ -18,6 +18,7 @@ import {
 } from './chatAgentService';
 import { resolveSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
+import { getWalkthroughAiOptions } from './walkthroughAiOptionsService';
 import { listWalkthroughRoutes } from '../../shared/walkthroughRoutes';
 import {
   DEFAULT_WALKTHROUGH_ANCHOR_SMART_TAGGING_SKILL_PATH,
@@ -422,7 +423,11 @@ export async function startSmartTagging(
 ): Promise<WalkthroughAnchorSmartTaggingStartResponse> {
   const normalized = normalizeCandidates(request.candidates);
   const candidates = await filterNewlyDiscovered(normalized);
-  const skillPath = validateSkillPath(request.skillPath);
+
+  const savedOptions = await getWalkthroughAiOptions().catch(() => null);
+  const skillPath = validateSkillPath(
+    request.skillPath?.trim() || savedOptions?.anchorSmartTaggingSkillPath,
+  );
 
   const skillConfig = await resolveSkillConfig({
     project: APEX_REPOSITORY_PROJECT,
@@ -444,7 +449,10 @@ export async function startSmartTagging(
 
   const globalModel = await getDefaultModel();
   const model =
-    request.model?.trim() || skillConfig?.developmentModel || globalModel;
+    request.model?.trim() ||
+    savedOptions?.anchorSmartTaggingModel?.trim() ||
+    skillConfig?.developmentModel ||
+    globalModel;
 
   const freeformContext = await buildKickoffContext(candidates);
 

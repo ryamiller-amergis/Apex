@@ -5,6 +5,7 @@ import {
   buildSmartTaggingCandidatesFromSync,
   mergeSmartTaggedSyncCandidates,
   resolveSyncReviewCandidates,
+  startAndPollAnchorSmartTagging,
   useAnchorRegistryCatalog,
   useAnchorRegistryModuleCoverage,
   useBulkUpdateAnchors,
@@ -304,5 +305,97 @@ describe('usePlatformAdminAnchorRegistry', () => {
         },
       }),
     ).toEqual([expect.objectContaining({ id: 'pending-1', testId: 'ado-create-error' })]);
+  });
+
+  it('forwards Options model and skillPath on smart-tagging start', async () => {
+    const created = [makeRecord({ id: 'n1', testId: 'new-anchor' })];
+    (global.fetch as jest.Mock) = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({
+              threadId: 'thread-1',
+              provenance: {
+                provider: 'cursor',
+                model: 'gpt-4o',
+                skillPath: '.cursor/skills/custom-tag/SKILL.md',
+                generatedAt: '2026-07-30T00:00:00.000Z',
+              },
+              candidateTestIds: ['new-anchor'],
+            }),
+          ),
+        json: () =>
+          Promise.resolve({
+            threadId: 'thread-1',
+            provenance: {
+              provider: 'cursor',
+              model: 'gpt-4o',
+              skillPath: '.cursor/skills/custom-tag/SKILL.md',
+              generatedAt: '2026-07-30T00:00:00.000Z',
+            },
+            candidateTestIds: ['new-anchor'],
+          }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: () => Promise.resolve(JSON.stringify({ status: 'ready', updated: [] })),
+        json: () => Promise.resolve({ status: 'ready', updated: [] }),
+      });
+
+    const syncResult = {
+      discoveries: [],
+      newCandidates: [],
+      existingMatches: [],
+      missingWarnings: [],
+      duplicates: [],
+      unsupportedDynamicPatterns: [],
+      diagnostics: {
+        provider: 'local' as const,
+        rootPath: '.',
+        filesScanned: 0,
+        filesSkipped: 0,
+        bytesRead: 0,
+        durationMs: 0,
+        truncatedFiles: [],
+        errors: [],
+      },
+      persistence: {
+        created,
+        refreshed: [],
+        markedMissing: [],
+        reviewCandidates: created,
+        newCandidateIdsForSmartTagging: ['n1'],
+      },
+    };
+
+    await startAndPollAnchorSmartTagging(syncResult, {
+      model: 'gpt-4o',
+      skillPath: '.cursor/skills/custom-tag/SKILL.md',
+      pollIntervalMs: 1,
+      maxAttempts: 2,
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/platform-admin/walkthroughs/anchor-registry/smart-tagging/start',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    const startCall = (global.fetch as jest.Mock).mock.calls.find(
+      (c) =>
+        typeof c[0] === 'string' &&
+        c[0].includes('/anchor-registry/smart-tagging/start'),
+    );
+    expect(startCall).toBeTruthy();
+    const body = JSON.parse(startCall![1].body as string);
+    expect(body.model).toBe('gpt-4o');
+    expect(body.skillPath).toBe('.cursor/skills/custom-tag/SKILL.md');
+    expect(body.candidates).toEqual([
+      expect.objectContaining({ testId: 'new-anchor' }),
+    ]);
   });
 });

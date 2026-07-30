@@ -37,6 +37,23 @@ jest.mock('../services/appSettingsService', () => ({
   getDefaultModel: jest.fn(),
 }));
 
+jest.mock('../services/walkthroughAiOptionsService', () => ({
+  getWalkthroughAiOptions: jest.fn().mockResolvedValue({
+    id: 'default',
+    walkthroughGenerationSkillPath: '.cursor/skills/walkthrough-generation/SKILL.md',
+    walkthroughGenerationModel: '',
+    anchorSmartTaggingSkillPath:
+      '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+    anchorSmartTaggingModel: '',
+    createdBy: 'system',
+    createdByDisplayName: 'System',
+    createdAt: '2026-07-30T00:00:00.000Z',
+    updatedBy: 'system',
+    updatedByDisplayName: 'System',
+    updatedAt: '2026-07-30T00:00:00.000Z',
+  }),
+}));
+
 jest.mock('../services/walkthroughAnchorRegistryService', () => ({
   getAnchorByTestId: jest.fn(),
   listAnchors: jest.fn(),

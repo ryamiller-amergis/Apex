@@ -38,6 +38,13 @@ jest.mock('../services/walkthroughAnchorSyncExtraction', () => {
   };
 });
 
+jest.mock('../services/walkthroughAnchorSyncRepoService', () => ({
+  resolveWalkthroughAnchorSyncProvider: jest.fn(
+    async (explicit?: 'local' | 'github' | 'ado' | null) => explicit ?? 'local'
+  ),
+  materializeApexWalkthroughAnchorSyncCheckout: jest.fn(),
+}));
+
 jest.mock('../services/walkthroughPageModuleScope', () => ({
   listApplicableWalkthroughPageModules: jest.fn().mockResolvedValue([
     {
@@ -66,6 +73,10 @@ import {
   syncExtractAndPersistAnchors,
 } from '../services/walkthroughAnchorRegistryService';
 import { syncExtractWalkthroughAnchors } from '../services/walkthroughAnchorSyncExtraction';
+import {
+  materializeApexWalkthroughAnchorSyncCheckout,
+  resolveWalkthroughAnchorSyncProvider,
+} from '../services/walkthroughAnchorSyncRepoService';
 import type {
   WalkthroughAnchorDiscovery,
   WalkthroughAnchorSyncExtractionResult,
@@ -86,6 +97,14 @@ const { db: mockDb } = jest.requireMock('../db/drizzle') as {
 const mockSyncExtract = syncExtractWalkthroughAnchors as jest.MockedFunction<
   typeof syncExtractWalkthroughAnchors
 >;
+const mockResolveProvider =
+  resolveWalkthroughAnchorSyncProvider as jest.MockedFunction<
+    typeof resolveWalkthroughAnchorSyncProvider
+  >;
+const mockMaterialize =
+  materializeApexWalkthroughAnchorSyncCheckout as jest.MockedFunction<
+    typeof materializeApexWalkthroughAnchorSyncCheckout
+  >;
 
 const actor = { id: 'admin-sync' };
 
@@ -160,6 +179,8 @@ function emptyExtraction(
       durationMs: 1,
       truncatedFiles: [],
       errors: [],
+      branch: null,
+      committedTruth: false,
     },
     ...overrides,
   };
@@ -663,5 +684,45 @@ describe('syncExtractAndPersistAnchors', () => {
     ]);
     // AI smart-tagging is Track B — sync must not invoke it; only expose IDs.
     expect(result.persistence).toHaveProperty('newCandidateIdsForSmartTagging');
+  });
+
+  it('materializes Apex skill repo for github sync before extract', async () => {
+    mockResolveProvider.mockResolvedValueOnce('github');
+    mockMaterialize.mockResolvedValueOnce({
+      repositoryRoot: '/data/dev-workspaces/walkthrough-anchor-sync',
+      branch: 'main',
+      repo: 'AI-Pilot',
+      provider: 'github',
+      project: 'Apex',
+    });
+    mockDb.query.walkthroughAnchorRegistry.findMany.mockResolvedValue([]);
+    mockSyncExtract.mockResolvedValue(
+      emptyExtraction({
+        diagnostics: {
+          provider: 'github',
+          rootPath: '/data/dev-workspaces/walkthrough-anchor-sync',
+          filesScanned: 0,
+          filesSkipped: 0,
+          bytesRead: 0,
+          durationMs: 1,
+          truncatedFiles: [],
+          errors: [],
+          branch: 'main',
+          committedTruth: true,
+        },
+      })
+    );
+
+    await syncExtractAndPersistAnchors({ provider: 'github' }, actor);
+
+    expect(mockMaterialize).toHaveBeenCalledWith('github');
+    expect(mockSyncExtract).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'github',
+        repositoryRoot: '/data/dev-workspaces/walkthrough-anchor-sync',
+        branch: 'main',
+        committedTruth: true,
+      })
+    );
   });
 });

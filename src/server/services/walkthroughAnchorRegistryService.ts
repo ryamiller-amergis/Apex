@@ -64,6 +64,10 @@ import {
 } from './walkthroughAnchorSyncExtraction';
 import { listRuntimeCatalogAnchors } from './walkthroughAnchorCatalogResolution';
 import {
+  materializeApexWalkthroughAnchorSyncCheckout,
+  resolveWalkthroughAnchorSyncProvider,
+} from './walkthroughAnchorSyncRepoService';
+import {
   humanizeWalkthroughTestId,
   isPlausibleWalkthroughTestId,
   needsAiSmartTagging,
@@ -827,6 +831,10 @@ export async function persistSyncExtractionResult(
 /**
  * Super Admin sync entry: extract repository anchors, persist BEFORE AI tagging.
  *
+ * Provider resolution (when command.provider omitted):
+ * - production → Apex project skillProvider (github|ado) + repo-cache materialize
+ * - otherwise → local cwd (includes uncommitted WIP)
+ *
  * Track B (AI smart-tagging) should consume
  * `result.persistence.newCandidateIdsForSmartTagging` only — do not invoke
  * startSmartTagging from this path.
@@ -835,17 +843,34 @@ export async function syncExtractAndPersistAnchors(
   command: WalkthroughAnchorSyncCommand,
   actor: Actor
 ): Promise<WalkthroughAnchorSyncResult> {
-  const provider = command.provider ?? 'local';
+  const provider = await resolveWalkthroughAnchorSyncProvider(command.provider);
   const catalogSnapshot = await listCatalogSnapshotForSync();
   const applicableModules = await listApplicableWalkthroughPageModules();
+
+  let repositoryRoot = command.repositoryRoot;
+  let branch: string | null = null;
+  let committedTruth = false;
+
+  if (provider === 'github' || provider === 'ado') {
+    committedTruth = true;
+    if (!command.files) {
+      const checkout = await materializeApexWalkthroughAnchorSyncCheckout(
+        provider
+      );
+      repositoryRoot = checkout.repositoryRoot;
+      branch = checkout.branch;
+    }
+  }
 
   const extractInput: SyncExtractWalkthroughAnchorsInput = {
     provider,
     catalogSnapshot,
     pageEntryComponents: listWalkthroughPageEntryComponents(applicableModules),
-    repositoryRoot: command.repositoryRoot,
+    repositoryRoot,
     clientRelativeRoot: command.clientRelativeRoot,
     files: command.files,
+    branch,
+    committedTruth,
   };
 
   const extraction = await syncExtractWalkthroughAnchors(extractInput);

@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { WalkthroughAnchorManagement } from '../WalkthroughAnchorManagement';
@@ -21,6 +22,27 @@ import {
 
 jest.mock('../WalkthroughCatalog', () => ({
   WalkthroughCatalog: () => <div data-testid="walkthrough-catalog" />,
+}));
+
+jest.mock('../WalkthroughReportingSection', () => ({
+  WalkthroughReportingSection: () => <div data-testid="walkthrough-reporting-section" />,
+}));
+
+jest.mock('../WalkthroughsAiOptionsPanel', () => ({
+  WalkthroughsAiOptionsPanel: () => <div data-testid="walkthroughs-ai-options" />,
+}));
+
+jest.mock('../../hooks/useWalkthroughAiOptions', () => ({
+  useWalkthroughAiOptionsQuery: () => ({
+    data: null,
+    isLoading: false,
+    isError: false,
+    error: null,
+  }),
+  useSaveWalkthroughAiOptions: () => ({
+    mutateAsync: jest.fn(),
+    isPending: false,
+  }),
 }));
 
 jest.mock('../../hooks/usePlatformAdminAnchorRegistry', () => ({
@@ -196,18 +218,33 @@ describe('WalkthroughsAdminPanel', () => {
     stubHooks();
   });
 
-  it('nests Walkthroughs and Anchor Management sub-tabs', async () => {
+  it('nests Walkthroughs, Reports, Anchor Management, and Options sub-tabs', async () => {
     const user = userEvent.setup();
-    render(<WalkthroughsAdminPanel />);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <WalkthroughsAdminPanel />
+      </QueryClientProvider>,
+    );
 
     expect(screen.getByTestId('walkthroughs-admin-panel')).toBeInTheDocument();
     expect(screen.getByTestId('walkthrough-catalog')).toBeInTheDocument();
+    expect(screen.queryByTestId('walkthrough-reporting-section')).not.toBeInTheDocument();
     expect(screen.queryByTestId('walkthrough-anchor-management')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('walkthroughs-ai-options')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('walkthroughs-admin-tab-reports'));
+    expect(screen.getByTestId('walkthrough-reporting-section')).toBeInTheDocument();
+    expect(screen.queryByTestId('walkthrough-catalog')).not.toBeInTheDocument();
 
     await user.click(screen.getByTestId('walkthroughs-admin-tab-anchors'));
 
     expect(screen.getByTestId('walkthrough-anchor-management')).toBeInTheDocument();
-    expect(screen.queryByTestId('walkthrough-catalog')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('walkthrough-reporting-section')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('walkthroughs-admin-tab-options'));
+    expect(screen.getByTestId('walkthroughs-ai-options')).toBeInTheDocument();
+    expect(screen.queryByTestId('walkthrough-anchor-management')).not.toBeInTheDocument();
 
     await user.click(screen.getByTestId('walkthroughs-admin-tab-walkthroughs'));
     expect(screen.getByTestId('walkthrough-catalog')).toBeInTheDocument();

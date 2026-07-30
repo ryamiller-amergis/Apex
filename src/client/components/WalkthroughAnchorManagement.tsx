@@ -28,6 +28,7 @@ import {
   useSyncAnchorRegistry,
   useUpdateAnchorRegistry,
 } from '../hooks/usePlatformAdminAnchorRegistry';
+import { useWalkthroughsAiOptions } from '../contexts/WalkthroughsAiOptionsContext';
 import {
   computeAnchorCatalogCounts,
   filterAnchorCatalog,
@@ -815,6 +816,7 @@ export const WalkthroughAnchorManagement: React.FC<WalkthroughAnchorManagementPr
   >('idle');
   const [enrichmentMessage, setEnrichmentMessage] = useState<string | null>(null);
   const smartTaggingAbortRef = useRef<AbortController | null>(null);
+  const { anchorSmartTaggingModel, anchorSmartTaggingSkillPath } = useWalkthroughsAiOptions();
 
   useEffect(() => {
     return () => {
@@ -918,6 +920,8 @@ export const WalkthroughAnchorManagement: React.FC<WalkthroughAnchorManagementPr
       );
       void startAndPollAnchorSmartTagging(result, {
         signal: abort.signal,
+        model: anchorSmartTaggingModel.trim() || undefined,
+        skillPath: anchorSmartTaggingSkillPath.trim() || undefined,
         onProgress: ({ elapsedMs, maxAttempts, attempt }) => {
           if (abort.signal.aborted) return;
           const elapsedSec = Math.floor(elapsedMs / 1000);

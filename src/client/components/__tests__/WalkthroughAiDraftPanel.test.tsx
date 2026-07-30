@@ -7,44 +7,25 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WalkthroughAiDraftPanel } from '../WalkthroughAiDraftPanel';
 import { buildProposalUnits } from '../../../shared/types/walkthroughAiDraft';
+import {
+  WalkthroughsAiOptionsProvider,
+  type WalkthroughsAiOptions,
+} from '../../contexts/WalkthroughsAiOptionsContext';
 
 const mockGenerate = jest.fn();
 const mockRedo = jest.fn();
 const mockValidate = jest.fn();
 
-jest.mock('../../hooks/useProjectSkillConfig', () => ({
-  useAvailableModels: () => ({
-    data: [
-      { id: 'claude-3-5-sonnet', displayName: 'Claude 3.5 Sonnet' },
-      { id: 'gpt-4o', displayName: 'GPT-4o' },
-    ],
+jest.mock('../../hooks/useWalkthroughAiOptions', () => ({
+  useWalkthroughAiOptionsQuery: () => ({
+    data: null,
     isLoading: false,
+    isError: false,
+    error: null,
   }),
-  useProjectSkillConfig: () => ({
-    data: {
-      skillRepo: 'Apex',
-      skillBranch: 'main',
-      skillProvider: 'github',
-    },
-    isLoading: false,
-  }),
-}));
-
-jest.mock('../../hooks/useChatThreads', () => ({
-  useSkillRepos: () => ({
-    data: [{ id: 'repo-1', name: 'Apex', defaultBranch: 'main' }],
-    isLoading: false,
-  }),
-  useSkillList: () => ({
-    data: [
-      {
-        id: 'skill-1',
-        name: 'Custom generation',
-        description: 'Custom walkthrough generation',
-        path: '.cursor/skills/custom/SKILL.md',
-      },
-    ],
-    isLoading: false,
+  useSaveWalkthroughAiOptions: () => ({
+    mutateAsync: jest.fn(),
+    isPending: false,
   }),
 }));
 
@@ -99,20 +80,29 @@ jest.mock('../../hooks/useWalkthroughAiDraft', () => ({
   }),
 }));
 
-function renderPanel(onMergeDraft = jest.fn()) {
+jest.mock('../../hooks/usePlatformAdminWalkthroughs', () => ({
+  useWalkthroughAnchors: () => ({ data: [], isLoading: false }),
+}));
+
+function renderPanel(
+  onMergeDraft = jest.fn(),
+  optionsInitial?: Partial<WalkthroughsAiOptions>,
+) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <WalkthroughAiDraftPanel
-        projectId="Apex"
-        currentDraft={{
-          internalName: '',
-          userTitle: '',
-          whyItMatters: '',
-          steps: [],
-        }}
-        onMergeDraft={onMergeDraft}
-      />
+      <WalkthroughsAiOptionsProvider initial={optionsInitial}>
+        <WalkthroughAiDraftPanel
+          projectId="Apex"
+          currentDraft={{
+            internalName: '',
+            userTitle: '',
+            whyItMatters: '',
+            steps: [],
+          }}
+          onMergeDraft={onMergeDraft}
+        />
+      </WalkthroughsAiOptionsProvider>
     </QueryClientProvider>,
   );
 }
@@ -205,16 +195,14 @@ describe('WalkthroughAiDraftPanel', () => {
     expect(screen.getByText('Step One')).toBeInTheDocument();
   });
 
-  it('renders Cursor model and skill selectors', () => {
+  it('shows Options hint for skill and model (configured on Options tab)', () => {
     renderPanel();
-    expect(screen.getByTestId('walkthrough-ai-cursor-model')).toBeInTheDocument();
-    expect(screen.getByTestId('walkthrough-ai-skill-path')).toBeInTheDocument();
-    const modelSelect = screen.getByTestId('walkthrough-ai-cursor-model') as HTMLSelectElement;
-    expect(modelSelect.options.length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByTestId('walkthrough-ai-skill-path')).toHaveValue(
-      '.cursor/skills/walkthrough-generation/SKILL.md',
+    expect(screen.getByTestId('walkthrough-ai-options-hint')).toBeInTheDocument();
+    expect(screen.getByTestId('walkthrough-ai-options-hint')).toHaveTextContent(
+      /Walkthroughs → Options/i,
     );
-    expect(screen.queryByText(/Bedrock/i)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('walkthrough-ai-cursor-model')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('walkthrough-ai-skill-path')).not.toBeInTheDocument();
   });
 
   it('displays provenance after generation', async () => {
@@ -253,7 +241,7 @@ describe('WalkthroughAiDraftPanel', () => {
     expect(provenance).toHaveTextContent('Skill: .cursor/skills/walkthrough-generation/SKILL.md');
   });
 
-  it('passes model and skillPath overrides to generate', async () => {
+  it('passes model and skillPath from Options context to generate', async () => {
     const user = userEvent.setup();
     const fields = { internalName: 'n', userTitle: 'T', whyItMatters: 'W' };
     mockGenerate.mockResolvedValue({
@@ -268,12 +256,10 @@ describe('WalkthroughAiDraftPanel', () => {
       },
     });
 
-    renderPanel();
-    await user.selectOptions(screen.getByTestId('walkthrough-ai-cursor-model'), 'gpt-4o');
-    await user.selectOptions(
-      screen.getByTestId('walkthrough-ai-skill-path'),
-      '.cursor/skills/custom/SKILL.md',
-    );
+    renderPanel(jest.fn(), {
+      walkthroughGenerationModel: 'gpt-4o',
+      walkthroughGenerationSkillPath: '.cursor/skills/custom/SKILL.md',
+    });
     await user.type(screen.getByTestId('walkthrough-ai-intent'), 'Test');
     await user.click(screen.getByTestId('walkthrough-ai-generate'));
 

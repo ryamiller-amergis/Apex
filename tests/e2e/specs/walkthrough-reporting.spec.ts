@@ -11,7 +11,8 @@ test.describe('Platform Admin Walkthrough reporting @walkthroughs', () => {
   }) => {
     // DEFERRED: Playwright env unavailable
     await page.goto('/platform-admin');
-    await page.getByTestId('platform-admin-tab-walkthrough-reports').click();
+    await page.getByTestId('platform-admin-tab-walkthroughs').click();
+    await page.getByTestId('walkthroughs-admin-tab-reports').click();
     await expect(page.getByTestId('walkthrough-reporting-section')).toBeVisible();
 
     await page.getByTestId('walkthrough-report-selector').selectOption({ index: 1 });

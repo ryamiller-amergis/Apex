@@ -288,6 +288,17 @@ export interface WalkthroughAnchorSyncPersistenceSummary {
 /** Scan provider accepted by POST .../anchor-registry/sync. */
 export type WalkthroughAnchorSyncProvider = 'local' | 'github' | 'ado';
 
+/**
+ * Super Admin Sync command.
+ *
+ * When `provider` is omitted:
+ * - production resolves Apex project skill settings (github|ado) and materializes
+ *   that repo via the shared repo cache (committed branch tip — not local WIP)
+ * - non-production defaults to `local` (cwd, including uncommitted WIP)
+ *
+ * Remote providers may omit `files`; the server materializes Apex's skill repo.
+ * Passing `files` remains supported for tests / injectors.
+ */
 export interface WalkthroughAnchorSyncCommand {
   provider?: WalkthroughAnchorSyncProvider;
   /** Absolute repository root for local scans (defaults to process.cwd()). */
@@ -295,8 +306,8 @@ export interface WalkthroughAnchorSyncCommand {
   /** Repo-relative client tree (default src/client). */
   clientRelativeRoot?: string;
   /**
-   * Pre-fetched client sources for github | ado providers.
-   * Required when provider is not `local`.
+   * Optional pre-fetched client sources for github | ado.
+   * When omitted, Apex's configured skill repo is materialized server-side.
    */
   files?: ReadonlyArray<{ path: string; content: string }>;
 }
@@ -352,6 +363,13 @@ export interface WalkthroughAnchorSyncDiagnostics {
   durationMs: number;
   truncatedFiles: string[];
   errors: Array<{ filePath: string; message: string }>;
+  /** Configured branch tip when scanning Apex skill repo; null for local/memory. */
+  branch: string | null;
+  /**
+   * True when Sync scanned Apex's remote skill-repo checkout (committed branch),
+   * not the App Service / local working tree WIP.
+   */
+  committedTruth: boolean;
 }
 
 // ── Type guards / normalization ───────────────────────────────────────────────

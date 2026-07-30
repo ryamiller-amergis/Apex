@@ -1,41 +1,22 @@
 .section {
+  padding: 24px;
+}
+
+.pickerCard {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  padding: 16px 20px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-secondary);
 }
 
-.header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.title {
-  margin: 0;
-  font-size: 1.25rem;
-  color: var(--text-primary);
-}
-
-.hint {
-  margin: 4px 0 0;
-  color: var(--text-secondary);
-  font-size: 0.875rem;
-}
-
-.controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 12px;
-}
-
-.field {
+.pickerField {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  min-width: 220px;
+  gap: 6px;
+  max-width: 420px;
 }
 
 .label {
@@ -46,50 +27,96 @@
 }
 
 .select {
+  width: 100%;
+  max-width: 420px;
   padding: 8px 12px;
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  background: var(--bg-secondary);
+  background: var(--bg-primary);
   color: var(--text-primary);
 }
 
 .select:focus {
   outline: 2px solid var(--accent-color);
   outline-offset: 2px;
-  background: var(--bg-secondary);
+  background: var(--bg-primary);
 }
 
-.button {
-  padding: 8px 14px;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  background: var(--bg-tertiary);
+.selectedMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-color-light);
+}
+
+.selectedTitleRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.selectedTitle {
+  font-size: 1rem;
+  font-weight: 600;
   color: var(--text-primary);
+}
+
+.selectedRevision {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.selectedTargeting {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.projectChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.projectChip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.projectChipMore {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border: 1px dashed var(--border-color);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--accent-color);
+  font-size: 0.75rem;
+  font-weight: 600;
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
-.button:hover {
+.projectChipMore:hover {
   border-color: var(--accent-color);
-  color: var(--accent-color);
+  background: var(--bg-tertiary);
 }
 
-.button:focus-visible {
+.projectChipMore:focus-visible {
   outline: 2px solid var(--accent-color);
   outline-offset: 2px;
-}
-
-.primaryButton {
-  composes: button;
-  border: none;
-  background: var(--accent-color);
-  color: #fff;
-  font-weight: 600;
-}
-
-.primaryButton:hover {
-  background: var(--accent-hover);
-  color: #fff;
 }
 
 .tabBar {
@@ -120,11 +147,17 @@
   outline-offset: 2px;
 }
 
+.panelBody {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
 .summary {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 12px;
-  padding: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+  padding: 20px 24px;
   border: 1px solid var(--border-color);
   border-radius: 12px;
   background: var(--bg-secondary);
@@ -133,13 +166,23 @@
 .summaryStat {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 .summaryValue {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
   font-size: 1.5rem;
   font-weight: 700;
   color: var(--text-primary);
+}
+
+.summaryPercent {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--accent-color);
 }
 
 .summaryLabel {
@@ -147,30 +190,17 @@
   color: var(--text-secondary);
 }
 
-.tableWrap {
-  overflow-x: auto;
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  background: var(--bg-secondary);
+.detailSection {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.table th,
-.table td {
-  padding: 12px 16px;
-  text-align: left;
-  border-bottom: 1px solid var(--border-color-light);
-}
-
-.table th {
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
+.detailTitle {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 .statusCompleted {
@@ -183,20 +213,6 @@
 
 .statusText {
   margin-left: 4px;
-}
-
-.errorPanel,
-.emptyPanel,
-.loadingPanel {
-  padding: 16px;
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  background: var(--bg-secondary);
-}
-
-.errorPanel {
-  border-color: var(--error-color);
-  color: var(--text-primary);
 }
 
 .liveRegion {

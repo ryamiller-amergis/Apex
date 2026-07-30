@@ -5,6 +5,12 @@
  * Diffs discoveries against an injected catalog snapshot.
  * Persistence is owned by walkthroughAnchorRegistryService.syncExtractAndPersistAnchors
  * (Wave 2 Track A) — call that for extract+persist; this module stays DB-free.
+ *
+ * Providers:
+ * - `local`: scan cwd / `repositoryRoot` (includes uncommitted WIP — for local authoring).
+ * - `github` | `ado`: scan a pre-materialized `repositoryRoot` (committed branch tip)
+ *   or accept optional pre-fetched `files`. Callers materialize Apex's skill repo
+ *   via repo cache — this module stays DB-free.
  */
 
 import { createHash } from 'crypto';
@@ -89,6 +95,16 @@ export interface WalkthroughAnchorScanDiagnostics {
   durationMs: number;
   truncatedFiles: string[];
   errors: Array<{ filePath: string; message: string }>;
+  /**
+   * Configured branch tip when scanning Apex's skill repo (committed truth).
+   * Null for local / in-memory fixtures.
+   */
+  branch: string | null;
+  /**
+   * True when the scan used Apex's remote skill-repo checkout (committed branch),
+   * not the server's local working tree WIP.
+   */
+  committedTruth: boolean;
 }
 
 export interface WalkthroughAnchorSyncExtractionResult {
@@ -110,6 +126,10 @@ export interface ExtractWalkthroughAnchorsOptions {
   /** Soft byte cap per file (default 512 KiB). Oversized files are skipped. */
   maxFileBytes?: number;
   rootPath?: string;
+  /** Branch tip label for diagnostics (remote / committed scans). */
+  branch?: string | null;
+  /** Override committedTruth diagnostic (defaults from provider). */
+  committedTruth?: boolean;
 }
 
 export interface ScanLocalWalkthroughAnchorsOptions extends ExtractWalkthroughAnchorsOptions {
@@ -123,8 +143,8 @@ export interface ScanLocalWalkthroughAnchorsOptions extends ExtractWalkthroughAn
 export interface SyncExtractWalkthroughAnchorsInput extends ScanLocalWalkthroughAnchorsOptions {
   provider: WalkthroughAnchorScanProvider;
   /**
-   * Remote providers (Wave 2+): pre-fetched client source files.
-   * Required when provider is github | ado until recursive fetch is wired.
+   * Optional pre-fetched client sources for github | ado (tests / injectors).
+   * When omitted for remote providers, callers must supply a materialized `repositoryRoot`.
    */
   files?: readonly WalkthroughAnchorSourceFile[];
 }
@@ -522,10 +542,17 @@ export function diffDiscoveriesAgainstCatalog(
   return { newCandidates, existingMatches, missingWarnings };
 }
 
+function isRemoteProvider(
+  provider: WalkthroughAnchorScanProvider
+): provider is 'github' | 'ado' {
+  return provider === 'github' || provider === 'ado';
+}
+
 function emptyDiagnostics(
   provider: WalkthroughAnchorScanProvider,
   rootPath: string,
-  startedAt: number
+  startedAt: number,
+  options?: { branch?: string | null; committedTruth?: boolean }
 ): WalkthroughAnchorScanDiagnostics {
   return {
     provider,
@@ -536,6 +563,9 @@ function emptyDiagnostics(
     durationMs: Math.max(0, Date.now() - startedAt),
     truncatedFiles: [],
     errors: [],
+    branch: options?.branch ?? null,
+    committedTruth:
+      options?.committedTruth ?? isRemoteProvider(provider),
   };
 }
 
@@ -552,7 +582,11 @@ export function extractWalkthroughAnchorsFromFiles(
   const diagnostics = emptyDiagnostics(
     provider,
     options.rootPath ?? '(memory)',
-    startedAt
+    startedAt,
+    {
+      branch: options.branch ?? null,
+      committedTruth: options.committedTruth,
+    }
   );
 
   const allOccurrences: WalkthroughAnchorLiteralOccurrence[] = [];
@@ -656,11 +690,12 @@ function walkClientSourceFiles(
   return { files, truncatedListing };
 }
 
-/** Scan a local checkout's src/client tree (ts/tsx) with bounded reads. */
+/** Scan a checkout's src/client tree (ts/tsx) with bounded reads. */
 export function scanLocalWalkthroughAnchors(
   options: ScanLocalWalkthroughAnchorsOptions = {}
 ): WalkthroughAnchorSyncExtractionResult {
   const startedAt = Date.now();
+  const provider = options.provider ?? 'local';
   const repositoryRoot = path.resolve(options.repositoryRoot ?? process.cwd());
   const clientRelativeRoot = toPosix(
     options.clientRelativeRoot ?? 'src/client'
@@ -679,7 +714,10 @@ export function scanLocalWalkthroughAnchors(
   );
 
   const loaded: WalkthroughAnchorSourceFile[] = [];
-  const diagnostics = emptyDiagnostics('local', repositoryRoot, startedAt);
+  const diagnostics = emptyDiagnostics(provider, repositoryRoot, startedAt, {
+    branch: options.branch ?? null,
+    committedTruth: options.committedTruth,
+  });
   if (truncatedListing) {
     diagnostics.errors.push({
       filePath: clientRelativeRoot,
@@ -708,11 +746,13 @@ export function scanLocalWalkthroughAnchors(
   }
 
   const result = extractWalkthroughAnchorsFromFiles(loaded, {
-    provider: 'local',
+    provider,
     catalogSnapshot: options.catalogSnapshot,
     pageEntryComponents: options.pageEntryComponents,
     maxFileBytes,
     rootPath: repositoryRoot,
+    branch: options.branch ?? null,
+    committedTruth: options.committedTruth,
   });
 
   // Preserve listing-level skip/truncation diagnostics from the walker.
@@ -728,6 +768,8 @@ export function scanLocalWalkthroughAnchors(
     ...result.diagnostics.errors,
   ];
   result.diagnostics.rootPath = repositoryRoot;
+  result.diagnostics.branch = diagnostics.branch;
+  result.diagnostics.committedTruth = diagnostics.committedTruth;
   result.diagnostics.durationMs = Math.max(0, Date.now() - startedAt);
   return result;
 }
@@ -736,7 +778,9 @@ export function scanLocalWalkthroughAnchors(
  * Provider-aware sync extraction entry point.
  *
  * - `local`: walks the current checkout (or `repositoryRoot`)
- * - `github` | `ado`: accepts pre-fetched `files` (Wave 2 will wire recursive APIs)
+ * - `github` | `ado`: scans a pre-materialized `repositoryRoot`, or uses
+ *   pre-fetched `files`. Callers (registry sync) materialize Apex's skill repo
+ *   via repo cache before invoking this — extraction stays DB-free.
  *
  * Returns a structured diff only. Prefer
  * `walkthroughAnchorRegistryService.syncExtractAndPersistAnchors` for Super Admin sync
@@ -746,21 +790,36 @@ export async function syncExtractWalkthroughAnchors(
   input: SyncExtractWalkthroughAnchorsInput
 ): Promise<WalkthroughAnchorSyncExtractionResult> {
   if (input.provider === 'local') {
-    return scanLocalWalkthroughAnchors(input);
+    return scanLocalWalkthroughAnchors({
+      ...input,
+      provider: 'local',
+      committedTruth: input.committedTruth ?? false,
+    });
   }
 
-  if (!input.files) {
+  if (input.files) {
+    return extractWalkthroughAnchorsFromFiles(input.files, {
+      provider: input.provider,
+      catalogSnapshot: input.catalogSnapshot,
+      pageEntryComponents: input.pageEntryComponents,
+      maxFileBytes: input.maxFileBytes,
+      rootPath: input.repositoryRoot ?? input.provider,
+      branch: input.branch ?? null,
+      committedTruth: input.committedTruth ?? true,
+    });
+  }
+
+  if (!input.repositoryRoot) {
     throw new Error(
-      `Provider "${input.provider}" requires pre-fetched files until Wave 2 remote tree wiring is complete`
+      `Provider "${input.provider}" requires a materialized repositoryRoot or pre-fetched files`
     );
   }
 
-  return extractWalkthroughAnchorsFromFiles(input.files, {
+  return scanLocalWalkthroughAnchors({
+    ...input,
     provider: input.provider,
-    catalogSnapshot: input.catalogSnapshot,
-    pageEntryComponents: input.pageEntryComponents,
-    maxFileBytes: input.maxFileBytes,
-    rootPath: input.repositoryRoot ?? input.provider,
+    repositoryRoot: input.repositoryRoot,
+    committedTruth: input.committedTruth ?? true,
   });
 }
 

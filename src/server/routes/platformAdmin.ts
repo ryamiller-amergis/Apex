@@ -10,7 +10,7 @@ import {
 import * as menuSettingsService from '../services/menuSettingsService';
 import * as featureFlagService from '../services/featureFlagService';
 import * as groupService from '../services/groupService';
-import { getUserId, getUserEmail } from '../utils/requestUser';
+import { getUserId, getUserEmail, getDisplayName } from '../utils/requestUser';
 import { listProjectCatalog } from '../services/projectCatalogService';
 import {
   approveProjectAccessRequest,
@@ -57,6 +57,8 @@ import {
   WalkthroughAnchorSmartTaggingOrchestrationError,
 } from '../services/walkthroughAnchorSmartTaggingService';
 import * as walkthroughAnchorRegistryService from '../services/walkthroughAnchorRegistryService';
+import * as walkthroughAiOptionsService from '../services/walkthroughAiOptionsService';
+import { WalkthroughAiOptionsError } from '../../shared/types/walkthroughAiOptions';
 
 const router = Router();
 const validMenuItemKeys = new Set<MenuItemKey>(CONFIGURABLE_MENU_ITEMS.map((item) => item.key));
@@ -496,6 +498,36 @@ router.get('/walkthroughs/anchors', async (_req: Request, res: Response): Promis
 // ── Smart Anchor Management catalog (Phase 2) ─────────────────────────────────
 // Static paths must stay above /walkthroughs/:id.
 
+router.get('/walkthroughs/ai-options', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const options = await walkthroughAiOptionsService.getWalkthroughAiOptions();
+    res.json(options);
+  } catch (err) {
+    console.error('[platform-admin] get walkthrough AI options failed', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.put('/walkthroughs/ai-options', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const saved = await walkthroughAiOptionsService.saveWalkthroughAiOptions(req.body, {
+      id: getUserId(req),
+      displayName: getDisplayName(req),
+    });
+    res.json(saved);
+  } catch (err) {
+    if (err instanceof WalkthroughAiOptionsError) {
+      res.status(err.code === 'NOT_FOUND' ? 404 : 400).json({
+        error: err.message,
+        code: err.code,
+      });
+      return;
+    }
+    console.error('[platform-admin] save walkthrough AI options failed', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 router.get('/walkthroughs/anchor-registry', async (req: Request, res: Response): Promise<void> => {
   try {
     const search = typeof req.query.search === 'string' ? req.query.search : undefined;
@@ -627,6 +659,8 @@ router.post(
  * Wave 2 Track A — Super Admin scanner sync (extract + persist).
  * Returns full sync result for the Sync review modal (Track C).
  * AI smart-tagging (Track B) consumes persistence.newCandidateIdsForSmartTagging only.
+ *
+ * Provider omitted → production uses Apex skill repo (repo cache); local uses cwd.
  */
 router.post(
   '/walkthroughs/anchor-registry/sync',
@@ -634,21 +668,18 @@ router.post(
     try {
       const actor = { id: getUserId(req) };
       const body = (req.body ?? {}) as WalkthroughAnchorSyncCommand;
-      const provider = body.provider ?? 'local';
-      if (provider !== 'local' && provider !== 'github' && provider !== 'ado') {
+      if (
+        body.provider != null &&
+        body.provider !== 'local' &&
+        body.provider !== 'github' &&
+        body.provider !== 'ado'
+      ) {
         res.status(400).json({ error: 'Invalid sync provider', code: 'VALIDATION_ERROR' });
-        return;
-      }
-      if ((provider === 'github' || provider === 'ado') && !Array.isArray(body.files)) {
-        res.status(400).json({
-          error: `Provider "${provider}" requires a files array until remote tree wiring is complete`,
-          code: 'VALIDATION_ERROR',
-        });
         return;
       }
       const result = await walkthroughAnchorRegistryService.syncExtractAndPersistAnchors(
         {
-          provider,
+          provider: body.provider,
           repositoryRoot: body.repositoryRoot,
           clientRelativeRoot: body.clientRelativeRoot,
           files: body.files,
@@ -658,11 +689,6 @@ router.post(
       res.json(result);
     } catch (err) {
       if (mapWalkthroughAnchorRegistryError(err, res)) return;
-      const message = err instanceof Error ? err.message : 'Internal server error';
-      if (typeof message === 'string' && message.includes('requires pre-fetched files')) {
-        res.status(400).json({ error: message, code: 'VALIDATION_ERROR' });
-        return;
-      }
       res.status(500).json({ error: 'Internal server error' });
     }
   },

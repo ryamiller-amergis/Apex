@@ -340,6 +340,7 @@ const SMART_TAGGING_POLL_MAX_ATTEMPTS = 300;
 /**
  * Start smart-tagging and poll until terminal. Never throws for empty input.
  * Callers should treat failures as non-blocking for the Sync review modal.
+ * Optional skillPath / model come from Platform Admin → Walkthroughs → Options.
  */
 export async function startAndPollAnchorSmartTagging(
   result: WalkthroughAnchorRegistrySyncResult,
@@ -347,6 +348,10 @@ export async function startAndPollAnchorSmartTagging(
     signal?: AbortSignal;
     pollIntervalMs?: number;
     maxAttempts?: number;
+    /** Override Cursor model (empty or omitted uses server default). */
+    model?: string;
+    /** Override skill markdown path under .cursor/skills (omitted uses server default). */
+    skillPath?: string;
     onProgress?: (info: {
       attempt: number;
       maxAttempts: number;
@@ -358,12 +363,19 @@ export async function startAndPollAnchorSmartTagging(
   const candidates = buildSmartTaggingCandidatesFromSync(result);
   if (candidates.length === 0) return null;
 
+  const model = options?.model?.trim();
+  const skillPath = options?.skillPath?.trim();
+
   const started = await registryFetch<WalkthroughAnchorSmartTaggingStartResponse>(
     '/api/platform-admin/walkthroughs/anchor-registry/smart-tagging/start',
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ candidates }),
+      body: JSON.stringify({
+        candidates,
+        ...(model ? { model } : {}),
+        ...(skillPath ? { skillPath } : {}),
+      }),
       signal: options?.signal,
     },
   );

@@ -73,6 +73,10 @@ jest.mock('../services/walkthroughGenerationService', () => ({
   getGenerationResult: jest.fn(),
   cancelGeneration: jest.fn(),
 }));
+jest.mock('../services/walkthroughAiOptionsService', () => ({
+  getWalkthroughAiOptions: jest.fn(),
+  saveWalkthroughAiOptions: jest.fn(),
+}));
 jest.mock('../services/walkthroughAnchorRegistryService', () => ({
   listAuthoringAnchorEntries: jest.fn().mockResolvedValue([
     {
@@ -112,6 +116,10 @@ const mockGeneration = jest.requireMock('../services/walkthroughGenerationServic
   startGeneration: jest.Mock;
   getGenerationResult: jest.Mock;
   cancelGeneration: jest.Mock;
+};
+const mockAiOptions = jest.requireMock('../services/walkthroughAiOptionsService') as {
+  getWalkthroughAiOptions: jest.Mock;
+  saveWalkthroughAiOptions: jest.Mock;
 };
 const mockRequireSuperAdmin = requireSuperAdmin as jest.Mock;
 
@@ -344,5 +352,59 @@ describe('platformAdmin walkthrough routes (TBI-002 DoD-0 / VT-09)', () => {
     expect(res.status).toBe(200);
     expect(res.body.defaultPreset).toBe('A');
     expect(res.body.presets.map((p: { id: string }) => p.id)).toEqual(['A', 'B', 'C']);
+  });
+
+  it('GET /walkthroughs/ai-options returns persisted options', async () => {
+    mockAiOptions.getWalkthroughAiOptions.mockResolvedValue({
+      id: 'default',
+      walkthroughGenerationSkillPath: '.cursor/skills/walkthrough-generation/SKILL.md',
+      walkthroughGenerationModel: 'composer-2',
+      anchorSmartTaggingSkillPath:
+        '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+      anchorSmartTaggingModel: '',
+      createdBy: 'system',
+      createdByDisplayName: 'System',
+      createdAt: '2026-07-30T00:00:00.000Z',
+      updatedBy: 'system',
+      updatedByDisplayName: 'System',
+      updatedAt: '2026-07-30T00:00:00.000Z',
+    });
+    const res = await request(buildApp()).get('/api/platform-admin/walkthroughs/ai-options');
+    expect(res.status).toBe(200);
+    expect(res.body.walkthroughGenerationModel).toBe('composer-2');
+  });
+
+  it('PUT /walkthroughs/ai-options saves with actor identity', async () => {
+    mockAiOptions.saveWalkthroughAiOptions.mockResolvedValue({
+      id: 'default',
+      walkthroughGenerationSkillPath: '.cursor/skills/custom/SKILL.md',
+      walkthroughGenerationModel: 'gpt-5.5',
+      anchorSmartTaggingSkillPath:
+        '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+      anchorSmartTaggingModel: 'claude-sonnet-4-6',
+      createdBy: 'super-admin',
+      createdByDisplayName: 'Admin',
+      createdAt: '2026-07-30T15:00:00.000Z',
+      updatedBy: 'super-admin',
+      updatedByDisplayName: 'Admin',
+      updatedAt: '2026-07-30T15:00:00.000Z',
+    });
+    const res = await request(buildApp())
+      .put('/api/platform-admin/walkthroughs/ai-options')
+      .send({
+        walkthroughGenerationSkillPath: '.cursor/skills/custom/SKILL.md',
+        walkthroughGenerationModel: 'gpt-5.5',
+        anchorSmartTaggingSkillPath:
+          '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+        anchorSmartTaggingModel: 'claude-sonnet-4-6',
+      });
+    expect(res.status).toBe(200);
+    expect(mockAiOptions.saveWalkthroughAiOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        walkthroughGenerationModel: 'gpt-5.5',
+      }),
+      { id: 'super-admin', displayName: 'Admin' },
+    );
+    expect(res.body.updatedByDisplayName).toBe('Admin');
   });
 });

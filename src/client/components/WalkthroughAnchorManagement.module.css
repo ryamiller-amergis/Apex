@@ -4,6 +4,79 @@
   gap: 16px;
 }
 
+.optionsCard {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 560px;
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+}
+
+.optionsGroup {
+  margin: 0;
+  padding: 12px 14px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-inline-size: 0;
+}
+
+.optionsGroupTitle {
+  padding: 0 4px;
+  font-weight: 600;
+  font-size: 0.9375rem;
+  color: var(--text-primary);
+}
+
+.optionsField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.optionsLabel {
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+}
+
+.optionsSelect {
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.optionsSelect:focus {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+}
+
+.optionsHint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.optionsMeta {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.buttonPrimary:disabled,
+.button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .subTabBar {
   display: flex;
   gap: 8px;

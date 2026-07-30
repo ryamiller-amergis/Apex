@@ -31,7 +31,7 @@ describe('WalkthroughReportingSection (FEAT-008)', () => {
     jest.resetAllMocks();
   });
 
-  it('PBI-010 AC-0 — shows X of Y and completed/dismissed detail', async () => {
+  it('PBI-010 AC-0 — shows X of Y, percentages, and completed/dismissed detail', async () => {
     global.fetch = jest.fn().mockImplementation((input) => {
       const url = String(input);
       if (url.includes('/api/platform-admin/walkthroughs?') && url.includes('lifecycle=published')) {
@@ -41,7 +41,7 @@ describe('WalkthroughReportingSection (FEAT-008)', () => {
               id: 'wt-1',
               userTitle: 'Intro',
               revision: 2,
-              targeting: { projects: ['Apex'] },
+              targeting: { projects: ['Apex', 'ASM', 'Amego'] },
             },
           ],
           nextCursor: null,
@@ -88,8 +88,72 @@ describe('WalkthroughReportingSection (FEAT-008)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('acknowledgement-summary')).toHaveTextContent('1 of 2');
     });
+    expect(screen.getByTestId('acknowledgement-percent')).toHaveTextContent('50%');
+    expect(screen.getByTestId('completed-percent')).toHaveTextContent('50%');
+    expect(screen.getByTestId('dismissed-percent')).toHaveTextContent('0%');
     expect(screen.getByTestId('acknowledgement-detail-table')).toHaveTextContent('Ada');
     expect(screen.getByTestId('acknowledgement-detail-table')).toHaveTextContent('completed');
+    expect(screen.getByTestId('walkthrough-report-selected-meta')).toHaveTextContent(
+      'Targeted to 3 projects',
+    );
+    expect(screen.getByTestId('walkthrough-report-selector')).not.toHaveTextContent(
+      'Apex, ASM, Amego',
+    );
+  });
+
+  it('filters acknowledgement detail by search', async () => {
+    const user = userEvent.setup();
+    global.fetch = jest.fn().mockImplementation((input) => {
+      const url = String(input);
+      if (url.includes('lifecycle=published')) {
+        return mockJson({
+          items: [{ id: 'wt-1', userTitle: 'Intro', revision: 1, targeting: { projects: ['Apex'] } }],
+          nextCursor: null,
+        });
+      }
+      if (url.includes('/reports/acknowledgement')) {
+        return mockJson({
+          walkthroughId: 'wt-1',
+          revision: 1,
+          generatedAt: '2026-07-29T12:00:00.000Z',
+          acknowledgedCount: 2,
+          audienceCount: 2,
+          completedCount: 1,
+          dismissedCount: 1,
+          details: [
+            {
+              userId: 'u1',
+              displayName: 'Ada',
+              email: 'ada@example.com',
+              status: 'completed',
+              acknowledgedAt: '2026-07-29T11:00:00.000Z',
+            },
+            {
+              userId: 'u2',
+              displayName: 'Grace',
+              email: 'grace@example.com',
+              status: 'dismissed',
+              acknowledgedAt: '2026-07-29T11:30:00.000Z',
+            },
+          ],
+          completed: [],
+          dismissed: [],
+        });
+      }
+      if (url.includes('/reports/anchor-misses')) {
+        return mockJson({ items: [], nextCursor: null });
+      }
+      return mockJson({}, false, 404);
+    });
+
+    renderSection();
+    await waitFor(() => {
+      expect(screen.getByTestId('acknowledgement-detail-table')).toHaveTextContent('Ada');
+    });
+
+    await user.type(screen.getByTestId('acknowledgement-detail-search'), 'grace');
+    expect(screen.getByTestId('acknowledgement-detail-table')).toHaveTextContent('Grace');
+    expect(screen.getByTestId('acknowledgement-detail-table')).not.toHaveTextContent('Ada');
   });
 
   it('PBI-010 AC-1 — error state replaces summary (no partial counts)', async () => {

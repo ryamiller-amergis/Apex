@@ -20,16 +20,8 @@ import {
   useWalkthroughAiPolicyPresets,
 } from '../hooks/useWalkthroughAiDraft';
 import { useWalkthroughAnchors } from '../hooks/usePlatformAdminWalkthroughs';
-import {
-  useAvailableModels,
-  useProjectSkillConfig,
-} from '../hooks/useProjectSkillConfig';
-import { useSkillList, useSkillRepos } from '../hooks/useChatThreads';
+import { useWalkthroughsAiOptions } from '../contexts/WalkthroughsAiOptionsContext';
 import styles from './WalkthroughAiDraft.module.css';
-
-const DEFAULT_WALKTHROUGH_GENERATION_SKILL_PATH =
-  '.cursor/skills/walkthrough-generation/SKILL.md';
-const APEX_REPOSITORY_PROJECT = 'Apex';
 
 interface WalkthroughAiDraftPanelProps {
   projectId: string;
@@ -42,8 +34,6 @@ interface WalkthroughAiDraftPanelProps {
 interface IntentFormValues {
   intent: string;
   policyPreset: WalkthroughAiPolicyPresetId;
-  cursorModel: string;
-  skillPath: string;
 }
 
 function unitTitle(unit: WalkthroughAiProposalUnit): string {
@@ -64,34 +54,15 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
   const redoMutation = useRedoWalkthroughAiUnit();
   const validateMutation = useValidateWalkthroughAiUnit();
   const anchorsQuery = useWalkthroughAnchors();
+  const {
+    walkthroughGenerationModel,
+    walkthroughGenerationSkillPath,
+  } = useWalkthroughsAiOptions();
 
   const anchorLabel = (key: string | undefined): string | null => {
     if (!key) return null;
     return anchorsQuery.data?.find((a) => a.key === key)?.label ?? key;
   };
-  const modelsQuery = useAvailableModels();
-  const skillConfigQuery = useProjectSkillConfig(APEX_REPOSITORY_PROJECT);
-  const skillConfig = skillConfigQuery.data;
-  const skillReposQuery = useSkillRepos(
-    APEX_REPOSITORY_PROJECT,
-    skillConfig?.skillProvider,
-  );
-  const skillRepo =
-    skillConfig?.skillRepo ||
-    skillReposQuery.data?.find(
-      (repo) => repo.name.toLowerCase() === APEX_REPOSITORY_PROJECT.toLowerCase(),
-    )?.name ||
-    skillReposQuery.data?.[0]?.name ||
-    null;
-  const skillBranch =
-    skillConfig?.skillBranch ||
-    skillReposQuery.data?.find((repo) => repo.name === skillRepo)?.defaultBranch;
-  const skillsQuery = useSkillList(
-    APEX_REPOSITORY_PROJECT,
-    skillRepo,
-    skillBranch,
-    skillConfig?.skillProvider,
-  );
 
   const [proposal, setProposal] = useState<WalkthroughAiProposal | null>(null);
   const [decisions, setDecisions] = useState<Record<string, WalkthroughAiUnitDecision>>({});
@@ -119,8 +90,6 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
             `Intent must be at most ${selectedPolicy.maxIntentLength} characters`,
           ),
         policyPreset: z.enum(['A', 'B', 'C']),
-        cursorModel: z.string(),
-        skillPath: z.string(),
       }),
     [selectedPolicy.maxIntentLength],
   );
@@ -135,8 +104,6 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
     defaultValues: {
       intent: '',
       policyPreset: DEFAULT_WALKTHROUGH_AI_POLICY_PRESET,
-      cursorModel: '',
-      skillPath: DEFAULT_WALKTHROUGH_GENERATION_SKILL_PATH,
     },
   });
 
@@ -154,12 +121,14 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
     setStatusMessage('Generating draft…');
     setUnitErrors({});
     try {
+      const model = walkthroughGenerationModel.trim();
+      const skillPath = walkthroughGenerationSkillPath.trim();
       const result = await generateMutation.mutateAsync({
         projectId,
         intent: values.intent,
         policyPreset: values.policyPreset,
-        ...(values.cursorModel?.trim() ? { model: values.cursorModel.trim() } : {}),
-        ...(values.skillPath?.trim() ? { skillPath: values.skillPath.trim() } : {}),
+        ...(model ? { model } : {}),
+        ...(skillPath ? { skillPath } : {}),
         existingDraft: {
           internalName: currentDraft.internalName,
           userTitle: currentDraft.userTitle,
@@ -334,52 +303,16 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
           </p>
         </div>
 
-        <div className={styles.field}>
-          <label className={styles.label} htmlFor="walkthrough-ai-cursor-model">
-            Cursor model (optional)
-          </label>
-          <select
-            id="walkthrough-ai-cursor-model"
-            className={styles.select}
-            {...register('cursorModel')}
-            disabled={generateMutation.isPending}
-            {...{ 'data-testid': 'walkthrough-ai-cursor-model' }}
-          >
-            <option value="">Project/default Cursor model</option>
-            {(modelsQuery.data ?? []).map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.displayName}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className={styles.field}>
-          <label className={styles.label} htmlFor="walkthrough-ai-skill-path">
-            Skill
-          </label>
-          <select
-            id="walkthrough-ai-skill-path"
-            className={styles.select}
-            {...register('skillPath')}
-            disabled={generateMutation.isPending || skillsQuery.isLoading}
-            {...{ 'data-testid': 'walkthrough-ai-skill-path' }}
-          >
-            <option value={DEFAULT_WALKTHROUGH_GENERATION_SKILL_PATH}>
-              Walkthrough generation (default)
-            </option>
-            {(skillsQuery.data ?? [])
-              .filter((skill) => skill.path !== DEFAULT_WALKTHROUGH_GENERATION_SKILL_PATH)
-              .map((skill) => (
-                <option key={skill.id} value={skill.path}>
-                  {skill.name}
-                </option>
-              ))}
-          </select>
-          <p className={styles.panelHint}>
-            Choose from the skills available through the Apex project repository connection.
-          </p>
-        </div>
+        <p className={styles.panelHint} {...{ 'data-testid': 'walkthrough-ai-options-hint' }}>
+          Skill and agent model come from Platform Admin → Walkthroughs → Options
+          {walkthroughGenerationSkillPath
+            ? ` (skill: ${walkthroughGenerationSkillPath.split('/').slice(-2).join('/')}`
+            : ''}
+          {walkthroughGenerationModel.trim()
+            ? `; model: ${walkthroughGenerationModel.trim()}`
+            : ''}
+          {walkthroughGenerationSkillPath ? ')' : ''}.
+        </p>
 
         <div className={styles.field}>
           <label className={styles.label} htmlFor="walkthrough-ai-intent">

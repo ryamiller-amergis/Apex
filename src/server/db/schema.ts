@@ -61,6 +61,7 @@ import type {
   WalkthroughAnchorSourceLocation,
 } from '../../shared/types/walkthroughAnchorRegistry';
 import type { WalkthroughRegistryPlacement } from '../../shared/walkthroughAnchors';
+import { WALKTHROUGH_AI_OPTIONS_SINGLETON_ID } from '../../shared/types/walkthroughAiOptions';
 
 // ── Tables ────────────────────────────────────────────────────────────────────
 
@@ -1878,6 +1879,21 @@ export const walkthroughAnchorRegistry = pgTable('walkthrough_anchor_registry', 
     .on(t.reviewStatus)
     .where(sql`${t.deletedAt} IS NULL`),
 }));
+
+/** Platform Admin → Walkthroughs → Options (singleton skill + agent model). */
+export const walkthroughAiOptions = pgTable('walkthrough_ai_options', {
+  id: text('id').primaryKey().default(WALKTHROUGH_AI_OPTIONS_SINGLETON_ID),
+  walkthroughGenerationSkillPath: text('walkthrough_generation_skill_path').notNull(),
+  walkthroughGenerationModel: text('walkthrough_generation_model').notNull().default(''),
+  anchorSmartTaggingSkillPath: text('anchor_smart_tagging_skill_path').notNull(),
+  anchorSmartTaggingModel: text('anchor_smart_tagging_model').notNull().default(''),
+  createdBy: text('created_by').notNull(),
+  createdByDisplayName: text('created_by_display_name').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedBy: text('updated_by').notNull(),
+  updatedByDisplayName: text('updated_by_display_name').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
 
 export const walkthroughsRelations = relations(walkthroughs, ({ many }) => ({
   steps: many(walkthroughSteps),

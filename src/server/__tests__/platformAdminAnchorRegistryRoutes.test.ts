@@ -306,6 +306,8 @@ describe('platformAdmin anchor-registry routes (Phase 2)', () => {
         durationMs: 2,
         truncatedFiles: [],
         errors: [],
+        branch: null,
+        committedTruth: false,
       },
       persistence: {
         created: [
@@ -347,10 +349,51 @@ describe('platformAdmin anchor-registry routes (Phase 2)', () => {
     );
   });
 
-  it('rejects remote sync without files', async () => {
+  it('accepts remote sync without files (server materializes Apex skill repo)', async () => {
+    mockRegistry.syncExtractAndPersistAnchors.mockResolvedValue({
+      discoveries: [],
+      newCandidates: [],
+      existingMatches: [],
+      missingWarnings: [],
+      duplicates: [],
+      unsupportedDynamicPatterns: [],
+      diagnostics: {
+        provider: 'github' as const,
+        rootPath: '/data/dev-workspaces/walkthrough-anchor-sync',
+        filesScanned: 0,
+        filesSkipped: 0,
+        bytesRead: 0,
+        durationMs: 1,
+        truncatedFiles: [],
+        errors: [],
+        branch: 'main',
+        committedTruth: true,
+      },
+      persistence: {
+        created: [],
+        refreshed: [],
+        markedMissing: [],
+        reviewCandidates: [],
+        newCandidateIdsForSmartTagging: [],
+      },
+    } as never);
+
     const res = await request(buildApp())
       .post('/api/platform-admin/walkthroughs/anchor-registry/sync')
       .send({ provider: 'github' });
+
+    expect(res.status).toBe(200);
+    expect(mockRegistry.syncExtractAndPersistAnchors).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'github' }),
+      expect.objectContaining({ id: 'super-admin' }),
+    );
+    expect(res.body.diagnostics.committedTruth).toBe(true);
+  });
+
+  it('rejects invalid sync provider', async () => {
+    const res = await request(buildApp())
+      .post('/api/platform-admin/walkthroughs/anchor-registry/sync')
+      .send({ provider: 'bitbucket' });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('VALIDATION_ERROR');
     expect(mockRegistry.syncExtractAndPersistAnchors).not.toHaveBeenCalled();
