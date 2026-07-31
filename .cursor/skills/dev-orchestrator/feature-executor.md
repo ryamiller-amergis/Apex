@@ -14,7 +14,7 @@ Implements exactly **one** Feature end-to-end using TDD.
 
 **Do not proceed to F1 until every required input below is loaded and summarized.** Titles alone are insufficient.
 
-Default paths use `.ai-pilot/output/`. Under local kickoff, use `.ai-pilot/local-dev/{slug}/` per [local-dev.md](local-dev.md).
+Default paths use `.ai-pilot/output/` with `{slug}`-prefixed filenames. Under local kickoff, use `.ai-pilot/local-dev/{pack}/` and the **short fixed filenames** in [local-dev.md](local-dev.md) (`backlog.json`, `design-spec/design.md`, …).
 
 ### F0.1 — Backlog Feature + every associated item
 

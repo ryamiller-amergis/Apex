@@ -396,12 +396,13 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  height: 32px; /* match .app-brand-mark so flex centering shares the same box */
   font-size: 1rem;
   font-weight: 800;
   letter-spacing: -0.03em;
   line-height: 1;
-  /* System UI ink box sits ~2px below the mark’s optical center. */
-  transform: translateY(-2px);
+  /* Capitals sit optically high in the em-box next to the square mark. */
+  transform: translateY(1px);
 }
 
 .app-brand-separator {

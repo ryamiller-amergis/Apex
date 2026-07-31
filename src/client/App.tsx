@@ -72,6 +72,8 @@ const StandupSummaryView = lazy(() => import('./components/StandupSummaryView'))
 const FeatureRequestsView = lazy(() => import('./components/FeatureRequestsView'));
 const UiLabView = lazy(() => import('./components/UiLabView').then(m => ({ default: m.UiLabView })));
 const PdfAssemblyView = lazy(() => import('./components/PdfAssemblyView').then(m => ({ default: m.PdfAssemblyView })));
+const ApryseWebViewerPoc = lazy(() => import('./components/ApryseWebViewerPoc').then(m => ({ default: m.ApryseWebViewerPoc })));
+const NutrientWebSdkPoc = lazy(() => import('./components/NutrientWebSdkPoc').then(m => ({ default: m.NutrientWebSdkPoc })));
 const DesignModuleView = lazy(() => import('./components/DesignModuleView'));
 const LoadTestsListPage = lazy(() => import('./components/LoadTestsListPage').then(m => ({ default: m.LoadTestsListPage })));
 const LoadTestDefinitionBuilderView = lazy(() =>
@@ -176,7 +178,7 @@ function App() {
                     ? 'feature-requests'
                     : location.pathname.startsWith('/ui-lab')
                     ? 'ui-lab'
-                    : location.pathname === '/pdf-tools'
+                    : location.pathname.startsWith('/pdf-tools')
                     ? 'pdf-tools'
                     : location.pathname === '/ai-cost'
                     ? 'ai-cost'
@@ -851,7 +853,13 @@ function App() {
                 <DesktopOnlyGate>
                   <Suspense fallback={<div {...{ 'data-testid': 'pdf-tools-loading' }}><ViewSkeleton /></div>}>
                     <div className="pdf-tools-view" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-                      <PdfAssemblyView key={userId} userId={userId} />
+                      {location.pathname === '/pdf-tools/webviewer-poc' ? (
+                        <ApryseWebViewerPoc />
+                      ) : location.pathname === '/pdf-tools/nutrient-poc' ? (
+                        <NutrientWebSdkPoc />
+                      ) : (
+                        <PdfAssemblyView key={userId} userId={userId} />
+                      )}
                     </div>
                   </Suspense>
                 </DesktopOnlyGate>
