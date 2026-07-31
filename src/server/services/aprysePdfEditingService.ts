@@ -1,3 +1,5 @@
+import path from 'path';
+
 export interface ApryseTextReplacement {
   /** One-based page number in the assembled output PDF. */
   pageNumber: number;
@@ -9,6 +11,7 @@ export interface ApryseCapabilityStatus {
   configured: boolean;
   sdkAvailable: boolean;
   findReplaceAvailable: boolean;
+  pdfToOfficeAvailable: boolean;
   message: string;
 }
 
@@ -33,16 +36,38 @@ interface ApryseFindReplaceLike {
   ): Promise<void>;
 }
 
+interface ApryseFilterReaderLike {
+  read(bufSize: number): Promise<Uint8Array | null>;
+}
+
+/** Opaque Apryse filter handle returned by Convert.toWordWithFilter. */
+type ApryseFilterLike = object;
+
+interface ApryseConvertLike {
+  toWordWithFilter(
+    document: AprysePdfDocLike,
+    options?: unknown
+  ): Promise<ApryseFilterLike>;
+}
+
 interface AprysePdfNetLike {
   PDFDoc: {
     createFromBuffer(bytes: Uint8Array): Promise<AprysePdfDocLike>;
   };
   FindReplace?: ApryseFindReplaceLike;
+  Convert?: ApryseConvertLike;
+  StructuredOutputModule?: {
+    isModuleAvailable(): Promise<boolean>;
+  };
+  FilterReader?: {
+    create(filter: ApryseFilterLike): Promise<ApryseFilterReaderLike>;
+  };
   SDFDoc: {
     SaveOptions: {
       e_remove_unused: number;
     };
   };
+  addResourceSearchPath?(resourcePath: string): Promise<void>;
   runWithCleanup(
     callback: () => Promise<Uint8Array>,
     licenseKey: string
@@ -59,6 +84,8 @@ export type ApryseSdkLoader = () => Promise<ApryseSdkModuleLike>;
 interface AprysePdfEditingDependencies {
   getLicenseKey: () => string | undefined;
   loadModule: ApryseSdkLoader;
+  /** Directory containing the Structured Output add-on (Lib/*.dll, etc.). */
+  getResourceSearchPath: () => string | undefined;
 }
 
 export class AprysePdfEditingError extends Error {
@@ -67,7 +94,9 @@ export class AprysePdfEditingError extends Error {
       | 'APRYSE_NOT_CONFIGURED'
       | 'APRYSE_SDK_UNAVAILABLE'
       | 'APRYSE_FIND_REPLACE_UNAVAILABLE'
-      | 'APRYSE_EDIT_FAILED',
+      | 'APRYSE_PDF_TO_OFFICE_UNAVAILABLE'
+      | 'APRYSE_EDIT_FAILED'
+      | 'APRYSE_CONVERT_FAILED',
     message: string,
     cause?: unknown
   ) {
@@ -83,6 +112,12 @@ const defaultDependencies: AprysePdfEditingDependencies = {
   getLicenseKey: () => process.env.APRYSE_LICENSE_KEY?.trim() || undefined,
   loadModule: async () =>
     (await import('@pdftron/pdfnet-node')) as unknown as ApryseSdkModuleLike,
+  getResourceSearchPath: () => {
+    const configured = process.env.APRYSE_RESOURCE_SEARCH_PATH?.trim();
+    if (configured) return configured;
+    // Default: repo-root apryse-modules/ (gitignored). Place Structured Output Lib here.
+    return path.join(process.cwd(), 'apryse-modules');
+  },
 };
 
 function messageFrom(error: unknown): string {
@@ -114,12 +149,40 @@ export function createAprysePdfEditingService(
     }
   };
 
+  const prepareResourceSearchPath = async (
+    PDFNet: AprysePdfNetLike
+  ): Promise<void> => {
+    const resourcePath = dependencies.getResourceSearchPath()?.trim();
+    if (!resourcePath || typeof PDFNet.addResourceSearchPath !== 'function') {
+      return;
+    }
+    await PDFNet.addResourceSearchPath(resourcePath);
+  };
+
+  const probePdfToOfficeAvailable = async (
+    PDFNet: AprysePdfNetLike
+  ): Promise<boolean> => {
+    await prepareResourceSearchPath(PDFNet);
+    if (typeof PDFNet.StructuredOutputModule?.isModuleAvailable === 'function') {
+      try {
+        return await PDFNet.StructuredOutputModule.isModuleAvailable();
+      } catch {
+        return false;
+      }
+    }
+    return (
+      typeof PDFNet.Convert?.toWordWithFilter === 'function' &&
+      typeof PDFNet.FilterReader?.create === 'function'
+    );
+  };
+
   const getStatus = async (): Promise<ApryseCapabilityStatus> => {
     if (!isConfigured()) {
       return {
         configured: false,
         sdkAvailable: false,
         findReplaceAvailable: false,
+        pdfToOfficeAvailable: false,
         message: 'APRYSE_LICENSE_KEY is not configured.',
       };
     }
@@ -128,19 +191,33 @@ export function createAprysePdfEditingService(
       const findReplaceAvailable =
         typeof PDFNet.FindReplace?.createFindReplaceOptions === 'function' &&
         typeof PDFNet.FindReplace?.findReplaceText === 'function';
+      const pdfToOfficeAvailable = await probePdfToOfficeAvailable(PDFNet);
+      const parts: string[] = [];
+      if (findReplaceAvailable) {
+        parts.push('FindReplace available');
+      } else {
+        parts.push('FindReplace unavailable');
+      }
+      if (pdfToOfficeAvailable) {
+        parts.push('PDF→Office (Structured Output) available');
+      } else {
+        parts.push(
+          'PDF→Office unavailable — install Structured Output into apryse-modules/ (or set APRYSE_RESOURCE_SEARCH_PATH)'
+        );
+      }
       return {
         configured: true,
         sdkAvailable: true,
         findReplaceAvailable,
-        message: findReplaceAvailable
-          ? 'Apryse FindReplace API is available; license entitlement is validated during export.'
-          : 'Apryse SDK loaded, but FindReplace is unavailable.',
+        pdfToOfficeAvailable,
+        message: `Apryse SDK loaded; ${parts.join('; ')}. License entitlement is validated during use.`,
       };
     } catch (error) {
       return {
         configured: true,
         sdkAvailable: false,
         findReplaceAvailable: false,
+        pdfToOfficeAvailable: false,
         message: messageFrom(error),
       };
     }
@@ -203,7 +280,78 @@ export function createAprysePdfEditingService(
     }
   };
 
-  return { isConfigured, getStatus, replaceText };
+  const readFilterToBuffer = async (
+    PDFNet: AprysePdfNetLike,
+    filter: ApryseFilterLike
+  ): Promise<Uint8Array> => {
+    if (typeof PDFNet.FilterReader?.create !== 'function') {
+      throw new AprysePdfEditingError(
+        'APRYSE_PDF_TO_OFFICE_UNAVAILABLE',
+        'Apryse FilterReader is unavailable; cannot read converted Office output.'
+      );
+    }
+    const reader = await PDFNet.FilterReader.create(filter);
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const chunk = await reader.read(64 * 1024);
+      if (!chunk || chunk.length === 0) break;
+      chunks.push(chunk);
+      total += chunk.length;
+    }
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      out.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return out;
+  };
+
+  const convertToWord = async (pdfBytes: Uint8Array): Promise<Uint8Array> => {
+    const key = dependencies.getLicenseKey()?.trim();
+    if (!key) {
+      throw new AprysePdfEditingError(
+        'APRYSE_NOT_CONFIGURED',
+        'APRYSE_LICENSE_KEY is not configured.'
+      );
+    }
+    const { PDFNet } = await loadConfiguredSdk();
+    try {
+      return await PDFNet.runWithCleanup(async () => {
+        await prepareResourceSearchPath(PDFNet);
+        const moduleAvailable =
+          typeof PDFNet.StructuredOutputModule?.isModuleAvailable === 'function'
+            ? await PDFNet.StructuredOutputModule.isModuleAvailable()
+            : false;
+        if (
+          !moduleAvailable ||
+          typeof PDFNet.Convert?.toWordWithFilter !== 'function'
+        ) {
+          throw new AprysePdfEditingError(
+            'APRYSE_PDF_TO_OFFICE_UNAVAILABLE',
+            'Apryse Structured Output module is unavailable. Download the Windows Structured Output module from Apryse, extract it into apryse-modules/ (so Lib/ is present), or set APRYSE_RESOURCE_SEARCH_PATH to that folder.'
+          );
+        }
+
+        const document = await PDFNet.PDFDoc.createFromBuffer(pdfBytes);
+        await document.initSecurityHandler();
+        const filter = await PDFNet.Convert.toWordWithFilter(document);
+        return readFilterToBuffer(PDFNet, filter);
+      }, key);
+    } catch (error) {
+      if (error instanceof AprysePdfEditingError) throw error;
+      throw new AprysePdfEditingError(
+        'APRYSE_CONVERT_FAILED',
+        `Apryse PDF→Word conversion failed: ${messageFrom(error)}`,
+        error
+      );
+    } finally {
+      await PDFNet.shutdown();
+    }
+  };
+
+  return { isConfigured, getStatus, replaceText, convertToWord };
 }
 
 export const aprysePdfEditingService = createAprysePdfEditingService();

@@ -25,6 +25,10 @@ export interface WorkbenchHeaderProps {
   totalPages: number;
   status: string;
   error: string | null;
+  /** File input accept attribute. Defaults to PDF-only. */
+  accept?: string;
+  /** Open button label. Defaults to "Open PDF". */
+  openLabel?: string;
   /** Called with one or more files — multiple = merge before loading. */
   onLoadFiles: (files: File[]) => void;
   onPrevPage: () => void;
@@ -51,6 +55,8 @@ export const NutrientWorkbenchHeader: React.FC<WorkbenchHeaderProps> = ({
   totalPages,
   status,
   error,
+  accept = 'application/pdf,.pdf',
+  openLabel = 'Open PDF',
   onLoadFiles,
   onPrevPage,
   onNextPage,
@@ -114,19 +120,19 @@ export const NutrientWorkbenchHeader: React.FC<WorkbenchHeaderProps> = ({
           type="button"
           className={styles.openBtn}
           onClick={() => fileInputRef.current?.click()}
-          aria-label="Open PDF (select multiple to merge)"
+          aria-label={`${openLabel} (select multiple PDFs to merge)`}
           data-testid="header-open-pdf"
-          title="Select one PDF to open, or multiple to auto-merge"
+          title="Select one file to open, or multiple PDFs to auto-merge"
         >
           <FolderOpen size={15} strokeWidth={1.8} aria-hidden="true" />
-          <span>Open PDF</span>
+          <span>{openLabel}</span>
         </button>
         <input
           ref={fileInputRef}
           type="file"
-          accept="application/pdf,.pdf"
+          accept={accept}
           multiple
-          aria-label="Choose one or more PDF files"
+          aria-label="Choose one or more files"
           style={{ display: 'none' }}
           onChange={handleFileChange}
           data-testid="header-file-input"

@@ -1,202 +1,161 @@
-import React, { useEffect, useRef, useState } from 'react';
-import WebViewer from '@pdftron/webviewer';
+import React, { useRef, useState } from 'react';
+import { useApryseWorkbench } from '../hooks/useApryseWorkbench';
 import { env } from '../config/env';
+import { NutrientWorkbenchHeader } from './NutrientWorkbenchHeader';
+import { ApryseToolRail } from './ApryseToolRail';
+import { NutrientFloatingToolbar } from './NutrientFloatingToolbar';
 import styles from './ApryseWebViewerPoc.module.css';
 
-type ApryseWebViewerInstance = Awaited<ReturnType<typeof WebViewer.Iframe>>;
-
-function loadErrorMessage(cause: unknown): string {
-  if (cause instanceof Error) return cause.message;
-  if (
-    cause &&
-    typeof cause === 'object' &&
-    'message' in cause &&
-    typeof cause.message === 'string'
-  ) {
-    return cause.message;
-  }
-  return 'Apryse could not load the PDF.';
-}
-
+/**
+ * Apryse WebViewer POC with Apex-owned chrome (same shell as Nutrient).
+ * Vendor header/ribbons are disabled; tools are driven via Core APIs.
+ * Wave B: redaction, signatures, XLSX Spreadsheet Editor.
+ */
 export const ApryseWebViewerPoc: React.FC = () => {
-  const viewerHostRef = useRef<HTMLDivElement>(null);
-  const instanceRef = useRef<ApryseWebViewerInstance | null>(null);
-  const currentFileNameRef = useRef<string | null>(null);
-  const [status, setStatus] = useState('Initializing Apryse WebViewer…');
-  const [error, setError] = useState<string | null>(null);
-  const [isReady, setIsReady] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerEl, setContainerEl] = useState<HTMLDivElement | null>(null);
+  const [isConverting, setIsConverting] = useState(false);
+
   const licenseKey = env.VITE_APRYSE_WEBVIEWER_LICENSE_KEY.trim();
 
-  useEffect(() => {
-    const viewerHost = viewerHostRef.current;
-    if (!licenseKey || !viewerHost) return;
-    const viewerElement = document.createElement('div');
-    viewerElement.className = styles.viewerInstance;
-    viewerHost.replaceChildren(viewerElement);
+  const { state, actions } = useApryseWorkbench({
+    licenseKey,
+    containerElement: containerEl,
+  });
 
-    let cancelled = false;
-    let removeDocumentListeners: (() => void) | null = null;
-    WebViewer.Iframe(
-      {
-        path: '/apryse-webviewer/lib',
-        licenseKey,
-        fullAPI: true,
-        backendType: WebViewer.BackendTypes.WASM,
-      },
-      viewerElement
-    )
-      .then((instance) => {
-        if (cancelled) {
-          instance.UI.dispose();
-          return;
-        }
-        instanceRef.current = instance;
-        instance.UI.enableFeatures([instance.UI.Feature.ContentEdit]);
-        instance.UI.setToolbarGroup(instance.UI.ToolbarGroup.EDIT);
-        const handleDocumentLoaded = () => {
-          if (cancelled) return;
-          const pageCount = instance.Core.documentViewer.getPageCount();
-          if (pageCount < 1) {
-            setError('Apryse loaded the file but found no PDF pages.');
-            return;
-          }
-          setError(null);
-          instance.Core.documentViewer.setCurrentPage(1, true);
-          instance.UI.setFitMode(instance.UI.FitMode.FitPage);
-          setStatus(
-            `${currentFileNameRef.current ?? 'PDF'} loaded (${pageCount} ${pageCount === 1 ? 'page' : 'pages'}). Rendering…`
-          );
-        };
-        const handleFinishedRendering = () => {
-          if (cancelled) return;
-          setStatus(
-            `${currentFileNameRef.current ?? 'PDF'} rendered. Use Edit Text, then Download.`
-          );
-        };
-        const handleLoadError = (cause: unknown) => {
-          if (cancelled) return;
-          setError(loadErrorMessage(cause));
-        };
-        instance.Core.documentViewer.addEventListener(
-          'documentLoaded',
-          handleDocumentLoaded
-        );
-        instance.Core.documentViewer.addEventListener(
-          'loadError',
-          handleLoadError
-        );
-        instance.Core.documentViewer.addEventListener(
-          'finishedRendering',
-          handleFinishedRendering
-        );
-        removeDocumentListeners = () => {
-          instance.Core.documentViewer.removeEventListener(
-            'documentLoaded',
-            handleDocumentLoaded
-          );
-          instance.Core.documentViewer.removeEventListener(
-            'loadError',
-            handleLoadError
-          );
-          instance.Core.documentViewer.removeEventListener(
-            'finishedRendering',
-            handleFinishedRendering
-          );
-        };
-        setIsReady(true);
-        setStatus('Apryse WebViewer is ready.');
-      })
-      .catch((cause: unknown) => {
-        if (cancelled) return;
-        setError(
-          cause instanceof Error
-            ? cause.message
-            : 'Apryse WebViewer failed to initialize.'
-        );
-        setIsReady(false);
-      });
-
-    return () => {
-      cancelled = true;
-      removeDocumentListeners?.();
-      instanceRef.current?.UI.dispose();
-      instanceRef.current = null;
-      viewerElement.remove();
-    };
-  }, [licenseKey]);
-
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    if (
-      file.type !== 'application/pdf' &&
-      !file.name.toLowerCase().endsWith('.pdf')
-    ) {
-      setError('Choose a PDF file.');
-      return;
-    }
-    const instance = instanceRef.current;
-    if (!instance) {
-      setError('Apryse WebViewer is not ready yet.');
-      return;
-    }
-
-    setError(null);
-    currentFileNameRef.current = file.name;
-    setStatus(`Loading ${file.name}…`);
-    try {
-      instance.UI.loadDocument(file, { filename: file.name });
-    } catch (cause: unknown) {
-      setError(loadErrorMessage(cause));
-    }
+  const containerCallback = (el: HTMLDivElement | null) => {
+    setContainerEl(el);
+    (containerRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
   };
 
-  const configurationError = !licenseKey
-    ? 'VITE_APRYSE_WEBVIEWER_LICENSE_KEY is not configured.'
-    : null;
+  const handleExportWord = async () => {
+    setIsConverting(true);
+    await actions.exportWord();
+    setIsConverting(false);
+  };
+
+  const handleDownloadPdf = async () => {
+    setIsConverting(true);
+    await actions.downloadPdf();
+    setIsConverting(false);
+  };
+
+  const handleMergePdf = async (file: File) => {
+    setIsConverting(true);
+    await actions.mergeDocument(file);
+    setIsConverting(false);
+  };
+
+  const handleAddPdfFromToolbar = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/pdf,.pdf';
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (file) void handleMergePdf(file);
+    };
+    input.click();
+  };
+
+  const handleSearchAndRedact = () => {
+    const query = window.prompt(
+      'Search text to mark for redaction (literal match):',
+      ''
+    );
+    if (query == null) return;
+    void actions.searchAndRedact?.(query, false);
+  };
+
+  if (!licenseKey) {
+    return (
+      <section className={styles.workbench} data-testid="apryse-webviewer-poc">
+        <div className={styles.configError} role="alert">
+          VITE_APRYSE_WEBVIEWER_LICENSE_KEY is not configured.
+        </div>
+      </section>
+    );
+  }
+
+  const spreadsheetMode = state.documentKind === 'xlsx';
 
   return (
-    <section className={styles.page} data-testid="apryse-webviewer-poc">
-      <header className={styles.header}>
-        <div>
-          <div className={styles.eyebrow}>PDF editing evaluation</div>
-          <h1>Apryse WebViewer POC</h1>
-          <p>
-            Upload a non-sensitive PDF, use Edit Text, then download the edited
-            file from the WebViewer toolbar.
-          </p>
-        </div>
-        <a className={styles.backLink} href="/pdf-tools">
-          Back to PDF tools
-        </a>
-      </header>
-
-      <div className={styles.controls}>
-        <label className={styles.fileLabel}>
-          <span>Choose PDF for Apryse POC</span>
-          <input
-            type="file"
-            accept="application/pdf,.pdf"
-            onChange={handleFileChange}
-            disabled={Boolean(configurationError) || !isReady}
-          />
-        </label>
-        {configurationError || error ? (
-          <div className={styles.error} role="alert">
-            {configurationError ?? error}
-          </div>
-        ) : (
-          <div className={styles.status} role="status">
-            {status}
-          </div>
-        )}
-      </div>
-
-      <div
-        ref={viewerHostRef}
-        className={styles.viewer}
-        data-testid="apryse-webviewer-container"
+    <section className={styles.workbench} data-testid="apryse-webviewer-poc">
+      <NutrientWorkbenchHeader
+        fileName={state.fileName}
+        isDirty={state.isDirty}
+        isLoaded={state.isLoaded}
+        isConverting={isConverting}
+        currentPage={state.currentPage}
+        totalPages={state.totalPages}
+        status={state.status}
+        error={state.error}
+        accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx"
+        openLabel="Open"
+        onLoadFiles={actions.loadDocuments}
+        onPrevPage={actions.prevPage}
+        onNextPage={actions.nextPage}
+        onGoToPage={actions.goToPage}
+        onZoomIn={actions.zoomIn}
+        onZoomOut={actions.zoomOut}
+        onFitPage={actions.fitPage}
+        onUndo={actions.undo}
+        onRedo={actions.redo}
+        onOpenSearch={actions.openSearch}
+        onDownloadPdf={() => void handleDownloadPdf()}
+        onExportWord={() => void handleExportWord()}
+        onMergePdf={(file) => void handleMergePdf(file)}
+        onBack={() => {}}
       />
+
+      <div className={styles.body}>
+        <ApryseToolRail
+          activeTool={state.activeTool}
+          isLoaded={state.isLoaded}
+          spreadsheetMode={spreadsheetMode}
+          onSetTool={actions.setTool}
+        />
+
+        <div className={styles.canvasWrapper}>
+          {state.isLoaded && (
+            <NutrientFloatingToolbar
+              activeTool={state.activeTool}
+              isDirty={state.isDirty}
+              onSaveEdits={() => void actions.saveContentEdits()}
+              onDiscardEdits={() => void actions.discardContentEdits()}
+              onZoomIn={actions.zoomIn}
+              onZoomOut={actions.zoomOut}
+              onFitPage={actions.fitPage}
+              onSetHighlightColor={actions.setHighlightColor}
+              onSetInkStrokeWidth={actions.setInkStrokeWidth}
+              onRotateCw={() => void actions.rotateCurrentPageCw()}
+              onRotateCcw={() => void actions.rotateCurrentPageCcw()}
+              onMergePdf={handleAddPdfFromToolbar}
+              onDeletePage={() => void actions.deleteCurrentPage?.()}
+              onApplyRedactions={() => void actions.applyRedactions?.()}
+              onSearchAndRedact={handleSearchAndRedact}
+            />
+          )}
+
+          <div
+            ref={containerCallback}
+            className={styles.viewer}
+            data-testid="apryse-webviewer-container"
+          />
+
+          {!state.isLoaded && !state.error && (
+            <div className={styles.emptyState}>
+              <div className={styles.emptyIcon} aria-hidden="true">
+                📄
+              </div>
+              <p className={styles.emptyTitle}>No document open</p>
+              <p className={styles.emptyHint}>
+                Click <strong>Open</strong> for a PDF or XLSX to start the Apryse
+                POC.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
     </section>
   );
 };

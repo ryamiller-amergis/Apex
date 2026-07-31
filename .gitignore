@@ -7,6 +7,9 @@ build/
 # Generated from @pdftron/webviewer during dev/build.
 public/apryse-webviewer/
 
+# Apryse Structured Output (PDF→Office) add-on binaries — download locally, do not commit.
+apryse-modules/
+
 # Environment variables
 .env
 .env.local

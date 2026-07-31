@@ -30,6 +30,7 @@ export type WorkbenchTool =
   | 'fill-form'
   | 'sign'
   | 'pages'
+  | 'redact'
   | null;
 
 export interface WorkbenchState {
@@ -75,6 +76,12 @@ export interface WorkbenchActions {
   rotateCurrentPageCcw: () => Promise<void>;
   /** Append all pages from another PDF (native importDocument — no reload). */
   mergeDocument: (file: File) => Promise<void>;
+  /** Delete the current page (Apryse pages panel / Nutrient document editor). */
+  deleteCurrentPage?: () => Promise<void>;
+  /** Permanently apply marked redaction annotations (Apryse Wave B). */
+  applyRedactions?: () => Promise<void>;
+  /** Mark matches for a keyword/regex and leave redaction marks (Apryse Wave B). */
+  searchAndRedact?: (query: string, useRegex?: boolean) => Promise<void>;
 }
 
 export interface UseNutrientWorkbenchOptions {
@@ -123,6 +130,7 @@ const INTERACTION_MODES: Record<Exclude<WorkbenchTool, null>, string | null> = {
   'fill-form': null,
   sign: 'INK_SIGNATURE',
   pages: 'DOCUMENT_EDITOR',
+  redact: 'REDACT_TEXT_HIGHLIGHTER',
 };
 
 /** Matches NutrientFloatingToolbar yellow swatch — applied when Highlight is activated. */
