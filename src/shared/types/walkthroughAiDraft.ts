@@ -98,6 +98,15 @@ export interface WalkthroughAiWalkthroughFields {
   whyItMatters: string;
 }
 
+/** Server-derived anchor ranking confidence for a proposal step (not skill-emitted). */
+export interface WalkthroughAiAnchorMatch {
+  score: number;
+  belowThreshold: boolean;
+  hasAnchor: boolean;
+  routeCompatible: boolean;
+  matchedTags: string[];
+}
+
 export interface WalkthroughAiStepProposal {
   id: string;
   ordinal: number;
@@ -111,6 +120,8 @@ export interface WalkthroughAiStepProposal {
   ctaLabel?: string | null;
   ctaRoute?: string | null;
   anchor?: WalkthroughAnchor;
+  /** Present when generation result was annotated from kickoff ranking. */
+  anchorMatch?: WalkthroughAiAnchorMatch | null;
 }
 
 export type WalkthroughAiProposalUnitKind = 'walkthrough-fields' | 'step';

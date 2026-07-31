@@ -362,6 +362,8 @@ describe('platformAdmin walkthrough routes (TBI-002 DoD-0 / VT-09)', () => {
       anchorSmartTaggingSkillPath:
         '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
       anchorSmartTaggingModel: '',
+      anchorDiscoverySkillPath: '.cursor/skills/walkthrough-anchor-discovery/SKILL.md',
+      anchorDiscoveryModel: '',
       createdBy: 'system',
       createdByDisplayName: 'System',
       createdAt: '2026-07-30T00:00:00.000Z',
@@ -382,6 +384,8 @@ describe('platformAdmin walkthrough routes (TBI-002 DoD-0 / VT-09)', () => {
       anchorSmartTaggingSkillPath:
         '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
       anchorSmartTaggingModel: 'claude-sonnet-4-6',
+      anchorDiscoverySkillPath: '.cursor/skills/walkthrough-anchor-discovery/SKILL.md',
+      anchorDiscoveryModel: 'composer-2',
       createdBy: 'super-admin',
       createdByDisplayName: 'Admin',
       createdAt: '2026-07-30T15:00:00.000Z',

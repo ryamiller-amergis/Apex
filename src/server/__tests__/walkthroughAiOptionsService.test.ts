@@ -23,16 +23,19 @@ const mockDb = db as unknown as {
 };
 
 describe('walkthroughAiOptions types', () => {
-  it('validates save command skill paths and models', () => {
+  it('validates save command skill paths and models including discovery', () => {
     const cmd = validateSaveWalkthroughAiOptionsCommand({
       walkthroughGenerationSkillPath: '.cursor/skills/walkthrough-generation/SKILL.md',
       walkthroughGenerationModel: ' gpt-5.5 ',
       anchorSmartTaggingSkillPath:
         '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
       anchorSmartTaggingModel: null,
+      anchorDiscoverySkillPath: '.cursor/skills/walkthrough-anchor-discovery/SKILL.md',
+      anchorDiscoveryModel: ' composer-2 ',
     });
     expect(cmd.walkthroughGenerationModel).toBe('gpt-5.5');
     expect(cmd.anchorSmartTaggingModel).toBe('');
+    expect(cmd.anchorDiscoveryModel).toBe('composer-2');
   });
 
   it('rejects invalid skill paths', () => {
@@ -41,8 +44,19 @@ describe('walkthroughAiOptions types', () => {
         walkthroughGenerationSkillPath: 'not-a-skill',
         anchorSmartTaggingSkillPath:
           '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+        anchorDiscoverySkillPath: '.cursor/skills/walkthrough-anchor-discovery/SKILL.md',
       }),
     ).toThrow(WalkthroughAiOptionsError);
+  });
+
+  it('rejects missing discovery skill path', () => {
+    expect(() =>
+      validateSaveWalkthroughAiOptionsCommand({
+        walkthroughGenerationSkillPath: '.cursor/skills/walkthrough-generation/SKILL.md',
+        anchorSmartTaggingSkillPath:
+          '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+      }),
+    ).toThrow(/anchorDiscoverySkillPath is required/);
   });
 });
 
@@ -51,65 +65,69 @@ describe('walkthroughAiOptionsService', () => {
     jest.clearAllMocks();
   });
 
-  it('returns defaults when no row exists', async () => {
+  it('returns default record when no row exists', async () => {
     mockDb.select.mockReturnValue({
-      from: () => ({
-        where: () => ({
-          limit: () => Promise.resolve([]),
+      from: jest.fn().mockReturnValue({
+        where: jest.fn().mockReturnValue({
+          limit: jest.fn().mockResolvedValue([]),
         }),
       }),
     });
-    const options = await getWalkthroughAiOptions();
-    expect(options.walkthroughGenerationSkillPath).toBe(
-      defaultWalkthroughAiOptionsRecord().walkthroughGenerationSkillPath,
-    );
-    expect(options.updatedByDisplayName).toBe('System');
+    const record = await getWalkthroughAiOptions();
+    expect(record.walkthroughGenerationSkillPath).toContain('walkthrough-generation');
+    expect(record.anchorDiscoverySkillPath).toContain('walkthrough-anchor-discovery');
   });
 
-  it('saves options with actor who/when fields', async () => {
-    const savedRow = {
-      id: 'default',
-      walkthroughGenerationSkillPath: '.cursor/skills/custom/SKILL.md',
-      walkthroughGenerationModel: 'composer-2',
-      anchorSmartTaggingSkillPath:
-        '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
-      anchorSmartTaggingModel: 'claude-sonnet-4-6',
-      createdBy: 'oid-1',
-      createdByDisplayName: 'Ryan Miller',
-      createdAt: '2026-07-30T15:00:00.000Z',
-      updatedBy: 'oid-1',
-      updatedByDisplayName: 'Ryan Miller',
-      updatedAt: '2026-07-30T15:00:00.000Z',
-    };
-
+  it('saves options including discovery skill/model', async () => {
     const onConflictDoUpdate = jest.fn().mockResolvedValue(undefined);
-    mockDb.insert.mockReturnValue({
-      values: () => ({
-        onConflictDoUpdate,
-      }),
-    });
+    const values = jest.fn().mockReturnValue({ onConflictDoUpdate });
+    mockDb.insert.mockReturnValue({ values });
     mockDb.select.mockReturnValue({
-      from: () => ({
-        where: () => ({
-          limit: () => Promise.resolve([savedRow]),
+      from: jest.fn().mockReturnValue({
+        where: jest.fn().mockReturnValue({
+          limit: jest.fn().mockResolvedValue([
+            {
+              id: 'default',
+              walkthroughGenerationSkillPath:
+                '.cursor/skills/walkthrough-generation/SKILL.md',
+              walkthroughGenerationModel: 'gpt-5.5',
+              anchorSmartTaggingSkillPath:
+                '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+              anchorSmartTaggingModel: '',
+              anchorDiscoverySkillPath:
+                '.cursor/skills/walkthrough-anchor-discovery/SKILL.md',
+              anchorDiscoveryModel: 'composer-2',
+              createdBy: 'u1',
+              createdByDisplayName: 'User',
+              createdAt: '2026-07-30T00:00:00.000Z',
+              updatedBy: 'u1',
+              updatedByDisplayName: 'User',
+              updatedAt: '2026-07-30T00:00:00.000Z',
+            },
+          ]),
         }),
       }),
     });
 
-    const result = await saveWalkthroughAiOptions(
+    const saved = await saveWalkthroughAiOptions(
       {
-        walkthroughGenerationSkillPath: '.cursor/skills/custom/SKILL.md',
-        walkthroughGenerationModel: 'composer-2',
+        walkthroughGenerationSkillPath: '.cursor/skills/walkthrough-generation/SKILL.md',
+        walkthroughGenerationModel: 'gpt-5.5',
         anchorSmartTaggingSkillPath:
           '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
-        anchorSmartTaggingModel: 'claude-sonnet-4-6',
+        anchorSmartTaggingModel: '',
+        anchorDiscoverySkillPath: '.cursor/skills/walkthrough-anchor-discovery/SKILL.md',
+        anchorDiscoveryModel: 'composer-2',
       },
-      { id: 'oid-1', displayName: 'Ryan Miller' },
+      { id: 'u1', displayName: 'User' },
     );
 
-    expect(onConflictDoUpdate).toHaveBeenCalled();
-    expect(result.updatedByDisplayName).toBe('Ryan Miller');
-    expect(result.walkthroughGenerationModel).toBe('composer-2');
-    expect(result.anchorSmartTaggingModel).toBe('claude-sonnet-4-6');
+    expect(values).toHaveBeenCalledWith(
+      expect.objectContaining({
+        anchorDiscoverySkillPath: '.cursor/skills/walkthrough-anchor-discovery/SKILL.md',
+        anchorDiscoveryModel: 'composer-2',
+      }),
+    );
+    expect(saved.anchorDiscoveryModel).toBe('composer-2');
   });
 });

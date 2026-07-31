@@ -9,6 +9,7 @@ import React, {
 } from 'react';
 import {
   DEFAULT_WALKTHROUGH_GENERATION_SKILL_PATH,
+  DEFAULT_WALKTHROUGH_ANCHOR_DISCOVERY_SKILL_PATH_FOR_OPTIONS,
   defaultWalkthroughAiOptionsRecord,
   type WalkthroughAiOptionsRecord,
 } from '../../shared/types/walkthroughAiOptions';
@@ -24,15 +25,19 @@ export const APEX_WALKTHROUGH_AI_PROJECT = 'Apex';
 export interface WalkthroughsAiOptions {
   walkthroughGenerationModel: string;
   anchorSmartTaggingModel: string;
+  anchorDiscoveryModel: string;
   walkthroughGenerationSkillPath: string;
   anchorSmartTaggingSkillPath: string;
+  anchorDiscoverySkillPath: string;
 }
 
 export interface WalkthroughsAiOptionsContextValue extends WalkthroughsAiOptions {
   setWalkthroughGenerationModel: (model: string) => void;
   setAnchorSmartTaggingModel: (model: string) => void;
+  setAnchorDiscoveryModel: (model: string) => void;
   setWalkthroughGenerationSkillPath: (skillPath: string) => void;
   setAnchorSmartTaggingSkillPath: (skillPath: string) => void;
+  setAnchorDiscoverySkillPath: (skillPath: string) => void;
   /** Last persisted row (who / when). Null until loaded or never saved beyond seed. */
   savedRecord: WalkthroughAiOptionsRecord | null;
   isLoading: boolean;
@@ -46,16 +51,20 @@ export interface WalkthroughsAiOptionsContextValue extends WalkthroughsAiOptions
 export const DEFAULT_WALKTHROUGHS_AI_OPTIONS: WalkthroughsAiOptions = {
   walkthroughGenerationModel: '',
   anchorSmartTaggingModel: '',
+  anchorDiscoveryModel: '',
   walkthroughGenerationSkillPath: DEFAULT_WALKTHROUGH_GENERATION_SKILL_PATH,
   anchorSmartTaggingSkillPath: DEFAULT_WALKTHROUGH_ANCHOR_SMART_TAGGING_SKILL_PATH,
+  anchorDiscoverySkillPath: DEFAULT_WALKTHROUGH_ANCHOR_DISCOVERY_SKILL_PATH_FOR_OPTIONS,
 };
 
 function recordToDraft(record: WalkthroughAiOptionsRecord): WalkthroughsAiOptions {
   return {
     walkthroughGenerationModel: record.walkthroughGenerationModel ?? '',
     anchorSmartTaggingModel: record.anchorSmartTaggingModel ?? '',
+    anchorDiscoveryModel: record.anchorDiscoveryModel ?? '',
     walkthroughGenerationSkillPath: record.walkthroughGenerationSkillPath,
     anchorSmartTaggingSkillPath: record.anchorSmartTaggingSkillPath,
+    anchorDiscoverySkillPath: record.anchorDiscoverySkillPath,
   };
 }
 
@@ -80,6 +89,9 @@ export const WalkthroughsAiOptionsProvider: React.FC<{
     initial?.anchorSmartTaggingModel ??
       DEFAULT_WALKTHROUGHS_AI_OPTIONS.anchorSmartTaggingModel,
   );
+  const [anchorDiscoveryModel, setAnchorDiscoveryModel] = useState(
+    initial?.anchorDiscoveryModel ?? DEFAULT_WALKTHROUGHS_AI_OPTIONS.anchorDiscoveryModel,
+  );
   const [walkthroughGenerationSkillPath, setWalkthroughGenerationSkillPath] = useState(
     initial?.walkthroughGenerationSkillPath ??
       DEFAULT_WALKTHROUGHS_AI_OPTIONS.walkthroughGenerationSkillPath,
@@ -87,6 +99,10 @@ export const WalkthroughsAiOptionsProvider: React.FC<{
   const [anchorSmartTaggingSkillPath, setAnchorSmartTaggingSkillPath] = useState(
     initial?.anchorSmartTaggingSkillPath ??
       DEFAULT_WALKTHROUGHS_AI_OPTIONS.anchorSmartTaggingSkillPath,
+  );
+  const [anchorDiscoverySkillPath, setAnchorDiscoverySkillPath] = useState(
+    initial?.anchorDiscoverySkillPath ??
+      DEFAULT_WALKTHROUGHS_AI_OPTIONS.anchorDiscoverySkillPath,
   );
   const [savedRecord, setSavedRecord] = useState<WalkthroughAiOptionsRecord | null>(
     initialSavedRecord ?? null,
@@ -102,8 +118,10 @@ export const WalkthroughsAiOptionsProvider: React.FC<{
     /* eslint-disable react-hooks/set-state-in-effect -- intentional one-shot server→draft hydrate */
     setWalkthroughGenerationModel(draft.walkthroughGenerationModel);
     setAnchorSmartTaggingModel(draft.anchorSmartTaggingModel);
+    setAnchorDiscoveryModel(draft.anchorDiscoveryModel);
     setWalkthroughGenerationSkillPath(draft.walkthroughGenerationSkillPath);
     setAnchorSmartTaggingSkillPath(draft.anchorSmartTaggingSkillPath);
+    setAnchorDiscoverySkillPath(draft.anchorDiscoverySkillPath);
     setSavedRecord(optionsQuery.data);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [initial, optionsQuery.data]);
@@ -115,15 +133,19 @@ export const WalkthroughsAiOptionsProvider: React.FC<{
     return (
       walkthroughGenerationModel !== baseline.walkthroughGenerationModel ||
       anchorSmartTaggingModel !== baseline.anchorSmartTaggingModel ||
+      anchorDiscoveryModel !== baseline.anchorDiscoveryModel ||
       walkthroughGenerationSkillPath !== baseline.walkthroughGenerationSkillPath ||
-      anchorSmartTaggingSkillPath !== baseline.anchorSmartTaggingSkillPath
+      anchorSmartTaggingSkillPath !== baseline.anchorSmartTaggingSkillPath ||
+      anchorDiscoverySkillPath !== baseline.anchorDiscoverySkillPath
     );
   }, [
     savedRecord,
     walkthroughGenerationModel,
     anchorSmartTaggingModel,
+    anchorDiscoveryModel,
     walkthroughGenerationSkillPath,
     anchorSmartTaggingSkillPath,
+    anchorDiscoverySkillPath,
   ]);
 
   const save = useCallback(async () => {
@@ -134,6 +156,8 @@ export const WalkthroughsAiOptionsProvider: React.FC<{
         walkthroughGenerationModel,
         anchorSmartTaggingSkillPath,
         anchorSmartTaggingModel,
+        anchorDiscoverySkillPath,
+        anchorDiscoveryModel,
       });
       setSavedRecord(saved);
       return saved;
@@ -149,18 +173,24 @@ export const WalkthroughsAiOptionsProvider: React.FC<{
     walkthroughGenerationModel,
     anchorSmartTaggingSkillPath,
     anchorSmartTaggingModel,
+    anchorDiscoverySkillPath,
+    anchorDiscoveryModel,
   ]);
 
   const value = useMemo<WalkthroughsAiOptionsContextValue>(
     () => ({
       walkthroughGenerationModel,
       anchorSmartTaggingModel,
+      anchorDiscoveryModel,
       walkthroughGenerationSkillPath,
       anchorSmartTaggingSkillPath,
+      anchorDiscoverySkillPath,
       setWalkthroughGenerationModel,
       setAnchorSmartTaggingModel,
+      setAnchorDiscoveryModel,
       setWalkthroughGenerationSkillPath,
       setAnchorSmartTaggingSkillPath,
+      setAnchorDiscoverySkillPath,
       savedRecord,
       isLoading: !initial && optionsQuery.isLoading,
       isSaving: saveMutation.isPending,
@@ -177,8 +207,10 @@ export const WalkthroughsAiOptionsProvider: React.FC<{
     [
       walkthroughGenerationModel,
       anchorSmartTaggingModel,
+      anchorDiscoveryModel,
       walkthroughGenerationSkillPath,
       anchorSmartTaggingSkillPath,
+      anchorDiscoverySkillPath,
       savedRecord,
       initial,
       optionsQuery.isLoading,
@@ -210,8 +242,10 @@ export function useWalkthroughsAiOptions(): WalkthroughsAiOptionsContextValue {
     ...DEFAULT_WALKTHROUGHS_AI_OPTIONS,
     setWalkthroughGenerationModel: () => undefined,
     setAnchorSmartTaggingModel: () => undefined,
+    setAnchorDiscoveryModel: () => undefined,
     setWalkthroughGenerationSkillPath: () => undefined,
     setAnchorSmartTaggingSkillPath: () => undefined,
+    setAnchorDiscoverySkillPath: () => undefined,
     savedRecord: fallback,
     isLoading: false,
     isSaving: false,

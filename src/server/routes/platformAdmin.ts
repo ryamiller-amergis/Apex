@@ -49,6 +49,7 @@ import {
   startGeneration as startWalkthroughGeneration,
   getGenerationResult as getWalkthroughGenerationResult,
   cancelGeneration as cancelWalkthroughGeneration,
+  rankAnchorMatchesForAiDraftStep,
 } from '../services/walkthroughGenerationService';
 import {
   startSmartTagging,
@@ -56,6 +57,12 @@ import {
   cancelSmartTagging,
   WalkthroughAnchorSmartTaggingOrchestrationError,
 } from '../services/walkthroughAnchorSmartTaggingService';
+import {
+  startAnchorDiscovery,
+  getAnchorDiscoveryResult,
+  cancelAnchorDiscovery,
+  WalkthroughAnchorDiscoveryOrchestrationError,
+} from '../services/walkthroughAnchorDiscoveryService';
 import * as walkthroughAnchorRegistryService from '../services/walkthroughAnchorRegistryService';
 import * as walkthroughAiOptionsService from '../services/walkthroughAiOptionsService';
 import { WalkthroughAiOptionsError } from '../../shared/types/walkthroughAiOptions';
@@ -106,6 +113,24 @@ function mapWalkthroughAnchorRegistryError(err: unknown, res: Response): boolean
 
 function mapSmartTaggingOrchestrationError(err: unknown, res: Response): boolean {
   if (!(err instanceof WalkthroughAnchorSmartTaggingOrchestrationError)) return false;
+  switch (err.code) {
+    case 'NOT_FOUND':
+      res.status(404).json({ error: err.message, code: err.code });
+      return true;
+    case 'INVALID_REQUEST':
+      res.status(400).json({ error: err.message, code: err.code });
+      return true;
+    case 'AI_FAILED':
+      res.status(502).json({ error: err.message, code: err.code });
+      return true;
+    default:
+      res.status(400).json({ error: err.message, code: err.code });
+      return true;
+  }
+}
+
+function mapAnchorDiscoveryOrchestrationError(err: unknown, res: Response): boolean {
+  if (!(err instanceof WalkthroughAnchorDiscoveryOrchestrationError)) return false;
   switch (err.code) {
     case 'NOT_FOUND':
       res.status(404).json({ error: err.message, code: err.code });
@@ -1016,6 +1041,71 @@ router.post('/walkthroughs/ai-drafts/generate/cancel', async (req: Request, res:
     res.json(result);
   } catch (err) {
     if (mapWalkthroughAiError(err, res)) return;
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/walkthroughs/ai-drafts/anchor-matches', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const body = req.body ?? {};
+    const result = await rankAnchorMatchesForAiDraftStep({
+      intent: typeof body.intent === 'string' ? body.intent : null,
+      heading: typeof body.heading === 'string' ? body.heading : null,
+      body: typeof body.body === 'string' ? body.body : null,
+      route: typeof body.route === 'string' ? body.route : null,
+    });
+    res.json(result);
+  } catch (err) {
+    if (mapWalkthroughAiError(err, res)) return;
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/walkthroughs/ai-drafts/anchor-discovery/start', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const body = req.body ?? {};
+    const userId = getUserId(req);
+    const result = await startAnchorDiscovery(
+      {
+        heading: body.heading,
+        body: body.body,
+        route: body.route,
+        intent: body.intent,
+        model: body.cursorModel ?? body.model,
+        skillPath: body.skillPath,
+      },
+      userId,
+    );
+    res.json(result);
+  } catch (err) {
+    if (mapAnchorDiscoveryOrchestrationError(err, res)) return;
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get('/walkthroughs/ai-drafts/anchor-discovery/status/:threadId', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = getUserId(req);
+    const result = await getAnchorDiscoveryResult(req.params.threadId, userId);
+    res.json(result);
+  } catch (err) {
+    if (mapAnchorDiscoveryOrchestrationError(err, res)) return;
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/walkthroughs/ai-drafts/anchor-discovery/cancel', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = getUserId(req);
+    const { threadId } = req.body ?? {};
+    if (!threadId || typeof threadId !== 'string') {
+      res.status(400).json({ error: 'threadId is required' });
+      return;
+    }
+    const result = await cancelAnchorDiscovery(threadId, userId);
+    res.json(result);
+  } catch (err) {
+    if (mapAnchorDiscoveryOrchestrationError(err, res)) return;
     res.status(500).json({ error: 'Internal server error' });
   }
 });

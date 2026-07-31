@@ -45,6 +45,8 @@ jest.mock('../services/walkthroughAiOptionsService', () => ({
     anchorSmartTaggingSkillPath:
       '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
     anchorSmartTaggingModel: '',
+    anchorDiscoverySkillPath: '.cursor/skills/walkthrough-anchor-discovery/SKILL.md',
+    anchorDiscoveryModel: '',
     createdBy: 'system',
     createdByDisplayName: 'System',
     createdAt: '2026-07-30T00:00:00.000Z',

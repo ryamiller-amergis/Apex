@@ -10,6 +10,9 @@ export const DEFAULT_WALKTHROUGH_GENERATION_SKILL_PATH =
 export const DEFAULT_WALKTHROUGH_ANCHOR_SMART_TAGGING_SKILL_PATH_FOR_OPTIONS =
   '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md';
 
+export const DEFAULT_WALKTHROUGH_ANCHOR_DISCOVERY_SKILL_PATH_FOR_OPTIONS =
+  '.cursor/skills/walkthrough-anchor-discovery/SKILL.md';
+
 const SKILL_PATH_RE = /^\.cursor\/skills\/[^/]+\/SKILL\.md$/;
 
 export interface WalkthroughAiOptionsRecord {
@@ -20,6 +23,9 @@ export interface WalkthroughAiOptionsRecord {
   anchorSmartTaggingSkillPath: string;
   /** Empty string = project / platform default model. */
   anchorSmartTaggingModel: string;
+  anchorDiscoverySkillPath: string;
+  /** Empty string = project / platform default model. */
+  anchorDiscoveryModel: string;
   createdBy: string;
   createdByDisplayName: string;
   createdAt: string;
@@ -33,6 +39,8 @@ export interface SaveWalkthroughAiOptionsCommand {
   walkthroughGenerationModel?: string | null;
   anchorSmartTaggingSkillPath: string;
   anchorSmartTaggingModel?: string | null;
+  anchorDiscoverySkillPath: string;
+  anchorDiscoveryModel?: string | null;
 }
 
 export class WalkthroughAiOptionsError extends Error {
@@ -85,6 +93,12 @@ export function validateSaveWalkthroughAiOptionsCommand(
       'anchorSmartTaggingSkillPath is required',
     );
   }
+  if (typeof b.anchorDiscoverySkillPath !== 'string') {
+    throw new WalkthroughAiOptionsError(
+      'VALIDATION_ERROR',
+      'anchorDiscoverySkillPath is required',
+    );
+  }
   return {
     walkthroughGenerationSkillPath: validateWalkthroughSkillPath(
       b.walkthroughGenerationSkillPath,
@@ -100,6 +114,13 @@ export function validateSaveWalkthroughAiOptionsCommand(
     anchorSmartTaggingModel: normalizeOptionalModel(
       b.anchorSmartTaggingModel as string | null | undefined,
     ),
+    anchorDiscoverySkillPath: validateWalkthroughSkillPath(
+      b.anchorDiscoverySkillPath,
+      'anchorDiscoverySkillPath',
+    ),
+    anchorDiscoveryModel: normalizeOptionalModel(
+      b.anchorDiscoveryModel as string | null | undefined,
+    ),
   };
 }
 
@@ -113,6 +134,9 @@ export function defaultWalkthroughAiOptionsRecord(
     anchorSmartTaggingSkillPath:
       DEFAULT_WALKTHROUGH_ANCHOR_SMART_TAGGING_SKILL_PATH_FOR_OPTIONS,
     anchorSmartTaggingModel: '',
+    anchorDiscoverySkillPath:
+      DEFAULT_WALKTHROUGH_ANCHOR_DISCOVERY_SKILL_PATH_FOR_OPTIONS,
+    anchorDiscoveryModel: '',
     createdBy: 'system',
     createdByDisplayName: 'System',
     createdAt: now,

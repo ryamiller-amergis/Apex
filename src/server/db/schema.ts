@@ -1887,6 +1887,10 @@ export const walkthroughAiOptions = pgTable('walkthrough_ai_options', {
   walkthroughGenerationModel: text('walkthrough_generation_model').notNull().default(''),
   anchorSmartTaggingSkillPath: text('anchor_smart_tagging_skill_path').notNull(),
   anchorSmartTaggingModel: text('anchor_smart_tagging_model').notNull().default(''),
+  anchorDiscoverySkillPath: text('anchor_discovery_skill_path')
+    .notNull()
+    .default('.cursor/skills/walkthrough-anchor-discovery/SKILL.md'),
+  anchorDiscoveryModel: text('anchor_discovery_model').notNull().default(''),
   createdBy: text('created_by').notNull(),
   createdByDisplayName: text('created_by_display_name').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),

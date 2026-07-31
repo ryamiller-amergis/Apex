@@ -113,6 +113,8 @@ describe('WalkthroughsAiOptionsPanel', () => {
         anchorSmartTaggingSkillPath:
           '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
         anchorSmartTaggingModel: 'claude-sonnet-4-6',
+        anchorDiscoverySkillPath: '.cursor/skills/walkthrough-anchor-discovery/SKILL.md',
+        anchorDiscoveryModel: '',
       });
     });
 
@@ -122,5 +124,11 @@ describe('WalkthroughsAiOptionsPanel', () => {
       );
     });
     expect(AGENT_MODELS.length).toBeGreaterThan(0);
+  });
+
+  it('exposes discovery skill and model selects', () => {
+    renderOptions();
+    expect(screen.getByTestId('walkthroughs-ai-options-discovery-skill')).toBeInTheDocument();
+    expect(screen.getByTestId('walkthroughs-ai-options-discovery-model')).toBeInTheDocument();
   });
 });

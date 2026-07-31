@@ -49,6 +49,8 @@ jest.mock('../services/walkthroughAiOptionsService', () => ({
     anchorSmartTaggingSkillPath:
       '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
     anchorSmartTaggingModel: '',
+    anchorDiscoverySkillPath: '.cursor/skills/walkthrough-anchor-discovery/SKILL.md',
+    anchorDiscoveryModel: '',
     createdBy: 'system',
     createdByDisplayName: 'System',
     createdAt: '2026-07-30T00:00:00.000Z',
@@ -106,6 +108,7 @@ import {
   buildGenerationAnchorRankingQuery,
   buildWalkthroughGenerationAnchorRanking,
   formatAnchorRankingForKickoff,
+  annotateProposalStepsWithAnchorMatch,
   _resetForTests,
 } from '../services/walkthroughGenerationService';
 import { DEFAULT_ANCHOR_AUTO_SELECT_SCORE_THRESHOLD } from '../services/walkthroughAnchorTagRanking';
@@ -542,6 +545,116 @@ describe('walkthroughGenerationService', () => {
       expect(markdown).toContain('profile-bio');
       expect(markdown).toContain('matchedTags');
       expect(markdown).toContain('"autoSelectedAnchor"');
+    });
+  });
+
+  describe('annotateProposalStepsWithAnchorMatch', () => {
+    it('AC — marks belowThreshold when score is under auto-select floor or anchor missing', () => {
+      const ranking = {
+        rankedCandidates: [
+          {
+            anchorKey: 'profile-bio',
+            testId: 'profile-bio',
+            label: 'Profile bio',
+            approvedRoute: '/profile',
+            allowedPlacements: ['bottom'] as const,
+            smartTags: ['profile'],
+            score: 0.9,
+            evidence: {
+              routeCompatible: true,
+              routeExactMatch: true,
+              matchedTags: ['profile'],
+              matchedLabelTokens: ['profile'],
+              queryTokens: ['profile'],
+              overlapRatio: 1,
+            },
+          },
+          {
+            anchorKey: 'weak-anchor',
+            testId: 'weak-anchor',
+            label: 'Weak',
+            approvedRoute: null,
+            allowedPlacements: ['top'] as const,
+            smartTags: [],
+            score: 0.4,
+            evidence: {
+              routeCompatible: true,
+              routeExactMatch: false,
+              matchedTags: [],
+              matchedLabelTokens: [],
+              queryTokens: [],
+              overlapRatio: 0,
+            },
+          },
+        ],
+        autoSelectedAnchor: null,
+        autoSelectThreshold: DEFAULT_ANCHOR_AUTO_SELECT_SCORE_THRESHOLD,
+      };
+
+      const annotated = annotateProposalStepsWithAnchorMatch(
+        {
+          proposalId: 'p1',
+          walkthroughFields: {
+            internalName: 'n',
+            userTitle: 't',
+            whyItMatters: 'w',
+          },
+          steps: [
+            {
+              id: 's1',
+              ordinal: 0,
+              heading: 'Strong',
+              bodyMarkdown: 'body',
+              anchor: {
+                key: 'profile-bio',
+                targetRoute: '/profile',
+                placement: 'bottom',
+              },
+            },
+            {
+              id: 's2',
+              ordinal: 1,
+              heading: 'Weak',
+              bodyMarkdown: 'body',
+              anchor: {
+                key: 'weak-anchor',
+                targetRoute: '/profile',
+                placement: 'top',
+              },
+            },
+            {
+              id: 's3',
+              ordinal: 2,
+              heading: 'Missing',
+              bodyMarkdown: 'body',
+            },
+          ],
+          units: [],
+          generatedAt: '2026-07-30T00:00:00.000Z',
+          generationContextVersion: 'v1',
+          policyPreset: 'A',
+        },
+        ranking,
+      );
+
+      expect(annotated.steps[0].anchorMatch).toMatchObject({
+        score: 0.9,
+        belowThreshold: false,
+        hasAnchor: true,
+      });
+      expect(annotated.steps[1].anchorMatch).toMatchObject({
+        score: 0.4,
+        belowThreshold: true,
+        hasAnchor: true,
+      });
+      expect(annotated.steps[2].anchorMatch).toMatchObject({
+        score: 0,
+        belowThreshold: true,
+        hasAnchor: false,
+      });
+      expect(annotated.units.some((u) => u.kind === 'step' && u.value.anchorMatch)).toBe(
+        true,
+      );
     });
   });
 

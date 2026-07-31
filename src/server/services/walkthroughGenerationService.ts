@@ -41,6 +41,7 @@ import {
 import {
   DEFAULT_WALKTHROUGH_AI_POLICY_PRESET,
   WalkthroughAiError,
+  buildProposalUnits,
   type GenerateWalkthroughAiDraftRequest,
   type WalkthroughAiPolicyPresetId,
   type WalkthroughAiProposal,
@@ -94,6 +95,7 @@ const cancelledThreads = new Set<string>();
 const generationInFlight = new Set<string>();
 const provenanceByThread = new Map<string, WalkthroughGenerationProvenance>();
 const policyByThread = new Map<string, WalkthroughAiPolicyPresetId>();
+const rankingByThread = new Map<string, WalkthroughGenerationAnchorRanking>();
 
 export function _getGenerationInFlightForTests(): ReadonlySet<string> {
   return generationInFlight;
@@ -104,6 +106,46 @@ export function _resetForTests(): void {
   generationInFlight.clear();
   provenanceByThread.clear();
   policyByThread.clear();
+  rankingByThread.clear();
+}
+
+/**
+ * Annotate proposal steps with server-derived ranking confidence for staged review.
+ * AC: belowThreshold when no anchor or score < autoSelectThreshold.
+ */
+export function annotateProposalStepsWithAnchorMatch(
+  proposal: WalkthroughAiProposal,
+  ranking: WalkthroughGenerationAnchorRanking | undefined,
+): WalkthroughAiProposal {
+  const threshold =
+    ranking?.autoSelectThreshold ?? DEFAULT_ANCHOR_AUTO_SELECT_SCORE_THRESHOLD;
+  const byKey = new Map(
+    (ranking?.rankedCandidates ?? []).map((c) => [c.anchorKey, c] as const),
+  );
+
+  const steps = proposal.steps.map((step) => {
+    const key = step.anchor?.key?.trim() || '';
+    const hasAnchor = Boolean(key);
+    const candidate = hasAnchor ? byKey.get(key) : undefined;
+    const score = candidate?.score ?? 0;
+    const belowThreshold = !hasAnchor || score < threshold;
+    return {
+      ...step,
+      anchorMatch: {
+        score,
+        belowThreshold,
+        hasAnchor,
+        routeCompatible: candidate?.evidence.routeCompatible ?? false,
+        matchedTags: [...(candidate?.evidence.matchedTags ?? [])],
+      },
+    };
+  });
+
+  return {
+    ...proposal,
+    steps,
+    units: buildProposalUnits(proposal.walkthroughFields, steps),
+  };
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────────
@@ -291,6 +333,25 @@ async function loadApprovedActiveCatalogAnchors(): Promise<
   return items;
 }
 
+/** Re-rank approved+active catalog anchors for one AI-draft step (staged review). */
+export async function rankAnchorMatchesForAiDraftStep(
+  query: WalkthroughAnchorTagRankingQuery,
+  options: { limit?: number } = {},
+): Promise<{
+  rankedCandidates: RankedWalkthroughAnchorCandidate[];
+  autoSelectThreshold: number;
+}> {
+  const records = await loadApprovedActiveCatalogAnchors();
+  const limit = options.limit ?? DEFAULT_GENERATION_ANCHOR_RANK_LIMIT;
+  const rankedCandidates = rankWalkthroughAnchorsByTags(records, query, {
+    limit,
+  });
+  return {
+    rankedCandidates,
+    autoSelectThreshold: DEFAULT_ANCHOR_AUTO_SELECT_SCORE_THRESHOLD,
+  };
+}
+
 async function resolveGenerationAnchorRanking(
   request: GenerateWalkthroughAiDraftRequest,
 ): Promise<WalkthroughGenerationAnchorRanking> {
@@ -429,6 +490,7 @@ export async function startGeneration(
   cancelledThreads.delete(thread.id);
   generationInFlight.add(thread.id);
   provenanceByThread.set(thread.id, provenance);
+  rankingByThread.set(thread.id, anchorRanking);
   policyByThread.set(
     thread.id,
     request.policyPreset ?? DEFAULT_WALKTHROUGH_AI_POLICY_PRESET,
@@ -520,11 +582,15 @@ export async function getGenerationResult(
     }
     // Phase 6: proposal allow-list is the DB authoring catalog, not DOM markers.
     const catalog = await listAuthoringAnchorEntries();
-    const { proposal } = parseGeneratedWalkthroughProposal(
+    const { proposal: parsedProposal } = parseGeneratedWalkthroughProposal(
       raw,
       policyByThread.get(threadId) ?? DEFAULT_WALKTHROUGH_AI_POLICY_PRESET,
       listPublicWalkthroughAssetPaths(),
       catalog,
+    );
+    const proposal = annotateProposalStepsWithAnchorMatch(
+      parsedProposal,
+      rankingByThread.get(threadId),
     );
     proposal.generationProvenance = provenance ?? null;
     return { status: 'ready', rawJson: raw, proposal, provenance };
@@ -551,5 +617,6 @@ export async function cancelGeneration(
   cancelledThreads.add(threadId);
   generationInFlight.delete(threadId);
   policyByThread.delete(threadId);
+  rankingByThread.delete(threadId);
   return { status: 'cancelled' };
 }

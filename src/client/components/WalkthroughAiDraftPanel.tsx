@@ -18,9 +18,15 @@ import {
   useRedoWalkthroughAiUnit,
   useValidateWalkthroughAiUnit,
   useWalkthroughAiPolicyPresets,
+  useWalkthroughAnchorMatches,
+  useStartAnchorDiscovery,
+  type WalkthroughAnchorMatchCandidate,
 } from '../hooks/useWalkthroughAiDraft';
 import { useWalkthroughAnchors } from '../hooks/usePlatformAdminWalkthroughs';
+import { useCreateManualAnchor } from '../hooks/usePlatformAdminAnchorRegistry';
 import { useWalkthroughsAiOptions } from '../contexts/WalkthroughsAiOptionsContext';
+import type { WalkthroughAnchorDiscoveryProposal } from '../../shared/types/walkthroughAnchorDiscovery';
+import type { WalkthroughRegistryPlacement } from '../../shared/walkthroughAnchors';
 import styles from './WalkthroughAiDraft.module.css';
 
 interface WalkthroughAiDraftPanelProps {
@@ -53,10 +59,15 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
   const generateMutation = useGenerateWalkthroughAiDraft();
   const redoMutation = useRedoWalkthroughAiUnit();
   const validateMutation = useValidateWalkthroughAiUnit();
+  const matchesMutation = useWalkthroughAnchorMatches();
+  const discoveryMutation = useStartAnchorDiscovery();
+  const createManualAnchor = useCreateManualAnchor();
   const anchorsQuery = useWalkthroughAnchors();
   const {
     walkthroughGenerationModel,
     walkthroughGenerationSkillPath,
+    anchorDiscoveryModel,
+    anchorDiscoverySkillPath,
   } = useWalkthroughsAiOptions();
 
   const anchorLabel = (key: string | undefined): string | null => {
@@ -71,6 +82,14 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
   const [unitErrors, setUnitErrors] = useState<Record<string, string>>({});
   const [redoingUnitId, setRedoingUnitId] = useState<string | null>(null);
   const [provenance, setProvenance] = useState<WalkthroughGenerationProvenance | null>(null);
+  const [pickerOpenForUnitId, setPickerOpenForUnitId] = useState<string | null>(null);
+  const [rankedByUnitId, setRankedByUnitId] = useState<
+    Record<string, WalkthroughAnchorMatchCandidate[]>
+  >({});
+  const [discoveryByUnitId, setDiscoveryByUnitId] = useState<
+    Record<string, WalkthroughAnchorDiscoveryProposal[]>
+  >({});
+  const [busyUnitId, setBusyUnitId] = useState<string | null>(null);
   const reviewHeadingRef = useRef<HTMLHeadingElement | null>(null);
 
   const [policyPreset, setPolicyPreset] = useState<WalkthroughAiPolicyPresetId>(
@@ -157,6 +176,140 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
       ...prev,
       [unitId]: { ...prev[unitId], ...patch },
     }));
+  };
+
+  const applyAnchorToStepUnit = (
+    unitId: string,
+    anchor: {
+      key: string;
+      targetRoute: string;
+      placement: WalkthroughRegistryPlacement;
+    },
+  ) => {
+    setProposal((prev) => {
+      if (!prev) return prev;
+      const steps = prev.steps.map((step) => {
+        if (`step-${step.id}` !== unitId) return step;
+        return {
+          ...step,
+          route: step.route ?? anchor.targetRoute,
+          anchor: {
+            key: anchor.key,
+            targetRoute: anchor.targetRoute,
+            placement: anchor.placement,
+          },
+          anchorMatch: {
+            score: 1,
+            belowThreshold: false,
+            hasAnchor: true,
+            routeCompatible: true,
+            matchedTags: step.anchorMatch?.matchedTags ?? [],
+          },
+        };
+      });
+      const units = prev.units.map((unit) => {
+        if (unit.unitId !== unitId || unit.kind !== 'step') return unit;
+        const step = steps.find((s) => `step-${s.id}` === unitId);
+        return step ? { ...unit, value: step } : unit;
+      });
+      return { ...prev, steps, units };
+    });
+  };
+
+  const handleChooseExisting = async (unit: Extract<WalkthroughAiProposalUnit, { kind: 'step' }>) => {
+    setBusyUnitId(unit.unitId);
+    setPickerOpenForUnitId(unit.unitId);
+    try {
+      const result = await matchesMutation.mutateAsync({
+        heading: unit.value.heading,
+        body: unit.value.bodyMarkdown,
+        route: unit.value.route ?? unit.value.anchor?.targetRoute ?? null,
+        intent: null,
+      });
+      setRankedByUnitId((prev) => ({
+        ...prev,
+        [unit.unitId]: result.rankedCandidates,
+      }));
+    } catch (err) {
+      setUnitErrors((prev) => ({
+        ...prev,
+        [unit.unitId]:
+          err instanceof Error ? err.message : 'Failed to load ranked anchor matches.',
+      }));
+    } finally {
+      setBusyUnitId(null);
+    }
+  };
+
+  const handleFindWithAi = async (unit: Extract<WalkthroughAiProposalUnit, { kind: 'step' }>) => {
+    setBusyUnitId(unit.unitId);
+    try {
+      const model = anchorDiscoveryModel.trim();
+      const skillPath = anchorDiscoverySkillPath.trim();
+      const result = await discoveryMutation.mutateAsync({
+        heading: unit.value.heading,
+        body: unit.value.bodyMarkdown,
+        route: unit.value.route ?? unit.value.anchor?.targetRoute ?? null,
+        ...(model ? { model } : {}),
+        ...(skillPath ? { skillPath } : {}),
+      });
+      setDiscoveryByUnitId((prev) => ({
+        ...prev,
+        [unit.unitId]: result.proposals,
+      }));
+    } catch (err) {
+      setUnitErrors((prev) => ({
+        ...prev,
+        [unit.unitId]:
+          err instanceof Error ? err.message : 'Anchor discovery failed.',
+      }));
+    } finally {
+      setBusyUnitId(null);
+    }
+  };
+
+  const handleImportDiscovered = async (
+    unit: Extract<WalkthroughAiProposalUnit, { kind: 'step' }>,
+    proposalItem: WalkthroughAnchorDiscoveryProposal,
+  ) => {
+    setBusyUnitId(unit.unitId);
+    try {
+      const created = await createManualAnchor.mutateAsync({
+        anchorKey: proposalItem.anchorKey,
+        testId: proposalItem.testId,
+        label: proposalItem.label,
+        suggestedRoute: proposalItem.suggestedRoute,
+        approvedRoute: proposalItem.suggestedRoute,
+        allowedPlacements: proposalItem.allowedPlacements,
+        smartTags: proposalItem.smartTags,
+        sourceLocations: proposalItem.sourceLocations,
+        reviewStatus: 'approved',
+        isActive: true,
+      });
+      const placement =
+        (created.allowedPlacements[0] as WalkthroughRegistryPlacement | undefined) ??
+        proposalItem.allowedPlacements[0] ??
+        'bottom';
+      applyAnchorToStepUnit(unit.unitId, {
+        key: created.anchorKey,
+        targetRoute:
+          created.approvedRoute ??
+          created.suggestedRoute ??
+          proposalItem.suggestedRoute ??
+          unit.value.route ??
+          '/',
+        placement,
+      });
+      setStatusMessage(`Imported anchor “${created.label}” and selected it for this step.`);
+    } catch (err) {
+      setUnitErrors((prev) => ({
+        ...prev,
+        [unit.unitId]:
+          err instanceof Error ? err.message : 'Failed to import discovered anchor.',
+      }));
+    } finally {
+      setBusyUnitId(null);
+    }
   };
 
   const handleAccept = async (unit: WalkthroughAiProposalUnit) => {
@@ -391,7 +544,10 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
               unit.kind === 'step'
                 ? (unit.imageCandidatePath ?? unit.value.imageCandidatePath ?? unit.value.imageUrl)
                 : null;
-            const isBusy = redoingUnitId === unit.unitId || validateMutation.isPending;
+            const isBusy =
+              redoingUnitId === unit.unitId ||
+              validateMutation.isPending ||
+              busyUnitId === unit.unitId;
 
             return (
               <article
@@ -422,6 +578,161 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
                       <div>
                         Anchor: {anchorLabel(unit.value.anchor.key)} ({unit.value.anchor.targetRoute}
                         , {unit.value.anchor.placement})
+                      </div>
+                    ) : null}
+                    {unit.value.anchorMatch ? (
+                      <div
+                        className={
+                          unit.value.anchorMatch.belowThreshold
+                            ? styles.anchorMatchBadgeLow
+                            : styles.anchorMatchBadge
+                        }
+                        {...{
+                          'data-testid': `walkthrough-proposal-${unit.unitId}-anchor-match`,
+                        }}
+                      >
+                        Match score {unit.value.anchorMatch.score.toFixed(2)}
+                        {unit.value.anchorMatch.belowThreshold ? ' · low confidence' : ''}
+                      </div>
+                    ) : null}
+                    {(!unit.value.anchor?.key || unit.value.anchorMatch?.belowThreshold) &&
+                    decision.status !== 'accepted' ? (
+                      <div
+                        className={styles.anchorMatchWarning}
+                        role="status"
+                        {...{
+                          'data-testid': `walkthrough-proposal-${unit.unitId}-anchor-low-confidence`,
+                        }}
+                      >
+                        Low confidence — pick or find an anchor
+                      </div>
+                    ) : null}
+                    {decision.status !== 'accepted' ? (
+                      <div className={styles.anchorTools}>
+                        <div className={styles.actions}>
+                          <button
+                            type="button"
+                            className={styles.button}
+                            disabled={isBusy}
+                            onClick={() => handleChooseExisting(unit)}
+                            {...{
+                              'data-testid': `walkthrough-proposal-${unit.unitId}-choose-anchor`,
+                            }}
+                          >
+                            Choose existing anchor
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.button}
+                            disabled={isBusy}
+                            onClick={() => handleFindWithAi(unit)}
+                            {...{
+                              'data-testid': `walkthrough-proposal-${unit.unitId}-find-anchor-ai`,
+                            }}
+                          >
+                            {busyUnitId === unit.unitId && discoveryMutation.isPending
+                              ? 'Finding…'
+                              : 'Find matches with AI'}
+                          </button>
+                        </div>
+                        {pickerOpenForUnitId === unit.unitId ? (
+                          <div
+                            className={styles.anchorPicker}
+                            {...{
+                              'data-testid': `walkthrough-proposal-${unit.unitId}-anchor-picker`,
+                            }}
+                          >
+                            <label
+                              className={styles.label}
+                              htmlFor={`walkthrough-proposal-${unit.unitId}-anchor-select`}
+                            >
+                              Ranked catalog anchors
+                            </label>
+                            <select
+                              id={`walkthrough-proposal-${unit.unitId}-anchor-select`}
+                              className={styles.select}
+                              defaultValue=""
+                              disabled={isBusy}
+                              onChange={(event) => {
+                                const key = event.target.value;
+                                if (!key) return;
+                                const ranked = rankedByUnitId[unit.unitId] ?? [];
+                                const match = ranked.find((c) => c.anchorKey === key);
+                                const catalog = anchorsQuery.data?.find((a) => a.key === key);
+                                const placement = (match?.allowedPlacements[0] ??
+                                  catalog?.allowedPlacements?.[0] ??
+                                  'bottom') as WalkthroughRegistryPlacement;
+                                const targetRoute =
+                                  match?.approvedRoute ??
+                                  catalog?.targetRoute ??
+                                  unit.value.route ??
+                                  '/';
+                                applyAnchorToStepUnit(unit.unitId, {
+                                  key,
+                                  targetRoute,
+                                  placement,
+                                });
+                              }}
+                              {...{
+                                'data-testid': `walkthrough-proposal-${unit.unitId}-anchor-select`,
+                              }}
+                            >
+                              <option value="">Select an anchor…</option>
+                              {(rankedByUnitId[unit.unitId] ?? []).map((candidate) => (
+                                <option key={candidate.anchorKey} value={candidate.anchorKey}>
+                                  {candidate.label} ({candidate.score.toFixed(2)})
+                                </option>
+                              ))}
+                              {(anchorsQuery.data ?? [])
+                                .filter(
+                                  (a) =>
+                                    !(rankedByUnitId[unit.unitId] ?? []).some(
+                                      (c) => c.anchorKey === a.key,
+                                    ),
+                                )
+                                .map((a) => (
+                                  <option key={`catalog-${a.key}`} value={a.key}>
+                                    {a.label} (catalog)
+                                  </option>
+                                ))}
+                            </select>
+                          </div>
+                        ) : null}
+                        {(discoveryByUnitId[unit.unitId] ?? []).length > 0 ? (
+                          <div
+                            className={styles.discoveryList}
+                            {...{
+                              'data-testid': `walkthrough-proposal-${unit.unitId}-discovery-results`,
+                            }}
+                          >
+                            {(discoveryByUnitId[unit.unitId] ?? []).map((item) => (
+                              <div
+                                key={item.anchorKey}
+                                className={styles.discoveryItem}
+                                {...{
+                                  'data-testid': `walkthrough-proposal-${unit.unitId}-discovery-${item.anchorKey}`,
+                                }}
+                              >
+                                <strong>{item.label}</strong>
+                                <span>
+                                  {item.anchorKey} · confidence {item.confidence.toFixed(2)}
+                                </span>
+                                <span>{item.rationale}</span>
+                                <button
+                                  type="button"
+                                  className={styles.buttonPrimary}
+                                  disabled={isBusy}
+                                  onClick={() => handleImportDiscovered(unit, item)}
+                                  {...{
+                                    'data-testid': `walkthrough-proposal-${unit.unitId}-import-${item.anchorKey}`,
+                                  }}
+                                >
+                                  Import &amp; select
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
                     {imagePath ? (

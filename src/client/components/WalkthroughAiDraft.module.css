@@ -162,6 +162,61 @@
   border-color: var(--error-color);
 }
 
+.anchorMatchBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.anchorMatchBadgeLow {
+  composes: anchorMatchBadge;
+  color: var(--error-color);
+  border-color: var(--error-color);
+}
+
+.anchorMatchWarning {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--error-color);
+  color: var(--error-color);
+  font-size: 0.8125rem;
+}
+
+.anchorTools {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.anchorPicker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.discoveryList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.discoveryItem {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+}
+
 .proposedBlock {
   margin: 0;
   white-space: pre-wrap;

@@ -5,6 +5,7 @@ import {
   useWalkthroughsAiOptions,
 } from '../contexts/WalkthroughsAiOptionsContext';
 import { DEFAULT_WALKTHROUGH_ANCHOR_SMART_TAGGING_SKILL_PATH } from '../../shared/types/walkthroughAnchorSmartTagging';
+import { DEFAULT_WALKTHROUGH_ANCHOR_DISCOVERY_SKILL_PATH } from '../../shared/types/walkthroughAnchorDiscovery';
 import { AGENT_MODELS } from '../config/models';
 import {
   useAvailableModels,
@@ -29,12 +30,16 @@ export const WalkthroughsAiOptionsPanel: React.FC = () => {
   const {
     walkthroughGenerationModel,
     anchorSmartTaggingModel,
+    anchorDiscoveryModel,
     walkthroughGenerationSkillPath,
     anchorSmartTaggingSkillPath,
+    anchorDiscoverySkillPath,
     setWalkthroughGenerationModel,
     setAnchorSmartTaggingModel,
+    setAnchorDiscoveryModel,
     setWalkthroughGenerationSkillPath,
     setAnchorSmartTaggingSkillPath,
+    setAnchorDiscoverySkillPath,
     savedRecord,
     isLoading,
     isSaving,
@@ -254,6 +259,70 @@ export const WalkthroughsAiOptionsPanel: React.FC = () => {
               <option value="">Project / platform default</option>
               {agentModels.map((m) => (
                 <option key={`smart-model-${m.id}`} value={m.id}>
+                  {m.displayName}
+                </option>
+              ))}
+            </select>
+          </div>
+        </fieldset>
+
+        <fieldset className={styles.optionsGroup}>
+          <legend className={styles.optionsGroupTitle}>Anchor discovery</legend>
+          <p className={styles.optionsHint}>
+            Used when finding a new coachable catalog anchor for a low-confidence AI draft
+            step.
+          </p>
+
+          <div className={styles.optionsField}>
+            <label
+              className={styles.optionsLabel}
+              htmlFor="walkthroughs-ai-discovery-skill"
+            >
+              Skill
+            </label>
+            <select
+              id="walkthroughs-ai-discovery-skill"
+              className={styles.optionsSelect}
+              value={anchorDiscoverySkillPath}
+              onChange={(e) => setAnchorDiscoverySkillPath(e.target.value)}
+              disabled={skillsQuery.isLoading || isSaving}
+              {...{ 'data-testid': 'walkthroughs-ai-options-discovery-skill' }}
+            >
+              <option value={DEFAULT_WALKTHROUGH_ANCHOR_DISCOVERY_SKILL_PATH}>
+                Anchor discovery (default)
+              </option>
+              {skills
+                .filter(
+                  (skill) => skill.path !== DEFAULT_WALKTHROUGH_ANCHOR_DISCOVERY_SKILL_PATH,
+                )
+                .map((skill) => (
+                  <option key={`discovery-${skill.id}`} value={skill.path}>
+                    {skill.name}
+                  </option>
+                ))}
+            </select>
+          </div>
+
+          <div className={styles.optionsField}>
+            <label
+              className={styles.optionsLabel}
+              htmlFor="walkthroughs-ai-discovery-model"
+            >
+              Agent model
+            </label>
+            <select
+              id="walkthroughs-ai-discovery-model"
+              className={styles.optionsSelect}
+              value={anchorDiscoveryModel}
+              onChange={(e) => setAnchorDiscoveryModel(e.target.value)}
+              disabled={(modelsQuery.isLoading && agentModels.length === 0) || isSaving}
+              title="Agent model for anchor discovery"
+              aria-label="Anchor discovery agent model"
+              {...{ 'data-testid': 'walkthroughs-ai-options-discovery-model' }}
+            >
+              <option value="">Project / platform default</option>
+              {agentModels.map((m) => (
+                <option key={`discovery-model-${m.id}`} value={m.id}>
                   {m.displayName}
                 </option>
               ))}

@@ -15,6 +15,9 @@ import {
 const mockGenerate = jest.fn();
 const mockRedo = jest.fn();
 const mockValidate = jest.fn();
+const mockMatches = jest.fn();
+const mockDiscovery = jest.fn();
+const mockCreateAnchor = jest.fn();
 
 jest.mock('../../hooks/useWalkthroughAiOptions', () => ({
   useWalkthroughAiOptionsQuery: () => ({
@@ -78,10 +81,36 @@ jest.mock('../../hooks/useWalkthroughAiDraft', () => ({
     mutateAsync: mockValidate,
     isPending: false,
   }),
+  useWalkthroughAnchorMatches: () => ({
+    mutateAsync: mockMatches,
+    isPending: false,
+  }),
+  useStartAnchorDiscovery: () => ({
+    mutateAsync: mockDiscovery,
+    isPending: false,
+  }),
 }));
 
 jest.mock('../../hooks/usePlatformAdminWalkthroughs', () => ({
-  useWalkthroughAnchors: () => ({ data: [], isLoading: false }),
+  useWalkthroughAnchors: () => ({
+    data: [
+      {
+        key: 'profile-bio',
+        testId: 'profile-bio',
+        label: 'Profile bio',
+        targetRoute: '/profile',
+        allowedPlacements: ['bottom'],
+      },
+    ],
+    isLoading: false,
+  }),
+}));
+
+jest.mock('../../hooks/usePlatformAdminAnchorRegistry', () => ({
+  useCreateManualAnchor: () => ({
+    mutateAsync: mockCreateAnchor,
+    isPending: false,
+  }),
 }));
 
 function renderPanel(
@@ -314,5 +343,64 @@ describe('WalkthroughAiDraftPanel', () => {
     const merged = onMerge.mock.calls[0][0];
     expect(merged.internalName).toBe('n');
     expect(merged.steps.map((s: { heading: string }) => s.heading)).toEqual(['Keep']);
+  });
+
+  it('AC — low-confidence step shows warning and choose/find actions', async () => {
+    const user = userEvent.setup();
+    const fields = { internalName: 'n', userTitle: 'Title', whyItMatters: 'Why' };
+    const steps = [
+      {
+        id: 's1',
+        ordinal: 0,
+        heading: 'Low match',
+        bodyMarkdown: 'needs anchor',
+        anchorMatch: {
+          score: 0.2,
+          belowThreshold: true,
+          hasAnchor: false,
+          routeCompatible: false,
+          matchedTags: [],
+        },
+      },
+    ];
+    mockGenerate.mockResolvedValue({
+      proposal: {
+        proposalId: 'p1',
+        walkthroughFields: fields,
+        steps,
+        units: buildProposalUnits(fields, steps),
+        generatedAt: new Date().toISOString(),
+        generationContextVersion: 'v1',
+        policyPreset: 'A',
+      },
+    });
+    mockMatches.mockResolvedValue({
+      rankedCandidates: [
+        {
+          anchorKey: 'profile-bio',
+          testId: 'profile-bio',
+          label: 'Profile bio',
+          approvedRoute: '/profile',
+          allowedPlacements: ['bottom'],
+          smartTags: ['profile'],
+          score: 0.91,
+          evidence: { routeCompatible: true, matchedTags: ['profile'] },
+        },
+      ],
+      autoSelectThreshold: 0.72,
+    });
+
+    renderPanel();
+    await user.type(screen.getByTestId('walkthrough-ai-intent'), 'Find anchors');
+    await user.click(screen.getByTestId('walkthrough-ai-generate'));
+    await screen.findByTestId('walkthrough-proposal-step-s1-anchor-low-confidence');
+
+    expect(
+      screen.getByTestId('walkthrough-proposal-step-s1-anchor-match'),
+    ).toHaveTextContent(/low confidence/i);
+
+    await user.click(screen.getByTestId('walkthrough-proposal-step-s1-choose-anchor'));
+    await waitFor(() => expect(mockMatches).toHaveBeenCalled());
+    expect(screen.getByTestId('walkthrough-proposal-step-s1-anchor-picker')).toBeInTheDocument();
   });
 });
