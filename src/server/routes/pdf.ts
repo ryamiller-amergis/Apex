@@ -114,6 +114,90 @@ router.get('/apryse/status', async (_req, res): Promise<void> => {
   res.json(status);
 });
 
+// ── POST /api/pdf/apryse/convert-to-word ──────────────────────────────────────
+// POC: convert an uploaded PDF to DOCX via Apryse Structured Output (server SDK).
+
+const convertUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50 MB POC limit
+    files: 1,
+  },
+});
+
+router.post(
+  '/apryse/convert-to-word',
+  convertUpload.single('file'),
+  async (req, res): Promise<void> => {
+    const file = req.file;
+    if (!file?.buffer?.length) {
+      res.status(400).json({
+        error: 'Upload a PDF file as multipart field "file".',
+        code: PDF_ERROR_CODES.FILE_NOT_PDF,
+      });
+      return;
+    }
+    const originalName = file.originalname || 'document.pdf';
+    const isPdf =
+      file.mimetype === 'application/pdf' ||
+      originalName.toLowerCase().endsWith('.pdf');
+    if (!isPdf) {
+      res.status(400).json({
+        error: 'Only PDF files are supported for Apryse PDF→Word conversion.',
+        code: PDF_ERROR_CODES.FILE_NOT_PDF,
+      });
+      return;
+    }
+
+    try {
+      const docxBytes = await aprysePdfEditingService.convertToWord(
+        new Uint8Array(file.buffer)
+      );
+      const baseName = path.basename(originalName, path.extname(originalName));
+      const downloadName = `${baseName || 'document'}.docx`;
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      );
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${downloadName.replace(/"/g, '')}"`
+      );
+      res.status(200).send(Buffer.from(docxBytes));
+    } catch (error) {
+      if (
+        error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        typeof (error as { code: unknown }).code === 'string'
+      ) {
+        const code = (error as { code: string; message?: string }).code;
+        const status =
+          code === 'APRYSE_NOT_CONFIGURED'
+            ? 503
+            : code === 'APRYSE_PDF_TO_OFFICE_UNAVAILABLE'
+              ? 503
+              : 500;
+        res.status(status).json({
+          error:
+            error instanceof Error
+              ? error.message
+              : 'Apryse PDF→Word conversion failed.',
+          code,
+        });
+        return;
+      }
+      res.status(500).json({
+        error:
+          error instanceof Error
+            ? error.message
+            : 'Apryse PDF→Word conversion failed.',
+        code: 'APRYSE_CONVERT_FAILED',
+      });
+    }
+  }
+);
+
 // ── GET /api/pdf/sessions ─────────────────────────────────────────────────────
 
 router.get('/sessions', async (req, res): Promise<void> => {

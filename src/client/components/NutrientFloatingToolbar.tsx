@@ -10,6 +10,7 @@ const TOOLS_WITH_SUBTYPES: ReadonlySet<Exclude<WorkbenchTool, null>> = new Set([
   'highlight',
   'draw',
   'pages',
+  'redact',
 ]);
 
 // ── Sub-option definitions ────────────────────────────────────────────────────
@@ -35,6 +36,14 @@ export interface FloatingToolbarSubOptions {
   onSetInkStrokeWidth: (width: number) => void;
   onRotateCw: () => void;
   onRotateCcw: () => void;
+  /** Append pages from another PDF (Pages tool). */
+  onMergePdf?: () => void;
+  /** Delete the current page (Pages tool). */
+  onDeletePage?: () => void;
+  /** Permanently apply redaction marks (Apryse Wave B). */
+  onApplyRedactions?: () => void;
+  /** Prompt + mark search matches for redaction (Apryse Wave B). */
+  onSearchAndRedact?: () => void;
 }
 
 // ── Local-storage position persistence ───────────────────────────────────────
@@ -117,6 +126,10 @@ export const NutrientFloatingToolbar: React.FC<FloatingToolbarSubOptions> = ({
   onSetInkStrokeWidth,
   onRotateCw,
   onRotateCcw,
+  onMergePdf,
+  onDeletePage,
+  onApplyRedactions,
+  onSearchAndRedact,
 }) => {
   const saved = loadSavedPosition();
   const def = defaultPosition();
@@ -283,13 +296,51 @@ export const NutrientFloatingToolbar: React.FC<FloatingToolbarSubOptions> = ({
 
       case 'sign':
         return [
-          { id: 'hint', label: 'Choose a signature type', action: () => {} },
+          {
+            id: 'hint',
+            label: 'Click to place ink/digital signature',
+            action: () => {},
+          },
         ];
 
       case 'pages':
         return [
-          { id: 'rotate-cw',  label: 'Rotate CW',  action: onRotateCw },
+          { id: 'rotate-cw', label: 'Rotate CW', action: onRotateCw },
           { id: 'rotate-ccw', label: 'Rotate CCW', action: onRotateCcw },
+          ...(onMergePdf
+            ? [{ id: 'add-pdf', label: 'Add PDF', action: onMergePdf }]
+            : []),
+          ...(onDeletePage
+            ? [{ id: 'delete-page', label: 'Delete page', action: onDeletePage }]
+            : []),
+        ];
+
+      case 'redact':
+        return [
+          {
+            id: 'mark',
+            label: 'Mark area/text',
+            action: () => {},
+          },
+          ...(onSearchAndRedact
+            ? [
+                {
+                  id: 'search-redact',
+                  label: 'Search & mark',
+                  action: onSearchAndRedact,
+                },
+              ]
+            : []),
+          ...(onApplyRedactions
+            ? [
+                {
+                  id: 'apply-redactions',
+                  label: 'Apply all',
+                  action: onApplyRedactions,
+                  active: true,
+                },
+              ]
+            : []),
         ];
 
       default:
@@ -305,6 +356,8 @@ export const NutrientFloatingToolbar: React.FC<FloatingToolbarSubOptions> = ({
     onZoomIn, onZoomOut, onFitPage,
     onSetHighlightColor, onSetInkStrokeWidth,
     onRotateCw, onRotateCcw,
+    onMergePdf, onDeletePage,
+    onApplyRedactions, onSearchAndRedact,
   ]);
 
   const toolLabel = activeTool

@@ -50,6 +50,7 @@ const mockSdk = {
     INK_SIGNATURE: 'INK_SIGNATURE',
     DOCUMENT_EDITOR: 'DOCUMENT_EDITOR',
     SEARCH: 'SEARCH',
+    REDACT_TEXT_HIGHLIGHTER: 'REDACT_TEXT_HIGHLIGHTER',
   },
   Color: { fromHex: (hex: string) => ({ hex }) },
   ZoomMode: { FIT_TO_WIDTH: 'FIT_TO_WIDTH' },

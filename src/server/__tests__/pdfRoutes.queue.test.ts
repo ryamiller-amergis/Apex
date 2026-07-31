@@ -4,6 +4,7 @@ import request from 'supertest';
 
 const mockQueuePdfExport = jest.fn();
 const mockGetApryseStatus = jest.fn();
+const mockConvertToWord = jest.fn();
 
 jest.mock('../middleware/auth', () => ({
   ensureAuthenticated: (
@@ -51,6 +52,7 @@ jest.mock('../services/pdfArtifactStore', () => ({
 jest.mock('../services/aprysePdfEditingService', () => ({
   aprysePdfEditingService: {
     getStatus: (...args: unknown[]) => mockGetApryseStatus(...args),
+    convertToWord: (...args: unknown[]) => mockConvertToWord(...args),
   },
 }));
 
@@ -84,8 +86,9 @@ describe('PDF export queue routes', () => {
       configured: true,
       sdkAvailable: true,
       findReplaceAvailable: true,
+      pdfToOfficeAvailable: true,
       message:
-        'Apryse FindReplace API is available; license entitlement is validated during export.',
+        'Apryse SDK loaded; FindReplace available; PDF→Office (Structured Output) available. License entitlement is validated during use.',
     });
 
     const response = await request(app).get('/api/pdf/apryse/status');
@@ -95,10 +98,33 @@ describe('PDF export queue routes', () => {
       configured: true,
       sdkAvailable: true,
       findReplaceAvailable: true,
+      pdfToOfficeAvailable: true,
       message:
-        'Apryse FindReplace API is available; license entitlement is validated during export.',
+        'Apryse SDK loaded; FindReplace available; PDF→Office (Structured Output) available. License entitlement is validated during use.',
     });
     expect(JSON.stringify(response.body)).not.toContain('demo-key');
+  });
+
+  test('converts an uploaded PDF to Word via Apryse', async () => {
+    mockConvertToWord.mockResolvedValue(new Uint8Array([10, 11, 12]));
+
+    const response = await request(app)
+      .post('/api/pdf/apryse/convert-to-word')
+      .attach('file', Buffer.from('%PDF-1.4'), 'sample.pdf')
+      .buffer()
+      .parse((res, callback) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+        res.on('end', () => callback(null, Buffer.concat(chunks)));
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.headers['content-type']).toContain(
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    );
+    expect(response.headers['content-disposition']).toContain('sample.docx');
+    expect(response.body).toEqual(Buffer.from([10, 11, 12]));
+    expect(mockConvertToWord).toHaveBeenCalledTimes(1);
   });
 
   test('returns 202 with queue status for accepted exports', async () => {
