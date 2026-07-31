@@ -5,6 +5,8 @@
  * platformAdmin.ts router before this sub-router is reached.
  */
 
+import path from 'path';
+import fs from 'fs';
 import { Router, Request, Response } from 'express';
 import { getUserId, getUserEmail } from '../utils/requestUser';
 import {
@@ -16,6 +18,9 @@ import {
   deleteDraftRelease,
   getReleaseAudit,
   updateRelease,
+  getSkillsMatrix,
+  getProjectAvailableSkills,
+  type CatalogSkillEntry,
 } from '../services/foundationSkillReleaseService';
 import {
   checkCompatibility,
@@ -25,6 +30,25 @@ import { listCandidates } from '../services/azureArtifactsSkillService';
 import { updateRepoWithFoundationSkills } from '../services/foundationSkillRepoUpdateService';
 import { AzureDevOpsService } from '../services/azureDevOps';
 import type { CreateFoundationSkillReleaseRequest } from '../../shared/types/foundationSkills';
+
+// ── Catalog helper ────────────────────────────────────────────────────────────
+
+let _catalogCache: CatalogSkillEntry[] | null = null;
+
+function loadCatalog(): CatalogSkillEntry[] {
+  if (_catalogCache) return _catalogCache;
+  try {
+    const catalogPath = path.resolve(__dirname, '../../../foundation-skills/catalog.json');
+    const raw = JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
+    _catalogCache = (raw.skills as Array<{ name: string; summary: string }>).map((s) => ({
+      name:    s.name,
+      summary: s.summary ?? '',
+    }));
+  } catch {
+    _catalogCache = [];
+  }
+  return _catalogCache;
+}
 
 const router = Router();
 
@@ -60,6 +84,11 @@ router.post('/releases', async (req: Request, res: Response): Promise<void> => {
     if (!body.version?.trim())         { res.status(400).json({ error: 'version is required' }); return; }
     if (!body.artifactVersion?.trim()) { res.status(400).json({ error: 'artifactVersion is required' }); return; }
     if (!Array.isArray(body.selectedSkills)) { res.status(400).json({ error: 'selectedSkills must be an array' }); return; }
+    // skillTargets is optional — default {} means all skills inherit release-level targetProjects
+    if (body.skillTargets !== undefined && (typeof body.skillTargets !== 'object' || Array.isArray(body.skillTargets))) {
+      res.status(400).json({ error: 'skillTargets must be an object mapping skill names to project arrays' });
+      return;
+    }
 
     const release = await createRelease(body, actor(req));
     res.status(201).json({ release });
@@ -131,11 +160,16 @@ router.delete('/releases/:id', async (req: Request, res: Response): Promise<void
 
 router.patch('/releases/:id', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { releaseNotes, breakingChanges, targetProjects, version, artifactVersion, artifactFeed } = req.body;
+    const {
+      releaseNotes, breakingChanges, targetProjects, skillTargets, selectedSkills,
+      version, artifactVersion, artifactFeed,
+    } = req.body;
     const release = await updateRelease(req.params.id, actor(req), {
       ...(releaseNotes    !== undefined && { releaseNotes }),
       ...(breakingChanges !== undefined && { breakingChanges }),
       ...(targetProjects  !== undefined && { targetProjects }),
+      ...(skillTargets    !== undefined && { skillTargets }),
+      ...(selectedSkills  !== undefined && { selectedSkills }),
       ...(version         !== undefined && { version }),
       ...(artifactVersion !== undefined && { artifactVersion }),
       ...(artifactFeed    !== undefined && { artifactFeed }),
@@ -210,6 +244,40 @@ router.post('/update-repo', async (req: Request, res: Response): Promise<void> =
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: msg });
+  }
+});
+
+// ── Skills matrix ─────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/platform-admin/foundation-skills/skills/matrix
+ * Returns the skills matrix: all 31 skills × all releases they appear in,
+ * with resolved effective audience per release.
+ */
+router.get('/skills/matrix', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const catalog = loadCatalog();
+    const skills = await getSkillsMatrix(catalog);
+    res.json({ skills });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message ?? 'Failed to build skills matrix' });
+  }
+});
+
+/**
+ * GET /api/platform-admin/foundation-skills/project-skills?project=<name>
+ * Returns skills available to the given Apex project from the latest published release.
+ * Safe for Project Admin consumption — only returns published data.
+ */
+router.get('/project-skills', async (req: Request, res: Response): Promise<void> => {
+  const project = req.query.project as string | undefined;
+  if (!project?.trim()) { res.status(400).json({ error: 'project query param is required' }); return; }
+  try {
+    const catalog = loadCatalog();
+    const skills = await getProjectAvailableSkills(project.trim(), catalog);
+    res.json({ skills });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message ?? 'Failed to get project skills' });
   }
 });
 

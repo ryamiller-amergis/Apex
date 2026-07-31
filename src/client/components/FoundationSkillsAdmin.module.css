@@ -380,3 +380,124 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 }
 
 .dropdownItem:hover { background: var(--bg-secondary); }
+
+/* ── Skill picker ── */
+.skillPickerBox {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.skillPickerHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.skillList {
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.skillRow {
+  border-bottom: 1px solid var(--border-color-light);
+  padding: 0;
+}
+
+.skillRow:last-child { border-bottom: none; }
+
+.skillRowChecked { background: color-mix(in srgb, var(--accent-color) 4%, transparent); }
+
+.skillRowMain {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+}
+
+.skillName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  min-width: 160px;
+}
+
+.skillSummary {
+  font-size: 12px;
+  color: var(--text-muted);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skillAudiencePanel {
+  padding: 8px 12px 12px 32px;
+  background: var(--bg-tertiary);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.overrideBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--warning-color, #f59e0b) 14%, transparent);
+  color: var(--warning-color, #92400e);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* ── Skill pills on release cards ── */
+.skillPillsRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 6px 0;
+}
+
+.skillPill {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color-light);
+}
+
+.skillPillOverride {
+  background: color-mix(in srgb, var(--warning-color, #f59e0b) 12%, transparent);
+  color: var(--warning-color, #92400e);
+  border-color: color-mix(in srgb, var(--warning-color, #f59e0b) 30%, transparent);
+}
+
+/* ── Skills matrix ── */
+.matrixRow:hover td { background: var(--bg-secondary); }
+
+.matrixSkillName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.matrixSkillSummary {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.matrixExpanded {
+  background: var(--bg-secondary);
+  padding: 12px 16px;
+}

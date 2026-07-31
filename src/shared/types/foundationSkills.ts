@@ -40,6 +40,9 @@ export interface FoundationSkillRelease {
   contractApiVersion: number;
   selectedSkills: string[];     // skill names included in this release
   targetProjects: string[];     // [] = all projects; non-empty = allowlist of Apex project names
+  /** Per-skill project overrides. skill → string[].
+   *  Empty array means "all projects". Absent key inherits targetProjects. */
+  skillTargets: Record<string, string[]>;
   manifestSnapshot: Record<string, unknown> | null; // catalog.json at publish time
   releaseNotes: string | null;
   breakingChanges: string | null;
@@ -96,6 +99,8 @@ export interface CreateFoundationSkillReleaseRequest {
   integritySha256?: string | null;
   selectedSkills: string[];
   targetProjects?: string[];    // [] or omit = all projects; non-empty = Apex project allowlist
+  /** Per-skill project overrides. Absent key inherits targetProjects. */
+  skillTargets?: Record<string, string[]>;
   manifestSnapshot?: Record<string, unknown> | null;
   releaseNotes?: string | null;
   breakingChanges?: string | null;
@@ -149,6 +154,41 @@ export interface CheckCompatibilityRequest {
   branch?: string;
   candidateVersion?: string; // defaults to latest published visible to apexProject
   apexProject?: string | null; // Apex project name for targeted-release filtering
+}
+
+// ── Skills matrix ─────────────────────────────────────────────────────────────
+
+/** One row in the Platform Admin skills matrix. */
+export interface SkillMatrixEntry {
+  name: string;
+  summary: string;
+  /** All releases that include this skill, with the resolved effective audience. */
+  releases: Array<{
+    releaseId: string;
+    version: string;
+    status: FoundationSkillReleaseStatus;
+    /** Resolved audience after applying per-skill override.
+     *  [] means "all projects". */
+    effectiveTargetProjects: string[];
+  }>;
+}
+
+export interface FoundationSkillsMatrixResponse {
+  skills: SkillMatrixEntry[];
+}
+
+/** Skills available to a specific Apex project (for Project Admin read-only view). */
+export interface ProjectAvailableSkill {
+  name: string;
+  summary: string;
+  version: string;
+  releaseId: string;
+  /** Resolved effective audience; [] = all. */
+  effectiveTargetProjects: string[];
+}
+
+export interface ProjectAvailableSkillsResponse {
+  skills: ProjectAvailableSkill[];
 }
 
 // ── Azure Artifacts ───────────────────────────────────────────────────────────

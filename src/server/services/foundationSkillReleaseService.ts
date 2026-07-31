@@ -23,6 +23,8 @@ import type {
   FoundationSkillReleaseAuditEntry,
   CreateFoundationSkillReleaseRequest,
   FoundationSkillAuditAction,
+  SkillMatrixEntry,
+  ProjectAvailableSkill,
 } from '../../shared/types/foundationSkills';
 import {
   isAzureArtifactsConfigured,
@@ -44,6 +46,7 @@ function mapRow(row: typeof foundationSkillReleases.$inferSelect): FoundationSki
     contractApiVersion:  row.contractApiVersion,
     selectedSkills:      (row.selectedSkills as string[]) ?? [],
     targetProjects:      (row.targetProjects as string[]) ?? [],
+    skillTargets:        (row.skillTargets as Record<string, string[]>) ?? {},
     manifestSnapshot:    (row.manifestSnapshot as Record<string, unknown>) ?? null,
     releaseNotes:        row.releaseNotes ?? null,
     breakingChanges:     row.breakingChanges ?? null,
@@ -68,6 +71,94 @@ export function isReleaseVisibleToProject(
   if (!release.targetProjects || release.targetProjects.length === 0) return true;
   if (!apexProject) return false;
   return release.targetProjects.includes(apexProject);
+}
+
+/**
+ * Returns the effective project allowlist for a specific skill in a release.
+ * Resolution rule: skillTargets[skillName] ?? release.targetProjects.
+ * An empty array means "all projects".
+ */
+export function getEffectiveTargetProjects(
+  release: FoundationSkillRelease,
+  skillName: string,
+): string[] {
+  const override = release.skillTargets?.[skillName];
+  if (override !== undefined) return override;
+  return release.targetProjects ?? [];
+}
+
+/**
+ * Returns the skill names from this release that are visible to the given project.
+ * Applies per-skill overrides via getEffectiveTargetProjects.
+ */
+export function getVisibleSkillsForProject(
+  release: FoundationSkillRelease,
+  apexProject: string | null | undefined,
+): string[] {
+  return (release.selectedSkills ?? []).filter((skill) => {
+    const effective = getEffectiveTargetProjects(release, skill);
+    if (effective.length === 0) return true;   // all projects
+    if (!apexProject) return false;
+    return effective.includes(apexProject);
+  });
+}
+
+/** Catalog entry shape (subset of catalog.json skill entries). */
+export interface CatalogSkillEntry {
+  name: string;
+  summary: string;
+}
+
+/**
+ * Builds the Platform Admin skills matrix from all releases in the DB.
+ * `catalog` should be the full list of known skills with summaries (from catalog.json).
+ */
+export async function getSkillsMatrix(catalog: CatalogSkillEntry[]): Promise<SkillMatrixEntry[]> {
+  const releases = await listReleases();
+
+  // Build a lookup: skillName → SkillMatrixEntry.releases[]
+  const bySkill = new Map<string, SkillMatrixEntry['releases']>();
+
+  for (const rel of releases) {
+    for (const skillName of rel.selectedSkills ?? []) {
+      if (!bySkill.has(skillName)) bySkill.set(skillName, []);
+      bySkill.get(skillName)!.push({
+        releaseId:              rel.id,
+        version:                rel.version,
+        status:                 rel.status,
+        effectiveTargetProjects: getEffectiveTargetProjects(rel, skillName),
+      });
+    }
+  }
+
+  // Build the final array preserving catalog order; include skills not yet in any release
+  return catalog.map((entry) => ({
+    name:     entry.name,
+    summary:  entry.summary,
+    releases: bySkill.get(entry.name) ?? [],
+  }));
+}
+
+/**
+ * Returns skills available to the given Apex project from the latest published release
+ * that is visible to the project.
+ */
+export async function getProjectAvailableSkills(
+  apexProject: string,
+  catalog: CatalogSkillEntry[],
+): Promise<ProjectAvailableSkill[]> {
+  const release = await getLatestPublishedRelease(apexProject);
+  if (!release) return [];
+
+  const summaryMap = new Map(catalog.map((c) => [c.name, c.summary]));
+
+  return getVisibleSkillsForProject(release, apexProject).map((name) => ({
+    name,
+    summary:                summaryMap.get(name) ?? '',
+    version:                release.version,
+    releaseId:              release.id,
+    effectiveTargetProjects: getEffectiveTargetProjects(release, name),
+  }));
 }
 
 async function appendAudit(
@@ -145,6 +236,7 @@ export async function createRelease(
         integritySha256:     input.integritySha256 ?? null,
         selectedSkills:      input.selectedSkills,
         targetProjects:      input.targetProjects ?? [],
+        skillTargets:        input.skillTargets ?? {},
         manifestSnapshot:    input.manifestSnapshot ?? null,
         releaseNotes:        input.releaseNotes ?? null,
         breakingChanges:     input.breakingChanges ?? null,
@@ -302,6 +394,9 @@ export interface UpdateReleaseInput {
   releaseNotes?:    string | null;
   breakingChanges?: string | null;
   targetProjects?:  string[];
+  /** Per-skill project targeting overrides; updatable on any status. */
+  skillTargets?:    Record<string, string[]>;
+  selectedSkills?:  string[];
   /** Only allowed for draft releases */
   version?:         string;
   artifactVersion?: string;
@@ -328,6 +423,8 @@ export async function updateRelease(
         ...(input.releaseNotes    !== undefined && { releaseNotes:    input.releaseNotes    ?? null }),
         ...(input.breakingChanges !== undefined && { breakingChanges: input.breakingChanges ?? null }),
         ...(input.targetProjects  !== undefined && { targetProjects:  input.targetProjects }),
+        ...(input.skillTargets    !== undefined && { skillTargets:    input.skillTargets }),
+        ...(input.selectedSkills  !== undefined && { selectedSkills:  input.selectedSkills }),
         ...(input.version         !== undefined && { version:         input.version }),
         ...(input.artifactVersion !== undefined && { artifactVersion: input.artifactVersion }),
         ...(input.artifactFeed    !== undefined && { artifactFeed:    input.artifactFeed    ?? null }),

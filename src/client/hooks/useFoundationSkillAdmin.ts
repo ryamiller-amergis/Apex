@@ -5,6 +5,8 @@ import type {
   FoundationSkillRepoStatus,
   ArtifactCandidate,
   CreateFoundationSkillReleaseRequest,
+  SkillMatrixEntry,
+  ProjectAvailableSkill,
 } from '../../shared/types/foundationSkills';
 
 // ── Fetch helper ──────────────────────────────────────────────────────────────
@@ -22,11 +24,13 @@ async function adminFetch<T>(url: string, init?: RequestInit): Promise<T> {
 // ── Query keys ────────────────────────────────────────────────────────────────
 
 export const foundationSkillAdminKeys = {
-  candidates:   ['foundation-skills-admin', 'candidates']   as const,
-  releases:     ['foundation-skills-admin', 'releases']     as const,
-  release:      (id: string) => ['foundation-skills-admin', 'releases', id] as const,
-  audit:        (id: string) => ['foundation-skills-admin', 'audit', id] as const,
-  repoStatuses: ['foundation-skills-admin', 'repo-statuses'] as const,
+  candidates:     ['foundation-skills-admin', 'candidates']     as const,
+  releases:       ['foundation-skills-admin', 'releases']       as const,
+  release:        (id: string) => ['foundation-skills-admin', 'releases', id] as const,
+  audit:          (id: string) => ['foundation-skills-admin', 'audit', id] as const,
+  repoStatuses:   ['foundation-skills-admin', 'repo-statuses']  as const,
+  skillsMatrix:   ['foundation-skills-admin', 'skills-matrix']  as const,
+  projectSkills:  (project: string) => ['foundation-skills-admin', 'project-skills', project] as const,
 };
 
 // ── Candidates ────────────────────────────────────────────────────────────────
@@ -115,6 +119,9 @@ export interface UpdateReleasePayload {
   releaseNotes?:    string | null;
   breakingChanges?: string | null;
   targetProjects?:  string[];
+  /** Per-skill project targeting overrides. */
+  skillTargets?:    Record<string, string[]>;
+  selectedSkills?:  string[];
   /** Draft-only fields */
   version?:         string;
   artifactVersion?: string;
@@ -201,5 +208,36 @@ export function useCheckFoundationSkillCompatibility() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: foundationSkillAdminKeys.repoStatuses });
     },
+  });
+}
+
+// ── Skills matrix ─────────────────────────────────────────────────────────────
+
+/** Platform Admin: full skills × releases matrix with effective audience per entry. */
+export function useFoundationSkillMatrix() {
+  return useQuery<SkillMatrixEntry[]>({
+    queryKey: foundationSkillAdminKeys.skillsMatrix,
+    queryFn: async () => {
+      const data = await adminFetch<{ skills: SkillMatrixEntry[] }>(
+        '/api/platform-admin/foundation-skills/skills/matrix',
+      );
+      return data.skills;
+    },
+    staleTime: 60_000,
+  });
+}
+
+/** Project Admin / consumer: skills available to a specific Apex project. */
+export function useProjectAvailableSkills(project: string) {
+  return useQuery<ProjectAvailableSkill[]>({
+    queryKey: foundationSkillAdminKeys.projectSkills(project),
+    queryFn: async () => {
+      const data = await adminFetch<{ skills: ProjectAvailableSkill[] }>(
+        `/api/platform-admin/foundation-skills/project-skills?project=${encodeURIComponent(project)}`,
+      );
+      return data.skills;
+    },
+    enabled: !!project,
+    staleTime: 60_000,
   });
 }

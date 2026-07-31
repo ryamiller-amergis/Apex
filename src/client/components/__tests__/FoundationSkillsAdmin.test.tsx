@@ -21,8 +21,10 @@ import {
   usePublishFoundationSkillRelease,
   useDeprecateFoundationSkillRelease,
   useDeleteDraftFoundationSkillRelease,
+  useUpdateFoundationSkillRelease,
   useUpdateRepoWithFoundationSkills,
   useCheckFoundationSkillCompatibility,
+  useFoundationSkillMatrix,
 } from '../../hooks/useFoundationSkillAdmin';
 
 jest.mock('../../hooks/useFoundationSkillAdmin', () => ({
@@ -34,8 +36,14 @@ jest.mock('../../hooks/useFoundationSkillAdmin', () => ({
   usePublishFoundationSkillRelease:     jest.fn(),
   useDeprecateFoundationSkillRelease:   jest.fn(),
   useDeleteDraftFoundationSkillRelease: jest.fn(),
+  useUpdateFoundationSkillRelease:      jest.fn(),
   useUpdateRepoWithFoundationSkills:    jest.fn(),
   useCheckFoundationSkillCompatibility: jest.fn(),
+  useFoundationSkillMatrix:             jest.fn(),
+}));
+
+jest.mock('../../hooks/useProjects', () => ({
+  useProjects: jest.fn().mockReturnValue({ data: [], isLoading: false }),
 }));
 
 const mockReleases           = useFoundationSkillReleases           as jest.Mock;
@@ -46,8 +54,10 @@ const mockCreate             = useCreateFoundationSkillRelease      as jest.Mock
 const mockPublish            = usePublishFoundationSkillRelease     as jest.Mock;
 const mockDeprecate          = useDeprecateFoundationSkillRelease   as jest.Mock;
 const mockDelete             = useDeleteDraftFoundationSkillRelease as jest.Mock;
+const mockUpdateRelease      = useUpdateFoundationSkillRelease      as jest.Mock;
 const mockUpdateRepo         = useUpdateRepoWithFoundationSkills    as jest.Mock;
 const mockCheckCompat        = useCheckFoundationSkillCompatibility as jest.Mock;
+const mockMatrix             = useFoundationSkillMatrix             as jest.Mock;
 
 const noop        = jest.fn().mockResolvedValue(undefined);
 const noopMutate  = { mutateAsync: noop, isPending: false, error: null };
@@ -82,8 +92,10 @@ function setupDefaults() {
   mockPublish.mockReturnValue(noopMutate);
   mockDeprecate.mockReturnValue(noopMutate);
   mockDelete.mockReturnValue(noopMutate);
+  mockUpdateRelease.mockReturnValue(noopMutate);
   mockUpdateRepo.mockReturnValue(noopMutate);
   mockCheckCompat.mockReturnValue(noopMutate);
+  mockMatrix.mockReturnValue({ data: [], isLoading: false });
 }
 
 describe('FoundationSkillsAdmin', () => {
@@ -93,9 +105,10 @@ describe('FoundationSkillsAdmin', () => {
   });
 
   describe('section navigation', () => {
-    it('renders three section tabs', () => {
+    it('renders four section tabs', () => {
       renderComponent();
       expect(screen.getByRole('tab', { name: 'Releases' })).toBeInTheDocument();
+      expect(screen.getByRole('tab', { name: 'Skills' })).toBeInTheDocument();
       expect(screen.getByRole('tab', { name: 'Consumer Repos' })).toBeInTheDocument();
       expect(screen.getByRole('tab', { name: 'Create Draft' })).toBeInTheDocument();
     });
@@ -157,7 +170,7 @@ describe('FoundationSkillsAdmin', () => {
   });
 
   describe('create draft form', () => {
-    it('submits when version and selectedSkills are provided', async () => {
+    it('submits when version is provided (all skills selected by default)', async () => {
       const mutateAsync = jest.fn().mockResolvedValue({ ...draftRelease });
       mockCreate.mockReturnValue({ mutateAsync, isPending: false });
       renderComponent();
@@ -168,9 +181,12 @@ describe('FoundationSkillsAdmin', () => {
 
       await waitFor(() =>
         expect(mutateAsync).toHaveBeenCalledWith(
-          expect.objectContaining({ version: '2.0.0', selectedSkills: [] }),
+          expect.objectContaining({ version: '2.0.0' }),
         ),
       );
+      // All 31 skills selected by default
+      const callArgs = mutateAsync.mock.calls[0][0];
+      expect(callArgs.selectedSkills).toHaveLength(31);
     });
   });
 

@@ -7,12 +7,12 @@ import { isReleaseVisibleToProject } from '../services/foundationSkillReleaseSer
 
 jest.mock('../db/drizzle', () => ({ db: {} }));
 
-function makeRelease(targetProjects: string[]): FoundationSkillRelease {
+function makeRelease(targetProjects: string[], skillTargets: Record<string, string[]> = {}): FoundationSkillRelease {
   return {
     id: 'r', version: '0.2.0', status: 'published',
     artifactPackage: '@apex/skills', artifactVersion: '0.2.0',
     artifactFeed: null, integritySha256: null, contractApiVersion: 1,
-    selectedSkills: [], targetProjects, manifestSnapshot: null,
+    selectedSkills: [], targetProjects, skillTargets, manifestSnapshot: null,
     releaseNotes: null, breakingChanges: null,
     publishedBy: null, publishedAt: null, deprecatedBy: null, deprecatedAt: null,
     createdBy: 'admin', createdAt: '', updatedAt: '',

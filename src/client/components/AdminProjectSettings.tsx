@@ -14,6 +14,7 @@ import { useSkillRepos, useSkillBranches, useSkillList } from '../hooks/useChatT
 import { useUsers } from '../hooks/useRbac';
 import { useGroupsWithMembers } from '../hooks/useGroups';
 import { GroupAwarePeoplePicker } from './GroupAwarePeoplePicker';
+import { useProjectAvailableSkills } from '../hooks/useFoundationSkillAdmin';
 import styles from './AdminProjectSettings.module.css';
 
 // ── BranchCombobox ─────────────────────────────────────────────────────────────
@@ -2214,7 +2215,93 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         )}
 
         {formError && !edit && <p className={styles.formError}>{formError}</p>}
+
+        {/* ── Foundation Skills (read-only) ────────────────────────────── */}
+        {!edit && selectedProject && (
+          <FoundationSkillsProjectView project={selectedProject} />
+        )}
       </div>
+    </div>
+  );
+};
+
+// ── FoundationSkillsProjectView ───────────────────────────────────────────────
+
+const FoundationSkillsProjectView: React.FC<{ project: string }> = ({ project }) => {
+  const [expanded, setExpanded] = useState(false);
+  const { data: skills = [], isLoading } = useProjectAvailableSkills(project);
+
+  return (
+    <div style={{ marginTop: 24 }}>
+      <button
+        type="button"
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+          background: 'none', border: 'none', cursor: 'pointer', padding: '10px 0',
+          borderTop: '1px solid var(--border-color)',
+        }}
+        onClick={() => setExpanded(p => !p)}
+        aria-expanded={expanded}
+      >
+        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
+          Foundation Skills
+        </span>
+        {skills.length > 0 && (
+          <span style={{
+            padding: '1px 7px', borderRadius: 12,
+            background: 'var(--bg-tertiary)', color: 'var(--text-muted)',
+            fontSize: 11, fontWeight: 600,
+          }}>
+            {skills.length} available
+          </span>
+        )}
+        <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-muted)' }}>
+          {expanded ? '▲' : '▼'}
+        </span>
+      </button>
+
+      {expanded && (
+        <div style={{ paddingBottom: 16 }}>
+          <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 12px' }}>
+            Foundation skills available to <strong>{project}</strong> from the latest published release.
+            Contact a Platform Admin to request additional skills.
+          </p>
+          {isLoading ? (
+            <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Loading…</p>
+          ) : skills.length === 0 ? (
+            <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+              No foundation skills have been released to this project yet.
+            </p>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: 'left', padding: '6px 10px', color: 'var(--text-muted)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', borderBottom: '1px solid var(--border-color)' }}>Skill</th>
+                  <th style={{ textAlign: 'left', padding: '6px 10px', color: 'var(--text-muted)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', borderBottom: '1px solid var(--border-color)' }}>Summary</th>
+                  <th style={{ textAlign: 'left', padding: '6px 10px', color: 'var(--text-muted)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', borderBottom: '1px solid var(--border-color)' }}>Version</th>
+                </tr>
+              </thead>
+              <tbody>
+                {skills.map(skill => (
+                  <tr key={skill.name}>
+                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--border-color-light)', fontWeight: 600, color: 'var(--text-primary)' }}>
+                      {skill.name}
+                    </td>
+                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--border-color-light)', color: 'var(--text-secondary)', fontSize: 12 }}>
+                      {skill.summary}
+                    </td>
+                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--border-color-light)' }}>
+                      <span style={{ padding: '2px 7px', borderRadius: 4, background: 'color-mix(in srgb, var(--success-color) 15%, transparent)', color: 'var(--success-color)', fontSize: 11, fontWeight: 600 }}>
+                        v{skill.version}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
     </div>
   );
 };
