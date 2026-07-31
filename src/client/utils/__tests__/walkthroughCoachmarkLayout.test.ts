@@ -1,7 +1,9 @@
 import {
   availableSpaceForPlacement,
   buildAnchorHighlightStyle,
+  isClippedByScrollableAncestor,
   isFixedOrStickyChrome,
+  isOversizedForScrollport,
   isRectFullyInViewport,
   oppositeSide,
   pickBestCoachmarkPlacement,
@@ -145,6 +147,102 @@ describe('walkthroughCoachmarkLayout', () => {
       expect(scrollIntoView).not.toHaveBeenCalled();
 
       header.remove();
+    });
+
+    it('scrolls a target clipped by a scrollable fixed modal', () => {
+      const backdrop = document.createElement('div');
+      backdrop.style.position = 'fixed';
+      const dialog = document.createElement('div');
+      dialog.setAttribute('role', 'dialog');
+      dialog.setAttribute('aria-modal', 'true');
+      dialog.style.overflow = 'auto';
+      const target = document.createElement('input');
+      const scrollIntoView = jest.fn();
+      target.scrollIntoView = scrollIntoView;
+
+      backdrop.appendChild(dialog);
+      dialog.appendChild(target);
+      document.body.appendChild(backdrop);
+
+      jest.spyOn(dialog, 'getBoundingClientRect').mockReturnValue({
+        top: 100,
+        bottom: 600,
+        left: 100,
+        right: 900,
+        width: 800,
+        height: 500,
+        x: 100,
+        y: 100,
+        toJSON: () => ({}),
+      });
+      // Inside the browser viewport, but below the dialog's clipped scrollport.
+      jest.spyOn(target, 'getBoundingClientRect').mockReturnValue({
+        top: 650,
+        bottom: 690,
+        left: 200,
+        right: 500,
+        width: 300,
+        height: 40,
+        x: 200,
+        y: 650,
+        toJSON: () => ({}),
+      });
+
+      expect(isFixedOrStickyChrome(target)).toBe(false);
+      expect(isClippedByScrollableAncestor(target)).toBe(true);
+      expect(scrollWalkthroughAnchorIntoView(target, { preferred: 'top' })).toBe(true);
+      expect(scrollIntoView).toHaveBeenCalledWith({
+        behavior: 'smooth',
+        block: 'end',
+        inline: 'nearest',
+      });
+
+      backdrop.remove();
+    });
+
+    it('aligns an oversized modal form to the start instead of its bottom', () => {
+      const dialog = document.createElement('section');
+      dialog.setAttribute('role', 'dialog');
+      dialog.setAttribute('aria-modal', 'true');
+      dialog.style.overflow = 'auto';
+      const form = document.createElement('form');
+      const scrollIntoView = jest.fn();
+      form.scrollIntoView = scrollIntoView;
+      dialog.appendChild(form);
+      document.body.appendChild(dialog);
+
+      jest.spyOn(dialog, 'getBoundingClientRect').mockReturnValue({
+        top: 24,
+        bottom: 724,
+        left: 100,
+        right: 900,
+        width: 800,
+        height: 700,
+        x: 100,
+        y: 24,
+        toJSON: () => ({}),
+      });
+      jest.spyOn(form, 'getBoundingClientRect').mockReturnValue({
+        top: -500,
+        bottom: 1100,
+        left: 120,
+        right: 880,
+        width: 760,
+        height: 1600,
+        x: 120,
+        y: -500,
+        toJSON: () => ({}),
+      });
+
+      expect(isOversizedForScrollport(form)).toBe(true);
+      expect(scrollWalkthroughAnchorIntoView(form, { preferred: 'top' })).toBe(true);
+      expect(scrollIntoView).toHaveBeenCalledWith({
+        behavior: 'smooth',
+        block: 'start',
+        inline: 'nearest',
+      });
+
+      dialog.remove();
     });
   });
 

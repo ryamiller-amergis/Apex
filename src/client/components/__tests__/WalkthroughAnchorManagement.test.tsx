@@ -59,6 +59,15 @@ jest.mock('../../hooks/usePlatformAdminAnchorRegistry', () => ({
   startAndPollAnchorSmartTagging: jest.fn().mockResolvedValue(null),
 }));
 
+jest.mock('../../hooks/usePlatformAdminWalkthroughs', () => ({
+  useWalkthroughAnchors: jest.fn(() => ({
+    data: undefined,
+    isLoading: false,
+    isError: false,
+    error: null,
+  })),
+}));
+
 const mockUseAnchorRegistryCatalog = useAnchorRegistryCatalog as jest.Mock;
 const mockUseAnchorRegistryModuleCoverage = useAnchorRegistryModuleCoverage as jest.Mock;
 const mockUseCreateManualAnchor = useCreateManualAnchor as jest.Mock;
@@ -473,6 +482,7 @@ describe('WalkthroughAnchorManagement', () => {
     const id = subset[0].id;
     await user.click(screen.getByTestId(`walkthrough-anchor-edit-${id}`));
     expect(screen.getByTestId('walkthrough-anchor-edit-modal')).toBeInTheDocument();
+    expect(screen.getByText(/AI uses this reveal chain during generation/i)).toBeInTheDocument();
 
     await user.clear(screen.getByTestId('walkthrough-anchor-edit-label'));
     await user.type(screen.getByTestId('walkthrough-anchor-edit-label'), 'Renamed anchor');
@@ -483,6 +493,72 @@ describe('WalkthroughAnchorManagement', () => {
       expect.objectContaining({
         id,
         label: 'Renamed anchor',
+      }),
+    );
+  });
+
+  it('filters approved opener anchors by route/search and saves selection order', async () => {
+    const user = userEvent.setup();
+    const updateAsync = jest.fn().mockResolvedValue({});
+    mockUseUpdateAnchorRegistry.mockReturnValue(mutationStub({ mutateAsync: updateAsync }));
+    const base = MOCK_WALKTHROUGH_ANCHOR_REGISTRY[0];
+    const target: WalkthroughAnchorRegistryRecord = {
+      ...base,
+      id: 'target-hidden',
+      anchorKey: 'target-hidden',
+      testId: 'target-hidden',
+      label: 'Hidden target',
+      approvedRoute: '/design-module',
+      openerAnchorKeys: [],
+    };
+    const homeOpener: WalkthroughAnchorRegistryRecord = {
+      ...base,
+      id: 'home-opener',
+      anchorKey: 'home-opener',
+      testId: 'home-opener',
+      label: 'Home opener',
+      approvedRoute: '/home',
+      openerAnchorKeys: [],
+    };
+    const designOpener: WalkthroughAnchorRegistryRecord = {
+      ...base,
+      id: 'design-opener',
+      anchorKey: 'design-modal-opener',
+      testId: 'design-modal-opener',
+      label: 'Design modal opener',
+      approvedRoute: '/design-module',
+      openerAnchorKeys: [],
+    };
+
+    render(<WalkthroughAnchorManagement records={[target, homeOpener, designOpener]} />);
+
+    await user.click(screen.getByTestId('walkthrough-anchor-edit-target-hidden'));
+    await user.selectOptions(
+      screen.getByTestId('walkthrough-anchor-edit-opener-route-filter'),
+      '/design-module',
+    );
+    await user.type(
+      screen.getByTestId('walkthrough-anchor-edit-opener-search'),
+      'modal',
+    );
+
+    expect(
+      screen.getByTestId('walkthrough-anchor-edit-opener-option-design-modal-opener'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId('walkthrough-anchor-edit-opener-option-home-opener'),
+    ).not.toBeInTheDocument();
+
+    await user.click(
+      screen.getByTestId('walkthrough-anchor-edit-opener-option-design-modal-opener'),
+    );
+    await user.click(screen.getByTestId('walkthrough-anchor-edit-save'));
+
+    await waitFor(() => expect(updateAsync).toHaveBeenCalled());
+    expect(updateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: target.id,
+        openerAnchorKeys: ['design-modal-opener'],
       }),
     );
   });

@@ -54,6 +54,9 @@ const ESTIMATED_FLOATING = {
   height: COACHMARK_PREFERRED_HEIGHT_PX,
 };
 
+const FOCUSABLE_SELECTOR =
+  'button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
+
 export const WalkthroughCoachmark: React.FC<WalkthroughCoachmarkProps> = ({
   step,
   stepIndex,
@@ -66,6 +69,7 @@ export const WalkthroughCoachmark: React.FC<WalkthroughCoachmarkProps> = ({
   onDismiss,
 }) => {
   const arrowRef = useRef<HTMLDivElement>(null);
+  const coachmarkRef = useRef<HTMLDivElement | null>(null);
   const titleId = `walkthrough-step-title-${step.id}`;
   const descriptionId = `walkthrough-step-desc-${step.id}`;
   const [highlightStyle, setHighlightStyle] = useState(() =>
@@ -168,6 +172,39 @@ export const WalkthroughCoachmark: React.FC<WalkthroughCoachmarkProps> = ({
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [onDismiss]);
 
+  useEffect(() => {
+    const coachmark = coachmarkRef.current;
+    if (!coachmark) return;
+
+    const focusable = coachmark.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
+    focusable[0]?.focus({ preventScroll: true });
+
+    const trapFocus = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return;
+      const currentFocusable = coachmark.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
+      if (currentFocusable.length === 0) {
+        event.preventDefault();
+        return;
+      }
+
+      const first = currentFocusable[0];
+      const last = currentFocusable[currentFocusable.length - 1];
+      if (!coachmark.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus({ preventScroll: true });
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus({ preventScroll: true });
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus({ preventScroll: true });
+      }
+    };
+
+    document.addEventListener('keydown', trapFocus);
+    return () => document.removeEventListener('keydown', trapFocus);
+  }, [step.id]);
+
   const arrowX = middlewareData.arrow?.x;
   const arrowY = middlewareData.arrow?.y;
   const side = context.placement.split('-')[0];
@@ -175,16 +212,26 @@ export const WalkthroughCoachmark: React.FC<WalkthroughCoachmarkProps> = ({
   return (
     <>
       <div
+        className={styles.interactionShield}
+        aria-hidden="true"
+        onWheel={(event) => event.preventDefault()}
+        {...{ 'data-testid': 'walkthrough-interaction-shield' }}
+      />
+      <div
         style={highlightStyle}
         className={styles.anchorHighlight}
         aria-hidden="true"
         {...{ 'data-testid': 'walkthrough-anchor-highlight' }}
       />
       <div
-        ref={refs.setFloating}
+        ref={(node) => {
+          coachmarkRef.current = node;
+          refs.setFloating(node);
+        }}
         style={floatingStyles}
         className={styles.coachmark}
-        role="region"
+        role="dialog"
+        aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
         data-placement={context.placement}

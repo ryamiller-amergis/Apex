@@ -28,6 +28,7 @@ function seedToRecord(
     approvedRoute: seed.approvedRoute,
     allowedPlacements: seed.allowedPlacements,
     smartTags: seed.smartTags,
+    openerAnchorKeys: seed.openerAnchorKeys ?? [],
     sourceKind: seed.sourceKind,
     sourceLocations: seed.sourceLocations,
     sourceHash: seed.sourceHash,

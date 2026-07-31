@@ -144,9 +144,8 @@ export const AiStepBuilderModal: React.FC<AiStepBuilderModalProps> = ({
       setStatusMessage('Step generated. Review it, then accept or reject.');
     } catch (err) {
       setIsError(true);
-      setStatusMessage(
-        err instanceof Error ? err.message : 'Generation failed. Nothing was added to the walkthrough.',
-      );
+      const base = err instanceof Error ? err.message : 'Generation failed. Nothing was added to the walkthrough.';
+      setStatusMessage(`${base} You can close this and build the step by hand with “Add step”.`);
     }
   };
 

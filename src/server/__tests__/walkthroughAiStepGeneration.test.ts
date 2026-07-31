@@ -29,6 +29,9 @@ const AUTHORING_CATALOG = [
     label: 'User menu',
     targetRoute: '/home',
     allowedPlacements: ['bottom', 'left', 'right', 'top'] as const,
+    smartTags: ['navigation', 'menu'],
+    openerAnchorKeys: [] as const,
+    sourceLocations: [{ filePath: 'src/client/components/UserMenu.tsx', line: 20 }],
   },
 ];
 
@@ -64,13 +67,17 @@ describe('generateStepProposal (single-step AI)', () => {
   it('returns exactly one reviewable step unit with a validated anchor', async () => {
     const anchor = AUTHORING_CATALOG[0];
     setWalkthroughAiProviderForTests({
-      generateStructuredJson: async () =>
-        JSON.stringify({
+      generateStructuredJson: async (prompt) => {
+        expect(prompt).toContain('"testId":"user-menu-trigger"');
+        expect(prompt).toContain('"sourceLocations"');
+        expect(prompt).toContain('hidden modal/menu/tab targets');
+        return JSON.stringify({
           heading: 'Open the user menu',
           bodyMarkdown: 'Click your avatar to open the menu.',
           anchorKey: anchor.key,
           anchorPlacement: anchor.allowedPlacements[0],
-        }),
+        });
+      },
     });
 
     const unit = await generateStepProposal({

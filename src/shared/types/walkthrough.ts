@@ -63,12 +63,23 @@ export type WalkthroughAnchorCatalogFallbackReason =
  * Fully absent, or key + targetRoute + placement present. Partial tuples are invalid.
  * Optional enrichment fields are serve-time only (not persisted on steps).
  */
+/** Serve-time opener control resolved from catalog (Phase 1 auto-open). */
+export interface WalkthroughAnchorOpener {
+  key: string;
+  testId: string;
+}
+
 export type WalkthroughAnchor = {
   key: string;
   targetRoute: string;
   placement: WalkthroughAnchorPlacement;
   /** Resolved test ID from approved+active catalog (playback enrichment). */
   testId?: string | null;
+  /**
+   * Ordered opener controls to click before resolving this target when it is
+   * not yet in the DOM (modals, menus, tabs). Serve-time enrichment only.
+   */
+  openers?: WalkthroughAnchorOpener[] | null;
   /** When true, playback centers immediately instead of waiting on DOM. */
   useCenteredFallback?: boolean;
   catalogFallbackReason?: WalkthroughAnchorCatalogFallbackReason;
@@ -439,7 +450,8 @@ export type WalkthroughAnchorMissReason =
   | 'missing'
   | 'inactive'
   | 'deleted'
-  | 'not_approved';
+  | 'not_approved'
+  | 'opener_missing';
 
 export interface WalkthroughAnchorMiss {
   walkthroughId: string;
@@ -693,16 +705,10 @@ export function validateSteps(steps: unknown): WalkthroughStepInput[] {
       throw new WalkthroughDomainError('VALIDATION_ERROR', 'Step imageAlt must be a string or null');
     }
     const anchor = validateAnchor(s.anchor);
-    const route =
-      typeof s.route === 'string' && s.route
-        ? s.route
-        : anchor?.targetRoute ?? null;
-    if (anchor && route !== anchor.targetRoute) {
-      throw new WalkthroughDomainError(
-        'VALIDATION_ERROR',
-        'Step route must match the registered anchor route',
-      );
-    }
+    // Anchored steps always play on the registered catalog route. Coerce rather
+    // than reject when step.route drifted (common after AI draft + manual re-pick).
+    const route = anchor?.targetRoute
+      ?? (typeof s.route === 'string' && s.route ? s.route : null);
     normalized.push({
       id: typeof s.id === 'string' ? s.id : undefined,
       ordinal: s.ordinal,

@@ -434,6 +434,69 @@ describe('WalkthroughAiDraftPanel', () => {
     ).toBeInTheDocument();
   });
 
+  it('selecting an anchor overwrites a mismatched step route so Accept can succeed', async () => {
+    const user = userEvent.setup();
+    const fields = { internalName: 'n', userTitle: 'Title', whyItMatters: 'Why' };
+    const steps = [
+      {
+        id: 's1',
+        ordinal: 0,
+        heading: 'Open My Work from the sidebar',
+        bodyMarkdown: 'Choose My Work in the left Build section.',
+        // AI left a different/starting route — the bug that blocked Accept.
+        route: '/home',
+        anchorMatch: {
+          score: 0,
+          belowThreshold: true,
+          hasAnchor: false,
+          routeCompatible: false,
+          matchedTags: [],
+        },
+      },
+    ];
+    mockGenerate.mockResolvedValue({
+      proposal: {
+        proposalId: 'p1',
+        walkthroughFields: fields,
+        steps,
+        units: buildProposalUnits(fields, steps),
+        generatedAt: new Date().toISOString(),
+        generationContextVersion: 'v1',
+        policyPreset: 'A',
+      },
+    });
+    mockMatches.mockResolvedValue({ rankedCandidates: [], autoSelectThreshold: 0.72 });
+    mockValidate.mockImplementation(async ({ unit }: { unit: unknown }) => ({
+      valid: true,
+      normalizedUnit: unit,
+    }));
+
+    renderPanel();
+    await user.type(screen.getByTestId('walkthrough-ai-intent'), 'My Work walkthrough');
+    await user.click(screen.getByTestId('walkthrough-ai-generate'));
+    await screen.findByTestId('walkthrough-proposal-step-s1-centered');
+
+    await user.click(screen.getByTestId('walkthrough-proposal-step-s1-choose-anchor'));
+    await waitFor(() => expect(mockMatches).toHaveBeenCalled());
+
+    const routeFilter = screen.getByTestId(
+      'walkthrough-proposal-step-s1-anchor-route-filter',
+    );
+    await user.selectOptions(routeFilter, '/design-module');
+    const anchorSelect = screen.getByTestId(
+      'walkthrough-proposal-step-s1-anchor-select',
+    );
+    await user.selectOptions(anchorSelect, 'design-module-add-btn');
+    await screen.findByTestId('walkthrough-proposal-step-s1-anchor-selected');
+
+    await user.click(screen.getByTestId('walkthrough-proposal-step-s1-accept'));
+    await waitFor(() => expect(mockValidate).toHaveBeenCalled());
+    const acceptedUnit = mockValidate.mock.calls[mockValidate.mock.calls.length - 1][0].unit;
+    expect(acceptedUnit.value.anchor?.key).toBe('design-module-add-btn');
+    expect(acceptedUnit.value.anchor?.targetRoute).toBe('/design-module');
+    expect(acceptedUnit.value.route).toBe('/design-module');
+  });
+
   it('free-text search narrows the anchor picker across the whole catalog', async () => {
     const user = userEvent.setup();
     const fields = { internalName: 'n', userTitle: 'Title', whyItMatters: 'Why' };

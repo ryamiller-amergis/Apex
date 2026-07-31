@@ -1,7 +1,7 @@
 /**
  * Coachmark: outside-target placement, non-mutating highlight, no header scroll.
  */
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { WalkthroughCoachmark } from '../WalkthroughCoachmark';
 import type { WalkthroughRendererStep } from '../../../shared/types/walkthrough';
 import * as layout from '../../utils/walkthroughCoachmarkLayout';
@@ -169,7 +169,16 @@ describe('WalkthroughCoachmark viewport behavior', () => {
     const card = await screen.findByTestId('walkthrough-coachmark-step');
     const footer = card.querySelector('[class*="coachmarkFooter"]');
     const scroll = card.querySelector('[class*="coachmarkScroll"]');
-    expect(footer!.contains(screen.getByTestId('walkthrough-next'))).toBe(true);
-    expect(scroll!.contains(screen.getByTestId('walkthrough-next'))).toBe(false);
+    const next = screen.getByTestId('walkthrough-next');
+    const dismiss = screen.getByTestId('walkthrough-close');
+    expect(footer!.contains(next)).toBe(true);
+    expect(scroll!.contains(next)).toBe(false);
+    expect(card).toHaveAttribute('role', 'dialog');
+    expect(card).toHaveAttribute('aria-modal', 'true');
+    expect(next).toHaveFocus();
+
+    dismiss.focus();
+    fireEvent.keyDown(document, { key: 'Tab' });
+    expect(next).toHaveFocus();
   });
 });

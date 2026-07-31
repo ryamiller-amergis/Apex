@@ -120,6 +120,7 @@ function makeRecord(
     approvedRoute: '/profile',
     allowedPlacements: ['bottom', 'top'],
     smartTags: ['profile'],
+    openerAnchorKeys: [],
     sourceKind: 'explicit',
     sourceLocations: [
       { filePath: 'src/client/components/ProfilePage.tsx', line: 10 },

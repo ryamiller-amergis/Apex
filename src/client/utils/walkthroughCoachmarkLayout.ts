@@ -171,6 +171,11 @@ export function isRectFullyInViewport(
  * identify it; fixed/sticky chrome remains covered for other shell controls.
  */
 export function isFixedOrStickyChrome(element: Element): boolean {
+  // A modal/popup commonly lives under a fixed full-screen backdrop. That fixed
+  // ancestor is positioning chrome, not a reason to suppress scrolling inside
+  // the dialog's own overflow container.
+  if (element.closest('[role="dialog"], [aria-modal="true"]')) return false;
+
   let current: Element | null = element;
   while (current && current instanceof HTMLElement) {
     if (current.classList.contains('app-header')) return true;
@@ -178,6 +183,70 @@ export function isFixedOrStickyChrome(element: Element): boolean {
     if (position === 'fixed' || position === 'sticky') return true;
     current = current.parentElement;
   }
+  return false;
+}
+
+function clipsOnAxis(value: string): boolean {
+  return value === 'auto' || value === 'scroll' || value === 'hidden' || value === 'clip';
+}
+
+/**
+ * `getBoundingClientRect()` can be inside the browser viewport while still being
+ * clipped by a modal/panel with overflow. Account for those internal scrollports
+ * before deciding the anchor is already visible.
+ */
+export function isClippedByScrollableAncestor(
+  element: Element,
+  padding = 0,
+): boolean {
+  const targetRect = getElementLayoutRect(element);
+  let current = element.parentElement;
+
+  while (current && current !== document.body && current !== document.documentElement) {
+    const style = window.getComputedStyle(current);
+    const overflow = style.overflow;
+    const clipsY = clipsOnAxis(style.overflowY || overflow);
+    const clipsX = clipsOnAxis(style.overflowX || overflow);
+
+    if (clipsY || clipsX) {
+      const containerRect = getElementLayoutRect(current);
+      if (
+        (clipsY &&
+          (targetRect.top < containerRect.top + padding ||
+            targetRect.bottom > containerRect.bottom - padding)) ||
+        (clipsX &&
+          (targetRect.left < containerRect.left + padding ||
+            targetRect.right > containerRect.right - padding))
+      ) {
+        return true;
+      }
+    }
+
+    current = current.parentElement;
+  }
+
+  return false;
+}
+
+export function isOversizedForScrollport(
+  element: Element,
+  padding = COACHMARK_VIEWPORT_PADDING_PX,
+): boolean {
+  const targetRect = getElementLayoutRect(element);
+  if (targetRect.height > window.innerHeight - padding * 2) return true;
+
+  let current = element.parentElement;
+  while (current && current !== document.body && current !== document.documentElement) {
+    const style = window.getComputedStyle(current);
+    const overflow = style.overflow;
+    const clipsY = clipsOnAxis(style.overflowY || overflow);
+    if (clipsY) {
+      const containerRect = getElementLayoutRect(current);
+      if (targetRect.height > containerRect.height - padding * 2) return true;
+    }
+    current = current.parentElement;
+  }
+
   return false;
 }
 
@@ -246,7 +315,15 @@ export function scrollWalkthroughAnchorIntoView(
   };
   const viewport = getViewportSize();
   const rect = getElementLayoutRect(element);
-  if (!options?.force && !shouldScrollAnchorIntoView(rect, viewport, preferred, floating)) {
+  const clippedByAncestor = isClippedByScrollableAncestor(
+    element,
+    COACHMARK_VIEWPORT_PADDING_PX,
+  );
+  if (
+    !options?.force &&
+    !clippedByAncestor &&
+    !shouldScrollAnchorIntoView(rect, viewport, preferred, floating)
+  ) {
     return false;
   }
 
@@ -262,7 +339,12 @@ export function scrollWalkthroughAnchorIntoView(
 
   element.scrollIntoView({
     behavior: prefersReduced ? 'auto' : (options?.behavior ?? 'smooth'),
-    block: scrollBlockForPlacement(preferred),
+    // Large form/section anchors cannot fit inside a modal scrollport. Aligning
+    // their end for a top placement jumps users to the bottom of the form; start
+    // alignment keeps the first fields and the step's described content visible.
+    block: isOversizedForScrollport(element)
+      ? 'start'
+      : scrollBlockForPlacement(preferred),
     inline: 'nearest',
   });
   return true;

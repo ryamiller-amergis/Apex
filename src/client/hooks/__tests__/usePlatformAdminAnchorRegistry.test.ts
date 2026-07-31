@@ -51,6 +51,7 @@ function makeRecord(
     approvedRoute: null,
     allowedPlacements: ['bottom'],
     smartTags: [],
+    openerAnchorKeys: [],
     sourceKind: 'data_testid',
     sourceLocations: [{ filePath: 'src/client/components/X.tsx', line: 1 }],
     sourceHash: 'hash',

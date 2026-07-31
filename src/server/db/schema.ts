@@ -1845,6 +1845,7 @@ export const walkthroughAnchorRegistry = pgTable('walkthrough_anchor_registry', 
     .notNull()
     .default(['bottom']),
   smartTags: jsonb('smart_tags').$type<string[]>().notNull().default([]),
+  openerAnchorKeys: jsonb('opener_anchor_keys').$type<string[]>().notNull().default([]),
   sourceKind: text('source_kind').$type<WalkthroughAnchorSourceKind>().notNull(),
   sourceLocations: jsonb('source_locations')
     .$type<WalkthroughAnchorSourceLocation[]>()

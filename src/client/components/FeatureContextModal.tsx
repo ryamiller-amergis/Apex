@@ -50,7 +50,10 @@ function prototypeToUiMock(proto: ApexFeatureContextPrototype): UiMock {
   };
 }
 
-const BacklogItemCard: React.FC<{ item: ApexFeatureContextBacklogItem }> = ({ item }) => {
+const BacklogItemCard: React.FC<{
+  item: ApexFeatureContextBacklogItem;
+  'data-testid'?: string;
+}> = ({ item, 'data-testid': testId }) => {
   const [expanded, setExpanded] = useState(false);
   const hasDetails =
     !!item.description ||
@@ -59,13 +62,17 @@ const BacklogItemCard: React.FC<{ item: ApexFeatureContextBacklogItem }> = ({ it
     (item.dependencies && item.dependencies.length > 0);
 
   return (
-    <div className={styles['backlog-item']}>
+    <div
+      className={styles['backlog-item']}
+      {...(testId ? { 'data-testid': testId } : {})}
+    >
       <button
         type="button"
         className={styles['backlog-item-header']}
         onClick={() => hasDetails && setExpanded((v) => !v)}
         aria-expanded={hasDetails ? expanded : undefined}
         disabled={!hasDetails}
+        {...{ 'data-testid': `feature-context-backlog-item-toggle-${item.id}` }}
       >
         <span className={styles['backlog-item-id']}>{item.id}</span>
         <span className={styles['backlog-item-title']}>{item.title}</span>
@@ -206,7 +213,12 @@ export const FeatureContextModal: React.FC<FeatureContextModalProps> = ({
       return (
         <div className={styles.state} role="alert">
           <p>{(error as Error)?.message ?? 'Failed to load feature context'}</p>
-          <button type="button" className={styles['retry-btn']} onClick={() => refetch()}>
+          <button
+            type="button"
+            className={styles['retry-btn']}
+            onClick={() => refetch()}
+            {...{ 'data-testid': 'feature-context-retry-btn' }}
+          >
             Retry
           </button>
         </div>
@@ -232,7 +244,11 @@ export const FeatureContextModal: React.FC<FeatureContextModalProps> = ({
               Only work items associated with {feature.featureId} are shown.
             </div>
             {data.backlogItems.map((item) => (
-              <BacklogItemCard key={item.id} item={item} />
+              <BacklogItemCard
+                key={item.id}
+                item={item}
+                {...{ 'data-testid': `feature-context-backlog-item-${item.id}` }}
+              />
             ))}
           </div>
         );
@@ -294,7 +310,7 @@ export const FeatureContextModal: React.FC<FeatureContextModalProps> = ({
     <div
       className={styles.overlay}
       onClick={onClose}
-      data-testid="feature-context-modal-overlay"
+      {...{ 'data-testid': 'feature-context-modal-overlay' }}
     >
       <div
         ref={dialogRef}
@@ -303,7 +319,7 @@ export const FeatureContextModal: React.FC<FeatureContextModalProps> = ({
         aria-modal="true"
         aria-labelledby={titleId}
         onClick={(e) => e.stopPropagation()}
-        data-testid="feature-context-modal"
+        {...{ 'data-testid': 'feature-context-modal' }}
       >
         <header className={styles.header}>
           <div className={styles['header-main']}>
@@ -325,6 +341,7 @@ export const FeatureContextModal: React.FC<FeatureContextModalProps> = ({
             className={styles['close-btn']}
             onClick={onClose}
             aria-label="Close"
+            {...{ 'data-testid': 'feature-context-close-btn' }}
           >
             Close
           </button>
@@ -336,6 +353,7 @@ export const FeatureContextModal: React.FC<FeatureContextModalProps> = ({
             role="tablist"
             aria-orientation="vertical"
             aria-label="Feature context sections"
+            {...{ 'data-testid': 'feature-context-tabs' }}
           >
             {TABS.map((tab, index) => {
               const selected = activeTab === tab.id;
@@ -352,6 +370,7 @@ export const FeatureContextModal: React.FC<FeatureContextModalProps> = ({
                   className={`${styles.tab}${selected ? ` ${styles['tab-active']}` : ''}`}
                   onClick={() => setActiveTab(tab.id)}
                   onKeyDown={(e) => handleTabKeyDown(e, index)}
+                  {...{ 'data-testid': `feature-context-tab-${tab.id}` }}
                 >
                   <span className={styles['tab-label']}>{tab.label}</span>
                   {data && <span className={styles['tab-meta']}>{tabMeta(tab.id)}</span>}
@@ -365,6 +384,7 @@ export const FeatureContextModal: React.FC<FeatureContextModalProps> = ({
             role="tabpanel"
             id={`feature-context-panel-${activeTab}`}
             aria-labelledby={`feature-context-tab-${activeTab}`}
+            {...{ 'data-testid': 'feature-context-panel' }}
           >
             {renderTabPanel()}
           </div>

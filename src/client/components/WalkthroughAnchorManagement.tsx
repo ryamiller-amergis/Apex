@@ -12,6 +12,8 @@ import {
 } from '../../shared/types/walkthroughAnchorRegistry';
 import {
   WALKTHROUGH_REGISTRY_PLACEMENTS,
+  toAuthoringAnchorEntry,
+  type WalkthroughAnchorRegistryEntry,
   type WalkthroughRegistryPlacement,
 } from '../../shared/walkthroughAnchors';
 import { listWalkthroughRoutes } from '../../shared/walkthroughRoutes';
@@ -37,6 +39,7 @@ import {
   type WalkthroughAnchorSyncDraft,
 } from './WalkthroughAnchorSyncReviewModal';
 import { useWalkthroughsAiOptions } from '../contexts/WalkthroughsAiOptionsContext';
+import { useWalkthroughAnchors } from '../hooks/usePlatformAdminWalkthroughs';
 import {
   computeAnchorCatalogCounts,
   filterAnchorCatalog,
@@ -96,6 +99,7 @@ const editAnchorSchema = z
     approvedRoute: z.string().optional(),
     allowedPlacements: z.array(placementSchema).min(1, 'Select at least one placement'),
     smartTags: z.string().optional(),
+    openerAnchorKeys: z.string().optional(),
     reviewStatus: z.enum(['pending', 'approved', 'rejected']),
     isActive: z.boolean(),
   })
@@ -131,6 +135,14 @@ function routeFor(record: WalkthroughAnchorRegistryRecord): string {
 }
 
 function parseSmartTags(raw: string | undefined): string[] {
+  if (!raw?.trim()) return [];
+  return raw
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean);
+}
+
+function parseOpenerAnchorKeys(raw: string | undefined): string[] {
   if (!raw?.trim()) return [];
   return raw
     .split(',')
@@ -494,12 +506,19 @@ const AddAnchorModal: React.FC<AddAnchorModalProps> = ({ onClose, onCreated }) =
 
 interface EditAnchorModalProps {
   record: WalkthroughAnchorRegistryRecord;
+  availableOpeners: readonly WalkthroughAnchorRegistryEntry[];
   onClose: () => void;
 }
 
-const EditAnchorModal: React.FC<EditAnchorModalProps> = ({ record, onClose }) => {
+const EditAnchorModal: React.FC<EditAnchorModalProps> = ({
+  record,
+  availableOpeners,
+  onClose,
+}) => {
   const updateMutation = useUpdateAnchorRegistry();
   const routes = listWalkthroughRoutes();
+  const [openerRoute, setOpenerRoute] = useState('');
+  const [openerSearch, setOpenerSearch] = useState('');
 
   const {
     register,
@@ -515,6 +534,7 @@ const EditAnchorModal: React.FC<EditAnchorModalProps> = ({ record, onClose }) =>
       approvedRoute: record.approvedRoute ?? '',
       allowedPlacements: [...record.allowedPlacements],
       smartTags: record.smartTags.join(', '),
+      openerAnchorKeys: (record.openerAnchorKeys ?? []).join(', '),
       reviewStatus: record.reviewStatus,
       isActive: record.isActive,
     },
@@ -523,6 +543,33 @@ const EditAnchorModal: React.FC<EditAnchorModalProps> = ({ record, onClose }) =>
   // eslint-disable-next-line react-hooks/incompatible-library -- RHF watch() is intentionally unmemoizable
   const reviewStatus = watch('reviewStatus');
   const placements = watch('allowedPlacements');
+  const selectedOpenerKeys = parseOpenerAnchorKeys(watch('openerAnchorKeys'));
+  const openerByKey = useMemo(
+    () => new Map(availableOpeners.map((candidate) => [candidate.key, candidate])),
+    [availableOpeners],
+  );
+  const filteredOpeners = useMemo(() => {
+    const term = openerSearch.trim().toLowerCase();
+    return availableOpeners
+      .filter((candidate) => candidate.key !== record.anchorKey)
+      .filter((candidate) => {
+        if (!openerRoute) return true;
+        return candidate.targetRoute === openerRoute;
+      })
+      .filter((candidate) => {
+        if (!term) return true;
+        return [
+          candidate.label,
+          candidate.key,
+          candidate.testId,
+          ...(candidate.smartTags ?? []),
+        ]
+          .join(' ')
+          .toLowerCase()
+          .includes(term);
+      })
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [availableOpeners, openerRoute, openerSearch, record.anchorKey]);
 
   useEffect(() => {
     if (reviewStatus !== 'approved') {
@@ -545,6 +592,29 @@ const EditAnchorModal: React.FC<EditAnchorModalProps> = ({ record, onClose }) =>
     setValue('allowedPlacements', next, { shouldValidate: true });
   };
 
+  const setSelectedOpeners = (keys: readonly string[]) => {
+    setValue('openerAnchorKeys', keys.join(', '), {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+  };
+
+  const toggleOpener = (key: string) => {
+    setSelectedOpeners(
+      selectedOpenerKeys.includes(key)
+        ? selectedOpenerKeys.filter((selected) => selected !== key)
+        : [...selectedOpenerKeys, key],
+    );
+  };
+
+  const moveOpener = (index: number, direction: -1 | 1) => {
+    const target = index + direction;
+    if (target < 0 || target >= selectedOpenerKeys.length) return;
+    const next = [...selectedOpenerKeys];
+    [next[index], next[target]] = [next[target], next[index]];
+    setSelectedOpeners(next);
+  };
+
   const onSubmit = async (values: EditAnchorFormValues) => {
     try {
       await updateMutation.mutateAsync({
@@ -554,6 +624,7 @@ const EditAnchorModal: React.FC<EditAnchorModalProps> = ({ record, onClose }) =>
         approvedRoute: emptyToNull(values.approvedRoute),
         allowedPlacements: values.allowedPlacements,
         smartTags: parseSmartTags(values.smartTags),
+        openerAnchorKeys: parseOpenerAnchorKeys(values.openerAnchorKeys),
         reviewStatus: values.reviewStatus,
         isActive: values.reviewStatus === 'approved' ? values.isActive : false,
       });
@@ -575,7 +646,7 @@ const EditAnchorModal: React.FC<EditAnchorModalProps> = ({ record, onClose }) =>
       aria-labelledby="anchor-edit-title"
       {...{ 'data-testid': 'walkthrough-anchor-edit-modal' }}
     >
-      <div className={styles.modalCardNarrow}>
+      <div className={styles.modalCardEditor}>
         <div className={styles.modalHeader}>
           <div>
             <h2 className={styles.modalTitle} id="anchor-edit-title">
@@ -654,6 +725,132 @@ const EditAnchorModal: React.FC<EditAnchorModalProps> = ({ record, onClose }) =>
               {...{ 'data-testid': 'walkthrough-anchor-edit-tags' }}
             />
           </label>
+          <div className={`${styles.field} ${styles.fieldWide}`}>
+            <span className={styles.label}>Opener anchors (ordered)</span>
+            <span className={styles.modalHint}>
+              Select approved+active elements to click before this hidden target appears. AI uses
+              this reveal chain during generation. Leave empty when the target is already visible.
+            </span>
+
+            {selectedOpenerKeys.length > 0 ? (
+              <ol
+                className={styles.openerSelection}
+                {...{ 'data-testid': 'walkthrough-anchor-edit-openers' }}
+              >
+                {selectedOpenerKeys.map((key, index) => {
+                  const selected = openerByKey.get(key);
+                  return (
+                    <li key={key} className={styles.openerSelectionRow}>
+                      <span className={styles.openerSelectionText}>
+                        <strong>{selected?.label ?? key}</strong>
+                        <code>{key}</code>
+                      </span>
+                      <span className={styles.openerSelectionActions}>
+                        <button
+                          type="button"
+                          className={styles.buttonGhost}
+                          aria-label={`Move opener ${key} up`}
+                          disabled={index === 0}
+                          onClick={() => moveOpener(index, -1)}
+                          {...{ 'data-testid': `walkthrough-anchor-edit-opener-move-up-${key}` }}
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.buttonGhost}
+                          aria-label={`Move opener ${key} down`}
+                          disabled={index === selectedOpenerKeys.length - 1}
+                          onClick={() => moveOpener(index, 1)}
+                          {...{ 'data-testid': `walkthrough-anchor-edit-opener-move-down-${key}` }}
+                        >
+                          ↓
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.buttonGhost}
+                          onClick={() => toggleOpener(key)}
+                          {...{ 'data-testid': `walkthrough-anchor-edit-opener-remove-${key}` }}
+                        >
+                          Remove
+                        </button>
+                      </span>
+                    </li>
+                  );
+                })}
+              </ol>
+            ) : (
+              <p
+                className={styles.openerEmpty}
+                {...{ 'data-testid': 'walkthrough-anchor-edit-openers' }}
+              >
+                No opener anchors selected.
+              </p>
+            )}
+
+            <div className={styles.openerFilters}>
+              <label className={styles.field}>
+                <span className={styles.label}>Filter by route</span>
+                <select
+                  className={styles.select}
+                  value={openerRoute}
+                  onChange={(event) => setOpenerRoute(event.target.value)}
+                  {...{ 'data-testid': 'walkthrough-anchor-edit-opener-route-filter' }}
+                >
+                  <option value="">All routes</option>
+                  {routes.map((route) => (
+                    <option key={route.route} value={route.route}>
+                      {route.label} ({route.route})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className={styles.field}>
+                <span className={styles.label}>Search openers</span>
+                <input
+                  type="search"
+                  className={styles.input}
+                  placeholder="Label, key, test ID, or tag…"
+                  value={openerSearch}
+                  onChange={(event) => setOpenerSearch(event.target.value)}
+                  {...{ 'data-testid': 'walkthrough-anchor-edit-opener-search' }}
+                />
+              </label>
+            </div>
+
+            <div
+              className={styles.openerOptions}
+              {...{ 'data-testid': 'walkthrough-anchor-edit-opener-options' }}
+            >
+              {filteredOpeners.length > 0 ? (
+                filteredOpeners.map((candidate) => (
+                  <label key={candidate.key} className={styles.openerOption}>
+                    <input
+                      type="checkbox"
+                      checked={selectedOpenerKeys.includes(candidate.key)}
+                      onChange={() => toggleOpener(candidate.key)}
+                      {...{
+                        'data-testid': `walkthrough-anchor-edit-opener-option-${candidate.key}`,
+                      }}
+                    />
+                    <span>
+                      <strong>{candidate.label}</strong>
+                      <small>
+                        {candidate.key} · {candidate.testId} ·{' '}
+                        {candidate.targetRoute || 'Any route'}
+                      </small>
+                    </span>
+                  </label>
+                ))
+              ) : (
+                <p className={styles.openerEmpty}>No approved openers match these filters.</p>
+              )}
+            </div>
+            <span className={styles.modalHint}>
+              Selection order is click order. For example, an Add button can reveal a modal Save
+              button. Test both Next and Back after saving.
+            </span>
+          </div>
           <div className={`${styles.field} ${styles.fieldWide}`}>
             <span className={styles.label}>Placements</span>
             <div className={styles.placementChecks}>
@@ -855,11 +1052,30 @@ export const WalkthroughAnchorManagement: React.FC<WalkthroughAnchorManagementPr
 
   const catalogQuery = useAnchorRegistryCatalog(listParams, { enabled: useLiveCatalog });
   const coverageQuery = useAnchorRegistryModuleCoverage({ enabled: useLiveCatalog });
+  const authoringAnchorsQuery = useWalkthroughAnchors();
   const syncMutation = useSyncAnchorRegistry();
   const persistSyncReviewMutation = usePersistAnchorSyncReviewDrafts();
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- fallback [] is render-local; memo deps intentionally include records identity
   const records = recordsProp ?? catalogQuery.data?.items ?? [];
+  const availableOpeners = useMemo(
+    () =>
+      authoringAnchorsQuery.data ??
+      records
+        .filter(
+          (candidate) =>
+            candidate.reviewStatus === 'approved' &&
+            candidate.isActive &&
+            candidate.deletedAt == null,
+        )
+        .map((candidate) =>
+          toAuthoringAnchorEntry({
+            ...candidate,
+            targetRoute: candidate.approvedRoute ?? candidate.suggestedRoute,
+          }),
+        ),
+    [authoringAnchorsQuery.data, records],
+  );
 
   // eslint-disable-next-line react-hooks/preserve-manual-memoization -- keep manual memo; records fallback identity is intentional
   const counts = useMemo(() => {
@@ -1346,7 +1562,11 @@ export const WalkthroughAnchorManagement: React.FC<WalkthroughAnchorManagementPr
       )}
       {editing && (
         // data-testid-exempt — modal root sets walkthrough-anchor-edit-modal
-        <EditAnchorModal record={editing} onClose={() => setEditing(null)} />
+        <EditAnchorModal
+          record={editing}
+          availableOpeners={availableOpeners}
+          onClose={() => setEditing(null)}
+        />
       )}
       {deleting && (
         // data-testid-exempt — modal root sets walkthrough-anchor-delete-modal

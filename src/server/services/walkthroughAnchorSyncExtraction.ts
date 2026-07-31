@@ -293,7 +293,7 @@ export function isAppSidebarSourcePath(filePath: string): boolean {
 
 const APP_SIDEBAR_NAV_ITEM_PREFIX = 'nav-item-';
 const APP_SIDEBAR_VIEW_CONVENTION_RE =
-  /navItemTestIdProps\s*\(|['"]data-testid['"]\s*:\s*`nav-item-\$\{(?:item\.)?view\}|data-testid\s*=\s*\{\s*`nav-item-\$\{(?:item\.)?view\}/;
+  /navItemTestIdProps\s*\(|['"]data-testid['"]\s*:\s*(?:(?:item\.)?testId\s*\?\?\s*)?`nav-item-\$\{(?:item\.)?view\}|data-testid\s*=\s*\{\s*(?:(?:item\.)?testId\s*\?\?\s*)?`nav-item-\$\{(?:item\.)?view\}/;
 
 /**
  * Resolve AppSidebar nav discoveries from literal `view:` / `testId:` fields.

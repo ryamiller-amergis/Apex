@@ -236,6 +236,64 @@ describe('ManualWalkthroughEditor', () => {
     expect(targetingIdx).toBeLessThan(aiIdx);
   });
 
+  it('explains how to configure opener anchors for hidden elements', async () => {
+    const user = userEvent.setup();
+    renderEditor();
+
+    await user.click(screen.getByTestId('walkthrough-steps-info-toggle'));
+
+    const info = screen.getByTestId('walkthrough-steps-info-panel');
+    expect(within(info).getByText(/hidden anchors/i)).toBeInTheDocument();
+    expect(within(info).getByText(/anchor management/i)).toBeInTheDocument();
+    expect(within(info).getByText('Opener anchors', { selector: 'strong' })).toBeInTheDocument();
+    expect(within(info).getByText(/design-module-save-btn/i)).toBeInTheDocument();
+  });
+
+  it('filters step anchors by route/text and searches CTA routes', async () => {
+    const user = userEvent.setup();
+    mockWalkthroughHooks.useWalkthroughAnchors.mockReturnValue({
+      data: [
+        {
+          key: 'user-menu-trigger',
+          testId: 'user-menu-trigger',
+          label: 'User menu',
+          targetRoute: '/home',
+          allowedPlacements: ['bottom'],
+          smartTags: ['navigation'],
+        },
+        {
+          key: 'profile-bio',
+          testId: 'profile-bio-section',
+          label: 'Profile bio',
+          targetRoute: '/profile',
+          allowedPlacements: ['top'],
+          smartTags: ['profile', 'edit'],
+        },
+      ],
+      isLoading: false,
+      isError: false,
+      error: null,
+    } as unknown as ReturnType<typeof mockWalkthroughHooks.useWalkthroughAnchors>);
+
+    renderEditor();
+
+    await user.selectOptions(screen.getByLabelText(/filter anchors by route/i), '/profile');
+    await user.type(screen.getByLabelText(/search anchors/i), 'bio');
+
+    const anchorSelect = screen.getByLabelText(/^Anchor$/i);
+    expect(within(anchorSelect).getByRole('option', { name: /Profile bio.*profile-bio/i }))
+      .toBeInTheDocument();
+    expect(within(anchorSelect).queryByRole('option', { name: /User menu/i }))
+      .not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/search CTA routes/i), 'design module');
+    const ctaRoute = screen.getByLabelText(/^CTA route$/i);
+    expect(within(ctaRoute).getByRole('option', { name: /Design Module/i }))
+      .toBeInTheDocument();
+    expect(within(ctaRoute).queryByRole('option', { name: /Profile/i }))
+      .not.toBeInTheDocument();
+  });
+
   it('disables the Lifecycle button while the form has unsaved changes', async () => {
     const user = userEvent.setup();
     const published = {
@@ -376,5 +434,74 @@ describe('ManualWalkthroughEditor', () => {
     const payload = createAsync.mock.calls[0][0];
     expect(payload.steps[0].ctaLabel).toBe('Go to Design Module');
     expect(payload.steps[0].ctaRoute).toBe('/design-module');
+  });
+
+  it('reconciles a saved placement that is no longer allowed before saving', async () => {
+    const user = userEvent.setup();
+    const existing = {
+      id: 'wt-stale-placement',
+      internalName: 'Design module guide',
+      userTitle: 'Design module',
+      whyItMatters: '',
+      lifecycle: 'draft',
+      priority: 0,
+      revision: 1,
+      publishedAt: null,
+      archivedAt: null,
+      createdBy: 'admin',
+      createdAt: '2026-07-30T00:00:00Z',
+      updatedBy: 'admin',
+      updatedAt: '2026-07-30T00:00:00Z',
+      steps: [{
+        id: 's1',
+        walkthroughId: 'wt-stale-placement',
+        ordinal: 0,
+        heading: 'Save the module',
+        bodyMarkdown: 'Save your changes.',
+        route: '/design-module',
+        ctaLabel: null,
+        ctaRoute: null,
+        anchor: {
+          key: 'user-menu-trigger',
+          targetRoute: '/home',
+          placement: 'right',
+        },
+      }],
+      targeting: { projects: ['Apex'], groupId: null },
+      targetingRules: [{ type: 'project', value: 'Apex' }],
+    };
+    const updateAsync = jest.fn().mockResolvedValue({
+      ...existing,
+      updatedAt: '2026-07-31T00:00:00Z',
+      steps: [{
+        ...existing.steps[0],
+        anchor: {
+          ...existing.steps[0].anchor,
+          placement: 'bottom',
+        },
+      }],
+    });
+    mockWalkthroughHooks.useWalkthroughDetail.mockReturnValue({
+      data: existing,
+      isLoading: false,
+      isError: false,
+      error: null,
+    } as unknown as ReturnType<typeof mockWalkthroughHooks.useWalkthroughDetail>);
+    mockWalkthroughHooks.useUpdateWalkthrough.mockReturnValue({
+      mutateAsync: updateAsync,
+      isPending: false,
+      error: null,
+    } as unknown as ReturnType<typeof mockWalkthroughHooks.useUpdateWalkthrough>);
+
+    renderEditor({ walkthroughId: existing.id });
+
+    await waitFor(() => expect(screen.getByLabelText(/^Placement$/i)).toHaveValue('bottom'));
+    expect(screen.getByLabelText(/^CTA route$/i)).toHaveValue('');
+
+    await user.click(screen.getByTestId('walkthrough-save-draft'));
+
+    await waitFor(() => expect(updateAsync).toHaveBeenCalled());
+    expect(updateAsync.mock.calls[0][0].steps[0].anchor?.placement).toBe('bottom');
+    expect(screen.queryByTestId('walkthrough-validation-summary')).not.toBeInTheDocument();
   });
 });

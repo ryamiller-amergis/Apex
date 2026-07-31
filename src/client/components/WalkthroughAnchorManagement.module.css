@@ -665,6 +665,12 @@
   max-width: 520px;
 }
 
+.modalCardEditor {
+  composes: modalCard;
+  max-width: 760px;
+  overflow-y: auto;
+}
+
 .modalHeader {
   display: flex;
   align-items: flex-start;
@@ -932,6 +938,102 @@
   grid-column: 1 / -1;
 }
 
+.openerSelection {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.openerSelectionRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color-light);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+}
+
+.openerSelectionText {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+}
+
+.openerSelectionText code {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+}
+
+.openerSelectionActions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
+.openerFilters {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(220px, 1.2fr);
+  gap: 10px;
+}
+
+.openerOptions {
+  display: flex;
+  max-height: 210px;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+}
+
+.openerOption {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 6px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.openerOption:hover {
+  background: var(--bg-tertiary);
+}
+
+.openerOption span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.8125rem;
+}
+
+.openerOption small {
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.7rem;
+}
+
+.openerEmpty {
+  margin: 0;
+  padding: 8px;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+}
+
 .checkboxLabel {
   display: flex;
   align-items: center;
@@ -971,5 +1073,14 @@
 
   .syncRow {
     grid-template-columns: 1fr;
+  }
+
+  .openerFilters {
+    grid-template-columns: 1fr;
+  }
+
+  .openerSelectionRow {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

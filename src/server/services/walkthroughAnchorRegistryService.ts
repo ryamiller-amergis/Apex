@@ -26,10 +26,13 @@ import {
 import { isWalkthroughRoute } from '../../shared/walkthroughRoutes';
 import {
   WalkthroughAnchorRegistryError,
+  isRuntimeEligibleAnchor,
   isWalkthroughAnchorReviewStatus,
   isWalkthroughAnchorSourceKind,
+  normalizeOpenerAnchorKeys,
   normalizeSmartTags,
   validateAnchorRegistryCandidate,
+  validateOpenerAnchorKeys,
   type BulkWalkthroughAnchorCommand,
   type CreateManualWalkthroughAnchorCommand,
   type CreateWalkthroughAnchorFromCandidateCommand,
@@ -104,6 +107,7 @@ function mapRow(row: RegistryRow): WalkthroughAnchorRegistryRecord {
     approvedRoute: row.approvedRoute,
     allowedPlacements: row.allowedPlacements,
     smartTags: row.smartTags,
+    openerAnchorKeys: row.openerAnchorKeys ?? [],
     sourceKind: row.sourceKind,
     sourceLocations: row.sourceLocations,
     sourceHash: row.sourceHash,
@@ -143,6 +147,40 @@ function assertValidCandidate(
 ): void {
   const errors = validateAnchorRegistryCandidate(candidate);
   if (errors.length > 0) throwValidation(errors);
+}
+
+async function assertOpenerKeysForAnchor(
+  executor: DbExecutor,
+  anchorKey: string,
+  openerAnchorKeys: readonly string[] | undefined,
+  /** When updating, exclude this row id from "other" graph collisions of same key. */
+  selfId?: string
+): Promise<string[]> {
+  const openers = normalizeOpenerAnchorKeys(openerAnchorKeys ?? []);
+  if (openers.length === 0) return [];
+
+  const liveRows = await executor.query.walkthroughAnchorRegistry.findMany({
+    where: isNull(walkthroughAnchorRegistry.deletedAt),
+  });
+
+  const runtimeEligibleKeys = new Set(
+    liveRows.filter(isRuntimeEligibleAnchor).map((r) => r.anchorKey)
+  );
+  const openerGraph = new Map<string, readonly string[]>();
+  for (const row of liveRows) {
+    if (selfId && row.id === selfId) continue;
+    openerGraph.set(row.anchorKey, row.openerAnchorKeys ?? []);
+  }
+  openerGraph.set(anchorKey, openers);
+
+  const errors = validateOpenerAnchorKeys({
+    anchorKey,
+    openerAnchorKeys: openers,
+    runtimeEligibleKeys,
+    openerGraph,
+  });
+  if (errors.length > 0) throwValidation(errors);
+  return openers;
 }
 
 function assertActiveApproved(
@@ -929,6 +967,7 @@ export async function createManualAnchor(
     approvedRoute: input.approvedRoute ?? null,
     allowedPlacements,
     smartTags,
+    openerAnchorKeys: input.openerAnchorKeys ?? [],
     sourceKind: 'manual',
     sourceLocations,
     reviewStatus,
@@ -946,6 +985,11 @@ export async function createManualAnchor(
   const anchorKey = input.anchorKey.trim();
   const testId = input.testId.trim();
   const label = input.label.trim();
+  const openerAnchorKeys = await assertOpenerKeysForAnchor(
+    db,
+    anchorKey,
+    input.openerAnchorKeys
+  );
 
   const duplicate = await findLiveByKeyOrTestId(db, anchorKey, testId);
   if (duplicate) {
@@ -968,6 +1012,7 @@ export async function createManualAnchor(
       approvedRoute: input.approvedRoute ?? null,
       allowedPlacements,
       smartTags,
+      openerAnchorKeys,
       sourceKind: 'manual',
       sourceLocations,
       sourceHash: null,
@@ -1021,6 +1066,14 @@ export async function updateAnchor(
       patch.sourceLocations !== undefined
         ? [...patch.sourceLocations]
         : existing.sourceLocations;
+    const openerAnchorKeys = await assertOpenerKeysForAnchor(
+      tx,
+      existing.anchorKey,
+      patch.openerAnchorKeys !== undefined
+        ? patch.openerAnchorKeys
+        : existing.openerAnchorKeys,
+      existing.id
+    );
 
     assertValidCandidate({
       anchorKey: existing.anchorKey,
@@ -1030,6 +1083,7 @@ export async function updateAnchor(
       approvedRoute,
       allowedPlacements,
       smartTags,
+      openerAnchorKeys,
       sourceKind: existing.sourceKind,
       sourceLocations,
       reviewStatus,
@@ -1048,6 +1102,7 @@ export async function updateAnchor(
         approvedRoute,
         allowedPlacements,
         smartTags,
+        openerAnchorKeys,
         sourceLocations,
         reviewStatus,
         isActive: nextActive,

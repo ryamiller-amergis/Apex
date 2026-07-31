@@ -24,6 +24,10 @@ Invoked programmatically by `walkthroughGenerationService.ts` via the Cursor SDK
    - Available image assets: list image files under `public/` (svg, png, jpg, webp, gif).
    - Relevant components/pages: browse `src/client/components/` and `src/client/App.tsx` route definitions to understand what each page shows.
 3. **Plan the Walkthrough** steps based on the intent, ensuring every route, anchor key, CTA route, and image path is verified against the repository source files and kickoff allow-lists discovered above.
+   - For each likely anchor, search the repository for its exact catalog `testId` and inspect the surrounding component. Look for conditional rendering and accessibility/UI signals such as dialogs, modals, menus, tabs, disclosures, `open` state, and click handlers that reveal the target.
+   - Treat `openerAnchorKeys` as catalog-owned reveal metadata for targets hidden inside modals, menus, tabs, or other conditional UI. The runtime clicks those approved+active anchors in order before locating the target.
+   - Prefer a catalog candidate whose existing opener chain correctly reveals a hidden target. If that candidate cannot be used, try a visible approved candidate that teaches the same action.
+   - A Step cannot define or repair opener relationships. If repository inspection shows a target is hidden and its catalog candidate does not contain the opener keys needed to reveal it, do not guess. Use a visible alternative or a centered Step (`anchorKey` / `anchorPlacement` null). It is acceptable when no safe anchor can be found.
 4. **Write the output** to `.ai-pilot/output/walkthrough-generation.json` using the Write tool.
 
 ## Output Schema
@@ -56,6 +60,7 @@ Write exactly this JSON shape to `.ai-pilot/output/walkthrough-generation.json`:
 1. **No invented behavior.** Every step must describe functionality that verifiably exists in the Apex codebase. Do not claim features, pages, buttons, or settings that are not in the source.
 2. **Routes must come from `walkthroughRoutes.ts`.** Do not invent routes. If a step targets a page, its `route` field must be an exact match from `ROUTE_ENTRIES`.
 3. **Anchors must come from ranked catalog candidates.** Only use `anchorKey` values present in the kickoff `rankedCandidates` (or the kickoff `autoSelectedAnchor`). Prefer `autoSelectedAnchor` when it is non-null and fits the step. Use `allowedPlacements` from that candidate for `anchorPlacement`. If the ranked catalog list is empty, set `anchorKey` / `anchorPlacement` to null rather than inventing keys. Do not fall back to `walkthroughAnchors.ts` DOM markers for allow-list keys (Phase 6/7 DB catalog cutover).
+   - For hidden targets, cross-reference the candidate with `## Authoring Catalog Anchors`, inspect its exact `testId` at the listed source locations, and require the needed `openerAnchorKeys`. Never invent opener keys in Step output.
 4. **Images must exist in `public/`.** Only reference image paths you verified by listing the `public/` directory.
 5. **Maximum 20 steps.** Keep walkthroughs focused and actionable.
 6. **Alt text is required when imageUrl is set.** Provide descriptive, accessible alt text for every image.

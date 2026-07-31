@@ -158,6 +158,7 @@ export function enrichDefinitionAnchorsFromRecords(
             targetRoute: result.enriched.targetRoute,
             placement: result.enriched.placement as NonNullable<WalkthroughStep['anchor']>['placement'],
             testId: result.enriched.testId,
+            openers: result.enriched.openers,
             useCenteredFallback: false,
             catalogFallbackReason: undefined,
           },

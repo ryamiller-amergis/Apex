@@ -149,7 +149,10 @@ describe('WalkthroughRenderer (TBI-004)', () => {
     });
     expect(screen.queryByTestId('walkthrough-modal-step')).toBeNull();
     expect(screen.getByText('Open the menu')).toBeInTheDocument();
+    expect(screen.getByTestId('walkthrough-interaction-shield')).toBeInTheDocument();
+    expect(target).toHaveAttribute('inert');
     unmount();
+    expect(target).not.toHaveAttribute('inert');
     target.remove();
   });
 

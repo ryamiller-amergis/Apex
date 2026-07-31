@@ -28,6 +28,8 @@ export interface ResolvedRuntimeCatalogAnchor {
   targetRoute: string | null;
   allowedPlacements: readonly WalkthroughRegistryPlacement[];
   smartTags: readonly string[];
+  openerAnchorKeys: readonly string[];
+  sourceLocations: WalkthroughAnchorRegistryRecord['sourceLocations'];
   sourceKind: WalkthroughAnchorSourceKind;
   /** Surfaced for telemetry; does not block resolution by itself. */
   missingSince: string | null;
@@ -67,6 +69,8 @@ function toResolved(
     targetRoute: record.approvedRoute,
     allowedPlacements: record.allowedPlacements,
     smartTags: record.smartTags,
+    openerAnchorKeys: record.openerAnchorKeys ?? [],
+    sourceLocations: record.sourceLocations,
     sourceKind: record.sourceKind,
     missingSince: record.missingSince,
   };
@@ -185,7 +189,25 @@ export function resolveRuntimeCatalogAnchor(
 /**
  * Enrich a step anchor with the catalog testId for playback without a
  * separate client catalog round-trip (Phase 6 handoff helper).
+ * Phase 1: also resolve ordered opener locators for auto-open.
  */
+export function resolveOpenerLocators(
+  records: readonly WalkthroughAnchorRegistryRecord[],
+  openerAnchorKeys: readonly string[] | null | undefined,
+): Array<{ key: string; testId: string }> {
+  if (!openerAnchorKeys?.length) return [];
+  const index = buildRuntimeCatalogIndex(records);
+  const out: Array<{ key: string; testId: string }> = [];
+  for (const raw of openerAnchorKeys) {
+    const key = typeof raw === 'string' ? raw.trim() : '';
+    if (!key) continue;
+    const runtime = index.runtimeByKey.get(key);
+    if (!runtime) continue; // DoD-1: skip unresolved — do not throw
+    out.push({ key: runtime.anchorKey, testId: runtime.testId });
+  }
+  return out;
+}
+
 export function enrichStepAnchorFromCatalog(
   records: readonly WalkthroughAnchorRegistryRecord[],
   stepAnchor: {
@@ -204,6 +226,7 @@ export function enrichStepAnchorFromCatalog(
         testId: string;
         label: string;
         allowedPlacements: readonly WalkthroughRegistryPlacement[];
+        openers: Array<{ key: string; testId: string }>;
       };
     }
   | {
@@ -241,6 +264,7 @@ export function enrichStepAnchorFromCatalog(
       testId: resolved.anchor.testId,
       label: resolved.anchor.label,
       allowedPlacements: resolved.anchor.allowedPlacements,
+      openers: resolveOpenerLocators(records, resolved.record.openerAnchorKeys),
     },
   };
 }

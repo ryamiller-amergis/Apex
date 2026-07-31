@@ -80,6 +80,7 @@ function makeRecord(
     approvedRoute: '/profile',
     allowedPlacements: ['bottom', 'top'],
     smartTags: ['profile', 'identity'],
+    openerAnchorKeys: [],
     sourceKind: 'manual',
     sourceLocations: [],
     sourceHash: null,

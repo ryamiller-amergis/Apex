@@ -260,9 +260,13 @@ function buildGenerationPrompt(input: {
     `Curated anchors (key → route): ${JSON.stringify(
       input.anchors.map((a) => ({
         key: a.key,
+        testId: a.testId,
         label: a.label,
         targetRoute: a.targetRoute,
         allowedPlacements: a.allowedPlacements,
+        smartTags: a.smartTags ?? [],
+        openerAnchorKeys: a.openerAnchorKeys ?? [],
+        sourceLocations: a.sourceLocations ?? [],
       })),
     )}`,
     `Curated routes: ${JSON.stringify(input.routes)}`,
@@ -270,6 +274,7 @@ function buildGenerationPrompt(input: {
     input.existingDraft
       ? `Existing draft context (optional guidance): ${JSON.stringify(input.existingDraft)}`
       : '',
+    'Anchor rules: `testId` identifies the exact DOM target. A non-empty `openerAnchorKeys` list is the ordered click chain used to reveal a target hidden in a modal, menu, tab, or conditional panel. Prefer those catalog-backed reveal chains for hidden targets. If a target appears hidden but has no opener chain, use a visible alternative or a centered step (null anchor) instead of assuming it will appear.',
     'Rules: use only listed routes, anchors, and image paths; omit invalid ones; at most 20 steps.',
   ]
     .filter(Boolean)
@@ -310,13 +315,18 @@ function buildStepGenerationPrompt(input: {
     `Curated anchors (key → route): ${JSON.stringify(
       input.anchors.map((a) => ({
         key: a.key,
+        testId: a.testId,
         label: a.label,
         targetRoute: a.targetRoute,
         allowedPlacements: a.allowedPlacements,
+        smartTags: a.smartTags ?? [],
+        openerAnchorKeys: a.openerAnchorKeys ?? [],
+        sourceLocations: a.sourceLocations ?? [],
       })),
     )}`,
     `Curated routes: ${JSON.stringify(input.routes)}`,
     `Allow-listed image paths: ${JSON.stringify(input.assets)}`,
+    'Anchor rules: `testId` identifies the exact DOM target. Use `openerAnchorKeys` as the ordered reveal chain for hidden modal/menu/tab targets. If a likely hidden target has no opener chain, choose a visible alternative or return a centered step with a null anchor.',
     'Rules: use only listed routes, anchors, and image paths; use null for anything not listed. Return one Step object only.',
   ]
     .filter(Boolean)
@@ -337,9 +347,10 @@ function buildRedoPrompt(input: {
       : 'Return { "kind":"step", "heading":"...", "bodyMarkdown":"...", "route":null|"/curated-path", "imageUrl":null|"/path", "imageAlt":null|"description", "ctaLabel":null, "ctaRoute":null, "anchorKey":null, "anchorPlacement":null }',
     `Current unit: ${JSON.stringify(input.unit)}`,
     input.feedback ? `Admin feedback: ${input.feedback}` : 'No additional feedback.',
-    `Curated anchors: ${JSON.stringify(input.anchors.map((a) => ({ key: a.key, targetRoute: a.targetRoute, allowedPlacements: a.allowedPlacements })))}`,
+    `Curated anchors: ${JSON.stringify(input.anchors.map((a) => ({ key: a.key, testId: a.testId, label: a.label, targetRoute: a.targetRoute, allowedPlacements: a.allowedPlacements, smartTags: a.smartTags ?? [], openerAnchorKeys: a.openerAnchorKeys ?? [], sourceLocations: a.sourceLocations ?? [] })))}`,
     `Curated routes: ${JSON.stringify(input.routes)}`,
     `Allow-listed images: ${JSON.stringify(input.assets)}`,
+    'For hidden modal/menu/tab targets, use only existing openerAnchorKeys reveal chains. If none exists, prefer a visible alternative or a centered step.',
   ].join('\n\n');
 }
 
@@ -844,17 +855,13 @@ export async function validateProposalUnit(
       imageUrl = candidate;
     }
 
-    const route = step.route ?? anchor?.targetRoute ?? null;
+    // Anchored steps always use the catalog route. Prefer the anchor over any
+    // stale step.route left over from AI generation or a prior picker choice.
+    const route = anchor?.targetRoute ?? step.route ?? null;
     if (route && !isWalkthroughRoute(route)) {
       throw new WalkthroughAiError(
         'PROPOSAL_UNIT_INVALID',
         'Step route must be in the curated Walkthrough route catalog',
-      );
-    }
-    if (anchor && route !== anchor.targetRoute) {
-      throw new WalkthroughAiError(
-        'REGISTRY_VALUE_STALE',
-        'Step route must match the registered anchor route',
       );
     }
     if (step.ctaRoute && !isWalkthroughRoute(step.ctaRoute)) {

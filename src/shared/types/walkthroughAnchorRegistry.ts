@@ -65,6 +65,8 @@ export interface WalkthroughAnchorRegistryRecord {
   approvedRoute: string | null;
   allowedPlacements: readonly WalkthroughRegistryPlacement[];
   smartTags: readonly string[];
+  /** Ordered catalog keys to click before this target can be coached. */
+  openerAnchorKeys: readonly string[];
   sourceKind: WalkthroughAnchorSourceKind;
   sourceLocations: readonly WalkthroughAnchorSourceLocation[];
   sourceHash: string | null;
@@ -105,6 +107,10 @@ export type WalkthroughAnchorRegistryValidationCode =
   | 'INVALID_ROUTE'
   | 'INVALID_PLACEMENTS'
   | 'INVALID_SMART_TAGS'
+  | 'INVALID_OPENER_KEYS'
+  | 'OPENER_SELF_REFERENCE'
+  | 'OPENER_NOT_ELIGIBLE'
+  | 'OPENER_CYCLE'
   | 'INVALID_SOURCE_KIND'
   | 'INVALID_SOURCE_LOCATIONS'
   | 'INVALID_REVIEW_STATUS'
@@ -207,6 +213,7 @@ export interface CreateManualWalkthroughAnchorCommand {
   approvedRoute?: string | null;
   allowedPlacements: readonly WalkthroughRegistryPlacement[];
   smartTags?: readonly string[];
+  openerAnchorKeys?: readonly string[];
   sourceLocations?: readonly WalkthroughAnchorSourceLocation[];
   /** Defaults to `approved` for Super Admin manual adds; may be `pending`. */
   reviewStatus?: WalkthroughAnchorReviewStatus;
@@ -220,6 +227,7 @@ export interface UpdateWalkthroughAnchorCommand {
   approvedRoute?: string | null;
   allowedPlacements?: readonly WalkthroughRegistryPlacement[];
   smartTags?: readonly string[];
+  openerAnchorKeys?: readonly string[];
   sourceLocations?: readonly WalkthroughAnchorSourceLocation[];
   reviewStatus?: WalkthroughAnchorReviewStatus;
   isActive?: boolean;
@@ -406,6 +414,89 @@ export function normalizeSmartTags(tags: readonly string[]): string[] {
   return out;
 }
 
+/**
+ * Trim + dedupe opener keys preserving order. Does not change case (keys are exact).
+ */
+export function normalizeOpenerAnchorKeys(keys: readonly string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of keys) {
+    if (typeof raw !== 'string') continue;
+    const key = raw.trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
+  }
+  return out;
+}
+
+function looksLikeSelectorSyntax(value: string): boolean {
+  return /[#.[\]>+~*=]|^\s*\/\//.test(value) || value.includes(' ');
+}
+
+/**
+ * Validate opener keys against self / eligibility / cycles (TBI-002 DoD).
+ * `openerGraph` must include this anchor's proposed openers under `anchorKey`.
+ */
+export function validateOpenerAnchorKeys(input: {
+  anchorKey: string;
+  openerAnchorKeys: readonly string[];
+  runtimeEligibleKeys: ReadonlySet<string>;
+  openerGraph: ReadonlyMap<string, readonly string[]>;
+}): WalkthroughAnchorRegistryValidationError[] {
+  const errors: WalkthroughAnchorRegistryValidationError[] = [];
+  const self = input.anchorKey.trim();
+  const openers = normalizeOpenerAnchorKeys(input.openerAnchorKeys);
+
+  for (const key of openers) {
+    if (looksLikeSelectorSyntax(key)) {
+      errors.push({
+        field: 'openerAnchorKeys',
+        code: 'INVALID_OPENER_KEYS',
+        message: `Opener key must be an exact catalog key, not a CSS selector: ${key}`,
+      });
+      continue;
+    }
+    if (key === self) {
+      errors.push({
+        field: 'openerAnchorKeys',
+        code: 'OPENER_SELF_REFERENCE',
+        message: 'An anchor cannot list itself as an opener',
+      });
+      continue;
+    }
+    if (!input.runtimeEligibleKeys.has(key)) {
+      errors.push({
+        field: 'openerAnchorKeys',
+        code: 'OPENER_NOT_ELIGIBLE',
+        message: `Opener must be an approved+active catalog key: ${key}`,
+      });
+    }
+  }
+
+  // Cycle: following openers from this anchor eventually reaches itself.
+  const queue = [...openers];
+  const seen = new Set<string>();
+  while (queue.length > 0) {
+    const node = queue.shift()!;
+    if (node === self) {
+      errors.push({
+        field: 'openerAnchorKeys',
+        code: 'OPENER_CYCLE',
+        message: `Opener chain forms a cycle involving "${self}"`,
+      });
+      break;
+    }
+    if (seen.has(node)) continue;
+    seen.add(node);
+    for (const child of input.openerGraph.get(node) ?? []) {
+      queue.push(child);
+    }
+  }
+
+  return errors;
+}
+
 export function isValidSmartTag(tag: string): boolean {
   return WALKTHROUGH_ANCHOR_SMART_TAG_PATTERN.test(tag);
 }
@@ -523,6 +614,32 @@ export function validateAnchorRegistryCandidate(
     }
   }
 
+  if (candidate.openerAnchorKeys !== undefined) {
+    if (!Array.isArray(candidate.openerAnchorKeys)) {
+      errors.push({
+        field: 'openerAnchorKeys',
+        code: 'INVALID_OPENER_KEYS',
+        message: 'openerAnchorKeys must be a JSON array of strings',
+      });
+    } else {
+      for (const key of candidate.openerAnchorKeys) {
+        if (typeof key !== 'string' || !key.trim()) {
+          errors.push({
+            field: 'openerAnchorKeys',
+            code: 'INVALID_OPENER_KEYS',
+            message: 'openerAnchorKeys entries must be non-empty strings',
+          });
+        } else if (looksLikeSelectorSyntax(key.trim())) {
+          errors.push({
+            field: 'openerAnchorKeys',
+            code: 'INVALID_OPENER_KEYS',
+            message: `Opener key must be an exact catalog key, not a CSS selector: ${key}`,
+          });
+        }
+      }
+    }
+  }
+
   if (
     candidate.sourceKind !== undefined &&
     !isWalkthroughAnchorSourceKind(candidate.sourceKind)
@@ -596,6 +713,7 @@ export const WALKTHROUGH_ANCHOR_REGISTRY_BASELINE_SEEDS: readonly WalkthroughAnc
     approvedRoute: '/home',
     allowedPlacements: ['bottom', 'left', 'right', 'top'],
     smartTags: ['user-menu', 'avatar', 'header', 'navigation', 'open', 'button'],
+    openerAnchorKeys: [],
     sourceKind: 'explicit',
     sourceLocations: [
       {
@@ -617,6 +735,7 @@ export const WALKTHROUGH_ANCHOR_REGISTRY_BASELINE_SEEDS: readonly WalkthroughAnc
     approvedRoute: '/home',
     allowedPlacements: ['bottom', 'top', 'left', 'right'],
     smartTags: ['whats-new', 'changelog', 'modal', 'announcements', 'home'],
+    openerAnchorKeys: [],
     sourceKind: 'explicit',
     sourceLocations: [
       {
@@ -638,6 +757,7 @@ export const WALKTHROUGH_ANCHOR_REGISTRY_BASELINE_SEEDS: readonly WalkthroughAnc
     approvedRoute: '/home',
     allowedPlacements: ['left', 'right', 'bottom', 'top'],
     smartTags: ['user-menu', 'profile', 'menu-item', 'navigation', 'settings'],
+    openerAnchorKeys: [],
     sourceKind: 'explicit',
     sourceLocations: [
       {
@@ -659,6 +779,7 @@ export const WALKTHROUGH_ANCHOR_REGISTRY_BASELINE_SEEDS: readonly WalkthroughAnc
     approvedRoute: '/profile',
     allowedPlacements: ['bottom', 'top'],
     smartTags: ['profile', 'identity', 'avatar', 'settings', 'section'],
+    openerAnchorKeys: [],
     sourceKind: 'explicit',
     sourceLocations: [
       {
@@ -680,6 +801,7 @@ export const WALKTHROUGH_ANCHOR_REGISTRY_BASELINE_SEEDS: readonly WalkthroughAnc
     approvedRoute: '/profile',
     allowedPlacements: ['bottom', 'top'],
     smartTags: ['profile', 'bio', 'settings', 'section', 'edit'],
+    openerAnchorKeys: [],
     sourceKind: 'explicit',
     sourceLocations: [
       {
@@ -701,6 +823,7 @@ export const WALKTHROUGH_ANCHOR_REGISTRY_BASELINE_SEEDS: readonly WalkthroughAnc
     approvedRoute: '/profile',
     allowedPlacements: ['bottom', 'top'],
     smartTags: ['profile', 'theme', 'appearance', 'settings', 'section'],
+    openerAnchorKeys: [],
     sourceKind: 'explicit',
     sourceLocations: [
       {
@@ -722,6 +845,7 @@ export const WALKTHROUGH_ANCHOR_REGISTRY_BASELINE_SEEDS: readonly WalkthroughAnc
     approvedRoute: '/profile',
     allowedPlacements: ['top', 'bottom'],
     smartTags: ['profile', 'notifications', 'preferences', 'settings', 'section'],
+    openerAnchorKeys: [],
     sourceKind: 'explicit',
     sourceLocations: [
       {

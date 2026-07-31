@@ -25,6 +25,7 @@ function seedToRecord(
     approvedRoute: seed.approvedRoute,
     allowedPlacements: seed.allowedPlacements,
     smartTags: seed.smartTags,
+    openerAnchorKeys: seed.openerAnchorKeys ?? [],
     sourceKind: seed.sourceKind,
     sourceLocations: seed.sourceLocations,
     sourceHash: seed.sourceHash,
@@ -52,6 +53,7 @@ export const MOCK_WALKTHROUGH_ANCHOR_SYNC_CANDIDATES: readonly WalkthroughAnchor
     approvedRoute: null,
     allowedPlacements: ['bottom', 'left'],
     smartTags: ['notifications', 'header', 'bell'],
+    openerAnchorKeys: [],
     sourceKind: 'data_testid',
     sourceLocations: [
       {
@@ -88,6 +90,7 @@ export const MOCK_WALKTHROUGH_ANCHOR_SYNC_CANDIDATES: readonly WalkthroughAnchor
     approvedRoute: null,
     allowedPlacements: ['top', 'bottom'],
     smartTags: ['ask-apex', 'chat', 'composer', 'home'],
+    openerAnchorKeys: [],
     sourceKind: 'data_testid',
     sourceLocations: [
       {
@@ -128,6 +131,7 @@ const EXTRA_MOCK_RECORDS: readonly WalkthroughAnchorRegistryRecord[] = [
     approvedRoute: '/standup',
     allowedPlacements: ['top', 'left'],
     smartTags: ['standup', 'submit', 'ceremony'],
+    openerAnchorKeys: [],
     sourceKind: 'explicit',
     sourceLocations: [
       {
@@ -157,6 +161,7 @@ const EXTRA_MOCK_RECORDS: readonly WalkthroughAnchorRegistryRecord[] = [
     approvedRoute: null,
     allowedPlacements: ['right'],
     smartTags: ['debug', 'dev-only'],
+    openerAnchorKeys: [],
     sourceKind: 'manual',
     sourceLocations: [
       {

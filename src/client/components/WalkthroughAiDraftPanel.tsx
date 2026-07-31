@@ -208,7 +208,10 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
         if (`step-${step.id}` !== unitId) return step;
         return {
           ...step,
-          route: step.route ?? anchor.targetRoute,
+          // Anchored steps always play on the catalog route — selecting an
+          // anchor must overwrite any prior AI/step route so Accept can't fail
+          // with "Step route must match the registered anchor route".
+          route: anchor.targetRoute,
           anchor: {
             key: anchor.key,
             targetRoute: anchor.targetRoute,

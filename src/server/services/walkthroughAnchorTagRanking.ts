@@ -48,6 +48,10 @@ export interface RankedWalkthroughAnchorCandidate {
   approvedRoute: string | null;
   allowedPlacements: readonly WalkthroughRegistryPlacement[];
   smartTags: readonly string[];
+  /** Existing reveal chain for targets hidden behind conditional UI. */
+  openerAnchorKeys?: readonly string[];
+  /** Repo evidence used by generation to inspect the target data-testid in source. */
+  sourceLocations?: WalkthroughAnchorRegistryRecord['sourceLocations'];
   /** Composite score in [0, 1] (route boost + text overlap). */
   score: number;
   evidence: WalkthroughAnchorTagRankingEvidence;
@@ -173,6 +177,8 @@ function scoreCandidate(
     approvedRoute: record.approvedRoute,
     allowedPlacements: record.allowedPlacements,
     smartTags: record.smartTags,
+    openerAnchorKeys: record.openerAnchorKeys ?? [],
+    sourceLocations: record.sourceLocations,
     score,
     evidence: {
       routeCompatible,

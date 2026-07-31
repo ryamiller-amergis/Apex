@@ -29,6 +29,7 @@ function seedToRecord(
     approvedRoute: seed.approvedRoute,
     allowedPlacements: seed.allowedPlacements,
     smartTags: seed.smartTags,
+    openerAnchorKeys: seed.openerAnchorKeys ?? [],
     sourceKind: seed.sourceKind,
     sourceLocations: seed.sourceLocations,
     sourceHash: seed.sourceHash,
@@ -300,6 +301,29 @@ describe('walkthroughAnchorCatalogResolution (Wave 2 Track D)', () => {
         reason: 'missing',
         key: null,
       });
+    });
+
+    it('TBI-003 DoD-0/1: attaches resolved openers and skips unresolved keys', () => {
+      const fixtures = baselineFixtures().map((row) =>
+        row.anchorKey === 'whats-new-modal'
+          ? {
+              ...row,
+              openerAnchorKeys: ['user-menu-trigger', 'not-in-catalog'],
+            }
+          : row,
+      );
+
+      const result = enrichStepAnchorFromCatalog(fixtures, {
+        key: 'whats-new-modal',
+        targetRoute: '/home',
+        placement: 'bottom',
+      });
+
+      expect(result.status).toBe('resolved');
+      if (result.status !== 'resolved') return;
+      expect(result.enriched.openers).toEqual([
+        { key: 'user-menu-trigger', testId: 'user-menu-trigger' },
+      ]);
     });
   });
 });

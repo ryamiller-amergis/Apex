@@ -397,12 +397,18 @@ function buildKickoffContext(
     '',
     '## Authoring Catalog Anchors (approved + active allow-list)',
     '',
+    'For each candidate, use `testId` and `sourceLocations` to inspect the actual target in the repository. Detect targets rendered only after a modal, menu, tab, disclosure, or other conditional action. Use existing `openerAnchorKeys` in order; if a hidden target has no valid opener chain, prefer a visible alternative or a centered step rather than assuming it will appear.',
+    '',
     JSON.stringify(
       authoringAnchors.map((a) => ({
         key: a.key,
+        testId: a.testId,
         label: a.label,
         targetRoute: a.targetRoute,
         allowedPlacements: a.allowedPlacements,
+        smartTags: a.smartTags ?? [],
+        openerAnchorKeys: a.openerAnchorKeys ?? [],
+        sourceLocations: a.sourceLocations ?? [],
       })),
       null,
       2,

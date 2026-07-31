@@ -227,6 +227,57 @@ export function AppSidebar() {
     ).toBe(false);
   });
 
+  it('resolves AppSidebar inline testId fallback expressions', () => {
+    const sidebarSource = `
+const moduleGroups = [{
+  items: [
+    { label: 'My Work', view: 'my-work', onNavigate: () => {} },
+    { label: 'Load Tests', view: 'load-tests', testId: 'nav-load-tests', onNavigate: () => {} },
+  ],
+}];
+export function AppSidebar() {
+  return moduleGroups[0].items.map((item) => (
+    <button
+      key={item.view}
+      {...{ 'data-testid': item.testId ?? \`nav-item-\${item.view}\` }}
+    />
+  ));
+}
+`;
+
+    const result = extractWalkthroughAnchorsFromFiles(
+      [
+        {
+          path: 'src/client/components/AppSidebar.tsx',
+          content: sidebarSource,
+        },
+      ],
+      {
+        provider: 'local',
+        catalogSnapshot: [
+          {
+            testId: 'nav-item-my-work',
+            anchorKey: 'nav-item-my-work',
+            reviewStatus: 'approved',
+            isActive: true,
+            deletedAt: null,
+          },
+        ],
+      }
+    );
+
+    expect(result.discoveries.map((d) => d.testId).sort()).toEqual([
+      'nav-item-my-work',
+      'nav-load-tests',
+    ]);
+    expect(
+      result.existingMatches.some((m) => m.testId === 'nav-item-my-work')
+    ).toBe(true);
+    expect(
+      result.missingWarnings.some((m) => m.testId === 'nav-item-my-work')
+    ).toBe(false);
+  });
+
   it('does not resolve view: literals outside AppSidebar', () => {
     const result = extractWalkthroughAnchorsFromFiles(
       [

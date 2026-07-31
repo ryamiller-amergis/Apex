@@ -35,6 +35,16 @@
   cursor: default;
 }
 
+.interactionShield {
+  position: absolute;
+  inset: 0;
+  z-index: 1199;
+  pointer-events: auto;
+  touch-action: none;
+  overscroll-behavior: none;
+  background: transparent;
+}
+
 .modal {
   position: absolute;
   top: 50%;

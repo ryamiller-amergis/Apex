@@ -64,6 +64,7 @@ export const WalkthroughRenderer: React.FC<WalkthroughRendererProps> = ({
   const seenRef = useRef(false);
   const missKeysRef = useRef(new Set<string>());
   const lastStepChangeKeyRef = useRef<string | null>(null);
+  const rendererRef = useRef<HTMLDivElement>(null);
 
   // Keep latest callbacks in refs so step effects do not re-fire when parents recreate closures.
   const onSeenRef = useRef(onSeen);
@@ -87,6 +88,28 @@ export const WalkthroughRenderer: React.FC<WalkthroughRendererProps> = ({
     missKeysRef.current = new Set();
     lastStepChangeKeyRef.current = null;
   }, [definition.id, definition.revision, playbackSessionId, clampedInitial]);
+
+  useEffect(() => {
+    if (!open || typeof document === 'undefined' || !rendererRef.current) return;
+
+    const rendererElement = rendererRef.current;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const lockedSiblings = Array.from(document.body.children)
+      .filter((element) => element !== rendererElement)
+      .map((element) => ({
+        element,
+        wasInert: element.hasAttribute('inert'),
+      }));
+
+    lockedSiblings.forEach(({ element }) => element.setAttribute('inert', ''));
+
+    return () => {
+      lockedSiblings.forEach(({ element, wasInert }) => {
+        if (!wasInert) element.removeAttribute('inert');
+      });
+      previouslyFocused?.focus?.({ preventScroll: true });
+    };
+  }, [open, definition.id, definition.revision, playbackSessionId]);
 
   const step = steps[stepIndex] ?? null;
   const activationKey = `${definition.id}:${definition.revision}:${step?.id ?? 'none'}:${playbackSessionId}`;
@@ -203,7 +226,11 @@ export const WalkthroughRenderer: React.FC<WalkthroughRendererProps> = ({
       : `${step.heading}. Step ${stepIndex + 1} of ${stepCount}.`;
 
   const content = (
-    <div className={styles.renderer} {...{ 'data-testid': 'walkthrough-renderer' }}>
+    <div
+      ref={rendererRef}
+      className={styles.renderer}
+      {...{ 'data-testid': 'walkthrough-renderer' }}
+    >
       <div className={styles.liveRegion} aria-live="polite" aria-atomic="true">
         {announcement}
       </div>

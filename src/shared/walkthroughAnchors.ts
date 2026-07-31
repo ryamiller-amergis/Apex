@@ -44,6 +44,19 @@ export interface WalkthroughAnchorRegistryEntry {
    * Optional: compile-time DOM markers do not carry tags.
    */
   smartTags?: readonly string[];
+  /**
+   * Repository locations where the target data-testid was discovered.
+   * Generation uses this evidence to inspect conditional/modal rendering.
+   */
+  sourceLocations?: readonly {
+    filePath: string;
+    line?: number | null;
+  }[];
+  /**
+   * Ordered catalog keys that must be clicked to reveal this target.
+   * Optional on compile-time DOM markers; catalog rows carry the full list.
+   */
+  openerAnchorKeys?: readonly string[];
 }
 
 export type WalkthroughAnchorValidationField =
@@ -201,6 +214,11 @@ export function toAuthoringAnchorEntry(input: {
   targetRoute: string | null;
   allowedPlacements: readonly WalkthroughRegistryPlacement[];
   smartTags?: readonly string[];
+  openerAnchorKeys?: readonly string[];
+  sourceLocations?: readonly {
+    filePath: string;
+    line?: number | null;
+  }[];
 }): WalkthroughAnchorRegistryEntry {
   return {
     key: input.anchorKey,
@@ -209,6 +227,8 @@ export function toAuthoringAnchorEntry(input: {
     targetRoute: input.targetRoute ?? '',
     allowedPlacements: input.allowedPlacements,
     smartTags: input.smartTags ?? [],
+    openerAnchorKeys: input.openerAnchorKeys ?? [],
+    sourceLocations: input.sourceLocations ?? [],
   };
 }
 

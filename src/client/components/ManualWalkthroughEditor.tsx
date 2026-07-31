@@ -282,6 +282,9 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
   const [lifecycleOpen, setLifecycleOpen] = useState(false);
   const [aiStepOpen, setAiStepOpen] = useState(false);
   const [stepsInfoOpen, setStepsInfoOpen] = useState(false);
+  const [anchorRouteFilterByStepId, setAnchorRouteFilterByStepId] = useState<Record<string, string>>({});
+  const [anchorSearchByStepId, setAnchorSearchByStepId] = useState<Record<string, string>>({});
+  const [ctaRouteSearchByStepId, setCtaRouteSearchByStepId] = useState<Record<string, string>>({});
   const [reorderAnnouncement, setReorderAnnouncement] = useState('');
   const [savedWalkthrough, setSavedWalkthrough] = useState<WalkthroughDefinition | null>(null);
   const loadedIdRef = useRef<string | null>(null);
@@ -358,7 +361,8 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
     setValue('groupId', null, { shouldDirty: true });
   };
 
-  const anchors = anchorsQuery.data ?? [];
+  const anchors = useMemo(() => anchorsQuery.data ?? [], [anchorsQuery.data]);
+  const walkthroughRoutes = useMemo(() => listWalkthroughRoutes(), []);
 
   useEffect(() => {
     if (!walkthroughId || !detailQuery.data) return;
@@ -517,12 +521,41 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
     const entry = registry.find((anchor) => anchor.key === key);
     if (entry) {
       setValue(`steps.${index}.anchorTargetRoute`, entry.targetRoute);
+      // Keep step route aligned with the catalog entry so save validation cannot
+      // fail with a route/anchor mismatch after the author picks a different anchor.
+      setValue(`steps.${index}.route`, entry.targetRoute);
       // eslint-disable-next-line react-hooks/incompatible-library -- react-hook-form watch is required for current placement read; pre-existing FEAT-003 pattern
-      if (!watch(`steps.${index}.anchorPlacement`)) {
+      const currentPlacement = watch(`steps.${index}.anchorPlacement`);
+      if (
+        !currentPlacement ||
+        !(entry.allowedPlacements as readonly string[]).includes(currentPlacement)
+      ) {
         setValue(`steps.${index}.anchorPlacement`, entry.allowedPlacements[0] ?? 'bottom');
       }
+    } else {
+      setValue(`steps.${index}.anchorTargetRoute`, '');
+      setValue(`steps.${index}.anchorPlacement`, '');
     }
   };
+
+  // Catalog placement options can change after a walkthrough is saved. Reconcile
+  // stale form values so the visible default is also the value submitted on save.
+  useEffect(() => {
+    if (!watchedSteps || anchors.length === 0) return;
+    watchedSteps.forEach((step, index) => {
+      if (!step?.anchorKey || !step.anchorPlacement) return;
+      const entry = anchors.find((anchor) => anchor.key === step.anchorKey);
+      if (
+        !entry ||
+        (entry.allowedPlacements as readonly string[]).includes(step.anchorPlacement)
+      ) return;
+      setValue(
+        `steps.${index}.anchorPlacement`,
+        entry.allowedPlacements[0] ?? 'bottom',
+        { shouldDirty: true, shouldValidate: true },
+      );
+    });
+  }, [anchors, setValue, watchedSteps]);
 
   // Auto-populate imageAlt from curated asset registry when imageUrl is set but alt is empty
   const prevImageUrlsRef = useRef<string[]>([]);
@@ -864,6 +897,17 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
                 </dd>
               </div>
               <div>
+                <dt>Hidden anchors (modals, menus, and tabs)</dt>
+                <dd>
+                  AI can select a hidden target, but the reveal action is configured on that target
+                  in <strong>Walkthroughs → Anchor Management</strong>. Edit the target anchor and
+                  add approved, active <strong>Opener anchors</strong> in click order. For example,
+                  <code>design-module-add-btn</code> opens the dialog containing
+                  <code> design-module-save-btn</code>. If a step unexpectedly appears centered,
+                  verify its opener anchors, save the anchor, then reopen the walkthrough.
+                </dd>
+              </div>
+              <div>
                 <dt>Anchor route</dt>
                 <dd>The in-app page the user is taken to for this step so the anchored element is visible.</dd>
               </div>
@@ -899,7 +943,52 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
             const step = watchedSteps[index];
             const selectedAnchor = anchors.find((anchor) => anchor.key === step?.anchorKey);
             const allowedPlacements = selectedAnchor?.allowedPlacements ?? WALKTHROUGH_REGISTRY_PLACEMENTS;
+            const anchorRouteFilter = anchorRouteFilterByStepId[field.id] ?? '';
+            const anchorSearch = (anchorSearchByStepId[field.id] ?? '').trim().toLowerCase();
+            const matchingAnchors = anchors
+              .filter((anchor) => !anchorRouteFilter || anchor.targetRoute === anchorRouteFilter)
+              .filter((anchor) => {
+                if (!anchorSearch) return true;
+                return [
+                  anchor.label,
+                  anchor.key,
+                  anchor.testId,
+                  anchor.targetRoute,
+                  ...(anchor.smartTags ?? []),
+                ]
+                  .join(' ')
+                  .toLowerCase()
+                  .includes(anchorSearch);
+              })
+              .slice()
+              .sort((a, b) => a.label.localeCompare(b.label));
+            const visibleAnchors =
+              selectedAnchor && !matchingAnchors.some((anchor) => anchor.key === selectedAnchor.key)
+                ? [selectedAnchor, ...matchingAnchors]
+                : matchingAnchors;
+            const anchorRouteOptions = Array.from(
+              new Set(anchors.map((anchor) => anchor.targetRoute).filter(Boolean)),
+            ).sort();
+            const ctaRouteSearch = (ctaRouteSearchByStepId[field.id] ?? '')
+              .trim()
+              .toLowerCase();
+            const matchingCtaRoutes = walkthroughRoutes.filter((entry) => {
+              if (!ctaRouteSearch) return true;
+              return `${entry.label} ${entry.route}`.toLowerCase().includes(ctaRouteSearch);
+            });
+            const selectedCtaRoute = walkthroughRoutes.find(
+              (entry) => entry.route === step?.ctaRoute,
+            );
+            const visibleCtaRoutes =
+              selectedCtaRoute &&
+              !matchingCtaRoutes.some((entry) => entry.route === selectedCtaRoute.route)
+                ? [selectedCtaRoute, ...matchingCtaRoutes]
+                : matchingCtaRoutes;
             const stepErrors = errors.steps?.[index];
+            const hasCtaLabel = Boolean(step?.ctaLabel?.trim());
+            const hasCtaRoute = Boolean(step?.ctaRoute?.trim());
+            // Live nudge so the "both or neither" rule never blocks a save by surprise.
+            const ctaIncomplete = hasCtaLabel !== hasCtaRoute;
 
             return (
               <article
@@ -993,7 +1082,23 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
                   imageAlt={step?.imageAlt}
                 />
 
-                <div className={styles.fieldGrid}>
+                <div className={styles.subsection}>
+                  <h4 className={styles.subsectionTitle}>In-step button</h4>
+                  {ctaIncomplete ? (
+                    <p
+                      className={styles.fieldWarning}
+                      {...{ 'data-testid': `walkthrough-step-cta-hint-${field.id}` }}
+                    >
+                      {hasCtaLabel
+                        ? 'Pick a CTA route to turn this into a button, or clear the label to skip it.'
+                        : 'Add a CTA label to turn this into a button, or set the route back to “No CTA link”.'}
+                    </p>
+                  ) : (
+                    <p className={styles.fieldHint}>
+                      Optional: set a CTA <strong>label</strong> and <strong>route</strong> together to show an
+                      in-step button that takes users to that page. Leave both empty for no button.
+                    </p>
+                  )}
                   <div className={styles.field}>
                     <label className={styles.label} htmlFor={`ctaLabel-${field.id}`}>CTA label</label>
                     <input
@@ -1004,55 +1109,122 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
                     />
                     {stepErrors?.ctaLabel && <p className={styles.fieldError}>{stepErrors.ctaLabel.message}</p>}
                   </div>
+                  <div className={styles.pickerFilters}>
+                    <label className={styles.field} htmlFor={`ctaRouteSearch-${field.id}`}>
+                      <span className={styles.label}>Search CTA routes</span>
+                      <input
+                        id={`ctaRouteSearch-${field.id}`}
+                        type="search"
+                        className={styles.input}
+                        placeholder="Route name or path…"
+                        value={ctaRouteSearchByStepId[field.id] ?? ''}
+                        onChange={(event) =>
+                          setCtaRouteSearchByStepId((previous) => ({
+                            ...previous,
+                            [field.id]: event.target.value,
+                          }))
+                        }
+                        {...{ 'data-testid': `walkthrough-step-cta-route-search-${field.id}` }}
+                      />
+                    </label>
+                  </div>
                   <div className={styles.field}>
                     <label className={styles.label} htmlFor={`ctaRoute-${field.id}`}>CTA route</label>
                     <select
                       id={`ctaRoute-${field.id}`}
-                      className={styles.select}
+                      className={styles.selectFull}
                       {...register(`steps.${index}.ctaRoute`)}
                       {...{ 'data-testid': `walkthrough-step-cta-route-${field.id}` }}
                     >
                       <option value="">No CTA link</option>
-                      {listWalkthroughRoutes().map((entry) => (
+                      {visibleCtaRoutes.map((entry) => (
                         <option key={entry.route} value={entry.route}>
                           {entry.label} ({entry.route})
                         </option>
                       ))}
                     </select>
+                    {matchingCtaRoutes.length === 0 && !selectedCtaRoute ? (
+                      <p className={styles.pickerEmpty}>No CTA routes match this search.</p>
+                    ) : null}
                     {stepErrors?.ctaRoute && <p className={styles.fieldError}>{stepErrors.ctaRoute.message}</p>}
                   </div>
                 </div>
 
-                <div className={styles.fieldGrid}>
+                <div className={styles.subsection}>
+                  <h4 className={styles.subsectionTitle}>Coachmark target</h4>
+                  <p className={styles.fieldHint}>
+                    Pin this step to an approved UI element, or leave the anchor empty for a centered modal step.
+                  </p>
+                  <div className={styles.pickerFilters}>
+                    <label className={styles.field} htmlFor={`anchorRouteFilter-${field.id}`}>
+                      <span className={styles.label}>Filter anchors by route</span>
+                      <select
+                        id={`anchorRouteFilter-${field.id}`}
+                        className={styles.select}
+                        value={anchorRouteFilter}
+                        onChange={(event) =>
+                          setAnchorRouteFilterByStepId((previous) => ({
+                            ...previous,
+                            [field.id]: event.target.value,
+                          }))
+                        }
+                        {...{
+                          'data-testid': `walkthrough-anchor-route-filter-${field.id}`,
+                        }}
+                      >
+                        <option value="">All routes</option>
+                        {anchorRouteOptions.map((route) => {
+                          const routeEntry = walkthroughRoutes.find(
+                            (entry) => entry.route === route,
+                          );
+                          return (
+                            <option key={route} value={route}>
+                              {routeEntry?.label ?? route} ({route})
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </label>
+                    <label className={styles.field} htmlFor={`anchorSearch-${field.id}`}>
+                      <span className={styles.label}>Search anchors</span>
+                      <input
+                        id={`anchorSearch-${field.id}`}
+                        type="search"
+                        className={styles.input}
+                        placeholder="Label, key, test ID, or tag…"
+                        value={anchorSearchByStepId[field.id] ?? ''}
+                        onChange={(event) =>
+                          setAnchorSearchByStepId((previous) => ({
+                            ...previous,
+                            [field.id]: event.target.value,
+                          }))
+                        }
+                        {...{ 'data-testid': `walkthrough-anchor-search-${field.id}` }}
+                      />
+                    </label>
+                  </div>
                   <div className={styles.field}>
                     <label className={styles.label} htmlFor={`anchorKey-${field.id}`}>Anchor</label>
                     <select
                       id={`anchorKey-${field.id}`}
-                      className={styles.select}
+                      className={styles.selectFull}
                       value={step?.anchorKey ?? ''}
                       {...{ 'data-testid': `walkthrough-anchor-key-${field.id}` }}
                       onChange={(event) => handleAnchorKeyChange(index, event.target.value, anchors)}
                     >
                       <option value="">No anchor (centered)</option>
-                      {anchors.map((anchor) => (
-                        <option key={anchor.key} value={anchor.key}>
-                          {anchor.label}
+                      {visibleAnchors.map((anchor) => (
+                        <option key={anchor.key} value={anchor.key} title={`${anchor.label} (${anchor.key})`}>
+                          {anchor.label} ({anchor.key})
                         </option>
                       ))}
                     </select>
+                    {matchingAnchors.length === 0 && !selectedAnchor ? (
+                      <p className={styles.pickerEmpty}>No approved anchors match these filters.</p>
+                    ) : null}
                   </div>
-                  {step?.anchorKey && (
-                    <>
-                      <div className={styles.field}>
-                        <label className={styles.label} htmlFor={`anchorRoute-${field.id}`}>Anchor route</label>
-                        <input
-                          id={`anchorRoute-${field.id}`}
-                          className={styles.input}
-                          readOnly
-                          {...register(`steps.${index}.anchorTargetRoute`)}
-                          {...{ 'data-testid': `walkthrough-anchor-route-${field.id}` }}
-                        />
-                      </div>
+                  {step?.anchorKey ? (
+                    <div className={styles.anchorDetails}>
                       <div className={styles.field}>
                         <label className={styles.label} htmlFor={`anchorPlacement-${field.id}`}>Placement</label>
                         <select
@@ -1068,8 +1240,18 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
                           ))}
                         </select>
                       </div>
-                    </>
-                  )}
+                      <div className={styles.field}>
+                        <label className={styles.label} htmlFor={`anchorRoute-${field.id}`}>Anchor route</label>
+                        <input
+                          id={`anchorRoute-${field.id}`}
+                          className={styles.inputReadonly}
+                          readOnly
+                          {...register(`steps.${index}.anchorTargetRoute`)}
+                          {...{ 'data-testid': `walkthrough-anchor-route-${field.id}` }}
+                        />
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               </article>
             );

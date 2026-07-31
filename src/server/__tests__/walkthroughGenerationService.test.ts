@@ -140,6 +140,11 @@ const DB_ONLY_AUTHORING_ENTRY = {
   label: 'DB-only Settings CTA',
   targetRoute: '/profile',
   allowedPlacements: ['bottom', 'top'] as const,
+  smartTags: ['settings', 'modal'],
+  openerAnchorKeys: ['user-menu-trigger'] as const,
+  sourceLocations: [
+    { filePath: 'src/client/components/ProfileSettingsModal.tsx', line: 42 },
+  ],
 };
 
 function authoringCatalogFromBaseline() {
@@ -150,6 +155,9 @@ function authoringCatalogFromBaseline() {
       label: seed.label,
       targetRoute: seed.approvedRoute ?? seed.suggestedRoute ?? '',
       allowedPlacements: seed.allowedPlacements,
+      smartTags: seed.smartTags,
+      openerAnchorKeys: seed.openerAnchorKeys ?? [],
+      sourceLocations: seed.sourceLocations,
     })),
     DB_ONLY_AUTHORING_ENTRY,
   ];
@@ -185,6 +193,7 @@ function seedToRecord(
     approvedRoute: seed.approvedRoute,
     allowedPlacements: seed.allowedPlacements,
     smartTags: seed.smartTags,
+    openerAnchorKeys: seed.openerAnchorKeys ?? [],
     sourceKind: seed.sourceKind,
     sourceLocations: seed.sourceLocations,
     sourceHash: seed.sourceHash,
@@ -457,6 +466,12 @@ describe('walkthroughGenerationService', () => {
       expect(freeform).toContain('### Auto-selected Anchor');
       expect(freeform).toContain('## Authoring Catalog Anchors (approved + active allow-list)');
       expect(freeform).toContain(DB_ONLY_AUTHORING_ENTRY.key);
+      expect(freeform).toContain('"openerAnchorKeys"');
+      expect(freeform).toContain('"user-menu-trigger"');
+      expect(freeform).toContain('"testId"');
+      expect(freeform).toContain('"sourceLocations"');
+      expect(freeform).toContain('ProfileSettingsModal.tsx');
+      expect(freeform).toContain('prefer a visible alternative or a centered step');
       // Regression: kickoff allow-list must come from DB authoring catalog, not DOM markers only.
       expect(listWalkthroughAnchors().some((a) => a.key === DB_ONLY_AUTHORING_ENTRY.key)).toBe(
         false,

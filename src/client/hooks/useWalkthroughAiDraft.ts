@@ -23,6 +23,8 @@ export interface WalkthroughAnchorMatchCandidate {
   approvedRoute: string | null;
   allowedPlacements: readonly string[];
   smartTags: readonly string[];
+  openerAnchorKeys?: readonly string[];
+  sourceLocations?: readonly { filePath: string; line?: number | null }[];
   score: number;
   evidence: {
     routeCompatible: boolean;
