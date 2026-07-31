@@ -34,6 +34,7 @@ export function toWalkthroughRendererDefinition(
     revision: definition.revision,
     title: definition.userTitle,
     intro: definition.whyItMatters,
+    isRequired: definition.isRequired,
     steps,
   };
 }

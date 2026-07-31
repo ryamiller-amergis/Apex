@@ -134,6 +134,7 @@ export function createWalkthroughDraftFormSchema(
       userTitle: z.string().min(1, 'User title is required'),
       whyItMatters: z.string(),
       priority: z.number().int(),
+      isRequired: z.boolean(),
       projects: z.array(z.string().min(1)).min(1, 'Select at least one project'),
       groupId: z.string().nullable().optional(),
       steps: z
@@ -202,6 +203,7 @@ export function draftFormToCreateCommand(form: WalkthroughDraftFormValues) {
     userTitle: form.userTitle.trim(),
     whyItMatters: form.whyItMatters,
     priority: form.priority,
+    isRequired: form.isRequired,
     targeting: {
       projects: form.projects,
       groupId: form.projects.length === 1 ? form.groupId || null : null,
@@ -209,4 +211,4 @@ export function draftFormToCreateCommand(form: WalkthroughDraftFormValues) {
     steps: form.steps.map((step, index) => stepFormToInput(step, index)),
   };
 }
-
+

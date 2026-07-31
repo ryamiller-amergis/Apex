@@ -10,17 +10,24 @@ export interface WalkthroughProgressErrorProps {
   submitting?: boolean;
   onRetry: () => void;
   onCloseWithoutAcknowledgement: () => void;
+  allowCloseWithoutAcknowledgement?: boolean;
 }
 
 export const WalkthroughProgressError: React.FC<WalkthroughProgressErrorProps> = ({
   open,
-  message = 'We could not save your progress. You can retry or close without acknowledging.',
+  message,
   submitting = false,
   onRetry,
   onCloseWithoutAcknowledgement,
+  allowCloseWithoutAcknowledgement = true,
 }) => {
   const dialogRef = useRef<HTMLDivElement>(null);
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+  const resolvedMessage =
+    message ??
+    (allowCloseWithoutAcknowledgement
+      ? 'We could not save your progress. You can retry or close without acknowledging.'
+      : 'We could not save your completion. Retry to finish this required walkthrough.');
 
   useEffect(() => {
     if (!open) return;
@@ -30,7 +37,7 @@ export const WalkthroughProgressError: React.FC<WalkthroughProgressErrorProps> =
     }, 0);
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (event.key === 'Escape' && allowCloseWithoutAcknowledgement) {
         event.preventDefault();
         onCloseWithoutAcknowledgement();
         return;
@@ -57,7 +64,7 @@ export const WalkthroughProgressError: React.FC<WalkthroughProgressErrorProps> =
       document.removeEventListener('keydown', onKeyDown);
       previouslyFocusedRef.current?.focus?.({ preventScroll: true });
     };
-  }, [open, onCloseWithoutAcknowledgement]);
+  }, [allowCloseWithoutAcknowledgement, open, onCloseWithoutAcknowledgement]);
 
   if (!open) return null;
 
@@ -75,7 +82,7 @@ export const WalkthroughProgressError: React.FC<WalkthroughProgressErrorProps> =
           Progress not saved
         </h2>
         <p className={styles.message} role="alert">
-          {message}
+          {resolvedMessage}
         </p>
         <div className={styles.actions}>
           <button
@@ -87,15 +94,17 @@ export const WalkthroughProgressError: React.FC<WalkthroughProgressErrorProps> =
           >
             {submitting ? 'Retrying…' : 'Retry'}
           </button>
-          <button
-            type="button"
-            className={styles.close}
-            disabled={submitting}
-            onClick={onCloseWithoutAcknowledgement}
-            {...{ 'data-testid': 'walkthrough-progress-close' }}
-          >
-            Close without acknowledging
-          </button>
+          {allowCloseWithoutAcknowledgement ? (
+            <button
+              type="button"
+              className={styles.close}
+              disabled={submitting}
+              onClick={onCloseWithoutAcknowledgement}
+              {...{ 'data-testid': 'walkthrough-progress-close' }}
+            >
+              Close without acknowledging
+            </button>
+          ) : null}
         </div>
       </div>
     </div>

@@ -3,8 +3,12 @@
  * Notification type is `system` (operator decision A). Deep link matches FEAT-006 live Help open.
  */
 
-/** Canonical Help / Walkthrough list deep link (FEAT-006: `?help=walkthroughs`). */
-export const WALKTHROUGH_LIST_DEEP_LINK = '/?help=walkthroughs';
+/**
+ * Canonical in-app Help / Walkthrough list deep link.
+ * Query-only navigation preserves the active project route instead of returning
+ * the user to the root project selector.
+ */
+export const WALKTHROUGH_LIST_DEEP_LINK = '?help=walkthroughs';
 
 /** In-app / Teams preference type for Walkthrough publication events. */
 export const WALKTHROUGH_PUBLISH_NOTIFICATION_TYPE = 'system' as const;
@@ -40,5 +44,5 @@ export function walkthroughPublishDedupeKey(
 
 export function isWalkthroughPublishNotificationLink(link: string | null | undefined): boolean {
   if (!link) return false;
-  return link === WALKTHROUGH_LIST_DEEP_LINK || link.includes('help=walkthroughs');
+  return link.includes('help=walkthroughs');
 }

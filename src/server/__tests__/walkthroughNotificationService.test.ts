@@ -94,7 +94,7 @@ describe('walkthroughNotificationService (FEAT-007 PBI-009)', () => {
 
   it('contract — system type and FEAT-006 Help deep link', () => {
     expect(WALKTHROUGH_PUBLISH_NOTIFICATION_TYPE).toBe('system');
-    expect(WALKTHROUGH_LIST_DEEP_LINK).toBe('/?help=walkthroughs');
+    expect(WALKTHROUGH_LIST_DEEP_LINK).toBe('?help=walkthroughs');
   });
 
   it('AC-0 — fresh publish fans out one durable system notification per live audience member with Help deep link', async () => {

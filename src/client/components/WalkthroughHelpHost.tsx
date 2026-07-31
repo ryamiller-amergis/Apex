@@ -225,6 +225,7 @@ export const WalkthroughHelpHost: React.FC<WalkthroughHelpHostProps> = ({
           setProgressError(null);
           setReplayDefinition(null);
         }}
+        allowCloseWithoutAcknowledgement={!replayDefinition?.isRequired}
       />
     </>
   );

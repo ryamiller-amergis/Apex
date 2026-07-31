@@ -38,6 +38,7 @@ export interface WalkthroughCoachmarkProps {
   onNext: () => void;
   onComplete: () => void;
   onDismiss: () => void;
+  allowDismiss?: boolean;
 }
 
 function toFloatingPlacement(placement: WalkthroughAnchorPlacement): CoachmarkSide {
@@ -67,6 +68,7 @@ export const WalkthroughCoachmark: React.FC<WalkthroughCoachmarkProps> = ({
   onNext,
   onComplete,
   onDismiss,
+  allowDismiss = true,
 }) => {
   const arrowRef = useRef<HTMLDivElement>(null);
   const coachmarkRef = useRef<HTMLDivElement | null>(null);
@@ -163,14 +165,14 @@ export const WalkthroughCoachmark: React.FC<WalkthroughCoachmarkProps> = ({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (event.key === 'Escape' && allowDismiss) {
         event.preventDefault();
         onDismiss();
       }
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [onDismiss]);
+  }, [allowDismiss, onDismiss]);
 
   useEffect(() => {
     const coachmark = coachmarkRef.current;
@@ -265,6 +267,7 @@ export const WalkthroughCoachmark: React.FC<WalkthroughCoachmarkProps> = ({
           onNext={onNext}
           onComplete={onComplete}
           onDismiss={onDismiss}
+          allowDismiss={allowDismiss}
         />
       </div>
     </>

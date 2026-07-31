@@ -37,4 +37,21 @@ describe('WalkthroughProgressError (FEAT-006 PBI-007 AC-1)', () => {
     expect(alertSpy).not.toHaveBeenCalled();
     alertSpy.mockRestore();
   });
+
+  it('required walkthrough failures only allow retry', () => {
+    const onClose = jest.fn();
+    render(
+      <WalkthroughProgressError
+        open
+        onRetry={jest.fn()}
+        onCloseWithoutAcknowledgement={onClose}
+        allowCloseWithoutAcknowledgement={false}
+      />,
+    );
+
+    expect(screen.queryByTestId('walkthrough-progress-close')).not.toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(/required walkthrough/i);
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });

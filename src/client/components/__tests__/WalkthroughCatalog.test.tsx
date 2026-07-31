@@ -33,6 +33,7 @@ const sampleWalkthrough = {
   whyItMatters: 'Helps new users',
   lifecycle: 'draft' as const,
   priority: 10,
+  isRequired: false,
   revision: 1,
   publishedAt: null,
   archivedAt: null,

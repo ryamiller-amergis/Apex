@@ -1696,6 +1696,7 @@ export const walkthroughs = pgTable('walkthroughs', {
   whyItMatters: text('why_it_matters').notNull().default(''),
   lifecycle: text('lifecycle').$type<WalkthroughLifecycle>().notNull().default('draft'),
   priority: integer('priority').notNull().default(0),
+  isRequired: boolean('is_required').notNull().default(false),
   revision: integer('revision').notNull().default(1),
   publishedAt: timestamp('published_at', { withTimezone: true, mode: 'string' }),
   archivedAt: timestamp('archived_at', { withTimezone: true, mode: 'string' }),

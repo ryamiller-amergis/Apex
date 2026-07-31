@@ -19,6 +19,7 @@ export interface WalkthroughStepContentProps {
   onNext: () => void;
   onComplete: () => void;
   onDismiss: () => void;
+  allowDismiss?: boolean;
   /**
    * When true, body content may scroll while Back/Next/Dismiss stay pinned
    * (coachmark chrome must never disappear behind an inner scrollbar).
@@ -38,6 +39,7 @@ export const WalkthroughStepContent: React.FC<WalkthroughStepContentProps> = ({
   onNext,
   onComplete,
   onDismiss,
+  allowDismiss = true,
   stickyControls = false,
 }) => {
   const [imageFailed, setImageFailed] = useState(false);
@@ -146,15 +148,17 @@ export const WalkthroughStepContent: React.FC<WalkthroughStepContentProps> = ({
           {ctaSafe.label}
         </Link>
       ) : null}
-      <button
-        type="button"
-        className={styles.button}
-        {...{ 'data-testid': 'walkthrough-close' }}
-        onClick={onDismiss}
-        aria-label="Dismiss walkthrough"
-      >
-        Dismiss
-      </button>
+      {allowDismiss ? (
+        <button
+          type="button"
+          className={styles.button}
+          {...{ 'data-testid': 'walkthrough-close' }}
+          onClick={onDismiss}
+          aria-label="Dismiss walkthrough"
+        >
+          Dismiss
+        </button>
+      ) : null}
     </div>
   );
 

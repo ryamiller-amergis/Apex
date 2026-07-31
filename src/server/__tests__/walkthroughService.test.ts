@@ -184,6 +184,7 @@ function definitionRow(overrides: Record<string, unknown> = {}) {
     whyItMatters: 'Why',
     lifecycle: 'draft',
     priority: 10,
+    isRequired: false,
     revision: 1,
     publishedAt: null,
     archivedAt: null,
@@ -318,6 +319,29 @@ describe('walkthroughService (TBI-002)', () => {
         actor,
       );
       expect(reshow.revision).toBe(3);
+    });
+
+    it('republishing an unpublished walkthrough increments revision and re-arms progress', async () => {
+      const unpublished = definitionRow({
+        lifecycle: 'unpublished',
+        revision: 2,
+        publishedAt: '2026-07-01T00:00:00Z',
+      });
+      mockDb.query.walkthroughs.findFirst
+        .mockResolvedValueOnce(unpublished)
+        .mockResolvedValueOnce({ ...unpublished, lifecycle: 'published', revision: 3 });
+      const set = jest.fn().mockReturnThis();
+      const where = jest.fn().mockReturnThis();
+      mockDb.update.mockImplementation(() => ({ set, where }));
+
+      const republished = await publishWalkthrough(
+        'wt-1',
+        { mode: 'fresh', targeting: { projects: ['Apex'] } },
+        actor,
+      );
+
+      expect(republished.revision).toBe(3);
+      expect(set).toHaveBeenCalledWith(expect.objectContaining({ revision: 3 }));
     });
 
     it('VT-12 — unpublish and archive exclude from further display reads', async () => {
@@ -767,6 +791,30 @@ describe('walkthroughService (TBI-002)', () => {
       );
       expect(progress.status).toBe('dismissed');
       expect(progress.acknowledged).toBe(true);
+    });
+
+    it('rejects dismissal progress for a required walkthrough', async () => {
+      mockDb.select.mockImplementation(() => ({
+        from: jest.fn().mockReturnThis(),
+        innerJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockResolvedValue([{ project: 'Apex' }]),
+      }));
+      mockDb.query.walkthroughs.findFirst.mockResolvedValue(
+        definitionRow({
+          lifecycle: 'published',
+          isRequired: true,
+          targetingRules: [{ id: 'r', type: 'project', value: 'Apex' }],
+        }),
+      );
+
+      await expect(
+        updateOwnProgress('Apex', 'wt-1', 'user-1', {
+          status: 'dismissed',
+          revision: 1,
+          lastStepId: 'step-1',
+        }),
+      ).rejects.toMatchObject({ code: 'INVALID_PROGRESS' });
     });
 
     it('keeps completed sticky when replay dismisses', async () => {

@@ -196,6 +196,7 @@ export const WalkthroughRenderer: React.FC<WalkthroughRendererProps> = ({
     );
   };
   const handleDismiss = () => {
+    if (definition.isRequired) return;
     safeCall(() =>
       onDismissRef.current?.({
         walkthroughId: definition.id,
@@ -245,6 +246,7 @@ export const WalkthroughRenderer: React.FC<WalkthroughRendererProps> = ({
           onNext={handleNext}
           onComplete={handleComplete}
           onDismiss={handleDismiss}
+          allowDismiss={!definition.isRequired}
         />
       ) : (
         <WalkthroughModalStep
@@ -257,6 +259,8 @@ export const WalkthroughRenderer: React.FC<WalkthroughRendererProps> = ({
           onNext={handleNext}
           onComplete={handleComplete}
           onDismiss={handleDismiss}
+          allowDismiss={!definition.isRequired}
+          allowEscapeDismiss={!definition.isRequired}
         />
       )}
     </div>

@@ -28,7 +28,7 @@ test.describe('Walkthrough publish notifications (FEAT-007 PBI-009)', () => {
       title: 'New walkthrough available',
       body: 'Intro to Planning',
       type: 'system',
-      link: '/?help=walkthroughs',
+      link: '?help=walkthroughs',
     });
 
     await stubAdoProjects(page);
@@ -48,6 +48,7 @@ test.describe('Walkthrough publish notifications (FEAT-007 PBI-009)', () => {
     await expect(item).toContainText('Intro to Planning');
 
     await item.click();
-    await expect(page).toHaveURL(/help=walkthroughs/);
+    await expect(page).toHaveURL(/\/home(?:\?|$)/);
+    await expect(page.getByTestId('walkthrough-help-panel')).toBeVisible();
   });
 });

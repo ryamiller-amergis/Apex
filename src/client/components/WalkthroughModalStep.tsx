@@ -13,6 +13,7 @@ export interface WalkthroughModalStepProps {
   onNext: () => void;
   onComplete: () => void;
   onDismiss: () => void;
+  allowDismiss?: boolean;
   /** When false, Escape does not dismiss (caller may still close via button). */
   allowEscapeDismiss?: boolean;
 }
@@ -27,6 +28,7 @@ export const WalkthroughModalStep: React.FC<WalkthroughModalStepProps> = ({
   onNext,
   onComplete,
   onDismiss,
+  allowDismiss = true,
   allowEscapeDismiss = true,
 }) => {
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -105,6 +107,7 @@ export const WalkthroughModalStep: React.FC<WalkthroughModalStepProps> = ({
           onNext={onNext}
           onComplete={onComplete}
           onDismiss={onDismiss}
+          allowDismiss={allowDismiss}
         />
       </div>
     </>

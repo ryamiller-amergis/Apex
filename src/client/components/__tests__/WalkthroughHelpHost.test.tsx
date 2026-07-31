@@ -15,6 +15,7 @@ const definition: WalkthroughDefinition = {
   whyItMatters: 'Learn profile settings',
   lifecycle: 'published',
   priority: 1,
+  isRequired: false,
   revision: 1,
   publishedAt: '2026-07-29T00:00:00.000Z',
   archivedAt: null,

@@ -18,6 +18,7 @@ const sample: WalkthroughDefinition = {
   whyItMatters: 'Why',
   lifecycle: 'published',
   priority: 10,
+  isRequired: false,
   revision: 1,
   publishedAt: '2026-07-02T00:00:00Z',
   archivedAt: null,

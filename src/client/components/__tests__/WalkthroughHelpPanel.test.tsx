@@ -12,6 +12,7 @@ const baseWalkthrough = {
   whyItMatters: 'Why',
   lifecycle: 'published' as const,
   priority: 1,
+  isRequired: false,
   revision: 1,
   publishedAt: '2026-07-01T00:00:00Z',
   archivedAt: null,

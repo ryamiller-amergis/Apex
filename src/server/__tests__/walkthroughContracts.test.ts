@@ -147,6 +147,7 @@ describe('Walkthrough shared contracts (TBI-001)', () => {
         userTitle: 'Try Feature X',
         whyItMatters: 'Because it saves time',
         priority: 10,
+        isRequired: true,
         targeting: { projects: ['Apex'] },
         steps: [
           { ordinal: 1, heading: 'Second', bodyMarkdown: 'b' },
@@ -157,6 +158,7 @@ describe('Walkthrough shared contracts (TBI-001)', () => {
         0, 1,
       ]);
       expect(cmd.targeting.projects).toEqual(['Apex']);
+      expect(cmd.isRequired).toBe(true);
     });
     it('normalizes multi-project targeting and rejects group with multiple projects', () => {
       const cmd = validateCreateCommand({
@@ -167,6 +169,7 @@ describe('Walkthrough shared contracts (TBI-001)', () => {
         steps: [{ ordinal: 0, heading: 'A', bodyMarkdown: 'a' }],
       });
       expect(cmd.targeting.projects).toEqual(['Apex', 'Other']);
+      expect(cmd.isRequired).toBe(false);
     });
 
     it('derives anchored destinations and validates Step/CTA routes against the catalog', () => {

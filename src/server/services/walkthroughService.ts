@@ -126,6 +126,7 @@ function mapDefinition(row: DefinitionRow): WalkthroughDefinition {
     whyItMatters: row.whyItMatters,
     lifecycle: row.lifecycle,
     priority: row.priority,
+    isRequired: row.isRequired ?? false,
     revision: row.revision,
     publishedAt: row.publishedAt,
     archivedAt: row.archivedAt,
@@ -364,6 +365,7 @@ export async function createWalkthrough(
         whyItMatters: command.whyItMatters,
         lifecycle: 'draft',
         priority: command.priority ?? 0,
+        isRequired: command.isRequired ?? false,
         revision: 1,
         createdBy: actor.id,
         updatedBy: actor.id,
@@ -401,6 +403,9 @@ export async function updateWalkthrough(
   if (input.expectedUpdatedAt !== undefined && input.expectedUpdatedAt !== existing.updatedAt) {
     throw new WalkthroughDomainError('REVISION_CONFLICT', 'Update timestamp conflict');
   }
+  if (input.isRequired !== undefined && typeof input.isRequired !== 'boolean') {
+    throw new WalkthroughDomainError('VALIDATION_ERROR', 'isRequired must be a boolean');
+  }
 
   const steps = input.steps !== undefined ? validateSteps(input.steps) : existing.steps.map(mapStep);
   if (input.steps !== undefined) {
@@ -424,6 +429,7 @@ export async function updateWalkthrough(
         userTitle: input.userTitle?.trim() ?? existing.userTitle,
         whyItMatters: input.whyItMatters ?? existing.whyItMatters,
         priority: input.priority ?? existing.priority,
+        isRequired: input.isRequired ?? existing.isRequired,
         generationProvenance,
         updatedBy: actor.id,
         updatedAt: ts,
@@ -483,7 +489,11 @@ export async function publishWalkthrough(
       throw new WalkthroughDomainError('INVALID_TRANSITION', `Cannot publish from ${from}`);
     }
     if (from === 'draft' || from === 'unpublished') {
-      // ok
+      // Republish a previously live walkthrough as a new revision so prior
+      // completion/dismissal progress cannot suppress it.
+      if (from === 'unpublished' && existing.publishedAt) {
+        nextRevision = existing.revision + 1;
+      }
     } else if (from === 'published') {
       throw new WalkthroughDomainError(
         'INVALID_TRANSITION',
@@ -819,6 +829,12 @@ export async function updateOwnProgress(
     throw new WalkthroughDomainError(
       'REVISION_CONFLICT',
       'Progress revision must match the current Walkthrough revision',
+    );
+  }
+  if (definition.isRequired && requestedStatus === 'dismissed') {
+    throw new WalkthroughDomainError(
+      'INVALID_PROGRESS',
+      'Required Walkthroughs must be completed and cannot be dismissed',
     );
   }
 

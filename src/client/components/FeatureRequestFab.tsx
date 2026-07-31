@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import { IS_BETA_RELEASE } from '../config/release';
 import { BrandLogo } from './BrandLogo';
 import { AskApexChat } from './AskApexChat';
@@ -123,10 +124,10 @@ function computeMenuStyle(
   return { left, top };
 }
 
-function readHelpWalkthroughsDeepLink(): boolean {
+function readHelpWalkthroughsDeepLink(search?: string): boolean {
   if (typeof window === 'undefined') return false;
   try {
-    return new URLSearchParams(window.location.search).get('help') === 'walkthroughs';
+    return new URLSearchParams(search ?? window.location.search).get('help') === 'walkthroughs';
   } catch {
     return false;
   }
@@ -174,6 +175,7 @@ export const FeatureRequestFab: React.FC<FeatureRequestFabProps> = ({
     width: typeof window === 'undefined' ? 0 : window.innerWidth,
     height: typeof window === 'undefined' ? 0 : window.innerHeight,
   });
+  const location = useLocation();
 
   useEffect(() => {
     positionRef.current = position;
@@ -227,11 +229,11 @@ export const FeatureRequestFab: React.FC<FeatureRequestFabProps> = ({
   }, []);
 
   useEffect(() => {
-    if (!projectId || !readHelpWalkthroughsDeepLink()) return;
+    if (!projectId || !readHelpWalkthroughsDeepLink(location.search)) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- sync Help open from ?help=walkthroughs deep link
     setHelpOpen(true);
     clearHelpWalkthroughsDeepLink();
-  }, [projectId]);
+  }, [projectId, location.search]);
 
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
     if (chatOpen || !position) return;

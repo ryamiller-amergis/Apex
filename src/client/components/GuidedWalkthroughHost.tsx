@@ -44,6 +44,7 @@ export const GuidedWalkthroughHost: React.FC<GuidedWalkthroughHostProps> = ({
         submitting={guided.progressSubmitting}
         onRetry={guided.retryProgressFailure}
         onCloseWithoutAcknowledgement={guided.dismissProgressFailureWithoutAck}
+        allowCloseWithoutAcknowledgement={!guided.activeDefinition?.isRequired}
       />
     </>
   );

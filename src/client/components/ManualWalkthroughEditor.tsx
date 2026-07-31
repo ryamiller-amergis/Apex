@@ -57,6 +57,7 @@ function definitionToFormValues(walkthrough: WalkthroughDefinition): Walkthrough
     userTitle: walkthrough.userTitle,
     whyItMatters: walkthrough.whyItMatters,
     priority: walkthrough.priority,
+    isRequired: walkthrough.isRequired,
     projects: [...walkthrough.targeting.projects],
     groupId: walkthrough.targeting.groupId ?? null,
     steps: walkthrough.steps.map((step) => ({
@@ -93,13 +94,13 @@ export const WalkthroughLifecycleDialog: React.FC<WalkthroughLifecycleDialogProp
   const canUnpublish = isPublished;
   const canArchive = walkthrough.lifecycle !== 'archived';
 
-  const [mode, setMode] = useState<WalkthroughPublishMode>(isPublished ? 'silent' : 'fresh');
+  const [mode, setMode] = useState<WalkthroughPublishMode>(isPublished ? 'reshow' : 'fresh');
   const [lifecycleError, setLifecycleError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isOpen) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset dialog controls when opened; pre-existing FEAT-003 pattern
-    setMode(isPublished ? 'silent' : 'fresh');
+    setMode(isPublished ? 'reshow' : 'fresh');
     setLifecycleError(null);
   }, [isOpen, isPublished]);
 
@@ -158,7 +159,11 @@ export const WalkthroughLifecycleDialog: React.FC<WalkthroughLifecycleDialogProp
                 onChange={() => setMode('fresh')}
                 {...{ 'data-testid': 'walkthrough-update-mode-fresh' }}
               />
-              <span>Publish as new walkthrough (revision 1)</span>
+              <span>
+                {walkthrough.publishedAt
+                  ? 'Republish & re-show — increment revision and restart at step one'
+                  : 'Publish as new walkthrough (revision 1)'}
+              </span>
             </label>
           </div>
         )}
@@ -264,6 +269,188 @@ export const WalkthroughMarkdownPreview: React.FC<{ markdown: string; imageUrl?:
   </div>
 );
 
+interface AnchorComboboxProps {
+  id: string;
+  dataTestId: string;
+  anchors: readonly WalkthroughAnchorRegistryEntry[];
+  selectedKey: string;
+  onSelect: (key: string) => void;
+}
+
+const AnchorCombobox: React.FC<AnchorComboboxProps> = ({
+  id,
+  dataTestId,
+  anchors,
+  selectedKey,
+  onSelect,
+}) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [activeIndex, setActiveIndex] = useState(0);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const selectedAnchor = anchors.find((anchor) => anchor.key === selectedKey);
+  const filteredAnchors = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) return anchors;
+    return anchors.filter((anchor) =>
+      [
+        anchor.label,
+        anchor.key,
+        anchor.testId,
+        anchor.targetRoute,
+        ...(anchor.smartTags ?? []),
+      ]
+        .join(' ')
+        .toLowerCase()
+        .includes(normalizedQuery),
+    );
+  }, [anchors, query]);
+
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!wrapperRef.current?.contains(event.target as Node)) {
+        setIsOpen(false);
+        setQuery('');
+      }
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, []);
+
+  const chooseAnchor = (key: string) => {
+    onSelect(key);
+    setIsOpen(false);
+    setQuery('');
+  };
+
+  const optionCount = filteredAnchors.length + 1;
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      if (!isOpen) {
+        setIsOpen(true);
+        setActiveIndex(0);
+        return;
+      }
+      setActiveIndex((previous) => (previous + 1) % optionCount);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (!isOpen) {
+        setIsOpen(true);
+        setActiveIndex(optionCount - 1);
+        return;
+      }
+      setActiveIndex((previous) => (previous - 1 + optionCount) % optionCount);
+    } else if (event.key === 'Enter' && isOpen) {
+      event.preventDefault();
+      if (activeIndex === 0) {
+        chooseAnchor('');
+      } else {
+        const activeAnchor = filteredAnchors[activeIndex - 1];
+        if (activeAnchor) chooseAnchor(activeAnchor.key);
+      }
+    } else if (event.key === 'Escape') {
+      setIsOpen(false);
+      setQuery('');
+    }
+  };
+
+  return (
+    <div className={styles.anchorCombobox} ref={wrapperRef}>
+      <input
+        id={id}
+        type="text"
+        className={styles.anchorComboboxInput}
+        value={isOpen ? query : selectedAnchor ? `${selectedAnchor.label} (${selectedAnchor.key})` : ''}
+        placeholder="Search by label, key, test ID, route, or tag…"
+        autoComplete="off"
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded={isOpen}
+        aria-controls={`${id}-listbox`}
+        aria-activedescendant={isOpen ? `${id}-option-${activeIndex}` : undefined}
+        {...{ 'data-testid': dataTestId }}
+        onFocus={() => {
+          setIsOpen(true);
+          setQuery('');
+          setActiveIndex(0);
+        }}
+        onClick={() => {
+          if (!isOpen) {
+            setIsOpen(true);
+            setQuery('');
+            setActiveIndex(0);
+          }
+        }}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          setIsOpen(true);
+          setActiveIndex(0);
+        }}
+        onKeyDown={handleKeyDown}
+      />
+      <span className={styles.anchorComboboxChevron} aria-hidden="true">⌄</span>
+      {isOpen ? (
+        <div
+          id={`${id}-listbox`}
+          className={styles.anchorComboboxList}
+          role="listbox"
+          aria-label="Approved anchors"
+          {...{ 'data-testid': `${dataTestId}-listbox` }}
+        >
+          <button
+            id={`${id}-option-0`}
+            type="button"
+            role="option"
+            aria-selected={!selectedKey}
+            className={`${styles.anchorComboboxOption} ${
+              activeIndex === 0 ? styles.anchorComboboxOptionActive : ''
+            }`}
+            onMouseEnter={() => setActiveIndex(0)}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              chooseAnchor('');
+            }}
+            {...{ 'data-testid': `${dataTestId}-option-none` }}
+          >
+            <span>No anchor (centered)</span>
+            <small>Show this step as a centered modal</small>
+          </button>
+          {filteredAnchors.map((anchor, index) => {
+            const optionIndex = index + 1;
+            return (
+              <button
+                id={`${id}-option-${optionIndex}`}
+                key={anchor.key}
+                type="button"
+                role="option"
+                aria-selected={anchor.key === selectedKey}
+                className={`${styles.anchorComboboxOption} ${
+                  optionIndex === activeIndex ? styles.anchorComboboxOptionActive : ''
+                }`}
+                onMouseEnter={() => setActiveIndex(optionIndex)}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  chooseAnchor(anchor.key);
+                }}
+                {...{ 'data-testid': `${dataTestId}-option-${anchor.key}` }}
+              >
+                <span>{anchor.label}</span>
+                <small>{anchor.key} · {anchor.targetRoute}</small>
+              </button>
+            );
+          })}
+          {filteredAnchors.length === 0 ? (
+            <p className={styles.anchorComboboxEmpty}>
+              No approved anchors match “{query.trim()}”.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
 export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = ({
   walkthroughId,
   onClose,
@@ -283,7 +470,6 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
   const [aiStepOpen, setAiStepOpen] = useState(false);
   const [stepsInfoOpen, setStepsInfoOpen] = useState(false);
   const [anchorRouteFilterByStepId, setAnchorRouteFilterByStepId] = useState<Record<string, string>>({});
-  const [anchorSearchByStepId, setAnchorSearchByStepId] = useState<Record<string, string>>({});
   const [ctaRouteSearchByStepId, setCtaRouteSearchByStepId] = useState<Record<string, string>>({});
   const [reorderAnnouncement, setReorderAnnouncement] = useState('');
   const [savedWalkthrough, setSavedWalkthrough] = useState<WalkthroughDefinition | null>(null);
@@ -295,6 +481,7 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
       userTitle: '',
       whyItMatters: '',
       priority: 0,
+      isRequired: false,
       projects: [],
       groupId: null,
       steps: [createEmptyStep(0)],
@@ -686,6 +873,17 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
               {...{ 'data-testid': 'walkthrough-priority' }}
             />
           </div>
+          <label className={styles.requiredOption}>
+            <input
+              type="checkbox"
+              {...register('isRequired')}
+              {...{ 'data-testid': 'walkthrough-required-toggle' }}
+            />
+            <span>
+              <strong>Required walkthrough</strong>
+              <small>Users must complete it and cannot dismiss it.</small>
+            </span>
+          </label>
         </div>
         <div className={styles.field}>
           <label className={styles.label} htmlFor="whyItMatters">Why it matters</label>
@@ -944,22 +1142,8 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
             const selectedAnchor = anchors.find((anchor) => anchor.key === step?.anchorKey);
             const allowedPlacements = selectedAnchor?.allowedPlacements ?? WALKTHROUGH_REGISTRY_PLACEMENTS;
             const anchorRouteFilter = anchorRouteFilterByStepId[field.id] ?? '';
-            const anchorSearch = (anchorSearchByStepId[field.id] ?? '').trim().toLowerCase();
             const matchingAnchors = anchors
               .filter((anchor) => !anchorRouteFilter || anchor.targetRoute === anchorRouteFilter)
-              .filter((anchor) => {
-                if (!anchorSearch) return true;
-                return [
-                  anchor.label,
-                  anchor.key,
-                  anchor.testId,
-                  anchor.targetRoute,
-                  ...(anchor.smartTags ?? []),
-                ]
-                  .join(' ')
-                  .toLowerCase()
-                  .includes(anchorSearch);
-              })
               .slice()
               .sort((a, b) => a.label.localeCompare(b.label));
             const visibleAnchors =
@@ -1155,73 +1339,44 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
                   <p className={styles.fieldHint}>
                     Pin this step to an approved UI element, or leave the anchor empty for a centered modal step.
                   </p>
-                  <div className={styles.pickerFilters}>
-                    <label className={styles.field} htmlFor={`anchorRouteFilter-${field.id}`}>
-                      <span className={styles.label}>Filter anchors by route</span>
-                      <select
-                        id={`anchorRouteFilter-${field.id}`}
-                        className={styles.select}
-                        value={anchorRouteFilter}
-                        onChange={(event) =>
-                          setAnchorRouteFilterByStepId((previous) => ({
-                            ...previous,
-                            [field.id]: event.target.value,
-                          }))
-                        }
-                        {...{
-                          'data-testid': `walkthrough-anchor-route-filter-${field.id}`,
-                        }}
-                      >
-                        <option value="">All routes</option>
-                        {anchorRouteOptions.map((route) => {
-                          const routeEntry = walkthroughRoutes.find(
-                            (entry) => entry.route === route,
-                          );
-                          return (
-                            <option key={route} value={route}>
-                              {routeEntry?.label ?? route} ({route})
-                            </option>
-                          );
-                        })}
-                      </select>
-                    </label>
-                    <label className={styles.field} htmlFor={`anchorSearch-${field.id}`}>
-                      <span className={styles.label}>Search anchors</span>
-                      <input
-                        id={`anchorSearch-${field.id}`}
-                        type="search"
-                        className={styles.input}
-                        placeholder="Label, key, test ID, or tag…"
-                        value={anchorSearchByStepId[field.id] ?? ''}
-                        onChange={(event) =>
-                          setAnchorSearchByStepId((previous) => ({
-                            ...previous,
-                            [field.id]: event.target.value,
-                          }))
-                        }
-                        {...{ 'data-testid': `walkthrough-anchor-search-${field.id}` }}
-                      />
-                    </label>
-                  </div>
+                  <label className={styles.field} htmlFor={`anchorRouteFilter-${field.id}`}>
+                    <span className={styles.label}>Filter anchors by route</span>
+                    <select
+                      id={`anchorRouteFilter-${field.id}`}
+                      className={styles.select}
+                      value={anchorRouteFilter}
+                      onChange={(event) =>
+                        setAnchorRouteFilterByStepId((previous) => ({
+                          ...previous,
+                          [field.id]: event.target.value,
+                        }))
+                      }
+                      {...{
+                        'data-testid': `walkthrough-anchor-route-filter-${field.id}`,
+                      }}
+                    >
+                      <option value="">All routes</option>
+                      {anchorRouteOptions.map((route) => {
+                        const routeEntry = walkthroughRoutes.find(
+                          (entry) => entry.route === route,
+                        );
+                        return (
+                          <option key={route} value={route}>
+                            {routeEntry?.label ?? route} ({route})
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </label>
                   <div className={styles.field}>
                     <label className={styles.label} htmlFor={`anchorKey-${field.id}`}>Anchor</label>
-                    <select
+                    <AnchorCombobox
                       id={`anchorKey-${field.id}`}
-                      className={styles.selectFull}
-                      value={step?.anchorKey ?? ''}
-                      {...{ 'data-testid': `walkthrough-anchor-key-${field.id}` }}
-                      onChange={(event) => handleAnchorKeyChange(index, event.target.value, anchors)}
-                    >
-                      <option value="">No anchor (centered)</option>
-                      {visibleAnchors.map((anchor) => (
-                        <option key={anchor.key} value={anchor.key} title={`${anchor.label} (${anchor.key})`}>
-                          {anchor.label} ({anchor.key})
-                        </option>
-                      ))}
-                    </select>
-                    {matchingAnchors.length === 0 && !selectedAnchor ? (
-                      <p className={styles.pickerEmpty}>No approved anchors match these filters.</p>
-                    ) : null}
+                      dataTestId={`walkthrough-anchor-key-${field.id}`}
+                      anchors={visibleAnchors}
+                      selectedKey={step?.anchorKey ?? ''}
+                      onSelect={(key) => handleAnchorKeyChange(index, key, anchors)}
+                    />
                   </div>
                   {step?.anchorKey ? (
                     <div className={styles.anchorDetails}>

@@ -144,6 +144,8 @@ export interface WalkthroughDefinition {
   whyItMatters: string;
   lifecycle: WalkthroughLifecycle;
   priority: number;
+  /** Required walkthroughs can only be closed by completing the final step. */
+  isRequired: boolean;
   revision: number;
   publishedAt: string | null;
   archivedAt: string | null;
@@ -186,6 +188,7 @@ export interface CreateWalkthroughCommand {
   userTitle: string;
   whyItMatters: string;
   priority?: number;
+  isRequired?: boolean;
   generationProvenance?: WalkthroughGenerationProvenance | null;
   steps: WalkthroughStepInput[];
   targeting: WalkthroughTargeting;
@@ -196,6 +199,7 @@ export interface UpdateWalkthroughCommand {
   userTitle?: string;
   whyItMatters?: string;
   priority?: number;
+  isRequired?: boolean;
   generationProvenance?: WalkthroughGenerationProvenance | null;
   steps?: WalkthroughStepInput[];
   targeting?: WalkthroughTargeting;
@@ -483,6 +487,7 @@ export interface WalkthroughRendererDefinition {
   revision: number;
   title: string;
   intro?: string | null;
+  isRequired?: boolean;
   steps: WalkthroughRendererStep[];
 }
 
@@ -743,11 +748,16 @@ export function validateCreateCommand(body: unknown): CreateWalkthroughCommand {
   if (typeof priority !== 'number' || !Number.isInteger(priority)) {
     throw new WalkthroughDomainError('VALIDATION_ERROR', 'priority must be an integer');
   }
+  const isRequired = b.isRequired === undefined ? false : b.isRequired;
+  if (typeof isRequired !== 'boolean') {
+    throw new WalkthroughDomainError('VALIDATION_ERROR', 'isRequired must be a boolean');
+  }
   return {
     internalName: b.internalName.trim(),
     userTitle: b.userTitle.trim(),
     whyItMatters: b.whyItMatters,
     priority,
+    isRequired,
     ...(b.generationProvenance !== undefined
       ? { generationProvenance: validateGenerationProvenance(b.generationProvenance) }
       : {}),

@@ -50,6 +50,7 @@ describe('draftFormToCreateCommand', () => {
       userTitle: 'Title',
       whyItMatters: 'Reason',
       priority: 0,
+      isRequired: false,
       projects: ['Apex'],
       groupId: null,
       steps: [

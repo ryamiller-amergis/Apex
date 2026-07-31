@@ -102,6 +102,7 @@ describe('Phase 6 runtime DB catalog cutover', () => {
       whyItMatters: 'Learn profile',
       lifecycle: 'published',
       priority: 1,
+      isRequired: false,
       revision: 1,
       publishedAt: EARLIER,
       archivedAt: null,
@@ -161,6 +162,7 @@ describe('Phase 6 runtime DB catalog cutover', () => {
       whyItMatters: '',
       lifecycle: 'published',
       priority: 0,
+      isRequired: false,
       revision: 1,
       publishedAt: EARLIER,
       archivedAt: null,
@@ -212,4 +214,4 @@ describe('Phase 6 runtime DB catalog cutover', () => {
     });
   });
 });
-
+

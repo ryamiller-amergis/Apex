@@ -4,7 +4,10 @@ import { useNotifications, useMarkAsRead, useMarkAllAsRead } from '../hooks/useN
 import { useNotificationContext } from '../contexts/NotificationContext';
 import { NotificationPreferences } from './NotificationPreferences';
 import type { AppNotification, NotificationType } from '../../shared/types/notification';
-import { isWalkthroughPublishNotificationLink } from '../../shared/types/walkthroughNotification';
+import {
+  isWalkthroughPublishNotificationLink,
+  WALKTHROUGH_LIST_DEEP_LINK,
+} from '../../shared/types/walkthroughNotification';
 import styles from './NotificationCenter.module.css';
 
 interface NotificationCenterProps {
@@ -87,7 +90,11 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({ onClose 
       decrementUnread();
     }
     if (item.link) {
-      navigate(item.link);
+      navigate(
+        isWalkthroughPublishNotificationLink(item.link)
+          ? WALKTHROUGH_LIST_DEEP_LINK
+          : item.link,
+      );
       onClose();
     }
   };

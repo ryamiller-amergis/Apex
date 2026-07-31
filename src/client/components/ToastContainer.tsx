@@ -2,7 +2,10 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useNotificationContext } from '../contexts/NotificationContext';
 import type { NotificationType } from '../../shared/types/notification';
-import { isWalkthroughPublishNotificationLink } from '../../shared/types/walkthroughNotification';
+import {
+  isWalkthroughPublishNotificationLink,
+  WALKTHROUGH_LIST_DEEP_LINK,
+} from '../../shared/types/walkthroughNotification';
 import styles from './ToastContainer.module.css';
 
 function getTypeLabel(type: NotificationType): string {
@@ -31,7 +34,11 @@ export const ToastContainer: React.FC = () => {
             role="alert"
             onClick={() => {
               if (toast.link) {
-                navigate(toast.link);
+                navigate(
+                  walkthroughToast
+                    ? WALKTHROUGH_LIST_DEEP_LINK
+                    : toast.link,
+                );
                 dismissToast(toast.id);
               }
             }}

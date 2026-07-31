@@ -78,6 +78,21 @@ describe('WalkthroughRenderer (TBI-004)', () => {
     unmount();
   });
 
+  it('required walkthroughs hide dismissal and ignore Escape', async () => {
+    const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
+    const onDismiss = jest.fn();
+    const { unmount } = renderRenderer(
+      { ...centeredDef, isRequired: true },
+      { onDismiss },
+    );
+
+    expect(screen.queryByTestId('walkthrough-close')).not.toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    expect(onDismiss).not.toHaveBeenCalled();
+    expect(screen.getByTestId('walkthrough-renderer')).toBeInTheDocument();
+    unmount();
+  });
+
   it('contains portal overflow so opening a walkthrough cannot shift header chrome', () => {
     const { unmount } = renderRenderer(centeredDef);
     const root = screen.getByTestId('walkthrough-renderer');

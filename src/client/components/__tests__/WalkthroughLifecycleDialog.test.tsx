@@ -20,6 +20,7 @@ function baseWalkthrough(overrides: Partial<WalkthroughDefinition> = {}): Walkth
     whyItMatters: 'Why',
     lifecycle: 'draft',
     priority: 1,
+    isRequired: false,
     revision: 1,
     publishedAt: null,
     archivedAt: null,
@@ -109,11 +110,11 @@ describe('WalkthroughLifecycleDialog (PBI-002)', () => {
     expect(screen.getByTestId('walkthrough-update-mode-reshow')).toBeInTheDocument();
 
     await user.click(screen.getByTestId('walkthrough-lifecycle-confirm-publish'));
-    expect(onPublish).toHaveBeenCalledWith('silent');
+    expect(onPublish).toHaveBeenCalledWith('reshow');
 
-    await user.click(screen.getByLabelText(/re-show/i));
+    await user.click(screen.getByLabelText(/silent update/i));
     await user.click(screen.getByTestId('walkthrough-lifecycle-confirm-publish'));
-    expect(onPublish).toHaveBeenLastCalledWith('reshow');
+    expect(onPublish).toHaveBeenLastCalledWith('silent');
   });
 
   it('AC-3 — unpublish and archive actions are available; no hard-delete control', async () => {

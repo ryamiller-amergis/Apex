@@ -74,6 +74,7 @@ function setupMocks() {
       whyItMatters: '',
       lifecycle: 'draft',
       priority: 0,
+      isRequired: false,
       revision: 1,
       publishedAt: null,
       archivedAt: null,
@@ -129,6 +130,7 @@ describe('ManualWalkthroughEditor', () => {
       whyItMatters: '',
       lifecycle: 'draft',
       priority: 0,
+      isRequired: true,
       revision: 1,
       publishedAt: null,
       archivedAt: null,
@@ -153,6 +155,7 @@ describe('ManualWalkthroughEditor', () => {
 
     await user.type(screen.getByLabelText(/internal name/i), 'Draft');
     await user.type(screen.getByLabelText(/user title/i), 'Welcome');
+    await user.click(screen.getByTestId('walkthrough-required-toggle'));
     await user.click(screen.getByTestId('walkthrough-project-option-Apex'));
     await user.type(screen.getByLabelText(/heading/i), 'First');
     await user.click(screen.getByTestId('walkthrough-step-add'));
@@ -165,6 +168,7 @@ describe('ManualWalkthroughEditor', () => {
     const payload = createAsync.mock.calls[0][0];
     expect(payload.steps[0].heading).toBe('First');
     expect(payload.steps[1].heading).toBe('Second');
+    expect(payload.isRequired).toBe(true);
     expect(onSaved).toHaveBeenCalled();
   });
 
@@ -249,7 +253,7 @@ describe('ManualWalkthroughEditor', () => {
     expect(within(info).getByText(/design-module-save-btn/i)).toBeInTheDocument();
   });
 
-  it('filters step anchors by route/text and searches CTA routes', async () => {
+  it('filters anchors live in the searchable combobox and searches CTA routes', async () => {
     const user = userEvent.setup();
     mockWalkthroughHooks.useWalkthroughAnchors.mockReturnValue({
       data: [
@@ -277,14 +281,20 @@ describe('ManualWalkthroughEditor', () => {
 
     renderEditor();
 
-    await user.selectOptions(screen.getByLabelText(/filter anchors by route/i), '/profile');
-    await user.type(screen.getByLabelText(/search anchors/i), 'bio');
-
-    const anchorSelect = screen.getByLabelText(/^Anchor$/i);
-    expect(within(anchorSelect).getByRole('option', { name: /Profile bio.*profile-bio/i }))
+    const anchorCombobox = screen.getByRole('combobox', { name: /^Anchor$/i });
+    await user.click(anchorCombobox);
+    expect(screen.getByRole('option', { name: /User menu.*user-menu-trigger/i }))
       .toBeInTheDocument();
-    expect(within(anchorSelect).queryByRole('option', { name: /User menu/i }))
+
+    await user.type(anchorCombobox, 'bio');
+    const anchorListbox = screen.getByRole('listbox', { name: /approved anchors/i });
+    expect(within(anchorListbox).getByRole('option', { name: /Profile bio.*profile-bio/i }))
+      .toBeInTheDocument();
+    expect(within(anchorListbox).queryByRole('option', { name: /User menu/i }))
       .not.toBeInTheDocument();
+
+    await user.click(within(anchorListbox).getByRole('option', { name: /Profile bio/i }));
+    expect(anchorCombobox).toHaveValue('Profile bio (profile-bio)');
 
     await user.type(screen.getByLabelText(/search CTA routes/i), 'design module');
     const ctaRoute = screen.getByLabelText(/^CTA route$/i);
@@ -303,6 +313,7 @@ describe('ManualWalkthroughEditor', () => {
       whyItMatters: 'Because',
       lifecycle: 'published',
       priority: 0,
+      isRequired: false,
       revision: 2,
       publishedAt: '2026-07-01T00:00:00Z',
       archivedAt: null,
@@ -344,6 +355,7 @@ describe('ManualWalkthroughEditor', () => {
       whyItMatters: '',
       lifecycle: 'draft',
       priority: 0,
+      isRequired: false,
       revision: 1,
       publishedAt: null,
       archivedAt: null,
@@ -402,6 +414,7 @@ describe('ManualWalkthroughEditor', () => {
       whyItMatters: '',
       lifecycle: 'draft',
       priority: 0,
+      isRequired: false,
       revision: 1,
       publishedAt: null,
       archivedAt: null,
@@ -445,6 +458,7 @@ describe('ManualWalkthroughEditor', () => {
       whyItMatters: '',
       lifecycle: 'draft',
       priority: 0,
+      isRequired: false,
       revision: 1,
       publishedAt: null,
       archivedAt: null,
