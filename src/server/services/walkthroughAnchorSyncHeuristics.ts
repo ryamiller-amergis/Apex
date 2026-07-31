@@ -272,7 +272,8 @@ function inferSmartTags(
 }
 
 /**
- * Build deterministic label / route / placements / tags / provenance for a sync candidate.
+ * Build deterministic label / route / tags / provenance for a sync candidate.
+ * Placements always allow all sides (not layout-evaluated).
  */
 export function suggestSyncCandidateMetadata(
   input: SyncHeuristicInput,

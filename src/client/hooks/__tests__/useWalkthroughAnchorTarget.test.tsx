@@ -34,10 +34,8 @@ function createWrapper(initialPath = '/other') {
 
 describe('useWalkthroughAnchorTarget (TBI-004 / Phase 6)', () => {
   it('DoD-1 / VT-06: navigates using enriched testId and resolves mounted target', async () => {
-    const target = document.createElement('button');
-    target.setAttribute('data-testid', 'user-menu-trigger');
-    document.body.appendChild(target);
-
+    // Target is NOT present on the current route, so the hook must navigate to the
+    // anchor's home route to bring it into view, then resolve once it mounts.
     const { Wrapper, getPath } = createWrapper('/other');
     const { result, unmount } = renderHook(
       () =>
@@ -62,10 +60,52 @@ describe('useWalkthroughAnchorTarget (TBI-004 / Phase 6)', () => {
       expect(getPath()).toBe('/home');
     });
 
+    const target = document.createElement('button');
+    target.setAttribute('data-testid', 'user-menu-trigger');
+    document.body.appendChild(target);
+
     await waitFor(() => {
       expect(result.current.status).toBe('resolved');
       expect(result.current.targetElement).toBe(target);
     });
+
+    unmount();
+    target.remove();
+  });
+
+  it('does not navigate when the anchored element is already on the current route', async () => {
+    // Persistent chrome (e.g. the sidebar nav) renders on every page. When the
+    // anchored element is already present, the coachmark must resolve in place and
+    // leave the user's location untouched — navigation is the CTA's job, not ours.
+    const target = document.createElement('button');
+    target.setAttribute('data-testid', 'user-menu-trigger');
+    document.body.appendChild(target);
+
+    const { Wrapper, getPath } = createWrapper('/other');
+    const { result, unmount } = renderHook(
+      () =>
+        useWalkthroughAnchorTarget({
+          walkthroughId: 'wt-1',
+          revision: 1,
+          stepId: 's1',
+          activationKey: 'present',
+          waitMs: 200,
+          anchor: {
+            key: 'user-menu-trigger',
+            targetRoute: '/home',
+            placement: 'bottom',
+            testId: 'user-menu-trigger',
+            useCenteredFallback: false,
+          },
+        }),
+      { wrapper: Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current.status).toBe('resolved');
+      expect(result.current.targetElement).toBe(target);
+    });
+    expect(getPath()).toBe('/other');
 
     unmount();
     target.remove();

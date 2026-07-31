@@ -252,6 +252,8 @@ describe('bulkUpdateAnchors', () => {
       id: '11111111-1111-1111-1111-111111111111',
       reviewStatus: 'pending',
       isActive: false,
+      suggestedRoute: '/design-module',
+      approvedRoute: null,
     });
     mockDb.query.walkthroughAnchorRegistry.findFirst.mockResolvedValue(pending);
 
@@ -266,30 +268,38 @@ describe('bulkUpdateAnchors', () => {
       id: pending.id,
       reviewStatus: 'approved',
       isActive: false,
+      suggestedRoute: '/design-module',
+      approvedRoute: '/design-module',
     });
     const activated = { ...approved, isActive: true };
     mockDb.query.walkthroughAnchorRegistry.findFirst
       .mockResolvedValueOnce(pending)
       .mockResolvedValueOnce(approved);
-    const returningApprove = jest.fn().mockResolvedValue([approved]);
-    const returningActivate = jest.fn().mockResolvedValue([activated]);
+    const setApprove = jest.fn().mockReturnValue({
+      where: jest.fn().mockReturnValue({
+        returning: jest.fn().mockResolvedValue([approved]),
+      }),
+    });
+    const setActivate = jest.fn().mockReturnValue({
+      where: jest.fn().mockReturnValue({
+        returning: jest.fn().mockResolvedValue([activated]),
+      }),
+    });
     mockDb.update
-      .mockReturnValueOnce({
-        set: jest.fn().mockReturnValue({
-          where: jest.fn().mockReturnValue({ returning: returningApprove }),
-        }),
-      })
-      .mockReturnValueOnce({
-        set: jest.fn().mockReturnValue({
-          where: jest.fn().mockReturnValue({ returning: returningActivate }),
-        }),
-      });
+      .mockReturnValueOnce({ set: setApprove })
+      .mockReturnValueOnce({ set: setActivate });
 
     const approvedRows = await bulkUpdateAnchors(
       { ids: [pending.id], action: 'approve' },
       actor,
     );
     expect(approvedRows[0].reviewStatus).toBe('approved');
+    expect(setApprove).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reviewStatus: 'approved',
+        approvedRoute: '/design-module',
+      }),
+    );
 
     const activatedRows = await bulkUpdateAnchors(
       { ids: [pending.id], action: 'activate' },

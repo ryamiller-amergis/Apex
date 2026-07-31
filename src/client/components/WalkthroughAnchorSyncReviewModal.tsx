@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   WALKTHROUGH_ANCHOR_SOURCE_KINDS,
   type WalkthroughAnchorRegistryRecord,
@@ -10,7 +10,16 @@ import {
   type WalkthroughRegistryPlacement,
 } from '../../shared/walkthroughAnchors';
 import { listWalkthroughRoutes } from '../../shared/walkthroughRoutes';
+import {
+  SMART_TAGGING_BATCH_SIZE_DEFAULT,
+  SMART_TAGGING_BATCH_SIZE_OPTIONS,
+  hasRealAiProvenance,
+  type SmartTaggingBatchSize,
+} from '../hooks/usePlatformAdminAnchorRegistry';
 import styles from './WalkthroughAnchorManagement.module.css';
+
+/** Catalog rows always allow all coachmark sides; preferred side is per walkthrough step. */
+const ALL_PLACEMENTS: WalkthroughRegistryPlacement[] = [...WALKTHROUGH_REGISTRY_PLACEMENTS];
 
 export interface WalkthroughAnchorSyncDraft
   extends Omit<WalkthroughAnchorRegistryRecord, 'allowedPlacements' | 'smartTags'> {
@@ -20,30 +29,39 @@ export interface WalkthroughAnchorSyncDraft
   warnMissing: boolean;
 }
 
+export type SyncReviewSectionId =
+  | 'ready'
+  | 'needs_ai'
+  | 'approved'
+  | 'rejected';
+
 export interface WalkthroughAnchorSyncReviewModalProps {
   candidates: readonly WalkthroughAnchorRegistryRecord[];
   onClose: () => void;
-  /** Persist approved/rejected drafts (may be async). Modal stays open on throw. */
+  /**
+   * Persist decided (approved/rejected) drafts. Modal stays open on success so
+   * remaining rows can continue through the next AI batch.
+   */
   onSave?: (drafts: WalkthroughAnchorSyncDraft[]) => void | Promise<void>;
   onApproveSelected?: (ids: string[]) => void;
   onRejectSelected?: (ids: string[]) => void;
-  /** Optional Track B enrichment status banner. */
   enrichmentStatus?: 'idle' | 'running' | 'ready' | 'failed';
   enrichmentMessage?: string | null;
-  /** Stop waiting on the AI batch and unlock Save (agent may still finish server-side). */
   onSkipWaitingForAi?: () => void;
   /**
-   * Re-run Sync + next AI batch of up to 20 while keeping this modal open.
-   * Shown when more candidates still need AI tags.
+   * Re-run Sync + next AI batch while keeping this modal open.
+   * Batch size comes from the chooser in this modal.
    */
-  onRunNextAiBatch?: () => void;
+  onRunNextAiBatch?: (batchSize: SmartTaggingBatchSize) => void;
   nextAiBatchPending?: boolean;
+  batchSize?: SmartTaggingBatchSize;
+  onBatchSizeChange?: (size: SmartTaggingBatchSize) => void;
 }
 
 function toDraft(record: WalkthroughAnchorRegistryRecord): WalkthroughAnchorSyncDraft {
   return {
     ...record,
-    allowedPlacements: [...record.allowedPlacements],
+    allowedPlacements: [...ALL_PLACEMENTS],
     smartTags: [...record.smartTags],
     warnMissing: record.missingSince != null,
   };
@@ -55,29 +73,90 @@ function provenanceBadge(
   draft: WalkthroughAnchorSyncDraft,
   enrichmentRunning: boolean,
 ): ProvenanceBadge {
-  const model = draft.aiProvenance?.model?.trim();
-  const hasRealAi =
-    !!model &&
-    model !== 'sync-heuristic' &&
-    (draft.smartTags.length > 0 || !!draft.aiProvenance?.rationale?.trim());
-  if (hasRealAi) return 'AI enriched';
+  if (hasRealAiProvenance(draft)) return 'AI enriched';
   if (enrichmentRunning) return 'Awaiting AI';
   if (draft.smartTags.length === 0 && !draft.aiProvenance?.rationale?.trim()) {
     return 'Scanner only';
   }
+  const model = draft.aiProvenance?.model?.trim();
   if (model === 'sync-heuristic' || !model) return 'Scanner only';
   return 'Awaiting AI';
 }
 
-/** Prefer AI-tagged rows first so the batch that just finished is visible. */
-function sortDraftsForReview(drafts: WalkthroughAnchorSyncDraft[]): WalkthroughAnchorSyncDraft[] {
-  const rank = (d: WalkthroughAnchorSyncDraft) => {
-    const badge = provenanceBadge(d, false);
-    if (badge === 'AI enriched') return 0;
-    if (badge === 'Awaiting AI') return 1;
-    return 2;
-  };
-  return [...drafts].sort((a, b) => rank(a) - rank(b));
+function sectionForDraft(
+  draft: WalkthroughAnchorSyncDraft,
+  enrichmentRunning: boolean,
+): SyncReviewSectionId {
+  if (draft.reviewStatus === 'approved') return 'approved';
+  if (draft.reviewStatus === 'rejected') return 'rejected';
+  if (provenanceBadge(draft, enrichmentRunning) === 'AI enriched') return 'ready';
+  return 'needs_ai';
+}
+
+const SECTION_ORDER: SyncReviewSectionId[] = ['ready', 'needs_ai', 'approved', 'rejected'];
+
+const SECTION_LABELS: Record<SyncReviewSectionId, string> = {
+  ready: 'Ready for review (AI enriched)',
+  needs_ai: 'Still need AI / scanner only',
+  approved: 'Approved (not saved yet)',
+  rejected: 'Rejected (not saved yet)',
+};
+
+/**
+ * Merge incoming catalog candidates into open drafts without wiping local
+ * approve/reject decisions or already-AI-enriched fields.
+ */
+export function mergeSyncReviewDraftsFromCandidates(
+  prev: readonly WalkthroughAnchorSyncDraft[],
+  candidates: readonly WalkthroughAnchorRegistryRecord[],
+): WalkthroughAnchorSyncDraft[] {
+  const prevById = new Map(prev.map((d) => [d.id, d]));
+  const next: WalkthroughAnchorSyncDraft[] = [];
+
+  for (const candidate of candidates) {
+    const existing = prevById.get(candidate.id);
+    if (!existing) {
+      next.push(toDraft(candidate));
+      continue;
+    }
+    // Keep local review decision + activation.
+    const reviewStatus = existing.reviewStatus;
+    const isActive = existing.isActive;
+    const warnMissing = existing.warnMissing;
+    if (hasRealAiProvenance(existing) || reviewStatus !== 'pending') {
+      next.push({
+        ...existing,
+        // Refresh non-AI presence metadata from server when still pending.
+        lastSeenAt: candidate.lastSeenAt ?? existing.lastSeenAt,
+        missingSince: candidate.missingSince ?? existing.missingSince,
+        reviewStatus,
+        isActive,
+        warnMissing,
+      });
+      continue;
+    }
+    // Pending without real AI: take server/AI field updates, keep local edits for
+    // fields the user may have typed only when server has nothing new — prefer server.
+    next.push({
+      ...toDraft(candidate),
+      reviewStatus,
+      isActive,
+      warnMissing,
+      // Preserve in-progress local edits when server row still lacks AI.
+      label: existing.label !== candidate.label ? existing.label : candidate.label,
+      smartTags:
+        existing.smartTags.length > 0 && candidate.smartTags.length === 0
+          ? existing.smartTags
+          : [...candidate.smartTags],
+      suggestedRoute:
+        existing.suggestedRoute && !candidate.suggestedRoute
+          ? existing.suggestedRoute
+          : candidate.suggestedRoute,
+      allowedPlacements: [...ALL_PLACEMENTS],
+    });
+  }
+
+  return next;
 }
 
 function badgeClass(badge: ProvenanceBadge): string {
@@ -93,6 +172,192 @@ const SyncReviewInfoIcon: React.FC = () => (
   </svg>
 );
 
+interface SyncDraftRowProps {
+  draft: WalkthroughAnchorSyncDraft;
+  selected: boolean;
+  enrichmentRunning: boolean;
+  routes: ReturnType<typeof listWalkthroughRoutes>;
+  onToggleSelected: (id: string) => void;
+  onUpdate: <K extends keyof WalkthroughAnchorSyncDraft>(
+    id: string,
+    key: K,
+    value: WalkthroughAnchorSyncDraft[K],
+  ) => void;
+}
+
+const SyncDraftRow: React.FC<SyncDraftRowProps> = ({
+  draft,
+  selected,
+  enrichmentRunning,
+  routes,
+  onToggleSelected,
+  onUpdate,
+}) => {
+  const rationale = draft.aiProvenance?.rationale ?? '';
+  const badge = provenanceBadge(draft, enrichmentRunning);
+  return (
+    <div
+      className={selected ? styles.syncRowSelected : styles.syncRow}
+      {...{ 'data-testid': `walkthrough-anchor-sync-row-${draft.id}` }}
+    >
+      <input
+        type="checkbox"
+        className={styles.syncCheckbox}
+        checked={selected}
+        onChange={() => onToggleSelected(draft.id)}
+        aria-label={`Select ${draft.anchorKey}`}
+        {...{ 'data-testid': `walkthrough-anchor-sync-select-${draft.id}` }}
+      />
+      <div className={styles.syncFields}>
+        <div className={styles.syncRowMeta}>
+          <span
+            className={`${styles.provenanceBadge} ${badgeClass(badge)}`}
+            {...{ 'data-testid': `walkthrough-anchor-sync-provenance-${draft.id}` }}
+          >
+            {badge}
+          </span>
+          <span className={styles.hint}>
+            Review status: <strong>{draft.reviewStatus}</strong>
+          </span>
+        </div>
+        <label className={styles.field}>
+          <span className={styles.label}>Anchor key</span>
+          <input
+            className={styles.input}
+            value={draft.anchorKey}
+            onChange={(e) => onUpdate(draft.id, 'anchorKey', e.target.value)}
+            {...{ 'data-testid': `walkthrough-anchor-sync-key-${draft.id}` }}
+          />
+        </label>
+        <label className={styles.field}>
+          <span className={styles.label}>Test ID</span>
+          <input
+            className={styles.input}
+            value={draft.testId}
+            onChange={(e) => onUpdate(draft.id, 'testId', e.target.value)}
+            {...{ 'data-testid': `walkthrough-anchor-sync-testid-${draft.id}` }}
+          />
+        </label>
+        <label className={styles.field}>
+          <span className={styles.label}>Label</span>
+          <input
+            className={styles.input}
+            value={draft.label}
+            onChange={(e) => onUpdate(draft.id, 'label', e.target.value)}
+            {...{ 'data-testid': `walkthrough-anchor-sync-label-${draft.id}` }}
+          />
+        </label>
+        <label className={styles.field}>
+          <span className={styles.label}>Suggested route</span>
+          <select
+            className={styles.select}
+            value={draft.suggestedRoute ?? ''}
+            onChange={(e) => onUpdate(draft.id, 'suggestedRoute', e.target.value || null)}
+            {...{ 'data-testid': `walkthrough-anchor-sync-route-${draft.id}` }}
+          >
+            <option value="">None</option>
+            {routes.map((r) => (
+              <option key={r.route} value={r.route}>
+                {r.label} ({r.route})
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className={styles.field}>
+          <span className={styles.label}>Source</span>
+          <select
+            className={styles.select}
+            value={draft.sourceKind}
+            onChange={(e) =>
+              onUpdate(draft.id, 'sourceKind', e.target.value as WalkthroughAnchorSourceKind)
+            }
+            {...{ 'data-testid': `walkthrough-anchor-sync-source-${draft.id}` }}
+          >
+            {WALKTHROUGH_ANCHOR_SOURCE_KINDS.map((kind) => (
+              <option key={kind} value={kind}>
+                {kind}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className={styles.field}>
+          <span className={styles.label}>Tags (comma-separated)</span>
+          <input
+            className={styles.input}
+            value={draft.smartTags.join(', ')}
+            placeholder="Filled by AI"
+            onChange={(e) =>
+              onUpdate(
+                draft.id,
+                'smartTags',
+                e.target.value
+                  .split(',')
+                  .map((t) => t.trim())
+                  .filter(Boolean),
+              )
+            }
+            {...{ 'data-testid': `walkthrough-anchor-sync-tags-${draft.id}` }}
+          />
+        </label>
+        <label className={`${styles.field} ${styles.fieldWide}`}>
+          <span className={styles.label}>Source evidence</span>
+          <textarea
+            className={styles.textarea}
+            value={draft.sourceLocations.map((l) => l.filePath).join('\n')}
+            onChange={(e) =>
+              onUpdate(
+                draft.id,
+                'sourceLocations',
+                e.target.value
+                  .split('\n')
+                  .map((line) => line.trim())
+                  .filter(Boolean)
+                  .map((filePath) => ({
+                    filePath,
+                    discoveryKind: draft.sourceKind,
+                  })),
+              )
+            }
+            {...{ 'data-testid': `walkthrough-anchor-sync-evidence-${draft.id}` }}
+          />
+        </label>
+        <label className={`${styles.field} ${styles.fieldWide}`}>
+          <span className={styles.label}>AI rationale</span>
+          <textarea
+            className={styles.textarea}
+            value={rationale}
+            placeholder="Filled by AI"
+            onChange={(e) =>
+              onUpdate(draft.id, 'aiProvenance', {
+                provider: draft.aiProvenance?.provider ?? 'cursor',
+                model: draft.aiProvenance?.model ?? 'unknown',
+                skillPath:
+                  draft.aiProvenance?.skillPath ??
+                  '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+                generatedAt: draft.aiProvenance?.generatedAt ?? new Date().toISOString(),
+                confidence: draft.aiProvenance?.confidence ?? null,
+                rationale: e.target.value,
+                runId: draft.aiProvenance?.runId ?? null,
+                threadId: draft.aiProvenance?.threadId ?? null,
+              })
+            }
+            {...{ 'data-testid': `walkthrough-anchor-sync-rationale-${draft.id}` }}
+          />
+        </label>
+        <label className={styles.checkboxLabel}>
+          <input
+            type="checkbox"
+            checked={draft.warnMissing}
+            onChange={(e) => onUpdate(draft.id, 'warnMissing', e.target.checked)}
+            {...{ 'data-testid': `walkthrough-anchor-sync-warn-${draft.id}` }}
+          />
+          Missing / warning state
+        </label>
+      </div>
+    </div>
+  );
+};
+
 export const WalkthroughAnchorSyncReviewModal: React.FC<
   WalkthroughAnchorSyncReviewModalProps
 > = ({
@@ -106,18 +371,40 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
   onSkipWaitingForAi,
   onRunNextAiBatch,
   nextAiBatchPending = false,
+  batchSize: batchSizeProp,
+  onBatchSizeChange,
 }) => {
   const [drafts, setDrafts] = useState<WalkthroughAnchorSyncDraft[]>(() =>
-    sortDraftsForReview(candidates.map(toDraft)),
+    candidates.map(toDraft),
   );
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [showWorkflowInfo, setShowWorkflowInfo] = useState(false);
+  const [localBatchSize, setLocalBatchSize] = useState<SmartTaggingBatchSize>(
+    batchSizeProp ?? SMART_TAGGING_BATCH_SIZE_DEFAULT,
+  );
+
+  const batchSize = batchSizeProp ?? localBatchSize;
+  const setBatchSize = (size: SmartTaggingBatchSize) => {
+    setLocalBatchSize(size);
+    onBatchSizeChange?.(size);
+  };
 
   useEffect(() => {
-    setDrafts(sortDraftsForReview(candidates.map(toDraft)));
-    setSelectedIds(new Set());
+    if (batchSizeProp != null) setLocalBatchSize(batchSizeProp);
+  }, [batchSizeProp]);
+
+  useEffect(() => {
+    setDrafts((prev) => mergeSyncReviewDraftsFromCandidates(prev, candidates));
+    setSelectedIds((prev) => {
+      const next = new Set<string>();
+      const ids = new Set(candidates.map((c) => c.id));
+      for (const id of prev) {
+        if (ids.has(id)) next.add(id);
+      }
+      return next;
+    });
     setSaveError(null);
   }, [candidates]);
 
@@ -129,6 +416,21 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
     return () => document.removeEventListener('keydown', handleKey);
   }, [onClose, saving]);
 
+  const enrichmentRunning = enrichmentStatus === 'running';
+
+  const sections = useMemo(() => {
+    const map: Record<SyncReviewSectionId, WalkthroughAnchorSyncDraft[]> = {
+      ready: [],
+      needs_ai: [],
+      approved: [],
+      rejected: [],
+    };
+    for (const draft of drafts) {
+      map[sectionForDraft(draft, enrichmentRunning)].push(draft);
+    }
+    return map;
+  }, [drafts, enrichmentRunning]);
+
   const toggleSelected = (id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -138,8 +440,9 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
     });
   };
 
-  const selectAll = () => {
-    setSelectedIds(new Set(drafts.map((d) => d.id)));
+  const selectSection = (sectionId: SyncReviewSectionId) => {
+    const ids = sections[sectionId].map((d) => d.id);
+    setSelectedIds(new Set(ids));
   };
 
   const clearSelection = () => {
@@ -151,9 +454,7 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
     key: K,
     value: WalkthroughAnchorSyncDraft[K],
   ) => {
-    setDrafts((prev) =>
-      prev.map((d) => (d.id === id ? { ...d, [key]: value } : d)),
-    );
+    setDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, [key]: value } : d)));
   };
 
   const setReviewStatusForIds = (ids: string[], status: WalkthroughAnchorReviewStatus) => {
@@ -164,7 +465,6 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
           ? {
               ...d,
               reviewStatus: status,
-              // Approve → activate for runtime allow-list; reject always deactivates.
               isActive: status === 'approved',
             }
           : d,
@@ -172,27 +472,16 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
     );
   };
 
-  const togglePlacement = (id: string, placement: WalkthroughRegistryPlacement) => {
-    setDrafts((prev) =>
-      prev.map((d) => {
-        if (d.id !== id) return d;
-        const has = d.allowedPlacements.includes(placement);
-        const allowedPlacements = has
-          ? d.allowedPlacements.filter((p) => p !== placement)
-          : [...d.allowedPlacements, placement];
-        return { ...d, allowedPlacements };
-      }),
-    );
-  };
-
-  const handleApproveAll = () => {
-    const ids = drafts.map((d) => d.id);
+  const handleApproveReady = () => {
+    const ids = sections.ready.map((d) => d.id);
+    if (ids.length === 0) return;
     setReviewStatusForIds(ids, 'approved');
     onApproveSelected?.(ids);
   };
 
-  const handleRejectAll = () => {
-    const ids = drafts.map((d) => d.id);
+  const handleRejectReady = () => {
+    const ids = sections.ready.map((d) => d.id);
+    if (ids.length === 0) return;
     setReviewStatusForIds(ids, 'rejected');
     onRejectSelected?.(ids);
   };
@@ -211,11 +500,17 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
     onRejectSelected?.(ids);
   };
 
-  const enrichmentRunning = enrichmentStatus === 'running';
   const saveDisabled = saving || enrichmentRunning;
+  const decidedDrafts = drafts.filter(
+    (d) => d.reviewStatus === 'approved' || d.reviewStatus === 'rejected',
+  );
 
   const handleSave = async () => {
     if (enrichmentRunning) return;
+    if (decidedDrafts.length === 0) {
+      setSaveError('Mark at least one row Approve or Reject before saving.');
+      return;
+    }
     if (!onSave) {
       onClose();
       return;
@@ -223,8 +518,14 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
     setSaving(true);
     setSaveError(null);
     try {
-      await onSave(drafts);
-      onClose();
+      await onSave(decidedDrafts);
+      const savedIds = new Set(decidedDrafts.map((d) => d.id));
+      setDrafts((prev) => prev.filter((d) => !savedIds.has(d.id)));
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const id of savedIds) next.delete(id);
+        return next;
+      });
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Failed to save sync review');
     } finally {
@@ -233,14 +534,10 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
   };
 
   const routes = listWalkthroughRoutes();
-  const aiEnrichedCount = drafts.filter(
-    (d) => provenanceBadge(d, false) === 'AI enriched',
-  ).length;
-  const scannerOnlyCount = drafts.length - aiEnrichedCount;
+  const aiEnrichedCount = sections.ready.length;
+  const needsAiCount = sections.needs_ai.length;
   const showNextBatch =
-    !!onRunNextAiBatch &&
-    scannerOnlyCount > 0 &&
-    enrichmentStatus !== 'running';
+    !!onRunNextAiBatch && needsAiCount > 0 && enrichmentStatus !== 'running';
 
   return (
     // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- overlay dismiss; dialog actions handle keyboard
@@ -280,8 +577,9 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
               </div>
             </div>
             <p className={styles.modalHint}>
-              Scanner finds coachable surfaces; AI fills tags/route/rationale in batches of 20.
-              Approve, reject, or edit before saving.
+              AI tags in batches of {batchSize}. Select all only selects that section (Ready ≈ this
+              batch), not every pending row. Approve/Reject → Save removes decided rows so you can
+              keep tagging.
             </p>
           </div>
           <button
@@ -311,41 +609,61 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
             <p>
               <strong>What Sync does:</strong>
               <br />
-              Scans the Apex client for coachable UI surfaces (menus, sections, forms, grids, etc.)
-              and creates <em>pending</em> catalog rows. It does <em>not</em> invent tags or routes —
-              those stay empty until AI (or you) fills them.
+              Scans the Apex client for coachable UI surfaces and creates <em>pending</em> catalog
+              rows. Tags/routes stay empty until AI (or you) fills them.
             </p>
             <p>
               <strong>What AI smart-tagging does:</strong>
-              <br />
-              A Cursor agent reviews up to <em>20</em> pending candidates per batch and suggests{' '}
-              <em>tags</em>, <em>suggested route</em>, <em>placements</em>, and a short{' '}
-              <em>rationale</em>. Large syncs need multiple batches — use{' '}
-              <em>Tag next AI batch</em> until scanner-only rows are gone (or you approve/reject them).
+              <br />A Cursor agent reviews up to <em>{batchSize}</em> pending candidates per batch.
+              Use <em>Tag next AI batch</em> until scanner-only rows are gone (or you approve/reject
+              them). Unsaved AI results are kept when the next batch finishes.
             </p>
             <p>
-              <strong>Status badges:</strong>
+              <strong>Sections &amp; select all:</strong>
               <br />
-              <em>Scanner only</em> — discovered by Sync; tags/route/rationale still empty.
+              <em>Ready for review</em> — AI-enriched pending rows (typically this batch). Select
+              all here only selects that section, not hundreds of still-untagged rows.
               <br />
-              <em>Awaiting AI</em> — a smart-tagging batch is running for this list.
+              <em>Still need AI</em> — scanner-only / awaiting.
               <br />
-              <em>AI enriched</em> — this batch (or a prior one) wrote real AI metadata on the row.
+              <em>Approved / Rejected</em> — local decisions waiting for Save.
             </p>
             <p>
-              <strong>How to finish:</strong>
+              <strong>Reject + Save:</strong>
               <br />
-              Review AI fields → Approve / Reject → <em>Save</em>. Closing without Save keeps rows
-              pending so the next Sync / Tag next AI batch can continue.
+              Persists as rejected/inactive and is not queued for AI again. Reject without Save stays
+              pending and will resurface.
             </p>
           </div>
         )}
+
+        <div className={styles.batchSizeRow} {...{ 'data-testid': 'walkthrough-anchor-sync-batch-size' }}>
+          <span className={styles.label}>AI batch size</span>
+          <div className={styles.batchSizeOptions}>
+            {SMART_TAGGING_BATCH_SIZE_OPTIONS.map((size) => (
+              <button
+                key={size}
+                type="button"
+                className={
+                  batchSize === size
+                    ? `${styles.button} ${styles.batchSizeActive}`
+                    : `${styles.buttonGhost} ${styles.batchSizeOption}`
+                }
+                disabled={enrichmentRunning || nextAiBatchPending}
+                onClick={() => setBatchSize(size)}
+                {...{ 'data-testid': `walkthrough-anchor-sync-batch-size-${size}` }}
+              >
+                {size}
+              </button>
+            ))}
+          </div>
+        </div>
 
         {enrichmentStatus === 'running' && (
           <div {...{ 'data-testid': 'walkthrough-anchor-sync-enrichment-running' }}>
             <p className={styles.warningText}>
               {enrichmentMessage ??
-                'AI smart-tagging is running on this batch (tags, route, placements, rationale). Save is disabled until it finishes.'}
+                'AI smart-tagging is running on this batch (tags, route, rationale). Save is disabled until it finishes.'}
             </p>
             {onSkipWaitingForAi && (
               <button
@@ -363,17 +681,17 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
           <div {...{ 'data-testid': 'walkthrough-anchor-sync-enrichment-ready' }}>
             <p className={styles.hint}>
               {enrichmentMessage ??
-                'AI smart-tagging finished for this batch. Review updated fields, then approve/reject and Save.'}
+                'AI smart-tagging finished for this batch. Review Ready for review, then approve/reject and Save.'}
             </p>
             {showNextBatch && (
               <button
                 type="button"
                 className={styles.buttonPrimary}
                 disabled={nextAiBatchPending}
-                onClick={onRunNextAiBatch}
+                onClick={() => onRunNextAiBatch?.(batchSize)}
                 {...{ 'data-testid': 'walkthrough-anchor-sync-next-batch' }}
               >
-                {nextAiBatchPending ? 'Starting next AI batch…' : 'Tag next AI batch'}
+                {nextAiBatchPending ? 'Starting next AI batch…' : `Tag next AI batch (${batchSize})`}
               </button>
             )}
           </div>
@@ -389,10 +707,12 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
                 type="button"
                 className={styles.button}
                 disabled={nextAiBatchPending}
-                onClick={onRunNextAiBatch}
+                onClick={() => onRunNextAiBatch?.(batchSize)}
                 {...{ 'data-testid': 'walkthrough-anchor-sync-next-batch' }}
               >
-                {nextAiBatchPending ? 'Starting next AI batch…' : 'Retry / tag next AI batch'}
+                {nextAiBatchPending
+                  ? 'Starting next AI batch…'
+                  : `Retry / tag next AI batch (${batchSize})`}
               </button>
             )}
           </div>
@@ -400,32 +720,24 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
         {enrichmentStatus === 'idle' && drafts.length > 0 && (
           <div {...{ 'data-testid': 'walkthrough-anchor-sync-enrichment-idle' }}>
             <p className={styles.hint}>
-              {scannerOnlyCount} scanner-only · {aiEnrichedCount} AI-enriched. Empty tags/route mean
-              AI has not run on those rows yet.
+              {needsAiCount} still need AI · {aiEnrichedCount} ready for review. Empty tags/route
+              mean AI has not run on those rows yet.
             </p>
             {showNextBatch && (
               <button
                 type="button"
                 className={styles.buttonPrimary}
                 disabled={nextAiBatchPending}
-                onClick={onRunNextAiBatch}
+                onClick={() => onRunNextAiBatch?.(batchSize)}
                 {...{ 'data-testid': 'walkthrough-anchor-sync-next-batch' }}
               >
-                {nextAiBatchPending ? 'Starting next AI batch…' : 'Tag next AI batch'}
+                {nextAiBatchPending ? 'Starting next AI batch…' : `Tag next AI batch (${batchSize})`}
               </button>
             )}
           </div>
         )}
 
         <div className={styles.syncToolbar}>
-          <button
-            type="button"
-            className={styles.buttonGhost}
-            onClick={selectAll}
-            {...{ 'data-testid': 'walkthrough-anchor-sync-select-all' }}
-          >
-            Select all
-          </button>
           <button
             type="button"
             className={styles.buttonGhost}
@@ -437,18 +749,20 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
           <button
             type="button"
             className={styles.button}
-            onClick={handleApproveAll}
-            {...{ 'data-testid': 'walkthrough-anchor-sync-approve-all' }}
+            disabled={sections.ready.length === 0}
+            onClick={handleApproveReady}
+            {...{ 'data-testid': 'walkthrough-anchor-sync-approve-ready' }}
           >
-            Approve All
+            Approve ready ({sections.ready.length})
           </button>
           <button
             type="button"
             className={styles.buttonDanger}
-            onClick={handleRejectAll}
-            {...{ 'data-testid': 'walkthrough-anchor-sync-reject-all' }}
+            disabled={sections.ready.length === 0}
+            onClick={handleRejectReady}
+            {...{ 'data-testid': 'walkthrough-anchor-sync-reject-ready' }}
           >
-            Reject All
+            Reject ready ({sections.ready.length})
           </button>
           <button
             type="button"
@@ -477,198 +791,43 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
             </p>
           ) : (
             <div className={styles.syncList}>
-              {drafts.map((draft) => {
-                const selected = selectedIds.has(draft.id);
-                const rationale = draft.aiProvenance?.rationale ?? '';
-                const badge = provenanceBadge(draft, enrichmentRunning);
+              {SECTION_ORDER.map((sectionId) => {
+                const sectionDrafts = sections[sectionId];
+                if (sectionDrafts.length === 0) return null;
                 return (
-                  <div
-                    key={draft.id}
-                    className={selected ? styles.syncRowSelected : styles.syncRow}
-                    {...{ 'data-testid': `walkthrough-anchor-sync-row-${draft.id}` }}
+                  <section
+                    key={sectionId}
+                    className={styles.syncSection}
+                    {...{ 'data-testid': `walkthrough-anchor-sync-section-${sectionId}` }}
                   >
-                    <input
-                      type="checkbox"
-                      className={styles.syncCheckbox}
-                      checked={selected}
-                      onChange={() => toggleSelected(draft.id)}
-                      aria-label={`Select ${draft.anchorKey}`}
-                      {...{ 'data-testid': `walkthrough-anchor-sync-select-${draft.id}` }}
-                    />
-                    <div className={styles.syncFields}>
-                      <div className={styles.syncRowMeta}>
-                        <span
-                          className={`${styles.provenanceBadge} ${badgeClass(badge)}`}
-                          {...{ 'data-testid': `walkthrough-anchor-sync-provenance-${draft.id}` }}
-                        >
-                          {badge}
-                        </span>
-                        <span className={styles.hint}>
-                          Review status: <strong>{draft.reviewStatus}</strong>
-                        </span>
-                      </div>
-                      <label className={styles.field}>
-                        <span className={styles.label}>Anchor key</span>
-                        <input
-                          className={styles.input}
-                          value={draft.anchorKey}
-                          onChange={(e) => updateDraft(draft.id, 'anchorKey', e.target.value)}
-                          {...{ 'data-testid': `walkthrough-anchor-sync-key-${draft.id}` }}
-                        />
-                      </label>
-                      <label className={styles.field}>
-                        <span className={styles.label}>Test ID</span>
-                        <input
-                          className={styles.input}
-                          value={draft.testId}
-                          onChange={(e) => updateDraft(draft.id, 'testId', e.target.value)}
-                          {...{ 'data-testid': `walkthrough-anchor-sync-testid-${draft.id}` }}
-                        />
-                      </label>
-                      <label className={styles.field}>
-                        <span className={styles.label}>Label</span>
-                        <input
-                          className={styles.input}
-                          value={draft.label}
-                          onChange={(e) => updateDraft(draft.id, 'label', e.target.value)}
-                          {...{ 'data-testid': `walkthrough-anchor-sync-label-${draft.id}` }}
-                        />
-                      </label>
-                      <label className={styles.field}>
-                        <span className={styles.label}>Suggested route</span>
-                        <select
-                          className={styles.select}
-                          value={draft.suggestedRoute ?? ''}
-                          onChange={(e) =>
-                            updateDraft(draft.id, 'suggestedRoute', e.target.value || null)
-                          }
-                          {...{ 'data-testid': `walkthrough-anchor-sync-route-${draft.id}` }}
-                        >
-                          <option value="">None</option>
-                          {routes.map((r) => (
-                            <option key={r.route} value={r.route}>
-                              {r.label} ({r.route})
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className={styles.field}>
-                        <span className={styles.label}>Source</span>
-                        <select
-                          className={styles.select}
-                          value={draft.sourceKind}
-                          onChange={(e) =>
-                            updateDraft(
-                              draft.id,
-                              'sourceKind',
-                              e.target.value as WalkthroughAnchorSourceKind,
-                            )
-                          }
-                          {...{ 'data-testid': `walkthrough-anchor-sync-source-${draft.id}` }}
-                        >
-                          {WALKTHROUGH_ANCHOR_SOURCE_KINDS.map((kind) => (
-                            <option key={kind} value={kind}>
-                              {kind}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className={styles.field}>
-                        <span className={styles.label}>Tags (comma-separated)</span>
-                        <input
-                          className={styles.input}
-                          value={draft.smartTags.join(', ')}
-                          placeholder="Filled by AI"
-                          onChange={(e) =>
-                            updateDraft(
-                              draft.id,
-                              'smartTags',
-                              e.target.value
-                                .split(',')
-                                .map((t) => t.trim())
-                                .filter(Boolean),
-                            )
-                          }
-                          {...{ 'data-testid': `walkthrough-anchor-sync-tags-${draft.id}` }}
-                        />
-                      </label>
-                      <div className={`${styles.field} ${styles.fieldWide}`}>
-                        <span className={styles.label}>Placements</span>
-                        <div className={styles.placementChecks}>
-                          {WALKTHROUGH_REGISTRY_PLACEMENTS.map((placement) => (
-                            <label key={placement} className={styles.checkboxLabel}>
-                              <input
-                                type="checkbox"
-                                checked={draft.allowedPlacements.includes(placement)}
-                                onChange={() => togglePlacement(draft.id, placement)}
-                                {...{
-                                  'data-testid': `walkthrough-anchor-sync-placement-${draft.id}-${placement}`,
-                                }}
-                              />
-                              {placement}
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                      <label className={`${styles.field} ${styles.fieldWide}`}>
-                        <span className={styles.label}>Source evidence</span>
-                        <textarea
-                          className={styles.textarea}
-                          value={draft.sourceLocations.map((l) => l.filePath).join('\n')}
-                          onChange={(e) =>
-                            updateDraft(
-                              draft.id,
-                              'sourceLocations',
-                              e.target.value
-                                .split('\n')
-                                .map((line) => line.trim())
-                                .filter(Boolean)
-                                .map((filePath) => ({
-                                  filePath,
-                                  discoveryKind: draft.sourceKind,
-                                })),
-                            )
-                          }
-                          {...{ 'data-testid': `walkthrough-anchor-sync-evidence-${draft.id}` }}
-                        />
-                      </label>
-                      <label className={`${styles.field} ${styles.fieldWide}`}>
-                        <span className={styles.label}>AI rationale</span>
-                        <textarea
-                          className={styles.textarea}
-                          value={rationale}
-                          placeholder="Filled by AI"
-                          onChange={(e) =>
-                            updateDraft(draft.id, 'aiProvenance', {
-                              provider: draft.aiProvenance?.provider ?? 'cursor',
-                              model: draft.aiProvenance?.model ?? 'unknown',
-                              skillPath:
-                                draft.aiProvenance?.skillPath ??
-                                '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
-                              generatedAt:
-                                draft.aiProvenance?.generatedAt ?? new Date().toISOString(),
-                              confidence: draft.aiProvenance?.confidence ?? null,
-                              rationale: e.target.value,
-                              runId: draft.aiProvenance?.runId ?? null,
-                              threadId: draft.aiProvenance?.threadId ?? null,
-                            })
-                          }
-                          {...{ 'data-testid': `walkthrough-anchor-sync-rationale-${draft.id}` }}
-                        />
-                      </label>
-                      <label className={styles.checkboxLabel}>
-                        <input
-                          type="checkbox"
-                          checked={draft.warnMissing}
-                          onChange={(e) =>
-                            updateDraft(draft.id, 'warnMissing', e.target.checked)
-                          }
-                          {...{ 'data-testid': `walkthrough-anchor-sync-warn-${draft.id}` }}
-                        />
-                        Missing / warning state
-                      </label>
+                    <div className={styles.syncSectionHeader}>
+                      <h3 className={styles.syncSectionTitle}>
+                        {SECTION_LABELS[sectionId]}{' '}
+                        <span className={styles.hint}>({sectionDrafts.length})</span>
+                      </h3>
+                      <button
+                        type="button"
+                        className={styles.buttonGhost}
+                        onClick={() => selectSection(sectionId)}
+                        {...{
+                          'data-testid': `walkthrough-anchor-sync-select-section-${sectionId}`,
+                        }}
+                      >
+                        Select all in section
+                      </button>
                     </div>
-                  </div>
+                    {sectionDrafts.map((draft) => (
+                      <SyncDraftRow
+                        key={draft.id}
+                        draft={draft}
+                        selected={selectedIds.has(draft.id)}
+                        enrichmentRunning={enrichmentRunning}
+                        routes={routes}
+                        onToggleSelected={toggleSelected}
+                        onUpdate={updateDraft}
+                      />
+                    ))}
+                  </section>
                 );
               })}
             </div>
@@ -676,7 +835,10 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
         </div>
 
         {saveError && (
-          <p className={styles.warningText} {...{ 'data-testid': 'walkthrough-anchor-sync-save-error' }}>
+          <p
+            className={styles.warningText}
+            {...{ 'data-testid': 'walkthrough-anchor-sync-save-error' }}
+          >
             {saveError}
           </p>
         )}
@@ -695,15 +857,21 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
             type="button"
             className={styles.buttonPrimary}
             onClick={() => void handleSave()}
-            disabled={saveDisabled}
+            disabled={saveDisabled || decidedDrafts.length === 0}
             title={
               enrichmentRunning
                 ? 'Wait for AI smart-tagging to finish before saving'
-                : undefined
+                : decidedDrafts.length === 0
+                  ? 'Approve or reject at least one row before saving'
+                  : `Save ${decidedDrafts.length} decided row(s) and remove them from this list`
             }
             {...{ 'data-testid': 'walkthrough-anchor-sync-save' }}
           >
-            {saving ? 'Saving…' : enrichmentRunning ? 'Waiting for AI…' : 'Save'}
+            {saving
+              ? 'Saving…'
+              : enrichmentRunning
+                ? 'Waiting for AI…'
+                : `Save decided (${decidedDrafts.length})`}
           </button>
         </div>
       </div>

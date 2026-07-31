@@ -110,15 +110,19 @@ export function _resetForTests(): void {
 }
 
 /**
- * Annotate proposal steps with server-derived ranking confidence for staged review.
- * AC: belowThreshold when no anchor or score < autoSelectThreshold.
+ * Annotate proposal steps with server-derived ranking metadata for staged review.
+ *
+ * Trust the AI's anchor selection: any `anchor.key` the model emits has already
+ * been validated against the approved+active authoring catalog allow-list during
+ * proposal parsing, so we do NOT second-guess it with the deterministic tag-overlap
+ * score. `belowThreshold` therefore reflects only whether an anchor is attached at
+ * all (i.e. a centered step), not the heuristic score. The `score` is retained for
+ * informational display / telemetry.
  */
 export function annotateProposalStepsWithAnchorMatch(
   proposal: WalkthroughAiProposal,
   ranking: WalkthroughGenerationAnchorRanking | undefined,
 ): WalkthroughAiProposal {
-  const threshold =
-    ranking?.autoSelectThreshold ?? DEFAULT_ANCHOR_AUTO_SELECT_SCORE_THRESHOLD;
   const byKey = new Map(
     (ranking?.rankedCandidates ?? []).map((c) => [c.anchorKey, c] as const),
   );
@@ -128,14 +132,19 @@ export function annotateProposalStepsWithAnchorMatch(
     const hasAnchor = Boolean(key);
     const candidate = hasAnchor ? byKey.get(key) : undefined;
     const score = candidate?.score ?? 0;
-    const belowThreshold = !hasAnchor || score < threshold;
+    // Only anchorless steps are "below threshold" (they become centered steps).
+    // An AI-selected catalog anchor is trusted regardless of its heuristic score.
+    const belowThreshold = !hasAnchor;
     return {
       ...step,
       anchorMatch: {
         score,
         belowThreshold,
         hasAnchor,
-        routeCompatible: candidate?.evidence.routeCompatible ?? false,
+        // A validated, AI-selected catalog anchor is route-compatible by construction.
+        routeCompatible: hasAnchor
+          ? (candidate?.evidence.routeCompatible ?? true)
+          : false,
         matchedTags: [...(candidate?.evidence.matchedTags ?? [])],
       },
     };

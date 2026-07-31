@@ -31,14 +31,23 @@ describe('walkthroughAnchorCoachableFilter', () => {
     expect(isExcludedWalkthroughTestId('confirm-dialog')).toBe(false);
   });
 
-  it('requires coachable tokens for plain data-testid', () => {
+  it('allows plain data-testid unless excluded (no token allowlist)', () => {
+    expect(
+      isCoachableWalkthroughDiscovery({
+        testId: 'design-module-add-btn',
+        sourceKind: 'data_testid',
+        sourceLocations: [
+          { filePath: 'src/client/components/DesignModuleView.tsx' },
+        ],
+      })
+    ).toBe(true);
     expect(
       isCoachableWalkthroughDiscovery({
         testId: 'xy-zz-1',
         sourceKind: 'data_testid',
         sourceLocations: [{ filePath: 'src/client/components/Foo.tsx' }],
       })
-    ).toBe(false);
+    ).toBe(true);
     expect(
       isCoachableWalkthroughDiscovery({
         testId: 'ado-create-error',
@@ -48,6 +57,15 @@ describe('walkthroughAnchorCoachableFilter', () => {
         ],
       })
     ).toBe(true);
+    expect(
+      isCoachableWalkthroughDiscovery({
+        testId: 'walkthrough-anchor-sync-select',
+        sourceKind: 'data_testid',
+        sourceLocations: [
+          { filePath: 'src/client/components/DesignModuleView.tsx' },
+        ],
+      })
+    ).toBe(false);
     expect(
       isCoachableWalkthroughDiscovery({
         testId: 'obscure-widget-x',

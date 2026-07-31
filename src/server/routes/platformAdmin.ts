@@ -26,6 +26,7 @@ import { CONFIGURABLE_MENU_ITEMS, type MenuItemKey, type UpsertProjectMenuConfig
 import type { ProjectAccessRequestStatus, SetProjectAssignmentsRequest } from '../../shared/types/platformAdmin';
 import * as walkthroughService from '../services/walkthroughService';
 import {
+  generateStepProposal,
   listWalkthroughAiPolicyPresets,
   redoProposalUnit,
   validateProposalUnit,
@@ -971,6 +972,23 @@ router.post('/walkthroughs/ai-drafts/redo', async (req: Request, res: Response):
       unit: body.unit,
       feedback: body.feedback,
       policyPreset: body.policyPreset,
+    });
+    res.json({ unit });
+  } catch (err) {
+    if (mapWalkthroughAiError(err, res)) return;
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/walkthroughs/ai-drafts/generate-step', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { anchors: _a, assets: _assets, assetAllowList: _al, ...body } = req.body ?? {};
+    const unit = await generateStepProposal({
+      projectId: body.projectId,
+      intent: body.intent,
+      policyPreset: body.policyPreset,
+      model: body.cursorModel ?? body.model,
+      existingDraft: body.existingDraft,
     });
     res.json({ unit });
   } catch (err) {

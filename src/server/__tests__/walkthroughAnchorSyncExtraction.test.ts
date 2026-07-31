@@ -157,6 +157,97 @@ describe('walkthroughAnchorSyncExtraction (Phase 3 fixtures)', () => {
     ).toBe(true);
   });
 
+  it('resolves AppSidebar view: literals to nav-item-* (with rare testId overrides)', () => {
+    const sidebarSource = `
+function navItemTestIdProps(item) {
+  return { 'data-testid': item.testId ?? \`nav-item-\${item.view}\` };
+}
+const moduleGroups = [{
+  items: [
+    { label: 'Interview', view: 'backlog', onNavigate: () => {} },
+    { label: 'Design Module', view: 'design-module', onNavigate: () => {} },
+    { label: 'Load Tests', view: 'load-tests', testId: 'nav-load-tests', onNavigate: () => {} },
+  ],
+}];
+export function AppSidebar() {
+  return moduleGroups[0].items.map((item) => (
+    <button key={item.view} {...navItemTestIdProps(item)} />
+  ));
+}
+`;
+
+    const result = extractWalkthroughAnchorsFromFiles(
+      [
+        {
+          path: 'src/client/components/AppSidebar.tsx',
+          content: sidebarSource,
+        },
+      ],
+      { provider: 'local', catalogSnapshot: [] }
+    );
+
+    const ids = result.discoveries.map((d) => d.testId).sort();
+    expect(ids).toEqual([
+      'nav-item-backlog',
+      'nav-item-design-module',
+      'nav-load-tests',
+    ]);
+    expect(ids).not.toContain('nav-item-load-tests');
+    expect(
+      result.unsupportedDynamicPatterns.every(
+        (p) => !/nav-item-\$\{/.test(p.snippet)
+      )
+    ).toBe(true);
+
+    const matched = extractWalkthroughAnchorsFromFiles(
+      [
+        {
+          path: 'src/client/components/AppSidebar.tsx',
+          content: sidebarSource,
+        },
+      ],
+      {
+        provider: 'local',
+        catalogSnapshot: [
+          {
+            testId: 'nav-item-design-module',
+            anchorKey: 'nav-item-design-module',
+            reviewStatus: 'approved',
+            isActive: true,
+            deletedAt: null,
+          },
+        ],
+      }
+    );
+    expect(
+      matched.existingMatches.some((m) => m.testId === 'nav-item-design-module')
+    ).toBe(true);
+    expect(
+      matched.missingWarnings.some((m) => m.testId === 'nav-item-design-module')
+    ).toBe(false);
+  });
+
+  it('does not resolve view: literals outside AppSidebar', () => {
+    const result = extractWalkthroughAnchorsFromFiles(
+      [
+        {
+          path: 'src/client/components/OtherNav.tsx',
+          content: `
+function navItemTestIdProps(item) {
+  return { 'data-testid': item.testId ?? \`nav-item-\${item.view}\` };
+}
+const items = [{ view: 'design-module' }];
+`,
+        },
+      ],
+      { provider: 'local', catalogSnapshot: [] }
+    );
+
+    expect(result.discoveries.map((d) => d.testId)).not.toContain(
+      'nav-item-design-module'
+    );
+  });
+
   it('diffs against an injected catalog snapshot without writing to DB', () => {
     const catalog: WalkthroughAnchorCatalogSnapshotEntry[] = [
       {

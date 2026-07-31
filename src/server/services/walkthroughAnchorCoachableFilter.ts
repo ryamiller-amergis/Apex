@@ -1,7 +1,8 @@
 /**
  * Coachable-anchor filters for Sync discovery.
- * Prefer product-facing interactive surfaces; drop Platform Admin / walkthrough
- * chrome and nitty-gritty control IDs (leave those to Playwright/unit tests).
+ * Drop Platform Admin / walkthrough chrome and known fine-grained test-only IDs.
+ * Do not require positive “coachable token” allowlists — any non-excluded
+ * data-testid / explicit marker is eligible for catalog review.
  */
 
 const EXCLUDED_PATH_RE =
@@ -10,10 +11,6 @@ const EXCLUDED_PATH_RE =
 /** Admin / walkthrough chrome and fine-grained test-only control IDs. */
 const EXCLUDED_TEST_ID_RE =
   /^(?:walkthrough-anchor-|walkthroughs-admin-|platform-admin-)|(?:^|-)(?:enrichment|sync-select|sync-confidence|checkbox|radio|spinner|skeleton|tooltip|pagination|page-\d+|icon-only|delete-confirm)(?:-|$)|\$\{|`/;
-
-/** Tokens that suggest a coachable, user-facing surface. */
-const COACHABLE_TOKEN_RE =
-  /\b(?:menu|nav|tab|section|panel|sidebar|header|footer|toolbar|filter|search|input|field|form|grid|table|list|modal|dialog|drawer|fab|composer|avatar|bell|notification|button|trigger|empty|banner|page|view|home|profile|standup|calendar|backlog|chat|ask-apex|whats-new|user-menu|create|save|submit|error|success|warning|ado|settings|draft|confirm)\b/i;
 
 export function isExcludedWalkthroughScanPath(filePath: string): boolean {
   const posix = filePath.replace(/\\/g, '/');
@@ -27,8 +24,8 @@ export function isExcludedWalkthroughTestId(testId: string): boolean {
 }
 
 /**
- * Explicit markers (`anchorTestIdProps`) are always coachable when path/id pass excludes.
- * Plain data-testid must look like a teachable surface (menu/section/input/grid/…).
+ * True when a discovery should enter Sync review / stay in coachable queues.
+ * Excludes admin chrome paths and nitty test-only IDs only.
  */
 export function isCoachableWalkthroughDiscovery(input: {
   testId: string;
@@ -43,6 +40,5 @@ export function isCoachableWalkthroughDiscovery(input: {
   ) {
     return false;
   }
-  if (input.sourceKind === 'explicit') return true;
-  return COACHABLE_TOKEN_RE.test(input.testId.replace(/-/g, ' '));
+  return true;
 }

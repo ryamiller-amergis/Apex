@@ -22,7 +22,7 @@ Apex is an internal product-building and project-management platform. It central
 | Feature Requests | `design-docs/feature-requests.md` | `.cursor/skills/feature-request-analysis/SKILL.md` | `featureRequestService.ts`, `featureRequestAnalysisService.ts` | `FeatureRequestsView.tsx`, `FeatureRequestModal.tsx`, `FeatureRequestFab.tsx` |
 | RBAC | `design-docs/rbac.md`, `design-docs/menu-view-rbac.md`, `design-docs/per-user-rbac.md` | `.cursor/skills/rbac-management/SKILL.md` | `rbacService.ts` | `AdminRoles.tsx`, `AdminUsers.tsx` |
 | Calendar & Work Items | `design-docs/calendar-work-item-assistant.md` | — | `azureDevOps.ts`, `calendarWorkItemAssistantService.ts` | `ScrumCalendar.tsx`, `UnscheduledList.tsx`, `DetailsPanel.tsx`, `CalendarWorkItemAssistantPanel.tsx` |
-| Guided Walkthroughs | — | `.cursor/skills/walkthrough-generation/SKILL.md`, `.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md` | `walkthroughService.ts`, `walkthroughGenerationService.ts`, `walkthroughAiDraftService.ts`, `walkthroughAnchorRegistryService.ts`, `walkthroughAnchorSmartTaggingService.ts`, `walkthroughNotificationService.ts` | `WalkthroughCatalog.tsx`, `WalkthroughRenderer.tsx`, `GuidedWalkthroughHost.tsx`, `WalkthroughHelpPanel.tsx`, `ManualWalkthroughEditor.tsx`, `WalkthroughAnchorManagement.tsx` |
+| Guided Walkthroughs | — | `.cursor/skills/walkthrough-generation/SKILL.md`, `.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md`, `.cursor/skills/walkthrough-anchor-discovery/SKILL.md`, `.cursor/skills/create-walkthrough-data-testids/SKILL.md` | `walkthroughService.ts`, `walkthroughGenerationService.ts`, `walkthroughAiDraftService.ts`, `walkthroughAnchorRegistryService.ts`, `walkthroughAnchorSmartTaggingService.ts`, `walkthroughNotificationService.ts` | `WalkthroughCatalog.tsx`, `WalkthroughRenderer.tsx`, `GuidedWalkthroughHost.tsx`, `WalkthroughHelpPanel.tsx`, `ManualWalkthroughEditor.tsx`, `WalkthroughAnchorManagement.tsx` |
 | UI Lab | — | `.cursor/skills/ui-lab/SKILL.md` | `uiLabService.ts` | `UiLabView.tsx` |
 | PDF Assembly | `design-docs/pdf-assembly-three-panel-ux.md` | — | `pdfAssemblyService.ts`, `documentConversionService.ts` | `PdfAssemblyView.tsx`, `PdfDocumentSidebar.tsx` |
 | AI Cost Analytics | — | — | `aiCostAnalyticsService.ts`, `aiUsageService.ts`, `aiCostScheduler.ts` | `AiCostAnalytics.tsx`, `AiCostComparison.tsx` |
@@ -63,7 +63,7 @@ Apex is an internal product-building and project-management platform. It central
 | **Walkthrough** | A guided, multi-step in-app tour (modal or coachmark) that teaches users a workflow; authored in Platform Admin and targeted by project, user, or group |
 | **Coachmark** | A walkthrough step anchored to an approved+active DB catalog key (resolved at serve time to a `data-testid`) rather than shown as a centered modal |
 | **Anchor catalog** | DB registry of walkthrough UI anchors (`walkthrough_anchor_registry`); authoring/runtime allow-list is approved+active rows; DOM markers in `walkthroughAnchors.ts` remain for scanners/opt-in |
-| **Smart tags** | AI-suggested classification metadata (tags, route, placements, confidence) applied only to newly discovered pending anchors during sync review |
+| **Smart tags** | AI-suggested classification metadata (tags, route, confidence) applied only to newly discovered pending anchors during sync review; placements always allow all sides — preferred side is chosen per walkthrough step |
 | **Design Module** | A project-scoped slice of the repository (source globs + docs) used to ground AI agents on a specific area of the codebase |
 | **Load Test Definition** | A k6 script and threshold profile stored per project; runs are executed against allowlisted targets with prod-safety guards |
 
@@ -132,6 +132,7 @@ src/
 | How do guided walkthroughs work? | `walkthroughService.ts`, `src/shared/walkthroughRoutes.ts`, Platform Admin → Walkthroughs (catalog + Anchor Management) |
 | How are walkthroughs AI-generated? | `.cursor/skills/walkthrough-generation/SKILL.md` via `walkthroughGenerationService.ts` (ranked DB catalog anchors only) |
 | How does Anchor Management / sync work? | `walkthroughAnchorRegistryService.ts`, `WalkthroughAnchorManagement.tsx`, Platform Admin → Walkthroughs → Anchor Management |
+| How do I add coachable data-testids for a route? | `.cursor/skills/create-walkthrough-data-testids/SKILL.md` — `/create-walkthrough-data-testids {path}` (e.g. `profile`, or paste a full URL) |
 | How does the calendar work-item assistant work? | `design-docs/calendar-work-item-assistant.md`, `calendarWorkItemAssistantService.ts` |
 | How do load tests work? | `loadTestService.ts`, `.cursor/skills/k6-load-test-generation/SKILL.md`, Admin → Load Test Targets |
 | What walkthrough routes and anchors exist? | `src/shared/walkthroughRoutes.ts`; anchors: DB catalog via `/api/platform-admin/walkthroughs/anchors` (DOM markers in `walkthroughAnchors.ts`) |

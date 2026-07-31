@@ -3,7 +3,10 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   buildSmartTaggingCandidatesFromSync,
+  hasRealAiProvenance,
+  mergeOpenSyncCandidates,
   mergeSmartTaggedSyncCandidates,
+  persistAnchorSyncReviewDrafts,
   resolveSyncReviewCandidates,
   startAndPollAnchorSmartTagging,
   useAnchorRegistryCatalog,
@@ -64,6 +67,19 @@ function makeRecord(
     ...overrides,
   };
 }
+
+const emptySyncDiagnostics = {
+  provider: 'local' as const,
+  rootPath: '.',
+  filesScanned: 0,
+  filesSkipped: 0,
+  bytesRead: 0,
+  durationMs: 0,
+  truncatedFiles: [] as string[],
+  errors: [] as Array<{ filePath: string; message: string }>,
+  branch: null as string | null,
+  committedTruth: false,
+};
 
 describe('usePlatformAdminAnchorRegistry', () => {
   beforeEach(() => jest.clearAllMocks());
@@ -156,6 +172,8 @@ describe('usePlatformAdminAnchorRegistry', () => {
         durationMs: 1,
         truncatedFiles: [],
         errors: [],
+        branch: null,
+        committedTruth: false,
       },
       persistence: {
         created: [created],
@@ -208,16 +226,7 @@ describe('usePlatformAdminAnchorRegistry', () => {
       missingWarnings: [],
       duplicates: [],
       unsupportedDynamicPatterns: [],
-      diagnostics: {
-        provider: 'local',
-        rootPath: '.',
-        filesScanned: 0,
-        filesSkipped: 0,
-        bytesRead: 0,
-        durationMs: 0,
-        truncatedFiles: [],
-        errors: [],
-      },
+      diagnostics: emptySyncDiagnostics,
       persistence: {
         created,
         refreshed: [],
@@ -243,23 +252,14 @@ describe('usePlatformAdminAnchorRegistry', () => {
     const created = Array.from({ length: 30 }, (_, i) =>
       makeRecord({ id: `id-${i}`, testId: `test-${i}` }),
     );
-    const inputs = buildSmartTaggingCandidatesFromSync({
+    const syncPayload = {
       discoveries: [],
       newCandidates: [],
       existingMatches: [],
       missingWarnings: [],
       duplicates: [],
       unsupportedDynamicPatterns: [],
-      diagnostics: {
-        provider: 'local',
-        rootPath: '.',
-        filesScanned: 0,
-        filesSkipped: 0,
-        bytesRead: 0,
-        durationMs: 0,
-        truncatedFiles: [],
-        errors: [],
-      },
+      diagnostics: emptySyncDiagnostics,
       persistence: {
         created,
         refreshed: [],
@@ -267,8 +267,131 @@ describe('usePlatformAdminAnchorRegistry', () => {
         reviewCandidates: created,
         newCandidateIdsForSmartTagging: created.map((r) => r.id),
       },
+    };
+    expect(buildSmartTaggingCandidatesFromSync(syncPayload)).toHaveLength(20);
+    expect(buildSmartTaggingCandidatesFromSync(syncPayload, { batchSize: 10 })).toHaveLength(10);
+    expect(buildSmartTaggingCandidatesFromSync(syncPayload, { batchSize: 50 })).toHaveLength(30);
+  });
+
+  it('excludes already AI-enriched ids from the next smart-tagging batch', () => {
+    const created = [
+      makeRecord({ id: 'keep', testId: 'keep' }),
+      makeRecord({
+        id: 'skip',
+        testId: 'skip',
+        smartTags: ['nav'],
+        aiProvenance: {
+          provider: 'cursor',
+          model: 'composer-2.5',
+          skillPath: '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+          generatedAt: '2026-01-01T00:00:00.000Z',
+          confidence: 0.9,
+          rationale: 'already tagged',
+        },
+      }),
+    ];
+    const inputs = buildSmartTaggingCandidatesFromSync(
+      {
+        discoveries: [],
+        newCandidates: [],
+        existingMatches: [],
+        missingWarnings: [],
+        duplicates: [],
+        unsupportedDynamicPatterns: [],
+        diagnostics: emptySyncDiagnostics,
+        persistence: {
+          created,
+          refreshed: [],
+          markedMissing: [],
+          reviewCandidates: created,
+          newCandidateIdsForSmartTagging: created.map((r) => r.id),
+        },
+      },
+      { excludeIds: ['skip'] },
+    );
+    expect(inputs).toEqual([expect.objectContaining({ testId: 'keep' })]);
+  });
+
+  it('persists sync review via bulk actions and skips unchanged field PATCHes', async () => {
+    const openAi = makeRecord({
+      id: 'ai-1',
+      testId: 'ai-1',
+      label: 'Bell',
+      smartTags: ['nav'],
+      suggestedRoute: '/home',
     });
-    expect(inputs).toHaveLength(20);
+    mockFetchOk({ items: [openAi] });
+
+    await persistAnchorSyncReviewDrafts(
+      [
+        {
+          id: 'ai-1',
+          label: 'Bell',
+          suggestedRoute: '/home',
+          approvedRoute: null,
+          allowedPlacements: ['bottom'],
+          smartTags: ['nav'],
+          sourceLocations: openAi.sourceLocations,
+          reviewStatus: 'approved',
+          isActive: true,
+        },
+      ],
+      { originals: [openAi] },
+    );
+
+    const calls = (global.fetch as jest.Mock).mock.calls.map((c) => String(c[0]));
+    // No PATCH for unchanged fields — only bulk approve + activate.
+    expect(
+      (global.fetch as jest.Mock).mock.calls.filter(
+        (c) => c[1]?.method === 'PATCH',
+      ),
+    ).toHaveLength(0);
+    expect(calls.some((u) => u.includes('/anchor-registry/bulk'))).toBe(true);
+    expect(
+      (global.fetch as jest.Mock).mock.calls.filter(
+        (c) =>
+          String(c[0]).includes('/anchor-registry/bulk') && c[1]?.method === 'POST',
+      ).length,
+    ).toBeGreaterThanOrEqual(1);
+  });
+
+  it('does not overwrite open AI-enriched rows when merging next sync or AI results', () => {
+    const openAi = makeRecord({
+      id: 'ai-1',
+      testId: 'ai-1',
+      label: 'Open AI label',
+      smartTags: ['nav'],
+      aiProvenance: {
+        provider: 'cursor',
+        model: 'composer-2.5',
+        skillPath: '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+        generatedAt: '2026-01-01T00:00:00.000Z',
+        confidence: 0.9,
+        rationale: 'keep me',
+      },
+    });
+    const scanner = makeRecord({ id: 'scan-1', testId: 'scan-1', label: 'Scanner' });
+    expect(hasRealAiProvenance(openAi)).toBe(true);
+
+    expect(
+      mergeSmartTaggedSyncCandidates([openAi, scanner], [
+        makeRecord({ id: 'ai-1', testId: 'ai-1', label: 'Should not win', smartTags: ['x'] }),
+        makeRecord({ id: 'scan-1', testId: 'scan-1', label: 'AI tagged', smartTags: ['y'] }),
+      ]),
+    ).toEqual([
+      expect.objectContaining({ id: 'ai-1', label: 'Open AI label', smartTags: ['nav'] }),
+      expect.objectContaining({ id: 'scan-1', label: 'AI tagged', smartTags: ['y'] }),
+    ]);
+
+    expect(
+      mergeOpenSyncCandidates([openAi], [
+        makeRecord({ id: 'ai-1', testId: 'ai-1', label: 'Scanner overwrite' }),
+        makeRecord({ id: 'new-1', testId: 'new-1', label: 'New pending' }),
+      ]),
+    ).toEqual([
+      expect.objectContaining({ id: 'ai-1', label: 'Open AI label' }),
+      expect.objectContaining({ id: 'new-1', label: 'New pending' }),
+    ]);
   });
 
   it('prefers reviewCandidates so re-sync pending rows open in the modal', () => {
@@ -286,16 +409,7 @@ describe('usePlatformAdminAnchorRegistry', () => {
         missingWarnings: [],
         duplicates: [],
         unsupportedDynamicPatterns: [],
-        diagnostics: {
-          provider: 'local',
-          rootPath: '.',
-          filesScanned: 0,
-          filesSkipped: 0,
-          bytesRead: 0,
-          durationMs: 0,
-          truncatedFiles: [],
-          errors: [],
-        },
+        diagnostics: emptySyncDiagnostics,
         persistence: {
           created: [],
           refreshed: [pendingExisting],
@@ -355,16 +469,7 @@ describe('usePlatformAdminAnchorRegistry', () => {
       missingWarnings: [],
       duplicates: [],
       unsupportedDynamicPatterns: [],
-      diagnostics: {
-        provider: 'local' as const,
-        rootPath: '.',
-        filesScanned: 0,
-        filesSkipped: 0,
-        bytesRead: 0,
-        durationMs: 0,
-        truncatedFiles: [],
-        errors: [],
-      },
+      diagnostics: emptySyncDiagnostics,
       persistence: {
         created,
         refreshed: [],

@@ -1,11 +1,11 @@
 ---
 name: Walkthrough Anchor Smart Tagging
-description: Classifies newly discovered walkthrough anchor candidates with evidence-based smart tags, route/label/placement suggestions, confidence, and rationale
+description: Classifies newly discovered walkthrough anchor candidates with evidence-based smart tags, route/label suggestions, confidence, and rationale
 ---
 
 # Walkthrough Anchor Smart Tagging
 
-Classify **newly discovered** Apex walkthrough anchor candidates. Produce structured smart-tag suggestions grounded in repository evidence — never invent product behavior, routes, or UI that is not in the source.
+Classify **newly discovered** Apex walkthrough anchor candidates. Produce structured smart-tag suggestions grounded in repository evidence — never invent product behavior, routes, or UI that is not in the source. **Do not evaluate coachmark placements** — always allow all four sides; preferred side is chosen later when authoring walkthrough steps.
 
 This skill is invoked programmatically (Wave 2) via the Cursor SDK, mirroring `walkthroughGenerationService.ts`. Wave 1 authors the contract only.
 
@@ -33,7 +33,7 @@ Kickoff context in `.ai-pilot/kickoff-context.md` lists candidate test IDs with 
    - Treat a page entry `routePattern` containing `:placeholders` as ownership evidence only. Never emit a placeholder route.
    - Emit the matched page entry's stable `suggestedRoute`; page-specific query routes are preferred over broad module routes.
    - Verify any `suggestedRoute` against `src/shared/walkthroughRoutes.ts` `ROUTE_ENTRIES` (exact match only).
-   - Choose `allowedPlacements` from `top | right | bottom | left` based on layout evidence (e.g. header controls → prefer `bottom`; left-nav items → prefer `right`).
+   - Always set `allowedPlacements` to `["top", "right", "bottom", "left"]`. Do **not** infer a preferred side from layout — placement is chosen per step when building the walkthrough.
 3. **Assign smart tags** using the controlled rubric below (3–8 tags).
 4. **Write the output** to `.ai-pilot/output/walkthrough-anchor-smart-tagging.json` using the Write tool.
 
@@ -86,7 +86,7 @@ Field requirements:
 - `suggestions` — exactly one entry for every input candidate; never return a partial batch.
 - `testId` / `anchorKey` / `suggestedLabel` / `rationale` — required non-empty strings.
 - `suggestedRoute` — `null` or an exact curated route from `walkthroughRoutes.ts`.
-- `allowedPlacements` — non-empty subset of `top`, `right`, `bottom`, `left`.
+- `allowedPlacements` — always exactly `["top", "right", "bottom", "left"]` (do not subset).
 - `smartTags` — **3–8** lowercase kebab-case strings.
 - `confidence` — finite number in inclusive range **[0, 1]**.
 - **No invented / extra fields** at the root or inside a suggestion.
@@ -95,7 +95,7 @@ Field requirements:
 
 1. **No invented behavior.** Describe only controls and pages verified in source. If evidence is weak, lower confidence and say so in `rationale`; do not fabricate features.
 2. **Routes must come from `walkthroughRoutes.ts`.** Never invent routes or entity IDs.
-3. **Placements are cardinal only:** `top`, `right`, `bottom`, `left`.
+3. **Do not evaluate placements.** Always emit all four: `top`, `right`, `bottom`, `left`. Preferred side is chosen later in walkthrough step authoring (and may flip at runtime).
 4. **Tags are lowercase kebab-case**, length 3–8 after dedupe.
 5. **Do not wrap output in markdown fences.** Write raw JSON.
 6. **Do not ask questions.** Execute silently and write the output file.
@@ -107,10 +107,10 @@ Field requirements:
 | Range       | When to use                                                                   |
 | ----------- | ----------------------------------------------------------------------------- |
 | `0.85–1.0`  | Explicit walkthrough marker or clear page ownership + visible label in source |
-| `0.55–0.84` | Stable `data-testid` with reasonable route/placement inference                |
+| `0.55–0.84` | Stable `data-testid` with reasonable route inference                          |
 | `0.25–0.54` | Ambiguous container / shared layout; Super Admin should review carefully      |
 | `0.0–0.24`  | Speculative — only if the ID exists but purpose is unclear                    |
 
 ## Evidence trail
 
-Before writing output, verify each reference by reading the actual source file. Cite paths (and line context when helpful) in `rationale`. Use the matched page entry's stable `suggestedRoute` and conservative placements when ownership is ambiguous.
+Before writing output, verify each reference by reading the actual source file. Cite paths (and line context when helpful) in `rationale`. Use the matched page entry's stable `suggestedRoute` when ownership is ambiguous.

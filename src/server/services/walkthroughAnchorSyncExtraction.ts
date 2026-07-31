@@ -283,8 +283,76 @@ function resolveExplicitTestId(anchorKey: string): {
 }
 
 /**
+ * AppSidebar convention: module buttons use `nav-item-${item.view}` (optional
+ * `testId` override on the same nav-item object). Sync resolves string-literal
+ * `view:` / `testId:` fields so catalog presence does not require a static id map.
+ */
+export function isAppSidebarSourcePath(filePath: string): boolean {
+  return /(^|\/)AppSidebar\.tsx$/i.test(toPosix(filePath));
+}
+
+const APP_SIDEBAR_NAV_ITEM_PREFIX = 'nav-item-';
+const APP_SIDEBAR_VIEW_CONVENTION_RE =
+  /navItemTestIdProps\s*\(|['"]data-testid['"]\s*:\s*`nav-item-\$\{(?:item\.)?view\}|data-testid\s*=\s*\{\s*`nav-item-\$\{(?:item\.)?view\}/;
+
+/**
+ * Resolve AppSidebar nav discoveries from literal `view:` / `testId:` fields.
+ * Returns [] when the file is not AppSidebar or the nav-item convention is absent.
+ */
+export function extractAppSidebarPrefixedViewOccurrences(
+  source: string,
+  filePath: string
+): WalkthroughAnchorLiteralOccurrence[] {
+  const posixPath = toPosix(filePath);
+  if (!isAppSidebarSourcePath(posixPath)) return [];
+  if (!APP_SIDEBAR_VIEW_CONVENTION_RE.test(source)) return [];
+
+  const occurrences: WalkthroughAnchorLiteralOccurrence[] = [];
+  const seen = new Set<string>();
+  const viewRe = /\bview:\s*['"]([^'"]+)['"]/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = viewRe.exec(source)) !== null) {
+    const view = match[1]?.trim();
+    if (!view) continue;
+
+    // Prefer an explicit testId on the same object (look ahead until next view:).
+    const after = source.slice(match.index, match.index + 500);
+    const nextViewOffset = after.slice(1).search(/\bview:\s*['"]/);
+    const region =
+      nextViewOffset >= 0 ? after.slice(0, nextViewOffset + 1) : after;
+    const override = region.match(/\btestId:\s*['"]([^'"]+)['"]/);
+    const testId = (override?.[1] ?? `${APP_SIDEBAR_NAV_ITEM_PREFIX}${view}`).trim();
+    if (!testId || seen.has(testId)) continue;
+    seen.add(testId);
+
+    occurrences.push({
+      testId,
+      filePath: posixPath,
+      line: lineNumberAtIndex(source, match.index),
+      discoveryKind: 'data_testid',
+      suggestedAnchorKey: testId,
+    });
+  }
+
+  return occurrences;
+}
+
+function isResolvedAppSidebarNavTemplate(
+  snippet: string,
+  filePath: string
+): boolean {
+  if (!isAppSidebarSourcePath(filePath)) return false;
+  return (
+    /nav-item-\$\{(?:item\.)?view\}/.test(snippet) ||
+    /navItemTestIdProps\s*\(/.test(snippet)
+  );
+}
+
+/**
  * Literal-pattern extraction for a single source file.
  * Discovers static test IDs only; records dynamic forms as unsupported.
+ * AppSidebar additionally resolves `view:` → `nav-item-${view}` (see above).
  */
 export function extractWalkthroughAnchorCandidatesFromSource(
   source: string,
@@ -309,10 +377,14 @@ export function extractWalkthroughAnchorCandidatesFromSource(
     index: number,
     reason: WalkthroughAnchorUnsupportedPattern['reason']
   ) => {
+    const snippet = snippetAt(source, index);
+    if (isResolvedAppSidebarNavTemplate(snippet, posixPath)) {
+      return;
+    }
     unsupported.push({
       filePath: posixPath,
       line: lineNumberAtIndex(source, index),
-      snippet: snippetAt(source, index),
+      snippet,
       reason,
     });
   };
@@ -424,6 +496,10 @@ export function extractWalkthroughAnchorCandidatesFromSource(
         discoveryKind: 'data_testid',
       });
     }
+  }
+
+  for (const occ of extractAppSidebarPrefixedViewOccurrences(source, posixPath)) {
+    pushOccurrence(occ);
   }
 
   return { literalOccurrences: occurrences, unsupported };

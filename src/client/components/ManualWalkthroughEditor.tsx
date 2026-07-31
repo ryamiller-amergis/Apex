@@ -6,10 +6,12 @@ import remarkGfm from 'remark-gfm';
 import type {
   WalkthroughDefinition,
   WalkthroughPublishMode,
+  WalkthroughStepInput,
 } from '../../shared/types/walkthrough';
 import type { WalkthroughAnchorRegistryEntry } from '../../shared/walkthroughAnchors';
 import { WALKTHROUGH_REGISTRY_PLACEMENTS } from '../../shared/walkthroughAnchors';
 import { getAssetDescription } from '../../shared/walkthroughAssets';
+import { listWalkthroughRoutes } from '../../shared/walkthroughRoutes';
 import {
   useArchiveWalkthrough,
   useCreateWalkthrough,
@@ -27,6 +29,7 @@ import {
   type WalkthroughDraftFormValues,
 } from '../utils/walkthroughAuthoringValidation';
 import { WalkthroughAiDraftPanel } from './WalkthroughAiDraftPanel';
+import { AiStepBuilderModal } from './AiStepBuilderModal';
 import { NumberStepper } from './NumberStepper';
 import styles from './WalkthroughAuthoring.module.css';
 
@@ -135,7 +138,7 @@ export const WalkthroughLifecycleDialog: React.FC<WalkthroughLifecycleDialogProp
     >
       <div className={styles.dialog}>
         <h3 id="walkthrough-lifecycle-title" className={styles.dialogTitle}>
-          Walkthrough lifecycle
+          Publish walkthrough
         </h3>
         <p id="walkthrough-lifecycle-desc" className={styles.dialogBody}>
           Current status: <strong>{walkthrough.lifecycle}</strong>
@@ -277,6 +280,8 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
   const archiveMutation = useArchiveWalkthrough();
 
   const [lifecycleOpen, setLifecycleOpen] = useState(false);
+  const [aiStepOpen, setAiStepOpen] = useState(false);
+  const [stepsInfoOpen, setStepsInfoOpen] = useState(false);
   const [reorderAnnouncement, setReorderAnnouncement] = useState('');
   const [savedWalkthrough, setSavedWalkthrough] = useState<WalkthroughDefinition | null>(null);
   const loadedIdRef = useRef<string | null>(null);
@@ -312,7 +317,7 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
     defaultValues,
   });
 
-  const { fields, append, remove, move, replace } = useFieldArray({ control, name: 'steps' });
+  const { fields, append, insert, remove, move, replace } = useFieldArray({ control, name: 'steps' });
   // eslint-disable-next-line react-hooks/exhaustive-deps -- RHF watch() identity; projectGroups must follow form projects
   const watchedProjects = watch('projects') ?? [];
   const watchedSteps = watch('steps');
@@ -434,6 +439,30 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
     [replace, setValue],
   );
 
+  const handleAiInsertStep = useCallback(
+    (index: number, step: WalkthroughStepInput) => {
+      insert(
+        index,
+        {
+          id: step.id ?? `ai-${Date.now()}`,
+          heading: step.heading,
+          bodyMarkdown: step.bodyMarkdown,
+          route: step.route ?? step.anchor?.targetRoute ?? null,
+          imageUrl: step.imageUrl ?? null,
+          imageAlt: step.imageAlt ?? '',
+          ctaLabel: step.ctaLabel ?? null,
+          ctaRoute: step.ctaRoute ?? null,
+          anchorKey: step.anchor?.key ?? '',
+          anchorTargetRoute: step.anchor?.targetRoute ?? '',
+          anchorPlacement: step.anchor?.placement ?? '',
+        },
+        { shouldFocus: true },
+      );
+      setReorderAnnouncement(`Inserted AI-generated step at position ${index + 1}`);
+    },
+    [insert],
+  );
+
   const onSaveDraft = handleSubmit(async (values) => {
     const command = draftFormToCreateCommand(values);
     const effectiveId = walkthroughId ?? savedWalkthrough?.id ?? null;
@@ -536,6 +565,9 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
             {currentWalkthrough
               ? `Status: ${currentWalkthrough.lifecycle} · Revision ${currentWalkthrough.revision}`
               : 'Draft changes are saved without publishing.'}
+            {currentWalkthrough && isDirty
+              ? ' · Unsaved changes — save your draft before publishing.'
+              : ''}
           </p>
         </div>
         <div className={styles.actions}>
@@ -561,10 +593,11 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
               type="button"
               className={styles.button}
               {...{ 'data-testid': 'walkthrough-publish' }}
-              disabled={isSaving}
+              disabled={isSaving || isDirty}
+              title={isDirty ? 'Save your draft before publishing' : undefined}
               onClick={() => setLifecycleOpen(true)}
             >
-              Lifecycle…
+              Publish…
             </button>
           )}
         </div>
@@ -761,19 +794,101 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
 
       <section className={styles.section} aria-labelledby="walkthrough-steps-title">
         <div className={styles.stepHeader}>
-          <h3 id="walkthrough-steps-title" className={styles.sectionTitle}>
-            Steps ({fields.length}/20)
-          </h3>
-          <button
-            type="button"
-            className={styles.button}
-            {...{ 'data-testid': 'walkthrough-step-add' }}
-            disabled={fields.length >= 20}
-            onClick={() => append(createEmptyStep(fields.length))}
-          >
-            Add step
-          </button>
+          <div className={styles.stepHeaderTitle}>
+            <h3 id="walkthrough-steps-title" className={styles.sectionTitle}>
+              Steps ({fields.length}/20)
+            </h3>
+            <button
+              type="button"
+              className={styles.infoButton}
+              aria-expanded={stepsInfoOpen}
+              aria-controls="walkthrough-steps-info"
+              aria-label="What do these step fields do?"
+              title="What do these step fields do?"
+              {...{ 'data-testid': 'walkthrough-steps-info-toggle' }}
+              onClick={() => setStepsInfoOpen((open) => !open)}
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z" />
+                <path d="m8.93 6.588-2.29.287-.082.38.45.083c.294.07.352.176.288.469l-.738 3.468c-.194.897.105 1.319.808 1.319.545 0 1.178-.252 1.465-.598l.088-.416c-.2.176-.492.246-.686.246-.275 0-.375-.193-.304-.533L8.93 6.588zM9 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z" />
+              </svg>
+            </button>
+          </div>
+          <div className={styles.stepActions}>
+            <button
+              type="button"
+              className={styles.button}
+              {...{ 'data-testid': 'walkthrough-step-add' }}
+              disabled={fields.length >= 20}
+              onClick={() => append(createEmptyStep(fields.length))}
+            >
+              Add step
+            </button>
+            <button
+              type="button"
+              className={styles.buttonPrimary}
+              {...{ 'data-testid': 'walkthrough-step-ai-build' }}
+              disabled={fields.length >= 20}
+              onClick={() => setAiStepOpen(true)}
+            >
+              Build with AI
+            </button>
+          </div>
         </div>
+
+        {stepsInfoOpen && (
+          <div
+            id="walkthrough-steps-info"
+            className={styles.infoPanel}
+            role="note"
+            {...{ 'data-testid': 'walkthrough-steps-info-panel' }}
+          >
+            <p className={styles.infoPanelIntro}>
+              Each step becomes one card in the live walkthrough. Users move through them with
+              <strong> Back / Next</strong>, and every field below maps to what they see in the app:
+            </p>
+            <dl className={styles.infoPanelList}>
+              <div>
+                <dt>Heading</dt>
+                <dd>The bold title at the top of the coachmark/modal card.</dd>
+              </div>
+              <div>
+                <dt>Body (Markdown)</dt>
+                <dd>The explanatory text under the heading. Markdown (bold, code, links) is rendered live.</dd>
+              </div>
+              <div>
+                <dt>Anchor</dt>
+                <dd>
+                  The specific on-screen element the card points at and highlights. Leave it as
+                  <em> No anchor</em> to show a centered modal instead of a pinned coachmark.
+                </dd>
+              </div>
+              <div>
+                <dt>Anchor route</dt>
+                <dd>The in-app page the user is taken to for this step so the anchored element is visible.</dd>
+              </div>
+              <div>
+                <dt>Placement</dt>
+                <dd>
+                  Which side of the anchor the card prefers (top / right / bottom / left). If that side is
+                  off-screen, the walkthrough auto-repositions to keep the card fully visible.
+                </dd>
+              </div>
+              <div>
+                <dt>CTA label &amp; CTA route</dt>
+                <dd>An optional action button on the card (e.g. “Go to Design Module”) that navigates in-app when clicked.</dd>
+              </div>
+              <div>
+                <dt>Image URL &amp; alt text</dt>
+                <dd>An optional image shown inside the card; alt text is required for accessibility when an image is set.</dd>
+              </div>
+              <div>
+                <dt>Step order</dt>
+                <dd>Use the ↑ / ↓ controls to reorder. The first step is what users see when the walkthrough launches.</dd>
+              </div>
+            </dl>
+          </div>
+        )}
 
         <p className={styles.reorderLive} aria-live="polite">
           {reorderAnnouncement}
@@ -891,12 +1006,19 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
                   </div>
                   <div className={styles.field}>
                     <label className={styles.label} htmlFor={`ctaRoute-${field.id}`}>CTA route</label>
-                    <input
+                    <select
                       id={`ctaRoute-${field.id}`}
-                      className={styles.input}
+                      className={styles.select}
                       {...register(`steps.${index}.ctaRoute`)}
                       {...{ 'data-testid': `walkthrough-step-cta-route-${field.id}` }}
-                    />
+                    >
+                      <option value="">No CTA link</option>
+                      {listWalkthroughRoutes().map((entry) => (
+                        <option key={entry.route} value={entry.route}>
+                          {entry.label} ({entry.route})
+                        </option>
+                      ))}
+                    </select>
                     {stepErrors?.ctaRoute && <p className={styles.fieldError}>{stepErrors.ctaRoute.message}</p>}
                   </div>
                 </div>
@@ -996,6 +1118,42 @@ export const ManualWalkthroughEditor: React.FC<ManualWalkthroughEditorProps> = (
             reset(definitionToFormValues(result));
             setLifecycleOpen(false);
           }}
+        />
+      )}
+
+      {aiStepOpen && (
+        // data-testid-exempt — AiStepBuilderModal root already sets data-testid
+        <AiStepBuilderModal
+          projectId={watchedProjects[0] ?? ''}
+          stepCount={fields.length}
+          existingDraft={{
+            internalName: watch('internalName') || '',
+            userTitle: watch('userTitle') || '',
+            whyItMatters: watch('whyItMatters') || '',
+            steps: (watchedSteps ?? []).map((step, index) => ({
+              id: step.id,
+              ordinal: index,
+              heading: step.heading || '',
+              bodyMarkdown: step.bodyMarkdown || '',
+              route: step.route ?? step.anchorTargetRoute ?? null,
+              imageUrl: step.imageUrl ?? null,
+              imageAlt: step.imageAlt ?? null,
+              ctaLabel: step.ctaLabel ?? null,
+              ctaRoute: step.ctaRoute ?? null,
+              anchor:
+                step.anchorKey && step.anchorTargetRoute && step.anchorPlacement
+                  ? {
+                      key: step.anchorKey,
+                      targetRoute: step.anchorTargetRoute,
+                      placement: step.anchorPlacement as NonNullable<
+                        WalkthroughStepInput['anchor']
+                      >['placement'],
+                    }
+                  : null,
+            })),
+          }}
+          onInsert={handleAiInsertStep}
+          onClose={() => setAiStepOpen(false)}
         />
       )}
     </div>

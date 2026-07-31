@@ -16,8 +16,6 @@ const mockGenerate = jest.fn();
 const mockRedo = jest.fn();
 const mockValidate = jest.fn();
 const mockMatches = jest.fn();
-const mockDiscovery = jest.fn();
-const mockCreateAnchor = jest.fn();
 
 jest.mock('../../hooks/useWalkthroughAiOptions', () => ({
   useWalkthroughAiOptionsQuery: () => ({
@@ -85,10 +83,6 @@ jest.mock('../../hooks/useWalkthroughAiDraft', () => ({
     mutateAsync: mockMatches,
     isPending: false,
   }),
-  useStartAnchorDiscovery: () => ({
-    mutateAsync: mockDiscovery,
-    isPending: false,
-  }),
 }));
 
 jest.mock('../../hooks/usePlatformAdminWalkthroughs', () => ({
@@ -100,16 +94,26 @@ jest.mock('../../hooks/usePlatformAdminWalkthroughs', () => ({
         label: 'Profile bio',
         targetRoute: '/profile',
         allowedPlacements: ['bottom'],
+        smartTags: ['profile', 'bio'],
+      },
+      {
+        key: 'design-module-add-btn',
+        testId: 'design-module-add-btn',
+        label: 'Design Module — Add module',
+        targetRoute: '/design-module',
+        allowedPlacements: ['right'],
+        smartTags: ['design', 'module', 'add', 'button'],
+      },
+      {
+        key: 'design-module-sidebar',
+        testId: 'design-module-sidebar',
+        label: 'Design Module — module sidebar',
+        targetRoute: '/design-module',
+        allowedPlacements: ['right'],
+        smartTags: ['design', 'module', 'sidebar'],
       },
     ],
     isLoading: false,
-  }),
-}));
-
-jest.mock('../../hooks/usePlatformAdminAnchorRegistry', () => ({
-  useCreateManualAnchor: () => ({
-    mutateAsync: mockCreateAnchor,
-    isPending: false,
   }),
 }));
 
@@ -345,7 +349,7 @@ describe('WalkthroughAiDraftPanel', () => {
     expect(merged.steps.map((s: { heading: string }) => s.heading)).toEqual(['Keep']);
   });
 
-  it('AC — low-confidence step shows warning and choose/find actions', async () => {
+  it('anchorless step renders centered with a route/tag-filtered anchor picker', async () => {
     const user = userEvent.setup();
     const fields = { internalName: 'n', userTitle: 'Title', whyItMatters: 'Why' };
     const steps = [
@@ -355,7 +359,7 @@ describe('WalkthroughAiDraftPanel', () => {
         heading: 'Low match',
         bodyMarkdown: 'needs anchor',
         anchorMatch: {
-          score: 0.2,
+          score: 0,
           belowThreshold: true,
           hasAnchor: false,
           routeCompatible: false,
@@ -374,33 +378,216 @@ describe('WalkthroughAiDraftPanel', () => {
         policyPreset: 'A',
       },
     });
-    mockMatches.mockResolvedValue({
-      rankedCandidates: [
-        {
-          anchorKey: 'profile-bio',
-          testId: 'profile-bio',
-          label: 'Profile bio',
-          approvedRoute: '/profile',
-          allowedPlacements: ['bottom'],
-          smartTags: ['profile'],
-          score: 0.91,
-          evidence: { routeCompatible: true, matchedTags: ['profile'] },
-        },
-      ],
-      autoSelectThreshold: 0.72,
-    });
+    // Ranked matches may be empty for a weak text query — the catalog still drives options.
+    mockMatches.mockResolvedValue({ rankedCandidates: [], autoSelectThreshold: 0.72 });
 
     renderPanel();
     await user.type(screen.getByTestId('walkthrough-ai-intent'), 'Find anchors');
     await user.click(screen.getByTestId('walkthrough-ai-generate'));
-    await screen.findByTestId('walkthrough-proposal-step-s1-anchor-low-confidence');
 
+    // Anchorless step renders as a centered step — no misleading low-confidence noise.
+    await screen.findByTestId('walkthrough-proposal-step-s1-centered');
     expect(
-      screen.getByTestId('walkthrough-proposal-step-s1-anchor-match'),
-    ).toHaveTextContent(/low confidence/i);
+      screen.queryByTestId('walkthrough-proposal-step-s1-anchor-low-confidence'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId('walkthrough-proposal-step-s1-anchor-match'),
+    ).not.toBeInTheDocument();
+    // No "Use centered step" button when the step is already centered.
+    expect(
+      screen.queryByTestId('walkthrough-proposal-step-s1-use-centered'),
+    ).not.toBeInTheDocument();
+
+    // Open the picker; filter by route → tags → anchor.
+    await user.click(screen.getByTestId('walkthrough-proposal-step-s1-choose-anchor'));
+    await waitFor(() => expect(mockMatches).toHaveBeenCalled());
+    expect(
+      screen.getByTestId('walkthrough-proposal-step-s1-anchor-picker'),
+    ).toBeInTheDocument();
+
+    const routeFilter = screen.getByTestId(
+      'walkthrough-proposal-step-s1-anchor-route-filter',
+    );
+    await user.selectOptions(routeFilter, '/design-module');
+
+    // Route drives the available approved anchor tags.
+    const tagFilter = await screen.findByTestId(
+      'walkthrough-proposal-step-s1-anchor-tag-filter',
+    );
+    expect(tagFilter).toHaveTextContent('add');
+
+    // Anchor options are scoped to the selected route.
+    const anchorSelect = screen.getByTestId(
+      'walkthrough-proposal-step-s1-anchor-select',
+    ) as HTMLSelectElement;
+    const optionText = Array.from(anchorSelect.options)
+      .map((o) => o.textContent)
+      .join(' ');
+    expect(optionText).toContain('Design Module — Add module');
+    expect(optionText).toContain('Design Module — module sidebar');
+    expect(optionText).not.toContain('Profile bio');
+
+    // Selecting an anchor applies it to the step.
+    await user.selectOptions(anchorSelect, 'design-module-add-btn');
+    expect(
+      await screen.findByTestId('walkthrough-proposal-step-s1-anchor-selected'),
+    ).toBeInTheDocument();
+  });
+
+  it('free-text search narrows the anchor picker across the whole catalog', async () => {
+    const user = userEvent.setup();
+    const fields = { internalName: 'n', userTitle: 'Title', whyItMatters: 'Why' };
+    const steps = [
+      {
+        id: 's1',
+        ordinal: 0,
+        heading: 'Low match',
+        bodyMarkdown: 'needs anchor',
+        anchorMatch: {
+          score: 0,
+          belowThreshold: true,
+          hasAnchor: false,
+          routeCompatible: false,
+          matchedTags: [],
+        },
+      },
+    ];
+    mockGenerate.mockResolvedValue({
+      proposal: {
+        proposalId: 'p1',
+        walkthroughFields: fields,
+        steps,
+        units: buildProposalUnits(fields, steps),
+        generatedAt: new Date().toISOString(),
+        generationContextVersion: 'v1',
+        policyPreset: 'A',
+      },
+    });
+    mockMatches.mockResolvedValue({ rankedCandidates: [], autoSelectThreshold: 0.72 });
+
+    renderPanel();
+    await user.type(screen.getByTestId('walkthrough-ai-intent'), 'Find anchors');
+    await user.click(screen.getByTestId('walkthrough-ai-generate'));
+    await screen.findByTestId('walkthrough-proposal-step-s1-centered');
 
     await user.click(screen.getByTestId('walkthrough-proposal-step-s1-choose-anchor'));
     await waitFor(() => expect(mockMatches).toHaveBeenCalled());
-    expect(screen.getByTestId('walkthrough-proposal-step-s1-anchor-picker')).toBeInTheDocument();
+
+    const search = screen.getByTestId('walkthrough-proposal-step-s1-anchor-search');
+    // "sidebar" only matches the design-module sidebar anchor across all routes.
+    await user.type(search, 'sidebar');
+
+    const anchorSelect = screen.getByTestId(
+      'walkthrough-proposal-step-s1-anchor-select',
+    ) as HTMLSelectElement;
+    const optionText = Array.from(anchorSelect.options)
+      .map((o) => o.textContent)
+      .join(' ');
+    expect(optionText).toContain('Design Module — module sidebar');
+    expect(optionText).not.toContain('Design Module — Add module');
+    expect(optionText).not.toContain('Profile bio');
+  });
+
+  it('trusts an AI-selected anchor on accept (does not strip to centered)', async () => {
+    const user = userEvent.setup();
+    const fields = { internalName: 'n', userTitle: 'Title', whyItMatters: 'Why' };
+    const steps = [
+      {
+        id: 's1',
+        ordinal: 0,
+        heading: 'Open Design Module',
+        bodyMarkdown: 'From the sidebar, go to Build → Design Module',
+        route: '/design-module',
+        anchor: {
+          key: 'design-module-add-btn',
+          targetRoute: '/design-module',
+          placement: 'right' as const,
+        },
+        // A low heuristic score is no longer treated as low confidence.
+        anchorMatch: {
+          score: 0.1,
+          belowThreshold: false,
+          hasAnchor: true,
+          routeCompatible: true,
+          matchedTags: [],
+        },
+      },
+    ];
+    mockGenerate.mockResolvedValue({
+      proposal: {
+        proposalId: 'p1',
+        walkthroughFields: fields,
+        steps,
+        units: buildProposalUnits(fields, steps),
+        generatedAt: new Date().toISOString(),
+        generationContextVersion: 'v1',
+        policyPreset: 'A',
+      },
+    });
+    mockValidate.mockImplementation(async ({ unit }: { unit: { value: { anchor: unknown } } }) => ({
+      valid: true,
+      normalizedUnit: unit,
+    }));
+
+    renderPanel();
+    await user.type(screen.getByTestId('walkthrough-ai-intent'), 'Design Module walkthrough');
+    await user.click(screen.getByTestId('walkthrough-ai-generate'));
+
+    await screen.findByTestId('walkthrough-proposal-step-s1-anchor-selected');
+    expect(
+      screen.queryByTestId('walkthrough-proposal-step-s1-anchor-low-confidence'),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('walkthrough-proposal-step-s1-accept'));
+    await waitFor(() => expect(mockValidate).toHaveBeenCalled());
+    const acceptedUnit = mockValidate.mock.calls[mockValidate.mock.calls.length - 1][0].unit;
+    expect(acceptedUnit.value.anchor?.key).toBe('design-module-add-btn');
+  });
+
+  it('Use centered step clears the selected anchor', async () => {
+    const user = userEvent.setup();
+    const fields = { internalName: 'n', userTitle: 'Title', whyItMatters: 'Why' };
+    const steps = [
+      {
+        id: 's1',
+        ordinal: 0,
+        heading: 'Open Design Module',
+        bodyMarkdown: 'From the sidebar, go to Build → Design Module',
+        route: '/design-module',
+        anchor: {
+          key: 'design-module-add-btn',
+          targetRoute: '/design-module',
+          placement: 'right' as const,
+        },
+        anchorMatch: {
+          score: 0.1,
+          belowThreshold: false,
+          hasAnchor: true,
+          routeCompatible: true,
+          matchedTags: [],
+        },
+      },
+    ];
+    mockGenerate.mockResolvedValue({
+      proposal: {
+        proposalId: 'p1',
+        walkthroughFields: fields,
+        steps,
+        units: buildProposalUnits(fields, steps),
+        generatedAt: new Date().toISOString(),
+        generationContextVersion: 'v1',
+        policyPreset: 'A',
+      },
+    });
+
+    renderPanel();
+    await user.type(screen.getByTestId('walkthrough-ai-intent'), 'Design Module walkthrough');
+    await user.click(screen.getByTestId('walkthrough-ai-generate'));
+    await screen.findByTestId('walkthrough-proposal-step-s1-anchor-selected');
+
+    await user.click(screen.getByTestId('walkthrough-proposal-step-s1-use-centered'));
+    expect(
+      await screen.findByTestId('walkthrough-proposal-step-s1-centered'),
+    ).toHaveTextContent(/Centered step/i);
   });
 });

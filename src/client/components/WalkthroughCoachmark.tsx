@@ -101,7 +101,12 @@ export const WalkthroughCoachmark: React.FC<WalkthroughCoachmarkProps> = ({
         fallbackPlacements: sameAxisFallbackPlacements(initialPlacement),
         padding: COACHMARK_VIEWPORT_PADDING_PX,
       }),
-      shift({ padding: COACHMARK_VIEWPORT_PADDING_PX }),
+      // crossAxis rescues the card back into the viewport when neither same-axis
+      // side has room (e.g. an anchor taller than the viewport, like a full-page
+      // document card). Without it, a top/bottom placement overflows the viewport
+      // edge and the footer controls get clipped. Overlapping an oversized anchor
+      // is acceptable; being cut off is not.
+      shift({ crossAxis: true, padding: COACHMARK_VIEWPORT_PADDING_PX }),
       size({
         padding: COACHMARK_VIEWPORT_PADDING_PX,
         apply({ availableWidth, availableHeight, elements }) {

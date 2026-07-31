@@ -15,6 +15,7 @@ import {
   useAnchorRegistryModuleCoverage,
   useBulkUpdateAnchors,
   useCreateManualAnchor,
+  usePersistAnchorSyncReviewDrafts,
   useSoftDeleteAnchor,
   useSyncAnchorRegistry,
   useUpdateAnchorRegistry,
@@ -52,6 +53,7 @@ jest.mock('../../hooks/usePlatformAdminAnchorRegistry', () => ({
   useCreateManualAnchor: jest.fn(),
   useUpdateAnchorRegistry: jest.fn(),
   useBulkUpdateAnchors: jest.fn(),
+  usePersistAnchorSyncReviewDrafts: jest.fn(),
   useSoftDeleteAnchor: jest.fn(),
   useSyncAnchorRegistry: jest.fn(),
   startAndPollAnchorSmartTagging: jest.fn().mockResolvedValue(null),
@@ -62,6 +64,7 @@ const mockUseAnchorRegistryModuleCoverage = useAnchorRegistryModuleCoverage as j
 const mockUseCreateManualAnchor = useCreateManualAnchor as jest.Mock;
 const mockUseUpdateAnchorRegistry = useUpdateAnchorRegistry as jest.Mock;
 const mockUseBulkUpdateAnchors = useBulkUpdateAnchors as jest.Mock;
+const mockUsePersistAnchorSyncReviewDrafts = usePersistAnchorSyncReviewDrafts as jest.Mock;
 const mockUseSoftDeleteAnchor = useSoftDeleteAnchor as jest.Mock;
 const mockUseSyncAnchorRegistry = useSyncAnchorRegistry as jest.Mock;
 
@@ -130,6 +133,7 @@ function stubHooks(options?: {
   mockUseCreateManualAnchor.mockReturnValue(mutationStub());
   mockUseUpdateAnchorRegistry.mockReturnValue(mutationStub());
   mockUseBulkUpdateAnchors.mockReturnValue(mutationStub());
+  mockUsePersistAnchorSyncReviewDrafts.mockReturnValue(mutationStub());
   mockUseSoftDeleteAnchor.mockReturnValue(mutationStub());
   const syncCandidates =
     options?.syncResult?.persistence?.created ??
@@ -273,6 +277,15 @@ describe('WalkthroughAnchorManagement', () => {
     );
   });
 
+  it('surfaces the hard data-testid dependency for coachable elements', () => {
+    render(<WalkthroughAnchorManagement />);
+
+    const notice = screen.getByTestId('walkthrough-anchor-testid-dependency');
+    expect(notice).toHaveTextContent(/Hard dependency/i);
+    expect(notice).toHaveTextContent('data-testid');
+    expect(notice).toHaveTextContent(/cannot be chosen/i);
+  });
+
   it('keeps module coverage compact until the user expands its details', async () => {
     const user = userEvent.setup();
     render(<WalkthroughAnchorManagement />);
@@ -382,11 +395,11 @@ describe('WalkthroughAnchorManagement', () => {
         newCandidateIdsForSmartTagging: MOCK_WALKTHROUGH_ANCHOR_SYNC_CANDIDATES.map((c) => c.id),
       },
     });
-    const updateAsync = jest.fn().mockResolvedValue({});
-    const bulkAsync = jest.fn().mockResolvedValue({ items: [] });
+    const persistAsync = jest.fn().mockResolvedValue(undefined);
     mockUseSyncAnchorRegistry.mockReturnValue(mutationStub({ mutateAsync: syncAsync }));
-    mockUseUpdateAnchorRegistry.mockReturnValue(mutationStub({ mutateAsync: updateAsync }));
-    mockUseBulkUpdateAnchors.mockReturnValue(mutationStub({ mutateAsync: bulkAsync }));
+    mockUsePersistAnchorSyncReviewDrafts.mockReturnValue(
+      mutationStub({ mutateAsync: persistAsync }),
+    );
 
     render(<WalkthroughAnchorManagement />);
 
@@ -400,20 +413,20 @@ describe('WalkthroughAnchorManagement', () => {
     expect(screen.getByTestId(`walkthrough-anchor-sync-row-${first.id}`)).toBeInTheDocument();
     expect(screen.queryByTestId(`walkthrough-anchor-row-${first.id}`)).not.toBeInTheDocument();
 
-    await user.click(screen.getByTestId('walkthrough-anchor-sync-approve-all'));
+    await user.click(screen.getByTestId('walkthrough-anchor-sync-approve-ready'));
     await user.click(screen.getByTestId('walkthrough-anchor-sync-save'));
 
-    await waitFor(() => expect(bulkAsync).toHaveBeenCalled());
-    expect(updateAsync).toHaveBeenCalled();
-    expect(bulkAsync).toHaveBeenCalledWith({
-      ids: MOCK_WALKTHROUGH_ANCHOR_SYNC_CANDIDATES.map((c) => c.id),
-      action: 'approve',
-    });
-    expect(bulkAsync).toHaveBeenCalledWith({
-      ids: MOCK_WALKTHROUGH_ANCHOR_SYNC_CANDIDATES.map((c) => c.id),
-      action: 'activate',
-    });
-    expect(screen.queryByTestId('walkthrough-anchor-sync-modal')).not.toBeInTheDocument();
+    await waitFor(() => expect(persistAsync).toHaveBeenCalled());
+    const persistArg = persistAsync.mock.calls[0][0] as {
+      drafts: Array<{ id: string; reviewStatus: string }>;
+    };
+    expect(persistArg.drafts.map((d) => d.id).sort()).toEqual(
+      MOCK_WALKTHROUGH_ANCHOR_SYNC_CANDIDATES.map((c) => c.id).sort(),
+    );
+    expect(persistArg.drafts.every((d) => d.reviewStatus === 'approved')).toBe(true);
+    // Modal stays open after save so the next AI batch can continue; decided rows leave the list.
+    expect(screen.getByTestId('walkthrough-anchor-sync-modal')).toBeInTheDocument();
+    expect(screen.getByTestId('walkthrough-anchor-sync-empty')).toBeInTheDocument();
   });
 
   it('uses syncCandidates prop override without calling sync API', async () => {
@@ -441,6 +454,7 @@ describe('WalkthroughAnchorManagement', () => {
       screen.getByTestId(`walkthrough-anchor-sync-label-${first.id}`),
       'Updated label',
     );
+    await user.click(screen.getByTestId('walkthrough-anchor-sync-approve-ready'));
     await user.click(screen.getByTestId('walkthrough-anchor-sync-save'));
 
     await waitFor(() => expect(onSyncSave).toHaveBeenCalled());

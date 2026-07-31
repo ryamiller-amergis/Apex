@@ -562,7 +562,9 @@ export function applyValidatedSmartTagSuggestions(
       anchorKey: suggestion.anchorKey,
       label: suggestion.suggestedLabel,
       suggestedRoute: suggestion.suggestedRoute,
-      allowedPlacements: [...suggestion.allowedPlacements],
+      // Placements are not AI-evaluated — always allow all sides; step authoring
+      // picks the preferred placement, and runtime flip/shift may adjust later.
+      allowedPlacements: [...WALKTHROUGH_REGISTRY_PLACEMENTS],
       smartTags,
       aiProvenance: {
         ...provenanceBase,

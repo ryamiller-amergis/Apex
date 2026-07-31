@@ -333,6 +333,7 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
         aria-modal="true"
         aria-labelledby="design-module-form-title"
         onMouseDown={(event) => event.stopPropagation()}
+        {...{ 'data-testid': 'design-module-form-modal' }}
       >
         <header className={styles.header}>
           <div>
@@ -349,12 +350,17 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
             className={styles.close}
             onClick={onClose}
             aria-label="Close"
+            {...{ 'data-testid': 'design-module-form-close' }}
           >
             ×
           </button>
         </header>
 
-        <form className={styles.form} onSubmit={onSubmit}>
+        <form
+          className={styles.form}
+          onSubmit={onSubmit}
+          {...{ 'data-testid': 'design-module-form' }}
+        >
           <div className={styles.nameField}>
             <label htmlFor="design-module-name">
               Name
@@ -363,18 +369,26 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
                 {...register('label')}
                 autoFocus
                 placeholder="e.g. Load Testing"
+                {...{ 'data-testid': 'design-module-name-input' }}
               />
             </label>
             {errors.label && (
               <span className={styles.error}>{errors.label.message}</span>
             )}
             {isEditing ? (
-              <span className={styles.slugCaption} data-testid="design-module-slug-preview">
+              <span
+                className={styles.slugCaption}
+                {...{ 'data-testid': 'design-module-slug-preview' }}
+              >
                 URL id <code>{module?.slug}</code>
+                {/* data-testid-exempt — hidden RHF field, not user-facing */}
                 <input type="hidden" {...register('slug')} />
               </span>
             ) : (
-              <span className={styles.slugCaption} data-testid="design-module-slug-preview">
+              <span
+                className={styles.slugCaption}
+                {...{ 'data-testid': 'design-module-slug-preview' }}
+              >
                 {derivedSlug ? (
                   <>
                     Saves as <code>{derivedSlug}</code>
@@ -382,6 +396,7 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
                 ) : (
                   'URL id is generated from the name'
                 )}
+                {/* data-testid-exempt — hidden RHF field, not user-facing */}
                 <input type="hidden" {...register('slug')} />
               </span>
             )}
@@ -395,11 +410,15 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
               {...register('description')}
               rows={2}
               placeholder="What this module covers for architecture docs"
+              {...{ 'data-testid': 'design-module-description-input' }}
             />
           </label>
           <label>
             Icon
-            <select {...register('iconKey')}>
+            <select
+              {...register('iconKey')}
+              {...{ 'data-testid': 'design-module-icon-select' }}
+            >
               {DESIGN_MODULE_ICON_OPTIONS.map((option) => (
                 <option key={option.key} value={option.key}>
                   {option.label}
@@ -419,7 +438,7 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
                 What should AI look for?
                 <textarea
                   id="design-module-search-hints"
-                  data-testid="design-module-search-hints"
+                  {...{ 'data-testid': 'design-module-search-hints' }}
                   rows={3}
                   value={searchHints}
                   onChange={(event) => setSearchHints(event.target.value)}
@@ -439,7 +458,7 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
                 <button
                   type="button"
                   className={styles.suggestBtn}
-                  data-testid="design-module-suggest-ai"
+                  {...{ 'data-testid': 'design-module-suggest-ai' }}
                   disabled={!canSuggest}
                   onClick={handleSuggest}
                 >
@@ -451,7 +470,7 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
                   <button
                     type="button"
                     className={styles.secondary}
-                    data-testid="design-module-scoping-cancel"
+                    {...{ 'data-testid': 'design-module-scoping-cancel' }}
                     onClick={() => void scoping.cancel()}
                   >
                     Cancel
@@ -463,7 +482,7 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
             {scoping.isScoping && (
               <div
                 className={styles.progress}
-                data-testid="design-module-scoping-progress"
+                {...{ 'data-testid': 'design-module-scoping-progress' }}
               >
                 <strong>{scoping.progressLabel ?? 'Scoping source files…'}</strong>
                 {scoping.streamingText && (
@@ -473,7 +492,10 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
             )}
 
             {scoping.error && (
-              <div className={styles.submitError} data-testid="design-module-scoping-error">
+              <div
+                className={styles.submitError}
+                {...{ 'data-testid': 'design-module-scoping-error' }}
+              >
                 {scoping.error}
               </div>
             )}
@@ -483,7 +505,7 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
                 {proposals.length > 0 ? (
                   <ul
                     className={styles.proposalList}
-                    data-testid="design-module-proposal-list"
+                    {...{ 'data-testid': 'design-module-proposal-list' }}
                   >
                     {proposals.map((glob) => (
                       <li key={glob.id} className={styles.proposalItem}>
@@ -501,6 +523,9 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
                               );
                             }}
                             aria-label={`Include ${glob.pattern}`}
+                            {...{
+                              'data-testid': `design-module-proposal-include-${glob.id}`,
+                            }}
                           />
                           <code>{glob.pattern}</code>
                         </label>
@@ -519,6 +544,9 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
                               )
                             }
                             aria-label={`Remove ${glob.pattern}`}
+                            {...{
+                              'data-testid': `design-module-proposal-remove-${glob.id}`,
+                            }}
                           >
                             Remove
                           </button>
@@ -534,6 +562,9 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
                         <input
                           {...register(`sourceGlobs.${index}.value`)}
                           placeholder="src/server/services/exampleService.ts"
+                          {...{
+                            'data-testid': `design-module-glob-input-${index}`,
+                          }}
                         />
                         <button
                           type="button"
@@ -541,6 +572,9 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
                           onClick={() => remove(index)}
                           disabled={fields.length === 1}
                           aria-label={`Remove source glob ${index + 1}`}
+                          {...{
+                            'data-testid': `design-module-glob-remove-${index}`,
+                          }}
                         >
                           Remove
                         </button>
@@ -572,6 +606,7 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
                       append({ value: '' });
                     }
                   }}
+                  {...{ 'data-testid': 'design-module-add-glob' }}
                 >
                   Add source glob
                 </button>
@@ -602,7 +637,7 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
                 {chat.length > 0 && (
                   <div
                     className={styles.chatLog}
-                    data-testid="design-module-refine-chat"
+                    {...{ 'data-testid': 'design-module-refine-chat' }}
                   >
                     {chat.map((msg) => (
                       <div
@@ -625,7 +660,7 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
                     onChange={(event) => setRefineInput(event.target.value)}
                     placeholder="e.g. Exclude test files"
                     disabled={scoping.isScoping}
-                    data-testid="design-module-refine-input"
+                    {...{ 'data-testid': 'design-module-refine-input' }}
                     onKeyDown={(event) => {
                       if (event.key === 'Enter') {
                         event.preventDefault();
@@ -636,7 +671,7 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
                   <button
                     type="button"
                     className={styles.secondary}
-                    data-testid="design-module-refine-send"
+                    {...{ 'data-testid': 'design-module-refine-send' }}
                     disabled={
                       !refineInput.trim() ||
                       scoping.isScoping ||
@@ -659,10 +694,16 @@ export const DesignModuleFormModal: React.FC<DesignModuleFormModalProps> = ({
               type="button"
               className={styles.secondary}
               onClick={onClose}
+              {...{ 'data-testid': 'design-module-form-cancel' }}
             >
               Cancel
             </button>
-            <button type="submit" className={styles.primary} disabled={pending}>
+            <button
+              type="submit"
+              className={styles.primary}
+              disabled={pending}
+              {...{ 'data-testid': 'design-module-save-btn' }}
+            >
               {pending ? 'Saving…' : 'Save Module'}
             </button>
           </footer>

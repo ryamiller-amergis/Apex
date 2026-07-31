@@ -16,18 +16,26 @@ import {
 } from '../../shared/walkthroughAnchors';
 import { listWalkthroughRoutes } from '../../shared/walkthroughRoutes';
 import {
+  idsWithRealAiProvenance,
+  mergeOpenSyncCandidates,
   mergeSmartTaggedSyncCandidates,
   resolveSyncReviewCandidates,
+  SMART_TAGGING_BATCH_SIZE_DEFAULT,
   SMART_TAGGING_CANDIDATE_BATCH_MAX,
   startAndPollAnchorSmartTagging,
   useAnchorRegistryCatalog,
   useAnchorRegistryModuleCoverage,
-  useBulkUpdateAnchors,
   useCreateManualAnchor,
+  usePersistAnchorSyncReviewDrafts,
   useSoftDeleteAnchor,
   useSyncAnchorRegistry,
   useUpdateAnchorRegistry,
+  type SmartTaggingBatchSize,
 } from '../hooks/usePlatformAdminAnchorRegistry';
+import {
+  WalkthroughAnchorSyncReviewModal,
+  type WalkthroughAnchorSyncDraft,
+} from './WalkthroughAnchorSyncReviewModal';
 import { useWalkthroughsAiOptions } from '../contexts/WalkthroughsAiOptionsContext';
 import {
   computeAnchorCatalogCounts,
@@ -36,10 +44,6 @@ import {
   type AnchorPresenceFilter,
   WALKTHROUGH_ANCHOR_CATALOG_GRID_STATUSES,
 } from './walkthroughAnchorManagementMockData';
-import {
-  WalkthroughAnchorSyncReviewModal,
-  type WalkthroughAnchorSyncDraft,
-} from './WalkthroughAnchorSyncReviewModal';
 import { DataGridToolbar, DataGridFilterSelect } from './DataGridToolbar';
 import gridStyles from './DataGrid.module.css';
 import styles from './WalkthroughAnchorManagement.module.css';
@@ -259,7 +263,7 @@ const AddAnchorModal: React.FC<AddAnchorModalProps> = ({ onClose, onCreated }) =
       label: '',
       suggestedRoute: '',
       approvedRoute: '',
-      allowedPlacements: ['bottom'],
+      allowedPlacements: [...WALKTHROUGH_REGISTRY_PLACEMENTS],
       reviewStatus: 'approved',
       isActive: true,
     },
@@ -357,6 +361,11 @@ const AddAnchorModal: React.FC<AddAnchorModalProps> = ({ onClose, onCreated }) =
               {...register('testId')}
               {...{ 'data-testid': 'walkthrough-anchor-add-testid' }}
             />
+            <span className={styles.fieldHint}>
+              Must match the element&apos;s existing{' '}
+              <code className={styles.dependencyCode}>data-testid</code> — anchors cannot target
+              elements without one.
+            </span>
             {errors.testId && (
               <span className={styles.warningText}>{errors.testId.message}</span>
             )}
@@ -815,6 +824,9 @@ export const WalkthroughAnchorManagement: React.FC<WalkthroughAnchorManagementPr
     'idle' | 'running' | 'ready' | 'failed'
   >('idle');
   const [enrichmentMessage, setEnrichmentMessage] = useState<string | null>(null);
+  const [smartTaggingBatchSize, setSmartTaggingBatchSize] = useState<SmartTaggingBatchSize>(
+    SMART_TAGGING_BATCH_SIZE_DEFAULT,
+  );
   const smartTaggingAbortRef = useRef<AbortController | null>(null);
   const { anchorSmartTaggingModel, anchorSmartTaggingSkillPath } = useWalkthroughsAiOptions();
 
@@ -844,8 +856,7 @@ export const WalkthroughAnchorManagement: React.FC<WalkthroughAnchorManagementPr
   const catalogQuery = useAnchorRegistryCatalog(listParams, { enabled: useLiveCatalog });
   const coverageQuery = useAnchorRegistryModuleCoverage({ enabled: useLiveCatalog });
   const syncMutation = useSyncAnchorRegistry();
-  const updateMutation = useUpdateAnchorRegistry();
-  const bulkMutation = useBulkUpdateAnchors();
+  const persistSyncReviewMutation = usePersistAnchorSyncReviewDrafts();
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- fallback [] is render-local; memo deps intentionally include records identity
   const records = recordsProp ?? catalogQuery.data?.items ?? [];
@@ -889,94 +900,131 @@ export const WalkthroughAnchorManagement: React.FC<WalkthroughAnchorManagementPr
   const reviewCandidates =
     syncCandidatesProp !== undefined ? syncCandidatesProp : liveSyncCandidates;
 
-  const handleSyncClick = async () => {
+  const runSmartTaggingForSyncResult = (
+    result: Awaited<ReturnType<typeof syncMutation.mutateAsync>>,
+    options: {
+      batchSize: SmartTaggingBatchSize;
+      mergeOpenList: boolean;
+      excludeIds: readonly string[];
+    },
+  ) => {
+    smartTaggingAbortRef.current?.abort();
+    const abort = new AbortController();
+    smartTaggingAbortRef.current = abort;
+    const pendingIds = (result.persistence?.newCandidateIdsForSmartTagging ?? []).filter(
+      (id) => !options.excludeIds.includes(id),
+    );
+    if (pendingIds.length === 0) {
+      setEnrichmentStatus('idle');
+      setEnrichmentMessage(
+        options.mergeOpenList
+          ? 'No additional candidates need AI — review Ready rows, or Save decided ones.'
+          : null,
+      );
+      return;
+    }
+    const batchSize = Math.min(options.batchSize, pendingIds.length, SMART_TAGGING_CANDIDATE_BATCH_MAX);
+    const remainingAfterBatch = Math.max(0, pendingIds.length - batchSize);
+    setEnrichmentStatus('running');
+    setEnrichmentMessage(
+      `AI smart-tagging running: batch of ${batchSize} (of ${pendingIds.length} awaiting AI). This can take several minutes — Save stays disabled until the batch finishes or you skip waiting.`,
+    );
+    void startAndPollAnchorSmartTagging(result, {
+      signal: abort.signal,
+      model: anchorSmartTaggingModel.trim() || undefined,
+      skillPath: anchorSmartTaggingSkillPath.trim() || undefined,
+      batchSize,
+      excludeIds: options.excludeIds,
+      onProgress: ({ elapsedMs, maxAttempts, attempt }) => {
+        if (abort.signal.aborted) return;
+        const elapsedSec = Math.floor(elapsedMs / 1000);
+        const elapsedLabel =
+          elapsedSec < 60
+            ? `${elapsedSec}s`
+            : `${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s`;
+        setEnrichmentMessage(
+          `AI smart-tagging running: batch of ${batchSize} (of ${pendingIds.length} awaiting AI). Typical run is several minutes — elapsed ${elapsedLabel} (poll ${attempt}/${maxAttempts}).`,
+        );
+      },
+    })
+      .then((status) => {
+        if (abort.signal.aborted) return;
+        if (!status) {
+          setEnrichmentStatus('idle');
+          return;
+        }
+        if (status.status === 'ready' && status.updated?.length) {
+          setLiveSyncCandidates((prev) =>
+            mergeSmartTaggedSyncCandidates(prev, status.updated),
+          );
+          setEnrichmentStatus('ready');
+          setEnrichmentMessage(
+            remainingAfterBatch > 0
+              ? `AI updated ${status.updated.length} candidate(s) in this batch. ${remainingAfterBatch} still await AI — use Tag next AI batch for up to ${options.batchSize} more.`
+              : `AI smart-tagging updated ${status.updated.length} candidate(s). Review Ready for review, then approve/reject and Save.`,
+          );
+          return;
+        }
+        if (status.status === 'ready') {
+          setEnrichmentStatus('ready');
+          setEnrichmentMessage(
+            remainingAfterBatch > 0
+              ? `AI finished this batch with no field changes. ${remainingAfterBatch} still await AI — use Tag next AI batch.`
+              : 'AI smart-tagging finished; no additional metadata changes.',
+          );
+          return;
+        }
+        setEnrichmentStatus('failed');
+        setEnrichmentMessage(
+          status.warning ??
+            status.error ??
+            'AI smart-tagging did not finish. Tags/route stay empty until you Sync again or edit manually.',
+        );
+      })
+      .catch((err) => {
+        if (abort.signal.aborted) return;
+        setEnrichmentStatus('failed');
+        setEnrichmentMessage(
+          err instanceof Error
+            ? err.message
+            : 'AI smart-tagging failed. Tags/route stay empty until you Sync again or edit manually.',
+        );
+      });
+  };
+
+  const handleSyncClick = async (options?: {
+    mergeOpenList?: boolean;
+    batchSize?: SmartTaggingBatchSize;
+  }) => {
+    const mergeOpenList = options?.mergeOpenList === true;
+    const batchSize = options?.batchSize ?? smartTaggingBatchSize;
     setActionError(null);
-    setEnrichmentStatus('idle');
-    setEnrichmentMessage(null);
+    if (!mergeOpenList) {
+      setEnrichmentStatus('idle');
+      setEnrichmentMessage(null);
+    }
     if (syncCandidatesProp !== undefined) {
       setSyncOpen(true);
       return;
     }
     try {
       const result = await syncMutation.mutateAsync();
-      setLiveSyncCandidates(resolveSyncReviewCandidates(result));
+      const incoming = resolveSyncReviewCandidates(result);
+      const openForExclude = mergeOpenList
+        ? mergeOpenSyncCandidates(liveSyncCandidates, incoming)
+        : incoming;
+      if (mergeOpenList) {
+        setLiveSyncCandidates((prev) => mergeOpenSyncCandidates(prev, incoming));
+      } else {
+        setLiveSyncCandidates(incoming);
+      }
       setSyncOpen(true);
 
-      // Non-blocking: refine open review rows when AI tagging finishes.
-      smartTaggingAbortRef.current?.abort();
-      const abort = new AbortController();
-      smartTaggingAbortRef.current = abort;
-      const pendingIds = result.persistence?.newCandidateIdsForSmartTagging ?? [];
-      if (pendingIds.length === 0) {
-        setEnrichmentStatus('idle');
-        setEnrichmentMessage(null);
-        return;
-      }
-      const batchSize = Math.min(SMART_TAGGING_CANDIDATE_BATCH_MAX, pendingIds.length);
-      const remainingAfterBatch = Math.max(0, pendingIds.length - batchSize);
-      setEnrichmentStatus('running');
-      setEnrichmentMessage(
-        `AI smart-tagging running: batch of ${batchSize} (of ${pendingIds.length} awaiting AI). This can take several minutes — Save stays disabled until the batch finishes or you skip waiting.`,
-      );
-      void startAndPollAnchorSmartTagging(result, {
-        signal: abort.signal,
-        model: anchorSmartTaggingModel.trim() || undefined,
-        skillPath: anchorSmartTaggingSkillPath.trim() || undefined,
-        onProgress: ({ elapsedMs, maxAttempts, attempt }) => {
-          if (abort.signal.aborted) return;
-          const elapsedSec = Math.floor(elapsedMs / 1000);
-          const elapsedLabel =
-            elapsedSec < 60
-              ? `${elapsedSec}s`
-              : `${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s`;
-      setEnrichmentMessage(
-        `AI smart-tagging running: batch of ${batchSize} (of ${pendingIds.length} awaiting AI). Typical run is several minutes — elapsed ${elapsedLabel} (poll ${attempt}/${maxAttempts}).`,
-      );
-        },
-      })
-        .then((status) => {
-          if (abort.signal.aborted) return;
-          if (!status) {
-            setEnrichmentStatus('idle');
-            return;
-          }
-          if (status.status === 'ready' && status.updated?.length) {
-            setLiveSyncCandidates((prev) =>
-              mergeSmartTaggedSyncCandidates(prev, status.updated),
-            );
-            setEnrichmentStatus('ready');
-            setEnrichmentMessage(
-              remainingAfterBatch > 0
-                ? `AI updated ${status.updated.length} candidate(s) in this batch. ${remainingAfterBatch} still await AI — use Tag next AI batch for up to ${SMART_TAGGING_CANDIDATE_BATCH_MAX} more.`
-                : `AI smart-tagging updated ${status.updated.length} candidate(s). Review tags/route/rationale, then approve/reject and Save.`,
-            );
-            return;
-          }
-          if (status.status === 'ready') {
-            setEnrichmentStatus('ready');
-            setEnrichmentMessage(
-              remainingAfterBatch > 0
-                ? `AI finished this batch with no field changes. ${remainingAfterBatch} still await AI — use Tag next AI batch.`
-                : 'AI smart-tagging finished; no additional metadata changes.',
-            );
-            return;
-          }
-          setEnrichmentStatus('failed');
-          setEnrichmentMessage(
-            status.warning ??
-              status.error ??
-              'AI smart-tagging did not finish. Tags/route stay empty until you Sync again or edit manually.',
-          );
-        })
-        .catch((err) => {
-          if (abort.signal.aborted) return;
-          setEnrichmentStatus('failed');
-          setEnrichmentMessage(
-            err instanceof Error
-              ? err.message
-              : 'AI smart-tagging failed. Tags/route stay empty until you Sync again or edit manually.',
-          );
-        });
+      runSmartTaggingForSyncResult(result, {
+        batchSize,
+        mergeOpenList,
+        excludeIds: mergeOpenList ? idsWithRealAiProvenance(openForExclude) : [],
+      });
     } catch (err) {
       const message =
         err instanceof Error
@@ -985,54 +1033,28 @@ export const WalkthroughAnchorManagement: React.FC<WalkthroughAnchorManagementPr
       setActionError(message);
       const pending = records.filter((r) => r.reviewStatus === 'pending');
       if (pending.length > 0) {
-        setLiveSyncCandidates(pending);
+        if (mergeOpenList) {
+          setLiveSyncCandidates((prev) => mergeOpenSyncCandidates(prev, pending));
+        } else {
+          setLiveSyncCandidates(pending);
+        }
         setSyncOpen(true);
       }
-    }
-  };
-
-  const persistSyncDrafts = async (drafts: WalkthroughAnchorSyncDraft[]) => {
-    // Field updates first (label/tags/placements/routes), then bulk review actions.
-    for (const draft of drafts) {
-      await updateMutation.mutateAsync({
-        id: draft.id,
-        label: draft.label,
-        suggestedRoute: draft.suggestedRoute,
-        approvedRoute: draft.approvedRoute,
-        allowedPlacements: draft.allowedPlacements,
-        smartTags: draft.smartTags,
-        sourceLocations: draft.sourceLocations,
-      });
-    }
-
-    const approvedIds = drafts
-      .filter((d) => d.reviewStatus === 'approved')
-      .map((d) => d.id);
-    const rejectedIds = drafts
-      .filter((d) => d.reviewStatus === 'rejected')
-      .map((d) => d.id);
-    // ACTIVE_REQUIRES_APPROVED: only activate after approve, and only when draft asks for it.
-    const activateIds = drafts
-      .filter((d) => d.reviewStatus === 'approved' && d.isActive)
-      .map((d) => d.id);
-
-    if (approvedIds.length > 0) {
-      await bulkMutation.mutateAsync({ ids: approvedIds, action: 'approve' });
-    }
-    if (rejectedIds.length > 0) {
-      await bulkMutation.mutateAsync({ ids: rejectedIds, action: 'reject' });
-    }
-    if (activateIds.length > 0) {
-      await bulkMutation.mutateAsync({ ids: activateIds, action: 'activate' });
     }
   };
 
   const handleSyncSave = async (drafts: WalkthroughAnchorSyncDraft[]) => {
     if (onSyncSave) {
       await onSyncSave(drafts);
-      return;
+    } else {
+      // Field + review persist only — never re-runs Sync / data-testid scan.
+      await persistSyncReviewMutation.mutateAsync({
+        drafts,
+        originals: liveSyncCandidates,
+      });
     }
-    await persistSyncDrafts(drafts);
+    const savedIds = new Set(drafts.map((d) => d.id));
+    setLiveSyncCandidates((prev) => prev.filter((row) => !savedIds.has(row.id)));
   };
 
   const catalogLoading = useLiveCatalog && catalogQuery.isLoading;
@@ -1076,6 +1098,17 @@ export const WalkthroughAnchorManagement: React.FC<WalkthroughAnchorManagementPr
           </button>
         </div>
       </div>
+
+      <aside
+        className={styles.dependencyNotice}
+        {...{ 'data-testid': 'walkthrough-anchor-testid-dependency' }}
+      >
+        <strong className={styles.dependencyNoticeLabel}>Hard dependency:</strong>{' '}
+        Coachable elements must expose a stable, static{' '}
+        <code className={styles.dependencyCode}>data-testid</code> on the DOM node you want to
+        target. Sync only discovers those values, and walkthrough coachmarks resolve to them at
+        runtime — CSS selectors or unlabeled elements cannot be chosen.
+      </aside>
 
       {(actionError || catalogError) && (
         <p
@@ -1284,6 +1317,8 @@ export const WalkthroughAnchorManagement: React.FC<WalkthroughAnchorManagementPr
           candidates={reviewCandidates}
           enrichmentStatus={enrichmentStatus}
           enrichmentMessage={enrichmentMessage}
+          batchSize={smartTaggingBatchSize}
+          onBatchSizeChange={setSmartTaggingBatchSize}
           onSkipWaitingForAi={() => {
             smartTaggingAbortRef.current?.abort();
             setEnrichmentStatus('failed');
@@ -1291,8 +1326,8 @@ export const WalkthroughAnchorManagement: React.FC<WalkthroughAnchorManagementPr
               'Stopped waiting for AI. You can edit and Save now, or use Tag next AI batch to retry.',
             );
           }}
-          onRunNextAiBatch={() => {
-            void handleSyncClick();
+          onRunNextAiBatch={(batchSize) => {
+            void handleSyncClick({ mergeOpenList: true, batchSize });
           }}
           nextAiBatchPending={syncMutation.isPending || enrichmentStatus === 'running'}
           onClose={() => {

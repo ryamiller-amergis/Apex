@@ -549,7 +549,7 @@ describe('walkthroughGenerationService', () => {
   });
 
   describe('annotateProposalStepsWithAnchorMatch', () => {
-    it('AC — marks belowThreshold when score is under auto-select floor or anchor missing', () => {
+    it('trusts any AI-selected anchor; only anchorless steps are belowThreshold', () => {
       const ranking = {
         rankedCandidates: [
           {
@@ -642,11 +642,14 @@ describe('walkthroughGenerationService', () => {
         belowThreshold: false,
         hasAnchor: true,
       });
+      // A low heuristic score with an AI-selected anchor is NOT below threshold —
+      // the validated catalog pick is trusted.
       expect(annotated.steps[1].anchorMatch).toMatchObject({
         score: 0.4,
-        belowThreshold: true,
+        belowThreshold: false,
         hasAnchor: true,
       });
+      // Only a step with no anchor at all is below threshold (becomes a centered step).
       expect(annotated.steps[2].anchorMatch).toMatchObject({
         score: 0,
         belowThreshold: true,

@@ -132,7 +132,7 @@ export const DesignModuleFileTree: React.FC<DesignModuleFileTreeProps> = ({
   }
   const tree = buildTree(files);
   return (
-    <div className={styles.tree} data-testid="design-module-file-tree">
+    <div className={styles.tree} {...{ 'data-testid': 'design-module-file-tree' }}>
       <TreeRows nodes={tree} depth={0} />
     </div>
   );

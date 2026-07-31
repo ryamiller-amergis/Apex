@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type {
   CreateWalkthroughCommand,
   PublishWalkthroughCommand,
@@ -14,6 +14,18 @@ export const walkthroughQueryKeys = {
   detail: (id: string | null) => ['platform-admin', 'walkthroughs', 'detail', id] as const,
   anchors: ['platform-admin', 'walkthroughs', 'anchors'] as const,
 };
+
+/**
+ * Invalidate the end-user walkthrough playback caches (eligibility, replay list,
+ * fetched definitions) so admin edits and lifecycle changes surface live without a
+ * hard reload. These keys are owned by the app-shell/replay hooks, not platform-admin,
+ * so authoring mutations must invalidate them explicitly for in-session preview coherence.
+ */
+function invalidateEndUserWalkthroughCaches(queryClient: QueryClient): void {
+  queryClient.invalidateQueries({ queryKey: ['walkthrough-eligibility'] });
+  queryClient.invalidateQueries({ queryKey: ['walkthrough-replay-list'] });
+  queryClient.invalidateQueries({ queryKey: ['walkthrough-definition'] });
+}
 
 export interface WalkthroughCatalogParams {
   lifecycle?: WalkthroughLifecycle;
@@ -114,6 +126,8 @@ export function useUpdateWalkthrough() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['platform-admin', 'walkthroughs'] });
       queryClient.setQueryData(walkthroughQueryKeys.detail(data.id), data);
+      // Refresh the end-user playback caches so saved step edits appear live in-session.
+      invalidateEndUserWalkthroughCaches(queryClient);
     },
   });
 }
@@ -154,6 +168,7 @@ export function usePublishWalkthrough() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['platform-admin', 'walkthroughs'] });
       queryClient.setQueryData(walkthroughQueryKeys.detail(data.id), data);
+      invalidateEndUserWalkthroughCaches(queryClient);
     },
   });
 }
@@ -173,6 +188,7 @@ export function useUnpublishWalkthrough() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['platform-admin', 'walkthroughs'] });
       queryClient.setQueryData(walkthroughQueryKeys.detail(data.id), data);
+      invalidateEndUserWalkthroughCaches(queryClient);
     },
   });
 }
@@ -192,6 +208,7 @@ export function useArchiveWalkthrough() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['platform-admin', 'walkthroughs'] });
       queryClient.setQueryData(walkthroughQueryKeys.detail(data.id), data);
+      invalidateEndUserWalkthroughCaches(queryClient);
     },
   });
 }

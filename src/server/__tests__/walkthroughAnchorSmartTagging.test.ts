@@ -72,6 +72,8 @@ describe('Walkthrough anchor smart-tagging skill contracts (Phase 4)', () => {
     expect(skill).toMatch(/common component/i);
     expect(skill).toMatch(/Home\/Admin\/Profile|Home, Admin, and Profile/);
     expect(skill).toMatch(/exactly one entry for every input candidate/i);
+    expect(skill).toMatch(/Do not evaluate placements/i);
+    expect(skill).toMatch(/\["top", "right", "bottom", "left"\]/);
   });
 
   it('accepts valid skill output (happy path)', () => {
@@ -365,7 +367,12 @@ describe('Walkthrough anchor smart-tagging skill contracts (Phase 4)', () => {
       'section',
       'edit',
     ]);
-    expect(merged[0].allowedPlacements).toEqual(['bottom', 'top']);
+    expect(merged[0].allowedPlacements).toEqual([
+      'top',
+      'right',
+      'bottom',
+      'left',
+    ]);
     expect(merged[0].aiProvenance?.confidence).toBe(0.7);
     expect(merged[0].aiProvenance?.rationale).toMatch(/ProfilePage/);
     expect(merged[0].aiProvenance?.threadId).toBe('thread-smart-tag-1');

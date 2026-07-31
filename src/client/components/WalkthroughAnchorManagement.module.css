@@ -131,6 +131,39 @@
   font-size: 0.875rem;
 }
 
+.dependencyNotice {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--accent-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.dependencyNoticeLabel {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.dependencyCode {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8125em;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.fieldHint {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
 .headerActions {
   display: flex;
   flex-wrap: wrap;
@@ -662,9 +695,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-secondary);
+  color: var(--accent-color);
   cursor: pointer;
-  opacity: 0.6;
+  opacity: 0.7;
   transition: opacity 0.2s ease;
 }
 
@@ -684,11 +717,11 @@
 
 .infoTooltip {
   background: var(--bg-secondary);
-  border: 2px solid #3498db;
+  border: 2px solid var(--accent-color);
   border-radius: 8px;
   padding: 16px;
   margin: 0;
-  box-shadow: var(--shadow-md);
+  box-shadow: 0 4px 12px var(--shadow-md);
   position: relative;
   animation: syncInfoSlideDown 0.2s ease-out;
 }
@@ -717,7 +750,7 @@
 }
 
 .infoTooltip strong {
-  color: #3498db;
+  color: var(--accent-color);
   font-weight: 600;
 }
 
@@ -776,10 +809,56 @@
   align-items: center;
 }
 
+.batchSizeRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.batchSizeOptions {
+  display: flex;
+  gap: 6px;
+}
+
+.batchSizeOption {
+  min-width: 44px;
+}
+
+.batchSizeActive {
+  min-width: 44px;
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
 .syncList {
   display: flex;
   flex-direction: column;
+  gap: 16px;
+}
+
+.syncSection {
+  display: flex;
+  flex-direction: column;
   gap: 12px;
+}
+
+.syncSectionHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-color-light);
+}
+
+.syncSectionTitle {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 .syncRow {

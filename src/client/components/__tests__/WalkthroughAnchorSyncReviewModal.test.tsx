@@ -37,9 +37,66 @@ describe('WalkthroughAnchorSyncReviewModal enrichment gating', () => {
 
     expect(screen.getByTestId('walkthrough-anchor-sync-enrichment-ready')).toBeInTheDocument();
     const save = screen.getByTestId('walkthrough-anchor-sync-save');
+    expect(save).toBeDisabled();
+
+    await user.click(screen.getByTestId('walkthrough-anchor-sync-approve-ready'));
     expect(save).not.toBeDisabled();
     await user.click(save);
     await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('walkthrough-anchor-sync-empty')).toBeInTheDocument();
+  });
+
+  it('select all in Ready section only selects AI-enriched rows', async () => {
+    const user = userEvent.setup();
+    const scannerOnly = {
+      ...MOCK_WALKTHROUGH_ANCHOR_SYNC_CANDIDATES[0],
+      id: 'scanner-only-1',
+      testId: 'scanner-only-1',
+      anchorKey: 'scanner-only-1',
+      smartTags: [] as string[],
+      aiProvenance: null,
+    };
+    const candidates = [...MOCK_WALKTHROUGH_ANCHOR_SYNC_CANDIDATES, scannerOnly];
+
+    render(
+      <WalkthroughAnchorSyncReviewModal
+        candidates={candidates}
+        enrichmentStatus="ready"
+        onClose={jest.fn()}
+        onSave={jest.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('walkthrough-anchor-sync-section-ready')).toBeInTheDocument();
+    expect(screen.getByTestId('walkthrough-anchor-sync-section-needs_ai')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('walkthrough-anchor-sync-select-section-ready'));
+
+    for (const row of MOCK_WALKTHROUGH_ANCHOR_SYNC_CANDIDATES) {
+      expect(screen.getByTestId(`walkthrough-anchor-sync-select-${row.id}`)).toBeChecked();
+    }
+    expect(screen.getByTestId('walkthrough-anchor-sync-select-scanner-only-1')).not.toBeChecked();
+  });
+
+  it('exposes batch size options 10, 20, and 50', async () => {
+    const user = userEvent.setup();
+    const onBatchSizeChange = jest.fn();
+    render(
+      <WalkthroughAnchorSyncReviewModal
+        candidates={MOCK_WALKTHROUGH_ANCHOR_SYNC_CANDIDATES}
+        enrichmentStatus="idle"
+        batchSize={20}
+        onBatchSizeChange={onBatchSizeChange}
+        onClose={jest.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('walkthrough-anchor-sync-batch-size-10')).toBeInTheDocument();
+    expect(screen.getByTestId('walkthrough-anchor-sync-batch-size-20')).toBeInTheDocument();
+    expect(screen.getByTestId('walkthrough-anchor-sync-batch-size-50')).toBeInTheDocument();
+    await user.click(screen.getByTestId('walkthrough-anchor-sync-batch-size-50'));
+    expect(onBatchSizeChange).toHaveBeenCalledWith(50);
   });
 
   it('toggles the workflow info panel from the Planning-style info icon', async () => {

@@ -23,6 +23,7 @@ import {
   toAuthoringAnchorEntry,
   type WalkthroughAnchorRegistryEntry,
 } from '../../shared/walkthroughAnchors';
+import { isWalkthroughRoute } from '../../shared/walkthroughRoutes';
 import {
   WalkthroughAnchorRegistryError,
   isWalkthroughAnchorReviewStatus,
@@ -161,6 +162,21 @@ function assertActiveApproved(
       ]
     );
   }
+}
+
+/**
+ * On approve, promote smart-tag / draft suggestedRoute into approvedRoute when
+ * the author has not set an approved route yet (Sync review edits suggested).
+ */
+export function resolveApprovedRouteOnApprove(
+  suggestedRoute: string | null | undefined,
+  approvedRoute: string | null | undefined
+): string | null {
+  const approved = approvedRoute?.trim() || null;
+  if (approved) return approved;
+  const suggested = suggestedRoute?.trim() || null;
+  if (suggested && isWalkthroughRoute(suggested)) return suggested;
+  return null;
 }
 
 function asStatusList(
@@ -537,14 +553,13 @@ export async function createFromCandidate(
     ? [...input.sourceLocations]
     : [];
   // Scanner-owned fields only. Leave tags/route/rationale empty until AI (or Super Admin) fills them.
+  // Placements always allow all sides; preferred side is chosen per walkthrough step.
   const label = (
     input.label?.trim() || humanizeWalkthroughTestId(testId)
   ).trim();
-  const allowedPlacements = (
-    input.allowedPlacements?.length
-      ? [...input.allowedPlacements]
-      : [...WALKTHROUGH_REGISTRY_PLACEMENTS]
-  ) as WalkthroughRegistryPlacement[];
+  const allowedPlacements = [
+    ...WALKTHROUGH_REGISTRY_PLACEMENTS,
+  ] as WalkthroughRegistryPlacement[];
   const suggestedRoute = input.suggestedRoute ?? null;
   const smartTags: string[] = [];
   const reviewStatus: WalkthroughAnchorReviewStatus = 'pending';
@@ -988,10 +1003,16 @@ export async function updateAnchor(
       patch.suggestedRoute !== undefined
         ? patch.suggestedRoute
         : existing.suggestedRoute;
-    const approvedRoute =
+    let approvedRoute =
       patch.approvedRoute !== undefined
         ? patch.approvedRoute
         : existing.approvedRoute;
+    if (reviewStatus === 'approved') {
+      approvedRoute = resolveApprovedRouteOnApprove(
+        suggestedRoute,
+        approvedRoute
+      );
+    }
     const allowedPlacements =
       patch.allowedPlacements !== undefined
         ? ([...patch.allowedPlacements] as WalkthroughRegistryPlacement[])
@@ -1043,17 +1064,36 @@ export async function updateAnchor(
 function applyBulkAction(
   row: RegistryRow,
   action: WalkthroughAnchorBulkAction
-): Pick<RegistryRow, 'reviewStatus' | 'isActive'> {
+): Pick<RegistryRow, 'reviewStatus' | 'isActive' | 'approvedRoute'> {
   switch (action) {
     case 'approve':
-      return { reviewStatus: 'approved', isActive: row.isActive };
+      return {
+        reviewStatus: 'approved',
+        isActive: row.isActive,
+        approvedRoute: resolveApprovedRouteOnApprove(
+          row.suggestedRoute,
+          row.approvedRoute
+        ),
+      };
     case 'reject':
-      return { reviewStatus: 'rejected', isActive: false };
+      return {
+        reviewStatus: 'rejected',
+        isActive: false,
+        approvedRoute: row.approvedRoute,
+      };
     case 'activate':
       assertActiveApproved(row.reviewStatus, true);
-      return { reviewStatus: row.reviewStatus, isActive: true };
+      return {
+        reviewStatus: row.reviewStatus,
+        isActive: true,
+        approvedRoute: row.approvedRoute,
+      };
     case 'deactivate':
-      return { reviewStatus: row.reviewStatus, isActive: false };
+      return {
+        reviewStatus: row.reviewStatus,
+        isActive: false,
+        approvedRoute: row.approvedRoute,
+      };
     default:
       throw new WalkthroughAnchorRegistryError(
         'VALIDATION_ERROR',
@@ -1105,6 +1145,7 @@ export async function bulkUpdateAnchors(
         .set({
           reviewStatus: next.reviewStatus,
           isActive: next.isActive,
+          approvedRoute: next.approvedRoute,
           updatedBy: actor.id,
           updatedAt: ts,
         })

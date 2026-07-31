@@ -17,6 +17,7 @@ import {
   resolveWalkthroughAiPolicyPreset,
   WalkthroughAiError,
   type GenerateWalkthroughAiDraftRequest,
+  type GenerateWalkthroughAiStepRequest,
   type RedoWalkthroughAiUnitRequest,
   type ValidateWalkthroughAiUnitRequest,
   type ValidateWalkthroughAiUnitSuccess,
@@ -275,6 +276,53 @@ function buildGenerationPrompt(input: {
     .join('\n\n');
 }
 
+function buildStepGenerationPrompt(input: {
+  intent: string;
+  projectId: string;
+  anchors: readonly WalkthroughAnchorRegistryEntry[];
+  routes: ReturnType<typeof listWalkthroughRoutes>;
+  assets: string[];
+  existingDraft?: GenerateWalkthroughAiStepRequest['existingDraft'];
+}): string {
+  return [
+    'You are adding exactly ONE new Step to an existing Apex Walkthrough. Return JSON only for that single Step.',
+    'Do not wrap commentary outside JSON. Use this schema:',
+    JSON.stringify(
+      {
+        heading: 'string',
+        bodyMarkdown: 'string',
+        route: 'optional curated in-app Step destination or null',
+        imageUrl: 'optional allow-listed path or null',
+        imageAlt: 'required descriptive text when imageUrl is set',
+        ctaLabel: 'optional',
+        ctaRoute: 'optional curated in-app route',
+        anchorKey: 'optional curated registry key or null',
+        anchorPlacement: 'optional top|right|bottom|left',
+      },
+      null,
+      2,
+    ),
+    `Project: ${input.projectId}`,
+    `What to add (author intent for this one Step): ${input.intent}`,
+    input.existingDraft
+      ? `Existing Walkthrough context — match its tone and voice, and do NOT duplicate an existing Step: ${JSON.stringify(input.existingDraft)}`
+      : '',
+    `Curated anchors (key → route): ${JSON.stringify(
+      input.anchors.map((a) => ({
+        key: a.key,
+        label: a.label,
+        targetRoute: a.targetRoute,
+        allowedPlacements: a.allowedPlacements,
+      })),
+    )}`,
+    `Curated routes: ${JSON.stringify(input.routes)}`,
+    `Allow-listed image paths: ${JSON.stringify(input.assets)}`,
+    'Rules: use only listed routes, anchors, and image paths; use null for anything not listed. Return one Step object only.',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
 function buildRedoPrompt(input: {
   unit: WalkthroughAiProposalUnit;
   feedback?: string;
@@ -431,6 +479,67 @@ export function parseGeneratedWalkthroughProposal(
   };
 }
 
+/**
+ * Parse a single generated Step object into a reviewable `kind: 'step'` unit.
+ * Accepts either a bare Step object or `{ step: {...} }`. Invalid anchors/images
+ * are dropped (null) via the shared normalizers so nothing un-curated leaks in.
+ */
+export function parseGeneratedStepUnit(
+  rawText: string,
+  assets: string[],
+  catalog: readonly WalkthroughAnchorRegistryEntry[] = listWalkthroughAnchors(),
+): { unit: WalkthroughAiProposalUnit; registryRejectionCount: number } {
+  const parsed = extractJsonObject(rawText) as Record<string, unknown>;
+  const registryRejection = { count: 0 };
+  const assetSet = new Set(assets);
+
+  const s = (
+    parsed.step && typeof parsed.step === 'object' ? parsed.step : parsed
+  ) as Record<string, unknown>;
+  const nestedAnchor =
+    s.anchor && typeof s.anchor === 'object' ? (s.anchor as Record<string, unknown>) : null;
+
+  const heading =
+    typeof s.heading === 'string' && s.heading.trim() ? s.heading.trim() : 'New step';
+  const bodyMarkdown = typeof s.bodyMarkdown === 'string' ? s.bodyMarkdown : '';
+  const imagePath = normalizeImage(s.imageUrl, assetSet, registryRejection);
+  const anchor = normalizeAnchor(
+    s.anchorKey ?? nestedAnchor?.key,
+    s.anchorPlacement ?? nestedAnchor?.placement,
+    registryRejection,
+    catalog,
+  );
+  const id = randomUUID();
+  const route = anchor?.targetRoute ?? normalizeRoute(s.route);
+
+  const value: WalkthroughAiStepProposal = {
+    id,
+    ordinal: 0,
+    heading,
+    bodyMarkdown,
+    route,
+    imageUrl: imagePath,
+    imageAlt:
+      imagePath && typeof s.imageAlt === 'string' && s.imageAlt.trim()
+        ? s.imageAlt.trim()
+        : null,
+    imageCandidatePath: imagePath,
+    ctaLabel: typeof s.ctaLabel === 'string' ? s.ctaLabel : null,
+    ctaRoute: normalizeRoute(s.ctaRoute),
+    anchor,
+  };
+
+  return {
+    unit: {
+      unitId: `step-${id}`,
+      kind: 'step',
+      value,
+      imageCandidatePath: imagePath,
+    },
+    registryRejectionCount: registryRejection.count,
+  };
+}
+
 function parseRedoUnit(
   rawText: string,
   previous: WalkthroughAiProposalUnit,
@@ -553,6 +662,65 @@ export async function generateProposal(
     throw new WalkthroughAiError(
       'AI_GENERATION_FAILED',
       'Walkthrough draft generation failed. Try again or author manually.',
+    );
+  }
+}
+
+/**
+ * Generate ONE new Step for an existing Walkthrough (direct-provider, synchronous).
+ * Returns a reviewable step unit — accept via `validateProposalUnit`, then the
+ * client injects it at the author-chosen position.
+ */
+export async function generateStepProposal(
+  request: GenerateWalkthroughAiStepRequest,
+): Promise<WalkthroughAiProposalUnit> {
+  const started = Date.now();
+  const policy = resolveWalkthroughAiPolicyPreset(request.policyPreset);
+  let modelId: string | undefined;
+  try {
+    if (typeof request.projectId !== 'string' || !request.projectId.trim()) {
+      throw new WalkthroughAiError('INTENT_INVALID', 'projectId is required');
+    }
+    const intent = sanitizeIntent(request.intent, policy);
+    const anchors = await listAuthoringAnchorEntries();
+    const routes = listWalkthroughRoutes();
+    const assets = listPublicWalkthroughAssetPaths();
+    modelId = request.model?.trim() || (await resolveCursorModel(request.projectId.trim()));
+    const prompt = buildStepGenerationPrompt({
+      intent,
+      projectId: request.projectId.trim(),
+      anchors,
+      routes,
+      assets,
+      existingDraft: request.existingDraft,
+    });
+    const provider = await getProvider();
+    const raw = await callProviderWithRetries(provider, prompt, policy, modelId);
+    const { unit, registryRejectionCount } = parseGeneratedStepUnit(raw, assets, anchors);
+    emitTelemetry({
+      event: 'walkthrough_ai_generation',
+      durationMs: Date.now() - started,
+      outcome: 'success',
+      modelId,
+      stepCount: 1,
+      registryRejectionCount,
+      unitKind: 'step',
+    });
+    return unit;
+  } catch (err) {
+    const code = err instanceof WalkthroughAiError ? err.code : 'AI_GENERATION_FAILED';
+    emitTelemetry({
+      event: 'walkthrough_ai_generation',
+      durationMs: Date.now() - started,
+      outcome: 'failure',
+      code,
+      modelId,
+      unitKind: 'step',
+    });
+    if (err instanceof WalkthroughAiError) throw err;
+    throw new WalkthroughAiError(
+      'AI_GENERATION_FAILED',
+      'AI step generation failed. Try again or add the step manually.',
     );
   }
 }

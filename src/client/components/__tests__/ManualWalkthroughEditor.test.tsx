@@ -236,6 +236,47 @@ describe('ManualWalkthroughEditor', () => {
     expect(targetingIdx).toBeLessThan(aiIdx);
   });
 
+  it('disables the Lifecycle button while the form has unsaved changes', async () => {
+    const user = userEvent.setup();
+    const published = {
+      id: 'wt-1',
+      internalName: 'Intro',
+      userTitle: 'Welcome',
+      whyItMatters: 'Because',
+      lifecycle: 'published',
+      priority: 0,
+      revision: 2,
+      publishedAt: '2026-07-01T00:00:00Z',
+      archivedAt: null,
+      createdBy: 'admin',
+      createdAt: '2026-07-01T00:00:00Z',
+      updatedBy: 'admin',
+      updatedAt: '2026-07-10T00:00:00Z',
+      steps: [{ id: 's1', walkthroughId: 'wt-1', ordinal: 0, heading: 'First', bodyMarkdown: 'A' }],
+      targeting: { projects: ['Apex'], groupId: null },
+      targetingRules: [],
+    };
+    mockWalkthroughHooks.useWalkthroughDetail.mockReturnValue({
+      data: published,
+      isLoading: false,
+      isError: false,
+      error: null,
+    } as unknown as ReturnType<typeof mockWalkthroughHooks.useWalkthroughDetail>);
+
+    renderEditor({ walkthroughId: 'wt-1' });
+
+    // Freshly loaded (saved) state → lifecycle is available.
+    const lifecycleBtn = await screen.findByTestId('walkthrough-publish');
+    expect(lifecycleBtn).toBeEnabled();
+
+    // Editing dirties the form → lifecycle must be gated until the draft is saved.
+    await user.type(screen.getByLabelText(/user title/i), ' Updated');
+    await waitFor(() => expect(screen.getByTestId('walkthrough-publish')).toBeDisabled());
+    expect(
+      screen.getByText(/save your draft before publishing/i),
+    ).toBeInTheDocument();
+  });
+
   it('carries imageAlt through save draft (round-trip)', async () => {
     const user = userEvent.setup();
     const createAsync = jest.fn().mockResolvedValue({
@@ -292,5 +333,48 @@ describe('ManualWalkthroughEditor', () => {
     const payload = createAsync.mock.calls[0][0];
     expect(payload.steps[0].imageAlt).toBe('Custom description');
     expect(payload.steps[0].imageUrl).toBe('/some-image.png');
+  });
+
+  it('carries CTA label and route through save draft (round-trip)', async () => {
+    const user = userEvent.setup();
+    const createAsync = jest.fn().mockResolvedValue({
+      id: 'wt-cta',
+      internalName: 'Draft',
+      userTitle: 'Welcome',
+      whyItMatters: '',
+      lifecycle: 'draft',
+      priority: 0,
+      revision: 1,
+      publishedAt: null,
+      archivedAt: null,
+      createdBy: 'admin',
+      createdAt: '2026-07-29T00:00:00Z',
+      updatedBy: 'admin',
+      updatedAt: '2026-07-29T00:00:00Z',
+      steps: [{ id: 's1', walkthroughId: 'wt-cta', ordinal: 0, heading: 'Step', bodyMarkdown: 'Body' }],
+      targeting: { projects: ['Apex'], groupId: null },
+      targetingRules: [],
+    });
+    mockWalkthroughHooks.useCreateWalkthrough.mockReturnValue({
+      mutateAsync: createAsync,
+      isPending: false,
+      error: null,
+    } as unknown as ReturnType<typeof mockWalkthroughHooks.useCreateWalkthrough>);
+
+    renderEditor();
+
+    await user.type(screen.getByLabelText(/internal name/i), 'Draft');
+    await user.type(screen.getByLabelText(/user title/i), 'Welcome');
+    await user.click(screen.getByTestId('walkthrough-project-option-Apex'));
+    await user.type(screen.getByLabelText(/heading/i), 'Step');
+    await user.type(screen.getByLabelText(/^CTA label$/i), 'Go to Design Module');
+    await user.selectOptions(screen.getByLabelText(/^CTA route$/i), '/design-module');
+
+    await user.click(screen.getByTestId('walkthrough-save-draft'));
+
+    await waitFor(() => expect(createAsync).toHaveBeenCalled());
+    const payload = createAsync.mock.calls[0][0];
+    expect(payload.steps[0].ctaLabel).toBe('Go to Design Module');
+    expect(payload.steps[0].ctaRoute).toBe('/design-module');
   });
 });

@@ -164,15 +164,6 @@ export function useWalkthroughAnchorTarget({
 
     setTestId(resolvedTestId);
 
-    const currentPath = location.pathname;
-    const needsNav = currentPath !== anchorRoute;
-    if (needsNav) {
-      setStatus('navigating');
-      navigate(anchorRoute);
-    }
-
-    setStatus('waiting');
-
     const finishResolved = (el: Element) => {
       if (isStale()) return;
       setTargetElement(el);
@@ -187,11 +178,25 @@ export function useWalkthroughAnchorTarget({
       setStatus('fallback');
     };
 
+    // Resolve against the CURRENT route first. Persistent chrome (e.g. the sidebar
+    // nav) renders on every page, so if the anchored element is already on screen we
+    // must NOT auto-navigate to the anchor's home route — doing so hijacks the user's
+    // location (e.g. yanking them to /design-module during step 1 instead of leaving
+    // that to the step's CTA). Only navigate when the element is absent here.
     const immediate = queryByTestId(resolvedTestId);
     if (immediate) {
       finishResolved(immediate);
       return;
     }
+
+    const currentPath = location.pathname;
+    const needsNav = currentPath !== anchorRoute;
+    if (needsNav) {
+      setStatus('navigating');
+      navigate(anchorRoute);
+    }
+
+    setStatus('waiting');
 
     let observer: MutationObserver | null = null;
     let timerId: number | null = null;

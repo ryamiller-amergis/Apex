@@ -63,8 +63,8 @@ const OUTPUT_RELATIVE_PATH = [
   ...WALKTHROUGH_ANCHOR_SMART_TAGGING_OUTPUT_RELATIVE_PATH,
 ];
 const CATALOG_HINT_LIMIT = 40;
-/** Cap candidates per Cursor run so large first-time syncs can finish. */
-export const SMART_TAGGING_CANDIDATE_BATCH_MAX = 20;
+/** Cap candidates per Cursor run so large first-time syncs can finish (UI offers 10/20/50). */
+export const SMART_TAGGING_CANDIDATE_BATCH_MAX = 50;
 
 const REVIEWABLE_WARNING =
   'Smart-tagging did not complete successfully. Newly discovered anchors remain pending and reviewable; scan state was not discarded.';

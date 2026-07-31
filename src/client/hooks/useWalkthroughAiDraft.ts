@@ -2,6 +2,8 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import type {
   GenerateWalkthroughAiDraftRequest,
   GenerateWalkthroughAiDraftResponse,
+  GenerateWalkthroughAiStepRequest,
+  GenerateWalkthroughAiStepResponse,
   RedoWalkthroughAiUnitRequest,
   ValidateWalkthroughAiUnitRequest,
   ValidateWalkthroughAiUnitSuccess,
@@ -90,6 +92,21 @@ export function useGenerateWalkthroughAiDraft() {
       }).catch(() => undefined);
       throw new Error('Walkthrough generation timed out. Try again.');
     },
+  });
+}
+
+/**
+ * Generate exactly one new Step for an existing Walkthrough (direct-provider,
+ * synchronous — no thread polling). Returns a reviewable step unit.
+ */
+export function useGenerateWalkthroughAiStep() {
+  return useMutation<GenerateWalkthroughAiStepResponse, Error, GenerateWalkthroughAiStepRequest>({
+    mutationFn: (body) =>
+      aiFetch('/api/platform-admin/walkthroughs/ai-drafts/generate-step', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
   });
 }
 

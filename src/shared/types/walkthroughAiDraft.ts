@@ -171,6 +171,32 @@ export interface GenerateWalkthroughAiDraftResponse {
   proposal: WalkthroughAiProposal;
 }
 
+/**
+ * Generate exactly ONE new Step to inject into an existing Walkthrough draft.
+ * Direct-provider (synchronous) flow — mirrors the redo/validate single-unit path,
+ * not the thread-based full generation. The existing draft is passed only as
+ * context so the new Step matches tone and does not duplicate an existing Step.
+ */
+export interface GenerateWalkthroughAiStepRequest {
+  projectId: string;
+  /** Author's description of what the new step should teach/cover. */
+  intent: string;
+  policyPreset?: WalkthroughAiPolicyPresetId;
+  /** Run-only Cursor override; never persisted as project configuration. */
+  model?: string;
+  existingDraft?: {
+    internalName?: string;
+    userTitle?: string;
+    whyItMatters?: string;
+    steps?: WalkthroughStepInput[];
+  };
+}
+
+export interface GenerateWalkthroughAiStepResponse {
+  /** Always a `kind: 'step'` unit; typed as the union for ergonomic client checks. */
+  unit: WalkthroughAiProposalUnit;
+}
+
 export interface RedoWalkthroughAiUnitRequest {
   projectId: string;
   proposalId: string;

@@ -19,14 +19,12 @@ import {
   useValidateWalkthroughAiUnit,
   useWalkthroughAiPolicyPresets,
   useWalkthroughAnchorMatches,
-  useStartAnchorDiscovery,
   type WalkthroughAnchorMatchCandidate,
 } from '../hooks/useWalkthroughAiDraft';
 import { useWalkthroughAnchors } from '../hooks/usePlatformAdminWalkthroughs';
-import { useCreateManualAnchor } from '../hooks/usePlatformAdminAnchorRegistry';
 import { useWalkthroughsAiOptions } from '../contexts/WalkthroughsAiOptionsContext';
-import type { WalkthroughAnchorDiscoveryProposal } from '../../shared/types/walkthroughAnchorDiscovery';
 import type { WalkthroughRegistryPlacement } from '../../shared/walkthroughAnchors';
+import { getWalkthroughRoute } from '../../shared/walkthroughRoutes';
 import styles from './WalkthroughAiDraft.module.css';
 
 interface WalkthroughAiDraftPanelProps {
@@ -49,6 +47,25 @@ function unitTitle(unit: WalkthroughAiProposalUnit): string {
   return unit.value.heading || 'Step';
 }
 
+function asCenteredStepUnit(
+  unit: Extract<WalkthroughAiProposalUnit, { kind: 'step' }>,
+): Extract<WalkthroughAiProposalUnit, { kind: 'step' }> {
+  return {
+    ...unit,
+    value: {
+      ...unit.value,
+      anchor: null,
+      anchorMatch: {
+        score: 0,
+        belowThreshold: false,
+        hasAnchor: false,
+        routeCompatible: true,
+        matchedTags: [],
+      },
+    },
+  };
+}
+
 export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = ({
   projectId,
   currentDraft,
@@ -60,15 +77,8 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
   const redoMutation = useRedoWalkthroughAiUnit();
   const validateMutation = useValidateWalkthroughAiUnit();
   const matchesMutation = useWalkthroughAnchorMatches();
-  const discoveryMutation = useStartAnchorDiscovery();
-  const createManualAnchor = useCreateManualAnchor();
   const anchorsQuery = useWalkthroughAnchors();
-  const {
-    walkthroughGenerationModel,
-    walkthroughGenerationSkillPath,
-    anchorDiscoveryModel,
-    anchorDiscoverySkillPath,
-  } = useWalkthroughsAiOptions();
+  const { walkthroughGenerationModel, walkthroughGenerationSkillPath } = useWalkthroughsAiOptions();
 
   const anchorLabel = (key: string | undefined): string | null => {
     if (!key) return null;
@@ -86,9 +96,10 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
   const [rankedByUnitId, setRankedByUnitId] = useState<
     Record<string, WalkthroughAnchorMatchCandidate[]>
   >({});
-  const [discoveryByUnitId, setDiscoveryByUnitId] = useState<
-    Record<string, WalkthroughAnchorDiscoveryProposal[]>
-  >({});
+  // Part B — anchor picker route/tag/search filters (per unit).
+  const [pickerRouteByUnitId, setPickerRouteByUnitId] = useState<Record<string, string>>({});
+  const [pickerTagByUnitId, setPickerTagByUnitId] = useState<Record<string, string | null>>({});
+  const [pickerSearchByUnitId, setPickerSearchByUnitId] = useState<Record<string, string>>({});
   const [busyUnitId, setBusyUnitId] = useState<string | null>(null);
   const reviewHeadingRef = useRef<HTMLHeadingElement | null>(null);
 
@@ -163,6 +174,11 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
       }
       setDecisions(initial);
       setAcceptedNormalized([]);
+      setRankedByUnitId({});
+      setPickerRouteByUnitId({});
+      setPickerTagByUnitId({});
+      setPickerSearchByUnitId({});
+      setPickerOpenForUnitId(null);
       setStatusMessage('Draft generated. Review each unit before merging.');
     } catch (err) {
       setStatusMessage(
@@ -216,9 +232,39 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
     });
   };
 
+  const applyCenteredToStepUnit = (unitId: string) => {
+    setProposal((prev) => {
+      if (!prev) return prev;
+      const steps = prev.steps.map((step) => {
+        if (`step-${step.id}` !== unitId) return step;
+        return {
+          ...step,
+          anchor: null,
+          anchorMatch: {
+            score: 0,
+            belowThreshold: false,
+            hasAnchor: false,
+            routeCompatible: true,
+            matchedTags: [],
+          },
+        };
+      });
+      const units = prev.units.map((unit) => {
+        if (unit.unitId !== unitId || unit.kind !== 'step') return unit;
+        const step = steps.find((s) => `step-${s.id}` === unitId);
+        return step ? { ...unit, value: step } : unit;
+      });
+      return { ...prev, steps, units };
+    });
+  };
+
   const handleChooseExisting = async (unit: Extract<WalkthroughAiProposalUnit, { kind: 'step' }>) => {
+    const initialRoute = unit.value.route ?? unit.value.anchor?.targetRoute ?? '';
     setBusyUnitId(unit.unitId);
     setPickerOpenForUnitId(unit.unitId);
+    setPickerRouteByUnitId((prev) => ({ ...prev, [unit.unitId]: initialRoute }));
+    setPickerTagByUnitId((prev) => ({ ...prev, [unit.unitId]: null }));
+    setPickerSearchByUnitId((prev) => ({ ...prev, [unit.unitId]: '' }));
     try {
       const result = await matchesMutation.mutateAsync({
         heading: unit.value.heading,
@@ -241,86 +287,30 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
     }
   };
 
-  const handleFindWithAi = async (unit: Extract<WalkthroughAiProposalUnit, { kind: 'step' }>) => {
-    setBusyUnitId(unit.unitId);
-    try {
-      const model = anchorDiscoveryModel.trim();
-      const skillPath = anchorDiscoverySkillPath.trim();
-      const result = await discoveryMutation.mutateAsync({
-        heading: unit.value.heading,
-        body: unit.value.bodyMarkdown,
-        route: unit.value.route ?? unit.value.anchor?.targetRoute ?? null,
-        ...(model ? { model } : {}),
-        ...(skillPath ? { skillPath } : {}),
-      });
-      setDiscoveryByUnitId((prev) => ({
-        ...prev,
-        [unit.unitId]: result.proposals,
-      }));
-    } catch (err) {
-      setUnitErrors((prev) => ({
-        ...prev,
-        [unit.unitId]:
-          err instanceof Error ? err.message : 'Anchor discovery failed.',
-      }));
-    } finally {
-      setBusyUnitId(null);
-    }
-  };
-
-  const handleImportDiscovered = async (
-    unit: Extract<WalkthroughAiProposalUnit, { kind: 'step' }>,
-    proposalItem: WalkthroughAnchorDiscoveryProposal,
-  ) => {
-    setBusyUnitId(unit.unitId);
-    try {
-      const created = await createManualAnchor.mutateAsync({
-        anchorKey: proposalItem.anchorKey,
-        testId: proposalItem.testId,
-        label: proposalItem.label,
-        suggestedRoute: proposalItem.suggestedRoute,
-        approvedRoute: proposalItem.suggestedRoute,
-        allowedPlacements: proposalItem.allowedPlacements,
-        smartTags: proposalItem.smartTags,
-        sourceLocations: proposalItem.sourceLocations,
-        reviewStatus: 'approved',
-        isActive: true,
-      });
-      const placement =
-        (created.allowedPlacements[0] as WalkthroughRegistryPlacement | undefined) ??
-        proposalItem.allowedPlacements[0] ??
-        'bottom';
-      applyAnchorToStepUnit(unit.unitId, {
-        key: created.anchorKey,
-        targetRoute:
-          created.approvedRoute ??
-          created.suggestedRoute ??
-          proposalItem.suggestedRoute ??
-          unit.value.route ??
-          '/',
-        placement,
-      });
-      setStatusMessage(`Imported anchor “${created.label}” and selected it for this step.`);
-    } catch (err) {
-      setUnitErrors((prev) => ({
-        ...prev,
-        [unit.unitId]:
-          err instanceof Error ? err.message : 'Failed to import discovered anchor.',
-      }));
-    } finally {
-      setBusyUnitId(null);
-    }
+  const handleUseCentered = (unit: Extract<WalkthroughAiProposalUnit, { kind: 'step' }>) => {
+    applyCenteredToStepUnit(unit.unitId);
+    setPickerOpenForUnitId(null);
+    setStatusMessage(
+      `“${unitTitle(unit)}” will use a centered modal step (no catalog coachmark).`,
+    );
   };
 
   const handleAccept = async (unit: WalkthroughAiProposalUnit) => {
     if (!projectId.trim()) return;
     const imageConfirmed = decisions[unit.unitId]?.imageConfirmed === true;
+    // Trust the AI's (or user's) anchor selection — it is validated against the
+    // approved catalog. Only steps with no anchor at all are normalized to centered.
+    const needsCentered = unit.kind === 'step' && !unit.value.anchor?.key;
+    const unitToValidate = needsCentered ? asCenteredStepUnit(unit) : unit;
     try {
       const result = await validateMutation.mutateAsync({
         projectId,
-        unit,
+        unit: unitToValidate,
         imageConfirmed,
       });
+      if (needsCentered) {
+        applyCenteredToStepUnit(unit.unitId);
+      }
       setAcceptedNormalized((prev) => {
         const without = prev.filter((u) => u.unitId !== unit.unitId);
         return [...without, result.normalizedUnit];
@@ -331,7 +321,11 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
         delete next[unit.unitId];
         return next;
       });
-      setStatusMessage(`Accepted “${unitTitle(unit)}”.`);
+      setStatusMessage(
+        needsCentered
+          ? `Accepted “${unitTitle(unit)}” as a centered step (no coachmark anchor selected).`
+          : `Accepted “${unitTitle(unit)}”.`,
+      );
     } catch (err) {
       setUnitErrors((prev) => ({
         ...prev,
@@ -482,7 +476,7 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
           {errors.intent && <p className={styles.fieldError}>{errors.intent.message}</p>}
         </div>
 
-        <div className={styles.actions}>
+        <div className={styles.formActions}>
           <button
             type="submit"
             className={styles.buttonPrimary}
@@ -549,6 +543,56 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
               validateMutation.isPending ||
               busyUnitId === unit.unitId;
 
+            // ── Part B: route/tag-filtered approved-anchor picker data ─────────
+            const anchorCatalog = anchorsQuery.data ?? [];
+            const ranked = rankedByUnitId[unit.unitId] ?? [];
+            const scoreByKey = new Map(ranked.map((c) => [c.anchorKey, c.score] as const));
+            const selectedRoute = pickerRouteByUnitId[unit.unitId] ?? '';
+            const selectedTag = pickerTagByUnitId[unit.unitId] ?? null;
+            const searchTerm = (pickerSearchByUnitId[unit.unitId] ?? '').trim().toLowerCase();
+            // Only routes that actually have approved anchors, labeled from the curated catalog.
+            const routeFilterOptions = Array.from(
+              new Set(
+                anchorCatalog
+                  .map((a) => a.targetRoute)
+                  .filter((r): r is string => Boolean(r)),
+              ),
+            )
+              .sort()
+              .map((route) => ({
+                route,
+                label: getWalkthroughRoute(route)?.label ?? route,
+              }));
+            const anchorsForRoute = selectedRoute
+              ? anchorCatalog.filter((a) => a.targetRoute === selectedRoute)
+              : anchorCatalog;
+            const tagsForRoute = Array.from(
+              new Set(anchorsForRoute.flatMap((a) => a.smartTags ?? [])),
+            ).sort();
+            const filteredAnchors = anchorsForRoute
+              .filter((a) => !selectedTag || (a.smartTags ?? []).includes(selectedTag))
+              .filter((a) => {
+                if (!searchTerm) return true;
+                const haystack = [
+                  a.label,
+                  a.key,
+                  a.testId,
+                  ...(a.smartTags ?? []),
+                ]
+                  .join(' ')
+                  .toLowerCase();
+                return haystack.includes(searchTerm);
+              })
+              .slice()
+              .sort(
+                (a, b) =>
+                  (scoreByKey.get(b.key) ?? 0) - (scoreByKey.get(a.key) ?? 0) ||
+                  a.label.localeCompare(b.label),
+              );
+            const selectedRouteLabel = selectedRoute
+              ? (getWalkthroughRoute(selectedRoute)?.label ?? selectedRoute)
+              : null;
+
             return (
               <article
                 key={unit.unitId}
@@ -575,38 +619,25 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
                   <div className={styles.proposedBlock}>
                     <div>{unit.value.bodyMarkdown}</div>
                     {unit.value.anchor?.key ? (
-                      <div>
-                        Anchor: {anchorLabel(unit.value.anchor.key)} ({unit.value.anchor.targetRoute}
-                        , {unit.value.anchor.placement})
-                      </div>
-                    ) : null}
-                    {unit.value.anchorMatch ? (
                       <div
-                        className={
-                          unit.value.anchorMatch.belowThreshold
-                            ? styles.anchorMatchBadgeLow
-                            : styles.anchorMatchBadge
-                        }
+                        className={styles.anchorSelectedBadge}
                         {...{
-                          'data-testid': `walkthrough-proposal-${unit.unitId}-anchor-match`,
+                          'data-testid': `walkthrough-proposal-${unit.unitId}-anchor-selected`,
                         }}
                       >
-                        Match score {unit.value.anchorMatch.score.toFixed(2)}
-                        {unit.value.anchorMatch.belowThreshold ? ' · low confidence' : ''}
+                        Anchor: {anchorLabel(unit.value.anchor.key)} (
+                        {unit.value.anchor.targetRoute}, {unit.value.anchor.placement})
                       </div>
-                    ) : null}
-                    {(!unit.value.anchor?.key || unit.value.anchorMatch?.belowThreshold) &&
-                    decision.status !== 'accepted' ? (
+                    ) : (
                       <div
-                        className={styles.anchorMatchWarning}
-                        role="status"
+                        className={styles.centeredStepBadge}
                         {...{
-                          'data-testid': `walkthrough-proposal-${unit.unitId}-anchor-low-confidence`,
+                          'data-testid': `walkthrough-proposal-${unit.unitId}-centered`,
                         }}
                       >
-                        Low confidence — pick or find an anchor
+                        Centered step (no catalog coachmark)
                       </div>
-                    ) : null}
+                    )}
                     {decision.status !== 'accepted' ? (
                       <div className={styles.anchorTools}>
                         <div className={styles.actions}>
@@ -619,21 +650,21 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
                               'data-testid': `walkthrough-proposal-${unit.unitId}-choose-anchor`,
                             }}
                           >
-                            Choose existing anchor
+                            {unit.value.anchor?.key ? 'Change anchor' : 'Choose existing anchor'}
                           </button>
-                          <button
-                            type="button"
-                            className={styles.button}
-                            disabled={isBusy}
-                            onClick={() => handleFindWithAi(unit)}
-                            {...{
-                              'data-testid': `walkthrough-proposal-${unit.unitId}-find-anchor-ai`,
-                            }}
-                          >
-                            {busyUnitId === unit.unitId && discoveryMutation.isPending
-                              ? 'Finding…'
-                              : 'Find matches with AI'}
-                          </button>
+                          {unit.value.anchor?.key ? (
+                            <button
+                              type="button"
+                              className={styles.button}
+                              disabled={isBusy}
+                              onClick={() => handleUseCentered(unit)}
+                              {...{
+                                'data-testid': `walkthrough-proposal-${unit.unitId}-use-centered`,
+                              }}
+                            >
+                              Use centered step
+                            </button>
+                          ) : null}
                         </div>
                         {pickerOpenForUnitId === unit.unitId ? (
                           <div
@@ -644,28 +675,148 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
                           >
                             <label
                               className={styles.label}
+                              htmlFor={`walkthrough-proposal-${unit.unitId}-anchor-route`}
+                            >
+                              Filter by route
+                            </label>
+                            <select
+                              id={`walkthrough-proposal-${unit.unitId}-anchor-route`}
+                              className={styles.select}
+                              value={selectedRoute}
+                              disabled={isBusy}
+                              onChange={(event) => {
+                                const route = event.target.value;
+                                setPickerRouteByUnitId((prev) => ({
+                                  ...prev,
+                                  [unit.unitId]: route,
+                                }));
+                                setPickerTagByUnitId((prev) => ({
+                                  ...prev,
+                                  [unit.unitId]: null,
+                                }));
+                              }}
+                              {...{
+                                'data-testid': `walkthrough-proposal-${unit.unitId}-anchor-route-filter`,
+                              }}
+                            >
+                              <option value="">All routes</option>
+                              {routeFilterOptions.map((r) => (
+                                <option key={r.route} value={r.route}>
+                                  {r.label} ({r.route})
+                                </option>
+                              ))}
+                            </select>
+
+                            <label
+                              className={styles.label}
+                              htmlFor={`walkthrough-proposal-${unit.unitId}-anchor-search`}
+                            >
+                              Search anchors
+                            </label>
+                            <input
+                              id={`walkthrough-proposal-${unit.unitId}-anchor-search`}
+                              className={styles.input}
+                              type="search"
+                              placeholder="Filter by name, key, or tag…"
+                              value={pickerSearchByUnitId[unit.unitId] ?? ''}
+                              disabled={isBusy}
+                              onChange={(event) =>
+                                setPickerSearchByUnitId((prev) => ({
+                                  ...prev,
+                                  [unit.unitId]: event.target.value,
+                                }))
+                              }
+                              {...{
+                                'data-testid': `walkthrough-proposal-${unit.unitId}-anchor-search`,
+                              }}
+                            />
+
+                            {tagsForRoute.length > 0 ? (
+                              <div
+                                className={styles.tagFilterRow}
+                                {...{
+                                  'data-testid': `walkthrough-proposal-${unit.unitId}-anchor-tag-filter`,
+                                }}
+                              >
+                                <button
+                                  type="button"
+                                  className={
+                                    selectedTag === null
+                                      ? styles.tagChipActive
+                                      : styles.tagChip
+                                  }
+                                  aria-pressed={selectedTag === null}
+                                  disabled={isBusy}
+                                  onClick={() =>
+                                    setPickerTagByUnitId((prev) => ({
+                                      ...prev,
+                                      [unit.unitId]: null,
+                                    }))
+                                  }
+                                  {...{
+                                    'data-testid': `walkthrough-proposal-${unit.unitId}-anchor-tag-all`,
+                                  }}
+                                >
+                                  All tags
+                                </button>
+                                {tagsForRoute.map((tag) => (
+                                  <button
+                                    key={tag}
+                                    type="button"
+                                    className={
+                                      selectedTag === tag
+                                        ? styles.tagChipActive
+                                        : styles.tagChip
+                                    }
+                                    aria-pressed={selectedTag === tag}
+                                    disabled={isBusy}
+                                    onClick={() =>
+                                      setPickerTagByUnitId((prev) => ({
+                                        ...prev,
+                                        [unit.unitId]:
+                                          prev[unit.unitId] === tag ? null : tag,
+                                      }))
+                                    }
+                                    {...{
+                                      'data-testid': `walkthrough-proposal-${unit.unitId}-anchor-tag-${tag}`,
+                                    }}
+                                  >
+                                    {tag}
+                                  </button>
+                                ))}
+                              </div>
+                            ) : null}
+
+                            <label
+                              className={styles.label}
                               htmlFor={`walkthrough-proposal-${unit.unitId}-anchor-select`}
                             >
-                              Ranked catalog anchors
+                              Approved anchors
+                              {selectedRouteLabel ? ` on ${selectedRouteLabel}` : ''}
                             </label>
                             <select
                               id={`walkthrough-proposal-${unit.unitId}-anchor-select`}
                               className={styles.select}
-                              defaultValue=""
+                              value={
+                                filteredAnchors.some(
+                                  (a) => a.key === unit.value.anchor?.key,
+                                )
+                                  ? (unit.value.anchor?.key ?? '')
+                                  : ''
+                              }
                               disabled={isBusy}
                               onChange={(event) => {
                                 const key = event.target.value;
                                 if (!key) return;
-                                const ranked = rankedByUnitId[unit.unitId] ?? [];
                                 const match = ranked.find((c) => c.anchorKey === key);
-                                const catalog = anchorsQuery.data?.find((a) => a.key === key);
-                                const placement = (match?.allowedPlacements[0] ??
-                                  catalog?.allowedPlacements?.[0] ??
+                                const catalog = anchorCatalog.find((a) => a.key === key);
+                                const placement = (catalog?.allowedPlacements?.[0] ??
+                                  match?.allowedPlacements[0] ??
                                   'bottom') as WalkthroughRegistryPlacement;
                                 const targetRoute =
-                                  match?.approvedRoute ??
-                                  catalog?.targetRoute ??
-                                  unit.value.route ??
+                                  catalog?.targetRoute ||
+                                  match?.approvedRoute ||
+                                  unit.value.route ||
                                   '/';
                                 applyAnchorToStepUnit(unit.unitId, {
                                   key,
@@ -678,59 +829,28 @@ export const WalkthroughAiDraftPanel: React.FC<WalkthroughAiDraftPanelProps> = (
                               }}
                             >
                               <option value="">Select an anchor…</option>
-                              {(rankedByUnitId[unit.unitId] ?? []).map((candidate) => (
-                                <option key={candidate.anchorKey} value={candidate.anchorKey}>
-                                  {candidate.label} ({candidate.score.toFixed(2)})
-                                </option>
-                              ))}
-                              {(anchorsQuery.data ?? [])
-                                .filter(
-                                  (a) =>
-                                    !(rankedByUnitId[unit.unitId] ?? []).some(
-                                      (c) => c.anchorKey === a.key,
-                                    ),
-                                )
-                                .map((a) => (
-                                  <option key={`catalog-${a.key}`} value={a.key}>
-                                    {a.label} (catalog)
+                              {filteredAnchors.map((a) => {
+                                const score = scoreByKey.get(a.key);
+                                return (
+                                  <option key={a.key} value={a.key}>
+                                    {a.label}
+                                    {typeof score === 'number'
+                                      ? ` — match ${score.toFixed(2)}`
+                                      : ''}
                                   </option>
-                                ))}
+                                );
+                              })}
                             </select>
-                          </div>
-                        ) : null}
-                        {(discoveryByUnitId[unit.unitId] ?? []).length > 0 ? (
-                          <div
-                            className={styles.discoveryList}
-                            {...{
-                              'data-testid': `walkthrough-proposal-${unit.unitId}-discovery-results`,
-                            }}
-                          >
-                            {(discoveryByUnitId[unit.unitId] ?? []).map((item) => (
-                              <div
-                                key={item.anchorKey}
-                                className={styles.discoveryItem}
+                            {filteredAnchors.length === 0 ? (
+                              <p
+                                className={styles.panelHint}
                                 {...{
-                                  'data-testid': `walkthrough-proposal-${unit.unitId}-discovery-${item.anchorKey}`,
+                                  'data-testid': `walkthrough-proposal-${unit.unitId}-anchor-empty`,
                                 }}
                               >
-                                <strong>{item.label}</strong>
-                                <span>
-                                  {item.anchorKey} · confidence {item.confidence.toFixed(2)}
-                                </span>
-                                <span>{item.rationale}</span>
-                                <button
-                                  type="button"
-                                  className={styles.buttonPrimary}
-                                  disabled={isBusy}
-                                  onClick={() => handleImportDiscovered(unit, item)}
-                                  {...{
-                                    'data-testid': `walkthrough-proposal-${unit.unitId}-import-${item.anchorKey}`,
-                                  }}
-                                >
-                                  Import &amp; select
-                                </button>
-                              </div>
-                            ))}
+                                No approved anchors match this route/tag filter.
+                              </p>
+                            ) : null}
                           </div>
                         ) : null}
                       </div>
