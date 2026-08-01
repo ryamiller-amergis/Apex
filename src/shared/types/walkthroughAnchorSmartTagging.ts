@@ -342,13 +342,37 @@ function validateSuggestion(
 }
 
 /**
+ * Agents sometimes wrap JSON in markdown fences or emit a bare suggestions
+ * array. Normalize those shapes before schema validation so a successful write
+ * is not rejected for a recoverable packaging mistake.
+ */
+function stripJsonMarkdownFences(raw: string): string {
+  const trimmed = raw.trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return (fenced?.[1] ?? trimmed).trim();
+}
+
+function normalizeSmartTaggingRoot(
+  parsed: unknown,
+): Record<string, unknown> | null {
+  if (Array.isArray(parsed)) {
+    return { suggestions: parsed };
+  }
+  if (parsed && typeof parsed === 'object') {
+    return parsed as Record<string, unknown>;
+  }
+  return null;
+}
+
+/**
  * Validate a parsed skill result without throwing.
  * Useful for bulk review UI and merge pre-checks.
  */
 export function validateWalkthroughAnchorSmartTaggingResult(
   result: unknown,
 ): WalkthroughAnchorSmartTaggingValidationError[] {
-  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+  const record = normalizeSmartTaggingRoot(result);
+  if (!record) {
     return [
       {
         field: '',
@@ -358,7 +382,6 @@ export function validateWalkthroughAnchorSmartTaggingResult(
     ];
   }
 
-  const record = result as Record<string, unknown>;
   const errors: WalkthroughAnchorSmartTaggingValidationError[] = [];
   const invented = unknownKeys(record, ALLOWED_RESULT_KEYS);
   if (invented.length > 0) {
@@ -397,13 +420,17 @@ export function validateWalkthroughAnchorSmartTaggingResult(
 /**
  * Parse + validate the smart-tagging skill JSON artifact.
  * Throws WalkthroughAnchorSmartTaggingError on invalid JSON or schema violations.
+ *
+ * Recoverable packaging mistakes (markdown fences, bare suggestions array) are
+ * normalized before schema checks — the agent must still emit valid suggestion
+ * entries.
  */
 export function parseWalkthroughAnchorSmartTaggingOutput(
   raw: string,
 ): WalkthroughAnchorSmartTaggingResult {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(stripJsonMarkdownFences(raw));
   } catch {
     throw new WalkthroughAnchorSmartTaggingError(
       'Smart-tagging output is not valid JSON.',
@@ -411,14 +438,14 @@ export function parseWalkthroughAnchorSmartTaggingOutput(
     );
   }
 
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+  const record = normalizeSmartTaggingRoot(parsed);
+  if (!record) {
     throw new WalkthroughAnchorSmartTaggingError(
       'Smart-tagging output is not an object.',
       'INVALID_OUTPUT',
     );
   }
 
-  const record = parsed as Record<string, unknown>;
   const invented = unknownKeys(record, ALLOWED_RESULT_KEYS);
   if (invented.length > 0) {
     throw new WalkthroughAnchorSmartTaggingError(

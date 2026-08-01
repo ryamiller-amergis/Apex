@@ -78,6 +78,8 @@ describe('Walkthrough anchor smart-tagging skill contracts (Phase 4)', () => {
     expect(skill).toMatch(/exactly one entry for every input candidate/i);
     expect(skill).toMatch(/Do not evaluate placements/i);
     expect(skill).toMatch(/\["top", "right", "bottom", "left"\]/);
+    expect(skill).toMatch(/never a bare array|Never write a bare array/i);
+    expect(skill).toMatch(/Do not end the turn until/i);
   });
 
   it('accepts valid skill output (happy path)', () => {
@@ -286,6 +288,29 @@ describe('Walkthrough anchor smart-tagging skill contracts (Phase 4)', () => {
         })
       )
     ).toThrow(/required|INVALID_/i);
+  });
+
+  it('recovers a bare suggestions array (common agent packaging mistake)', () => {
+    const bare = [
+      validSuggestion({
+        testId: 'new-candidate',
+        anchorKey: 'new-candidate',
+        suggestedLabel: 'New candidate',
+      }),
+    ];
+    const parsed = parseWalkthroughAnchorSmartTaggingOutput(JSON.stringify(bare));
+    expect(parsed.suggestions).toHaveLength(1);
+    expect(parsed.suggestions[0].testId).toBe('new-candidate');
+    expect(validateWalkthroughAnchorSmartTaggingResult(bare)).toEqual([]);
+  });
+
+  it('strips markdown fences before parsing', () => {
+    const fenced = `\`\`\`json\n${JSON.stringify(validPayload())}\n\`\`\``;
+    const parsed = parseWalkthroughAnchorSmartTaggingOutput(fenced);
+    expect(parsed.suggestions).toHaveLength(1);
+    expect(parsed.suggestions[0].testId).toBe(
+      validPayload().suggestions[0].testId
+    );
   });
 
   it('pure merge helper applies validated suggestions onto pending rows only', () => {

@@ -83,6 +83,8 @@ Write exactly this JSON shape to `.ai-pilot/output/walkthrough-anchor-smart-tagg
 }
 ```
 
+**Root shape (required):** the file contents must be a single JSON **object** whose only top-level key is `suggestions`. Never write a bare array (`[{...}]`). Never wrap the JSON in markdown fences. Chat-only JSON does not count — the Write tool must create that exact path before you end the turn.
+
 Field requirements:
 
 - `suggestions` — exactly one entry for every input candidate; never return a partial batch.
@@ -100,7 +102,7 @@ Field requirements:
 3. **Do not evaluate placements.** Always emit all four: `top`, `right`, `bottom`, `left`. Preferred side is chosen later in walkthrough step authoring (and may flip at runtime).
 4. **Tags are lowercase kebab-case**, length 3–8 after dedupe.
 5. **Do not wrap output in markdown fences.** Write raw JSON.
-6. **Do not ask questions.** Execute silently and write the output file.
+6. **Do not ask questions.** Execute silently and write the output file. Do not end the turn until `.ai-pilot/output/walkthrough-anchor-smart-tagging.json` exists with the object root `{ "suggestions": [...] }` (never a bare array).
 7. **Never skip a candidate.** Sync already limited the batch to reachable source files. If ownership is shared or ambiguous, choose the closest verified page entry, lower confidence, and explain the ambiguity.
 8. **Stay within accessible modules.** Classify candidates only against modules supplied in `accessiblePageModules`; Home, Admin, and Profile are valid fixed modules.
 

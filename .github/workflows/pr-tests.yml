@@ -14,6 +14,7 @@ jobs:
     outputs:
       migrations: ${{ steps.detect.outputs.has_migration_changes }}
       markdown_only: ${{ steps.markdown_only.outputs.markdown_only }}
+      load_test_runner: ${{ steps.load_test_runner.outputs.changed }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -36,6 +37,25 @@ jobs:
           GITHUB_SHA: ${{ github.sha }}
         run: node scripts/ci/is-markdown-only-changes.mjs
 
+      - name: Detect load-test runner changes
+        id: load_test_runner
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          if git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- \
+            runners/load-test-k6/ \
+            scripts/ci/publish-lt-k6-runner.sh \
+            src/server/services/loadTestRunner/ \
+            src/shared/types/loadTest.ts \
+            package.json \
+            package-lock.json \
+            tsconfig.server.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
   docs-only:
     needs: detect-changes
     if: needs.detect-changes.outputs.markdown_only == 'true'
@@ -44,7 +64,7 @@ jobs:
       - name: Skip tests and dev deploy for documentation-only PRs
         run: echo "Markdown-only PR — skipping unit tests and dev deployment."
 
-  test:
+  validate:
     needs: detect-changes
     if: needs.detect-changes.outputs.markdown_only != 'true'
     runs-on: ubuntu-latest
@@ -71,8 +91,81 @@ jobs:
       - name: Lint (ESLint)
         run: npm run lint:check
 
-      - name: Run full test suite
-        run: npm test -- --ci
+  unit-test:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.markdown_only != 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [server, client]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ${{ matrix.project }} unit tests
+        run: npm test -- --ci --selectProjects ${{ matrix.project }}
+
+  # Preserve the existing required "test" status check while the expensive
+  # client/server suites run in parallel matrix jobs.
+  test:
+    needs: [detect-changes, validate, unit-test]
+    if: always() && needs.detect-changes.outputs.markdown_only != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify validation and unit tests passed
+        env:
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          UNIT_TEST_RESULT: ${{ needs.unit-test.result }}
+        run: |
+          if [[ "$VALIDATE_RESULT" != "success" || "$UNIT_TEST_RESULT" != "success" ]]; then
+            echo "Validation result: $VALIDATE_RESULT"
+            echo "Unit-test result: $UNIT_TEST_RESULT"
+            exit 1
+          fi
+
+  build:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.markdown_only != 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        env:
+          VITE_TEAMS: ${{ vars.VITE_TEAMS }}
+          VITE_NUTRIENT_LICENSE_KEY: ${{ secrets.VITE_NUTRIENT_LICENSE_KEY }}
+          VITE_APRYSE_WEBVIEWER_LICENSE_KEY: ${{ secrets.VITE_APRYSE_WEBVIEWER_LICENSE_KEY }}
+        run: npm run build
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-build-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
 
   integration-test:
     needs: detect-changes
@@ -118,10 +211,12 @@ jobs:
         run: npm run test:integration
 
   e2e-smoke:
-    needs: [detect-changes, test]
-    if: needs.detect-changes.outputs.markdown_only != 'true' && needs.test.result == 'success'
+    needs: [detect-changes, validate, unit-test]
+    if: >-
+      needs.detect-changes.outputs.markdown_only != 'true' &&
+      needs.validate.result == 'success' &&
+      needs.unit-test.result == 'success'
     runs-on: ubuntu-latest
-
     services:
       postgres:
         image: postgres:16
@@ -150,8 +245,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps
+      - name: Resolve Playwright version
+        id: playwright-version
+        run: |
+          PLAYWRIGHT_VERSION=$(node -p "require('@playwright/test/package.json').version")
+          echo "version=$PLAYWRIGHT_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browser
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+
+      - name: Install Playwright system dependencies
+        run: npx playwright install-deps chromium
+
+      - name: Install Playwright browser
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install chromium
 
       - name: Run E2E smoke tests
         env:
@@ -170,10 +282,12 @@ jobs:
           retention-days: 7
 
   e2e-interview-flow:
-    needs: [detect-changes, test]
-    if: needs.detect-changes.outputs.markdown_only != 'true' && needs.test.result == 'success'
+    needs: [detect-changes, validate, unit-test]
+    if: >-
+      needs.detect-changes.outputs.markdown_only != 'true' &&
+      needs.validate.result == 'success' &&
+      needs.unit-test.result == 'success'
     runs-on: ubuntu-latest
-
     services:
       postgres:
         image: postgres:16
@@ -202,8 +316,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps
+      - name: Resolve Playwright version
+        id: playwright-version
+        run: |
+          PLAYWRIGHT_VERSION=$(node -p "require('@playwright/test/package.json').version")
+          echo "version=$PLAYWRIGHT_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browser
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+
+      - name: Install Playwright system dependencies
+        run: npx playwright install-deps chromium
+
+      - name: Install Playwright browser
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install chromium
 
       - name: Run interview-flow E2E tests
         env:
@@ -262,7 +393,18 @@ jobs:
         run: node scripts/ci/validate-migrations.mjs
 
   deploy-dev:
-    needs: [test, integration-test, e2e-smoke, e2e-interview-flow, detect-changes, migrate-check]
+    needs:
+      [
+        test,
+        validate,
+        unit-test,
+        build,
+        integration-test,
+        e2e-smoke,
+        e2e-interview-flow,
+        detect-changes,
+        migrate-check,
+      ]
     # always() is required: when the PR has no migration file changes, migrate-check
     # is skipped and GitHub would otherwise skip deploy-dev too — even though app-only
     # PRs should still deploy to dev.
@@ -270,6 +412,9 @@ jobs:
       always() && !cancelled() &&
       needs.detect-changes.outputs.markdown_only != 'true' &&
       needs.test.result == 'success' &&
+      needs.validate.result == 'success' &&
+      needs.unit-test.result == 'success' &&
+      needs.build.result == 'success' &&
       needs.integration-test.result == 'success' &&
       needs.e2e-smoke.result == 'success' &&
       needs.e2e-interview-flow.result == 'success' &&
@@ -293,14 +438,13 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --omit=dev
 
-      - name: Build application
-        env:
-          VITE_TEAMS: ${{ vars.VITE_TEAMS }}
-          VITE_NUTRIENT_LICENSE_KEY: ${{ secrets.VITE_NUTRIENT_LICENSE_KEY }}
-          VITE_APRYSE_WEBVIEWER_LICENSE_KEY: ${{ secrets.VITE_APRYSE_WEBVIEWER_LICENSE_KEY }}
-        run: npm run build
+      - name: Download build output
+        uses: actions/download-artifact@v4
+        with:
+          name: dev-build-${{ github.sha }}
+          path: dist/
 
       - name: Detect migration changes
         id: migration_changes
@@ -322,9 +466,7 @@ jobs:
           cp package*.json deploy/
           cp server.js deploy/ 2>/dev/null || true
           cp -r scripts deploy/
-          cd deploy
-          npm ci --omit=dev
-          cd ..
+          mv node_modules deploy/
           (cd deploy && zip -r ../deploy.zip .)
 
       - name: Login to Azure
@@ -419,6 +561,7 @@ jobs:
           package: ./deploy.zip
 
       - name: Publish load-test k6 runner image
+        if: needs.detect-changes.outputs.load_test_runner == 'true'
         env:
           LT_ACR_NAME: ${{ vars.LT_ACR_NAME }}
           LT_CONTAINER_APP_JOB_NAME: ${{ vars.LT_CONTAINER_APP_JOB_NAME }}
@@ -469,8 +612,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps
+      - name: Resolve Playwright version
+        id: playwright-version
+        run: |
+          PLAYWRIGHT_VERSION=$(node -p "require('@playwright/test/package.json').version")
+          echo "version=$PLAYWRIGHT_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browser
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+
+      - name: Install Playwright system dependencies
+        run: npx playwright install-deps chromium
+
+      - name: Install Playwright browser
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install chromium
 
       # Deployed App Service cold-starts after each deploy (the startup command even
       # reinstalls git before Node boots), so the first requests can hang or 5xx.

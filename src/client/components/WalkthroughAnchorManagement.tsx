@@ -1191,9 +1191,10 @@ export const WalkthroughAnchorManagement: React.FC<WalkthroughAnchorManagementPr
           return;
         }
         setEnrichmentStatus('failed');
+        // Prefer the specific failure reason; keep the reviewable warning as context.
+        const detail = [status.error, status.warning].filter(Boolean).join(' — ');
         setEnrichmentMessage(
-          status.warning ??
-            status.error ??
+          detail ||
             'AI smart-tagging did not finish. Tags/route stay empty until you Sync again or edit manually.',
         );
       })

@@ -571,6 +571,7 @@ async function buildKickoffContext(
     '## Output',
     '',
     `Write validated JSON to ${OUTPUT_RELATIVE_PATH.join('/')}.`,
+    'Root must be an object `{ "suggestions": [...] }` — never a bare array, never markdown fences. Do not end until that file exists.',
   ];
 
   return lines.join('\n');
