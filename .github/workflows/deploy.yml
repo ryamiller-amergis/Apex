@@ -94,8 +94,9 @@ jobs:
           cp server.js deploy/ 2>/dev/null || true
           cp -r scripts deploy/
           cd deploy
-          # husky is a devDependency; omit=dev would fail prepare: husky without this.
-          HUSKY=0 npm ci --omit=dev
+          # Skip lifecycle scripts: prepare runs husky (devDependency) and fails
+          # under omit=dev. postinstall is Windows AppLocker-only and unused here.
+          npm ci --omit=dev --ignore-scripts
           cd ..
           (cd deploy && zip -r ../deploy.zip .)
 

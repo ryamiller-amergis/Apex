@@ -40,7 +40,7 @@
     "migrate:local:down": "dotenv -e .env.local -- node-pg-migrate down --no-check-order",
     "migrate:dev-to-prod": "ts-node -P tsconfig.server.json scripts/migrate-dev-to-prod.ts",
     "postinstall": "node scripts/patch-esbuild-wasm.js",
-    "prepare": "husky"
+    "prepare": "husky || true"
   },
   "lint-staged": {
     "src/{client,server,shared}/**/*.{ts,tsx}": "cross-env ESLINT_USE_FLAT_CONFIG=false eslint"

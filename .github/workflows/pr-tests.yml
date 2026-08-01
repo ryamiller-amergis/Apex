@@ -438,8 +438,10 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        # husky is a devDependency; omit=dev would fail prepare: husky without this.
-        run: HUSKY=0 npm ci --omit=dev
+        # Prod package only: skip lifecycle scripts so prepare (husky, a
+        # devDependency) cannot fail with "husky: not found". postinstall only
+        # patches esbuild for Windows AppLocker and is not needed on Linux deploy.
+        run: npm ci --omit=dev --ignore-scripts
 
       - name: Download build output
         uses: actions/download-artifact@v4
