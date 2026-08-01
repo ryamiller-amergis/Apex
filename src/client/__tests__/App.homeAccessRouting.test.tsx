@@ -29,6 +29,10 @@ jest.mock('../components/BetaAnnouncementModal', () => ({
   BetaAnnouncementModal: () => null,
 }));
 
+jest.mock('../components/GuidedWalkthroughHost', () => ({
+  GuidedWalkthroughHost: () => null,
+}));
+
 jest.mock('../hooks/useProjectRepoConfigs', () => ({
   useProjectRepoConfigs: jest.fn().mockReturnValue({ data: [], isLoading: false, isFetched: true, isError: false }),
 }));
@@ -88,6 +92,8 @@ function makeAppShell(overrides: Record<string, unknown> = {}) {
     isAuthenticated: true,
     authenticatedUser: { name: 'Test User', email: 'test@example.com' },
     can: (key: string) => key === 'home:view',
+    isInAnyGroup: () => false,
+    userId: 'user-1',
     isSuperAdmin: false,
     permissionsLoaded: true,
     workItems: [],
@@ -103,7 +109,13 @@ function makeAppShell(overrides: Record<string, unknown> = {}) {
     hasUnreadChangelog: false,
     showChangelogOnLogin: false,
     handleMarkChangelogAsRead: jest.fn(),
+    handleDismissWhatsNewBanner: jest.fn(),
     handleToggleShowChangelogOnLogin: jest.fn(),
+    whatsNewLastSeenVersion: null,
+    whatsNewManualUnavailable: false,
+    whatsNewCurrentVersion: '1.0.0',
+    whatsNewAutomaticOverlaySettled: true,
+    whatsNewBlocksAutomaticWalkthrough: false,
     betaAnnouncementDismissed: false,
     handleDismissBetaAnnouncement: jest.fn(),
     handleLogout: jest.fn(),

@@ -1,5 +1,16 @@
 import '@testing-library/jest-dom';
+import type { ReactNode } from 'react';
 import { TextEncoder, TextDecoder } from 'util';
+
+jest.mock('react-markdown', () => ({
+  __esModule: true,
+  default: ({ children }: { children: ReactNode }) => children,
+}));
+
+jest.mock('remark-gfm', () => ({
+  __esModule: true,
+  default: jest.fn(),
+}));
 
 // React Router (and its dependencies) require TextEncoder/TextDecoder in the
 // jsdom test environment, which does not provide them by default.

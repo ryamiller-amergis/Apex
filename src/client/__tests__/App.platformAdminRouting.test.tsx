@@ -31,6 +31,10 @@ jest.mock('../components/BetaAnnouncementModal', () => ({
   BetaAnnouncementModal: () => null,
 }));
 
+jest.mock('../components/GuidedWalkthroughHost', () => ({
+  GuidedWalkthroughHost: () => null,
+}));
+
 jest.mock('../hooks/useProjectRepoConfigs', () => ({
   useProjectRepoConfigs: jest.fn().mockReturnValue({ data: [], isLoading: false, isSuccess: true }),
 }));
@@ -88,6 +92,8 @@ function setupAppShell() {
     isAuthenticated: true,
     authenticatedUser: { name: 'Super Admin', email: 'admin@example.com' },
     can: (key: string) => key === 'admin:roles',
+    isInAnyGroup: () => false,
+    userId: 'admin-1',
     isSuperAdmin: true,
     permissionsLoaded: true,
     workItems: [],
@@ -103,7 +109,13 @@ function setupAppShell() {
     hasUnreadChangelog: false,
     showChangelogOnLogin: false,
     handleMarkChangelogAsRead: jest.fn(),
+    handleDismissWhatsNewBanner: jest.fn(),
     handleToggleShowChangelogOnLogin: jest.fn(),
+    whatsNewLastSeenVersion: null,
+    whatsNewManualUnavailable: false,
+    whatsNewCurrentVersion: '1.0.0',
+    whatsNewAutomaticOverlaySettled: true,
+    whatsNewBlocksAutomaticWalkthrough: false,
     betaAnnouncementDismissed: false,
     handleDismissBetaAnnouncement: jest.fn(),
     handleLogout: jest.fn(),

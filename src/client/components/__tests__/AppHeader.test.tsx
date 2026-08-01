@@ -37,6 +37,10 @@ jest.mock('../UserMenu', () => ({
   UserMenu: () => <div data-testid="user-menu" />,
 }));
 
+jest.mock('../FeatureRequestFab', () => ({
+  FeatureRequestFab: () => null,
+}));
+
 // ── No menu config, not super admin (default) ─────────────────────────────────
 
 describe('AppHeader — no menuEnabledViews, not super admin', () => {

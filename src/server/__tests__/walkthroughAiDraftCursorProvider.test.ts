@@ -20,6 +20,12 @@ jest.mock('../services/appSettingsService', () => ({
   getDefaultModel: jest.fn().mockResolvedValue('composer-2.5'),
 }));
 
+jest.mock('../services/walkthroughAnchorRegistryService', () => ({
+  listAuthoringAnchorEntries: jest.fn(async () => []),
+  listCatalogRecordsForResolution: jest.fn(async () => []),
+  getAnchorByKey: jest.fn(async () => null),
+}));
+
 const VALID_PROPOSAL_JSON = JSON.stringify({
   internalName: 'test-draft',
   userTitle: 'Test Draft',
