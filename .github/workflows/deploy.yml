@@ -94,7 +94,8 @@ jobs:
           cp server.js deploy/ 2>/dev/null || true
           cp -r scripts deploy/
           cd deploy
-          npm ci --omit=dev
+          # husky is a devDependency; omit=dev would fail prepare: husky without this.
+          HUSKY=0 npm ci --omit=dev
           cd ..
           (cd deploy && zip -r ../deploy.zip .)
 
