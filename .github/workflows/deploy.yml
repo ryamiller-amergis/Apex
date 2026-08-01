@@ -94,11 +94,14 @@ jobs:
           cp server.js deploy/ 2>/dev/null || true
           cp -r scripts deploy/
           cd deploy
-          # Skip lifecycle scripts: prepare runs husky (devDependency) and fails
-          # under omit=dev. postinstall is Windows AppLocker-only and unused here.
-          npm ci --omit=dev --ignore-scripts
+          # Native production dependencies (including sqlite3) require lifecycle
+          # scripts to install their Linux bindings. prepare tolerates omitted Husky.
+          npm ci --omit=dev
           cd ..
           (cd deploy && zip -r ../deploy.zip .)
+
+      - name: Verify packaged native dependencies
+        run: node -e "require('./deploy/node_modules/sqlite3'); console.log('sqlite3 binding loaded')"
 
       - name: Login to Azure
         uses: azure/login@v2

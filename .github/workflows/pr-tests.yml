@@ -438,10 +438,9 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        # Prod package only: skip lifecycle scripts so prepare (husky, a
-        # devDependency) cannot fail with "husky: not found". postinstall only
-        # patches esbuild for Windows AppLocker and is not needed on Linux deploy.
-        run: npm ci --omit=dev --ignore-scripts
+        # Native production dependencies (including sqlite3) require lifecycle
+        # scripts to install their Linux bindings. prepare tolerates omitted Husky.
+        run: npm ci --omit=dev
 
       - name: Download build output
         uses: actions/download-artifact@v4
@@ -471,6 +470,9 @@ jobs:
           cp -r scripts deploy/
           mv node_modules deploy/
           (cd deploy && zip -r ../deploy.zip .)
+
+      - name: Verify packaged native dependencies
+        run: node -e "require('./deploy/node_modules/sqlite3'); console.log('sqlite3 binding loaded')"
 
       - name: Login to Azure
         uses: azure/login@v2
