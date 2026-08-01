@@ -69,7 +69,11 @@ describe('Walkthrough anchor smart-tagging skill contracts (Phase 4)', () => {
     expect(skill).toMatch(/confidence/i);
     expect(skill).toMatch(/rationale/i);
     expect(skill).toMatch(/accessiblePageModules/);
-    expect(skill).toMatch(/common component/i);
+    // Ownership comes from pre-resolved evidence (or import tracing fallback);
+    // do not infer from a shared component's filename alone.
+    expect(skill).toMatch(/shared component/i);
+    expect(skill).toMatch(/owningPageEntries|Pre-Resolved Candidate Evidence/);
+    expect(skill).toMatch(/Do NOT browse|do not browse/i);
     expect(skill).toMatch(/Home\/Admin\/Profile|Home, Admin, and Profile/);
     expect(skill).toMatch(/exactly one entry for every input candidate/i);
     expect(skill).toMatch(/Do not evaluate placements/i);
