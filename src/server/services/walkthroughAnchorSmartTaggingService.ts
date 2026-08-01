@@ -33,7 +33,18 @@ import * as walkthroughAnchorRegistryService from './walkthroughAnchorRegistrySe
 import {
   APEX_WALKTHROUGH_PROJECT,
   listApplicableWalkthroughPageModules,
+  listWalkthroughPageEntryComponents,
 } from './walkthroughPageModuleScope';
+import {
+  loadClientSourceFiles,
+  resolveOwningComponentsByPath,
+} from './walkthroughAnchorSyncExtraction';
+import {
+  WALKTHROUGH_ANCHOR_SYNC_SESSION_ID,
+  materializeApexWalkthroughAnchorSyncCheckout,
+  resolveWalkthroughAnchorSyncProvider,
+} from './walkthroughAnchorSyncRepoService';
+import { getWorkspaceDir } from './repoCheckoutService';
 
 export {
   DEFAULT_WALKTHROUGH_ANCHOR_SMART_TAGGING_SKILL_PATH,
@@ -300,8 +311,181 @@ async function filterNewlyDiscovered(
   return filtered;
 }
 
-async function buildKickoffContext(
+// ── Repository evidence pre-resolution ───────────────────────────────────────
+//
+// Smart-tagging historically relied on the Cursor agent browsing the repo over
+// the github-repo MCP to (a) confirm each candidate's data-testid and (b) trace
+// imports upward to the owning page module. On small App Service SKUs that
+// per-file MCP browsing is the dominant cost and a frequent failure source.
+//
+// We pre-compute that evidence deterministically from the already-materialized
+// repo checkout (the same one Sync uses) and hand it to the agent, so it can
+// classify from supplied evidence instead of browsing. Fully best-effort: any
+// failure falls back to the prior behavior (agent may still browse).
+
+/** Source snippet lines to include on each side of a candidate occurrence. */
+const EVIDENCE_SNIPPET_CONTEXT_LINES = 4;
+/** Cap source locations enriched per candidate to keep kickoff context bounded. */
+const EVIDENCE_MAX_LOCATIONS_PER_CANDIDATE = 2;
+
+export interface WalkthroughAnchorSmartTaggingOwningPageEntry {
+  component: string;
+  routePattern: string;
+  suggestedRoute: string;
+  moduleKey: string;
+  moduleLabel: string;
+}
+
+interface CandidateEvidenceEnrichment {
+  candidates: WalkthroughAnchorSmartTaggingCandidateInput[];
+  evidenceByTestId: Map<string, WalkthroughAnchorSmartTaggingOwningPageEntry[]>;
+}
+
+/**
+ * Resolve a readable repo root for evidence extraction:
+ * - local (dev/test): the server working tree (includes WIP).
+ * - github|ado (prod): reuse the Sync checkout when present, else materialize.
+ */
+async function resolveEvidenceRepositoryRoot(
+  provider: Awaited<ReturnType<typeof resolveWalkthroughAnchorSyncProvider>>
+): Promise<string | null> {
+  if (provider === 'local') return process.cwd();
+
+  const existing = getWorkspaceDir(WALKTHROUGH_ANCHOR_SYNC_SESSION_ID);
+  if (fs.existsSync(path.join(existing, 'src', 'client'))) return existing;
+
+  const checkout = await materializeApexWalkthroughAnchorSyncCheckout(provider);
+  return checkout.repositoryRoot;
+}
+
+function extractSnippetForLocation(
+  content: string,
+  filePath: string,
+  line: number | null | undefined
+): string | null {
+  const lines = content.split(/\r?\n/);
+  if (!line || line < 1 || line > lines.length) return null;
+  const start = Math.max(0, line - 1 - EVIDENCE_SNIPPET_CONTEXT_LINES);
+  const end = Math.min(lines.length, line + EVIDENCE_SNIPPET_CONTEXT_LINES);
+  const body = lines.slice(start, end).join('\n');
+  return `// ${filePath}:${line}\n${body}`;
+}
+
+function buildOwningPageEntryLookup(
+  pageModules: Awaited<ReturnType<typeof listApplicableWalkthroughPageModules>>
+): Map<string, WalkthroughAnchorSmartTaggingOwningPageEntry> {
+  const byComponent = new Map<
+    string,
+    WalkthroughAnchorSmartTaggingOwningPageEntry
+  >();
+  for (const module of pageModules) {
+    for (const entry of module.pageEntries) {
+      byComponent.set(entry.component, {
+        component: entry.component,
+        routePattern: entry.routePattern,
+        suggestedRoute: entry.suggestedRoute,
+        moduleKey: module.key,
+        moduleLabel: module.label,
+      });
+    }
+  }
+  return byComponent;
+}
+
+/**
+ * Enrich candidates with deterministic repository evidence: real code snippets
+ * around each occurrence, plus the resolved owning page module(s)/route(s).
+ * Non-fatal — returns the original candidates on any failure.
+ */
+async function enrichCandidatesWithRepositoryEvidence(
   candidates: WalkthroughAnchorSmartTaggingCandidateInput[]
+): Promise<CandidateEvidenceEnrichment> {
+  const empty: CandidateEvidenceEnrichment = {
+    candidates,
+    evidenceByTestId: new Map(),
+  };
+
+  try {
+    const provider = await resolveWalkthroughAnchorSyncProvider();
+    const repositoryRoot = await resolveEvidenceRepositoryRoot(provider);
+    if (!repositoryRoot) return empty;
+
+    const files = loadClientSourceFiles({ repositoryRoot });
+    if (files.length === 0) return empty;
+
+    const filesByPath = new Map(
+      files.map((file) => [file.path.replace(/\\/g, '/'), file])
+    );
+    const pageModules = await listApplicableWalkthroughPageModules();
+    const pageEntryComponents = listWalkthroughPageEntryComponents(pageModules);
+    const ownersByPath = resolveOwningComponentsByPath(
+      files,
+      pageEntryComponents
+    );
+    const owningEntryLookup = buildOwningPageEntryLookup(pageModules);
+
+    const evidenceByTestId = new Map<
+      string,
+      WalkthroughAnchorSmartTaggingOwningPageEntry[]
+    >();
+
+    const enriched = candidates.map((candidate) => {
+      const locations = (candidate.sourceLocations ?? []).slice(
+        0,
+        EVIDENCE_MAX_LOCATIONS_PER_CANDIDATE
+      );
+
+      const snippets: string[] = [];
+      const owningComponents = new Set<string>();
+      for (const loc of candidate.sourceLocations ?? []) {
+        const normalizedPath = loc.filePath.replace(/\\/g, '/');
+        for (const owner of ownersByPath.get(normalizedPath) ?? []) {
+          owningComponents.add(owner);
+        }
+      }
+      for (const loc of locations) {
+        const normalizedPath = loc.filePath.replace(/\\/g, '/');
+        const file = filesByPath.get(normalizedPath);
+        if (!file) continue;
+        const snippet = extractSnippetForLocation(
+          file.content,
+          normalizedPath,
+          loc.line
+        );
+        if (snippet) snippets.push(snippet);
+      }
+
+      const owningPageEntries = [...owningComponents]
+        .map((component) => owningEntryLookup.get(component))
+        .filter(
+          (entry): entry is WalkthroughAnchorSmartTaggingOwningPageEntry =>
+            Boolean(entry)
+        );
+      if (owningPageEntries.length > 0) {
+        evidenceByTestId.set(candidate.testId, owningPageEntries);
+      }
+
+      const mergedSnippets =
+        snippets.length > 0 ? snippets : candidate.codeSnippets;
+      return { ...candidate, codeSnippets: mergedSnippets };
+    });
+
+    return { candidates: enriched, evidenceByTestId };
+  } catch (err) {
+    console.warn(
+      '[walkthroughAnchorSmartTagging] repository evidence enrichment failed (non-fatal); agent may browse the repo:',
+      err instanceof Error ? err.message : String(err)
+    );
+    return empty;
+  }
+}
+
+async function buildKickoffContext(
+  candidates: WalkthroughAnchorSmartTaggingCandidateInput[],
+  evidenceByTestId: Map<
+    string,
+    WalkthroughAnchorSmartTaggingOwningPageEntry[]
+  > = new Map()
 ): Promise<string> {
   const routes = listWalkthroughRoutes();
   const accessiblePageModules = await listApplicableWalkthroughPageModules();
@@ -331,6 +515,14 @@ async function buildKickoffContext(
     existingCatalogHints = [];
   }
 
+  const preResolvedEvidence = candidates
+    .map((candidate) => ({
+      testId: candidate.testId,
+      owningPageEntries: evidenceByTestId.get(candidate.testId) ?? [],
+    }))
+    .filter((entry) => entry.owningPageEntries.length > 0);
+  const hasPreResolvedEvidence = preResolvedEvidence.length > 0;
+
   const lines = [
     '# Walkthrough Anchor Smart Tagging Request',
     '',
@@ -339,13 +531,25 @@ async function buildKickoffContext(
     'Classify only the newly discovered candidates below. Do not invent routes or UI.',
     'Tags must include meaningful tokens already present in each testId (e.g. ado-create-error → ado, create, error) plus domain/UI/intent tags.',
     `Return exactly one suggestion for each of the ${candidates.length} candidates. Do not omit candidates.`,
-    'Resolve each candidate to its actual hosting page module by tracing imports/render references upward from shared components to the page entries listed below.',
+    hasPreResolvedEvidence
+      ? 'Each candidate ships with its actual source snippet(s) (codeSnippets) and the deterministically resolved owning page module(s)/route(s) under "Pre-Resolved Candidate Evidence". Classify from that supplied evidence — do NOT browse or search the repository unless a candidate has no evidence.'
+      : 'Resolve each candidate to its actual hosting page module by tracing imports/render references upward from shared components to the page entries listed below.',
     'Use the matched page entry suggestedRoute. It is the stable route users follow to enter that page workflow, including page-specific query tabs where applicable.',
     '',
     '## Candidates',
     '',
     JSON.stringify(candidates, null, 2),
     '',
+    ...(hasPreResolvedEvidence
+      ? [
+          '## Pre-Resolved Candidate Evidence',
+          '',
+          'For each testId below, `owningPageEntries` was resolved deterministically by tracing the client import graph from page entries down to the candidate source file. Prefer the matched entry\'s `suggestedRoute`. Combined with each candidate\'s `codeSnippets`, this is sufficient to classify without opening the repository.',
+          '',
+          JSON.stringify(preResolvedEvidence, null, 2),
+          '',
+        ]
+      : []),
     '## Accessible Page Modules',
     '',
     'These are all application modules managed from Platform Admin, plus fixed Home, Admin, and Profile modules. Each candidate was pre-filtered to these page import trees.',
@@ -454,7 +658,16 @@ export async function startSmartTagging(
     skillConfig?.developmentModel ||
     globalModel;
 
-  const freeformContext = await buildKickoffContext(candidates);
+  // Pre-resolve repository evidence (code snippets + owning page module/route)
+  // so the agent classifies from supplied evidence instead of browsing the repo
+  // over MCP — the dominant cost/failure source on small App Service SKUs.
+  const { candidates: enrichedCandidates, evidenceByTestId } =
+    await enrichCandidatesWithRepositoryEvidence(candidates);
+
+  const freeformContext = await buildKickoffContext(
+    enrichedCandidates,
+    evidenceByTestId
+  );
 
   const thread = await createChatThread(userId, {
     project: APEX_REPOSITORY_PROJECT,

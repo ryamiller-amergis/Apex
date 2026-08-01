@@ -269,6 +269,88 @@ export function collectReachableClientSourcePaths(
   return reachable;
 }
 
+/**
+ * Reverse of {@link collectReachableClientSourcePaths}: for every source file,
+ * list the page-entry components that transitively import/render it. Used by
+ * smart-tagging to pre-resolve each candidate's owning page module(s) so the AI
+ * agent classifies from supplied evidence instead of browsing the repo.
+ *
+ * O(pageEntries × importGraph); bounded and deterministic (no I/O, no DB).
+ */
+export function resolveOwningComponentsByPath(
+  files: readonly WalkthroughAnchorSourceFile[],
+  pageEntryComponents: readonly string[]
+): Map<string, string[]> {
+  const filePaths = new Set(files.map((file) => toPosix(file.path)));
+  const owners = new Map<string, Set<string>>();
+
+  for (const rawEntry of pageEntryComponents) {
+    const entry = toPosix(rawEntry);
+    if (!filePaths.has(entry)) continue;
+    const reachable = collectReachableClientSourcePaths(files, [entry]);
+    for (const filePath of reachable) {
+      let bucket = owners.get(filePath);
+      if (!bucket) {
+        bucket = new Set<string>();
+        owners.set(filePath, bucket);
+      }
+      bucket.add(entry);
+    }
+  }
+
+  return new Map(
+    [...owners.entries()].map(([filePath, entries]) => [
+      filePath,
+      [...entries].sort((a, b) => a.localeCompare(b)),
+    ])
+  );
+}
+
+/**
+ * Load a checkout's `src/client` TS/TSX sources into memory (bounded reads).
+ * Best-effort and DB-free: used to pre-compute smart-tagging evidence (code
+ * snippets + owning page module) from an already-materialized repo without
+ * running the AI agent over MCP. Returns [] when the tree is absent/unreadable.
+ */
+export function loadClientSourceFiles(
+  options: {
+    repositoryRoot?: string;
+    clientRelativeRoot?: string;
+    maxFiles?: number;
+    maxFileBytes?: number;
+  } = {}
+): WalkthroughAnchorSourceFile[] {
+  const repositoryRoot = path.resolve(options.repositoryRoot ?? process.cwd());
+  const clientRelativeRoot = toPosix(
+    options.clientRelativeRoot ?? 'src/client'
+  );
+  const absoluteClientRoot = path.join(
+    repositoryRoot,
+    ...clientRelativeRoot.split('/')
+  );
+  const maxFiles = options.maxFiles ?? DEFAULT_MAX_FILES;
+  const maxFileBytes = options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
+
+  const { files: relativePaths } = walkClientSourceFiles(
+    absoluteClientRoot,
+    repositoryRoot,
+    maxFiles
+  );
+
+  const loaded: WalkthroughAnchorSourceFile[] = [];
+  for (const rel of relativePaths) {
+    const absolute = path.join(repositoryRoot, ...rel.split('/'));
+    try {
+      const stat = fs.statSync(absolute);
+      if (stat.size > maxFileBytes) continue;
+      loaded.push({ path: rel, content: fs.readFileSync(absolute, 'utf8') });
+    } catch {
+      // Skip unreadable file; enrichment is best-effort.
+    }
+  }
+  return loaded;
+}
+
 function resolveExplicitTestId(anchorKey: string): {
   testId: string | null;
   reason?: WalkthroughAnchorUnsupportedPattern['reason'];

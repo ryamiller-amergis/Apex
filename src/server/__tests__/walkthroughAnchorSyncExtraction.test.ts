@@ -7,6 +7,7 @@ import * as path from 'path';
 import {
   extractWalkthroughAnchorCandidatesFromSource,
   extractWalkthroughAnchorsFromFiles,
+  resolveOwningComponentsByPath,
   scanLocalWalkthroughAnchors,
   syncExtractWalkthroughAnchors,
 } from '../services/walkthroughAnchorSyncExtraction';
@@ -451,5 +452,77 @@ const items = [{ view: 'design-module' }];
     expect(result.discoveries).toHaveLength(0);
     expect(result.diagnostics.truncatedFiles).toContain('src/client/Huge.tsx');
     expect(result.diagnostics.filesSkipped).toBe(1);
+  });
+
+  describe('resolveOwningComponentsByPath', () => {
+    const files = [
+      {
+        path: 'src/client/components/PageA.tsx',
+        content: `import { Shared } from './Shared';\nexport const PageA = () => <Shared />;\n`,
+      },
+      {
+        path: 'src/client/components/PageB.tsx',
+        content: `import { OnlyB } from './OnlyB';\nexport const PageB = () => <OnlyB />;\n`,
+      },
+      {
+        path: 'src/client/components/Shared.tsx',
+        content: `export const Shared = () => <div data-testid="shared-btn" />;\n`,
+      },
+      {
+        path: 'src/client/components/OnlyB.tsx',
+        content: `export const OnlyB = () => <div data-testid="only-b" />;\n`,
+      },
+    ];
+
+    it('maps each source file to the page entries that transitively import it', () => {
+      const owners = resolveOwningComponentsByPath(files, [
+        'src/client/components/PageA.tsx',
+        'src/client/components/PageB.tsx',
+      ]);
+
+      // A shared component owned by the single page that renders it.
+      expect(owners.get('src/client/components/Shared.tsx')).toEqual([
+        'src/client/components/PageA.tsx',
+      ]);
+      expect(owners.get('src/client/components/OnlyB.tsx')).toEqual([
+        'src/client/components/PageB.tsx',
+      ]);
+      // Each page entry owns itself.
+      expect(owners.get('src/client/components/PageA.tsx')).toEqual([
+        'src/client/components/PageA.tsx',
+      ]);
+    });
+
+    it('lists every owning page entry when a component is shared across pages', () => {
+      const shared = [
+        ...files,
+        {
+          path: 'src/client/components/PageC.tsx',
+          content: `import { Shared } from './Shared';\nexport const PageC = () => <Shared />;\n`,
+        },
+      ];
+
+      const owners = resolveOwningComponentsByPath(shared, [
+        'src/client/components/PageA.tsx',
+        'src/client/components/PageC.tsx',
+      ]);
+
+      expect(owners.get('src/client/components/Shared.tsx')).toEqual([
+        'src/client/components/PageA.tsx',
+        'src/client/components/PageC.tsx',
+      ]);
+    });
+
+    it('ignores page entries that are not present in the file set', () => {
+      const owners = resolveOwningComponentsByPath(files, [
+        'src/client/components/PageA.tsx',
+        'src/client/components/DoesNotExist.tsx',
+      ]);
+
+      expect(owners.has('src/client/components/OnlyB.tsx')).toBe(false);
+      expect(owners.get('src/client/components/Shared.tsx')).toEqual([
+        'src/client/components/PageA.tsx',
+      ]);
+    });
   });
 });

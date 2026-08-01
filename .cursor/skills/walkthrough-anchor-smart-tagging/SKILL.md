@@ -11,28 +11,30 @@ This skill is invoked programmatically (Wave 2) via the Cursor SDK, mirroring `w
 
 ## Trigger
 
-Kickoff context in `.ai-pilot/kickoff-context.md` lists candidate test IDs with source paths/snippets. Classify only those candidates.
+The kickoff context (delivered as the freeform message that starts this run) lists candidate test IDs with source paths/snippets and, when available, **pre-resolved evidence**. Classify only those candidates.
 
 ## Inputs (from kickoff context)
 
-| Field                 | Required | Description                                                                                                                               |
-| --------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| candidates            | Yes      | Array of `{ testId, sourceLocations[], sourceKind?, codeSnippets? }`                                                                      |
-| accessiblePageModules | Yes      | All application modules managed from Platform Admin, plus fixed Home/Admin/Profile modules, with page entries and stable suggested routes |
-| curatedRoutes         | Yes      | Snapshot of allow-listed routes from `walkthroughRoutes.ts`                                                                               |
-| existingCatalogHints  | No       | Existing labels/tags for nearby anchors (do not copy blindly)                                                                             |
+| Field                       | Required | Description                                                                                                                                                  |
+| --------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| candidates                  | Yes      | Array of `{ testId, sourceLocations[], sourceKind?, codeSnippets? }`. `codeSnippets` are the actual source lines around each occurrence.                     |
+| Pre-Resolved Candidate Evidence | No   | Per-testId `owningPageEntries[]` (`component`, `routePattern`, `suggestedRoute`, `moduleKey`, `moduleLabel`) resolved deterministically from the import graph |
+| accessiblePageModules       | Yes      | All application modules managed from Platform Admin, plus fixed Home/Admin/Profile modules, with page entries and stable suggested routes                     |
+| curatedRoutes               | Yes      | Snapshot of allow-listed routes from `walkthroughRoutes.ts`                                                                                                  |
+| existingCatalogHints        | No       | Existing labels/tags for nearby anchors (do not copy blindly)                                                                                                |
 
 ## Procedure
 
-1. **Read kickoff context** from `.ai-pilot/kickoff-context.md`.
-2. **Inspect the Apex repository** for each candidate:
-   - Open the listed `sourceLocations.filePath` files and confirm the `data-testid` / `anchorTestIdProps(...)` occurrence.
-   - Starting at the source component, find its import/render references and trace upward until reaching a page entry component from `accessiblePageModules`.
-   - When the source is a common component, classify the anchor for the specific page module that renders it. Do not infer ownership from the common component's filename or assign a broad parent module without verifying the reference chain.
-   - Use the most specific verified page/workflow in the label, tags, and rationale (for example, `prd-review` for a modal rendered by `PrdReviewView`).
+**Classify from the supplied evidence. Do NOT browse, search, or open the repository unless a candidate is missing both `codeSnippets` and pre-resolved `owningPageEntries` (only then fall back to reading the referenced `sourceLocations.filePath`).** Avoiding repository browsing is required — it is slow and unreliable in the deployment environment.
+
+1. **Read the kickoff context** (the freeform message). Note the `candidates`, the `## Pre-Resolved Candidate Evidence` block (when present), the accessible page modules, and curated routes.
+2. **Classify each candidate from evidence:**
+   - Use each candidate's `codeSnippets` to confirm the `data-testid` / `anchorTestIdProps(...)` occurrence and read the surrounding UI intent — do not re-open the file when a snippet is present.
+   - Use the candidate's `owningPageEntries` (from Pre-Resolved Candidate Evidence) to determine the hosting page module. When several owning entries are listed, choose the most specific verified page/workflow for the label, tags, and rationale (for example, `prd-review` for a modal owned by `PrdReviewView`).
+   - Only when a candidate has **no** `owningPageEntries` should you trace imports yourself: open the listed `sourceLocations.filePath`, follow references upward to a page entry in `accessiblePageModules`, and classify against that page module (never infer ownership from a shared component's filename alone).
    - Treat a page entry `routePattern` containing `:placeholders` as ownership evidence only. Never emit a placeholder route.
    - Emit the matched page entry's stable `suggestedRoute`; page-specific query routes are preferred over broad module routes.
-   - Verify any `suggestedRoute` against `src/shared/walkthroughRoutes.ts` `ROUTE_ENTRIES` (exact match only).
+   - Verify any `suggestedRoute` against the supplied `curatedRoutes` (exact match only). If none matches, emit `null`.
    - Always set `allowedPlacements` to `["top", "right", "bottom", "left"]`. Do **not** infer a preferred side from layout — placement is chosen per step when building the walkthrough.
 3. **Assign smart tags** using the controlled rubric below (3–8 tags).
 4. **Write the output** to `.ai-pilot/output/walkthrough-anchor-smart-tagging.json` using the Write tool.
@@ -113,4 +115,4 @@ Field requirements:
 
 ## Evidence trail
 
-Before writing output, verify each reference by reading the actual source file. Cite paths (and line context when helpful) in `rationale`. Use the matched page entry's stable `suggestedRoute` when ownership is ambiguous.
+Ground each `rationale` in the supplied evidence — cite the candidate's `codeSnippets` (file path + line) and the resolved owning page module. Only read the actual source file when a candidate has no snippet and no pre-resolved owning entry. Use the matched page entry's stable `suggestedRoute` when ownership is ambiguous.

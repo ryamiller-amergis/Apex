@@ -310,10 +310,11 @@ body {
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  /* This element owns the shell scrollbar and contains AppHeader. Always reserve
-     the scrollbar track so mounting overlays cannot change the header width. */
+  /* Shell scroll container for header + routed views. Use auto (not scroll) so a
+     classic Windows scrollbar is not painted when content fits; scrollbar-gutter
+     still reserves space so overlays/walkthroughs cannot shift AppHeader. */
   overflow-x: hidden;
-  overflow-y: scroll;
+  overflow-y: auto;
   scrollbar-gutter: stable;
   transition: margin-left 0.2s ease;
 }
