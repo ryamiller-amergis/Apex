@@ -18,7 +18,14 @@ SET revision    = revision + 1,
 WHERE internal_name = 'user-profile-page-tour';
 
 -- 3. Insert corrected steps using curated anchors and route catalog entries
-INSERT INTO walkthrough_steps
+-- This is a repair migration, not a seed. Fresh environments may not have the
+-- local walkthrough row, so only insert replacement steps when it exists.
+DO $repair_profile_tour$
+BEGIN
+IF EXISTS (
+  SELECT 1 FROM walkthroughs WHERE internal_name = 'user-profile-page-tour'
+) THEN
+  INSERT INTO walkthrough_steps
   (walkthrough_id, ordinal, heading, body_markdown, target_route, image_url, image_alt, anchor_key, placement, cta_label, cta_route)
 VALUES
   -- Step 0: Home intro (unanchored modal)
@@ -119,6 +126,9 @@ VALUES
     'Go to Home',
     '/home'
   );
+END IF;
+END
+$repair_profile_tour$;
 
 -- Down Migration
 -- Restore the original step count placeholder; actual content is lost.
