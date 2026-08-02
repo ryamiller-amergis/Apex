@@ -29,7 +29,7 @@ function dependencies(
   overrides: Partial<CallerGroundingDependencies> = {},
 ): CallerGroundingDependencies {
   return {
-    isFeatureEnabled: jest.fn().mockResolvedValue(true),
+    isGroundingEnabledForCaller: jest.fn().mockResolvedValue(true),
     ensureRepoCache: jest.fn().mockResolvedValue({
       baseSha: grounding.groundedSha,
     }),
@@ -84,7 +84,14 @@ describe('PBI-005 shared caller grounding startup', () => {
       cwd: 'C:\\data\\grounding-workspaces\\opaque',
       profileId,
     });
-    expect(deps.isFeatureEnabled).toHaveBeenCalledTimes(1);
+    expect(deps.isGroundingEnabledForCaller).toHaveBeenCalledWith(
+      {
+        caller: 'chat-agent',
+        project: 'Apex',
+        userId: 'developer-1',
+      },
+      expect.any(Function),
+    );
     expect(deps.groundingService.getGroundings).toHaveBeenCalledWith(run);
     expect(deps.materialize).toHaveBeenCalledWith(grounding, run);
     expect(deps.profiles.registerConnectionProfile).toHaveBeenCalledWith(
@@ -240,7 +247,7 @@ describe('PBI-005 shared caller grounding startup', () => {
   it('AC-1 flag-off selects legacy remote behavior without a failure event', async () => {
     // Given the grounding feature is intentionally disabled for this cohort.
     const deps = dependencies({
-      isFeatureEnabled: jest.fn().mockResolvedValue(false),
+      isGroundingEnabledForCaller: jest.fn().mockResolvedValue(false),
     });
     const service = createCallerGroundingService(deps);
 
@@ -296,10 +303,13 @@ describe('PBI-005 shared caller grounding startup', () => {
     expect(deps.profiles.registerConnectionProfile).not.toHaveBeenCalled();
   });
 
-  it('AC-1 flag-evaluation failure selects remote and emits exactly one failure event', async () => {
+  it('AC-1 flag-evaluation failure selects remote and emits exactly one sanitized failure event', async () => {
     // Given the feature-flag service fails instead of returning an intentional disabled result.
     const deps = dependencies({
-      isFeatureEnabled: jest.fn().mockRejectedValue(new Error('flag service unavailable')),
+      isGroundingEnabledForCaller: jest.fn().mockImplementation(async (_ctx, onEvaluationError) => {
+        onEvaluationError?.();
+        return false;
+      }),
     });
     const service = createCallerGroundingService(deps);
 

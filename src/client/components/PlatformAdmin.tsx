@@ -1292,6 +1292,7 @@ const FlagCard: React.FC<FlagCardProps> = ({
   const { data: auditEntries = [], isLoading: auditLoading } = useFlagAudit(showAudit ? flag.id : null);
   const [ruleType, setRuleType] = useState<FlagRuleType>('project');
   const [selectedTargets, setSelectedTargets] = useState<string[]>([]);
+  const [ruleValue, setRuleValue] = useState('');
 
   const usersById = useMemo(() => {
     const lookup = new Map<string, PlatformAdminUser>();
@@ -1312,7 +1313,8 @@ const FlagCard: React.FC<FlagCardProps> = ({
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- clear targets when rule type changes
-        setSelectedTargets([]);
+    setSelectedTargets([]);
+    setRuleValue('');
   }, [ruleType]);
 
   const targetOptions = useMemo<TypeaheadOption[]>(() => {
@@ -1386,6 +1388,16 @@ const FlagCard: React.FC<FlagCardProps> = ({
       return;
     }
 
+    if (ruleType === 'caller' || ruleType === 'environment') {
+      const value = ruleValue.trim();
+      if (!value) return;
+      if (!flag.rules.some((rule) => rule.type === ruleType && rule.value === value)) {
+        await addRule.mutateAsync({ flagId: flag.id, type: ruleType, value });
+      }
+      setRuleValue('');
+      return;
+    }
+
     if (selectedTargets.length === 0) return;
 
     const payloads: Array<{ type: FlagRuleType; value?: string }> = [];
@@ -1421,7 +1433,12 @@ const FlagCard: React.FC<FlagCardProps> = ({
 
   const rulePending = addRule.isPending;
   const canAddEveryone = ruleType === 'everyone' && !hasEveryoneRule;
-  const canAddTargets = ruleType !== 'everyone' && selectedTargets.length > 0;
+  const isFreeTextRule = ruleType === 'caller' || ruleType === 'environment';
+  const canAddTargets = isFreeTextRule
+    ? ruleValue.trim().length > 0
+    : ruleType !== 'everyone' && selectedTargets.length > 0;
+  const isGroundingRolloutFlag =
+    flag.key === 'repo-grounding-workspace-profile';
 
   return (
     <article className={styles.flagCard}>
@@ -1440,7 +1457,12 @@ const FlagCard: React.FC<FlagCardProps> = ({
               className={styles.toggleInput}
               checked={flag.enabled}
               onChange={onToggleEnabled}
-              {...{ 'data-testid': `platform-admin-flag-enabled-${flag.id}` }}
+              aria-label={`${flag.key} kill switch`}
+              {...{
+                'data-testid': isGroundingRolloutFlag
+                  ? 'feature-flag-kill-switch-toggle'
+                  : `platform-admin-flag-enabled-${flag.id}`,
+              }}
             />
             <span className={`${styles.toggleTrack} ${flag.enabled ? styles.toggleTrackOn : ''}`}>
               <span className={styles.toggleThumb} />
@@ -1551,6 +1573,26 @@ const FlagCard: React.FC<FlagCardProps> = ({
                   <option value="project">project</option>
                   <option value="user">user</option>
                   <option value="group">group</option>
+                  <option
+                    value="caller"
+                    {...{
+                      'data-testid': isGroundingRolloutFlag
+                        ? 'feature-flag-rule-type-caller'
+                        : `platform-admin-flag-rule-type-caller-${flag.id}`,
+                    }}
+                  >
+                    caller
+                  </option>
+                  <option
+                    value="environment"
+                    {...{
+                      'data-testid': isGroundingRolloutFlag
+                        ? 'feature-flag-rule-type-environment'
+                        : `platform-admin-flag-rule-type-environment-${flag.id}`,
+                    }}
+                  >
+                    environment
+                  </option>
                 </select>
               </div>
               <button
@@ -1609,6 +1651,27 @@ const FlagCard: React.FC<FlagCardProps> = ({
               />
             )}
 
+            {isFreeTextRule && (
+              <div className={styles.flagField}>
+                <label className={styles.label} htmlFor={`flag-rule-value-${flag.id}`}>
+                  {ruleType === 'caller' ? 'Caller key' : 'Environment name'}
+                </label>
+                <input
+                  id={`flag-rule-value-${flag.id}`}
+                  type="text"
+                  className={styles.input}
+                  value={ruleValue}
+                  disabled={rulePending}
+                  onChange={(event) => setRuleValue(event.target.value)}
+                  {...{
+                    'data-testid': isGroundingRolloutFlag
+                      ? 'feature-flag-rule-value-input'
+                      : `platform-admin-flag-rule-value-input-${flag.id}`,
+                  }}
+                />
+              </div>
+            )}
+
             {ruleType === 'everyone' && hasEveryoneRule && (
               <p className={styles.muted}>An &quot;everyone&quot; rule already exists for this flag.</p>
             )}
@@ -1626,7 +1689,15 @@ const FlagCard: React.FC<FlagCardProps> = ({
           ) : (
             <div className={styles.flagAuditList}>
               {auditEntries.map((entry) => (
-                <div key={entry.id} className={styles.flagAuditRow}>
+                <div
+                  key={entry.id}
+                  className={styles.flagAuditRow}
+                  {...{
+                    'data-testid': isGroundingRolloutFlag
+                      ? 'feature-flag-audit-entry'
+                      : `platform-admin-flag-audit-entry-${entry.id}`,
+                  }}
+                >
                   <span className={styles.flagAuditAction}>{entry.action}</span>
                   <span className={styles.muted}>{entry.actorEmail ?? entry.actorId ?? 'system'}</span>
                   <span className={styles.muted}>{new Date(entry.createdAt).toLocaleString()}</span>

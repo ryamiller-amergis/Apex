@@ -8,7 +8,7 @@ import type {
   RunGroundingService,
 } from './runGroundingService';
 import type { RunGrounding, RunRef } from '../../shared/types/runGrounding';
-import { isFeatureEnabled as evaluateFeatureFlag } from './featureFlagService';
+import { isGroundingEnabledForCaller as evaluateGroundingFlag } from './featureFlagService';
 import {
   groundingProfileResolver,
   type GroundingCallerContext,
@@ -22,8 +22,6 @@ import {
 } from './runGroundingMaterializer';
 import { runGroundingService } from './runGroundingService';
 import { trackEvent as emitTelemetryEvent } from './telemetry';
-
-const PROFILE_FLAG = 'repo-grounding-workspace-profile';
 
 export interface CallerRepository {
   provider: SkillProvider;
@@ -61,7 +59,7 @@ type GroundingServiceDependency = Pick<
 >;
 
 export interface CallerGroundingDependencies {
-  isFeatureEnabled: typeof evaluateFeatureFlag;
+  isGroundingEnabledForCaller: typeof evaluateGroundingFlag;
   ensureRepoCache: (
     options: {
       provider: SkillProvider;
@@ -222,12 +220,23 @@ export function createCallerGroundingService(
   return {
     async start(input) {
       let enabled = false;
+      let evaluationFailed = false;
       try {
-        enabled = await dependencies.isFeatureEnabled(PROFILE_FLAG, {
-          userId: input.userId,
-          project: input.run.project,
-        });
+        enabled = await dependencies.isGroundingEnabledForCaller(
+          {
+            userId: input.userId,
+            project: input.run.project,
+            caller: input.caller,
+          },
+          () => {
+            evaluationFailed = true;
+          },
+        );
       } catch {
+        evaluationFailed = true;
+      }
+
+      if (evaluationFailed) {
         return fallback(input, 'flag-evaluation-failed');
       }
 
@@ -250,7 +259,7 @@ export function createCallerGroundingService(
 }
 
 export const callerGroundingService = createCallerGroundingService({
-  isFeatureEnabled: evaluateFeatureFlag,
+  isGroundingEnabledForCaller: evaluateGroundingFlag,
   ensureRepoCache: ensureRepositoryCache,
   groundingService: runGroundingService,
   materialize: materializeRunGroundingWithPath,

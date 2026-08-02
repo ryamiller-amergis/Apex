@@ -24,6 +24,7 @@ import {
 } from '../services/pendingAssignmentService';
 import { CONFIGURABLE_MENU_ITEMS, type MenuItemKey, type UpsertProjectMenuConfigRequest } from '../../shared/types/menuSettings';
 import type { ProjectAccessRequestStatus, SetProjectAssignmentsRequest } from '../../shared/types/platformAdmin';
+import type { AddRuleRequest, FlagRuleType } from '../../shared/types/featureFlags';
 import * as walkthroughService from '../services/walkthroughService';
 import {
   generateStepProposal,
@@ -70,6 +71,14 @@ import { WalkthroughAiOptionsError } from '../../shared/types/walkthroughAiOptio
 
 const router = Router();
 const validMenuItemKeys = new Set<MenuItemKey>(CONFIGURABLE_MENU_ITEMS.map((item) => item.key));
+const validFlagRuleTypes = new Set<FlagRuleType>([
+  'everyone',
+  'project',
+  'user',
+  'group',
+  'caller',
+  'environment',
+]);
 
 function mapWalkthroughError(err: unknown, res: Response): boolean {
   if (!(err instanceof WalkthroughDomainError)) return false;
@@ -444,8 +453,21 @@ router.delete('/feature-flags/:id', async (req: Request, res: Response): Promise
 
 router.post('/feature-flags/:id/rules', async (req: Request, res: Response): Promise<void> => {
   try {
+    const type = req.body?.type as FlagRuleType | undefined;
+    const value = typeof req.body?.value === 'string' ? req.body.value.trim() : undefined;
+    if (!type || !validFlagRuleTypes.has(type) || (type !== 'everyone' && !value)) {
+      res.status(400).json({
+        error: 'type must be valid and value is required unless type is everyone',
+      });
+      return;
+    }
+
+    const input: AddRuleRequest = {
+      type,
+      value: type === 'everyone' ? null : value,
+    };
     const actor = { id: getUserId(req), email: getUserEmail(req) ?? '' };
-    const rule = await featureFlagService.addRule(req.params.id, req.body, actor);
+    const rule = await featureFlagService.addRule(req.params.id, input, actor);
     res.status(201).json(rule);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- featureFlagService throws plain Error with message checks
   } catch (err: any) {

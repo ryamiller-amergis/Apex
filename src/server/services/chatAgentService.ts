@@ -422,6 +422,53 @@ export function resolveDocumentAssistantType(
   return undefined;
 }
 
+export type GroundingCallerKey =
+  | 'interview'
+  | 'prd'
+  | 'design-doc'
+  | 'agent-home'
+  | 'walkthrough'
+  | 'design-module';
+
+export function resolveGroundingCallerKey(
+  kickoff: ChatThreadKickoff,
+): GroundingCallerKey {
+  const assistantType = resolveDocumentAssistantType(kickoff);
+  if (assistantType === 'adr') return 'interview';
+  if (assistantType === 'prd' || assistantType === 'design-doc') {
+    return assistantType;
+  }
+
+  const skillPath = kickoff.skillPath?.replace(/\\/g, '/').toLowerCase() ?? '';
+  if (skillPath.includes('walkthrough-')) return 'walkthrough';
+  if (skillPath.includes('design-module-')) return 'design-module';
+  if (
+    skillPath.includes('/to-prd/') ||
+    skillPath.includes('prd-spec-review') ||
+    skillPath.includes('/prd-assistant/')
+  ) {
+    return 'prd';
+  }
+  if (
+    skillPath.includes('prd-design-spec') ||
+    skillPath.includes('design-spec') ||
+    skillPath.includes('design-doc')
+  ) {
+    return 'design-doc';
+  }
+  if (
+    skillPath.includes('grill-with-docs') ||
+    skillPath.includes('grill-design') ||
+    skillPath.includes('kick-off') ||
+    skillPath.includes('adr-interview') ||
+    skillPath.includes('adr-finalize')
+  ) {
+    return 'interview';
+  }
+
+  return 'agent-home';
+}
+
 export function buildMcpServers(
   kickoff: ChatThreadKickoff,
   adoSkillsUrl: string,
@@ -2699,7 +2746,7 @@ async function ensureThreadGrounding(
   }
 
   state.grounding = await callerGroundingService.start({
-    caller: 'chat-agent',
+    caller: resolveGroundingCallerKey(state.thread.kickoff),
     userId: state.thread.userId,
     run: {
       runType: 'chat',

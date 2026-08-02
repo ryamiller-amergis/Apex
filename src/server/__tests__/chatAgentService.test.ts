@@ -115,6 +115,7 @@ import {
   buildAgentRecoveryContext,
   isDocumentAssistant,
   isRepositoryReadingChatCaller,
+  resolveGroundingCallerKey,
   resumeOrCreateAgent,
   resolveDocumentAssistantType,
   copyScratchInputsToGroundedCheckout,
@@ -443,6 +444,25 @@ function baseKickoff(overrides: Partial<ChatThreadKickoff> = {}): ChatThreadKick
 }
 
 describe('document assistant MCP wiring', () => {
+  it.each([
+    [{ assistantType: 'adr' as const }, 'interview'],
+    [{ assistantType: 'prd' as const }, 'prd'],
+    [{ assistantType: 'design-doc' as const }, 'design-doc'],
+    [{ skillPath: '.cursor/skills/grill-with-docs/SKILL.md' }, 'interview'],
+    [{ skillPath: '.cursor/skills/kick-off/SKILL.md' }, 'interview'],
+    [{ skillPath: '.cursor/skills/to-prd/SKILL.md' }, 'prd'],
+    [{ skillPath: '.cursor/skills/prd-spec-review/SKILL.md' }, 'prd'],
+    [{ skillPath: '.cursor/skills/prd-design-spec/SKILL.md' }, 'design-doc'],
+    [{ skillPath: '.cursor/skills/walkthrough-generation/SKILL.md' }, 'walkthrough'],
+    [{ skillPath: '.cursor/skills/design-module-doc/SKILL.md' }, 'design-module'],
+    [{}, 'agent-home'],
+  ])(
+    'AC-0 identifies centralized chat cohort %s as %s',
+    (overrides, expectedCaller) => {
+      expect(resolveGroundingCallerKey(baseKickoff(overrides))).toBe(expectedCaller);
+    },
+  );
+
   it('AC-0 pins chat caller grounding to skillBranch before branch', async () => {
     // Given the skills contract selects a different branch than the runtime branch.
     const stopAfterGrounding = new Error('stop after grounding selection');
@@ -466,6 +486,7 @@ describe('document assistant MCP wiring', () => {
       // Then the pin uses the same skillBranch ?? branch contract as prompt/preload.
       expect(mockCallerGroundingStart).toHaveBeenCalledWith(
         expect.objectContaining({
+          caller: 'agent-home',
           repository: {
             provider: 'github',
             repo: 'org/AI-Pilot',
