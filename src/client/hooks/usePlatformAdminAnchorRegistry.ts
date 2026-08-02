@@ -477,25 +477,73 @@ export function buildSmartTaggingCandidatesFromSync(
 }
 
 const SMART_TAGGING_POLL_MS = 2000;
-/** ~10 minutes — Cursor agent runs for a 20-anchor batch often exceed the old ~2 min window. */
-const SMART_TAGGING_POLL_MAX_ATTEMPTS = 300;
+/**
+ * Floor of ~10 minutes so small batches keep the previous window. Cursor agent
+ * runtime scales with the number of anchors, so a fixed 10-min cap caused large
+ * batches (e.g. 50) to "time out" on the client while the server agent was still
+ * running. The real budget is derived per-run from the candidate count below.
+ */
+const SMART_TAGGING_POLL_MIN_ATTEMPTS = 300;
+/**
+ * ~36s of budget per anchor (18 polls × 2s). A 50-anchor batch therefore waits
+ * up to ~30 min instead of the old flat ~10 min, which is enough headroom for
+ * the agent to finish on the smaller App Service SKUs used in dev/prod-staging.
+ */
+const SMART_TAGGING_POLL_ATTEMPTS_PER_CANDIDATE = 18;
+
+/** Poll attempts to allow for a run of `candidateCount` anchors. */
+export function resolveSmartTaggingPollMaxAttempts(candidateCount: number): number {
+  const scaled = Math.ceil(candidateCount) * SMART_TAGGING_POLL_ATTEMPTS_PER_CANDIDATE;
+  return Math.max(SMART_TAGGING_POLL_MIN_ATTEMPTS, scaled);
+}
 
 /**
- * Start smart-tagging and poll until terminal. Never throws for empty input.
- * Callers should treat failures as non-blocking for the Sync review modal.
- * Optional skillPath / model come from Platform Admin → Walkthroughs → Options.
+ * Anchors tagged per Cursor run when fanning out a large batch. Small runs are
+ * the reliable unit — the 10-anchor batch consistently finishes and rarely
+ * produces partial/garbled output — so we split big batches into chunks of this
+ * size and run them as independent threads (each has its own isolated workspace
+ * server-side, so unique candidate ids never collide across chunks).
  */
-export async function startAndPollAnchorSmartTagging(
-  result: WalkthroughAnchorRegistrySyncResult,
+export const SMART_TAGGING_CHUNK_SIZE = 10;
+/**
+ * Max chunks the client runs at once. Mirrors the server's default
+ * MAX_CONCURRENT_LOCAL_AGENTS (2) — firing more just queues server-side and, if
+ * the server cap were raised, risks the App Service RAM/EPIPE crashes the cap
+ * exists to prevent. Extra chunks beyond this are started as slots free up.
+ */
+export const SMART_TAGGING_MAX_PARALLEL_CHUNKS = 2;
+
+/** Split candidates into fixed-size chunks (last chunk may be smaller). */
+export function chunkSmartTaggingCandidates<T>(items: readonly T[], size: number): T[][] {
+  const chunkSize = Math.max(1, Math.floor(size));
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += chunkSize) {
+    chunks.push(items.slice(i, i + chunkSize));
+  }
+  return chunks;
+}
+
+/** Progress emitted while a chunked smart-tagging run is in flight. */
+export interface ChunkedSmartTaggingProgress {
+  elapsedMs: number;
+  totalChunks: number;
+  completedChunks: number;
+  runningChunks: number;
+  /** Distinct anchors tagged so far across finished chunks. */
+  updatedCount: number;
+}
+
+/**
+ * Start smart-tagging for an explicit candidate set and poll until terminal.
+ * Low-level primitive: one Cursor thread per call. Throws on abort.
+ */
+async function startAndPollSmartTaggingCandidates(
+  candidates: readonly WalkthroughAnchorSmartTaggingCandidateInput[],
   options?: {
     signal?: AbortSignal;
     pollIntervalMs?: number;
     maxAttempts?: number;
-    batchSize?: number;
-    excludeIds?: ReadonlySet<string> | readonly string[];
-    /** Override Cursor model (empty or omitted uses server default). */
     model?: string;
-    /** Override skill markdown path under .cursor/skills (omitted uses server default). */
     skillPath?: string;
     onProgress?: (info: {
       attempt: number;
@@ -504,13 +552,7 @@ export async function startAndPollAnchorSmartTagging(
       threadId: string;
     }) => void;
   },
-): Promise<WalkthroughAnchorSmartTaggingStatusResponse | null> {
-  const candidates = buildSmartTaggingCandidatesFromSync(result, {
-    batchSize: options?.batchSize,
-    excludeIds: options?.excludeIds,
-  });
-  if (candidates.length === 0) return null;
-
+): Promise<WalkthroughAnchorSmartTaggingStatusResponse> {
   const model = options?.model?.trim();
   const skillPath = options?.skillPath?.trim();
 
@@ -529,7 +571,8 @@ export async function startAndPollAnchorSmartTagging(
   );
 
   const interval = options?.pollIntervalMs ?? SMART_TAGGING_POLL_MS;
-  const maxAttempts = options?.maxAttempts ?? SMART_TAGGING_POLL_MAX_ATTEMPTS;
+  const maxAttempts =
+    options?.maxAttempts ?? resolveSmartTaggingPollMaxAttempts(candidates.length);
   const startedAt = Date.now();
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
@@ -566,8 +609,179 @@ export async function startAndPollAnchorSmartTagging(
   return {
     status: 'failed',
     error: 'Smart-tagging timed out',
-    warning: `AI smart-tagging still running after ~${waitedMin} min (client stopped waiting). Tags may appear if you Sync again once the agent finishes. You can edit and Save now.`,
+    warning: `An AI batch is still running server-side after ~${waitedMin} min (client stopped waiting). The agent keeps working, so tags may appear if you Sync again once it finishes. You can edit and Save now.`,
   };
+}
+
+/**
+ * Combine per-chunk statuses into a single response. Partial success still
+ * returns 'ready' with the merged rows plus a warning naming the shortfall, so
+ * the UI applies what finished instead of discarding it.
+ */
+function aggregateChunkedSmartTaggingStatuses(
+  statuses: readonly WalkthroughAnchorSmartTaggingStatusResponse[],
+  mergedUpdated: WalkthroughAnchorRegistryRecord[],
+): WalkthroughAnchorSmartTaggingStatusResponse {
+  const settled = statuses.filter(Boolean);
+  const failed = settled.filter((s) => s.status !== 'ready');
+
+  if (failed.length === 0) {
+    return { status: 'ready', updated: mergedUpdated };
+  }
+
+  const readyCount = settled.length - failed.length;
+  if (readyCount === 0) {
+    const firstError = failed.find((s) => s.error)?.error;
+    return {
+      status: 'failed',
+      error: firstError ?? 'Smart-tagging did not complete for any batch.',
+      warning: `All ${failed.length} AI batch(es) failed. Newly discovered anchors remain pending and reviewable — try Sync again or edit manually.`,
+      updated: mergedUpdated,
+    };
+  }
+
+  return {
+    status: 'ready',
+    updated: mergedUpdated,
+    warning: `${failed.length} of ${settled.length} AI batch(es) did not finish; ${mergedUpdated.length} anchor(s) tagged. Use “Tag next AI batch” to retry the rest.`,
+  };
+}
+
+/**
+ * Start smart-tagging and poll until terminal. Never throws for empty input.
+ * Callers should treat failures as non-blocking for the Sync review modal.
+ * Optional skillPath / model come from Platform Admin → Walkthroughs → Options.
+ *
+ * Single-thread variant (one Cursor run for the whole batch). For large batches
+ * prefer runChunkedAnchorSmartTagging, which fans out into smaller reliable runs.
+ */
+export async function startAndPollAnchorSmartTagging(
+  result: WalkthroughAnchorRegistrySyncResult,
+  options?: {
+    signal?: AbortSignal;
+    pollIntervalMs?: number;
+    maxAttempts?: number;
+    batchSize?: number;
+    excludeIds?: ReadonlySet<string> | readonly string[];
+    /** Override Cursor model (empty or omitted uses server default). */
+    model?: string;
+    /** Override skill markdown path under .cursor/skills (omitted uses server default). */
+    skillPath?: string;
+    onProgress?: (info: {
+      attempt: number;
+      maxAttempts: number;
+      elapsedMs: number;
+      threadId: string;
+    }) => void;
+  },
+): Promise<WalkthroughAnchorSmartTaggingStatusResponse | null> {
+  const candidates = buildSmartTaggingCandidatesFromSync(result, {
+    batchSize: options?.batchSize,
+    excludeIds: options?.excludeIds,
+  });
+  if (candidates.length === 0) return null;
+
+  return startAndPollSmartTaggingCandidates(candidates, {
+    signal: options?.signal,
+    pollIntervalMs: options?.pollIntervalMs,
+    maxAttempts: options?.maxAttempts,
+    model: options?.model,
+    skillPath: options?.skillPath,
+    onProgress: options?.onProgress,
+  });
+}
+
+/**
+ * Chunked smart-tagging: split the batch into SMART_TAGGING_CHUNK_SIZE-anchor
+ * runs and execute up to SMART_TAGGING_MAX_PARALLEL_CHUNKS at once (extra chunks
+ * start as earlier ones finish). Resolves only after every chunk is terminal,
+ * with all AI-updated rows merged by id. Never throws for empty input; aborts
+ * propagate as AbortError.
+ */
+export async function runChunkedAnchorSmartTagging(
+  result: WalkthroughAnchorRegistrySyncResult,
+  options?: {
+    signal?: AbortSignal;
+    pollIntervalMs?: number;
+    batchSize?: number;
+    excludeIds?: ReadonlySet<string> | readonly string[];
+    chunkSize?: number;
+    maxParallelChunks?: number;
+    model?: string;
+    skillPath?: string;
+    onProgress?: (info: ChunkedSmartTaggingProgress) => void;
+  },
+): Promise<WalkthroughAnchorSmartTaggingStatusResponse | null> {
+  const candidates = buildSmartTaggingCandidatesFromSync(result, {
+    batchSize: options?.batchSize,
+    excludeIds: options?.excludeIds,
+  });
+  if (candidates.length === 0) return null;
+
+  const chunks = chunkSmartTaggingCandidates(
+    candidates,
+    options?.chunkSize ?? SMART_TAGGING_CHUNK_SIZE,
+  );
+
+  const startedAt = Date.now();
+  const totalChunks = chunks.length;
+  const mergedUpdatedById = new Map<string, WalkthroughAnchorRegistryRecord>();
+  const statuses = new Array<WalkthroughAnchorSmartTaggingStatusResponse>(totalChunks);
+  let completedChunks = 0;
+  let runningChunks = 0;
+
+  const emitProgress = () => {
+    options?.onProgress?.({
+      elapsedMs: Date.now() - startedAt,
+      totalChunks,
+      completedChunks,
+      runningChunks,
+      updatedCount: mergedUpdatedById.size,
+    });
+  };
+  emitProgress();
+
+  let nextIndex = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      if (options?.signal?.aborted) {
+        throw new DOMException('Aborted', 'AbortError');
+      }
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= chunks.length) return;
+
+      runningChunks += 1;
+      emitProgress();
+      try {
+        const status = await startAndPollSmartTaggingCandidates(chunks[index], {
+          signal: options?.signal,
+          pollIntervalMs: options?.pollIntervalMs,
+          model: options?.model,
+          skillPath: options?.skillPath,
+        });
+        statuses[index] = status;
+        if (status.status === 'ready' && status.updated) {
+          for (const row of status.updated) mergedUpdatedById.set(row.id, row);
+        }
+      } finally {
+        runningChunks -= 1;
+        completedChunks += 1;
+        emitProgress();
+      }
+    }
+  };
+
+  const parallelism = Math.min(
+    Math.max(1, options?.maxParallelChunks ?? SMART_TAGGING_MAX_PARALLEL_CHUNKS),
+    chunks.length,
+  );
+  await Promise.all(Array.from({ length: parallelism }, () => worker()));
+
+  return aggregateChunkedSmartTaggingStatuses(
+    statuses,
+    Array.from(mergedUpdatedById.values()),
+  );
 }
 
 /**

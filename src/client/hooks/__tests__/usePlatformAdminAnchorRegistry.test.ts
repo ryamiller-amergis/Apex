@@ -3,11 +3,14 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   buildSmartTaggingCandidatesFromSync,
+  chunkSmartTaggingCandidates,
   hasRealAiProvenance,
   mergeOpenSyncCandidates,
   mergeSmartTaggedSyncCandidates,
   persistAnchorSyncReviewDrafts,
+  resolveSmartTaggingPollMaxAttempts,
   resolveSyncReviewCandidates,
+  runChunkedAnchorSmartTagging,
   startAndPollAnchorSmartTagging,
   useAnchorRegistryCatalog,
   useAnchorRegistryModuleCoverage,
@@ -272,6 +275,131 @@ describe('usePlatformAdminAnchorRegistry', () => {
     expect(buildSmartTaggingCandidatesFromSync(syncPayload)).toHaveLength(20);
     expect(buildSmartTaggingCandidatesFromSync(syncPayload, { batchSize: 10 })).toHaveLength(10);
     expect(buildSmartTaggingCandidatesFromSync(syncPayload, { batchSize: 50 })).toHaveLength(30);
+  });
+
+  it('scales the smart-tagging poll window with the batch size', () => {
+    // Small batches keep the ~10 min floor (300 polls x 2s).
+    expect(resolveSmartTaggingPollMaxAttempts(10)).toBe(300);
+    expect(resolveSmartTaggingPollMaxAttempts(20)).toBe(360);
+    // A 50-anchor batch waits ~30 min instead of the old flat ~10 min, so the
+    // client stops abandoning still-running server runs.
+    expect(resolveSmartTaggingPollMaxAttempts(50)).toBe(900);
+  });
+
+  it('splits candidates into fixed-size chunks (last may be smaller)', () => {
+    const items = Array.from({ length: 25 }, (_, i) => i);
+    expect(chunkSmartTaggingCandidates(items, 10).map((c) => c.length)).toEqual([10, 10, 5]);
+    expect(chunkSmartTaggingCandidates(items, 10)[2]).toEqual([20, 21, 22, 23, 24]);
+    expect(chunkSmartTaggingCandidates([], 10)).toEqual([]);
+    // Degenerate size falls back to 1-per-chunk rather than looping forever.
+    expect(chunkSmartTaggingCandidates([1, 2], 0).map((c) => c.length)).toEqual([1, 1]);
+  });
+
+  describe('runChunkedAnchorSmartTagging', () => {
+    const jsonResponse = (payload: unknown) => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      text: () => Promise.resolve(JSON.stringify(payload)),
+      json: () => Promise.resolve(payload),
+    });
+
+    const buildSyncResult = (count: number) => {
+      const created = Array.from({ length: count }, (_, i) =>
+        makeRecord({ id: `id-${i}`, testId: `test-${i}` }),
+      );
+      return {
+        discoveries: [],
+        newCandidates: [],
+        existingMatches: [],
+        missingWarnings: [],
+        duplicates: [],
+        unsupportedDynamicPatterns: [],
+        diagnostics: emptySyncDiagnostics,
+        persistence: {
+          created,
+          refreshed: [],
+          markedMissing: [],
+          reviewCandidates: created,
+          newCandidateIdsForSmartTagging: created.map((r) => r.id),
+        },
+      };
+    };
+
+    it('fans a large batch into chunks and merges every AI update', async () => {
+      let threadSeq = 0;
+      const startedCounts: number[] = [];
+      const threadTestIds = new Map<string, string[]>();
+
+      (global.fetch as jest.Mock) = jest.fn((url: string, init?: RequestInit) => {
+        if (url.includes('/smart-tagging/start')) {
+          const body = JSON.parse((init?.body as string) ?? '{}');
+          const testIds = (body.candidates ?? []).map((c: { testId: string }) => c.testId);
+          const threadId = `thread-${threadSeq++}`;
+          threadTestIds.set(threadId, testIds);
+          startedCounts.push(testIds.length);
+          return Promise.resolve(
+            jsonResponse({ threadId, provenance: { provider: 'cursor', model: 'm' }, candidateTestIds: testIds }),
+          );
+        }
+        const threadId = decodeURIComponent(url.split('/status/')[1]);
+        const testIds = threadTestIds.get(threadId) ?? [];
+        return Promise.resolve(
+          jsonResponse({
+            status: 'ready',
+            updated: testIds.map((t) => makeRecord({ id: `u-${t}`, testId: t, smartTags: ['x'] })),
+          }),
+        );
+      });
+
+      const status = await runChunkedAnchorSmartTagging(buildSyncResult(25), {
+        batchSize: 50,
+        chunkSize: 10,
+        pollIntervalMs: 1,
+      });
+
+      // 25 candidates → chunks of 10 / 10 / 5, each its own /start thread.
+      expect([...startedCounts].sort((a, b) => b - a)).toEqual([10, 10, 5]);
+      expect(status?.status).toBe('ready');
+      expect(status?.updated).toHaveLength(25);
+    });
+
+    it('returns ready with a warning when some chunks fail but others succeed', async () => {
+      let threadSeq = 0;
+      const threadTestIds = new Map<string, string[]>();
+
+      (global.fetch as jest.Mock) = jest.fn((url: string, init?: RequestInit) => {
+        if (url.includes('/smart-tagging/start')) {
+          const body = JSON.parse((init?.body as string) ?? '{}');
+          const testIds = (body.candidates ?? []).map((c: { testId: string }) => c.testId);
+          const threadId = `thread-${threadSeq++}`;
+          threadTestIds.set(threadId, testIds);
+          return Promise.resolve(jsonResponse({ threadId, candidateTestIds: testIds }));
+        }
+        const threadId = decodeURIComponent(url.split('/status/')[1]);
+        const testIds = threadTestIds.get(threadId) ?? [];
+        // First thread fails; the rest succeed.
+        if (threadId === 'thread-0') {
+          return Promise.resolve(jsonResponse({ status: 'failed', error: 'Agent crashed' }));
+        }
+        return Promise.resolve(
+          jsonResponse({
+            status: 'ready',
+            updated: testIds.map((t) => makeRecord({ id: `u-${t}`, testId: t })),
+          }),
+        );
+      });
+
+      const status = await runChunkedAnchorSmartTagging(buildSyncResult(20), {
+        batchSize: 50,
+        chunkSize: 10,
+        pollIntervalMs: 1,
+      });
+
+      expect(status?.status).toBe('ready');
+      expect(status?.updated).toHaveLength(10);
+      expect(status?.warning).toMatch(/did not finish/i);
+    });
   });
 
   it('excludes already AI-enriched ids from the next smart-tagging batch', () => {

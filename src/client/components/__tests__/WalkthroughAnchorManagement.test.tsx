@@ -57,6 +57,7 @@ jest.mock('../../hooks/usePlatformAdminAnchorRegistry', () => ({
   useSoftDeleteAnchor: jest.fn(),
   useSyncAnchorRegistry: jest.fn(),
   startAndPollAnchorSmartTagging: jest.fn().mockResolvedValue(null),
+  runChunkedAnchorSmartTagging: jest.fn().mockResolvedValue(null),
 }));
 
 jest.mock('../../hooks/usePlatformAdminWalkthroughs', () => ({

@@ -22,9 +22,9 @@ import {
   mergeOpenSyncCandidates,
   mergeSmartTaggedSyncCandidates,
   resolveSyncReviewCandidates,
+  runChunkedAnchorSmartTagging,
   SMART_TAGGING_BATCH_SIZE_DEFAULT,
   SMART_TAGGING_CANDIDATE_BATCH_MAX,
-  startAndPollAnchorSmartTagging,
   useAnchorRegistryCatalog,
   useAnchorRegistryModuleCoverage,
   useCreateManualAnchor,
@@ -1145,21 +1145,25 @@ export const WalkthroughAnchorManagement: React.FC<WalkthroughAnchorManagementPr
     setEnrichmentMessage(
       `AI smart-tagging running: batch of ${batchSize} (of ${pendingIds.length} awaiting AI). This can take several minutes — Save stays disabled until the batch finishes or you skip waiting.`,
     );
-    void startAndPollAnchorSmartTagging(result, {
+    void runChunkedAnchorSmartTagging(result, {
       signal: abort.signal,
       model: anchorSmartTaggingModel.trim() || undefined,
       skillPath: anchorSmartTaggingSkillPath.trim() || undefined,
       batchSize,
       excludeIds: options.excludeIds,
-      onProgress: ({ elapsedMs, maxAttempts, attempt }) => {
+      onProgress: ({ elapsedMs, totalChunks, completedChunks, runningChunks, updatedCount }) => {
         if (abort.signal.aborted) return;
         const elapsedSec = Math.floor(elapsedMs / 1000);
         const elapsedLabel =
           elapsedSec < 60
             ? `${elapsedSec}s`
             : `${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s`;
+        const chunkLabel =
+          totalChunks > 1
+            ? ` — batch ${completedChunks}/${totalChunks} done (${runningChunks} running), ${updatedCount} tagged so far`
+            : '';
         setEnrichmentMessage(
-          `AI smart-tagging running: batch of ${batchSize} (of ${pendingIds.length} awaiting AI). Typical run is several minutes — elapsed ${elapsedLabel} (poll ${attempt}/${maxAttempts}).`,
+          `AI smart-tagging running: ${batchSize} anchor(s) of ${pendingIds.length} awaiting AI${chunkLabel}. Elapsed ${elapsedLabel}.`,
         );
       },
     })
@@ -1174,20 +1178,20 @@ export const WalkthroughAnchorManagement: React.FC<WalkthroughAnchorManagementPr
             mergeSmartTaggedSyncCandidates(prev, status.updated),
           );
           setEnrichmentStatus('ready');
-          setEnrichmentMessage(
+          const base =
             remainingAfterBatch > 0
               ? `AI updated ${status.updated.length} candidate(s) in this batch. ${remainingAfterBatch} still await AI — use Tag next AI batch for up to ${options.batchSize} more.`
-              : `AI smart-tagging updated ${status.updated.length} candidate(s). Review Ready for review, then approve/reject and Save.`,
-          );
+              : `AI smart-tagging updated ${status.updated.length} candidate(s). Review Ready for review, then approve/reject and Save.`;
+          setEnrichmentMessage(status.warning ? `${base} ${status.warning}` : base);
           return;
         }
         if (status.status === 'ready') {
           setEnrichmentStatus('ready');
-          setEnrichmentMessage(
+          const base =
             remainingAfterBatch > 0
               ? `AI finished this batch with no field changes. ${remainingAfterBatch} still await AI — use Tag next AI batch.`
-              : 'AI smart-tagging finished; no additional metadata changes.',
-          );
+              : 'AI smart-tagging finished; no additional metadata changes.';
+          setEnrichmentMessage(status.warning ? `${base} ${status.warning}` : base);
           return;
         }
         setEnrichmentStatus('failed');
