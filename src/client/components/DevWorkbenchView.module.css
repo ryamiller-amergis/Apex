@@ -151,7 +151,7 @@
 
 .start-btn {
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .start-btn:hover:not(:disabled) {
@@ -160,7 +160,7 @@
 
 .resume-btn {
   background: var(--success-color);
-  color: #fff;
+  color: var(--on-success);
 }
 
 .resume-btn:hover {

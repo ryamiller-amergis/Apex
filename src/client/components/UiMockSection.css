@@ -338,7 +338,7 @@
   font-size: 12px;
   font-weight: 600;
   background: var(--success-color);
-  color: #fff;
+  color: var(--on-success);
   margin-left: auto;
 }
 
@@ -450,7 +450,7 @@
 
 .ui-mock-section__btn-generate {
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .ui-mock-section__btn-generate:hover:not(:disabled) {
@@ -465,13 +465,13 @@
 
 .ui-mock-section__btn-regenerate:hover:not(:disabled) {
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border-color: var(--accent-color);
 }
 
 .ui-mock-section__btn-approve {
   background: var(--success-color);
-  color: #fff;
+  color: var(--on-success);
 }
 
 .ui-mock-section__btn-approve:hover:not(:disabled) {

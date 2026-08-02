@@ -72,7 +72,7 @@
 
 .btnExport:hover {
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 /* ── Filters ─────────────────────────────────────────────────────────────── */
@@ -135,7 +135,7 @@
   border: none;
   border-radius: 6px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 0.82rem;
   font-weight: 500;
   cursor: pointer;
@@ -672,7 +672,7 @@
 
 .calDaySelected {
   background: var(--accent-color) !important;
-  color: #fff !important;
+  color: var(--on-accent) !important;
   border-color: var(--accent-color) !important;
   font-weight: 600;
 }

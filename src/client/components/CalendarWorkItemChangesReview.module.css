@@ -268,7 +268,7 @@
   border-radius: 6px;
   border: none;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;

@@ -172,7 +172,7 @@
 
 .ui-mock-preview__btn-icon:hover {
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border-color: var(--accent-color);
 }
 
@@ -271,7 +271,7 @@
   border-radius: 20px;
   border: none;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
@@ -349,7 +349,7 @@
   border-radius: 6px;
   border: none;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;

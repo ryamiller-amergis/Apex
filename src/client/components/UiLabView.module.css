@@ -38,7 +38,7 @@
 .newBtn {
   padding: 6px 14px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 6px;
   font-size: 13px;
@@ -245,7 +245,7 @@
   background: var(--accent-color);
   border: none;
   border-radius: 6px;
-  color: #fff;
+  color: var(--on-accent);
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
@@ -320,7 +320,7 @@
 .headerBtn.active {
   background: var(--accent-color);
   border-color: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .headerBtnDanger {
@@ -386,7 +386,7 @@
 
 .historyBannerReturnBtn:hover {
   background: var(--accent-color);
-  color: var(--bg-primary);
+  color: var(--on-accent);
 }
 
 /* ── Canvas body (iframe + comment overlay) ─────────────────────────────── */
@@ -443,7 +443,7 @@
   height: 22px;
   border-radius: 50%;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 10px;
   font-weight: 700;
   display: flex;
@@ -546,7 +546,7 @@
   padding: 0 4px;
   border-radius: 9px;
   background: var(--accent-color);
-  color: var(--bg-primary);
+  color: var(--on-accent);
   font-size: 0.65rem;
   font-weight: 700;
 }
@@ -672,7 +672,7 @@
   align-self: flex-end;
   padding: 6px 14px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 5px;
   font-size: 12px;
@@ -717,7 +717,7 @@
 .feedbackSendBtn {
   padding: 8px 16px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 6px;
   font-size: 13px;
@@ -786,7 +786,7 @@
 .retryBtn {
   padding: 8px 20px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 6px;
   font-size: 14px;

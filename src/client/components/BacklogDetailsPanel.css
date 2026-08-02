@@ -455,7 +455,7 @@
 
 .btn-save {
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border-color: var(--accent-color);
 }
 
@@ -1985,12 +1985,12 @@
 
 .bdp-wizard-step--active .bdp-wizard-step-num {
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .bdp-wizard-step--done .bdp-wizard-step-num {
   background: var(--success-color);
-  color: #fff;
+  color: var(--on-success);
 }
 
 /* Questions */

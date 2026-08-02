@@ -35,7 +35,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
+  color: var(--on-accent);
   font-size: 16px;
 }
 
@@ -116,7 +116,7 @@
 .presetBtnActive {
   background: var(--accent-color);
   border-color: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .filterSep {

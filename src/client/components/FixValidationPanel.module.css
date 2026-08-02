@@ -486,13 +486,13 @@
 .verdictBtnActiveGood {
   border-color: var(--success-color);
   background: var(--success-color);
-  color: #fff;
+  color: var(--on-success);
 }
 
 .verdictBtnActiveGood:hover {
   background: var(--success-color);
   border-color: var(--success-color);
-  color: #fff;
+  color: var(--on-success);
 }
 
 .verdictBtnActiveBad {
@@ -541,7 +541,7 @@
 
 .sectionBtnAccept:hover:not(:disabled) {
   background: var(--success-color);
-  color: #fff;
+  color: var(--on-success);
 }
 
 .sectionBtnAccept:disabled {
@@ -786,7 +786,7 @@
   border-radius: 7px;
   border: none;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 0.84rem;
   font-weight: 600;
   cursor: pointer;
@@ -936,7 +936,7 @@
   border-radius: 7px;
   border: none;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 0.84rem;
   font-weight: 600;
   cursor: pointer;

@@ -161,7 +161,7 @@
 .addBtn {
   padding: 8px 16px;
   background: var(--accent-color);
-  color: white;
+  color: var(--on-accent);
   border: none;
   border-radius: 6px;
   cursor: pointer;
@@ -233,7 +233,7 @@
 
 .groupCount {
   background: var(--accent-color);
-  color: white;
+  color: var(--on-accent);
   padding: 1px 7px;
   border-radius: 10px;
   font-size: 0.7rem;
@@ -312,7 +312,7 @@
 
 .weekdayBtn.active {
   background: var(--accent-color);
-  color: white;
+  color: var(--on-accent);
   border-color: var(--accent-color);
 }
 
@@ -438,7 +438,7 @@
 
 .periodBtnActive {
   background: var(--accent-color);
-  color: white;
+  color: var(--on-accent);
 }
 
 .durationStepper {
@@ -544,7 +544,7 @@
 .saveBtn {
   padding: 8px 16px;
   background: var(--accent-color);
-  color: white;
+  color: var(--on-accent);
   border: none;
   border-radius: 6px;
   cursor: pointer;
@@ -633,7 +633,7 @@
 
 .configActions button:first-child {
   background: var(--accent-color);
-  color: white;
+  color: var(--on-accent);
   border-color: var(--accent-color);
 }
 
@@ -693,7 +693,7 @@
 .facilitateBtn {
   padding: 6px 12px;
   background: var(--accent-color);
-  color: white;
+  color: var(--on-accent);
   border: none;
   border-radius: 4px;
   cursor: pointer;

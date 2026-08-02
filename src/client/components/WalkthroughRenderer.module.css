@@ -235,7 +235,7 @@
   appearance: none;
   border: 1px solid var(--accent-color);
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border-radius: 4px;
   padding: 8px 12px;
   font-size: 0.875rem;

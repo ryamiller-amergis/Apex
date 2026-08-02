@@ -276,7 +276,7 @@
   background: var(--accent-color);
   border: none;
   border-radius: 6px;
-  color: #fff;
+  color: var(--on-accent);
   cursor: pointer;
   flex-shrink: 0;
   transition: background 0.2s ease;

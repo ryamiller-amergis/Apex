@@ -217,12 +217,12 @@
 .exportBtnWord {
   border-color: var(--accent-color);
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .exportBtnWord:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent-color) 85%, #000);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 /* ── Responsive: hide filename and status on very narrow screens ─────────── */

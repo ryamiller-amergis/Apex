@@ -248,7 +248,7 @@
 
 .modal-btn-confirm {
   background-color: var(--accent-color);
-  color: white;
+  color: var(--on-accent);
 }
 
 .modal-btn-confirm:hover:not(:disabled) {

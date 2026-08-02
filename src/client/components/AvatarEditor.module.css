@@ -38,7 +38,7 @@
   align-items: center;
   justify-content: center;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 1.5rem;
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -54,7 +54,7 @@
   border-radius: 50%;
   border: 2px solid var(--bg-secondary);
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -108,7 +108,7 @@
 
 .btnPrimary {
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border-color: var(--accent-color);
   box-shadow: 0 1px 2px color-mix(in srgb, var(--accent-color) 35%, transparent);
 }
@@ -276,7 +276,7 @@
 .btnConfirm {
   padding: 8px 18px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 7px;
   font-size: 0.875rem;

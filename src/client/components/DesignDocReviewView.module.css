@@ -286,7 +286,7 @@
 .failureBannerBtnPrimaryAccent {
   composes: failureBannerBtnPrimary;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .failureBannerBtnPrimaryAccent:hover:not(:disabled) {
@@ -642,7 +642,7 @@
 .actionBtnPrimary {
   composes: actionBtn;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border-color: var(--accent-color);
   font-weight: 600;
 }
@@ -650,7 +650,7 @@
 .actionBtnPrimary:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .actionBtnPrimary:disabled {
@@ -679,14 +679,14 @@
   composes: actionBtn;
   background: var(--success-color);
   border-color: var(--success-color);
-  color: #fff;
+  color: var(--on-success);
   font-weight: 600;
 }
 
 .btnApprove:hover:not(:disabled) {
   background: color-mix(in srgb, var(--success-color) 85%, #000);
   border-color: color-mix(in srgb, var(--success-color) 85%, #000);
-  color: #fff;
+  color: var(--on-success);
 }
 
 .btnApprove:disabled {
@@ -953,7 +953,7 @@
 .btnPrimary {
   padding: 9px 18px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 7px;
   font-size: 0.88rem;
@@ -1127,7 +1127,7 @@
   gap: 6px;
   padding: 8px 16px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 7px;
   font-size: 0.85rem;
@@ -1176,7 +1176,7 @@
 .qaMessageBubbleUser {
   align-self: flex-end;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border-bottom-right-radius: 3px;
 }
 
@@ -1309,7 +1309,7 @@
 
 .qaChoiceOptionSelected .qaChoiceOptionLetter {
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .qaChoiceOptionText {
@@ -1345,7 +1345,7 @@
   align-self: flex-end;
   padding: 7px 16px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 7px;
   font-size: 0.82rem;
@@ -1451,7 +1451,7 @@
   background: var(--accent-color);
   border: none;
   border-radius: 7px;
-  color: #fff;
+  color: var(--on-accent);
   cursor: pointer;
   flex-shrink: 0;
   transition: background 0.2s ease;
@@ -1772,7 +1772,7 @@
 .confirmBtnConfirm {
   padding: 7px 16px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 7px;
   font-size: 0.875rem;
@@ -2501,7 +2501,7 @@
   padding: 0 5px;
   border-radius: 10px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 0.68rem;
   font-weight: 700;
   line-height: 1;

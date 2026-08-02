@@ -112,7 +112,7 @@
   min-width: 72px;
   border: 1px solid var(--accent-color);
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .doneButton:hover {

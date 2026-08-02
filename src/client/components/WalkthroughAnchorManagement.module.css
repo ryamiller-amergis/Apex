@@ -195,12 +195,12 @@
   composes: button;
   border-color: var(--accent-color);
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .buttonPrimary:hover {
   background: var(--accent-hover);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .buttonDanger {

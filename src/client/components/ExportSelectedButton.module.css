@@ -7,7 +7,7 @@
   border: 1px solid var(--accent-color);
   border-radius: 4px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 0.8125rem;
   font-weight: 600;
   cursor: pointer;

@@ -181,14 +181,14 @@
 .actionBtnPrimary {
   composes: actionBtn;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border-color: var(--accent-color);
 }
 
 .actionBtnPrimary:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .actionBtnDanger {
@@ -331,7 +331,7 @@
 .messageBubbleUser {
   align-self: flex-end;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border-bottom-right-radius: 3px;
 }
 
@@ -604,13 +604,13 @@
 .micBtnActive {
   background: var(--accent-color);
   border-color: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .micBtnActive:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .modelSelect {
@@ -653,7 +653,7 @@
   border-radius: 8px;
   border: none;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   cursor: pointer;
   transition: background 0.2s ease, opacity 0.2s ease;
   flex-shrink: 0;
@@ -983,7 +983,7 @@
 .choiceQNum {
   flex-shrink: 0;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 10px;
   font-weight: 700;
   padding: 2px 6px;
@@ -1047,7 +1047,7 @@
 .choiceOptionSelected .choiceOptionLetter {
   background: var(--accent-color);
   border-color: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .choiceOptionText {
@@ -1090,7 +1090,7 @@
   margin: 10px 12px 12px;
   padding: 9px 16px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 8px;
   font-size: 13px;

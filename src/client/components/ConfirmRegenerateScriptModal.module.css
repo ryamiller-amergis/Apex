@@ -67,7 +67,7 @@
 .btnConfirm {
   padding: 8px 18px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 7px;
   font-size: 0.875rem;

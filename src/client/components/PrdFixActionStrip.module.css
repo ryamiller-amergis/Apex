@@ -79,7 +79,7 @@
   border-radius: 6px;
   border: 1px solid var(--success-color);
   background: var(--success-color);
-  color: #fff;
+  color: var(--on-success);
   font-size: 0.78rem;
   font-weight: 600;
   cursor: pointer;

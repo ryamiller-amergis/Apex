@@ -212,7 +212,7 @@
 
 .view-toggle .toggle-btn.active {
   background: var(--accent-color);
-  color: white;
+  color: var(--on-accent);
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
@@ -508,7 +508,7 @@
 
 .select-action-btn:hover {
   background: linear-gradient(135deg, var(--accent-color) 0%, var(--primary-color) 100%);
-  color: white;
+  color: var(--on-accent);
   border-color: var(--accent-color);
   transform: translateY(-1px);
   box-shadow: 0 4px 8px rgba(74, 144, 226, 0.25);
@@ -584,7 +584,7 @@
 .fetch-cost-btn {
   padding: 12px 24px;
   background: linear-gradient(135deg, var(--accent-color) 0%, var(--primary-color) 100%);
-  color: white;
+  color: var(--on-accent);
   border: none;
   border-radius: 8px;
   font-size: 13px;
@@ -803,7 +803,7 @@
   width: 32px;
   height: 32px;
   background: var(--accent-color);
-  color: white;
+  color: var(--on-accent);
   border-radius: 50%;
   font-weight: 700;
   font-size: 14px;

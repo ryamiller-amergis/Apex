@@ -92,12 +92,12 @@
   composes: button;
   border-color: var(--accent-color);
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .buttonPrimary:hover:not(:disabled) {
   background: var(--accent-hover);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .status {
@@ -249,7 +249,7 @@
   composes: tagChip;
   border-color: var(--accent-color);
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .anchorTools {

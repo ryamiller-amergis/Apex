@@ -63,7 +63,7 @@
 .retry {
   border: 1px solid var(--accent-color);
   background: var(--accent-color);
-  color: var(--bg-primary);
+  color: var(--on-accent);
 }
 
 .retry:hover:not(:disabled) {

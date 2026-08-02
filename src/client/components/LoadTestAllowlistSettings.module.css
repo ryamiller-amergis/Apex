@@ -107,7 +107,7 @@
 
 .primaryBtn {
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: 1px solid transparent;
 }
 

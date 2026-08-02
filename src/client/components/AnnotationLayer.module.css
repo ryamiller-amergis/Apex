@@ -47,7 +47,7 @@
 
 .addCommentButton:hover {
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .addCommentButton svg {

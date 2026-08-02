@@ -24,7 +24,7 @@
 
 .groupChip {
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border-color: var(--accent-color);
 }
 
