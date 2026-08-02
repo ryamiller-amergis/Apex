@@ -23,7 +23,8 @@ resource "azurerm_storage_account" "shared" {
   tags                            = merge(var.tags, { Environment = var.environment, Workload = "shared-async" })
 
   blob_properties {
-    versioning_enabled = false
+    versioning_enabled       = false
+    last_access_time_enabled = true
   }
 }
 
@@ -33,4 +34,20 @@ resource "azurerm_storage_container" "shared" {
   name                  = each.key
   storage_account_name  = azurerm_storage_account.shared.name
   container_access_type = "private"
+}
+
+# Grounding bundles are server-only and use the Apex App Service managed
+# identity. Keep this grant at the container boundary.
+resource "azurerm_role_assignment" "grounding_api_blob_contributor" {
+  scope                = azurerm_storage_container.shared["repo-grounding"].resource_manager_id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = azurerm_linux_web_app.main.identity[0].principal_id
+}
+
+resource "azurerm_role_assignment" "grounding_staging_blob_contributor" {
+  count = var.enable_staging_slot ? 1 : 0
+
+  scope                = azurerm_storage_container.shared["repo-grounding"].resource_manager_id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = azurerm_linux_web_app_slot.staging[0].identity[0].principal_id
 }

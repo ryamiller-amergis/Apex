@@ -15,7 +15,7 @@ This directory contains Terraform configuration for provisioning Azure resources
 - **App Service Plan**: Linux-based plan with Node.js support (B1 tier)
 - **App Service**: Linux web app running Node.js 24 LTS
 - **Application Insights**: Monitoring and telemetry
-- **Shared async Blob storage**: One private Storage Account per environment; modules isolate via containers (PDF starts with `pdf-artifacts`, load-test adds `lt-artifacts`)
+- **Shared async Blob storage**: One private Storage Account per environment; modules isolate via private containers (`pdf-artifacts`, `repo-grounding`, and load-test `lt-artifacts`)
 - **Managed-identity access**: The cross-cutting Apex App Service identity is scoped to the shared Storage Account. PDF assembly stays in the Apex application; job delivery uses the Postgres queue (Service Bus deferred).
 - **Load Test infrastructure** (FEAT-002): Dedicated Service Bus namespace, Container Apps Job, and managed identities — see [Load Test module](#load-test-module-feat-002) below.
 
@@ -188,7 +188,7 @@ The shared Blob account is created in every Terraform workspace. PDF is the firs
 | Terraform variable | Purpose | Default |
 |--------------------|---------|---------|
 | `shared_storage_account_name` | Globally unique shared artifact account; null derives `stapex<environment>async` (for example, `stapexdevasync`) | derived |
-| `blob_containers` | Map of private containers on the shared account | `{ pdf-artifacts = {} }` |
+| `blob_containers` | Map of private containers on the shared account | `{ pdf-artifacts = {}, repo-grounding = {} }` |
 | `pdf_blob_container_name` | PDF container key inside `blob_containers` | `pdf-artifacts` |
 
 App setting contract for the Apex application (wire via deploy pipeline / App Service config — `main.tf` ignores `app_settings` drift):
@@ -197,6 +197,25 @@ App setting contract for the Apex application (wire via deploy pipeline / App Se
 |-------------|--------------|----------|
 | `PDF_BLOB_ACCOUNT_NAME` | `shared_storage_account_name` / `pdf_storage_account_name` output | Apex app |
 | `PDF_BLOB_CONTAINER_NAME` | `pdf_blob_container_name` output | Apex app |
+| `GROUNDING_BLOB_ACCOUNT_NAME` | `grounding_storage_account_name` output | Grounding bundle store |
+| `GROUNDING_BLOB_CONTAINER_NAME` | `grounding_blob_container_name` output | Grounding bundle store |
+
+### Repository grounding bundles
+
+`repo-grounding` stores immutable, content-addressed git bundles at
+`{provider}/{project}/{repo}/{sha}.bundle`. The container is private, anonymous
+blob access is disabled at the account, and the Apex App Service system identity
+and optional staging-slot system identity have `Storage Blob Data Contributor`
+only at this container's scope. Runtime access uses those system-assigned
+identities; `AZURE_CLIENT_ID` remains the application-auth registration ID and
+must not be used as a Blob credential. Do not configure connection strings, SAS
+tokens, or account keys.
+
+Azure Storage Service Encryption with Microsoft-managed keys provides encryption
+at rest. Account-level last-access tracking is enabled, and the shared account's
+single lifecycle management policy deletes `repo-grounding/` block blobs after
+14 days since last access. Application code must not delete bundles when a run
+finishes.
 
 The production Apex app and its staging deployment slot each have a distinct
 system-assigned managed identity. Both receive Storage Account-scoped Blob
@@ -234,12 +253,16 @@ terraform validate
 terraform plan
 terraform output shared_storage_account_name
 terraform output pdf_blob_container_name
+terraform output grounding_blob_container_name
 ```
 
 Complete the following smoke checks before marking the infrastructure ready:
 
 1. From the Apex App Service identity, upload/read/delete a test blob under a `{userId}/{sessionId}/` prefix in `pdf-artifacts`.
 2. Attempt anonymous Blob access from an unassigned principal; access must fail.
+3. Confirm `repo-grounding` is private, last-access tracking is enabled, its
+   lifecycle rule uses 14 days since last access, and the Apex identity role is
+   scoped to that container.
 
 ---
 
