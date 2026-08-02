@@ -5,7 +5,10 @@ import type {
   RepoReader,
   RepositoryIdentity,
 } from '../../shared/types/repoReader';
-import { isFeatureEnabled as evaluateFeatureFlag } from './featureFlagService';
+import {
+  isFeatureEnabled as evaluateFeatureFlag,
+  isRemoteSearchConvergenceEnabled as evaluateConvergence,
+} from './featureFlagService';
 import { LocalCheckoutReader } from './localCheckoutReader';
 import { RemoteCatalogReader } from './remoteCatalogReader';
 import { createRepoReader, RepoReaderError } from './repoReader';
@@ -16,6 +19,7 @@ const DEFAULT_PROFILE_TTL_MS = 60 * 60 * 1_000;
 export interface GroundingProfileRegistration extends RepositoryIdentity {
   runRef: string;
   checkoutPath: string;
+  caller?: string;
   ttlMs?: number;
 }
 
@@ -46,6 +50,7 @@ export interface RunProjectAuthorization {
 export interface GroundingProfileResolverOptions {
   authorization: RunProjectAuthorization;
   isFeatureEnabled?: typeof evaluateFeatureFlag;
+  isRemoteSearchConvergenceEnabled?: typeof evaluateConvergence;
   now?: () => number;
 }
 
@@ -59,20 +64,29 @@ interface ConnectionProfileOwner {
 interface StoredGroundingProfile extends RepositoryIdentity {
   runRef: string;
   checkoutPath: string;
+  caller?: string;
   expiresAt: number;
 }
 
 export class GroundingProfileResolver {
-  private readonly profiles = new Map<GroundingProfileId, StoredGroundingProfile>();
-  private readonly connectionOwners =
-    new Map<GroundingProfileId, ConnectionProfileOwner>();
+  private readonly profiles = new Map<
+    GroundingProfileId,
+    StoredGroundingProfile
+  >();
+  private readonly connectionOwners = new Map<
+    GroundingProfileId,
+    ConnectionProfileOwner
+  >();
   private readonly authorization: RunProjectAuthorization;
   private readonly featureEnabled: typeof evaluateFeatureFlag;
+  private readonly convergenceEnabled: typeof evaluateConvergence;
   private readonly now: () => number;
 
   constructor(options: GroundingProfileResolverOptions) {
     this.authorization = options.authorization;
     this.featureEnabled = options.isFeatureEnabled ?? evaluateFeatureFlag;
+    this.convergenceEnabled =
+      options.isRemoteSearchConvergenceEnabled ?? evaluateConvergence;
     this.now = options.now ?? Date.now;
   }
 
@@ -86,6 +100,7 @@ export class GroundingProfileResolver {
       repo: input.repo,
       sha: input.sha,
       checkoutPath: input.checkoutPath,
+      caller: input.caller,
       expiresAt,
     });
     return { id, expiresAt };
@@ -94,7 +109,7 @@ export class GroundingProfileResolver {
   registerConnectionProfile(
     input: GroundingProfileRegistration,
     caller: GroundingCallerContext,
-    reauthorize: GroundingProfileReauthorization,
+    reauthorize: GroundingProfileReauthorization
   ): GroundingProfile {
     const profile = this.registerProfile(input);
     this.connectionOwners.set(profile.id, {
@@ -110,14 +125,14 @@ export class GroundingProfileResolver {
   }
 
   async resolveConnectionProfile(
-    profileId: GroundingProfileId,
+    profileId: GroundingProfileId
   ): Promise<RepoReader> {
     const owner = this.connectionOwners.get(profileId);
     if (!owner || !(await owner.reauthorize())) {
       throw new RepoReaderError(
         'ACCESS_DENIED',
         'Grounding profile access denied',
-        false,
+        false
       );
     }
     const profile = await this.getAuthorizedProfile(profileId, owner.caller);
@@ -129,12 +144,17 @@ export class GroundingProfileResolver {
         sha: profile.sha,
       },
       checkoutPath: profile.checkoutPath,
+      telemetryContext: {
+        caller: profile.caller ?? 'repo-reader',
+        project: profile.project,
+        runId: profile.runRef.split(':').slice(1).join(':') || profile.runRef,
+      },
     });
   }
 
   private async getAuthorizedProfile(
     profileId: GroundingProfileId,
-    caller: GroundingCallerContext,
+    caller: GroundingCallerContext
   ): Promise<StoredGroundingProfile> {
     const profile = this.profiles.get(profileId);
     if (!profile || this.now() >= profile.expiresAt) {
@@ -142,12 +162,19 @@ export class GroundingProfileResolver {
       throw new RepoReaderError(
         'PROFILE_UNAVAILABLE',
         'Grounding profile is unavailable',
-        false,
+        false
       );
     }
 
-    if (caller.runRef !== profile.runRef || caller.project !== profile.project) {
-      throw new RepoReaderError('ACCESS_DENIED', 'Grounding profile access denied', false);
+    if (
+      caller.runRef !== profile.runRef ||
+      caller.project !== profile.project
+    ) {
+      throw new RepoReaderError(
+        'ACCESS_DENIED',
+        'Grounding profile access denied',
+        false
+      );
     }
 
     const authorized = await this.authorization.authorize({
@@ -160,14 +187,18 @@ export class GroundingProfileResolver {
       repo: profile.repo,
     });
     if (!authorized) {
-      throw new RepoReaderError('ACCESS_DENIED', 'Grounding profile access denied', false);
+      throw new RepoReaderError(
+        'ACCESS_DENIED',
+        'Grounding profile access denied',
+        false
+      );
     }
     return profile;
   }
 
   async resolveProfile(
     profileId: GroundingProfileId,
-    caller: GroundingCallerContext,
+    caller: GroundingCallerContext
   ): Promise<RepoReader> {
     const profile = await this.getAuthorizedProfile(profileId, caller);
 
@@ -182,11 +213,26 @@ export class GroundingProfileResolver {
       sha: profile.sha,
     };
     const factories = {
-      local: () => new LocalCheckoutReader({
-        identity,
-        checkoutPath: profile.checkoutPath,
-      }),
-      remote: () => new RemoteCatalogReader(identity),
+      local: () =>
+        new LocalCheckoutReader({
+          identity,
+          checkoutPath: profile.checkoutPath,
+          telemetryContext: {
+            caller: profile.caller ?? 'repo-reader',
+            project: profile.project,
+            runId:
+              profile.runRef.split(':').slice(1).join(':') || profile.runRef,
+          },
+        }),
+      remote: () =>
+        new RemoteCatalogReader(identity, undefined, {
+          flagContext: {
+            userId: caller.userId,
+            project: caller.project,
+            caller: profile.caller ?? 'repo-reader',
+          },
+          isConvergenceEnabled: this.convergenceEnabled,
+        }),
     };
 
     // Retain the enabled branch after two stable sprints at full rollout.

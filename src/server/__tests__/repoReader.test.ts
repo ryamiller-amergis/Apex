@@ -99,6 +99,59 @@ describe('TBI-001 DoD-0 exposes one contract for read, list, and search', () => 
       fs.rmSync(fixture.root, { recursive: true, force: true });
     }
   });
+
+  it('TBI-008 DoD-0 measures read, list, and search without leaking checkout paths', async () => {
+    // Arrange
+    const fixture = makeFixture();
+    const telemetry = jest.fn();
+    const reader = new LocalCheckoutReader({
+      identity: identity('ado', fixture.sha),
+      checkoutPath: fixture.root,
+      telemetryContext: {
+        caller: 'interview',
+        project: 'Apex',
+        runId: 'thread-1',
+      },
+      telemetry,
+      now: jest
+        .fn()
+        .mockReturnValueOnce(1_000)
+        .mockReturnValueOnce(1_018)
+        .mockReturnValueOnce(2_000)
+        .mockReturnValueOnce(2_025)
+        .mockReturnValueOnce(3_000)
+        .mockReturnValueOnce(3_040),
+    });
+
+    try {
+      // Act
+      await reader.readFile('README.md');
+      await reader.listDir('src');
+      await reader.searchCode('needle');
+
+      // Assert
+      expect(telemetry.mock.calls).toEqual([
+        [
+          'grounding.read.latency',
+          { caller: 'interview', project: 'Apex', runId: 'thread-1' },
+          { durationMs: 18 },
+        ],
+        [
+          'grounding.read.latency',
+          { caller: 'interview', project: 'Apex', runId: 'thread-1' },
+          { durationMs: 25 },
+        ],
+        [
+          'grounding.read.latency',
+          { caller: 'interview', project: 'Apex', runId: 'thread-1' },
+          { durationMs: 40 },
+        ],
+      ]);
+      expect(JSON.stringify(telemetry.mock.calls)).not.toContain(fixture.root);
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('TBI-001 DoD-1 rejects traversal, symlink escape, expiry, and cross-run access safely', () => {
@@ -236,6 +289,40 @@ describe('TBI-001 DoD-1 rejects traversal, symlink escape, expiry, and cross-run
 
     // Assert
     expect(reader).toBeInstanceOf(RemoteCatalogReader);
+  });
+
+  it('TBI-008 preserves the originating caller for convergence targeting', async () => {
+    // Arrange
+    const isConvergenceEnabled = jest.fn().mockResolvedValue(true);
+    const resolver = new GroundingProfileResolver({
+      authorization: { authorize: async () => true },
+      isFeatureEnabled: async () => false,
+      isRemoteSearchConvergenceEnabled: isConvergenceEnabled,
+    });
+    const profile = resolver.registerProfile({
+      runRef: 'chat:interview-thread',
+      caller: 'interview',
+      ...identity('github', 'abc123'),
+      checkoutPath: 'not-used-while-disabled',
+    });
+    const reader = await resolver.resolveProfile(profile.id, {
+      userId: 'user-1',
+      runRef: 'chat:interview-thread',
+      project: 'acme',
+    });
+
+    // Act
+    const search = reader.searchCode('needle');
+
+    // Assert
+    await expect(search).rejects.toMatchObject({
+      code: 'REMOTE_SEARCH_DISABLED',
+    });
+    expect(isConvergenceEnabled).toHaveBeenCalledWith({
+      userId: 'user-1',
+      project: 'acme',
+      caller: 'interview',
+    });
   });
 });
 

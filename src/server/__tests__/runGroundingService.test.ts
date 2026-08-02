@@ -340,3 +340,30 @@ describe('runGroundingService security contract', () => {
     expect(repository.deactivateByRun).toHaveBeenCalledWith(run);
   });
 });
+
+describe('TBI-008 runtime drift telemetry', () => {
+  it('DoD-0 emits the contract drift event when status detects a moved source', async () => {
+    // Arrange
+    const repository = repositoryMock();
+    repository.findByRun.mockResolvedValue([grounding('target')]);
+    const drift = jest.fn();
+    const service = createRunGroundingService(repository, {
+      readCachedOriginSha: jest.fn().mockResolvedValue('new-origin-sha'),
+      evaluateStaleness: jest.fn().mockResolvedValue('fresh'),
+      telemetry: { drift },
+    });
+
+    // Act
+    const status = await service.getStatus(run, 'target', true);
+
+    // Assert
+    expect(status?.driftState).toBe('source-changed');
+    expect(drift).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caller: 'run-grounding-status',
+        project: 'Apex',
+        runId: 'run-1',
+      }),
+    );
+  });
+});

@@ -22,6 +22,10 @@ import { isFeatureEnabled as evaluateFeatureFlag } from './featureFlagService';
 import { materializeRunGrounding } from './runGroundingMaterializer';
 import { emitGroundingActiveSetChanged } from './groundingMaintenanceEvents';
 import { groundingStalenessService } from './groundingStalenessService';
+import {
+  groundingTelemetry,
+  type GroundingTelemetry,
+} from './groundingTelemetry';
 
 export type RepositoryGroundingPin = Pick<
   CreateRunGroundingInput,
@@ -116,6 +120,7 @@ export interface RunGroundingServiceOptions {
   evaluateStaleness?: (
     grounding: RunGrounding
   ) => Promise<GroundingStalenessState>;
+  telemetry?: Pick<GroundingTelemetry, 'drift'>;
 }
 
 function createGroundingInput(
@@ -331,6 +336,7 @@ export function createRunGroundingService(
     options.evaluateStaleness ??
     ((grounding: RunGrounding) =>
       groundingStalenessService.evaluate(grounding));
+  const telemetry = options.telemetry ?? groundingTelemetry;
   const materializationStates = new Map<
     string,
     GroundingMaterializationState
@@ -453,6 +459,23 @@ export function createRunGroundingService(
         materializationKey(ref, role),
       );
       const stalenessState = await evaluateStaleness(grounding);
+      const driftState =
+        materialization === 'unavailable' || cachedOriginSha === null
+          ? 'unavailable'
+          : cachedOriginSha === grounding.groundedSha
+            ? 'grounded'
+            : 'source-changed';
+      if (driftState === 'source-changed') {
+        telemetry.drift({
+          caller: 'run-grounding-status',
+          project: grounding.project,
+          runId: grounding.runId,
+          runType: grounding.runType,
+          provider: grounding.provider,
+          repository: grounding.repository,
+          branch: grounding.branch,
+        });
+      }
       return {
         runType: grounding.runType,
         runId: grounding.runId,
@@ -460,12 +483,7 @@ export function createRunGroundingService(
         groundedSha: grounding.groundedSha,
         groundedShaShort: grounding.groundedSha.slice(0, 12),
         groundedAt: grounding.groundedAt,
-        driftState:
-          materialization === 'unavailable' || cachedOriginSha === null
-            ? 'unavailable'
-            : cachedOriginSha === grounding.groundedSha
-              ? 'grounded'
-              : 'source-changed',
+        driftState,
         stalenessState,
         canReGround,
       };

@@ -7,13 +7,14 @@ export const MAX_REPO_DIRECTORY_ENTRIES = 1_000;
 export type RepoReaderErrorCode =
   | 'ACCESS_DENIED'
   | 'LOCAL_READ_UNAVAILABLE'
-  | 'PROFILE_UNAVAILABLE';
+  | 'PROFILE_UNAVAILABLE'
+  | 'REMOTE_SEARCH_DISABLED';
 
 export class RepoReaderError extends Error {
   constructor(
     readonly code: RepoReaderErrorCode,
     message: string,
-    readonly fallbackEligible: boolean,
+    readonly fallbackEligible: boolean
   ) {
     super(message);
     this.name = 'RepoReaderError';
@@ -38,7 +39,7 @@ export interface RepoReaderFactories {
  */
 export function createRepoReader(
   mode: 'local' | 'remote',
-  factories: RepoReaderFactories,
+  factories: RepoReaderFactories
 ): RepoReader {
   return mode === 'local' ? factories.local() : factories.remote();
 }

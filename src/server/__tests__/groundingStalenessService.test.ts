@@ -112,4 +112,41 @@ describe('TBI-007 groundingStalenessService', () => {
       { cwd: 'C:\\opaque-cache.git' },
     );
   });
+
+  it('TBI-008 DoD-0 emits the redacted contract staleness event from evaluation', async () => {
+    // Arrange
+    const telemetry = jest.fn();
+    const source = {
+      ...grounding(7 * DAY_MS),
+      repository:
+        'https://user:repo-secret@example.invalid/org/repo?token=abc',
+    };
+    const service = createGroundingStalenessService({
+      now: () => NOW,
+      countCommitsBehind: jest.fn().mockResolvedValue(0),
+      telemetry,
+    });
+
+    // Act
+    await service.evaluate(source);
+
+    // Assert
+    expect(telemetry).toHaveBeenCalledWith(
+      'grounding.staleness',
+      expect.objectContaining({
+        caller: 'grounding-staleness',
+        project: 'Apex',
+        runId: 'run-1',
+      }),
+      expect.objectContaining({
+        breachCount: 1,
+        ageMs: 7 * DAY_MS,
+        commitCount: 0,
+      }),
+    );
+    const serialized = JSON.stringify(telemetry.mock.calls);
+    expect(serialized).not.toContain('repo-secret');
+    expect(serialized).not.toContain('token=abc');
+    expect(serialized).not.toContain('C:\\');
+  });
 });

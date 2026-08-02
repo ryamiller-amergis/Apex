@@ -57,6 +57,7 @@ import {
   evaluateFlags,
   isFeatureEnabled,
   isGroundingEnabledForCaller,
+  isFeatureOperational,
   isRemoteSearchConvergenceEnabled,
 } from '../services/featureFlagService';
 
@@ -829,4 +830,22 @@ describe('grounding rollout accessors', () => {
 
     expect(converged).toBe(true);
   });
+
+  it.each([
+    ['disabled', { enabled: false, lifecycle: 'active' }],
+    ['archived', { enabled: true, lifecycle: 'archived' }],
+  ])(
+    'TBI-008 reports the grounding kill switch non-operational when %s',
+    async (_label, state) => {
+      mockDb.query.featureFlags.findFirst.mockResolvedValue({
+        ...baseFlag,
+        key: 'repo-grounding-workspace-profile',
+        ...state,
+      });
+
+      await expect(
+        isFeatureOperational('repo-grounding-workspace-profile'),
+      ).resolves.toBe(false);
+    },
+  );
 });

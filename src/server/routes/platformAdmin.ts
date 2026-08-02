@@ -68,6 +68,11 @@ import {
 import * as walkthroughAnchorRegistryService from '../services/walkthroughAnchorRegistryService';
 import * as walkthroughAiOptionsService from '../services/walkthroughAiOptionsService';
 import { WalkthroughAiOptionsError } from '../../shared/types/walkthroughAiOptions';
+import {
+  GROUNDING_ROLLOUT_STAGES,
+  type GroundingRolloutStage,
+} from '../../shared/types/groundingOperations';
+import { groundingGateService } from '../services/groundingGateService';
 
 const router = Router();
 const validMenuItemKeys = new Set<MenuItemKey>(CONFIGURABLE_MENU_ITEMS.map((item) => item.key));
@@ -178,6 +183,31 @@ function mapWalkthroughAiError(err: unknown, res: Response): boolean {
 }
 
 router.use(requireSuperAdmin);
+
+router.get('/grounding/rollout-status', async (req: Request, res: Response): Promise<void> => {
+  const stage = typeof req.query.stage === 'string' ? req.query.stage : '';
+  if (!GROUNDING_ROLLOUT_STAGES.includes(stage as GroundingRolloutStage)) {
+    res.status(400).json({
+      error: `stage must be one of: ${GROUNDING_ROLLOUT_STAGES.join(', ')}`,
+    });
+    return;
+  }
+
+  const project =
+    typeof req.query.project === 'string' && req.query.project.trim()
+      ? req.query.project.trim()
+      : undefined;
+
+  try {
+    const evaluation = await groundingGateService.evaluate(
+      stage as GroundingRolloutStage,
+      project,
+    );
+    res.json(evaluation);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 router.get('/projects', async (_req: Request, res: Response): Promise<void> => {
   try {

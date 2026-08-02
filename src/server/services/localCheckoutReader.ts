@@ -7,16 +7,22 @@ import type {
   RepoSearchResult,
   RepositoryIdentity,
 } from '../../shared/types/repoReader';
+import type { GroundingTelemetryContext } from '../../shared/types/groundingOperations';
 import { git, safeArgs } from '../utils/asyncGit';
+import { createGroundingTelemetry } from './groundingTelemetry';
 import {
   boundedSearchLimit,
   MAX_REPO_DIRECTORY_ENTRIES,
   RepoReaderError,
 } from './repoReader';
+import { trackEvent } from './telemetry';
 
 export interface LocalCheckoutReaderOptions {
   identity: RepositoryIdentity;
   checkoutPath: string;
+  telemetryContext?: GroundingTelemetryContext;
+  telemetry?: typeof trackEvent;
+  now?: () => number;
 }
 
 const ACCESS_DENIED_MESSAGE = 'Repository path access denied';
@@ -25,61 +31,72 @@ const LOCAL_UNAVAILABLE_MESSAGE = 'Repository content is unavailable';
 export class LocalCheckoutReader implements RepoReader {
   readonly identity: RepositoryIdentity;
   private readonly checkoutPath: string;
+  private readonly telemetryContext?: GroundingTelemetryContext;
+  private readonly telemetry: ReturnType<typeof createGroundingTelemetry>;
+  private readonly now: () => number;
 
   constructor(options: LocalCheckoutReaderOptions) {
     this.identity = { ...options.identity };
     this.checkoutPath = options.checkoutPath;
+    this.telemetryContext = options.telemetryContext;
+    this.telemetry = createGroundingTelemetry(options.telemetry ?? trackEvent);
+    this.now = options.now ?? Date.now;
   }
 
   async readFile(filePath: string): Promise<string> {
-    return this.controlled(async () => {
-      const { target } = await this.resolveSafeTarget(filePath);
-      return fs.readFile(target, 'utf-8');
-    });
+    return this.measured(() =>
+      this.controlled(async () => {
+        const { target } = await this.resolveSafeTarget(filePath);
+        return fs.readFile(target, 'utf-8');
+      }),
+    );
   }
 
   async listDir(dirPath: string): Promise<RepoDirEntry[]> {
-    return this.controlled(async () => {
-      const { target, portablePath } = await this.resolveSafeTarget(dirPath);
-      const entries = await fs.readdir(target, { withFileTypes: true });
+    return this.measured(() =>
+      this.controlled(async () => {
+        const { target, portablePath } = await this.resolveSafeTarget(dirPath);
+        const entries = await fs.readdir(target, { withFileTypes: true });
 
-      return entries
-        .sort((left, right) => {
-          const leftDirectory = left.isDirectory();
-          const rightDirectory = right.isDirectory();
-          if (leftDirectory !== rightDirectory) return leftDirectory ? -1 : 1;
-          return left.name.localeCompare(right.name);
-        })
-        .slice(0, MAX_REPO_DIRECTORY_ENTRIES)
-        .map((entry) => ({
-          path: `/${[portablePath, entry.name].filter(Boolean).join('/')}`,
-          name: entry.name,
-          isFolder: entry.isDirectory(),
-        }));
-    });
+        return entries
+          .sort((left, right) => {
+            const leftDirectory = left.isDirectory();
+            const rightDirectory = right.isDirectory();
+            if (leftDirectory !== rightDirectory) return leftDirectory ? -1 : 1;
+            return left.name.localeCompare(right.name);
+          })
+          .slice(0, MAX_REPO_DIRECTORY_ENTRIES)
+          .map((entry) => ({
+            path: `/${[portablePath, entry.name].filter(Boolean).join('/')}`,
+            name: entry.name,
+            isFolder: entry.isDirectory(),
+          }));
+      }),
+    );
   }
 
   async searchCode(query: string, limit?: number): Promise<RepoSearchResult[]> {
-    if (!query.trim()) return [];
+    return this.measured(async () => {
+      if (!query.trim()) return [];
+      return this.controlled(async () => {
+        const root = await this.resolveCheckoutRoot();
+        let output: string;
+        try {
+          output = await git(
+            safeArgs(root, ['grep', '-n', '-I', '--full-name', '-F', '-e', query, '--', '.']),
+            {
+              cwd: root,
+              timeout: 10_000,
+              maxBuffer: 2 * 1024 * 1024,
+            },
+          );
+        } catch (error) {
+          if (error instanceof Error && /exit code 1$/i.test(error.message)) return [];
+          throw error;
+        }
 
-    return this.controlled(async () => {
-      const root = await this.resolveCheckoutRoot();
-      let output: string;
-      try {
-        output = await git(
-          safeArgs(root, ['grep', '-n', '-I', '--full-name', '-F', '-e', query, '--', '.']),
-          {
-            cwd: root,
-            timeout: 10_000,
-            maxBuffer: 2 * 1024 * 1024,
-          },
-        );
-      } catch (error) {
-        if (error instanceof Error && /exit code 1$/i.test(error.message)) return [];
-        throw error;
-      }
-
-      return this.shapeSearchResults(output, boundedSearchLimit(limit));
+        return this.shapeSearchResults(output, boundedSearchLimit(limit));
+      });
     });
   }
 
@@ -180,6 +197,24 @@ export class LocalCheckoutReader implements RepoReader {
         LOCAL_UNAVAILABLE_MESSAGE,
         true,
       );
+    }
+  }
+
+  private async measured<T>(operation: () => Promise<T>): Promise<T> {
+    const startedAt = this.now();
+    try {
+      return await operation();
+    } finally {
+      if (this.telemetryContext) {
+        try {
+          this.telemetry.localRead(
+            this.telemetryContext,
+            this.now() - startedAt,
+          );
+        } catch {
+          // Observability must never change repository-read behavior.
+        }
+      }
     }
   }
 }

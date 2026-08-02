@@ -395,6 +395,15 @@ describe('performance/observability privacy-safe hit/miss and duration signals',
       expect.arrayContaining([
         ['grounding.bundle.lookup', { outcome: 'hit' }, undefined],
         [
+          'grounding.bundle',
+          expect.objectContaining({
+            caller: 'bundle-store',
+            project: 'system',
+            result: 'hit',
+          }),
+          { hit: 1 },
+        ],
+        [
           'grounding.bundle.materialization.duration',
           { source: 'bundle', outcome: 'success' },
           { durationMs: expect.any(Number) },
@@ -407,6 +416,52 @@ describe('performance/observability privacy-safe hit/miss and duration signals',
     expect(serialized).not.toContain(identity.sha);
     expect(serialized).not.toContain(destination);
     expect(serialized).not.toContain(secret);
+  });
+
+  it('TBI-008 DoD-0 emits a redacted contract bundle miss from the real lookup path', async () => {
+    // Arrange
+    const destination = join(
+      tmpdir(),
+      'private-bundle-destination-do-not-emit',
+    );
+    const credentialRepo = {
+      ...identity,
+      repo: 'https://user:bundle-secret@example.invalid/org/repo?token=abc',
+    };
+    const events: Parameters<BundleStoreTelemetry>[] = [];
+    const store = createGroundingBundleStore({
+      getContainerClient: () =>
+        fakeContainer({
+          downloadToFile: jest
+            .fn()
+            .mockRejectedValue(Object.assign(new Error('missing'), {
+              statusCode: 404,
+            })),
+        }),
+      repairAndMaterialize: jest.fn().mockResolvedValue(false),
+      telemetry: (name, properties, measurements) => {
+        events.push([name, properties, measurements]);
+      },
+      now: () => 100,
+    });
+
+    // Act
+    await store.rehydrate(credentialRepo, destination);
+
+    // Assert
+    expect(events).toEqual(
+      expect.arrayContaining([
+        [
+          'grounding.bundle',
+          expect.objectContaining({ result: 'miss' }),
+          { hit: 0 },
+        ],
+      ]),
+    );
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain('bundle-secret');
+    expect(serialized).not.toContain('token=abc');
+    expect(serialized).not.toContain(destination);
   });
 });
 

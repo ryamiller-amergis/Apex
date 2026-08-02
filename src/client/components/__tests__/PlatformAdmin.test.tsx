@@ -42,6 +42,27 @@ jest.mock('../WalkthroughsAdminPanel', () => ({
   ),
 }));
 
+jest.mock('../GroundingRolloutStatus', () => ({
+  GroundingRolloutStatus: ({
+    stage,
+    onAdvance,
+  }: {
+    stage: string;
+    onAdvance: () => void;
+  }) => (
+    <section data-testid="grounding-rollout-status">
+      <span>{stage}</span>
+      <button
+        type="button"
+        data-testid="grounding-advance-button"
+        onClick={onAdvance}
+      >
+        Review advancement controls
+      </button>
+    </section>
+  ),
+}));
+
 jest.mock('../../hooks/usePlatformAdmin', () => ({
   useApproveProjectAccessRequest: jest.fn(),
   usePlatformAdminAccessRequests: jest.fn(),
@@ -375,6 +396,24 @@ describe('PlatformAdmin feature flags', () => {
 
     expect(screen.getByRole('heading', { name: /feature flags/i })).toBeInTheDocument();
     expect(screen.getByText('repo-grounding-workspace-profile')).toBeInTheDocument();
+  });
+
+  it('AC-0 / BR-011 mounts the current rollout scorecard and focuses manual audited controls', async () => {
+    const user = userEvent.setup({ delay: null });
+
+    await user.click(screen.getByRole('tab', { name: /feature flags/i }));
+
+    expect(screen.getByTestId('grounding-rollout-status')).toHaveTextContent(
+      'design-module',
+    );
+    await user.click(screen.getByTestId('grounding-advance-button'));
+
+    await waitFor(() => {
+      expect(
+        document.getElementById('grounding-rollout-feature-flag-controls'),
+      ).toHaveFocus();
+    });
+    expect(screen.getByRole('button', { name: /hide rules/i })).toBeVisible();
   });
 
   it('lets a super admin add project targeting rules via typeahead multi-select', async () => {

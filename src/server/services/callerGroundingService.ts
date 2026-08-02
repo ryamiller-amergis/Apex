@@ -22,6 +22,11 @@ import {
 } from './runGroundingMaterializer';
 import { runGroundingService } from './runGroundingService';
 import { trackEvent as emitTelemetryEvent } from './telemetry';
+import { createGroundingTelemetry } from './groundingTelemetry';
+import {
+  runImpactContextRegistry,
+  type RunImpactContextRegistry,
+} from './runImpactContextRegistry';
 
 export interface CallerRepository {
   provider: SkillProvider;
@@ -60,28 +65,28 @@ type GroundingServiceDependency = Pick<
 
 export interface CallerGroundingDependencies {
   isGroundingEnabledForCaller: typeof evaluateGroundingFlag;
-  ensureRepoCache: (
-    options: {
-      provider: SkillProvider;
-      project: string;
-      repo: string;
-      branch: string;
-    },
-  ) => Promise<{ baseSha: string }>;
+  ensureRepoCache: (options: {
+    provider: SkillProvider;
+    project: string;
+    repo: string;
+    branch: string;
+  }) => Promise<{ baseSha: string; mirrorHit?: boolean }>;
   groundingService: GroundingServiceDependency;
   materialize: (
     grounding: RunGrounding,
-    destination: RunRef,
+    destination: RunRef
   ) => Promise<RunGroundingMaterializationResult>;
   profiles: {
     registerConnectionProfile(
       input: GroundingProfileRegistration,
       caller: GroundingCallerContext,
-      reauthorize: GroundingProfileReauthorization,
+      reauthorize: GroundingProfileReauthorization
     ): GroundingProfile;
     revokeProfile(profileId: GroundingProfileId): void;
   };
+  impactContexts: Pick<RunImpactContextRegistry, 'register' | 'unregister'>;
   trackEvent: typeof emitTelemetryEvent;
+  now?: () => number;
 }
 
 function runRefKey(run: RunRef): string {
@@ -92,9 +97,7 @@ function groundingProvider(provider: SkillProvider): RunGrounding['provider'] {
   return provider === 'ado' ? 'azure_devops' : 'github';
 }
 
-function profileProvider(
-  provider: RunGrounding['provider'],
-): SkillProvider {
+function profileProvider(provider: RunGrounding['provider']): SkillProvider {
   return provider === 'azure_devops' ? 'ado' : 'github';
 }
 
@@ -106,21 +109,41 @@ function repositoryName(repository: CallerRepository): string {
 
 function activeTarget(groundings: RunGrounding[]): RunGrounding | undefined {
   return groundings.find(
-    (grounding) => grounding.repoRole === 'target' && grounding.isActive,
+    (grounding) => grounding.repoRole === 'target' && grounding.isActive
   );
 }
 
 function activatedTarget(
-  activation: ActivateRunGroundingsResult,
+  activation: ActivateRunGroundingsResult
 ): RunGrounding | undefined {
   return activation.ok ? activeTarget(activation.groundings) : undefined;
 }
 
+function callerRunTitle(caller: string): string {
+  const words = caller
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((word) =>
+      word.toLowerCase() === 'apex' ? 'Apex' : word.toLowerCase()
+    );
+  if (words.length === 0) return 'Grounded run';
+  words[0] = words[0][0].toUpperCase() + words[0].slice(1);
+  return `${words.join(' ')} run`;
+}
+
 export function createCallerGroundingService(
-  dependencies: CallerGroundingDependencies,
+  dependencies: CallerGroundingDependencies
 ): {
   start(input: StartCallerGroundingInput): Promise<CallerGroundingSelection>;
 } {
+  const telemetry = createGroundingTelemetry(dependencies.trackEvent);
+  const now = dependencies.now ?? Date.now;
+  const telemetryContext = (input: StartCallerGroundingInput) => ({
+    caller: input.caller,
+    project: input.run.project,
+    runId: input.run.runId,
+    runType: input.run.runType,
+  });
   const remote = (): RemoteCallerGrounding => ({
     mode: 'remote',
     release: async () => undefined,
@@ -128,26 +151,24 @@ export function createCallerGroundingService(
 
   const fallback = (
     input: StartCallerGroundingInput,
-    reason: string,
+    reason: string
   ): RemoteCallerGrounding => {
-    dependencies.trackEvent('grounding.fallback', {
-      caller: input.caller,
-      project: input.run.project,
-      runId: input.run.runId,
-      reason,
-    });
+    const context = telemetryContext(input);
+    telemetry.fallback(context, reason);
     return remote();
   };
 
   const startLocal = async (
     input: StartCallerGroundingInput,
+    setMaterializationMode: (mode: 'cold' | 'warm') => void
   ): Promise<CallerGroundingSelection> => {
     try {
       const repo = repositoryName(input.repository);
       const existing = activeTarget(
-        await dependencies.groundingService.getGroundings(input.run),
+        await dependencies.groundingService.getGroundings(input.run)
       );
       let grounding = existing;
+      setMaterializationMode(existing ? 'warm' : 'cold');
 
       if (!grounding) {
         const cache = await dependencies.ensureRepoCache({
@@ -156,6 +177,9 @@ export function createCallerGroundingService(
           repo,
           branch: input.repository.branch,
         });
+        if (cache.mirrorHit !== undefined) {
+          telemetry.mirror(telemetryContext(input), cache.mirrorHit);
+        }
         grounding = activatedTarget(
           await dependencies.groundingService.activateGroundings({
             run: input.run,
@@ -165,7 +189,7 @@ export function createCallerGroundingService(
               branch: input.repository.branch,
               groundedSha: cache.baseSha,
             },
-          }),
+          })
         );
       }
 
@@ -192,10 +216,17 @@ export function createCallerGroundingService(
           repo,
           sha: grounding.groundedSha,
           checkoutPath: materialized.workspacePath,
+          caller: input.caller,
         },
         callerContext,
-        input.reauthorize,
+        input.reauthorize
       );
+      dependencies.impactContexts.register(input.run, {
+        authorId: input.userId,
+        title: callerRunTitle(input.caller),
+        link: '/home',
+        caller: input.caller,
+      });
 
       let released = false;
       return {
@@ -208,6 +239,7 @@ export function createCallerGroundingService(
           try {
             await dependencies.groundingService.markTerminalInactive(input.run);
           } finally {
+            dependencies.impactContexts.unregister(input.run);
             dependencies.profiles.revokeProfile(profile.id);
           }
         },
@@ -230,7 +262,7 @@ export function createCallerGroundingService(
           },
           () => {
             evaluationFailed = true;
-          },
+          }
         );
       } catch {
         evaluationFailed = true;
@@ -250,7 +282,23 @@ export function createCallerGroundingService(
       }
 
       // @feature-flag:repo-grounding-workspace-profile enabled-start
-      const local = await startLocal(input);
+      const startedAt = now();
+      let materializationMode: 'cold' | 'warm' = 'cold';
+      const local = await startLocal(input, (mode) => {
+        materializationMode = mode;
+      });
+      telemetry.materialization(
+        telemetryContext(input),
+        materializationMode,
+        now() - startedAt,
+        local.mode === 'local' ? 'success' : 'failure'
+      );
+      if (local.mode === 'remote') {
+        telemetry.failure(
+          telemetryContext(input),
+          'grounded-caller-attempt-failed'
+        );
+      }
       // @feature-flag:repo-grounding-workspace-profile enabled-end
       // @feature-flag:repo-grounding-workspace-profile end
       return local;
@@ -264,5 +312,6 @@ export const callerGroundingService = createCallerGroundingService({
   groundingService: runGroundingService,
   materialize: materializeRunGroundingWithPath,
   profiles: groundingProfileResolver,
+  impactContexts: runImpactContextRegistry,
   trackEvent: emitTelemetryEvent,
 });

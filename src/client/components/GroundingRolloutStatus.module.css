@@ -1,0 +1,199 @@
+.card {
+  padding: 20px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-sm);
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 18px;
+}
+
+.subtitle,
+.sample,
+.manualNote {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.overallStatus,
+.gateStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.overallStatus {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-primary);
+}
+
+.statusEligible,
+.gateStatusPass {
+  color: var(--success-color);
+}
+
+.statusBlocked,
+.gateStatusFail {
+  color: var(--error-color);
+}
+
+.statusUnknown,
+.gateStatusUnknown {
+  color: var(--text-secondary);
+}
+
+.sample {
+  margin-top: 16px;
+}
+
+.emptyState {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color-light);
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.gateList,
+.skeletonList {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.gateRow {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(80px, auto) minmax(90px, auto);
+  align-items: center;
+  gap: 16px;
+  padding: 12px;
+  border: 1px solid var(--border-color-light);
+  border-radius: 8px;
+  background: var(--bg-primary);
+}
+
+.gateLabel,
+.threshold {
+  display: block;
+}
+
+.gateLabel {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.threshold {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.metric {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.gateStatus {
+  justify-content: flex-end;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.primaryButton,
+.secondaryButton {
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.primaryButton {
+  border: 1px solid var(--accent-color);
+  background: var(--accent-color);
+  color: var(--bg-primary);
+}
+
+.primaryButton:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.primaryButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.secondaryButton {
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.secondaryButton:hover {
+  border-color: var(--accent-color);
+}
+
+.error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid var(--error-color);
+  border-radius: 8px;
+  color: var(--error-color);
+}
+
+.skeletonRow {
+  height: 56px;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  opacity: 0.7;
+}
+
+@media (max-width: 720px) {
+  .header,
+  .actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .overallStatus {
+    align-self: flex-start;
+  }
+
+  .gateRow {
+    grid-template-columns: 1fr auto;
+  }
+
+  .gateStatus {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+}

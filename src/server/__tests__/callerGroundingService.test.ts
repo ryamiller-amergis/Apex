@@ -26,7 +26,7 @@ const grounding: RunGrounding = {
 const profileId = 'opaque-profile' as GroundingProfileId;
 
 function dependencies(
-  overrides: Partial<CallerGroundingDependencies> = {},
+  overrides: Partial<CallerGroundingDependencies> = {}
 ): CallerGroundingDependencies {
   return {
     isGroundingEnabledForCaller: jest.fn().mockResolvedValue(true),
@@ -53,6 +53,10 @@ function dependencies(
         expiresAt: Date.now() + 60_000,
       }),
       revokeProfile: jest.fn(),
+    },
+    impactContexts: {
+      register: jest.fn(),
+      unregister: jest.fn(),
     },
     trackEvent: jest.fn(),
     ...overrides,
@@ -90,7 +94,7 @@ describe('PBI-005 shared caller grounding startup', () => {
         project: 'Apex',
         userId: 'developer-1',
       },
-      expect.any(Function),
+      expect.any(Function)
     );
     expect(deps.groundingService.getGroundings).toHaveBeenCalledWith(run);
     expect(deps.materialize).toHaveBeenCalledWith(grounding, run);
@@ -106,12 +110,21 @@ describe('PBI-005 shared caller grounding startup', () => {
         runRef: 'chat:thread-1',
         project: 'Apex',
       },
-      expect.any(Function),
+      expect.any(Function)
     );
+    expect(deps.impactContexts.register).toHaveBeenCalledWith(run, {
+      authorId: 'developer-1',
+      title: 'Chat agent run',
+      link: '/home',
+      caller: 'chat-agent',
+    });
 
     await selected.release();
-    expect(deps.groundingService.markTerminalInactive).toHaveBeenCalledWith(run);
+    expect(deps.groundingService.markTerminalInactive).toHaveBeenCalledWith(
+      run
+    );
     expect(deps.profiles.revokeProfile).toHaveBeenCalledWith(profileId);
+    expect(deps.impactContexts.unregister).toHaveBeenCalledWith(run);
   });
 
   it('AC-0 creates a run grounding when the caller has no existing pin', async () => {
@@ -195,7 +208,7 @@ describe('PBI-005 shared caller grounding startup', () => {
         repo: 'AI-Pilot',
       }),
       expect.anything(),
-      expect.any(Function),
+      expect.any(Function)
     );
   });
 
@@ -230,17 +243,157 @@ describe('PBI-005 shared caller grounding startup', () => {
     });
 
     // Then ADO receives the original repository name without GitHub normalization.
-    expect(deps.ensureRepoCache).toHaveBeenCalledWith(expect.objectContaining({
-      provider: 'ado',
-      repo: 'Platform/AI-Pilot',
-    }));
+    expect(deps.ensureRepoCache).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'ado',
+        repo: 'Platform/AI-Pilot',
+      })
+    );
     expect(deps.groundingService.activateGroundings).toHaveBeenCalledWith(
       expect.objectContaining({
         target: expect.objectContaining({
           provider: 'azure_devops',
           repository: 'Platform/AI-Pilot',
         }),
+      })
+    );
+  });
+
+  it.each([
+    {
+      label: 'cold',
+      existing: [] as RunGrounding[],
+      mirrorHit: true,
+      expectedMode: 'cold',
+    },
+    {
+      label: 'warm',
+      existing: [grounding],
+      mirrorHit: undefined,
+      expectedMode: 'warm',
+    },
+  ])(
+    'TBI-008 DoD-0 emits one $label materialization for an enabled successful caller',
+    async ({ existing, mirrorHit, expectedMode }) => {
+      // Arrange
+      const deps = dependencies({
+        now: jest.fn().mockReturnValueOnce(1_000).mockReturnValueOnce(1_125),
+      });
+      jest
+        .mocked(deps.groundingService.getGroundings)
+        .mockResolvedValue(existing);
+      jest.mocked(deps.ensureRepoCache).mockResolvedValue({
+        baseSha: grounding.groundedSha,
+        mirrorHit,
+      });
+      const service = createCallerGroundingService(deps);
+
+      // Act
+      await service.start({
+        caller: 'interview',
+        userId: 'developer-1',
+        run,
+        repository: {
+          provider: 'github',
+          repo: 'AI-Pilot',
+          branch: 'main',
+        },
+        reauthorize: async () => true,
+      });
+
+      // Assert
+      expect(deps.trackEvent).toHaveBeenCalledWith(
+        'grounding.materialize',
+        expect.objectContaining({
+          caller: 'interview',
+          project: 'Apex',
+          runId: 'thread-1',
+          mode: expectedMode,
+          outcome: 'success',
+        }),
+        { durationMs: 125 }
+      );
+      expect(
+        jest
+          .mocked(deps.trackEvent)
+          .mock.calls.filter(([name]) => name === 'grounding.materialize')
+      ).toHaveLength(1);
+      if (mirrorHit !== undefined) {
+        expect(deps.trackEvent).toHaveBeenCalledWith(
+          'grounding.mirror',
+          expect.objectContaining({
+            caller: 'interview',
+            project: 'Apex',
+            runId: 'thread-1',
+            result: mirrorHit ? 'hit' : 'miss',
+          }),
+          { hit: mirrorHit ? 1 : 0 }
+        );
+      }
+      expect(deps.profiles.registerConnectionProfile).toHaveBeenCalledWith(
+        expect.objectContaining({ caller: 'interview' }),
+        expect.anything(),
+        expect.any(Function)
+      );
+    }
+  );
+
+  it('TBI-008 DoD-0 emits same-cohort mirror miss and failed materialization once', async () => {
+    // Arrange
+    const deps = dependencies({
+      now: jest.fn().mockReturnValueOnce(2_000).mockReturnValueOnce(2_250),
+      materialize: jest.fn().mockResolvedValue({ state: 'unavailable' }),
+    });
+    jest.mocked(deps.groundingService.getGroundings).mockResolvedValue([]);
+    jest.mocked(deps.ensureRepoCache).mockResolvedValue({
+      baseSha: grounding.groundedSha,
+      mirrorHit: false,
+    });
+    const service = createCallerGroundingService(deps);
+
+    // Act
+    await service.start({
+      caller: 'interview',
+      userId: 'developer-1',
+      run,
+      repository: {
+        provider: 'github',
+        repo: 'AI-Pilot',
+        branch: 'main',
+      },
+      reauthorize: async () => true,
+    });
+
+    // Assert
+    expect(deps.trackEvent).toHaveBeenCalledWith(
+      'grounding.mirror',
+      expect.objectContaining({
+        caller: 'interview',
+        project: 'Apex',
+        runId: 'thread-1',
+        result: 'miss',
       }),
+      { hit: 0 }
+    );
+    expect(deps.trackEvent).toHaveBeenCalledWith(
+      'grounding.materialize',
+      expect.objectContaining({
+        caller: 'interview',
+        project: 'Apex',
+        runId: 'thread-1',
+        mode: 'cold',
+        outcome: 'failure',
+      }),
+      { durationMs: 250 }
+    );
+    expect(deps.trackEvent).toHaveBeenCalledWith(
+      'grounding.failure',
+      expect.objectContaining({
+        caller: 'interview',
+        project: 'Apex',
+        runId: 'thread-1',
+      }),
+      { failureCount: 1 }
     );
   });
 
@@ -269,6 +422,7 @@ describe('PBI-005 shared caller grounding startup', () => {
     expect(deps.trackEvent).not.toHaveBeenCalled();
     expect(deps.groundingService.getGroundings).not.toHaveBeenCalled();
     expect(deps.profiles.registerConnectionProfile).not.toHaveBeenCalled();
+    expect(deps.impactContexts.register).not.toHaveBeenCalled();
   });
 
   it('AC-1 materialization unavailability selects remote and emits exactly one failure event', async () => {
@@ -293,23 +447,34 @@ describe('PBI-005 shared caller grounding startup', () => {
 
     // Then controlled remote fallback emits exactly one failure event.
     expect(selected).toMatchObject({ mode: 'remote' });
-    expect(deps.trackEvent).toHaveBeenCalledTimes(1);
-    expect(deps.trackEvent).toHaveBeenCalledWith('grounding.fallback', {
-      caller: 'chat-agent',
-      project: 'Apex',
-      runId: 'thread-1',
-      reason: 'materialization-unavailable',
-    });
+    expect(deps.trackEvent).toHaveBeenCalledWith(
+      'grounding.fallback',
+      {
+        caller: 'chat-agent',
+        project: 'Apex',
+        runId: 'thread-1',
+        runType: 'chat',
+        reason: 'materialization-unavailable',
+      },
+      { fallbackCount: 1 }
+    );
+    expect(
+      jest
+        .mocked(deps.trackEvent)
+        .mock.calls.filter(([name]) => name === 'grounding.fallback')
+    ).toHaveLength(1);
     expect(deps.profiles.registerConnectionProfile).not.toHaveBeenCalled();
   });
 
   it('AC-1 flag-evaluation failure selects remote and emits exactly one sanitized failure event', async () => {
     // Given the feature-flag service fails instead of returning an intentional disabled result.
     const deps = dependencies({
-      isGroundingEnabledForCaller: jest.fn().mockImplementation(async (_ctx, onEvaluationError) => {
-        onEvaluationError?.();
-        return false;
-      }),
+      isGroundingEnabledForCaller: jest
+        .fn()
+        .mockImplementation(async (_ctx, onEvaluationError) => {
+          onEvaluationError?.();
+          return false;
+        }),
     });
     const service = createCallerGroundingService(deps);
 
@@ -328,20 +493,31 @@ describe('PBI-005 shared caller grounding startup', () => {
 
     // Then remote fallback emits exactly one failure event for the evaluation failure.
     expect(selected).toMatchObject({ mode: 'remote' });
-    expect(deps.trackEvent).toHaveBeenCalledTimes(1);
-    expect(deps.trackEvent).toHaveBeenCalledWith('grounding.fallback', {
-      caller: 'chat-agent',
-      project: 'Apex',
-      runId: 'thread-1',
-      reason: 'flag-evaluation-failed',
-    });
+    expect(deps.trackEvent).toHaveBeenCalledWith(
+      'grounding.fallback',
+      {
+        caller: 'chat-agent',
+        project: 'Apex',
+        runId: 'thread-1',
+        runType: 'chat',
+        reason: 'flag-evaluation-failed',
+      },
+      { fallbackCount: 1 }
+    );
+    expect(
+      jest
+        .mocked(deps.trackEvent)
+        .mock.calls.filter(([name]) => name === 'grounding.fallback')
+    ).toHaveLength(1);
     expect(deps.groundingService.getGroundings).not.toHaveBeenCalled();
   });
 
   it('AC-1 / VT-02 selects remote and emits exactly one fallback event when materialization throws', async () => {
     // Given grounding is enabled, fallback is permitted, and materialization fails.
     const deps = dependencies({
-      materialize: jest.fn().mockRejectedValue(new Error('checkout unavailable')),
+      materialize: jest
+        .fn()
+        .mockRejectedValue(new Error('checkout unavailable')),
     });
     const service = createCallerGroundingService(deps);
 
@@ -360,13 +536,22 @@ describe('PBI-005 shared caller grounding startup', () => {
 
     // Then the remote reader path is selected with one sanitized fallback event.
     expect(selected).toMatchObject({ mode: 'remote' });
-    expect(deps.trackEvent).toHaveBeenCalledTimes(1);
-    expect(deps.trackEvent).toHaveBeenCalledWith('grounding.fallback', {
-      caller: 'ask-apex',
-      project: 'Apex',
-      runId: 'thread-1',
-      reason: 'startup-failed',
-    });
+    expect(deps.trackEvent).toHaveBeenCalledWith(
+      'grounding.fallback',
+      {
+        caller: 'ask-apex',
+        project: 'Apex',
+        runId: 'thread-1',
+        runType: 'chat',
+        reason: 'startup-failed',
+      },
+      { fallbackCount: 1 }
+    );
+    expect(
+      jest
+        .mocked(deps.trackEvent)
+        .mock.calls.filter(([name]) => name === 'grounding.fallback')
+    ).toHaveLength(1);
     expect(deps.profiles.registerConnectionProfile).not.toHaveBeenCalled();
   });
 });

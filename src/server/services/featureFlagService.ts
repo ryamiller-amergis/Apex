@@ -302,6 +302,14 @@ export async function isFeatureEnabled(
   return result[key] ?? false;
 }
 
+export async function isFeatureOperational(key: string): Promise<boolean> {
+  const flag = await db.query.featureFlags.findFirst({
+    where: eq(featureFlags.key, key),
+    columns: { enabled: true, lifecycle: true },
+  });
+  return Boolean(flag?.enabled && flag.lifecycle !== 'archived');
+}
+
 export interface GroundingFlagContext {
   userId: string;
   project: string;

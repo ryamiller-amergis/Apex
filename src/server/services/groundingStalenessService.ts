@@ -9,6 +9,7 @@ import {
   readCachedOriginSha,
   type RepoCacheOptions,
 } from './repoCacheService';
+import { createGroundingTelemetry } from './groundingTelemetry';
 import { trackEvent } from './telemetry';
 import { runGroundingRepository } from './runGroundingRepository';
 
@@ -62,6 +63,7 @@ export function createGroundingStalenessService(
   const countCommitsBehind =
     dependencies.countCommitsBehind ?? countCommitsBehindMirror;
   const telemetry = dependencies.telemetry ?? trackEvent;
+  const groundingOperations = createGroundingTelemetry(telemetry);
   const listActiveGroundings =
     dependencies.listActiveGroundings ??
     (() => runGroundingRepository.listActiveGroundings());
@@ -84,16 +86,18 @@ export function createGroundingStalenessService(
     }
 
     if (state !== 'fresh') {
-      telemetry(
-        'grounding.staleness',
+      groundingOperations.staleness(
         {
+          caller: 'grounding-staleness',
           provider: grounding.provider,
           project: grounding.project,
+          runId: grounding.runId,
+          runType: grounding.runType,
           repository: grounding.repository,
           branch: grounding.branch,
-          state,
+          result: state,
         },
-        { ageMs, commitCount },
+        { ageMs, commitCount }
       );
     }
     return state;

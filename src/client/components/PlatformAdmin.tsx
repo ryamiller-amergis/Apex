@@ -38,6 +38,8 @@ import type {
   ProjectAssignmentGroup,
 } from '../../shared/types/platformAdmin';
 import type { FeatureFlagRule, FeatureFlagWithRules, FlagLifecycle, FlagRuleType } from '../../shared/types/featureFlags';
+import type { GroundingRolloutStage } from '../../shared/types/groundingOperations';
+import { GroundingRolloutStatus } from './GroundingRolloutStatus';
 import styles from './PlatformAdmin.module.css';
 
 const MENU_ITEM_KEYS = CONFIGURABLE_MENU_ITEMS.map((item) => item.key) as [MenuItemKey, ...MenuItemKey[]];
@@ -49,6 +51,46 @@ const menuSchema = z.object({
 type MenuFormValues = z.infer<typeof menuSchema>;
 
 type PlatformAdminTab = 'access' | 'menu' | 'flags' | 'walkthroughs';
+
+function resolveGroundingRolloutStage(
+  flags: FeatureFlagWithRules[],
+): GroundingRolloutStage {
+  const convergenceFlag = flags.find(
+    (flag) => flag.key === 'repo-grounding-remote-search-convergence',
+  );
+  if (
+    convergenceFlag?.enabled &&
+    convergenceFlag.lifecycle !== 'archived' &&
+    convergenceFlag.rules.length > 0
+  ) {
+    return 'convergence';
+  }
+
+  const groundingFlag = flags.find(
+    (flag) => flag.key === 'repo-grounding-workspace-profile',
+  );
+  const callerRules = new Set(
+    groundingFlag?.rules
+      .filter((rule) => rule.type === 'caller' && rule.value)
+      .map((rule) => rule.value as string) ?? [],
+  );
+
+  if (
+    ['ask-apex', 'agent-home', 'walkthrough'].some((caller) =>
+      callerRules.has(caller),
+    )
+  ) {
+    return 'assistants-walkthroughs';
+  }
+  if (
+    ['interview', 'prd', 'design-doc'].some((caller) =>
+      callerRules.has(caller),
+    )
+  ) {
+    return 'interviews-documents';
+  }
+  return 'design-module';
+}
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong';
@@ -1107,6 +1149,10 @@ const FeatureFlagsSection: React.FC = () => {
     users,
     groups,
   }), [projectList, users, groups]);
+  const rolloutStage = useMemo(
+    () => resolveGroundingRolloutStage(flags),
+    [flags],
+  );
 
   const {
     register,
@@ -1136,6 +1182,22 @@ const FeatureFlagsSection: React.FC = () => {
 
   const handleCleanupReadyChange = (flag: FeatureFlagWithRules, cleanupReady: boolean) => {
     void updateFlag.mutateAsync({ id: flag.id, cleanupReady });
+  };
+
+  const handleReviewGroundingAdvancement = () => {
+    const groundingFlag = flags.find(
+      (flag) => flag.key === 'repo-grounding-workspace-profile',
+    );
+    if (!groundingFlag) return;
+
+    setExpandedFlagId(groundingFlag.id);
+    window.setTimeout(() => {
+      const controls = document.getElementById(
+        'grounding-rollout-feature-flag-controls',
+      );
+      controls?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+      controls?.focus();
+    }, 0);
   };
 
   const handleDeleteRequest = (flag: FeatureFlagWithRules) => {
@@ -1172,6 +1234,11 @@ const FeatureFlagsSection: React.FC = () => {
         </div>
         <span className={styles.countBadge}>{flags.length} flags</span>
       </div>
+
+      <GroundingRolloutStatus
+        stage={rolloutStage}
+        onAdvance={handleReviewGroundingAdvancement}
+      />
 
       <form
         className={styles.flagCreateForm}
@@ -1441,7 +1508,11 @@ const FlagCard: React.FC<FlagCardProps> = ({
     flag.key === 'repo-grounding-workspace-profile';
 
   return (
-    <article className={styles.flagCard}>
+    <article
+      id={isGroundingRolloutFlag ? 'grounding-rollout-feature-flag-controls' : undefined}
+      className={styles.flagCard}
+      tabIndex={isGroundingRolloutFlag ? -1 : undefined}
+    >
       <div className={styles.flagCardHeader}>
         <div className={styles.flagCardMeta}>
           <code className={styles.flagKey}>{flag.key}</code>

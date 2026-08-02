@@ -15,6 +15,7 @@ import type {
   RepositoryIdentity,
 } from '../../../shared/types/grounding';
 import { isFeatureEnabled as evaluateFeatureFlag } from '../featureFlagService';
+import { createGroundingTelemetry } from '../groundingTelemetry';
 import { trackEvent } from '../telemetry';
 
 const execFileAsync = promisify(execFile);
@@ -200,6 +201,7 @@ export function createGroundingBundleStore(
     options.getContainerClient ?? (() => resolveContainerClient(containerName));
   const runGit = options.runGit ?? defaultRunGit;
   const telemetry = options.telemetry ?? trackEvent;
+  const groundingOperations = createGroundingTelemetry(telemetry);
   const now = options.now ?? Date.now;
 
   return {
@@ -250,6 +252,10 @@ export function createGroundingBundleStore(
           const blob = getContainerClient().getBlockBlobClient(key);
           await blob.downloadToFile(downloadedBundle);
           telemetry('grounding.bundle.lookup', { outcome: 'hit' });
+          groundingOperations.bundle(
+            { caller: 'bundle-store', project: 'system' },
+            true
+          );
 
           const verificationRepo = join(scratchDirectory, 'verify.git');
           await runGit(['init', '--bare', verificationRepo]);
@@ -294,6 +300,10 @@ export function createGroundingBundleStore(
           telemetry('grounding.bundle.lookup', {
             outcome: fallbackReason === 'bundle-missing' ? 'miss' : 'corrupt',
           });
+          groundingOperations.bundle(
+            { caller: 'bundle-store', project: 'system' },
+            false
+          );
           if (destinationOwned) {
             await rm(destination, { recursive: true, force: true }).catch(
               () => undefined

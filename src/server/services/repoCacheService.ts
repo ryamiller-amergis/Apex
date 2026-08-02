@@ -40,6 +40,8 @@ export interface RepoCacheResult {
   baseSha: string;
   stale: boolean;
   remote: GitRemote;
+  /** True when a complete shared mirror existed before this ensure attempt. */
+  mirrorHit?: boolean;
 }
 
 function safeSlug(value: string): string {
@@ -374,8 +376,9 @@ export async function refreshRepoCacheUnderLease(
   let stale = false;
   let baseSha: string;
   const repoLabel = `${options.provider}/${options.repo}@${options.branch}`;
+  const mirrorHit = cacheExists(cacheDir);
 
-  if (!cacheExists(cacheDir)) {
+  if (!mirrorHit) {
     if (fs.existsSync(cacheDir)) {
       throw new Error(
         'Repository cache is incomplete and was preserved because active workspaces may reference it',
@@ -430,7 +433,7 @@ export async function refreshRepoCacheUnderLease(
     `[repo-cache] ${stale ? 'verified stale' : 'ready'} ${options.provider}/${options.repo}@${options.branch} ` +
     `sha=${baseSha.slice(0, 12)} durationMs=${Date.now() - startedAt}`,
   );
-  return { cacheDir, baseSha, stale, remote };
+  return { cacheDir, baseSha, stale, remote, mirrorHit };
 }
 
 export function ensureRepoCache(options: RepoCacheOptions): Promise<RepoCacheResult> {
