@@ -227,6 +227,7 @@ describe('walkthroughAnchorSmartTaggingService', () => {
       expect(ctx).toContain('## Existing Catalog Hints');
       expect(ctx).toContain('Use `suggestedLabel`');
       expect(ctx).toContain('Never emit a `label` field');
+      expect(ctx).toContain('Never emit `tooltip`');
     });
 
     it('filters out approved/rejected catalog rows (only newly discovered)', async () => {
@@ -403,7 +404,7 @@ describe('walkthroughAnchorSmartTaggingService', () => {
       ).not.toHaveBeenCalled();
     });
 
-    it('rejects partial AI batches instead of silently returning only some cards', async () => {
+    it('applies partial AI batches and leaves missing candidates pending with a warning', async () => {
       await startAndClearInFlight([
         { testId: 'new-candidate' },
         { testId: 'second-candidate' },
@@ -416,12 +417,12 @@ describe('walkthroughAnchorSmartTaggingService', () => {
 
       const result = await getSmartTaggingResult(THREAD_ID, USER_ID);
 
-      expect(result.status).toBe('failed');
-      expect(result.error).toMatch(/partial batch \(1\/2\)/i);
-      expect(result.error).toContain('second-candidate');
+      expect(result.status).toBe('ready');
+      expect(result.warning).toMatch(/partial batch \(1\/2\)/i);
+      expect(result.warning).toContain('second-candidate');
       expect(
         mockedRegistry.applySmartTagSuggestionsToPending
-      ).not.toHaveBeenCalled();
+      ).toHaveBeenCalledTimes(1);
     });
 
     it('on partial persist failure leaves catalog reviewable (failed + warning, no discard)', async () => {

@@ -574,6 +574,7 @@ async function buildKickoffContext(
     'Root must be an object `{ "suggestions": [...] }` — never a bare array, never markdown fences. Do not end until that file exists.',
     'Each suggestion must use exactly these fields: testId, anchorKey, suggestedLabel, suggestedRoute, allowedPlacements, smartTags, confidence, rationale.',
     'Use `suggestedLabel` for the human-readable label. Never emit a `label` field.',
+    'Set `allowedPlacements` to exactly `["top", "right", "bottom", "left"]`. Never emit `tooltip` or a preferred placement.',
   ];
 
   return lines.join('\n');
@@ -770,12 +771,10 @@ export async function getSmartTaggingResult(
   const missingTestIds = expectedTestIds.filter(
     (testId) => !returnedTestIds.has(testId)
   );
-  if (missingTestIds.length > 0) {
-    return failedResponse(
-      provenance,
-      `Smart-tagging returned a partial batch (${parsed.suggestions.length}/${expectedTestIds.length}). Missing: ${missingTestIds.join(', ')}`
-    );
-  }
+  const partialWarning =
+    missingTestIds.length > 0
+      ? `Smart-tagging returned a partial batch (${parsed.suggestions.length}/${expectedTestIds.length}). Missing candidates remain pending for the next batch: ${missingTestIds.join(', ')}`
+      : undefined;
 
   let updated = updatedByThread.get(threadId) ?? [];
   if (!appliedThreads.has(threadId)) {
@@ -821,6 +820,7 @@ export async function getSmartTaggingResult(
     result: parsed,
     provenance,
     updated,
+    warning: partialWarning,
   };
 }
 

@@ -49,18 +49,6 @@ const EVIDENCE_TAG_STOPWORDS = new Set([
 ]);
 
 
-const ALLOWED_RESULT_KEYS = new Set(['suggestions']);
-const ALLOWED_SUGGESTION_KEYS = new Set([
-  'testId',
-  'anchorKey',
-  'suggestedLabel',
-  'suggestedRoute',
-  'allowedPlacements',
-  'smartTags',
-  'confidence',
-  'rationale',
-]);
-
 // ── Skill output shapes ───────────────────────────────────────────────────────
 
 /** One classified candidate written by the smart-tagging skill. */
@@ -137,13 +125,6 @@ export type WalkthroughAnchorSmartTagMergeProvenanceBase = Omit<
 
 // ── Validation ────────────────────────────────────────────────────────────────
 
-function unknownKeys(
-  record: Record<string, unknown>,
-  allowed: ReadonlySet<string>,
-): string[] {
-  return Object.keys(record).filter((key) => !allowed.has(key));
-}
-
 /**
  * The registry persists the human-readable value as `label`, so agents
  * occasionally mirror that name even though the skill contract calls it
@@ -153,21 +134,53 @@ function unknownKeys(
 function normalizeSuggestionAliases(
   record: Record<string, unknown>,
 ): Record<string, unknown> {
-  if (!Object.prototype.hasOwnProperty.call(record, 'label')) return record;
-
   const normalized = { ...record };
-  if (!Object.prototype.hasOwnProperty.call(normalized, 'suggestedLabel')) {
-    normalized.suggestedLabel = normalized.label;
+  const aliases: Array<[canonical: string, alias: string]> = [
+    ['anchorKey', 'key'],
+    ['suggestedLabel', 'label'],
+    ['suggestedRoute', 'route'],
+    ['smartTags', 'tags'],
+    ['confidence', 'confidenceScore'],
+    ['rationale', 'reason'],
+  ];
+  for (const [canonical, alias] of aliases) {
+    if (
+      !Object.prototype.hasOwnProperty.call(normalized, canonical) &&
+      Object.prototype.hasOwnProperty.call(normalized, alias)
+    ) {
+      normalized[canonical] = normalized[alias];
+    }
+    delete normalized[alias];
   }
-  delete normalized.label;
   return normalized;
 }
 
-function isPlacement(value: unknown): value is WalkthroughRegistryPlacement {
+function isValidAnchorKey(anchorKey: string): boolean {
   return (
-    typeof value === 'string' &&
-    (WALKTHROUGH_REGISTRY_PLACEMENTS as readonly string[]).includes(value)
+    Boolean(anchorKey) &&
+    !/[#.[\]>+~*=]|^\s*\/\//.test(anchorKey) &&
+    !anchorKey.includes(' ')
   );
+}
+
+function labelFromTestId(testId: string): string {
+  return testId
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(' ');
+}
+
+function normalizeConfidence(value: unknown): number {
+  const numeric =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && value.trim()
+        ? Number(value)
+        : Number.NaN;
+  if (!Number.isFinite(numeric)) return 0.5;
+  const ratio = numeric > 1 ? numeric / 100 : numeric;
+  return Math.max(0, Math.min(1, ratio));
 }
 
 function validateSuggestion(
@@ -190,14 +203,6 @@ function validateSuggestion(
   }
 
   const record = normalizeSuggestionAliases(raw as Record<string, unknown>);
-  const invented = unknownKeys(record, ALLOWED_SUGGESTION_KEYS);
-  if (invented.length > 0) {
-    errors.push({
-      field: fieldPrefix,
-      code: 'UNEXPECTED_FIELD',
-      message: `Invented / unknown suggestion fields: ${invented.join(', ')}`,
-    });
-  }
 
   const testId = typeof record.testId === 'string' ? record.testId.trim() : '';
   if (!testId) {
@@ -208,24 +213,13 @@ function validateSuggestion(
     });
   }
 
-  const anchorKey =
+  const emittedAnchorKey =
     typeof record.anchorKey === 'string' ? record.anchorKey.trim() : '';
-  if (!anchorKey) {
-    errors.push({
-      field: `${fieldPrefix}.anchorKey`,
-      code: 'INVALID_ANCHOR_KEY',
-      message: 'anchorKey is required',
-    });
-  } else if (/[#.[\]>+~*=]|^\s*\/\//.test(anchorKey) || anchorKey.includes(' ')) {
-    errors.push({
-      field: `${fieldPrefix}.anchorKey`,
-      code: 'INVALID_ANCHOR_KEY',
-      message: 'anchorKey must be an exact registry key, not a CSS selector',
-    });
-  }
+  const anchorKey = isValidAnchorKey(emittedAnchorKey) ? emittedAnchorKey : testId;
 
-  const suggestedLabel =
+  const emittedLabel =
     typeof record.suggestedLabel === 'string' ? record.suggestedLabel.trim() : '';
+  const suggestedLabel = emittedLabel || labelFromTestId(testId);
   if (!suggestedLabel) {
     errors.push({
       field: `${fieldPrefix}.suggestedLabel`,
@@ -241,105 +235,34 @@ function validateSuggestion(
     const trimmed = record.suggestedRoute.trim();
     if (!trimmed) {
       suggestedRoute = null;
-    } else if (!isWalkthroughRoute(trimmed)) {
-      errors.push({
-        field: `${fieldPrefix}.suggestedRoute`,
-        code: 'INVALID_ROUTE',
-        message: 'suggestedRoute must be a relative allow-listed in-app route',
-      });
     } else {
-      suggestedRoute = trimmed;
-    }
-  } else {
-    errors.push({
-      field: `${fieldPrefix}.suggestedRoute`,
-      code: 'INVALID_ROUTE',
-      message: 'suggestedRoute must be a string or null',
-    });
-  }
-
-  const allowedPlacements: WalkthroughRegistryPlacement[] = [];
-  if (!Array.isArray(record.allowedPlacements) || record.allowedPlacements.length === 0) {
-    errors.push({
-      field: `${fieldPrefix}.allowedPlacements`,
-      code: 'INVALID_PLACEMENTS',
-      message: 'allowedPlacements must be a non-empty array',
-    });
-  } else {
-    const seen = new Set<string>();
-    for (const placement of record.allowedPlacements) {
-      if (!isPlacement(placement)) {
-        errors.push({
-          field: `${fieldPrefix}.allowedPlacements`,
-          code: 'INVALID_PLACEMENTS',
-          message: `Unsupported placement: ${String(placement)}`,
-        });
-        continue;
-      }
-      if (seen.has(placement)) continue;
-      seen.add(placement);
-      allowedPlacements.push(placement);
+      suggestedRoute = isWalkthroughRoute(trimmed) ? trimmed : null;
     }
   }
 
-  let smartTags: string[] = [];
-  if (!Array.isArray(record.smartTags)) {
-    errors.push({
-      field: `${fieldPrefix}.smartTags`,
-      code: 'INVALID_SMART_TAGS',
-      message: 'smartTags must be a JSON array of strings',
-    });
-  } else {
-    for (const tag of record.smartTags) {
-      if (typeof tag !== 'string' || !isValidSmartTag(tag)) {
-        errors.push({
-          field: `${fieldPrefix}.smartTags`,
-          code: 'INVALID_SMART_TAGS',
-          message: `Invalid smart tag (lowercase kebab-case required): ${String(tag)}`,
-        });
-      }
-    }
-    smartTags = normalizeSmartTags(
-      record.smartTags.filter((t): t is string => typeof t === 'string'),
-    );
-    if (
-      smartTags.length < SMART_TAG_COUNT_MIN ||
-      smartTags.length > SMART_TAG_COUNT_MAX
-    ) {
-      errors.push({
-        field: `${fieldPrefix}.smartTags`,
-        code: 'INVALID_SMART_TAGS',
-        message: `smartTags tag count must be ${SMART_TAG_COUNT_MIN}–${SMART_TAG_COUNT_MAX} (got ${smartTags.length})`,
-      });
-    }
+  // Placement policy is deterministic and is not AI-authored. Normalize any
+  // emitted value (including legacy terms such as "tooltip") to all four
+  // supported sides instead of rejecting an otherwise valid tagging batch.
+  const allowedPlacements: WalkthroughRegistryPlacement[] = [
+    ...WALKTHROUGH_REGISTRY_PLACEMENTS,
+  ];
+
+  const emittedTags = Array.isArray(record.smartTags)
+    ? record.smartTags.filter((tag): tag is string => typeof tag === 'string')
+    : [];
+  const smartTags = mergeEvidenceTokensIntoSmartTags(testId, emittedTags);
+  for (const fallback of ['walkthrough', 'discover', 'ui-element']) {
+    if (smartTags.length >= SMART_TAG_COUNT_MIN) break;
+    if (!smartTags.includes(fallback)) smartTags.push(fallback);
   }
 
-  let confidence = Number.NaN;
-  if (typeof record.confidence !== 'number' || !Number.isFinite(record.confidence)) {
-    errors.push({
-      field: `${fieldPrefix}.confidence`,
-      code: 'INVALID_CONFIDENCE',
-      message: 'confidence must be a finite number in [0, 1]',
-    });
-  } else if (record.confidence < 0 || record.confidence > 1) {
-    errors.push({
-      field: `${fieldPrefix}.confidence`,
-      code: 'INVALID_CONFIDENCE',
-      message: `confidence must be between 0 and 1 (got ${record.confidence})`,
-    });
-  } else {
-    confidence = record.confidence;
-  }
+  const confidence = normalizeConfidence(record.confidence);
 
-  const rationale =
+  const emittedRationale =
     typeof record.rationale === 'string' ? record.rationale.trim() : '';
-  if (!rationale) {
-    errors.push({
-      field: `${fieldPrefix}.rationale`,
-      code: 'INVALID_RATIONALE',
-      message: 'rationale is required',
-    });
-  }
+  const rationale =
+    emittedRationale ||
+    'The smart-tagging agent did not provide a rationale; manual review is required.';
 
   if (errors.length > 0) {
     return { errors };
@@ -378,7 +301,16 @@ function normalizeSmartTaggingRoot(
     return { suggestions: parsed };
   }
   if (parsed && typeof parsed === 'object') {
-    return parsed as Record<string, unknown>;
+    const record = { ...(parsed as Record<string, unknown>) };
+    if (!Array.isArray(record.suggestions)) {
+      const alias = Array.isArray(record.results)
+        ? record.results
+        : Array.isArray(record.anchors)
+          ? record.anchors
+          : null;
+      if (alias) record.suggestions = alias;
+    }
+    return record;
   }
   return null;
 }
@@ -402,14 +334,6 @@ export function validateWalkthroughAnchorSmartTaggingResult(
   }
 
   const errors: WalkthroughAnchorSmartTaggingValidationError[] = [];
-  const invented = unknownKeys(record, ALLOWED_RESULT_KEYS);
-  if (invented.length > 0) {
-    errors.push({
-      field: '',
-      code: 'UNEXPECTED_FIELD',
-      message: `Invented / unknown top-level fields: ${invented.join(', ')}`,
-    });
-  }
 
   if (!Array.isArray(record.suggestions)) {
     errors.push({
@@ -462,21 +386,6 @@ export function parseWalkthroughAnchorSmartTaggingOutput(
     throw new WalkthroughAnchorSmartTaggingError(
       'Smart-tagging output is not an object.',
       'INVALID_OUTPUT',
-    );
-  }
-
-  const invented = unknownKeys(record, ALLOWED_RESULT_KEYS);
-  if (invented.length > 0) {
-    throw new WalkthroughAnchorSmartTaggingError(
-      `Invented / unknown top-level fields: ${invented.join(', ')}`,
-      'UNEXPECTED_FIELD',
-      [
-        {
-          field: '',
-          code: 'UNEXPECTED_FIELD',
-          message: `Invented / unknown top-level fields: ${invented.join(', ')}`,
-        },
-      ],
     );
   }
 

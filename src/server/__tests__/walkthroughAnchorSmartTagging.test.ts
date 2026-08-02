@@ -13,7 +13,6 @@ import {
   applyValidatedSmartTagSuggestions,
   parseWalkthroughAnchorSmartTaggingOutput,
   validateWalkthroughAnchorSmartTaggingResult,
-  type WalkthroughAnchorSmartTagSuggestion,
 } from '../../shared/types/walkthroughAnchorSmartTagging';
 
 const SKILL_PATH = path.resolve(
@@ -105,6 +104,32 @@ describe('Walkthrough anchor smart-tagging skill contracts (Phase 4)', () => {
     ).toBe('Profile — Identity');
   });
 
+  it('normalizes common root and suggestion field aliases', () => {
+    const parsed = parseWalkthroughAnchorSmartTaggingOutput(
+      JSON.stringify({
+        results: [
+          {
+            testId: 'profile-save-button',
+            key: 'profile-save-button',
+            label: 'Save profile',
+            route: '/profile',
+            tags: ['Profile', 'Save Action', 'Button'],
+            confidenceScore: '0.9',
+            reason: 'Visible save control in ProfilePage.tsx.',
+          },
+        ],
+      })
+    );
+
+    expect(parsed.suggestions[0]).toMatchObject({
+      anchorKey: 'profile-save-button',
+      suggestedLabel: 'Save profile',
+      suggestedRoute: '/profile',
+      confidence: 0.9,
+      rationale: 'Visible save control in ProfilePage.tsx.',
+    });
+  });
+
   it('accepts null suggestedRoute and boundary confidence', () => {
     const raw = JSON.stringify(
       validPayload({
@@ -131,157 +156,117 @@ describe('Walkthrough anchor smart-tagging skill contracts (Phase 4)', () => {
     expect(validateWalkthroughAnchorSmartTaggingResult(parsed)).toEqual([]);
   });
 
-  it('rejects non-kebab-case / invalid smart tags', () => {
-    expect(() =>
-      parseWalkthroughAnchorSmartTaggingOutput(
-        JSON.stringify(
-          validPayload({
-            suggestions: [
-              validSuggestion({
-                smartTags: ['profile', 'Bad_Tag', 'settings'],
-              }),
-            ],
-          })
-        )
-      )
-    ).toThrow(/smart\s*tags?|INVALID_SMART_TAGS/i);
-
-    const errors = validateWalkthroughAnchorSmartTaggingResult({
-      suggestions: [
-        {
-          ...validSuggestion(),
-          smartTags: ['OK Tag', 'profile'],
-        } as unknown as WalkthroughAnchorSmartTagSuggestion,
-      ],
-    });
-    expect(errors.some((e) => e.code === 'INVALID_SMART_TAGS')).toBe(true);
-  });
-
-  it(`rejects smart tag counts outside ${SMART_TAG_COUNT_MIN}–${SMART_TAG_COUNT_MAX}`, () => {
-    expect(() =>
-      parseWalkthroughAnchorSmartTaggingOutput(
-        JSON.stringify(
-          validPayload({
-            suggestions: [
-              validSuggestion({
-                smartTags: ['a', 'b'],
-              }),
-            ],
-          })
-        )
-      )
-    ).toThrow(/3|8|tag count|INVALID_SMART_TAGS/i);
-
-    expect(() =>
-      parseWalkthroughAnchorSmartTaggingOutput(
-        JSON.stringify(
-          validPayload({
-            suggestions: [
-              validSuggestion({
-                smartTags: Array.from({ length: 9 }, (_, i) => `tag-${i + 1}`),
-              }),
-            ],
-          })
-        )
-      )
-    ).toThrow(/3|8|tag count|INVALID_SMART_TAGS/i);
-  });
-
-  it('rejects invented / unknown fields', () => {
-    expect(() =>
-      parseWalkthroughAnchorSmartTaggingOutput(
-        JSON.stringify({
-          ...validPayload(),
-          inventedTopLevel: true,
+  it('normalizes smart-tag casing, spaces, and underscores', () => {
+    const parsed = parseWalkthroughAnchorSmartTaggingOutput(
+      JSON.stringify(
+        validPayload({
+          suggestions: [
+            validSuggestion({
+              smartTags: ['profile', 'Bad_Tag', 'UI Element'],
+            }),
+          ],
         })
       )
-    ).toThrow(/unknown|invented|UNEXPECTED_FIELD/i);
+    );
 
-    expect(() =>
-      parseWalkthroughAnchorSmartTaggingOutput(
-        JSON.stringify(
-          validPayload({
-            suggestions: [
-              {
-                ...validSuggestion(),
-                madeUpField: 'nope',
-              },
-            ],
-          })
-        )
-      )
-    ).toThrow(/unknown|invented|UNEXPECTED_FIELD/i);
+    expect(parsed.suggestions[0].smartTags).toEqual(
+      expect.arrayContaining(['profile', 'bad-tag', 'ui-element'])
+    );
+    expect(validateWalkthroughAnchorSmartTaggingResult(parsed)).toEqual([]);
   });
 
-  it('rejects confidence outside [0, 1]', () => {
-    expect(() =>
-      parseWalkthroughAnchorSmartTaggingOutput(
-        JSON.stringify(
-          validPayload({
-            suggestions: [validSuggestion({ confidence: 1.01 })],
-          })
-        )
+  it(`normalizes smart tag counts into ${SMART_TAG_COUNT_MIN}–${SMART_TAG_COUNT_MAX}`, () => {
+    const tooFew = parseWalkthroughAnchorSmartTaggingOutput(
+      JSON.stringify(
+        validPayload({
+          suggestions: [validSuggestion({ smartTags: [] })],
+        })
       )
-    ).toThrow(/confidence|INVALID_CONFIDENCE/i);
+    );
+    const tooMany = parseWalkthroughAnchorSmartTaggingOutput(
+      JSON.stringify(
+        validPayload({
+          suggestions: [
+            validSuggestion({
+              smartTags: Array.from({ length: 12 }, (_, i) => `tag-${i + 1}`),
+            }),
+          ],
+        })
+      )
+    );
 
-    expect(() =>
-      parseWalkthroughAnchorSmartTaggingOutput(
-        JSON.stringify(
-          validPayload({
-            suggestions: [validSuggestion({ confidence: -0.1 })],
-          })
-        )
-      )
-    ).toThrow(/confidence|INVALID_CONFIDENCE/i);
-
-    expect(() =>
-      parseWalkthroughAnchorSmartTaggingOutput(
-        JSON.stringify(
-          validPayload({
-            suggestions: [validSuggestion({ confidence: 'high' })],
-          })
-        )
-      )
-    ).toThrow(/confidence|INVALID_CONFIDENCE/i);
+    expect(tooFew.suggestions[0].smartTags.length).toBeGreaterThanOrEqual(
+      SMART_TAG_COUNT_MIN
+    );
+    expect(tooMany.suggestions[0].smartTags).toHaveLength(SMART_TAG_COUNT_MAX);
   });
 
-  it('rejects invalid routes and placements', () => {
-    expect(() =>
-      parseWalkthroughAnchorSmartTaggingOutput(
-        JSON.stringify(
-          validPayload({
-            suggestions: [
-              validSuggestion({ suggestedRoute: '/not-a-real-route' }),
-            ],
-          })
-        )
-      )
-    ).toThrow(/route|INVALID_ROUTE/i);
+  it('ignores unknown fields instead of applying them', () => {
+    const parsed = parseWalkthroughAnchorSmartTaggingOutput(
+      JSON.stringify({
+        ...validPayload({
+          suggestions: [{ ...validSuggestion(), madeUpField: 'nope' }],
+        }),
+        inventedTopLevel: true,
+      })
+    );
 
-    expect(() =>
-      parseWalkthroughAnchorSmartTaggingOutput(
-        JSON.stringify(
-          validPayload({
-            suggestions: [
-              validSuggestion({ allowedPlacements: ['bottom', 'diagonal'] }),
-            ],
-          })
-        )
-      )
-    ).toThrow(/placement|INVALID_PLACEMENTS/i);
-
-    expect(() =>
-      parseWalkthroughAnchorSmartTaggingOutput(
-        JSON.stringify(
-          validPayload({
-            suggestions: [validSuggestion({ allowedPlacements: [] })],
-          })
-        )
-      )
-    ).toThrow(/placement|INVALID_PLACEMENTS/i);
+    expect(parsed.suggestions).toHaveLength(1);
+    expect(parsed.suggestions[0]).not.toHaveProperty('madeUpField');
   });
 
-  it('rejects invalid JSON and missing required suggestion fields', () => {
+  it.each([
+    ['percentage number', 85, 0.85],
+    ['numeric string', '0.73', 0.73],
+    ['negative value', -0.1, 0],
+    ['non-numeric value', 'high', 0.5],
+  ])('normalizes %s confidence', (_case, emitted, expected) => {
+    const parsed = parseWalkthroughAnchorSmartTaggingOutput(
+      JSON.stringify(
+        validPayload({
+          suggestions: [validSuggestion({ confidence: emitted })],
+        })
+      )
+    );
+    expect(parsed.suggestions[0].confidence).toBe(expected);
+  });
+
+  it('normalizes an invalid route to null for manual review', () => {
+    const parsed = parseWalkthroughAnchorSmartTaggingOutput(
+      JSON.stringify(
+        validPayload({
+          suggestions: [
+            validSuggestion({ suggestedRoute: '/not-a-real-route' }),
+          ],
+        })
+      )
+    );
+    expect(parsed.suggestions[0].suggestedRoute).toBeNull();
+  });
+
+  it.each([
+    ['unsupported tooltip term', ['tooltip']],
+    ['partial placement list', ['bottom']],
+    ['empty placement list', []],
+    ['missing placement list', undefined],
+  ])('normalizes %s to the deterministic placement policy', (_case, emitted) => {
+    const parsed = parseWalkthroughAnchorSmartTaggingOutput(
+      JSON.stringify(
+        validPayload({
+          suggestions: [validSuggestion({ allowedPlacements: emitted })],
+        })
+      )
+    );
+
+    expect(parsed.suggestions[0].allowedPlacements).toEqual([
+      'top',
+      'right',
+      'bottom',
+      'left',
+    ]);
+  });
+
+  it('rejects invalid JSON, empty output, and missing candidate identity', () => {
     expect(() => parseWalkthroughAnchorSmartTaggingOutput('{')).toThrow(
       /JSON|INVALID_OUTPUT/i
     );
@@ -295,13 +280,28 @@ describe('Walkthrough anchor smart-tagging skill contracts (Phase 4)', () => {
         JSON.stringify({
           suggestions: [
             {
-              testId: 'x',
-              // missing remaining required fields
+              suggestedLabel: 'No candidate identity',
             },
           ],
         })
       )
-    ).toThrow(/required|INVALID_/i);
+    ).toThrow(/testId|required|INVALID_/i);
+  });
+
+  it('fills review-safe defaults when optional agent fields are missing', () => {
+    const parsed = parseWalkthroughAnchorSmartTaggingOutput(
+      JSON.stringify({ suggestions: [{ testId: 'profile-save-button' }] })
+    );
+
+    expect(parsed.suggestions[0]).toMatchObject({
+      testId: 'profile-save-button',
+      anchorKey: 'profile-save-button',
+      suggestedLabel: 'Profile Save Button',
+      suggestedRoute: null,
+      confidence: 0.5,
+    });
+    expect(parsed.suggestions[0].smartTags.length).toBeGreaterThanOrEqual(3);
+    expect(parsed.suggestions[0].rationale).toMatch(/manual review/i);
   });
 
   it('recovers a bare suggestions array (common agent packaging mistake)', () => {
