@@ -73,12 +73,18 @@ describe('TBI-001 DoD-0 exposes one contract for read, list, and search', () => 
 
       // Act
       const result = await exerciseContract(reader);
+      const rootRelativeContent = await reader.readFile('/README.md');
+      const rootRelativeEntries = await reader.listDir('/src');
       const emptyContent = await reader.readFile('empty.txt');
       const boundedEntries = await reader.listDir('crowded');
       const noMatches = await reader.searchCode('definitely-not-present');
 
       // Assert
       expect(result.content).toBe('fixture\n');
+      expect(rootRelativeContent).toBe('fixture\n');
+      expect(rootRelativeEntries).toEqual([
+        { path: '/src/index.ts', name: 'index.ts', isFolder: false },
+      ]);
       expect(result.entries).toEqual([
         { path: '/src/index.ts', name: 'index.ts', isFolder: false },
       ]);
@@ -170,21 +176,23 @@ describe('TBI-001 DoD-1 rejects traversal, symlink escape, expiry, and cross-run
     try {
       // Act
       const attempts = [
-        reader.readFile('../secret.txt'),
-        reader.readFile(path.join(outside, 'secret.txt')),
-        reader.readFile('escape-link/secret.txt'),
+        () => reader.readFile('../secret.txt'),
+        () => reader.readFile('C:\\outside\\secret.txt'),
+        () => reader.readFile('//server/share/secret.txt'),
+        () => reader.readFile('escape-link/secret.txt'),
       ];
 
       // Assert
       for (const attempt of attempts) {
-        await expect(attempt).rejects.toMatchObject({
+        const operation = attempt();
+        await expect(operation).rejects.toMatchObject({
           name: 'RepoReaderError',
           code: 'ACCESS_DENIED',
           fallbackEligible: false,
         });
-        await expect(attempt).rejects.not.toThrow(fixture.root);
-        await expect(attempt).rejects.not.toThrow(outside);
-        await expect(attempt).rejects.not.toThrow(secretContent);
+        await expect(operation).rejects.not.toThrow(fixture.root);
+        await expect(operation).rejects.not.toThrow(outside);
+        await expect(operation).rejects.not.toThrow(secretContent);
       }
     } finally {
       fs.rmSync(fixture.root, { recursive: true, force: true });
