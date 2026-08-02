@@ -138,4 +138,4 @@ describe('WalkthroughAnchors DOM markers + catalog validation (TBI-003 / Phase 6
     }
   });
 });
-
+

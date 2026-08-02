@@ -144,6 +144,25 @@ function unknownKeys(
   return Object.keys(record).filter((key) => !allowed.has(key));
 }
 
+/**
+ * The registry persists the human-readable value as `label`, so agents
+ * occasionally mirror that name even though the skill contract calls it
+ * `suggestedLabel`. Treat that single known alias as a recoverable boundary
+ * mismatch; canonical `suggestedLabel` wins when both are present.
+ */
+function normalizeSuggestionAliases(
+  record: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!Object.prototype.hasOwnProperty.call(record, 'label')) return record;
+
+  const normalized = { ...record };
+  if (!Object.prototype.hasOwnProperty.call(normalized, 'suggestedLabel')) {
+    normalized.suggestedLabel = normalized.label;
+  }
+  delete normalized.label;
+  return normalized;
+}
+
 function isPlacement(value: unknown): value is WalkthroughRegistryPlacement {
   return (
     typeof value === 'string' &&
@@ -170,7 +189,7 @@ function validateSuggestion(
     return { errors };
   }
 
-  const record = raw as Record<string, unknown>;
+  const record = normalizeSuggestionAliases(raw as Record<string, unknown>);
   const invented = unknownKeys(record, ALLOWED_SUGGESTION_KEYS);
   if (invented.length > 0) {
     errors.push({

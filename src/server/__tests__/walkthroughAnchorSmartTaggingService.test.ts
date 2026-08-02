@@ -225,6 +225,8 @@ describe('walkthroughAnchorSmartTaggingService', () => {
       expect(ctx).toContain('"key": "cloudcost"');
       expect(ctx).toContain('## Curated Routes');
       expect(ctx).toContain('## Existing Catalog Hints');
+      expect(ctx).toContain('Use `suggestedLabel`');
+      expect(ctx).toContain('Never emit a `label` field');
     });
 
     it('filters out approved/rejected catalog rows (only newly discovered)', async () => {

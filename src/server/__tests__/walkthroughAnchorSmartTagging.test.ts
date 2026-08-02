@@ -91,6 +91,20 @@ describe('Walkthrough anchor smart-tagging skill contracts (Phase 4)', () => {
     expect(validateWalkthroughAnchorSmartTaggingResult(parsed)).toEqual([]);
   });
 
+  it('normalizes the registry label alias emitted by an agent', () => {
+    const suggestion = validSuggestion();
+    const { suggestedLabel, ...withRegistryAlias } = suggestion;
+    const payload = {
+      suggestions: [{ ...withRegistryAlias, label: suggestedLabel }],
+    };
+
+    expect(validateWalkthroughAnchorSmartTaggingResult(payload)).toEqual([]);
+    expect(
+      parseWalkthroughAnchorSmartTaggingOutput(JSON.stringify(payload)).suggestions[0]
+        .suggestedLabel
+    ).toBe('Profile — Identity');
+  });
+
   it('accepts null suggestedRoute and boundary confidence', () => {
     const raw = JSON.stringify(
       validPayload({

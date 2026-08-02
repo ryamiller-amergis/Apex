@@ -572,6 +572,8 @@ async function buildKickoffContext(
     '',
     `Write validated JSON to ${OUTPUT_RELATIVE_PATH.join('/')}.`,
     'Root must be an object `{ "suggestions": [...] }` — never a bare array, never markdown fences. Do not end until that file exists.',
+    'Each suggestion must use exactly these fields: testId, anchorKey, suggestedLabel, suggestedRoute, allowedPlacements, smartTags, confidence, rationale.',
+    'Use `suggestedLabel` for the human-readable label. Never emit a `label` field.',
   ];
 
   return lines.join('\n');
