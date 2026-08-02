@@ -395,6 +395,59 @@ describe('walkthroughService (TBI-002)', () => {
       expect(next?.id).toBe('high');
     });
 
+    it('re-show re-arms the highest-priority revision while silent update remains suppressed', async () => {
+      const completedRevisionTwo = {
+        walkthroughId: 'high',
+        userId: 'user-1',
+        revision: 2,
+        status: 'completed',
+        lastStepId: 'step-1',
+        seenAt: '2026-07-01T00:00:00Z',
+        acknowledgedAt: '2026-07-01T00:00:00Z',
+        updatedAt: '2026-07-01T00:00:00Z',
+      };
+      const lowerPriority = definitionRow({
+        id: 'low',
+        lifecycle: 'published',
+        priority: 1,
+        publishedAt: '2026-07-02T00:00:00Z',
+        targetingRules: [{ id: 'low-rule', type: 'project', value: 'Apex' }],
+        progress: [],
+      });
+
+      mockDb.query.walkthroughs.findMany.mockResolvedValueOnce([
+        definitionRow({
+          id: 'high',
+          lifecycle: 'published',
+          priority: 100,
+          revision: 2,
+          publishedAt: '2026-07-01T00:00:00Z',
+          targetingRules: [{ id: 'high-rule', type: 'project', value: 'Apex' }],
+          progress: [completedRevisionTwo],
+        }),
+        lowerPriority,
+      ]);
+
+      // A silent update preserves revision 2, so its completed progress still suppresses it.
+      expect((await getNextEligible('Apex', 'user-1'))?.id).toBe('low');
+
+      mockDb.query.walkthroughs.findMany.mockResolvedValueOnce([
+        definitionRow({
+          id: 'high',
+          lifecycle: 'published',
+          priority: 100,
+          revision: 3,
+          publishedAt: '2026-07-01T00:00:00Z',
+          targetingRules: [{ id: 'high-rule', type: 'project', value: 'Apex' }],
+          progress: [completedRevisionTwo],
+        }),
+        lowerPriority,
+      ]);
+
+      const reshow = await getNextEligible('Apex', 'user-1');
+      expect(reshow).toMatchObject({ id: 'high', revision: 3, priority: 100 });
+    });
+
     it('FEAT-005 AC-0 — equal priority breaks ties by newest publishedAt', async () => {
       mockDb.select.mockImplementation(() => ({
         from: jest.fn().mockReturnThis(),

@@ -83,9 +83,15 @@ export function useWalkthroughEligibility({
     enabled: canFetch,
     retry: false,
     staleTime: 60_000,
+    // Project entry is an eligibility boundary. A cached "none" may predate a
+    // re-show publish in another session, so always verify it on host remount.
+    refetchOnMount: 'always',
   });
 
-  const isSettled = !canFetch || query.isFetched || query.isError;
+  // Cached data is available while the mount refetch runs. Do not let overlay
+  // arbitration consume that stale value before the entry check completes.
+  const isSettled =
+    !canFetch || (!query.isFetching && (query.isFetchedAfterMount || query.isError));
 
   return {
     candidate: query.isError ? null : (query.data ?? null),
