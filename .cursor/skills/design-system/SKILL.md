@@ -14,6 +14,7 @@ description: Apex design system reference for Bedrock prototype and design-plan 
 >
 > **AI agents using this file must:**
 > - Use ONLY the tokens below for all colors, shadows, and borders.
+> - Pair accent and success fills with their semantic foreground tokens; never hard-code white text or icons on theme-token fills.
 > - Never invent, approximate, or sample hex/rgba values not listed here.
 > - Apply the **top AppHeader** shell (not a left sidebar) as described below.
 > - Prefer routes from the Apex Screen Inventory section when deciding `update-page`.
@@ -236,6 +237,7 @@ For greenfield features with no natural home, use `new-page` and `targetRoute: n
 | Component | Key rules |
 |-----------|-----------|
 | Primary button | `background: var(--accent-color); color: var(--on-accent); border-radius: var(--radius); height ~36px; padding 8px 16px`. Hover → `var(--accent-hover)`. |
+| Success button | `background: var(--success-color); color: var(--on-success)`. Hover → `var(--success-hover)` while retaining `var(--on-success)`. |
 | Secondary / outlined | Transparent bg, `1px solid var(--border-color)` or accent border; text `var(--text-primary)` or accent. |
 | Text inputs | Label above; 36–40px height; border `var(--border-color)`; focus ring `2px solid var(--accent-color)`. |
 | Cards / panels | `background: #fff` or `var(--bg-secondary)`; border `1px solid var(--border-color)`; `border-radius: var(--radius)`; padding 16–24px. |
@@ -254,13 +256,21 @@ For greenfield features with no natural home, use `new-page` and `targetRoute: n
 - **Selected/active:** accent text + soft tertiary background.
 - **Disabled:** `opacity: 0.45`, `cursor: not-allowed`. Never hide.
 
+### Theme-safe filled controls — mandatory
+
+- Any solid or gradient background containing `var(--accent-color)` or `var(--accent-hover)` must use `color: var(--on-accent)`.
+- Any solid or gradient background containing `var(--success-color)` or `var(--success-hover)` must use `color: var(--on-success)`.
+- SVG icons on these fills must inherit `currentColor` from the semantic foreground token. Do not use `fill: #fff`, `stroke: #fff`, `color: white`, or `color: var(--bg-primary)`.
+- These rules apply to buttons, badges, avatars, icon tiles, selected states, hover states, and generated prototypes across every theme, including Ice.
+- Production CSS is enforced by `npm run lint:theme-contrast`; do not bypass the check with an equivalent hard-coded light color.
+
 ---
 
 ## 9. Visual Annotation Convention (EXTEND / update-page)
 
 When a feature **extends an existing Apex page**, wrap only the new/changed element(s) with:
 - **2px dashed `var(--accent-color)` (#2747D9) border** with 8px padding.
-- Floating label: `NEW: {featureName}` — `background: #2747D9; color: #fff; font: 10px/1 bold; padding: 2px 6px`.
+- Floating label: `NEW: {featureName}` — `background: var(--accent-color); color: var(--on-accent); font: 10px/1 bold; padding: 2px 6px`.
 - Markers: `<!-- NEW_FEATURE:START -->` … `<!-- NEW_FEATURE:END -->`.
 
 For **NEW-page** features, skip the annotation. Use four STATE markers:
@@ -289,6 +299,6 @@ Prototypes MUST:
 - Make NO network calls (`fetch`, `XMLHttpRequest`, `window.open`, `window.location` are neutralised).
 - Keep `<a href="#">` for nav (sandbox disables real navigation).
 - Icons: inline SVGs (`24×24`, `fill="currentColor"`). No emoji.
-- Avatars: colored circle with initials on `var(--accent-color)`.
+- Avatars: colored circle with initials on `var(--accent-color)` and foreground `var(--on-accent)`.
 
 Inline `<script>` and `on*` handlers ARE allowed for tabs, toggles, modals, dropdowns.

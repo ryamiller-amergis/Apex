@@ -88,7 +88,7 @@ jobs:
       - name: TypeScript type-check (server)
         run: npx tsc -p tsconfig.server.json --noEmit
 
-      - name: Lint (ESLint)
+      - name: Lint (ESLint and theme contrast)
         run: npm run lint:check
 
   unit-test:
