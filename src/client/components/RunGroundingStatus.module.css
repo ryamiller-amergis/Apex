@@ -39,7 +39,7 @@
 
 .action:hover:not(:disabled) {
   background: var(--accent-color);
-  color: var(--bg-primary);
+  color: var(--on-accent);
 }
 
 .action:disabled {

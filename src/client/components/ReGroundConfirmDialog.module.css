@@ -53,7 +53,7 @@
 .primary {
   border-color: var(--accent-color);
   background: var(--accent-color);
-  color: var(--bg-primary);
+  color: var(--on-accent);
 }
 
 .primary:hover:not(:disabled) {
