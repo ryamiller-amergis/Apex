@@ -6,6 +6,7 @@ import type { PrdStatus } from '../../shared/types/interview';
 import { markAsInterviewThread } from './chatAgentService';
 import { createNotification } from './notificationService';
 import { getSkillSettingsName } from './projectSettingsService';
+import { runGroundingService } from './runGroundingService';
 
 const VALID_INTERVIEW_STATUSES: InterviewStatus[] = ['in_progress', 'complete', 'archived'];
 
@@ -313,10 +314,25 @@ export async function updateInterviewStatus(
     throw err;
   }
 
-  await db
-    .update(interviews)
-    .set({ status: newStatus, updatedAt: new Date().toISOString() })
-    .where(eq(interviews.id, id));
+  const persistStatus = () =>
+    db
+      .update(interviews)
+      .set({ status: newStatus, updatedAt: new Date().toISOString() })
+      .where(eq(interviews.id, id));
+
+  if (newStatus === 'complete' || newStatus === 'archived') {
+    await runGroundingService.persistThenMarkTerminalInactive(
+      {
+        runType: 'chat',
+        runId: row.chatThreadId,
+        project: row.project,
+      },
+      persistStatus,
+    );
+    return;
+  }
+
+  await persistStatus();
 }
 
 export async function updateInterviewTitle(

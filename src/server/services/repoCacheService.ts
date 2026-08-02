@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import type { SkillProvider } from '../../shared/types/projectSettings';
+import type { RunGrounding } from '../../shared/types/runGrounding';
 import { git, safeArgs } from '../utils/asyncGit';
 import { resolveDataRoot } from '../utils/dataDir';
 import {
@@ -125,6 +126,32 @@ async function readBaseSha(
     safeArgs(cacheDir, ['rev-parse', `refs/heads/${branch}`]),
     { cwd: cacheDir, abortSignal },
   )).trim();
+}
+
+/**
+ * Reads the branch tip already present in the local bare cache. This function
+ * intentionally never resolves credentials, fetches, or repairs the cache.
+ */
+export async function readCachedOriginSha(
+  grounding: Pick<
+    RunGrounding,
+    'provider' | 'project' | 'repository' | 'branch'
+  >,
+): Promise<string | null> {
+  const options: RepoCacheOptions = {
+    provider: grounding.provider === 'azure_devops' ? 'ado' : 'github',
+    project: grounding.project,
+    repo: grounding.repository,
+    branch: grounding.branch,
+  };
+  const cacheDir = getRepoCacheDir(options);
+  if (!cacheExists(cacheDir)) return null;
+
+  try {
+    return await readBaseSha(cacheDir, grounding.branch);
+  } catch {
+    return null;
+  }
 }
 
 async function verifyBaseCommitLightweight(

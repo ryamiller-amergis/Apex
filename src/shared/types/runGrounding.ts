@@ -1,6 +1,8 @@
 export type RunType = 'chat' | 'one_shot' | 'service';
 export type RepoRole = 'target' | 'skill';
 export type RepoProvider = 'github' | 'azure_devops';
+export type GroundingSurface = 'interview' | 'prd' | 'design_doc';
+export type DriftState = 'grounded' | 'source-changed' | 'unavailable';
 
 export interface RunRef {
   runType: RunType;
@@ -37,4 +39,29 @@ export interface ActiveRepositoryBranchQuery {
   project: string;
   repository: string;
   branch: string;
+}
+
+/**
+ * Credential-free grounding metadata exposed to authorized run surfaces.
+ * Domain surfaces resolve to the underlying persistence RunRef before use.
+ */
+export interface RunGroundingStatus {
+  runType: RunType;
+  runId: string;
+  role: RepoRole;
+  groundedSha: string;
+  groundedShaShort: string;
+  groundedAt: string;
+  driftState: DriftState;
+  canReGround: boolean;
+}
+
+export interface ReGroundRequest {
+  role?: RepoRole;
+}
+
+export interface ReGroundResponse {
+  previousSha: string;
+  newSha: string;
+  groundedAt: string;
 }

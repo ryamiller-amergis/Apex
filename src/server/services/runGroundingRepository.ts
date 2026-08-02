@@ -138,20 +138,27 @@ const postgresRunGroundingStore: RunGroundingStore = {
   async reground(ref, role, newSha, groundedAt) {
     return db.transaction(async (tx) => {
       const [current] = await tx
-        .update(runGroundings)
-        .set({
-          isActive: false,
-          updatedAt: groundedAt,
-        })
+        .select()
+        .from(runGroundings)
         .where(
           and(
             scopeConditions(ref),
-            eq(runGroundings.repoRole, role),
-            eq(runGroundings.isActive, true)
+            eq(runGroundings.repoRole, role)
           )
         )
-        .returning();
+        .orderBy(desc(runGroundings.groundedAt))
+        .limit(1);
       if (!current) return null;
+
+      if (current.isActive) {
+        await tx
+          .update(runGroundings)
+          .set({
+            isActive: false,
+            updatedAt: groundedAt,
+          })
+          .where(eq(runGroundings.id, current.id));
+      }
 
       const [replacement] = await tx
         .insert(runGroundings)
@@ -224,7 +231,10 @@ export function createRunGroundingRepository(
 
     copyGrounding(from, to, role) {
       return withPersistenceBoundary('copy', async () => {
-        const source = await store.findActiveByRole(from, role);
+        const source =
+          (await store.findActiveByRole(from, role)) ??
+          (await store.findByRun(from)).find((row) => row.repoRole === role) ??
+          null;
         if (!source) return null;
         return store.insert({
           ...to,

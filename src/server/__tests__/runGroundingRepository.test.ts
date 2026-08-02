@@ -112,11 +112,18 @@ class InMemoryRunGroundingStore implements RunGroundingStore {
     newSha: string,
     groundedAt: string
   ): Promise<RunGrounding | null> {
-    const current = await this.findActiveByRole(ref, role);
+    const current =
+      (await this.findActiveByRole(ref, role)) ??
+      [...(await this.findByRun(ref))]
+        .reverse()
+        .find((row) => row.repoRole === role) ??
+      null;
     if (!current) return null;
 
-    current.isActive = false;
-    current.updatedAt = groundedAt;
+    if (current.isActive) {
+      current.isActive = false;
+      current.updatedAt = groundedAt;
+    }
     return this.insert({
       ...ref,
       repoRole: role,
@@ -299,8 +306,51 @@ describe('runGroundingRepository', () => {
     );
   });
 
+  it('TBI-004 DoD-1 copies the latest durable upstream pin after terminal deactivation', async () => {
+    const repository = createRunGroundingRepository(
+      new InMemoryRunGroundingStore(),
+      {
+        now: () => '2026-08-02T15:00:00.000Z',
+      }
+    );
+    const source: RunRef = {
+      runType: 'chat',
+      runId: 'run-1',
+      project: 'Apex',
+    };
+    await repository.createGrounding(targetInput);
+    await repository.deactivateByRun(source);
+
+    const copied = await repository.copyGrounding(
+      source,
+      { runType: 'chat', runId: 'design-doc-thread', project: 'Apex' },
+      'target'
+    );
+
+    expect(copied).toEqual(
+      expect.objectContaining({
+        runType: 'chat',
+        runId: 'design-doc-thread',
+        groundedSha: 'target-sha',
+        isActive: true,
+      })
+    );
+
+    await expect(
+      repository.reground(source, 'target', 'new-target-sha')
+    ).resolves.toEqual(
+      expect.objectContaining({
+        runId: 'run-1',
+        groundedSha: 'new-target-sha',
+        isActive: true,
+      })
+    );
+  });
+
   it('DoD-1 exposes typed persistence failures without raw database details', async () => {
-    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const warn = jest
+      .spyOn(console, 'warn')
+      .mockImplementation(() => undefined);
     const store = new InMemoryRunGroundingStore();
     store.insert = jest
       .fn()
@@ -321,10 +371,10 @@ describe('runGroundingRepository', () => {
     });
     await expect(result).rejects.not.toThrow(/duplicate key|sensitive detail/i);
     expect(warn).toHaveBeenCalledWith(
-      '[run-grounding] create persistence failed',
+      '[run-grounding] create persistence failed'
     );
     expect(warn).not.toHaveBeenCalledWith(
-      expect.stringMatching(/duplicate key|sensitive detail/i),
+      expect.stringMatching(/duplicate key|sensitive detail/i)
     );
     warn.mockRestore();
   });

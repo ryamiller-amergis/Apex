@@ -35,10 +35,19 @@ import {
   stopDocumentValidationWatcher,
   type DocumentValidationAdapter,
 } from './documentValidationService';
+import {
+  propagatePipelineGrounding,
+  resolveRunGroundingSurface,
+  runGroundingService,
+} from './runGroundingService';
 
 const VALID_PRD_STATUSES: PrdStatus[] = ['generating', 'draft', 'validating', 'pending_review', 'reviewer_approved', 'approved', 'revision_requested'];
 
-async function cleanupWorkspace(threadId: string): Promise<void> {
+async function cleanupWorkspace(
+  threadId: string,
+  preserveGroundedWorkspace = false,
+): Promise<void> {
+  if (preserveGroundedWorkspace) return;
   try {
     const row = await db.query.chatThreads.findFirst({
       where: eq(chatThreads.id, threadId),
@@ -186,6 +195,28 @@ export async function createPrd(opts: {
       status: 'generating',
     })
     .returning({ id: prds.id });
+
+  try {
+    const upstream = await resolveRunGroundingSurface(
+      'interview',
+      opts.interviewId,
+    );
+    if (upstream) {
+      await propagatePipelineGrounding(
+        upstream.run,
+        {
+          runType: 'chat',
+          runId: opts.chatThreadId,
+          project: opts.project,
+        },
+        opts.userId,
+      );
+    }
+  } catch {
+    console.warn(
+      `[run-grounding] PRD propagation unavailable (prdId=${row.id})`,
+    );
+  }
 
   return { prdId: row.id, threadId: opts.chatThreadId };
 }
@@ -750,7 +781,7 @@ export function startPrdWatcher(prdId: string, chatThreadId: string): void {
     // instance that handled the delete. Bail if the PRD is gone or no longer generating.
     const prdRow = await db.query.prds.findFirst({
       where: eq(prds.id, prdId),
-      columns: { id: true, status: true },
+      columns: { id: true, status: true, project: true },
     });
     if (!prdRow || prdRow.status !== 'generating') {
       clearInterval(interval);
@@ -765,9 +796,17 @@ export function startPrdWatcher(prdId: string, chatThreadId: string): void {
       clearInterval(interval);
       activePrdWatchers.delete(prdId);
       console.warn(`[prdWatcher] Timed out waiting for PRD output — resetting to draft (prdId=${prdId}, threadId=${chatThreadId})`);
-      await db.update(prds)
-        .set({ status: 'draft', updatedAt: new Date().toISOString() })
-        .where(and(eq(prds.id, prdId), eq(prds.status, 'generating')));
+      await runGroundingService.persistThenMarkTerminalInactive(
+        {
+          runType: 'chat',
+          runId: chatThreadId,
+          project: prdRow.project,
+        },
+        () =>
+          db.update(prds)
+            .set({ status: 'draft', updatedAt: new Date().toISOString() })
+            .where(and(eq(prds.id, prdId), eq(prds.status, 'generating'))),
+      );
       return;
     }
 
@@ -783,7 +822,17 @@ export function startPrdWatcher(prdId: string, chatThreadId: string): void {
       activePrdWatchers.delete(prdId);
       console.log(`[prdWatcher] Both files ready — syncing to DB (prdId=${prdId})`);
       try {
-        await syncPrdContent(prdId, content, backlog);
+        const terminalResult =
+          await runGroundingService.persistThenMarkTerminalInactive(
+            {
+              runType: 'chat',
+              runId: chatThreadId,
+              project: prdRow.project,
+            },
+            () => syncPrdContent(prdId, content, backlog),
+          );
+        const preserveGroundedWorkspace =
+          terminalResult.workspaceOwnedByIdleCleanup;
         console.log(`[prdWatcher] Sync complete — PRD is now draft (prdId=${prdId})`);
         try {
           const prdRowAfterSync = await db.query.prds.findFirst({
@@ -801,7 +850,7 @@ export function startPrdWatcher(prdId: string, chatThreadId: string): void {
 
           if (!testCasesEnabled) {
             console.log(`[prdWatcher] Test cases disabled for interview — skipping generation (prdId=${prdId})`);
-            cleanupWorkspace(chatThreadId);
+            cleanupWorkspace(chatThreadId, preserveGroundedWorkspace);
             try {
               await autoStartPrdValidation(prdId);
             } catch (err) {
@@ -810,11 +859,13 @@ export function startPrdWatcher(prdId: string, chatThreadId: string): void {
           } else {
             const { triggerTestCaseGeneration } = await import('./testCaseService');
             const testCaseStarted = await triggerTestCaseGeneration(prdId, chatThreadId);
-            if (!testCaseStarted) cleanupWorkspace(chatThreadId);
+            if (!testCaseStarted) {
+              cleanupWorkspace(chatThreadId, preserveGroundedWorkspace);
+            }
           }
         } catch (err) {
           console.error(`[prdWatcher] Auto test-case generation failed (prdId=${prdId})`, err);
-          cleanupWorkspace(chatThreadId);
+          cleanupWorkspace(chatThreadId, preserveGroundedWorkspace);
         }
       } catch (err) {
         console.error(`[prdWatcher] Failed to sync PRD content (prdId=${prdId})`, err);

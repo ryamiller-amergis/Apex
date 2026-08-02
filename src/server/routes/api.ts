@@ -61,8 +61,10 @@ import {
   RejectProposalRequestSchema,
 } from '../../shared/types/calendarWorkItemAssistant';
 
+import runGroundingsRouter from './runGroundings';
 const router = express.Router();
 
+router.use('/run-groundings', runGroundingsRouter);
 // GET /api/available-models — accessible to all authenticated users so that
 // non-admin roles (e.g. interviews:manage) can populate model dropdowns.
 router.get('/available-models', async (_req: Request, res: Response) => {
