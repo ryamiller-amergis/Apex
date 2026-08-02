@@ -8,15 +8,32 @@ import {
 
 describe('walkthroughAssets', () => {
   describe('isDarkFamilyTheme', () => {
-    it.each(['dark', 'amergis', 'midnight', 'dusk', 'aurora'])(
+    it.each([
+      'dark',
+      'amergis',
+      'slate',
+      'ocean',
+      'midnight',
+      'dusk',
+      'aurora',
+      'glacier',
+      'ember',
+      'haze',
+      'neon',
+      'volt',
+      'plasma',
+      'pink',
+      'ice',
+      'flare',
+    ])(
       'returns true for dark-family theme "%s"',
       (theme) => {
         expect(isDarkFamilyTheme(theme)).toBe(true);
       },
     );
 
-    it('returns false for light theme', () => {
-      expect(isDarkFamilyTheme('light')).toBe(false);
+    it.each(['light', 'pearl'])('returns false for light-family theme "%s"', (theme) => {
+      expect(isDarkFamilyTheme(theme)).toBe(false);
     });
 
     it('returns false for unknown themes', () => {
@@ -79,6 +96,34 @@ describe('walkthroughAssets', () => {
       expect(resolveThemedImageUrl('/brand-lockup-beta.svg', 'aurora')).toBe(
         '/brand-lockup-inverse-beta.svg',
       );
+    });
+
+    it('returns inverse variant for neon theme', () => {
+      expect(resolveThemedImageUrl('/brand-lockup.svg', 'neon')).toBe(
+        '/brand-lockup-inverse.svg',
+      );
+    });
+
+    it('returns inverse variant for volt theme', () => {
+      expect(resolveThemedImageUrl('/brand-lockup.svg', 'volt')).toBe(
+        '/brand-lockup-inverse.svg',
+      );
+    });
+
+    it('returns inverse variant for plasma theme', () => {
+      expect(resolveThemedImageUrl('/brand-lockup-beta.svg', 'plasma')).toBe(
+        '/brand-lockup-inverse-beta.svg',
+      );
+    });
+
+    it('returns inverse variant for pink neon theme', () => {
+      expect(resolveThemedImageUrl('/brand-lockup.svg', 'pink')).toBe(
+        '/brand-lockup-inverse.svg',
+      );
+    });
+
+    it('returns default variant for pearl theme', () => {
+      expect(resolveThemedImageUrl('/brand-lockup.svg', 'pearl')).toBe('/brand-lockup.svg');
     });
 
     it('resolves from inverse URL back to default for light theme', () => {

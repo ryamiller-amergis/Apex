@@ -5,7 +5,7 @@
  */
 import React from 'react';
 import { useCurrentProfile, useUpdateCurrentProfile } from '../hooks/useProfile';
-import { THEME_OPTIONS, type ThemeMode } from '../config/themes';
+import { THEME_CATEGORIES, getThemeOption, getThemesByCategory, type ThemeCategory, type ThemeMode } from '../config/themes';
 import { AvatarEditor } from './AvatarEditor';
 import { NotificationPreferences } from './NotificationPreferences';
 import {
@@ -312,10 +312,14 @@ interface ProfileThemeSectionProps {
 
 export const ProfileThemeSection: React.FC<ProfileThemeSectionProps> = ({ theme, onThemeChange }) => {
   const [selected, setSelected] = React.useState<ThemeMode>(theme);
+  const [category, setCategory] = React.useState<ThemeCategory>(
+    () => getThemeOption(theme)?.category ?? 'classic',
+  );
   const [error, setError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     setSelected(theme);
+    setCategory(getThemeOption(theme)?.category ?? 'classic');
   }, [theme]);
 
   const handleSelect = (next: ThemeMode) => {
@@ -330,19 +334,58 @@ export const ProfileThemeSection: React.FC<ProfileThemeSectionProps> = ({ theme,
     }
   };
 
+  const visibleThemes = getThemesByCategory(category);
+  const activeCategory = THEME_CATEGORIES.find((item) => item.value === category);
+
   return (
     <section className={`${styles.card} ${styles.cardFill}`} {...anchorTestIdProps(WalkthroughAnchorKeys.PROFILE_THEME)} aria-labelledby="profile-theme-heading">
       <h2 id="profile-theme-heading" className={styles.cardHeading} data-walkthrough-focus>
         Theme
       </h2>
-      <div className={styles.themeGrid} role="radiogroup" aria-label="Theme">
-        {THEME_OPTIONS.map((option) => {
+
+      <div
+        className={styles.themeCategoryGroup}
+        role="radiogroup"
+        aria-label="Theme category"
+        data-testid="profile-theme-category-group"
+      >
+        {THEME_CATEGORIES.map((item) => {
+          const isActive = category === item.value;
+          return (
+            <button
+              key={item.value}
+              type="button"
+              className={`${styles.themeCategoryRadio} ${isActive ? styles.themeCategoryRadioActive : ''}`}
+              onClick={() => setCategory(item.value)}
+              role="radio"
+              aria-checked={isActive}
+              aria-label={`${item.label}: ${item.description}`}
+              data-testid={`profile-theme-category-${item.value}`}
+            >
+              <span className={styles.themeCategoryDot} aria-hidden="true" />
+              <span className={styles.themeCategoryCopy}>
+                <span className={styles.themeCategoryLabel}>{item.label}</span>
+                <span className={styles.themeCategoryDesc}>{item.description}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {activeCategory && (
+        <p className={styles.themeCategoryHint} data-testid="profile-theme-category-hint">
+          {activeCategory.label} themes
+        </p>
+      )}
+
+      <div className={styles.themeGrid} role="radiogroup" aria-label={`${activeCategory?.label ?? 'Theme'} options`}>
+        {visibleThemes.map((option) => {
           const isActive = selected === option.value;
           return (
             <button
               key={option.value}
               type="button"
-              className={`${styles.themeCard} ${isActive ? styles.themeCardActive : ''}`}
+              className={`${styles.themeCard} ${isActive ? styles.themeCardActive : ''} ${option.category === 'neon' ? styles.themeCardNeon : ''}`}
               onClick={() => handleSelect(option.value)}
               role="radio"
               aria-checked={isActive}

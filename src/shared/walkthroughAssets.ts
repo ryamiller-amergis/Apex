@@ -9,7 +9,24 @@ export interface WalkthroughAssetEntry {
   description: string;
 }
 
-const DARK_FAMILY_THEMES = new Set(['dark', 'amergis', 'midnight', 'dusk', 'aurora']);
+const DARK_FAMILY_THEMES = new Set([
+  'dark',
+  'amergis',
+  'slate',
+  'ocean',
+  'midnight',
+  'dusk',
+  'aurora',
+  'glacier',
+  'ember',
+  'haze',
+  'neon',
+  'volt',
+  'plasma',
+  'pink',
+  'ice',
+  'flare',
+]);
 
 export const WALKTHROUGH_ASSET_REGISTRY: WalkthroughAssetEntry[] = [
   {
@@ -26,7 +43,7 @@ export const WALKTHROUGH_ASSET_REGISTRY: WalkthroughAssetEntry[] = [
 
 /**
  * Returns true when the theme belongs to the dark family.
- * Light is the only non-dark theme.
+ * Light-family themes (light, pearl) use the default logo variant.
  */
 export function isDarkFamilyTheme(theme: string): boolean {
   return DARK_FAMILY_THEMES.has(theme);

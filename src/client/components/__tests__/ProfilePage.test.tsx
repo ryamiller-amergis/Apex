@@ -82,7 +82,7 @@ const baseProfile: CurrentProfileResponse = {
   updatedAt: null,
 };
 
-function renderPage(theme: 'amergis' | 'light' = 'amergis', onThemeChange = jest.fn()) {
+function renderPage(theme: 'amergis' | 'light' | 'neon' = 'amergis', onThemeChange = jest.fn()) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -270,6 +270,28 @@ describe('ProfileThemeSection / NotificationPreferences — TBI-006 / PBI-006', 
     const { onThemeChange } = renderPage('amergis');
     fireEvent.click(screen.getByTestId('profile-theme-option-dark'));
     expect(onThemeChange).toHaveBeenCalledWith('dark');
+  });
+
+  it('categorizes themes with radio category filters and exposes neon', () => {
+    const { onThemeChange } = renderPage('amergis');
+
+    expect(screen.getByTestId('profile-theme-category-classic')).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getAllByTestId(/profile-theme-option-/)).toHaveLength(6);
+    expect(screen.getByTestId('profile-theme-option-amergis')).toBeInTheDocument();
+    expect(screen.queryByTestId('profile-theme-option-neon')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('profile-theme-category-atmosphere'));
+    expect(screen.getAllByTestId(/profile-theme-option-/)).toHaveLength(6);
+
+    fireEvent.click(screen.getByTestId('profile-theme-category-neon'));
+    expect(screen.getByTestId('profile-theme-category-neon')).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getAllByTestId(/profile-theme-option-/)).toHaveLength(6);
+    expect(screen.getByTestId('profile-theme-option-neon')).toBeInTheDocument();
+    expect(screen.getByTestId('profile-theme-option-pink')).toBeInTheDocument();
+    expect(screen.queryByTestId('profile-theme-option-amergis')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('profile-theme-option-pink'));
+    expect(onThemeChange).toHaveBeenCalledWith('pink');
   });
 
   it('DoD-0 / AC-1: theme failure restores prior selection with contained error', () => {
