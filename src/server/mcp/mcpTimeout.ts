@@ -19,6 +19,20 @@ export function resolveMcpToolTimeoutMs(): number {
   return resolvePositiveMs(process.env.MCP_TOOL_TIMEOUT_MS, 35_000);
 }
 
+/**
+ * Owner-side deadline for an MCP tool_call that never emits a terminal SDK
+ * event. It must outlive both server-side MCP bounds so normal timeout results
+ * can reach the agent before the run owner disposes it.
+ */
+export function resolveAgentMcpToolTimeoutMs(): number {
+  const serverBoundMs = Math.max(resolveMcpHttpTimeoutMs(), resolveMcpToolTimeoutMs());
+  const fallbackMs = serverBoundMs + 15_000;
+  return Math.max(
+    resolvePositiveMs(process.env.AGENT_MCP_TOOL_TIMEOUT_MS, fallbackMs),
+    serverBoundMs + 5_000,
+  );
+}
+
 export class McpTimeoutError extends Error {
   readonly timeoutMs: number;
 

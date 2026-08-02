@@ -2,13 +2,14 @@ import { render, screen } from '@testing-library/react';
 import { DesignModuleFileTree } from '../DesignModuleFileTree';
 
 describe('DesignModuleFileTree', () => {
-  it('renders the empty label when there are no files', () => {
+  it('renders the empty label but keeps the anchor target mounted when there are no files', () => {
     render(<DesignModuleFileTree files={[]} emptyLabel="Nothing matched." />);
 
-    expect(screen.getByText('Nothing matched.')).toBeInTheDocument();
-    expect(
-      screen.queryByTestId('design-module-file-tree')
-    ).not.toBeInTheDocument();
+    // Walkthrough coachmarks anchor to this test id; it must resolve even before a
+    // data-dependent preview has produced matches, so it stays mounted while empty.
+    const tree = screen.getByTestId('design-module-file-tree');
+    expect(tree).toBeInTheDocument();
+    expect(tree).toHaveTextContent('Nothing matched.');
   });
 
   it('renders folders before files and shows folder file counts', () => {

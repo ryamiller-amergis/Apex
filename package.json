@@ -40,7 +40,7 @@
     "migrate:local:down": "dotenv -e .env.local -- node-pg-migrate down --no-check-order",
     "migrate:dev-to-prod": "ts-node -P tsconfig.server.json scripts/migrate-dev-to-prod.ts",
     "postinstall": "node scripts/patch-esbuild-wasm.js",
-    "prepare": "husky"
+    "prepare": "husky || true"
   },
   "lint-staged": {
     "src/{client,server,shared}/**/*.{ts,tsx}": "cross-env ESLINT_USE_FLAT_CONFIG=false eslint"
@@ -66,6 +66,7 @@
     "@azure/msal-node": "^5.2.5",
     "@azure/storage-blob": "12.32.0",
     "@cursor/sdk": "^1.0.12",
+    "@floating-ui/react": "^0.27.20",
     "@hookform/resolvers": "^5.2.2",
     "@matbee/libreoffice-converter": "^2.7.0",
     "@microsoft/applicationinsights-web": "^3.4.1",

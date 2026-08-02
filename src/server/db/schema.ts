@@ -50,6 +50,21 @@ import type {
   ThresholdResult,
   ArtifactRef,
 } from '../../shared/types/loadTest';
+import type {
+  WalkthroughAnchorPlacement,
+  WalkthroughGenerationProvenance,
+  WalkthroughLifecycle,
+  WalkthroughProgressStatus,
+  WalkthroughTargetRuleType,
+} from '../../shared/types/walkthrough';
+import type {
+  WalkthroughAnchorAiProvenance,
+  WalkthroughAnchorReviewStatus,
+  WalkthroughAnchorSourceKind,
+  WalkthroughAnchorSourceLocation,
+} from '../../shared/types/walkthroughAnchorRegistry';
+import type { WalkthroughRegistryPlacement } from '../../shared/walkthroughAnchors';
+import { WALKTHROUGH_AI_OPTIONS_SINGLETON_ID } from '../../shared/types/walkthroughAiOptions';
 
 // ── Tables ────────────────────────────────────────────────────────────────────
 
@@ -756,8 +771,12 @@ export const notifications = pgTable('notifications', {
   body: text('body'),
   link: text('link'),
   read: boolean('read').notNull().default(false),
+  /** Optional producer idempotency key (unique when present). FEAT-007. */
+  dedupeKey: text('dedupe_key'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
-});
+}, (t) => ({
+  dedupeKeyUq: uniqueIndex('uq_notifications_dedupe_key').on(t.dedupeKey),
+}));
 
 export const notificationPreferences = pgTable('notification_preferences', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -1671,5 +1690,291 @@ export const loadTestRunsRelations = relations(loadTestRuns, ({ one }) => ({
   loadTest: one(loadTests, {
     fields: [loadTestRuns.loadTestId],
     references: [loadTests.id],
+  }),
+}));
+
+// ── Walkthrough Tables (FEAT-001) ─────────────────────────────────────────────
+
+export const walkthroughs = pgTable('walkthroughs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  internalName: text('internal_name').notNull(),
+  userTitle: text('user_title').notNull(),
+  whyItMatters: text('why_it_matters').notNull().default(''),
+  lifecycle: text('lifecycle').$type<WalkthroughLifecycle>().notNull().default('draft'),
+  priority: integer('priority').notNull().default(0),
+  isRequired: boolean('is_required').notNull().default(false),
+  revision: integer('revision').notNull().default(1),
+  publishedAt: timestamp('published_at', { withTimezone: true, mode: 'string' }),
+  archivedAt: timestamp('archived_at', { withTimezone: true, mode: 'string' }),
+  createdBy: text('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedBy: text('updated_by').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  generationProvenance: jsonb('generation_provenance').$type<WalkthroughGenerationProvenance>(),
+}, (t) => ({
+  lifecyclePriorityPublishedIdx: index('idx_walkthroughs_lifecycle_priority_published').on(
+    t.lifecycle,
+    t.priority,
+    t.publishedAt,
+  ),
+}));
+
+export const walkthroughSteps = pgTable('walkthrough_steps', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  walkthroughId: uuid('walkthrough_id').notNull().references(() => walkthroughs.id, { onDelete: 'cascade' }),
+  ordinal: integer('ordinal').notNull(),
+  heading: text('heading').notNull(),
+  bodyMarkdown: text('body_markdown').notNull().default(''),
+  /** First-class Step destination; existing DB column retained for compatibility. */
+  route: text('target_route'),
+  imageUrl: text('image_url'),
+  imageAlt: text('image_alt'),
+  ctaLabel: text('cta_label'),
+  ctaRoute: text('cta_route'),
+  /** Flat nullable anchor columns — route is shared with the Step destination. */
+  anchorKey: text('anchor_key'),
+  placement: text('placement').$type<WalkthroughAnchorPlacement>(),
+}, (t) => ({
+  ordinalUq: unique('uq_walkthrough_steps_ordinal').on(t.walkthroughId, t.ordinal),
+  walkthroughOrdinalIdx: index('idx_walkthrough_steps_walkthrough_ordinal').on(
+    t.walkthroughId,
+    t.ordinal,
+  ),
+}));
+
+export const walkthroughTargetingRules = pgTable('walkthrough_targeting_rules', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  walkthroughId: uuid('walkthrough_id').notNull().references(() => walkthroughs.id, { onDelete: 'cascade' }),
+  type: text('type').$type<WalkthroughTargetRuleType>().notNull(),
+  value: text('value').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  typeValueIdx: index('idx_walkthrough_targeting_rules_type_value').on(t.type, t.value),
+  walkthroughIdx: index('idx_walkthrough_targeting_rules_walkthrough').on(t.walkthroughId),
+  walkthroughTypeValueUq: unique('uq_walkthrough_targeting_rules_walkthrough_type_value').on(
+    t.walkthroughId,
+    t.type,
+    t.value,
+  ),
+}));
+
+export const walkthroughProgress = pgTable('walkthrough_progress', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  walkthroughId: uuid('walkthrough_id').notNull().references(() => walkthroughs.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull(),
+  /** Persisted: seen | completed | dismissed only. acknowledged is derived. */
+  status: text('status').$type<WalkthroughProgressStatus>().notNull(),
+  lastStepId: uuid('last_step_id').references(() => walkthroughSteps.id, { onDelete: 'set null' }),
+  seenAt: timestamp('seen_at', { withTimezone: true, mode: 'string' }),
+  acknowledgedAt: timestamp('acknowledged_at', { withTimezone: true, mode: 'string' }),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  userRevisionUq: unique('uq_walkthrough_progress_user_revision').on(
+    t.walkthroughId,
+    t.userId,
+    t.revision,
+  ),
+  userWalkthroughRevisionIdx: index('idx_walkthrough_progress_user_walkthrough_revision').on(
+    t.userId,
+    t.walkthroughId,
+    t.revision,
+  ),
+  walkthroughRevisionIdx: index('idx_walkthrough_progress_walkthrough_revision').on(
+    t.walkthroughId,
+    t.revision,
+  ),
+}));
+
+export type WalkthroughNotificationAttemptState = 'pending' | 'delivered' | 'failed';
+
+export const walkthroughAnchorMisses = pgTable('walkthrough_anchor_misses', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  walkthroughId: uuid('walkthrough_id').notNull().references(() => walkthroughs.id, { onDelete: 'cascade' }),
+  stepId: uuid('step_id').notNull().references(() => walkthroughSteps.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull(),
+  projectSnapshot: text('project_snapshot').notNull(),
+  anchorKey: text('anchor_key').notNull(),
+  targetRoute: text('target_route').notNull(),
+  occurrenceId: uuid('occurrence_id').notNull(),
+  occurredAt: timestamp('occurred_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  occurrenceUq: unique('uq_walkthrough_anchor_misses_occurrence').on(
+    t.userId,
+    t.walkthroughId,
+    t.stepId,
+    t.revision,
+    t.occurrenceId,
+  ),
+  walkthroughOccurredIdx: index('idx_walkthrough_anchor_misses_walkthrough_occurred').on(
+    t.walkthroughId,
+    t.occurredAt,
+    t.id,
+  ),
+  stepRevisionIdx: index('idx_walkthrough_anchor_misses_step_revision').on(t.stepId, t.revision),
+}));
+
+export const walkthroughNotificationDeliveries = pgTable('walkthrough_notification_deliveries', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  walkthroughId: uuid('walkthrough_id').notNull().references(() => walkthroughs.id, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull(),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  notificationId: uuid('notification_id').references(() => notifications.id, { onDelete: 'set null' }),
+  attemptState: text('attempt_state').$type<WalkthroughNotificationAttemptState>().notNull().default('pending'),
+  attemptCount: integer('attempt_count').notNull().default(0),
+  lastErrorClass: text('last_error_class'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  wtRevUserUq: unique('uq_walkthrough_notification_deliveries_wt_rev_user').on(
+    t.walkthroughId,
+    t.revision,
+    t.userId,
+  ),
+  userRevisionIdx: index('idx_walkthrough_notification_deliveries_user_revision').on(
+    t.userId,
+    t.walkthroughId,
+    t.revision,
+  ),
+}));
+
+/** Smart Anchor Management — approved+active rows are the runtime catalog. */
+export const walkthroughAnchorRegistry = pgTable('walkthrough_anchor_registry', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  anchorKey: text('anchor_key').notNull(),
+  testId: text('test_id').notNull(),
+  label: text('label').notNull(),
+  suggestedRoute: text('suggested_route'),
+  approvedRoute: text('approved_route'),
+  allowedPlacements: jsonb('allowed_placements')
+    .$type<WalkthroughRegistryPlacement[]>()
+    .notNull()
+    .default(['bottom']),
+  smartTags: jsonb('smart_tags').$type<string[]>().notNull().default([]),
+  openerAnchorKeys: jsonb('opener_anchor_keys').$type<string[]>().notNull().default([]),
+  sourceKind: text('source_kind').$type<WalkthroughAnchorSourceKind>().notNull(),
+  sourceLocations: jsonb('source_locations')
+    .$type<WalkthroughAnchorSourceLocation[]>()
+    .notNull()
+    .default([]),
+  sourceHash: text('source_hash'),
+  reviewStatus: text('review_status')
+    .$type<WalkthroughAnchorReviewStatus>()
+    .notNull()
+    .default('pending'),
+  isActive: boolean('is_active').notNull().default(false),
+  lastSeenAt: timestamp('last_seen_at', { withTimezone: true, mode: 'string' }),
+  missingSince: timestamp('missing_since', { withTimezone: true, mode: 'string' }),
+  deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
+  aiProvenance: jsonb('ai_provenance').$type<WalkthroughAnchorAiProvenance>(),
+  createdBy: text('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedBy: text('updated_by').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  anchorKeyUq: uniqueIndex('uq_walkthrough_anchor_registry_anchor_key')
+    .on(t.anchorKey)
+    .where(sql`${t.deletedAt} IS NULL`),
+  testIdUq: uniqueIndex('uq_walkthrough_anchor_registry_test_id')
+    .on(t.testId)
+    .where(sql`${t.deletedAt} IS NULL`),
+  smartTagsGinIdx: index('idx_walkthrough_anchor_registry_smart_tags').using('gin', t.smartTags),
+  activeRouteStatusIdx: index('idx_walkthrough_anchor_registry_active_route_status')
+    .on(t.isActive, t.approvedRoute, t.reviewStatus)
+    .where(sql`${t.deletedAt} IS NULL`),
+  reviewStatusIdx: index('idx_walkthrough_anchor_registry_review_status')
+    .on(t.reviewStatus)
+    .where(sql`${t.deletedAt} IS NULL`),
+}));
+
+/** Platform Admin → Walkthroughs → Options (singleton skill + agent model). */
+export const walkthroughAiOptions = pgTable('walkthrough_ai_options', {
+  id: text('id').primaryKey().default(WALKTHROUGH_AI_OPTIONS_SINGLETON_ID),
+  walkthroughGenerationSkillPath: text('walkthrough_generation_skill_path').notNull(),
+  walkthroughGenerationModel: text('walkthrough_generation_model').notNull().default(''),
+  anchorSmartTaggingSkillPath: text('anchor_smart_tagging_skill_path').notNull(),
+  anchorSmartTaggingModel: text('anchor_smart_tagging_model').notNull().default(''),
+  anchorDiscoverySkillPath: text('anchor_discovery_skill_path')
+    .notNull()
+    .default('.cursor/skills/walkthrough-anchor-discovery/SKILL.md'),
+  anchorDiscoveryModel: text('anchor_discovery_model').notNull().default(''),
+  createdBy: text('created_by').notNull(),
+  createdByDisplayName: text('created_by_display_name').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedBy: text('updated_by').notNull(),
+  updatedByDisplayName: text('updated_by_display_name').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export const walkthroughsRelations = relations(walkthroughs, ({ many }) => ({
+  steps: many(walkthroughSteps),
+  targetingRules: many(walkthroughTargetingRules),
+  progress: many(walkthroughProgress),
+  notificationDeliveries: many(walkthroughNotificationDeliveries),
+  anchorMisses: many(walkthroughAnchorMisses),
+}));
+
+export const walkthroughAnchorMissesRelations = relations(walkthroughAnchorMisses, ({ one }) => ({
+  walkthrough: one(walkthroughs, {
+    fields: [walkthroughAnchorMisses.walkthroughId],
+    references: [walkthroughs.id],
+  }),
+  step: one(walkthroughSteps, {
+    fields: [walkthroughAnchorMisses.stepId],
+    references: [walkthroughSteps.id],
+  }),
+  user: one(appUsers, {
+    fields: [walkthroughAnchorMisses.userId],
+    references: [appUsers.oid],
+  }),
+}));
+
+export const walkthroughNotificationDeliveriesRelations = relations(
+  walkthroughNotificationDeliveries,
+  ({ one }) => ({
+    walkthrough: one(walkthroughs, {
+      fields: [walkthroughNotificationDeliveries.walkthroughId],
+      references: [walkthroughs.id],
+    }),
+    user: one(appUsers, {
+      fields: [walkthroughNotificationDeliveries.userId],
+      references: [appUsers.oid],
+    }),
+    notification: one(notifications, {
+      fields: [walkthroughNotificationDeliveries.notificationId],
+      references: [notifications.id],
+    }),
+  }),
+);
+
+export const walkthroughStepsRelations = relations(walkthroughSteps, ({ one, many }) => ({
+  walkthrough: one(walkthroughs, {
+    fields: [walkthroughSteps.walkthroughId],
+    references: [walkthroughs.id],
+  }),
+  progressRows: many(walkthroughProgress),
+  anchorMisses: many(walkthroughAnchorMisses),
+}));
+
+export const walkthroughTargetingRulesRelations = relations(walkthroughTargetingRules, ({ one }) => ({
+  walkthrough: one(walkthroughs, {
+    fields: [walkthroughTargetingRules.walkthroughId],
+    references: [walkthroughs.id],
+  }),
+}));
+
+export const walkthroughProgressRelations = relations(walkthroughProgress, ({ one }) => ({
+  walkthrough: one(walkthroughs, {
+    fields: [walkthroughProgress.walkthroughId],
+    references: [walkthroughs.id],
+  }),
+  user: one(appUsers, {
+    fields: [walkthroughProgress.userId],
+    references: [appUsers.oid],
+  }),
+  lastStep: one(walkthroughSteps, {
+    fields: [walkthroughProgress.lastStepId],
+    references: [walkthroughSteps.id],
   }),
 }));

@@ -210,7 +210,10 @@ npm run changelog    # helper for release notes
 npm run build && npm start   # production-style build/run
 ```
 
-A Husky **pre-commit** hook runs ESLint via `lint-staged` on staged `src/{client,server,shared}/**/*.{ts,tsx}` files only (untouched files are skipped). Warnings and errors both fail the commit (`--max-warnings=0`). Fix with `npm run lint:fix` or address findings manually, then re-stage.
+A Husky **pre-commit** hook runs:
+
+1. ESLint via `lint-staged` on staged `src/{client,server,shared}/**/*.{ts,tsx}` files only (untouched files are skipped). Warnings and errors both fail the commit (`--max-warnings=0`). Fix with `npm run lint:fix` or address findings manually, then re-stage.
+2. A **data-testid** policy (`scripts/check-data-testid.mjs`) on staged client TSX under `src/client/` (excludes tests). When a file is staged, **every** interactive element in that file must include a `data-testid` (or `anchorTestIdProps`) — not only newly added lines. Covered: `button`, `input`, `select`, `textarea`, `a`, `form`, `dialog`, elements with click/submit handlers, and common `*Button` / `*Modal` / … components. Escape hatch: `// data-testid-exempt` on the line above the tag. In Cursor: `/resolve-pre-commit-data-testid` or `/resolve-pre-commit-eslint` for the matching hook failure.
 
 Pull requests opened in GitHub use the description template in [`.github/PULL_REQUEST_TEMPLATE.md`](./.github/PULL_REQUEST_TEMPLATE.md). In Cursor, developers can kick off a filled PR with the [`create-pull-request`](./.cursor/skills/create-pull-request/SKILL.md) skill (`/create-pull-request`).
 

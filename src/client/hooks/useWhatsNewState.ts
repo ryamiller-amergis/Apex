@@ -40,6 +40,14 @@ export interface UseWhatsNewStateResult {
   proactive: boolean;
   /** Manual open should show the benign unavailable dialog. */
   manualUnavailable: boolean;
+  /**
+   * FEAT-005 — bootstrap + changelog evaluation finished so overlay arbitration may run.
+   */
+  automaticOverlaySettled: boolean;
+  /**
+   * FEAT-005 — What's New will or did auto-open; Walkthrough must not launch this load.
+   */
+  blocksAutomaticWalkthrough: boolean;
   open: (mode: WhatsNewOpenMode) => void;
   dismiss: (surface: 'modal' | 'banner') => void;
   setShowOnLogin: (show: boolean) => void;
@@ -88,6 +96,11 @@ export function useWhatsNewState({
     changelogQuery.isError ||
     (changelogQuery.isFetched && !changelogQuery.data);
   const changelogReady = !!changelogQuery.data?.entries?.length;
+  const changelogSettled =
+    !enabled ||
+    !snapshot ||
+    changelogQuery.isFetched ||
+    changelogQuery.isError;
 
   const status: UseWhatsNewStateResult['status'] = !snapshot
     ? 'loading'
@@ -112,6 +125,14 @@ export function useWhatsNewState({
     setOpenMode('automatic');
     setIsOpen(true);
   }
+
+  /** FEAT-005: What's New auto-overlay decision is definitive for this document. */
+  const automaticOverlaySettled =
+    !enabled || (snapshot != null && (status === 'unavailable' || changelogSettled));
+
+  /** FEAT-005: What's New will or did consume the automatic overlay slot. */
+  const blocksAutomaticWalkthrough =
+    autoOpened || (automaticOverlaySettled && proactive && showOnLogin);
 
   useEffect(() => {
     if (!isOpen || openMode !== 'automatic' || autoOpenTelemetrySentRef.current) return;
@@ -227,6 +248,8 @@ export function useWhatsNewState({
     openMode,
     proactive,
     manualUnavailable,
+    automaticOverlaySettled,
+    blocksAutomaticWalkthrough,
     open,
     dismiss,
     setShowOnLogin,

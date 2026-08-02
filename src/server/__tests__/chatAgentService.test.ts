@@ -117,7 +117,14 @@ const {
   upsertThread: jest.Mock;
 };
 
-const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
+const { db: mockDb } = jest.requireMock('../db/drizzle') as {
+  db: {
+    query: {
+      prds: { findFirst: jest.Mock };
+      designDocs: { findFirst: jest.Mock };
+    };
+  };
+};
 
 function chatMessage(
   id: string,
@@ -470,6 +477,26 @@ describe('document assistant MCP wiring', () => {
 
     expect(servers['github-repo']).toBeUndefined();
     expect(servers['ado-skills']).toBeDefined();
+  });
+
+  it('uses repository MCP profiles without broad code search for interviews', () => {
+    const githubServers = buildMcpServers(
+      baseKickoff(),
+      'http://localhost:3001/mcp/ado-skills',
+      { restrictRepoSearch: true },
+    );
+    expect(githubServers['github-repo']).toEqual({
+      url: 'http://localhost:3001/mcp/github-repo?profile=interview',
+    });
+
+    const adoServers = buildMcpServers(
+      baseKickoff({ skillProvider: 'ado', repo: 'Apex' }),
+      'http://localhost:3001/mcp/ado-skills',
+      { restrictRepoSearch: true },
+    );
+    expect(adoServers['ado-skills']).toEqual({
+      url: 'http://localhost:3001/mcp/ado-skills?profile=interview',
+    });
   });
 });
 

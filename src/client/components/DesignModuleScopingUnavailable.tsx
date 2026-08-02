@@ -5,7 +5,7 @@ export const DesignModuleScopingUnavailable: React.FC = () => {
   return (
     <div
       className={styles.panel}
-      data-testid="design-module-scoping-unavailable"
+      {...{ 'data-testid': 'design-module-scoping-unavailable' }}
       role="status"
     >
       <h3 className={styles.title}>AI scoping unavailable</h3>

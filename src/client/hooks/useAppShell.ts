@@ -277,6 +277,8 @@ export function useAppShell() {
     open: openWhatsNew,
     closeWithoutAck: closeWhatsNewWithoutAck,
     manualUnavailable: whatsNewManualUnavailable,
+    automaticOverlaySettled: whatsNewAutomaticOverlaySettled,
+    blocksAutomaticWalkthrough: whatsNewBlocksAutomaticWalkthrough,
   } = whatsNew;
 
   const handleMarkChangelogAsRead = useCallback(() => {
@@ -354,6 +356,8 @@ export function useAppShell() {
     whatsNewLastSeenVersion: whatsNew.lastSeenVersion,
     whatsNewManualUnavailable: whatsNew.manualUnavailable,
     whatsNewCurrentVersion: whatsNew.currentVersion,
+    whatsNewAutomaticOverlaySettled,
+    whatsNewBlocksAutomaticWalkthrough,
     betaAnnouncementDismissed,
     handleDismissBetaAnnouncement,
     handleLogout,

@@ -15,6 +15,8 @@ File weights: **PRD markdown 50%, backlog JSON 50%**.
 ### Persona names (Apex groups enum)
 `Product-Owner`, `BA`, `UI/UX`, `Manager`, `Developer`, `QA`, `Platform Admin`, `Project Admin`, `Authenticated User`
 
+**Alias:** Interview or PRD wording **"Super Admin"** maps to **`Platform Admin`**. Do not score Super Admin vs Platform Admin as a persona mismatch or invent a separate Super Admin enum value.
+
 ### Persona types
 `Internal`, `Admin`, `Technical`
 
@@ -197,19 +199,23 @@ Valid persona names: `Product-Owner`, `BA`, `UI/UX`, `Manager`, `Developer`, `QA
 
 ### Feature structure — weight 10
 
+Optional `userTypes` / `personaBehaviors` on Features are schema-valid (design-prototype enrichment). Do **not** score 0 solely because they are present. TBIs must not have these fields (scored under TBI structure).
+
 | Score | Evidence |
 |-------|----------|
-| 0 | Feature missing any required field; or contains properties not in `backlog-schema.json` (e.g. `route`, `userTypes`) |
-| 1 | Required fields present; feature-flag alignment broken; or `affectedPersonas` contains names not in the Apex groups enum |
+| 0 | Feature missing any required field; or contains properties not in `backlog-schema.json` (e.g. `route`, `compliance`) |
+| 1 | Required fields present; feature-flag alignment broken; or `affectedPersonas` / `userTypes` contains names not in the Apex groups enum (after mapping Super Admin → Platform Admin) |
 | 2 | Fields present; flag matches PRD; description generic |
 | 3 | All fields complete; `affectedPersonas` uses Apex enum names only; flag alignment correct; description names capability and beneficiary; no extra properties beyond schema |
 
 ### PBI user stories and structure — weight 12
 
+Optional `userTypes` / `personaBehaviors` on PBIs are schema-valid (design-prototype enrichment). Do **not** score 0 solely because they are present.
+
 | Score | Evidence |
 |-------|----------|
-| 0 | PBI missing any required field; or contains properties not in `backlog-schema.json` (e.g. `userTypes`, `compliance`) |
-| 1 | `userStory.persona` not from Apex groups enum (valid: `Product-Owner`, `BA`, `UI/UX`, `Manager`, `Developer`, `QA`, `Platform Admin`, `Project Admin`, `Authenticated User`) |
+| 0 | PBI missing any required field; or contains properties not in `backlog-schema.json` (e.g. `compliance`) |
+| 1 | `userStory.persona` not from Apex groups enum (valid: `Product-Owner`, `BA`, `UI/UX`, `Manager`, `Developer`, `QA`, `Platform Admin`, `Project Admin`, `Authenticated User`; Super Admin ≡ Platform Admin) |
 | 2 | Complete with valid Apex persona; `nonFunctionalRequirements` sub-fields (`performance`, `accessibility`, `security`) have some blanks |
 | 3 | All fields populated; persona from Apex enum; NFR sub-fields (`performance`, `accessibility`, `security`) populated with concrete values; no extra properties beyond schema |
 
@@ -226,10 +232,10 @@ Valid persona names: `Product-Owner`, `BA`, `UI/UX`, `Manager`, `Developer`, `QA
 
 | Score | Evidence |
 |-------|----------|
-| 0 | TBI missing required fields or has a `userStory` field |
+| 0 | TBI missing required fields; has a `userStory` field; or has `userTypes` / `personaBehaviors` (those belong on Features/PBIs only) |
 | 1 | `description` is one sentence; `definitionOfDone` < 3 items |
 | 2 | Description 2–4 sentences; DoD 3+ items but some not verifiable |
-| 3 | All fields populated; description names module and approach; DoD items are independently verifiable |
+| 3 | All fields populated; description names module and approach; DoD items are independently verifiable; no persona enrichment fields |
 
 ### dependsOn graph validity — weight 8
 
@@ -253,7 +259,7 @@ Valid persona names: `Product-Owner`, `BA`, `UI/UX`, `Manager`, `Developer`, `QA
 
 ### Schema compliance — weight 5
 
-The backlog schema uses `additionalProperties: false` at every level. Extra properties (e.g. `route`, `userTypes`, `compliance`) are schema violations.
+The backlog schema uses `additionalProperties: false` at every level. Extra properties (e.g. `route`, `compliance`) are schema violations. Optional `userTypes` / `personaBehaviors` on **Features and PBIs** are defined in the schema — do **not** treat them as violations. Those fields on **TBIs** are violations.
 
 | Score | Evidence |
 |-------|----------|

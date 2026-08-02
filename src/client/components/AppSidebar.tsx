@@ -8,6 +8,7 @@ interface NavItem {
   icon: React.ReactNode;
   permission: string | null;
   onNavigate: () => void;
+  /** Rare override when the id cannot follow `nav-item-${view}` (e.g. Load Tests). */
   testId?: string;
 }
 
@@ -16,6 +17,8 @@ interface NavGroup {
   label: string;
   items: NavItem[];
 }
+
+/** Spread props for sidebar module buttons — Sync resolves `view:` → `nav-item-${view}`. */
 
 interface AppSidebarProps {
   currentView: string;
@@ -294,6 +297,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
             onClick={onNavigateHome}
             type="button"
             title={collapsed ? 'Home' : undefined}
+            {...{ 'data-testid': 'nav-item-home' }}
           >
             <span className={styles.icon}><IconHome /></span>
             {!collapsed && <span className={styles.label}>Home</span>}
@@ -317,7 +321,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
                 onClick={item.onNavigate}
                 type="button"
                 title={collapsed ? item.label : undefined}
-                data-testid={item.testId ?? `nav-item-${item.view}`}
+                {...{ 'data-testid': item.testId ?? `nav-item-${item.view}` }}
               >
                 <span className={styles.icon}>{item.icon}</span>
                 {!collapsed && <span className={styles.label}>{item.label}</span>}
@@ -336,6 +340,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
               onClick={onNavigateAdmin}
               type="button"
               title={collapsed ? 'Admin' : undefined}
+              {...{ 'data-testid': 'nav-item-admin' }}
             >
               <span className={styles.icon}><IconAdmin /></span>
               {!collapsed && <span className={styles.label}>Admin</span>}
@@ -349,6 +354,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
           type="button"
           title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          {...{ 'data-testid': 'sidebar-collapse-btn' }}
         >
           {collapsed ? <IconChevronRight /> : <IconChevronLeft />}
           {!collapsed && <span className={styles.collapseLabel}>Collapse</span>}

@@ -299,8 +299,9 @@ describe('ProfileThemeSection / NotificationPreferences — TBI-006 / PBI-006', 
   it('DoD-2 / AC-2: coming-soon rows lack toggles; disabled parent disables Toast', () => {
     renderPage();
     const notifications = screen.getByTestId('profile-notification-section');
-    expect(within(notifications).queryByTestId('notification-pref-enabled-system')).not.toBeInTheDocument();
-    expect(within(notifications).getAllByText('Coming soon').length).toBeGreaterThan(0);
+    expect(within(notifications).getByTestId('notification-pref-enabled-system')).toBeInTheDocument();
+    expect(within(notifications).queryByTestId('notification-pref-enabled-background')).not.toBeInTheDocument();
+    expect(within(notifications).getAllByText('Coming soon').length).toBe(1);
     expect(screen.getByTestId('notification-pref-toast-ai')).toBeDisabled();
   });
 

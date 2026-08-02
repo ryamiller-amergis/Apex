@@ -33,6 +33,14 @@ jest.mock('../UserMenu', () => ({
   UserMenu: () => <div data-testid="user-menu" />,
 }));
 
+jest.mock('../WalkthroughsAdminPanel', () => ({
+  WalkthroughsAdminPanel: () => (
+    <div data-testid="walkthroughs-admin-panel">
+      <div data-testid="walkthrough-catalog" />
+    </div>
+  ),
+}));
+
 jest.mock('../../hooks/usePlatformAdmin', () => ({
   useApproveProjectAccessRequest: jest.fn(),
   usePlatformAdminAccessRequests: jest.fn(),
@@ -476,5 +484,20 @@ describe('PlatformAdmin feature flags', () => {
       { id: 'flag-1' },
       expect.objectContaining({ onSuccess: expect.any(Function) }),
     );
+  });
+});
+
+describe('PlatformAdmin walkthroughs tab', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('renders walkthrough catalog when walkthroughs tab is selected', async () => {
+    const user = userEvent.setup();
+    setupPlatformAdmin();
+
+    await user.click(screen.getByTestId('platform-admin-tab-walkthroughs'));
+
+    expect(screen.getByTestId('walkthrough-catalog')).toBeInTheDocument();
   });
 });

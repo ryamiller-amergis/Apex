@@ -27,7 +27,9 @@ export function mountAdoMcp(app: Application, basePath = '/mcp/ado-skills'): voi
       enableJsonResponse: true,
     });
 
-    const server = createAdoMcpServer();
+    const server = createAdoMcpServer({
+      enableCodeSearch: req.query.profile !== 'interview',
+    });
     const timeoutMs = resolveMcpHttpTimeoutMs();
 
     try {

@@ -40,6 +40,7 @@ From {feature-slug}-assumptions.md:
 - Do NOT modify protected files without user approval
 - Do NOT run `git commit` or `git push`
 - If feature-flag gating applies: top-level split from `feature-flags` at the entry route/component with the agreed flag key; keep the disabled branch functional
+- UI: every interactive element in a staged client TSX file MUST have data-testid via spread `{...{ 'data-testid': 'kebab-id' }}` (not `data-testid="…"`; match design.md; whole-file scan). Source of truth: `scripts/check-data-testid.mjs` (includes `form`, `*Panel`, and the full PascalCase suffix list — do not use a shortened list). After GREEN, run `node scripts/check-data-testid.mjs` (stage touched client TSX first) and fix until exit 0. Also clear ESLint **errors** on touched files (`cross-env ESLINT_USE_FLAT_CONFIG=false npx eslint <files>`). Hook failures → /resolve-pre-commit-data-testid or /resolve-pre-commit-eslint.
 
 ### TDD Instructions (see below)
 <paste the TDD block matching this item's layer>
@@ -98,10 +99,31 @@ TDD — Red to Green:
    - Mock fetch and external hooks; use MSW or inline jest.fn() mocks
    - Use AAA pattern; test user-visible behavior matching Given/When/Then, not implementation details
    - Align UI assertions with {feature-slug}-design.md states/labels where specified
+   - Prefer querying by data-testid from the design-spec list (getByTestId) for interactive controls
    - Run: npm test -- <testfile> — confirm tests FAIL before writing implementation
 
 2. GREEN: Write the implementation.
+   - data-testid policy (pre-commit enforced): every interactive UI element in a staged client TSX file MUST have a stable kebab-case id via spread syntax
+     `{...{ 'data-testid': 'test-id-example' }}` (whole-file scan — not only new lines). Never write kebab-case JSX attrs `data-testid="…"` / `data-testid={…}`.
+     Source of truth: scripts/check-data-testid.mjs — mark ALL of:
+       • tags: a, button, dialog, form, input, select, textarea
+       • handler props: onClick, onSubmit, onChange, onKeyDown, onKeyUp, onPointerDown, onDoubleClick
+       • PascalCase suffixes: Button, Modal, Dialog, Drawer, Input, Select, Checkbox, Toggle, Switch, Tab,
+         Menu, MenuItem, Dropdown, Popover, Tooltip, Form, Field, Panel, Card, Banner, Badge, Chip, Fab, Link, NavItem
+     Common agent misses: <form>, *Panel, *Card, *Field, and the parent mount site for a new interactive component.
+     Match ids listed in {feature-slug}-design.md when present.
+   - Dynamic: `{...{ 'data-testid': \`work-item-${id}\` }}`. Walkthrough: `{...anchorTestIdProps('registry-key')}`.
+   - When extending an existing screen, add missing ids AND convert any legacy `data-testid="…"` / `data-testid={…}` on interactive controls in that file to spread form.
+   - Screen / landmark roots (page container, primary panel, empty/error states used by E2E) also need the spread form.
+   - Do not rely on CSS class or text selectors for new E2E/unit queries when a test id exists.
+   - Img alt: do not use redundant words like "image"/"photo"/"picture" in alt (jsx-a11y/img-redundant-alt is an ESLint error).
    - Run: npm test -- <testfile> — confirm all tests PASS
+   - Verify pre-commit gates before claiming done:
+       git add -- <touched-client-tsx>
+       node scripts/check-data-testid.mjs
+       cross-env ESLINT_USE_FLAT_CONFIG=false npx eslint --max-warnings=-1 <touched-ts-tsx>
+     Fix data-testid violations and ESLint **errors**; do not boil the ocean on unrelated pre-existing warnings.
+     Hook recovery: /resolve-pre-commit-data-testid or /resolve-pre-commit-eslint.
 
 3. REFACTOR: Clean up; re-run tests to confirm still green.
 

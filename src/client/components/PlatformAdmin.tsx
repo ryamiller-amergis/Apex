@@ -25,6 +25,7 @@ import {
   useRemoveFlagRule,
   useFlagAudit,
 } from '../hooks/usePlatformAdminFeatureFlags';
+import { WalkthroughsAdminPanel } from './WalkthroughsAdminPanel';
 import { UserMenu } from './UserMenu';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import type { ThemeMode } from '../hooks/useAppShell';
@@ -47,7 +48,7 @@ const menuSchema = z.object({
 
 type MenuFormValues = z.infer<typeof menuSchema>;
 
-type PlatformAdminTab = 'access' | 'menu' | 'flags';
+type PlatformAdminTab = 'access' | 'menu' | 'flags' | 'walkthroughs';
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong';
@@ -147,6 +148,7 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
   onLogout,
 }) => {
   const [selectedMenuProject, setSelectedMenuProject] = useState<string>('');
+  // data-testid-exempt
   const [activeTab, setActiveTab] = useState<PlatformAdminTab>('access');
   const [assignmentSavedProject, setAssignmentSavedProject] = useState<string | null>(null);
   const [menuSavedProject, setMenuSavedProject] = useState<string | null>(null);
@@ -229,13 +231,19 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
 
   useEffect(() => {
     if (selectedMenuProject && projectNames.includes(selectedMenuProject)) return;
-    setSelectedMenuProject(projectNames[0] ?? '');
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- keep selection valid when project list changes
+        setSelectedMenuProject(projectNames[0] ?? '');
   }, [projectNames, selectedMenuProject]);
 
   return (
     <div className={styles.page}>
       <header className={styles.header}>
-        <button type="button" className={styles.backButton} onClick={onBackToProjects}>
+        <button
+          type="button"
+          className={styles.backButton}
+          onClick={onBackToProjects}
+          {...{ 'data-testid': 'platform-admin-back' }}
+        >
           Back to projects
         </button>
         <div>
@@ -253,6 +261,7 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
             theme={theme}
             user={user}
             hasUnreadChangelog={hasUnreadChangelog}
+            {...{ 'data-testid': 'platform-admin-user-menu' }}
           />
         </div>
       </header>
@@ -286,6 +295,7 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
               aria-controls="platform-admin-panel-access"
               className={`${styles.tabButton} ${activeTab === 'access' ? styles.tabButtonActive : ''}`}
               onClick={() => setActiveTab('access')}
+              {...{ 'data-testid': 'platform-admin-tab-access' }}
             >
               Access &amp; Users
               {accessRequests.length > 0 && (
@@ -302,6 +312,7 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
               aria-controls="platform-admin-panel-menu"
               className={`${styles.tabButton} ${activeTab === 'menu' ? styles.tabButtonActive : ''}`}
               onClick={() => setActiveTab('menu')}
+              {...{ 'data-testid': 'platform-admin-tab-menu' }}
             >
               Menu Visibility
             </button>
@@ -313,8 +324,21 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
               aria-controls="platform-admin-panel-flags"
               className={`${styles.tabButton} ${activeTab === 'flags' ? styles.tabButtonActive : ''}`}
               onClick={() => setActiveTab('flags')}
+              {...{ 'data-testid': 'platform-admin-tab-flags' }}
             >
               Feature Flags
+            </button>
+            <button
+              type="button"
+              role="tab"
+              id="platform-admin-tab-walkthroughs"
+              aria-selected={activeTab === 'walkthroughs'}
+              aria-controls="platform-admin-panel-walkthroughs"
+              className={`${styles.tabButton} ${activeTab === 'walkthroughs' ? styles.tabButtonActive : ''}`}
+              onClick={() => setActiveTab('walkthroughs')}
+              {...{ 'data-testid': 'platform-admin-tab-walkthroughs' }}
+            >
+              Walkthroughs
             </button>
           </div>
 
@@ -353,6 +377,7 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
                         isSaving={setAssignments.isPending}
                         wasSaved={assignmentSavedProject === project}
                         onSave={handleSaveAssignments}
+                        {...{ 'data-testid': `platform-admin-assignment-card-${project}` }}
                       />
                     );
                   })}
@@ -386,6 +411,17 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
               className={styles.tabPanel}
             >
               <FeatureFlagsSection />
+            </div>
+          )}
+          {activeTab === 'walkthroughs' && (
+            <div
+              id="platform-admin-panel-walkthroughs"
+              role="tabpanel"
+              aria-labelledby="platform-admin-tab-walkthroughs"
+              className={styles.tabPanel}
+            >
+              {/* data-testid-exempt — host sets walkthroughs-admin-panel */}
+              <WalkthroughsAdminPanel />
             </div>
           )}
         </main>
@@ -447,6 +483,7 @@ const AccessRequestsSection: React.FC<AccessRequestsSectionProps> = ({
                   className={styles.secondaryButton}
                   disabled={pending}
                   onClick={() => void onReject(request.id)}
+                  {...{ 'data-testid': `platform-admin-access-reject-${request.id}` }}
                 >
                   Reject
                 </button>
@@ -455,6 +492,7 @@ const AccessRequestsSection: React.FC<AccessRequestsSectionProps> = ({
                   className={styles.primaryButton}
                   disabled={pending}
                   onClick={() => void onApprove(request.id)}
+                  {...{ 'data-testid': `platform-admin-access-approve-${request.id}` }}
                 >
                   Accept
                 </button>
@@ -531,7 +569,8 @@ const AssignmentCard: React.FC<AssignmentCardProps> = ({
   const pendingDisplayCount = pendingAssignments.length + importedPendingEmails.length;
 
   useEffect(() => {
-    setSelectedUserIds(currentUserIds);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset member editor when group membership snapshot changes
+        setSelectedUserIds(currentUserIds);
     setSearchQuery('');
     setImportMessage(null);
     setImportedPendingEmails([]);
@@ -660,6 +699,7 @@ const AssignmentCard: React.FC<AssignmentCardProps> = ({
                     disabled={pending}
                     onClick={() => void handleRemoveSavedPending(assignment.email)}
                     aria-label={`Remove pending ${assignment.email}`}
+                    {...{ 'data-testid': `platform-admin-pending-remove-saved-${assignment.email}` }}
                   >
                     Remove
                   </button>
@@ -680,6 +720,7 @@ const AssignmentCard: React.FC<AssignmentCardProps> = ({
                     disabled={pending}
                     onClick={() => handleRemoveImportedPending(email)}
                     aria-label={`Remove pending ${email}`}
+                    {...{ 'data-testid': `platform-admin-pending-remove-imported-${email}` }}
                   >
                     Remove
                   </button>
@@ -690,7 +731,11 @@ const AssignmentCard: React.FC<AssignmentCardProps> = ({
         )}
       </div>
 
-      <form className={styles.form} onSubmit={(event) => void handleSubmitAssignments(event)}>
+      <form
+        className={styles.form}
+        onSubmit={(event) => void handleSubmitAssignments(event)}
+        {...{ 'data-testid': `platform-admin-assignments-form-${group.project}` }}
+      >
         <label className={styles.label} htmlFor={`assignments-${group.project}`}>
           Add users
         </label>
@@ -707,6 +752,7 @@ const AssignmentCard: React.FC<AssignmentCardProps> = ({
                   onClick={() => handleRemoveUser(user.userId)}
                   disabled={pending}
                   aria-label={`Remove ${getUserLabel(user)}`}
+                  {...{ 'data-testid': `platform-admin-assignment-chip-remove-${user.userId}` }}
                 >
                   &times;
                 </button>
@@ -723,11 +769,17 @@ const AssignmentCard: React.FC<AssignmentCardProps> = ({
           disabled={pending || availableUsers.length === 0}
           onChange={(event) => setSearchQuery(event.target.value)}
           autoComplete="off"
+          {...{ 'data-testid': `platform-admin-assignment-search-${group.project}` }}
         />
         {availableUsers.length === 0 ? (
           <p className={styles.fieldWarning}>No logged-in users are available to assign yet.</p>
         ) : (
-          <div className={styles.suggestionList} role="listbox" aria-label={`${group.project} matching users`}>
+          <div
+            className={styles.suggestionList}
+            role="listbox"
+            aria-label={`${group.project} matching users`}
+            {...{ 'data-testid': `platform-admin-assignment-suggestions-${group.project}` }}
+          >
             {hasSuggestions ? (
               filteredUsers.map((user) => (
                 <button
@@ -738,6 +790,7 @@ const AssignmentCard: React.FC<AssignmentCardProps> = ({
                   disabled={pending}
                   role="option"
                   aria-selected={false}
+                  {...{ 'data-testid': `platform-admin-assignment-suggestion-${user.userId}` }}
                 >
                   <span className={styles.userName}>{getUserLabel(user)}</span>
                   {user.email && <span className={styles.userEmail}>{user.email}</span>}
@@ -759,13 +812,19 @@ const AssignmentCard: React.FC<AssignmentCardProps> = ({
             accept=".csv,.txt,text/csv,text/plain"
             disabled={pending}
             onChange={(event) => void handleImportFile(event)}
+            {...{ 'data-testid': `platform-admin-assignment-import-${group.project}` }}
           />
           <span className={styles.importHint}>One email or user ID per line, or CSV with email/userId column.</span>
         </div>
         {importMessage && <p className={styles.fieldWarning}>{importMessage}</p>}
         <div className={styles.formActions}>
           {wasSaved && <span className={styles.success}>Assignments saved</span>}
-          <button type="submit" className={styles.primaryButton} disabled={pending}>
+          <button
+            type="submit"
+            className={styles.primaryButton}
+            disabled={pending}
+            {...{ 'data-testid': `platform-admin-assignments-save-${group.project}` }}
+          >
             {pending ? 'Saving...' : 'Save assignments'}
           </button>
         </div>
@@ -804,6 +863,7 @@ const MenuVisibilitySection: React.FC<MenuVisibilitySectionProps> = ({
     defaultValues: { enabledViews },
   });
 
+  // eslint-disable-next-line react-hooks/incompatible-library -- RHF watch() is intentionally unmemoizable
   const watchedViews = watch('enabledViews') ?? [];
 
   useEffect(() => {
@@ -836,13 +896,18 @@ const MenuVisibilitySection: React.FC<MenuVisibilitySectionProps> = ({
               type="button"
               className={`${styles.projectButton} ${selectedProject === project ? styles.projectButtonActive : ''}`}
               onClick={() => onSelectProject(project)}
+              {...{ 'data-testid': `platform-admin-menu-project-${project}` }}
             >
               {project}
             </button>
           ))}
         </div>
 
-        <form className={styles.menuForm} onSubmit={(event) => void handleSubmit(onSubmit)(event)}>
+        <form
+          className={styles.menuForm}
+          onSubmit={(event) => void handleSubmit(onSubmit)(event)}
+          {...{ 'data-testid': 'platform-admin-menu-form' }}
+        >
           <h3 className={styles.cardTitle}>{selectedProject}</h3>
           <p className={styles.muted}>Unchecked views stay hidden for regular users on this project.</p>
           <div className={styles.checkboxList}>
@@ -859,6 +924,7 @@ const MenuVisibilitySection: React.FC<MenuVisibilitySectionProps> = ({
                     className={styles.checkbox}
                     disabled={pending}
                     {...register('enabledViews')}
+                    {...{ 'data-testid': `platform-admin-menu-view-${item.key}` }}
                   />
                   <span>{item.label}</span>
                 </label>
@@ -867,7 +933,12 @@ const MenuVisibilitySection: React.FC<MenuVisibilitySectionProps> = ({
           </div>
           <div className={styles.formActions}>
             {wasSaved && <span className={styles.success}>Menu visibility saved</span>}
-            <button type="submit" className={styles.primaryButton} disabled={pending || !selectedProject}>
+            <button
+              type="submit"
+              className={styles.primaryButton}
+              disabled={pending || !selectedProject}
+              {...{ 'data-testid': 'platform-admin-menu-save' }}
+            >
               {pending ? 'Saving...' : 'Save menu visibility'}
             </button>
           </div>
@@ -902,6 +973,7 @@ interface TypeaheadMultiSelectProps {
   onChange: (values: string[]) => void;
   disabled?: boolean;
   emptyMessage?: string;
+  testIdPrefix?: string;
 }
 
 const TypeaheadMultiSelect: React.FC<TypeaheadMultiSelectProps> = ({
@@ -913,8 +985,10 @@ const TypeaheadMultiSelect: React.FC<TypeaheadMultiSelectProps> = ({
   onChange,
   disabled = false,
   emptyMessage = 'No matches found.',
+  testIdPrefix,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const testIdBase = testIdPrefix ?? id;
   const selectedSet = useMemo(() => new Set(selectedValues), [selectedValues]);
   const selectedOptions = useMemo(
     () => selectedValues.map((value) => {
@@ -957,6 +1031,7 @@ const TypeaheadMultiSelect: React.FC<TypeaheadMultiSelectProps> = ({
                 onClick={() => handleRemove(option.value)}
                 disabled={disabled}
                 aria-label={`Remove ${option.label}`}
+                {...{ 'data-testid': `${testIdBase}-chip-remove-${option.value}` }}
               >
                 &times;
               </button>
@@ -973,11 +1048,17 @@ const TypeaheadMultiSelect: React.FC<TypeaheadMultiSelectProps> = ({
         disabled={disabled || options.length === 0}
         onChange={(event) => setSearchQuery(event.target.value)}
         autoComplete="off"
+        {...{ 'data-testid': `${testIdBase}-search` }}
       />
       {options.length === 0 ? (
         <p className={styles.muted}>{emptyMessage}</p>
       ) : (
-        <div className={styles.suggestionList} role="listbox" aria-label={`${label} matches`}>
+        <div
+          className={styles.suggestionList}
+          role="listbox"
+          aria-label={`${label} matches`}
+          {...{ 'data-testid': `${testIdBase}-suggestions` }}
+        >
           {filteredOptions.length > 0 ? (
             filteredOptions.map((option) => (
               <button
@@ -988,6 +1069,7 @@ const TypeaheadMultiSelect: React.FC<TypeaheadMultiSelectProps> = ({
                 disabled={disabled}
                 role="option"
                 aria-selected={false}
+                {...{ 'data-testid': `${testIdBase}-suggestion-${option.value}` }}
               >
                 <span className={styles.userName}>{option.label}</span>
               </button>
@@ -1091,7 +1173,11 @@ const FeatureFlagsSection: React.FC = () => {
         <span className={styles.countBadge}>{flags.length} flags</span>
       </div>
 
-      <form className={styles.flagCreateForm} onSubmit={(e) => void handleSubmit(onCreateSubmit)(e)}>
+      <form
+        className={styles.flagCreateForm}
+        onSubmit={(e) => void handleSubmit(onCreateSubmit)(e)}
+        {...{ 'data-testid': 'platform-admin-flag-create-form' }}
+      >
         <h3 className={styles.cardTitle}>Create new flag</h3>
         <div className={styles.flagCreateFields}>
           <div className={styles.flagField}>
@@ -1102,6 +1188,7 @@ const FeatureFlagsSection: React.FC = () => {
               placeholder="my-new-feature"
               disabled={isSubmitting || createFlag.isPending}
               {...register('key')}
+              {...{ 'data-testid': 'platform-admin-flag-key-input' }}
             />
             {formErrors.key && <p className={styles.fieldError}>{formErrors.key.message}</p>}
           </div>
@@ -1113,12 +1200,14 @@ const FeatureFlagsSection: React.FC = () => {
               placeholder="What this flag controls"
               disabled={isSubmitting || createFlag.isPending}
               {...register('description')}
+              {...{ 'data-testid': 'platform-admin-flag-desc-input' }}
             />
           </div>
           <button
             type="submit"
             className={styles.primaryButton}
             disabled={isSubmitting || createFlag.isPending}
+            {...{ 'data-testid': 'platform-admin-flag-create-submit' }}
           >
             {createFlag.isPending ? 'Creating...' : 'Create flag'}
           </button>
@@ -1143,6 +1232,7 @@ const FeatureFlagsSection: React.FC = () => {
               onLifecycleChange={(lc) => handleLifecycleChange(flag, lc)}
               onCleanupReadyChange={(cr) => handleCleanupReadyChange(flag, cr)}
               onDelete={() => handleDeleteRequest(flag)}
+              {...{ 'data-testid': `platform-admin-flag-card-${flag.id}` }}
             />
           ))}
         </div>
@@ -1165,6 +1255,7 @@ const FeatureFlagsSection: React.FC = () => {
               deleteFlag.reset();
             }
           }}
+          {...{ 'data-testid': 'platform-admin-flag-delete-modal' }}
         />
       )}
     </section>
@@ -1220,7 +1311,8 @@ const FlagCard: React.FC<FlagCardProps> = ({
   );
 
   useEffect(() => {
-    setSelectedTargets([]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clear targets when rule type changes
+        setSelectedTargets([]);
   }, [ruleType]);
 
   const targetOptions = useMemo<TypeaheadOption[]>(() => {
@@ -1348,13 +1440,19 @@ const FlagCard: React.FC<FlagCardProps> = ({
               className={styles.toggleInput}
               checked={flag.enabled}
               onChange={onToggleEnabled}
+              {...{ 'data-testid': `platform-admin-flag-enabled-${flag.id}` }}
             />
             <span className={`${styles.toggleTrack} ${flag.enabled ? styles.toggleTrackOn : ''}`}>
               <span className={styles.toggleThumb} />
             </span>
             <span className={styles.toggleText}>{flag.enabled ? 'On' : 'Off'}</span>
           </label>
-          <button type="button" className={styles.secondaryButton} onClick={onDelete}>
+          <button
+            type="button"
+            className={styles.secondaryButton}
+            onClick={onDelete}
+            {...{ 'data-testid': `platform-admin-flag-delete-${flag.id}` }}
+          >
             Delete
           </button>
         </div>
@@ -1364,11 +1462,13 @@ const FlagCard: React.FC<FlagCardProps> = ({
 
       <div className={styles.flagControls}>
         <div className={styles.flagField}>
-          <label className={styles.label}>Lifecycle</label>
+          {/* eslint-disable-next-line jsx-a11y/label-has-associated-control -- adjacent select is the control; structure preserved */}
+                    <label className={styles.label}>Lifecycle</label>
           <select
             className={styles.input}
             value={flag.lifecycle}
             onChange={(e) => onLifecycleChange(e.target.value as FlagLifecycle)}
+            {...{ 'data-testid': `platform-admin-flag-lifecycle-${flag.id}` }}
           >
             {LIFECYCLE_OPTIONS.map((lc) => (
               <option key={lc} value={lc}>{lc}</option>
@@ -1381,16 +1481,27 @@ const FlagCard: React.FC<FlagCardProps> = ({
             className={styles.checkbox}
             checked={flag.cleanupReady}
             onChange={(e) => onCleanupReadyChange(e.target.checked)}
+            {...{ 'data-testid': `platform-admin-flag-cleanup-${flag.id}` }}
           />
           <span>Cleanup ready</span>
         </label>
       </div>
 
       <div className={styles.flagExpandRow}>
-        <button type="button" className={styles.secondaryButton} onClick={onToggleExpand}>
+        <button
+          type="button"
+          className={styles.secondaryButton}
+          onClick={onToggleExpand}
+          {...{ 'data-testid': `platform-admin-flag-expand-${flag.id}` }}
+        >
           {isExpanded ? 'Hide rules' : `Rules (${flag.rules.length})`}
         </button>
-        <button type="button" className={styles.secondaryButton} onClick={onToggleAudit}>
+        <button
+          type="button"
+          className={styles.secondaryButton}
+          onClick={onToggleAudit}
+          {...{ 'data-testid': `platform-admin-flag-audit-${flag.id}` }}
+        >
           {showAudit ? 'Hide audit' : 'Audit log'}
         </button>
       </div>
@@ -1414,6 +1525,7 @@ const FlagCard: React.FC<FlagCardProps> = ({
                     className={styles.secondaryButton}
                     onClick={() => handleRemoveRule(rule.id)}
                     disabled={removeRule.isPending}
+                    {...{ 'data-testid': `platform-admin-flag-remove-rule-${rule.id}` }}
                   >
                     Remove
                   </button>
@@ -1433,6 +1545,7 @@ const FlagCard: React.FC<FlagCardProps> = ({
                   value={ruleType}
                   disabled={rulePending}
                   onChange={(event) => setRuleType(event.target.value as FlagRuleType)}
+                  {...{ 'data-testid': `platform-admin-flag-rule-type-${flag.id}` }}
                 >
                   <option value="everyone">everyone</option>
                   <option value="project">project</option>
@@ -1445,6 +1558,7 @@ const FlagCard: React.FC<FlagCardProps> = ({
                 className={styles.primaryButton}
                 disabled={rulePending || (!canAddEveryone && !canAddTargets)}
                 onClick={() => void handleAddRules()}
+                {...{ 'data-testid': `platform-admin-flag-add-rule-${flag.id}` }}
               >
                 {rulePending ? 'Adding...' : ruleType === 'everyone' ? 'Add rule' : 'Add rules'}
               </button>
@@ -1460,6 +1574,8 @@ const FlagCard: React.FC<FlagCardProps> = ({
                 onChange={setSelectedTargets}
                 disabled={rulePending}
                 emptyMessage="No matching projects found."
+                testIdPrefix={`platform-admin-flag-rule-projects-${flag.id}`}
+                {...{ 'data-testid': `platform-admin-flag-rule-projects-${flag.id}` }}
               />
             )}
 
@@ -1473,6 +1589,8 @@ const FlagCard: React.FC<FlagCardProps> = ({
                 onChange={setSelectedTargets}
                 disabled={rulePending}
                 emptyMessage="No matching users found."
+                testIdPrefix={`platform-admin-flag-rule-users-${flag.id}`}
+                {...{ 'data-testid': `platform-admin-flag-rule-users-${flag.id}` }}
               />
             )}
 
@@ -1486,6 +1604,8 @@ const FlagCard: React.FC<FlagCardProps> = ({
                 onChange={setSelectedTargets}
                 disabled={rulePending}
                 emptyMessage="No matching groups found."
+                testIdPrefix={`platform-admin-flag-rule-groups-${flag.id}`}
+                {...{ 'data-testid': `platform-admin-flag-rule-groups-${flag.id}` }}
               />
             )}
 

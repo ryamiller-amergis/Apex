@@ -310,7 +310,12 @@ body {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  /* Shell scroll container for header + routed views. Use auto (not scroll) so a
+     classic Windows scrollbar is not painted when content fits; scrollbar-gutter
+     still reserves space so overlays/walkthroughs cannot shift AppHeader. */
+  overflow-x: hidden;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   transition: margin-left 0.2s ease;
 }
 
@@ -345,6 +350,9 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex: 0 0 auto;
+  width: 100%;
+  box-sizing: border-box;
   padding: 8px 20px;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border-color);
@@ -436,6 +444,8 @@ body {
   display: flex;
   gap: 12px;
   align-items: center;
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .selector-group {

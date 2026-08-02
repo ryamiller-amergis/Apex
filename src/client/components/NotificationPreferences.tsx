@@ -8,7 +8,11 @@ import styles from './NotificationPreferences.module.css';
 
 const NOTIFICATION_TYPES: { type: NotificationType; label: string; description: string; comingSoon?: boolean }[] = [
   { type: 'user-action', label: 'User Actions', description: 'Assignments, approvals, rejections, revisions' },
-  { type: 'system', label: 'System Events', description: 'Deployments, builds, releases', comingSoon: true },
+  {
+    type: 'system',
+    label: 'System Events',
+    description: 'Walkthrough publications, deployments, builds, releases',
+  },
   { type: 'ai', label: 'AI Completions', description: 'PRD generation, test cases, validation, design docs, prototypes' },
   { type: 'background', label: 'Background Jobs', description: 'Job status updates', comingSoon: true },
 ];
@@ -40,7 +44,7 @@ export const NotificationPreferences: React.FC<NotificationPreferencesProps> = (
       <div
         className={styles['prefs-error']}
         role="alert"
-        data-testid="profile-section-error-notifications"
+        {...{ 'data-testid': 'profile-section-error-notifications' }}
       >
         <div>{loadError?.message || 'Failed to load notification preferences.'}</div>
         <button
@@ -49,6 +53,7 @@ export const NotificationPreferences: React.FC<NotificationPreferencesProps> = (
           onClick={() => {
             void refetch();
           }}
+          {...{ 'data-testid': 'notification-prefs-retry' }}
         >
           Retry
         </button>
@@ -62,7 +67,7 @@ export const NotificationPreferences: React.FC<NotificationPreferencesProps> = (
         <div
           className={styles['prefs-error']}
           role="alert"
-          data-testid="profile-section-error-notifications"
+          {...{ 'data-testid': 'profile-section-error-notifications' }}
         >
           {updatePref.error?.message || 'Failed to update notification preference. Previous value retained.'}
         </div>
@@ -89,7 +94,7 @@ export const NotificationPreferences: React.FC<NotificationPreferencesProps> = (
                     type="checkbox"
                     className={styles['prefs-checkbox']}
                     checked={enabled}
-                    data-testid={`notification-pref-enabled-${type}`}
+                    {...{ 'data-testid': `notification-pref-enabled-${type}` }}
                     onChange={(e) =>
                       updatePref.mutate({ notificationType: type, enabled: e.target.checked })
                     }
@@ -103,7 +108,7 @@ export const NotificationPreferences: React.FC<NotificationPreferencesProps> = (
                     className={styles['prefs-checkbox']}
                     checked={toastEnabled}
                     disabled={!enabled}
-                    data-testid={`notification-pref-toast-${type}`}
+                    {...{ 'data-testid': `notification-pref-toast-${type}` }}
                     onChange={(e) =>
                       updatePref.mutate({ notificationType: type, toastEnabled: e.target.checked })
                     }

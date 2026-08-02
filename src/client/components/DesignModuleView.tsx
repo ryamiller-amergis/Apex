@@ -115,8 +115,12 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
   };
 
   return (
-    <main className={styles.layout}>
-      <aside className={styles.rail} aria-label="Architecture modules">
+    <main className={styles.layout} {...{ 'data-testid': 'design-module-page' }}>
+      <aside
+        className={styles.rail}
+        aria-label="Architecture modules"
+        {...{ 'data-testid': 'design-module-sidebar' }}
+      >
         <div className={styles.railHeader}>
           <div>
             <h1>Design Module</h1>
@@ -127,6 +131,7 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
               type="button"
               className={styles.addButton}
               onClick={() => setFormMode('create')}
+              {...{ 'data-testid': 'design-module-add-btn' }}
             >
               Add Module
             </button>
@@ -138,11 +143,17 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
         ) : modulesQuery.error ? (
           <div className={styles.error}>{modulesQuery.error.message}</div>
         ) : modules.length === 0 ? (
-          <div className={styles.railMessage}>
+          <div
+            className={styles.railMessage}
+            {...{ 'data-testid': 'design-module-list-empty' }}
+          >
             No architecture modules are configured.
           </div>
         ) : (
-          <div className={styles.moduleList}>
+          <div
+            className={styles.moduleList}
+            {...{ 'data-testid': 'design-module-list' }}
+          >
             {modules.map((module) => {
               const Icon = getDesignModuleIcon(module.iconKey);
               return (
@@ -154,6 +165,7 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
                     setNotice(null);
                     setSelectedSlug(module.slug);
                   }}
+                  {...{ 'data-testid': `design-module-select-${module.slug}` }}
                 >
                   <span className={styles.moduleIcon}>
                     <Icon size={22} />
@@ -175,18 +187,27 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
         )}
       </aside>
 
-      <section className={styles.content}>
+      <section
+        className={styles.content}
+        {...{ 'data-testid': 'design-module-content-panel' }}
+      >
         {moduleQuery.isLoading && selectedSlug ? (
           <div className={styles.empty}>Loading architecture…</div>
         ) : moduleQuery.error ? (
           <div className={styles.error}>{moduleQuery.error.message}</div>
         ) : !activeModule ? (
-          <div className={styles.empty}>
+          <div
+            className={styles.empty}
+            {...{ 'data-testid': 'design-module-content-empty' }}
+          >
             Select a module to explore its architecture.
           </div>
         ) : (
           <>
-            <header className={styles.contentHeader}>
+            <header
+              className={styles.contentHeader}
+              {...{ 'data-testid': 'design-module-content-header' }}
+            >
               <div>
                 <div className={styles.titleRow}>
                   <h2>{activeModule.label}</h2>
@@ -215,6 +236,7 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
                       type="button"
                       className={styles.secondary}
                       onClick={() => setFormMode('edit')}
+                      {...{ 'data-testid': 'design-module-edit-btn' }}
                     >
                       Edit
                     </button>
@@ -223,6 +245,7 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
                       className={styles.danger}
                       onClick={() => setShowDeleteConfirm(true)}
                       disabled={deleteModule.isPending}
+                      {...{ 'data-testid': 'design-module-delete-btn' }}
                     >
                       Delete
                     </button>
@@ -232,7 +255,10 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
             </header>
 
             {canRegenerate && (
-              <div className={styles.generationBar}>
+              <div
+                className={styles.generationBar}
+                {...{ 'data-testid': 'design-module-generation-bar' }}
+              >
                 <div>
                   <strong>
                     {activeModule.hasContent
@@ -250,6 +276,7 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
                     onChange={(event) =>
                       setForceRegeneration(event.target.checked)
                     }
+                    {...{ 'data-testid': 'design-module-force-regenerate' }}
                   />
                   Force
                 </label>
@@ -262,6 +289,7 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
                     isGenerating ||
                     (!activeModule.isStale && !forceRegeneration)
                   }
+                  {...{ 'data-testid': 'design-module-generate-btn' }}
                 >
                   {regenerate.isPending || isGenerating
                     ? 'Starting…'
@@ -272,7 +300,14 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
               </div>
             )}
 
-            {notice && <div className={styles.notice}>{notice}</div>}
+            {notice && (
+              <div
+                className={styles.notice}
+                {...{ 'data-testid': 'design-module-notice-banner' }}
+              >
+                {notice}
+              </div>
+            )}
             {regenerate.error && (
               <div className={styles.error}>{regenerate.error.message}</div>
             )}
@@ -280,11 +315,17 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
               <div className={styles.error}>{deleteModule.error.message}</div>
             )}
 
-            <article className={styles.document}>
+            <article
+              className={styles.document}
+              {...{ 'data-testid': 'design-module-document-panel' }}
+            >
               {activeModule.content ? (
                 <MarkdownWithMermaid content={activeModule.content} />
               ) : (
-                <div className={styles.emptyDocument}>
+                <div
+                  className={styles.emptyDocument}
+                  {...{ 'data-testid': 'design-module-document-empty' }}
+                >
                   <h3>No architecture content yet</h3>
                   <p>
                     {isGenerating
@@ -299,6 +340,7 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
       </section>
 
       {formMode && (
+        // data-testid-exempt — DesignModuleFormModal root already sets data-testid
         <DesignModuleFormModal
           project={selectedProject}
           module={formMode === 'edit' ? activeModule : null}
@@ -324,6 +366,7 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
       )}
 
       {showDeleteConfirm && activeModule && (
+        // data-testid-exempt — shared ConfirmDeleteModal; delete flow covered by design-module-delete-btn
         <ConfirmDeleteModal
           title="Delete architecture module"
           itemName={activeModule.label}

@@ -6,6 +6,10 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ThemeMode } from '../config/themes';
 import { useCurrentProfile } from '../hooks/useProfile';
+import {
+  WalkthroughAnchorKeys,
+  anchorTestIdProps,
+} from '../../shared/walkthroughAnchors';
 import { SharedAvatar } from './SharedAvatar';
 import { WhatsNewIndicator } from './WhatsNewIndicator';
 import styles from './UserMenu.module.css';
@@ -60,11 +64,13 @@ export const UserMenu: React.FC<UserMenuProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      itemRefs.current[0]?.focus();
+      // Opening the dropdown must not scroll the app shell. The header lives
+      // inside the app's scroll container, so a normal focus() can shift it.
+      itemRefs.current[0]?.focus({ preventScroll: true });
       return;
     }
     if (restoreFocusRef.current) {
-      triggerRef.current?.focus();
+      triggerRef.current?.focus({ preventScroll: true });
       restoreFocusRef.current = false;
     }
   }, [isOpen]);
@@ -82,7 +88,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({
   const focusItem = (index: number) => {
     const count = MENU_ACTIONS.length;
     const next = ((index % count) + count) % count;
-    itemRefs.current[next]?.focus();
+    itemRefs.current[next]?.focus({ preventScroll: true });
   };
 
   const handleMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -154,7 +160,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({
         aria-label="User menu"
         aria-haspopup="menu"
         aria-expanded={isOpen}
-        data-testid="user-menu-trigger"
+        {...anchorTestIdProps(WalkthroughAnchorKeys.USER_MENU_TRIGGER)}
       >
         <SharedAvatar
           oid={avatarOid}
@@ -240,7 +246,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({
             type="button"
             role="menuitem"
             className={styles['user-menu-item']}
-            data-testid="user-menu-profile"
+            {...anchorTestIdProps(WalkthroughAnchorKeys.USER_MENU_PROFILE)}
             onClick={handleProfile}
           >
             <span className={styles['menu-item-icon']} aria-hidden="true">

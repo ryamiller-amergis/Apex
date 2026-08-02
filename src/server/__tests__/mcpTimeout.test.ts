@@ -1,6 +1,7 @@
 import {
   McpTimeoutError,
   raceWithTimeout,
+  resolveAgentMcpToolTimeoutMs,
   resolveMcpHttpTimeoutMs,
   resolveMcpToolTimeoutMs,
   resolvePositiveMs,
@@ -15,12 +16,15 @@ import {
 describe('mcpTimeout', () => {
   const originalHttp = process.env.MCP_HTTP_TIMEOUT_MS;
   const originalTool = process.env.MCP_TOOL_TIMEOUT_MS;
+  const originalAgentTool = process.env.AGENT_MCP_TOOL_TIMEOUT_MS;
 
   afterEach(() => {
     if (originalHttp === undefined) delete process.env.MCP_HTTP_TIMEOUT_MS;
     else process.env.MCP_HTTP_TIMEOUT_MS = originalHttp;
     if (originalTool === undefined) delete process.env.MCP_TOOL_TIMEOUT_MS;
     else process.env.MCP_TOOL_TIMEOUT_MS = originalTool;
+    if (originalAgentTool === undefined) delete process.env.AGENT_MCP_TOOL_TIMEOUT_MS;
+    else process.env.AGENT_MCP_TOOL_TIMEOUT_MS = originalAgentTool;
   });
 
   it('resolvePositiveMs falls back for invalid values', () => {
@@ -35,6 +39,17 @@ describe('mcpTimeout', () => {
     process.env.MCP_TOOL_TIMEOUT_MS = '8000';
     expect(resolveMcpHttpTimeoutMs()).toBe(12_000);
     expect(resolveMcpToolTimeoutMs()).toBe(8_000);
+  });
+
+  it('sets the owner MCP deadline after the server-side timeout bounds', () => {
+    delete process.env.MCP_HTTP_TIMEOUT_MS;
+    delete process.env.MCP_TOOL_TIMEOUT_MS;
+    delete process.env.AGENT_MCP_TOOL_TIMEOUT_MS;
+    expect(resolveAgentMcpToolTimeoutMs()).toBe(60_000);
+
+    process.env.MCP_HTTP_TIMEOUT_MS = '70000';
+    process.env.AGENT_MCP_TOOL_TIMEOUT_MS = '30000';
+    expect(resolveAgentMcpToolTimeoutMs()).toBe(75_000);
   });
 
   it('raceWithTimeout resolves when work finishes first', async () => {

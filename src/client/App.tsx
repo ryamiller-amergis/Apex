@@ -6,6 +6,7 @@ import { HTML5Backend } from 'react-dnd-html5-backend';
 import { DueDateReasonModal } from './components/DueDateReasonModal';
 import { BetaAnnouncementModal } from './components/BetaAnnouncementModal';
 import { Changelog } from './components/Changelog';
+import { GuidedWalkthroughHost } from './components/GuidedWalkthroughHost';
 import { WhatsNewBanner } from './components/WhatsNewBanner';
 import { Login } from './components/Login';
 import { ViewErrorFallback } from './components/ViewErrorFallback';
@@ -91,6 +92,7 @@ const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 
 /** Tabs visible in the tab bar, in display order — used for permission-aware default/fallback. */
 const VISIBLE_PLANNING_TABS: readonly PlanningTab[] = ['dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
 
+// data-testid-exempt — TypeScript Record<PlanningTab, …> generic, not JSX
 const PLANNING_TAB_PERMISSIONS: Record<PlanningTab, string> = {
   'cycle-time':  'planning:view',
   'dev-stats':   'planning:devstats',
@@ -140,7 +142,7 @@ function App() {
   }, []);
   const { data: activeThread = null } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests' | 'not-found';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -184,7 +186,7 @@ function App() {
                     ? 'design-module'
                     : location.pathname.startsWith('/load-tests')
                     ? 'load-tests'
-                    : 'calendar';
+                    : 'not-found';
 
   const planningTabSegment = location.pathname.startsWith('/planning')
     ? location.pathname.split('/')[2]
@@ -229,6 +231,8 @@ function App() {
     whatsNewLastSeenVersion,
     whatsNewManualUnavailable,
     whatsNewCurrentVersion,
+    whatsNewAutomaticOverlaySettled,
+    whatsNewBlocksAutomaticWalkthrough,
     handleLogout,
     selectedProject,
     selectedAreaPath,
@@ -457,6 +461,13 @@ function App() {
           lastSeenVersion={whatsNewLastSeenVersion}
           manualUnavailable={whatsNewManualUnavailable}
         />
+        <GuidedWalkthroughHost
+          projectId={selectedProject}
+          userId={userId}
+          enabled={false}
+          whatsNewSettled={whatsNewAutomaticOverlaySettled}
+          whatsNewBlocksWalkthrough={whatsNewBlocksAutomaticWalkthrough}
+        />
       </ErrorBoundary>
     );
   }
@@ -476,6 +487,18 @@ function App() {
             onLogout={handleLogout}
           />
         </Suspense>
+      </ErrorBoundary>
+    );
+  }
+
+  if (currentView === 'not-found') {
+    return (
+      <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+        <div role="status" aria-live="polite" {...{ 'data-testid': 'route-not-found' }}>
+          <h1>Page not found</h1>
+          <p>The requested Apex page does not exist.</p>
+          <button type="button" onClick={() => navigate('/')} {...{ 'data-testid': 'route-not-found-home-btn' }}>Return to projects</button>
+        </div>
       </ErrorBoundary>
     );
   }
@@ -565,6 +588,7 @@ function App() {
           />
           {hasUnreadChangelog && (
             <div className="changelog-banner-row">
+              {/* data-testid-exempt — WhatsNewBanner owns whats-new-banner root id */}
               <WhatsNewBanner
                 currentVersion={whatsNewCurrentVersion}
                 onOpenChangelog={() => setShowChangelog(true)}
@@ -609,6 +633,7 @@ function App() {
                       onSelectItem={setSelectedItem}
                     />
                     {selectedItem && (
+                      // data-testid-exempt — DetailsPanel owns its panel chrome; no data-testid prop
                       <DetailsPanel
                         workItem={selectedItem}
                         onClose={() => setSelectedItem(null)}
@@ -624,6 +649,7 @@ function App() {
                     )}
                     {calendarAssistantOpen && calendarAssistantAnchor && (
                       <Suspense fallback={null}>
+                        {/* data-testid-exempt — assistant panel API has no data-testid prop */}
                         <CalendarWorkItemAssistantPanel
                           anchorWorkItemId={calendarAssistantAnchor.id}
                           anchorTitle={calendarAssistantAnchor.title}
@@ -635,6 +661,7 @@ function App() {
                       </Suspense>
                     )}
                     {pendingDueDateChange && (
+                      // data-testid-exempt — DueDateReasonModal API has no data-testid prop
                       <DueDateReasonModal
                         workItemId={pendingDueDateChange.workItemId}
                         workItemTitle={pendingDueDateChange.workItemTitle}
@@ -709,6 +736,7 @@ function App() {
                       className={`admin-tab${location.pathname.startsWith('/admin/roles') || location.pathname === '/admin' ? ' admin-tab-active' : ''}`}
                       onClick={() => navigate('/admin/roles')}
                       type="button"
+                      {...{ 'data-testid': 'admin-tab-roles' }}
                     >
                       Roles
                     </button>
@@ -716,6 +744,7 @@ function App() {
                       className={`admin-tab${location.pathname === '/admin/users' ? ' admin-tab-active' : ''}`}
                       onClick={() => navigate('/admin/users')}
                       type="button"
+                      {...{ 'data-testid': 'admin-tab-users' }}
                     >
                       Users
                     </button>
@@ -723,6 +752,7 @@ function App() {
                       className={`admin-tab${location.pathname === '/admin/groups' ? ' admin-tab-active' : ''}`}
                       onClick={() => navigate('/admin/groups')}
                       type="button"
+                      {...{ 'data-testid': 'admin-tab-groups' }}
                     >
                       Groups
                     </button>
@@ -730,6 +760,7 @@ function App() {
                       className={`admin-tab${location.pathname === '/admin/project-settings' ? ' admin-tab-active' : ''}`}
                       onClick={() => navigate('/admin/project-settings')}
                       type="button"
+                      {...{ 'data-testid': 'admin-tab-project-settings' }}
                     >
                       Project Settings
                     </button>
@@ -737,6 +768,7 @@ function App() {
                       className={`admin-tab${location.pathname === '/admin/notifications' ? ' admin-tab-active' : ''}`}
                       onClick={() => navigate('/admin/notifications')}
                       type="button"
+                      {...{ 'data-testid': 'admin-tab-notifications' }}
                     >
                       Notifications
                     </button>
@@ -744,6 +776,7 @@ function App() {
                       className={`admin-tab${location.pathname === '/admin/load-test-targets' ? ' admin-tab-active' : ''}`}
                       onClick={() => navigate('/admin/load-test-targets')}
                       type="button"
+                      {...{ 'data-testid': 'admin-tab-load-test-targets' }}
                     >
                       Load Test Targets
                     </button>
@@ -818,7 +851,7 @@ function App() {
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <PdfToolsRouteGuard selectedProject={selectedProject} isSuperAdmin={isSuperAdmin}>
                 <DesktopOnlyGate>
-                  <Suspense fallback={<div data-testid="pdf-tools-loading"><ViewSkeleton /></div>}>
+                  <Suspense fallback={<div {...{ 'data-testid': 'pdf-tools-loading' }}><ViewSkeleton /></div>}>
                     <div className="pdf-tools-view" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                       {location.pathname === '/pdf-tools/webviewer-poc' ? (
                         <ApryseWebViewerPoc />
@@ -938,6 +971,7 @@ function App() {
                 </div>
                 {selectedItem && currentView === 'planning' && (
                   <Suspense fallback={null}>
+                    {/* data-testid-exempt — DetailsPanel owns its panel chrome; no data-testid prop */}
                     <DetailsPanel
                       workItem={selectedItem}
                       onClose={() => setSelectedItem(null)}
@@ -965,13 +999,22 @@ function App() {
           lastSeenVersion={whatsNewLastSeenVersion}
           manualUnavailable={whatsNewManualUnavailable}
         />
+        <GuidedWalkthroughHost
+          projectId={selectedProject}
+          userId={userId}
+          enabled={isAuthenticated === true && permissionsLoaded && Boolean(selectedProject)}
+          whatsNewSettled={whatsNewAutomaticOverlaySettled}
+          whatsNewBlocksWalkthrough={whatsNewBlocksAutomaticWalkthrough}
+        />
         {showBetaAnnouncement && !(isSuperAdmin && betaAnnouncementDismissed) && (
+          // data-testid-exempt — BetaAnnouncementModal API has no data-testid prop
           <BetaAnnouncementModal
             isSuperAdmin={isSuperAdmin}
             onDismiss={handleDismissBetaAnnouncement}
           />
         )}
 
+        {/* data-testid-exempt — ChatAgentPanel API has no data-testid prop */}
         <ChatAgentPanel
           thread={activeThread}
           isOpen={chatOpen}

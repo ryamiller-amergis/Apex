@@ -25,6 +25,11 @@ import { db } from '../../db/drizzle';
 import { eq } from 'drizzle-orm';
 import { prds } from '../../db/schema';
 import type { ContentSnapshot, PrdValidationBaseline } from '../../../shared/types/interview';
+import { raceWithTimeout, resolveMcpToolTimeoutMs } from '../mcpTimeout';
+
+function toolErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
 
 function isActiveFixThread(
   baseline: { fixThreadId?: string } | null | undefined,
@@ -94,11 +99,14 @@ export async function handleUpdatePrd(params: {
         .set(
           fixMode
             ? {
-                backlogJson: parsed as any,
+                backlogJson: parsed as (typeof prds.$inferInsert)['backlogJson'],
                 proposedBacklogJson: null,
                 updatedAt: now,
               }
-            : { proposedBacklogJson: parsed as any, updatedAt: now },
+            : {
+                proposedBacklogJson: parsed as (typeof prds.$inferInsert)['proposedBacklogJson'],
+                updatedAt: now,
+              },
         )
         .where(eq(prds.id, params.prdId));
     }
@@ -234,11 +242,14 @@ export async function handleAddTestCase(params: {
   }
 }
 
-export function createAdoMcpServer(): McpServer {
+export function createAdoMcpServer(
+  options?: { enableCodeSearch?: boolean },
+): McpServer {
   const server = new McpServer({
     name: 'ado-skills',
     version: '1.0.0',
   });
+  const toolTimeoutMs = resolveMcpToolTimeoutMs();
 
   // ── Skills namespace ────────────────────────────────────────────────────────
 
@@ -310,7 +321,9 @@ export function createAdoMcpServer(): McpServer {
     },
     async ({ project, repo, path, branch }) => {
       try {
-        const entries = await listRepoDir(project, repo, path, branch);
+        const entries = await raceWithTimeout('list_repo_dir', toolTimeoutMs, () =>
+          listRepoDir(project, repo, path, branch),
+        );
         return {
           content: [{ type: 'text', text: JSON.stringify(entries, null, 2) }],
         };
@@ -332,30 +345,50 @@ export function createAdoMcpServer(): McpServer {
       branch: z.string().optional().describe('Branch name'),
     },
     async ({ project, repo, path, branch }) => {
-      const content = await getSkillFile(project, repo, path, branch);
-      return {
-        content: [{ type: 'text', text: content }],
-      };
+      try {
+        const content = await raceWithTimeout('get_skill_file', toolTimeoutMs, () =>
+          getSkillFile(project, repo, path, branch),
+        );
+        return {
+          content: [{ type: 'text', text: content }],
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `Error reading file: ${toolErrorMessage(err)}` }],
+          isError: true,
+        };
+      }
     },
   );
 
-  server.tool(
-    'search_repo_code',
-    'Search code in a repository by keyword and return matching file paths with snippets. Use this when you need to locate implementation areas quickly before reading full files.',
-    {
-      project: z.string().describe('ADO project name'),
-      repo: z.string().describe('Repository name'),
-      query: z.string().describe('Search query (keywords, symbol, or phrase)'),
-      branch: z.string().optional().describe('Branch name (best-effort; may use indexed default branch)'),
-      limit: z.number().int().min(1).max(50).optional().describe('Maximum results (default 10)'),
-    },
-    async ({ project, repo, query, branch, limit }) => {
-      const results = await searchRepoCode(project, repo, query, branch, limit ?? 10);
-      return {
-        content: [{ type: 'text', text: JSON.stringify(results, null, 2) }],
-      };
-    },
-  );
+  if (options?.enableCodeSearch !== false) {
+    server.tool(
+      'search_repo_code',
+      'Search code in a repository by keyword and return matching file paths with snippets. Use this when you need to locate implementation areas quickly before reading full files.',
+      {
+        project: z.string().describe('ADO project name'),
+        repo: z.string().describe('Repository name'),
+        query: z.string().describe('Search query (keywords, symbol, or phrase)'),
+        branch: z.string().optional().describe('Branch name (best-effort; may use indexed default branch)'),
+        limit: z.number().int().min(1).max(50).optional().describe('Maximum results (default 10)'),
+      },
+      async ({ project, repo, query, branch, limit }) => {
+        try {
+          const results = await raceWithTimeout('search_repo_code', toolTimeoutMs, () =>
+            searchRepoCode(project, repo, query, branch, limit ?? 10),
+          );
+          return {
+            content: [{ type: 'text', text: JSON.stringify(results, null, 2) }],
+          };
+        } catch (err) {
+          return {
+            content: [{ type: 'text', text: `Search error: ${toolErrorMessage(err)}` }],
+            isError: true,
+          };
+        }
+      },
+    );
+  }
 
   server.tool(
     'search_skills',
@@ -739,7 +772,7 @@ export function createAdoMcpServer(): McpServer {
     async ({ sessionId }) => {
       try {
         const { eq } = await import('drizzle-orm');
-        const { standupSessions, standupParticipants, appUsers, chatMessages } = await import('../../db/schema');
+        const { standupSessions, appUsers, chatMessages } = await import('../../db/schema');
         const session = await db.query.standupSessions.findFirst({
           where: eq(standupSessions.id, sessionId),
           with: {
@@ -752,7 +785,12 @@ export function createAdoMcpServer(): McpServer {
         }
 
         const participantData = await Promise.all(
-          session.participants.map(async (p: any) => {
+          session.participants.map(async (p: {
+              userId: string;
+              threadId: string | null;
+              status: string;
+              structuredUpdate: unknown;
+            }) => {
             const user = await db.query.appUsers.findFirst({
               where: eq(appUsers.oid, p.userId),
               columns: { displayName: true, email: true },
@@ -763,7 +801,7 @@ export function createAdoMcpServer(): McpServer {
                 .select({ role: chatMessages.role, text: chatMessages.text })
                 .from(chatMessages)
                 .where(eq(chatMessages.threadId, p.threadId));
-              transcript = messages.map((m: any) => `[${m.role}] ${m.text}`);
+              transcript = messages.map((m) => `[${m.role}] ${m.text}`);
             }
             return {
               userId: p.userId,

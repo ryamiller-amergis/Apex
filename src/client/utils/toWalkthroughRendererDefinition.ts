@@ -1,0 +1,40 @@
+/**
+ * Map a published WalkthroughDefinition (domain) to the hybrid renderer contract.
+ */
+import type {
+  WalkthroughDefinition,
+  WalkthroughRendererDefinition,
+  WalkthroughStep,
+} from '../../shared/types/walkthrough';
+
+function stepToRenderer(step: WalkthroughStep) {
+  return {
+    id: step.id,
+    position: step.ordinal,
+    heading: step.heading,
+    bodyMarkdown: step.bodyMarkdown,
+    route: step.route ?? step.anchor?.targetRoute ?? null,
+    imageUrl: step.imageUrl ?? null,
+    imageAlt: step.imageAlt ?? null,
+    ctaLabel: step.ctaLabel ?? null,
+    ctaRoute: step.ctaRoute ?? null,
+    anchor: step.anchor ?? null,
+  };
+}
+
+export function toWalkthroughRendererDefinition(
+  definition: WalkthroughDefinition,
+): WalkthroughRendererDefinition {
+  const steps = [...definition.steps]
+    .sort((a, b) => a.ordinal - b.ordinal)
+    .map(stepToRenderer);
+
+  return {
+    id: definition.id,
+    revision: definition.revision,
+    title: definition.userTitle,
+    intro: definition.whyItMatters,
+    isRequired: definition.isRequired,
+    steps,
+  };
+}

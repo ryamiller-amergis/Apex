@@ -127,13 +127,17 @@ function statusBadgeClass(state: MyWorkStatus): string {
   }
 }
 
-const WorkStatusBadge: React.FC<{ state: MyWorkStatus; statusAt: string | null }> = ({
-  state,
-  statusAt,
-}) => {
+const WorkStatusBadge: React.FC<{
+  state: MyWorkStatus;
+  statusAt: string | null;
+  'data-testid'?: string;
+}> = ({ state, statusAt, 'data-testid': testId }) => {
   const formatted = formatStatusAt(statusAt);
   return (
-    <span className={styles['status-with-time']}>
+    <span
+      className={styles['status-with-time']}
+      {...(testId ? { 'data-testid': testId } : {})}
+    >
       <span className={statusBadgeClass(state)}>{formatMyWorkStatusLabel(state)}</span>
       {formatted && <span className={styles['status-timestamp']}>{formatted}</span>}
     </span>
@@ -248,17 +252,26 @@ const ApexBacklogView: React.FC<{
   }
 
   if (!backlogGroups || backlogGroups.length === 0) {
-    return <div className={styles.empty}>No approved PRDs with backlog features found for Apex.</div>;
+    return (
+      <div className={styles.empty} {...{ 'data-testid': 'my-work-empty' }}>
+        No approved PRDs with backlog features found for Apex.
+      </div>
+    );
   }
 
   return (
-    <div className={styles['apex-backlog']}>
+    <div className={styles['apex-backlog']} {...{ 'data-testid': 'my-work-apex-backlog' }}>
       {startLocalFeature.error && (
         <div className={styles.error}>{startLocalFeature.error.message}</div>
       )}
 
       <div className={styles['filters-row']}>
-        <div className={styles.filters} role="toolbar" aria-label="Filter features by status">
+        <div
+          className={styles.filters}
+          role="toolbar"
+          aria-label="Filter features by status"
+          {...{ 'data-testid': 'my-work-status-filters' }}
+        >
           {APEX_STATUS_FILTERS.map(({ id, label }) => (
             <button
               key={id}
@@ -266,6 +279,7 @@ const ApexBacklogView: React.FC<{
               className={`${styles['filter-pill']}${statusFilter === id ? ` ${styles['filter-pill-active']}` : ''}`}
               aria-pressed={statusFilter === id}
               onClick={() => setStatusFilter(id)}
+              {...{ 'data-testid': `my-work-status-filter-${id}` }}
             >
               {label}
             </button>
@@ -292,12 +306,13 @@ const ApexBacklogView: React.FC<{
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             aria-label="Search PRDs, epics, and features"
+            {...{ 'data-testid': 'my-work-search-input' }}
           />
         </div>
       </div>
 
       {filteredGroups.length === 0 ? (
-        <div className={styles.empty}>
+        <div className={styles.empty} {...{ 'data-testid': 'my-work-empty' }}>
           {searchQuery.trim()
             ? 'No PRDs, epics, or features match this search.'
             : 'No features match this filter.'}
@@ -327,11 +342,16 @@ const ApexBacklogView: React.FC<{
                 onClick={() => togglePrd(group.prdId)}
                 type="button"
                 aria-expanded={openPrds.has(group.prdId)}
+                {...{ 'data-testid': `my-work-prd-toggle-${group.prdId}` }}
               >
                 <span className={styles['toggle-icon']}>{openPrds.has(group.prdId) ? '▼' : '▶'}</span>
                 <span className={styles['prd-label']}>PRD:</span>
                 <span className={styles['prd-title']}>{group.prdTitle}</span>
-                <WorkStatusBadge state={prdStatus.state} statusAt={prdStatus.statusAt} />
+                <WorkStatusBadge
+                  state={prdStatus.state}
+                  statusAt={prdStatus.statusAt}
+                  {...{ 'data-testid': `my-work-prd-status-${group.prdId}` }}
+                />
               </button>
 
               {openPrds.has(group.prdId) && group.epics.map((epic, epicIdx) => {
@@ -357,15 +377,20 @@ const ApexBacklogView: React.FC<{
                       onClick={() => toggleEpic(epicKey)}
                       type="button"
                       aria-expanded={openEpics.has(epicKey)}
+                      {...{ 'data-testid': `my-work-epic-toggle-${epicKey}` }}
                     >
                       <span className={styles['toggle-icon']}>{openEpics.has(epicKey) ? '▼' : '▶'}</span>
                       <span className={styles['epic-label']}>Epic:</span>
                       <span className={styles['epic-title']}>{epic.epicTitle}</span>
-                      <WorkStatusBadge state={epicStatus.state} statusAt={epicStatus.statusAt} />
+                      <WorkStatusBadge
+                        state={epicStatus.state}
+                        statusAt={epicStatus.statusAt}
+                        {...{ 'data-testid': `my-work-epic-status-${epicKey}` }}
+                      />
                     </button>
 
                     {openEpics.has(epicKey) && (
-                      <div className={styles['feature-list']}>
+                      <div className={styles['feature-list']} {...{ 'data-testid': 'my-work-feature-list' }}>
                         {epic.features.map(feature => {
                           const key = featureCompleteKey(feature.prdId, feature.featureId);
                           const readiness = computeFeatureWorkStatus(feature, allSessions, allSessions);
@@ -394,6 +419,7 @@ const ApexBacklogView: React.FC<{
                                         ? (readiness.statusAt ?? new Date().toISOString())
                                         : readiness.statusAt
                                     }
+                                    {...{ 'data-testid': `my-work-feature-status-${feature.featureId}` }}
                                   />
                                   {isBlocked && !isComplete && (
                                     <span className={styles['blocked-badge']}>Blocked by {readiness.blockedBy}</span>
@@ -409,6 +435,7 @@ const ApexBacklogView: React.FC<{
                                   onClick={() => setSelectedContextFeature(feature)}
                                   type="button"
                                   title="Inspect PRD, backlog, design artifacts, and prototype"
+                                  {...{ 'data-testid': 'my-work-view-context-btn' }}
                                 >
                                   View Context
                                 </button>
@@ -423,6 +450,7 @@ const ApexBacklogView: React.FC<{
                                         disabled={closingId === readiness.sessionId}
                                         type="button"
                                         title="Clear in-progress status for this feature"
+                                        {...{ 'data-testid': `my-work-clear-progress-${feature.featureId}` }}
                                       >
                                         {closingId === readiness.sessionId ? 'Closing...' : 'Clear Progress'}
                                       </button>
@@ -433,6 +461,7 @@ const ApexBacklogView: React.FC<{
                                       disabled={completingFeature !== null}
                                       type="button"
                                       title="Mark this feature as complete to unblock dependent features"
+                                      {...{ 'data-testid': 'my-work-mark-complete-btn' }}
                                     >
                                       {completingFeature === feature.featureId ? 'Completing...' : 'Mark Complete'}
                                     </button>
@@ -442,6 +471,7 @@ const ApexBacklogView: React.FC<{
                                       disabled={startLocalFeature.isPending}
                                       type="button"
                                       title="Mark In Progress, download a context pack, and open Cursor or VS Code locally"
+                                      {...{ 'data-testid': 'my-work-start-local-dev-btn' }}
                                     >
                                       Start Local Development
                                     </button>
@@ -462,6 +492,7 @@ const ApexBacklogView: React.FC<{
       )}
 
       {localDevTarget && (
+        // data-testid-exempt — StartLocalDevModal root already sets data-testid
         <StartLocalDevModal
           target={localDevTarget}
           onClose={() => setLocalDevTarget(null)}
@@ -469,6 +500,7 @@ const ApexBacklogView: React.FC<{
       )}
 
       {selectedContextFeature && (
+        // data-testid-exempt — FeatureContextModal root already sets data-testid
         <FeatureContextModal
           project={project}
           feature={selectedContextFeature}
@@ -539,12 +571,16 @@ export const DevWorkbenchView: React.FC = () => {
 
   if (isApex) {
     return (
-      <div className={styles.container}>
-        <div className={styles.header}>
+      <div className={styles.container} {...{ 'data-testid': 'my-work-page' }}>
+        <div className={styles.header} {...{ 'data-testid': 'my-work-header' }}>
           <h1 className={styles.title}>My Work</h1>
           <p className={styles.subtitle}>Approved PRD features ready for development</p>
         </div>
-        <section className={styles.section} aria-labelledby="feature-backlog-heading">
+        <section
+          className={styles.section}
+          aria-labelledby="feature-backlog-heading"
+          {...{ 'data-testid': 'my-work-feature-backlog-section' }}
+        >
           <div className={styles['section-header']}>
             <h2 id="feature-backlog-heading">Feature Backlog</h2>
             <p>Approved PRD features</p>
@@ -557,7 +593,7 @@ export const DevWorkbenchView: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className={styles.container}>
+      <div className={styles.container} {...{ 'data-testid': 'my-work-page' }}>
         <div className={styles.loading}>Loading assigned work items...</div>
       </div>
     );
@@ -565,15 +601,15 @@ export const DevWorkbenchView: React.FC = () => {
 
   if (error) {
     return (
-      <div className={styles.container}>
+      <div className={styles.container} {...{ 'data-testid': 'my-work-page' }}>
         <div className={styles.error}>Failed to load work items: {error.message}</div>
       </div>
     );
   }
 
   return (
-    <div className={styles.container}>
-      <div className={styles.header}>
+    <div className={styles.container} {...{ 'data-testid': 'my-work-page' }}>
+      <div className={styles.header} {...{ 'data-testid': 'my-work-header' }}>
         <h1 className={styles.title}>My Work</h1>
         <p className={styles.subtitle}>Work items assigned to you — start a development session to begin coding</p>
       </div>
@@ -583,9 +619,11 @@ export const DevWorkbenchView: React.FC = () => {
       )}
 
       {!workItems || workItems.length === 0 ? (
-        <div className={styles.empty}>No active work items assigned to you.</div>
+        <div className={styles.empty} {...{ 'data-testid': 'my-work-empty' }}>
+          No active work items assigned to you.
+        </div>
       ) : (
-        <div className={styles.list}>
+        <div className={styles.list} {...{ 'data-testid': 'my-work-work-items-list' }}>
           {sortedWorkItems.map((item) => {
             const active = sessionByWorkItem.get(item.id);
             const eligibility = evaluateDevStartEligibility(item, { isSuperAdmin });
@@ -607,6 +645,7 @@ export const DevWorkbenchView: React.FC = () => {
                         className={styles['resume-btn']}
                         onClick={() => handleResume(active.sessionId)}
                         type="button"
+                        {...{ 'data-testid': 'my-work-resume-session-btn' }}
                       >
                         Resume Session
                       </button>
@@ -615,6 +654,7 @@ export const DevWorkbenchView: React.FC = () => {
                         onClick={() => handleClose(active.sessionId)}
                         disabled={closingId === active.sessionId}
                         type="button"
+                        {...{ 'data-testid': `my-work-close-session-${item.id}` }}
                       >
                         {closingId === active.sessionId ? 'Closing...' : 'Close Session'}
                       </button>
@@ -626,6 +666,7 @@ export const DevWorkbenchView: React.FC = () => {
                       disabled={startingId !== null || !eligibility.allowed}
                       title={eligibility.allowed ? undefined : eligibility.reason}
                       type="button"
+                      {...{ 'data-testid': 'my-work-start-dev-btn' }}
                     >
                       {startingId === item.id ? 'Starting...' : 'Start Development'}
                     </button>
@@ -642,6 +683,7 @@ export const DevWorkbenchView: React.FC = () => {
                     }
                     type="button"
                     title="Download a context pack and open Cursor or VS Code locally"
+                    {...{ 'data-testid': 'my-work-start-local-dev-btn' }}
                   >
                     Start Local Development
                   </button>
@@ -653,6 +695,7 @@ export const DevWorkbenchView: React.FC = () => {
       )}
 
       {localDevTarget && (
+        // data-testid-exempt — StartLocalDevModal root already sets data-testid
         <StartLocalDevModal
           target={localDevTarget}
           onClose={() => setLocalDevTarget(null)}

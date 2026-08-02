@@ -128,11 +128,21 @@ export const DesignModuleFileTree: React.FC<DesignModuleFileTreeProps> = ({
   emptyLabel = 'No matched files yet.',
 }) => {
   if (files.length === 0) {
-    return <div className={styles.empty}>{emptyLabel}</div>;
+    // Keep the anchor target mounted in the empty state so walkthrough coachmarks
+    // (and any test id consumers) can resolve the "Matched files" tree before a
+    // glob/data-dependent preview has produced results.
+    return (
+      <div
+        className={styles.empty}
+        {...{ 'data-testid': 'design-module-file-tree' }}
+      >
+        {emptyLabel}
+      </div>
+    );
   }
   const tree = buildTree(files);
   return (
-    <div className={styles.tree} data-testid="design-module-file-tree">
+    <div className={styles.tree} {...{ 'data-testid': 'design-module-file-tree' }}>
       <TreeRows nodes={tree} depth={0} />
     </div>
   );

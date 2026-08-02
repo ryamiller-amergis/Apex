@@ -40,7 +40,9 @@ Do NOT ask any questions before, during, or after writing. Derive all decisions 
 > **Single-ownership model with PRD-first authoring.** The PRD is written first and is authoritative for narrative decisions (problem, solution, implementation/testing, target surface, security, NFRs, **feature-flag required/rollout/disabled behavior**, **assumptions**, out-of-scope intent). The backlog is written second and must be a faithful structural decomposition of that PRD plus the transcript. The backlog owns epics → features → PBIs/TBIs, **user stories**, acceptance criteria, business rules, dependencies, and feature-flag **name** (only when the PRD requires a flag). Each overlapping field has exactly one author; the other artifact either omits it or mirrors it without re-authoring.
 
 ### Backlog JSON (`.ai-pilot/output/{kebab-slug}.backlog.json`) — write after PRD
-Follow [`backlog-schema.json`](backlog-schema.json). The schema uses `additionalProperties: false` at every level — **include only the properties defined in the schema; do not add extra fields** (e.g., no `route`, `userTypes`, `compliance`, or any other property not in the schema).
+Follow [`backlog-schema.json`](backlog-schema.json). The schema uses `additionalProperties: false` at every level — **include only the properties defined in the schema; do not add extra fields** (e.g., no `route`, `compliance`, or any other property not in the schema).
+
+Optional `userTypes` / `personaBehaviors` on Features and PBIs **are** in the schema (for design-prototype generation). Prefer omitting them during `/to-prd` authoring — Apex may enrich them afterward. If present, values must be Apex persona names from the enum below. Never put them on TBIs. Treat interview wording **"Super Admin"** as **`Platform Admin`**. Do **not** use MaxView/timeclock slugs (`S`, `I`, `C`, `E`, `CO`, etc.).
 
 Key constraints:
 - `priority` values must be exactly: `"Must Have"`, `"Should Have"`, `"Could Have"`, or `"Won't Have"`
@@ -73,7 +75,7 @@ Follow [`prd-template.md`](prd-template.md) exactly. Key constraints:
 - [ ] No file paths or code snippets in Implementation Decisions
 - [ ] PBI AC covers all four required scenarios (a–d)
 - [ ] Backlog JSON field names match `backlog-schema.json` required properties
-- [ ] **No extra properties** at any level — schema uses `additionalProperties: false`; strip `route`, `userTypes`, `compliance`, or anything not in the schema
+- [ ] **No extra properties** at any level — schema uses `additionalProperties: false`; strip `route`, `compliance`, or anything not in the schema. Optional `userTypes` / `personaBehaviors` on Features/PBIs are allowed; never on TBIs.
 - [ ] Persona `type` values are exactly `"Internal"`, `"Admin"`, or `"Technical"`
 - [ ] PBI `nonFunctionalRequirements` has exactly 3 keys: `performance`, `accessibility`, `security`
 - [ ] Every PBI has a unique `id` matching `PBI-NNN`; every TBI has a unique `id` matching `TBI-NNN`

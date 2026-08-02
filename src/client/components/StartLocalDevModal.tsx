@@ -154,13 +154,20 @@ export const StartLocalDevModal: React.FC<StartLocalDevModalProps> = ({ target, 
       role="dialog"
       aria-modal="true"
       aria-labelledby="local-dev-modal-title"
+      {...{ 'data-testid': 'start-local-dev-modal' }}
     >
       <div className={styles.modal}>
         <div className={styles.header}>
           <h2 className={styles.title} id="local-dev-modal-title">
             Start Local Development
           </h2>
-          <button className={styles.closeBtn} onClick={onClose} aria-label="Close" type="button">
+          <button
+            className={styles.closeBtn}
+            onClick={onClose}
+            aria-label="Close"
+            type="button"
+            {...{ 'data-testid': 'start-local-dev-close-btn' }}
+          >
             ✕
           </button>
         </div>
@@ -177,7 +184,12 @@ export const StartLocalDevModal: React.FC<StartLocalDevModalProps> = ({ target, 
             )}
           </div>
 
-          <div className={styles.editorToggle} role="group" aria-label="Editor">
+          <div
+            className={styles.editorToggle}
+            role="group"
+            aria-label="Editor"
+            {...{ 'data-testid': 'start-local-dev-editor-toggle' }}
+          >
             <button
               type="button"
               className={`${styles.editorBtn}${editor === 'cursor' ? ` ${styles.editorBtnActive}` : ''}`}
@@ -188,6 +200,7 @@ export const StartLocalDevModal: React.FC<StartLocalDevModalProps> = ({ target, 
                 setStatusNote(null);
               }}
               aria-pressed={editor === 'cursor'}
+              {...{ 'data-testid': 'start-local-dev-editor-cursor' }}
             >
               Cursor
             </button>
@@ -201,6 +214,7 @@ export const StartLocalDevModal: React.FC<StartLocalDevModalProps> = ({ target, 
                 setStatusNote(null);
               }}
               aria-pressed={editor === 'vscode'}
+              {...{ 'data-testid': 'start-local-dev-editor-vscode' }}
             >
               VS Code
             </button>
@@ -231,13 +245,19 @@ export const StartLocalDevModal: React.FC<StartLocalDevModalProps> = ({ target, 
                 className={styles.btnPrimary}
                 onClick={handleOpenInIde}
                 disabled={busy}
+                {...{ 'data-testid': 'start-local-dev-open-btn' }}
               >
                 {primaryLabel}
               </button>
               {canDeepLink && openAttempted && (
                 <p className={styles.webFallbackNote}>
                   Cursor didn&apos;t open?{' '}
-                  <a href={webLink} target="_blank" rel="noopener noreferrer">
+                  <a
+                    href={webLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    {...{ 'data-testid': 'start-local-dev-cursor-web-link' }}
+                  >
                     Use the web link instead
                   </a>
                 </p>
@@ -261,6 +281,7 @@ export const StartLocalDevModal: React.FC<StartLocalDevModalProps> = ({ target, 
                       type="button"
                       className={styles.btnSecondary}
                       onClick={handleDownloadZip}
+                      {...{ 'data-testid': 'start-local-dev-download-btn' }}
                     >
                       {packDownloaded ? 'Download again' : 'Download ZIP'}
                     </button>
@@ -289,6 +310,7 @@ export const StartLocalDevModal: React.FC<StartLocalDevModalProps> = ({ target, 
                         className={styles.btnPrimary}
                         onClick={handleOpenInIde}
                         disabled={busy}
+                        {...{ 'data-testid': 'start-local-dev-open-btn' }}
                       >
                         {busy ? 'Opening…' : 'Open in Cursor'}
                       </button>
@@ -297,6 +319,7 @@ export const StartLocalDevModal: React.FC<StartLocalDevModalProps> = ({ target, 
                         type="button"
                         className={styles.btnPrimary}
                         onClick={handleCopyPrompt}
+                        {...{ 'data-testid': 'start-local-dev-copy-prompt-btn' }}
                       >
                         {promptCopied ? '✓ Copied' : 'Copy prompt'}
                       </button>
@@ -313,7 +336,12 @@ export const StartLocalDevModal: React.FC<StartLocalDevModalProps> = ({ target, 
               {canDeepLink && openAttempted && (
                 <p className={styles.webFallbackNote}>
                   Cursor didn&apos;t open?{' '}
-                  <a href={webLink} target="_blank" rel="noopener noreferrer">
+                  <a
+                    href={webLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    {...{ 'data-testid': 'start-local-dev-cursor-web-link' }}
+                  >
                     Use the web link instead
                   </a>
                 </p>
@@ -330,6 +358,7 @@ export const StartLocalDevModal: React.FC<StartLocalDevModalProps> = ({ target, 
                   type="button"
                   className={`${styles.copyBtn}${promptCopied ? ` ${styles.copied}` : ''}`}
                   onClick={handleCopyPrompt}
+                  {...{ 'data-testid': 'start-local-dev-copy-prompt-preview-btn' }}
                 >
                   {promptCopied ? '✓ Copied' : 'Copy'}
                 </button>
@@ -339,7 +368,12 @@ export const StartLocalDevModal: React.FC<StartLocalDevModalProps> = ({ target, 
         </div>
 
         <div className={styles.footer}>
-          <button type="button" className={styles.btnCancel} onClick={onClose}>
+          <button
+            type="button"
+            className={styles.btnCancel}
+            onClick={onClose}
+            {...{ 'data-testid': 'start-local-dev-footer-close-btn' }}
+          >
             Close
           </button>
         </div>

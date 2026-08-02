@@ -136,6 +136,7 @@ Feature flag: <yes — key `my-feature-key` | no>
 Protected files requiring explicit permission: <list or "none">
 Key existing files: <3-5 most relevant file paths>
 Design specs: <paths to the three {feature-slug}-*.md files>
+data-testid: <ids from design.md, or "n/a — no UI"> — spread `{...{ 'data-testid': 'kebab-id' }}`; match scripts/check-data-testid.mjs (form, *Panel, full suffix list); verify with `node scripts/check-data-testid.mjs` before done
 Git policy: NO `git commit` / NO `git push`. The Dev Workbench captures the diff and opens the PR.
 ```
 
@@ -185,6 +186,47 @@ Any test case (or matrix row) with `automation.recommendedTier === 'e2e-playwrig
 
 Report the deferred list at the end of the Feature Executor run.
 
+### F3.3 — `data-testid` on UI (mandatory for client work)
+
+Pre-commit runs `scripts/check-data-testid.mjs` on staged client TSX under `src/client/` (non-test). When a file is staged, **every** interactive element in that file must have `data-testid` — missing ids on existing controls in a touched file fail the commit. Resolve with `/resolve-pre-commit-data-testid`.
+
+**Source of truth:** `scripts/check-data-testid.mjs` (`REQUIRED_TAGS`, `COMPONENT_SUFFIX_RE`, handler/role heuristics). Do **not** invent a shorter suffix list in prompts — if the script and this skill disagree, follow the script.
+
+**Required syntax (spread — not kebab-case JSX attribute):**
+
+```tsx
+// ✅ REQUIRED
+<button type="button" {...{ 'data-testid': 'test-id-example' }}>…</button>
+<button type="button" {...{ 'data-testid': `work-item-${id}` }}>…</button>
+<button type="button" {...anchorTestIdProps('registry-key')}>…</button>
+
+// ❌ FORBIDDEN — do not write kebab-case attributes
+<button type="button" data-testid="test-id-example">…</button>
+<button type="button" data-testid={`work-item-${id}`}>…</button>
+```
+
+Id **values** stay kebab-case (`test-id-example`); only the JSX form must be the object spread.
+
+**Elements that always need a test id (mirror the script):**
+
+| Kind | Must mark |
+|------|-----------|
+| Intrinsic tags | `a`, `button`, `dialog`, `form`, `input`, `select`, `textarea` |
+| Handler-driven | any element with `onClick` / `onSubmit` / `onChange` / `onKeyDown` / `onKeyUp` / `onPointerDown` / `onDoubleClick` |
+| Role-driven | interactive `role=` values the script matches (button, link, dialog, tab, …) |
+| PascalCase suffixes | names ending in `Button`, `Modal`, `Dialog`, `Drawer`, `Input`, `Select`, `Checkbox`, `Toggle`, `Switch`, `Tab`, `Menu`, `MenuItem`, `Dropdown`, `Popover`, `Tooltip`, `Form`, `Field`, `Panel`, `Card`, `Banner`, `Badge`, `Chip`, `Fab`, `Link`, `NavItem` |
+
+Common misses that fail commits: `<form>`, `*Panel`, `*Card`, `*Field`, mounting custom interactive children in a touched parent file.
+
+When the Feature (or any PBI) touches UI:
+
+1. From `{feature-slug}-design.md`, copy the **data-testid attributes** list into the Context Block and every client subagent prompt.
+2. **New screens / components:** put `{...{ 'data-testid': 'kebab-id' }}` on the screen root, primary landmarks (empty/error/loading containers used in tests), and every element matching the table above (including `form` and `*Panel`).
+3. **Existing / touched screens:** before claiming GREEN, ensure **all** interactive controls in that file have a spread `data-testid` (pre-commit scans the whole file). Convert any legacy `data-testid="…"` / `data-testid={…}` attributes on touched elements to the spread form in the same change.
+4. Prefer design-spec ids verbatim. If the design spec omitted an id for a control you add, invent a stable kebab-case id and note it in the completion synopsis under Files changed.
+5. Escape hatch only for non-testable decorative markup: `// data-testid-exempt` on the line above the tag (rare).
+6. **Verify (mandatory for client work):** stage or pass the touched client TSX paths, then run `node scripts/check-data-testid.mjs` and fix until exit 0. Do not treat “ids look complete” as done.
+
 ## Phase F4 — Dispatch inner waves with TDD
 
 For each inner wave, dispatch one subagent per item (items in the same wave run in parallel). Each subagent prompt **must** include the full work-item contract and design anchors — not a one-line goal.
@@ -208,11 +250,21 @@ After all subagents in an inner wave complete, the executor (you, in the parent 
    npm test -- --testPathPattern="<pattern covering this wave's new files>"
    ```
 3. **AC/DoD coverage check:** For each item in the wave, confirm every non-deferred matrix row has a corresponding passing test (by criterion id in the test name/description or an explicit mapping in the synopsis). If any AC/DoD is uncovered, treat it as a gate failure — write the missing RED test and fix before continuing.
-4. If failures: diagnose, fix inline or dispatch a targeted fix subagent, then re-run.
-5. Only after type-check, tests, and matrix coverage pass: dispatch the next inner wave.
+4. **Pre-commit gates for touched client/shared/server TS|TSX (mandatory when those files changed):**
+   ```bash
+   # data-testid — stage touched client TSX first (checker reads the index)
+   git add -- <touched-src-client-tsx>
+   node scripts/check-data-testid.mjs
+
+   # ESLint — blocking errors only (matches husky lint-staged; do not boil the ocean on pre-existing warnings)
+   cross-env ESLINT_USE_FLAT_CONFIG=false npx eslint --max-warnings=-1 <touched-ts-tsx-paths>
+   ```
+   Fix any **errors** (and any data-testid violations) before continuing. Do not expand scope to clean unrelated warnings in large pre-existing files unless they become errors or the operator asks. Hook recovery: `/resolve-pre-commit-data-testid`, `/resolve-pre-commit-eslint`.
+5. If failures: diagnose, fix inline or dispatch a targeted fix subagent, then re-run.
+6. Only after type-check, tests, matrix coverage, and the pre-commit gates above pass: dispatch the next inner wave.
 
 Report after each inner-wave gate:
-> "Inner wave N complete. Type-check: ✓. Tests: ✓. AC/DoD matrix: ✓. Proceeding to inner wave N+1."
+> "Inner wave N complete. Type-check: ✓. Tests: ✓. AC/DoD matrix: ✓. data-testid/eslint: ✓ (or n/a). Proceeding to inner wave N+1."
 
 ## Phase F6 — Feature completion
 
@@ -273,10 +325,12 @@ Copy and track per Feature Executor run:
 [ ] Context Block produced and injected into every subagent prompt (includes design-spec paths)
 [ ] Inner item DAG built from item.dependsOn (verified self-contained) + parallelGroup
 [ ] e2e-playwright test cases: specs AUTHORED; execution DEFERRED only when Playwright environment is unavailable; AC still covered at unit/integration
+[ ] data-testid: new/touched interactive UI matches `scripts/check-data-testid.mjs` (incl. `form`, `*Panel`, full suffix list); spread syntax only; `node scripts/check-data-testid.mjs` exited 0 on staged client TSX
+[ ] eslint: touched staged TS/TSX have no ESLint **errors** (warnings optional unless operator requires; do not boil ocean on unrelated files)
 [ ] Every subagent prompt included verbatim work-item contract + design-spec anchors + matrix rows (from tdd-prompts.md)
 [ ] Every item followed RED → GREEN → REFACTOR → tsc with tests bound to AC-/DoD- ids
 [ ] Verification targets from test-cases.json traceability satisfied (non-e2e)
-[ ] Inner-wave gate passed (tsc + jest + AC/DoD matrix coverage) before each subsequent wave
+[ ] Inner-wave gate passed (tsc + jest + AC/DoD matrix coverage + data-testid/eslint on touched files) before each subsequent wave
 [ ] ALL PBIs AND TBIs in this Feature's items[] have corresponding implementation AND criterion coverage
 [ ] No protected files modified without explicit permission
 [ ] NO `git commit` / NO `git push` performed
