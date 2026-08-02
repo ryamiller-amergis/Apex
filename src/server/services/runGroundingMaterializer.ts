@@ -13,8 +13,14 @@ import {
   type GroundingBundleStore,
   type GroundingBundleStoreOptions,
 } from './grounding/bundleStoreService';
-import { ensureRepoCache } from './repoCacheService';
+import {
+  ensureRepoCache,
+  repairRepoCache,
+  type RepoCacheResult,
+} from './repoCacheService';
+import { redactSecrets } from './repoCheckoutService';
 import { materializeWorkspaceFromCache } from './repoWorkspaceService';
+import { trackEvent } from './telemetry';
 
 type MaterializationState = 'materialized' | 'unavailable';
 
@@ -29,8 +35,10 @@ export interface GroundingMaterializerDependencies {
     options: GroundingBundleStoreOptions,
   ) => Pick<GroundingBundleStore, 'rehydrate'>;
   ensureRepoCache?: typeof ensureRepoCache;
+  repairRepoCache?: typeof repairRepoCache;
   materializeWorkspaceFromCache?: typeof materializeWorkspaceFromCache;
   runGit?: typeof git;
+  telemetry?: typeof trackEvent;
 }
 
 function cacheProvider(provider: RunGrounding['provider']): SkillProvider {
@@ -76,10 +84,12 @@ export function createRunGroundingMaterializer(
 ) => Promise<MaterializationState> {
   const dataRoot = dependencies.dataRoot ?? resolveDataRoot();
   const ensureCache = dependencies.ensureRepoCache ?? ensureRepoCache;
+  const repairCache = dependencies.repairRepoCache ?? repairRepoCache;
   const materializeFromCache =
     dependencies.materializeWorkspaceFromCache ??
     materializeWorkspaceFromCache;
   const runGit = dependencies.runGit ?? git;
+  const telemetry = dependencies.telemetry ?? trackEvent;
   const branchesByDestination = new Map<string, string>();
   const createBundleStore =
     dependencies.createBundleStore ?? createGroundingBundleStore;
@@ -87,23 +97,47 @@ export function createRunGroundingMaterializer(
     repairAndMaterialize: async ({ identity, destination }) => {
       const branch = branchesByDestination.get(destination);
       if (!branch) return false;
-      const cache = await ensureCache({
+      const cacheOptions = {
         provider: identity.provider,
         project: identity.project,
         repo: identity.repo,
         branch,
-      });
-      await materializeFromCache(
-        cache.cacheDir,
-        destination,
-        branch,
-        cache.remote.url,
-      );
-      await runGit(
-        safeArgs(destination, ['checkout', '--detach', identity.sha]),
-        { cwd: destination },
-      );
-      return true;
+      } as const;
+      const materializePinnedSha = async (
+        cache: Pick<RepoCacheResult, 'cacheDir' | 'remote'>,
+      ): Promise<void> => {
+        await materializeFromCache(
+          cache.cacheDir,
+          destination,
+          branch,
+          cache.remote.url,
+        );
+        await runGit(
+          safeArgs(destination, ['checkout', '--detach', identity.sha]),
+          { cwd: destination },
+        );
+      };
+
+      const cache = await ensureCache(cacheOptions);
+      try {
+        await materializePinnedSha(cache);
+        return true;
+      } catch {
+        try {
+          const repairedCache = await repairCache(cacheOptions);
+          await materializePinnedSha(repairedCache);
+          return true;
+        } catch {
+          telemetry('grounding.materialization.fallback', {
+            provider: String(identity.provider),
+            project: identity.project,
+            repository: redactSecrets(identity.repo),
+            branch,
+            reason: 'pinned-sha-unavailable',
+          });
+          return false;
+        }
+      }
     },
   });
 

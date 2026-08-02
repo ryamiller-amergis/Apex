@@ -2,6 +2,7 @@ import type {
   ActiveRepositoryBranchQuery,
   CreateRunGroundingInput,
   GroundingSurface,
+  GroundingStalenessState,
   ReGroundResponse,
   RepoRole,
   RunGrounding,
@@ -19,6 +20,8 @@ import {
 import { readCachedOriginSha as readCachedOriginShaFromRepoCache } from './repoCacheService';
 import { isFeatureEnabled as evaluateFeatureFlag } from './featureFlagService';
 import { materializeRunGrounding } from './runGroundingMaterializer';
+import { emitGroundingActiveSetChanged } from './groundingMaintenanceEvents';
+import { groundingStalenessService } from './groundingStalenessService';
 
 export type RepositoryGroundingPin = Pick<
   CreateRunGroundingInput,
@@ -110,6 +113,9 @@ export interface RunGroundingServiceOptions {
     destination: RunRef
   ) => Promise<GroundingMaterializationState>;
   readCachedOriginSha?: (grounding: RunGrounding) => Promise<string | null>;
+  evaluateStaleness?: (
+    grounding: RunGrounding
+  ) => Promise<GroundingStalenessState>;
 }
 
 function createGroundingInput(
@@ -321,6 +327,10 @@ export function createRunGroundingService(
   const materialize = options.materialize ?? materializeRunGrounding;
   const readCachedOriginSha =
     options.readCachedOriginSha ?? readCachedOriginShaFromRepoCache;
+  const evaluateStaleness =
+    options.evaluateStaleness ??
+    ((grounding: RunGrounding) =>
+      groundingStalenessService.evaluate(grounding));
   const materializationStates = new Map<
     string,
     GroundingMaterializationState
@@ -341,6 +351,9 @@ export function createRunGroundingService(
 
       try {
         const groundings = await repository.activateGroundings(groundingInputs);
+        for (const grounding of groundings) {
+          emitGroundingActiveSetChanged(grounding);
+        }
 
         return {
           ok: true,
@@ -361,8 +374,10 @@ export function createRunGroundingService(
       }
     },
 
-    copyGrounding(from, to, role) {
-      return repository.copyGrounding(from, to, role);
+    async copyGrounding(from, to, role) {
+      const grounding = await repository.copyGrounding(from, to, role);
+      if (grounding) emitGroundingActiveSetChanged(grounding);
+      return grounding;
     },
 
     async copyGroundingByValue(from, to, role) {
@@ -370,6 +385,7 @@ export function createRunGroundingService(
       if (!grounding) {
         return { grounding: null, materialization: 'unavailable' };
       }
+      emitGroundingActiveSetChanged(grounding);
 
       try {
         const materialization = await materialize(grounding, to);
@@ -398,8 +414,10 @@ export function createRunGroundingService(
       return repository.findActiveByRepoBranch(query);
     },
 
-    reground(ref, role, newSha) {
-      return repository.reground(ref, role, newSha);
+    async reground(ref, role, newSha) {
+      const grounding = await repository.reground(ref, role, newSha);
+      if (grounding) emitGroundingActiveSetChanged(grounding);
+      return grounding;
     },
 
     deactivate(ref) {
@@ -434,6 +452,7 @@ export function createRunGroundingService(
       const materialization = materializationStates.get(
         materializationKey(ref, role),
       );
+      const stalenessState = await evaluateStaleness(grounding);
       return {
         runType: grounding.runType,
         runId: grounding.runId,
@@ -447,6 +466,7 @@ export function createRunGroundingService(
             : cachedOriginSha === grounding.groundedSha
               ? 'grounded'
               : 'source-changed',
+        stalenessState,
         canReGround,
       };
     },

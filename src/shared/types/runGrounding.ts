@@ -3,6 +3,10 @@ export type RepoRole = 'target' | 'skill';
 export type RepoProvider = 'github' | 'azure_devops';
 export type GroundingSurface = 'interview' | 'prd' | 'design_doc';
 export type DriftState = 'grounded' | 'source-changed' | 'unavailable';
+export type GroundingStalenessState =
+  | 'fresh'
+  | 'soft-stale'
+  | 'hard-checkpoint';
 
 export interface RunRef {
   runType: RunType;
@@ -41,6 +45,8 @@ export interface ActiveRepositoryBranchQuery {
   branch: string;
 }
 
+export type PreWarmTarget = ActiveRepositoryBranchQuery;
+
 /**
  * Credential-free grounding metadata exposed to authorized run surfaces.
  * Domain surfaces resolve to the underlying persistence RunRef before use.
@@ -53,6 +59,7 @@ export interface RunGroundingStatus {
   groundedShaShort: string;
   groundedAt: string;
   driftState: DriftState;
+  stalenessState: GroundingStalenessState;
   canReGround: boolean;
 }
 

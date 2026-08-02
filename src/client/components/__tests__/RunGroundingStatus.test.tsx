@@ -26,6 +26,7 @@ const status = {
   groundedShaShort: sha.slice(0, 12),
   groundedAt: '2026-08-02T14:00:00.000Z',
   driftState: 'source-changed' as const,
+  stalenessState: 'soft-stale' as const,
   canReGround: true,
 };
 

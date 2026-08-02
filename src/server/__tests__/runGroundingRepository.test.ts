@@ -113,6 +113,28 @@ class InMemoryRunGroundingStore implements RunGroundingStore {
     );
   }
 
+  async listActiveGroundings(): Promise<RunGrounding[]> {
+    return this.rows.filter((row) => row.isActive);
+  }
+
+  async listActiveTargets() {
+    return [
+      ...new Map(
+        this.rows
+          .filter((row) => row.isActive)
+          .map((row) => [
+            [row.provider, row.project, row.repository, row.branch].join('\0'),
+            {
+              provider: row.provider,
+              project: row.project,
+              repository: row.repository,
+              branch: row.branch,
+            },
+          ]),
+      ).values(),
+    ];
+  }
+
   async reground(
     ref: RunRef,
     role: RepoRole,
@@ -551,6 +573,44 @@ describe('runGroundingRepository', () => {
         isActive: true,
       }),
     ]);
+  });
+
+  it('TBI-007 DoD-0 returns distinct active repository and branch pre-warm targets', async () => {
+    // Arrange
+    const repository = createRunGroundingRepository(
+      new InMemoryRunGroundingStore(),
+    );
+    await repository.createGrounding(targetInput);
+    await repository.createGrounding({
+      ...targetInput,
+      runId: 'run-2',
+      groundedSha: 'another-sha',
+    });
+    await repository.createGrounding({
+      ...targetInput,
+      runId: 'run-3',
+      branch: 'release',
+      groundedSha: 'release-sha',
+    });
+    await repository.deactivateByRun({
+      runType: 'chat',
+      runId: 'run-3',
+      project: 'Apex',
+    });
+
+    // Act
+    const targets = await repository.listActiveTargets();
+
+    // Assert
+    expect(targets).toEqual([
+      {
+        provider: 'github',
+        project: 'Apex',
+        repository: 'ASM/AI-Pilot',
+        branch: 'main',
+      },
+    ]);
+    await expect(repository.listActiveGroundings()).resolves.toHaveLength(2);
   });
 });
 

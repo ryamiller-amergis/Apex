@@ -65,6 +65,8 @@ function repositoryMock(): jest.Mocked<RunGroundingRepository> {
     copyGrounding: jest.fn(),
     findByRun: jest.fn(),
     findActiveByRepoBranch: jest.fn(),
+    listActiveGroundings: jest.fn(),
+    listActiveTargets: jest.fn(),
     reground: jest.fn(),
     deactivateByRun: jest.fn(),
   };
@@ -133,6 +135,14 @@ class ServiceTestGroundingStore implements RunGroundingStore {
   async findActiveByRepoBranch(
     _query: ActiveRepositoryBranchQuery,
   ): Promise<RunGrounding[]> {
+    return [];
+  }
+
+  async listActiveGroundings(): Promise<RunGrounding[]> {
+    return this.rows.filter((row) => row.isActive);
+  }
+
+  async listActiveTargets() {
     return [];
   }
 
@@ -423,6 +433,7 @@ describe('TBI-004 cached drift and explicit re-ground contracts', () => {
     const readCachedOriginSha = jest.fn().mockResolvedValue(shaB);
     const service = createRunGroundingService(repository, {
       readCachedOriginSha,
+      evaluateStaleness: jest.fn().mockResolvedValue('fresh'),
     });
 
     // Act
@@ -437,6 +448,7 @@ describe('TBI-004 cached drift and explicit re-ground contracts', () => {
       groundedShaShort: shaA.slice(0, 12),
       groundedAt,
       driftState: 'source-changed',
+      stalenessState: 'fresh',
       canReGround: true,
     });
     expect(readCachedOriginSha).toHaveBeenCalledWith(row);

@@ -84,6 +84,7 @@ describe('TBI-004 run grounding route authorization', () => {
       groundedShaShort: shaA.slice(0, 12),
       groundedAt,
       driftState: 'grounded',
+      stalenessState: 'fresh',
       canReGround: false,
     });
 
@@ -119,6 +120,7 @@ describe('TBI-004 run grounding route authorization', () => {
       groundedShaShort: shaA.slice(0, 12),
       groundedAt,
       driftState: 'grounded',
+      stalenessState: 'fresh',
       canReGround: false,
     });
 

@@ -69,6 +69,8 @@ function repositoryMock(
     copyGrounding: jest.fn(),
     findByRun: jest.fn(),
     findActiveByRepoBranch: jest.fn(),
+    listActiveGroundings: jest.fn(),
+    listActiveTargets: jest.fn(),
     reground: jest.fn(),
     deactivateByRun: jest.fn(),
     ...overrides,

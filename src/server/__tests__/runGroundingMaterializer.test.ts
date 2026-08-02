@@ -143,4 +143,117 @@ describe('TBI-004 default independent grounding materializer', () => {
       { cwd: destination },
     );
   });
+
+  it('TBI-007 DoD-1 repairs a verified mirror then retries the exact pinned SHA', async () => {
+    // Arrange
+    const createBundleStore: GroundingMaterializerDependencies['createBundleStore'] =
+      jest.fn((options) => ({
+        rehydrate: jest.fn(async (identity, destination) => {
+          const repaired = await options.repairAndMaterialize({
+            identity,
+            destination,
+          });
+          return repaired
+            ? { status: 'materialized' as const, source: 'repair' as const }
+            : {
+                status: 'remote-fallback' as const,
+                reason: 'repair-failed' as const,
+              };
+        }),
+      }));
+    const ensureRepoCache = jest.fn().mockResolvedValue({
+      cacheDir: 'C:\\cache\\repo.git',
+      remote: { url: 'https://example.invalid/repo.git' },
+    });
+    const repairRepoCache = jest.fn().mockResolvedValue({
+      cacheDir: 'C:\\cache\\repo.git',
+      remote: { url: 'https://example.invalid/repo.git' },
+    });
+    const materializeWorkspaceFromCache = jest.fn().mockResolvedValue(undefined);
+    let checkoutAttempts = 0;
+    const runGit = jest.fn(async (args: string[]) => {
+      if (args.includes('checkout') && ++checkoutAttempts === 1) {
+        throw new Error('missing pinned object');
+      }
+      return '';
+    });
+    const materialize = createRunGroundingMaterializer({
+      dataRoot: 'C:\\persistent-data',
+      createBundleStore,
+      ensureRepoCache,
+      repairRepoCache,
+      materializeWorkspaceFromCache,
+      runGit,
+      telemetry: jest.fn(),
+    });
+
+    // Act
+    const result = await materialize(grounding, run('repair-thread'));
+
+    // Assert
+    expect(result).toBe('materialized');
+    expect(repairRepoCache).toHaveBeenCalledTimes(1);
+    expect(materializeWorkspaceFromCache).toHaveBeenCalledTimes(2);
+    expect(
+      runGit.mock.calls.filter(([args]) => args.includes('checkout')),
+    ).toEqual([
+      [expect.arrayContaining(['checkout', '--detach', sha]), expect.anything()],
+      [expect.arrayContaining(['checkout', '--detach', sha]), expect.anything()],
+    ]);
+  });
+
+  it('TBI-007 DoD-1 uses controlled remote fallback telemetry only after exact-SHA retry fails', async () => {
+    // Arrange
+    const createBundleStore: GroundingMaterializerDependencies['createBundleStore'] =
+      jest.fn((options) => ({
+        rehydrate: jest.fn(async (identity, destination) => {
+          const repaired = await options.repairAndMaterialize({
+            identity,
+            destination,
+          });
+          return repaired
+            ? { status: 'materialized' as const, source: 'repair' as const }
+            : {
+                status: 'remote-fallback' as const,
+                reason: 'repair-failed' as const,
+              };
+        }),
+      }));
+    const repairRepoCache = jest.fn().mockResolvedValue({
+      cacheDir: 'C:\\cache\\repo.git',
+      remote: { url: 'https://example.invalid/repo.git' },
+    });
+    const runGit = jest.fn().mockRejectedValue(new Error('missing pinned object'));
+    const telemetry = jest.fn();
+    const materialize = createRunGroundingMaterializer({
+      dataRoot: 'C:\\persistent-data',
+      createBundleStore,
+      ensureRepoCache: jest.fn().mockResolvedValue({
+        cacheDir: 'C:\\cache\\repo.git',
+        remote: { url: 'https://example.invalid/repo.git' },
+      }),
+      repairRepoCache,
+      materializeWorkspaceFromCache: jest.fn().mockResolvedValue(undefined),
+      runGit,
+      telemetry,
+    });
+
+    // Act
+    const result = await materialize(grounding, run('fallback-thread'));
+
+    // Assert
+    expect(result).toBe('unavailable');
+    expect(repairRepoCache).toHaveBeenCalledTimes(1);
+    expect(runGit).toHaveBeenCalledTimes(2);
+    expect(telemetry).toHaveBeenCalledWith(
+      'grounding.materialization.fallback',
+      {
+        provider: 'github',
+        project: 'Apex',
+        repository: 'AI-Pilot',
+        branch: 'main',
+        reason: 'pinned-sha-unavailable',
+      },
+    );
+  });
 });

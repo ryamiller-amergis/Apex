@@ -59,6 +59,13 @@ function cacheIdentity(options: RepoCacheOptions): string {
   ].join('\0');
 }
 
+export function getRepoCacheLeaseKey(options: RepoCacheOptions): string {
+  return `repo-cache:${crypto
+    .createHash('sha256')
+    .update(cacheIdentity(options))
+    .digest('hex')}`;
+}
+
 export function getRepoCacheDir(options: RepoCacheOptions): string {
   const readable = [
     options.provider,
@@ -187,6 +194,25 @@ async function verifyCacheConnectivity(
 
 function repairMarkerPath(cacheDir: string): string {
   return path.join(cacheDir, 'apex-repair-complete');
+}
+
+function refreshMarkerPath(cacheDir: string): string {
+  return path.join(cacheDir, 'apex-refresh-complete');
+}
+
+function writeRefreshMarker(cacheDir: string): void {
+  fs.writeFileSync(refreshMarkerPath(cacheDir), `${Date.now()}\n`, 'utf-8');
+}
+
+export function wasRepoCacheRefreshedSince(
+  options: RepoCacheOptions,
+  sinceMs: number,
+): boolean {
+  try {
+    return fs.statSync(refreshMarkerPath(getRepoCacheDir(options))).mtimeMs >= sinceMs;
+  } catch {
+    return false;
+  }
 }
 
 function writeRepairMarker(cacheDir: string, baseSha: string): void {
@@ -337,7 +363,7 @@ async function refreshWarmCache(
   );
 }
 
-async function refreshUnderLease(
+export async function refreshRepoCacheUnderLease(
   options: RepoCacheOptions,
   lease: RepoCacheLeaseContext,
 ): Promise<RepoCacheResult> {
@@ -352,7 +378,7 @@ async function refreshUnderLease(
   if (!cacheExists(cacheDir)) {
     if (fs.existsSync(cacheDir)) {
       throw new Error(
-        `Repository cache is incomplete and was preserved because active workspaces may reference it: ${cacheDir}`,
+        'Repository cache is incomplete and was preserved because active workspaces may reference it',
       );
     }
     console.log(`[repo-cache] phase=cold-clone-start repo=${repoLabel}`);
@@ -397,6 +423,9 @@ async function refreshUnderLease(
     }
   }
 
+  await assertOwned();
+  abortSignal.throwIfAborted();
+  writeRefreshMarker(cacheDir);
   console.log(
     `[repo-cache] ${stale ? 'verified stale' : 'ready'} ${options.provider}/${options.repo}@${options.branch} ` +
     `sha=${baseSha.slice(0, 12)} durationMs=${Date.now() - startedAt}`,
@@ -410,8 +439,8 @@ export function ensureRepoCache(options: RepoCacheOptions): Promise<RepoCacheRes
   if (existing) return existing;
 
   const refresh = withRepoCacheLease(
-    `repo-cache:${crypto.createHash('sha256').update(key).digest('hex')}`,
-    (lease) => refreshUnderLease(options, lease),
+    getRepoCacheLeaseKey(options),
+    (lease) => refreshRepoCacheUnderLease(options, lease),
   ).finally(() => {
     inFlightRefreshes.delete(key);
   });
@@ -420,15 +449,14 @@ export function ensureRepoCache(options: RepoCacheOptions): Promise<RepoCacheRes
 }
 
 export function repairRepoCache(options: RepoCacheOptions): Promise<RepoCacheResult> {
-  const key = cacheIdentity(options);
   const cacheDirAtRequest = getRepoCacheDir(options);
   const markerAtRequest = readRepairMarker(cacheDirAtRequest);
   return withRepoCacheLease(
-    `repo-cache:${crypto.createHash('sha256').update(key).digest('hex')}`,
+    getRepoCacheLeaseKey(options),
     async ({ signal, assertOwned }) => {
       const cacheDir = getRepoCacheDir(options);
       if (!cacheExists(cacheDir)) {
-        throw new Error(`Repository cache is unavailable for in-place repair: ${cacheDir}`);
+        throw new Error('Repository cache is unavailable for in-place repair');
       }
       const remote = resolveGitRemote(options.provider, options.project, options.repo);
       const repoLabel = `${options.provider}/${options.repo}@${options.branch}`;

@@ -4,6 +4,7 @@ import { runGroundings } from '../db/schema';
 import type {
   ActiveRepositoryBranchQuery,
   CreateRunGroundingInput,
+  PreWarmTarget,
   RepoRole,
   RunGrounding,
   RunRef,
@@ -17,6 +18,8 @@ export interface RunGroundingStore {
   findActiveByRepoBranch(
     query: ActiveRepositoryBranchQuery
   ): Promise<RunGrounding[]>;
+  listActiveGroundings(): Promise<RunGrounding[]>;
+  listActiveTargets(): Promise<PreWarmTarget[]>;
   /**
    * Atomically deactivates the current role row and inserts its replacement.
    * Returns null when no active row exists in the supplied run/project scope.
@@ -65,6 +68,8 @@ export interface RunGroundingRepository {
   findActiveByRepoBranch(
     query: ActiveRepositoryBranchQuery
   ): Promise<RunGrounding[]>;
+  listActiveGroundings(): Promise<RunGrounding[]>;
+  listActiveTargets(): Promise<PreWarmTarget[]>;
   reground(
     ref: RunRef,
     role: RepoRole,
@@ -136,6 +141,31 @@ const postgresRunGroundingStore: RunGroundingStore = {
           eq(runGroundings.branch, query.branch),
           eq(runGroundings.isActive, true)
         )
+      );
+  },
+
+  async listActiveGroundings() {
+    return db
+      .select()
+      .from(runGroundings)
+      .where(eq(runGroundings.isActive, true));
+  },
+
+  async listActiveTargets() {
+    return db
+      .select({
+        provider: runGroundings.provider,
+        project: runGroundings.project,
+        repository: runGroundings.repository,
+        branch: runGroundings.branch,
+      })
+      .from(runGroundings)
+      .where(eq(runGroundings.isActive, true))
+      .groupBy(
+        runGroundings.provider,
+        runGroundings.project,
+        runGroundings.repository,
+        runGroundings.branch
       );
   },
 
@@ -288,6 +318,16 @@ export function createRunGroundingRepository(
       return withPersistenceBoundary('query', () =>
         store.findActiveByRepoBranch(query)
       );
+    },
+
+    listActiveGroundings() {
+      return withPersistenceBoundary('query', () =>
+        store.listActiveGroundings()
+      );
+    },
+
+    listActiveTargets() {
+      return withPersistenceBoundary('query', () => store.listActiveTargets());
     },
 
     reground(ref, role, newSha) {
