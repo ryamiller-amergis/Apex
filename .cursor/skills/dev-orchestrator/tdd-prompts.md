@@ -39,7 +39,7 @@ From {feature-slug}-assumptions.md:
 - Implement ONLY behavior justified by the work-item contract + design-spec anchors above
 - Do NOT modify protected files without user approval
 - Do NOT run `git commit` or `git push`
-- If feature-flag gating applies: top-level split from `feature-flags` at the entry route/component with the agreed flag key; keep the disabled branch functional
+- If feature-flag gating applies: load `feature-flags`; use a top-level split at the entry route/component with the agreed key; keep the disabled branch functional; add its exact balanced `@feature-flag:<key>` start/end and enabled/disabled branch markers so `feature-flag-cleanup` can retire it deterministically
 - UI: every interactive element in a staged client TSX file MUST have data-testid via spread `{...{ 'data-testid': 'kebab-id' }}` (not `data-testid="…"`; match design.md; whole-file scan). Source of truth: `scripts/check-data-testid.mjs` (includes `form`, `*Panel`, and the full PascalCase suffix list — do not use a shortened list). After GREEN, run `node scripts/check-data-testid.mjs` (stage touched client TSX first) and fix until exit 0. Also clear ESLint **errors** on touched files (`cross-env ESLINT_USE_FLAT_CONFIG=false npx eslint <files>`). Hook failures → /resolve-pre-commit-data-testid or /resolve-pre-commit-eslint.
 
 ### TDD Instructions (see below)

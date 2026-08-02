@@ -124,7 +124,7 @@ Read the applicable rules and skills, then build a **Context Block** and inject 
 - `ui-design-standards` — applies when CSS or new components are involved.
 - `postgresql-db` — applies when DB queries, schema, or migrations are involved.
 - `rbac-governance` — applies when client UI features are added or removed.
-- `feature-flags` — read when this Feature has a `featureFlag.name`; follow the top-level split pattern.
+- `feature-flags` — read when this Feature has a `featureFlag.name`; follow the top-level split pattern and add the required balanced `@feature-flag:<key>` markers around enabled and disabled branches so later cleanup is deterministic.
 
 Output the block in this format:
 

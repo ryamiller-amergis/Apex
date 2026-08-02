@@ -18,7 +18,7 @@ Apex is an internal product-building and project-management platform. It central
 | Design Prototypes | `design-docs/claude-design-prototype.md` | — | `designPrototypeService.ts`, `designSystemService.ts` | `DesignPrototypeReviewView.tsx`, `DesignPlanReviewView.tsx` |
 | Daily Standups | `design-docs/standup_ceremony_bot_cf0fc810.plan.md` | `.cursor/skills/daily-standup/SKILL.md` | `standupService.ts`, `standupScheduler.ts` | `StandupCeremonyView.tsx`, `StandupManageView.tsx`, `StandupSummaryView.tsx` |
 | In-App Notifications | `design-docs/in-app-notifications.md`, `design-docs/ai-completion-notifications.md` | `.cursor/skills/in-app-notifications/SKILL.md` | `notificationService.ts`, `aiCompletionNotifier.ts` | `NotificationBell.tsx`, `NotificationCenter.tsx`, `ToastContainer.tsx` |
-| Feature Flags | `design-docs/feature_flags_system_84747609.plan.md` | `.cursor/skills/feature-flags/SKILL.md` | `featureFlagService.ts` | `PlatformAdmin.tsx`, `FeatureFlagDemo.tsx` |
+| Feature Flags | `design-docs/feature_flags_system_84747609.plan.md` | `.cursor/skills/feature-flags/SKILL.md`, `.cursor/skills/feature-flag-cleanup/SKILL.md` | `featureFlagService.ts` | `PlatformAdmin.tsx`, `FeatureFlagDemo.tsx` |
 | Feature Requests | `design-docs/feature-requests.md` | `.cursor/skills/feature-request-analysis/SKILL.md` | `featureRequestService.ts`, `featureRequestAnalysisService.ts` | `FeatureRequestsView.tsx`, `FeatureRequestModal.tsx`, `FeatureRequestFab.tsx` |
 | RBAC | `design-docs/rbac.md`, `design-docs/menu-view-rbac.md`, `design-docs/per-user-rbac.md` | `.cursor/skills/rbac-management/SKILL.md` | `rbacService.ts` | `AdminRoles.tsx`, `AdminUsers.tsx` |
 | Calendar & Work Items | `design-docs/calendar-work-item-assistant.md` | — | `azureDevOps.ts`, `calendarWorkItemAssistantService.ts` | `ScrumCalendar.tsx`, `UnscheduledList.tsx`, `DetailsPanel.tsx`, `CalendarWorkItemAssistantPanel.tsx` |
@@ -107,7 +107,7 @@ src/
 | What permissions exist? | `.cursor/rules/rbac-governance.mdc` → Permission Catalog |
 | What changed recently? | `public/CHANGELOG.json` (newest entries first) |
 | How do notifications work? | `.cursor/skills/in-app-notifications/SKILL.md` |
-| How do feature flags work? | `.cursor/skills/feature-flags/SKILL.md` |
+| How do feature flags work? | `.cursor/skills/feature-flags/SKILL.md`; cleanup: `.cursor/skills/feature-flag-cleanup/SKILL.md` |
 | How does the standup ceremony work? | `.cursor/skills/daily-standup/SKILL.md` |
 | How is the changelog updated? | `.cursor/skills/update-changelog/SKILL.md` |
 | What are the UI coding standards? | `.cursor/rules/react-coding-standards.mdc`, `.cursor/rules/ui-design-standards.mdc` |
