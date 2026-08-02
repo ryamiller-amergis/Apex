@@ -14,6 +14,77 @@ const flushAsyncWork = () =>
   new Promise<void>((resolve) => setImmediate(resolve));
 
 describe('TBI-007 groundingPreWarmService', () => {
+  it('publishes the refreshed branch tip for fast bundle rehydration', async () => {
+    // Arrange
+    const sha = 'b'.repeat(40);
+    let leaseActive = false;
+    const publishBundle = jest.fn(async () => {
+      expect(leaseActive).toBe(false);
+      return 'published' as const;
+    });
+    const service = createGroundingPreWarmService({
+      withLease: jest.fn(async (_key, operation) => {
+        leaseActive = true;
+        await operation({
+          signal: new AbortController().signal,
+          assertOwned: jest.fn().mockResolvedValue(undefined),
+        });
+        leaseActive = false;
+      }),
+      refreshUnderLease: jest.fn().mockResolvedValue(undefined),
+      wasRefreshedSince: jest.fn().mockReturnValue(false),
+      readCachedSha: jest
+        .fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(sha),
+      publishBundle,
+      telemetry: jest.fn(),
+    });
+
+    // Act
+    await service.preWarm(target);
+
+    // Assert
+    expect(publishBundle).toHaveBeenCalledWith({
+      identity: {
+        provider: 'github',
+        project: 'Apex',
+        repo: 'AI-Pilot',
+        sha,
+      },
+      cacheDir: expect.stringMatching(/repo-cache/),
+      branch: 'main',
+    });
+  });
+
+  it('keeps a usable mirror warm when bundle publication fails', async () => {
+    // Arrange
+    const telemetry = jest.fn();
+    const service = createGroundingPreWarmService({
+      withLease: jest.fn(async (_key, operation) =>
+        operation({
+          signal: new AbortController().signal,
+          assertOwned: jest.fn().mockResolvedValue(undefined),
+        })
+      ),
+      refreshUnderLease: jest.fn().mockResolvedValue(undefined),
+      wasRefreshedSince: jest.fn().mockReturnValue(false),
+      readCachedSha: jest
+        .fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce('b'.repeat(40)),
+      publishBundle: jest.fn().mockRejectedValue(new Error('Blob unavailable')),
+      telemetry,
+    });
+
+    // Act / Assert
+    await expect(service.preWarm(target)).resolves.toBeUndefined();
+    expect(telemetry).toHaveBeenCalledWith(
+      'grounding.bundle.publish',
+      expect.objectContaining({ outcome: 'failed' })
+    );
+  });
+
   it('DoD-0 coalesces concurrent refreshes and sweeps distinct active targets under a repository lease', async () => {
     // Arrange
     let releaseRefresh!: () => void;
@@ -25,7 +96,7 @@ describe('TBI-007 groundingPreWarmService', () => {
       operation({
         signal: new AbortController().signal,
         assertOwned: jest.fn().mockResolvedValue(undefined),
-      }),
+      })
     );
     const listActiveTargets = jest.fn().mockResolvedValue([target]);
     const service = createGroundingPreWarmService({
@@ -64,7 +135,7 @@ describe('TBI-007 groundingPreWarmService', () => {
         operation({
           signal: controller.signal,
           assertOwned: jest.fn().mockRejectedValue(new Error('lease lost')),
-        }),
+        })
       ),
       refreshUnderLease,
       wasRefreshedSince: jest.fn().mockReturnValue(false),
@@ -87,14 +158,13 @@ describe('TBI-007 groundingPreWarmService', () => {
       signal: new AbortController().signal,
       assertOwned: jest.fn().mockResolvedValue(undefined),
     };
-    const withLease = jest.fn((
-      _key: string,
-      operation: (context: typeof lease) => Promise<void>,
-    ) => {
-      const queued = leaseQueue.then(() => operation(lease));
-      leaseQueue = queued.then(() => undefined);
-      return queued;
-    });
+    const withLease = jest.fn(
+      (_key: string, operation: (context: typeof lease) => Promise<void>) => {
+        const queued = leaseQueue.then(() => operation(lease));
+        leaseQueue = queued.then(() => undefined);
+        return queued;
+      }
+    );
     const refreshUnderLease = jest.fn(async () => {
       refreshed = true;
     });
@@ -137,7 +207,7 @@ describe('TBI-007 groundingPreWarmService', () => {
           operation({
             signal: new AbortController().signal,
             assertOwned: jest.fn().mockResolvedValue(undefined),
-          }),
+          })
         ),
         refreshUnderLease,
         wasRefreshedSince: jest.fn().mockReturnValue(coalesced),
@@ -163,7 +233,7 @@ describe('TBI-007 groundingPreWarmService', () => {
           branch: 'main',
         }),
         fromSha,
-        toSha,
+        toSha
       );
       expect(enqueueImpact).toHaveBeenCalledWith({
         provider: 'github',
@@ -174,7 +244,7 @@ describe('TBI-007 groundingPreWarmService', () => {
         toSha,
         changedFiles: ['src/server/a.ts', 'README.md'],
       });
-    },
+    }
   );
 
   it.each([
@@ -191,7 +261,7 @@ describe('TBI-007 groundingPreWarmService', () => {
           operation({
             signal: new AbortController().signal,
             assertOwned: jest.fn().mockResolvedValue(undefined),
-          }),
+          })
         ),
         refreshUnderLease: jest.fn().mockResolvedValue(undefined),
         wasRefreshedSince: jest.fn().mockReturnValue(false),
@@ -210,7 +280,7 @@ describe('TBI-007 groundingPreWarmService', () => {
 
       // Assert
       expect(enqueueImpact).not.toHaveBeenCalled();
-    },
+    }
   );
 
   it('AC-3 keeps pre-warm non-blocking and successful when impact diff fails', async () => {
@@ -227,7 +297,7 @@ describe('TBI-007 groundingPreWarmService', () => {
         operation({
           signal: new AbortController().signal,
           assertOwned: jest.fn().mockResolvedValue(undefined),
-        }),
+        })
       ),
       refreshUnderLease: jest.fn().mockResolvedValue(undefined),
       wasRefreshedSince: jest.fn().mockReturnValue(false),
@@ -252,14 +322,14 @@ describe('TBI-007 groundingPreWarmService', () => {
     const enqueueImpact = jest.fn();
     const safePaths = Array.from(
       { length: 205 },
-      (_, index) => `src/file-${index}.ts`,
+      (_, index) => `src/file-${index}.ts`
     );
     const service = createGroundingPreWarmService({
       withLease: jest.fn(async (_key, operation) =>
         operation({
           signal: new AbortController().signal,
           assertOwned: jest.fn().mockResolvedValue(undefined),
-        }),
+        })
       ),
       refreshUnderLease: jest.fn().mockResolvedValue(undefined),
       wasRefreshedSince: jest.fn().mockReturnValue(false),
@@ -284,7 +354,8 @@ describe('TBI-007 groundingPreWarmService', () => {
     await flushAsyncWork();
 
     // Assert
-    const changedFiles = enqueueImpact.mock.calls[0][0].changedFiles as string[];
+    const changedFiles = enqueueImpact.mock.calls[0][0]
+      .changedFiles as string[];
     expect(changedFiles).toHaveLength(200);
     expect(changedFiles[0]).toBe('src/file-0.ts');
     expect(changedFiles).not.toEqual(
@@ -292,7 +363,7 @@ describe('TBI-007 groundingPreWarmService', () => {
         'C:\\private\\checkout.ts',
         '../outside.ts',
         '/absolute.ts',
-      ]),
+      ])
     );
   });
 });

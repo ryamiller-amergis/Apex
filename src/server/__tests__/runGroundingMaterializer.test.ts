@@ -60,7 +60,7 @@ describe('TBI-004 default independent grounding materializer', () => {
     expect(secondIdentity.sha).toBe(sha);
     expect(firstDestination).not.toBe(secondDestination);
     expect(firstDestination).toMatch(
-      new RegExp(`grounding-workspaces[\\\\/]\\w+$`),
+      new RegExp(`grounding-workspaces[\\\\/]\\w+$`)
     );
     expect(firstDestination).not.toContain('prd-thread');
     expect(secondDestination).not.toContain('design-doc-thread');
@@ -110,7 +110,9 @@ describe('TBI-004 default independent grounding materializer', () => {
       cacheDir: 'C:\\cache\\repo.git',
       remote: { url: 'https://example.invalid/repo.git' },
     });
-    const materializeWorkspaceFromCache = jest.fn().mockResolvedValue(undefined);
+    const materializeWorkspaceFromCache = jest
+      .fn()
+      .mockResolvedValue(undefined);
     const runGit = jest.fn().mockResolvedValue('');
     const materialize = createRunGroundingMaterializer({
       dataRoot: 'C:\\persistent-data',
@@ -135,13 +137,62 @@ describe('TBI-004 default independent grounding materializer', () => {
       'C:\\cache\\repo.git',
       expect.stringMatching(/grounding-workspaces/),
       'main',
-      'https://example.invalid/repo.git',
+      'https://example.invalid/repo.git'
     );
     const destination = materializeWorkspaceFromCache.mock.calls[0][1];
     expect(runGit).toHaveBeenCalledWith(
       expect.arrayContaining(['checkout', '--detach', sha]),
-      { cwd: destination },
+      { cwd: destination }
     );
+  });
+
+  it('writes through a repaired mirror without delaying materialization', async () => {
+    // Arrange
+    const publishBundle = jest.fn().mockResolvedValue('published');
+    const createBundleStore: GroundingMaterializerDependencies['createBundleStore'] =
+      jest.fn((options) => ({
+        rehydrate: jest.fn(async (identity, destination) => {
+          const repaired = await options.repairAndMaterialize({
+            identity,
+            destination,
+          });
+          return repaired
+            ? { status: 'materialized' as const, source: 'repair' as const }
+            : {
+                status: 'remote-fallback' as const,
+                reason: 'repair-failed' as const,
+              };
+        }),
+      }));
+    const materialize = createRunGroundingMaterializer({
+      dataRoot: 'C:\\persistent-data',
+      createBundleStore,
+      ensureRepoCache: jest.fn().mockResolvedValue({
+        cacheDir: 'C:\\cache\\repo.git',
+        remote: { url: 'https://example.invalid/repo.git' },
+      }),
+      materializeWorkspaceFromCache: jest.fn().mockResolvedValue(undefined),
+      runGit: jest.fn().mockResolvedValue(''),
+      publishBundle,
+    });
+
+    // Act
+    await expect(materialize(grounding, run('write-through'))).resolves.toBe(
+      'materialized'
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    // Assert
+    expect(publishBundle).toHaveBeenCalledWith({
+      identity: {
+        provider: 'github',
+        project: 'Apex',
+        repo: 'AI-Pilot',
+        sha,
+      },
+      cacheDir: 'C:\\cache\\repo.git',
+      branch: 'main',
+    });
   });
 
   it('TBI-007 DoD-1 repairs a verified mirror then retries the exact pinned SHA', async () => {
@@ -169,7 +220,9 @@ describe('TBI-004 default independent grounding materializer', () => {
       cacheDir: 'C:\\cache\\repo.git',
       remote: { url: 'https://example.invalid/repo.git' },
     });
-    const materializeWorkspaceFromCache = jest.fn().mockResolvedValue(undefined);
+    const materializeWorkspaceFromCache = jest
+      .fn()
+      .mockResolvedValue(undefined);
     let checkoutAttempts = 0;
     const runGit = jest.fn(async (args: string[]) => {
       if (args.includes('checkout') && ++checkoutAttempts === 1) {
@@ -195,10 +248,16 @@ describe('TBI-004 default independent grounding materializer', () => {
     expect(repairRepoCache).toHaveBeenCalledTimes(1);
     expect(materializeWorkspaceFromCache).toHaveBeenCalledTimes(2);
     expect(
-      runGit.mock.calls.filter(([args]) => args.includes('checkout')),
+      runGit.mock.calls.filter(([args]) => args.includes('checkout'))
     ).toEqual([
-      [expect.arrayContaining(['checkout', '--detach', sha]), expect.anything()],
-      [expect.arrayContaining(['checkout', '--detach', sha]), expect.anything()],
+      [
+        expect.arrayContaining(['checkout', '--detach', sha]),
+        expect.anything(),
+      ],
+      [
+        expect.arrayContaining(['checkout', '--detach', sha]),
+        expect.anything(),
+      ],
     ]);
   });
 
@@ -223,7 +282,9 @@ describe('TBI-004 default independent grounding materializer', () => {
       cacheDir: 'C:\\cache\\repo.git',
       remote: { url: 'https://example.invalid/repo.git' },
     });
-    const runGit = jest.fn().mockRejectedValue(new Error('missing pinned object'));
+    const runGit = jest
+      .fn()
+      .mockRejectedValue(new Error('missing pinned object'));
     const telemetry = jest.fn();
     const materialize = createRunGroundingMaterializer({
       dataRoot: 'C:\\persistent-data',
@@ -253,7 +314,7 @@ describe('TBI-004 default independent grounding materializer', () => {
         repository: 'AI-Pilot',
         branch: 'main',
         reason: 'pinned-sha-unavailable',
-      },
+      }
     );
   });
 });

@@ -43,6 +43,7 @@ export type RepairAndMaterialize = (
 ) => Promise<boolean>;
 
 export interface GroundingBundleStore {
+  bundleExists(identity: RepositoryIdentity): Promise<boolean>;
   uploadBundle(
     identity: RepositoryIdentity,
     temporaryBundlePath: string
@@ -205,6 +206,18 @@ export function createGroundingBundleStore(
   const now = options.now ?? Date.now;
 
   return {
+    async bundleExists(identity) {
+      const key = bundleKey(identity);
+      try {
+        return await getContainerClient().getBlockBlobClient(key).exists();
+      } catch (error) {
+        if (isAuthorizationFailure(error)) {
+          throw new GroundingBundleAuthorizationError();
+        }
+        throw new Error('Grounding bundle lookup failed');
+      }
+    },
+
     async uploadBundle(identity, temporaryBundlePath) {
       const key = bundleKey(identity);
       try {

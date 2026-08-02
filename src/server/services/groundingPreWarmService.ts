@@ -15,6 +15,10 @@ import { runGroundingRepository } from './runGroundingRepository';
 import { groundingImpactEvaluatorService } from './groundingImpactEvaluatorService';
 import { trackEvent } from './telemetry';
 import { git, safeArgs } from '../utils/asyncGit';
+import {
+  groundingBundlePublisher,
+  type GroundingBundlePublisher,
+} from './grounding/groundingBundlePublisherService';
 
 const MAX_CHANGED_PATHS = 200;
 
@@ -27,22 +31,20 @@ export interface GroundingPreWarmDependencies {
   listActiveTargets?: () => Promise<PreWarmTarget[]>;
   withLease?: (
     cacheKey: string,
-    operation: (lease: RepoCacheLeaseContext) => Promise<void>,
+    operation: (lease: RepoCacheLeaseContext) => Promise<void>
   ) => Promise<void>;
   refreshUnderLease?: (
     options: RepoCacheOptions,
-    lease: RepoCacheLeaseContext,
+    lease: RepoCacheLeaseContext
   ) => Promise<unknown>;
-  wasRefreshedSince?: (
-    options: RepoCacheOptions,
-    sinceMs: number,
-  ) => boolean;
+  wasRefreshedSince?: (options: RepoCacheOptions, sinceMs: number) => boolean;
   readCachedSha?: (target: PreWarmTarget) => Promise<string | null>;
   listChangedPaths?: (
     options: RepoCacheOptions,
     fromSha: string,
-    toSha: string,
+    toSha: string
   ) => Promise<string[]>;
+  publishBundle?: GroundingBundlePublisher['publish'];
   enqueueImpact?: typeof groundingImpactEvaluatorService.enqueue;
   telemetry?: typeof trackEvent;
   now?: () => number;
@@ -81,7 +83,7 @@ function safeChangedPaths(paths: string[]): string[] {
         }
         const normalized = value.replace(/^\.\//, '');
         return normalized.split('/').includes('..') ? [] : [normalized];
-      }),
+      })
     ),
   ].slice(0, MAX_CHANGED_PATHS);
 }
@@ -89,7 +91,7 @@ function safeChangedPaths(paths: string[]): string[] {
 async function listChangedRepositoryPaths(
   options: RepoCacheOptions,
   fromSha: string,
-  toSha: string,
+  toSha: string
 ): Promise<string[]> {
   const cacheDir = getRepoCacheDir(options);
   const output = await git(
@@ -105,13 +107,13 @@ async function listChangedRepositoryPaths(
       cwd: cacheDir,
       timeout: 10_000,
       maxBuffer: 512 * 1024,
-    },
+    }
   );
   return output.split(/\r?\n/).filter(Boolean);
 }
 
 export function createGroundingPreWarmService(
-  dependencies: GroundingPreWarmDependencies = {},
+  dependencies: GroundingPreWarmDependencies = {}
 ): GroundingPreWarmService {
   const listActiveTargets =
     dependencies.listActiveTargets ??
@@ -126,6 +128,9 @@ export function createGroundingPreWarmService(
   const readCachedSha = dependencies.readCachedSha ?? readCachedOriginSha;
   const listChangedPaths =
     dependencies.listChangedPaths ?? listChangedRepositoryPaths;
+  const publishBundle =
+    dependencies.publishBundle ??
+    ((input) => groundingBundlePublisher.publish(input));
   const enqueueImpact =
     dependencies.enqueueImpact ??
     ((event) => groundingImpactEvaluatorService.enqueue(event));
@@ -139,11 +144,12 @@ export function createGroundingPreWarmService(
     const options = cacheOptions(target);
     const requestedAt = now();
     const previousSha = Promise.resolve(readCachedSha(target)).catch(
-      () => null,
+      () => null
     );
     const operation = previousSha
-      .then((fromSha) =>
-        withLease(getRepoCacheLeaseKey(options), async (lease) => {
+      .then(async (fromSha) => {
+        let toSha: string | null = null;
+        await withLease(getRepoCacheLeaseKey(options), async (lease) => {
           lease.signal.throwIfAborted();
           const coalesced = wasRefreshedSince(options, requestedAt);
           if (!coalesced) {
@@ -159,31 +165,62 @@ export function createGroundingPreWarmService(
               branch: target.branch,
               outcome: coalesced ? 'coalesced' : 'refreshed',
             },
-            { durationMs: Math.max(0, now() - requestedAt) },
+            { durationMs: Math.max(0, now() - requestedAt) }
           );
+          toSha = await Promise.resolve(readCachedSha(target)).catch(
+            () => null
+          );
+        });
 
-          void Promise.resolve()
-            .then(async () => {
-              if (!fromSha) return;
-              const toSha = await readCachedSha(target);
-              if (!toSha || toSha === fromSha) return;
-              const changedFiles = safeChangedPaths(
-                await listChangedPaths(options, fromSha, toSha),
-              );
-              if (changedFiles.length === 0) return;
-              enqueueImpact({
-                provider: target.provider,
+        if (toSha) {
+          try {
+            const outcome = await publishBundle({
+              identity: {
+                provider: options.provider,
                 project: target.project,
-                repository: target.repository,
-                branch: target.branch,
-                fromSha,
-                toSha,
-                changedFiles,
-              });
-            })
-            .catch(() => undefined);
-        }),
-      )
+                repo: target.repository,
+                sha: toSha,
+              },
+              cacheDir: getRepoCacheDir(options),
+              branch: target.branch,
+            });
+            telemetry('grounding.bundle.publish', {
+              provider: target.provider,
+              project: target.project,
+              repository: target.repository,
+              branch: target.branch,
+              outcome,
+            });
+          } catch {
+            telemetry('grounding.bundle.publish', {
+              provider: target.provider,
+              project: target.project,
+              repository: target.repository,
+              branch: target.branch,
+              outcome: 'failed',
+            });
+          }
+        }
+
+        void Promise.resolve()
+          .then(async () => {
+            if (!fromSha || !toSha || toSha === fromSha) return;
+            const changedFiles = safeChangedPaths(
+              await listChangedPaths(options, fromSha, toSha)
+            );
+            if (changedFiles.length === 0) return;
+            enqueueImpact({
+              provider: target.provider,
+              project: target.project,
+              repository: target.repository,
+              branch: target.branch,
+              fromSha,
+              toSha,
+              changedFiles,
+            });
+          })
+          .catch(() => undefined);
+      })
       .finally(() => {
         inFlight.delete(identity);
       });

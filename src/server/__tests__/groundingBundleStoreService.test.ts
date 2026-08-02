@@ -194,6 +194,19 @@ describe('AC-1 missing or corrupt bundle repairs before controlled fallback', ()
 });
 
 describe('AC-2 concurrent writers converge on one immutable bundle', () => {
+  it('checks the content-addressed key before a publisher builds a bundle', async () => {
+    // Given
+    const exists = jest.fn().mockResolvedValue(true);
+    const store = createGroundingBundleStore({
+      getContainerClient: () => fakeContainer({ exists }),
+      repairAndMaterialize: jest.fn(),
+    });
+
+    // When / Then
+    await expect(store.bundleExists(identity)).resolves.toBe(true);
+    expect(exists).toHaveBeenCalledTimes(1);
+  });
+
   it.each([409, 412])(
     'AC-2 uses If-None-Match "*", accepts a %i winner, and cleans both temporary artifacts',
     async (concurrentStatus) => {
@@ -422,7 +435,7 @@ describe('performance/observability privacy-safe hit/miss and duration signals',
     // Arrange
     const destination = join(
       tmpdir(),
-      'private-bundle-destination-do-not-emit',
+      'private-bundle-destination-do-not-emit'
     );
     const credentialRepo = {
       ...identity,
@@ -432,11 +445,11 @@ describe('performance/observability privacy-safe hit/miss and duration signals',
     const store = createGroundingBundleStore({
       getContainerClient: () =>
         fakeContainer({
-          downloadToFile: jest
-            .fn()
-            .mockRejectedValue(Object.assign(new Error('missing'), {
+          downloadToFile: jest.fn().mockRejectedValue(
+            Object.assign(new Error('missing'), {
               statusCode: 404,
-            })),
+            })
+          ),
         }),
       repairAndMaterialize: jest.fn().mockResolvedValue(false),
       telemetry: (name, properties, measurements) => {
@@ -456,7 +469,7 @@ describe('performance/observability privacy-safe hit/miss and duration signals',
           expect.objectContaining({ result: 'miss' }),
           { hit: 0 },
         ],
-      ]),
+      ])
     );
     const serialized = JSON.stringify(events);
     expect(serialized).not.toContain('bundle-secret');

@@ -2,10 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { SkillProvider } from '../../shared/types/projectSettings';
-import type {
-  RunGrounding,
-  RunRef,
-} from '../../shared/types/runGrounding';
+import type { RunGrounding, RunRef } from '../../shared/types/runGrounding';
 import { git, safeArgs } from '../utils/asyncGit';
 import { resolveDataRoot } from '../utils/dataDir';
 import {
@@ -13,6 +10,10 @@ import {
   type GroundingBundleStore,
   type GroundingBundleStoreOptions,
 } from './grounding/bundleStoreService';
+import {
+  groundingBundlePublisher,
+  type GroundingBundlePublisher,
+} from './grounding/groundingBundlePublisherService';
 import {
   ensureRepoCache,
   repairRepoCache,
@@ -32,12 +33,13 @@ export interface RunGroundingMaterializationResult {
 export interface GroundingMaterializerDependencies {
   dataRoot?: string;
   createBundleStore?: (
-    options: GroundingBundleStoreOptions,
+    options: GroundingBundleStoreOptions
   ) => Pick<GroundingBundleStore, 'rehydrate'>;
   ensureRepoCache?: typeof ensureRepoCache;
   repairRepoCache?: typeof repairRepoCache;
   materializeWorkspaceFromCache?: typeof materializeWorkspaceFromCache;
   runGit?: typeof git;
+  publishBundle?: GroundingBundlePublisher['publish'];
   telemetry?: typeof trackEvent;
 }
 
@@ -48,7 +50,7 @@ function cacheProvider(provider: RunGrounding['provider']): SkillProvider {
 function opaqueDestination(
   dataRoot: string,
   grounding: RunGrounding,
-  destinationRun: RunRef,
+  destinationRun: RunRef
 ): string {
   const identity = JSON.stringify([
     destinationRun.runType,
@@ -71,28 +73,30 @@ function opaqueDestination(
 export function resolveRunGroundingWorkspacePath(
   grounding: RunGrounding,
   destinationRun: RunRef,
-  dataRoot = resolveDataRoot(),
+  dataRoot = resolveDataRoot()
 ): string {
   return opaqueDestination(dataRoot, grounding, destinationRun);
 }
 
 export function createRunGroundingMaterializer(
-  dependencies: GroundingMaterializerDependencies = {},
+  dependencies: GroundingMaterializerDependencies = {}
 ): (
   grounding: RunGrounding,
-  destinationRun: RunRef,
+  destinationRun: RunRef
 ) => Promise<MaterializationState> {
   const dataRoot = dependencies.dataRoot ?? resolveDataRoot();
   const ensureCache = dependencies.ensureRepoCache ?? ensureRepoCache;
   const repairCache = dependencies.repairRepoCache ?? repairRepoCache;
   const materializeFromCache =
-    dependencies.materializeWorkspaceFromCache ??
-    materializeWorkspaceFromCache;
+    dependencies.materializeWorkspaceFromCache ?? materializeWorkspaceFromCache;
   const runGit = dependencies.runGit ?? git;
   const telemetry = dependencies.telemetry ?? trackEvent;
   const branchesByDestination = new Map<string, string>();
   const createBundleStore =
     dependencies.createBundleStore ?? createGroundingBundleStore;
+  const publishBundle =
+    dependencies.publishBundle ??
+    ((input) => groundingBundlePublisher.publish(input));
   const store = createBundleStore({
     repairAndMaterialize: async ({ identity, destination }) => {
       const branch = branchesByDestination.get(destination);
@@ -104,28 +108,60 @@ export function createRunGroundingMaterializer(
         branch,
       } as const;
       const materializePinnedSha = async (
-        cache: Pick<RepoCacheResult, 'cacheDir' | 'remote'>,
+        cache: Pick<RepoCacheResult, 'cacheDir' | 'remote'>
       ): Promise<void> => {
         await materializeFromCache(
           cache.cacheDir,
           destination,
           branch,
-          cache.remote.url,
+          cache.remote.url
         );
         await runGit(
           safeArgs(destination, ['checkout', '--detach', identity.sha]),
-          { cwd: destination },
+          { cwd: destination }
         );
+      };
+      const publishFromCache = (
+        cache: Pick<RepoCacheResult, 'cacheDir'>
+      ): void => {
+        void Promise.resolve()
+          .then(() =>
+            publishBundle({
+              identity,
+              cacheDir: cache.cacheDir,
+              branch,
+            })
+          )
+          .then((outcome) => {
+            telemetry('grounding.bundle.publish', {
+              provider: String(identity.provider),
+              project: identity.project,
+              repository: redactSecrets(identity.repo),
+              branch,
+              outcome,
+            });
+          })
+          .catch(() => {
+            telemetry('grounding.bundle.publish', {
+              provider: String(identity.provider),
+              project: identity.project,
+              repository: redactSecrets(identity.repo),
+              branch,
+              outcome: 'failed',
+            });
+          });
       };
 
       const cache = await ensureCache(cacheOptions);
       try {
         await materializePinnedSha(cache);
+        publishFromCache(cache);
         return true;
       } catch {
         try {
           const repairedCache = await repairCache(cacheOptions);
           await materializePinnedSha(repairedCache);
+          publishFromCache(repairedCache);
           return true;
         } catch {
           telemetry('grounding.materialization.fallback', {
@@ -142,11 +178,7 @@ export function createRunGroundingMaterializer(
   });
 
   return async (grounding, destinationRun) => {
-    const destination = opaqueDestination(
-      dataRoot,
-      grounding,
-      destinationRun,
-    );
+    const destination = opaqueDestination(dataRoot, grounding, destinationRun);
     fs.mkdirSync(path.dirname(destination), { recursive: true });
     branchesByDestination.set(destination, grounding.branch);
     try {
@@ -157,11 +189,9 @@ export function createRunGroundingMaterializer(
           repo: grounding.repository,
           sha: grounding.groundedSha,
         },
-        destination,
+        destination
       );
-      return result.status === 'materialized'
-        ? 'materialized'
-        : 'unavailable';
+      return result.status === 'materialized' ? 'materialized' : 'unavailable';
     } catch {
       return 'unavailable';
     } finally {
@@ -174,7 +204,7 @@ export const materializeRunGrounding = createRunGroundingMaterializer();
 
 export async function materializeRunGroundingWithPath(
   grounding: RunGrounding,
-  destinationRun: RunRef,
+  destinationRun: RunRef
 ): Promise<RunGroundingMaterializationResult> {
   const state = await materializeRunGrounding(grounding, destinationRun);
   return state === 'materialized'
@@ -182,7 +212,7 @@ export async function materializeRunGroundingWithPath(
         state,
         workspacePath: resolveRunGroundingWorkspacePath(
           grounding,
-          destinationRun,
+          destinationRun
         ),
       }
     : { state };
