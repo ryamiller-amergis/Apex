@@ -43,11 +43,7 @@ import {
 
 const VALID_PRD_STATUSES: PrdStatus[] = ['generating', 'draft', 'validating', 'pending_review', 'reviewer_approved', 'approved', 'revision_requested'];
 
-async function cleanupWorkspace(
-  threadId: string,
-  preserveGroundedWorkspace = false,
-): Promise<void> {
-  if (preserveGroundedWorkspace) return;
+async function cleanupWorkspace(threadId: string): Promise<void> {
   try {
     const row = await db.query.chatThreads.findFirst({
       where: eq(chatThreads.id, threadId),
@@ -822,8 +818,7 @@ export function startPrdWatcher(prdId: string, chatThreadId: string): void {
       activePrdWatchers.delete(prdId);
       console.log(`[prdWatcher] Both files ready — syncing to DB (prdId=${prdId})`);
       try {
-        const terminalResult =
-          await runGroundingService.persistThenMarkTerminalInactive(
+        await runGroundingService.persistThenMarkTerminalInactive(
             {
               runType: 'chat',
               runId: chatThreadId,
@@ -831,8 +826,6 @@ export function startPrdWatcher(prdId: string, chatThreadId: string): void {
             },
             () => syncPrdContent(prdId, content, backlog),
           );
-        const preserveGroundedWorkspace =
-          terminalResult.workspaceOwnedByIdleCleanup;
         console.log(`[prdWatcher] Sync complete — PRD is now draft (prdId=${prdId})`);
         try {
           const prdRowAfterSync = await db.query.prds.findFirst({
@@ -850,7 +843,7 @@ export function startPrdWatcher(prdId: string, chatThreadId: string): void {
 
           if (!testCasesEnabled) {
             console.log(`[prdWatcher] Test cases disabled for interview — skipping generation (prdId=${prdId})`);
-            cleanupWorkspace(chatThreadId, preserveGroundedWorkspace);
+            cleanupWorkspace(chatThreadId);
             try {
               await autoStartPrdValidation(prdId);
             } catch (err) {
@@ -860,12 +853,12 @@ export function startPrdWatcher(prdId: string, chatThreadId: string): void {
             const { triggerTestCaseGeneration } = await import('./testCaseService');
             const testCaseStarted = await triggerTestCaseGeneration(prdId, chatThreadId);
             if (!testCaseStarted) {
-              cleanupWorkspace(chatThreadId, preserveGroundedWorkspace);
+              cleanupWorkspace(chatThreadId);
             }
           }
         } catch (err) {
           console.error(`[prdWatcher] Auto test-case generation failed (prdId=${prdId})`, err);
-          cleanupWorkspace(chatThreadId, preserveGroundedWorkspace);
+          cleanupWorkspace(chatThreadId);
         }
       } catch (err) {
         console.error(`[prdWatcher] Failed to sync PRD content (prdId=${prdId})`, err);

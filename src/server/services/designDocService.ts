@@ -64,11 +64,7 @@ async function assertAuthorOrOwnerOrAdmin(
   throw forbidden(`Only the author or owner can ${action}`);
 }
 
-async function cleanupWorkspace(
-  threadId: string,
-  preserveGroundedWorkspace = false,
-): Promise<void> {
-  if (preserveGroundedWorkspace) return;
+async function cleanupWorkspace(threadId: string): Promise<void> {
   try {
     const row = await db.query.chatThreads.findFirst({
       where: eq(chatThreads.id, threadId),
@@ -679,14 +675,7 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
     if (!seedDoc || !seedDoc.chatThreadId) {
       clearInterval(interval);
       activeDocWatchers.delete(seedDocId);
-      const groundingHistory = seedDoc
-        ? await runGroundingService.getGroundings({
-            runType: 'chat',
-            runId: chatThreadId,
-            project: seedDoc.project,
-          })
-        : [];
-      await cleanupWorkspace(chatThreadId, groundingHistory.length > 0);
+      await cleanupWorkspace(chatThreadId);
       console.log(`[designDocWatcher] syncOutputToDb handled creation — workspace cleaned (seedDocId=${seedDocId})`);
       return;
     }
@@ -760,10 +749,8 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
     }
 
     if (allDone) {
-      let preserveGroundedWorkspace = false;
       try {
-        const terminalResult =
-          await runGroundingService.persistThenMarkTerminalInactive(
+        await runGroundingService.persistThenMarkTerminalInactive(
             {
               runType: 'chat',
               runId: chatThreadId,
@@ -775,15 +762,13 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
                 .set({ chatThreadId: null, updatedAt: new Date().toISOString() })
                 .where(eq(designDocs.id, seedDocId)),
           );
-        preserveGroundedWorkspace =
-          terminalResult.workspaceOwnedByIdleCleanup;
       } catch (err) {
         console.error(`[designDocWatcher] Error clearing seed row chatThreadId`, err);
         return;
       }
       clearInterval(interval);
       activeDocWatchers.delete(seedDocId);
-      await cleanupWorkspace(chatThreadId, preserveGroundedWorkspace);
+      await cleanupWorkspace(chatThreadId);
       console.log(`[designDocWatcher] Done — ${createdSlugs.size} feature(s) created, workspace cleaned (seedDocId=${seedDocId})`);
     }
   }, WATCHER_INTERVAL_MS);
@@ -844,8 +829,7 @@ export async function finalizeSingleFeatureDoc(
   if (!design || !techSpec || !assumptions) {
     const missing = [!design && 'design', !techSpec && 'tech-spec', !assumptions && 'assumptions'].filter(Boolean).join(', ');
     console.warn(`[finalizeSingleFeatureDoc] Missing output files [${missing}] — marking generation_failed (designDocId=${designDocId})`);
-    const terminalResult =
-      await runGroundingService.persistThenMarkTerminalInactive(
+    await runGroundingService.persistThenMarkTerminalInactive(
         { runType: 'chat', runId: chatThreadId, project },
         () =>
           db.update(designDocs)
@@ -856,18 +840,14 @@ export async function finalizeSingleFeatureDoc(
               eq(designDocs.status, 'generating'),
             )),
       );
-    await cleanupWorkspace(
-      chatThreadId,
-      terminalResult.workspaceOwnedByIdleCleanup,
-    );
+    await cleanupWorkspace(chatThreadId);
     return false;
   }
 
   const skillConfig = await resolveSkillConfig({ project, settingsId: guard.skillSettingsId ?? undefined });
   const finalStatus: DesignDocStatus = skillConfig?.designDocValidationSkillPath ? 'validating' : 'pending_review';
 
-  const terminalResult =
-    await runGroundingService.persistThenMarkTerminalInactive(
+  await runGroundingService.persistThenMarkTerminalInactive(
       { runType: 'chat', runId: chatThreadId, project },
       () =>
         db.update(designDocs)
@@ -886,10 +866,7 @@ export async function finalizeSingleFeatureDoc(
           )),
     );
 
-  await cleanupWorkspace(
-    chatThreadId,
-    terminalResult.workspaceOwnedByIdleCleanup,
-  );
+  await cleanupWorkspace(chatThreadId);
   console.log(`[finalizeSingleFeatureDoc] Done — status=${finalStatus} (designDocId=${designDocId})`);
 
   notifyAiCompletion('design_doc_generated', designDocId, { title: 'Design doc' }).catch(err =>

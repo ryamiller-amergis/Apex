@@ -1,13 +1,16 @@
 import { Agent } from '@cursor/sdk';
 import type { SDKAgent } from '@cursor/sdk/dist/cjs/agent.js';
 import type { McpServerConfig } from '@cursor/sdk/dist/cjs/options.js';
-import fs from 'fs';
-import os from 'os';
+import { readFile } from 'fs/promises';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { retryWithBackoff } from '../utils/retry';
 import { listSkillConfigs } from './projectSettingsService';
 import { recordAiUsage, estimateTokens } from './aiUsageService';
+import {
+  callerGroundingService,
+  type CallerGroundingSelection,
+} from './callerGroundingService';
 
 const SESSION_IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const MODEL_ID = 'composer-2.5';
@@ -66,11 +69,18 @@ const FALLBACK_SYSTEM_PROMPT = `${SYSTEM_PROMPT_BASE}
 
 Note: I was unable to load the latest documentation from the repository. I'll do my best to answer using my tools and general knowledge of the application.`;
 
-let cachedContextPrompt: string | null = null;
-let contextFetchedAt = 0;
 const CONTEXT_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+interface RepoInfo {
+  org: string;
+  repo: string;
+  branch: string;
+}
+const contextPromptCache = new Map<
+  string,
+  { prompt: string; fetchedAt: number }
+>();
 
-async function resolveRepoInfo(): Promise<{ org: string; repo: string; branch: string } | null> {
+async function resolveRepoInfo(): Promise<RepoInfo | null> {
   try {
     const configs = await listSkillConfigs();
     const ghConfig = configs.find(c => c.skillProvider === 'github' && c.isDefault);
@@ -90,15 +100,37 @@ async function resolveRepoInfo(): Promise<{ org: string; repo: string; branch: s
   }
 }
 
-async function fetchRepoContext(): Promise<string> {
-  if (cachedContextPrompt && Date.now() - contextFetchedAt < CONTEXT_CACHE_TTL_MS) {
-    return cachedContextPrompt;
+function safeLocalContextPath(cwd: string, relativePath: string): string {
+  const root = path.resolve(cwd);
+  const target = path.resolve(root, relativePath);
+  const relative = path.relative(root, target);
+  if (
+    relative === '..' ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error('Repository context path is unavailable');
   }
+  return target;
+}
 
-  const repoInfo = await resolveRepoInfo();
+async function fetchRepoContext(
+  grounding: CallerGroundingSelection,
+  repoInfo: RepoInfo | null,
+): Promise<string> {
   if (!repoInfo) return FALLBACK_SYSTEM_PROMPT;
 
-  const { getSkillFile } = await import('./skillCatalogGitHub');
+  const sourceKey = grounding.mode === 'local'
+    ? `local:${grounding.profileId}:${grounding.cwd}`
+    : `remote:${repoInfo.org}/${repoInfo.repo}@${repoInfo.branch}`;
+  const cached = contextPromptCache.get(sourceKey);
+  if (cached && Date.now() - cached.fetchedAt < CONTEXT_CACHE_TTL_MS) {
+    return cached.prompt;
+  }
+
+  const remoteCatalog = grounding.mode === 'remote'
+    ? await import('./skillCatalogGitHub')
+    : null;
   const sections: string[] = [SYSTEM_PROMPT_BASE, ''];
 
   // Inject repo coordinates so the agent knows what to pass to MCP tools
@@ -119,7 +151,17 @@ async function fetchRepoContext(): Promise<string> {
 
   for (const file of filesToFetch) {
     try {
-      const content = await getSkillFile(repoInfo.repo, file.path, repoInfo.branch, repoInfo.org);
+      const content = grounding.mode === 'local'
+        ? await readFile(
+            safeLocalContextPath(grounding.cwd, file.path),
+            'utf-8',
+          )
+        : await remoteCatalog!.getSkillFile(
+            repoInfo.repo,
+            file.path,
+            repoInfo.branch,
+            repoInfo.org,
+          );
       if (content) {
         sections.push(`## ${file.label}\n\n${content}`);
       }
@@ -129,8 +171,10 @@ async function fetchRepoContext(): Promise<string> {
   }
 
   const prompt = sections.length > 4 ? sections.join('\n\n') : FALLBACK_SYSTEM_PROMPT;
-  cachedContextPrompt = prompt;
-  contextFetchedAt = Date.now();
+  contextPromptCache.set(sourceKey, {
+    prompt,
+    fetchedAt: Date.now(),
+  });
   return prompt;
 }
 
@@ -138,16 +182,26 @@ async function fetchRepoContext(): Promise<string> {
  * Build the MCP servers map for the Ask Apex agent.
  * Provides read-only GitHub repo browsing tools.
  */
-function buildAskApexMcpServers(): Record<string, McpServerConfig> {
+function buildAskApexMcpServers(
+  grounding: CallerGroundingSelection,
+): Record<string, McpServerConfig> {
   const port = process.env.PORT ?? '3001';
+  const profilePath = grounding.mode === 'local'
+    ? `/grounding/${grounding.profileId}`
+    : '';
   return {
-    'github-repo': { url: `http://localhost:${port}/mcp/github-repo` },
+    'github-repo': {
+      url: `http://localhost:${port}/mcp/github-repo${profilePath}`,
+    },
   };
 }
 
-async function buildSystemPrompt(): Promise<string> {
+async function buildSystemPrompt(
+  grounding: CallerGroundingSelection,
+  repoInfo: RepoInfo | null,
+): Promise<string> {
   try {
-    return await fetchRepoContext();
+    return await fetchRepoContext(grounding, repoInfo);
   } catch (err) {
     console.error('[ask-apex] Failed to build context-aware prompt:', (err as Error).message);
     return FALLBACK_SYSTEM_PROMPT;
@@ -179,7 +233,8 @@ interface SessionState {
   status: AskApexSessionStatus;
   subscribers: Set<(event: AskApexSseEvent) => void>;
   idleTimer: ReturnType<typeof setTimeout> | null;
-  workspaceDir: string;
+  grounding: CallerGroundingSelection | null;
+  repoInfo: RepoInfo | null;
 }
 
 const sessions = new Map<string, SessionState>();
@@ -198,22 +253,20 @@ function resetIdleTimer(session: SessionState): void {
 function destroySession(sessionId: string): void {
   const session = sessions.get(sessionId);
   if (!session) return;
+  if (session.status === 'streaming') {
+    resetIdleTimer(session);
+    return;
+  }
   if (session.idleTimer) clearTimeout(session.idleTimer);
   if (session.agent) {
     try { session.agent[Symbol.asyncDispose]().catch(() => {}); } catch { /* ignore */ }
   }
-  try {
-    if (fs.existsSync(session.workspaceDir)) {
-      fs.rmSync(session.workspaceDir, { recursive: true, force: true });
-    }
-  } catch { /* ignore cleanup errors */ }
   sessions.delete(sessionId);
+  void session.grounding?.release().catch(() => undefined);
 }
 
 export function createSession(userId: string): string {
   const sessionId = uuidv4();
-  const workspaceDir = path.join(os.tmpdir(), 'ask-apex-sessions', sessionId);
-  fs.mkdirSync(workspaceDir, { recursive: true });
 
   const session: SessionState = {
     id: sessionId,
@@ -223,7 +276,8 @@ export function createSession(userId: string): string {
     status: 'idle',
     subscribers: new Set(),
     idleTimer: null,
-    workspaceDir,
+    grounding: null,
+    repoInfo: null,
   };
 
   sessions.set(sessionId, session);
@@ -252,6 +306,40 @@ export function getSessionMessages(sessionId: string, userId: string): AskApexMe
   const session = getSession(sessionId, userId);
   if (!session) return null;
   return session.messages;
+}
+
+async function ensureSessionGrounding(
+  session: SessionState,
+): Promise<CallerGroundingSelection> {
+  if (session.grounding) return session.grounding;
+
+  const repoInfo = await resolveRepoInfo();
+  session.repoInfo = repoInfo;
+  if (!repoInfo) {
+    session.grounding = {
+      mode: 'remote',
+      release: async () => undefined,
+    };
+    return session.grounding;
+  }
+
+  session.grounding = await callerGroundingService.start({
+    caller: 'ask-apex',
+    userId: session.userId,
+    run: {
+      runType: 'service',
+      runId: session.id,
+      project: 'Apex',
+    },
+    repository: {
+      provider: 'github',
+      repo: repoInfo.repo,
+      branch: repoInfo.branch,
+    },
+    reauthorize: async () =>
+      getSession(session.id, session.userId) !== null,
+  });
+  return session.grounding;
 }
 
 function isTransientSdkError(err: unknown): boolean {
@@ -285,25 +373,27 @@ export async function sendMessage(sessionId: string, userId: string, text: strin
     return;
   }
 
-  const isFirstTurn = !session.agent;
-  let prompt: string;
-  if (isFirstTurn) {
-    const systemPrompt = await buildSystemPrompt();
-    prompt = `${systemPrompt}\n\n---\n\nUser: ${text.trim()}`;
-  } else {
-    prompt = text.trim();
-  }
-
   try {
     const sdkRetryOpts = { maxRetries: 3, initialDelay: 1000, shouldRetry: isTransientSdkError, jitter: true } as const;
+    const isFirstTurn = !session.agent;
+    const grounding = isFirstTurn
+      ? await ensureSessionGrounding(session)
+      : session.grounding;
+    if (!grounding) throw new Error('Repository grounding is unavailable');
+
+    const prompt = isFirstTurn
+      ? `${await buildSystemPrompt(grounding, session.repoInfo)}\n\n---\n\nUser: ${text.trim()}`
+      : text.trim();
 
     if (!session.agent) {
-      const mcpServers = buildAskApexMcpServers();
+      const mcpServers = buildAskApexMcpServers(grounding);
       session.agent = await retryWithBackoff(
         () => Agent.create({
           apiKey,
           model: { id: MODEL_ID },
-          local: { cwd: session.workspaceDir },
+          local: {
+            cwd: grounding.mode === 'local' ? grounding.cwd : process.cwd(),
+          },
           mcpServers,
         }),
         sdkRetryOpts,

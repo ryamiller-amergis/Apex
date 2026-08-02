@@ -118,16 +118,23 @@ export class LocalCheckoutReader implements RepoReader {
     platformPath: string;
     portablePath: string;
   } {
+    // MCP's existing ADO contract describes repo-root paths with one leading
+    // slash (for example "/README.md"). Treat that slash as repository-relative
+    // while continuing to reject host absolute, UNC, drive, and traversal paths.
+    const repoRelativePath =
+      requestedPath.startsWith('/') && !requestedPath.startsWith('//')
+        ? requestedPath.slice(1)
+        : requestedPath;
     if (
       requestedPath.includes('\0')
-      || path.isAbsolute(requestedPath)
-      || path.posix.isAbsolute(requestedPath)
-      || path.win32.isAbsolute(requestedPath)
+      || path.isAbsolute(repoRelativePath)
+      || path.posix.isAbsolute(repoRelativePath)
+      || path.win32.isAbsolute(repoRelativePath)
     ) {
       throw new RepoReaderError('ACCESS_DENIED', ACCESS_DENIED_MESSAGE, false);
     }
 
-    const segments = requestedPath.replace(/\\/g, '/').split('/');
+    const segments = repoRelativePath.replace(/\\/g, '/').split('/');
     if (segments.includes('..')) {
       throw new RepoReaderError('ACCESS_DENIED', ACCESS_DENIED_MESSAGE, false);
     }

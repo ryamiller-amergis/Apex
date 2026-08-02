@@ -101,6 +101,24 @@ jest.mock('react-markdown', () => ({
 }));
 
 jest.mock('remark-gfm', () => ({ __esModule: true, default: jest.fn() }));
+jest.mock('../RunGroundingStatus', () => ({
+  RunGroundingStatus: ({
+    surface,
+    domainRunId,
+    project,
+  }: {
+    surface: string;
+    domainRunId: string;
+    project: string;
+  }) => (
+    <div
+      data-testid="interview-grounding-embed"
+      data-surface={surface}
+      data-domain-run-id={domainRunId}
+      data-project={project}
+    />
+  ),
+}));
 
 // ── Imports needed after mocks ─────────────────────────────────────────────────
 
@@ -186,6 +204,27 @@ beforeEach(() => {
     ok: true,
     json: () => Promise.resolve({ ok: true }),
   }) as jest.Mock;
+});
+
+describe('PBI-004 Interview grounding status embed', () => {
+  it('AC-2 / VT-03 Given an existing Interview, When its run view renders, Then reusable grounding status receives the Interview scope', () => {
+    // Arrange / Act
+    renderExistingInterview();
+
+    // Assert
+    expect(screen.getByTestId('interview-grounding-embed')).toHaveAttribute(
+      'data-surface',
+      'interview'
+    );
+    expect(screen.getByTestId('interview-grounding-embed')).toHaveAttribute(
+      'data-domain-run-id',
+      'iv-1'
+    );
+    expect(screen.getByTestId('interview-grounding-embed')).toHaveAttribute(
+      'data-project',
+      'MaxView'
+    );
+  });
 });
 
 // ── PRD link chips ─────────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ import {
   searchRepoCode,
   listSkills,
 } from '../../services/skillCatalogGitHub';
+import type { RepoReader } from '../../../shared/types/repoReader';
 import { raceWithTimeout, resolveMcpToolTimeoutMs } from '../mcpTimeout';
 
 function toolErrorMessage(err: unknown): string {
@@ -22,7 +23,10 @@ function toolErrorMessage(err: unknown): string {
  * result to the Cursor SDK instead of hanging the interview turn.
  */
 export function createGitHubMcpServer(
-  options?: { enableCodeSearch?: boolean },
+  options?: {
+    enableCodeSearch?: boolean;
+    repoReader?: RepoReader;
+  },
 ): McpServer {
   const server = new McpServer({
     name: 'github-repo',
@@ -43,7 +47,9 @@ export function createGitHubMcpServer(
     async ({ repo, path, branch, org }) => {
       try {
         const content = await raceWithTimeout('get_skill_file', toolTimeoutMs, () =>
-          getSkillFile(repo, path, branch, org),
+          options?.repoReader
+            ? options.repoReader.readFile(path)
+            : getSkillFile(repo, path, branch, org),
         );
         return { content: [{ type: 'text', text: content }] };
       } catch (err) {
@@ -65,7 +71,9 @@ export function createGitHubMcpServer(
     async ({ repo, path, branch, org }) => {
       try {
         const entries = await raceWithTimeout('list_repo_dir', toolTimeoutMs, () =>
-          listRepoDir(repo, path, branch, org),
+          options?.repoReader
+            ? options.repoReader.listDir(path)
+            : listRepoDir(repo, path, branch, org),
         );
         return { content: [{ type: 'text', text: JSON.stringify(entries, null, 2) }] };
       } catch {
@@ -89,7 +97,9 @@ export function createGitHubMcpServer(
       async ({ repo, query, branch, org, limit }) => {
         try {
           const results = await raceWithTimeout('search_repo_code', toolTimeoutMs, () =>
-            searchRepoCode(repo, query, branch, org, limit ?? 10),
+            options?.repoReader
+              ? options.repoReader.searchCode(query, limit ?? 10)
+              : searchRepoCode(repo, query, branch, org, limit ?? 10),
           );
           return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
         } catch (err) {

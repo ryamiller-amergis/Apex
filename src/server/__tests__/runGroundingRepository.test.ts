@@ -69,12 +69,19 @@ class InMemoryRunGroundingStore implements RunGroundingStore {
   }
 
   async findByRun(ref: RunRef): Promise<RunGrounding[]> {
-    return this.rows.filter(
-      (row) =>
-        row.runType === ref.runType &&
-        row.runId === ref.runId &&
-        row.project === ref.project
-    );
+    return this.rows
+      .filter(
+        (row) =>
+          row.runType === ref.runType &&
+          row.runId === ref.runId &&
+          row.project === ref.project
+      )
+      .sort(
+        (left, right) =>
+          right.groundedAt.localeCompare(left.groundedAt) ||
+          right.createdAt.localeCompare(left.createdAt) ||
+          right.id.localeCompare(left.id)
+      );
   }
 
   async findActiveByRole(
@@ -114,9 +121,7 @@ class InMemoryRunGroundingStore implements RunGroundingStore {
   ): Promise<RunGrounding | null> {
     const current =
       (await this.findActiveByRole(ref, role)) ??
-      [...(await this.findByRun(ref))]
-        .reverse()
-        .find((row) => row.repoRole === role) ??
+      (await this.findByRun(ref)).find((row) => row.repoRole === role) ??
       null;
     if (!current) return null;
 
@@ -345,6 +350,57 @@ describe('runGroundingRepository', () => {
         isActive: true,
       })
     );
+  });
+
+  it('TBI-004 DoD-3 re-grounds from the newest groundedAt row when all history is inactive', async () => {
+    const repository = createRunGroundingRepository(
+      new InMemoryRunGroundingStore(),
+      {
+        now: () => '2026-08-02T17:00:00.000Z',
+      }
+    );
+    const ref: RunRef = {
+      runType: 'chat',
+      runId: 'run-1',
+      project: 'Apex',
+    };
+    for (const input of [
+      {
+        ...targetInput,
+        repository: 'oldest-repo',
+        groundedAt: '2026-08-02T14:00:00.000Z',
+      },
+      {
+        ...targetInput,
+        repository: 'newest-repo',
+        groundedAt: '2026-08-02T16:00:00.000Z',
+      },
+      {
+        ...targetInput,
+        repository: 'middle-repo',
+        groundedAt: '2026-08-02T15:00:00.000Z',
+      },
+    ]) {
+      await repository.createGrounding(input);
+      await repository.deactivateByRun(ref);
+    }
+
+    const replacement = await repository.reground(
+      ref,
+      'target',
+      'replacement-sha'
+    );
+    const history = await repository.findByRun(ref);
+
+    expect(replacement).toEqual(
+      expect.objectContaining({
+        repository: 'newest-repo',
+        groundedSha: 'replacement-sha',
+        isActive: true,
+      })
+    );
+    expect(history).toHaveLength(4);
+    expect(history.filter((row) => row.isActive)).toHaveLength(1);
   });
 
   it('DoD-1 exposes typed persistence failures without raw database details', async () => {

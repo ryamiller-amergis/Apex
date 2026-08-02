@@ -4,12 +4,14 @@
  * the thread is interview-backed or referenced by any document row
  * (PRD or design doc), guarding against cascade data loss.
  */
+import path from 'path';
 
 // ── Mocks (hoisted) ──────────────────────────────────────────────────────────
 
 jest.mock('fs', () => ({
   mkdirSync: jest.fn(),
   writeFileSync: jest.fn(),
+  cpSync: jest.fn(),
   rmSync: jest.fn(),
   existsSync: jest.fn().mockReturnValue(false),
   readdirSync: jest.fn().mockReturnValue([]),
@@ -93,10 +95,18 @@ jest.mock('../services/teamsBotService', () => ({
   handleIncoming: jest.fn(),
 }));
 
+const mockCallerGroundingStart = jest.fn();
+jest.mock('../services/callerGroundingService', () => ({
+  callerGroundingService: {
+    start: mockCallerGroundingStart,
+  },
+}));
+
 // ── Imports ───────────────────────────────────────────────────────────────────
 
 import {
   createThread,
+  sendMessage,
   closeThread,
   permanentlyDeleteThread,
   markAsInterviewThread,
@@ -104,8 +114,10 @@ import {
   buildDocumentAssistantEditGuidance,
   buildAgentRecoveryContext,
   isDocumentAssistant,
+  isRepositoryReadingChatCaller,
   resumeOrCreateAgent,
   resolveDocumentAssistantType,
+  copyScratchInputsToGroundedCheckout,
 } from '../services/chatAgentService';
 import type { ChatMessage, ChatThreadKickoff } from '../../shared/types/chat';
 
@@ -288,6 +300,48 @@ describe('closeThread — thread retention', () => {
     );
   });
 
+  it('DoD-2 keeps the profile checkout runtime-only and never deletes it', async () => {
+    // Arrange
+    const mockedFs = jest.requireMock('fs') as {
+      existsSync: jest.Mock;
+      readdirSync: jest.Mock;
+      cpSync: jest.Mock;
+      rmSync: jest.Mock;
+    };
+    const thread = await createThread(
+      'user-1',
+      { project: 'proj', repo: 'org/repo', branch: 'main' },
+      { skipAutoKickoff: true },
+    );
+    const scratchWorkspace = thread.workspaceDir;
+    const profileCheckout = '/tmp/test-data/grounding-workspaces/opaque';
+    mockedFs.existsSync.mockReturnValueOnce(true);
+    mockedFs.readdirSync.mockReturnValueOnce(['.ai-pilot']);
+
+    // Act
+    copyScratchInputsToGroundedCheckout(scratchWorkspace, profileCheckout);
+    await closeThread(thread.id);
+
+    // Assert
+    expect(thread.workspaceDir).toBe(scratchWorkspace);
+    expect(mockPgUpsertThread).not.toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: profileCheckout }),
+    );
+    expect(mockedFs.cpSync).toHaveBeenCalledWith(
+      path.join(scratchWorkspace, '.ai-pilot'),
+      path.join(profileCheckout, '.ai-pilot'),
+      { recursive: true, force: true },
+    );
+    expect(mockedFs.rmSync).toHaveBeenCalledWith(
+      scratchWorkspace,
+      { recursive: true, force: true },
+    );
+    expect(mockedFs.rmSync).not.toHaveBeenCalledWith(
+      profileCheckout,
+      expect.anything(),
+    );
+  });
+
   it('is a no-op for a thread ID that no longer exists in memory or DB', async () => {
     await closeThread('nonexistent-thread-id');
 
@@ -389,6 +443,71 @@ function baseKickoff(overrides: Partial<ChatThreadKickoff> = {}): ChatThreadKick
 }
 
 describe('document assistant MCP wiring', () => {
+  it('AC-0 pins chat caller grounding to skillBranch before branch', async () => {
+    // Given the skills contract selects a different branch than the runtime branch.
+    const stopAfterGrounding = new Error('stop after grounding selection');
+    mockCallerGroundingStart.mockRejectedValueOnce(stopAfterGrounding);
+    process.env.CURSOR_API_KEY = 'test-key';
+    const thread = await createThread(
+      'developer-1',
+      baseKickoff({
+        branch: 'runtime-branch',
+        skillBranch: 'skills-snapshot',
+      }),
+      { skipAutoKickoff: true },
+    );
+
+    try {
+      // When the first chat turn selects its shared caller grounding.
+      await expect(
+        sendMessage(thread.id, 'Read the selected skill snapshot'),
+      ).rejects.toBe(stopAfterGrounding);
+
+      // Then the pin uses the same skillBranch ?? branch contract as prompt/preload.
+      expect(mockCallerGroundingStart).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repository: {
+            provider: 'github',
+            repo: 'org/AI-Pilot',
+            branch: 'skills-snapshot',
+          },
+        }),
+      );
+    } finally {
+      delete process.env.CURSOR_API_KEY;
+      await closeThread(thread.id);
+    }
+  });
+
+  it('AC-0 skips shared repository grounding for calendar-only assistants', () => {
+    // Given the calendar assistant builds only its restricted calendar MCP server.
+    const kickoff = baseKickoff({
+      assistantType: 'calendar-work-item',
+      calendarAssistantSessionId: 'calendar-session-1',
+    });
+    const servers = buildMcpServers(
+      kickoff,
+      'http://localhost:3001/mcp/ado-skills',
+      { calendarSessionId: 'calendar-session-1' },
+    );
+
+    // When chat decides whether this caller needs shared repository grounding.
+    const repositoryReading = isRepositoryReadingChatCaller(kickoff, false);
+
+    // Then no repository profile is started for the calendar-only MCP contract.
+    expect(Object.keys(servers)).toEqual(['calendar-assistant']);
+    expect(repositoryReading).toBe(false);
+  });
+
+  it('AC-0 keeps normal GitHub and ADO chat callers repository-reading', () => {
+    expect(isRepositoryReadingChatCaller(baseKickoff(), false)).toBe(true);
+    expect(isRepositoryReadingChatCaller(baseKickoff({
+      skillProvider: 'ado',
+      repo: 'Apex',
+    }), false)).toBe(true);
+    expect(isRepositoryReadingChatCaller(baseKickoff(), true)).toBe(false);
+  });
+
   it('identifies ADR / PRD / design-doc assistant types', () => {
     expect(isDocumentAssistant('adr')).toBe(true);
     expect(isDocumentAssistant('prd')).toBe(true);
@@ -496,6 +615,27 @@ describe('document assistant MCP wiring', () => {
     );
     expect(adoServers['ado-skills']).toEqual({
       url: 'http://localhost:3001/mcp/ado-skills?profile=interview',
+    });
+  });
+
+  it('DoD-2 transports the shared profile on chat-agent MCP URLs', () => {
+    const profileId = 'opaque-profile' as import('../../shared/types/repoReader').GroundingProfileId;
+    const githubServers = buildMcpServers(
+      baseKickoff(),
+      'http://localhost:3001/mcp/ado-skills',
+      { groundingProfileId: profileId, restrictRepoSearch: true },
+    );
+    const adoServers = buildMcpServers(
+      baseKickoff({ skillProvider: 'ado', repo: 'Apex' }),
+      'http://localhost:3001/mcp/ado-skills',
+      { groundingProfileId: profileId, restrictRepoSearch: true },
+    );
+
+    expect(githubServers['github-repo']).toEqual({
+      url: 'http://localhost:3001/mcp/github-repo/grounding/opaque-profile?profile=interview',
+    });
+    expect(adoServers['ado-skills']).toEqual({
+      url: 'http://localhost:3001/mcp/ado-skills/grounding/opaque-profile?profile=interview',
     });
   });
 });

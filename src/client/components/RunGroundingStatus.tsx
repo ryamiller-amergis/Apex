@@ -49,8 +49,12 @@ const GroundingStatusEnabled: React.FC<RunGroundingStatusProps> = ({
   const ownerExplanationId = `run-grounding-owner-${domainRunId}`;
 
   const confirmReGround = async () => {
-    await reGround(target.role);
-    setConfirming(false);
+    try {
+      await reGround(target.role);
+      setConfirming(false);
+    } catch {
+      // The mutation exposes the inline error; keep the dialog open for retry.
+    }
   };
 
   return (
@@ -75,9 +79,10 @@ const GroundingStatusEnabled: React.FC<RunGroundingStatusProps> = ({
             aria-live="polite"
             {...{ 'data-testid': 'run-grounding-drift-notice' }}
           >
+            <span aria-hidden="true">⚠</span>{' '}
             {target.driftState === 'source-changed'
               ? 'Source changed — re-evaluate when ready.'
-              : 'Cached source status is unavailable.'}
+              : 'Pinned source unavailable locally — using remote fallback.'}
           </p>
         ) : null}
         <button

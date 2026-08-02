@@ -41,14 +41,14 @@ function mockGroundingHook(overrides = {}) {
   });
 }
 
-describe('TBI-004 DoD-3 reusable grounding status UI', () => {
+describe('PBI-004 reusable grounding status UI', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockUseFeatureFlag.mockReturnValue(true);
     mockGroundingHook();
   });
 
-  it('DoD-3 renders the SHA, grounded date, non-blocking drift state, and owner action', () => {
+  it('AC-2 / VT-03 / VT-09 Given cached origin drift, When status renders, Then SHA A and a polite non-blocking source-changed notice remain visible', () => {
     // Arrange / Act
     render(
       <RunGroundingStatus surface="prd" domainRunId="prd-1" project="Apex" />
@@ -70,10 +70,13 @@ describe('TBI-004 DoD-3 reusable grounding status UI', () => {
     expect(notice).toHaveAttribute('role', 'status');
     expect(notice).toHaveAttribute('aria-live', 'polite');
     expect(notice).toHaveTextContent(/source changed/i);
+    expect(screen.getByTestId('run-grounding-sha')).toHaveTextContent(
+      sha.slice(0, 12)
+    );
     expect(screen.getByTestId('run-grounding-reground-button')).toBeEnabled();
   });
 
-  it('DoD-3 explains why a participant cannot use the owner-only action', () => {
+  it('Security VT-07 explains why a participant cannot use the owner-only action', () => {
     // Arrange
     mockGroundingHook({
       statuses: [{ ...status, canReGround: false }],
@@ -89,7 +92,7 @@ describe('TBI-004 DoD-3 reusable grounding status UI', () => {
     expect(screen.getByText(/only the run owner can re-ground/i)).toBeVisible();
   });
 
-  it('DoD-3 requires confirmation and Escape returns focus to the trigger without re-grounding', async () => {
+  it('AC-3 / VT-04 / VT-10 Given drift, When confirmation is dismissed with Escape, Then SHA A is unchanged, no re-ground occurs, and focus returns', async () => {
     // Arrange
     const reGround = jest.fn().mockResolvedValue(undefined);
     mockGroundingHook({ reGround });
@@ -108,10 +111,13 @@ describe('TBI-004 DoD-3 reusable grounding status UI', () => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     );
     expect(reGround).not.toHaveBeenCalled();
+    expect(screen.getByTestId('run-grounding-sha')).toHaveTextContent(
+      sha.slice(0, 12)
+    );
     expect(trigger).toHaveFocus();
   });
 
-  it('DoD-3 confirms explicit re-ground through the required action contract', async () => {
+  it('VT-06 confirms explicit re-ground through the required action contract', async () => {
     // Arrange
     const reGround = jest.fn().mockResolvedValue(undefined);
     mockGroundingHook({ reGround });
@@ -127,7 +133,44 @@ describe('TBI-004 DoD-3 reusable grounding status UI', () => {
     await waitFor(() => expect(reGround).toHaveBeenCalledWith('target'));
   });
 
-  it('feature flag off preserves the existing null UI', () => {
+  it('VT-06 Given re-ground fails, When confirmation is submitted, Then the dialog remains available without an unhandled rejection', async () => {
+    // Arrange
+    const reGround = jest.fn().mockRejectedValue(new Error('Cached origin is unavailable'));
+    mockGroundingHook({ reGround });
+    render(
+      <RunGroundingStatus surface="prd" domainRunId="prd-1" project="Apex" />
+    );
+
+    // Act
+    fireEvent.click(screen.getByTestId('run-grounding-reground-button'));
+    fireEvent.click(screen.getByTestId('run-grounding-reground-confirm'));
+
+    // Assert
+    await waitFor(() => expect(reGround).toHaveBeenCalledWith('target'));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('AC-1 / VT-02 Given exact-SHA materialization is unavailable, When status renders, Then fallback is visible while SHA A remains pinned', () => {
+    // Arrange
+    mockGroundingHook({
+      statuses: [{ ...status, driftState: 'unavailable' }],
+    });
+
+    // Act
+    render(
+      <RunGroundingStatus surface="prd" domainRunId="prd-1" project="Apex" />
+    );
+
+    // Assert
+    expect(screen.getByTestId('run-grounding-drift-notice')).toHaveTextContent(
+      /remote fallback/i
+    );
+    expect(screen.getByTestId('run-grounding-sha')).toHaveTextContent(
+      sha.slice(0, 12)
+    );
+  });
+
+  it('VT-11 Given the feature flag is off, When a run renders, Then existing null UI is preserved', () => {
     // Arrange
     mockUseFeatureFlag.mockReturnValue(false);
 

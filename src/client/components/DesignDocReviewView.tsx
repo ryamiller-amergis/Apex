@@ -40,6 +40,7 @@ import { AnnotationLayer, unwrapCommentMarks } from './AnnotationLayer';
 import { ReviewCommentSidebar } from './ReviewCommentSidebar';
 import { FixValidationPanel } from './FixValidationPanel';
 import { ApexFixRunningBanner } from './ApexFixRunningBanner';
+import { RunGroundingStatus } from './RunGroundingStatus';
 import type { ContentSnapshot, GapChangeEntry } from './FixValidationPanel';
 import type { DesignDocStatus, ValidationScorecardGap, ValidationScorecard, ValidationScorecardFeature } from '../../shared/types/interview';
 import {
@@ -779,7 +780,7 @@ const ReviewSideDock: React.FC<ReviewSideDockProps> = ({
   if (!showComments && !showValidation) return null;
 
   return (
-    <div className={styles.reviewDock} data-testid="dd-review-dock">
+    <div className={styles.reviewDock} {...{ 'data-testid': 'dd-review-dock' }}>
       {showComments && !commentsCollapsed && commentsPanel}
       {showValidation && !validationCollapsed && validationPanel}
 
@@ -792,7 +793,7 @@ const ReviewSideDock: React.FC<ReviewSideDockProps> = ({
             role="tab"
             aria-selected={!commentsCollapsed}
             title={commentsCollapsed ? 'Expand comments' : 'Collapse comments'}
-            data-testid="dd-dock-comments-tab"
+            {...{ 'data-testid': 'dd-dock-comments-tab' }}
           >
             {openCommentCount > 0 && (
               <span className={styles.reviewDockTabBadge}>{openCommentCount}</span>
@@ -808,7 +809,7 @@ const ReviewSideDock: React.FC<ReviewSideDockProps> = ({
             role="tab"
             aria-selected={!validationCollapsed}
             title={validationCollapsed ? 'Expand validation' : 'Collapse validation'}
-            data-testid="dd-dock-validation-tab"
+            {...{ 'data-testid': 'dd-dock-validation-tab' }}
             style={
               validationScore !== null && validationScore !== undefined
                 ? { borderLeftColor: scoreColor(validationScore) }
@@ -824,7 +825,7 @@ const ReviewSideDock: React.FC<ReviewSideDockProps> = ({
               <span
                 className={styles.reviewDockTabScore}
                 style={{ color: scoreColor(validationScore) }}
-                data-testid="dd-validation-score"
+                {...{ 'data-testid': 'dd-validation-score' }}
               >
                 {validationScore}%
               </span>
@@ -1114,6 +1115,7 @@ export const DesignDocReviewView: React.FC = () => {
               type="button"
               onClick={() => setActiveTab('assumptions')}
               style={{ color: 'var(--accent-color)', background: 'none', border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'underline' }}
+              {...{ 'data-testid': 'dd-markdown-assumptions-link' }}
             >
               {children}
             </button>
@@ -1125,6 +1127,7 @@ export const DesignDocReviewView: React.FC = () => {
               type="button"
               onClick={() => setActiveTab('tech-spec')}
               style={{ color: 'var(--accent-color)', background: 'none', border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'underline' }}
+              {...{ 'data-testid': 'dd-markdown-tech-spec-link' }}
             >
               {children}
             </button>
@@ -1136,13 +1139,24 @@ export const DesignDocReviewView: React.FC = () => {
               type="button"
               onClick={() => setActiveTab('design')}
               style={{ color: 'var(--accent-color)', background: 'none', border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'underline' }}
+              {...{ 'data-testid': 'dd-markdown-design-link' }}
             >
               {children}
             </button>
           );
         }
       }
-      return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
+      return (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          {...props}
+          {...{ 'data-testid': 'dd-markdown-external-link' }}
+        >
+          {children}
+        </a>
+      );
     },
   }), []);
 
@@ -1982,10 +1996,15 @@ export const DesignDocReviewView: React.FC = () => {
   };
 
   return (
-    <div className={styles.container} data-testid="design-doc-review">
+    <div className={styles.container} {...{ 'data-testid': 'design-doc-review' }}>
       <div className={styles.header}>
         <div className={styles.headerLeft}>
-          <button className={styles.backBtn} onClick={() => navigate('/backlog?tab=design-docs')} type="button">
+          <button
+            className={styles.backBtn}
+            onClick={() => navigate('/backlog?tab=design-docs')}
+            type="button"
+            {...{ 'data-testid': 'dd-review-back-btn' }}
+          >
             ←
           </button>
           <div className={styles.headerInfo}>
@@ -1993,14 +2012,14 @@ export const DesignDocReviewView: React.FC = () => {
               <h1 className={styles.title}>{doc.title}</h1>
               <span
                 className={`${styles.statusBadge} ${statusBadgeClass(doc.status)}`}
-                data-testid="dd-status-badge"
+                {...{ 'data-testid': 'dd-status-badge' }}
               >
                 {statusLabel(doc.status)}
               </span>
               {doc.validationScore !== null && doc.validationScore !== undefined && (
                 <span
                   className={`${styles.validationBadge} ${doc.validationScore >= validationThreshold ? styles.validationBadgeGood : doc.validationScore >= 70 ? styles.validationBadgeMid : styles.validationBadgeBad}`}
-                  data-testid="dd-validation-badge"
+                  {...{ 'data-testid': 'dd-validation-badge' }}
                 >
                   {doc.validationScore}% validated
                 </span>
@@ -2044,6 +2063,7 @@ export const DesignDocReviewView: React.FC = () => {
                   onClick={() => navigate(`/backlog/prd/${sourcePrd.id}`)}
                   type="button"
                   title={`View PRD: ${sourcePrd.title}`}
+                  {...{ 'data-testid': 'dd-parent-prd-link' }}
                 >
                   <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
                     <rect x="2" y="1" width="10" height="12" rx="1.5" />
@@ -2056,6 +2076,11 @@ export const DesignDocReviewView: React.FC = () => {
                 </button>
               </div>
             )}
+            <RunGroundingStatus
+              surface="design_doc"
+              domainRunId={doc.id}
+              project={doc.project}
+            />
           </div>
         </div>
 
@@ -2110,7 +2135,7 @@ export const DesignDocReviewView: React.FC = () => {
               onClick={handleSubmit}
               disabled={submitDoc.isPending || !hasAnyContent}
               type="button"
-              data-testid="dd-submit-btn"
+              {...{ 'data-testid': 'dd-submit-btn' }}
             >
               Submit for Review
             </button>
@@ -2126,7 +2151,7 @@ export const DesignDocReviewView: React.FC = () => {
                 onClick={() => void handleMarkValidationReady()}
                 disabled={markValidationReady.isPending}
                 type="button"
-                data-testid="dd-submit-btn"
+                {...{ 'data-testid': 'dd-submit-btn' }}
               >
                 {markValidationReady.isPending
                   ? 'Submitting…'
@@ -2152,7 +2177,7 @@ export const DesignDocReviewView: React.FC = () => {
                           : undefined
                   }
                   type="button"
-                  data-testid="dd-approve-btn"
+                  {...{ 'data-testid': 'dd-approve-btn' }}
                 >
                   Approve
                 </button>
@@ -2169,7 +2194,7 @@ export const DesignDocReviewView: React.FC = () => {
                   onClick={() => void handleOwnerApprove()}
                   disabled={ownerApproveMutation.isPending}
                   type="button"
-                  data-testid="dd-approve-owner-btn"
+                  {...{ 'data-testid': 'dd-approve-owner-btn' }}
                 >
                   Approve as Owner
                 </button>
@@ -2333,7 +2358,7 @@ export const DesignDocReviewView: React.FC = () => {
         <div
           className={styles.generationFailedBanner}
           role="alert"
-          data-testid="dd-generation-failed-banner"
+          {...{ 'data-testid': 'dd-generation-failed-banner' }}
         >
           <svg
             className={`${styles.failureBannerIcon} ${styles.failureBannerIconRed}`}
@@ -2434,7 +2459,7 @@ export const DesignDocReviewView: React.FC = () => {
           {showFixBanner && (
             <div
               className={bannerSeverity === 'red' ? styles.validationFailureBannerRed : styles.validationFailureBannerAmber}
-              data-testid="dd-fix-banner"
+              {...{ 'data-testid': 'dd-fix-banner' }}
             >
               <svg
                 className={`${styles.failureBannerIcon} ${bannerSeverity === 'red' ? styles.failureBannerIconRed : styles.failureBannerIconAmber}`}

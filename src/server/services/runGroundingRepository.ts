@@ -102,7 +102,11 @@ const postgresRunGroundingStore: RunGroundingStore = {
       .select()
       .from(runGroundings)
       .where(scopeConditions(ref))
-      .orderBy(desc(runGroundings.groundedAt));
+      .orderBy(
+        desc(runGroundings.groundedAt),
+        desc(runGroundings.createdAt),
+        desc(runGroundings.id)
+      );
   },
 
   async findActiveByRole(ref, role) {
@@ -137,27 +141,55 @@ const postgresRunGroundingStore: RunGroundingStore = {
 
   async reground(ref, role, newSha, groundedAt) {
     return db.transaction(async (tx) => {
-      const [current] = await tx
+      const [active] = await tx
         .select()
         .from(runGroundings)
         .where(
           and(
             scopeConditions(ref),
-            eq(runGroundings.repoRole, role)
+            eq(runGroundings.repoRole, role),
+            eq(runGroundings.isActive, true)
           )
         )
-        .orderBy(desc(runGroundings.groundedAt))
+        .orderBy(
+          desc(runGroundings.groundedAt),
+          desc(runGroundings.createdAt),
+          desc(runGroundings.id)
+        )
         .limit(1);
+      const [latest] = active
+        ? [active]
+        : await tx
+            .select()
+            .from(runGroundings)
+            .where(
+              and(
+                scopeConditions(ref),
+                eq(runGroundings.repoRole, role)
+              )
+            )
+            .orderBy(
+              desc(runGroundings.groundedAt),
+              desc(runGroundings.createdAt),
+              desc(runGroundings.id)
+            )
+            .limit(1);
+      const current = active ?? latest;
       if (!current) return null;
 
-      if (current.isActive) {
+      if (active) {
         await tx
           .update(runGroundings)
           .set({
             isActive: false,
             updatedAt: groundedAt,
           })
-          .where(eq(runGroundings.id, current.id));
+          .where(
+            and(
+              eq(runGroundings.id, active.id),
+              eq(runGroundings.isActive, true)
+            )
+          );
       }
 
       const [replacement] = await tx

@@ -27,6 +27,7 @@ import {
 } from '../hooks/useInterviews';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { SectionOwnerModal } from './SectionOwnerModal';
+import { RunGroundingStatus } from './RunGroundingStatus';
 import type { InterviewStatus } from '../../shared/types/interview';
 import type { InterviewSkillOption } from '../../shared/types/projectSettings';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
@@ -85,6 +86,7 @@ const InterviewChoiceBlockUI: React.FC<ChoiceBlockUIProps> = ({
             onClick={() => !locked && onSelect(opt.letter)}
             disabled={locked}
             type="button"
+            {...{ 'data-testid': `interview-choice-${opt.letter}` }}
           >
             <span className={styles.choiceOptionLetter}>{opt.letter.toUpperCase()}</span>
             <span className={styles.choiceOptionText}>{opt.text}</span>
@@ -96,6 +98,7 @@ const InterviewChoiceBlockUI: React.FC<ChoiceBlockUIProps> = ({
         onClick={() => !locked && onSelect('other')}
         disabled={locked}
         type="button"
+        {...{ 'data-testid': 'interview-choice-other' }}
       >
         <span className={styles.choiceOptionLetter}>✎</span>
         <span className={styles.choiceOptionText}>Other / free-form</span>
@@ -108,6 +111,7 @@ const InterviewChoiceBlockUI: React.FC<ChoiceBlockUIProps> = ({
         value={freeform}
         onChange={(e) => onFreeform(e.target.value)}
         rows={2}
+        {...{ 'data-testid': 'interview-choice-freeform' }}
       />
     )}
     {locked && freeform && (
@@ -189,7 +193,10 @@ export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ te
     return (
       <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant} ${fullWidth ? styles.assistantBubbleFullWidth : ''}`}>
         <div className={styles.bubbleActions}>
-          <ReadAloudButton text={text} />
+          <ReadAloudButton
+            text={text}
+            {...{ 'data-testid': 'interview-message-read-aloud' }}
+          />
         </div>
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
       </div>
@@ -200,7 +207,10 @@ export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ te
   return (
     <div className={`${styles.assistantBubble} ${fullWidth ? styles.assistantBubbleFullWidth : ''}`}>
       <div className={styles.bubbleActions}>
-        <ReadAloudButton text={text} />
+        <ReadAloudButton
+          text={text}
+          {...{ 'data-testid': 'interview-message-read-aloud' }}
+        />
       </div>
       {parts.map((part) => {
         if (part.type === 'markdown') {
@@ -232,6 +242,7 @@ export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ te
           onClick={handleSubmit}
           disabled={!allAnswered || isRunning}
           type="button"
+          {...{ 'data-testid': 'interview-submit-answers' }}
         >
           {isRunning ? 'Agent is thinking…' : 'Submit answers ↑'}
         </button>
@@ -481,7 +492,12 @@ const NewInterviewCompose: React.FC = () => {
 
   return (
     <div className={styles.composeContainer}>
-      <button className={styles.backBtn} onClick={() => navigate('/backlog')} type="button">
+      <button
+        className={styles.backBtn}
+        onClick={() => navigate('/backlog')}
+        type="button"
+        {...{ 'data-testid': 'interview-compose-back' }}
+      >
         ← Back
       </button>
 
@@ -533,6 +549,7 @@ const NewInterviewCompose: React.FC = () => {
                   if (opt) setSelectedSkillOption(opt);
                 }}
                 disabled={isSending}
+                {...{ 'data-testid': 'interview-skill-select' }}
               >
                 {interviewSkillOptions.map((opt) => (
                   <option key={opt.path} value={opt.path}>{opt.friendlyName}</option>
@@ -554,6 +571,7 @@ const NewInterviewCompose: React.FC = () => {
             className={styles.fileInput}
             onChange={handleAttachmentChange}
             disabled={isSending}
+            {...{ 'data-testid': 'interview-compose-file-input' }}
           />
           <div className={styles.composeTitleRow}>
             <label className={styles.composeTitleLabel} htmlFor="interview-title">
@@ -575,6 +593,7 @@ const NewInterviewCompose: React.FC = () => {
                   textareaRef.current?.focus();
                 }
               }}
+              {...{ 'data-testid': 'interview-compose-title' }}
             />
             {titleTouched && !title.trim() && (
               <span className={styles.composeTitleErrorMsg}>A title is required</span>
@@ -589,6 +608,7 @@ const NewInterviewCompose: React.FC = () => {
             placeholder="Describe what you'd like to explore in this interview… (Enter to send, Shift+Enter for new line)"
             rows={3}
             disabled={isSending}
+            {...{ 'data-testid': 'interview-compose-message' }}
           />
           {attachments.length > 0 && (
             <div className={styles.attachmentList}>
@@ -602,6 +622,7 @@ const NewInterviewCompose: React.FC = () => {
                     onClick={() => removeAttachment(a.id)}
                     disabled={isSending}
                     aria-label={`Remove ${a.name}`}
+                    {...{ 'data-testid': `interview-attachment-remove-${a.id}` }}
                   >×</button>
                 </span>
               ))}
@@ -618,6 +639,7 @@ const NewInterviewCompose: React.FC = () => {
               aria-label="Attach files"
               title="Attach files for context"
               disabled={isSending}
+              {...{ 'data-testid': 'interview-compose-attach' }}
             >
               <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M7 10.5l5.2-5.2a3 3 0 114.2 4.2l-6.7 6.7a5 5 0 01-7.1-7.1l6.4-6.4" />
@@ -632,6 +654,7 @@ const NewInterviewCompose: React.FC = () => {
                 ? (speech.isListening ? 'Stop listening' : 'Talk to transcribe into chat')
                 : 'Speech recognition not supported in this browser'}
               disabled={!speech.isSpeechSupported || isSending}
+              {...{ 'data-testid': 'interview-compose-microphone' }}
             >
               <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="7" y="2.5" width="6" height="10" rx="3" />
@@ -645,6 +668,7 @@ const NewInterviewCompose: React.FC = () => {
               value={model}
               onChange={(e) => setModel(e.target.value)}
               disabled={isSending}
+              {...{ 'data-testid': 'interview-compose-model' }}
             >
               {modelsLoading || !availableModels?.length ? (
                 <option value={model}>Loading models…</option>
@@ -660,6 +684,7 @@ const NewInterviewCompose: React.FC = () => {
               disabled={(!input.trim() && attachments.length === 0) || isSending || !resolvedRepoName || !title.trim() || (!resolvedSkillPath && !grillSkill)}
               type="button"
               aria-label="Start interview"
+              {...{ 'data-testid': 'interview-compose-start' }}
             >
               {isSending ? (
                 <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={styles.spinIcon}>
@@ -702,6 +727,7 @@ const NewInterviewCompose: React.FC = () => {
             setShowOwnerModal(false);
           }}
           isSubmitting={isSending}
+          {...{ 'data-testid': 'interview-owner-modal' }}
         />
       )}
     </div>
@@ -982,7 +1008,12 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     <div className={styles.container}>
       <div className={styles.header}>
         <div className={styles.headerLeft}>
-          <button className={styles.backBtn} onClick={() => navigate('/backlog')} type="button">
+          <button
+            className={styles.backBtn}
+            onClick={() => navigate('/backlog')}
+            type="button"
+            {...{ 'data-testid': 'interview-back' }}
+          >
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M10 3L5 8l5 5" />
             </svg>
@@ -999,19 +1030,21 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   onChange={(e) => setEditTitle(e.target.value)}
                   onBlur={() => void commitTitleEdit()}
                   onKeyDown={handleTitleKeyDown}
+                  {...{ 'data-testid': 'interview-title-input' }}
                 />
               ) : (
                 <h1
                   className={styles.title}
                   onClick={canManage ? startTitleEdit : undefined}
                   title={canManage ? 'Click to rename' : undefined}
+                  {...{ 'data-testid': 'interview-title' }}
                 >
                   {interview.title}
                 </h1>
               )}
               <span
                 className={`${styles.badge} ${badgeClass(interview.status)}`}
-                data-testid="interview-status-badge"
+                {...{ 'data-testid': 'interview-status-badge' }}
               >
                 {badgeLabel(interview.status)}
               </span>
@@ -1028,19 +1061,19 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               )}
             </div>
             {(interview.prdOwnerName || interview.designDocOwnerName || interview.designPrototypeOwnerName) && (
-              <div className={styles.ownerChips} data-testid="interview-owner-chips">
+              <div className={styles.ownerChips} {...{ 'data-testid': 'interview-owner-chips' }}>
                 {interview.prdOwnerName && (
-                  <span className={styles.ownerChip} data-testid="interview-owner-chip-prd">
+                  <span className={styles.ownerChip} {...{ 'data-testid': 'interview-owner-chip-prd' }}>
                     PRD: {interview.prdOwnerName}
                   </span>
                 )}
                 {interview.designDocOwnerName && (
-                  <span className={styles.ownerChip} data-testid="interview-owner-chip-design-doc">
+                  <span className={styles.ownerChip} {...{ 'data-testid': 'interview-owner-chip-design-doc' }}>
                     Design Doc: {interview.designDocOwnerName}
                   </span>
                 )}
                 {interview.designPrototypeOwnerName && (
-                  <span className={styles.ownerChip} data-testid="interview-owner-chip-prototype">
+                  <span className={styles.ownerChip} {...{ 'data-testid': 'interview-owner-chip-prototype' }}>
                     Design Prototype: {interview.designPrototypeOwnerName}
                   </span>
                 )}
@@ -1055,6 +1088,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                     onClick={() => navigate(`/backlog/prd/${prd.id}`)}
                     type="button"
                     title={`View PRD: ${prd.title}`}
+                    {...{ 'data-testid': `interview-prd-link-${prd.id}` }}
                   >
                     <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
                       <rect x="2" y="1" width="10" height="12" rx="1.5" />
@@ -1068,6 +1102,11 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 ))}
               </div>
             )}
+            <RunGroundingStatus
+              surface="interview"
+              domainRunId={interview.id}
+              project={interview.project}
+            />
           </div>
         </div>
 
@@ -1081,7 +1120,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   disabled={updateStatus.isPending}
                   type="button"
                   title="Mark this interview as complete"
-                  data-testid="complete-interview-btn"
+                  {...{ 'data-testid': 'complete-interview-btn' }}
                 >
                   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M3 8l3.5 3.5L13 4" />
@@ -1096,7 +1135,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   disabled={updateStatus.isPending || interview.prds.length > 0}
                   type="button"
                   title={interview.prds.length > 0 ? 'Cannot reopen — a PRD has already been generated' : 'Reopen this interview'}
-                  data-testid="reopen-interview-btn"
+                  {...{ 'data-testid': 'reopen-interview-btn' }}
                 >
                   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M13 3v4H9" />
@@ -1112,7 +1151,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   disabled={updateStatus.isPending}
                   type="button"
                   title="Archive this interview"
-                  data-testid="archive-interview-btn"
+                  {...{ 'data-testid': 'archive-interview-btn' }}
                 >
                   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <rect x="2" y="5" width="12" height="9" rx="1" />
@@ -1129,7 +1168,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   disabled={startChat.isPending || createPrd.isPending || interview.prds.length > 0}
                   type="button"
                   title={interview.prds.length > 0 ? 'A PRD has already been generated for this interview' : 'Generate a PRD from this interview'}
-                  data-testid="generate-prd-btn"
+                  {...{ 'data-testid': 'generate-prd-btn' }}
                 >
                   {startChat.isPending || createPrd.isPending ? (
                     <>
@@ -1157,6 +1196,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 disabled={deleteInterview.isPending}
                 type="button"
                 title="Delete this interview"
+                {...{ 'data-testid': 'delete-interview-btn' }}
               >
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="2 4 4 4 14 4" />
@@ -1179,6 +1219,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             className={styles.sendErrorDismiss}
             onClick={() => setSendError(null)}
             aria-label="Dismiss error"
+            {...{ 'data-testid': 'interview-dismiss-error' }}
           >×</button>
         </div>
       )}
@@ -1202,6 +1243,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                       onClick={() => handleRetryLast()}
                       disabled={isRunning}
                       type="button"
+                      {...{ 'data-testid': 'interview-retry-message' }}
                     >
                       ↺ Try again
                     </button>
@@ -1265,7 +1307,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
       </div>
 
       {isChatLocked ? (
-        <div className={styles.lockedNotice} data-testid="locked-notice">
+        <div className={styles.lockedNotice} {...{ 'data-testid': 'locked-notice' }}>
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
             <rect x="3" y="7" width="10" height="8" rx="1.5" />
             <path d="M5 7V5a3 3 0 0 1 6 0v2" />
@@ -1283,6 +1325,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               onClick={() => void handleStatusChange('in_progress')}
               disabled={updateStatus.isPending}
               type="button"
+              {...{ 'data-testid': 'interview-locked-reopen' }}
             >
               Reopen
             </button>
@@ -1319,6 +1362,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                     onClick={() => void handleGeneratePrd()}
                     disabled={startChat.isPending || createPrd.isPending || interview.prds.length > 0}
                     type="button"
+                    {...{ 'data-testid': 'interview-context-generate-prd-critical' }}
                   >
                     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <rect x="3" y="1" width="10" height="14" rx="1.5" />
@@ -1480,6 +1524,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                           className={styles.sendConfirmNo}
                           onClick={() => setShowSendConfirm(false)}
                           type="button"
+                          {...{ 'data-testid': 'interview-send-confirm-cancel' }}
                         >
                           Cancel
                         </button>
@@ -1490,6 +1535,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                             void handleSend();
                           }}
                           type="button"
+                          {...{ 'data-testid': 'interview-send-confirm-submit' }}
                         >
                           Send anyway
                         </button>
@@ -1508,6 +1554,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                     disabled={(!input.trim() && attachments.length === 0) || isSending}
                     type="button"
                     aria-label="Send"
+                    {...{ 'data-testid': 'interview-send-message' }}
                   >
                     <svg viewBox="0 0 20 20" fill="currentColor">
                       <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
@@ -1535,6 +1582,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             });
           }}
           onCancel={() => setShowDeleteModal(false)}
+          {...{ 'data-testid': 'interview-delete-modal' }}
         />
       )}
     </div>

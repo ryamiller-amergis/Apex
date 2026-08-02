@@ -18,6 +18,7 @@ import {
 } from './runGroundingRepository';
 import { readCachedOriginSha as readCachedOriginShaFromRepoCache } from './repoCacheService';
 import { isFeatureEnabled as evaluateFeatureFlag } from './featureFlagService';
+import { materializeRunGrounding } from './runGroundingMaterializer';
 
 export type RepositoryGroundingPin = Pick<
   CreateRunGroundingInput,
@@ -90,7 +91,6 @@ export interface RunGroundingService {
   ): Promise<{
     persisted: T;
     deactivatedCount: number;
-    workspaceOwnedByIdleCleanup: boolean;
   }>;
   getStatus(
     ref: RunRef,
@@ -129,6 +129,10 @@ function createGroundingInput(
     groundedSha: pin.groundedSha,
     groundedAt,
   };
+}
+
+function materializationKey(ref: RunRef, role: RepoRole): string {
+  return [ref.runType, ref.runId, ref.project, role].join('\0');
 }
 
 function uniqueParticipants(
@@ -298,6 +302,12 @@ export async function propagatePipelineGrounding(
   const result = await (
     options.service ?? runGroundingService
   ).copyGroundingByValue(from, to, 'target');
+  if (result.grounding && result.materialization === 'unavailable') {
+    console.warn(
+      `[run-grounding] downstream materialization unavailable ` +
+        `runType=${to.runType} runId=${to.runId}`,
+    );
+  }
   // @feature-flag:repo-grounding-workspace-profile enabled-end
   // @feature-flag:repo-grounding-workspace-profile end
   return result;
@@ -308,11 +318,13 @@ export function createRunGroundingService(
   options: RunGroundingServiceOptions = {}
 ): RunGroundingService {
   const now = options.now ?? (() => new Date().toISOString());
-  const materialize =
-    options.materialize ??
-    (async (): Promise<GroundingMaterializationState> => 'unavailable');
+  const materialize = options.materialize ?? materializeRunGrounding;
   const readCachedOriginSha =
     options.readCachedOriginSha ?? readCachedOriginShaFromRepoCache;
+  const materializationStates = new Map<
+    string,
+    GroundingMaterializationState
+  >();
 
   return {
     async activateGroundings(input) {
@@ -360,11 +372,20 @@ export function createRunGroundingService(
       }
 
       try {
+        const materialization = await materialize(grounding, to);
+        materializationStates.set(
+          materializationKey(to, role),
+          materialization,
+        );
         return {
           grounding,
-          materialization: await materialize(grounding, to),
+          materialization,
         };
       } catch {
+        materializationStates.set(
+          materializationKey(to, role),
+          'unavailable',
+        );
         return { grounding, materialization: 'unavailable' };
       }
     },
@@ -392,21 +413,14 @@ export function createRunGroundingService(
     async persistThenMarkTerminalInactive(ref, persist) {
       const persisted = await persist();
       let deactivatedCount = 0;
-      let deactivationFailed = false;
       try {
         deactivatedCount = await repository.deactivateByRun(ref);
       } catch {
-        deactivationFailed = true;
         console.warn(
           '[run-grounding] terminal deactivation failed after durable persistence'
         );
       }
-      return {
-        persisted,
-        deactivatedCount,
-        workspaceOwnedByIdleCleanup:
-          deactivatedCount > 0 || deactivationFailed,
-      };
+      return { persisted, deactivatedCount };
     },
 
     async getStatus(ref, role, canReGround) {
@@ -417,6 +431,9 @@ export function createRunGroundingService(
       if (!grounding) return null;
 
       const cachedOriginSha = await readCachedOriginSha(grounding);
+      const materialization = materializationStates.get(
+        materializationKey(ref, role),
+      );
       return {
         runType: grounding.runType,
         runId: grounding.runId,
@@ -425,7 +442,7 @@ export function createRunGroundingService(
         groundedShaShort: grounding.groundedSha.slice(0, 12),
         groundedAt: grounding.groundedAt,
         driftState:
-          cachedOriginSha === null
+          materialization === 'unavailable' || cachedOriginSha === null
             ? 'unavailable'
             : cachedOriginSha === grounding.groundedSha
               ? 'grounded'
@@ -445,6 +462,17 @@ export function createRunGroundingService(
       if (!cachedOriginSha) return null;
       const replacement = await repository.reground(ref, role, cachedOriginSha);
       if (!replacement) return null;
+      try {
+        materializationStates.set(
+          materializationKey(ref, role),
+          await materialize(replacement, ref),
+        );
+      } catch {
+        materializationStates.set(
+          materializationKey(ref, role),
+          'unavailable',
+        );
+      }
       return {
         previousSha: current.groundedSha,
         newSha: replacement.groundedSha,

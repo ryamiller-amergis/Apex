@@ -49,6 +49,13 @@ export interface GroundingProfileResolverOptions {
   now?: () => number;
 }
 
+export type GroundingProfileReauthorization = () => Promise<boolean>;
+
+interface ConnectionProfileOwner {
+  caller: GroundingCallerContext;
+  reauthorize: GroundingProfileReauthorization;
+}
+
 interface StoredGroundingProfile extends RepositoryIdentity {
   runRef: string;
   checkoutPath: string;
@@ -57,6 +64,8 @@ interface StoredGroundingProfile extends RepositoryIdentity {
 
 export class GroundingProfileResolver {
   private readonly profiles = new Map<GroundingProfileId, StoredGroundingProfile>();
+  private readonly connectionOwners =
+    new Map<GroundingProfileId, ConnectionProfileOwner>();
   private readonly authorization: RunProjectAuthorization;
   private readonly featureEnabled: typeof evaluateFeatureFlag;
   private readonly now: () => number;
@@ -82,17 +91,54 @@ export class GroundingProfileResolver {
     return { id, expiresAt };
   }
 
-  revokeProfile(profileId: GroundingProfileId): void {
-    this.profiles.delete(profileId);
+  registerConnectionProfile(
+    input: GroundingProfileRegistration,
+    caller: GroundingCallerContext,
+    reauthorize: GroundingProfileReauthorization,
+  ): GroundingProfile {
+    const profile = this.registerProfile(input);
+    this.connectionOwners.set(profile.id, {
+      caller: { ...caller },
+      reauthorize,
+    });
+    return profile;
   }
 
-  async resolveProfile(
+  revokeProfile(profileId: GroundingProfileId): void {
+    this.profiles.delete(profileId);
+    this.connectionOwners.delete(profileId);
+  }
+
+  async resolveConnectionProfile(
+    profileId: GroundingProfileId,
+  ): Promise<RepoReader> {
+    const owner = this.connectionOwners.get(profileId);
+    if (!owner || !(await owner.reauthorize())) {
+      throw new RepoReaderError(
+        'ACCESS_DENIED',
+        'Grounding profile access denied',
+        false,
+      );
+    }
+    const profile = await this.getAuthorizedProfile(profileId, owner.caller);
+    return new LocalCheckoutReader({
+      identity: {
+        provider: profile.provider,
+        project: profile.project,
+        repo: profile.repo,
+        sha: profile.sha,
+      },
+      checkoutPath: profile.checkoutPath,
+    });
+  }
+
+  private async getAuthorizedProfile(
     profileId: GroundingProfileId,
     caller: GroundingCallerContext,
-  ): Promise<RepoReader> {
+  ): Promise<StoredGroundingProfile> {
     const profile = this.profiles.get(profileId);
     if (!profile || this.now() >= profile.expiresAt) {
-      if (profile) this.profiles.delete(profileId);
+      if (profile) this.revokeProfile(profileId);
       throw new RepoReaderError(
         'PROFILE_UNAVAILABLE',
         'Grounding profile is unavailable',
@@ -116,6 +162,14 @@ export class GroundingProfileResolver {
     if (!authorized) {
       throw new RepoReaderError('ACCESS_DENIED', 'Grounding profile access denied', false);
     }
+    return profile;
+  }
+
+  async resolveProfile(
+    profileId: GroundingProfileId,
+    caller: GroundingCallerContext,
+  ): Promise<RepoReader> {
+    const profile = await this.getAuthorizedProfile(profileId, caller);
 
     const enabled = await this.featureEnabled(PROFILE_FLAG, {
       userId: caller.userId,
@@ -151,3 +205,16 @@ export class GroundingProfileResolver {
     return reader;
   }
 }
+
+/**
+ * Process-local registry used by MCP connections. Each registered profile also
+ * carries a caller-owned reauthorization callback, so resolving an opaque ID
+ * never relies on the URL as authorization.
+ */
+export const groundingProfileResolver = new GroundingProfileResolver({
+  authorization: {
+    authorize: async (input) =>
+      input.callerRunRef === input.ownerRunRef &&
+      input.callerProject === input.ownerProject,
+  },
+});

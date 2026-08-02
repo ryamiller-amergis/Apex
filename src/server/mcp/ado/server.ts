@@ -25,6 +25,7 @@ import { db } from '../../db/drizzle';
 import { eq } from 'drizzle-orm';
 import { prds } from '../../db/schema';
 import type { ContentSnapshot, PrdValidationBaseline } from '../../../shared/types/interview';
+import type { RepoReader } from '../../../shared/types/repoReader';
 import { raceWithTimeout, resolveMcpToolTimeoutMs } from '../mcpTimeout';
 
 function toolErrorMessage(err: unknown): string {
@@ -243,7 +244,10 @@ export async function handleAddTestCase(params: {
 }
 
 export function createAdoMcpServer(
-  options?: { enableCodeSearch?: boolean },
+  options?: {
+    enableCodeSearch?: boolean;
+    repoReader?: RepoReader;
+  },
 ): McpServer {
   const server = new McpServer({
     name: 'ado-skills',
@@ -322,7 +326,9 @@ export function createAdoMcpServer(
     async ({ project, repo, path, branch }) => {
       try {
         const entries = await raceWithTimeout('list_repo_dir', toolTimeoutMs, () =>
-          listRepoDir(project, repo, path, branch),
+          options?.repoReader
+            ? options.repoReader.listDir(path)
+            : listRepoDir(project, repo, path, branch),
         );
         return {
           content: [{ type: 'text', text: JSON.stringify(entries, null, 2) }],
@@ -347,7 +353,9 @@ export function createAdoMcpServer(
     async ({ project, repo, path, branch }) => {
       try {
         const content = await raceWithTimeout('get_skill_file', toolTimeoutMs, () =>
-          getSkillFile(project, repo, path, branch),
+          options?.repoReader
+            ? options.repoReader.readFile(path)
+            : getSkillFile(project, repo, path, branch),
         );
         return {
           content: [{ type: 'text', text: content }],
@@ -375,7 +383,9 @@ export function createAdoMcpServer(
       async ({ project, repo, query, branch, limit }) => {
         try {
           const results = await raceWithTimeout('search_repo_code', toolTimeoutMs, () =>
-            searchRepoCode(project, repo, query, branch, limit ?? 10),
+            options?.repoReader
+              ? options.repoReader.searchCode(query, limit ?? 10)
+              : searchRepoCode(project, repo, query, branch, limit ?? 10),
           );
           return {
             content: [{ type: 'text', text: JSON.stringify(results, null, 2) }],
