@@ -7,6 +7,7 @@ import {
   appGroupMembers,
   appGroups,
 } from '../db/schema';
+import { getAppEnvironment } from '../utils/superAdmin';
 import type {
   FeatureFlag,
   FeatureFlagRule,
@@ -17,9 +18,12 @@ import type {
   CreateFlagRequest,
   UpdateFlagRequest,
   AddRuleRequest,
+  FlagEvaluationContext,
 } from '../../shared/types/featureFlags';
 
 const KEBAB_CASE_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+const GROUNDING_FLAG = 'repo-grounding-workspace-profile';
+const REMOTE_SEARCH_CONVERGENCE_FLAG = 'repo-grounding-remote-search-convergence';
 
 // ── listFlags ────────────────────────────────────────────────────────────────
 
@@ -233,11 +237,7 @@ export async function getUserGroupIdsForProject(
 
 // ── evaluateFlags ────────────────────────────────────────────────────────────
 
-export async function evaluateFlags(ctx: {
-  userId: string;
-  project: string;
-  groupIds: string[];
-}): Promise<Record<string, boolean>> {
+export async function evaluateFlags(ctx: FlagEvaluationContext): Promise<Record<string, boolean>> {
   const flags = await db.query.featureFlags.findMany({
     where: ne(featureFlags.lifecycle, 'archived'),
     with: { rules: true },
@@ -251,26 +251,41 @@ export async function evaluateFlags(ctx: {
       continue;
     }
 
-    let matched = false;
-    for (const rule of flag.rules) {
-      switch (rule.type) {
-        case 'everyone':
-          matched = true;
-          break;
-        case 'project':
-          if (rule.value === ctx.project) matched = true;
-          break;
-        case 'user':
-          if (rule.value === ctx.userId) matched = true;
-          break;
-        case 'group':
-          if (rule.value && ctx.groupIds.includes(rule.value)) matched = true;
-          break;
-      }
-      if (matched) break;
-    }
+    const audienceRules = flag.rules.filter((rule) =>
+      ['everyone', 'project', 'user', 'group'].includes(rule.type),
+    );
+    const callerRules = flag.rules.filter((rule) => rule.type === 'caller');
+    const environmentRules = flag.rules.filter((rule) => rule.type === 'environment');
 
-    result[flag.key] = matched;
+    const audienceMatches =
+      audienceRules.length === 0 ||
+      audienceRules.some((rule) => {
+        switch (rule.type) {
+          case 'everyone':
+            return true;
+          case 'project':
+            return rule.value === ctx.project;
+          case 'user':
+            return rule.value === ctx.userId;
+          case 'group':
+            return Boolean(rule.value && ctx.groupIds.includes(rule.value));
+          default:
+            return false;
+        }
+      });
+    const callerMatches =
+      callerRules.length === 0 ||
+      callerRules.some((rule) => rule.value === ctx.caller);
+    const environmentMatches =
+      environmentRules.length === 0 ||
+      environmentRules.some((rule) => rule.value === ctx.environment);
+    const knownRuleCount = audienceRules.length + callerRules.length + environmentRules.length;
+
+    result[flag.key] =
+      knownRuleCount > 0 &&
+      audienceMatches &&
+      callerMatches &&
+      environmentMatches;
   }
 
   return result;
@@ -280,9 +295,55 @@ export async function evaluateFlags(ctx: {
 
 export async function isFeatureEnabled(
   key: string,
-  ctx: { userId: string; project: string },
+  ctx: Omit<FlagEvaluationContext, 'groupIds'>,
 ): Promise<boolean> {
   const groupIds = await getUserGroupIdsForProject(ctx.userId, ctx.project);
   const result = await evaluateFlags({ ...ctx, groupIds });
   return result[key] ?? false;
+}
+
+export async function isFeatureOperational(key: string): Promise<boolean> {
+  const flag = await db.query.featureFlags.findFirst({
+    where: eq(featureFlags.key, key),
+    columns: { enabled: true, lifecycle: true },
+  });
+  return Boolean(flag?.enabled && flag.lifecycle !== 'archived');
+}
+
+export interface GroundingFlagContext {
+  userId: string;
+  project: string;
+  caller: string;
+}
+
+export type FlagEvaluationErrorHandler = () => void;
+
+async function evaluateGroundingFlag(
+  key: string,
+  ctx: GroundingFlagContext,
+  onEvaluationError?: FlagEvaluationErrorHandler,
+): Promise<boolean> {
+  try {
+    return await isFeatureEnabled(key, {
+      ...ctx,
+      environment: getAppEnvironment(),
+    });
+  } catch {
+    onEvaluationError?.();
+    return false;
+  }
+}
+
+export async function isGroundingEnabledForCaller(
+  ctx: GroundingFlagContext,
+  onEvaluationError?: FlagEvaluationErrorHandler,
+): Promise<boolean> {
+  return evaluateGroundingFlag(GROUNDING_FLAG, ctx, onEvaluationError);
+}
+
+export async function isRemoteSearchConvergenceEnabled(
+  ctx: GroundingFlagContext,
+  onEvaluationError?: FlagEvaluationErrorHandler,
+): Promise<boolean> {
+  return evaluateGroundingFlag(REMOTE_SEARCH_CONVERGENCE_FLAG, ctx, onEvaluationError);
 }

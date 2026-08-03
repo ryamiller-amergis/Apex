@@ -69,6 +69,7 @@ import { ReviewCommentSidebar } from './ReviewCommentSidebar';
 import { BacklogViewer } from './BacklogViewer';
 import { CreateAdoItemsModal } from './CreateAdoItemsModal';
 import { ApexFixRunningBanner } from './ApexFixRunningBanner';
+import { RunGroundingStatus } from './RunGroundingStatus';
 import type { PrdStatus, PrdValidationBaseline, TestCaseCoverageSummary, Prd } from '../../shared/types/interview';
 import {
   isPrdFixFlowOwningAccept,
@@ -1802,6 +1803,11 @@ export const PrdReviewView: React.FC = () => {
                 </button>
               </div>
             )}
+            <RunGroundingStatus
+              surface="prd"
+              domainRunId={prd.id}
+              project={prd.project}
+            />
           </div>
         </div>
 

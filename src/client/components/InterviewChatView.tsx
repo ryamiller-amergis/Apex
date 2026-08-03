@@ -27,6 +27,7 @@ import {
 } from '../hooks/useInterviews';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { SectionOwnerModal } from './SectionOwnerModal';
+import { RunGroundingStatus } from './RunGroundingStatus';
 import type { InterviewStatus } from '../../shared/types/interview';
 import type { InterviewSkillOption } from '../../shared/types/projectSettings';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
@@ -85,6 +86,7 @@ const InterviewChoiceBlockUI: React.FC<ChoiceBlockUIProps> = ({
             onClick={() => !locked && onSelect(opt.letter)}
             disabled={locked}
             type="button"
+            {...{ 'data-testid': `interview-choice-${opt.letter}` }}
           >
             <span className={styles.choiceOptionLetter}>{opt.letter.toUpperCase()}</span>
             <span className={styles.choiceOptionText}>{opt.text}</span>
@@ -96,6 +98,7 @@ const InterviewChoiceBlockUI: React.FC<ChoiceBlockUIProps> = ({
         onClick={() => !locked && onSelect('other')}
         disabled={locked}
         type="button"
+        {...{ 'data-testid': 'interview-choice-other' }}
       >
         <span className={styles.choiceOptionLetter}>✎</span>
         <span className={styles.choiceOptionText}>Other / free-form</span>
@@ -108,6 +111,7 @@ const InterviewChoiceBlockUI: React.FC<ChoiceBlockUIProps> = ({
         value={freeform}
         onChange={(e) => onFreeform(e.target.value)}
         rows={2}
+        {...{ 'data-testid': 'interview-choice-freeform' }}
       />
     )}
     {locked && freeform && (
@@ -189,7 +193,10 @@ export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ te
     return (
       <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant} ${fullWidth ? styles.assistantBubbleFullWidth : ''}`}>
         <div className={styles.bubbleActions}>
-          <ReadAloudButton text={text} />
+          <ReadAloudButton
+            text={text}
+            {...{ 'data-testid': 'interview-message-read-aloud' }}
+          />
         </div>
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
       </div>
@@ -200,7 +207,10 @@ export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ te
   return (
     <div className={`${styles.assistantBubble} ${fullWidth ? styles.assistantBubbleFullWidth : ''}`}>
       <div className={styles.bubbleActions}>
-        <ReadAloudButton text={text} />
+        <ReadAloudButton
+          text={text}
+          {...{ 'data-testid': 'interview-message-read-aloud' }}
+        />
       </div>
       {parts.map((part) => {
         if (part.type === 'markdown') {
@@ -232,6 +242,7 @@ export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ te
           onClick={handleSubmit}
           disabled={!allAnswered || isRunning}
           type="button"
+          {...{ 'data-testid': 'interview-submit-answers' }}
         >
           {isRunning ? 'Agent is thinking…' : 'Submit answers ↑'}
         </button>
@@ -481,7 +492,12 @@ const NewInterviewCompose: React.FC = () => {
 
   return (
     <div className={styles.composeContainer}>
-      <button className={styles.backBtn} onClick={() => navigate('/backlog')} type="button">
+      <button
+        className={styles.backBtn}
+        onClick={() => navigate('/backlog')}
+        type="button"
+        {...{ 'data-testid': 'interview-compose-back' }}
+      >
         ← Back
       </button>
 
@@ -533,6 +549,7 @@ const NewInterviewCompose: React.FC = () => {
                   if (opt) setSelectedSkillOption(opt);
                 }}
                 disabled={isSending}
+                {...{ 'data-testid': 'interview-skill-select' }}
               >
                 {interviewSkillOptions.map((opt) => (
                   <option key={opt.path} value={opt.path}>{opt.friendlyName}</option>
@@ -554,6 +571,7 @@ const NewInterviewCompose: React.FC = () => {
             className={styles.fileInput}
             onChange={handleAttachmentChange}
             disabled={isSending}
+            {...{ 'data-testid': 'interview-compose-file-input' }}
           />
           <div className={styles.composeTitleRow}>
             <label className={styles.composeTitleLabel} htmlFor="interview-title">
@@ -575,6 +593,7 @@ const NewInterviewCompose: React.FC = () => {
                   textareaRef.current?.focus();
                 }
               }}
+              {...{ 'data-testid': 'interview-compose-title' }}
             />
             {titleTouched && !title.trim() && (
               <span className={styles.composeTitleErrorMsg}>A title is required</span>
@@ -589,6 +608,7 @@ const NewInterviewCompose: React.FC = () => {
             placeholder="Describe what you'd like to explore in this interview… (Enter to send, Shift+Enter for new line)"
             rows={3}
             disabled={isSending}
+            {...{ 'data-testid': 'interview-compose-message' }}
           />
           {attachments.length > 0 && (
             <div className={styles.attachmentList}>
@@ -602,6 +622,7 @@ const NewInterviewCompose: React.FC = () => {
                     onClick={() => removeAttachment(a.id)}
                     disabled={isSending}
                     aria-label={`Remove ${a.name}`}
+                    {...{ 'data-testid': `interview-attachment-remove-${a.id}` }}
                   >×</button>
                 </span>
               ))}
@@ -618,6 +639,7 @@ const NewInterviewCompose: React.FC = () => {
               aria-label="Attach files"
               title="Attach files for context"
               disabled={isSending}
+              {...{ 'data-testid': 'interview-compose-attach' }}
             >
               <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M7 10.5l5.2-5.2a3 3 0 114.2 4.2l-6.7 6.7a5 5 0 01-7.1-7.1l6.4-6.4" />
@@ -632,6 +654,7 @@ const NewInterviewCompose: React.FC = () => {
                 ? (speech.isListening ? 'Stop listening' : 'Talk to transcribe into chat')
                 : 'Speech recognition not supported in this browser'}
               disabled={!speech.isSpeechSupported || isSending}
+              {...{ 'data-testid': 'interview-compose-microphone' }}
             >
               <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="7" y="2.5" width="6" height="10" rx="3" />
@@ -645,6 +668,7 @@ const NewInterviewCompose: React.FC = () => {
               value={model}
               onChange={(e) => setModel(e.target.value)}
               disabled={isSending}
+              {...{ 'data-testid': 'interview-compose-model' }}
             >
               {modelsLoading || !availableModels?.length ? (
                 <option value={model}>Loading models…</option>
@@ -660,6 +684,7 @@ const NewInterviewCompose: React.FC = () => {
               disabled={(!input.trim() && attachments.length === 0) || isSending || !resolvedRepoName || !title.trim() || (!resolvedSkillPath && !grillSkill)}
               type="button"
               aria-label="Start interview"
+              {...{ 'data-testid': 'interview-compose-start' }}
             >
               {isSending ? (
                 <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={styles.spinIcon}>
@@ -702,6 +727,7 @@ const NewInterviewCompose: React.FC = () => {
             setShowOwnerModal(false);
           }}
           isSubmitting={isSending}
+          {...{ 'data-testid': 'interview-owner-modal' }}
         />
       )}
     </div>
@@ -721,6 +747,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [isAwaitingAgentResponse, setIsAwaitingAgentResponse] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitle, setEditTitle] = useState('');
   const [model, setModel] = useState(DEFAULT_MODEL_ID);
@@ -732,6 +759,8 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pendingMessageIdsRef = useRef<Set<string>>(new Set());
+  const pendingObservedRunningRef = useRef(false);
 
   const updateStatus = useUpdateInterviewStatus();
   const updateTitle = useUpdateInterviewTitle();
@@ -764,19 +793,38 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
   const speech = useSpeechInput(useCallback((text: string) => setInput(text), []));
 
-  const { data: chatThread } = useChatThread(interview?.chatThreadId ?? null);
+  const {
+    data: chatThread,
+    isLoading: isChatThreadLoading,
+    isError: isChatThreadError,
+  } = useChatThread(interview?.chatThreadId ?? null);
 
-  const { messages, streamingText, status: threadStatus, isRetrying, retryReason } = useChatStream(
-    interview?.chatThreadId ?? null,
-    {
-      initialMessages: chatThread?.messages,
-      initialStatus: chatThread?.status,
-    },
-  );
+  const {
+    messages,
+    streamingText,
+    status: threadStatus,
+    isRetrying,
+    retryReason,
+    progressLabel,
+  } = useChatStream(interview?.chatThreadId ?? null, {
+    initialMessages: chatThread?.messages,
+    initialStatus: chatThread?.status,
+  });
 
   const isRunning = threadStatus === 'running';
 
   const visibleMessagesForContext = messages.filter((m) => !(m.role === 'user' && m.text === 'Begin.'));
+  const isEmptyInProgressInterview = Boolean(
+    interview?.status === 'in_progress'
+      && visibleMessagesForContext.length === 0
+      && !streamingText,
+  );
+  const isPreparingInterview = Boolean(
+    isEmptyInProgressInterview && threadStatus !== 'error',
+  );
+  const hasPreparationError = isEmptyInProgressInterview && threadStatus === 'error';
+  const isAgentProcessing = isRunning || isSending || isAwaitingAgentResponse;
+  const isInteractionBusy = isAgentProcessing || isPreparingInterview;
   const draftAttachmentChars = attachments.reduce((sum, a) => sum + a.content.length, 0);
   const contextEstimate = useContextEstimate(
     visibleMessagesForContext, input, streamingText, model, draftAttachmentChars,
@@ -807,13 +855,68 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     }
   }, [isEditingTitle]);
 
-  const handleSend = useCallback(async () => {
-    const text = input.trim();
-    if ((!text && attachments.length === 0) || isRunning || isSending || !interview?.chatThreadId) return;
+  const clearAwaitingAgentResponse = useCallback(() => {
+    pendingMessageIdsRef.current.clear();
+    pendingObservedRunningRef.current = false;
+    setIsAwaitingAgentResponse(false);
+  }, []);
+
+  const beginAwaitingAgentResponse = useCallback(() => {
+    pendingMessageIdsRef.current = new Set(messages.map((message) => message.id));
+    pendingObservedRunningRef.current = false;
+    setIsAwaitingAgentResponse(true);
+  }, [messages]);
+
+  useEffect(() => {
+    if (!isAwaitingAgentResponse) return;
+
+    if (isRunning) {
+      pendingObservedRunningRef.current = true;
+      return;
+    }
+
+    const receivedAgentOutcome = messages.some(
+      (message) =>
+        !pendingMessageIdsRef.current.has(message.id)
+        && (message.role === 'agent' || message.role === 'system'),
+    );
+
+    if (
+      receivedAgentOutcome
+      || pendingObservedRunningRef.current
+      || threadStatus === 'error'
+      || threadStatus === 'closed'
+    ) {
+      clearAwaitingAgentResponse();
+    }
+  }, [
+    clearAwaitingAgentResponse,
+    isAwaitingAgentResponse,
+    isRunning,
+    messages,
+    threadStatus,
+  ]);
+
+  useEffect(() => {
+    clearAwaitingAgentResponse();
+  }, [interview?.chatThreadId, clearAwaitingAgentResponse]);
+
+  const sendMessageToAgent = useCallback(async (
+    text: string,
+    includeDraftAttachments: boolean,
+  ) => {
+    const outgoingAttachments = includeDraftAttachments ? attachments : [];
+    if (
+      (!text && outgoingAttachments.length === 0)
+      || isInteractionBusy
+      || !interview?.chatThreadId
+    ) return;
+
     if (speech.isListening) speech.stop();
     setInput('');
     setSendError(null);
     setIsSending(true);
+    beginAwaitingAgentResponse();
     try {
       const res = await fetch(`/api/chat/threads/${interview.chatThreadId}/messages`, {
         method: 'POST',
@@ -821,7 +924,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         credentials: 'include',
         body: JSON.stringify({
           text: text || 'Please use the attached files as context.',
-          attachments,
+          attachments: outgoingAttachments,
           model,
         }),
       });
@@ -832,9 +935,10 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
           if (body?.error) msg = body.error;
         } catch { /* use default msg */ }
         setSendError(msg);
+        clearAwaitingAgentResponse();
         return;
       }
-      clearAttachments();
+      if (includeDraftAttachments) clearAttachments();
     } catch (err: unknown) {
       trackException(err instanceof Error ? err : new Error(String(err)), {
         context: 'interview.send',
@@ -842,10 +946,27 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
       });
       const msg = err instanceof Error ? err.message : 'Failed to send message';
       setSendError(msg);
+      clearAwaitingAgentResponse();
     } finally {
       setIsSending(false);
     }
-  }, [input, attachments, isRunning, isSending, interview?.chatThreadId, clearAttachments, speech]);
+  }, [
+    attachments,
+    beginAwaitingAgentResponse,
+    clearAttachments,
+    clearAwaitingAgentResponse,
+    id,
+    isInteractionBusy,
+    interview?.chatThreadId,
+    model,
+    speech,
+  ]);
+
+  const handleSend = useCallback(async () => {
+    const text = input.trim();
+    if (!text && attachments.length === 0) return;
+    await sendMessageToAgent(text, true);
+  }, [attachments.length, input, sendMessageToAgent]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -855,16 +976,16 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   }, [handleSend]);
 
   const handleRetryLast = useCallback(() => {
-    if (!interview?.chatThreadId || isRunning) return;
+    if (!interview?.chatThreadId || isInteractionBusy) return;
     const lastUserMsg = [...visibleMessagesForContext].reverse().find((m) => m.role === 'user');
     if (!lastUserMsg) return;
-    void fetch(`/api/chat/threads/${interview.chatThreadId}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ text: lastUserMsg.text, model }),
-    });
-  }, [interview?.chatThreadId, isRunning, visibleMessagesForContext, model]);
+    void sendMessageToAgent(lastUserMsg.text, false);
+  }, [
+    interview?.chatThreadId,
+    isInteractionBusy,
+    sendMessageToAgent,
+    visibleMessagesForContext,
+  ]);
 
   const handleAttachmentChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     await addFiles(e.currentTarget.files);
@@ -982,7 +1103,12 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     <div className={styles.container}>
       <div className={styles.header}>
         <div className={styles.headerLeft}>
-          <button className={styles.backBtn} onClick={() => navigate('/backlog')} type="button">
+          <button
+            className={styles.backBtn}
+            onClick={() => navigate('/backlog')}
+            type="button"
+            {...{ 'data-testid': 'interview-back' }}
+          >
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M10 3L5 8l5 5" />
             </svg>
@@ -999,19 +1125,21 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   onChange={(e) => setEditTitle(e.target.value)}
                   onBlur={() => void commitTitleEdit()}
                   onKeyDown={handleTitleKeyDown}
+                  {...{ 'data-testid': 'interview-title-input' }}
                 />
               ) : (
                 <h1
                   className={styles.title}
                   onClick={canManage ? startTitleEdit : undefined}
                   title={canManage ? 'Click to rename' : undefined}
+                  {...{ 'data-testid': 'interview-title' }}
                 >
                   {interview.title}
                 </h1>
               )}
               <span
                 className={`${styles.badge} ${badgeClass(interview.status)}`}
-                data-testid="interview-status-badge"
+                {...{ 'data-testid': 'interview-status-badge' }}
               >
                 {badgeLabel(interview.status)}
               </span>
@@ -1028,19 +1156,19 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               )}
             </div>
             {(interview.prdOwnerName || interview.designDocOwnerName || interview.designPrototypeOwnerName) && (
-              <div className={styles.ownerChips} data-testid="interview-owner-chips">
+              <div className={styles.ownerChips} {...{ 'data-testid': 'interview-owner-chips' }}>
                 {interview.prdOwnerName && (
-                  <span className={styles.ownerChip} data-testid="interview-owner-chip-prd">
+                  <span className={styles.ownerChip} {...{ 'data-testid': 'interview-owner-chip-prd' }}>
                     PRD: {interview.prdOwnerName}
                   </span>
                 )}
                 {interview.designDocOwnerName && (
-                  <span className={styles.ownerChip} data-testid="interview-owner-chip-design-doc">
+                  <span className={styles.ownerChip} {...{ 'data-testid': 'interview-owner-chip-design-doc' }}>
                     Design Doc: {interview.designDocOwnerName}
                   </span>
                 )}
                 {interview.designPrototypeOwnerName && (
-                  <span className={styles.ownerChip} data-testid="interview-owner-chip-prototype">
+                  <span className={styles.ownerChip} {...{ 'data-testid': 'interview-owner-chip-prototype' }}>
                     Design Prototype: {interview.designPrototypeOwnerName}
                   </span>
                 )}
@@ -1055,6 +1183,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                     onClick={() => navigate(`/backlog/prd/${prd.id}`)}
                     type="button"
                     title={`View PRD: ${prd.title}`}
+                    {...{ 'data-testid': `interview-prd-link-${prd.id}` }}
                   >
                     <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
                       <rect x="2" y="1" width="10" height="12" rx="1.5" />
@@ -1068,6 +1197,11 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 ))}
               </div>
             )}
+            <RunGroundingStatus
+              surface="interview"
+              domainRunId={interview.id}
+              project={interview.project}
+            />
           </div>
         </div>
 
@@ -1081,7 +1215,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   disabled={updateStatus.isPending}
                   type="button"
                   title="Mark this interview as complete"
-                  data-testid="complete-interview-btn"
+                  {...{ 'data-testid': 'complete-interview-btn' }}
                 >
                   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M3 8l3.5 3.5L13 4" />
@@ -1096,7 +1230,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   disabled={updateStatus.isPending || interview.prds.length > 0}
                   type="button"
                   title={interview.prds.length > 0 ? 'Cannot reopen — a PRD has already been generated' : 'Reopen this interview'}
-                  data-testid="reopen-interview-btn"
+                  {...{ 'data-testid': 'reopen-interview-btn' }}
                 >
                   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M13 3v4H9" />
@@ -1112,7 +1246,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   disabled={updateStatus.isPending}
                   type="button"
                   title="Archive this interview"
-                  data-testid="archive-interview-btn"
+                  {...{ 'data-testid': 'archive-interview-btn' }}
                 >
                   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <rect x="2" y="5" width="12" height="9" rx="1" />
@@ -1129,7 +1263,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   disabled={startChat.isPending || createPrd.isPending || interview.prds.length > 0}
                   type="button"
                   title={interview.prds.length > 0 ? 'A PRD has already been generated for this interview' : 'Generate a PRD from this interview'}
-                  data-testid="generate-prd-btn"
+                  {...{ 'data-testid': 'generate-prd-btn' }}
                 >
                   {startChat.isPending || createPrd.isPending ? (
                     <>
@@ -1157,6 +1291,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 disabled={deleteInterview.isPending}
                 type="button"
                 title="Delete this interview"
+                {...{ 'data-testid': 'delete-interview-btn' }}
               >
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="2 4 4 4 14 4" />
@@ -1179,12 +1314,43 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             className={styles.sendErrorDismiss}
             onClick={() => setSendError(null)}
             aria-label="Dismiss error"
+            {...{ 'data-testid': 'interview-dismiss-error' }}
           >×</button>
         </div>
       )}
 
       <div className={styles.messages}>
         <div className={styles.messageList}>
+          {hasPreparationError && (
+            <div className={styles.preparationState} role="alert">
+              <div className={styles.preparationErrorIcon}>!</div>
+              <h2 className={styles.preparationTitle}>Unable to prepare this interview</h2>
+              <p className={styles.preparationDetail}>
+                {chatThread?.lastError ?? 'Repository preparation was interrupted. Try sending your message again.'}
+              </p>
+            </div>
+          )}
+
+          {isPreparingInterview && (
+            <div
+              className={styles.preparationState}
+              role="status"
+              aria-live="polite"
+              {...{ 'data-testid': 'interview-preparation-state' }}
+            >
+              <div className={styles.preparationSpinner} />
+              <h2 className={styles.preparationTitle}>Preparing your interview</h2>
+              <p className={styles.preparationDetail}>
+                {progressLabel
+                  ?? (isChatThreadError
+                    ? 'The interview service is reconnecting after a temporary interruption…'
+                    : isChatThreadLoading
+                      ? 'Connecting to the interview service…'
+                      : 'Getting the latest repository requirements so your interview starts with current context…')}
+              </p>
+            </div>
+          )}
+
           {visibleMessages.map((msg, msgIndex) => {
             if (msg.role === 'tool') {
               return (
@@ -1200,8 +1366,9 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                     <button
                       className={styles.retryBtn}
                       onClick={() => handleRetryLast()}
-                      disabled={isRunning}
+                      disabled={isInteractionBusy}
                       type="button"
+                      {...{ 'data-testid': 'interview-retry-message' }}
                     >
                       ↺ Try again
                     </button>
@@ -1223,15 +1390,9 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 text={msg.text}
                 onSend={(text) => {
                   if (isChatLocked) return;
-                  setInput('');
-                  void fetch(`/api/chat/threads/${interview.chatThreadId}/messages`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    credentials: 'include',
-                    body: JSON.stringify({ text, model }),
-                  });
+                  void sendMessageToAgent(text, false);
                 }}
-                isRunning={isRunning}
+                isRunning={isInteractionBusy}
                 questionOffset={messageQOffsets.get(msg.id) ?? 0}
                 interviewLocked={isChatLocked}
                 alreadyAnswered={msgIndex < lastUserMsgIndex}
@@ -1246,8 +1407,14 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             </div>
           )}
 
-          {isRunning && !streamingText && !isRetrying && (
-            <div className={styles.typingIndicator}>
+          {isAgentProcessing && !streamingText && !isRetrying && (
+            <div
+              className={styles.typingIndicator}
+              role="status"
+              aria-live="polite"
+              aria-label="Agent is processing your response"
+              {...{ 'data-testid': 'interview-agent-processing' }}
+            >
               <span className={styles.typingDot} />
               <span className={styles.typingDot} />
               <span className={styles.typingDot} />
@@ -1265,7 +1432,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
       </div>
 
       {isChatLocked ? (
-        <div className={styles.lockedNotice} data-testid="locked-notice">
+        <div className={styles.lockedNotice} {...{ 'data-testid': 'locked-notice' }}>
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
             <rect x="3" y="7" width="10" height="8" rx="1.5" />
             <path d="M5 7V5a3 3 0 0 1 6 0v2" />
@@ -1283,6 +1450,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               onClick={() => void handleStatusChange('in_progress')}
               disabled={updateStatus.isPending}
               type="button"
+              {...{ 'data-testid': 'interview-locked-reopen' }}
             >
               Reopen
             </button>
@@ -1319,6 +1487,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                     onClick={() => void handleGeneratePrd()}
                     disabled={startChat.isPending || createPrd.isPending || interview.prds.length > 0}
                     type="button"
+                    {...{ 'data-testid': 'interview-context-generate-prd-critical' }}
                   >
                     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <rect x="3" y="1" width="10" height="14" rx="1.5" />
@@ -1369,18 +1538,26 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             accept=".txt,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*"
             className={styles.fileInput}
             onChange={handleAttachmentChange}
-            disabled={isRunning || isSending}
+            disabled={isInteractionBusy || isSending}
           />
-          <div className={styles.inputBox}>
+          <div
+            className={`${styles.inputBox} ${isInteractionBusy ? styles.inputBoxBusy : ''}`}
+            aria-busy={isInteractionBusy}
+          >
             <textarea
               ref={textareaRef}
               className={styles.inputField}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={isRunning ? 'Agent is thinking…' : 'Continue the interview… (Enter to send)'}
+              placeholder={isPreparingInterview
+                ? 'Preparing the latest requirements…'
+                : isAgentProcessing
+                  ? 'Agent is thinking…'
+                  : 'Continue the interview… (Enter to send)'}
               rows={1}
-              disabled={isRunning || isSending}
+              disabled={isInteractionBusy || isSending}
+              {...{ 'data-testid': 'interview-message-input' }}
             />
             {attachments.length > 0 && (
               <div className={styles.attachmentList}>
@@ -1392,7 +1569,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                       type="button"
                       className={styles.attachmentRemove}
                       onClick={() => removeAttachment(a.id)}
-                      disabled={isRunning || isSending}
+                      disabled={isInteractionBusy || isSending}
                       aria-label={`Remove ${a.name}`}
                     >×</button>
                   </span>
@@ -1408,7 +1585,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 type="button"
                 aria-label="Attach files"
                 title="Attach files for context"
-                disabled={isRunning || isSending}
+                disabled={isInteractionBusy || isSending}
               >
                 <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M7 10.5l5.2-5.2a3 3 0 114.2 4.2l-6.7 6.7a5 5 0 01-7.1-7.1l6.4-6.4" />
@@ -1422,7 +1599,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 title={speech.isSpeechSupported
                   ? (speech.isListening ? 'Stop listening' : 'Talk to transcribe into chat')
                   : 'Speech recognition not supported in this browser'}
-                disabled={!speech.isSpeechSupported || isRunning || isSending}
+                disabled={!speech.isSpeechSupported || isInteractionBusy || isSending}
               >
                 <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
                   <rect x="7" y="2.5" width="6" height="10" rx="3" />
@@ -1435,7 +1612,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 className={styles.modelSelect}
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
-                disabled={isRunning}
+                disabled={isInteractionBusy}
                 aria-label="Model"
               >
                 {modelsLoading || !availableModels?.length ? (
@@ -1480,6 +1657,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                           className={styles.sendConfirmNo}
                           onClick={() => setShowSendConfirm(false)}
                           type="button"
+                          {...{ 'data-testid': 'interview-send-confirm-cancel' }}
                         >
                           Cancel
                         </button>
@@ -1490,6 +1668,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                             void handleSend();
                           }}
                           type="button"
+                          {...{ 'data-testid': 'interview-send-confirm-submit' }}
                         >
                           Send anyway
                         </button>
@@ -1505,9 +1684,13 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                         void handleSend();
                       }
                     }}
-                    disabled={(!input.trim() && attachments.length === 0) || isSending}
+                    disabled={
+                      (!input.trim() && attachments.length === 0)
+                      || isInteractionBusy
+                    }
                     type="button"
                     aria-label="Send"
+                    {...{ 'data-testid': 'interview-send-message' }}
                   >
                     <svg viewBox="0 0 20 20" fill="currentColor">
                       <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
@@ -1535,6 +1718,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             });
           }}
           onCancel={() => setShowDeleteModal(false)}
+          {...{ 'data-testid': 'interview-delete-modal' }}
         />
       )}
     </div>

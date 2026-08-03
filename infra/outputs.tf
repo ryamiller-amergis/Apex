@@ -62,6 +62,25 @@ output "blob_container_names" {
   value       = sort(keys(azurerm_storage_container.shared))
 }
 
+# Repository grounding bundle workload
+output "grounding_storage_account_name" {
+  description = "Storage Account used by repository grounding bundles"
+  value       = azurerm_storage_account.shared.name
+}
+
+output "grounding_blob_container_name" {
+  description = "Private Blob container used for immutable repository grounding bundles"
+  value       = azurerm_storage_container.shared["repo-grounding"].name
+}
+
+output "grounding_app_setting_names" {
+  description = "Non-secret app setting contract for repository grounding bundle storage"
+  value = {
+    blob_account_name   = "GROUNDING_BLOB_ACCOUNT_NAME"
+    blob_container_name = "GROUNDING_BLOB_CONTAINER_NAME"
+  }
+}
+
 # PDF workload (first consumer of shared blob)
 output "pdf_storage_account_name" {
   description = "Storage Account used by PDF (alias of shared_storage_account_name)"

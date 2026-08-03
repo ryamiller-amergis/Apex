@@ -123,13 +123,16 @@ describe('repoCacheService', () => {
       expect.arrayContaining(['fsck', '--full', '--no-dangling', '--progress', 'abc123']),
       expect.objectContaining({ timeout: COLD_CACHE_TIMEOUT_MS }),
     );
-    expect(result.baseSha).toBe('abc123');
+    expect(result).toEqual(expect.objectContaining({
+      baseSha: 'abc123',
+      mirrorHit: false,
+    }));
   });
 
   it('incrementally refreshes an existing cache before returning its base SHA', async () => {
     mockFs.existsSync.mockReturnValue(true);
 
-    await ensureRepoCache({
+    const result = await ensureRepoCache({
       provider: 'ado',
       project: 'MaxView',
       repo: 'MaxView',
@@ -151,6 +154,7 @@ describe('repoCacheService', () => {
     );
     expect(mockGit.mock.calls.some(([args]) => (args as string[]).includes('fsck'))).toBe(false);
     expect(mockGit.mock.calls.some(([args]) => (args as string[]).includes('clone'))).toBe(false);
+    expect(result.mirrorHit).toBe(true);
   });
 
   it('repairs a warm cache when its fetched head commit cannot be read', async () => {

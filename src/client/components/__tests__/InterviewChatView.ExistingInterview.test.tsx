@@ -101,6 +101,24 @@ jest.mock('react-markdown', () => ({
 }));
 
 jest.mock('remark-gfm', () => ({ __esModule: true, default: jest.fn() }));
+jest.mock('../RunGroundingStatus', () => ({
+  RunGroundingStatus: ({
+    surface,
+    domainRunId,
+    project,
+  }: {
+    surface: string;
+    domainRunId: string;
+    project: string;
+  }) => (
+    <div
+      data-testid="interview-grounding-embed"
+      data-surface={surface}
+      data-domain-run-id={domainRunId}
+      data-project={project}
+    />
+  ),
+}));
 
 // ── Imports needed after mocks ─────────────────────────────────────────────────
 
@@ -188,6 +206,27 @@ beforeEach(() => {
   }) as jest.Mock;
 });
 
+describe('PBI-004 Interview grounding status embed', () => {
+  it('AC-2 / VT-03 Given an existing Interview, When its run view renders, Then reusable grounding status receives the Interview scope', () => {
+    // Arrange / Act
+    renderExistingInterview();
+
+    // Assert
+    expect(screen.getByTestId('interview-grounding-embed')).toHaveAttribute(
+      'data-surface',
+      'interview'
+    );
+    expect(screen.getByTestId('interview-grounding-embed')).toHaveAttribute(
+      'data-domain-run-id',
+      'iv-1'
+    );
+    expect(screen.getByTestId('interview-grounding-embed')).toHaveAttribute(
+      'data-project',
+      'MaxView'
+    );
+  });
+});
+
 // ── PRD link chips ─────────────────────────────────────────────────────────────
 
 describe('ExistingInterviewView — PRD link chips', () => {
@@ -252,15 +291,44 @@ describe('ExistingInterviewView — PRD link chips', () => {
 // ── Chat input locked (complete / archived) ────────────────────────────────────
 
 describe('ExistingInterviewView — input locked when not in_progress', () => {
-  it('shows the chat input area when the interview is in_progress', () => {
+  it('shows repository preparation instead of a blank in-progress interview', () => {
     (useInterview as jest.Mock).mockReturnValue({
       data: makeInterview({ status: 'in_progress' }),
       isLoading: false,
       isError: false,
     });
+    mockUseChatStream.mockReturnValue({
+      ...idleStream,
+      status: 'running',
+      progressLabel: 'Refreshing the repository mirror…',
+    });
     renderExistingInterview();
-    expect(screen.getByPlaceholderText(/Continue the interview/i)).toBeInTheDocument();
+    expect(screen.getByTestId('interview-preparation-state')).toHaveTextContent(
+      'Refreshing the repository mirror…'
+    );
+    expect(screen.getByPlaceholderText(/Preparing the latest requirements/i)).toBeDisabled();
     expect(screen.queryByText(/complete and the chat is closed/i)).not.toBeInTheDocument();
+  });
+
+  it('shows a recoverable error when repository preparation fails', () => {
+    (useChatThread as jest.Mock).mockReturnValue({
+      data: {
+        status: 'error',
+        lastError: 'Unable to prepare the repository for this interview.',
+        kickoff: { model: 'composer-2' },
+      },
+    });
+    mockUseChatStream.mockReturnValue({
+      ...idleStream,
+      status: 'error',
+    });
+
+    renderExistingInterview();
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Unable to prepare the repository for this interview.'
+    );
+    expect(screen.getByPlaceholderText(/Continue the interview/i)).toBeEnabled();
   });
 
   it('replaces the input with a locked notice when status is "complete"', () => {
@@ -536,6 +604,125 @@ describe('ExistingInterviewView — choice block submit gating', () => {
     });
     renderExistingInterview();
     expect(screen.getByRole('button', { name: /Submit answers/i })).toBeInTheDocument();
+  });
+});
+
+// ── Optimistic processing state ───────────────────────────────────────────────
+
+describe('ExistingInterviewView — processing state after send', () => {
+  const initialAgentMessage = {
+    id: 'agent-question-1',
+    role: 'agent' as const,
+    text: 'What problem should we explore?',
+    ts: '2026-01-01T00:00:00Z',
+  };
+
+  it('disables input and shows bouncing dots until the agent responds', async () => {
+    let streamState = {
+      ...idleStream,
+      messages: [initialAgentMessage],
+    };
+    mockUseChatStream.mockImplementation(() => streamState);
+
+    const view = renderExistingInterview();
+    const input = screen.getByTestId('interview-message-input');
+
+    fireEvent.change(input, { target: { value: 'Investigate the retry flow' } });
+    fireEvent.click(screen.getByTestId('interview-send-message'));
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/chat/threads/thread-iv-1/messages',
+        expect.objectContaining({ method: 'POST' }),
+      );
+      expect(input).toBeDisabled();
+      expect(screen.getByTestId('interview-agent-processing')).toBeInTheDocument();
+    });
+    expect(input).toHaveAttribute('placeholder', 'Agent is thinking…');
+
+    streamState = {
+      ...idleStream,
+      messages: [
+        initialAgentMessage,
+        {
+          id: 'agent-response-1',
+          role: 'agent' as const,
+          text: 'Here is the next question.',
+          ts: '2026-01-01T00:00:01Z',
+        },
+      ],
+    };
+    view.rerender(
+      <MemoryRouter initialEntries={['/backlog/interview/iv-1']}>
+        <InterviewChatView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('interview-message-input')).toBeEnabled();
+      expect(screen.queryByTestId('interview-agent-processing')).not.toBeInTheDocument();
+    });
+  });
+
+  it('re-enables input and removes processing state when the send fails', async () => {
+    mockUseChatStream.mockReturnValue({
+      ...idleStream,
+      messages: [initialAgentMessage],
+    });
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      json: () => Promise.resolve({ error: 'Unable to queue message' }),
+    }) as jest.Mock;
+
+    renderExistingInterview();
+    const input = screen.getByTestId('interview-message-input');
+
+    fireEvent.change(input, { target: { value: 'Investigate the retry flow' } });
+    fireEvent.click(screen.getByTestId('interview-send-message'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Unable to queue message')).toBeInTheDocument();
+      expect(input).toBeEnabled();
+      expect(screen.queryByTestId('interview-agent-processing')).not.toBeInTheDocument();
+    });
+  });
+
+  it('stays disabled throughout the running state and unlocks when the run ends', async () => {
+    let streamState = {
+      ...idleStream,
+      messages: [initialAgentMessage],
+    };
+    mockUseChatStream.mockImplementation(() => streamState);
+
+    const view = renderExistingInterview();
+    const renderCurrentStream = () => {
+      view.rerender(
+        <MemoryRouter initialEntries={['/backlog/interview/iv-1']}>
+          <InterviewChatView />
+        </MemoryRouter>,
+      );
+    };
+
+    fireEvent.change(screen.getByTestId('interview-message-input'), {
+      target: { value: 'Investigate the retry flow' },
+    });
+    fireEvent.click(screen.getByTestId('interview-send-message'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('interview-message-input')).toBeDisabled();
+    });
+
+    streamState = { ...streamState, status: 'running' };
+    renderCurrentStream();
+    expect(screen.getByTestId('interview-message-input')).toBeDisabled();
+    expect(screen.getByTestId('interview-agent-processing')).toBeInTheDocument();
+
+    streamState = { ...streamState, status: 'idle' };
+    renderCurrentStream();
+    await waitFor(() => {
+      expect(screen.getByTestId('interview-message-input')).toBeEnabled();
+      expect(screen.queryByTestId('interview-agent-processing')).not.toBeInTheDocument();
+    });
   });
 });
 

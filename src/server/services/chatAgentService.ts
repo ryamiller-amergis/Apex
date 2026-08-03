@@ -66,6 +66,11 @@ import {
   type InFlightToolCall,
 } from './inFlightToolTracker';
 import { buildRepositoryContextPack } from './repositoryContextPack';
+import {
+  callerGroundingService,
+  type CallerGroundingSelection,
+} from './callerGroundingService';
+import type { GroundingProfileId } from '../../shared/types/repoReader';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -91,10 +96,18 @@ interface ThreadState {
   isInterviewThread: boolean;
   /** True when the thread backs a dev-session (gets extended run timeout for sequential implementation) */
   isDevSession: boolean;
+  /** One reader/profile selection, fixed for the lifetime of the caller. */
+  grounding: CallerGroundingSelection | null;
+  /** Server-local checkout used only while this process owns the profile. */
+  groundingWorkspaceDir: string | null;
 }
 
 const threads = new Map<string, ThreadState>();
 const lastTokenProgressWriteAt = new Map<string, number>();
+
+function runtimeWorkspaceDir(state: ThreadState): string {
+  return state.groundingWorkspaceDir ?? state.thread.workspaceDir;
+}
 
 /**
  * Cap concurrent local Cursor agents per App Service instance. Interview →
@@ -386,6 +399,13 @@ export function isDocumentAssistant(
   return assistantType === 'adr' || assistantType === 'prd' || assistantType === 'design-doc';
 }
 
+export function isRepositoryReadingChatCaller(
+  kickoff: ChatThreadKickoff,
+  isDevSession: boolean,
+): boolean {
+  return !isDevSession && kickoff.assistantType !== 'calendar-work-item';
+}
+
 /** Prefer explicit assistantType; fall back to freeform context markers for older threads. */
 export function resolveDocumentAssistantType(
   kickoff: ChatThreadKickoff,
@@ -402,6 +422,53 @@ export function resolveDocumentAssistantType(
   return undefined;
 }
 
+export type GroundingCallerKey =
+  | 'interview'
+  | 'prd'
+  | 'design-doc'
+  | 'agent-home'
+  | 'walkthrough'
+  | 'design-module';
+
+export function resolveGroundingCallerKey(
+  kickoff: ChatThreadKickoff,
+): GroundingCallerKey {
+  const assistantType = resolveDocumentAssistantType(kickoff);
+  if (assistantType === 'adr') return 'interview';
+  if (assistantType === 'prd' || assistantType === 'design-doc') {
+    return assistantType;
+  }
+
+  const skillPath = kickoff.skillPath?.replace(/\\/g, '/').toLowerCase() ?? '';
+  if (skillPath.includes('walkthrough-')) return 'walkthrough';
+  if (skillPath.includes('design-module-')) return 'design-module';
+  if (
+    skillPath.includes('/to-prd/') ||
+    skillPath.includes('prd-spec-review') ||
+    skillPath.includes('/prd-assistant/')
+  ) {
+    return 'prd';
+  }
+  if (
+    skillPath.includes('prd-design-spec') ||
+    skillPath.includes('design-spec') ||
+    skillPath.includes('design-doc')
+  ) {
+    return 'design-doc';
+  }
+  if (
+    skillPath.includes('grill-with-docs') ||
+    skillPath.includes('grill-design') ||
+    skillPath.includes('kick-off') ||
+    skillPath.includes('adr-interview') ||
+    skillPath.includes('adr-finalize')
+  ) {
+    return 'interview';
+  }
+
+  return 'agent-home';
+}
+
 export function buildMcpServers(
   kickoff: ChatThreadKickoff,
   adoSkillsUrl: string,
@@ -409,6 +476,7 @@ export function buildMcpServers(
     maxviewEnabled?: boolean;
     calendarSessionId?: string;
     restrictRepoSearch?: boolean;
+    groundingProfileId?: GroundingProfileId;
   },
 ): Record<string, McpServerConfig> {
   const servers: Record<string, McpServerConfig> = {};
@@ -429,8 +497,11 @@ export function buildMcpServers(
   // github-repo MCP for search_repo_code / list_repo_dir / get_skill_file
   // (e.g. Design Module scoping against the connected skill repo).
   if (kickoff.skillProvider === 'github') {
+    const profilePath = options?.groundingProfileId
+      ? `/grounding/${options.groundingProfileId}`
+      : '';
     servers['github-repo'] = {
-      url: `http://localhost:${port}/mcp/github-repo${
+      url: `http://localhost:${port}/mcp/github-repo${profilePath}${
         options?.restrictRepoSearch ? '?profile=interview' : ''
       }`,
     };
@@ -441,10 +512,14 @@ export function buildMcpServers(
   // GitHub-backed document assistants — those tools only touch Postgres and do
   // not require ADO credentials.
   if (kickoff.skillProvider !== 'github' || resolveDocumentAssistantType(kickoff)) {
+    const profilePath = options?.groundingProfileId
+      ? `/grounding/${options.groundingProfileId}`
+      : '';
+    const groundedAdoSkillsUrl = `${adoSkillsUrl}${profilePath}`;
     servers['ado-skills'] = {
-      url: `${adoSkillsUrl}${
+      url: `${groundedAdoSkillsUrl}${
         options?.restrictRepoSearch
-          ? `${adoSkillsUrl.includes('?') ? '&' : '?'}profile=interview`
+          ? `${groundedAdoSkillsUrl.includes('?') ? '&' : '?'}profile=interview`
           : ''
       }`,
     };
@@ -1601,7 +1676,7 @@ async function cancelSdkRunBestEffort(
     };
     const run = await (Agent as AgentWithGetRun).getRun(runId, {
       runtime: 'local',
-      cwd: state.thread.workspaceDir,
+      cwd: runtimeWorkspaceDir(state),
     });
     if (run.supports('cancel')) await run.cancel();
   } catch {
@@ -1921,6 +1996,8 @@ async function ensureThreadState(threadId: string): Promise<ThreadState | null> 
     idleTimer: null,
     isInterviewThread: isInterview,
     isDevSession: thread.kickoff?.mode === 'development',
+    grounding: null,
+    groundingWorkspaceDir: null,
   };
   threads.set(threadId, state);
   resetIdleTimer(state);
@@ -2038,6 +2115,8 @@ export async function createThread(
     idleTimer: null,
     isInterviewThread: false,
     isDevSession: thread.kickoff?.mode === 'development',
+    grounding: null,
+    groundingWorkspaceDir: null,
   };
 
   threads.set(threadId, state);
@@ -2526,6 +2605,13 @@ async function syncOutputToDb(threadId: string, workspaceDir: string, agentText?
 }
 
 function cleanupWorkspaceDir(workspaceDir: string): void {
+  const resolved = path.resolve(workspaceDir);
+  const isSharedRuntimeWorkspace = [...threads.values()].some(
+    (state) =>
+      state.groundingWorkspaceDir !== null &&
+      path.resolve(state.groundingWorkspaceDir) === resolved,
+  );
+  if (isSharedRuntimeWorkspace) return;
   try {
     fs.rmSync(workspaceDir, { recursive: true, force: true });
     console.log(`[chat] post-run: cleaned up workspace ${workspaceDir}`);
@@ -2621,6 +2707,73 @@ async function eagerPushDevSession(
   }
 }
 
+export function copyScratchInputsToGroundedCheckout(
+  scratchWorkspace: string,
+  groundedCheckout: string,
+): void {
+  if (path.resolve(scratchWorkspace) === path.resolve(groundedCheckout)) return;
+
+  fs.mkdirSync(groundedCheckout, { recursive: true });
+  if (fs.existsSync(scratchWorkspace)) {
+    for (const entryName of fs.readdirSync(scratchWorkspace)) {
+      fs.cpSync(
+        path.join(scratchWorkspace, entryName),
+        path.join(groundedCheckout, entryName),
+        { recursive: true, force: true },
+      );
+    }
+  }
+}
+
+function adoptGroundedWorkspace(state: ThreadState, cwd: string): void {
+  copyScratchInputsToGroundedCheckout(state.thread.workspaceDir, cwd);
+  state.groundingWorkspaceDir = cwd;
+}
+
+async function ensureThreadGrounding(
+  state: ThreadState,
+): Promise<CallerGroundingSelection> {
+  if (state.grounding) return state.grounding;
+
+  // Development workspaces own their checkout lifecycle, and calendar
+  // assistants expose only the restricted calendar MCP. Neither browses repos.
+  if (!isRepositoryReadingChatCaller(state.thread.kickoff, state.isDevSession)) {
+    state.grounding = {
+      mode: 'remote',
+      release: async () => undefined,
+    };
+    return state.grounding;
+  }
+
+  state.grounding = await callerGroundingService.start({
+    caller: resolveGroundingCallerKey(state.thread.kickoff),
+    userId: state.thread.userId,
+    run: {
+      runType: 'chat',
+      runId: state.thread.id,
+      project: state.thread.kickoff.project,
+    },
+    repository: {
+      provider: state.thread.kickoff.skillProvider ?? 'ado',
+      repo: state.thread.kickoff.repo,
+      branch:
+        state.thread.kickoff.skillBranch ??
+        state.thread.kickoff.branch ??
+        'main',
+    },
+    reauthorize: async () => {
+      const current = await getThread(state.thread.id);
+      return current?.userId === state.thread.userId &&
+        current.status !== 'closed';
+    },
+  });
+
+  if (state.grounding.mode === 'local') {
+    adoptGroundedWorkspace(state, state.grounding.cwd);
+  }
+  return state.grounding;
+}
+
 export async function sendMessage(
   threadId: string,
   text: string,
@@ -2686,7 +2839,49 @@ export async function sendMessage(
     }
   }
 
+  const provisionalRunId = `${threadId}:provisional`;
+
+  // Grounding may need a cold mirror refresh. Expose that work immediately so
+  // a newly created interview does not look idle while its repository is being
+  // prepared.
+  state.thread.status = 'running';
+  broadcast(state, { type: 'status', status: 'running' });
+  persistThread(state.thread);
+  resetIdleTimer(state);
+
+  // Register durable liveness before grounding begins. The row is replaced by
+  // the real SDK run once agent.send() returns a definitive run ID.
+  const provisionalRunTimeoutMs = state.isDevSession ? INTERVIEW_IDLE_TIMEOUT_MS : IDLE_TIMEOUT_MS;
+  const preparationStartedAt = new Date().toISOString();
+  await db.insert(agentRuns).values({
+    id: provisionalRunId,
+    threadId,
+    status: 'queued',
+    timeoutAt: new Date(Date.now() + provisionalRunTimeoutMs).toISOString(),
+    progressAt: preparationStartedAt,
+    progressLabel: 'Preparing the latest repository requirements…',
+    progressPhase: 'analysis',
+  }).onConflictDoNothing().catch((e) =>
+    console.warn('[chat] Failed to insert provisional agent_runs row:', e),
+  );
+
   const mcpServerUrl = `http://localhost:${process.env.PORT ?? 3001}/mcp/ado-skills`;
+  let grounding: CallerGroundingSelection;
+  try {
+    grounding = await ensureThreadGrounding(state);
+  } catch (error) {
+    state.thread.status = 'error';
+    state.thread.lastError = 'Unable to prepare the repository for this interview.';
+    broadcast(state, {
+      type: 'error',
+      error: state.thread.lastError,
+    });
+    broadcast(state, { type: 'done' });
+    persistThread(state.thread);
+    await db.delete(agentRuns).where(eq(agentRuns.id, provisionalRunId)).catch(() => {});
+    throw error;
+  }
+  const agentWorkspaceDir = runtimeWorkspaceDir(state);
   const maxviewEnabled = await isMaxviewMcpEnabled(state.thread.userId, state.thread.kickoff.project);
   const calendarSessionId = state.thread.kickoff.assistantType === 'calendar-work-item'
     ? (state.thread.kickoff.calendarAssistantSessionId ?? undefined)
@@ -2695,6 +2890,8 @@ export async function sendMessage(
     maxviewEnabled,
     calendarSessionId,
     restrictRepoSearch: state.isInterviewThread,
+    groundingProfileId:
+      grounding.mode === 'local' ? grounding.profileId : undefined,
   });
   console.log('[chat] MCP servers for turn:', Object.keys(mcpServers).join(', '), {
     maxviewEnabled,
@@ -2702,7 +2899,7 @@ export async function sendMessage(
   });
 
   const turnId = uuidv4();
-  const attachmentMeta = await writeMessageAttachments(state.thread.workspaceDir, turnId, attachments);
+  const attachmentMeta = await writeMessageAttachments(agentWorkspaceDir, turnId, attachments);
   const promptText = buildPromptWithAttachments(text, attachmentMeta);
   const priorMessages = [...state.thread.messages];
   const recoveryContext = state.isInterviewThread
@@ -2728,28 +2925,6 @@ export async function sendMessage(
     attachmentCount: attachmentMeta.length,
   });
 
-  // Update status
-  state.thread.status = 'running';
-  broadcast(state, { type: 'status', status: 'running' });
-  persistThread(state.thread);
-  resetIdleTimer(state);
-
-  // Insert a provisional agent_runs row so cross-instance liveness checks
-  // (isThreadRunAlive) see a live run during the slow Agent.create / agent.send
-  // window. The real run ID is unknown until after agent.send, so use a
-  // thread-scoped provisional ID; the definitive insert at ~2222 will either
-  // reuse this row (onConflictDoNothing) or create the real one alongside it.
-  const provisionalRunId = `${threadId}:provisional`;
-  const provisionalRunTimeoutMs = state.isDevSession ? INTERVIEW_IDLE_TIMEOUT_MS : IDLE_TIMEOUT_MS;
-  await db.insert(agentRuns).values({
-    id: provisionalRunId,
-    threadId,
-    status: 'queued',
-    timeoutAt: new Date(Date.now() + provisionalRunTimeoutMs).toISOString(),
-  }).onConflictDoNothing().catch((e) =>
-    console.warn('[chat] Failed to insert provisional agent_runs row:', e),
-  );
-
   // A missing cursorAgentId can mean either a brand-new conversation or a
   // force-disposed interview agent. In the latter case, include the visible
   // PostgreSQL-backed history so Agent.create() continues instead of restarting.
@@ -2762,7 +2937,8 @@ export async function sendMessage(
         maxviewEnabled,
         recoveryContext,
         {
-          preloadRepositoryContext: state.isInterviewThread,
+          preloadRepositoryContext:
+            state.isInterviewThread && grounding.mode === 'remote',
           repoSearchEnabled: !state.isInterviewThread,
         },
       );
@@ -2810,7 +2986,7 @@ export async function sendMessage(
             () => Agent.resume(priorCursorAgentId!, {
               apiKey,
               model: { id: resolvedModel },
-              local: { cwd: state.thread.workspaceDir },
+              local: { cwd: agentWorkspaceDir },
               mcpServers,
               agents: { 'code-reviewer': codeReviewerAgent },
             }),
@@ -2823,7 +2999,7 @@ export async function sendMessage(
             () => Agent.create({
               apiKey,
               model: { id: resolvedModel },
-              local: { cwd: state.thread.workspaceDir },
+              local: { cwd: agentWorkspaceDir },
               mcpServers,
               agents: { 'code-reviewer': codeReviewerAgent },
             }),
@@ -2847,7 +3023,8 @@ export async function sendMessage(
           maxviewEnabled,
           recoveryContext,
           {
-            preloadRepositoryContext: state.isInterviewThread,
+            preloadRepositoryContext:
+              state.isInterviewThread && grounding.mode === 'remote',
             repoSearchEnabled: !state.isInterviewThread,
           },
         );
@@ -3201,7 +3378,7 @@ export async function sendMessage(
                 () => Agent.resume(state.thread.cursorAgentId!, {
                   apiKey,
                   model: { id: resolvedModel },
-                  local: { cwd: state.thread.workspaceDir },
+                  local: { cwd: agentWorkspaceDir },
                   mcpServers,
                 }),
                 sdkRetryOpts,
@@ -3234,7 +3411,7 @@ export async function sendMessage(
               () => Agent.resume(state.thread.cursorAgentId!, {
                 apiKey,
                 model: { id: resolvedModel },
-                local: { cwd: state.thread.workspaceDir },
+                local: { cwd: agentWorkspaceDir },
                 mcpServers,
               }),
               sdkRetryOpts,
@@ -3329,7 +3506,7 @@ export async function sendMessage(
 
     // Sync output artifacts directly to Postgres
     try {
-      await syncOutputToDb(threadId, state.thread.workspaceDir, agentTextBuffer);
+      await syncOutputToDb(threadId, runtimeWorkspaceDir(state), agentTextBuffer);
     } catch (err) {
       console.error(`[chat] post-run DB sync failed for thread ${threadId}:`, err);
     }
@@ -3648,6 +3825,10 @@ export async function closeThread(threadId: string): Promise<void> {
     await state.agent[Symbol.asyncDispose]().catch(() => {});
     state.agent = null;
   }
+  const grounding = state.grounding;
+  state.grounding = null;
+  state.groundingWorkspaceDir = null;
+  await grounding?.release().catch(() => undefined);
 
   // For dev sessions with unpushed changes: evict from memory (free resources)
   // but leave the thread status as-is (idle) and preserve the workspace.
@@ -3694,6 +3875,10 @@ export async function permanentlyDeleteThread(threadId: string): Promise<void> {
       await state.agent[Symbol.asyncDispose]().catch(() => {});
       state.agent = null;
     }
+    const grounding = state.grounding;
+    state.grounding = null;
+    state.groundingWorkspaceDir = null;
+    await grounding?.release().catch(() => undefined);
 
     threads.delete(threadId);
 
@@ -3707,7 +3892,7 @@ export async function permanentlyDeleteThread(threadId: string): Promise<void> {
 
 function resolveOutputDir(threadId: string): string | null {
   const state = threads.get(threadId);
-  if (state) return path.join(state.thread.workspaceDir, '.ai-pilot', 'output');
+  if (state) return path.join(runtimeWorkspaceDir(state), '.ai-pilot', 'output');
   return null;
 }
 

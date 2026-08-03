@@ -312,7 +312,8 @@ variable "blob_containers" {
   description = "Private blob containers on the shared storage account. Key = container name. Add one container per workload."
   type        = map(object({}))
   default = {
-    pdf-artifacts = {}
+    pdf-artifacts  = {}
+    repo-grounding = {}
   }
 }
 

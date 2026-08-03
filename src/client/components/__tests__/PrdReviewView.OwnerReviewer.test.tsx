@@ -120,6 +120,24 @@ jest.mock('../ReviewerApprovalChecklist', () => ({
     </div>
   ),
 }));
+jest.mock('../RunGroundingStatus', () => ({
+  RunGroundingStatus: ({
+    surface,
+    domainRunId,
+    project,
+  }: {
+    surface: string;
+    domainRunId: string;
+    project: string;
+  }) => (
+    <div
+      data-testid="prd-grounding-embed"
+      data-surface={surface}
+      data-domain-run-id={domainRunId}
+      data-project={project}
+    />
+  ),
+}));
 
 // ── Base fixtures ──────────────────────────────────────────────────────────────
 
@@ -172,6 +190,27 @@ beforeEach(() => {
     isAdmin: false,
   });
   mockSubmitPrdMutateAsync.mockResolvedValue(undefined);
+});
+
+describe('PBI-004 PRD grounding status embed', () => {
+  it('AC-2 / VT-03 Given an existing PRD, When its run view renders, Then reusable grounding status receives the PRD scope', () => {
+    // Arrange / Act
+    renderView();
+
+    // Assert
+    expect(screen.getByTestId('prd-grounding-embed')).toHaveAttribute(
+      'data-surface',
+      'prd'
+    );
+    expect(screen.getByTestId('prd-grounding-embed')).toHaveAttribute(
+      'data-domain-run-id',
+      'prd-1'
+    );
+    expect(screen.getByTestId('prd-grounding-embed')).toHaveAttribute(
+      'data-project',
+      'proj-alpha'
+    );
+  });
 });
 
 // ── 1. Owner display ──────────────────────────────────────────────────────────

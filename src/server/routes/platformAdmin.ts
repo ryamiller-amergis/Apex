@@ -24,6 +24,7 @@ import {
 } from '../services/pendingAssignmentService';
 import { CONFIGURABLE_MENU_ITEMS, type MenuItemKey, type UpsertProjectMenuConfigRequest } from '../../shared/types/menuSettings';
 import type { ProjectAccessRequestStatus, SetProjectAssignmentsRequest } from '../../shared/types/platformAdmin';
+import type { AddRuleRequest, FlagRuleType } from '../../shared/types/featureFlags';
 import * as walkthroughService from '../services/walkthroughService';
 import {
   generateStepProposal,
@@ -67,9 +68,22 @@ import {
 import * as walkthroughAnchorRegistryService from '../services/walkthroughAnchorRegistryService';
 import * as walkthroughAiOptionsService from '../services/walkthroughAiOptionsService';
 import { WalkthroughAiOptionsError } from '../../shared/types/walkthroughAiOptions';
+import {
+  GROUNDING_ROLLOUT_STAGES,
+  type GroundingRolloutStage,
+} from '../../shared/types/groundingOperations';
+import { groundingGateService } from '../services/groundingGateService';
 
 const router = Router();
 const validMenuItemKeys = new Set<MenuItemKey>(CONFIGURABLE_MENU_ITEMS.map((item) => item.key));
+const validFlagRuleTypes = new Set<FlagRuleType>([
+  'everyone',
+  'project',
+  'user',
+  'group',
+  'caller',
+  'environment',
+]);
 
 function mapWalkthroughError(err: unknown, res: Response): boolean {
   if (!(err instanceof WalkthroughDomainError)) return false;
@@ -169,6 +183,31 @@ function mapWalkthroughAiError(err: unknown, res: Response): boolean {
 }
 
 router.use(requireSuperAdmin);
+
+router.get('/grounding/rollout-status', async (req: Request, res: Response): Promise<void> => {
+  const stage = typeof req.query.stage === 'string' ? req.query.stage : '';
+  if (!GROUNDING_ROLLOUT_STAGES.includes(stage as GroundingRolloutStage)) {
+    res.status(400).json({
+      error: `stage must be one of: ${GROUNDING_ROLLOUT_STAGES.join(', ')}`,
+    });
+    return;
+  }
+
+  const project =
+    typeof req.query.project === 'string' && req.query.project.trim()
+      ? req.query.project.trim()
+      : undefined;
+
+  try {
+    const evaluation = await groundingGateService.evaluate(
+      stage as GroundingRolloutStage,
+      project,
+    );
+    res.json(evaluation);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 router.get('/projects', async (_req: Request, res: Response): Promise<void> => {
   try {
@@ -444,8 +483,21 @@ router.delete('/feature-flags/:id', async (req: Request, res: Response): Promise
 
 router.post('/feature-flags/:id/rules', async (req: Request, res: Response): Promise<void> => {
   try {
+    const type = req.body?.type as FlagRuleType | undefined;
+    const value = typeof req.body?.value === 'string' ? req.body.value.trim() : undefined;
+    if (!type || !validFlagRuleTypes.has(type) || (type !== 'everyone' && !value)) {
+      res.status(400).json({
+        error: 'type must be valid and value is required unless type is everyone',
+      });
+      return;
+    }
+
+    const input: AddRuleRequest = {
+      type,
+      value: type === 'everyone' ? null : value,
+    };
     const actor = { id: getUserId(req), email: getUserEmail(req) ?? '' };
-    const rule = await featureFlagService.addRule(req.params.id, req.body, actor);
+    const rule = await featureFlagService.addRule(req.params.id, input, actor);
     res.status(201).json(rule);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- featureFlagService throws plain Error with message checks
   } catch (err: any) {

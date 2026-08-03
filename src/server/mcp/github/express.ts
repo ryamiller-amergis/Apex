@@ -3,6 +3,11 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { createGitHubMcpServer } from './server';
 import { failMcpHttpResponse, handleMcpPost } from '../mcpRequestLog';
 import { McpTimeoutError, resolveMcpHttpTimeoutMs } from '../mcpTimeout';
+import type {
+  GroundingProfileId,
+  RepoReader,
+} from '../../../shared/types/repoReader';
+import { groundingProfileResolver } from '../../services/groundingProfileResolver';
 
 /**
  * Mount the GitHub MCP server as a Streamable HTTP transport on the given Express app.
@@ -12,7 +17,11 @@ import { McpTimeoutError, resolveMcpHttpTimeoutMs } from '../mcpTimeout';
  * leave the Cursor agent tool_call in `running` until the chat reaper fires (~5 min).
  */
 export function mountGitHubMcp(app: Application, basePath = '/mcp/github-repo'): void {
-  app.post(basePath, async (req: Request, res: Response) => {
+  const handleRequest = async (
+    req: Request,
+    res: Response,
+    profileId?: GroundingProfileId,
+  ): Promise<void> => {
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       // Keep headers uncommitted until the JSON-RPC result is ready. This lets
@@ -20,8 +29,19 @@ export function mountGitHubMcp(app: Application, basePath = '/mcp/github-repo'):
       enableJsonResponse: true,
     });
 
+    let repoReader: RepoReader | undefined;
+    try {
+      repoReader = profileId
+        ? await groundingProfileResolver.resolveConnectionProfile(profileId)
+        : undefined;
+    } catch {
+      res.status(404).json({ error: 'Grounding profile is unavailable' });
+      return;
+    }
+
     const server = createGitHubMcpServer({
       enableCodeSearch: req.query.profile !== 'interview',
+      repoReader,
     });
     const timeoutMs = resolveMcpHttpTimeoutMs();
 
@@ -43,6 +63,14 @@ export function mountGitHubMcp(app: Application, basePath = '/mcp/github-repo'):
         res.status(500).json({ error: 'MCP server error' });
       }
     }
+  };
+
+  app.post(basePath, async (req: Request, res: Response) => {
+    await handleRequest(req, res);
+  });
+
+  app.post(`${basePath}/grounding/:profileId`, async (req: Request, res: Response) => {
+    await handleRequest(req, res, req.params.profileId as GroundingProfileId);
   });
 
   app.get(`${basePath}/health`, (_req: Request, res: Response) => {

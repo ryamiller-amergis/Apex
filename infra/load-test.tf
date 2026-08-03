@@ -95,6 +95,22 @@ resource "azurerm_storage_management_policy" "lt_artifacts_lifecycle" {
   storage_account_id = azurerm_storage_account.shared.id
 
   rule {
+    name    = "repo-grounding-14day-last-access"
+    enabled = true
+
+    filters {
+      prefix_match = ["repo-grounding/"]
+      blob_types   = ["blockBlob"]
+    }
+
+    actions {
+      base_blob {
+        delete_after_days_since_last_access_time_greater_than = 14
+      }
+    }
+  }
+
+  rule {
     name    = "lt-artifacts-90day"
     enabled = true
 

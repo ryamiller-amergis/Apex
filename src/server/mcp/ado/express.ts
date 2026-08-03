@@ -4,6 +4,11 @@ import { createAdoMcpServer } from './server';
 import { mountCalendarAssistantMcp } from '../calendarAssistant/express';
 import { failMcpHttpResponse, handleMcpPost } from '../mcpRequestLog';
 import { McpTimeoutError, resolveMcpHttpTimeoutMs } from '../mcpTimeout';
+import type {
+  GroundingProfileId,
+  RepoReader,
+} from '../../../shared/types/repoReader';
+import { groundingProfileResolver } from '../../services/groundingProfileResolver';
 
 /**
  * Mount the ADO MCP server as a Streamable HTTP transport on the given Express app.
@@ -21,14 +26,29 @@ export function mountAdoMcp(app: Application, basePath = '/mcp/ado-skills'): voi
    * Each request gets its own transport+server pair (stateless per-request model).
    * This is the recommended pattern for HTTP deployments without session persistence.
    */
-  app.post(basePath, async (req: Request, res: Response) => {
+  const handleRequest = async (
+    req: Request,
+    res: Response,
+    profileId?: GroundingProfileId,
+  ): Promise<void> => {
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined, // stateless mode
       enableJsonResponse: true,
     });
 
+    let repoReader: RepoReader | undefined;
+    try {
+      repoReader = profileId
+        ? await groundingProfileResolver.resolveConnectionProfile(profileId)
+        : undefined;
+    } catch {
+      res.status(404).json({ error: 'Grounding profile is unavailable' });
+      return;
+    }
+
     const server = createAdoMcpServer({
       enableCodeSearch: req.query.profile !== 'interview',
+      repoReader,
     });
     const timeoutMs = resolveMcpHttpTimeoutMs();
 
@@ -49,6 +69,14 @@ export function mountAdoMcp(app: Application, basePath = '/mcp/ado-skills'): voi
         res.status(500).json({ error: 'MCP server error' });
       }
     }
+  };
+
+  app.post(basePath, async (req: Request, res: Response) => {
+    await handleRequest(req, res);
+  });
+
+  app.post(`${basePath}/grounding/:profileId`, async (req: Request, res: Response) => {
+    await handleRequest(req, res, req.params.profileId as GroundingProfileId);
   });
 
   // Health probe — useful for IDE and orchestrator registration checks

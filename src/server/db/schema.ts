@@ -1,5 +1,6 @@
-import { bigserial, boolean, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigserial, boolean, check, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
+import type { RepoProvider, RepoRole, RunType } from '../../shared/types/runGrounding';
 import type {
   OverlayTextBox,
   PageManifestEntry,
@@ -169,6 +170,42 @@ export const repoCacheLeases = pgTable('repo_cache_leases', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
   expiresAtIdx: index('idx_repo_cache_leases_expires_at').on(t.expiresAt),
+}));
+
+export const runGroundings = pgTable('run_groundings', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  runType: text('run_type').$type<RunType>().notNull(),
+  runId: text('run_id').notNull(),
+  repoRole: text('repo_role').$type<RepoRole>().notNull(),
+  provider: text('provider').$type<RepoProvider>().notNull(),
+  project: text('project').notNull(),
+  repository: text('repository').notNull(),
+  branch: text('branch').notNull(),
+  groundedSha: text('grounded_sha').notNull(),
+  groundedAt: timestamp('grounded_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  isActive: boolean('is_active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  runTypeCheck: check(
+    'run_groundings_run_type_check',
+    sql`${t.runType} IN ('chat', 'one_shot', 'service')`,
+  ),
+  repoRoleCheck: check(
+    'run_groundings_repo_role_check',
+    sql`${t.repoRole} IN ('target', 'skill')`,
+  ),
+  providerCheck: check(
+    'run_groundings_provider_check',
+    sql`${t.provider} IN ('github', 'azure_devops')`,
+  ),
+  runLookupIdx: index('idx_run_groundings_run_lookup').on(t.runType, t.runId),
+  activeRepoBranchIdx: index('idx_run_groundings_active_repo_branch')
+    .on(t.provider, t.project, t.repository, t.branch)
+    .where(sql`${t.isActive}`),
+  activeRunRoleUq: uniqueIndex('uq_run_groundings_active_run_role')
+    .on(t.runType, t.runId, t.repoRole)
+    .where(sql`${t.isActive}`),
 }));
 
 // ── RBAC Tables ───────────────────────────────────────────────────────────────

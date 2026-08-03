@@ -19,6 +19,11 @@ import { resolveSkillConfig, getSkillSettingsName } from './projectSettingsServi
 import { getDefaultModel } from './appSettingsService';
 import { getPrd } from './prdService';
 import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
+import {
+  propagatePipelineGrounding,
+  resolveRunGroundingSurface,
+  runGroundingService,
+} from './runGroundingService';
 
 const VALID_STATUSES: DesignDocStatus[] = ['generating', 'generation_failed', 'validating', 'draft', 'pending_review', 'reviewer_approved', 'approved', 'revision_requested'];
 
@@ -189,6 +194,27 @@ export async function createDesignDoc(opts: {
       `[designDoc] propagateDesignDocApprovers failed on create (prdId=${opts.prdId}, docId=${row.id})`,
       err,
     );
+  }
+
+  if (opts.chatThreadId) {
+    try {
+      const upstream = await resolveRunGroundingSurface('prd', opts.prdId);
+      if (upstream) {
+        await propagatePipelineGrounding(
+          upstream.run,
+          {
+            runType: 'chat',
+            runId: opts.chatThreadId,
+            project: opts.project,
+          },
+          opts.userId,
+        );
+      }
+    } catch {
+      console.warn(
+        `[run-grounding] Design Doc propagation unavailable (designDocId=${row.id})`,
+      );
+    }
   }
 
   return { designDocId: row.id };
@@ -621,9 +647,23 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
       clearInterval(interval);
       activeDocWatchers.delete(seedDocId);
       console.warn(`[designDocWatcher] Timed out — resetting to draft (seedDocId=${seedDocId}, threadId=${chatThreadId})`);
-      await db.update(designDocs)
-        .set({ status: 'draft', updatedAt: new Date().toISOString() })
-        .where(and(eq(designDocs.id, seedDocId), eq(designDocs.status, 'generating')));
+      const timedOutDoc = await db.query.designDocs.findFirst({
+        where: eq(designDocs.id, seedDocId),
+        columns: { project: true },
+      });
+      if (timedOutDoc) {
+        await runGroundingService.persistThenMarkTerminalInactive(
+          {
+            runType: 'chat',
+            runId: chatThreadId,
+            project: timedOutDoc.project,
+          },
+          () =>
+            db.update(designDocs)
+              .set({ status: 'draft', updatedAt: new Date().toISOString() })
+              .where(and(eq(designDocs.id, seedDocId), eq(designDocs.status, 'generating'))),
+        );
+      }
       return;
     }
 
@@ -710,12 +750,21 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
 
     if (allDone) {
       try {
-        await db
-          .update(designDocs)
-          .set({ chatThreadId: null, updatedAt: new Date().toISOString() })
-          .where(eq(designDocs.id, seedDocId));
+        await runGroundingService.persistThenMarkTerminalInactive(
+            {
+              runType: 'chat',
+              runId: chatThreadId,
+              project: seedDoc.project,
+            },
+            () =>
+              db
+                .update(designDocs)
+                .set({ chatThreadId: null, updatedAt: new Date().toISOString() })
+                .where(eq(designDocs.id, seedDocId)),
+          );
       } catch (err) {
         console.error(`[designDocWatcher] Error clearing seed row chatThreadId`, err);
+        return;
       }
       clearInterval(interval);
       activeDocWatchers.delete(seedDocId);
@@ -732,8 +781,8 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
  *
  * Persists content + moves the row to the next status (validating or pending_review).
  * Safe to call from both the watcher and the post-run syncOutputToDb path — the
- * `chatThreadId` column acts as a completion guard: once this function nulls it,
- * any concurrent caller sees the null and skips.
+ * The generating status plus chat thread acts as the completion guard. The
+ * thread id remains durable so grounding status can resolve after completion.
  *
  * Returns true when content was persisted, false when the row was already finalised
  * by another caller (guard triggered).
@@ -761,7 +810,11 @@ export async function finalizeSingleFeatureDoc(
 ): Promise<boolean> {
   // Thread guard: skip if the row no longer owns this thread (already completed/retried).
   const guard = await db.query.designDocs.findFirst({
-    where: and(eq(designDocs.id, designDocId), eq(designDocs.chatThreadId, chatThreadId)),
+    where: and(
+      eq(designDocs.id, designDocId),
+      eq(designDocs.chatThreadId, chatThreadId),
+      eq(designDocs.status, 'generating'),
+    ),
     columns: { id: true, skillSettingsId: true },
   });
   if (!guard) {
@@ -776,9 +829,17 @@ export async function finalizeSingleFeatureDoc(
   if (!design || !techSpec || !assumptions) {
     const missing = [!design && 'design', !techSpec && 'tech-spec', !assumptions && 'assumptions'].filter(Boolean).join(', ');
     console.warn(`[finalizeSingleFeatureDoc] Missing output files [${missing}] — marking generation_failed (designDocId=${designDocId})`);
-    await db.update(designDocs)
-      .set({ status: 'generation_failed', generationError: `Missing output files: ${missing}`, chatThreadId: null, updatedAt: new Date().toISOString() })
-      .where(and(eq(designDocs.id, designDocId), eq(designDocs.chatThreadId, chatThreadId)));
+    await runGroundingService.persistThenMarkTerminalInactive(
+        { runType: 'chat', runId: chatThreadId, project },
+        () =>
+          db.update(designDocs)
+            .set({ status: 'generation_failed', generationError: `Missing output files: ${missing}`, updatedAt: new Date().toISOString() })
+            .where(and(
+              eq(designDocs.id, designDocId),
+              eq(designDocs.chatThreadId, chatThreadId),
+              eq(designDocs.status, 'generating'),
+            )),
+      );
     await cleanupWorkspace(chatThreadId);
     return false;
   }
@@ -786,17 +847,24 @@ export async function finalizeSingleFeatureDoc(
   const skillConfig = await resolveSkillConfig({ project, settingsId: guard.skillSettingsId ?? undefined });
   const finalStatus: DesignDocStatus = skillConfig?.designDocValidationSkillPath ? 'validating' : 'pending_review';
 
-  await db.update(designDocs)
-    .set({
-      designContent: design,
-      techSpecContent: techSpec,
-      assumptionsContent: assumptions,
-      status: finalStatus,
-      generationError: null,
-      chatThreadId: null,
-      updatedAt: new Date().toISOString(),
-    })
-    .where(and(eq(designDocs.id, designDocId), eq(designDocs.chatThreadId, chatThreadId)));
+  await runGroundingService.persistThenMarkTerminalInactive(
+      { runType: 'chat', runId: chatThreadId, project },
+      () =>
+        db.update(designDocs)
+          .set({
+            designContent: design,
+            techSpecContent: techSpec,
+            assumptionsContent: assumptions,
+            status: finalStatus,
+            generationError: null,
+            updatedAt: new Date().toISOString(),
+          })
+          .where(and(
+            eq(designDocs.id, designDocId),
+            eq(designDocs.chatThreadId, chatThreadId),
+            eq(designDocs.status, 'generating'),
+          )),
+    );
 
   await cleanupWorkspace(chatThreadId);
   console.log(`[finalizeSingleFeatureDoc] Done — status=${finalStatus} (designDocId=${designDocId})`);
@@ -836,9 +904,13 @@ export function startSingleFeatureDocWatcher(
       clearInterval(interval);
       activeDocWatchers.delete(designDocId);
       console.warn(`[singleFeatureDocWatcher] Timed out — marking generation_failed (designDocId=${designDocId}, threadId=${chatThreadId})`);
-      await db.update(designDocs)
-        .set({ status: 'generation_failed', generationError: 'Generation timed out', chatThreadId: null, updatedAt: new Date().toISOString() })
-        .where(and(eq(designDocs.id, designDocId), eq(designDocs.status, 'generating')));
+      await runGroundingService.persistThenMarkTerminalInactive(
+        { runType: 'chat', runId: chatThreadId, project },
+        () =>
+          db.update(designDocs)
+            .set({ status: 'generation_failed', generationError: 'Generation timed out', updatedAt: new Date().toISOString() })
+            .where(and(eq(designDocs.id, designDocId), eq(designDocs.status, 'generating'))),
+      );
       return;
     }
 
@@ -872,7 +944,6 @@ export function startSingleFeatureDocWatcher(
       activeDocWatchers.delete(designDocId);
       console.warn(`[singleFeatureDocWatcher] Agent finished without complete output — marking generation_failed (designDocId=${designDocId})`);
       await finalizeSingleFeatureDoc(designDocId, chatThreadId, project);
-      await cleanupWorkspace(chatThreadId);
     }
   }, WATCHER_INTERVAL_MS);
 
