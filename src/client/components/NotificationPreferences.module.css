@@ -9,6 +9,32 @@
   color: var(--text-muted);
 }
 
+.prefs-error {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--error-color) 40%, var(--border-color));
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+}
+
+.prefs-retry {
+  margin-top: 8px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.prefs-retry:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
 .prefs-row {
   display: flex;
   align-items: center;

@@ -110,7 +110,7 @@
   padding: 0 6px;
   border-radius: 999px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 0.75rem;
   font-weight: 700;
   line-height: 1;
@@ -518,7 +518,7 @@
   border: 1px solid var(--accent-color);
   border-radius: 8px;
   background: var(--accent-color);
-  color: var(--bg-primary);
+  color: var(--on-accent);
   cursor: pointer;
   font-weight: 700;
   transition: all 0.2s ease;

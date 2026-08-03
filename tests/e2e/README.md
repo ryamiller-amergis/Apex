@@ -32,6 +32,7 @@ Every command below maps to a real `package.json` script or a valid `npx playwri
 | `npm run test:e2e:headed` | Runs the full suite in a visible browser window (`playwright test --headed`). |
 | `npm run test:e2e:ui` | Opens Playwright's interactive UI mode for stepping through and re-running tests (`playwright test --ui`). |
 | `npm run test:e2e:a11y` | Runs only the accessibility scans (`playwright test --grep @a11y`). |
+| `npm run test:e2e:interview-flow` | Deterministic Interview → PRD → Prototype → Design Doc suite (`playwright test --grep @interview-flow`). |
 | `npm run test:e2e:reset-db` | Cleans up leftover `[E2E]`-prefixed rows after an interrupted run (Ctrl-C). |
 
 ### Raw Playwright usage (no npm script)
@@ -296,16 +297,44 @@ External systems are **never** called from E2E tests:
 | Azure DevOps (work items) | `page.route('**/api/workitems*', ...)` |
 | ADO (projects list) | `page.route('**/api/projects', ...)` |
 | ADO export | `page.route('**/api/workitems/from-prd', ...)` |
-| SSE notification stream | `page.route('**/api/notifications/stream', ...)` |
-| AI / Bedrock / Cursor SDK | Not invoked in E2E mode (E2E_MODE=true suppresses AI routes) |
+| SSE notification stream | `suppressSseStreams` / `page.route('**/api/notifications/stream', ...)` |
+| Chat / Ask Apex SSE | `stubAiChatStream` |
+| PRD generation | `stubPrdGeneration` |
+| Prototype generation | `stubPrototypeGeneration` |
+| Validation scorecard | `stubValidationScorecard` |
+| Fix with AI / Fix comment | `stubFixWithAi` / `stubFixComment` |
+| Bedrock / Cursor agent hosts | `stubBedrock` |
+| Full AI interception set | `stubAllAiTraffic` (used by `@interview-flow` specs) |
+
+## Deterministic interview flow suite (`@interview-flow`)
+
+Specs under `interview-flow-*.spec.ts` cover Interview → PRD → Prototype → Design Doc without live AI. They seed exact entity states via `/e2e/*` and assert gating, approvals, comments, validation thresholds, and settings toggles.
+
+```powershell
+npm run test:e2e:interview-flow
+```
+
+### Seed helpers (`SeedApi`)
+
+| Helper | Purpose |
+|--------|---------|
+| `seedInterview` | Interview + chat thread in any status, with owners/approvers |
+| `seedPrd` | PRD with full status enum; optional `withReadyTestCases`, validation score |
+| `seedDesignPrototype` | Prototype under a PRD in any status |
+| `seedDesignDoc` | Design doc with status + validation score/scorecard |
+| `seedReviewComment` | Comment on `prd` \| `design_doc` \| `design_prototype` |
+| `seedApproverAssignments` | `document_approver_assignments` rows |
+| `seedProjectSettings` | Upsert `[E2E]` project skill settings (thresholds, approvalMode, etc.) |
+| `reset` | Deletes all `[E2E]`-prefixed entities (call in `afterEach`) |
 
 ## Adding a new spec
 
 1. Create `tests/e2e/specs/<domain>.spec.ts`.
 2. Import from `../support/fixtures` (not directly from `@playwright/test`).
-3. Tag tests with `@smoke` for Tier 0 or `@regression` for Tier 1.
+3. Tag tests with `@smoke` for Tier 0, `@critical` / `@regression` / `@pipeline` / `@a11y` as appropriate. Add `@interview-flow` only when the spec covers Interview → PRD → Prototype → Design Doc.
 4. Add a page object in `tests/e2e/pages/` if the test drives a new screen.
 5. Seed state via `SeedApi` methods; clean up in `afterEach` with `SeedApi.reset(e2eApi)`.
+6. For interview-flow specs, call `stubAllAiTraffic(page)` (or more specific stubs) before exercising generation / fix flows.
 6. Stub any external API calls via `tests/e2e/support/api-stubs.ts`.
 7. Link the scenario to its acceptance criterion in a comment at the top.
 
@@ -324,5 +353,6 @@ When a component lacks a suitable selector, add `data-testid` to the component a
 | Gate | Trigger | Suite |
 |------|---------|-------|
 | PR smoke | Every PR to main | `@smoke` tests only |
-| Nightly full regression | 02:00 UTC daily | All specs + `@a11y` |
+| PR interview flow | Every PR to main | `@interview-flow` (`npm run test:e2e:interview-flow`) — blocks dev deploy |
+| Nightly full regression | 02:00 UTC daily | All specs + `@a11y` (includes `@interview-flow`) |
 | Nightly integration | 02:00 UTC daily | `tests/integration/**` |

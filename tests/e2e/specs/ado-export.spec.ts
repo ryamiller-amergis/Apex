@@ -38,12 +38,15 @@ test.describe('ADO export entry points @smoke @critical', () => {
     const prdPage = new PrdReviewPage(page);
     await prdPage.goto(prd.id);
 
-    // Approved PRD shows its status and the downstream generation actions that
-    // precede ADO export.
+    // Approved PRD with prototypes enabled shows the prototype generation entry point
+    // (design-docs bypass is only offered when prototype stage is off).
     await expect(page.getByText('Approved', { exact: true })).toBeVisible({ timeout: 10_000 });
     await expect(
-      page.getByRole('button', { name: /generate design docs/i })
+      page.getByRole('button', { name: /generate prototypes/i })
     ).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: /generate design docs/i })
+    ).toHaveCount(0);
   });
 
   test('draft PRD renders with Draft status', async ({ page, loginAsPersona, e2eApi }) => {

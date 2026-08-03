@@ -75,6 +75,10 @@ resource "azurerm_linux_web_app" "main" {
     "PDF_BLOB_ACCOUNT_NAME"   = azurerm_storage_account.shared.name
     "PDF_BLOB_CONTAINER_NAME" = azurerm_storage_container.shared[var.pdf_blob_container_name].name
 
+    # Repository grounding bundles (managed identity; no storage keys)
+    "GROUNDING_BLOB_ACCOUNT_NAME"   = azurerm_storage_account.shared.name
+    "GROUNDING_BLOB_CONTAINER_NAME" = azurerm_storage_container.shared["repo-grounding"].name
+
     # Database
     "DATABASE_URL" = "postgresql://${var.postgresql_admin_username}:${var.postgresql_admin_password}@${azurerm_postgresql_flexible_server.main.fqdn}:5432/${var.postgresql_database_name}?sslmode=require"
 
@@ -121,15 +125,24 @@ resource "azurerm_linux_web_app" "main" {
 
   # Keep environment-specific values with their deployment slot during swaps.
   sticky_settings {
-    app_setting_names = [
+    app_setting_names = compact([
       "AZURE_REDIRECT_URL",
       "APPLICATIONINSIGHTS_CONNECTION_STRING",
-    ]
+      var.enable_staging_slot ? "LT_APEX_CALLBACK_BASE_URL" : null,
+    ])
   }
 
   logs {
     detailed_error_messages = true
     failed_request_tracing  = true
+
+    dynamic "application_logs" {
+      for_each = var.environment == "dev" ? [1] : []
+
+      content {
+        file_system_level = "Information"
+      }
+    }
 
     http_logs {
       file_system {
@@ -160,6 +173,13 @@ resource "azurerm_linux_web_app_slot" "staging" {
   app_service_id = azurerm_linux_web_app.main.id
   https_only     = true
   tags           = merge(var.tags, { Environment = var.environment, Slot = var.staging_slot_name })
+
+  # Slot identities are not swapped with application code. Keep a dedicated
+  # system identity on staging so pre-swap PDF smoke tests retain managed-
+  # identity access to the production shared Blob account.
+  identity {
+    type = "SystemAssigned"
+  }
 
   site_config {
     always_on = true

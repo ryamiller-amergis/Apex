@@ -45,6 +45,11 @@ jest.mock('../db/drizzle', () => {
   };
 });
 
+// upsertAppUser seeds lastSeenChangelogVersion via resolveCurrentChangelogVersion.
+jest.mock('../services/changelogService', () => ({
+  resolveCurrentChangelogVersion: jest.fn().mockResolvedValue('1.0.0'),
+}));
+
 import {
   getUserPermissions,
   getUserRoleNames,
@@ -500,7 +505,12 @@ describe('upsertAppUser', () => {
 
     expect(mockDb.insert).toHaveBeenCalledTimes(1);
     expect(valuesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ oid: 'oid-1', displayName: 'Bob Smith', email: 'bob@example.com' }),
+      expect.objectContaining({
+        oid: 'oid-1',
+        displayName: 'Bob Smith',
+        email: 'bob@example.com',
+        lastSeenChangelogVersion: '1.0.0',
+      }),
     );
     expect(onConflictMock).toHaveBeenCalledTimes(1);
   });

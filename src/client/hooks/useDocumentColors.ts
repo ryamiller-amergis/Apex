@@ -26,9 +26,9 @@ const PALETTE: { rgb: string; label: string }[] = [
 function buildColor(index: number): DocumentColor {
   const { rgb, label } = PALETTE[index % PALETTE.length];
   return {
-    bg: `rgba(${rgb},0.08)`,
-    border: `rgba(${rgb},0.6)`,
-    text: `rgba(${rgb},0.9)`,
+    bg: `rgba(${rgb},0.18)`,
+    border: `rgba(${rgb},0.85)`,
+    text: `rgba(${rgb},1)`,
     label,
   };
 }

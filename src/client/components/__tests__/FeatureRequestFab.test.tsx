@@ -1,4 +1,5 @@
 import { render, screen, fireEvent } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { FeatureRequestFab } from '../FeatureRequestFab';
 
 jest.mock('../AskApexChat', () => ({
@@ -9,63 +10,88 @@ jest.mock('../AskApexChat', () => ({
   ),
 }));
 
+jest.mock('../WalkthroughHelpHost', () => ({
+  WalkthroughHelpHost: ({ open }: { open: boolean }) =>
+    open ? <div data-testid="walkthrough-help-panel">Help open</div> : null,
+}));
+
 jest.mock('../BrandLogo', () => ({
   BrandLogo: () => <span data-testid="apex-brand-mark" />,
 }));
 
 describe('FeatureRequestFab', () => {
   const onSubmit = jest.fn();
+  const renderFab = (initialEntry = '/') =>
+    render(
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <FeatureRequestFab onSubmit={onSubmit} projectId="Apex" />
+      </MemoryRouter>,
+    );
 
   beforeEach(() => {
     onSubmit.mockReset();
     localStorage.clear();
     Object.defineProperty(window, 'innerWidth', { value: 1200, writable: true });
     Object.defineProperty(window, 'innerHeight', { value: 800, writable: true });
+    window.history.replaceState({}, '', '/');
   });
 
   it('opens the menu when the FAB is clicked', () => {
-    render(<FeatureRequestFab onSubmit={onSubmit} />);
+    renderFab();
     fireEvent.click(screen.getByRole('button', { name: 'Open Apex menu' }));
+    expect(screen.getByRole('menuitem', { name: /Walkthroughs/i })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: /Request New Apex Feature/i })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: /Report an Issue/i })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: /Ask Apex/i })).toBeInTheDocument();
   });
 
+  it('FEAT-006 PBI-008 AC-0 — opens Walkthrough Help from Apex FAB menu', () => {
+    renderFab();
+    fireEvent.click(screen.getByRole('button', { name: 'Open Apex menu' }));
+    fireEvent.click(screen.getByTestId('walkthrough-help-trigger'));
+    expect(screen.getByTestId('walkthrough-help-panel')).toBeInTheDocument();
+  });
+
+  it('opens Walkthrough Help when the active route receives the notification deep link', () => {
+    renderFab('/home?help=walkthroughs');
+    expect(screen.getByTestId('walkthrough-help-panel')).toBeInTheDocument();
+  });
+
   it('submits a feature when Request New Apex Feature is clicked', () => {
-    render(<FeatureRequestFab onSubmit={onSubmit} />);
+    renderFab();
     fireEvent.click(screen.getByRole('button', { name: 'Open Apex menu' }));
     fireEvent.click(screen.getByRole('menuitem', { name: /Request New Apex Feature/i }));
     expect(onSubmit).toHaveBeenCalledWith('feature');
   });
 
   it('submits an issue when Report an Issue is clicked', () => {
-    render(<FeatureRequestFab onSubmit={onSubmit} />);
+    renderFab();
     fireEvent.click(screen.getByRole('button', { name: 'Open Apex menu' }));
     fireEvent.click(screen.getByRole('menuitem', { name: /Report an Issue/i }));
     expect(onSubmit).toHaveBeenCalledWith('issue');
   });
 
   it('opens Ask Apex chat when Ask Apex is clicked', () => {
-    render(<FeatureRequestFab onSubmit={onSubmit} />);
+    renderFab();
     fireEvent.click(screen.getByRole('button', { name: 'Open Apex menu' }));
     fireEvent.click(screen.getByRole('menuitem', { name: /Ask Apex/i }));
     expect(screen.getByTestId('ask-apex-chat')).toBeInTheDocument();
   });
 
   it('closes the menu on Escape', () => {
-    render(<FeatureRequestFab onSubmit={onSubmit} />);
+    renderFab();
     fireEvent.click(screen.getByRole('button', { name: 'Open Apex menu' }));
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('menuitem', { name: /Ask Apex/i })).not.toBeInTheDocument();
   });
 
   it('renders the Apex brand mark on the FAB', () => {
-    render(<FeatureRequestFab onSubmit={onSubmit} />);
+    renderFab();
     expect(screen.getByTestId('apex-brand-mark')).toBeInTheDocument();
   });
 
   it('opens the menu on click but not after a drag gesture', () => {
-    render(<FeatureRequestFab onSubmit={onSubmit} />);
+    renderFab();
     const fab = screen.getByRole('button', { name: 'Open Apex menu' });
 
     fireEvent.pointerDown(fab, { clientX: 100, clientY: 100, pointerId: 1 });
@@ -79,7 +105,7 @@ describe('FeatureRequestFab', () => {
   });
 
   it('preserves its viewport-edge offset while the window resizes', () => {
-    render(<FeatureRequestFab onSubmit={onSubmit} />);
+    renderFab();
     const fabContainer = screen.getByRole('button', { name: 'Open Apex menu' }).parentElement!;
 
     expect(fabContainer).toHaveStyle({ left: '1128px', top: '728px' });

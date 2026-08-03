@@ -1,11 +1,15 @@
-import { bigserial, boolean, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigserial, boolean, check, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
+import type { RepoProvider, RepoRole, RunType } from '../../shared/types/runGrounding';
 import type {
+  OverlayTextBox,
   PageManifestEntry,
   PdfConversionStatus,
   PdfFileMetadata,
   PdfJobType,
   PdfSessionStatus,
+  PdfSignatureState,
+  PdfTextFormValue,
 } from '../../shared/types/pdf';
 import type {
   WorkItemHierarchyNode,
@@ -22,7 +26,7 @@ import type {
   ChatThreadKickoff,
   SseEvent,
 } from '../../shared/types/chat';
-import type { ContentSnapshot, PrdValidationBaseline, TestCaseCoverageSummary, ValidationScorecard } from '../../shared/types/interview';
+import type { ContentSnapshot, DesignDocValidationOverride, PrdReadinessOverride, PrdValidationBaseline, TestCaseCoverageSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { DesignPrototypeHistoryEntry } from '../../shared/types/designPrototype';
 import type { UiLabHistoryEntry } from '../../shared/types/uiLab';
 import type { DevSessionSetupPhase } from '../../shared/types/devWorkbench';
@@ -34,6 +38,34 @@ import type { ProjectAccessRequestStatus } from '../../shared/types/platformAdmi
 import type { FlagLifecycle, FlagRuleType, FlagAuditAction } from '../../shared/types/featureFlags';
 import type { WorkItemType } from '../../shared/types/featureRequest';
 import type { DesignModuleIconKey } from '../../shared/types/designModule';
+import type {
+  LoadProfile,
+  LoadTestEngine,
+  LoadTestExecutionSnapshot,
+  LoadTestFlowType,
+  LoadTestRunSource,
+  LoadTestScriptSource,
+  FlowStep,
+  RunStatus,
+  Threshold,
+  ThresholdResult,
+  ArtifactRef,
+} from '../../shared/types/loadTest';
+import type {
+  WalkthroughAnchorPlacement,
+  WalkthroughGenerationProvenance,
+  WalkthroughLifecycle,
+  WalkthroughProgressStatus,
+  WalkthroughTargetRuleType,
+} from '../../shared/types/walkthrough';
+import type {
+  WalkthroughAnchorAiProvenance,
+  WalkthroughAnchorReviewStatus,
+  WalkthroughAnchorSourceKind,
+  WalkthroughAnchorSourceLocation,
+} from '../../shared/types/walkthroughAnchorRegistry';
+import type { WalkthroughRegistryPlacement } from '../../shared/walkthroughAnchors';
+import { WALKTHROUGH_AI_OPTIONS_SINGLETON_ID } from '../../shared/types/walkthroughAiOptions';
 
 // ── Tables ────────────────────────────────────────────────────────────────────
 
@@ -43,6 +75,8 @@ export const chatThreads = pgTable('chat_threads', {
   status: text('status').notNull().default('idle'),
   kickoff: jsonb('kickoff').$type<ChatThreadKickoff>().notNull(),
   cursorAgentId: text('cursor_agent_id'),
+  groundingMode: text('grounding_mode'),
+  groundedSha: text('grounded_sha'),
   workspaceDir: text('workspace_dir'),
   lastError: text('last_error'),
   savedWikiUrl: text('saved_wiki_url'),
@@ -140,6 +174,42 @@ export const repoCacheLeases = pgTable('repo_cache_leases', {
   expiresAtIdx: index('idx_repo_cache_leases_expires_at').on(t.expiresAt),
 }));
 
+export const runGroundings = pgTable('run_groundings', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  runType: text('run_type').$type<RunType>().notNull(),
+  runId: text('run_id').notNull(),
+  repoRole: text('repo_role').$type<RepoRole>().notNull(),
+  provider: text('provider').$type<RepoProvider>().notNull(),
+  project: text('project').notNull(),
+  repository: text('repository').notNull(),
+  branch: text('branch').notNull(),
+  groundedSha: text('grounded_sha').notNull(),
+  groundedAt: timestamp('grounded_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  isActive: boolean('is_active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  runTypeCheck: check(
+    'run_groundings_run_type_check',
+    sql`${t.runType} IN ('chat', 'one_shot', 'service')`,
+  ),
+  repoRoleCheck: check(
+    'run_groundings_repo_role_check',
+    sql`${t.repoRole} IN ('target', 'skill')`,
+  ),
+  providerCheck: check(
+    'run_groundings_provider_check',
+    sql`${t.provider} IN ('github', 'azure_devops')`,
+  ),
+  runLookupIdx: index('idx_run_groundings_run_lookup').on(t.runType, t.runId),
+  activeRepoBranchIdx: index('idx_run_groundings_active_repo_branch')
+    .on(t.provider, t.project, t.repository, t.branch)
+    .where(sql`${t.isActive}`),
+  activeRunRoleUq: uniqueIndex('uq_run_groundings_active_run_role')
+    .on(t.runType, t.runId, t.repoRole)
+    .where(sql`${t.isActive}`),
+}));
+
 // ── RBAC Tables ───────────────────────────────────────────────────────────────
 
 export const appUsers = pgTable('app_users', {
@@ -151,6 +221,21 @@ export const appUsers = pgTable('app_users', {
   showChangelogOnLogin: boolean('show_changelog_on_login').notNull().default(true),
   dismissedBetaProdAnnouncement: boolean('dismissed_beta_prod_announcement').notNull().default(false),
 });
+
+/**
+ * One-to-one personal profile content keyed by Azure AD object ID.
+ * Optional bio and avatar metadata live here — not on app_users (RBAC identity cache).
+ */
+export const userProfiles = pgTable('user_profiles', {
+  userOid: text('user_oid').primaryKey().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  bio: text('bio'),
+  avatarBlobKey: text('avatar_blob_key'),
+  avatarUpdatedAt: timestamp('avatar_updated_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  userOidIdx: index('idx_user_profiles_user_oid').on(t.userOid),
+}));
 
 export const appRoles = pgTable('app_roles', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -197,13 +282,24 @@ export const appUserProjectRoles = pgTable('app_user_project_roles', {
 
 // ── RBAC Relations ────────────────────────────────────────────────────────────
 
-export const appUsersRelations = relations(appUsers, ({ many }) => ({
+export const appUsersRelations = relations(appUsers, ({ many, one }) => ({
   userRoles: many(appUserRoles),
   projectRoles: many(appUserProjectRoles),
   groupMemberships: many(appGroupMembers),
   projectAssignments: many(userProjectAssignments),
   projectAccessRequests: many(projectAccessRequests),
   featureRequests: many(featureRequests),
+  profile: one(userProfiles, {
+    fields: [appUsers.oid],
+    references: [userProfiles.userOid],
+  }),
+}));
+
+export const userProfilesRelations = relations(userProfiles, ({ one }) => ({
+  user: one(appUsers, {
+    fields: [userProfiles.userOid],
+    references: [appUsers.oid],
+  }),
 }));
 
 export const appRolesRelations = relations(appRoles, ({ many }) => ({
@@ -338,6 +434,8 @@ export const interviews = pgTable('interviews', {
   designPrototypeApproverIds: jsonb('design_prototype_approver_ids').$type<string[]>(),
   testCaseApproverIds: jsonb('test_case_approver_ids').$type<string[]>(),
   skillSettingsId: uuid('skill_settings_id'),
+  prototypeStageEnabled: boolean('prototype_stage_enabled').notNull().default(true),
+  testCasesEnabled: boolean('test_cases_enabled').notNull().default(true),
   status: text('status').notNull().default('in_progress'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -389,6 +487,7 @@ export const prds = pgTable('prds', {
   validationReportMd: text('validation_report_md'),
   validationPhase: text('validation_phase'),
   fixBaseline: jsonb('fix_baseline').$type<PrdValidationBaseline>(),
+  readinessOverride: jsonb('readiness_override').$type<PrdReadinessOverride>(),
   skillSettingsId: uuid('skill_settings_id'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -422,6 +521,7 @@ export const designDocs = pgTable('design_docs', {
   validationReportMd: text('validation_report_md'),
   validationPhase: text('validation_phase'),
   fixBaseline: jsonb('fix_baseline').$type<ContentSnapshot>(),
+  validationOverride: jsonb('validation_override').$type<DesignDocValidationOverride>(),
   authorId: text('author_id').notNull(),
   title: text('title').notNull().default('Untitled Design Doc'),
   model: text('model'),
@@ -582,6 +682,7 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   designPlanBedrockModelId: text('design_plan_bedrock_model_id'),
   designPlanBedrockMaxTokens: integer('design_plan_bedrock_max_tokens'),
   prdValidationScoreThreshold: integer('prd_validation_score_threshold'),
+  designDocValidationScoreThreshold: integer('design_doc_validation_score_threshold'),
   uiLabBedrockModelId: text('ui_lab_bedrock_model_id'),
   uiLabBedrockMaxTokens: integer('ui_lab_bedrock_max_tokens'),
   uiLabBedrockTimeoutMs: integer('ui_lab_bedrock_timeout_ms'),
@@ -615,6 +716,12 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   cursorServiceAccountId: text('cursor_service_account_id'),
   calendarAssistantSkillPath: text('calendar_assistant_skill_path'),
   calendarAssistantModel: text('calendar_assistant_model'),
+  loadTestGenerationSkillPath: text('load_test_generation_skill_path'),
+  loadTestGenerationModel: text('load_test_generation_model'),
+  designModuleSkillPath: text('design_module_skill_path'),
+  designModuleModel: text('design_module_model'),
+  designModuleScopingSkillPath: text('design_module_scoping_skill_path'),
+  designModuleScopingModel: text('design_module_scoping_model'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (t) => ({
@@ -703,8 +810,12 @@ export const notifications = pgTable('notifications', {
   body: text('body'),
   link: text('link'),
   read: boolean('read').notNull().default(false),
+  /** Optional producer idempotency key (unique when present). FEAT-007. */
+  dedupeKey: text('dedupe_key'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
-});
+}, (t) => ({
+  dedupeKeyUq: uniqueIndex('uq_notifications_dedupe_key').on(t.dedupeKey),
+}));
 
 export const notificationPreferences = pgTable('notification_preferences', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -744,7 +855,8 @@ export const appSettings = pgTable('app_settings', {
 
 export const designModules = pgTable('design_modules', {
   id: uuid('id').primaryKey().defaultRandom(),
-  slug: text('slug').notNull().unique(),
+  project: text('project').notNull().default('Apex'),
+  slug: text('slug').notNull(),
   label: text('label').notNull(),
   description: text('description'),
   iconKey: text('icon_key').$type<DesignModuleIconKey>().notNull().default('default'),
@@ -754,12 +866,15 @@ export const designModules = pgTable('design_modules', {
   sourceCommit: text('source_commit'),
   lastGeneratedAt: timestamp('last_generated_at', { withTimezone: true, mode: 'string' }),
   generatedByModel: text('generated_by_model'),
+  scopingThreadId: text('scoping_thread_id'),
   sortOrder: integer('sort_order').notNull().default(0),
   createdBy: text('created_by'),
   updatedBy: text('updated_by'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
+  projectSlugUnique: uniqueIndex('design_modules_project_slug_key').on(t.project, t.slug),
+  projectIdx: index('idx_design_modules_project').on(t.project),
   sortOrderIdx: index('idx_design_modules_sort_order').on(t.sortOrder, t.label),
 }));
 
@@ -1227,7 +1342,7 @@ export const featureRequestAdrs = pgTable('feature_request_adrs', {
   featureRequestId: uuid('feature_request_id').notNull()
     .references(() => featureRequests.id, { onDelete: 'cascade' }),
   adrId: uuid('adr_id').notNull()
-    .references(() => adrs.id, { onDelete: 'restrict' }),
+    .references(() => adrs.id, { onDelete: 'cascade' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
   pk: primaryKey({ columns: [t.featureRequestId, t.adrId] }),
@@ -1265,8 +1380,11 @@ export const pdfSessions = pgTable('pdf_sessions', {
   projectId: text('project_id'),
   status: text('status').$type<PdfSessionStatus>().notNull().default('active'),
   pageManifest: jsonb('page_manifest').$type<PageManifestEntry[]>().notNull().default([]),
+  textOverlays: jsonb('text_overlays').$type<OverlayTextBox[]>().notNull().default([]),
   fileMetadata: jsonb('file_metadata').$type<PdfFileMetadata[]>().notNull().default([]),
   exportFilename: text('export_filename'),
+  formFieldValues: jsonb('form_field_values').$type<PdfTextFormValue[]>().notNull().default([]),
+  signatureState: jsonb('signature_state').$type<PdfSignatureState>().notNull().default({ assets: [], overlays: [] }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull().default(sql`now() + interval '4 hours'`),
@@ -1531,6 +1649,374 @@ export const workItemChangeProposalsRelations = relations(workItemChangeProposal
 
 // Add calendar assistant columns to projectSkillSettings (applied via migration)
 // Drizzle schema mirrors columns added in 20260715170000_calendar-work-item-assistant.sql
+
+// ── Load Testing Module ───────────────────────────────────────────────────────
+
+export const loadTests = pgTable('load_test', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: text('project_id').notNull(),
+  name: text('name').notNull(),
+  description: text('description'),
+  targetUrl: text('target_url').notNull(),
+  environment: text('environment').notNull(),
+  engine: text('engine').$type<LoadTestEngine>().notNull().default('k6'),
+  flowType: text('flow_type').$type<LoadTestFlowType>().notNull().default('single'),
+  scriptSource: text('script_source').$type<LoadTestScriptSource>().notNull().default('form_builder'),
+  script: text('script').notNull(),
+  loadProfile: jsonb('load_profile').$type<LoadProfile>().notNull(),
+  clientThresholds: jsonb('client_thresholds').$type<Threshold[]>().notNull().default([]),
+  flowSteps: jsonb('flow_steps').$type<FlowStep[] | null>(),
+  runSource: text('run_source').$type<LoadTestRunSource>(),
+  secretRefs: jsonb('secret_refs').$type<Record<string, string>>(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  createdBy: text('created_by').notNull(),
+  updatedBy: text('updated_by').notNull(),
+}, (t) => ({
+  projectIdIdx: index('idx_load_test_project_id').on(t.projectId),
+  projectCreatedIdx: index('idx_load_test_project_created').on(t.projectId, t.createdAt),
+}));
+
+export const loadTestRuns = pgTable('load_test_run', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: text('project_id').notNull(),
+  loadTestId: uuid('load_test_id').notNull().references(() => loadTests.id, { onDelete: 'restrict' }),
+  status: text('status').$type<RunStatus>().notNull().default('queued'),
+  runSource: text('run_source').$type<LoadTestRunSource>().notNull().default('app'),
+  queuedAt: timestamp('queued_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }),
+  completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
+  heartbeatAt: timestamp('heartbeat_at', { withTimezone: true, mode: 'string' }),
+  dispatchMessageId: text('dispatch_message_id'),
+  cancelRequested: boolean('cancel_requested').notNull().default(false),
+  overallResult: text('overall_result').$type<'passed' | 'failed'>(),
+  thresholdResults: jsonb('threshold_results').$type<ThresholdResult[]>(),
+  summaryArtifactRef: jsonb('summary_artifact_ref').$type<ArtifactRef>(),
+  timeseriesArtifactRef: jsonb('timeseries_artifact_ref').$type<ArtifactRef>(),
+  errorDetail: text('error_detail'),
+  targetKey: text('target_key'),
+  executionSnapshot: jsonb('execution_snapshot').$type<LoadTestExecutionSnapshot>(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectIdIdx: index('idx_load_test_run_project_id').on(t.projectId),
+  projectCreatedIdx: index('idx_load_test_run_project_created').on(t.projectId, t.createdAt),
+  loadTestIdIdx: index('idx_load_test_run_load_test_id').on(t.loadTestId),
+  statusHeartbeatIdx: index('idx_load_test_run_status_heartbeat').on(t.status, t.heartbeatAt),
+}));
+
+export const loadTestTargets = pgTable('load_test_target', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: text('project_id').notNull(),
+  baseUrl: text('base_url').notNull(),
+  environmentLabel: text('environment_label').notNull(),
+  isReachable: boolean('is_reachable').notNull().default(true),
+  isActive: boolean('is_active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  createdBy: text('created_by').notNull(),
+  updatedBy: text('updated_by').notNull(),
+}, (t) => ({
+  projectIdIdx: index('idx_load_test_target_project_id').on(t.projectId),
+  projectBaseUrlUq: uniqueIndex('uq_load_test_target_project_base_url').on(t.projectId, t.baseUrl),
+}));
+
+export const loadTestsRelations = relations(loadTests, ({ many }) => ({
+  runs: many(loadTestRuns),
+}));
+
+export const loadTestRunsRelations = relations(loadTestRuns, ({ one }) => ({
+  loadTest: one(loadTests, {
+    fields: [loadTestRuns.loadTestId],
+    references: [loadTests.id],
+  }),
+}));
+
+// ── Walkthrough Tables (FEAT-001) ─────────────────────────────────────────────
+
+export const walkthroughs = pgTable('walkthroughs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  internalName: text('internal_name').notNull(),
+  userTitle: text('user_title').notNull(),
+  whyItMatters: text('why_it_matters').notNull().default(''),
+  lifecycle: text('lifecycle').$type<WalkthroughLifecycle>().notNull().default('draft'),
+  priority: integer('priority').notNull().default(0),
+  isRequired: boolean('is_required').notNull().default(false),
+  revision: integer('revision').notNull().default(1),
+  publishedAt: timestamp('published_at', { withTimezone: true, mode: 'string' }),
+  archivedAt: timestamp('archived_at', { withTimezone: true, mode: 'string' }),
+  createdBy: text('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedBy: text('updated_by').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  generationProvenance: jsonb('generation_provenance').$type<WalkthroughGenerationProvenance>(),
+}, (t) => ({
+  lifecyclePriorityPublishedIdx: index('idx_walkthroughs_lifecycle_priority_published').on(
+    t.lifecycle,
+    t.priority,
+    t.publishedAt,
+  ),
+}));
+
+export const walkthroughSteps = pgTable('walkthrough_steps', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  walkthroughId: uuid('walkthrough_id').notNull().references(() => walkthroughs.id, { onDelete: 'cascade' }),
+  ordinal: integer('ordinal').notNull(),
+  heading: text('heading').notNull(),
+  bodyMarkdown: text('body_markdown').notNull().default(''),
+  /** First-class Step destination; existing DB column retained for compatibility. */
+  route: text('target_route'),
+  imageUrl: text('image_url'),
+  imageAlt: text('image_alt'),
+  ctaLabel: text('cta_label'),
+  ctaRoute: text('cta_route'),
+  /** Flat nullable anchor columns — route is shared with the Step destination. */
+  anchorKey: text('anchor_key'),
+  placement: text('placement').$type<WalkthroughAnchorPlacement>(),
+}, (t) => ({
+  ordinalUq: unique('uq_walkthrough_steps_ordinal').on(t.walkthroughId, t.ordinal),
+  walkthroughOrdinalIdx: index('idx_walkthrough_steps_walkthrough_ordinal').on(
+    t.walkthroughId,
+    t.ordinal,
+  ),
+}));
+
+export const walkthroughTargetingRules = pgTable('walkthrough_targeting_rules', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  walkthroughId: uuid('walkthrough_id').notNull().references(() => walkthroughs.id, { onDelete: 'cascade' }),
+  type: text('type').$type<WalkthroughTargetRuleType>().notNull(),
+  value: text('value').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  typeValueIdx: index('idx_walkthrough_targeting_rules_type_value').on(t.type, t.value),
+  walkthroughIdx: index('idx_walkthrough_targeting_rules_walkthrough').on(t.walkthroughId),
+  walkthroughTypeValueUq: unique('uq_walkthrough_targeting_rules_walkthrough_type_value').on(
+    t.walkthroughId,
+    t.type,
+    t.value,
+  ),
+}));
+
+export const walkthroughProgress = pgTable('walkthrough_progress', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  walkthroughId: uuid('walkthrough_id').notNull().references(() => walkthroughs.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull(),
+  /** Persisted: seen | completed | dismissed only. acknowledged is derived. */
+  status: text('status').$type<WalkthroughProgressStatus>().notNull(),
+  lastStepId: uuid('last_step_id').references(() => walkthroughSteps.id, { onDelete: 'set null' }),
+  seenAt: timestamp('seen_at', { withTimezone: true, mode: 'string' }),
+  acknowledgedAt: timestamp('acknowledged_at', { withTimezone: true, mode: 'string' }),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  userRevisionUq: unique('uq_walkthrough_progress_user_revision').on(
+    t.walkthroughId,
+    t.userId,
+    t.revision,
+  ),
+  userWalkthroughRevisionIdx: index('idx_walkthrough_progress_user_walkthrough_revision').on(
+    t.userId,
+    t.walkthroughId,
+    t.revision,
+  ),
+  walkthroughRevisionIdx: index('idx_walkthrough_progress_walkthrough_revision').on(
+    t.walkthroughId,
+    t.revision,
+  ),
+}));
+
+export type WalkthroughNotificationAttemptState = 'pending' | 'delivered' | 'failed';
+
+export const walkthroughAnchorMisses = pgTable('walkthrough_anchor_misses', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  walkthroughId: uuid('walkthrough_id').notNull().references(() => walkthroughs.id, { onDelete: 'cascade' }),
+  stepId: uuid('step_id').notNull().references(() => walkthroughSteps.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull(),
+  projectSnapshot: text('project_snapshot').notNull(),
+  anchorKey: text('anchor_key').notNull(),
+  targetRoute: text('target_route').notNull(),
+  occurrenceId: uuid('occurrence_id').notNull(),
+  occurredAt: timestamp('occurred_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  occurrenceUq: unique('uq_walkthrough_anchor_misses_occurrence').on(
+    t.userId,
+    t.walkthroughId,
+    t.stepId,
+    t.revision,
+    t.occurrenceId,
+  ),
+  walkthroughOccurredIdx: index('idx_walkthrough_anchor_misses_walkthrough_occurred').on(
+    t.walkthroughId,
+    t.occurredAt,
+    t.id,
+  ),
+  stepRevisionIdx: index('idx_walkthrough_anchor_misses_step_revision').on(t.stepId, t.revision),
+}));
+
+export const walkthroughNotificationDeliveries = pgTable('walkthrough_notification_deliveries', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  walkthroughId: uuid('walkthrough_id').notNull().references(() => walkthroughs.id, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull(),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  notificationId: uuid('notification_id').references(() => notifications.id, { onDelete: 'set null' }),
+  attemptState: text('attempt_state').$type<WalkthroughNotificationAttemptState>().notNull().default('pending'),
+  attemptCount: integer('attempt_count').notNull().default(0),
+  lastErrorClass: text('last_error_class'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  wtRevUserUq: unique('uq_walkthrough_notification_deliveries_wt_rev_user').on(
+    t.walkthroughId,
+    t.revision,
+    t.userId,
+  ),
+  userRevisionIdx: index('idx_walkthrough_notification_deliveries_user_revision').on(
+    t.userId,
+    t.walkthroughId,
+    t.revision,
+  ),
+}));
+
+/** Smart Anchor Management — approved+active rows are the runtime catalog. */
+export const walkthroughAnchorRegistry = pgTable('walkthrough_anchor_registry', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  anchorKey: text('anchor_key').notNull(),
+  testId: text('test_id').notNull(),
+  label: text('label').notNull(),
+  suggestedRoute: text('suggested_route'),
+  approvedRoute: text('approved_route'),
+  allowedPlacements: jsonb('allowed_placements')
+    .$type<WalkthroughRegistryPlacement[]>()
+    .notNull()
+    .default(['bottom']),
+  smartTags: jsonb('smart_tags').$type<string[]>().notNull().default([]),
+  openerAnchorKeys: jsonb('opener_anchor_keys').$type<string[]>().notNull().default([]),
+  sourceKind: text('source_kind').$type<WalkthroughAnchorSourceKind>().notNull(),
+  sourceLocations: jsonb('source_locations')
+    .$type<WalkthroughAnchorSourceLocation[]>()
+    .notNull()
+    .default([]),
+  sourceHash: text('source_hash'),
+  reviewStatus: text('review_status')
+    .$type<WalkthroughAnchorReviewStatus>()
+    .notNull()
+    .default('pending'),
+  isActive: boolean('is_active').notNull().default(false),
+  lastSeenAt: timestamp('last_seen_at', { withTimezone: true, mode: 'string' }),
+  missingSince: timestamp('missing_since', { withTimezone: true, mode: 'string' }),
+  deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
+  aiProvenance: jsonb('ai_provenance').$type<WalkthroughAnchorAiProvenance>(),
+  createdBy: text('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedBy: text('updated_by').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  anchorKeyUq: uniqueIndex('uq_walkthrough_anchor_registry_anchor_key')
+    .on(t.anchorKey)
+    .where(sql`${t.deletedAt} IS NULL`),
+  testIdUq: uniqueIndex('uq_walkthrough_anchor_registry_test_id')
+    .on(t.testId)
+    .where(sql`${t.deletedAt} IS NULL`),
+  smartTagsGinIdx: index('idx_walkthrough_anchor_registry_smart_tags').using('gin', t.smartTags),
+  activeRouteStatusIdx: index('idx_walkthrough_anchor_registry_active_route_status')
+    .on(t.isActive, t.approvedRoute, t.reviewStatus)
+    .where(sql`${t.deletedAt} IS NULL`),
+  reviewStatusIdx: index('idx_walkthrough_anchor_registry_review_status')
+    .on(t.reviewStatus)
+    .where(sql`${t.deletedAt} IS NULL`),
+}));
+
+/** Platform Admin → Walkthroughs → Options (singleton skill + agent model). */
+export const walkthroughAiOptions = pgTable('walkthrough_ai_options', {
+  id: text('id').primaryKey().default(WALKTHROUGH_AI_OPTIONS_SINGLETON_ID),
+  walkthroughGenerationSkillPath: text('walkthrough_generation_skill_path').notNull(),
+  walkthroughGenerationModel: text('walkthrough_generation_model').notNull().default(''),
+  anchorSmartTaggingSkillPath: text('anchor_smart_tagging_skill_path').notNull(),
+  anchorSmartTaggingModel: text('anchor_smart_tagging_model').notNull().default(''),
+  anchorDiscoverySkillPath: text('anchor_discovery_skill_path')
+    .notNull()
+    .default('.cursor/skills/walkthrough-anchor-discovery/SKILL.md'),
+  anchorDiscoveryModel: text('anchor_discovery_model').notNull().default(''),
+  createdBy: text('created_by').notNull(),
+  createdByDisplayName: text('created_by_display_name').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedBy: text('updated_by').notNull(),
+  updatedByDisplayName: text('updated_by_display_name').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export const walkthroughsRelations = relations(walkthroughs, ({ many }) => ({
+  steps: many(walkthroughSteps),
+  targetingRules: many(walkthroughTargetingRules),
+  progress: many(walkthroughProgress),
+  notificationDeliveries: many(walkthroughNotificationDeliveries),
+  anchorMisses: many(walkthroughAnchorMisses),
+}));
+
+export const walkthroughAnchorMissesRelations = relations(walkthroughAnchorMisses, ({ one }) => ({
+  walkthrough: one(walkthroughs, {
+    fields: [walkthroughAnchorMisses.walkthroughId],
+    references: [walkthroughs.id],
+  }),
+  step: one(walkthroughSteps, {
+    fields: [walkthroughAnchorMisses.stepId],
+    references: [walkthroughSteps.id],
+  }),
+  user: one(appUsers, {
+    fields: [walkthroughAnchorMisses.userId],
+    references: [appUsers.oid],
+  }),
+}));
+
+export const walkthroughNotificationDeliveriesRelations = relations(
+  walkthroughNotificationDeliveries,
+  ({ one }) => ({
+    walkthrough: one(walkthroughs, {
+      fields: [walkthroughNotificationDeliveries.walkthroughId],
+      references: [walkthroughs.id],
+    }),
+    user: one(appUsers, {
+      fields: [walkthroughNotificationDeliveries.userId],
+      references: [appUsers.oid],
+    }),
+    notification: one(notifications, {
+      fields: [walkthroughNotificationDeliveries.notificationId],
+      references: [notifications.id],
+    }),
+  }),
+);
+
+export const walkthroughStepsRelations = relations(walkthroughSteps, ({ one, many }) => ({
+  walkthrough: one(walkthroughs, {
+    fields: [walkthroughSteps.walkthroughId],
+    references: [walkthroughs.id],
+  }),
+  progressRows: many(walkthroughProgress),
+  anchorMisses: many(walkthroughAnchorMisses),
+}));
+
+export const walkthroughTargetingRulesRelations = relations(walkthroughTargetingRules, ({ one }) => ({
+  walkthrough: one(walkthroughs, {
+    fields: [walkthroughTargetingRules.walkthroughId],
+    references: [walkthroughs.id],
+  }),
+}));
+
+export const walkthroughProgressRelations = relations(walkthroughProgress, ({ one }) => ({
+  walkthrough: one(walkthroughs, {
+    fields: [walkthroughProgress.walkthroughId],
+    references: [walkthroughs.id],
+  }),
+  user: one(appUsers, {
+    fields: [walkthroughProgress.userId],
+    references: [appUsers.oid],
+  }),
+  lastStep: one(walkthroughSteps, {
+    fields: [walkthroughProgress.lastStepId],
+    references: [walkthroughSteps.id],
+  }),
+}));
 
 // ── Foundation Skill Releases ─────────────────────────────────────────────────
 

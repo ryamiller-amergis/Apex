@@ -2,11 +2,21 @@
 
 ## What is Apex?
 
-Apex (formerly AI-Pilot) is an internal product-building and project-management platform that centralizes the software delivery lifecycle into a single AI-enhanced application. It connects Azure DevOps work items, AI-guided design interviews, automated PRD generation, design doc workflows, daily standups, planning analytics, and cloud cost tracking into one cohesive experience — replacing fragmented manual processes with streamlined, AI-assisted workflows.
+Apex (formerly AI-Pilot) is an internal product-building and project-management platform that centralizes the software delivery lifecycle into a single AI-enhanced application. It connects Azure DevOps work items, AI-guided design interviews, automated PRD generation, design doc workflows, daily standups, planning analytics, cloud cost tracking, guided walkthroughs, load testing, UI prototyping, PDF assembly, AI cost analytics, and design-module scoping into one cohesive experience — replacing fragmented manual processes with streamlined, AI-assisted workflows.
 
 **Core value proposition:** Apex eliminates context-switching between disconnected tools by bringing work item management, document generation, review workflows, team ceremonies, and analytics into one platform — with AI agents that automate repetitive tasks, enforce consistency, and surface insights that would otherwise require manual effort.
 
 ## Key Features
+
+### 0. Agent Home
+
+The default landing experience for AI-assisted work within a project.
+
+- **Skill pills** — project-configured shortcuts that start a chat with a specific skill and model
+- **Thread history** — resume prior agent conversations from a sidebar
+- **Streaming chat** — SSE-powered agent responses with attachment support
+- **MCP integrations** — optional quick-launch pills for configured MCP servers
+- **Gated by** — `home:view` permission and the `agent-home` feature flag (both granted to all roles by default)
 
 ### 1. AI-Guided Design Interviews
 
@@ -62,6 +72,7 @@ Apex deeply integrates with Azure DevOps for work item management and export.
 - **Create in ADO** — exports PRD backlogs to Azure DevOps as PBIs, Features, Technical Backlog Items, dependency links, attached design docs, prototype HTML, and QA test cases
 - **Selective PBI creation** — push individual approved PBIs to ADO without creating the entire epic hierarchy
 - **Two-way sync** — changes in Azure DevOps are reflected in the app within the polling interval
+- **Work-item assistant** — AI chat launched from the details panel to propose Description and Acceptance Criteria changes; user reviews a diff and explicitly confirms before ADO writes (feature-flagged per project)
 
 ### 6. Daily Standup Ceremonies
 
@@ -121,12 +132,83 @@ Platform admins can create and manage feature flags for targeted rollout.
 
 A developer-focused view for managing personal work items and development sessions (visible to users in the Developer group).
 
+- **Apex PRD features** appear as PRD → Epic → Feature rows from approved PRDs. Each feature offers **View Context** (read-only PRD, backlog, design doc, tech spec, assumptions, and sandboxed prototype), **Start Local Development**, **Mark Complete**, and **Clear Progress** when in progress. Cloud Start/Resume/Close session actions are not offered on Apex feature rows.
+- **Non-Apex projects** continue to list ADO assigned work items with Start Development / Resume Session / local development actions unchanged.
+
 ### 13. What's New / Changelog
 
 - **Auto-popup** — What's New modal opens automatically after each deployment if there's a new release
 - **Non-blocking banner** on the project selector page
 - **User control** — "Show automatically on login" toggle; unread indicator on the profile icon
 - **Server-tracked** — release version synced through a server-side setting via database migration
+
+### 14. Guided Walkthroughs
+
+In-app guided tours that onboard users to Apex workflows without leaving the product.
+
+- **Authoring** — platform admins create walkthroughs in Platform Admin with manual editor or AI-assisted draft generation
+- **Step types** — modal steps and coachmark steps anchored to approved+active DB catalog keys (resolved to `data-testid` at serve time)
+- **Anchor Management** — Super Admins sync the UI for static `data-testid`s, review new/missing candidates, apply AI smart tags to newly discovered IDs only, and approve/reject catalog rows
+- **Targeting** — publish to everyone, specific projects, users, or groups; lifecycle states (draft → published → archived)
+- **Automatic launch** — eligible users see new walkthroughs on login (after What's New settles)
+- **Help replay** — users reopen walkthroughs from the Apex FAB help panel (`?help=walkthroughs` deep link)
+- **Progress tracking** — per-user acknowledgement with reporting and anchor-miss telemetry; stale/soft-deleted anchors fall back to centered guidance
+- **Repo-grounded generation** — AI generation validates routes (`walkthroughRoutes.ts`), ranked DB catalog anchors, and image assets before proposing steps
+
+### 15. UI Lab
+
+AI-assisted UI prototyping for the UI/UX group.
+
+- **Prompt-to-mock** — generate interactive HTML mockups from natural-language prompts
+- **Target routes** — designs can be scoped to a specific Apex page for context
+- **Versioning and comments** — iterate on designs with version history and threaded feedback
+- **Gated by** — `ui-lab:view` permission, UI/UX group membership, and menu visibility
+
+### 16. PDF Assembly Tool
+
+A three-panel PDF workspace for merging, reordering, and exporting documents.
+
+- **Upload and convert** — ingest PDFs and common office formats; background workers handle conversion
+- **Page manipulation** — reorder, rotate, and remove pages in a visual sidebar
+- **Export** — assemble a final PDF artifact for download
+- **Gated by** — `pdf-assembly:use` permission (no default role assignment — assign explicitly)
+
+### 17. AI Cost Analytics
+
+Platform-wide visibility into AI spend across Apex capabilities.
+
+- **Usage events** — tracks token usage and cost per feature, model, provider, and project
+- **Dashboards** — summary, timeseries, breakdowns by feature/model/project, and reconciliation views
+- **Cursor usage** — ingests Cursor analytics events alongside Bedrock/SDK usage
+- **Gated by** — `analytics:ai-cost:view` permission (admin by default)
+
+### 18. Design Module
+
+Project-scoped repository slices that ground AI agents on specific areas of the codebase.
+
+- **Module catalog** — define modules with name, description, and source globs
+- **AI scoping** — the design-module-scoping skill proposes source globs from a natural-language description
+- **Documentation** — attach or regenerate module docs for agent context
+- **Gated by** — `design-module:view` permission and menu visibility
+
+### 19. Load Testing
+
+k6-based load test definitions and runs scoped per project.
+
+- **Definition builder** — guided form or raw k6 script editor with AI script generation
+- **Thresholds and profiles** — configure VUs, duration, RPS caps, and pass/fail thresholds
+- **Target allowlist** — admins configure permitted targets; prod-pattern hostnames are blocked
+- **Run history** — view run status, threshold results, and script details
+- **Gated by** — `load-test:view` / `load-test:run` / `load-test:manage` permissions
+
+### 20. User Profile
+
+Per-user settings accessible from the header user menu.
+
+- **Avatar** — upload or choose an avatar; resolved via `avatarResolverService`
+- **Bio and display name** — plain-text profile fields with validation
+- **Theme** — Light, Dark, or Amergis theme selection
+- **Notification preferences** — per-type notification and toast toggles
 
 ## User Workflows
 
@@ -178,6 +260,13 @@ A developer-focused view for managing personal work items and development sessio
 3. Drag items back to unscheduled to clear due dates
 4. Click any item to open the details panel for editing
 5. Use filters to narrow by iteration, work item type, assignee, or state
+
+### How do I use a guided walkthrough?
+
+1. New walkthroughs launch automatically after login when you are in the targeted audience (What's New takes priority)
+2. Step through modal or coachmark steps using Next / Back / Dismiss
+3. Reopen any walkthrough from the **Apex FAB** → **Help** → **Walkthroughs**
+4. Platform admins author and publish walkthroughs in **Platform Admin** → **Walkthroughs**
 
 ## How Apex Cuts Down Workflows
 
@@ -235,7 +324,7 @@ A developer-focused view for managing personal work items and development sessio
 - **Azure Application Insights** for telemetry
 
 ### Data Storage
-- **PostgreSQL** — all persistent data: users, roles, permissions, chat threads, interviews, PRDs, design docs, notifications, feature flags, feature requests, standup sessions, project settings
+- **PostgreSQL** — all persistent data: users, roles, permissions, chat threads, interviews, PRDs, design docs, notifications, feature flags, feature requests, standup sessions, walkthroughs, load tests, UI Lab designs, PDF sessions, design modules, AI usage events, project settings
 - **Azure DevOps** — work items, iterations, area paths (accessed via API, not stored locally)
 
 ### AI Integration
@@ -247,7 +336,7 @@ A developer-focused view for managing personal work items and development sessio
 
 | Nav Item | Route | Permission | Description |
 |----------|-------|------------|-------------|
-| Home | `/home` | (any authenticated user) | Agent chat home with skill pills for guided conversations |
+| Home | `/home` | `home:view` permission + `agent-home` feature flag (both granted to all roles by default) | Agent chat home with skill pills for guided conversations |
 | Calendar | `/calendar` | `calendar:view` + menu enabled | Work item calendar with drag-and-drop scheduling |
 | Planning | `/planning/*` | `planning:view` + menu enabled | Analytics tabs: Dev Stats, QA Metrics, AI Analysis, Roadmap, Releases |
 | Cloud Cost | `/cloud-cost` | `cost:view` + menu enabled | Azure cloud cost visualization |
@@ -255,9 +344,15 @@ A developer-focused view for managing personal work items and development sessio
 | ADR | `/adr` | `adr:view` + menu enabled | Architecture decision interviews and MADR records |
 | My Work | `/my-work` | `dev-workbench:view` + Developer group + menu enabled | Developer workbench and sessions |
 | Standup | `/standup` | `standup:participate` + menu enabled | Daily standup ceremony participation |
-| Feature Requests | `/feature-requests` | `feature-requests:view` + Apex project only + menu enabled | Feature request review and triage (Apex admins) |
-| Admin | `/admin/*` | `admin:roles` | Roles, Users, Groups, Project Settings, Notifications |
-| Platform Admin | `/platform-admin` | Super admin only | Access & Users, Menu Visibility, Feature Flags |
+| UI Lab | `/ui-lab` | `ui-lab:view` + UI/UX group + menu enabled | AI-assisted UI mockup generation |
+| Apex Backlog | `/feature-requests` | `feature-requests:view` + Apex project only + menu enabled | Feature request review and triage (Apex admins) |
+| PDF Assembly Tool | `/pdf-tools` | `pdf-assembly:use` + menu enabled | PDF merge, reorder, and export workspace |
+| AI Cost Analytics | `/ai-cost` | `analytics:ai-cost:view` + menu enabled | AI usage and cost dashboards |
+| Design Module | `/design-module` | `design-module:view` + menu enabled | Repository module catalog and AI scoping |
+| Load Tests | `/load-tests` | `load-test:view` + menu enabled | k6 load test definitions and run history |
+| Profile | `/profile` | Authenticated user | Avatar, bio, theme, and notification preferences |
+| Admin | `/admin/*` | `admin:roles` | Roles, Users, Groups, Project Settings, Notifications, Load Test Targets |
+| Platform Admin | `/platform-admin` | Super admin only | Access & Users, Menu Visibility, Feature Flags, Walkthroughs, Walkthrough Reports |
 
 Navigation is controlled by three layers:
 1. **RBAC permissions** — determined from project-specific roles when assigned, otherwise from global roles; permissions refresh when the user switches projects
@@ -272,26 +367,35 @@ Navigation is controlled by three layers:
 - **Groups** — manage project groups (Developer, BA, QA, etc.) that gate certain features; member selection is limited to users assigned to the active project
 - **Project Settings** — per-project configuration for AI skills, models, approval mode, designated approvers
 - **Notifications** — admin notification management
+- **Load Test Targets** — configure the allowlisted hostnames/environments load tests may target
 
 ### Platform Admin (`/platform-admin`, super admin only)
 - **Access & Users** — manage project access requests and pending email assignments
 - **Menu Visibility** — toggle which modules are visible per project
 - **Feature Flags** — create flags with targeting rules, enable/disable toggles, lifecycle management, audit log
+- **Walkthroughs** — author, AI-draft, publish, and archive guided walkthroughs with targeting rules
+- **Walkthrough Reports** — acknowledgement status, replay metrics, and anchor-miss telemetry
 
 ## AI Capabilities
 
 | Capability | Skill | What it Does |
 |-----------|-------|-------------|
+| Agent Home Chat | (project-configured) | General-purpose agent conversations with skill pills and thread history |
 | Design Interview | `/grill-with-docs` | Structured interview that challenges design decisions using project context |
 | ADR Interview and Generation | `/adr-interview`, `/adr-finalize` | Challenges an architecture decision against repository evidence and writes a MADR record |
 | PRD Generation | `/to-prd` | Generates structured PRD + backlog hierarchy from interview transcript |
 | Design Doc Generation | (project-configured) | Auto-generates design docs from approved prototypes |
 | Design Doc Validation | (project-configured) | Scores design docs against a validation rubric; blocks approval below 90% |
 | Design Doc Fix | (project-configured) | Proposes targeted edits to fix validation gaps |
+| Design Module Scoping | `/design-module-scoping` | Proposes repository source globs for a design module from a description |
+| UI Lab Generation | `/ui-lab` | Generates interactive HTML UI mockups from prompts |
+| Walkthrough Generation | `/walkthrough-generation` | Repo-grounded walkthrough draft from natural-language intent |
+| Load Test Script Generation | `/k6-load-test-generation` | Generates k6 load test scripts from flow hints |
+| Calendar Work-Item Assistant | (project-configured) | Proposes ADO Description/AC changes from calendar context; user confirms before write |
 | Daily Standup | Daily Standup skill | Facilitates individual standup conversations with ADO context |
 | Standup Facilitation | Facilitator skill | Summarizes team updates and creates cross-cutting follow-ups |
 | Feature Request Analysis | Feature Request Analysis skill | Suggests priority, risk, and rationale for submitted requests |
 | PRD Assistant | (contextual) | Bulk-addresses reviewer feedback with proposed content changes |
-| Ask Apex | (this agent) | Product knowledge assistant that helps users understand and navigate Apex |
+| Ask Apex | `/app-knowledge` | Product knowledge assistant that helps users understand and navigate Apex |
 
 Each AI capability can be configured per project with a specific skill path and model in Admin → Project Settings. The system supports Cursor SDK models and AWS Bedrock models.

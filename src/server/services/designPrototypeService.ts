@@ -40,7 +40,7 @@ interface BacklogItem {
     iWant?: string;
     soThat?: string;
   };
-  /** User-type slugs (e.g. S/I/C/E/CO) this item applies to. */
+  /** Apex persona names (e.g. Platform Admin, Developer) this item applies to. */
   userTypes?: string[];
   /** Same control, different behavior per persona group. */
   personaBehaviors?: Array<{ userTypes: string[]; behavior: string }>;

@@ -17,18 +17,7 @@
         "additionalProperties": false,
         "properties": {
           "name": {
-            "type": "string",
-            "enum": [
-              "Product-Owner",
-              "BA",
-              "UI/UX",
-              "Manager",
-              "Developer",
-              "QA",
-              "Platform Admin",
-              "Project Admin",
-              "Authenticated User"
-            ]
+            "$ref": "#/definitions/apexPersonaName"
           },
           "type": {
             "type": "string",
@@ -150,6 +139,46 @@
       "type": "string",
       "enum": ["Must Have", "Should Have", "Could Have", "Won't Have"]
     },
+    "apexPersonaName": {
+      "type": "string",
+      "description": "Apex groups/roles enum. Treat interview wording 'Super Admin' as Platform Admin.",
+      "enum": [
+        "Product-Owner",
+        "BA",
+        "UI/UX",
+        "Manager",
+        "Developer",
+        "QA",
+        "Platform Admin",
+        "Project Admin",
+        "Authenticated User"
+      ]
+    },
+    "personaBehaviors": {
+      "type": "array",
+      "description": "Optional. Same control/screen with divergent behavior per persona group. Used by design-prototype generation. Features and PBIs only — never on TBIs.",
+      "items": {
+        "type": "object",
+        "required": ["userTypes", "behavior"],
+        "additionalProperties": false,
+        "properties": {
+          "userTypes": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "$ref": "#/definitions/apexPersonaName" }
+          },
+          "behavior": {
+            "type": "string",
+            "description": "What the control/screen does for this persona group."
+          }
+        }
+      }
+    },
+    "userTypes": {
+      "type": "array",
+      "description": "Optional. Apex personas this Feature/PBI serves. Often populated by post-generation enrichment for design prototypes. Features and PBIs only — never on TBIs. Treat Super Admin as Platform Admin.",
+      "items": { "$ref": "#/definitions/apexPersonaName" }
+    },
     "feature": {
       "type": "object",
       "required": ["id", "title", "priority", "description", "affectedPersonas", "outOfScope", "dependsOn", "items"],
@@ -169,21 +198,10 @@
         "affectedPersonas": {
           "type": "array",
           "minItems": 1,
-          "items": {
-            "type": "string",
-            "enum": [
-              "Product-Owner",
-              "BA",
-              "UI/UX",
-              "Manager",
-              "Developer",
-              "QA",
-              "Platform Admin",
-              "Project Admin",
-              "Authenticated User"
-            ]
-          }
+          "items": { "$ref": "#/definitions/apexPersonaName" }
         },
+        "userTypes": { "$ref": "#/definitions/userTypes" },
+        "personaBehaviors": { "$ref": "#/definitions/personaBehaviors" },
         "outOfScope": {
           "type": "array",
           "minItems": 1,
@@ -247,24 +265,13 @@
           "required": ["persona", "iWant", "soThat"],
           "additionalProperties": false,
           "properties": {
-            "persona": {
-              "type": "string",
-              "enum": [
-                "Product-Owner",
-                "BA",
-                "UI/UX",
-                "Manager",
-                "Developer",
-                "QA",
-                "Platform Admin",
-                "Project Admin",
-                "Authenticated User"
-              ]
-            },
+            "persona": { "$ref": "#/definitions/apexPersonaName" },
             "iWant": { "type": "string" },
             "soThat": { "type": "string" }
           }
         },
+        "userTypes": { "$ref": "#/definitions/userTypes" },
+        "personaBehaviors": { "$ref": "#/definitions/personaBehaviors" },
         "businessRules": {
           "type": "array",
           "items": { "type": "string" }

@@ -50,6 +50,7 @@ jest.mock('../../hooks/useInterviews', () => ({
   useFixValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useAcceptFixValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useRevertDesignDocSection: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useOverrideDesignDocValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useFixDesignDocWithAi: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
   useFixDesignDocCommentWithAi: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useReassignApprovers: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
@@ -71,7 +72,10 @@ jest.mock('react-markdown', () => ({
 jest.mock('remark-gfm', () => ({ __esModule: true, default: jest.fn() }));
 jest.mock('mermaid', () => ({ initialize: jest.fn(), run: jest.fn() }));
 jest.mock('../ConfirmDeleteModal', () => ({ ConfirmDeleteModal: () => null }));
-jest.mock('../AnnotationLayer', () => ({ AnnotationLayer: ({ children }: { children: ReactNode }) => <>{children}</> }));
+jest.mock('../AnnotationLayer', () => ({
+  AnnotationLayer: ({ children }: { children: ReactNode }) => <>{children}</>,
+  unwrapCommentMarks: jest.fn(),
+}));
 jest.mock('../ReviewCommentSidebar', () => ({ ReviewCommentSidebar: () => null }));
 jest.mock('../../hooks/useReviewComments', () => ({
   useReviewComments: () => ({ data: [] }),

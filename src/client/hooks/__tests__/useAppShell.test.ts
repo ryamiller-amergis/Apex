@@ -12,6 +12,15 @@ jest.mock('../useWorkItems', () => ({
   }),
 }));
 
+jest.mock('../useChangelog', () => ({
+  useChangelog: () => ({
+    data: { currentVersion: '1.0.0', entries: [] },
+    isLoading: false,
+    isError: false,
+    isFetched: true,
+  }),
+}));
+
 jest.mock('../../config/env', () => ({
   env: { VITE_TEAMS: 'ProjectA|ProjectA/Team1~~~ProjectB|ProjectB/Team2' },
 }));

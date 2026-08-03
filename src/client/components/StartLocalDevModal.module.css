@@ -125,12 +125,12 @@
 
 .editorBtnActive {
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .editorBtnActive:hover {
   background: var(--accent-hover);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .status {
@@ -285,7 +285,7 @@
 
 .btnPrimary {
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: 1px solid var(--accent-color);
   border-radius: 6px;
   padding: 8px 16px;

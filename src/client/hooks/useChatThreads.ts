@@ -1,10 +1,12 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import type {
   ChatThread,
   ChatThreadSummary,
+  ChatThreadSearchResult,
   StartChatRequest,
   SendMessageRequest,
 } from '../../shared/types/chat';
+import { useDebouncedValue } from './useDebouncedValue';
 
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: 'include', ...options });
@@ -15,6 +17,31 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+const MIN_SEARCH_LENGTH = 2;
+
+export interface UseChatThreadListOptions {
+  /** Raw search term; debounced ~300ms inside the hook before it joins the query key. */
+  searchTerm?: string;
+  /** When searching, forwarded as flaggedOnly to the list API (BR-006). */
+  flaggedOnly?: boolean;
+}
+
+function buildThreadListUrl(
+  limit: number,
+  project: string | null | undefined,
+  q: string | null,
+  flaggedOnly: boolean,
+): string {
+  const params = new URLSearchParams();
+  params.set('limit', String(limit));
+  if (project) params.set('project', project);
+  if (q) {
+    params.set('q', q);
+    if (flaggedOnly) params.set('flaggedOnly', 'true');
+  }
+  return `/api/chat/threads?${params.toString()}`;
+}
+
 export function useChatThreads() {
   return useQuery<ChatThread[]>({
     queryKey: ['chat-threads'],
@@ -23,16 +50,36 @@ export function useChatThreads() {
   });
 }
 
-export function useChatThreadList(limit = 50, project?: string | null) {
-  return useQuery<ChatThreadSummary[]>({
-    queryKey: ['chat-thread-list', limit, project],
+/**
+ * Lightweight thread list for the history sidebar.
+ * Optional `searchTerm` is debounced (~300ms); terms under 2 chars fall back to the
+ * normal summary list (BR-003). Search and non-search share the `chat-thread-list`
+ * query-key family (TBI-004 NFR).
+ */
+export function useChatThreadList(
+  limit = 50,
+  project?: string | null,
+  options?: UseChatThreadListOptions,
+) {
+  const debouncedTerm = useDebouncedValue(options?.searchTerm ?? '', 300);
+  const trimmed = debouncedTerm.trim();
+  const effectiveQ = trimmed.length >= MIN_SEARCH_LENGTH ? trimmed : null;
+  const flaggedOnly = Boolean(options?.flaggedOnly);
+
+  const query = useQuery<ChatThreadSummary[] | ChatThreadSearchResult[]>({
+    queryKey: ['chat-thread-list', limit, project, effectiveQ, effectiveQ ? flaggedOnly : false],
     queryFn: () =>
-      apiFetch(
-        `/api/chat/threads?limit=${limit}${project ? `&project=${encodeURIComponent(project)}` : ''}`,
-      ),
+      apiFetch(buildThreadListUrl(limit, project, effectiveQ, flaggedOnly)),
     enabled: !!project,
     staleTime: 30_000,
+    placeholderData: keepPreviousData,
   });
+
+  return {
+    ...query,
+    /** True when the debounced term meets the 2-char minimum and search is active. */
+    isSearchActive: effectiveQ !== null,
+  };
 }
 
 export function useChatThread(threadId: string | null) {

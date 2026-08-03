@@ -1,0 +1,17 @@
+import React from 'react';
+import {
+  WalkthroughAnchorKeys,
+  anchorTestIdProps,
+} from '../../shared/walkthroughAnchors';
+
+/**
+ * Same stable test ID appears via explicit marker and a literal.
+ * Aggregate should prefer sourceKind=explicit.
+ */
+export const MixedExplicitAndLiteral: React.FC = () => (
+  <div>
+    <div {...anchorTestIdProps(WalkthroughAnchorKeys.WHATS_NEW_MODAL)}>Modal</div>
+    {/* Rare: literal duplicate of the same test id */}
+    <div {...{ 'data-testid': 'whats-new-modal' }}>Also modal</div>
+  </div>
+);

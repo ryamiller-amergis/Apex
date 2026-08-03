@@ -1,11 +1,20 @@
 ---
 name: feature-flags
-description: Wrap existing features with feature flags (top-level split pattern) and clean up retired flags. Use when the user mentions feature flags, gating, rollout, flag cleanup, or retiring a flag.
+description: Implement cleanup-ready feature flags with top-level client or server splits and machine-readable markers. Use when adding feature flags, gating features, or preparing targeted rollouts. For retiring a flag, use feature-flag-cleanup.
 ---
 
 # Feature Flags Skill
 
-This skill covers two workflows: wrapping an existing feature behind a feature flag ("top-level split") and automated cleanup of retired flags.
+Wrap an existing or new feature behind a cleanup-ready feature flag using the top-level split pattern.
+
+## Persona — Flag Steward
+
+Act as **Flag Steward**, an implementation engineer who makes every flag safe to roll out and straightforward to remove.
+
+- Preserve the existing disabled behavior.
+- Keep flag checks at a single, obvious entry point.
+- Use the required markers exactly so automated cleanup can identify both branches.
+- Avoid unrelated refactors and do not scatter checks through nested code.
 
 ## Evaluation Contract
 
@@ -17,7 +26,7 @@ Flags are evaluated via `GET /api/feature-flags/evaluate?project=<current-projec
 Server-side: `isFeatureEnabled(key, ctx)` from `src/server/services/featureFlagService.ts`.
 Client-side: `useFeatureFlag(key)` from `src/client/hooks/useFeatureFlags.ts`.
 
-## Workflow 1: Wrap a Feature (Top-Level Split)
+## Workflow: Wrap a Feature (Top-Level Split)
 
 Use this when gating an existing or new feature behind a flag for targeted rollout.
 
@@ -34,11 +43,19 @@ Use this when gating an existing or new feature behind a flag for targeted rollo
      const userId = getUserId(req);
      const project = req.query.project as string;
      const enabled = await isFeatureEnabled('my-feature-key', { userId, project });
+
+     // @feature-flag:my-feature-key start winner=enabled
      if (!enabled) {
+       // @feature-flag:my-feature-key disabled-start
        res.status(404).json({ error: 'Not found' });
        return;
+       // @feature-flag:my-feature-key disabled-end
      }
-     // ... feature logic
+
+     // @feature-flag:my-feature-key enabled-start
+     await handleMyFeature(req, res);
+     // @feature-flag:my-feature-key enabled-end
+     // @feature-flag:my-feature-key end
    });
    ```
 
@@ -49,9 +66,17 @@ Use this when gating an existing or new feature behind a flag for targeted rollo
    export const MyFeatureView: React.FC<Props> = (props) => {
      const isEnabled = useFeatureFlag('my-feature-key');
 
-     if (!isEnabled) return null; // or render the legacy path
-
-     return <NewFeatureImplementation {...props} />;
+     // @feature-flag:my-feature-key start winner=enabled
+     return isEnabled ? (
+       // @feature-flag:my-feature-key enabled-start
+       <NewFeatureImplementation {...props} />
+       // @feature-flag:my-feature-key enabled-end
+     ) : (
+       // @feature-flag:my-feature-key disabled-start
+       <LegacyFeatureImplementation {...props} />
+       // @feature-flag:my-feature-key disabled-end
+     );
+     // @feature-flag:my-feature-key end
    };
    ```
 
@@ -62,51 +87,31 @@ Use this when gating an existing or new feature behind a flag for targeted rollo
 - Keep both branches (enabled/disabled) functional — the disabled path should be the previous behavior or null
 - One flag per feature — do not reuse flags across unrelated features
 - Name flags after the feature, not the ticket (e.g. `new-dashboard` not `JIRA-1234`)
+- Record explicit cleanup criteria (for example, remove after two stable sprints at full rollout)
 
-## Workflow 2: Automated Cleanup (Retire a Flag)
+## Cleanup-Ready Marker Contract (Required)
 
-Use this when a flag has been fully rolled out (enabled for everyone) or is no longer needed.
+Use these exact line-comment forms:
 
-### Prerequisites
-- The flag's `lifecycle` should be set to `stale` or `cleanup_ready` should be `true` in the admin UI
-- Confirm with the team that the feature is stable and the flag can be removed
+```text
+// @feature-flag:<key> start winner=<enabled|disabled>
+// @feature-flag:<key> enabled-start
+// @feature-flag:<key> enabled-end
+// @feature-flag:<key> disabled-start
+// @feature-flag:<key> disabled-end
+// @feature-flag:<key> end
+```
 
-### Steps
+Rules:
 
-1. **Find all references** to the flag key:
-   ```
-   Search for: 'my-feature-key' across the codebase
-   Patterns to find:
-   - useFeatureFlag('my-feature-key')
-   - isFeatureEnabled('my-feature-key', ...)
-   - Any string literal matching the key
-   ```
+1. Replace `<key>` with the exact kebab-case flag key on every marker.
+2. Put one complete `start`/`end` region around each top-level split. Do not nest marker regions.
+3. Mark both branches explicitly, including a `null`, 404, or legacy disabled branch.
+4. Set `winner=enabled` for a rollout expected to retain the new behavior. Use `winner=disabled` only when the intended retirement outcome is to retain the legacy behavior.
+5. Keep branch markers balanced and on their own lines. Do not add prose to marker lines.
+6. The `winner` value is automation metadata, not authorization to retire the flag. Cleanup still requires lifecycle and team approval.
 
-2. **Inline the winning branch**:
-   - If the flag was ON for everyone: keep the enabled/true branch, delete the disabled/false branch and the flag check
-   - If the flag is being retired without full rollout: keep the disabled/false branch (legacy path), delete the enabled branch and the flag check
-   - Remove the import of `useFeatureFlag` or `isFeatureEnabled` if no other flags remain in that file
-
-3. **Remove the flag from the database**:
-   - Option A (preferred): Delete via Platform Admin > Feature Flags tab (audit log preserved automatically)
-   - Option B: Create a migration if the flag was seeded via migration
-
-4. **Verify**:
-   ```bash
-   npx tsc -p tsconfig.server.json --noEmit
-   npx tsc -p tsconfig.client.json --noEmit
-   npm test
-   ```
-
-5. **Update lifecycle**: If not deleting, set lifecycle to `archived` in the admin UI.
-
-### Cleanup Checklist
-- [ ] All `useFeatureFlag('key')` calls removed, winning branch inlined
-- [ ] All `isFeatureEnabled('key', ...)` calls removed, winning branch inlined
-- [ ] No remaining string references to the flag key in source code
-- [ ] Type-check passes (both configs)
-- [ ] Tests pass
-- [ ] Flag deleted or archived in admin
+For retirement and code removal, load [`.cursor/skills/feature-flag-cleanup/SKILL.md`](../feature-flag-cleanup/SKILL.md).
 
 ## File References
 

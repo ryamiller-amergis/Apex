@@ -42,6 +42,9 @@ jest.mock('../db/drizzle', () => {
         notificationPreferences: {
           findFirst: jest.fn().mockResolvedValue(null),
         },
+        notifications: {
+          findFirst: jest.fn().mockResolvedValue(null),
+        },
       },
     },
   };
@@ -224,6 +227,42 @@ describe('createNotification', () => {
     const payload = JSON.parse((res.write as jest.Mock).mock.calls[0][0].replace(/^data: /, '').trim());
     expect(payload.toast).toBe(true);
     unsubscribe('user-1', res);
+  });
+
+  it('FEAT-007 AC-3 / VT-02 — dedupeKey returns existing row without second SSE/Teams push', async () => {
+    const existing = makeNotificationRow({ id: 'existing-notif', dedupeKey: 'walkthrough-publish:wt:1:u1' });
+    mockDb.query.notifications.findFirst.mockResolvedValue(existing);
+
+    const res = { write: jest.fn() } as any;
+    subscribe('user-1', res);
+
+    const result = await createNotification(
+      'user-1',
+      { type: 'system', title: 'New walkthrough available', link: '/?help=walkthroughs' },
+      { dedupeKey: 'walkthrough-publish:wt:1:u1' },
+    );
+
+    expect(result.id).toBe('existing-notif');
+    expect(mockDb.insert).not.toHaveBeenCalled();
+    expect(res.write).not.toHaveBeenCalled();
+    unsubscribe('user-1', res);
+  });
+
+  it('FEAT-007 — inserts dedupeKey when creating a new notification', async () => {
+    const row = makeNotificationRow({ type: 'system', dedupeKey: 'k1' });
+    const returningMock = jest.fn().mockResolvedValue([row]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+    mockDb.query.notifications.findFirst.mockResolvedValue(null);
+    mockDb.query.notificationPreferences.findFirst.mockResolvedValue(null);
+
+    await createNotification(
+      'user-1',
+      { type: 'system', title: 'New walkthrough available' },
+      { dedupeKey: 'k1' },
+    );
+
+    expect(valuesMock).toHaveBeenCalledWith(expect.objectContaining({ dedupeKey: 'k1' }));
   });
 });
 

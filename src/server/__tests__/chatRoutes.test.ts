@@ -6,7 +6,7 @@
  *   test suite can verify both the happy path and the 403 gate.
  */
 import request from 'supertest';
-import express from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 
 // ── Controllable permission flag ───────────────────────────────────────────────
 // Must start with 'mock' so Jest's hoist transform allows the factory to
@@ -15,7 +15,7 @@ let mockPermissionGranted = true;
 
 jest.mock('../middleware/rbac', () => ({
   requirePermission: (..._keys: string[]) =>
-    (_req: any, res: any, next: any) => {
+    (_req: Request, res: Response, next: NextFunction) => {
       if (mockPermissionGranted) {
         next();
       } else {
@@ -23,8 +23,8 @@ jest.mock('../middleware/rbac', () => ({
       }
     },
   requireAnyPermission: (..._keys: string[]) =>
-    (_req: any, _res: any, next: any) => next(),
-  attachPermissions: (_req: any, _res: any, next: any) => next(),
+    (_req: Request, _res: Response, next: NextFunction) => next(),
+  attachPermissions: (_req: Request, _res: Response, next: NextFunction) => next(),
 }));
 
 jest.mock('../services/chatAgentService', () => ({
@@ -32,9 +32,11 @@ jest.mock('../services/chatAgentService', () => ({
   getThread: jest.fn(),
   getThreadAsync: jest.fn(),
   listThreadSummaries: jest.fn().mockResolvedValue([]),
+  searchThreadSummaries: jest.fn().mockResolvedValue([]),
   sendMessage: jest.fn(),
   subscribeToThread: jest.fn().mockReturnValue(() => {}),
   cancelRun: jest.fn(),
+  recoverStaleRunningThread: jest.fn().mockResolvedValue('idle'),
   permanentlyDeleteThread: jest.fn(),
   readOutputPrd: jest.fn().mockReturnValue(null),
   writeOutputPrd: jest.fn(),
@@ -74,7 +76,12 @@ import chatRouter, {
   shouldForwardPgRunEvent,
 } from '../routes/chat';
 import * as chatAgentService from '../services/chatAgentService';
-import type { AgentRunEventEnvelope } from '../../shared/types/chat';
+import type {
+  AgentRunEventEnvelope,
+  ChatThread,
+  ChatThreadSearchResult,
+  ChatThreadSummary,
+} from '../../shared/types/chat';
 
 const mockChatService = chatAgentService as jest.Mocked<typeof chatAgentService>;
 
@@ -83,8 +90,10 @@ const mockChatService = chatAgentService as jest.Mocked<typeof chatAgentService>
 function buildApp() {
   const app = express();
   app.use(express.json());
-  app.use((req: any, _res: any, next: any) => {
-    req.user = { profile: { oid: 'user-1' } };
+  app.use((req: Request, _res: Response, next: NextFunction) => {
+    (req as Request & { user?: { profile: { oid: string } } }).user = {
+      profile: { oid: 'user-1' },
+    };
     next();
   });
   app.use('/api/chat', chatRouter);
@@ -150,6 +159,8 @@ describe('chat run-event SSE transport', () => {
       heartbeatTimeoutMs: 5 * 60_000,
       queuedTimeoutMs: 90_000,
       progressStaleMs: 2 * 60_000,
+      progressAbortMs: 10 * 60_000,
+      inFlightToolMaxMs: 15 * 60_000,
       longRunMs: 30 * 60_000,
       hardLimitMs: 2 * 60 * 60_000,
     })).toMatchObject({
@@ -225,6 +236,126 @@ describe('GET /api/chat/threads', () => {
   });
 });
 
+describe('GET /api/chat/threads — search (PBI-001)', () => {
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    jest.clearAllMocks();
+    mockChatService.listThreadSummaries.mockResolvedValue([]);
+    mockChatService.searchThreadSummaries.mockResolvedValue([]);
+  });
+
+  it('AC-0 / TC-PBI-001-001: q>=2 returns matching threads with match context', async () => {
+    mockChatService.searchThreadSummaries.mockResolvedValue([
+      {
+        id: 't-notif',
+        userId: 'user-1',
+        title: 'Notifications',
+        status: 'idle',
+        kickoff: { project: 'Apex', repo: 'AI-Pilot' },
+        flagged: false,
+        createdAt: '2026-07-01T00:00:00.000Z',
+        lastActivityAt: '2026-07-10T00:00:00.000Z',
+        titleOnly: false,
+        match: {
+          messageId: 'msg-1',
+          role: 'agent',
+          snippet: '...use in-app notifications for this...',
+          matchedAt: '2026-07-10T12:00:00.000Z',
+        },
+      },
+    ] as ChatThreadSearchResult[]);
+
+    const res = await request(buildApp()).get('/api/chat/threads?q=notif');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].match).toMatchObject({
+      messageId: 'msg-1',
+      role: 'agent',
+      matchedAt: '2026-07-10T12:00:00.000Z',
+    });
+    expect(res.body[0].match.snippet.toLowerCase()).toContain('notif');
+    expect(mockChatService.searchThreadSummaries).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ term: 'notif' }),
+    );
+    expect(mockChatService.listThreadSummaries).not.toHaveBeenCalled();
+  });
+
+  it('AC-1 / TC-PBI-001-002: search failure returns non-2xx with no partial body', async () => {
+    mockChatService.searchThreadSummaries.mockRejectedValue(new Error('search boom'));
+
+    const res = await request(buildApp()).get('/api/chat/threads?q=design');
+
+    expect(res.status).toBe(500);
+    expect(Array.isArray(res.body)).toBe(false);
+    expect(res.body).toMatchObject({ error: expect.any(String) });
+    expect(res.body.match).toBeUndefined();
+  });
+
+  it('AC-2 / BR-003: single-character q does not search; returns summary list', async () => {
+    mockChatService.listThreadSummaries.mockResolvedValue([
+      {
+        id: 't1',
+        userId: 'user-1',
+        title: 'Summary',
+        status: 'idle',
+        kickoff: { project: 'Apex', repo: 'AI-Pilot' },
+        flagged: false,
+        createdAt: '2026-07-01T00:00:00.000Z',
+        lastActivityAt: '2026-07-10T00:00:00.000Z',
+      },
+    ] as ChatThreadSummary[]);
+
+    const res = await request(buildApp()).get('/api/chat/threads?q=a');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].match).toBeUndefined();
+    expect(mockChatService.searchThreadSummaries).not.toHaveBeenCalled();
+    expect(mockChatService.listThreadSummaries).toHaveBeenCalled();
+  });
+
+  it('A-009 / VT-04: omitted q uses summary list path unchanged', async () => {
+    mockChatService.listThreadSummaries.mockResolvedValue([]);
+
+    const res = await request(buildApp()).get('/api/chat/threads');
+
+    expect(res.status).toBe(200);
+    expect(mockChatService.searchThreadSummaries).not.toHaveBeenCalled();
+    expect(mockChatService.listThreadSummaries).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ limit: 50, offset: 0 }),
+    );
+  });
+
+  it('AC-3 / BR-001: search is invoked with caller userId only (cross-user exclusion at query layer)', async () => {
+    mockChatService.searchThreadSummaries.mockResolvedValue([]);
+
+    await request(buildApp()).get('/api/chat/threads?q=notif');
+
+    expect(mockChatService.searchThreadSummaries).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ term: 'notif' }),
+    );
+  });
+
+  it('passes project and flaggedOnly through to search', async () => {
+    await request(buildApp()).get(
+      '/api/chat/threads?q=notif&project=Apex&flaggedOnly=true',
+    );
+
+    expect(mockChatService.searchThreadSummaries).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        term: 'notif',
+        project: 'Apex',
+        flaggedOnly: true,
+      }),
+    );
+  });
+});
+
 describe('GET /api/chat/threads — messagePreview for history labels', () => {
   beforeEach(() => {
     mockPermissionGranted = true;
@@ -244,7 +375,7 @@ describe('GET /api/chat/threads — messagePreview for history labels', () => {
         createdAt: '2026-01-01T00:00:00.000Z',
         lastActivityAt: '2026-01-01T00:00:00.000Z',
       },
-    ] as any);
+    ] as ChatThreadSearchResult[]);
 
     const res = await request(buildApp()).get('/api/chat/threads');
 
@@ -266,7 +397,7 @@ describe('GET /api/chat/threads — messagePreview for history labels', () => {
         createdAt: '2026-01-01T00:00:00.000Z',
         lastActivityAt: '2026-01-01T00:00:00.000Z',
       },
-    ] as any);
+    ] as ChatThreadSearchResult[]);
 
     const res = await request(buildApp()).get('/api/chat/threads');
 
@@ -344,7 +475,7 @@ describe('POST /api/chat/threads — happy path', () => {
       flagged: false,
       createdAt: '2026-01-01T00:00:00.000Z',
       lastActivityAt: '2026-01-01T00:00:00.000Z',
-    } as any);
+    } as ChatThread);
 
     const kickoff = {
       project: 'MaxView',
@@ -413,7 +544,7 @@ describe('chat thread lifecycle', () => {
   it('create -> list -> delete -> list empty', async () => {
     const app = buildApp();
 
-    mockChatService.createThread.mockResolvedValue(createdThread as any);
+    mockChatService.createThread.mockResolvedValue(createdThread as ChatThread);
 
     const createRes = await request(app)
       .post('/api/chat/threads')
@@ -422,7 +553,7 @@ describe('chat thread lifecycle', () => {
     expect(createRes.status).toBe(201);
     expect(createRes.body).toEqual({ threadId });
 
-    mockChatService.listThreadSummaries.mockResolvedValue([listedSummary] as any);
+    mockChatService.listThreadSummaries.mockResolvedValue([listedSummary] as ChatThreadSummary[]);
 
     const listRes = await request(app).get('/api/chat/threads?project=MaxView');
 
@@ -446,5 +577,55 @@ describe('chat thread lifecycle', () => {
 
     expect(listAfterDeleteRes.status).toBe(200);
     expect(listAfterDeleteRes.body).toEqual([]);
+  });
+});
+
+describe('POST /api/chat/threads/:id/messages — stale running self-heal', () => {
+  const threadId = 'stuck-thread-id';
+  const runningThread = {
+    id: threadId,
+    userId: 'user-1',
+    kickoff: { project: 'Apex', repo: 'Apex' },
+    messages: [],
+    status: 'running',
+    workspaceDir: '/tmp/ws',
+    flagged: false,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    lastActivityAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    jest.clearAllMocks();
+    mockResolveThreadAccess.mockResolvedValue({
+      thread: runningThread,
+      access: 'owner',
+    });
+    mockCanWriteThread.mockResolvedValue(true);
+  });
+
+  it('accepts a message after recovering a dead running thread', async () => {
+    (mockChatService.recoverStaleRunningThread as jest.Mock).mockResolvedValue('idle');
+    mockChatService.sendMessage.mockResolvedValue(undefined);
+
+    const res = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: 'Continue' });
+
+    expect(res.status).toBe(202);
+    expect(mockChatService.recoverStaleRunningThread).toHaveBeenCalledWith(threadId);
+    expect(mockChatService.sendMessage).toHaveBeenCalled();
+  });
+
+  it('returns 409 when a live run is still active', async () => {
+    (mockChatService.recoverStaleRunningThread as jest.Mock).mockResolvedValue('running');
+
+    const res = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: 'Continue' });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'Agent is already running' });
+    expect(mockChatService.sendMessage).not.toHaveBeenCalled();
   });
 });

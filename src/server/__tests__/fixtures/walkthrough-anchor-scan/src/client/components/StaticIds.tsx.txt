@@ -1,0 +1,13 @@
+import React from 'react';
+
+/** Ordinary literal test IDs — discoverable as data_testid candidates. */
+export const StaticIds: React.FC = () => (
+  <div>
+    <button type="button" {...{ 'data-testid': 'save-draft-button' }}>
+      Save
+    </button>
+    <section {...{ 'data-testid': 'settings-panel' }}>Settings</section>
+    {/* Legacy attribute form still discoverable */}
+    <dialog data-testid="confirm-dialog">Confirm</dialog>
+  </div>
+);

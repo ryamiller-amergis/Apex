@@ -199,31 +199,15 @@
 }
 
 .gapItemAddressed {
-  background: color-mix(in srgb, var(--success-color) 12%, var(--bg-primary));
+  background: color-mix(in srgb, var(--success-color) var(--status-mix), var(--bg-primary));
   border-left: 3px solid var(--success-color);
   padding-left: 21px;
 }
 
 .gapItemNotAddressed {
-  background: color-mix(in srgb, var(--error-color) 12%, var(--bg-primary));
+  background: color-mix(in srgb, var(--error-color) var(--status-mix), var(--bg-primary));
   border-left: 3px solid var(--error-color);
   padding-left: 21px;
-}
-
-:global([data-theme="dark"]) .gapItemAddressed {
-  background: color-mix(in srgb, var(--success-color) 22%, var(--bg-primary));
-}
-
-:global([data-theme="dark"]) .gapItemNotAddressed {
-  background: color-mix(in srgb, var(--error-color) 22%, var(--bg-primary));
-}
-
-:global([data-theme="amergis"]) .gapItemAddressed {
-  background: color-mix(in srgb, var(--success-color) 22%, var(--bg-primary));
-}
-
-:global([data-theme="amergis"]) .gapItemNotAddressed {
-  background: color-mix(in srgb, var(--error-color) 22%, var(--bg-primary));
 }
 
 .gapItemTop {
@@ -502,13 +486,13 @@
 .verdictBtnActiveGood {
   border-color: var(--success-color);
   background: var(--success-color);
-  color: #fff;
+  color: var(--on-success);
 }
 
 .verdictBtnActiveGood:hover {
   background: var(--success-color);
   border-color: var(--success-color);
-  color: #fff;
+  color: var(--on-success);
 }
 
 .verdictBtnActiveBad {
@@ -557,7 +541,7 @@
 
 .sectionBtnAccept:hover:not(:disabled) {
   background: var(--success-color);
-  color: #fff;
+  color: var(--on-success);
 }
 
 .sectionBtnAccept:disabled {
@@ -740,20 +724,10 @@
   gap: 8px;
   padding: 10px 16px;
   font-size: 0.78rem;
-  color: #92400e;
-  background: color-mix(in srgb, #f59e0b 12%, var(--bg-primary));
-  border-top: 1px solid color-mix(in srgb, #f59e0b 30%, var(--border-color));
+  color: var(--warning-text);
+  background: color-mix(in srgb, var(--warning-color) var(--status-mix), var(--bg-primary));
+  border-top: 1px solid color-mix(in srgb, var(--warning-color) 30%, var(--border-color));
   line-height: 1.45;
-}
-
-:global([data-theme="dark"]) .gapChangeWarning {
-  color: #fbbf24;
-  background: color-mix(in srgb, #f59e0b 15%, var(--bg-primary));
-}
-
-:global([data-theme="amergis"]) .gapChangeWarning {
-  color: #fbbf24;
-  background: color-mix(in srgb, #f59e0b 15%, var(--bg-primary));
 }
 
 .gapChangeDiffWrap {
@@ -812,7 +786,7 @@
   border-radius: 7px;
   border: none;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 0.84rem;
   font-weight: 600;
   cursor: pointer;
@@ -867,16 +841,36 @@
   color: #fff;
 }
 
-/* ── Fixing / progress overlay ─────────────────────────────────────────────── */
+/* ── Fixing / compact progress strip ───────────────────────────────────────── */
 
-.fixingOverlay {
+.fixingStrip {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  padding: 64px 24px;
-  gap: 16px;
-  flex: 1;
+  gap: 10px;
+  padding: 8px 16px;
+  margin: 0;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--accent-color) 6%, var(--bg-secondary));
+  position: relative;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.fixingPulse {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--accent-color);
+  opacity: 0.7;
+  animation: fixingPulse 1.8s ease-in-out infinite;
+}
+
+@keyframes fixingPulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.9; }
 }
 
 @keyframes spin {
@@ -885,35 +879,48 @@
 }
 
 .fixingSpinner {
-  width: 32px;
-  height: 32px;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
   color: var(--accent-color);
-  animation: spin 1.2s linear infinite;
+  animation: spin 1s linear infinite;
+}
+
+.fixingStripText {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+  flex-wrap: wrap;
 }
 
 .fixingTitle {
-  font-size: 0.95rem;
+  font-size: 0.82rem;
   font-weight: 600;
   color: var(--text-primary);
+  line-height: 1.3;
 }
 
-.fixingSub {
-  font-size: 0.82rem;
-  color: var(--text-secondary);
-  max-width: 340px;
-  text-align: center;
+.fixingHint {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  white-space: nowrap;
 }
 
 .fixingCancelBtn {
-  padding: 6px 14px;
+  flex-shrink: 0;
+  padding: 4px 12px;
   border-radius: 6px;
   border: 1px solid var(--border-color);
-  background: transparent;
+  background: var(--bg-primary);
   color: var(--text-secondary);
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
+  white-space: nowrap;
 }
 
 .fixingCancelBtn:hover {
@@ -929,7 +936,7 @@
   border-radius: 7px;
   border: none;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 0.84rem;
   font-weight: 600;
   cursor: pointer;

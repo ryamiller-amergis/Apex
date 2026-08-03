@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useChatStream } from './useChatStream';
+import { useAgentChatSession } from './useAgentChatSession';
 import type {
   WorkItemHierarchyNode,
   WorkItemAssistantSession,
@@ -164,27 +164,17 @@ export function useRejectProposal() {
 // ── Chat integration ──────────────────────────────────────────────────────────
 
 export function useCalendarAssistantChat(threadId: string | null) {
-  const stream = useChatStream(threadId);
+  const session = useAgentChatSession(threadId);
 
   const sendMessage = useCallback(async (text: string) => {
-    if (!threadId) return;
-    await fetch(`/api/chat/threads/${threadId}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ text }),
-    });
-  }, [threadId]);
+    await session.send(text);
+  }, [session]);
 
   const cancelRun = useCallback(async () => {
-    if (!threadId) return;
-    await fetch(`/api/chat/threads/${threadId}/cancel`, {
-      method: 'POST',
-      credentials: 'include',
-    });
-  }, [threadId]);
+    await session.cancel();
+  }, [session]);
 
-  return { ...stream, sendMessage, cancelRun };
+  return { ...session, sendMessage, cancelRun };
 }
 
 // ── Scope selection state ─────────────────────────────────────────────────────

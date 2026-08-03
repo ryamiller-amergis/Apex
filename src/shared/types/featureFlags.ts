@@ -1,6 +1,20 @@
 export type FlagLifecycle = 'active' | 'stale' | 'archived';
 
-export type FlagRuleType = 'everyone' | 'project' | 'user' | 'group';
+export type FlagRuleType =
+  | 'everyone'
+  | 'project'
+  | 'user'
+  | 'group'
+  | 'caller'
+  | 'environment';
+
+export interface FlagEvaluationContext {
+  userId: string;
+  project: string;
+  groupIds: string[];
+  caller?: string;
+  environment?: string;
+}
 
 export type FlagAuditAction =
   | 'created'

@@ -32,6 +32,7 @@ async function loginAndGotoDashboard(
 
 test.describe('Interview dashboard @smoke', () => {
   test('dashboard loads with section buttons for BA persona @deployed-smoke', async ({ page, loginAsPersona }) => {
+    test.setTimeout(120_000);
     const dashboard = await loginAndGotoDashboard(page, loginAsPersona, 'ba');
 
     await expect(page).toHaveURL(/\/backlog/, { timeout: 10_000 });

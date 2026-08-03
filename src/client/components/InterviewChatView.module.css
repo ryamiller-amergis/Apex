@@ -181,14 +181,14 @@
 .actionBtnPrimary {
   composes: actionBtn;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border-color: var(--accent-color);
 }
 
 .actionBtnPrimary:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .actionBtnDanger {
@@ -320,6 +320,55 @@
   gap: 12px;
 }
 
+.preparationState {
+  align-self: stretch;
+  display: flex;
+  min-height: clamp(260px, 52vh, 520px);
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 48px;
+  text-align: center;
+}
+
+.preparationSpinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--border-color);
+  border-top-color: var(--accent-color);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.preparationErrorIcon {
+  display: flex;
+  width: 40px;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--error-color);
+  color: #fff;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.preparationTitle {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.preparationDetail {
+  max-width: 520px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
 .messageBubble {
   padding: 10px 14px;
   border-radius: 10px;
@@ -331,7 +380,7 @@
 .messageBubbleUser {
   align-self: flex-end;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border-bottom-right-radius: 3px;
 }
 
@@ -387,15 +436,22 @@
   height: 6px;
   border-radius: 50%;
   background: var(--text-muted);
-  animation: typing 1.2s infinite;
+  animation: typing 1.2s ease-in-out infinite;
 }
 
 .typingDot:nth-child(2) { animation-delay: 0.2s; }
 .typingDot:nth-child(3) { animation-delay: 0.4s; }
 
 @keyframes typing {
-  0%, 60%, 100% { opacity: 0.3; transform: scale(0.9); }
-  30% { opacity: 1; transform: scale(1); }
+  0%, 60%, 100% { opacity: 0.35; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-4px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .typingDot {
+    animation: none;
+    opacity: 0.75;
+  }
 }
 
 .inputArea {
@@ -427,6 +483,12 @@
   box-shadow: 0 2px 12px var(--shadow-md);
 }
 
+.inputBoxBusy {
+  background: var(--bg-tertiary);
+  border-color: var(--border-color-light);
+  box-shadow: none;
+}
+
 .inputField {
   width: 100%;
   background: transparent;
@@ -443,6 +505,12 @@
 
 .inputField::placeholder {
   color: var(--text-muted);
+}
+
+.inputField:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+  opacity: 0.8;
 }
 
 .attachmentList {
@@ -604,13 +672,13 @@
 .micBtnActive {
   background: var(--accent-color);
   border-color: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .micBtnActive:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .modelSelect {
@@ -653,7 +721,7 @@
   border-radius: 8px;
   border: none;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   cursor: pointer;
   transition: background 0.2s ease, opacity 0.2s ease;
   flex-shrink: 0;
@@ -983,7 +1051,7 @@
 .choiceQNum {
   flex-shrink: 0;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 10px;
   font-weight: 700;
   padding: 2px 6px;
@@ -1047,7 +1115,7 @@
 .choiceOptionSelected .choiceOptionLetter {
   background: var(--accent-color);
   border-color: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .choiceOptionText {
@@ -1090,7 +1158,7 @@
   margin: 10px 12px 12px;
   padding: 9px 16px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 8px;
   font-size: 13px;

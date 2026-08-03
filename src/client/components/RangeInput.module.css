@@ -7,7 +7,7 @@
 }
 
 .label {
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 500;
   color: var(--text-secondary);
   white-space: nowrap;
@@ -17,18 +17,20 @@
   flex: 1;
   min-width: 140px;
   max-width: 240px;
-  padding: 5px 8px;
+  height: 36px;
+  padding: 6px 10px;
   border: 1px solid var(--border-color);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--bg-primary);
   color: var(--text-primary);
-  font-size: 12px;
-  outline: none;
+  font-size: 0.8125rem;
   transition: border-color 0.2s ease;
 }
 
 .input:focus {
   border-color: var(--accent-color);
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
 }
 
 .inputError {

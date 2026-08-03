@@ -1,0 +1,93 @@
+.editorOverlay {
+  margin-top: 8px;
+}
+
+.nameCell {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.lifecycle {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: capitalize;
+  background: var(--bg-tertiary);
+}
+
+.lifecyclePublished {
+  color: var(--success-color);
+}
+
+.lifecycleDraft {
+  color: var(--text-secondary);
+}
+
+.lifecycleArchived {
+  color: var(--text-muted);
+}
+
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.modalCard {
+  width: min(100%, 420px);
+  padding: 20px 24px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-md);
+}
+
+.modalTitle {
+  margin: 0 0 8px;
+  font-size: 1.125rem;
+}
+
+.modalBody {
+  margin: 0 0 16px;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.modalError {
+  margin: 0 0 12px;
+  color: var(--error-color);
+  font-size: 0.875rem;
+}
+
+.modalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.modalDanger {
+  padding: 8px 14px;
+  border: 1px solid var(--error-color);
+  border-radius: 8px;
+  background: var(--error-color);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.modalDanger:hover {
+  opacity: 0.92;
+}
+
+.modalDanger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

@@ -22,8 +22,6 @@ import type {
 } from '../../shared/types/featureRequest';
 import {
   FEATURE_REQUEST_STATUSES,
-  FEATURE_REQUEST_PRIORITIES,
-  FEATURE_REQUEST_RISKS,
   WORK_ITEM_TYPES,
 } from '../../shared/types/featureRequest';
 import {
@@ -33,12 +31,21 @@ import {
 import { FeatureRequestDetailPanel } from './FeatureRequestDetailPanel';
 import { FeatureRequestModal } from './FeatureRequestModal';
 import {
+  DataGridFilterDivider,
+  DataGridFilterPills,
+  DataGridFilterSelect,
+  DataGridToolbar,
+  type DataGridFilterOption,
+} from './DataGridToolbar';
+import {
   reorderWithSequentialRanks,
   sortFeatureRequestsByRank,
 } from '../utils/featureRequestRank';
+import gridStyles from './DataGrid.module.css';
 import styles from './FeatureRequestsView.module.css';
 
 type SortMode = 'rank' | 'newest' | 'priority';
+type StatusFilter = FeatureRequestStatus | '';
 
 const PRIORITY_ORDER: Record<string, number> = {
   critical: 0,
@@ -64,6 +71,18 @@ const TYPE_ITEM_LABELS: Record<WorkItemType, string> = {
   technical: 'technical item',
   issue: 'issue',
 };
+
+const SORT_OPTIONS: readonly DataGridFilterOption<SortMode>[] = [
+  { label: 'Rank', value: 'rank' },
+  { label: 'Newest first', value: 'newest' },
+  { label: 'Priority', value: 'priority' },
+];
+
+const STATUS_FILTER_OPTIONS: readonly DataGridFilterOption<StatusFilter>[] =
+  FEATURE_REQUEST_STATUSES.map((status) => ({
+    label: STATUS_LABELS[status],
+    value: status,
+  }));
 
 function priorityBadgeClass(p: FeatureRequestPriority): string {
   const map: Record<FeatureRequestPriority, string> = {
@@ -126,14 +145,17 @@ export const FeatureRequestsView: React.FC = () => {
   const reanalyzeMutation = useReanalyzeFeatureRequest();
 
   const [sortMode, setSortMode] = useState<SortMode>('rank');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('');
+  const [search, setSearch] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [openActionMenuId, setOpenActionMenuId] = useState<string | null>(null);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
   const dragIndexRef = useRef<number | null>(null);
   const tabParam = searchParams.get('tab');
-  const activeType: WorkItemType = WORK_ITEM_TYPES.includes(tabParam as WorkItemType)
+  const activeType: WorkItemType = WORK_ITEM_TYPES.includes(
+    tabParam as WorkItemType,
+  )
     ? (tabParam as WorkItemType)
     : 'feature';
 
@@ -142,50 +164,65 @@ export const FeatureRequestsView: React.FC = () => {
     permissionsLoaded &&
     can('interviews:manage') &&
     isInAnyGroup(['BA', 'Manager', 'Product-Owner']);
-  const showActionsColumn =
-    canManage ||
-    (isInterviewableWorkItemType(activeType) &&
-      (canKickOff ||
-        Boolean(
-          requests?.some(
-            (fr) => isInterviewableWorkItemType(fr.type) && fr.interviewId,
-          ),
-        )));
 
-  useEffect(() => {
-    if (openActionMenuId === null) return;
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target?.closest(`[data-fr-action-menu="${openActionMenuId}"]`))
-        return;
-      setOpenActionMenuId(null);
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpenActionMenuId(null);
-    };
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [openActionMenuId]);
+  // Reordering only makes sense on an unfiltered, rank-sorted list — otherwise
+  // sequential ranks computed from a subset would corrupt the global order.
+  const searchQuery = search.trim().toLowerCase();
+  const showRank =
+    canManage && sortMode === 'rank' && statusFilter === '' && searchQuery === '';
 
   useEffect(() => {
     setSelectedId(null);
-    setOpenActionMenuId(null);
   }, [activeType]);
+
+  const counts = useMemo(
+    () =>
+      WORK_ITEM_TYPES.reduce<Record<WorkItemType, number>>(
+        (result, type) => {
+          result[type] =
+            requests?.filter((request) => request.type === type).length ?? 0;
+          return result;
+        },
+        { feature: 0, technical: 0, issue: 0 },
+      ),
+    [requests],
+  );
+
+  const typeOptions: readonly DataGridFilterOption<WorkItemType>[] = useMemo(
+    () =>
+      WORK_ITEM_TYPES.map((type) => ({
+        label: `${TYPE_LABELS[type]} ${counts[type]}`,
+        value: type,
+      })),
+    [counts],
+  );
 
   const sorted = useMemo(() => {
     if (!requests) return [];
-    const filtered = requests.filter((request) => request.type === activeType);
+    let filtered = requests.filter((request) => request.type === activeType);
+    if (statusFilter) {
+      filtered = filtered.filter((request) => request.status === statusFilter);
+    }
+    if (searchQuery) {
+      filtered = filtered.filter((request) =>
+        [
+          request.title,
+          request.submitterName,
+          request.sourceProject,
+          request.aiRationale,
+          request.request,
+        ]
+          .filter((value): value is string => Boolean(value))
+          .some((value) => value.toLowerCase().includes(searchQuery)),
+      );
+    }
     switch (sortMode) {
       case 'rank':
         return sortFeatureRequestsByRank(filtered);
       case 'newest':
         return [...filtered].sort(
           (a, b) =>
-            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
         );
       case 'priority': {
         return [...filtered].sort((a, b) => {
@@ -202,18 +239,13 @@ export const FeatureRequestsView: React.FC = () => {
       default:
         return filtered;
     }
-  }, [requests, sortMode, activeType]);
+  }, [requests, sortMode, activeType, statusFilter, searchQuery]);
 
-  const counts = useMemo(
-    () =>
-      WORK_ITEM_TYPES.reduce<Record<WorkItemType, number>>(
-        (result, type) => {
-          result[type] = requests?.filter((request) => request.type === type).length ?? 0;
-          return result;
-        },
-        { feature: 0, technical: 0, issue: 0 },
-      ),
-    [requests],
+  const handleTypeChange = useCallback(
+    (type: WorkItemType) => {
+      setSearchParams(type === 'feature' ? {} : { tab: type });
+    },
+    [setSearchParams],
   );
 
   const handleUpdate = useCallback(
@@ -224,11 +256,11 @@ export const FeatureRequestsView: React.FC = () => {
         teamPriority: FeatureRequestPriority | null;
         teamRisk: FeatureRequestRisk | null;
         rank: number | null;
-      }>
+      }>,
     ) => {
       updateMutation.mutate({ id, ...patch });
     },
-    [updateMutation]
+    [updateMutation],
   );
 
   const handleReorder = useCallback(
@@ -239,14 +271,14 @@ export const FeatureRequestsView: React.FC = () => {
       const updates = result.order
         .map((item, i) => ({ id: item.id, rank: i + 1 }))
         .filter(
-          ({ id, rank }) => sorted.find((item) => item.id === id)?.rank !== rank
+          ({ id, rank }) => sorted.find((item) => item.id === id)?.rank !== rank,
         );
 
       if (updates.length > 0) {
         reorderMutation.mutate(updates);
       }
     },
-    [sorted, reorderMutation]
+    [sorted, reorderMutation],
   );
 
   const handleMoveUp = useCallback(
@@ -254,7 +286,7 @@ export const FeatureRequestsView: React.FC = () => {
       if (index <= 0) return;
       handleReorder(index, index - 1);
     },
-    [handleReorder]
+    [handleReorder],
   );
 
   const handleMoveDown = useCallback(
@@ -262,163 +294,180 @@ export const FeatureRequestsView: React.FC = () => {
       if (index >= sorted.length - 1) return;
       handleReorder(index, index + 1);
     },
-    [sorted.length, handleReorder]
+    [sorted.length, handleReorder],
+  );
+
+  const handleKickOff = useCallback(
+    (request: FeatureRequest) => {
+      navigate('/backlog/interview/new', {
+        state: {
+          featureRequest: toFeatureRequestInterviewPrefill(request),
+        },
+      });
+    },
+    [navigate],
   );
 
   const selectedRequest = useMemo(
     () =>
       selectedId ? (requests?.find((r) => r.id === selectedId) ?? null) : null,
-    [requests, selectedId]
+    [requests, selectedId],
   );
 
-  if (isLoading)
+  const filtersActive = statusFilter !== '' || searchQuery !== '';
+
+  if (isLoading) {
     return <div className={styles['loading']}>Loading Apex Backlog…</div>;
-  if (error)
+  }
+  if (error) {
     return (
       <div className={styles['error']}>
         Failed to load Apex Backlog: {(error as Error).message}
       </div>
     );
+  }
+
+  const itemNoun = TYPE_ITEM_LABELS[activeType];
 
   return (
     <div className={styles['container']}>
       <div className={styles['content']}>
-        <div className={styles['grid']}>
-          <div className={styles['tabs']} role="tablist" aria-label="Apex Backlog work item types">
-            {WORK_ITEM_TYPES.map((type) => (
-              <button
-                key={type}
-                className={`${styles['tab']} ${activeType === type ? styles['tabActive'] : ''}`}
-                type="button"
-                role="tab"
-                aria-selected={activeType === type}
-                onClick={() => setSearchParams(type === 'feature' ? {} : { tab: type })}
-              >
-                {TYPE_LABELS[type]}
-                <span className={styles['tabCount']}>{counts[type]}</span>
-              </button>
-            ))}
-          </div>
-          <div className={styles['header']}>
+        <section
+          className={gridStyles.section}
+          {...{ 'data-testid': 'feature-requests-view' }}
+        >
+          <div className={gridStyles.header}>
             <div>
-              <h2>Apex Backlog</h2>
-              <span className={styles['recordCount']}>
-                {sorted.length} {sorted.length === 1
-                  ? TYPE_ITEM_LABELS[activeType]
-                  : `${TYPE_ITEM_LABELS[activeType]}s`}
-              </span>
+              <h2 className={gridStyles.title}>Apex Backlog</h2>
+              <p className={gridStyles.hint}>
+                {sorted.length}{' '}
+                {sorted.length === 1 ? itemNoun : `${itemNoun}s`}
+                {filtersActive ? ' (filtered)' : ''}
+              </p>
             </div>
-            <div className={styles['headerRight']}>
-              {can('feature-requests:submit') && selectedProject && (
-                <button
-                  className={styles['createButton']}
-                  type="button"
-                  onClick={() => setIsCreateModalOpen(true)}
-                >
-                  <span aria-hidden="true">+</span>
-                  New {TYPE_ITEM_LABELS[activeType]}
-                </button>
-              )}
-              <label className={styles['sortControl']}>
-                <span>Sort</span>
-                <select
-                  className={styles['sortSelect']}
-                  value={sortMode}
-                  onChange={(e) => setSortMode(e.target.value as SortMode)}
-                >
-                  <option value="rank">Rank</option>
-                  <option value="newest">Newest first</option>
-                  <option value="priority">Priority</option>
-                </select>
-              </label>
-            </div>
+            {can('feature-requests:submit') && selectedProject && (
+              <button
+                type="button"
+                className={gridStyles.buttonPrimary}
+                onClick={() => setIsCreateModalOpen(true)}
+                {...{ 'data-testid': 'feature-request-create' }}
+              >
+                <span aria-hidden="true">+ </span>
+                New {itemNoun}
+              </button>
+            )}
           </div>
 
+          <DataGridToolbar
+            searchValue={search}
+            onSearchChange={setSearch}
+            searchPlaceholder={`Search ${itemNoun}s…`}
+            searchTestId="feature-requests-search"
+          >
+            <DataGridFilterPills
+              options={typeOptions}
+              value={activeType}
+              onChange={handleTypeChange}
+              testIdPrefix="feature-requests-type"
+              aria-label="Work item type"
+              {...{ 'data-testid': 'feature-requests-type-filters' }}
+            />
+            <DataGridFilterDivider />
+            <DataGridFilterSelect
+              label="Status"
+              value={statusFilter}
+              onChange={setStatusFilter}
+              options={STATUS_FILTER_OPTIONS}
+              includeEmptyOption
+              emptyOptionLabel="All statuses"
+              {...{ 'data-testid': 'feature-requests-status-filter' }}
+            />
+            <DataGridFilterSelect
+              label="Sort"
+              value={sortMode}
+              onChange={setSortMode}
+              options={SORT_OPTIONS}
+              {...{ 'data-testid': 'feature-requests-sort' }}
+            />
+          </DataGridToolbar>
+
           {sorted.length === 0 ? (
-            <div className={styles['gridEmpty']}>
-              No {TYPE_ITEM_LABELS[activeType]}s yet. Create one to get started.
-            </div>
+            <p className={gridStyles.empty} {...{ 'data-testid': 'feature-requests-empty' }}>
+              {filtersActive
+                ? `No ${itemNoun}s match your filters.`
+                : `No ${itemNoun}s yet. Create one to get started.`}
+            </p>
           ) : (
-            <table className={styles['table']}>
-              <thead>
-                <tr>
-                  {canManage && sortMode === 'rank' && <th>#</th>}
-                  <th>Request</th>
-                  <th>Status</th>
-                  <th>AI Analysis</th>
-                  <th>Team Override</th>
-                  <th>Rationale</th>
-                  {showActionsColumn && <th>Actions</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {sorted.map((fr, idx) => (
-                  <FeatureRequestRow
-                    key={fr.id}
-                    fr={fr}
-                    index={idx}
-                    total={sorted.length}
-                    canManage={canManage}
-                    canKickOff={isInterviewableWorkItemType(activeType) && canKickOff}
-                    showActions={showActionsColumn}
-                    showRank={canManage && sortMode === 'rank'}
-                    isDragging={dragIndex === idx}
-                    isDropTarget={
-                      dropTargetIndex === idx &&
-                      dragIndex !== null &&
-                      dragIndex !== idx
-                    }
-                    actionMenuOpen={openActionMenuId === fr.id}
-                    onToggleActionMenu={() =>
-                      setOpenActionMenuId((current) =>
-                        current === fr.id ? null : fr.id
-                      )
-                    }
-                    onCloseActionMenu={() => setOpenActionMenuId(null)}
-                    onSelect={() => setSelectedId(fr.id)}
-                    onUpdate={handleUpdate}
-                    onMoveUp={handleMoveUp}
-                    onMoveDown={handleMoveDown}
-                    onDragStart={() => {
-                      dragIndexRef.current = idx;
-                      setDragIndex(idx);
-                    }}
-                    onDragEnd={() => {
-                      dragIndexRef.current = null;
-                      setDragIndex(null);
-                      setDropTargetIndex(null);
-                    }}
-                    onDragOver={() => setDropTargetIndex(idx)}
-                    onDragLeave={() =>
-                      setDropTargetIndex((prev) => (prev === idx ? null : prev))
-                    }
-                    onDrop={() => {
-                      const fromIndex = dragIndexRef.current;
-                      if (fromIndex !== null) handleReorder(fromIndex, idx);
-                      dragIndexRef.current = null;
-                      setDragIndex(null);
-                      setDropTargetIndex(null);
-                    }}
-                    onReanalyze={(id) => reanalyzeMutation.mutate(id)}
-                    isReanalyzing={reanalyzeMutation.isPending}
-                    onKickOffInterview={(request) => {
-                      setOpenActionMenuId(null);
-                      navigate('/backlog/interview/new', {
-                        state: {
-                          featureRequest: toFeatureRequestInterviewPrefill(request),
-                        },
-                      });
-                    }}
-                    onViewInterview={(interviewId) => {
-                      setOpenActionMenuId(null);
-                      navigate(`/backlog/interview/${interviewId}`);
-                    }}
-                  />
-                ))}
-              </tbody>
-            </table>
+            <div className={gridStyles.tableWrap}>
+              <table
+                className={gridStyles.table}
+                {...{ 'data-testid': 'feature-requests-table' }}
+              >
+                <thead>
+                  <tr>
+                    {showRank && <th scope="col">#</th>}
+                    <th scope="col">Request</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">AI Analysis</th>
+                    <th scope="col">Team Override</th>
+                    <th scope="col">Rationale</th>
+                    <th scope="col">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sorted.map((fr, idx) => (
+                    <FeatureRequestRow
+                      key={fr.id}
+                      fr={fr}
+                      index={idx}
+                      total={sorted.length}
+                      canManage={canManage}
+                      canKickOff={
+                        isInterviewableWorkItemType(activeType) && canKickOff
+                      }
+                      showRank={showRank}
+                      isDragging={dragIndex === idx}
+                      isDropTarget={
+                        dropTargetIndex === idx &&
+                        dragIndex !== null &&
+                        dragIndex !== idx
+                      }
+                      onEdit={() => setSelectedId(fr.id)}
+                      onMoveUp={handleMoveUp}
+                      onMoveDown={handleMoveDown}
+                      onDragStart={() => {
+                        dragIndexRef.current = idx;
+                        setDragIndex(idx);
+                      }}
+                      onDragEnd={() => {
+                        dragIndexRef.current = null;
+                        setDragIndex(null);
+                        setDropTargetIndex(null);
+                      }}
+                      onDragOver={() => setDropTargetIndex(idx)}
+                      onDragLeave={() =>
+                        setDropTargetIndex((prev) =>
+                          prev === idx ? null : prev,
+                        )
+                      }
+                      onDrop={() => {
+                        const fromIndex = dragIndexRef.current;
+                        if (fromIndex !== null) handleReorder(fromIndex, idx);
+                        dragIndexRef.current = null;
+                        setDragIndex(null);
+                        setDropTargetIndex(null);
+                      }}
+                      onKickOffInterview={handleKickOff}
+                      onViewInterview={(interviewId) =>
+                        navigate(`/backlog/interview/${interviewId}`)
+                      }
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
-        </div>
+        </section>
       </div>
 
       {selectedRequest && (
@@ -429,6 +478,7 @@ export const FeatureRequestsView: React.FC = () => {
           onUpdate={handleUpdate}
           onReanalyze={(id) => reanalyzeMutation.mutate(id)}
           isReanalyzing={reanalyzeMutation.isPending}
+          {...{ 'data-testid': 'feature-request-detail-panel' }}
         />
       )}
 
@@ -437,6 +487,7 @@ export const FeatureRequestsView: React.FC = () => {
           selectedProject={selectedProject}
           type={activeType}
           onClose={() => setIsCreateModalOpen(false)}
+          {...{ 'data-testid': 'feature-request-create-modal' }}
         />
       )}
     </div>
@@ -451,23 +502,10 @@ interface RowProps {
   total: number;
   canManage: boolean;
   canKickOff: boolean;
-  showActions: boolean;
   showRank: boolean;
   isDragging: boolean;
   isDropTarget: boolean;
-  actionMenuOpen: boolean;
-  onToggleActionMenu: () => void;
-  onCloseActionMenu: () => void;
-  onSelect: () => void;
-  onUpdate: (
-    id: string,
-    patch: Partial<{
-      status: FeatureRequestStatus;
-      teamPriority: FeatureRequestPriority | null;
-      teamRisk: FeatureRequestRisk | null;
-      rank: number | null;
-    }>
-  ) => void;
+  onEdit: () => void;
   onMoveUp: (index: number) => void;
   onMoveDown: (index: number) => void;
   onDragStart: () => void;
@@ -475,8 +513,6 @@ interface RowProps {
   onDragOver: () => void;
   onDragLeave: () => void;
   onDrop: () => void;
-  onReanalyze: (id: string) => void;
-  isReanalyzing: boolean;
   onKickOffInterview: (fr: FeatureRequest) => void;
   onViewInterview: (interviewId: string) => void;
 }
@@ -487,15 +523,10 @@ const FeatureRequestRow: React.FC<RowProps> = ({
   total,
   canManage,
   canKickOff,
-  showActions,
   showRank,
   isDragging,
   isDropTarget,
-  actionMenuOpen,
-  onToggleActionMenu,
-  onCloseActionMenu,
-  onSelect,
-  onUpdate,
+  onEdit,
   onMoveUp,
   onMoveDown,
   onDragStart,
@@ -503,8 +534,6 @@ const FeatureRequestRow: React.FC<RowProps> = ({
   onDragOver,
   onDragLeave,
   onDrop,
-  onReanalyze,
-  isReanalyzing,
   onKickOffInterview,
   onViewInterview,
 }) => {
@@ -525,25 +554,27 @@ const FeatureRequestRow: React.FC<RowProps> = ({
     onDrop();
   };
 
-  const rowClass = [
-    isDragging ? styles['rowDragging'] : '',
-    isDropTarget ? styles['rowDropTarget'] : '',
-  ]
-    .filter(Boolean)
-    .join(' ');
+  const rowClass =
+    [
+      isDragging ? styles['rowDragging'] : '',
+      isDropTarget ? styles['rowDropTarget'] : '',
+    ]
+      .filter(Boolean)
+      .join(' ') || undefined;
 
-  const showKickOff = canKickOff && isInterviewableWorkItemType(fr.type) && !fr.interviewId;
-  const showViewInterview = isInterviewableWorkItemType(fr.type) && Boolean(fr.interviewId);
-  const hasMenuItems = canManage || showKickOff || showViewInterview;
+  const showKickOff =
+    canKickOff && isInterviewableWorkItemType(fr.type) && !fr.interviewId;
+  const showViewInterview =
+    isInterviewableWorkItemType(fr.type) && Boolean(fr.interviewId);
 
   return (
     <tr
-      className={rowClass || undefined}
+      className={rowClass}
       onDragOver={showRank ? handleDragOver : undefined}
       onDragLeave={showRank ? onDragLeave : undefined}
       onDrop={showRank ? handleDrop : undefined}
+      {...{ 'data-testid': `feature-request-row-${fr.id}` }}
     >
-      {/* Rank controls */}
       {showRank && (
         <td className={styles['rankCell']}>
           <div className={styles['rankControls']}>
@@ -557,224 +588,116 @@ const FeatureRequestRow: React.FC<RowProps> = ({
             >
               ⠿
             </span>
-            <button
-              className={styles['rankBtn']}
-              disabled={index === 0}
-              onClick={() => onMoveUp(index)}
-              title="Move up"
-              type="button"
-            >
-              ▲
-            </button>
             <span className={styles['rankValue']}>{index + 1}</span>
-            <button
-              className={styles['rankBtn']}
-              disabled={index === total - 1}
-              onClick={() => onMoveDown(index)}
-              title="Move down"
-              type="button"
-            >
-              ▼
-            </button>
+            <span className={styles['rankArrows']}>
+              <button
+                className={styles['rankBtn']}
+                disabled={index === 0}
+                onClick={() => onMoveUp(index)}
+                title="Move up"
+                type="button"
+                {...{ 'data-testid': `feature-request-rank-up-${fr.id}` }}
+              >
+                ▲
+              </button>
+              <button
+                className={styles['rankBtn']}
+                disabled={index === total - 1}
+                onClick={() => onMoveDown(index)}
+                title="Move down"
+                type="button"
+                {...{ 'data-testid': `feature-request-rank-down-${fr.id}` }}
+              >
+                ▼
+              </button>
+            </span>
           </div>
         </td>
       )}
 
-      {/* Title / submitter / source / date */}
-      <td className={styles['titleCell']}>
-        <button
-          className={styles['titleButton']}
-          type="button"
-          onClick={onSelect}
-        >
-          <div className={styles['titleText']}>{fr.title}</div>
-          <div className={styles['submitterMeta']}>
-            {fr.submitterName ?? 'Unknown'} · {fr.sourceProject} ·{' '}
-            {formatDate(fr.createdAt)}
-          </div>
-          <span className={styles['viewDetailsHint']}>View details</span>
-        </button>
-      </td>
-
-      {/* Status */}
       <td>
-        {canManage ? (
-          <select
-            className={styles['controlSelect']}
-            value={fr.status}
-            onChange={(e) =>
-              onUpdate(fr.id, {
-                status: e.target.value as FeatureRequestStatus,
-              })
-            }
-          >
-            {FEATURE_REQUEST_STATUSES.map((s) => (
-              <option key={s} value={s}>
-                {STATUS_LABELS[s]}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <span className={statusBadgeClass(fr.status)}>
-            {STATUS_LABELS[fr.status]}
-          </span>
-        )}
-      </td>
-
-      {/* AI Analysis */}
-      <td>
-        <div className={styles['aiAnalysis']}>
-          <div className={styles['aiBadges']}>
-            {fr.aiStatus === 'analyzing' && (
-              <span className={styles['spinner']} />
-            )}
-            <span className={aiStatusBadgeClass(fr.aiStatus)}>
-              {fr.aiStatus}
-            </span>
-            {fr.aiPriority && (
-              <span className={priorityBadgeClass(fr.aiPriority)}>
-                P: {fr.aiPriority}
-              </span>
-            )}
-            {fr.aiRisk && (
-              <span className={riskBadgeClass(fr.aiRisk)}>R: {fr.aiRisk}</span>
-            )}
-          </div>
+        <div className={styles['titleText']}>{fr.title}</div>
+        <div className={styles['submitterMeta']}>
+          {fr.submitterName ?? 'Unknown'} · {fr.sourceProject} ·{' '}
+          {formatDate(fr.createdAt)}
         </div>
       </td>
 
-      {/* Team overrides */}
       <td>
-        {canManage ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <select
-              className={styles['controlSelect']}
-              value={fr.teamPriority ?? ''}
-              onChange={(e) =>
-                onUpdate(fr.id, {
-                  teamPriority: (e.target.value ||
-                    null) as FeatureRequestPriority | null,
-                })
-              }
-            >
-              <option value="">Priority…</option>
-              {FEATURE_REQUEST_PRIORITIES.map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
-            <select
-              className={styles['controlSelect']}
-              value={fr.teamRisk ?? ''}
-              onChange={(e) =>
-                onUpdate(fr.id, {
-                  teamRisk: (e.target.value ||
-                    null) as FeatureRequestRisk | null,
-                })
-              }
-            >
-              <option value="">Risk…</option>
-              {FEATURE_REQUEST_RISKS.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
-            </select>
-          </div>
-        ) : (
-          <div className={styles['aiBadges']}>
-            {fr.teamPriority && (
-              <span className={priorityBadgeClass(fr.teamPriority)}>
-                {fr.teamPriority}
-              </span>
-            )}
-            {fr.teamRisk && (
-              <span className={riskBadgeClass(fr.teamRisk)}>{fr.teamRisk}</span>
-            )}
-            {!fr.teamPriority && !fr.teamRisk && (
-              <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-                —
-              </span>
-            )}
-          </div>
-        )}
+        <span className={statusBadgeClass(fr.status)}>
+          {STATUS_LABELS[fr.status]}
+        </span>
       </td>
 
-      {/* Rationale */}
-      <td className={styles['rationaleCell']}>
-        {fr.aiRationale ?? (
-          <span style={{ color: 'var(--text-muted)' }}>—</span>
-        )}
-      </td>
-
-      {/* Actions */}
-      {showActions && (
-        <td className={styles['actionsCell']}>
-          {hasMenuItems ? (
-            <div className={styles['actionMenu']} data-fr-action-menu={fr.id}>
-              <button
-                className={`${styles['actionMenuBtn']}${actionMenuOpen ? ` ${styles['actionMenuBtnActive']}` : ''}`}
-                type="button"
-                title="Actions"
-                aria-label={`Actions for ${fr.title}`}
-                aria-haspopup="menu"
-                aria-expanded={actionMenuOpen}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggleActionMenu();
-                }}
-              >
-                ⋯
-              </button>
-              {actionMenuOpen && (
-                <div className={styles['actionMenuPanel']} role="menu">
-                  {canManage && (
-                    <button
-                      className={styles['actionMenuItem']}
-                      type="button"
-                      role="menuitem"
-                      disabled={isReanalyzing || fr.aiStatus === 'analyzing'}
-                      onClick={() => {
-                        onCloseActionMenu();
-                        onReanalyze(fr.id);
-                      }}
-                    >
-                      {fr.aiStatus === 'analyzing'
-                        ? 'Analyzing…'
-                        : 'Re-analyze'}
-                    </button>
-                  )}
-                  {showKickOff && (
-                    <button
-                      className={styles['actionMenuItem']}
-                      type="button"
-                      role="menuitem"
-                      onClick={() => onKickOffInterview(fr)}
-                    >
-                      Kick Off Interview
-                    </button>
-                  )}
-                  {showViewInterview && fr.interviewId && (
-                    <button
-                      className={styles['actionMenuItem']}
-                      type="button"
-                      role="menuitem"
-                      onClick={() => onViewInterview(fr.interviewId!)}
-                    >
-                      View Interview
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          ) : (
-            <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-              —
+      <td>
+        <div className={styles['aiBadges']}>
+          {fr.aiStatus === 'analyzing' && (
+            <span className={styles['spinner']} />
+          )}
+          <span className={aiStatusBadgeClass(fr.aiStatus)}>{fr.aiStatus}</span>
+          {fr.aiPriority && (
+            <span className={priorityBadgeClass(fr.aiPriority)}>
+              P: {fr.aiPriority}
             </span>
           )}
-        </td>
-      )}
+          {fr.aiRisk && (
+            <span className={riskBadgeClass(fr.aiRisk)}>R: {fr.aiRisk}</span>
+          )}
+        </div>
+      </td>
+
+      <td>
+        <div className={styles['aiBadges']}>
+          {fr.teamPriority && (
+            <span className={priorityBadgeClass(fr.teamPriority)}>
+              {fr.teamPriority}
+            </span>
+          )}
+          {fr.teamRisk && (
+            <span className={riskBadgeClass(fr.teamRisk)}>{fr.teamRisk}</span>
+          )}
+          {!fr.teamPriority && !fr.teamRisk && (
+            <span className={styles['muted']}>—</span>
+          )}
+        </div>
+      </td>
+
+      <td className={styles['rationaleCell']}>
+        {fr.aiRationale ?? <span className={styles['muted']}>—</span>}
+      </td>
+
+      <td>
+        <div className={gridStyles.rowActions}>
+          <button
+            type="button"
+            className={gridStyles.buttonGhost}
+            onClick={onEdit}
+            {...{ 'data-testid': `feature-request-edit-${fr.id}` }}
+          >
+            {canManage ? 'Edit' : 'View'}
+          </button>
+          {showKickOff && (
+            <button
+              type="button"
+              className={gridStyles.buttonGhost}
+              onClick={() => onKickOffInterview(fr)}
+              {...{ 'data-testid': `feature-request-kickoff-${fr.id}` }}
+            >
+              Kick off interview
+            </button>
+          )}
+          {showViewInterview && fr.interviewId && (
+            <button
+              type="button"
+              className={gridStyles.buttonGhost}
+              onClick={() => onViewInterview(fr.interviewId!)}
+              {...{ 'data-testid': `feature-request-view-interview-${fr.id}` }}
+            >
+              View interview
+            </button>
+          )}
+        </div>
+      </td>
     </tr>
   );
 };

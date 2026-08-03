@@ -124,6 +124,9 @@ export default defineConfig({
             // Dev + staging depend on the programmatic SSO `setup` project and
             // consume its fresh session. Prod passes no creds → no dependency,
             // no storageState → the @prod-safe subset runs unauthenticated.
+            // Allow time for ensureDeployedServerSession to re-run Entra SSO when
+            // a saved connect.sid is stale (common right after slot recycle).
+            timeout: 120_000,
             dependencies: hasSsoCreds ? ['setup'] : [],
             use: {
               ...devices['Desktop Chrome'],

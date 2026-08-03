@@ -21,6 +21,7 @@ This skill is loaded when the `rbac-governance` rule determines that an add, rem
 | `chat:create` | chat | Create new chat threads | ✓ | ✓ | |
 | `chat:view` | chat | Access Agent Studio chat | ✓ | ✓ | |
 | `chat:view_all` | chat | View all users' chat threads | ✓ | | |
+| `home:view` | chat | Access the Agent Home page | ✓ | ✓ | ✓ |
 | `cost:view` | cost | View cost and usage data | ✓ | | ✓ |
 | `deployments:create` | deployments | Create deployments | ✓ | ✓ | |
 | `deployments:manage` | deployments | Manage existing deployments | ✓ | | |

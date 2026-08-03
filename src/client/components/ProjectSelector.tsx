@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useProjects } from '../hooks/useProjects';
@@ -10,7 +10,7 @@ import {
 } from '../hooks/usePlatformAdmin';
 import { IS_BETA_RELEASE } from '../config/release';
 import { BrandLogo } from './BrandLogo';
-import { ChangelogBanner } from './ChangelogBanner';
+import { WhatsNewBanner } from './WhatsNewBanner';
 import { UserMenu } from './UserMenu';
 import type { ThemeMode } from '../hooks/useAppShell';
 import styles from './ProjectSelector.module.css';
@@ -32,6 +32,7 @@ interface ProjectSelectorProps {
   onSetShowChangelog?: (show: boolean) => void;
   onMarkChangelogAsRead?: () => void;
   onToggleShowChangelogOnLogin?: (show: boolean) => void;
+  whatsNewCurrentVersion?: string | null;
   user?: { name: string; email?: string } | null;
   theme?: ThemeMode;
   onThemeChange?: (theme: ThemeMode) => void;
@@ -44,10 +45,10 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   isSuperAdmin = false,
   onOpenPlatformAdmin,
   hasUnreadChangelog,
-  showChangelogOnLogin,
   onSetShowChangelog,
   onMarkChangelogAsRead,
   onToggleShowChangelogOnLogin,
+  whatsNewCurrentVersion,
   user,
   theme = 'dark',
   onThemeChange,
@@ -72,7 +73,7 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
       )}
       <div className={styles.header}>
         <div className={styles.logoMark}>
-          <BrandLogo beta={IS_BETA_RELEASE} />
+          <BrandLogo beta={IS_BETA_RELEASE} align="center" />
         </div>
         <p className={styles.subtitle}>Select a project to start planning</p>
         <div className={styles.actions}>
@@ -97,8 +98,9 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
         </div>
       </div>
 
-      {hasUnreadChangelog && showChangelogOnLogin && onSetShowChangelog && onMarkChangelogAsRead && onToggleShowChangelogOnLogin && (
-        <ChangelogBanner
+      {hasUnreadChangelog && onSetShowChangelog && onMarkChangelogAsRead && (
+        <WhatsNewBanner
+          currentVersion={whatsNewCurrentVersion}
           onOpenChangelog={() => onSetShowChangelog(true)}
           onMarkAsRead={onMarkChangelogAsRead}
           onToggleShowOnLogin={onToggleShowChangelogOnLogin}
@@ -174,7 +176,7 @@ const RequestAccessModal: React.FC<RequestAccessModalProps> = ({ onClose }) => {
   const {
     register,
     handleSubmit,
-    watch,
+    control,
     reset,
     formState: { errors, isSubmitting },
   } = useForm<RequestAccessFormValues>({
@@ -182,7 +184,7 @@ const RequestAccessModal: React.FC<RequestAccessModalProps> = ({ onClose }) => {
     defaultValues: { projects: [] },
   });
 
-  const selectedProjects = watch('projects') ?? [];
+  const selectedProjects = useWatch({ control, name: 'projects' }) ?? [];
   const pendingRequests = useMemo(() => {
     return myRequests.filter((request) => request.status === 'pending');
   }, [myRequests]);

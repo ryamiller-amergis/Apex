@@ -148,7 +148,7 @@
 .messageBubbleUser {
   align-self: flex-end;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border-bottom-right-radius: 3px;
 }
 
@@ -251,7 +251,7 @@
   background: var(--accent-color);
   border: none;
   border-radius: 7px;
-  color: #fff;
+  color: var(--on-accent);
   cursor: pointer;
   flex-shrink: 0;
   transition: background 0.2s ease;
@@ -369,7 +369,7 @@
 .confirmBtnConfirm {
   padding: 7px 16px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 7px;
   font-size: 0.875rem;

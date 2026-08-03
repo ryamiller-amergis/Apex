@@ -4,6 +4,7 @@ import { PrdAssistantPanel } from './PrdAssistantPanel';
 import { useLocation, useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { stripYamlFrontmatter } from '../utils/stripYamlFrontmatter';
 import { useAppShell } from '../hooks/useAppShell';
 import {
   usePrd,
@@ -28,7 +29,11 @@ import {
   useRefreshPrdValidation,
   useFixPrdValidation,
   useAcceptFixPrdValidation,
+  useFixPrdCoverage,
+  useAcceptFixPrdCoverage,
+  useOverridePrdReadiness,
   useRevertPrdSection,
+  useDismissPrdFixSession,
   usePrdValidationReport,
   useGenerateTestCases,
   useRecalculateTestCaseCoverage,
@@ -37,6 +42,8 @@ import {
   useOwnerApprove,
   useOwnerApproval,
   useActiveUsers,
+  useApplyProposedPrd,
+  useRejectProposedPrd,
 } from '../hooks/useInterviews';
 import {
   useReviewComments,
@@ -47,36 +54,49 @@ import {
   useDeleteComment,
 } from '../hooks/useReviewComments';
 import { ProposedChangesReview } from './ProposedChangesReview';
+import { PrdFixActionStrip } from './PrdFixActionStrip';
+import type { PrdFixActionStripProgress } from './PrdFixActionStrip';
 import { usePrototypesForPrd, useGeneratePrototypesForPrd } from '../hooks/useDesignPrototypes';
 import { useDesignPlan } from '../hooks/useDesignPlan';
 import { useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
+import { ReviewReasonModal } from './ReviewReasonModal';
+import { ValidationOverrideAudit } from './ValidationOverrideAudit';
 import { AnnotationLayer } from './AnnotationLayer';
 import { ReviewerApprovalChecklist } from './ReviewerApprovalChecklist';
 import { ReviewCommentSidebar } from './ReviewCommentSidebar';
 import { BacklogViewer } from './BacklogViewer';
 import { CreateAdoItemsModal } from './CreateAdoItemsModal';
-import { FixingProgressView } from './FixValidationPanel';
 import { ApexFixRunningBanner } from './ApexFixRunningBanner';
-import type { PrdStatus, PrdValidationBaseline, TestCaseCoverageSummary } from '../../shared/types/interview';
+import { RunGroundingStatus } from './RunGroundingStatus';
+import type { PrdStatus, PrdValidationBaseline, TestCaseCoverageSummary, Prd } from '../../shared/types/interview';
 import {
+  isPrdFixFlowOwningAccept,
   isPrdSingleCommentFixPending,
+  isPrdUnchangedFromFixBaseline,
   prdHasProposedChanges,
 } from '../utils/apexFixHelpers';
 import {
+  APEX_FIX_TIMEOUT_MS,
+  agentErrorFromChatThreadStatus,
+  cancelChatThread,
   clearApexFixInProgress,
   fetchChatThreadStatus,
+  isTerminalChatThreadStatus,
   markApexFixInProgress,
   readApexFixInProgress,
+  type ApexFixSessionScope,
 } from '../utils/apexFixSession';
 import { downloadArtifactZip, sanitizeArtifactName } from '../utils/artifactDownload';
 import {
   derivePrdReadiness,
   type PrdReadiness,
+  type PrdReadinessOverride,
   type PrdReadinessSeverity,
   type PrdReadinessStageStatus,
 } from '../../shared/utils/prdReadiness';
+import { resolvePrototypeStageEnabled } from '../../shared/utils/prototypeStage';
 import { buildPassingValidationReasonsMarkdown } from '../../shared/utils/validationReport';
 import type {
   ReviewSectionKey,
@@ -86,24 +106,27 @@ import styles from './PrdReviewView.module.css';
 
 type TabId = 'preview' | 'backlog' | 'validation';
 
+type PrdFixKind = 'validation' | 'coverage';
+
 type PrdFixFlowState =
   | { phase: 'idle' }
-  | { phase: 'fixing'; baseline: PrdValidationBaseline; threadId: string }
-  | { phase: 'reviewing'; baseline: PrdValidationBaseline; threadId: string; agentError?: string };
+  | { phase: 'fixing'; kind: PrdFixKind; baseline: PrdValidationBaseline; threadId: string }
+  | { phase: 'reviewing'; kind: PrdFixKind; baseline: PrdValidationBaseline; threadId: string; agentError?: string };
 
 type PrdFixFlowAction =
-  | { type: 'START_FIX'; baseline: PrdValidationBaseline; threadId: string }
+  | { type: 'START_FIX'; kind: PrdFixKind; baseline: PrdValidationBaseline; threadId: string }
   | { type: 'FIX_COMPLETE'; agentError?: string }
   | { type: 'RESET' };
 
 function prdFixFlowReducer(state: PrdFixFlowState, action: PrdFixFlowAction): PrdFixFlowState {
   switch (action.type) {
     case 'START_FIX':
-      return { phase: 'fixing', baseline: action.baseline, threadId: action.threadId };
+      return { phase: 'fixing', kind: action.kind, baseline: action.baseline, threadId: action.threadId };
     case 'FIX_COMPLETE':
       if (state.phase !== 'fixing') return state;
       return {
         phase: 'reviewing',
+        kind: state.kind,
         baseline: state.baseline,
         threadId: state.threadId,
         agentError: action.agentError,
@@ -113,6 +136,10 @@ function prdFixFlowReducer(state: PrdFixFlowState, action: PrdFixFlowAction): Pr
     default:
       return state;
   }
+}
+
+function fixSessionScope(kind: PrdFixKind): ApexFixSessionScope {
+  return kind === 'coverage' ? 'prd-coverage' : 'prd-validation';
 }
 
 /* ── User-story projection (read-only, derived from the backlog) ──────────────── */
@@ -223,6 +250,113 @@ function statusLabel(status: PrdStatus): string {
   }
 }
 
+function workflowSummaryLabel(testCasesRequired: boolean, prototypeStageEnabled: boolean): string {
+  if (testCasesRequired && prototypeStageEnabled) return 'QA + Prototype';
+  if (testCasesRequired) return 'QA + Direct design docs';
+  if (prototypeStageEnabled) return 'Prototype only';
+  return 'Direct design docs';
+}
+
+const WorkflowSummaryBadge: React.FC<{
+  testCasesRequired: boolean;
+  prototypeStageEnabled: boolean;
+}> = ({ testCasesRequired, prototypeStageEnabled }) => {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const summary = workflowSummaryLabel(testCasesRequired, prototypeStageEnabled);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (containerRef.current?.contains(event.target as Node)) return;
+      setOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div className={styles.workflowSummary} ref={containerRef}>
+      <button
+        type="button"
+        className={styles.workflowBadge}
+        aria-expanded={open}
+        aria-controls="prd-workflow-details"
+        onClick={() => setOpen((current) => !current)}
+      {...{ 'data-testid': 'prd-workflow-summary-toggle' }}>
+        <span className={styles.workflowBadgeLabel}>Workflow:</span> {summary}
+        <svg viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M3 4.5l3 3 3-3" />
+        </svg>
+      </button>
+
+      {open && (
+        <div
+          id="prd-workflow-details"
+          className={styles.workflowPopover}
+          role="region"
+          aria-label="PRD workflow details"
+        >
+          <div className={styles.workflowPopoverHeader}>
+            <strong>PRD workflow</strong>
+            <span>Selected at interview kickoff</span>
+          </div>
+
+          <div className={styles.workflowPath} aria-label="PRD delivery path">
+            <span>PRD</span>
+            <span aria-hidden="true">→</span>
+            <span className={!testCasesRequired ? styles.workflowPathSkipped : undefined}>
+              {testCasesRequired ? 'Test cases' : 'No QA'}
+            </span>
+            <span aria-hidden="true">→</span>
+            <span>Approval</span>
+            <span aria-hidden="true">→</span>
+            <span className={!prototypeStageEnabled ? styles.workflowPathSkipped : undefined}>
+              {prototypeStageEnabled ? 'Prototype' : 'Direct'}
+            </span>
+            <span aria-hidden="true">→</span>
+            <span>Design docs</span>
+          </div>
+
+          <div className={styles.workflowStageList}>
+            <div className={styles.workflowStage}>
+              <div>
+                <strong>Test case generation</strong>
+                <span>Validates acceptance criteria and coverage before approval.</span>
+              </div>
+              <span className={testCasesRequired ? styles.workflowIncluded : styles.workflowSkipped}>
+                {testCasesRequired ? 'Included' : 'Skipped'}
+              </span>
+            </div>
+            <div className={styles.workflowStage}>
+              <div>
+                <strong>Prototype generation</strong>
+                <span>
+                  {prototypeStageEnabled
+                    ? 'Validates UX and user flows before design docs.'
+                    : 'Design docs are generated directly after PRD approval.'}
+                </span>
+              </div>
+              <span className={prototypeStageEnabled ? styles.workflowIncluded : styles.workflowSkipped}>
+                {prototypeStageEnabled ? 'Included' : 'Skipped'}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, {
     month: 'short',
@@ -269,6 +403,7 @@ function formatCoverageSummary(summary: TestCaseCoverageSummary): string[] {
 }
 
 function shouldDefaultReadinessExpanded(readiness: PrdReadiness): boolean {
+  if (readiness.overridden) return true;
   if (readiness.blockingReason) return true;
   if (readiness.qaFailures.length > 0) return true;
   return readiness.severity === 'error' || readiness.severity === 'warning';
@@ -277,12 +412,16 @@ function shouldDefaultReadinessExpanded(readiness: PrdReadiness): boolean {
 const PrdReadinessPanel: React.FC<{
   readiness: PrdReadiness;
   coverage?: TestCaseCoverageSummary | null;
-}> = ({ readiness, coverage }) => {
+  override?: PrdReadinessOverride | null;
+  overrideUserName?: string | null;
+  actions?: React.ReactNode;
+}> = ({ readiness, coverage, override, overrideUserName, actions }) => {
   const [expanded, setExpanded] = useState(() => shouldDefaultReadinessExpanded(readiness));
 
   return (
     <div
       className={`${styles.readinessBanner} ${readinessBannerClass(readiness.severity)} ${expanded ? '' : styles.readinessBannerCollapsed}`}
+      {...{ 'data-testid': 'prd-readiness-panel' }}
     >
       <button
         type="button"
@@ -290,7 +429,7 @@ const PrdReadinessPanel: React.FC<{
         onClick={() => setExpanded((v) => !v)}
         aria-expanded={expanded}
         aria-label={expanded ? 'Collapse PRD readiness' : 'Expand PRD readiness'}
-      >
+      {...{ 'data-testid': 'prd-readiness-toggle' }}>
         <svg
           className={`${styles.readinessChevron} ${expanded ? styles.readinessChevronExpanded : ''}`}
           viewBox="0 0 16 16"
@@ -308,6 +447,11 @@ const PrdReadinessPanel: React.FC<{
         {!expanded && readiness.blockingReason && (
           <span className={styles.readinessCollapsedHint}>{readiness.blockingReason}</span>
         )}
+        {!expanded && readiness.overridden && override && (
+          <span className={styles.readinessCollapsedHint}>
+            Overridden by {override.userDisplayName ?? overrideUserName ?? override.userId}
+          </span>
+        )}
       </button>
 
       {expanded && (
@@ -316,6 +460,13 @@ const PrdReadinessPanel: React.FC<{
             <div className={styles.readinessDescription}>{readiness.description}</div>
             {readiness.blockingReason && (
               <div className={styles.readinessBlocker}>{readiness.blockingReason}</div>
+            )}
+            {readiness.overridden && override && (
+              <ValidationOverrideAudit
+                override={override}
+                legacySummary={`Overrode readiness state(s): ${(override.states ?? []).join(', ').replace(/_/g, ' ')}`}
+                title="Override audit history"
+              />
             )}
           </div>
 
@@ -354,6 +505,8 @@ const PrdReadinessPanel: React.FC<{
               )}
             </div>
           )}
+
+          {actions && <div className={styles.readinessActions}>{actions}</div>}
         </>
       )}
     </div>
@@ -382,7 +535,18 @@ export const PrdReviewView: React.FC = () => {
   const { data: ownerApproval } = useOwnerApproval(id, 'prd');
   const { data: projectConfig } = useProjectSkillConfig(prd?.project);
   const latestTestCase = testCaseRecord ?? prd?.latestTestCase ?? null;
-  const readiness = prd ? derivePrdReadiness(prd, latestTestCase, prd.validationScoreThreshold ?? undefined) : null;
+  const prototypeStageEnabled = resolvePrototypeStageEnabled(
+    prd?.prototypeStageEnabled,
+    projectConfig,
+  );
+  const testCasesRequired = prd?.testCasesRequired !== false;
+  const readiness = prd
+    ? derivePrdReadiness(prd, latestTestCase, prd.validationScoreThreshold ?? undefined, {
+        testCasesRequired,
+        prdValidationEnabled: prd.prdValidationEnabled === true,
+        overriddenStates: prd.readinessOverride?.states,
+      })
+    : null;
 
   const updateContent = useUpdatePrdContent();
   const updateBacklog = useUpdatePrdBacklog();
@@ -396,6 +560,8 @@ export const PrdReviewView: React.FC = () => {
   const syncAdoStatus = useSyncPrdAdoStatus(id);
   const fixWithAi = useFixPrdWithAi(id ?? '');
   const fixPrdCommentWithAi = useFixPrdCommentWithAi(id ?? '');
+  const applyProposedPrd = useApplyProposedPrd(id ?? '');
+  const rejectProposedPrd = useRejectProposedPrd(id ?? '');
 
   const generateTestCases = useGenerateTestCases();
   const recalculateTestCaseCoverage = useRecalculateTestCaseCoverage();
@@ -406,7 +572,11 @@ export const PrdReviewView: React.FC = () => {
   const refreshPrdValidation = useRefreshPrdValidation();
   const fixPrdValidation = useFixPrdValidation();
   const acceptFixPrdValidation = useAcceptFixPrdValidation();
+  const fixPrdCoverage = useFixPrdCoverage();
+  const acceptFixPrdCoverage = useAcceptFixPrdCoverage();
+  const overridePrdReadiness = useOverridePrdReadiness();
   const revertPrdSection = useRevertPrdSection();
+  const dismissPrdFixSession = useDismissPrdFixSession();
   const { data: validationReport } = usePrdValidationReport(
     id,
     prd?.validationThreadId,
@@ -414,6 +584,23 @@ export const PrdReviewView: React.FC = () => {
   );
 
   const [prdFixFlow, prdFixFlowDispatch] = useReducer(prdFixFlowReducer, { phase: 'idle' });
+  const [fixIdleNotice, setFixIdleNotice] = useState<string | null>(null);
+  const fixCompletionInFlightRef = useRef(false);
+  const [fixReviewModalOpen, setFixReviewModalOpen] = useState(false);
+  const [fixReviewProgress, setFixReviewProgress] = useState<PrdFixActionStripProgress>({
+    approved: 0,
+    rejected: 0,
+    pending: 0,
+    total: 0,
+  });
+  const [proposedReviewModalOpen, setProposedReviewModalOpen] = useState(false);
+  const [proposedReviewProgress, setProposedReviewProgress] = useState<PrdFixActionStripProgress>({
+    approved: 0,
+    rejected: 0,
+    pending: 0,
+    total: 0,
+  });
+  const didAutoOpenProposedRef = useRef(false);
 
   const [activeTab, setActiveTab] = useState<TabId>('preview');
   const [fixingCommentId, setFixingCommentId] = useState<string | null>(null);
@@ -462,6 +649,7 @@ export const PrdReviewView: React.FC = () => {
   const [showAdoModal, setShowAdoModal] = useState(false);
   const [showApprovalsModal, setShowApprovalsModal] = useState(false);
   const [showReassignModal, setShowReassignModal] = useState(false);
+  const [showOverrideModal, setShowOverrideModal] = useState(false);
   const [showAllDocs, setShowAllDocs] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
@@ -609,10 +797,10 @@ export const PrdReviewView: React.FC = () => {
       const hasRealDocs = relatedDesignDocs && relatedDesignDocs.length > 0;
       groups.push({ label: 'Design Doc Review', informational: !hasRealDocs, subtitle: buildSubtitle(designDocReviewerRows.length), rows: designDocReviewerRows });
     }
-    if (designPrototypeReviewerRows.length > 0) {
+    if (prototypeStageEnabled && designPrototypeReviewerRows.length > 0) {
       groups.push({ label: 'Design Prototype Review', informational: designPrototypeAssignments.length === 0, subtitle: buildSubtitle(designPrototypeReviewerRows.length), rows: designPrototypeReviewerRows });
     }
-    if (qaReviewerRows.length > 0) {
+    if (testCasesRequired && qaReviewerRows.length > 0) {
       groups.push({ label: 'QA Review', subtitle: buildSubtitle(qaReviewerRows.length), rows: qaReviewerRows });
     }
 
@@ -627,7 +815,7 @@ export const PrdReviewView: React.FC = () => {
     }
 
     return groups;
-  }, [prdReviewerRows, designDocReviewerRows, designPrototypeReviewerRows, designPrototypeAssignments, qaReviewerRows, prd, ownerApproval, projectConfig?.approvalMode, relatedDesignDocs]);
+  }, [prdReviewerRows, designDocReviewerRows, designPrototypeReviewerRows, designPrototypeAssignments, qaReviewerRows, prd, ownerApproval, projectConfig?.approvalMode, relatedDesignDocs, testCasesRequired, prototypeStageEnabled]);
 
   const isGenerating =
     !!prd && prd.status === 'generating' && prd.content === '';
@@ -741,10 +929,10 @@ export const PrdReviewView: React.FC = () => {
       prdId: id,
       action: 'approve',
     });
-    if (result?.approved) {
+    if (result?.approved && prototypeStageEnabled) {
       navigate(`/backlog/design-plan/${id}`);
     }
-  }, [id, readiness?.readyForReviewActions, reviewPrd, navigate]);
+  }, [id, readiness?.readyForReviewActions, reviewPrd, navigate, prototypeStageEnabled]);
 
   const handleQaApprove = useCallback(async () => {
     if (!id) return;
@@ -754,13 +942,10 @@ export const PrdReviewView: React.FC = () => {
   const handleOwnerApprove = useCallback(async () => {
     if (!id) return;
     await ownerApprovePrd.mutateAsync({ status: 'approved' });
-    navigate(`/backlog/design-plan/${id}`);
-  }, [id, ownerApprovePrd, navigate]);
-
-  const handleOwnerRevision = useCallback(async () => {
-    if (!id) return;
-    await ownerApprovePrd.mutateAsync({ status: 'revision_requested', comment: 'Revision requested by owner' });
-  }, [id, ownerApprovePrd]);
+    if (prototypeStageEnabled) {
+      navigate(`/backlog/design-plan/${id}`);
+    }
+  }, [id, ownerApprovePrd, navigate, prototypeStageEnabled]);
 
   const handleAddComment = useCallback(
     (sectionKey: ReviewSectionKey, selector: TextSelector) => {
@@ -834,8 +1019,20 @@ export const PrdReviewView: React.FC = () => {
     }
   }, [id, fixWithAi]);
 
+  const handleAcceptAllProposed = useCallback(() => {
+    if (!id) return;
+    applyProposedPrd.mutate();
+  }, [id, applyProposedPrd]);
+
+  const handleRejectAllProposed = useCallback(() => {
+    if (!id) return;
+    rejectProposedPrd.mutate();
+  }, [id, rejectProposedPrd]);
+
   const handleStartFixValidation = useCallback(async () => {
     if (!id || !prd) return;
+    setFixIdleNotice(null);
+    fixCompletionInFlightRef.current = false;
     const baseline: PrdValidationBaseline = {
       content: prd.content || '',
       backlogJson: prd.backlogJson,
@@ -845,31 +1042,125 @@ export const PrdReviewView: React.FC = () => {
     try {
       const result = await fixPrdValidation.mutateAsync(id);
       markApexFixInProgress('prd-validation', id, { threadId: result.threadId });
-      prdFixFlowDispatch({ type: 'START_FIX', baseline, threadId: result.threadId });
+      prdFixFlowDispatch({ type: 'START_FIX', kind: 'validation', baseline, threadId: result.threadId });
     } catch {
       clearApexFixInProgress('prd-validation', id);
       prdFixFlowDispatch({ type: 'RESET' });
     }
   }, [id, prd, fixPrdValidation]);
 
-  const handleFixValidationCancel = useCallback(() => {
-    if (id) clearApexFixInProgress('prd-validation', id);
-    prdFixFlowDispatch({ type: 'RESET' });
+  const handleStartFixCoverage = useCallback(async () => {
+    if (!id || !prd) return;
+    setFixIdleNotice(null);
+    fixCompletionInFlightRef.current = false;
+    const baseline: PrdValidationBaseline = {
+      content: prd.content || '',
+      backlogJson: prd.backlogJson,
+      capturedAt: new Date().toISOString(),
+    };
+    markApexFixInProgress('prd-coverage', id);
+    try {
+      const result = await fixPrdCoverage.mutateAsync(id);
+      markApexFixInProgress('prd-coverage', id, { threadId: result.threadId });
+      prdFixFlowDispatch({ type: 'START_FIX', kind: 'coverage', baseline, threadId: result.threadId });
+    } catch {
+      clearApexFixInProgress('prd-coverage', id);
+      prdFixFlowDispatch({ type: 'RESET' });
+    }
+  }, [id, prd, fixPrdCoverage]);
+
+  const clearPrdFixSessions = useCallback(() => {
+    if (!id) return;
+    clearApexFixInProgress('prd-validation', id);
+    clearApexFixInProgress('prd-coverage', id);
   }, [id]);
+
+  /** After Apex finishes: no-op sessions return to idle with Fix with Apex; otherwise enter reviewing. */
+  const finalizePrdFixCompletion = useCallback(async (
+    baseline: PrdValidationBaseline,
+    kind: PrdFixKind,
+    threadId: string,
+    agentError?: string,
+  ): Promise<'idle' | 'reviewing'> => {
+    if (!id) return 'reviewing';
+    if (fixCompletionInFlightRef.current) return 'reviewing';
+    fixCompletionInFlightRef.current = true;
+
+    // Leave fixing immediately so poll/timeout effects stop.
+    prdFixFlowDispatch({ type: 'START_FIX', kind, baseline, threadId });
+    prdFixFlowDispatch({ type: 'FIX_COMPLETE', agentError });
+
+    try {
+      await queryClient.refetchQueries({ queryKey: ['prd', id] });
+      const fresh = queryClient.getQueryData<Prd>(['prd', id]);
+      clearPrdFixSessions();
+      if (fresh && isPrdUnchangedFromFixBaseline(fresh, baseline)) {
+        try {
+          await dismissPrdFixSession.mutateAsync(id);
+        } catch {
+          return 'reviewing';
+        }
+        fixCompletionInFlightRef.current = false;
+        prdFixFlowDispatch({ type: 'RESET' });
+        setFixIdleNotice(
+          agentError
+            ? `${agentError} No changes were applied.`
+            : 'No changes applied. You can try Fix with Apex again.',
+        );
+        return 'idle';
+      }
+      return 'reviewing';
+    } catch {
+      return 'reviewing';
+    }
+  }, [id, queryClient, clearPrdFixSessions, dismissPrdFixSession]);
+
+  const handleFixValidationCancel = useCallback(() => {
+    const threadId =
+      prdFixFlow.phase !== 'idle'
+        ? prdFixFlow.threadId
+        : (prd?.prdAssistantThreadId ?? undefined);
+    if (threadId) void cancelChatThread(threadId);
+    clearPrdFixSessions();
+    prdFixFlowDispatch({ type: 'RESET' });
+  }, [clearPrdFixSessions, prd?.prdAssistantThreadId, prdFixFlow]);
 
   const handleAcceptFixValidation = useCallback(async () => {
     if (!id) return;
-    await acceptFixPrdValidation.mutateAsync(id);
-    clearApexFixInProgress('prd-validation', id);
+    setFixIdleNotice(null);
+    fixCompletionInFlightRef.current = false;
+    if (prdFixFlow.phase === 'reviewing' && prdFixFlow.kind === 'coverage') {
+      await acceptFixPrdCoverage.mutateAsync(id);
+    } else {
+      await acceptFixPrdValidation.mutateAsync(id);
+    }
+    clearPrdFixSessions();
     prdFixFlowDispatch({ type: 'RESET' });
-  }, [id, acceptFixPrdValidation]);
+  }, [id, prdFixFlow, acceptFixPrdValidation, acceptFixPrdCoverage, clearPrdFixSessions]);
 
   const handleRevertFixValidation = useCallback(async () => {
     if (!id) return;
+    setFixIdleNotice(null);
+    fixCompletionInFlightRef.current = false;
     await revertPrdSection.mutateAsync(id);
-    clearApexFixInProgress('prd-validation', id);
+    clearPrdFixSessions();
     prdFixFlowDispatch({ type: 'RESET' });
-  }, [id, revertPrdSection]);
+  }, [id, revertPrdSection, clearPrdFixSessions]);
+
+  const handleDismissFixSession = useCallback(async () => {
+    if (!id) return;
+    fixCompletionInFlightRef.current = false;
+    await dismissPrdFixSession.mutateAsync(id);
+    clearPrdFixSessions();
+    prdFixFlowDispatch({ type: 'RESET' });
+    setFixIdleNotice('Fix review dismissed. Current content was kept; Fix with Apex is available again.');
+  }, [id, dismissPrdFixSession, clearPrdFixSessions]);
+
+  const handleOverrideReadiness = useCallback(async (reason: string) => {
+    if (!id) return;
+    await overridePrdReadiness.mutateAsync({ prdId: id, reason });
+    setShowOverrideModal(false);
+  }, [id, overridePrdReadiness]);
 
   // Recover in-progress comment fixes after navigation.
   useEffect(() => {
@@ -886,7 +1177,7 @@ export const PrdReviewView: React.FC = () => {
     }
   }, [prd, id]);
 
-  // Restore validation fix flow from server fixBaseline after navigation.
+  // Restore validation/coverage fix flow from server fixBaseline after navigation.
   useEffect(() => {
     if (!prd || prdFixFlow.phase !== 'idle') return;
     if (!prd.fixBaseline) return;
@@ -898,45 +1189,49 @@ export const PrdReviewView: React.FC = () => {
     let cancelled = false;
 
     (async () => {
-      if (!readApexFixInProgress('prd-validation', prd.id)) {
-        markApexFixInProgress('prd-validation', prd.id, { threadId });
+      const coverageSession = readApexFixInProgress('prd-coverage', prd.id);
+      const validationSession = readApexFixInProgress('prd-validation', prd.id);
+      const kind: PrdFixKind = coverageSession ? 'coverage' : 'validation';
+      const sessionScope = fixSessionScope(kind);
+      if (!coverageSession && !validationSession) {
+        markApexFixInProgress(sessionScope, prd.id, { threadId });
       }
       const thread = await fetchChatThreadStatus(threadId);
       if (cancelled) return;
-      if (thread && thread.status !== 'idle' && thread.status !== 'error') {
-        prdFixFlowDispatch({ type: 'START_FIX', baseline, threadId });
+      if (thread && !isTerminalChatThreadStatus(thread.status)) {
+        prdFixFlowDispatch({ type: 'START_FIX', kind, baseline, threadId });
         return;
       }
-      if (thread && (thread.status === 'idle' || thread.status === 'error')) {
-        await queryClient.refetchQueries({ queryKey: ['prd', prd.id] });
+      if (thread && isTerminalChatThreadStatus(thread.status)) {
         if (cancelled) return;
-        prdFixFlowDispatch({ type: 'START_FIX', baseline, threadId });
-        prdFixFlowDispatch({
-          type: 'FIX_COMPLETE',
-          agentError: thread.status === 'error'
-            ? (thread.lastError ?? 'The AI agent encountered an error and could not complete the fix.')
-            : undefined,
-        });
+        await finalizePrdFixCompletion(
+          baseline,
+          kind,
+          threadId,
+          agentErrorFromChatThreadStatus(thread.status, thread.lastError),
+        );
         return;
       }
-      // Thread not found — treat as completed with error so the UI doesn't get stuck
-      clearApexFixInProgress('prd-validation', prd.id);
-      prdFixFlowDispatch({ type: 'START_FIX', baseline, threadId });
-      prdFixFlowDispatch({
-        type: 'FIX_COMPLETE',
-        agentError: 'The fix session is no longer available. You can try again.',
-      });
+      // Thread not found — treat as completed (no-op check still applies)
+      if (cancelled) return;
+      await finalizePrdFixCompletion(
+        baseline,
+        kind,
+        threadId,
+        'The fix session is no longer available. You can try again.',
+      );
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [prd?.id, prd?.fixBaseline, prd?.prdAssistantThreadId, prdFixFlow.phase, queryClient]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on prd id/fixBaseline/thread fields, not full prd
+  }, [prd?.id, prd?.fixBaseline, prd?.prdAssistantThreadId, prdFixFlow.phase, finalizePrdFixCompletion]);
 
-  // Poll the assistant thread until Apex finishes applying validation fixes.
+  // Poll the assistant thread until Apex finishes applying validation/coverage fixes.
   useEffect(() => {
     if (prdFixFlow.phase !== 'fixing' || !id) return;
-    const { threadId } = prdFixFlow;
+    const { threadId, baseline, kind } = prdFixFlow;
     let cancelled = false;
 
     let notFoundCount = 0;
@@ -947,25 +1242,24 @@ export const PrdReviewView: React.FC = () => {
         if (!thread) {
           notFoundCount++;
           if (notFoundCount >= 3) {
-            clearApexFixInProgress('prd-validation', id);
-            prdFixFlowDispatch({
-              type: 'FIX_COMPLETE',
-              agentError: 'The fix session is no longer available. You can try again.',
-            });
+            await finalizePrdFixCompletion(
+              baseline,
+              kind,
+              threadId,
+              'The fix session is no longer available. You can try again.',
+            );
           }
           return;
         }
         notFoundCount = 0;
-        if (thread.status === 'idle' || thread.status === 'error') {
-          await queryClient.refetchQueries({ queryKey: ['prd', id] });
+        if (isTerminalChatThreadStatus(thread.status)) {
           if (!cancelled) {
-            clearApexFixInProgress('prd-validation', id);
-            prdFixFlowDispatch({
-              type: 'FIX_COMPLETE',
-              agentError: thread.status === 'error'
-                ? (thread.lastError ?? 'The AI agent encountered an error and could not complete the fix.')
-                : undefined,
-            });
+            await finalizePrdFixCompletion(
+              baseline,
+              kind,
+              threadId,
+              agentErrorFromChatThreadStatus(thread.status, thread.lastError),
+            );
           }
         }
       } catch {
@@ -982,7 +1276,63 @@ export const PrdReviewView: React.FC = () => {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [prdFixFlow, id, queryClient]);
+  }, [prdFixFlow, id, finalizePrdFixCompletion]);
+
+  // Hard wall-clock timeout so the fixing overlay can never spin indefinitely.
+  useEffect(() => {
+    if (prdFixFlow.phase !== 'fixing' || !id) return;
+    const { threadId, baseline, kind } = prdFixFlow;
+    const timeoutId = window.setTimeout(() => {
+      void cancelChatThread(threadId);
+      void finalizePrdFixCompletion(
+        baseline,
+        kind,
+        threadId,
+        'The fix took too long and was stopped. You can try again.',
+      );
+    }, APEX_FIX_TIMEOUT_MS);
+    return () => window.clearTimeout(timeoutId);
+  }, [prdFixFlow, id, finalizePrdFixCompletion]);
+
+  // If server cleared fixBaseline while UI is still reviewing, return to idle so Fix with Apex returns.
+  useEffect(() => {
+    if (prdFixFlow.phase !== 'reviewing' || !prd) return;
+    if (prd.fixBaseline) return;
+    if (dismissPrdFixSession.isPending || revertPrdSection.isPending || acceptFixPrdValidation.isPending || acceptFixPrdCoverage.isPending) {
+      return;
+    }
+    fixCompletionInFlightRef.current = false;
+    clearPrdFixSessions();
+    prdFixFlowDispatch({ type: 'RESET' });
+  }, [
+    prd,
+    prdFixFlow.phase,
+    dismissPrdFixSession.isPending,
+    revertPrdSection.isPending,
+    acceptFixPrdValidation.isPending,
+    acceptFixPrdCoverage.isPending,
+    clearPrdFixSessions,
+  ]);
+
+  useEffect(() => {
+    if (prdFixFlow.phase === 'idle') {
+      fixCompletionInFlightRef.current = false;
+    }
+  }, [prdFixFlow.phase]);
+
+  // If validation was incorrectly auto-started mid Fix-with-Apex, cancel it so the
+  // fix session owns the UI until the user Accepts & Re-validates.
+  // Only while fixBaseline is still set — after Accept clears it, validation is intentional.
+  useEffect(() => {
+    if (!id || !prd) return;
+    if (!prd.fixBaseline) return;
+    if (prdFixFlow.phase !== 'fixing' && prdFixFlow.phase !== 'reviewing') return;
+    if (prd.status !== 'validating') return;
+    void cancelPrdValidation.mutateAsync(id).catch(() => {
+      /* non-fatal — server also guards auto-start while fixBaseline is set */
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on prd status/fixBaseline, not full prd
+  }, [id, prd?.status, prd?.fixBaseline, prdFixFlow.phase, cancelPrdValidation]);
 
   // Clear bulk comment fix session once proposed changes land.
   useEffect(() => {
@@ -993,6 +1343,34 @@ export const PrdReviewView: React.FC = () => {
     }
   }, [prd, id, bulkCommentFixRunning]);
 
+  // Auto-open the section wizard once when comment/assistant proposals land.
+  useEffect(() => {
+    if (!prd) return;
+    const showProposed =
+      prdHasProposedChanges(prd) && !isPrdFixFlowOwningAccept(prd, prdFixFlow.phase);
+    if (!showProposed) {
+      didAutoOpenProposedRef.current = false;
+      setProposedReviewModalOpen((open) => (open ? false : open));
+      setProposedReviewProgress((prev) =>
+        prev.approved === 0 && prev.rejected === 0 && prev.pending === 0 && prev.total === 0
+          ? prev
+          : { approved: 0, rejected: 0, pending: 0, total: 0 },
+      );
+      return;
+    }
+    if (didAutoOpenProposedRef.current) return;
+    didAutoOpenProposedRef.current = true;
+    setProposedReviewModalOpen(true);
+  // Depend on proposal fields / fix ownership — not the whole `prd` object identity.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    prd?.proposedContent,
+    prd?.proposedBacklogJson,
+    prd?.fixBaseline,
+    prd?.fixCommentId,
+    prdFixFlow.phase,
+  ]);
+
   // Poll while bulk comment fix is in flight (no server-side in-progress flag).
   useEffect(() => {
     if (!id || !bulkCommentFixRunning) return;
@@ -1002,10 +1380,11 @@ export const PrdReviewView: React.FC = () => {
     return () => window.clearInterval(interval);
   }, [id, bulkCommentFixRunning, queryClient]);
 
-  // Poll until fixBaseline lands after validation fix was started (e.g. user navigated away early).
+  // Poll until fixBaseline lands after a fix was started (e.g. user navigated away early).
   useEffect(() => {
     if (!id || prdFixFlow.phase !== 'idle') return;
-    const session = readApexFixInProgress('prd-validation', id);
+    const session =
+      readApexFixInProgress('prd-validation', id) ?? readApexFixInProgress('prd-coverage', id);
     if (!session || prd?.fixBaseline) return;
     const interval = window.setInterval(() => {
       void queryClient.refetchQueries({ queryKey: ['prd', id] });
@@ -1066,6 +1445,30 @@ export const PrdReviewView: React.FC = () => {
     return (backlog.epics ?? []).some((e) => !e.adoWorkItemId);
   }, [prd?.backlogJson]);
 
+  // When all readiness gates pass on a draft, promote to review automatically —
+  // authors should not need a separate "Submit for Review" click.
+  const autoSubmittedPrdRef = useRef<string | null>(null);
+  const canAutoSubmitDraft =
+    !!prd &&
+    !!id &&
+    !!readiness?.readyForReviewActions &&
+    prd.status === 'draft' &&
+    can('interviews:manage') &&
+    (prd.authorId === userId || prd.ownerId === userId || isAdmin);
+
+  useEffect(() => {
+    if (!canAutoSubmitDraft || !id) {
+      if (prd?.status === 'pending_review' || prd?.status === 'approved') {
+        autoSubmittedPrdRef.current = null;
+      }
+      return;
+    }
+    if (submitPrd.isPending) return;
+    if (autoSubmittedPrdRef.current === id) return;
+    autoSubmittedPrdRef.current = id;
+    void handleSubmit();
+  }, [canAutoSubmitDraft, id, prd?.status, submitPrd.isPending, handleSubmit]);
+
   if (isLoading) return <div className={styles.loadingState}>Loading PRD…</div>;
   if (isError || !prd)
     return <div className={styles.errorState}>PRD not found.</div>;
@@ -1110,12 +1513,14 @@ export const PrdReviewView: React.FC = () => {
   const canShowApprovalsAction = approvalChecklistGroups.length > 0;
   const canShowAssistantAction = prd.status !== 'approved';
   const canGenerateTestCasesAction =
+    testCasesRequired &&
     canManage &&
     prd.status !== 'approved' &&
     !!prd.content &&
     (readiness.state === 'test_cases_pending' ||
       readiness.state === 'test_case_generation_failed');
   const canRecalculateTestCaseCoverageAction =
+    testCasesRequired &&
     canManage &&
     prd.status !== 'approved' &&
     readiness.state === 'coverage_gaps';
@@ -1126,13 +1531,13 @@ export const PrdReviewView: React.FC = () => {
     prd.status !== 'validating' &&
     !!prd.content &&
     !!prd.backlogJson &&
-    prd.latestTestCase?.status === 'ready';
+    (!testCasesRequired || prd.latestTestCase?.status === 'ready');
   const canCancelValidationAction = canManage && prd.status === 'validating';
   const canManageDraftReviewAction =
     canManage && (isAuthor || isOwner || isAdmin);
+  // Drafts auto-submit when readiness clears — only revision_requested needs a manual resubmit.
   const canSubmitForReviewAction =
-    canManageDraftReviewAction &&
-    (prd.status === 'draft' || prd.status === 'revision_requested');
+    canManageDraftReviewAction && prd.status === 'revision_requested';
   const canWithdrawAction =
     canManageDraftReviewAction && prd.status === 'pending_review';
   const canDeletePrdAction = canManageDraftReviewAction;
@@ -1147,24 +1552,35 @@ export const PrdReviewView: React.FC = () => {
     canReassignReviewersAction;
 
   const sectionComments = reviewComments.filter((c) => c.sectionKey === 'prd');
-  const validationFixSession = id ? readApexFixInProgress('prd-validation', id) : null;
+  const validationFixSession = id
+    ? (readApexFixInProgress('prd-validation', id) ?? readApexFixInProgress('prd-coverage', id))
+    : null;
   const apexFixRunningBanner = (() => {
     if (prdFixFlow.phase === 'fixing' || (validationFixSession && prdFixFlow.phase === 'idle')) {
+      const isCoverage = !!id && !!readApexFixInProgress('prd-coverage', id);
       return {
-        title: 'Apex is fixing validation gaps…',
+        title: isCoverage
+          ? 'Apex is fixing coverage gaps…'
+          : 'Apex is fixing validation gaps…',
         subtitle: 'You can leave this page — progress will resume when you return.',
+        hint: 'Typically 1–3 min',
+        showCancel: prdFixFlow.phase === 'fixing',
       };
     }
     if (bulkCommentFixRunning || fixWithAi.isPending) {
       return {
         title: 'Apex is applying review comment fixes…',
         subtitle: 'Proposed changes will appear here when complete.',
+        hint: undefined as string | undefined,
+        showCancel: false,
       };
     }
     if (fixingCommentId || isPrdSingleCommentFixPending(prd)) {
       return {
         title: 'Apex is fixing a review comment…',
         subtitle: 'The proposed edit will appear when complete.',
+        hint: undefined as string | undefined,
+        showCancel: false,
       };
     }
     return null;
@@ -1190,25 +1606,31 @@ export const PrdReviewView: React.FC = () => {
   );
 
   /* ── Preview content (with optional section editing) ────────────────────── */
+  // Strip YAML frontmatter for preview only — ReactMarkdown collapses soft
+  // line breaks, which turns title/slug/created/… into one unprofessional line.
   const previewContent = prd.content ? (
     canEditContent ? (
       <>
         {parsedSections.map((section, index) => (
           <div key={index} className={styles.sectionWrapper}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{section}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {stripYamlFrontmatter(section)}
+            </ReactMarkdown>
             <button
               type="button"
               className={styles.sectionEditBtn}
               aria-label="Edit section"
               onClick={() => handleEditSection(index)}
-            >
+            {...{ 'data-testid': 'prd-section-edit-btn' }}>
               {pencilIcon}
             </button>
           </div>
         ))}
       </>
     ) : (
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{prd.content}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+        {stripYamlFrontmatter(prd.content)}
+      </ReactMarkdown>
     )
   ) : (
     <div className={styles.emptyPreview}>
@@ -1253,14 +1675,14 @@ export const PrdReviewView: React.FC = () => {
     ) : null;
 
   return (
-    <div className={styles.container}>
+    <div className={styles.container} {...{ 'data-testid': 'prd-review' }}>
       <div className={styles.header}>
         <div className={styles.headerLeft}>
           <button
             className={styles.backBtn}
             onClick={() => navigate('/backlog?tab=prds')}
             type="button"
-          >
+          {...{ 'data-testid': 'prd-review-back-btn' }}>
             ←
           </button>
           <div className={styles.headerInfo}>
@@ -1268,11 +1690,15 @@ export const PrdReviewView: React.FC = () => {
               <h1 className={styles.title}>{prd.title}</h1>
               <span
                 className={`${styles.statusBadge} ${statusBadgeClass(prd.status)}`}
+                {...{ 'data-testid': 'prd-status-badge' }}
               >
                 {statusLabel(prd.status)}
               </span>
               {prd.prdValidationEnabled && (() => {
-                const hasAllArtifacts = !!prd.content && !!prd.backlogJson && prd.latestTestCase?.status === 'ready';
+                const hasAllArtifacts =
+                  !!prd.content &&
+                  !!prd.backlogJson &&
+                  (!testCasesRequired || prd.latestTestCase?.status === 'ready');
                 if (prd.status === 'validating') {
                   return (
                     <span className={`${styles.validationBadge} ${styles.badgeRunning}`}>
@@ -1336,6 +1762,10 @@ export const PrdReviewView: React.FC = () => {
                   <span className={styles.metaValue}>{prd.model}</span>
                 </span>
               )}
+              <WorkflowSummaryBadge
+                testCasesRequired={testCasesRequired}
+                prototypeStageEnabled={prototypeStageEnabled}
+              {...{ 'data-testid': 'prd-workflow-summary' }}/>
             </div>
             {sourceInterview && (
               <div className={styles.parentLinks}>
@@ -1346,7 +1776,7 @@ export const PrdReviewView: React.FC = () => {
                   }
                   type="button"
                   title={`View Interview: ${sourceInterview.title}`}
-                >
+                {...{ 'data-testid': 'prd-parent-interview-link' }}>
                   <svg
                     viewBox="0 0 14 14"
                     fill="none"
@@ -1373,6 +1803,11 @@ export const PrdReviewView: React.FC = () => {
                 </button>
               </div>
             )}
+            <RunGroundingStatus
+              surface="prd"
+              domainRunId={prd.id}
+              project={prd.project}
+            />
           </div>
         </div>
 
@@ -1387,7 +1822,7 @@ export const PrdReviewView: React.FC = () => {
             disabled={!prd.content && !prd.backlogJson}
             type="button"
             title="Download PRD Markdown and backlog JSON"
-          >
+          {...{ 'data-testid': 'prd-download-btn' }}>
             <svg
               viewBox="0 0 16 16"
               fill="none"
@@ -1409,7 +1844,7 @@ export const PrdReviewView: React.FC = () => {
               onClick={() => void generateTestCases.mutateAsync(prd.id)}
               disabled={generateTestCases.isPending}
               type="button"
-            >
+            {...{ 'data-testid': 'prd-generate-test-cases-btn' }}>
               {readiness.state === 'test_case_generation_failed' ? 'Regenerate Test Cases' : 'Generate Test Cases'}
             </button>
           )}
@@ -1420,7 +1855,7 @@ export const PrdReviewView: React.FC = () => {
               onClick={() => void recalculateTestCaseCoverage.mutateAsync(prd.id)}
               disabled={recalculateTestCaseCoverage.isPending}
               type="button"
-            >
+            {...{ 'data-testid': 'prd-recalculate-coverage-btn' }}>
               {recalculateTestCaseCoverage.isPending
                 ? 'Re-evaluating Coverage…'
                 : 'Re-evaluate Coverage'}
@@ -1435,7 +1870,7 @@ export const PrdReviewView: React.FC = () => {
               title="Apex Assistant"
               aria-label="Apex Assistant"
               aria-expanded={assistantOpen}
-            >
+            {...{ 'data-testid': 'prd-assistant-toggle-btn' }}>
               <svg
                 viewBox="0 0 16 16"
                 fill="none"
@@ -1457,7 +1892,7 @@ export const PrdReviewView: React.FC = () => {
               onClick={() => void cancelPrdValidation.mutateAsync(prd.id)}
               disabled={cancelPrdValidation.isPending}
               type="button"
-            >
+            {...{ 'data-testid': 'prd-cancel-validation-btn' }}>
               Cancel Validation
             </button>
           )}
@@ -1479,6 +1914,7 @@ export const PrdReviewView: React.FC = () => {
                     : undefined
               }
               type="button"
+              {...{ 'data-testid': 'submit-review-btn' }}
             >
               Submit for Review
             </button>
@@ -1506,6 +1942,7 @@ export const PrdReviewView: React.FC = () => {
                           : undefined
                     }
                     type="button"
+                    {...{ 'data-testid': 'approve-prd-btn' }}
                   >
                     Approve PRD
                   </button>
@@ -1514,6 +1951,7 @@ export const PrdReviewView: React.FC = () => {
             )}
 
           {canReview &&
+            testCasesRequired &&
             isAssignedQaApprover &&
             !hasAlreadyApprovedQa &&
             prd.status === 'pending_review' && (
@@ -1525,6 +1963,7 @@ export const PrdReviewView: React.FC = () => {
                     onClick={() => void handleQaApprove()}
                     disabled={reviewTestCases.isPending}
                     type="button"
+                    {...{ 'data-testid': 'approve-qa-btn' }}
                   >
                     Approve QA
                   </button>
@@ -1544,16 +1983,9 @@ export const PrdReviewView: React.FC = () => {
                     ? 'Reviewers must approve the PRD before owner approval'
                     : undefined}
                   type="button"
+                  {...{ 'data-testid': 'approve-owner-btn' }}
                 >
                   Approve as Owner
-                </button>
-                <button
-                  className={styles.btnRevision}
-                  onClick={() => void handleOwnerRevision()}
-                  disabled={ownerApprovePrd.isPending}
-                  type="button"
-                >
-                  Request Revision
                 </button>
               </div>
             </>
@@ -1573,7 +2005,7 @@ export const PrdReviewView: React.FC = () => {
                     : 'Create work items in Azure DevOps'
                 }
                 type="button"
-              >
+              {...{ 'data-testid': 'prd-create-ado-items-btn' }}>
                 {createAdoItems.isPending ? 'Creating…' : 'Create in ADO'}
               </button>
             )}
@@ -1587,7 +2019,7 @@ export const PrdReviewView: React.FC = () => {
                 aria-haspopup="menu"
                 aria-expanded={actionMenuOpen}
                 aria-label="More actions"
-              >
+              {...{ 'data-testid': 'prd-actions-menu-btn' }}>
                 More
                 <svg
                   viewBox="0 0 16 16"
@@ -1617,7 +2049,7 @@ export const PrdReviewView: React.FC = () => {
                       }}
                       type="button"
                       role="menuitem"
-                    >
+                    {...{ 'data-testid': 'prd-actions-approvals-btn' }}>
                       <span className={styles.actionMenuIcon}>
                         <svg viewBox="0 0 16 16" aria-hidden="true">
                           <rect x="2" y="2" width="12" height="12" rx="2" />
@@ -1638,7 +2070,7 @@ export const PrdReviewView: React.FC = () => {
                       disabled={createPrdValidationThread.isPending}
                       type="button"
                       role="menuitem"
-                    >
+                    {...{ 'data-testid': 'prd-actions-validate-btn' }}>
                       <span className={styles.actionMenuIcon}>
                         <svg viewBox="0 0 16 16" aria-hidden="true">
                           <circle cx="8" cy="8" r="6" />
@@ -1658,7 +2090,7 @@ export const PrdReviewView: React.FC = () => {
                       }}
                       type="button"
                       role="menuitem"
-                    >
+                    {...{ 'data-testid': 'prd-actions-edit-btn' }}>
                       <span className={styles.actionMenuIcon}>{pencilIcon}</span>
                       <span className={styles.actionMenuLabel}>Edit</span>
                     </button>
@@ -1674,7 +2106,7 @@ export const PrdReviewView: React.FC = () => {
                       disabled={withdrawPrd.isPending}
                       type="button"
                       role="menuitem"
-                    >
+                    {...{ 'data-testid': 'prd-actions-withdraw-btn' }}>
                       <span className={styles.actionMenuIcon}>
                         <svg viewBox="0 0 16 16" aria-hidden="true">
                           <path d="M4 8h8" />
@@ -1699,7 +2131,7 @@ export const PrdReviewView: React.FC = () => {
                           ? `Reviewers: ${reviewerDisplayNames.join(', ')}`
                           : 'Assign reviewers'
                       }
-                    >
+                    {...{ 'data-testid': 'prd-actions-reassign-btn' }}>
                       <span className={styles.actionMenuIcon}>
                         <svg viewBox="0 0 16 16" aria-hidden="true">
                           <circle cx="6" cy="5" r="2.5" />
@@ -1725,7 +2157,7 @@ export const PrdReviewView: React.FC = () => {
                       disabled={deletePrd.isPending}
                       type="button"
                       role="menuitem"
-                    >
+                    {...{ 'data-testid': 'prd-actions-delete-btn' }}>
                       <span className={styles.actionMenuIcon}>
                         <svg viewBox="0 0 16 16" aria-hidden="true">
                           <polyline points="2 4 4 4 14 4" />
@@ -1748,82 +2180,208 @@ export const PrdReviewView: React.FC = () => {
         <ApexFixRunningBanner
           title={apexFixRunningBanner.title}
           subtitle={apexFixRunningBanner.subtitle}
-        />
+          hint={apexFixRunningBanner.hint}
+          onCancel={apexFixRunningBanner.showCancel ? handleFixValidationCancel : undefined}
+        {...{ 'data-testid': 'prd-apex-fix-running-banner' }}/>
       )}
 
-      {/* Validation Banner */}
-      {prd.validationScore !== null && prd.validationScore !== undefined && prd.validationScore < (prd.validationScoreThreshold ?? 90) && prd.status === 'draft' && prd.validationScorecard && (
-        <div className={styles.validationPanel}>
-          {prdFixFlow.phase === 'fixing' ? (
-            <FixingProgressView onCancel={handleFixValidationCancel} />
-          ) : (
-            <div className={styles.validationBanner}>
-              <div className={styles.validationBannerLeft}>
-                <span className={styles.validationBannerText}>
-                  Validation score: <strong>{prd.validationScore}%</strong> (needs ≥ {prd.validationScoreThreshold ?? 90}%).
-                  {prdFixFlow.phase === 'reviewing'
-                    ? prdFixFlow.agentError
-                      ? ` ${prdFixFlow.agentError}`
-                      : ' Review Apex\'s changes, then accept to re-validate.'
-                    : ' Fix gaps to proceed.'}
-                </span>
-              </div>
-              <div className={styles.validationActions}>
-                {prdFixFlow.phase === 'idle' && canManage && (
-                  <button
-                    className={prd.validationScore < 70 ? styles.fixBtnRed : styles.fixBtnAmber}
-                    onClick={() => void handleStartFixValidation()}
-                    disabled={fixPrdValidation.isPending}
-                    type="button"
-                  >
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M8 2l1.09 3.26L12.36 6l-3.27 1.09L8 10.36 6.91 7.09 3.64 6l3.27-1.09z" />
-                      <path d="M13 1l.54 1.63L15.18 3.18 13.54 3.72 13 5.35l-.54-1.63L10.82 3.18l1.64-.55z" />
-                    </svg>
-                    {fixPrdValidation.isPending ? 'Starting…' : 'Fix with Apex'}
-                  </button>
-                )}
-                {prdFixFlow.phase === 'reviewing' && canManage && (
-                  <>
-                    <button
-                      className={styles.fixBtnGreen}
-                      onClick={() => void handleAcceptFixValidation()}
-                      disabled={acceptFixPrdValidation.isPending}
-                      type="button"
-                    >
-                      Accept & Re-validate
-                    </button>
-                    <button
-                      className={styles.fixBtnSecondary}
-                      onClick={() => void handleRevertFixValidation()}
-                      disabled={revertPrdSection.isPending}
-                      type="button"
-                    >
-                      Revert
-                    </button>
-                  </>
-                )}
-                <button
-                  className={styles.fixBtnSecondary}
-                  onClick={() => void createPrdValidationThread.mutateAsync(prd.id)}
-                  disabled={createPrdValidationThread.isPending || prdFixFlow.phase !== 'idle'}
-                  type="button"
-                >
-                  Re-run
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+      {/* Unified Option-A strip while Fix-with-Apex reviewing + baseline diffs exist */}
+      {(() => {
+        const showUnifiedStrip =
+          prdFixFlow.phase === 'reviewing'
+          && !!prd.fixBaseline
+          && !isPrdUnchangedFromFixBaseline(prd, prd.fixBaseline);
+        const showLegacyValidationBanner =
+          !showUnifiedStrip
+          && prd.validationScore !== null
+          && prd.validationScore !== undefined
+          && prd.validationScore < (prd.validationScoreThreshold ?? 90)
+          && prd.status === 'draft'
+          && !!prd.validationScorecard
+          && prdFixFlow.phase !== 'fixing';
 
-      <PrdReadinessPanel
-        readiness={readiness}
-        coverage={latestTestCase?.coverageSummary ?? null}
-      />
+        return (
+          <>
+            {showUnifiedStrip && (
+              <PrdFixActionStrip
+                validationScore={prd.validationScore ?? 0}
+                validationThreshold={prd.validationScoreThreshold ?? 90}
+                readinessLabel={readiness?.label ?? 'Validation gaps'}
+                readinessBlockingReason={readiness?.blockingReason}
+                progress={fixReviewProgress}
+                agentError={
+                  prdFixFlow.phase === 'reviewing' ? prdFixFlow.agentError : undefined
+                }
+                busy={
+                  acceptFixPrdValidation.isPending
+                  || acceptFixPrdCoverage.isPending
+                  || dismissPrdFixSession.isPending
+                  || revertPrdSection.isPending
+                }
+                onContinueReview={() => setFixReviewModalOpen(true)}
+                onAcceptAll={() => void handleAcceptFixValidation()}
+                onRevert={() => void handleRevertFixValidation()}
+                onDismiss={() => void handleDismissFixSession()}
+                onPreview={() => setFixReviewModalOpen(true)}
+                acceptLabel={
+                  prdFixFlow.kind === 'coverage'
+                    ? 'Accept all & re-evaluate coverage'
+                    : 'Accept all & re-validate'
+                }
+              />
+            )}
+
+            {showLegacyValidationBanner && (
+              <div className={styles.validationPanel}>
+                <div className={styles.validationBanner}>
+                  <div className={styles.validationBannerLeft}>
+                    <span className={styles.validationBannerText}>
+                      Validation score: <strong>{prd.validationScore}%</strong> (needs ≥ {prd.validationScoreThreshold ?? 90}%).
+                      {fixIdleNotice
+                        ? ` ${fixIdleNotice}`
+                        : ' Fix gaps to proceed.'}
+                    </span>
+                  </div>
+                  <div className={styles.validationActions}>
+                    {prdFixFlow.phase === 'idle' && canManage && (
+                      <button
+                        className={prd.validationScore! < 70 ? styles.fixBtnRed : styles.fixBtnAmber}
+                        onClick={() => void handleStartFixValidation()}
+                        disabled={fixPrdValidation.isPending}
+                        type="button"
+                      {...{ 'data-testid': 'prd-start-fix-btn' }}>
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M8 2l1.09 3.26L12.36 6l-3.27 1.09L8 10.36 6.91 7.09 3.64 6l3.27-1.09z" />
+                          <path d="M13 1l.54 1.63L15.18 3.18 13.54 3.72 13 5.35l-.54-1.63L10.82 3.18l1.64-.55z" />
+                        </svg>
+                        {fixPrdValidation.isPending ? 'Starting…' : 'Fix with Apex'}
+                      </button>
+                    )}
+                    {prdFixFlow.phase === 'idle' && (
+                      <button
+                        className={styles.fixBtnSecondary}
+                        onClick={() => void createPrdValidationThread.mutateAsync(prd.id)}
+                        disabled={createPrdValidationThread.isPending}
+                        type="button"
+                      {...{ 'data-testid': 'prd-revalidate-btn' }}>
+                        Re-run
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {!showUnifiedStrip && (
+              <PrdReadinessPanel
+                readiness={readiness}
+                coverage={testCasesRequired ? (latestTestCase?.coverageSummary ?? null) : null}
+                override={prd.readinessOverride}
+                overrideUserName={
+                  prd.readinessOverride
+                    ? (activeUsers.find((u) => u.oid === prd.readinessOverride?.userId)?.displayName ?? null)
+                    : null
+                }
+                actions={(() => {
+                  if (!canManage || !readiness || prdFixFlow.phase === 'fixing') return undefined;
+                  const showCoverageFix = readiness.state === 'coverage_gaps' && prdFixFlow.phase === 'idle';
+                  const showValidationFixInPanel =
+                    readiness.state === 'validation_failed' &&
+                    prdFixFlow.phase === 'idle' &&
+                    !(
+                      prd.validationScore !== null &&
+                      prd.validationScore !== undefined &&
+                      prd.validationScore < (prd.validationScoreThreshold ?? 90) &&
+                      prd.status === 'draft' &&
+                      !!prd.validationScorecard
+                    );
+                  const showCoverageReview =
+                    prdFixFlow.phase === 'reviewing' && prdFixFlow.kind === 'coverage';
+                  const showProceedAnyway =
+                    prdFixFlow.phase === 'idle' &&
+                    !readiness.readyForReviewActions &&
+                    !readiness.overridden &&
+                    (readiness.state === 'coverage_gaps' ||
+                      readiness.state === 'validation_failed' ||
+                      readiness.state === 'test_case_generation_failed');
+                  if (!showCoverageFix && !showValidationFixInPanel && !showCoverageReview && !showProceedAnyway) {
+                    return undefined;
+                  }
+                  return (
+                    <div className={styles.validationActions}>
+                      {showCoverageFix && (
+                        <button
+                          className={styles.fixBtnAmber}
+                          onClick={() => void handleStartFixCoverage()}
+                          disabled={fixPrdCoverage.isPending}
+                          type="button"
+                        >
+                          {fixPrdCoverage.isPending ? 'Starting…' : 'Fix with Apex'}
+                        </button>
+                      )}
+                      {showValidationFixInPanel && (
+                        <button
+                          className={styles.fixBtnAmber}
+                          onClick={() => void handleStartFixValidation()}
+                          disabled={fixPrdValidation.isPending}
+                          type="button"
+                        >
+                          {fixPrdValidation.isPending ? 'Starting…' : 'Fix with Apex'}
+                        </button>
+                      )}
+                      {showCoverageReview && (
+                        <>
+                          <button
+                            className={styles.fixBtnGreen}
+                            onClick={() => void handleAcceptFixValidation()}
+                            disabled={acceptFixPrdCoverage.isPending || dismissPrdFixSession.isPending || revertPrdSection.isPending}
+                            type="button"
+                          >
+                            Accept & Re-evaluate Coverage
+                          </button>
+                          <button
+                            className={styles.fixBtnSecondary}
+                            onClick={() => void handleRevertFixValidation()}
+                            disabled={revertPrdSection.isPending || dismissPrdFixSession.isPending || acceptFixPrdCoverage.isPending}
+                            type="button"
+                            title="Restore content from before Fix with Apex"
+                          >
+                            {revertPrdSection.isPending ? 'Reverting…' : 'Revert'}
+                          </button>
+                          <button
+                            className={styles.fixBtnSecondary}
+                            onClick={() => void handleDismissFixSession()}
+                            disabled={dismissPrdFixSession.isPending || revertPrdSection.isPending || acceptFixPrdCoverage.isPending}
+                            type="button"
+                            title="Keep current content, clear the fix session, and show Fix with Apex again"
+                          >
+                            {dismissPrdFixSession.isPending ? 'Dismissing…' : 'Dismiss'}
+                          </button>
+                          {prdFixFlow.agentError && (
+                            <span className={styles.readinessCollapsedHint}>{prdFixFlow.agentError}</span>
+                          )}
+                        </>
+                      )}
+                      {showProceedAnyway && (
+                        <button
+                          className={styles.fixBtnSecondary}
+                          onClick={() => setShowOverrideModal(true)}
+                          type="button"
+                        >
+                          Proceed anyway
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
+              {...{ 'data-testid': 'prd-readiness-panel-mount' }}/>
+            )}
+          </>
+        );
+      })()}
 
       <div className={styles.bannerRow}>
-        {projectConfig?.prototypeStageEnabled !== false && prd.status === 'approved' && designPlanResponse?.plan && (
+        {prototypeStageEnabled && prd.status === 'approved' && designPlanResponse?.plan && (
           <div className={styles.designDocBanner}>
             <span className={styles.designDocBannerText}>
               {designPlanResponse.plan.status === 'generating'
@@ -1836,13 +2394,14 @@ export const PrdReviewView: React.FC = () => {
               className={styles.designDocBannerLink}
               onClick={() => navigate(`/backlog/design-plan/${id}`)}
               type="button"
+              {...{ 'data-testid': 'prd-design-plan-link' }}
             >
               View Design Plan →
             </button>
           </div>
         )}
 
-        {projectConfig?.prototypeStageEnabled !== false && prd.status === 'approved' && relatedPrototypes.length > 0 && (
+        {prototypeStageEnabled && prd.status === 'approved' && relatedPrototypes.length > 0 && (
           <div className={styles.designDocBanner}>
             <span className={styles.designDocBannerText}>
               {relatedPrototypes.length === 1
@@ -1855,13 +2414,13 @@ export const PrdReviewView: React.FC = () => {
               className={styles.designDocBannerLink}
               onClick={() => navigate(`/backlog/design-prototypes/${id}`)}
               type="button"
-            >
+            {...{ 'data-testid': 'prd-design-prototypes-link' }}>
               View Design Prototypes →
             </button>
           </div>
         )}
 
-        {projectConfig?.prototypeStageEnabled !== false && prd.status === 'approved' && relatedPrototypes.length === 0 && canManage && (
+        {prototypeStageEnabled && prd.status === 'approved' && relatedPrototypes.length === 0 && canManage && (
           <div className={styles.designDocBanner}>
             <span className={styles.designDocBannerText}>
               No design prototypes exist for this PRD. Generate them to continue the design flow.
@@ -1876,7 +2435,7 @@ export const PrdReviewView: React.FC = () => {
               }}
               disabled={generatePrototypes.isPending}
               type="button"
-            >
+            {...{ 'data-testid': 'prd-generate-prototypes-btn' }}>
               {generatePrototypes.isPending ? 'Generating…' : 'Generate prototypes'}
             </button>
           </div>
@@ -1908,7 +2467,7 @@ export const PrdReviewView: React.FC = () => {
                       onClick={() => navigate(`/backlog/design-doc/${doc.id}`)}
                       type="button"
                       title={`View Design Doc: ${doc.title}`}
-                    >
+                    {...{ 'data-testid': 'prd-design-doc-link' }}>
                       <svg
                         viewBox="0 0 14 14"
                         fill="none"
@@ -1929,7 +2488,7 @@ export const PrdReviewView: React.FC = () => {
                       className={styles.showMoreChip}
                       onClick={() => setShowAllDocs(true)}
                       type="button"
-                    >
+                    {...{ 'data-testid': 'prd-show-all-docs-btn' }}>
                       +{hiddenCount} more
                     </button>
                   )}
@@ -1938,7 +2497,7 @@ export const PrdReviewView: React.FC = () => {
                       className={styles.showMoreChip}
                       onClick={() => setShowAllDocs(false)}
                       type="button"
-                    >
+                    {...{ 'data-testid': 'prd-show-fewer-docs-btn' }}>
                       Show less
                     </button>
                   )}
@@ -1948,7 +2507,7 @@ export const PrdReviewView: React.FC = () => {
           );
         })()}
 
-      {prd.status === 'approved' && (!relatedDesignDocs || relatedDesignDocs.length === 0) && canManage && (
+      {!prototypeStageEnabled && prd.status === 'approved' && (!relatedDesignDocs || relatedDesignDocs.length === 0) && canManage && (
         <div className={styles.designDocRow}>
           <div className={styles.designDocBanner}>
             <span className={styles.designDocBannerText}>
@@ -1962,21 +2521,67 @@ export const PrdReviewView: React.FC = () => {
               }}
               disabled={createDesignDoc.isPending}
               type="button"
-            >
+            {...{ 'data-testid': 'prd-create-design-doc-btn' }}>
               {createDesignDoc.isPending ? 'Generating…' : 'Generate Design Docs'}
             </button>
           </div>
         </div>
       )}
 
-      {(prd.proposedContent != null || prd.proposedBacklogJson != null) && (
+      {/* Fix-with-Apex (validation/coverage): review baseline → live diffs section by section. */}
+      {prdFixFlow.phase === 'reviewing'
+        && prd.fixBaseline
+        && !isPrdUnchangedFromFixBaseline(prd, prd.fixBaseline) && (
         <ProposedChangesReview
+          reviewMode="fix-baseline"
+          hideBanner
+          deferAutoOpen
+          modalOpen={fixReviewModalOpen}
+          onModalOpenChange={setFixReviewModalOpen}
+          onReviewProgress={setFixReviewProgress}
           prdId={prd.id}
-          currentContent={prd.content}
-          currentBacklogJson={prd.backlogJson}
-          proposedContent={prd.proposedContent}
-          proposedBacklogJson={prd.proposedBacklogJson}
+          currentContent={prd.fixBaseline.content}
+          currentBacklogJson={prd.fixBaseline.backlogJson}
+          proposedContent={prd.content}
+          proposedBacklogJson={prd.backlogJson ?? null}
+          onAcceptAndRevalidate={() => handleAcceptFixValidation()}
+          onRejectAll={() => handleRevertFixValidation()}
         />
+      )}
+
+      {/* Comment / assistant proposed drafts — same section wizard + Option A strip. */}
+      {prdHasProposedChanges(prd) && !isPrdFixFlowOwningAccept(prd, prdFixFlow.phase) && (
+        <>
+          <PrdFixActionStrip
+            summaryLabel={
+              prd.fixCommentId ? 'Comment fix ready' : 'Proposed changes'
+            }
+            progress={proposedReviewProgress}
+            busy={
+              applyProposedPrd.isPending
+              || rejectProposedPrd.isPending
+            }
+            onContinueReview={() => setProposedReviewModalOpen(true)}
+            onAcceptAll={handleAcceptAllProposed}
+            onRevert={handleRejectAllProposed}
+            onPreview={() => setProposedReviewModalOpen(true)}
+            acceptLabel="Accept all"
+            revertLabel="Reject all"
+            ariaLabel="Proposed changes review"
+          />
+          <ProposedChangesReview
+            hideBanner
+            deferAutoOpen
+            modalOpen={proposedReviewModalOpen}
+            onModalOpenChange={setProposedReviewModalOpen}
+            onReviewProgress={setProposedReviewProgress}
+            prdId={prd.id}
+            currentContent={prd.content}
+            currentBacklogJson={prd.backlogJson}
+            proposedContent={prd.proposedContent}
+            proposedBacklogJson={prd.proposedBacklogJson}
+          />
+        </>
       )}
 
       {isGenerating ? (
@@ -1987,10 +2592,10 @@ export const PrdReviewView: React.FC = () => {
               className={`${styles.tab} ${styles.active}`}
               disabled
               type="button"
-            >
+            {...{ 'data-testid': 'prd-generating-tab-preview' }}>
               Preview
             </button>
-            <button className={styles.tab} disabled type="button">
+            <button className={styles.tab} disabled type="button" {...{ 'data-testid': 'prd-generating-tab-backlog' }}>
               Backlog
             </button>
           </div>
@@ -2101,6 +2706,7 @@ export const PrdReviewView: React.FC = () => {
               className={`${styles.tab} ${activeTab === 'preview' ? styles.active : ''}`}
               onClick={() => setActiveTab('preview')}
               type="button"
+              {...{ 'data-testid': 'prd-tab-preview' }}
             >
               Preview
             </button>
@@ -2108,6 +2714,7 @@ export const PrdReviewView: React.FC = () => {
               className={`${styles.tab} ${activeTab === 'backlog' ? styles.active : ''}`}
               onClick={() => setActiveTab('backlog')}
               type="button"
+              {...{ 'data-testid': 'prd-tab-backlog' }}
             >
               Backlog
             </button>
@@ -2116,6 +2723,7 @@ export const PrdReviewView: React.FC = () => {
                 className={`${styles.tab} ${activeTab === 'validation' ? styles.active : ''}`}
                 onClick={() => setActiveTab('validation')}
                 type="button"
+                {...{ 'data-testid': 'prd-tab-validation' }}
               >
                 Validation
               </button>
@@ -2126,7 +2734,7 @@ export const PrdReviewView: React.FC = () => {
               type="button"
               title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
               aria-label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-            >
+            {...{ 'data-testid': 'prd-tab-fullscreen-btn' }}>
               {isFullscreen ? (
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3" />
@@ -2220,8 +2828,8 @@ export const PrdReviewView: React.FC = () => {
                       >
                         <BacklogViewer
                           data={prd.backlogJson}
-                          testCasesJson={testCaseRecord?.testCasesJson}
-                          testCaseStatus={latestTestCase?.status}
+                          testCasesJson={testCasesRequired ? testCaseRecord?.testCasesJson : undefined}
+                          testCaseStatus={testCasesRequired ? latestTestCase?.status : undefined}
                           editable={canEditContent}
                           routeOptions={routeOptions}
                           onSaveBacklog={(updatedData) => {
@@ -2236,8 +2844,8 @@ export const PrdReviewView: React.FC = () => {
                     ) : (
                       <BacklogViewer
                         data={prd.backlogJson}
-                        testCasesJson={testCaseRecord?.testCasesJson}
-                        testCaseStatus={latestTestCase?.status}
+                        testCasesJson={testCasesRequired ? testCaseRecord?.testCasesJson : undefined}
+                        testCaseStatus={testCasesRequired ? latestTestCase?.status : undefined}
                         editable={canEditContent}
                         routeOptions={routeOptions}
                         onSaveBacklog={(updatedData) => {
@@ -2481,7 +3089,7 @@ export const PrdReviewView: React.FC = () => {
                         disabled={refreshPrdValidation.isPending}
                         type="button"
                         style={{ marginTop: '0.5rem' }}
-                      >
+                      {...{ 'data-testid': 'prd-refresh-validation-btn' }}>
                         Refresh
                       </button>
                     </div>
@@ -2498,7 +3106,19 @@ export const PrdReviewView: React.FC = () => {
       )}
 
       {/* ── Full-document edit modal ────────────────────────────────────────── */}
+      {showOverrideModal && (
+        <ReviewReasonModal
+          title="Proceed with unresolved gaps?"
+          placeholder="Why are you proceeding without resolving these gaps?"
+          confirmLabel="Proceed anyway"
+          isPending={overridePrdReadiness.isPending}
+          onConfirm={(reason) => void handleOverrideReadiness(reason)}
+          onCancel={() => setShowOverrideModal(false)}
+        {...{ 'data-testid': 'prd-override-readiness-modal' }}/>
+      )}
+
       {showEditModal && (
+        // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- dialog backdrop dismiss
         <div
           className={styles.editModal}
           onClick={(e) => {
@@ -2507,7 +3127,7 @@ export const PrdReviewView: React.FC = () => {
           role="dialog"
           aria-modal="true"
           aria-label="Edit PRD"
-        >
+        {...{ 'data-testid': 'prd-edit-modal' }}>
           <div className={styles.editModalCard}>
             <h3 className={styles.editModalTitle}>Edit PRD</h3>
             <textarea
@@ -2515,21 +3135,21 @@ export const PrdReviewView: React.FC = () => {
               value={editModalContent}
               onChange={(e) => setEditModalContent(e.target.value)}
               placeholder="Write your PRD in Markdown…"
-            />
+            {...{ 'data-testid': 'prd-edit-modal-textarea' }}/>
             <div className={styles.editActions}>
               <button
                 className={styles.btnPrimary}
                 onClick={() => void handleSaveEditModal()}
                 disabled={updateContent.isPending}
                 type="button"
-              >
+              {...{ 'data-testid': 'prd-edit-modal-save-btn' }}>
                 {updateContent.isPending ? 'Saving…' : 'Save'}
               </button>
               <button
                 className={styles.btnSecondary}
                 onClick={() => setShowEditModal(false)}
                 type="button"
-              >
+              {...{ 'data-testid': 'prd-edit-modal-cancel-btn' }}>
                 Cancel
               </button>
             </div>
@@ -2539,6 +3159,7 @@ export const PrdReviewView: React.FC = () => {
 
       {/* ── Section edit modal ──────────────────────────────────────────────── */}
       {editingSectionIndex !== null && (
+        // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- dialog backdrop dismiss
         <div
           className={styles.editModal}
           onClick={(e) => {
@@ -2547,6 +3168,7 @@ export const PrdReviewView: React.FC = () => {
           role="dialog"
           aria-modal="true"
           aria-label="Edit section"
+          {...{ 'data-testid': 'prd-section-edit-modal' }}
         >
           <div className={styles.editModalCard}>
             <h3 className={styles.editModalTitle}>Edit Section</h3>
@@ -2555,21 +3177,21 @@ export const PrdReviewView: React.FC = () => {
               value={sectionEditContent}
               onChange={(e) => setSectionEditContent(e.target.value)}
               placeholder="Section content in Markdown…"
-            />
+            {...{ 'data-testid': 'prd-section-edit-textarea' }}/>
             <div className={styles.editActions}>
               <button
                 className={styles.btnPrimary}
                 onClick={() => void handleSaveSectionEdit()}
                 disabled={updateContent.isPending}
                 type="button"
-              >
+              {...{ 'data-testid': 'prd-section-edit-save-btn' }}>
                 {updateContent.isPending ? 'Saving…' : 'Save section'}
               </button>
               <button
                 className={styles.btnSecondary}
                 onClick={() => setEditingSectionIndex(null)}
                 type="button"
-              >
+              {...{ 'data-testid': 'prd-section-edit-cancel-btn' }}>
                 Cancel
               </button>
             </div>
@@ -2589,10 +3211,11 @@ export const PrdReviewView: React.FC = () => {
             });
           }}
           onCancel={() => setShowDeleteModal(false)}
-        />
+        {...{ 'data-testid': 'prd-delete-confirm-modal' }}/>
       )}
 
       {pendingSelector && (
+        // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- dialog backdrop dismiss
         <div
           className={styles.commentModal}
           onClick={(e) => {
@@ -2600,7 +3223,7 @@ export const PrdReviewView: React.FC = () => {
           }}
           role="dialog"
           aria-modal="true"
-        >
+        {...{ 'data-testid': 'prd-comment-modal' }}>
           <div className={styles.commentModalCard}>
             <h3 className={styles.commentModalTitle}>Add Comment</h3>
             <blockquote className={styles.commentModalQuote}>
@@ -2612,14 +3235,15 @@ export const PrdReviewView: React.FC = () => {
               onChange={(e) => setNewCommentBody(e.target.value)}
               placeholder="Write your comment…"
               rows={3}
+              // eslint-disable-next-line jsx-a11y/no-autofocus -- focus comment body when opening add-comment dialog
               autoFocus
-            />
+            {...{ 'data-testid': 'prd-comment-modal-textarea' }}/>
             <div className={styles.commentModalActions}>
               <button
                 className={styles.btnSecondary}
                 onClick={() => setPendingSelector(null)}
                 type="button"
-              >
+              {...{ 'data-testid': 'prd-comment-modal-cancel-btn' }}>
                 Cancel
               </button>
               <button
@@ -2627,7 +3251,7 @@ export const PrdReviewView: React.FC = () => {
                 onClick={() => void handleSubmitComment()}
                 disabled={!newCommentBody.trim() || createComment.isPending}
                 type="button"
-              >
+              {...{ 'data-testid': 'prd-comment-modal-submit-btn' }}>
                 {createComment.isPending ? 'Posting…' : 'Post Comment'}
               </button>
             </div>
@@ -2644,7 +3268,7 @@ export const PrdReviewView: React.FC = () => {
             createAdoItems.mutateAsync({ prdId: prd.id, ...req })
           }
           onCancel={() => setShowAdoModal(false)}
-        />
+        {...{ 'data-testid': 'prd-create-ado-modal' }}/>
       )}
 
       {showReassignModal && prd && (
@@ -2663,10 +3287,11 @@ export const PrdReviewView: React.FC = () => {
           onConfirm={(selections) => void handleReassignConfirm(selections)}
           onCancel={() => setShowReassignModal(false)}
           isSubmitting={reassignApprovers.isPending}
-        />
+        {...{ 'data-testid': 'prd-reassign-approvers-modal' }}/>
       )}
 
       {showApprovalsModal && (
+        // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- dialog backdrop dismiss
         <div
           className={styles.editModal}
           onClick={(e) => {
@@ -2675,7 +3300,7 @@ export const PrdReviewView: React.FC = () => {
           role="dialog"
           aria-modal="true"
           aria-label="Approvals"
-        >
+        {...{ 'data-testid': 'prd-approvals-modal' }}>
           <div className={styles.editModalCard}>
             <h3 className={styles.editModalTitle}>Approvals</h3>
             <ReviewerApprovalChecklist groups={approvalChecklistGroups} />
@@ -2684,7 +3309,7 @@ export const PrdReviewView: React.FC = () => {
                 className={styles.btnSecondary}
                 onClick={() => setShowApprovalsModal(false)}
                 type="button"
-              >
+              {...{ 'data-testid': 'prd-approvals-modal-close-btn' }}>
                 Close
               </button>
             </div>
@@ -2697,7 +3322,7 @@ export const PrdReviewView: React.FC = () => {
         open={assistantOpen}
         onClose={() => setAssistantOpen(false)}
         existingThreadId={prd.prdAssistantThreadId}
-      />
+      {...{ 'data-testid': 'prd-assistant-panel' }}/>
     </div>
   );
 };

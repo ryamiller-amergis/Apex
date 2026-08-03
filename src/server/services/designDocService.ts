@@ -7,7 +7,8 @@ import { designDocs, appUsers, chatThreads, prds, interviews, designPrototypes, 
 
 const authorUser = alias(appUsers, 'author_user');
 const designDocOwnerUser = alias(appUsers, 'design_doc_owner_user');
-import type { ContentSnapshot, DesignDoc, DesignDocStatus, DesignDocSummary, ReviewDesignDocRequest, ValidationScorecard, ValidationScorecardGap } from '../../shared/types/interview';
+import type { ContentSnapshot, DesignDoc, DesignDocStatus, DesignDocSummary, DesignDocValidationOverride, ReviewDesignDocRequest, ValidationScorecard, ValidationScorecardGap } from '../../shared/types/interview';
+import { buildOverrideHistory } from '../../shared/utils/validationOverride';
 import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, createThread as createChatThread, sendMessage, cancelRun } from './chatAgentService';
 import { isThreadRunAlive, canThisInstanceFailGeneration } from './agentRunReaperService';
 import { isAdminUser } from '../utils/rbacHelpers';
@@ -18,8 +19,50 @@ import { resolveSkillConfig, getSkillSettingsName } from './projectSettingsServi
 import { getDefaultModel } from './appSettingsService';
 import { getPrd } from './prdService';
 import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
+import {
+  propagatePipelineGrounding,
+  resolveRunGroundingSurface,
+  runGroundingService,
+} from './runGroundingService';
 
 const VALID_STATUSES: DesignDocStatus[] = ['generating', 'generation_failed', 'validating', 'draft', 'pending_review', 'reviewer_approved', 'approved', 'revision_requested'];
+
+const DEFAULT_DESIGN_DOC_VALIDATION_THRESHOLD = 90;
+
+async function resolveDesignDocValidationThreshold(
+  project: string,
+  settingsId?: string | null,
+): Promise<number> {
+  const skillConfig = await resolveSkillConfig({ project, settingsId: settingsId ?? undefined });
+  return skillConfig?.designDocValidationScoreThreshold ?? DEFAULT_DESIGN_DOC_VALIDATION_THRESHOLD;
+}
+
+/** Interview-scoped design-doc owner (kickoff), when set and distinct from author. */
+async function getInterviewDesignDocOwnerId(prdId: string | null | undefined): Promise<string | null> {
+  if (!prdId) return null;
+  const prd = await db.query.prds.findFirst({
+    where: eq(prds.id, prdId),
+    columns: { interviewId: true },
+  });
+  if (!prd?.interviewId) return null;
+  const interview = await db.query.interviews.findFirst({
+    where: eq(interviews.id, prd.interviewId),
+    columns: { designDocOwnerId: true },
+  });
+  return interview?.designDocOwnerId ?? null;
+}
+
+async function assertAuthorOrOwnerOrAdmin(
+  row: { authorId: string; prdId: string | null },
+  requestingUserId: string,
+  action: string,
+): Promise<void> {
+  if (row.authorId === requestingUserId) return;
+  if (await isAdminUser(requestingUserId)) return;
+  const ownerId = await getInterviewDesignDocOwnerId(row.prdId);
+  if (ownerId && ownerId === requestingUserId) return;
+  throw forbidden(`Only the author or owner can ${action}`);
+}
 
 async function cleanupWorkspace(threadId: string): Promise<void> {
   try {
@@ -144,6 +187,36 @@ export async function createDesignDoc(opts: {
     })
     .returning({ id: designDocs.id });
 
+  try {
+    await propagateDesignDocApprovers(opts.prdId, row.id, opts.userId);
+  } catch (err) {
+    console.error(
+      `[designDoc] propagateDesignDocApprovers failed on create (prdId=${opts.prdId}, docId=${row.id})`,
+      err,
+    );
+  }
+
+  if (opts.chatThreadId) {
+    try {
+      const upstream = await resolveRunGroundingSurface('prd', opts.prdId);
+      if (upstream) {
+        await propagatePipelineGrounding(
+          upstream.run,
+          {
+            runType: 'chat',
+            runId: opts.chatThreadId,
+            project: opts.project,
+          },
+          opts.userId,
+        );
+      }
+    } catch {
+      console.warn(
+        `[run-grounding] Design Doc propagation unavailable (designDocId=${row.id})`,
+      );
+    }
+  }
+
   return { designDocId: row.id };
 }
 
@@ -204,9 +277,13 @@ export async function getDesignDoc(id: string): Promise<DesignDoc | null> {
 
   if (rows.length === 0) return null;
   const { designDoc: row, reviewerDisplayName, authorDisplayName, designDocOwnerId, designDocOwnerDisplayName } = rows[0];
-  const skillSettingsName = await getSkillSettingsName(row.skillSettingsId);
+  const [skillSettingsName, validationScoreThreshold] = await Promise.all([
+    getSkillSettingsName(row.skillSettingsId),
+    resolveDesignDocValidationThreshold(row.project, row.skillSettingsId),
+  ]);
   return {
     ...rowToSummary(row, reviewerDisplayName, undefined, authorDisplayName, designDocOwnerId, designDocOwnerDisplayName, skillSettingsName),
+    validationScoreThreshold,
     designContent: row.designContent,
     techSpecContent: row.techSpecContent,
     assumptionsContent: row.assumptionsContent,
@@ -224,9 +301,7 @@ export async function updateDesignDocContent(
 ): Promise<void> {
   const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
   if (!row) throw notFound('Design doc not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can edit design doc content');
-  }
+  await assertAuthorOrOwnerOrAdmin(row, requestingUserId, 'edit design doc content');
   if (row.status === 'approved' || row.status === 'reviewer_approved') throw conflict('Approved design docs cannot be edited');
 
   const updates: Partial<typeof designDocs.$inferInsert> = {
@@ -248,6 +323,36 @@ export async function updateDesignDocContent(
   await db.update(designDocs).set(updates).where(eq(designDocs.id, id));
 }
 
+/**
+ * Stage assistant / review-fix edits as proposed_* drafts for owner accept/reject.
+ * Does not modify live design/tech/assumptions content.
+ */
+export async function stageDesignDocProposedContent(
+  id: string,
+  requestingUserId: string,
+  opts: { designContent?: string; techSpecContent?: string; assumptionsContent?: string },
+): Promise<void> {
+  const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
+  if (!row) throw notFound('Design doc not found');
+  await assertAuthorOrOwnerOrAdmin(row, requestingUserId, 'propose design doc content');
+  if (row.status === 'approved' || row.status === 'reviewer_approved') {
+    throw conflict('Approved design docs cannot be edited');
+  }
+
+  const updates: Partial<typeof designDocs.$inferInsert> = {
+    updatedAt: new Date().toISOString(),
+    fixCommentId: null,
+  };
+
+  if (opts.designContent !== undefined) updates.proposedDesignContent = opts.designContent;
+  if (opts.techSpecContent !== undefined) {
+    updates.proposedTechSpecContent = stripPrototypeArtifactsFromTechSpec(opts.techSpecContent);
+  }
+  if (opts.assumptionsContent !== undefined) updates.proposedAssumptionsContent = opts.assumptionsContent;
+
+  await db.update(designDocs).set(updates).where(eq(designDocs.id, id));
+}
+
 export async function submitForReview(
   id: string,
   requestingUserId: string,
@@ -255,9 +360,7 @@ export async function submitForReview(
 ): Promise<void> {
   const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
   if (!row) throw notFound('Design doc not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can submit for review');
-  }
+  await assertAuthorOrOwnerOrAdmin(row, requestingUserId, 'submit for review');
   if (row.status !== 'draft' && row.status !== 'pending_review' && row.status !== 'revision_requested') {
     throw conflict(`Cannot submit design doc from status '${row.status}'`);
   }
@@ -302,9 +405,7 @@ export async function submitForReview(
 export async function withdrawFromReview(id: string, requestingUserId: string): Promise<void> {
   const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
   if (!row) throw notFound('Design doc not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can withdraw from review');
-  }
+  await assertAuthorOrOwnerOrAdmin(row, requestingUserId, 'withdraw from review');
   if (row.status !== 'pending_review') throw conflict(`Cannot withdraw design doc from status '${row.status}'`);
 
   await db
@@ -338,9 +439,15 @@ export async function reviewDesignDoc(
   const admin = await isAdminUser(reviewerId);
 
   const skillConfig = await resolveSkillConfig({ project: row.project, settingsId: row.skillSettingsId ?? undefined });
-  if (skillConfig?.designDocValidationSkillPath && !admin) {
-    if (row.validationScore === null || row.validationScore === undefined || row.validationScore < 90) {
-      const err = new Error(`Validation score must be >= 90 to approve. Current score: ${row.validationScore ?? 'not scored'}`);
+  if (skillConfig?.designDocValidationSkillPath) {
+    const threshold = skillConfig.designDocValidationScoreThreshold ?? DEFAULT_DESIGN_DOC_VALIDATION_THRESHOLD;
+    const scoreOk =
+      row.validationScore !== null &&
+      row.validationScore !== undefined &&
+      row.validationScore >= threshold;
+    const hasOverride = !!(row.validationOverride as DesignDocValidationOverride | null);
+    if (!scoreOk && !hasOverride) {
+      const err = new Error(`Validation score must be >= ${threshold} to approve. Current score: ${row.validationScore ?? 'not scored'}`);
       (err as any).status = 409;
       throw err;
     }
@@ -540,9 +647,23 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
       clearInterval(interval);
       activeDocWatchers.delete(seedDocId);
       console.warn(`[designDocWatcher] Timed out — resetting to draft (seedDocId=${seedDocId}, threadId=${chatThreadId})`);
-      await db.update(designDocs)
-        .set({ status: 'draft', updatedAt: new Date().toISOString() })
-        .where(and(eq(designDocs.id, seedDocId), eq(designDocs.status, 'generating')));
+      const timedOutDoc = await db.query.designDocs.findFirst({
+        where: eq(designDocs.id, seedDocId),
+        columns: { project: true },
+      });
+      if (timedOutDoc) {
+        await runGroundingService.persistThenMarkTerminalInactive(
+          {
+            runType: 'chat',
+            runId: chatThreadId,
+            project: timedOutDoc.project,
+          },
+          () =>
+            db.update(designDocs)
+              .set({ status: 'draft', updatedAt: new Date().toISOString() })
+              .where(and(eq(designDocs.id, seedDocId), eq(designDocs.status, 'generating'))),
+        );
+      }
       return;
     }
 
@@ -618,21 +739,32 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
 
     if (agentFinished && !allDone) {
       if (!(await canThisInstanceFailGeneration(chatThreadId))) {
-        clearInterval(interval);
-        activeDocWatchers.delete(seedDocId);
-        console.warn(`[designDocWatcher] Skipping fail — not run owner or no terminal run (seedDocId=${seedDocId})`);
+        // Keep polling — do not stop the watcher. Stopping here left seed docs
+        // stuck in `generating` forever when recovery ran on a non-owner instance
+        // after the owning worker died. Orphan grace in canThisInstanceFailGeneration
+        // eventually allows takeover; until then (or until timeout) keep watching.
+        console.warn(`[designDocWatcher] Waiting — not run owner or no terminal run yet (seedDocId=${seedDocId})`);
         return;
       }
     }
 
     if (allDone) {
       try {
-        await db
-          .update(designDocs)
-          .set({ chatThreadId: null, updatedAt: new Date().toISOString() })
-          .where(eq(designDocs.id, seedDocId));
+        await runGroundingService.persistThenMarkTerminalInactive(
+            {
+              runType: 'chat',
+              runId: chatThreadId,
+              project: seedDoc.project,
+            },
+            () =>
+              db
+                .update(designDocs)
+                .set({ chatThreadId: null, updatedAt: new Date().toISOString() })
+                .where(eq(designDocs.id, seedDocId)),
+          );
       } catch (err) {
         console.error(`[designDocWatcher] Error clearing seed row chatThreadId`, err);
+        return;
       }
       clearInterval(interval);
       activeDocWatchers.delete(seedDocId);
@@ -649,12 +781,28 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
  *
  * Persists content + moves the row to the next status (validating or pending_review).
  * Safe to call from both the watcher and the post-run syncOutputToDb path — the
- * `chatThreadId` column acts as a completion guard: once this function nulls it,
- * any concurrent caller sees the null and skips.
+ * The generating status plus chat thread acts as the completion guard. The
+ * thread id remains durable so grounding status can resolve after completion.
  *
  * Returns true when content was persisted, false when the row was already finalised
  * by another caller (guard triggered).
  */
+/**
+ * True when a design_docs generation row should be updated in place (one agent
+ * thread → one doc) rather than treated as a legacy multi-feature seed that
+ * fans out to child rows.
+ *
+ * - Prototype approval path: designPrototypeId set (+ featureIndex)
+ * - PRD "generate design docs" path: featureIndex set, no prototype
+ * - Legacy seed: neither — post-run calls syncPerFeatureDesignDocs instead
+ */
+export function isSingleFeatureDesignDocRow(row: {
+  designPrototypeId?: string | null;
+  featureIndex?: number | null;
+}): boolean {
+  return row.designPrototypeId != null || row.featureIndex != null;
+}
+
 export async function finalizeSingleFeatureDoc(
   designDocId: string,
   chatThreadId: string,
@@ -662,7 +810,11 @@ export async function finalizeSingleFeatureDoc(
 ): Promise<boolean> {
   // Thread guard: skip if the row no longer owns this thread (already completed/retried).
   const guard = await db.query.designDocs.findFirst({
-    where: and(eq(designDocs.id, designDocId), eq(designDocs.chatThreadId, chatThreadId)),
+    where: and(
+      eq(designDocs.id, designDocId),
+      eq(designDocs.chatThreadId, chatThreadId),
+      eq(designDocs.status, 'generating'),
+    ),
     columns: { id: true, skillSettingsId: true },
   });
   if (!guard) {
@@ -677,9 +829,17 @@ export async function finalizeSingleFeatureDoc(
   if (!design || !techSpec || !assumptions) {
     const missing = [!design && 'design', !techSpec && 'tech-spec', !assumptions && 'assumptions'].filter(Boolean).join(', ');
     console.warn(`[finalizeSingleFeatureDoc] Missing output files [${missing}] — marking generation_failed (designDocId=${designDocId})`);
-    await db.update(designDocs)
-      .set({ status: 'generation_failed', generationError: `Missing output files: ${missing}`, chatThreadId: null, updatedAt: new Date().toISOString() })
-      .where(and(eq(designDocs.id, designDocId), eq(designDocs.chatThreadId, chatThreadId)));
+    await runGroundingService.persistThenMarkTerminalInactive(
+        { runType: 'chat', runId: chatThreadId, project },
+        () =>
+          db.update(designDocs)
+            .set({ status: 'generation_failed', generationError: `Missing output files: ${missing}`, updatedAt: new Date().toISOString() })
+            .where(and(
+              eq(designDocs.id, designDocId),
+              eq(designDocs.chatThreadId, chatThreadId),
+              eq(designDocs.status, 'generating'),
+            )),
+      );
     await cleanupWorkspace(chatThreadId);
     return false;
   }
@@ -687,17 +847,24 @@ export async function finalizeSingleFeatureDoc(
   const skillConfig = await resolveSkillConfig({ project, settingsId: guard.skillSettingsId ?? undefined });
   const finalStatus: DesignDocStatus = skillConfig?.designDocValidationSkillPath ? 'validating' : 'pending_review';
 
-  await db.update(designDocs)
-    .set({
-      designContent: design,
-      techSpecContent: techSpec,
-      assumptionsContent: assumptions,
-      status: finalStatus,
-      generationError: null,
-      chatThreadId: null,
-      updatedAt: new Date().toISOString(),
-    })
-    .where(and(eq(designDocs.id, designDocId), eq(designDocs.chatThreadId, chatThreadId)));
+  await runGroundingService.persistThenMarkTerminalInactive(
+      { runType: 'chat', runId: chatThreadId, project },
+      () =>
+        db.update(designDocs)
+          .set({
+            designContent: design,
+            techSpecContent: techSpec,
+            assumptionsContent: assumptions,
+            status: finalStatus,
+            generationError: null,
+            updatedAt: new Date().toISOString(),
+          })
+          .where(and(
+            eq(designDocs.id, designDocId),
+            eq(designDocs.chatThreadId, chatThreadId),
+            eq(designDocs.status, 'generating'),
+          )),
+    );
 
   await cleanupWorkspace(chatThreadId);
   console.log(`[finalizeSingleFeatureDoc] Done — status=${finalStatus} (designDocId=${designDocId})`);
@@ -737,9 +904,13 @@ export function startSingleFeatureDocWatcher(
       clearInterval(interval);
       activeDocWatchers.delete(designDocId);
       console.warn(`[singleFeatureDocWatcher] Timed out — marking generation_failed (designDocId=${designDocId}, threadId=${chatThreadId})`);
-      await db.update(designDocs)
-        .set({ status: 'generation_failed', generationError: 'Generation timed out', chatThreadId: null, updatedAt: new Date().toISOString() })
-        .where(and(eq(designDocs.id, designDocId), eq(designDocs.status, 'generating')));
+      await runGroundingService.persistThenMarkTerminalInactive(
+        { runType: 'chat', runId: chatThreadId, project },
+        () =>
+          db.update(designDocs)
+            .set({ status: 'generation_failed', generationError: 'Generation timed out', updatedAt: new Date().toISOString() })
+            .where(and(eq(designDocs.id, designDocId), eq(designDocs.status, 'generating'))),
+      );
       return;
     }
 
@@ -762,16 +933,17 @@ export function startSingleFeatureDocWatcher(
     // unreliable after hydrateThread resets status on non-owner workers.
     if (isThreadIdle(chatThreadId) && !(await isThreadRunAlive(chatThreadId))) {
       if (!(await canThisInstanceFailGeneration(chatThreadId))) {
-        clearInterval(interval);
-        activeDocWatchers.delete(designDocId);
-        console.warn(`[singleFeatureDocWatcher] Skipping fail — not run owner or no terminal run (designDocId=${designDocId})`);
+        // Keep polling — do NOT clear the interval. Clearing here permanently
+        // abandoned docs in `generating` when a non-owner recovery watcher saw a
+        // terminal run owned by a dead instance. Orphan grace eventually lets
+        // canThisInstanceFailGeneration return true; timeout is the backstop.
+        console.warn(`[singleFeatureDocWatcher] Waiting — not run owner or no terminal run yet (designDocId=${designDocId})`);
         return;
       }
       clearInterval(interval);
       activeDocWatchers.delete(designDocId);
       console.warn(`[singleFeatureDocWatcher] Agent finished without complete output — marking generation_failed (designDocId=${designDocId})`);
       await finalizeSingleFeatureDoc(designDocId, chatThreadId, project);
-      await cleanupWorkspace(chatThreadId);
     }
   }, WATCHER_INTERVAL_MS);
 
@@ -964,9 +1136,7 @@ export async function startSingleFeatureDesignDocWatcher(
 export async function deleteDesignDoc(id: string, requestingUserId: string): Promise<void> {
   const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
   if (!row) throw notFound('Design doc not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can delete this design doc');
-  }
+  await assertAuthorOrOwnerOrAdmin(row, requestingUserId, 'delete this design doc');
   stopDocWatcher(id);
   stopValidationWatcher(id);
   await db.delete(designDocs).where(eq(designDocs.id, id));
@@ -998,6 +1168,7 @@ function rowToSummary(
     validationReportMd: row.validationReportMd ?? null,
     validationPhase: row.validationPhase ?? null,
     fixBaseline: (row.fixBaseline as ContentSnapshot | null) ?? null,
+    validationOverride: (row.validationOverride as DesignDocValidationOverride | null) ?? null,
     authorId: row.authorId,
     authorName: authorName ?? undefined,
     ownerId: effectiveOwnerId,
@@ -1264,9 +1435,7 @@ export async function syncValidationResult(
 export async function cancelValidation(id: string, requestingUserId: string): Promise<void> {
   const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
   if (!row) throw notFound('Design doc not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can cancel validation');
-  }
+  await assertAuthorOrOwnerOrAdmin(row, requestingUserId, 'cancel validation');
   if (row.status !== 'validating') throw conflict(`Cannot cancel validation from status '${row.status}'`);
 
 
@@ -1288,12 +1457,11 @@ export async function cancelValidation(id: string, requestingUserId: string): Pr
 export async function markValidationReady(id: string, requestingUserId: string): Promise<void> {
   const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
   if (!row) throw notFound('Design doc not found');
-  if (row.authorId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
-    throw forbidden('Only the author can mark validation as ready');
-  }
+  await assertAuthorOrOwnerOrAdmin(row, requestingUserId, 'mark validation as ready');
   if (row.status !== 'validating') throw conflict(`Cannot mark ready from status '${row.status}'`);
-  if (!row.validationScore || row.validationScore < 90) {
-    const err = new Error(`Validation score must be >= 90. Current: ${row.validationScore ?? 'not scored'}`);
+  const threshold = await resolveDesignDocValidationThreshold(row.project, row.skillSettingsId);
+  if (!row.validationScore || row.validationScore < threshold) {
+    const err = new Error(`Validation score must be >= ${threshold}. Current: ${row.validationScore ?? 'not scored'}`);
     (err as any).status = 409;
     throw err;
   }
@@ -1305,6 +1473,82 @@ export async function markValidationReady(id: string, requestingUserId: string):
   notifyApproversDocumentReady(id, 'design_doc').catch((err) =>
     console.error(`[markValidationReady] Failed to notify approvers (docId=${id})`, err),
   );
+}
+
+/**
+ * Record an authorized validation-score override so review can proceed below threshold.
+ * Appends to an audit history of who / when / why.
+ */
+export async function overrideDesignDocValidation(
+  id: string,
+  userId: string,
+  reason: string,
+  userDisplayName?: string,
+): Promise<DesignDocValidationOverride> {
+  const trimmed = reason.trim();
+  if (!trimmed) {
+    const err = new Error('A reason is required to override validation');
+    (err as any).status = 400;
+    throw err;
+  }
+
+  const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
+  if (!row) throw notFound('Design doc not found');
+
+  if (
+    row.status !== 'draft' &&
+    row.status !== 'pending_review' &&
+    row.status !== 'revision_requested' &&
+    row.status !== 'validating'
+  ) {
+    throw conflict(`Cannot override validation from status '${row.status}'`);
+  }
+
+  const threshold = await resolveDesignDocValidationThreshold(row.project, row.skillSettingsId);
+  const score = row.validationScore ?? null;
+  if (score !== null && score >= threshold) {
+    throw conflict('Validation score already meets the threshold; no override is needed');
+  }
+
+  const at = new Date().toISOString();
+  const trimmedName = userDisplayName?.trim();
+  const summary =
+    score === null
+      ? `Overrode missing validation score (threshold ${threshold}%)`
+      : `Overrode validation score ${score}% (threshold ${threshold}%)`;
+  const prior = (row.validationOverride as DesignDocValidationOverride | null) ?? null;
+  const history = buildOverrideHistory(
+    prior,
+    {
+      reason: trimmed,
+      userId,
+      ...(trimmedName ? { userDisplayName: trimmedName } : {}),
+      at,
+      summary,
+    },
+    prior
+      ? prior.validationScore === null
+        ? `Overrode missing validation score (threshold ${prior.validationThreshold}%)`
+        : `Overrode validation score ${prior.validationScore}% (threshold ${prior.validationThreshold}%)`
+      : summary,
+  );
+
+  const override: DesignDocValidationOverride = {
+    reason: trimmed,
+    userId,
+    ...(trimmedName ? { userDisplayName: trimmedName } : {}),
+    at,
+    validationScore: score,
+    validationThreshold: threshold,
+    history,
+  };
+
+  await db
+    .update(designDocs)
+    .set({ validationOverride: override, updatedAt: at })
+    .where(eq(designDocs.id, id));
+
+  return override;
 }
 
 // ── Fix Validation Flow ───────────────────────────────────────────────────────
@@ -1385,6 +1629,7 @@ export async function triggerFixValidation(
       skillPath: skillConfig?.designDocAssistantSkillPath ?? undefined,
       freeformContext: buildDocContext('__THREAD_ID__'),
       model,
+      assistantType: 'design-doc',
     }, { skipAutoKickoff: true });
 
     const contextPath = path.join(thread.workspaceDir, '.ai-pilot', 'kickoff-context.md');
@@ -1484,12 +1729,13 @@ export async function triggerFixValidation(
   const sectionsToUpdate = Object.keys(gapsBySection);
   const pendingGaps = Object.values(gapsBySection).flat();
 
-  const scoreDeficit = 90 - scorecard.overall_score;
+  const threshold = await resolveDesignDocValidationThreshold(doc.project, doc.skillSettingsId);
+  const scoreDeficit = Math.max(0, threshold - scorecard.overall_score);
 
   const prompt = [
     '# Fix Validation Gaps',
     '',
-    `The validation scorecard scored this design doc at **${scorecard.overall_score}%** (needs ≥90%). The score must increase by at least ${scoreDeficit} percentage points. There are ${pendingGaps.length} gaps across ${sectionsToUpdate.length} section(s) that must be fixed.`,
+    `The validation scorecard scored this design doc at **${scorecard.overall_score}%** (needs ≥${threshold}%). The score must increase by at least ${scoreDeficit} percentage points. There are ${pendingGaps.length} gaps across ${sectionsToUpdate.length} section(s) that must be fixed.`,
     '',
     '## ⚠️ MOST IMPORTANT INSTRUCTION — YOU MUST CALL THE TOOL',
     '',
@@ -1502,7 +1748,7 @@ export async function triggerFixValidation(
     '',
     '## How Scoring Works',
     '',
-    'Each gap is scored 1-3. A score of 1 means the topic is absent or superficial, 2 means partially addressed, and 3 means fully addressed with specifics. The overall percentage is derived from the average of all gap scores. To push above 90%, every gap currently scored 1 or 2 must reach a 3.',
+    `Each gap is scored 1-3. A score of 1 means the topic is absent or superficial, 2 means partially addressed, and 3 means fully addressed with specifics. The overall percentage is derived from the average of all gap scores. To push above ${threshold}%, every gap currently scored 1 or 2 must reach a 3.`,
     '',
     '**What it takes to earn a 3:** The "what a 3 looks like" description for each gap is the EXACT rubric the validator uses. You must write content that directly and completely satisfies that description — not just acknowledge it, but provide the actual details, plans, tables, or specifications it calls for.',
     '',

@@ -1,5 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ChatThreadSummary } from '../../shared/types/chat';
+import type {
+  ChatThreadSearchResult,
+  ChatThreadSummary,
+  SelectChatThreadHandler,
+} from '../../shared/types/chat';
 import { formatThreadHistoryLabel } from '../../shared/utils/threadHistoryLabel';
 import { useChatThreadList, useDeleteThread, useFlagThread } from '../hooks/useChatThreads';
 import styles from './ThreadHistorySidebar.module.css';
@@ -26,7 +30,7 @@ function defaultWidth(): number {
 
 interface ThreadHistorySidebarProps {
   activeThreadId: string | null;
-  onSelectThread: (threadId: string) => void;
+  onSelectThread: SelectChatThreadHandler;
   onDeleteThread?: (threadId: string) => void;
   onClose: () => void;
   project?: string;
@@ -80,6 +84,10 @@ const STATUS_DOT_CLASS: Record<string, string> = {
   closed: styles['dot--closed'],
 };
 
+function isSearchResult(thread: ChatThreadSummary): thread is ChatThreadSearchResult {
+  return 'match' in thread || 'titleOnly' in thread;
+}
+
 export const ThreadHistorySidebar: React.FC<ThreadHistorySidebarProps> = ({
   activeThreadId,
   onSelectThread,
@@ -88,15 +96,26 @@ export const ThreadHistorySidebar: React.FC<ThreadHistorySidebarProps> = ({
   project,
   className,
 }) => {
-  const { data: threads = [], isLoading, error } = useChatThreadList(50, project);
-  const deleteThread = useDeleteThread();
-  const flagThread = useFlagThread();
+  const [searchTerm, setSearchTerm] = useState('');
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [showFlaggedOnly, setShowFlaggedOnly] = useState(false);
   const [width, setWidth] = useState<number>(() => loadStoredWidth() ?? defaultWidth());
   const isDragging = useRef(false);
   const startX = useRef(0);
   const startWidth = useRef(0);
+
+  const {
+    data: threads = [],
+    isLoading,
+    isFetching,
+    error,
+    isSearchActive,
+  } = useChatThreadList(50, project, {
+    searchTerm,
+    flaggedOnly: showFlaggedOnly,
+  });
+  const deleteThread = useDeleteThread();
+  const flagThread = useFlagThread();
 
   const handleDragStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -132,10 +151,12 @@ export const ThreadHistorySidebar: React.FC<ThreadHistorySidebarProps> = ({
     };
   }, []);
 
-  const visibleThreads = useMemo(
-    () => (showFlaggedOnly ? threads.filter((t) => t.flagged) : threads),
-    [threads, showFlaggedOnly],
-  );
+  // Non-search: client-side flagged filter (list API does not honor flaggedOnly without q).
+  // Search: server already applied flaggedOnly — do not double-filter.
+  const visibleThreads = useMemo(() => {
+    if (isSearchActive) return threads;
+    return showFlaggedOnly ? threads.filter((t) => t.flagged) : threads;
+  }, [threads, showFlaggedOnly, isSearchActive]);
 
   const flaggedCount = useMemo(() => threads.filter((t) => t.flagged).length, [threads]);
 
@@ -154,6 +175,11 @@ export const ThreadHistorySidebar: React.FC<ThreadHistorySidebarProps> = ({
   const handleToggleFlag = (threadId: string, currentlyFlagged: boolean) => {
     flagThread.mutate({ threadId, flagged: !currentlyFlagged });
   };
+
+  const showSearchLoading = isSearchActive && isFetching && !error;
+  const showSearchError = isSearchActive && Boolean(error);
+  const showSearchEmpty =
+    isSearchActive && !isLoading && !error && visibleThreads.length === 0 && !isFetching;
 
   return (
     <div
@@ -187,35 +213,102 @@ export const ThreadHistorySidebar: React.FC<ThreadHistorySidebarProps> = ({
         </div>
       </div>
 
-      <div className={styles.list}>
-        {isLoading && (
-          <div className={styles['empty-state']}>Loading…</div>
-        )}
-        {error && (
-          <div className={styles['empty-state']}>Failed to load history.</div>
-        )}
-        {!isLoading && !error && visibleThreads.length === 0 && (
-          <div className={styles['empty-state']}>
-            {showFlaggedOnly ? 'No flagged conversations.' : 'No past conversations yet.'}
-          </div>
-        )}
-        {groupThreadsByDate(visibleThreads).map(({ label, threads: groupThreads }) => (
-          <React.Fragment key={label}>
-            <div className={styles['date-group-header']}>{label}</div>
-            {groupThreads.map((thread) => (
-              <ThreadRow
-                key={thread.id}
-                thread={thread}
-                isActive={thread.id === activeThreadId}
-                isDeleting={pendingDeleteId === thread.id}
-                onSelect={onSelectThread}
-                onDelete={handleDelete}
-                onToggleFlag={handleToggleFlag}
-              />
-            ))}
-          </React.Fragment>
-        ))}
+      <div className={styles['search-wrap']}>
+        <label className={styles['search-label']} htmlFor="history-search-input">
+          Search chat history
+        </label>
+        <input
+          id="history-search-input"
+          data-testid="history-search-input"
+          className={styles['search-input']}
+          type="search"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          placeholder="Search chats…"
+          autoComplete="off"
+          spellCheck={false}
+        />
       </div>
+
+      <div className={styles.list}>
+        {isSearchActive ? (
+          <>
+            {showSearchLoading && (
+              <div
+                className={styles['search-status']}
+                data-testid="history-search-loading"
+                aria-live="polite"
+              >
+                Searching…
+              </div>
+            )}
+            {showSearchError && (
+              <div
+                className={styles['search-error']}
+                data-testid="history-search-error"
+                role="alert"
+              >
+                Search failed. Try again or clear the query.
+              </div>
+            )}
+            {!showSearchError && showSearchEmpty && (
+              <div
+                className={styles['empty-state']}
+                data-testid="history-search-empty"
+              >
+                No matching chats
+              </div>
+            )}
+            {!showSearchError && visibleThreads.length > 0 && (
+              <div data-testid="history-search-results">
+                {visibleThreads.map((thread) => (
+                  <SearchResultRow
+                    key={thread.id}
+                    thread={thread}
+                    isActive={thread.id === activeThreadId}
+                    isDeleting={pendingDeleteId === thread.id}
+                    onSelect={onSelectThread}
+                    onDelete={handleDelete}
+                    onToggleFlag={handleToggleFlag}
+                  />
+                ))}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            {isLoading && (
+              <div className={styles['empty-state']}>Loading…</div>
+            )}
+            {error && (
+              <div className={styles['empty-state']}>Failed to load history.</div>
+            )}
+            {!isLoading && !error && visibleThreads.length === 0 && (
+              <div className={styles['empty-state']}>
+                {showFlaggedOnly ? 'No flagged conversations.' : 'No past conversations yet.'}
+              </div>
+            )}
+            {groupThreadsByDate(visibleThreads).map(({ label, threads: groupThreads }) => (
+              <React.Fragment key={label}>
+                <div className={styles['date-group-header']}>{label}</div>
+                {groupThreads.map((thread) => (
+                  <ThreadRow
+                    key={thread.id}
+                    thread={thread}
+                    isActive={thread.id === activeThreadId}
+                    isDeleting={pendingDeleteId === thread.id}
+                    onSelect={onSelectThread}
+                    onDelete={handleDelete}
+                    onToggleFlag={handleToggleFlag}
+                  />
+                ))}
+              </React.Fragment>
+            ))}
+          </>
+        )}
+      </div>
+      {/* Resize drag handle — mouse interaction is intentional for a separator control. */}
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- drag resize */}
       <div
         className={styles['resize-handle']}
         onMouseDown={handleDragStart}
@@ -231,7 +324,7 @@ interface ThreadRowProps {
   thread: ChatThreadSummary;
   isActive: boolean;
   isDeleting: boolean;
-  onSelect: (id: string) => void;
+  onSelect: SelectChatThreadHandler;
   onDelete: (id: string) => void;
   onToggleFlag: (id: string, currentlyFlagged: boolean) => void;
 }
@@ -302,5 +395,107 @@ const ThreadRow: React.FC<ThreadRowProps> = ({
       </button>
     </div>
   </div>
+  );
+};
+
+interface SearchResultRowProps extends ThreadRowProps {
+  thread: ChatThreadSummary | ChatThreadSearchResult;
+}
+
+function focusOptionsForSearchResult(
+  thread: ChatThreadSummary | ChatThreadSearchResult,
+): { focusMessageId: string } | undefined {
+  if (!isSearchResult(thread) || thread.titleOnly) return undefined;
+  const messageId = thread.match?.messageId;
+  if (!messageId) return undefined;
+  return { focusMessageId: messageId };
+}
+
+const SearchResultRow: React.FC<SearchResultRowProps> = ({
+  thread,
+  isActive,
+  isDeleting,
+  onSelect,
+  onDelete,
+  onToggleFlag,
+}) => {
+  const historyLabel = formatThreadHistoryLabel(thread);
+  const snippet =
+    isSearchResult(thread) && thread.match?.snippet ? thread.match.snippet : null;
+  const ariaLabel = snippet
+    ? `Open thread: ${historyLabel}. Match: ${snippet}`
+    : `Open thread: ${historyLabel}`;
+
+  return (
+    <div
+      className={`${styles.row} ${isActive ? styles['row--active'] : ''} ${isDeleting ? styles['row--deleting'] : ''}`}
+      data-testid="history-search-result-row"
+    >
+      <button
+        className={styles['row-select']}
+        onClick={() => onSelect(thread.id, focusOptionsForSearchResult(thread))}
+        disabled={isDeleting}
+        type="button"
+        aria-label={ariaLabel}
+      >
+        <span className={`${styles.dot} ${STATUS_DOT_CLASS[thread.status] ?? ''}`} />
+        <span className={styles['row-body']}>
+          <span className={styles['row-title']}>
+            {thread.flagged && <span className={styles['row-flag-indicator']}>⚑</span>}
+            {historyLabel}
+          </span>
+          {snippet && (
+            <span
+              className={styles['row-snippet']}
+              data-testid="history-search-result-snippet"
+            >
+              {snippet}
+            </span>
+          )}
+          <span className={styles['row-meta']}>
+            {thread.kickoff.repo && (
+              <span className={styles['row-repo']}>{thread.kickoff.repo}</span>
+            )}
+            <span className={styles['row-time']}>
+              {formatRelativeTime(
+                isSearchResult(thread) && thread.match?.matchedAt
+                  ? thread.match.matchedAt
+                  : thread.lastActivityAt,
+              )}
+            </span>
+          </span>
+        </span>
+      </button>
+      <div className={styles['row-actions']}>
+        <button
+          className={`${styles['row-flag']} ${thread.flagged ? styles['row-flag--active'] : ''}`}
+          onClick={(e) => { e.stopPropagation(); onToggleFlag(thread.id, thread.flagged); }}
+          disabled={isDeleting}
+          type="button"
+          aria-label={thread.flagged ? 'Remove flag' : 'Flag for follow-up'}
+          title={thread.flagged ? 'Remove flag' : 'Flag for follow-up'}
+        >
+          <svg viewBox="0 0 16 16" fill={thread.flagged ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M2 2v12M2 2h9l-2 3.5L11 9H2" />
+          </svg>
+        </button>
+        <button
+          className={styles['row-delete']}
+          onClick={(e) => { e.stopPropagation(); onDelete(thread.id); }}
+          disabled={isDeleting}
+          type="button"
+          aria-label="Delete thread"
+          title="Delete"
+        >
+          {isDeleting ? (
+            <span className={styles['delete-spinner']} />
+          ) : (
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 4h10M6 4V2.5h4V4M5 4l.5 9h5l.5-9" />
+            </svg>
+          )}
+        </button>
+      </div>
+    </div>
   );
 };

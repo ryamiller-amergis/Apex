@@ -50,6 +50,7 @@ jest.mock('../../hooks/useInterviews', () => ({
   useFixValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useAcceptFixValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useRevertDesignDocSection: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useOverrideDesignDocValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useFixDesignDocWithAi: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
   useFixDesignDocCommentWithAi: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useReassignApprovers: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
@@ -89,11 +90,30 @@ jest.mock('../ConfirmDeleteModal', () => ({ ConfirmDeleteModal: () => null }));
 jest.mock('../ApproverSelectModal', () => ({ ApproverSelectModal: () => null }));
 jest.mock('../AnnotationLayer', () => ({
   AnnotationLayer: ({ children }: { children: ReactNode }) => <>{children}</>,
+  unwrapCommentMarks: jest.fn(),
 }));
 jest.mock('../ReviewCommentSidebar', () => ({ ReviewCommentSidebar: () => null }));
 jest.mock('../FixValidationPanel', () => ({
   FixValidationPanel: () => null,
   FixingProgressView: () => null,
+}));
+jest.mock('../RunGroundingStatus', () => ({
+  RunGroundingStatus: ({
+    surface,
+    domainRunId,
+    project,
+  }: {
+    surface: string;
+    domainRunId: string;
+    project: string;
+  }) => (
+    <div
+      data-testid="design-doc-grounding-embed"
+      data-surface={surface}
+      data-domain-run-id={domainRunId}
+      data-project={project}
+    />
+  ),
 }));
 
 // ── Base fixtures ──────────────────────────────────────────────────────────────
@@ -139,6 +159,27 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockUseDesignDoc.mockReturnValue({ data: baseDoc, isLoading: false, isError: false });
   mockUseDocumentAssignments.mockReturnValue({ data: [] });
+});
+
+describe('PBI-004 Design Doc grounding status embed', () => {
+  it('AC-2 / VT-03 Given an existing Design Doc, When its run view renders, Then reusable grounding status receives the Design Doc scope', () => {
+    // Arrange / Act
+    renderView();
+
+    // Assert
+    expect(screen.getByTestId('design-doc-grounding-embed')).toHaveAttribute(
+      'data-surface',
+      'design_doc'
+    );
+    expect(screen.getByTestId('design-doc-grounding-embed')).toHaveAttribute(
+      'data-domain-run-id',
+      'doc-1'
+    );
+    expect(screen.getByTestId('design-doc-grounding-embed')).toHaveAttribute(
+      'data-project',
+      'proj-alpha'
+    );
+  });
 });
 
 // ── 1. Owner display ──────────────────────────────────────────────────────────

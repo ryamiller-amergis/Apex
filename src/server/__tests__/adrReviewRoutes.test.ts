@@ -79,7 +79,7 @@ jest.mock('../services/bedrockService', () => ({
   BedrockModelTruncatedError: class BedrockModelTruncatedError extends Error {},
 }));
 
-import { getAdr, updateAdrStatus } from '../services/adrService';
+import { deleteAdr, getAdr, updateAdrStatus } from '../services/adrService';
 import {
   getAssignments,
   isApprovalComplete,
@@ -253,5 +253,19 @@ describe('ADR reviewer candidates route', () => {
     expect(response.body).toEqual([
       expect.objectContaining({ id: 'dev-1', displayName: 'Dev One' }),
     ]);
+  });
+});
+
+describe('ADR delete route', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (deleteAdr as jest.Mock).mockResolvedValue(undefined);
+  });
+
+  it('DELETEs an ADR and returns 204', async () => {
+    const response = await request(buildApp()).delete('/adr-1');
+
+    expect(response.status).toBe(204);
+    expect(deleteAdr).toHaveBeenCalledWith('adr-1', 'reviewer-1');
   });
 });

@@ -70,6 +70,16 @@ jest.mock('../services/testCaseService', () => ({
   triggerTestCaseGeneration: jest.fn(),
 }));
 
+jest.mock('../services/bedrockService', () => ({
+  fixPrdContentWithBedrock: jest.fn(),
+  fixPrdBacklogWithBedrock: jest.fn(),
+  fixDesignDocSectionWithBedrock: jest.fn(),
+  regeneratePrdContentRegionWithBedrock: jest.fn(),
+  regeneratePrdBacklogItemWithBedrock: jest.fn(),
+  regenerateMarkdownRegionWithBedrock: jest.fn(),
+  BedrockModelTruncatedError: class BedrockModelTruncatedError extends Error {},
+}));
+
 jest.mock('../db/drizzle', () => ({
   db: {
     query: {
@@ -110,6 +120,7 @@ jest.mock('../middleware/rbac', () => ({
 
 jest.mock('../utils/requestUser', () => ({
   getUserId: jest.fn().mockReturnValue('user-test'),
+  getDisplayName: jest.fn().mockReturnValue('Test User'),
 }));
 
 const mockInterviewService = interviewService as jest.Mocked<typeof interviewService>;
@@ -152,6 +163,7 @@ const {
   markValidationReady: mockMarkValidationReady,
   autoStartValidation: mockAutoStartValidation,
   syncValidationResult: mockSyncValidationResult,
+  overrideDesignDocValidation: mockOverrideDesignDocValidation,
 } = jest.requireMock('../services/designDocService') as {
   createDesignDoc: jest.Mock;
   startDesignDocWatcher: jest.Mock;
@@ -167,6 +179,7 @@ const {
   markValidationReady: jest.Mock;
   autoStartValidation: jest.Mock;
   syncValidationResult: jest.Mock;
+  overrideDesignDocValidation: jest.Mock;
 };
 
 const {
@@ -220,6 +233,16 @@ const { db: mockDb } = jest.requireMock('../db/drizzle') as {
 const { fetchExistingPageContext: mockFetchExistingPageContext } = jest.requireMock(
   '../services/designSystemService',
 ) as { fetchExistingPageContext: jest.Mock };
+
+const {
+  regeneratePrdContentRegionWithBedrock: mockRegeneratePrdContentRegion,
+  regeneratePrdBacklogItemWithBedrock: mockRegeneratePrdBacklogItem,
+  regenerateMarkdownRegionWithBedrock: mockRegenerateMarkdownRegion,
+} = jest.requireMock('../services/bedrockService') as {
+  regeneratePrdContentRegionWithBedrock: jest.Mock;
+  regeneratePrdBacklogItemWithBedrock: jest.Mock;
+  regenerateMarkdownRegionWithBedrock: jest.Mock;
+};
 
 // ── App factory ────────────────────────────────────────────────────────────────
 
@@ -1958,5 +1981,302 @@ describe('POST /api/interviews/prds/:prdId/design-docs — enriched freeformCont
     await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
 
     expect(mockFetchExistingPageContext).not.toHaveBeenCalled();
+  });
+});
+
+// -- PRD override / coverage / selective apply / regenerate ---------------------
+
+describe('POST /api/interviews/prds/:prdId/override-readiness', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns the override payload and passes display name', async () => {
+    const override = {
+      reason: 'Ship it',
+      userId: 'user-test',
+      userDisplayName: 'Test User',
+      at: '2026-07-01T00:00:00Z',
+      states: ['coverage_gaps' as const],
+    };
+    mockPrdService.overridePrdReadiness.mockResolvedValue(override);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/override-readiness')
+      .send({ reason: 'Ship it' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ override });
+    expect(mockPrdService.overridePrdReadiness).toHaveBeenCalledWith(
+      'prd-1',
+      'user-test',
+      'Ship it',
+      'Test User',
+    );
+  });
+
+  it('propagates service conflicts', async () => {
+    mockPrdService.overridePrdReadiness.mockRejectedValue(
+      Object.assign(new Error('A reason is required to override readiness'), { status: 400 }),
+    );
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/override-readiness')
+      .send({ reason: '' });
+
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('POST /api/interviews/prds/:prdId/fix-coverage', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns the coverage-fix thread id', async () => {
+    mockPrdService.triggerFixCoverageGaps.mockResolvedValue({ threadId: 'cov-thread-1' });
+
+    const res = await request(buildApp()).post('/api/interviews/prds/prd-1/fix-coverage');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ threadId: 'cov-thread-1' });
+    expect(mockPrdService.triggerFixCoverageGaps).toHaveBeenCalledWith('prd-1', 'user-test');
+  });
+});
+
+describe('POST /api/interviews/prds/:prdId/fix-coverage/accept', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('accepts coverage fixes', async () => {
+    mockPrdService.acceptFixCoverageGaps.mockResolvedValue(undefined);
+
+    const res = await request(buildApp()).post('/api/interviews/prds/prd-1/fix-coverage/accept');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(mockPrdService.acceptFixCoverageGaps).toHaveBeenCalledWith('prd-1');
+  });
+});
+
+describe('POST /api/interviews/prds/:prdId/fix-session/dismiss', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('dismisses the active fix session', async () => {
+    mockPrdService.dismissPrdFixSession.mockResolvedValue(undefined);
+
+    const res = await request(buildApp()).post('/api/interviews/prds/prd-1/fix-session/dismiss');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(mockPrdService.dismissPrdFixSession).toHaveBeenCalledWith('prd-1', 'user-test');
+  });
+});
+
+describe('POST /api/interviews/prds/:prdId/apply-proposed-selective', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 404 when PRD is missing', async () => {
+    mockPrdService.getPrd.mockResolvedValue(null);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-missing/apply-proposed-selective')
+      .send({ content: '# Merged' });
+
+    expect(res.status).toBe(404);
+    expect(mockPrdService.applyProposedPrdChanges).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when there are no proposed changes', async () => {
+    mockPrdService.getPrd.mockResolvedValue({
+      ...prd,
+      proposedContent: null,
+      proposedBacklogJson: null,
+    });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/apply-proposed-selective')
+      .send({ content: '# Merged' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'No proposed changes to apply' });
+  });
+
+  it('applies the client-merged selective result', async () => {
+    mockPrdService.getPrd.mockResolvedValue({
+      ...prd,
+      proposedContent: '# Proposed',
+      proposedBacklogJson: { items: [] },
+    });
+    mockPrdService.applyProposedPrdChanges.mockResolvedValue({ applied: true });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/apply-proposed-selective')
+      .send({ content: '# Merged', backlogJson: { items: [{ id: 'x' }] } });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(mockPrdService.applyProposedPrdChanges).toHaveBeenCalledWith('prd-1', {
+      resolvedBy: 'user-test',
+      mergedContent: '# Merged',
+      mergedBacklogJson: { items: [{ id: 'x' }] },
+    });
+  });
+});
+
+describe('POST /api/interviews/prds/:prdId/regenerate-proposed-section', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetSkillConfig.mockResolvedValue(null);
+  });
+
+  it('requires feedback', async () => {
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/regenerate-proposed-section')
+      .send({ section: 'content', feedback: '   ' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'feedback is required' });
+  });
+
+  it('writes regenerated content to proposed_* when not in fixMode', async () => {
+    mockPrdService.getPrd
+      .mockResolvedValueOnce({
+        ...prd,
+        proposedContent: '# Proposed PRD',
+        fixBaseline: null,
+      })
+      .mockResolvedValueOnce({
+        ...prd,
+        proposedContent: '# Revised proposed',
+        proposedBacklogJson: null,
+      });
+    mockRegeneratePrdContentRegion.mockResolvedValue('# Revised proposed');
+    const setMock = jest.fn().mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/regenerate-proposed-section')
+      .send({
+        section: 'content',
+        oldText: 'old',
+        newText: 'new',
+        feedback: 'Make it clearer',
+      });
+
+    expect(res.status).toBe(200);
+    expect(mockRegeneratePrdContentRegion).toHaveBeenCalled();
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ proposedContent: '# Revised proposed' }),
+    );
+    expect(res.body).toMatchObject({ proposedContent: '# Revised proposed' });
+  });
+
+  it('writes regenerated content to live content when fixBaseline is set', async () => {
+    mockPrdService.getPrd
+      .mockResolvedValueOnce({
+        ...prd,
+        content: '# Live PRD',
+        proposedContent: null,
+        fixBaseline: { content: '# Baseline', backlogJson: {}, capturedAt: '2026-01-01T00:00:00Z' },
+      })
+      .mockResolvedValueOnce({
+        ...prd,
+        content: '# Revised live',
+        backlogJson: null,
+      });
+    mockRegeneratePrdContentRegion.mockResolvedValue('# Revised live');
+    const setMock = jest.fn().mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/regenerate-proposed-section')
+      .send({
+        section: 'content',
+        oldText: 'old',
+        newText: 'new',
+        feedback: 'Tighten wording',
+      });
+
+    expect(res.status).toBe(200);
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({ content: '# Revised live' }),
+    );
+    expect(res.body).toMatchObject({ proposedContent: '# Revised live' });
+  });
+});
+
+describe('POST /api/interviews/design-docs/:id/override-validation', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns the validation override payload', async () => {
+    const override = {
+      reason: 'Accepted score risk',
+      userId: 'user-test',
+      userDisplayName: 'Test User',
+      at: '2026-07-01T00:00:00Z',
+      validationScore: 40,
+      validationThreshold: 90,
+    };
+    mockOverrideDesignDocValidation.mockResolvedValue(override);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/design-docs/dd-1/override-validation')
+      .send({ reason: 'Accepted score risk' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ override });
+    expect(mockOverrideDesignDocValidation).toHaveBeenCalledWith(
+      'dd-1',
+      'user-test',
+      'Accepted score risk',
+      'Test User',
+    );
+  });
+});
+
+describe('POST /api/interviews/design-docs/:id/apply-proposed-selective', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 400 when no proposed sections exist', async () => {
+    mockGetDesignDoc.mockResolvedValue({
+      ...designDocSummary,
+      proposedDesignContent: null,
+      proposedTechSpecContent: null,
+      proposedAssumptionsContent: null,
+    });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/design-docs/dd-1/apply-proposed-selective')
+      .send({ designContent: '# Merged design' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'No proposed changes to apply' });
+  });
+
+  it('writes merged sections and clears proposed columns', async () => {
+    mockGetDesignDoc.mockResolvedValue({
+      ...designDocSummary,
+      designContent: '# Design',
+      techSpecContent: '# Tech',
+      assumptionsContent: '# Assumptions',
+      proposedDesignContent: '# Proposed design',
+      proposedTechSpecContent: null,
+      proposedAssumptionsContent: null,
+    });
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ fixCommentId: null });
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/design-docs/dd-1/apply-proposed-selective')
+      .send({ designContent: '# Merged design' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        designContent: '# Merged design',
+        proposedDesignContent: null,
+        proposedTechSpecContent: null,
+        proposedAssumptionsContent: null,
+      }),
+    );
   });
 });

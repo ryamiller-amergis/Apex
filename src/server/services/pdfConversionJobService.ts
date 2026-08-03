@@ -8,6 +8,7 @@ import type {
   EnqueueExportResponse,
   FileUploadResult,
   PdfConversionJob,
+  PdfExportFormat,
   PdfJobType,
 } from '../../shared/types/pdf';
 import { PDF_ERROR_CODES } from '../../shared/types/pdf';
@@ -33,7 +34,7 @@ export class PdfQueueSaturatedError extends Error {
 
   constructor(
     message: string,
-    readonly retryAfterSeconds = 5,
+    readonly retryAfterSeconds = 5
   ) {
     super(message);
     this.name = 'PdfQueueSaturatedError';
@@ -42,7 +43,9 @@ export class PdfQueueSaturatedError extends Error {
 
 function envInt(name: string, fallback: number, minimum = 1): number {
   const parsed = Number(process.env[name]);
-  return Number.isFinite(parsed) ? Math.max(minimum, Math.floor(parsed)) : fallback;
+  return Number.isFinite(parsed)
+    ? Math.max(minimum, Math.floor(parsed))
+    : fallback;
 }
 
 const INSTANCE_ID = `${os.hostname()}:${process.pid}`;
@@ -54,7 +57,7 @@ const QUEUE_DEPTH_LIMIT = envInt('PDF_MAX_QUEUE_DEPTH', 200);
 const LEASE_MS = envInt('PDF_JOB_LEASE_MS', 20 * 60_000, 60_000);
 const HEARTBEAT_INTERVAL_MS = Math.min(
   envInt('PDF_JOB_HEARTBEAT_MS', 30_000, 5_000),
-  Math.floor(LEASE_MS / 3),
+  Math.floor(LEASE_MS / 3)
 );
 const POLL_INTERVAL_MS = envInt('PDF_JOB_POLL_INTERVAL_MS', 1_000, 250);
 
@@ -121,12 +124,17 @@ export async function assertPdfQueueCapacity(userId: string): Promise<void> {
     FROM pdf_conversion_jobs
     WHERE status IN ('queued', 'processing')
   `);
-  const counts = resultRows<{ queue_depth: number; user_depth: number }>(countsResult)[0] ?? {
+  const counts = resultRows<{ queue_depth: number; user_depth: number }>(
+    countsResult
+  )[0] ?? {
     queue_depth: 0,
     user_depth: 0,
   };
 
-  if (Number(counts.user_depth) >= USER_BACKLOG_LIMIT || Number(counts.queue_depth) >= QUEUE_DEPTH_LIMIT) {
+  if (
+    Number(counts.user_depth) >= USER_BACKLOG_LIMIT ||
+    Number(counts.queue_depth) >= QUEUE_DEPTH_LIMIT
+  ) {
     console.warn('[pdf-queue] Enqueue rejected', {
       userId,
       userDepth: Number(counts.user_depth),
@@ -134,11 +142,17 @@ export async function assertPdfQueueCapacity(userId: string): Promise<void> {
       userBacklogLimit: USER_BACKLOG_LIMIT,
       queueDepthLimit: QUEUE_DEPTH_LIMIT,
     });
-    trackEvent('PdfQueueBackpressure', { userId }, {
-      userDepth: Number(counts.user_depth),
-      queueDepth: Number(counts.queue_depth),
-    });
-    throw new PdfQueueSaturatedError('PDF processing is busy. Please retry shortly.');
+    trackEvent(
+      'PdfQueueBackpressure',
+      { userId },
+      {
+        userDepth: Number(counts.user_depth),
+        queueDepth: Number(counts.queue_depth),
+      }
+    );
+    throw new PdfQueueSaturatedError(
+      'PDF processing is busy. Please retry shortly.'
+    );
   }
 }
 
@@ -148,7 +162,7 @@ export async function enqueuePdfConversion(
   filePath: string,
   originalName: string,
   originalMimeType: string,
-  maxFileBytes: number,
+  maxFileBytes: number
 ): Promise<FileUploadResult> {
   let sizeBytes: number;
   try {
@@ -158,7 +172,10 @@ export async function enqueuePdfConversion(
     return {
       originalName,
       status: 'error',
-      error: { code: PDF_ERROR_CODES.FILE_CORRUPT, message: 'File could not be read.' },
+      error: {
+        code: PDF_ERROR_CODES.FILE_CORRUPT,
+        message: 'File could not be read.',
+      },
     };
   }
 
@@ -169,7 +186,8 @@ export async function enqueuePdfConversion(
       status: 'error',
       error: {
         code: PDF_ERROR_CODES.FILE_TOO_LARGE,
-        message: 'This file exceeds the 100 MB size limit. Please upload a smaller file.',
+        message:
+          'This file exceeds the 100 MB size limit. Please upload a smaller file.',
       },
     };
   }
@@ -181,7 +199,11 @@ export async function enqueuePdfConversion(
     throw error;
   }
   const conversionId = crypto.randomUUID();
-  const ref: PdfArtifactRef = { userId, sessionId, fileName: `${conversionId}.docx` };
+  const ref: PdfArtifactRef = {
+    userId,
+    sessionId,
+    fileName: `${conversionId}.docx`,
+  };
   const inputKey = buildPdfArtifactKey(ref);
   await getPdfArtifactStore().putFile(ref, filePath);
 
@@ -210,24 +232,40 @@ export async function enqueuePdfConversion(
 export async function enqueuePdfExport(
   sessionId: string,
   userId: string,
-  filename: string,
+  filename?: string,
   pages?: number[],
+  format: PdfExportFormat = 'pdf'
 ): Promise<EnqueueExportResponse> {
   await assertPdfQueueCapacity(userId);
   const jobId = crypto.randomUUID();
-  const resultFileName = `${jobId}.pdf`;
-  const inputKey = buildPdfArtifactKey({ userId, sessionId, fileName: resultFileName });
+  const ext = format === 'docx' ? '.docx' : '.pdf';
+  const resultFileName = `${jobId}${ext}`;
+  const inputKey = buildPdfArtifactKey({
+    userId,
+    sessionId,
+    fileName: resultFileName,
+  });
+  const mimeType =
+    format === 'docx'
+      ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      : 'application/pdf';
+  const payload = {
+    ...(filename?.trim() ? { filename } : {}),
+    pages: pages ?? [],
+    resultFileName,
+    format,
+  };
 
   await db.insert(pdfConversionJobs).values({
     id: jobId,
     sessionId,
     jobType: 'export',
     userId,
-    originalName: filename,
-    originalMimeType: 'application/pdf',
+    originalName: filename ?? '',
+    originalMimeType: mimeType,
     inputKey,
     status: 'queued',
-    payload: { filename, pages: pages ?? [], resultFileName },
+    payload,
   });
 
   const queuePosition = await getPdfQueuePosition(jobId);
@@ -239,26 +277,38 @@ export async function enqueuePdfExport(
   };
 }
 
-export async function getPdfConversionJobs(sessionId: string): Promise<PdfConversionJob[]> {
+export async function getPdfConversionJobs(
+  sessionId: string
+): Promise<PdfConversionJob[]> {
   const rows = await db.query.pdfConversionJobs.findMany({
     where: and(
       eq(pdfConversionJobs.sessionId, sessionId),
-      eq(pdfConversionJobs.jobType, 'docx_convert'),
+      eq(pdfConversionJobs.jobType, 'docx_convert')
     ),
     orderBy: [asc(pdfConversionJobs.createdAt)],
   });
   return Promise.all(rows.map(mapJob));
 }
 
-export async function getPdfJob(jobId: string, userId: string): Promise<PdfConversionJob | undefined> {
+export async function getPdfJob(
+  jobId: string,
+  userId: string
+): Promise<PdfConversionJob | undefined> {
   const row = await db.query.pdfConversionJobs.findFirst({
-    where: and(eq(pdfConversionJobs.id, jobId), eq(pdfConversionJobs.userId, userId)),
+    where: and(
+      eq(pdfConversionJobs.id, jobId),
+      eq(pdfConversionJobs.userId, userId)
+    ),
   });
   return row ? mapJob(row) : undefined;
 }
 
 async function mapJob(row: PdfJobRow): Promise<PdfConversionJob> {
-  const result = (row.result ?? {}) as { filename?: string };
+  const result = (row.result ?? {}) as {
+    filename?: string;
+    resultFileName?: string;
+    format?: string;
+  };
   return {
     id: row.id,
     sessionId: row.sessionId,
@@ -266,11 +316,15 @@ async function mapJob(row: PdfJobRow): Promise<PdfConversionJob> {
     originalName: row.originalName,
     status: row.status,
     fileId: row.fileId,
-    queuePosition: row.status === 'queued' ? await getPdfQueuePosition(row.id) : null,
-    resultUrl: row.status === 'completed' && row.jobType === 'export'
-      ? `/api/pdf/jobs/${row.id}/result`
-      : null,
+    queuePosition:
+      row.status === 'queued' ? await getPdfQueuePosition(row.id) : null,
+    resultUrl:
+      row.status === 'completed' && row.jobType === 'export'
+        ? `/api/pdf/jobs/${row.id}/result`
+        : null,
     resultFilename: result.filename ?? null,
+    resultFileName: result.resultFileName ?? null,
+    resultFormat: result.format === 'docx' ? 'docx' : 'pdf',
     attempts: row.attempts,
     maxAttempts: row.maxAttempts,
     error: row.errorCode
@@ -306,7 +360,9 @@ export async function claimNextPdfJob(): Promise<PdfJobRow | null> {
     const lockExpiresAt = new Date(now.getTime() + LEASE_MS);
     // Serialize only the short claim decision so independently scaled instances
     // cannot all observe the same global/per-user slot and oversubscribe it.
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('apex_pdf_job_claim'))`);
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtext('apex_pdf_job_claim'))`
+    );
     const result = await tx.execute(sql`
       WITH candidate AS (
         SELECT jobs.id
@@ -354,20 +410,28 @@ export async function renewPdfJobLock(jobId: string): Promise<boolean> {
       lockExpiresAt: new Date(now.getTime() + LEASE_MS).toISOString(),
       updatedAt: now.toISOString(),
     })
-    .where(and(
-      eq(pdfConversionJobs.id, jobId),
-      eq(pdfConversionJobs.status, 'processing'),
-      eq(pdfConversionJobs.ownerInstance, INSTANCE_ID),
-    ))
+    .where(
+      and(
+        eq(pdfConversionJobs.id, jobId),
+        eq(pdfConversionJobs.status, 'processing'),
+        eq(pdfConversionJobs.ownerInstance, INSTANCE_ID)
+      )
+    )
     .returning({ id: pdfConversionJobs.id });
   if (!renewed) {
-    console.error('[pdf-queue] Lock renewal lost ownership', { jobId, instanceId: INSTANCE_ID });
+    console.error('[pdf-queue] Lock renewal lost ownership', {
+      jobId,
+      instanceId: INSTANCE_ID,
+    });
     trackEvent('PdfJobLockRenewalFailure', { jobId, instanceId: INSTANCE_ID });
   }
   return Boolean(renewed);
 }
 
-export async function recoverExpiredPdfJobs(): Promise<{ requeued: number; poisoned: number }> {
+export async function recoverExpiredPdfJobs(): Promise<{
+  requeued: number;
+  poisoned: number;
+}> {
   const now = new Date().toISOString();
   const poisonedResult = await db.execute(sql`
     UPDATE pdf_conversion_jobs
@@ -410,7 +474,7 @@ export async function recoverExpiredPdfJobs(): Promise<{ requeued: number; poiso
 async function finishJob(
   job: PdfJobRow,
   result: PdfJobExecutionResult,
-  startedAt: number,
+  startedAt: number
 ): Promise<void> {
   const completedAt = new Date().toISOString();
   const [completed] = await db
@@ -427,11 +491,13 @@ async function finishJob(
       errorCode: null,
       errorMessage: null,
     })
-    .where(and(
-      eq(pdfConversionJobs.id, job.id),
-      eq(pdfConversionJobs.status, 'processing'),
-      eq(pdfConversionJobs.ownerInstance, INSTANCE_ID),
-    ))
+    .where(
+      and(
+        eq(pdfConversionJobs.id, job.id),
+        eq(pdfConversionJobs.status, 'processing'),
+        eq(pdfConversionJobs.ownerInstance, INSTANCE_ID)
+      )
+    )
     .returning({ id: pdfConversionJobs.id });
   if (!completed) {
     console.warn('[pdf-queue] Completion ignored after ownership changed', {
@@ -453,9 +519,13 @@ async function finishJob(
 async function failOrRetryJob(job: PdfJobRow, error: unknown): Promise<void> {
   const now = new Date().toISOString();
   const terminal = job.attempts >= job.maxAttempts;
-  const code = (error as { code?: string })?.code
-    ?? (job.jobType === 'export' ? PDF_ERROR_CODES.EXPORT_FAILED : PDF_ERROR_CODES.CONVERSION_FAILED);
-  const message = error instanceof Error ? error.message : 'PDF processing failed.';
+  const code =
+    (error as { code?: string })?.code ??
+    (job.jobType === 'export'
+      ? PDF_ERROR_CODES.EXPORT_FAILED
+      : PDF_ERROR_CODES.CONVERSION_FAILED);
+  const message =
+    error instanceof Error ? error.message : 'PDF processing failed.';
   const [updated] = await db
     .update(pdfConversionJobs)
     .set({
@@ -468,11 +538,13 @@ async function failOrRetryJob(job: PdfJobRow, error: unknown): Promise<void> {
       errorCode: terminal ? code : null,
       errorMessage: terminal ? message : null,
     })
-    .where(and(
-      eq(pdfConversionJobs.id, job.id),
-      eq(pdfConversionJobs.status, 'processing'),
-      eq(pdfConversionJobs.ownerInstance, INSTANCE_ID),
-    ))
+    .where(
+      and(
+        eq(pdfConversionJobs.id, job.id),
+        eq(pdfConversionJobs.status, 'processing'),
+        eq(pdfConversionJobs.ownerInstance, INSTANCE_ID)
+      )
+    )
     .returning({ id: pdfConversionJobs.id });
   if (!updated) {
     console.warn('[pdf-queue] Failure ignored after ownership changed', {
@@ -496,7 +568,10 @@ async function failOrRetryJob(job: PdfJobRow, error: unknown): Promise<void> {
       } catch (cleanupError) {
         console.error('[pdf-queue] Failed to delete poison-job input', {
           jobId: job.id,
-          error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+          error:
+            cleanupError instanceof Error
+              ? cleanupError.message
+              : String(cleanupError),
         });
       }
     }
@@ -504,7 +579,10 @@ async function failOrRetryJob(job: PdfJobRow, error: unknown): Promise<void> {
   }
 }
 
-async function runClaimedJob(job: PdfJobRow, handler: PdfJobHandler): Promise<void> {
+async function runClaimedJob(
+  job: PdfJobRow,
+  handler: PdfJobHandler
+): Promise<void> {
   activeJobs.add(job.id);
   const startedAt = Date.now();
   const heartbeatTimer = setInterval(() => {
@@ -555,20 +633,23 @@ export function processPendingPdfConversions(
     sessionId: string,
     inputKey: string,
     originalName: string,
-    originalMimeType: string,
-  ) => Promise<FileUploadResult>,
+    originalMimeType: string
+  ) => Promise<FileUploadResult>
 ): Promise<void> {
   return processPendingPdfJobs(async (job) => {
     const result = await handler(
       job.sessionId,
       job.inputKey,
       job.originalName,
-      job.originalMimeType,
+      job.originalMimeType
     );
     if (result.status !== 'success') {
-      throw Object.assign(new Error(result.error?.message ?? 'PDF conversion failed.'), {
-        code: result.error?.code ?? PDF_ERROR_CODES.CONVERSION_FAILED,
-      });
+      throw Object.assign(
+        new Error(result.error?.message ?? 'PDF conversion failed.'),
+        {
+          code: result.error?.code ?? PDF_ERROR_CODES.CONVERSION_FAILED,
+        }
+      );
     }
     return { fileId: result.fileId, result: { fileId: result.fileId } };
   });

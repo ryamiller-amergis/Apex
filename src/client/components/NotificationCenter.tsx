@@ -4,6 +4,10 @@ import { useNotifications, useMarkAsRead, useMarkAllAsRead } from '../hooks/useN
 import { useNotificationContext } from '../contexts/NotificationContext';
 import { NotificationPreferences } from './NotificationPreferences';
 import type { AppNotification, NotificationType } from '../../shared/types/notification';
+import {
+  isWalkthroughPublishNotificationLink,
+  WALKTHROUGH_LIST_DEEP_LINK,
+} from '../../shared/types/walkthroughNotification';
 import styles from './NotificationCenter.module.css';
 
 interface NotificationCenterProps {
@@ -86,19 +90,25 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({ onClose 
       decrementUnread();
     }
     if (item.link) {
-      navigate(item.link);
+      navigate(
+        isWalkthroughPublishNotificationLink(item.link)
+          ? WALKTHROUGH_LIST_DEEP_LINK
+          : item.link,
+      );
       onClose();
     }
   };
 
   if (showPreferences) {
     return (
-      <div className={styles['center-dropdown']}>
+      <div className={styles['center-dropdown']} {...{ 'data-testid': 'notification-center-panel' }}>
         <div className={styles['center-header']}>
           <button
+            type="button"
             className={styles['center-back-btn']}
             onClick={() => setShowPreferences(false)}
             aria-label="Back to notifications"
+            {...{ 'data-testid': 'notification-center-back' }}
           >
             <svg viewBox="0 0 16 16" fill="none">
               <path d="M10 3L5 8l5 5" />
@@ -114,25 +124,29 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({ onClose 
   const grouped = groupByDate(notifications);
 
   return (
-    <div className={styles['center-dropdown']}>
+    <div className={styles['center-dropdown']} {...{ 'data-testid': 'notification-center-panel' }}>
       <div className={styles['center-header']}>
         <h3 className={styles['center-title']}>Notifications</h3>
         <div className={styles['center-actions']}>
           <button
+            type="button"
             className={styles['center-action-btn']}
             onClick={() => { markAllAsRead.mutate(); resetUnread(); }}
             title="Mark all as read"
             aria-label="Mark all as read"
+            {...{ 'data-testid': 'notification-center-mark-all-read' }}
           >
             <svg viewBox="0 0 16 16" fill="none">
               <path d="M2 8.5L6 12.5 14 4.5" />
             </svg>
           </button>
           <button
+            type="button"
             className={styles['center-action-btn']}
             onClick={() => setShowPreferences(true)}
             title="Notification settings"
             aria-label="Notification settings"
+            {...{ 'data-testid': 'notification-center-settings' }}
           >
             <svg viewBox="0 0 16 16" fill="none">
               <circle cx="8" cy="8" r="2.5" />
@@ -151,29 +165,40 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({ onClose 
           grouped.map((group) => (
             <div key={group.label}>
               <div className={styles['center-group-label']}>{group.label}</div>
-              {group.items.map((item) => (
-                <button
-                  key={item.id}
-                  className={`${styles['center-item']} ${!item.read ? styles['center-item-unread'] : ''}`}
-                  onClick={() => handleItemClick(item)}
-                >
-                  <span className={styles['center-item-icon']}>{getTypeIcon(item.type as NotificationType)}</span>
-                  <div className={styles['center-item-content']}>
-                    <div className={styles['center-item-title']}>{item.title}</div>
-                    {item.body && <div className={styles['center-item-body']}>{item.body}</div>}
-                    <div className={styles['center-item-time']}>{getRelativeTime(item.createdAt)}</div>
-                  </div>
-                  {!item.read && <span className={styles['center-item-dot']} />}
-                </button>
-              ))}
+              {group.items.map((item) => {
+                const walkthroughItem = isWalkthroughPublishNotificationLink(item.link);
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={`${styles['center-item']} ${!item.read ? styles['center-item-unread'] : ''}`}
+                    onClick={() => handleItemClick(item)}
+                    {...{
+                      'data-testid': walkthroughItem
+                        ? 'walkthrough-publish-notification'
+                        : `notification-item-${item.id}`,
+                    }}
+                  >
+                    <span className={styles['center-item-icon']}>{getTypeIcon(item.type as NotificationType)}</span>
+                    <div className={styles['center-item-content']}>
+                      <div className={styles['center-item-title']}>{item.title}</div>
+                      {item.body && <div className={styles['center-item-body']}>{item.body}</div>}
+                      <div className={styles['center-item-time']}>{getRelativeTime(item.createdAt)}</div>
+                    </div>
+                    {!item.read && <span className={styles['center-item-dot']} />}
+                  </button>
+                );
+              })}
             </div>
           ))
         )}
       </div>
       <div className={styles['center-footer']}>
         <button
+          type="button"
           className={styles['center-footer-link']}
           onClick={() => { navigate('/notifications'); onClose(); }}
+          {...{ 'data-testid': 'notification-center-view-all' }}
         >
           View all notifications
         </button>

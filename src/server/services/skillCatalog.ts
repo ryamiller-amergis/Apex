@@ -3,6 +3,10 @@ import type { AdoProject, AdoRepo, SkillEntry, SkillDetail, SupportingFile, Skil
 
 const ORG_URL = process.env.ADO_ORG || '';
 const PAT = process.env.ADO_PAT || '';
+/** Bound ADO code-search HTTP calls so MCP tools cannot hang the agent stream forever. */
+const ADO_FETCH_TIMEOUT_MS = Number(process.env.ADO_FETCH_TIMEOUT_MS) > 0
+  ? Number(process.env.ADO_FETCH_TIMEOUT_MS)
+  : 30_000;
 
 /** Roots to search for SKILL.md files within a repo, in priority order */
 const SKILL_ROOTS = ['skills', '.cursor/skills'];
@@ -444,6 +448,7 @@ export async function searchRepoCode(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(ADO_FETCH_TIMEOUT_MS),
   });
 
   if (!response.ok) {

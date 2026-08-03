@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 import type { ReviewCommentWithReplies, ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
 import styles from './AnnotationLayer.module.css';
 
@@ -107,9 +107,12 @@ function getTextOffset(container: Node, targetNode: Node, targetOffset: number):
  */
 export function anchorSelector(containerText: string, selector: TextSelector): { start: number; end: number } | null {
   const { exact, prefix, suffix, start: hintStart } = selector;
+  if (!exact) return null;
 
-  // 1. Try at the hinted offset first
+  // 1. Try at the hinted offset first (ignore null/NaN from older rows)
   if (
+    typeof hintStart === 'number' &&
+    Number.isFinite(hintStart) &&
     hintStart >= 0 &&
     hintStart + exact.length <= containerText.length &&
     containerText.slice(hintStart, hintStart + exact.length) === exact
@@ -147,10 +150,17 @@ export function anchorSelector(containerText: string, selector: TextSelector): {
     }
   }
 
-  // 3. Last resort: first occurrence anywhere.
+  // 3. Exact string match anywhere.
   const idx = containerText.indexOf(exact);
   if (idx >= 0) {
     return { start: idx, end: idx + exact.length };
+  }
+
+  // 4. Whitespace-insensitive fallback — markdown / cross-block selections often
+  //    store spaced exact text while textContent concatenates with \n or no gap.
+  const strippedTarget = exact.replace(/\s/g, '');
+  if (strippedTarget.length >= 3) {
+    return findStrippedMatch(containerText, strippedTarget);
   }
 
   return null;
@@ -198,6 +208,28 @@ function createRangeFromOffsets(
   }
 }
 
+/**
+ * Restore React-owned text nodes by removing annotation <mark> wrappers.
+ * Must run before React reconciles children — otherwise commit throws
+ * HierarchyRequestError ("insertBefore… is not a child of this node").
+ */
+export function unwrapCommentMarks(root: ParentNode | null | undefined): void {
+  if (!root || typeof (root as ParentNode).querySelectorAll !== 'function') return;
+  const marks = Array.from(root.querySelectorAll('mark[data-comment-id]'));
+  // Deepest first so nested unwrap (rare) stays valid.
+  for (let i = marks.length - 1; i >= 0; i--) {
+    const mark = marks[i] as HTMLElement;
+    const parent = mark.parentNode;
+    if (!parent) continue;
+    try {
+      while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+      if (mark.parentNode === parent) parent.removeChild(mark);
+    } catch {
+      // Detached or mid-reconcile — abandon.
+    }
+  }
+}
+
 export const AnnotationLayer: React.FC<AnnotationLayerProps> = ({
   sectionKey,
   comments,
@@ -210,80 +242,101 @@ export const AnnotationLayer: React.FC<AnnotationLayerProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const [floatingButton, setFloatingButton] = useState<FloatingButton | null>(null);
   const highlightElementsRef = useRef<HTMLElement[]>([]);
+  const applyingHighlightsRef = useRef(false);
+  const commentsRef = useRef(comments);
+  const activeCommentIdRef = useRef(activeCommentId);
+  const onCommentClickRef = useRef(onCommentClick);
+  commentsRef.current = comments;
+  activeCommentIdRef.current = activeCommentId;
+  onCommentClickRef.current = onCommentClick;
 
-  const clearHighlights = useCallback(() => {
-    for (const el of highlightElementsRef.current) {
-      const parent = el.parentNode;
-      if (parent) {
-        while (el.firstChild) parent.insertBefore(el.firstChild, el);
-        parent.removeChild(el);
-      }
-    }
-    highlightElementsRef.current = [];
-  }, []);
+  // CRITICAL: React commits children *before* layout-effect cleanup. If <mark>
+  // wrappers still own text nodes when tab/markdown remounts, commit throws
+  // HierarchyRequestError. Unwrap during render (previous DOM still mounted),
+  // then re-apply in useLayoutEffect after every commit.
+  unwrapCommentMarks(containerRef.current);
+  highlightElementsRef.current = [];
 
   // Derive a stable fingerprint of only the data that affects highlights so
-  // the expensive DOM teardown/rebuild only runs when it actually needs to.
+  // MutationObserver can track the active comment set.
   const highlightFingerprint = useMemo(
-    () => comments.map((c) => `${c.id}:${c.selector.start}:${c.selector.end}:${c.status}`).join('|'),
+    () => comments.map((c) => `${c.id}:${c.selector.start}:${c.selector.end}:${c.status}:${c.selector.exact}`).join('|'),
     [comments],
   );
 
-  // Re-anchor highlights only when the set of comments, their positions, or
-  // statuses change — NOT on every field update (replies, timestamps, etc.).
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+  const clearHighlights = useCallback(() => {
+    unwrapCommentMarks(containerRef.current);
+    highlightElementsRef.current = [];
+  }, []);
 
+  const applyHighlights = useCallback(() => {
+    const container = containerRef.current;
+    if (!container || !container.isConnected) return;
+
+    applyingHighlightsRef.current = true;
     clearHighlights();
 
+    const currentComments = commentsRef.current;
+    const currentActiveId = activeCommentIdRef.current;
+    const clickHandler = onCommentClickRef.current;
     const containerText = container.textContent ?? '';
-    if (!containerText) return;
 
-    for (const comment of comments) {
-      // Skip resolved comments: once resolved, a highlight must not re-anchor
-      // (and possibly jump to a different matching occurrence) after edits.
-      if (comment.status === 'resolved') continue;
+    if (containerText) {
+      for (const comment of currentComments) {
+        // Skip resolved comments: once resolved, a highlight must not re-anchor
+        // (and possibly jump to a different matching occurrence) after edits.
+        if (comment.status === 'resolved') continue;
 
-      const anchor = anchorSelector(containerText, comment.selector);
-      if (!anchor) continue;
+        const anchor = anchorSelector(containerText, comment.selector);
+        if (!anchor) continue;
 
-      const range = createRangeFromOffsets(container, anchor.start, anchor.end);
-      if (!range) continue;
+        const range = createRangeFromOffsets(container, anchor.start, anchor.end);
+        if (!range) continue;
 
-      const mark = document.createElement('mark');
-      mark.className = comment.id === activeCommentId
-        ? `${styles.highlight} ${styles.highlightActive}`
-        : styles.highlight;
-      mark.dataset.commentId = comment.id;
-      mark.addEventListener('click', (e) => {
-        e.stopPropagation();
-        onCommentClick(comment.id);
-      });
+        const mark = document.createElement('mark');
+        mark.className = comment.id === currentActiveId
+          ? `${styles.highlight} ${styles.highlightActive}`
+          : styles.highlight;
+        mark.dataset.commentId = comment.id;
+        mark.addEventListener('click', (e) => {
+          e.stopPropagation();
+          clickHandler(comment.id);
+        });
 
-      try {
-        range.surroundContents(mark);
-        highlightElementsRef.current.push(mark);
-      } catch {
-        const fragments = extractTextNodes(range, container);
-        for (const frag of fragments) {
-          const fragMark = document.createElement('mark');
-          fragMark.className = mark.className;
-          fragMark.dataset.commentId = comment.id;
-          fragMark.addEventListener('click', (e) => {
-            e.stopPropagation();
-            onCommentClick(comment.id);
-          });
-          frag.parentNode?.insertBefore(fragMark, frag);
-          fragMark.appendChild(frag);
-          highlightElementsRef.current.push(fragMark);
+        try {
+          range.surroundContents(mark);
+          highlightElementsRef.current.push(mark);
+        } catch {
+          try {
+            const fragments = extractTextNodes(range, container);
+            for (const frag of fragments) {
+              const parent = frag.parentNode;
+              if (!parent || !frag.isConnected || frag.parentNode !== parent) continue;
+              const fragMark = document.createElement('mark');
+              fragMark.className = mark.className;
+              fragMark.dataset.commentId = comment.id;
+              fragMark.addEventListener('click', (e) => {
+                e.stopPropagation();
+                clickHandler(comment.id);
+              });
+              parent.insertBefore(fragMark, frag);
+              fragMark.appendChild(frag);
+              highlightElementsRef.current.push(fragMark);
+            }
+          } catch {
+            // Range became invalid mid-apply (React remount) — skip this comment.
+          }
         }
       }
     }
 
-    if (activeCommentId) {
+    queueMicrotask(() => {
+      applyingHighlightsRef.current = false;
+    });
+
+    if (currentActiveId) {
       const activeMark = highlightElementsRef.current.find(
-        (el) => el.dataset.commentId === activeCommentId,
+        (el) => el.dataset.commentId === currentActiveId && el.isConnected,
       );
       if (activeMark) {
         let ancestor: HTMLElement | null = activeMark.parentElement;
@@ -293,19 +346,55 @@ export const AnnotationLayer: React.FC<AnnotationLayerProps> = ({
           }
           ancestor = ancestor.parentElement;
         }
-        // Double rAF: first lets React process the state updates and re-render,
-        // second ensures the browser has laid out the now-visible sections.
         requestAnimationFrame(() =>
-          requestAnimationFrame(() =>
-            activeMark.scrollIntoView({ behavior: 'smooth', block: 'center' }),
-          ),
+          requestAnimationFrame(() => {
+            if (activeMark.isConnected) {
+              activeMark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          }),
         );
       }
     }
+  }, [clearHighlights]);
 
-    return clearHighlights;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [highlightFingerprint, activeCommentId, onCommentClick, clearHighlights]);
+  // Always re-apply after commit — render-time unwrap clears marks every render.
+  useLayoutEffect(() => {
+    applyHighlights();
+  });
+
+  // Restore highlights when React/Mermaid replaces subtree DOM without
+  // re-rendering this layer (e.g. async mermaid SVG swap).
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    let cancelled = false;
+    let debounceTimer: number | null = null;
+
+    const observer = new MutationObserver(() => {
+      if (cancelled || applyingHighlightsRef.current) return;
+      const surviving = highlightElementsRef.current.filter((el) => container.contains(el));
+      if (surviving.length === highlightElementsRef.current.length) return;
+
+      if (debounceTimer !== null) window.clearTimeout(debounceTimer);
+      debounceTimer = window.setTimeout(() => {
+        debounceTimer = null;
+        if (!cancelled && container.isConnected) applyHighlights();
+      }, 40);
+    });
+
+    observer.observe(container, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+
+    return () => {
+      cancelled = true;
+      observer.disconnect();
+      if (debounceTimer !== null) window.clearTimeout(debounceTimer);
+    };
+  }, [highlightFingerprint, applyHighlights]);
 
   const handleMouseUp = useCallback(() => {
     if (readOnly) {

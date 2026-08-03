@@ -1,5 +1,26 @@
 const MERMAID_KEYWORD_RE = /^(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|stateDiagram-v2|erDiagram|journey|gantt|pie|mindmap|timeline|gitGraph|C4Context|C4Container|C4Component|C4Deployment|C4Dynamic|quadrantChart|sankey-beta|xychart-beta|block-beta|packet-beta|architecture-beta|requirementDiagram|zenuml|kanban)\b/;
 
+/** Language tags AI often uses for diagrams instead of `mermaid`. */
+const MERMAID_GENERIC_FENCE_LANGS = new Set([
+  '',
+  'text',
+  'txt',
+  'plaintext',
+  'ascii',
+  'diagram',
+  'prose',
+  'markdown',
+]);
+
+function shouldRewriteFenceAsMermaid(
+  lang: string,
+  firstContentLine: string
+): boolean {
+  if (lang === 'mermaid') return false;
+  if (!MERMAID_KEYWORD_RE.test(firstContentLine)) return false;
+  return MERMAID_GENERIC_FENCE_LANGS.has(lang);
+}
+
 export function normalizeMermaidBlocks(markdown: string): string {
   const lines = markdown.split('\n');
   const normalized: string[] = [];
@@ -13,10 +34,12 @@ export function normalizeMermaidBlocks(markdown: string): string {
       const fenceMarker = trimmed.startsWith('```') ? '```' : '~~~';
 
       if (!inFence) {
-        // Opening fence — check if it's a bare fence (no language tag) whose
-        // first content line is a mermaid keyword. If so, rewrite as ```mermaid.
+        // Opening fence — rewrite generic/bare fences whose first content line
+        // is a Mermaid keyword (AI often emits ```text instead of ```mermaid).
         const lang = trimmed.slice(fenceMarker.length).trim();
-        if (!lang && i + 1 < lines.length && MERMAID_KEYWORD_RE.test(lines[i + 1].trim())) {
+        const firstContentLine =
+          i + 1 < lines.length ? lines[i + 1].trim() : '';
+        if (shouldRewriteFenceAsMermaid(lang, firstContentLine)) {
           normalized.push(`${fenceMarker}mermaid`);
           inFence = true;
           continue;

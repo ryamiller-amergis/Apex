@@ -5,7 +5,7 @@
  * without a real database or Azure DevOps connection.
  */
 import request from 'supertest';
-import express from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import apiRouter from '../routes/api';
 
 // ── Mocks ──────────────────────────────────────────────────────────────────────
@@ -80,14 +80,14 @@ jest.mock('../services/projectSettingsService', () => ({
 
 jest.mock('../middleware/rbac', () => ({
   requirePermission: (..._keys: string[]) =>
-    (_req: any, _res: any, next: any) => next(),
+    (_req: Request, _res: Response, next: NextFunction) => next(),
   requireAnyPermission: (..._keys: string[]) =>
-    (_req: any, _res: any, next: any) => next(),
+    (_req: Request, _res: Response, next: NextFunction) => next(),
   requireGroupMembership: (..._groups: string[]) =>
-    (_req: any, _res: any, next: any) => next(),
-  requireProjectAccess: (_resolver: any) =>
-    (_req: any, _res: any, next: any) => next(),
-  attachPermissions: (_req: any, _res: any, next: any) => next(),
+    (_req: Request, _res: Response, next: NextFunction) => next(),
+  requireProjectAccess: (_resolver: (req: Request) => string | undefined) =>
+    (_req: Request, _res: Response, next: NextFunction) => next(),
+  attachPermissions: (_req: Request, _res: Response, next: NextFunction) => next(),
 }));
 
 jest.mock('../services/rbacService', () => ({
@@ -114,6 +114,25 @@ jest.mock('../services/groupService', () => ({
 jest.mock('../services/changelogService', () => ({
   getChangelogPayload: jest.fn().mockResolvedValue({ entries: [] }),
   getCurrentChangelogVersion: jest.fn().mockResolvedValue('1.0.0'),
+  ChangelogContentError: class ChangelogContentError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = 'ChangelogContentError';
+    }
+  },
+}));
+
+jest.mock('../services/whatsNewStateService', () => ({
+  evaluateWhatsNewState: jest.fn().mockResolvedValue({
+    status: 'ready',
+    currentVersion: '1.0.0',
+    lastSeenVersion: null,
+    unread: true,
+    showOnLogin: true,
+    seeded: false,
+  }),
+  acknowledgeWhatsNew: jest.fn(),
+  updateWhatsNewPreference: jest.fn(),
 }));
 
 jest.mock('../utils/superAdmin', () => ({
@@ -122,15 +141,19 @@ jest.mock('../utils/superAdmin', () => ({
 
 // ── App factory ────────────────────────────────────────────────────────────────
 
+type AuthedRequest = Request & {
+  user?: { profile: { oid: string } };
+};
+
 function buildApp(userOid?: string) {
   const app = express();
   app.use(express.json());
-  app.use((req: any, _res: any, next: any) => {
-    req.user = userOid ? { profile: { oid: userOid } } : undefined;
+  app.use((req: Request, _res: Response, next: NextFunction) => {
+    (req as AuthedRequest).user = userOid ? { profile: { oid: userOid } } : undefined;
     next();
   });
   app.use('/api', apiRouter);
-  app.use((err: any, _req: any, res: any, _next: any) => {
+  app.use((err: Error & { status?: number }, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status ?? 500;
     res.status(status).json({ error: err.message ?? 'Internal server error' });
   });
@@ -142,10 +165,6 @@ function buildApp(userOid?: string) {
 const { getUserPermissions: mockGetUserPermissions } = jest.requireMock(
   '../services/rbacService',
 ) as { getUserPermissions: jest.Mock };
-
-const { getUserGroupNames: mockGetUserGroupNames } = jest.requireMock(
-  '../services/groupService',
-) as { getUserGroupNames: jest.Mock };
 
 // ── GET /api/me/permissions ────────────────────────────────────────────────────
 

@@ -67,7 +67,9 @@ test.describe('Accessibility audits @a11y', () => {
 
   test('login/project selector has no critical a11y violations', async ({ page }) => {
     await page.goto('/', { waitUntil: 'domcontentloaded' });
-    // Unauthenticated visit renders the Login page.
+    // Unauthenticated visit renders the Split Gate login page.
+    await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+    await expect(page.getByText('Continue with your Amergis account.')).toBeVisible();
     await expect(
       page.getByRole('button', { name: /sign in with amergis sso/i }),
     ).toBeVisible();

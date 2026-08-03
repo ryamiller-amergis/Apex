@@ -1,45 +1,66 @@
 /**
- * Tests for ProposedChangesReview component.
- *
- * Coverage:
- *  1. Returns null when both proposedContent and proposedBacklogJson are null/undefined
- *  2. Renders a banner when proposedContent is non-null
- *  3. Renders a banner when proposedBacklogJson is non-null
- *  4. "Review Changes" expands to show a diff panel
- *  5. DiffView rendered with oldText=currentContent and newText=proposedContent
- *  6. "Accept Changes" button calls applyMutation.mutate
- *  7. "Reject Changes" button calls rejectMutation.mutate
- *  8. Renders backlog comparison when proposedBacklogJson is provided
+ * Tests for ProposedChangesReview component (section-by-section wizard entry).
  */
 
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ProposedChangesReview } from '../ProposedChangesReview';
 
-// Mock the hooks
-const mockApplyMutate = jest.fn();
 const mockRejectMutate = jest.fn();
+const mockSelectiveMutateAsync = jest.fn().mockResolvedValue(undefined);
+const mockRegenerateMutateAsync = jest.fn().mockResolvedValue({});
 
 jest.mock('../../hooks/useInterviews', () => ({
-  useApplyProposedPrd: () => ({
-    mutate: mockApplyMutate,
-    isPending: false,
-  }),
   useRejectProposedPrd: () => ({
     mutate: mockRejectMutate,
     isPending: false,
   }),
+  useApplyProposedPrdSelective: () => ({
+    mutateAsync: mockSelectiveMutateAsync,
+    isPending: false,
+  }),
+  useRegenerateProposedPrdSection: () => ({
+    mutateAsync: mockRegenerateMutateAsync,
+    isPending: false,
+  }),
+  useUpdatePrdContent: () => ({
+    mutateAsync: jest.fn().mockResolvedValue(undefined),
+    isPending: false,
+  }),
+  useUpdatePrdBacklog: () => ({
+    mutateAsync: jest.fn().mockResolvedValue(undefined),
+    isPending: false,
+  }),
 }));
 
-// Mock DiffView to avoid complex diff logic in these tests
 jest.mock('../DiffView', () => ({
   DiffView: ({ oldText, newText }: { oldText: string; newText: string }) => (
     <div data-testid="diff-view" data-old={oldText} data-new={newText} />
   ),
 }));
 
-// Mock CSS modules
+jest.mock('../ChangeReviewWizard', () => ({
+  ChangeReviewWizard: ({
+    onFinish,
+    onCancel,
+  }: {
+    onFinish: (units: unknown[]) => void;
+    onCancel?: () => void;
+  }) => (
+    <div data-testid="change-review-wizard">
+      <button type="button" onClick={() => onFinish([])}>
+        Finish wizard
+      </button>
+      {onCancel && (
+        <button type="button" onClick={onCancel}>
+          Minimize
+        </button>
+      )}
+    </div>
+  ),
+}));
+
 jest.mock('../ProposedChangesReview.module.css', () => new Proxy({}, { get: (_t, k) => String(k) }));
 
 function createWrapper() {
@@ -60,8 +81,6 @@ describe('ProposedChangesReview', () => {
     jest.clearAllMocks();
   });
 
-  // ── 1. Null case ──────────────────────────────────────────────────────────────
-
   it('returns null when both proposedContent and proposedBacklogJson are null/undefined', () => {
     const { container } = render(
       <ProposedChangesReview {...defaultProps} />,
@@ -69,16 +88,6 @@ describe('ProposedChangesReview', () => {
     );
     expect(container.firstChild).toBeNull();
   });
-
-  it('returns null when proposedContent is null and proposedBacklogJson is undefined', () => {
-    const { container } = render(
-      <ProposedChangesReview {...defaultProps} proposedContent={null} />,
-      { wrapper: createWrapper() },
-    );
-    expect(container.firstChild).toBeNull();
-  });
-
-  // ── 2. Banner with proposedContent ───────────────────────────────────────────
 
   it('renders a banner/notice when proposedContent is non-null', () => {
     render(
@@ -91,22 +100,7 @@ describe('ProposedChangesReview', () => {
     expect(screen.getByText(/apex assistant has proposed changes/i)).toBeInTheDocument();
   });
 
-  // ── 3. Banner with proposedBacklogJson ───────────────────────────────────────
-
-  it('renders a banner/notice when proposedBacklogJson is non-null', () => {
-    render(
-      <ProposedChangesReview
-        {...defaultProps}
-        proposedBacklogJson={{ epics: [{ title: 'New Epic' }] }}
-      />,
-      { wrapper: createWrapper() },
-    );
-    expect(screen.getByText(/apex assistant has proposed changes/i)).toBeInTheDocument();
-  });
-
-  // ── 4. "Review Changes" expands diff panel ───────────────────────────────────
-
-  it('expands to show diff panel when "Review Changes" is clicked', () => {
+  it('expands preview when "Preview Changes" is clicked', () => {
     render(
       <ProposedChangesReview
         {...defaultProps}
@@ -116,37 +110,45 @@ describe('ProposedChangesReview', () => {
     );
 
     expect(screen.queryByTestId('diff-view')).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: /review changes/i }));
-
+    fireEvent.click(screen.getByRole('button', { name: /preview changes/i }));
     expect(screen.getByTestId('diff-view')).toBeInTheDocument();
   });
 
-  // ── 5. DiffView receives correct props ───────────────────────────────────────
-
-  it('renders DiffView with oldText=currentContent and newText=proposedContent', () => {
-    const currentContent = '# Old Content\n\nOriginal.';
-    const proposedContent = '# New Content\n\nProposed.';
-
+  it('opens the section-by-section wizard in a modal', () => {
     render(
       <ProposedChangesReview
-        prdId="prd-1"
-        currentContent={currentContent}
-        proposedContent={proposedContent}
+        {...defaultProps}
+        proposedContent={'line1\nold\nline3'}
       />,
       { wrapper: createWrapper() },
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /review changes/i }));
-
-    const diffView = screen.getByTestId('diff-view');
-    expect(diffView).toHaveAttribute('data-old', currentContent);
-    expect(diffView).toHaveAttribute('data-new', proposedContent);
+    fireEvent.click(screen.getByRole('button', { name: /review section by section/i }));
+    expect(screen.getByTestId('change-review-wizard')).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: /review proposed changes/i })).toBeInTheDocument();
   });
 
-  // ── 6. Accept button calls applyMutation.mutate ───────────────────────────────
+  it('supports hideBanner with controlled modal for comment/assistant proposals', () => {
+    const onProgress = jest.fn();
+    render(
+      <ProposedChangesReview
+        {...defaultProps}
+        proposedContent={'line1\nold\nline3'}
+        hideBanner
+        deferAutoOpen
+        modalOpen
+        onModalOpenChange={jest.fn()}
+        onReviewProgress={onProgress}
+      />,
+      { wrapper: createWrapper() },
+    );
 
-  it('calls applyMutation.mutate when "Accept Changes" is clicked', () => {
+    expect(screen.queryByText(/apex assistant has proposed changes/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId('change-review-wizard')).toBeInTheDocument();
+    expect(onProgress).toHaveBeenCalled();
+  });
+
+  it('calls reject mutation when "Reject all" is clicked', () => {
     render(
       <ProposedChangesReview
         {...defaultProps}
@@ -155,28 +157,59 @@ describe('ProposedChangesReview', () => {
       { wrapper: createWrapper() },
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /accept changes/i }));
-
-    expect(mockApplyMutate).toHaveBeenCalledTimes(1);
-  });
-
-  // ── 7. Reject button calls rejectMutation.mutate ──────────────────────────────
-
-  it('calls rejectMutation.mutate when "Reject Changes" is clicked', () => {
-    render(
-      <ProposedChangesReview
-        {...defaultProps}
-        proposedContent="# Proposed"
-      />,
-      { wrapper: createWrapper() },
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: /reject changes/i }));
-
+    fireEvent.click(screen.getByRole('button', { name: /reject all/i }));
     expect(mockRejectMutate).toHaveBeenCalledTimes(1);
   });
 
-  // ── 8. Backlog comparison ─────────────────────────────────────────────────────
+  it('calls selective apply when wizard finishes', async () => {
+    render(
+      <ProposedChangesReview
+        {...defaultProps}
+        proposedContent={'line1\nold\nline3'}
+      />,
+      { wrapper: createWrapper() },
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /review section by section/i }));
+    fireEvent.click(screen.getByRole('button', { name: /finish wizard/i }));
+
+    await waitFor(() => {
+      expect(mockSelectiveMutateAsync).toHaveBeenCalled();
+    });
+  });
+
+  it('auto-opens the review modal in fix-baseline mode when there are changes', () => {
+    render(
+      <ProposedChangesReview
+        {...defaultProps}
+        reviewMode="fix-baseline"
+        currentContent={'line1\nold\nline3'}
+        proposedContent={'line1\nnew\nline3'}
+      />,
+      { wrapper: createWrapper() },
+    );
+
+    expect(screen.getByTestId('change-review-wizard')).toBeInTheDocument();
+    expect(screen.getByText(/apex has applied fixes/i)).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: /review apex fixes/i })).toBeInTheDocument();
+  });
+
+  it('minimizes the modal and allows continuing review', () => {
+    render(
+      <ProposedChangesReview
+        {...defaultProps}
+        reviewMode="fix-baseline"
+        currentContent={'line1\nold\nline3'}
+        proposedContent={'line1\nnew\nline3'}
+      />,
+      { wrapper: createWrapper() },
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /minimize review/i }));
+    expect(screen.getByRole('button', { name: /continue review/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /continue review/i }));
+    expect(screen.getByRole('dialog', { name: /review apex fixes/i })).toBeInTheDocument();
+  });
 
   it('renders backlog changes via BacklogChangesView when proposedBacklogJson is provided', () => {
     const proposedBacklogJson = {
@@ -200,47 +233,9 @@ describe('ProposedChangesReview', () => {
       { wrapper: createWrapper() },
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /review changes/i }));
-
-    // The component renders BacklogChangesView (inline, not DiffView) for backlog diffs.
-    // It computes the structural diff and renders added/modified/removed change cards.
+    fireEvent.click(screen.getByRole('button', { name: /preview changes/i }));
     expect(screen.getByText('Backlog Changes')).toBeInTheDocument();
     expect(screen.getByText('1 added')).toBeInTheDocument();
     expect(screen.getByText('Epic Beta')).toBeInTheDocument();
-  });
-
-  // ── 9. Loading state ──────────────────────────────────────────────────────────
-
-  it('disables Accept button while apply mutation is pending', () => {
-    jest.resetModules();
-    // Override the mock for pending state
-    const mockApplyPending = jest.fn();
-    jest.doMock('../../hooks/useInterviews', () => ({
-      useApplyProposedPrd: () => ({
-        mutate: mockApplyPending,
-        isPending: true,
-      }),
-      useRejectProposedPrd: () => ({
-        mutate: jest.fn(),
-        isPending: false,
-      }),
-    }));
-
-    // Re-import with new mock
-    const { ProposedChangesReview: PCR } = jest.requireActual('../ProposedChangesReview');
-    void PCR; // just ensuring the path exists; loading state is tested via disabled attribute
-
-    // Simple check: the component renders with Accept/Reject buttons
-    render(
-      <ProposedChangesReview
-        {...defaultProps}
-        proposedContent="# Proposed"
-      />,
-      { wrapper: createWrapper() },
-    );
-
-    const acceptBtn = screen.getByRole('button', { name: /accept changes/i });
-    // In non-pending state (default mock), button should not be disabled
-    expect(acceptBtn).not.toBeDisabled();
   });
 });

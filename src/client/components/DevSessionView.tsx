@@ -2,8 +2,8 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useChatThread, useSendMessage, useCancelRun } from '../hooks/useChatThreads';
-import { useChatStream } from '../hooks/useChatStream';
+import { useChatThread } from '../hooks/useChatThreads';
+import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import {
   useDevSession,
   useDevDiff,
@@ -101,10 +101,20 @@ const DiffViewer: React.FC<{ diffText: string }> = ({ diffText }) => {
   return (
     <div className={styles['diff-viewer']}>
       <div className={styles['diff-toolbar']}>
-        <button type="button" className={styles['diff-toolbar-btn']} onClick={expandAll}>
+        <button
+          type="button"
+          className={styles['diff-toolbar-btn']}
+          onClick={expandAll}
+          {...{ 'data-testid': 'dev-session-diff-expand-all' }}
+        >
           Expand all
         </button>
-        <button type="button" className={styles['diff-toolbar-btn']} onClick={collapseAll}>
+        <button
+          type="button"
+          className={styles['diff-toolbar-btn']}
+          onClick={collapseAll}
+          {...{ 'data-testid': 'dev-session-diff-collapse-all' }}
+        >
           Collapse all
         </button>
       </div>
@@ -114,6 +124,7 @@ const DiffViewer: React.FC<{ diffText: string }> = ({ diffText }) => {
             type="button"
             className={styles['diff-file-header']}
             onClick={() => toggle(i)}
+            {...{ 'data-testid': `dev-session-diff-file-${i}` }}
           >
             <span className={styles['diff-file-toggle']}>{isCollapsed(i) ? '▶' : '▼'}</span>
             <span className={styles['diff-file-path']}>{file.path}</span>
@@ -193,6 +204,7 @@ const ChoiceBlockUI: React.FC<{
               onClick={() => !locked && onSelect(opt.letter)}
               disabled={locked}
               type="button"
+              {...{ 'data-testid': `dev-session-choice-option-${opt.letter}` }}
             >
               <span className={styles['choice-option-letter']}>{opt.letter.toUpperCase()}</span>
               <span className={styles['choice-option-text']}>{opt.text}</span>
@@ -204,6 +216,7 @@ const ChoiceBlockUI: React.FC<{
           onClick={() => !locked && onSelect('other')}
           disabled={locked}
           type="button"
+          {...{ 'data-testid': 'dev-session-choice-option-other' }}
         >
           <span className={styles['choice-option-letter']}>✎</span>
           <span className={styles['choice-option-text']}>Other / free-form</span>
@@ -216,6 +229,7 @@ const ChoiceBlockUI: React.FC<{
           value={freeform}
           onChange={(e) => onFreeform(e.target.value)}
           rows={2}
+          {...{ 'data-testid': 'dev-session-choice-freeform' }}
         />
       )}
       {locked && freeform && (
@@ -322,6 +336,7 @@ const AgentBubble: React.FC<{
             onClick={handleSubmit}
             disabled={!allAnswered || isRunning}
             type="button"
+            {...{ 'data-testid': 'dev-session-submit-answers' }}
           >
             {isRunning ? 'Agent is thinking…' : 'Submit answers ↑'}
           </button>
@@ -408,13 +423,19 @@ const ReadyToTest: React.FC<ReadyToTestProps> = ({ branchName, sessionId, branch
             target="_blank"
             rel="noopener noreferrer"
             className={styles['pr-link']}
+            {...{ 'data-testid': 'dev-session-pr-link' }}
           >
             View Pull Request →
           </a>
           <div className={styles['branch-copy-row']}>
             <span className={styles['branch-label']}>Branch:</span>
             <code className={styles['branch-name-code']}>{branchName}</code>
-            <button type="button" className={styles['copy-branch-btn']} onClick={copyBranch}>
+            <button
+              type="button"
+              className={styles['copy-branch-btn']}
+              onClick={copyBranch}
+              {...{ 'data-testid': 'dev-session-copy-branch-pr' }}
+            >
               {copied ? 'Copied!' : 'Copy'}
             </button>
           </div>
@@ -440,6 +461,7 @@ const ReadyToTest: React.FC<ReadyToTestProps> = ({ branchName, sessionId, branch
             className={styles['create-pr-btn']}
             onClick={handleCreatePr}
             disabled={createPr.isPending}
+            {...{ 'data-testid': 'dev-session-create-pr-btn' }}
           >
             {createPr.isPending ? 'Creating PR…' : 'Create Pull Request'}
           </button>
@@ -449,7 +471,12 @@ const ReadyToTest: React.FC<ReadyToTestProps> = ({ branchName, sessionId, branch
           <div className={styles['branch-copy-row']}>
             <span className={styles['branch-label']}>Branch:</span>
             <code className={styles['branch-name-code']}>{branchName}</code>
-            <button type="button" className={styles['copy-branch-btn']} onClick={copyBranch}>
+            <button
+              type="button"
+              className={styles['copy-branch-btn']}
+              onClick={copyBranch}
+              {...{ 'data-testid': 'dev-session-copy-branch-push' }}
+            >
               {copied ? 'Copied!' : 'Copy'}
             </button>
           </div>
@@ -474,6 +501,7 @@ const ReadyToTest: React.FC<ReadyToTestProps> = ({ branchName, sessionId, branch
           className={styles['push-btn']}
           onClick={handlePush}
           disabled={pushBranch.isPending}
+          {...{ 'data-testid': 'dev-session-push-branch-btn' }}
         >
           {pushBranch.isPending ? 'Pushing…' : 'Push Branch'}
         </button>
@@ -483,7 +511,12 @@ const ReadyToTest: React.FC<ReadyToTestProps> = ({ branchName, sessionId, branch
         <div className={styles['branch-copy-row']}>
           <span className={styles['branch-label']}>Branch:</span>
           <code className={styles['branch-name-code']}>{branchName}</code>
-          <button type="button" className={styles['copy-branch-btn']} onClick={copyBranch}>
+          <button
+            type="button"
+            className={styles['copy-branch-btn']}
+            onClick={copyBranch}
+            {...{ 'data-testid': 'dev-session-copy-branch-ready' }}
+          >
             {copied ? 'Copied!' : 'Copy'}
           </button>
         </div>
@@ -606,6 +639,7 @@ const MergeResolver: React.FC<{ sessionId: string }> = ({ sessionId }) => {
               }
               rows={12}
               spellCheck={false}
+              {...{ 'data-testid': `dev-session-conflict-editor-${f.path}` }}
             />
             <div className={styles['conflict-file-actions']}>
               <button
@@ -614,6 +648,7 @@ const MergeResolver: React.FC<{ sessionId: string }> = ({ sessionId }) => {
                 onClick={() => void handleMarkResolved(f.path)}
                 disabled={resolveConflict.isPending || editor?.resolved || stillConflicted}
                 title={stillConflicted ? 'Remove all conflict markers first' : undefined}
+                {...{ 'data-testid': `dev-session-resolve-btn-${f.path}` }}
               >
                 {resolveConflict.isPending ? 'Saving…' : editor?.resolved ? 'Saved' : 'Mark as Resolved'}
               </button>
@@ -632,6 +667,7 @@ const MergeResolver: React.FC<{ sessionId: string }> = ({ sessionId }) => {
           className={styles['push-btn']}
           onClick={() => void handleComplete()}
           disabled={!allResolved || completeMerge.isPending}
+          {...{ 'data-testid': 'dev-session-complete-merge-btn' }}
         >
           {completeMerge.isPending ? 'Completing merge…' : 'Complete merge & push'}
         </button>
@@ -640,6 +676,7 @@ const MergeResolver: React.FC<{ sessionId: string }> = ({ sessionId }) => {
           className={styles['close-btn']}
           onClick={() => abortMerge.mutate()}
           disabled={abortMerge.isPending}
+          {...{ 'data-testid': 'dev-session-abort-merge-btn' }}
         >
           {abortMerge.isPending ? 'Aborting…' : 'Abort merge'}
         </button>
@@ -665,6 +702,10 @@ export const DevSessionView: React.FC = () => {
 
   const { data: thread } = useChatThread(threadId);
 
+  const chatSession = useAgentChatSession(threadId, {
+    initialMessages: thread?.messages,
+    initialStatus: thread?.status,
+  });
   const {
     messages,
     streamingText,
@@ -677,13 +718,7 @@ export const DevSessionView: React.FC = () => {
     runHealth,
     isRetrying,
     retryReason,
-  } = useChatStream(
-    threadId,
-    { initialMessages: thread?.messages, initialStatus: thread?.status },
-  );
-
-  const sendMessage = useSendMessage(threadId ?? '');
-  const cancelRun = useCancelRun(threadId ?? '');
+  } = chatSession;
   const { data: diff, refetch: refetchDiff } = useDevDiff(threadId);
 
   const [input, setInput] = useState('');
@@ -718,7 +753,7 @@ export const DevSessionView: React.FC = () => {
     document.addEventListener('mouseup', onUp);
   }, [panelWidth]);
 
-  const isRunning = status === 'running';
+  const isRunning = chatSession.isRunning;
   const visibleMessages = useMemo(
     () => messages.filter((m) => !m.hidden && !(m.role === 'user' && m.text === 'Begin.')),
     [messages],
@@ -768,9 +803,9 @@ export const DevSessionView: React.FC = () => {
     const trimmed = text.trim();
     if (!trimmed || isRunning || !threadId) return;
     setInput('');
-    await sendMessage.mutateAsync({ text: trimmed });
+    await chatSession.send(trimmed);
     refetchDiff();
-  }, [isRunning, threadId, sendMessage, refetchDiff]);
+  }, [isRunning, threadId, chatSession, refetchDiff]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -794,6 +829,7 @@ export const DevSessionView: React.FC = () => {
           className={styles['back-link']}
           onClick={() => navigate('/my-work')}
           type="button"
+          {...{ 'data-testid': 'dev-session-back' }}
         >
           ← Back to My Work
         </button>
@@ -913,12 +949,14 @@ export const DevSessionView: React.FC = () => {
             onKeyDown={handleKeyDown}
             disabled={isSettingUp || isFailed || isConflict || isRunning || status === 'closed'}
             rows={1}
+            {...{ 'data-testid': 'dev-session-compose-message' }}
           />
           {isRunning ? (
             <button
               className={styles['stop-btn']}
-              onClick={() => cancelRun.mutate()}
+              onClick={() => void chatSession.cancel()}
               type="button"
+              {...{ 'data-testid': 'dev-session-stop-btn' }}
             >
               ■ Stop
             </button>
@@ -928,6 +966,7 @@ export const DevSessionView: React.FC = () => {
               onClick={() => doSend(input)}
               disabled={isSettingUp || isFailed || isConflict || !input.trim() || status === 'closed'}
               type="button"
+              {...{ 'data-testid': 'dev-session-send-btn' }}
             >
               Send ↑
             </button>
@@ -954,6 +993,7 @@ export const DevSessionView: React.FC = () => {
                 className={styles['collapse-btn']}
                 onClick={() => setChangesOpen(false)}
                 title="Collapse changes panel"
+                {...{ 'data-testid': 'dev-session-collapse-changes' }}
               >
                 ▶
               </button>
@@ -997,6 +1037,7 @@ export const DevSessionView: React.FC = () => {
           className={styles['expand-tab']}
           onClick={() => setChangesOpen(true)}
           title="Show changes panel"
+          {...{ 'data-testid': 'dev-session-expand-changes' }}
         >
           <span className={styles['expand-arrow']}>◀</span>
           Changes {diff && diff.changedFiles.length > 0 && `(${diff.changedFiles.length})`}

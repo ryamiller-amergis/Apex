@@ -143,6 +143,199 @@ describe('useChatThreadList', () => {
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(result.current.error?.message).toBe('HTTP 503');
   });
+
+  // ── TBI-004 / search term (FEAT-002) ───────────────────────────────────────
+
+  describe('TBI-004 debounced search term', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('DoD-0 / VT-01: does not fire a search fetch before ~300ms debounce', async () => {
+      mockFetchOk([]);
+      const { wrapper } = createWrapper();
+
+      const { rerender } = renderHook(
+        ({ term }) => useChatThreadList(50, 'TestProject', { searchTerm: term }),
+        { wrapper, initialProps: { term: '' } },
+      );
+
+      await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+      const callsBefore = (global.fetch as jest.Mock).mock.calls.length;
+
+      rerender({ term: 'de' });
+      act(() => {
+        jest.advanceTimersByTime(299);
+      });
+
+      expect((global.fetch as jest.Mock).mock.calls.length).toBe(callsBefore);
+    });
+
+    it('DoD-0 / VT-02: after debounce sends q when term length >= 2', async () => {
+      mockFetchOk([
+        {
+          ...threadSummary,
+          match: {
+            messageId: 'msg-1',
+            role: 'user',
+            snippet: 'design system tokens',
+            matchedAt: '2026-01-02T00:00:00.000Z',
+          },
+          titleOnly: false,
+        },
+      ]);
+      const { wrapper } = createWrapper();
+
+      renderHook(
+        () => useChatThreadList(50, 'TestProject', { searchTerm: 'design' }),
+        { wrapper },
+      );
+
+      // Initial mount uses empty debounced term → non-search fetch
+      await act(async () => {
+        jest.advanceTimersByTime(300);
+      });
+
+      await waitFor(() => {
+        const urls = (global.fetch as jest.Mock).mock.calls.map((c) => String(c[0]));
+        expect(urls.some((u) => u.includes('q=design'))).toBe(true);
+      });
+    });
+
+    it('DoD-1 / VT-03: terms under 2 chars fall back to normal list without q', async () => {
+      mockFetchOk([threadSummary]);
+      const { wrapper } = createWrapper();
+
+      renderHook(
+        () => useChatThreadList(50, 'TestProject', { searchTerm: 'd' }),
+        { wrapper },
+      );
+
+      await act(async () => {
+        jest.advanceTimersByTime(300);
+      });
+
+      await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+      const urls = (global.fetch as jest.Mock).mock.calls.map((c) => String(c[0]));
+      expect(urls.every((u) => !u.includes('q='))).toBe(true);
+    });
+
+    it('DoD-2: returned search data carries match context for snippets', async () => {
+      const searchHit = {
+        ...threadSummary,
+        match: {
+          messageId: 'msg-1',
+          role: 'user' as const,
+          snippet: 'plain design excerpt around the hit',
+          matchedAt: '2026-01-02T00:00:00.000Z',
+        },
+        titleOnly: false,
+      };
+      mockFetchOk([searchHit]);
+      const { wrapper } = createWrapper();
+
+      const { result } = renderHook(
+        () => useChatThreadList(50, 'TestProject', { searchTerm: 'design' }),
+        { wrapper },
+      );
+
+      await act(async () => {
+        jest.advanceTimersByTime(300);
+      });
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+      const row = result.current.data![0] as typeof searchHit;
+      expect(row.match?.snippet).toBe('plain design excerpt around the hit');
+      expect(row.titleOnly).toBe(false);
+    });
+
+    it('VT-04 / AC-3: clearing the term collapses back to the non-search key (no q)', async () => {
+      mockFetchOk([threadSummary]);
+      const { wrapper } = createWrapper();
+
+      const { rerender } = renderHook(
+        ({ term }) => useChatThreadList(50, 'TestProject', { searchTerm: term }),
+        { wrapper, initialProps: { term: 'design' } },
+      );
+
+      await act(async () => {
+        jest.advanceTimersByTime(300);
+      });
+      await waitFor(() => {
+        const urls = (global.fetch as jest.Mock).mock.calls.map((c) => String(c[0]));
+        expect(urls.some((u) => u.includes('q=design'))).toBe(true);
+      });
+
+      rerender({ term: '' });
+      await act(async () => {
+        jest.advanceTimersByTime(300);
+      });
+
+      await waitFor(() => {
+        const calls = (global.fetch as jest.Mock).mock.calls;
+        const lastUrl = String(calls[calls.length - 1][0]);
+        expect(lastUrl).not.toContain('q=');
+        expect(lastUrl).toContain('project=TestProject');
+      });
+    });
+
+    it('BR-006: passes flaggedOnly when searching with the toggle active', async () => {
+      mockFetchOk([]);
+      const { wrapper } = createWrapper();
+
+      renderHook(
+        () =>
+          useChatThreadList(50, 'TestProject', {
+            searchTerm: 'notif',
+            flaggedOnly: true,
+          }),
+        { wrapper },
+      );
+
+      await act(async () => {
+        jest.advanceTimersByTime(300);
+      });
+
+      await waitFor(() => {
+        const urls = (global.fetch as jest.Mock).mock.calls.map((c) => String(c[0]));
+        expect(
+          urls.some((u) => u.includes('q=notif') && u.includes('flaggedOnly=true')),
+        ).toBe(true);
+      });
+    });
+
+    it('NFR: search and non-search share the chat-thread-list query-key family', async () => {
+      mockFetchOk([]);
+      const { queryClient, wrapper } = createWrapper();
+
+      const { rerender } = renderHook(
+        ({ term }) => useChatThreadList(50, 'TestProject', { searchTerm: term }),
+        { wrapper, initialProps: { term: '' } },
+      );
+
+      await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+
+      rerender({ term: 'design' });
+      await act(async () => {
+        jest.advanceTimersByTime(300);
+      });
+      await waitFor(() => {
+        const urls = (global.fetch as jest.Mock).mock.calls.map((c) => String(c[0]));
+        expect(urls.some((u) => u.includes('q=design'))).toBe(true);
+      });
+
+      const cacheKeys = queryClient
+        .getQueryCache()
+        .getAll()
+        .map((q) => q.queryKey);
+      expect(cacheKeys.every((k) => k[0] === 'chat-thread-list')).toBe(true);
+      expect(cacheKeys.length).toBeGreaterThanOrEqual(2);
+    });
+  });
 });
 
 // ── useChatThread ─────────────────────────────────────────────────────────────

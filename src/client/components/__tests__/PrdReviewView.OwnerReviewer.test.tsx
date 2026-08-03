@@ -8,7 +8,7 @@
  */
 
 import type { ReactNode } from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PrdReviewView } from '../PrdReviewView';
@@ -50,6 +50,8 @@ jest.mock('../../hooks/useInterviews', () => ({
   useReassignApprovers: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
   useFixPrdWithAi: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
   useFixPrdCommentWithAi: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useApplyProposedPrd: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
+  useRejectProposedPrd: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
   useCreatePrdValidationThread: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useCancelPrdValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useRefreshPrdValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
@@ -58,7 +60,14 @@ jest.mock('../../hooks/useInterviews', () => ({
     isPending: false,
   })),
   useAcceptFixPrdValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useFixPrdCoverage: jest.fn(() => ({
+    mutateAsync: jest.fn().mockResolvedValue({ threadId: 'coverage-thread-1' }),
+    isPending: false,
+  })),
+  useAcceptFixPrdCoverage: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useOverridePrdReadiness: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useRevertPrdSection: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useDismissPrdFixSession: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useScreenInventoryRoutes: jest.fn(() => ({ data: [] })),
   usePrdValidationReport: jest.fn(() => ({ data: null })),
   useDocumentAssignments: (...args: unknown[]) => mockUseDocumentAssignments(...args),
@@ -109,6 +118,24 @@ jest.mock('../ReviewerApprovalChecklist', () => ({
         </div>
       ))}
     </div>
+  ),
+}));
+jest.mock('../RunGroundingStatus', () => ({
+  RunGroundingStatus: ({
+    surface,
+    domainRunId,
+    project,
+  }: {
+    surface: string;
+    domainRunId: string;
+    project: string;
+  }) => (
+    <div
+      data-testid="prd-grounding-embed"
+      data-surface={surface}
+      data-domain-run-id={domainRunId}
+      data-project={project}
+    />
   ),
 }));
 
@@ -163,6 +190,27 @@ beforeEach(() => {
     isAdmin: false,
   });
   mockSubmitPrdMutateAsync.mockResolvedValue(undefined);
+});
+
+describe('PBI-004 PRD grounding status embed', () => {
+  it('AC-2 / VT-03 Given an existing PRD, When its run view renders, Then reusable grounding status receives the PRD scope', () => {
+    // Arrange / Act
+    renderView();
+
+    // Assert
+    expect(screen.getByTestId('prd-grounding-embed')).toHaveAttribute(
+      'data-surface',
+      'prd'
+    );
+    expect(screen.getByTestId('prd-grounding-embed')).toHaveAttribute(
+      'data-domain-run-id',
+      'prd-1'
+    );
+    expect(screen.getByTestId('prd-grounding-embed')).toHaveAttribute(
+      'data-project',
+      'proj-alpha'
+    );
+  });
 });
 
 // ── 1. Owner display ──────────────────────────────────────────────────────────
@@ -225,8 +273,56 @@ describe('Owner display in header', () => {
   });
 });
 
+describe('PRD workflow summary', () => {
+  it('shows the compact workflow and explains included QA and prototype stages', () => {
+    mockUsePrd.mockReturnValue({
+      data: {
+        ...basePrd,
+        testCasesRequired: true,
+        prototypeStageEnabled: true,
+      },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderView();
+
+    const workflowButton = screen.getByRole('button', { name: 'Workflow: QA + Prototype' });
+    expect(workflowButton).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(workflowButton);
+
+    expect(workflowButton).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('region', { name: 'PRD workflow details' })).toBeInTheDocument();
+    expect(screen.getByText('Selected at interview kickoff')).toBeInTheDocument();
+    expect(screen.getByText('Validates acceptance criteria and coverage before approval.')).toBeInTheDocument();
+    expect(screen.getByText('Validates UX and user flows before design docs.')).toBeInTheDocument();
+    expect(screen.getAllByText('Included')).toHaveLength(2);
+  });
+
+  it('labels a workflow with both optional stages disabled as direct design docs', () => {
+    mockUsePrd.mockReturnValue({
+      data: {
+        ...basePrd,
+        testCasesRequired: false,
+        prototypeStageEnabled: false,
+      },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderView();
+
+    const workflowButton = screen.getByRole('button', { name: 'Workflow: Direct design docs' });
+    fireEvent.click(workflowButton);
+
+    expect(screen.getByText('Design docs are generated directly after PRD approval.')).toBeInTheDocument();
+    expect(screen.getAllByText('Skipped')).toHaveLength(2);
+  });
+});
+
 describe('Submit for review', () => {
-  it('uses the reviewer selections already captured on the source interview', () => {
+  it('auto-submits with kickoff reviewers when readiness is complete — no Submit button', async () => {
     mockUseAppShell.mockReturnValue({
       can: (key: string) => key === 'interviews:manage',
       userId: 'user-author',
@@ -241,6 +337,13 @@ describe('Submit for review', () => {
           prdId: 'prd-1',
           chatThreadId: null,
           status: 'ready',
+          coverageSummary: {
+            totalCases: 10,
+            pbisCovered: 1,
+            acCovered: '4/4',
+            brCovered: '4/4',
+            gaps: 0,
+          },
           validationStatus: 'not_available',
           createdAt: '2026-01-01T00:00:00Z',
           updatedAt: '2026-01-01T00:00:00Z',
@@ -261,15 +364,56 @@ describe('Submit for review', () => {
     });
 
     renderView();
-    fireEvent.click(screen.getByRole('button', { name: /Submit for Review/i }));
 
-    expect(mockSubmitPrdMutateAsync).toHaveBeenCalledWith({
-      prdId: 'prd-1',
-      prdApproverIds: ['prd-reviewer'],
-      designDocApproverIds: ['design-doc-reviewer'],
-      designPrototypeApproverIds: ['prototype-reviewer'],
-      qaApproverIds: ['qa-reviewer'],
+    expect(screen.queryByRole('button', { name: /Submit for Review/i })).not.toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(mockSubmitPrdMutateAsync).toHaveBeenCalledWith({
+        prdId: 'prd-1',
+        prdApproverIds: ['prd-reviewer'],
+        designDocApproverIds: ['design-doc-reviewer'],
+        designPrototypeApproverIds: ['prototype-reviewer'],
+        qaApproverIds: ['qa-reviewer'],
+      });
     });
+  });
+
+  it('does not show Submit for Review while validation is still pending', () => {
+    mockUseAppShell.mockReturnValue({
+      can: (key: string) => key === 'interviews:manage',
+      userId: 'user-author',
+      isAdmin: false,
+    });
+    mockUsePrd.mockReturnValue({
+      data: {
+        ...basePrd,
+        prdValidationEnabled: true,
+        backlogJson: { epics: [] },
+        latestTestCase: {
+          id: 'test-case-1',
+          prdId: 'prd-1',
+          chatThreadId: null,
+          status: 'ready',
+          coverageSummary: {
+            totalCases: 10,
+            pbisCovered: 1,
+            acCovered: '4/4',
+            brCovered: '4/4',
+            gaps: 0,
+          },
+          validationStatus: 'not_available',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        },
+      },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderView();
+
+    expect(screen.queryByRole('button', { name: /Submit for Review/i })).not.toBeInTheDocument();
+    expect(mockSubmitPrdMutateAsync).not.toHaveBeenCalled();
   });
 });
 

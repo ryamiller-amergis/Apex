@@ -19,7 +19,7 @@ interface NavItem {
 }
 
 interface AppHeaderProps {
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -34,6 +34,7 @@ interface AppHeaderProps {
   repoConfigs?: ProjectRepoConfigSummary[];
   selectedSkillSettingsId?: string | null;
   onChangeSkillSettings?: (id: string) => void;
+  canAccessHome?: boolean;
   onNavigateHome: () => void;
   onNavigateProjects?: () => void;
   onNavigateCalendar: () => void;
@@ -47,6 +48,7 @@ interface AppHeaderProps {
   onNavigateFeatureRequests?: () => void;
   onNavigateAiCost?: () => void;
   onNavigateDesignModule?: () => void;
+  onNavigateLoadTests?: () => void;
   onNavigateAdmin: () => void;
   onOpenChangelog: () => void;
   onThemeChange: (theme: ThemeMode) => void;
@@ -67,6 +69,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   repoConfigs = [],
   selectedSkillSettingsId,
   onChangeSkillSettings,
+  canAccessHome = true,
   onNavigateHome,
   onNavigateProjects,
   onNavigateCalendar,
@@ -80,6 +83,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigateFeatureRequests,
   onNavigateAiCost,
   onNavigateDesignModule,
+  onNavigateLoadTests,
   onNavigateAdmin,
   onOpenChangelog,
   onThemeChange,
@@ -102,9 +106,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [menuOpen, closeMenu]);
 
-  useEffect(() => {
-    if (!isMobile && menuOpen) closeMenu();
-  }, [isMobile, menuOpen, closeMenu]);
+  // Close the mobile drawer when the viewport leaves mobile — adjust during render
+  // to avoid a cascading setState-in-effect when the breakpoint flips.
+  if (!isMobile && menuOpen) {
+    setMenuOpen(false);
+  }
 
   const navItems: NavItem[] = [
     { label: 'Home', view: 'home', permission: null, onNavigate: onNavigateHome },
@@ -119,11 +125,12 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'UI Lab', view: 'ui-lab', permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
     { label: 'Apex Backlog', view: 'feature-requests', permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
     { label: 'Design Module', view: 'design-module', permission: 'design-module:view', onNavigate: onNavigateDesignModule ?? (() => {}) },
+    { label: 'Load Tests', view: 'load-tests', permission: 'load-test:view', onNavigate: onNavigateLoadTests ?? (() => {}) },
     { label: 'Admin', view: 'admin', permission: 'admin:roles', onNavigate: onNavigateAdmin },
   ];
 
   const visibleNavItems = navItems.filter((item) => {
-    if (item.view === 'home') return true;
+    if (item.view === 'home') return canAccessHome;
     if (item.view === 'admin') return can('admin:roles');
     if (item.view === 'my-work') {
       if (!isSuperAdmin && !menuEnabledViews.includes('my-work')) return false;
@@ -162,12 +169,25 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           className="app-brand"
           onClick={onNavigateProjects ?? onNavigateHome}
           type="button"
-          aria-label="Select an Apex project"
+          aria-label={
+            selectedProject
+              ? `Select an Apex project (current: ${selectedProject})`
+              : 'Select an Apex project'
+          }
           title="Select project"
+          {...{ 'data-testid': 'app-header-brand' }}
         >
           <BrandLogo variant="mark" className="app-brand-mark" beta={IS_BETA_RELEASE} />
           <span className="app-brand-text">
-            Apex
+            <span>Apex</span>
+            {selectedProject && (
+              <>
+                <span className="app-brand-separator" aria-hidden="true">
+                  ·
+                </span>
+                <span className="app-brand-project">{selectedProject}</span>
+              </>
+            )}
             {IS_BETA_RELEASE && <span className="app-brand-beta">BETA</span>}
           </span>
         </button>
@@ -179,6 +199,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             type="button"
             aria-label="Open navigation menu"
             aria-expanded={menuOpen}
+            {...{ 'data-testid': 'app-header-hamburger' }}
           >
             <span className={styles['hamburger-icon']} aria-hidden="true">
               <span />
@@ -197,6 +218,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               className={styles['repo-switcher']}
               value={selectedSkillSettingsId ?? ''}
               onChange={(e) => onChangeSkillSettings(e.target.value)}
+              {...{ 'data-testid': 'app-header-repo-switcher' }}
             >
               {repoConfigs.map((cfg) => (
                 <option key={cfg.id} value={cfg.id}>
@@ -207,6 +229,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           </div>
         )}
         {can('notifications:view') && <NotificationBell />}
+        {/* data-testid-exempt — pre-existing UserMenu; FEAT-006 Help lives on Apex Fab */}
         <UserMenu
           onOpenChangelog={onOpenChangelog}
           onThemeChange={onThemeChange}
@@ -223,6 +246,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             className={`${styles['mobile-nav-overlay']} ${menuOpen ? styles['open'] : ''}`}
             onClick={closeMenu}
             aria-hidden="true"
+            // data-testid-exempt — decorative dismiss overlay; close control is the explicit button
           />
           <nav
             className={`${styles['mobile-nav']} ${menuOpen ? styles['open'] : ''}`}
@@ -235,6 +259,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
                 onClick={closeMenu}
                 type="button"
                 aria-label="Close navigation menu"
+                {...{ 'data-testid': 'app-header-mobile-nav-close' }}
               >
                 &#x2715;
               </button>
@@ -246,6 +271,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
                   className={`${styles['mobile-nav-item']} ${currentView === item.view ? styles['active'] : ''}`}
                   onClick={() => handleMobileNavClick(item.onNavigate)}
                   type="button"
+                  {...{ 'data-testid': `app-header-mobile-nav-${item.view}` }}
                 >
                   {item.label}
                 </button>
@@ -255,11 +281,17 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         </>
       )}
 
-      {can('feature-requests:submit') && selectedProject && (
-        <FeatureRequestFab onSubmit={setWorkItemType} />
+      {selectedProject && (
+        <FeatureRequestFab
+          onSubmit={setWorkItemType}
+          projectId={selectedProject}
+          canSubmitWorkItems={can('feature-requests:submit')}
+          {...{ 'data-testid': 'apex-feature-request-fab' }}
+        />
       )}
 
       {workItemType && selectedProject && (
+        // data-testid-exempt — pre-existing modal mount; FEAT-006 only extends Fab Help seam
         <FeatureRequestModal
           selectedProject={selectedProject}
           type={workItemType}

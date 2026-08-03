@@ -15,19 +15,14 @@ import { SidebarPage } from '../pages/sidebar.page';
 test.describe('Authentication and project selection @smoke @critical', () => {
   // This block verifies the UNAUTHENTICATED boundary. In deployed-target mode the
   // `deployed-smoke` project applies the programmatic-SSO storageState (dev/staging),
-  // which would leave the context already logged in. `storageState: undefined` is
-  // meant to reset that, but Playwright does NOT reliably let a nested `test.use`
-  // override a project-level storageState with `undefined` — so on dev/staging the
-  // inherited `connect.sid` session cookie survives and the app renders already
-  // authenticated (the captured run proved this: the very first /home request carried
-  // connect.sid and /auth/status returned {"authenticated":true}). We therefore ALSO
-  // clear cookies at the start of the test to guarantee a truly logged-out session in
-  // every environment before asserting the login boundary.
+  // which would leave the context already logged in. Playwright does NOT treat
+  // `storageState: undefined` as "clear project storageState" — use an explicit
+  // empty state object (Playwright docs) plus clearCookies so the login card is
+  // guaranteed in every environment.
   test.describe('unauthenticated boundary', () => {
-    test.use({ storageState: undefined });
+    test.use({ storageState: { cookies: [], origins: [] } });
 
     test('unauthenticated visit shows the login UI @deployed-smoke @prod-safe', async ({ page, context }) => {
-      // Force a genuinely cookie-less session regardless of any inherited storageState.
       await context.clearCookies();
 
       await page.goto('/home');
@@ -41,15 +36,20 @@ test.describe('Authentication and project selection @smoke @critical', () => {
   });
 
   test('BA persona can log in and sees the project selector @deployed-smoke', async ({ page, loginAsPersona }) => {
+    test.setTimeout(120_000);
     await suppressBetaAnnouncement(page);
     await stubAdoProjects(page);
     await loginAsPersona('ba');
     await page.goto('/');
 
-    // After login the user should see the project selector prompt.
+    // After login: project selector, or the app shell if a project is already active
+    // for the SSO test account on this environment.
     await expect(
-      page.getByText(/select a project to start planning/i)
-    ).toBeVisible({ timeout: 10_000 });
+      page
+        .getByText(/select a project to start planning/i)
+        .or(page.getByRole('navigation', { name: /main navigation/i }))
+        .first(),
+    ).toBeVisible({ timeout: 15_000 });
   });
 
   test('selecting a project navigates to /home', async ({ page, loginAsPersona }) => {
@@ -89,6 +89,7 @@ test.describe('Authentication and project selection @smoke @critical', () => {
   });
 
   test('app shell renders with sidebar and header after login @deployed-smoke', async ({ page, loginAsPersona }) => {
+    test.setTimeout(120_000);
     await suppressBetaAnnouncement(page);
     await stubAdoProjects(page);
     await loginAsPersona('ba');

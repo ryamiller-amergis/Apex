@@ -1,0 +1,30 @@
+# Keep docker build context small for runners/load-test-k6 (repo-root context).
+# Required for the image: package.json, package-lock.json, dist/server, dist/shared.
+
+**/.git
+**/.github
+**/node_modules
+**/coverage
+**/playwright-report
+**/test-results
+**/.turbo
+**/.vite
+**/deploy
+**/deploy.zip
+
+# Client build is not needed in the k6 runner image
+dist/client
+
+# Local / infra noise
+infra/.terraform
+infra/*.tfstate*
+infra/tfplan*
+**/*.md
+
+# Tests and local env
+**/__tests__
+**/*.test.ts
+**/*.test.tsx
+.env
+.env.*
+!.env.example
