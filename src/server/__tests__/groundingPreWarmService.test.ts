@@ -1,7 +1,10 @@
 jest.mock('../db/drizzle', () => ({ db: {} }));
 
 import type { PreWarmTarget } from '../../shared/types/runGrounding';
-import { createGroundingPreWarmService } from '../services/groundingPreWarmService';
+import {
+  configuredPreWarmTargets,
+  createGroundingPreWarmService,
+} from '../services/groundingPreWarmService';
 
 const target: PreWarmTarget = {
   provider: 'github',
@@ -14,6 +17,51 @@ const flushAsyncWork = () =>
   new Promise<void>((resolve) => setImmediate(resolve));
 
 describe('TBI-007 groundingPreWarmService', () => {
+  it('prepares configured project repositories before their first active run', () => {
+    expect(configuredPreWarmTargets([
+      {
+        id: 'github-default',
+        project: 'Apex',
+        friendlyName: 'Apex',
+        isDefault: true,
+        skillProvider: 'github',
+        skillRepo: 'amergis/AI-Pilot',
+        skillBranch: 'main',
+      },
+      {
+        id: 'github-duplicate',
+        project: 'Apex',
+        friendlyName: 'Apex duplicate',
+        isDefault: false,
+        skillProvider: 'github',
+        skillRepo: 'AI-Pilot',
+        skillBranch: 'main',
+      },
+      {
+        id: 'ado-default',
+        project: 'MaxView',
+        friendlyName: 'MaxView',
+        isDefault: true,
+        skillProvider: 'ado',
+        skillRepo: 'Platform/MaxView',
+        skillBranch: 'develop',
+      },
+    ])).toEqual([
+      {
+        provider: 'github',
+        project: 'Apex',
+        repository: 'AI-Pilot',
+        branch: 'main',
+      },
+      {
+        provider: 'azure_devops',
+        project: 'MaxView',
+        repository: 'Platform/MaxView',
+        branch: 'develop',
+      },
+    ]);
+  });
+
   it('publishes the refreshed branch tip for fast bundle rehydration', async () => {
     // Arrange
     const sha = 'b'.repeat(40);

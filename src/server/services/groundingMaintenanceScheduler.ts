@@ -64,7 +64,7 @@ export class GroundingMaintenanceScheduler {
     this.subscribe =
       dependencies.subscribe ?? onGroundingActiveSetChanged;
     this.startupDelayMs =
-      dependencies.startupDelayMs ?? 30_000 + Math.floor(Math.random() * 60_000);
+      dependencies.startupDelayMs ?? 5_000 + Math.floor(Math.random() * 10_000);
     this.intervalMs =
       dependencies.intervalMs ?? GROUNDING_MAINTENANCE_INTERVAL_MS;
   }

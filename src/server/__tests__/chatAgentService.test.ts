@@ -38,6 +38,16 @@ jest.mock('../db/drizzle', () => ({
       prds: { findFirst: jest.fn().mockResolvedValue(null) },
       designDocs: { findFirst: jest.fn().mockResolvedValue(null) },
     },
+    insert: jest.fn(() => ({
+      values: jest.fn(() =>
+        Object.assign(Promise.resolve(), {
+          onConflictDoNothing: jest.fn(() => Promise.resolve()),
+        })
+      ),
+    })),
+    delete: jest.fn(() => ({
+      where: jest.fn(() => Promise.resolve()),
+    })),
   },
 }));
 
@@ -53,6 +63,7 @@ jest.mock('../db/schema', () => ({
   prds: {},
   designDocs: {},
   chatThreads: {},
+  agentRuns: { id: 'id' },
 }));
 
 jest.mock('../services/chatThreadRepository', () => ({
@@ -136,6 +147,7 @@ const { db: mockDb } = jest.requireMock('../db/drizzle') as {
       prds: { findFirst: jest.Mock };
       designDocs: { findFirst: jest.Mock };
     };
+    insert: jest.Mock;
   };
 };
 
@@ -492,6 +504,15 @@ describe('document assistant MCP wiring', () => {
             repo: 'org/AI-Pilot',
             branch: 'skills-snapshot',
           },
+        }),
+      );
+      const provisionalInsert = mockDb.insert.mock.results[0].value as {
+        values: jest.Mock;
+      };
+      expect(provisionalInsert.values).toHaveBeenCalledWith(
+        expect.objectContaining({
+          progressLabel: 'Preparing the latest repository requirements…',
+          status: 'queued',
         }),
       );
     } finally {

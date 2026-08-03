@@ -790,19 +790,37 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
   const speech = useSpeechInput(useCallback((text: string) => setInput(text), []));
 
-  const { data: chatThread } = useChatThread(interview?.chatThreadId ?? null);
+  const {
+    data: chatThread,
+    isLoading: isChatThreadLoading,
+    isError: isChatThreadError,
+  } = useChatThread(interview?.chatThreadId ?? null);
 
-  const { messages, streamingText, status: threadStatus, isRetrying, retryReason } = useChatStream(
-    interview?.chatThreadId ?? null,
-    {
-      initialMessages: chatThread?.messages,
-      initialStatus: chatThread?.status,
-    },
-  );
+  const {
+    messages,
+    streamingText,
+    status: threadStatus,
+    isRetrying,
+    retryReason,
+    progressLabel,
+  } = useChatStream(interview?.chatThreadId ?? null, {
+    initialMessages: chatThread?.messages,
+    initialStatus: chatThread?.status,
+  });
 
   const isRunning = threadStatus === 'running';
 
   const visibleMessagesForContext = messages.filter((m) => !(m.role === 'user' && m.text === 'Begin.'));
+  const isEmptyInProgressInterview = Boolean(
+    interview?.status === 'in_progress'
+      && visibleMessagesForContext.length === 0
+      && !streamingText,
+  );
+  const isPreparingInterview = Boolean(
+    isEmptyInProgressInterview && threadStatus !== 'error',
+  );
+  const hasPreparationError = isEmptyInProgressInterview && threadStatus === 'error';
+  const isInteractionBusy = isRunning || isPreparingInterview;
   const draftAttachmentChars = attachments.reduce((sum, a) => sum + a.content.length, 0);
   const contextEstimate = useContextEstimate(
     visibleMessagesForContext, input, streamingText, model, draftAttachmentChars,
@@ -1226,6 +1244,36 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
       <div className={styles.messages}>
         <div className={styles.messageList}>
+          {hasPreparationError && (
+            <div className={styles.preparationState} role="alert">
+              <div className={styles.preparationErrorIcon}>!</div>
+              <h2 className={styles.preparationTitle}>Unable to prepare this interview</h2>
+              <p className={styles.preparationDetail}>
+                {chatThread?.lastError ?? 'Repository preparation was interrupted. Try sending your message again.'}
+              </p>
+            </div>
+          )}
+
+          {isPreparingInterview && (
+            <div
+              className={styles.preparationState}
+              role="status"
+              aria-live="polite"
+              {...{ 'data-testid': 'interview-preparation-state' }}
+            >
+              <div className={styles.preparationSpinner} />
+              <h2 className={styles.preparationTitle}>Preparing your interview</h2>
+              <p className={styles.preparationDetail}>
+                {progressLabel
+                  ?? (isChatThreadError
+                    ? 'The interview service is reconnecting after a temporary interruption…'
+                    : isChatThreadLoading
+                      ? 'Connecting to the interview service…'
+                      : 'Getting the latest repository requirements so your interview starts with current context…')}
+              </p>
+            </div>
+          )}
+
           {visibleMessages.map((msg, msgIndex) => {
             if (msg.role === 'tool') {
               return (
@@ -1413,7 +1461,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             accept=".txt,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*"
             className={styles.fileInput}
             onChange={handleAttachmentChange}
-            disabled={isRunning || isSending}
+            disabled={isInteractionBusy || isSending}
           />
           <div className={styles.inputBox}>
             <textarea
@@ -1422,9 +1470,13 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={isRunning ? 'Agent is thinking…' : 'Continue the interview… (Enter to send)'}
+              placeholder={isPreparingInterview
+                ? 'Preparing the latest requirements…'
+                : isRunning
+                  ? 'Agent is thinking…'
+                  : 'Continue the interview… (Enter to send)'}
               rows={1}
-              disabled={isRunning || isSending}
+              disabled={isInteractionBusy || isSending}
             />
             {attachments.length > 0 && (
               <div className={styles.attachmentList}>
@@ -1436,7 +1488,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                       type="button"
                       className={styles.attachmentRemove}
                       onClick={() => removeAttachment(a.id)}
-                      disabled={isRunning || isSending}
+                      disabled={isInteractionBusy || isSending}
                       aria-label={`Remove ${a.name}`}
                     >×</button>
                   </span>
@@ -1452,7 +1504,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 type="button"
                 aria-label="Attach files"
                 title="Attach files for context"
-                disabled={isRunning || isSending}
+                disabled={isInteractionBusy || isSending}
               >
                 <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M7 10.5l5.2-5.2a3 3 0 114.2 4.2l-6.7 6.7a5 5 0 01-7.1-7.1l6.4-6.4" />
@@ -1466,7 +1518,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 title={speech.isSpeechSupported
                   ? (speech.isListening ? 'Stop listening' : 'Talk to transcribe into chat')
                   : 'Speech recognition not supported in this browser'}
-                disabled={!speech.isSpeechSupported || isRunning || isSending}
+                disabled={!speech.isSpeechSupported || isInteractionBusy || isSending}
               >
                 <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
                   <rect x="7" y="2.5" width="6" height="10" rx="3" />
@@ -1479,7 +1531,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 className={styles.modelSelect}
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
-                disabled={isRunning}
+                disabled={isInteractionBusy}
                 aria-label="Model"
               >
                 {modelsLoading || !availableModels?.length ? (

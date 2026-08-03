@@ -2839,8 +2839,48 @@ export async function sendMessage(
     }
   }
 
+  const provisionalRunId = `${threadId}:provisional`;
+
+  // Grounding may need a cold mirror refresh. Expose that work immediately so
+  // a newly created interview does not look idle while its repository is being
+  // prepared.
+  state.thread.status = 'running';
+  broadcast(state, { type: 'status', status: 'running' });
+  persistThread(state.thread);
+  resetIdleTimer(state);
+
+  // Register durable liveness before grounding begins. The row is replaced by
+  // the real SDK run once agent.send() returns a definitive run ID.
+  const provisionalRunTimeoutMs = state.isDevSession ? INTERVIEW_IDLE_TIMEOUT_MS : IDLE_TIMEOUT_MS;
+  const preparationStartedAt = new Date().toISOString();
+  await db.insert(agentRuns).values({
+    id: provisionalRunId,
+    threadId,
+    status: 'queued',
+    timeoutAt: new Date(Date.now() + provisionalRunTimeoutMs).toISOString(),
+    progressAt: preparationStartedAt,
+    progressLabel: 'Preparing the latest repository requirements…',
+    progressPhase: 'analysis',
+  }).onConflictDoNothing().catch((e) =>
+    console.warn('[chat] Failed to insert provisional agent_runs row:', e),
+  );
+
   const mcpServerUrl = `http://localhost:${process.env.PORT ?? 3001}/mcp/ado-skills`;
-  const grounding = await ensureThreadGrounding(state);
+  let grounding: CallerGroundingSelection;
+  try {
+    grounding = await ensureThreadGrounding(state);
+  } catch (error) {
+    state.thread.status = 'error';
+    state.thread.lastError = 'Unable to prepare the repository for this interview.';
+    broadcast(state, {
+      type: 'error',
+      error: state.thread.lastError,
+    });
+    broadcast(state, { type: 'done' });
+    persistThread(state.thread);
+    await db.delete(agentRuns).where(eq(agentRuns.id, provisionalRunId)).catch(() => {});
+    throw error;
+  }
   const agentWorkspaceDir = runtimeWorkspaceDir(state);
   const maxviewEnabled = await isMaxviewMcpEnabled(state.thread.userId, state.thread.kickoff.project);
   const calendarSessionId = state.thread.kickoff.assistantType === 'calendar-work-item'
@@ -2884,28 +2924,6 @@ export async function sendMessage(
     messageLength: userMsg.text.length,
     attachmentCount: attachmentMeta.length,
   });
-
-  // Update status
-  state.thread.status = 'running';
-  broadcast(state, { type: 'status', status: 'running' });
-  persistThread(state.thread);
-  resetIdleTimer(state);
-
-  // Insert a provisional agent_runs row so cross-instance liveness checks
-  // (isThreadRunAlive) see a live run during the slow Agent.create / agent.send
-  // window. The real run ID is unknown until after agent.send, so use a
-  // thread-scoped provisional ID; the definitive insert at ~2222 will either
-  // reuse this row (onConflictDoNothing) or create the real one alongside it.
-  const provisionalRunId = `${threadId}:provisional`;
-  const provisionalRunTimeoutMs = state.isDevSession ? INTERVIEW_IDLE_TIMEOUT_MS : IDLE_TIMEOUT_MS;
-  await db.insert(agentRuns).values({
-    id: provisionalRunId,
-    threadId,
-    status: 'queued',
-    timeoutAt: new Date(Date.now() + provisionalRunTimeoutMs).toISOString(),
-  }).onConflictDoNothing().catch((e) =>
-    console.warn('[chat] Failed to insert provisional agent_runs row:', e),
-  );
 
   // A missing cursorAgentId can mean either a brand-new conversation or a
   // force-disposed interview agent. In the latter case, include the visible

@@ -1,4 +1,5 @@
 import type { PreWarmTarget } from '../../shared/types/runGrounding';
+import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import {
   getRepoCacheDir,
   getRepoCacheLeaseKey,
@@ -12,6 +13,7 @@ import {
   type RepoCacheLeaseContext,
 } from './repoCacheLeaseService';
 import { runGroundingRepository } from './runGroundingRepository';
+import { listSkillConfigs } from './projectSettingsService';
 import { groundingImpactEvaluatorService } from './groundingImpactEvaluatorService';
 import { trackEvent } from './telemetry';
 import { git, safeArgs } from '../utils/asyncGit';
@@ -21,6 +23,7 @@ import {
 } from './grounding/groundingBundlePublisherService';
 
 const MAX_CHANGED_PATHS = 200;
+const PRE_WARM_CONCURRENCY = 2;
 
 export interface GroundingPreWarmService {
   preWarm(target: PreWarmTarget): Promise<void>;
@@ -66,6 +69,59 @@ function targetIdentity(target: PreWarmTarget): string {
     target.repository,
     target.branch,
   ].join('\0');
+}
+
+function uniqueTargets(targets: PreWarmTarget[]): PreWarmTarget[] {
+  return [
+    ...new Map(
+      targets.map((target) => [targetIdentity(target), target])
+    ).values(),
+  ];
+}
+
+export function configuredPreWarmTargets(
+  configs: ProjectSkillConfig[]
+): PreWarmTarget[] {
+  return uniqueTargets(
+    configs.flatMap((config) => {
+      const repository = config.skillRepo.trim();
+      const branch = config.skillBranch.trim();
+      if (!config.project.trim() || !repository || !branch) return [];
+
+      const provider =
+        config.skillProvider === 'github' ? 'github' : 'azure_devops';
+      const normalizedRepository =
+        provider === 'github'
+          ? repository.split('/').pop() || repository
+          : repository;
+      return [{
+        provider,
+        project: config.project,
+        repository: normalizedRepository,
+        branch,
+      }];
+    })
+  );
+}
+
+async function listDefaultPreWarmTargets(): Promise<PreWarmTarget[]> {
+  const [activeResult, configuredResult] = await Promise.allSettled([
+    runGroundingRepository.listActiveTargets(),
+    listSkillConfigs(),
+  ]);
+  if (
+    activeResult.status === 'rejected'
+    && configuredResult.status === 'rejected'
+  ) {
+    throw activeResult.reason;
+  }
+
+  return uniqueTargets([
+    ...(activeResult.status === 'fulfilled' ? activeResult.value : []),
+    ...(configuredResult.status === 'fulfilled'
+      ? configuredPreWarmTargets(configuredResult.value)
+      : []),
+  ]);
 }
 
 function safeChangedPaths(paths: string[]): string[] {
@@ -117,7 +173,7 @@ export function createGroundingPreWarmService(
 ): GroundingPreWarmService {
   const listActiveTargets =
     dependencies.listActiveTargets ??
-    (() => runGroundingRepository.listActiveTargets());
+    listDefaultPreWarmTargets;
   const withLease = dependencies.withLease ?? withRepoCacheLease;
   const refreshUnderLease =
     dependencies.refreshUnderLease ?? refreshRepoCacheUnderLease;
@@ -232,7 +288,19 @@ export function createGroundingPreWarmService(
     preWarm,
     async sweep() {
       const targets = await listActiveTargets();
-      await Promise.all(targets.map((target) => preWarm(target)));
+      let firstError: unknown;
+      for (let index = 0; index < targets.length; index += PRE_WARM_CONCURRENCY) {
+        const results = await Promise.allSettled(
+          targets
+            .slice(index, index + PRE_WARM_CONCURRENCY)
+            .map((target) => preWarm(target))
+        );
+        firstError ??= results.find(
+          (result): result is PromiseRejectedResult =>
+            result.status === 'rejected'
+        )?.reason;
+      }
+      if (firstError) throw firstError;
     },
   };
 }

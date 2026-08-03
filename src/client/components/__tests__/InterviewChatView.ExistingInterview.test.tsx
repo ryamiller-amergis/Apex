@@ -291,15 +291,44 @@ describe('ExistingInterviewView — PRD link chips', () => {
 // ── Chat input locked (complete / archived) ────────────────────────────────────
 
 describe('ExistingInterviewView — input locked when not in_progress', () => {
-  it('shows the chat input area when the interview is in_progress', () => {
+  it('shows repository preparation instead of a blank in-progress interview', () => {
     (useInterview as jest.Mock).mockReturnValue({
       data: makeInterview({ status: 'in_progress' }),
       isLoading: false,
       isError: false,
     });
+    mockUseChatStream.mockReturnValue({
+      ...idleStream,
+      status: 'running',
+      progressLabel: 'Refreshing the repository mirror…',
+    });
     renderExistingInterview();
-    expect(screen.getByPlaceholderText(/Continue the interview/i)).toBeInTheDocument();
+    expect(screen.getByTestId('interview-preparation-state')).toHaveTextContent(
+      'Refreshing the repository mirror…'
+    );
+    expect(screen.getByPlaceholderText(/Preparing the latest requirements/i)).toBeDisabled();
     expect(screen.queryByText(/complete and the chat is closed/i)).not.toBeInTheDocument();
+  });
+
+  it('shows a recoverable error when repository preparation fails', () => {
+    (useChatThread as jest.Mock).mockReturnValue({
+      data: {
+        status: 'error',
+        lastError: 'Unable to prepare the repository for this interview.',
+        kickoff: { model: 'composer-2' },
+      },
+    });
+    mockUseChatStream.mockReturnValue({
+      ...idleStream,
+      status: 'error',
+    });
+
+    renderExistingInterview();
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Unable to prepare the repository for this interview.'
+    );
+    expect(screen.getByPlaceholderText(/Continue the interview/i)).toBeEnabled();
   });
 
   it('replaces the input with a locked notice when status is "complete"', () => {
