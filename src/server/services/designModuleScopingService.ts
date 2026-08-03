@@ -50,35 +50,12 @@ function trackScopingSend(
   });
 }
 /**
- * Platform skill lives in the Apex checkout. Remote skill repos often do not
- * have it yet (GitHub pre-fetch 404s and the agent exits without writing
- * output). Embed the local skill text so scoping works before the skill is
- * published to the connected repo. Repo *file discovery* still happens via MCP
- * against the project's configured skillRepo/branch — not the local disk.
- *
- * When a project overrides designModuleScopingSkillPath, try that path first
- * under the Apex checkout, then fall back to the default local skill.
+ * Skill content is loaded by chatAgentService during thread bootstrap via the
+ * standard prefetch chain (pinned SHA checkout → GH/ADO MCP → Apex cwd
+ * fallback). This service only passes the skillPath on the thread kickoff and
+ * includes module metadata in freeformContext — it does not embed the skill
+ * body itself.
  */
-export function loadLocalScopingSkill(
-  skillPathRel = DEFAULT_DESIGN_MODULE_SCOPING_SKILL_PATH,
-  repositoryRoot = process.cwd()
-): string {
-  const normalized = skillPathRel.replace(/^\//, '');
-  const candidates = [normalized];
-  if (normalized !== DEFAULT_DESIGN_MODULE_SCOPING_SKILL_PATH) {
-    candidates.push(DEFAULT_DESIGN_MODULE_SCOPING_SKILL_PATH);
-  }
-  for (const rel of candidates) {
-    const skillPath = path.join(repositoryRoot, rel);
-    if (fs.existsSync(skillPath)) {
-      return fs.readFileSync(skillPath, 'utf-8');
-    }
-  }
-  throw new DesignModuleScopingError(
-    `Design module scoping skill is missing at ${normalized}.`,
-    'SKILL_MISSING'
-  );
-}
 
 function buildModuleContext(
   projectId: string,
@@ -122,19 +99,15 @@ function buildFreeformContext(
   projectId: string,
   input: DesignModuleScopingRequest,
   repoMeta: { repo: string; branch: string; skillProvider: string },
-  skillPathRel = DEFAULT_DESIGN_MODULE_SCOPING_SKILL_PATH
 ): string {
   return [
-    '# Design Module Scoping skill — follow exactly',
-    loadLocalScopingSkill(skillPathRel),
-    '',
     '# Module to scope',
     buildModuleContext(projectId, input, repoMeta),
   ].join('\n');
 }
 
 const SCOPING_KICKOFF_MESSAGE =
-  'Execute the Design Module Scoping skill in `.ai-pilot/kickoff-context.md`. Use MCP tools to search/list the connected project repository and branch listed there, then write `.ai-pilot/output/module-scoping.json` with the Write tool. Do not ask questions.';
+  'Execute the Design Module Scoping skill. The module context is in `.ai-pilot/kickoff-context.md`. Use MCP tools to search/list the connected project repository and branch listed there, then write `.ai-pilot/output/module-scoping.json` with the Write tool. Do not ask questions.';
 
 async function persistThreadOnModule(
   moduleSlug: string | undefined,
@@ -219,7 +192,6 @@ export async function startScoping(
       projectId,
       input,
       repoMeta,
-      skillPath
     );
     updateThreadKickoffContext(resumeThreadId, freeformContext);
 
@@ -248,7 +220,7 @@ export async function startScoping(
     }
 
     const message = [
-      'Refine the Design Module source scope using the skill in kickoff-context.md.',
+      'Refine the Design Module source scope. The updated module context is in `.ai-pilot/kickoff-context.md`.',
       '',
       buildModuleContext(projectId, input, repoMeta),
       '',
@@ -279,7 +251,6 @@ export async function startScoping(
     projectId,
     input,
     repoMeta,
-    skillPath
   );
 
   const thread = await createChatThread(

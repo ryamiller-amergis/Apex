@@ -55,6 +55,8 @@ import {
   DEFAULT_DESIGN_MODULE_SCOPING_SKILL_PATH,
 } from '../services/designModuleScopingService';
 
+const OUTPUT_RELATIVE_PATH = ['.ai-pilot', 'output', 'module-scoping.json'];
+
 const mockedDb = db as any;
 const mockedCreateThread = createThread as jest.MockedFunction<typeof createThread>;
 const mockedCancelRun = cancelRun as jest.MockedFunction<typeof cancelRun>;
@@ -69,8 +71,6 @@ const mockedResolveSkillConfig = resolveSkillConfig as jest.MockedFunction<
 const mockedGetDefaultModel = getDefaultModel as jest.MockedFunction<
   typeof getDefaultModel
 >;
-
-const LOCAL_SKILL = `# Design Module Scoping\n\nWrite module-scoping.json.\n`;
 
 const PROJECT_ID = 'Apex';
 const USER_ID = 'user-1';
@@ -113,15 +113,8 @@ beforeEach(async () => {
   mockedSendMessage.mockResolvedValue(undefined as never);
   mockedGetDefaultModel.mockResolvedValue('claude-sonnet-4');
   mockedDb.query.designModules.findFirst.mockResolvedValue(null);
-  mockFs.existsSync.mockImplementation((p) =>
-    String(p).replace(/\\/g, '/').endsWith(DEFAULT_DESIGN_MODULE_SCOPING_SKILL_PATH)
-  );
-  mockFs.readFileSync.mockImplementation((p) => {
-    if (String(p).replace(/\\/g, '/').endsWith(DEFAULT_DESIGN_MODULE_SCOPING_SKILL_PATH)) {
-      return LOCAL_SKILL;
-    }
-    return '';
-  });
+  mockFs.existsSync.mockReturnValue(false);
+  mockFs.readFileSync.mockReturnValue('' as any);
   mockFs.mkdirSync.mockReturnValue(undefined as never);
   mockFs.writeFileSync.mockReturnValue(undefined as never);
   // Drain prior trackScopingSend().finally() handlers so in-flight set is clean.
@@ -225,7 +218,7 @@ describe('startScoping', () => {
       expect.objectContaining({ skipAutoKickoff: true })
     );
     expect(mockedCreateThread.mock.calls[0][1].freeformContext).toContain(
-      'Design Module Scoping skill'
+      'Module to scope'
     );
     expect(mockedCreateThread.mock.calls[0][1].freeformContext).toContain(
       'Connected repo: org/repo'
@@ -246,19 +239,6 @@ describe('startScoping', () => {
       designModuleScopingSkillPath: customSkill,
       designModuleScopingModel: 'opus-custom',
     } as any);
-    mockFs.existsSync.mockImplementation((p) => {
-      const norm = String(p).replace(/\\/g, '/');
-      return (
-        norm.endsWith(customSkill) ||
-        norm.endsWith(DEFAULT_DESIGN_MODULE_SCOPING_SKILL_PATH)
-      );
-    });
-    mockFs.readFileSync.mockImplementation((p) => {
-      const norm = String(p).replace(/\\/g, '/');
-      if (norm.endsWith(customSkill)) return '# Custom scoping skill\n';
-      if (norm.endsWith(DEFAULT_DESIGN_MODULE_SCOPING_SKILL_PATH)) return LOCAL_SKILL;
-      return '';
-    });
     mockedCreateThread.mockResolvedValue(fakeThread(THREAD_ID, '/tmp/ws'));
 
     await startScoping(PROJECT_ID, REQUEST, USER_ID);
@@ -268,7 +248,7 @@ describe('startScoping', () => {
       expect.objectContaining({
         skillPath: customSkill,
         model: 'opus-custom',
-        freeformContext: expect.stringContaining('Custom scoping skill'),
+        freeformContext: expect.stringContaining('Load Testing'),
       }),
       expect.objectContaining({ skipAutoKickoff: true })
     );
