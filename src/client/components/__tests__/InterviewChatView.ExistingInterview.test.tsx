@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { InterviewChatView } from '../InterviewChatView';
 import type { Interview, PrdSummary } from '../../../shared/types/interview';
+import type { ChatThreadStatus } from '../../../shared/types/chat';
 
 // ── Module mocks ───────────────────────────────────────────────────────────────
 
@@ -691,6 +692,7 @@ describe('ExistingInterviewView — processing state after send', () => {
     let streamState = {
       ...idleStream,
       messages: [initialAgentMessage],
+      status: 'idle' as ChatThreadStatus,
     };
     mockUseChatStream.mockImplementation(() => streamState);
 
