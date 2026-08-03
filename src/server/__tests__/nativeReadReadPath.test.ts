@@ -417,12 +417,8 @@ describe('FEAT-005 S5 VT-10 actual custom-tool confinement', () => {
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'native-read-s5-outside-'));
     const outsideContent = 'outside repository secret';
     fs.writeFileSync(path.join(outside, 'secret.txt'), outsideContent);
-    // 'junction' is Windows-only; on Linux/macOS use a directory symlink.
-    fs.symlinkSync(
-      outside,
-      path.join(target.root, 'escape-link'),
-      process.platform === 'win32' ? 'junction' : 'dir',
-    );
+    // Same fixture style as repoReader.test.ts (junction is treated as dir on POSIX).
+    fs.symlinkSync(outside, path.join(target.root, 'escape-link'), 'junction');
     const tools = createNativeReadTools(
       reader(target.root, 'target-repo', target.sha),
     );
@@ -430,12 +426,12 @@ describe('FEAT-005 S5 VT-10 actual custom-tool confinement', () => {
     try {
       // Act — start each attempt only after the previous settles so rejected
       // promises are never briefly unhandled (Jest treats that as a failure).
+      // Host-absolute samples must be win32/UNC forms: a POSIX `/tmp/...` path is
+      // indistinguishable from MCP's leading-slash repo-root contract and is
+      // normalized to an in-checkout relative miss (LOCAL_READ_UNAVAILABLE).
       const attempts = [
         () => execute(tools.get_skill_file, { path: '../secret.txt' }),
-        () => execute(tools.get_skill_file, {
-          path: path.join(outside, 'secret.txt'),
-        }),
-        // Portable host-absolute / UNC-style path (matches repoReader.test.ts).
+        () => execute(tools.get_skill_file, { path: 'C:\\outside\\secret.txt' }),
         () => execute(tools.get_skill_file, { path: '//host/share/secret.txt' }),
         () => execute(tools.get_skill_file, { path: 'escape-link/secret.txt' }),
       ];
