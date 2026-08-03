@@ -142,12 +142,22 @@ Git policy: NO `git commit` / NO `git push`. The Dev Workbench captures the diff
 
 (For local kickoff, replace the Git policy line per [local-dev.md](local-dev.md).)
 
-## Phase F2 — Build the inner (item) DAG
+## Phase F2 — Build the execution DAG
 
-- **Nodes** = this Feature's `items[]` (PBIs + TBIs).
-- **Edges** = item `dependsOn` (guaranteed self-contained — every referenced ID resolves to an item in **this** Feature). If any `dependsOn` references an item outside this Feature, stop and report it as an upstream decomposition error (the `/prd-spec-review` gate should have caught it).
-- **Parallel hints** = `parallelGroup`; items sharing a `parallelGroup` label are safe to run together.
-- Validate the item graph is a DAG. Topo-sort into **inner waves**: items with no unmet `dependsOn` form the first inner wave; each subsequent wave unlocks once its predecessors pass the wave gate.
+First validate the backlog item completion graph:
+
+- **Item nodes** = this Feature's `items[]` (PBIs + TBIs).
+- **Item edges** = item `dependsOn`. If any reference resolves outside this Feature, stop and report an upstream decomposition error.
+- Confirm the item graph is acyclic. Item dependencies remain completion constraints even when implementation tasks overlap.
+
+Then inspect the Feature tech spec:
+
+1. When it contains an `Implementation Plan` with uniquely identified steps and explicit blockers, **read and follow [multi-task-execution.md](multi-task-execution.md)**. Build the Task Context Ledger, task DAG, file-conflict-safe execution bundles, and topological waves. This is the preferred multi-task mode.
+2. Treat written execution lanes as hints. Recalculate them from dependencies and coalesce tasks that would write the same source or test files.
+3. When no executable implementation-step graph exists, fall back to the item DAG: `parallelGroup` is a parallel hint, and items with no unmet `dependsOn` form each wave.
+4. If an implementation plan exists but is malformed or cannot be traced to backlog/design requirements, stop. Do not silently discard it or invent missing task contracts.
+
+Print the selected execution mode and complete execution plan before proceeding to F3.
 
 ## Phase F3 — AC/DoD → Test Matrix + E2E
 
@@ -158,12 +168,12 @@ Before any RED tests are written, build a matrix covering **all** items in this 
 ```
 ## Requirements → Test Matrix — {FEAT-NNN}
 
-| Item | Criterion | Source | Linked TC (if any) | Tier | Planned test name | Status |
-|------|-----------|--------|--------------------|------|-------------------|--------|
-| PBI-001 | AC-0 | backlog acceptanceCriteria[0] | TC-PBI-001-001 | unit | saves preference when toggled off | pending |
-| PBI-001 | AC-1 | backlog acceptanceCriteria[1] | TC-PBI-001-002 | unit | reverts toggle and shows error on save failure | pending |
-| TBI-001 | DoD-0 | backlog definitionOfDone[0] | — | unit | migration creates notification_preferences | pending |
-| … | … | … | … | … | … | … |
+| Item | Criterion | Task / verification owner | Source | Linked TC (if any) | Tier | Planned test or check | Status |
+|------|-----------|---------------------------|--------|--------------------|------|-----------------------|--------|
+| PBI-001 | AC-0 | S4 | backlog acceptanceCriteria[0] | TC-PBI-001-001 | unit | saves preference when toggled off | pending |
+| PBI-001 | AC-1 | S4 | backlog acceptanceCriteria[1] | TC-PBI-001-002 | unit | reverts toggle and shows error on save failure | pending |
+| TBI-001 | DoD-0 | S1 | backlog definitionOfDone[0] | — | check | migration creates notification_preferences | pending |
+| … | … | … | … | … | … | … | … |
 ```
 
 **Matrix rules:**
@@ -173,6 +183,7 @@ Before any RED tests are written, build a matrix covering **all** items in this 
 4. Include testable `businessRules` and NFR rows when they imply observable behavior not already covered by an AC/DoD.
 5. Respect Feature and item `outOfScope` — do not add matrix rows for out-of-scope behavior.
 6. Design-spec decisions that refine an AC (route, status code, component state) must be reflected in the planned assertion, not ignored.
+7. In multi-task mode, map every row to its enabling tasks and exactly one verification-owner task. Use `enabled` only for landed prerequisites and `covered` only after the owner assertion passes.
 
 ### F3.2 — E2E Playwright tests
 
@@ -227,18 +238,23 @@ When the Feature (or any PBI) touches UI:
 5. Escape hatch only for non-testable decorative markup: `// data-testid-exempt` on the line above the tag (rare).
 6. **Verify (mandatory for client work):** stage or pass the touched client TSX paths, then run `node scripts/check-data-testid.mjs` and fix until exit 0. Do not treat “ids look complete” as done.
 
-## Phase F4 — Dispatch inner waves with TDD
+## Phase F4 — Dispatch execution waves with TDD
 
-For each inner wave, dispatch one subagent per item (items in the same wave run in parallel). Each subagent prompt **must** include the full work-item contract and design anchors — not a one-line goal.
+For each wave:
+
+- **Multi-task mode:** dispatch one subagent per conflict-safe execution bundle. Different bundles in the same wave run in parallel; tasks coalesced because they touch the same source/test files have one writer.
+- **Item fallback mode:** dispatch one subagent per item; items in the same wave run in parallel.
+
+Each subagent prompt **must** include every task in its bundle, full owning-item contracts, design anchors, matrix rows, expected files, and cross-task contracts — not a one-line goal.
 
 **Read and paste from [tdd-prompts.md](tdd-prompts.md):**
-1. Subagent task template
+1. Subagent execution-bundle template
 2. AC/DoD binding rules
-3. The TDD block for the item's layer (server / client / shared-types)
+3. The TDD block for every layer the bundle touches (server / client / shared-types)
 
-## Phase F5 — Inner-wave verification gate
+## Phase F5 — Wave verification gate
 
-After all subagents in an inner wave complete, the executor (you, in the parent session) must:
+After all subagents in a wave complete, the executor (you, in the parent session) must:
 
 1. Run type-check for all affected configs:
    ```bash
@@ -249,7 +265,7 @@ After all subagents in an inner wave complete, the executor (you, in the parent 
    ```bash
    npm test -- --testPathPattern="<pattern covering this wave's new files>"
    ```
-3. **AC/DoD coverage check:** For each item in the wave, confirm every non-deferred matrix row has a corresponding passing test (by criterion id in the test name/description or an explicit mapping in the synopsis). If any AC/DoD is uncovered, treat it as a gate failure — write the missing RED test and fix before continuing.
+3. **AC/DoD coverage check:** Confirm every matrix row owned by a task in this wave has a corresponding passing test/check (by criterion id in the test name/description or an explicit mapping in the synopsis). Enabling-only rows may become `enabled`, never `covered`. If any due row is uncovered, treat it as a gate failure — write the missing RED test/check and fix before continuing.
 4. **Pre-commit gates for touched client/shared/server TS|TSX (mandatory when those files changed):**
    ```bash
    # data-testid — stage touched client TSX first (checker reads the index)
@@ -261,20 +277,21 @@ After all subagents in an inner wave complete, the executor (you, in the parent 
    ```
    Fix any **errors** (and any data-testid violations) before continuing. Do not expand scope to clean unrelated warnings in large pre-existing files unless they become errors or the operator asks. Hook recovery: `/resolve-pre-commit-data-testid`, `/resolve-pre-commit-eslint`.
 5. If failures: diagnose, fix inline or dispatch a targeted fix subagent, then re-run.
-6. Only after type-check, tests, matrix coverage, and the pre-commit gates above pass: dispatch the next inner wave.
+6. In multi-task mode, update the Task Context Ledger and verify that newly unlocked tasks consume only completed outputs.
+7. Only after type-check, tests, matrix coverage, and the pre-commit gates above pass: dispatch the next wave.
 
-Report after each inner-wave gate:
-> "Inner wave N complete. Type-check: ✓. Tests: ✓. AC/DoD matrix: ✓. data-testid/eslint: ✓ (or n/a). Proceeding to inner wave N+1."
+Report after each execution-wave gate:
+> "Execution wave N complete. Type-check: ✓. Tests/checks: ✓. AC/DoD matrix: ✓. data-testid/eslint: ✓ (or n/a). Proceeding to wave N+1."
 
 ## Phase F6 — Feature completion
 
-When the last inner wave passes its gate:
+When the last execution wave passes its gate:
 
 1. Confirm every non-deferred verification target has a passing test.
 2. Confirm every PBI AC and every TBI DoD in the Requirements → Test Matrix is `covered` (or explicitly deferred e2e **with** a lower-tier substitute where required by F3.2).
 3. List deferred e2e cases (skipped by design).
 4. Run the **Quality-gate checklist** below.
-5. **Verify all items are implemented.** Cross-reference every PBI and TBI in this Feature's `items[]` against the files you created or modified **and** against the matrix. If any item has no corresponding implementation or uncovered criterion, **go back and implement it before proceeding** — do not skip PBIs (frontend) in favor of TBIs (backend) or vice versa. A Feature is not complete until all its items and criteria are accounted for.
+5. **Verify all tasks and items are implemented.** In multi-task mode, account for every tech-spec implementation step. Cross-reference every PBI and TBI in this Feature's `items[]` against the files you created or modified **and** against the matrix. If any task is incomplete, item has no corresponding implementation, or criterion is uncovered, **go back and implement it before proceeding**.
 6. **Stop.** Do **not** commit or push — Dev Workbench owns `finalisePush` (or the operator owns git in local mode).
 
 **MANDATORY — post a completion synopsis.** You MUST end your run with a visible chat message (not just tool calls). The synopsis must include:
@@ -285,6 +302,10 @@ When the last inner wave passes its gate:
 ### Completed items
 - [PBI/TBI-ID] Title — files created/modified
   - AC/DoD coverage: AC-0 ✓, AC-1 ✓, … (or DoD-0 ✓, …)
+- ...
+
+### Completed implementation tasks
+- [S1] Goal — owning item(s); verification/check ✓
 - ...
 
 ### Requirements → Test Matrix (final)
@@ -323,14 +344,18 @@ Copy and track per Feature Executor run:
 [ ] Assumption gate (F0.5) passed: ⚠ naming items resolved against live repo; material items confirmed or waived by operator
 [ ] Requirements → Test Matrix built (every AC + every DoD + linked non-e2e TCs)
 [ ] Context Block produced and injected into every subagent prompt (includes design-spec paths)
-[ ] Inner item DAG built from item.dependsOn (verified self-contained) + parallelGroup
+[ ] Backlog item completion DAG built and verified self-contained
+[ ] Tech-spec Implementation Plan evaluated: multi-task DAG + Task Context Ledger + conflict-safe bundles used, or item fallback explicitly justified because no step graph exists
+[ ] Every task maps to owning items + requirements/design/VT; every criterion/VT has exactly one verification owner
+[ ] Parallel bundles have non-overlapping writes; same-file tasks coalesced under one writer
 [ ] e2e-playwright test cases: specs AUTHORED; execution DEFERRED only when Playwright environment is unavailable; AC still covered at unit/integration
 [ ] data-testid: new/touched interactive UI matches `scripts/check-data-testid.mjs` (incl. `form`, `*Panel`, full suffix list); spread syntax only; `node scripts/check-data-testid.mjs` exited 0 on staged client TSX
 [ ] eslint: touched staged TS/TSX have no ESLint **errors** (warnings optional unless operator requires; do not boil ocean on unrelated files)
-[ ] Every subagent prompt included verbatim work-item contract + design-spec anchors + matrix rows (from tdd-prompts.md)
-[ ] Every item followed RED → GREEN → REFACTOR → tsc with tests bound to AC-/DoD- ids
+[ ] Every subagent prompt included its complete task bundle + verbatim owning-item contracts + design-spec anchors + matrix rows (from tdd-prompts.md)
+[ ] Every verification-owner task followed RED → GREEN → REFACTOR → tsc/checks with tests bound to AC-/DoD-/VT ids
 [ ] Verification targets from test-cases.json traceability satisfied (non-e2e)
-[ ] Inner-wave gate passed (tsc + jest + AC/DoD matrix coverage + data-testid/eslint on touched files) before each subsequent wave
+[ ] Execution-wave gate passed (tsc + tests/checks + AC/DoD matrix coverage + data-testid/eslint on touched files) before each subsequent wave
+[ ] Every tech-spec implementation task is complete (multi-task mode)
 [ ] ALL PBIs AND TBIs in this Feature's items[] have corresponding implementation AND criterion coverage
 [ ] No protected files modified without explicit permission
 [ ] NO `git commit` / NO `git push` performed

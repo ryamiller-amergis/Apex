@@ -74,6 +74,84 @@ export interface GroundingTelemetryContext {
   [key: string]: unknown;
 }
 
+export const NATIVE_READ_TELEMETRY_EVENT_NAMES = {
+  flagEvaluated: 'native-read.flag.evaluated',
+  capabilitySelfCheck: 'native-read.capability.self-check',
+  bindingWrite: 'grounding.binding.write',
+  agentRecreate: 'grounding.agent.recreate',
+  denied: 'native-read.denied',
+  engaged: 'native-read.engaged',
+} as const;
+
+export type NativeReadTelemetryEventName =
+  (typeof NATIVE_READ_TELEMETRY_EVENT_NAMES)[keyof typeof NATIVE_READ_TELEMETRY_EVENT_NAMES];
+
+export const NATIVE_READ_DENIAL_CATEGORIES = [
+  'shell',
+  'write',
+  'edit',
+  'delete',
+  'subagent',
+  'unknown-tool',
+  'traversal',
+  'symlink',
+  'host-absolute',
+  'indirect-process',
+  'out-of-root',
+  'unapproved-egress',
+  'policy-override',
+] as const;
+
+export type NativeReadDenialCategory =
+  (typeof NATIVE_READ_DENIAL_CATEGORIES)[number];
+
+export interface NativeReadCapabilityResult {
+  proven: boolean;
+  reason: string;
+}
+
+type GroundingTelemetryEventContext = Pick<
+  GroundingTelemetryContext,
+  | 'caller'
+  | 'project'
+  | 'runId'
+  | 'runType'
+  | 'provider'
+  | 'repository'
+  | 'branch'
+>;
+
+export type NativeReadFlagEvaluatedEventProperties =
+  GroundingTelemetryEventContext & {
+    flag: 'native-read';
+    outcome: 'enabled' | 'disabled' | 'error';
+    reason: string;
+  };
+
+export type NativeReadCapabilitySelfCheckEventProperties =
+  GroundingTelemetryEventContext & {
+    outcome: 'proven' | 'not-proven' | 'error';
+    selfCheckReason: string;
+  };
+
+export type GroundingBindingWriteEventProperties =
+  GroundingTelemetryEventContext & {
+    mode: 'local' | 'remote';
+    outcome: 'success' | 'failure';
+  };
+
+export type GroundingAgentRecreateEventProperties =
+  GroundingTelemetryEventContext & {
+    recreateReason: string;
+  };
+
+export type NativeReadDeniedEventProperties =
+  GroundingTelemetryEventContext & {
+    denialCategory: NativeReadDenialCategory;
+  };
+
+export type NativeReadEngagedEventProperties = GroundingTelemetryEventContext;
+
 export interface GroundingNotificationVolume {
   candidateCount: number;
   filteredCount: number;

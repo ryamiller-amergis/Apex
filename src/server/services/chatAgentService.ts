@@ -1,6 +1,9 @@
 import { Agent, CursorAgentError } from '@cursor/sdk';
 import type { SDKAgent } from '@cursor/sdk/dist/cjs/agent.js';
-import type { McpServerConfig } from '@cursor/sdk/dist/cjs/options.js';
+import type {
+  LocalAgentOptions,
+  McpServerConfig,
+} from '@cursor/sdk/dist/cjs/options.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -15,6 +18,9 @@ import type {
   AgentRunEventStatus,
   AgentRunEventType,
   AgentRunPhase,
+  BindingContinuityDecision,
+  BindingRecreationReason,
+  GroundingBinding,
   SseEvent,
   SseErrorCode,
   SsePhaseEvent,
@@ -51,7 +57,10 @@ import {
   subscribeRunEvents,
 } from './pgNotifyService';
 import { isMaxviewConfigured } from './maxviewAuthService';
-import { isFeatureEnabled } from './featureFlagService';
+import {
+  isFeatureEnabled,
+  isLifecycleBindingEnabledForCaller,
+} from './featureFlagService';
 import {
   getMyWorkSessionContext,
   logMyWorkSession,
@@ -67,10 +76,18 @@ import {
 } from './inFlightToolTracker';
 import { buildRepositoryContextPack } from './repositoryContextPack';
 import {
+  callerGroundingSelectionToBinding,
   callerGroundingService,
+  evaluateBindingContinuity,
   type CallerGroundingSelection,
 } from './callerGroundingService';
-import type { GroundingProfileId } from '../../shared/types/repoReader';
+import type {
+  GroundingProfileId,
+  RepoReader,
+} from '../../shared/types/repoReader';
+import { groundingTelemetry } from './groundingTelemetry';
+import { groundingProfileResolver } from './groundingProfileResolver';
+import { createNativeReadTools } from './nativeReadToolAdapter';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -98,6 +115,10 @@ interface ThreadState {
   isDevSession: boolean;
   /** One reader/profile selection, fixed for the lifetime of the caller. */
   grounding: CallerGroundingSelection | null;
+  /** Binding derived from the exact acquired selection. */
+  resolvedGroundingBinding: GroundingBinding | null;
+  /** Authoritative continuity classification retained for FEAT-003 routing. */
+  bindingContinuity: BindingContinuityDecision | null;
   /** Server-local checkout used only while this process owns the profile. */
   groundingWorkspaceDir: string | null;
 }
@@ -386,6 +407,14 @@ function resolveEnvRefs(map: Record<string, string>): Record<string, string> {
   return resolved;
 }
 
+function appendMcpQuery(
+  url: string,
+  key: string,
+  value: string,
+): string {
+  return `${url}${url.includes('?') ? '&' : '?'}${key}=${value}`;
+}
+
 /**
  * Build the mcpServers map for the Cursor SDK agent.
  * Always includes ado-skills; conditionally adds any MCP pill selected for this thread.
@@ -477,6 +506,7 @@ export function buildMcpServers(
     calendarSessionId?: string;
     restrictRepoSearch?: boolean;
     groundingProfileId?: GroundingProfileId;
+    enableRepoBrowse?: boolean;
   },
 ): Record<string, McpServerConfig> {
   const servers: Record<string, McpServerConfig> = {};
@@ -500,10 +530,14 @@ export function buildMcpServers(
     const profilePath = options?.groundingProfileId
       ? `/grounding/${options.groundingProfileId}`
       : '';
-    servers['github-repo'] = {
-      url: `http://localhost:${port}/mcp/github-repo${profilePath}${
+    let githubUrl = `http://localhost:${port}/mcp/github-repo${profilePath}${
         options?.restrictRepoSearch ? '?profile=interview' : ''
-      }`,
+      }`;
+    if (options?.enableRepoBrowse === false) {
+      githubUrl = appendMcpQuery(githubUrl, 'enableRepoBrowse', 'false');
+    }
+    servers['github-repo'] = {
+      url: githubUrl,
     };
   }
 
@@ -515,7 +549,14 @@ export function buildMcpServers(
     const profilePath = options?.groundingProfileId
       ? `/grounding/${options.groundingProfileId}`
       : '';
-    const groundedAdoSkillsUrl = `${adoSkillsUrl}${profilePath}`;
+    let groundedAdoSkillsUrl = `${adoSkillsUrl}${profilePath}`;
+    if (options?.enableRepoBrowse === false) {
+      groundedAdoSkillsUrl = appendMcpQuery(
+        groundedAdoSkillsUrl,
+        'enableRepoBrowse',
+        'false',
+      );
+    }
     servers['ado-skills'] = {
       url: `${groundedAdoSkillsUrl}${
         options?.restrictRepoSearch
@@ -549,6 +590,104 @@ export function buildMcpServers(
   }
 
   return servers;
+}
+
+export interface RepositoryReadRuntime {
+  nativeReads: boolean;
+  local: LocalAgentOptions;
+  mcpServers: Record<string, McpServerConfig>;
+  repoReader?: RepoReader;
+}
+
+function targetedRepositoryName(kickoff: ChatThreadKickoff): string {
+  if (kickoff.skillProvider !== 'github') return kickoff.repo;
+  return kickoff.repo.split('/').pop() || kickoff.repo;
+}
+
+function isExactGroundingReader(
+  reader: RepoReader,
+  grounding: Extract<CallerGroundingSelection, { mode: 'local' }>,
+  kickoff: ChatThreadKickoff,
+): boolean {
+  return (
+    reader.identity.provider === (kickoff.skillProvider ?? 'ado')
+    && reader.identity.project === kickoff.project
+    && reader.identity.repo === targetedRepositoryName(kickoff)
+    && reader.identity.sha === grounding.resolvedSha
+  );
+}
+
+export async function prepareRepositoryReadRuntime(options: {
+  grounding: CallerGroundingSelection;
+  kickoff: ChatThreadKickoff;
+  adoSkillsUrl: string;
+  sandboxCwd: string;
+  maxviewEnabled?: boolean;
+  calendarSessionId?: string;
+  restrictRepoSearch?: boolean;
+}): Promise<RepositoryReadRuntime> {
+  const requestedNative =
+    options.grounding.mode === 'local'
+    && options.grounding.nativeReads;
+  let repoReader: RepoReader | undefined;
+
+  if (requestedNative && options.grounding.mode === 'local') {
+    try {
+      const resolved = await groundingProfileResolver.resolveConnectionProfile(
+        options.grounding.profileId,
+      );
+      if (isExactGroundingReader(resolved, options.grounding, options.kickoff)) {
+        repoReader = resolved;
+      }
+    } catch {
+      repoReader = undefined;
+    }
+  }
+
+  const nativeReads = Boolean(repoReader);
+  if (requestedNative && !nativeReads) {
+    groundingTelemetry.fallback(
+      {
+        caller: resolveGroundingCallerKey(options.kickoff),
+        project: options.kickoff.project,
+        provider:
+          options.kickoff.skillProvider === 'github'
+            ? 'github'
+            : 'azure_devops',
+        repository: targetedRepositoryName(options.kickoff),
+        branch: options.kickoff.branch,
+      },
+      'native-read-reader-resolution-failed',
+    );
+  }
+  const groundingProfileId =
+    options.grounding.mode === 'local' && !requestedNative
+      ? options.grounding.profileId
+      : undefined;
+  const mcpServers = buildMcpServers(
+    options.kickoff,
+    options.adoSkillsUrl,
+    {
+      maxviewEnabled: options.maxviewEnabled,
+      calendarSessionId: options.calendarSessionId,
+      restrictRepoSearch: options.restrictRepoSearch,
+      groundingProfileId,
+      enableRepoBrowse: !nativeReads,
+    },
+  );
+  const local: LocalAgentOptions = {
+    cwd: options.sandboxCwd,
+    ...(repoReader
+      ? { customTools: createNativeReadTools(repoReader) }
+      : {}),
+  };
+
+  return {
+    nativeReads,
+    local,
+    mcpServers,
+    repoReader,
+  };
 }
 
 /**
@@ -689,7 +828,7 @@ export function buildDocumentAssistantEditGuidance(kickoff: ChatThreadKickoff): 
       ``,
       `# ADR context and repository grounding`,
       `Read \`.ai-pilot/kickoff-context.md\` for the current ADR, original interview transcript, and repository identity.`,
-      `Inspect relevant repository files with the available sandbox and repository MCP tools before making factual claims or proposing edits.`,
+      `Inspect relevant repository files with the available repository read tools before making factual claims or proposing edits.`,
       ``,
       `# Applying edits — MANDATORY tool use`,
       `When the author asks to change the ADR, produce the complete revised markdown and call \`update_adr\` with the adr_id and thread_id above.`,
@@ -788,15 +927,44 @@ export function buildDocumentAssistantEditGuidance(kickoff: ChatThreadKickoff): 
   ];
 }
 
-function buildFreeChatPrompt(kickoff: ChatThreadKickoff): string {
+function buildRepositoryReadPromptLines(
+  kickoff: ChatThreadKickoff,
+  nativeReads: boolean,
+): string[] {
+  if (!nativeReads) {
+    const repoLabel =
+      kickoff.skillProvider === 'github' ? 'GitHub repo' : 'ADO repo';
+    return [
+      `# Sandbox workspace`,
+      `You are running in an isolated sandbox. The current working directory contains only a \`.ai-pilot/\` scratch folder.`,
+      `It is NOT a clone of the project repo. Project files live in the ${repoLabel} and must be fetched via MCP — never search the local filesystem for them.`,
+      ``,
+    ];
+  }
+
+  return [
+    `# Sandbox workspace and native repository reads`,
+    `You are running in an isolated sandbox. The current working directory contains the \`.ai-pilot/\` scratch inputs and outputs; it is NOT the repository checkout.`,
+    `Repository content is available only through these local checkout-backed read-only tools:`,
+    `- \`get_skill_file\` — read a repository-relative file`,
+    `- \`list_repo_dir\` — list a repository-relative directory`,
+    `- \`search_repo_code\` — search the authorized pinned checkout`,
+    `Never use the GitHub or ADO provider MCP servers for repository reads. Use document-staging/write-back MCP tools for repository-related output when the workflow requires them.`,
+    ``,
+  ];
+}
+
+function buildFreeChatPrompt(
+  kickoff: ChatThreadKickoff,
+  options?: { nativeReads?: boolean },
+): string {
   const branch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
   const isGitHub = kickoff.skillProvider === 'github';
-  const repoLabel = isGitHub ? 'GitHub repo' : 'ADO repo';
   const parts: string[] = [
-    `# Sandbox workspace`,
-    `You are running in an isolated sandbox. The current working directory contains only a \`.ai-pilot/\` scratch folder.`,
-    `It is NOT a clone of the project repo. Project files live in the ${repoLabel} and must be fetched via MCP — never search the local filesystem for them.`,
-    ``,
+    ...buildRepositoryReadPromptLines(
+      kickoff,
+      options?.nativeReads ?? false,
+    ),
     `# Session context`,
     `  project: "${kickoff.project}"`,
     `  repo:    "${kickoff.repo}"`,
@@ -1061,9 +1229,12 @@ function buildCalendarWorkItemAssistantPrompt(kickoff: ChatThreadKickoff): strin
   ].join('\n');
 }
 
-function buildInitialPrompt(
+export function buildInitialPrompt(
   kickoff: ChatThreadKickoff,
-  options?: { repoSearchEnabled?: boolean },
+  options?: {
+    repoSearchEnabled?: boolean;
+    nativeReads?: boolean;
+  },
 ): string {
   if (kickoff.assistantType === 'calendar-work-item') {
     return buildCalendarWorkItemAssistantPrompt(kickoff);
@@ -1081,22 +1252,33 @@ function buildInitialPrompt(
     return buildDevelopmentPrompt(kickoff);
   }
   if (!kickoff.skillPath) {
-    return buildFreeChatPrompt(kickoff);
+    return buildFreeChatPrompt(kickoff, {
+      nativeReads: options?.nativeReads,
+    });
   }
 
   const branch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
   const isGitHub = kickoff.skillProvider === 'github';
   const repoSearchEnabled = options?.repoSearchEnabled ?? true;
+  const nativeReads = options?.nativeReads ?? false;
   const parts: string[] = [
-    `# Sandbox`,
-    `You are running in an isolated sandbox workspace. The current working directory contains ONLY a \`.ai-pilot/\` scratch folder for kickoff inputs and final outputs.`,
-    isGitHub
-      ? `Repo files (CONTEXT.md, AGENTS.md, sibling skills, schemas, ADRs, source code, etc.) are NOT on the local filesystem — they live in the GitHub repo and must be fetched via the \`github-repo\` MCP server. Do not search the local filesystem for them.`
-      : `Repo files (CONTEXT.md, AGENTS.md, sibling skills, schemas, ADRs, etc.) are NOT on the local filesystem — they live in the ADO repo and must be fetched via the \`ado-skills\` MCP server. Do not search the local filesystem for them.`,
-    ``,
+    ...buildRepositoryReadPromptLines(kickoff, nativeReads),
   ];
 
-  if (isGitHub) {
+  if (nativeReads) {
+    parts.push(
+      `# Repository read tools`,
+      `Use known repository-relative paths with \`list_repo_dir\` and \`get_skill_file\`.`,
+      repoSearchEnabled
+        ? `Use \`search_repo_code\` only when no known path applies.`
+        : `Broad search is restricted for this interview; prefer exact-path reads and surface an unresolved assumption when they are insufficient.`,
+      ``,
+      ...buildScopePolicyLines(kickoff),
+      ``,
+      `# Your task`,
+      `The skill and core repository context are pre-loaded below when available. Follow the skill exactly.`,
+    );
+  } else if (isGitHub) {
     const slashIdx = kickoff.repo.indexOf('/');
     const ghOrg =
       slashIdx > 0
@@ -1300,11 +1482,15 @@ export function buildAgentRecoveryContext(
 
 export async function resumeOrCreateAgent<T>(options: {
   cursorAgentId?: string;
+  forceRecreate?: boolean;
   resume: () => Promise<T>;
   create: () => Promise<T>;
 }): Promise<{ agent: T; mode: 'created' | 'resumed' | 'recreated'; resumeError?: unknown }> {
   if (!options.cursorAgentId) {
     return { agent: await options.create(), mode: 'created' };
+  }
+  if (options.forceRecreate) {
+    return { agent: await options.create(), mode: 'recreated' };
   }
 
   try {
@@ -1318,6 +1504,82 @@ export async function resumeOrCreateAgent<T>(options: {
   }
 }
 
+export function selectGroundingBoundaryRecreation(options: {
+  lifecycleEnabled: boolean;
+  hasAgentIdentity: boolean;
+  decision: BindingContinuityDecision;
+}): BindingRecreationReason | null {
+  if (
+    !options.lifecycleEnabled
+    || !options.hasAgentIdentity
+    || options.decision.decision !== 'recreate'
+  ) {
+    return null;
+  }
+  return options.decision.reason;
+}
+
+export function settleGroundingContinuityAfterBindingWrite(state: {
+  bindingContinuity: BindingContinuityDecision | null;
+}): void {
+  state.bindingContinuity = { decision: 'resume' };
+}
+
+export async function resumePinnedTurnAgent<T>(
+  resume: () => Promise<T>,
+): Promise<T> {
+  return resume();
+}
+
+function storedGroundingBinding(thread: ChatThread): unknown {
+  if (thread.groundingMode == null && thread.groundedSha == null) {
+    return null;
+  }
+  return {
+    mode: thread.groundingMode,
+    sha: thread.groundedSha,
+  };
+}
+
+export function classifyGroundingContinuity(
+  thread: ChatThread,
+  selection: CallerGroundingSelection,
+): {
+  resolvedBinding: GroundingBinding;
+  decision: BindingContinuityDecision;
+} {
+  const resolvedBinding = callerGroundingSelectionToBinding(selection);
+  return {
+    resolvedBinding,
+    decision: evaluateBindingContinuity(
+      storedGroundingBinding(thread),
+      resolvedBinding,
+    ),
+  };
+}
+
+export async function persistCreatedAgentBinding(
+  thread: ChatThread,
+  agent: { agentId?: string },
+  acquisitionMode: 'created' | 'resumed' | 'recreated',
+  resolvedBinding: GroundingBinding | null,
+): Promise<void> {
+  if (
+    (acquisitionMode !== 'created' && acquisitionMode !== 'recreated')
+    || !resolvedBinding
+  ) {
+    return;
+  }
+  if (!agent.agentId) {
+    throw new Error('Cursor SDK did not provide an agent identity');
+  }
+
+  thread.cursorAgentId = agent.agentId;
+  thread.groundingMode = resolvedBinding.mode;
+  thread.groundedSha = resolvedBinding.sha;
+  await pgUpsertThread(thread);
+}
+
 async function buildNewAgentTurnPrompt(
   kickoff: ChatThreadKickoff,
   promptText: string,
@@ -1326,10 +1588,13 @@ async function buildNewAgentTurnPrompt(
   options?: {
     preloadRepositoryContext?: boolean;
     repoSearchEnabled?: boolean;
+    nativeReads?: boolean;
+    repoReader?: RepoReader;
   },
 ): Promise<string> {
   let initialPrompt = buildInitialPrompt(kickoff, {
     repoSearchEnabled: options?.repoSearchEnabled,
+    nativeReads: options?.nativeReads,
   });
   const provider = kickoff.skillProvider ?? 'ado';
   const resolvedBranch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
@@ -1338,11 +1603,11 @@ async function buildNewAgentTurnPrompt(
   let contextContent: string | null = null;
   let agentsContent: string | null = null;
 
-  // Fetch independent bootstrap documents concurrently. A partial context pack
-  // is still useful; failed exact reads remain available through MCP at runtime.
+  // Fetch independent bootstrap documents concurrently. Native turns use the
+  // same authorized pinned reader exposed through custom tools; fallback turns
+  // retain the configured provider catalog behavior.
   if (kickoff.skillPath || options?.preloadRepositoryContext) {
     try {
-      const { getSkillFile } = await import('./skillCatalogFacade');
       const requests: Array<{
         key: 'skill' | 'context' | 'agents';
         path: string;
@@ -1356,15 +1621,19 @@ async function buildNewAgentTurnPrompt(
       }
 
       const results = await Promise.allSettled(
-        requests.map((request) =>
-          getSkillFile(
-            kickoff.project,
-            kickoff.repo,
-            request.path,
-            resolvedBranch,
-            provider,
-          ),
-        ),
+        requests.map(async (request) => {
+          if (options?.repoReader) {
+            return options.repoReader.readFile(request.path);
+          }
+          const { getSkillFile } = await import('./skillCatalogFacade');
+          return getSkillFile(
+              kickoff.project,
+              kickoff.repo,
+              request.path,
+              resolvedBranch,
+              provider,
+            );
+        }),
       );
       results.forEach((result, index) => {
         const request = requests[index];
@@ -1377,7 +1646,7 @@ async function buildNewAgentTurnPrompt(
         }
         if (request.key === 'skill') {
           skillContent = result.value;
-          skillSource = provider;
+          skillSource = options?.repoReader ? 'local' : provider;
         } else if (request.key === 'context') {
           contextContent = result.value;
         } else {
@@ -1391,7 +1660,7 @@ async function buildNewAgentTurnPrompt(
 
   if (kickoff.skillPath) {
     const skillPathNorm = kickoff.skillPath.replace(/^\//, '');
-    if (!skillContent) {
+    if (!skillContent && !options?.repoReader) {
       const localPath = path.join(process.cwd(), skillPathNorm);
       if (fs.existsSync(localPath)) {
         try {
@@ -1997,6 +2266,8 @@ async function ensureThreadState(threadId: string): Promise<ThreadState | null> 
     isInterviewThread: isInterview,
     isDevSession: thread.kickoff?.mode === 'development',
     grounding: null,
+    resolvedGroundingBinding: null,
+    bindingContinuity: null,
     groundingWorkspaceDir: null,
   };
   threads.set(threadId, state);
@@ -2116,6 +2387,8 @@ export async function createThread(
     isInterviewThread: false,
     isDevSession: thread.kickoff?.mode === 'development',
     grounding: null,
+    resolvedGroundingBinding: null,
+    bindingContinuity: null,
     groundingWorkspaceDir: null,
   };
 
@@ -2707,27 +2980,22 @@ async function eagerPushDevSession(
   }
 }
 
-export function copyScratchInputsToGroundedCheckout(
-  scratchWorkspace: string,
-  groundedCheckout: string,
-): void {
-  if (path.resolve(scratchWorkspace) === path.resolve(groundedCheckout)) return;
-
-  fs.mkdirSync(groundedCheckout, { recursive: true });
-  if (fs.existsSync(scratchWorkspace)) {
-    for (const entryName of fs.readdirSync(scratchWorkspace)) {
-      fs.cpSync(
-        path.join(scratchWorkspace, entryName),
-        path.join(groundedCheckout, entryName),
-        { recursive: true, force: true },
-      );
-    }
-  }
+export interface StaleRecoveryGroundingState {
+  grounding: CallerGroundingSelection | null;
+  resolvedGroundingBinding: GroundingBinding | null;
+  bindingContinuity: BindingContinuityDecision | null;
+  groundingWorkspaceDir: string | null;
 }
 
-function adoptGroundedWorkspace(state: ThreadState, cwd: string): void {
-  copyScratchInputsToGroundedCheckout(state.thread.workspaceDir, cwd);
-  state.groundingWorkspaceDir = cwd;
+export async function releaseGroundingForStaleRecovery(
+  state: StaleRecoveryGroundingState,
+): Promise<void> {
+  const grounding = state.grounding;
+  state.grounding = null;
+  state.resolvedGroundingBinding = null;
+  state.bindingContinuity = null;
+  state.groundingWorkspaceDir = null;
+  await grounding?.release().catch(() => undefined);
 }
 
 async function ensureThreadGrounding(
@@ -2768,10 +3036,24 @@ async function ensureThreadGrounding(
     },
   });
 
-  if (state.grounding.mode === 'local') {
-    adoptGroundedWorkspace(state, state.grounding.cwd);
-  }
+  const continuity = classifyGroundingContinuity(
+    state.thread,
+    state.grounding,
+  );
+  state.resolvedGroundingBinding = continuity.resolvedBinding;
+  state.bindingContinuity = continuity.decision;
+
   return state.grounding;
+}
+
+export async function reevaluateThreadGroundingForRecovery(
+  threadId: string,
+): Promise<boolean> {
+  const state = await ensureThreadState(threadId);
+  if (!state) return false;
+  await releaseGroundingForStaleRecovery(state);
+  await ensureThreadGrounding(state);
+  return true;
 }
 
 export async function sendMessage(
@@ -2846,7 +3128,7 @@ export async function sendMessage(
   // prepared.
   state.thread.status = 'running';
   broadcast(state, { type: 'status', status: 'running' });
-  persistThread(state.thread);
+  await pgUpsertThread(state.thread);
   resetIdleTimer(state);
 
   // Register durable liveness before grounding begins. The row is replaced by
@@ -2881,21 +3163,78 @@ export async function sendMessage(
     await db.delete(agentRuns).where(eq(agentRuns.id, provisionalRunId)).catch(() => {});
     throw error;
   }
-  const agentWorkspaceDir = runtimeWorkspaceDir(state);
+  const groundingCaller = resolveGroundingCallerKey(state.thread.kickoff);
+  const lifecycleTelemetryContext = {
+    caller: groundingCaller,
+    project: state.thread.kickoff.project,
+    runId: threadId,
+    runType: 'chat' as const,
+  };
+  let lifecycleBindingEnabled = false;
+  if (isRepositoryReadingChatCaller(state.thread.kickoff, state.isDevSession)) {
+    let lifecycleEvaluationFailed = false;
+    lifecycleBindingEnabled = await isLifecycleBindingEnabledForCaller(
+      {
+        userId: state.thread.userId,
+        project: state.thread.kickoff.project,
+        caller: groundingCaller,
+      },
+      () => {
+        lifecycleEvaluationFailed = true;
+      },
+    );
+    groundingTelemetry.lifecycleFlag(
+      lifecycleTelemetryContext,
+      lifecycleBindingEnabled,
+      lifecycleEvaluationFailed ? 'failure' : 'success',
+    );
+  }
+
+  let boundaryRecreationReason: BindingRecreationReason | null = null;
+  // Retain the enabled branch after two stable sprints at full rollout.
+  // @feature-flag:repo-grounding-lifecycle-binding start winner=enabled
+  if (!lifecycleBindingEnabled) {
+    // @feature-flag:repo-grounding-lifecycle-binding disabled-start
+    // Preserve FEAT-002 writes while suppressing FEAT-003 boundary disposal.
+    boundaryRecreationReason = null;
+    // @feature-flag:repo-grounding-lifecycle-binding disabled-end
+  } else {
+    // @feature-flag:repo-grounding-lifecycle-binding enabled-start
+    boundaryRecreationReason = state.bindingContinuity
+      ? selectGroundingBoundaryRecreation({
+          lifecycleEnabled: true,
+          hasAgentIdentity: Boolean(state.agent || state.thread.cursorAgentId),
+          decision: state.bindingContinuity,
+        })
+      : null;
+    if (boundaryRecreationReason && state.agent) {
+      await state.agent[Symbol.asyncDispose]().catch(() => {});
+      state.agent = null;
+    }
+    // @feature-flag:repo-grounding-lifecycle-binding enabled-end
+  }
+  // @feature-flag:repo-grounding-lifecycle-binding end
+
   const maxviewEnabled = await isMaxviewMcpEnabled(state.thread.userId, state.thread.kickoff.project);
   const calendarSessionId = state.thread.kickoff.assistantType === 'calendar-work-item'
     ? (state.thread.kickoff.calendarAssistantSessionId ?? undefined)
     : undefined;
-  const mcpServers = buildMcpServers(state.thread.kickoff, mcpServerUrl, {
+  const repositoryRuntime = await prepareRepositoryReadRuntime({
+    grounding,
+    kickoff: state.thread.kickoff,
+    adoSkillsUrl: mcpServerUrl,
+    sandboxCwd: state.thread.workspaceDir,
     maxviewEnabled,
     calendarSessionId,
     restrictRepoSearch: state.isInterviewThread,
-    groundingProfileId:
-      grounding.mode === 'local' ? grounding.profileId : undefined,
   });
+  const agentWorkspaceDir = state.thread.workspaceDir;
+  const localAgentOptions = repositoryRuntime.local;
+  const mcpServers = repositoryRuntime.mcpServers;
   console.log('[chat] MCP servers for turn:', Object.keys(mcpServers).join(', '), {
     maxviewEnabled,
     maxviewConfigured: isMaxviewConfigured(),
+    nativeReads: repositoryRuntime.nativeReads,
   });
 
   const turnId = uuidv4();
@@ -2940,6 +3279,8 @@ export async function sendMessage(
           preloadRepositoryContext:
             state.isInterviewThread && grounding.mode === 'remote',
           repoSearchEnabled: !state.isInterviewThread,
+          nativeReads: repositoryRuntime.nativeReads,
+          repoReader: repositoryRuntime.repoReader,
         },
       );
   let agentAcquisitionMode: 'existing' | 'created' | 'resumed' | 'recreated' =
@@ -2976,6 +3317,7 @@ export async function sendMessage(
       const priorCursorAgentId = state.thread.cursorAgentId;
       const acquisition = await resumeOrCreateAgent({
         cursorAgentId: priorCursorAgentId,
+        forceRecreate: boundaryRecreationReason !== null,
         resume: async () => {
           logMyWork('agent.resume_started', {
             cursorAgentId: priorCursorAgentId,
@@ -2986,7 +3328,7 @@ export async function sendMessage(
             () => Agent.resume(priorCursorAgentId!, {
               apiKey,
               model: { id: resolvedModel },
-              local: { cwd: agentWorkspaceDir },
+              local: localAgentOptions,
               mcpServers,
               agents: { 'code-reviewer': codeReviewerAgent },
             }),
@@ -2999,7 +3341,7 @@ export async function sendMessage(
             () => Agent.create({
               apiKey,
               model: { id: resolvedModel },
-              local: { cwd: agentWorkspaceDir },
+              local: localAgentOptions,
               mcpServers,
               agents: { 'code-reviewer': codeReviewerAgent },
             }),
@@ -3009,14 +3351,36 @@ export async function sendMessage(
       });
       state.agent = acquisition.agent;
       agentAcquisitionMode = acquisition.mode;
+      await persistCreatedAgentBinding(
+        state.thread,
+        acquisition.agent,
+        acquisition.mode,
+        state.resolvedGroundingBinding,
+      );
+      if (
+        (acquisition.mode === 'created' || acquisition.mode === 'recreated')
+        && state.resolvedGroundingBinding
+      ) {
+        settleGroundingContinuityAfterBindingWrite(state);
+        groundingTelemetry.bindingWrite(
+          lifecycleTelemetryContext,
+          state.resolvedGroundingBinding.mode,
+          'success',
+        );
+      }
+      if (boundaryRecreationReason && acquisition.mode === 'recreated') {
+        groundingTelemetry.recreation(
+          lifecycleTelemetryContext,
+          boundaryRecreationReason,
+          'success',
+        );
+      }
 
       if (acquisition.mode === 'recreated') {
         console.warn(
           `[chat] Agent.resume failed for thread ${threadId}; recreating with PostgreSQL history`,
           describeError(acquisition.resumeError),
         );
-        state.thread.cursorAgentId = undefined;
-        persistThread(state.thread);
         prompt = await buildNewAgentTurnPrompt(
           state.thread.kickoff,
           promptText,
@@ -3026,6 +3390,8 @@ export async function sendMessage(
             preloadRepositoryContext:
               state.isInterviewThread && grounding.mode === 'remote',
             repoSearchEnabled: !state.isInterviewThread,
+            nativeReads: repositoryRuntime.nativeReads,
+            repoReader: repositoryRuntime.repoReader,
           },
         );
       }
@@ -3375,12 +3741,14 @@ export async function sendMessage(
             }
             if (state.thread.cursorAgentId) {
               state.agent = await retryWithBackoff(
-                () => Agent.resume(state.thread.cursorAgentId!, {
-                  apiKey,
-                  model: { id: resolvedModel },
-                  local: { cwd: agentWorkspaceDir },
-                  mcpServers,
-                }),
+                () => resumePinnedTurnAgent(
+                  () => Agent.resume(state.thread.cursorAgentId!, {
+                    apiKey,
+                    model: { id: resolvedModel },
+                    local: localAgentOptions,
+                    mcpServers,
+                  }),
+                ),
                 sdkRetryOpts,
               );
               currentRun = await state.agent.send(prompt);
@@ -3408,12 +3776,14 @@ export async function sendMessage(
           }
           if (state.thread.cursorAgentId) {
             state.agent = await retryWithBackoff(
-              () => Agent.resume(state.thread.cursorAgentId!, {
-                apiKey,
-                model: { id: resolvedModel },
-                local: { cwd: agentWorkspaceDir },
-                mcpServers,
-              }),
+              () => resumePinnedTurnAgent(
+                () => Agent.resume(state.thread.cursorAgentId!, {
+                  apiKey,
+                  model: { id: resolvedModel },
+                  local: localAgentOptions,
+                  mcpServers,
+                }),
+              ),
               sdkRetryOpts,
             );
             currentRun = await state.agent.send(prompt);
@@ -3730,10 +4100,14 @@ export async function recoverStaleRunningThread(
     console.warn(
       `[chat] recoverStaleRunningThread — clearing dead running state (threadId=${threadId})`,
     );
-    await cancelRun(threadId);
+    await forceDisposeThreadAgent(state, {
+      clearCursorAgentId: false,
+      reason: 'stale_running_recovery',
+    });
     await clearStaleRun(threadId);
     state.thread.status = 'idle';
     state.thread.activeRunId = undefined;
+    await reevaluateThreadGroundingForRecovery(threadId);
   }
   return 'idle';
 }

@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "package": {
+    "name": "@cursor/sdk",
+    "version": "1.0.24"
+  },
+  "runtime": {
+    "Agent": {
+      "exported": true,
+      "staticMembers": [
+        "archive",
+        "cancelRun",
+        "create",
+        "delete",
+        "get",
+        "getRun",
+        "list",
+        "listRuns",
+        "messages",
+        "prompt",
+        "resume",
+        "unarchive"
+      ]
+    }
+  },
+  "contracts": {
+    "Agent": {
+      "runtimeExports": [
+        "Agent"
+      ],
+      "sourceFiles": [
+        "dist/esm/options.d.ts",
+        "dist/esm/stubs.d.ts"
+      ],
+      "declarations": [
+        {
+          "name": "Agent",
+          "kind": "class",
+          "sourceFile": "dist/esm/stubs.d.ts",
+          "text": "export declare class Agent {\n    private constructor();\n    /**\n     * Create an agent instance.\n     */\n    static create(options: AgentOptions): Promise<SDKAgent>;\n    /**\n     * Resume an existing agent by ID.\n     */\n    static resume(agentId: string, options?: Partial<AgentOptions>): Promise<SDKAgent>;\n    /**\n     * Convenience API to create an agent, run one prompt, and close.\n     */\n    static prompt(message: string, options?: AgentOptions): Promise<RunResult>;\n    static list(options?: ListAgentsOptions): Promise<ListResult<SDKAgentInfo>>;\n    static listRuns(agentId: string, options?: ListRunsOptions): Promise<ListResult<Run>>;\n    static getRun(runId: string, options?: GetRunOptions): Promise<Run>;\n    static cancelRun(runId: string, options?: GetRunOptions): Promise<void>;\n    /**\n     * Fetch a single agent's metadata by ID. Cloud-only — local agent lookup\n     * is a post-launch followup.\n     */\n    static get(agentId: string, options?: GetAgentOptions): Promise<SDKAgentInfo>;\n    /**\n     * Archive an agent. Cloud-only.\n     */\n    static archive(agentId: string, options?: AgentOperationOptions): Promise<void>;\n    /**\n     * Unarchive a previously archived agent. Cloud-only.\n     */\n    static unarchive(agentId: string, options?: AgentOperationOptions): Promise<void>;\n    /**\n     * Delete an agent. Cloud-only and irreversible.\n     */\n    static delete(agentId: string, options?: AgentOperationOptions): Promise<void>;\n    static readonly messages: {\n        list(agentId: string, options?: GetAgentMessagesOptions): Promise<AgentMessage[]>;\n    };\n}"
+        },
+        {
+          "name": "AgentOptions",
+          "kind": "interface",
+          "sourceFile": "dist/esm/options.d.ts",
+          "text": "export interface AgentOptions {\n    /**\n     * Model selection (`{ id, params? }`). Required for local agents; optional\n     * for cloud (the server resolves the caller's configured default when\n     * omitted). Use `Cursor.models.list()` to discover valid selections.\n     */\n    model?: ModelSelection;\n    apiKey?: string;\n    /**\n     * Optional human-readable name for the agent, surfaced as the `title` in\n     * `Agent.list()` / `Agent.get()`. Cloud agents auto-generate a name from\n     * the first prompt when this is omitted; local agents fall back to a\n     * generic default.\n     */\n    name?: string;\n    local?: LocalAgentOptions;\n    cloud?: CloudAgentOptions;\n    mcpServers?: Record<string, McpServerConfig>;\n    agents?: Record<string, AgentDefinition>;\n    agentId?: string;\n    idempotencyKey?: string;\n    /** Initial conversation mode for this agent. */\n    mode?: AgentModeOption;\n}"
+        }
+      ]
+    },
+    "LocalAgent": {
+      "runtimeExports": [],
+      "sourceFiles": [
+        "dist/esm/options.d.ts"
+      ],
+      "declarations": [
+        {
+          "name": "LocalAgentOptions",
+          "kind": "interface",
+          "sourceFile": "dist/esm/options.d.ts",
+          "text": "export interface LocalAgentOptions {\n    cwd?: string | string[];\n    /**\n     * Enable Cursor's Auto-review for local tool calls. When this is true,\n     * local runs select the classifier-backed Auto mode whenever the connected\n     * backend has the Auto-review classifier feature enabled.\n     */\n    autoReview?: boolean;\n    /**\n     * Custom {@link LocalAgentStore} for this call. When omitted, uses\n     * `Cursor.configure({ local: { store } })` if set; otherwise the default\n     * SQLite backend when `sqlite3` is installed (`@cursor/sdk/sqlite`), or\n     * {@link JsonlLocalAgentStore} when running without native SQLite.\n     * Agent rows hold a slim checkpoint ref (`latestCheckpoint.rootBlobId`);\n     * blob bytes live on `store.checkpoints`.\n     */\n    store?: LocalAgentStore;\n    /**\n     * Ambient Cursor settings layers to load from the local filesystem.\n     * Local agents only. On cloud, `project` / `team` / `plugins` are\n     * always on and `user` / `mdm` / `local` have no VM equivalent, so\n     * this field is gated to the local shape.\n     */\n    settingSources?: SettingSource[];\n    sandboxOptions?: SandboxOptions;\n    /**\n     * In-process callback tools for this agent, exposed as the\n     * `custom-user-tools` MCP server (`GetMcpTools` / `CallMcpTool`). Applied on\n     * every `send` unless overridden by {@link LocalSendOptions.customTools}.\n     * Local agents only; not supported on cloud agents.\n     */\n    customTools?: Record<string, SDKCustomTool>;\n    /**\n     * Enable transport and stall auto-retry for local agent runs. Defaults to\n     * true for headless embedders; set false to surface transport errors on the\n     * first failure (legacy SDK behavior).\n     */\n    enableAgentRetries?: boolean;\n}"
+        },
+        {
+          "name": "LocalSendOptions",
+          "kind": "interface",
+          "sourceFile": "dist/esm/options.d.ts",
+          "text": "export interface LocalSendOptions {\n    /**\n     * Expire the currently active persisted run, if any, before starting this\n     * message as a new follow-up run. Recovery path for local agents left wedged\n     * after a crashed CLI process.\n     */\n    force?: boolean;\n    /**\n     * Custom tools for this send only. When set, replaces\n     * {@link LocalAgentOptions.customTools} for that run.\n     */\n    customTools?: Record<string, SDKCustomTool>;\n}"
+        }
+      ]
+    },
+    "sandbox": {
+      "runtimeExports": [],
+      "sourceFiles": [
+        "dist/esm/options.d.ts"
+      ],
+      "declarations": [
+        {
+          "name": "SandboxOptions",
+          "kind": "interface",
+          "sourceFile": "dist/esm/options.d.ts",
+          "text": "export interface SandboxOptions {\n    enabled: boolean;\n}"
+        },
+        {
+          "name": "LocalAgentOptions.sandboxOptions",
+          "kind": "property",
+          "sourceFile": "dist/esm/options.d.ts",
+          "text": "sandboxOptions?: SandboxOptions;"
+        }
+      ]
+    },
+    "trustedSettings": {
+      "runtimeExports": [],
+      "sourceFiles": [
+        "dist/esm/options.d.ts"
+      ],
+      "declarations": [
+        {
+          "name": "SettingSource",
+          "kind": "type",
+          "sourceFile": "dist/esm/options.d.ts",
+          "text": "export type SettingSource = \"project\" | \"user\" | \"team\" | \"mdm\" | \"plugins\" | \"all\";"
+        },
+        {
+          "name": "LocalAgentOptions.settingSources",
+          "kind": "property",
+          "sourceFile": "dist/esm/options.d.ts",
+          "text": "settingSources?: SettingSource[];"
+        }
+      ]
+    }
+  }
+}

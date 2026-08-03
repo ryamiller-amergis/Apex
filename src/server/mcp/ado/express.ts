@@ -48,6 +48,7 @@ export function mountAdoMcp(app: Application, basePath = '/mcp/ado-skills'): voi
 
     const server = createAdoMcpServer({
       enableCodeSearch: req.query.profile !== 'interview',
+      enableRepoBrowse: req.query.enableRepoBrowse !== 'false',
       repoReader,
     });
     const timeoutMs = resolveMcpHttpTimeoutMs();

@@ -2,6 +2,8 @@
  * Unit tests for featureFlagService.
  * The Drizzle `db` instance is fully mocked so no real database is needed.
  */
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 
 // ── DB mock ────────────────────────────────────────────────────────────────────
 
@@ -57,8 +59,10 @@ import {
   evaluateFlags,
   isFeatureEnabled,
   isGroundingEnabledForCaller,
+  isLifecycleBindingEnabledForCaller,
   isFeatureOperational,
   isRemoteSearchConvergenceEnabled,
+  isNativeReadEnabledForCaller,
 } from '../services/featureFlagService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
@@ -742,6 +746,70 @@ describe('grounding rollout accessors', () => {
     expect(onEvaluationError).toHaveBeenCalledWith();
   });
 
+  it('TBI-004 DoD-3 / VT-07 evaluates the lifecycle binding rollout independently', async () => {
+    mockDb.query.featureFlags.findMany.mockResolvedValue([
+      {
+        ...baseFlag,
+        key: 'repo-grounding-lifecycle-binding',
+        rules: [
+          { type: 'caller', value: 'interview' },
+          { type: 'environment', value: 'dev' },
+          { type: 'project', value: 'proj-a' },
+        ],
+      },
+    ]);
+
+    const enabled = await isLifecycleBindingEnabledForCaller({
+      userId: 'user-1',
+      project: 'proj-a',
+      caller: 'interview',
+    });
+
+    expect(enabled).toBe(true);
+  });
+
+  it('TBI-004 DoD-3 / VT-07 fails the lifecycle binding rollout closed', async () => {
+    mockDb.query.featureFlags.findMany.mockRejectedValue(new Error('database unavailable'));
+    const onEvaluationError = jest.fn();
+
+    const enabled = await isLifecycleBindingEnabledForCaller(
+      { userId: 'user-1', project: 'proj-a', caller: 'interview' },
+      onEvaluationError,
+    );
+
+    expect(enabled).toBe(false);
+    expect(onEvaluationError).toHaveBeenCalledTimes(1);
+  });
+
+  it('TBI-004 DoD-3 seeds the lifecycle binding flag disabled and active', () => {
+    const migration = readFileSync(
+      resolve(
+        process.cwd(),
+        'migrations/20260803150000_seed-repo-grounding-lifecycle-binding-flag.sql',
+      ),
+      'utf8',
+    );
+
+    expect(migration).toMatch(/'repo-grounding-lifecycle-binding'/);
+    expect(migration).toMatch(/false,\s*'active',\s*false/);
+    expect(migration).toMatch(/ON CONFLICT \(key\) DO NOTHING/);
+  });
+
+  it('TBI-005 DoD-0 seeds native-read active and default-off with reversible cleanup', () => {
+    const migration = readFileSync(
+      resolve(process.cwd(), 'migrations/20260803160000_seed-native-read-flag.sql'),
+      'utf8',
+    );
+
+    expect(migration).toMatch(/'native-read'/);
+    expect(migration).toMatch(/false,\s*'active',\s*false/);
+    expect(migration).toMatch(/ON CONFLICT \(key\) DO NOTHING/);
+    expect(migration).toMatch(
+      /DELETE FROM feature_flag_rules[\s\S]*WHERE key = 'native-read'/,
+    );
+    expect(migration).toMatch(/DELETE FROM feature_flags\s+WHERE key = 'native-read'/);
+  });
+
   it('AC-2 resolves the same caller independently across projects', async () => {
     mockDb.query.featureFlags.findMany.mockResolvedValue([
       {
@@ -829,6 +897,63 @@ describe('grounding rollout accessors', () => {
     });
 
     expect(converged).toBe(true);
+  });
+
+  it.each([
+    ['disabled', false, false, [{ type: 'everyone', value: null }]],
+    ['absent', false, true, []],
+    [
+      'enabled with matching targeting',
+      true,
+      true,
+      [
+        { type: 'caller', value: 'interview' },
+        { type: 'environment', value: 'dev' },
+        { type: 'project', value: 'proj-a' },
+      ],
+    ],
+    [
+      'enabled with nonmatching targeting',
+      false,
+      true,
+      [
+        { type: 'caller', value: 'design-doc' },
+        { type: 'environment', value: 'dev' },
+        { type: 'project', value: 'proj-a' },
+      ],
+    ],
+  ])(
+    'TBI-005 / VT-06 returns %s native-read evaluation as %s',
+    async (state, expected, enabled, rules) => {
+      mockDb.query.featureFlags.findMany.mockResolvedValue(
+        state === 'absent'
+          ? []
+          : [{ ...baseFlag, key: 'native-read', enabled, rules }],
+      );
+      const onEvaluationError = jest.fn();
+
+      const result = await isNativeReadEnabledForCaller(
+        { userId: 'user-1', project: 'proj-a', caller: 'interview' },
+        onEvaluationError,
+      );
+
+      expect(result).toBe(expected);
+      expect(onEvaluationError).not.toHaveBeenCalled();
+    },
+  );
+
+  it('TBI-005 / VT-06 fails native-read evaluation closed and invokes callback only on throw', async () => {
+    mockDb.query.featureFlags.findMany.mockRejectedValue(new Error('database unavailable'));
+    const onEvaluationError = jest.fn();
+
+    const enabled = await isNativeReadEnabledForCaller(
+      { userId: 'user-1', project: 'proj-a', caller: 'interview' },
+      onEvaluationError,
+    );
+
+    expect(enabled).toBe(false);
+    expect(onEvaluationError).toHaveBeenCalledTimes(1);
+    expect(onEvaluationError).toHaveBeenCalledWith();
   });
 
   it.each([

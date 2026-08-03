@@ -107,6 +107,24 @@ describe('PBI-006 rollout mutation authorization', () => {
   });
 });
 
+describe('PBI-004 native-read governance authorization', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('AC-3 / VT-05 rejects non-Platform-Admin mutation before native-read state changes', async () => {
+    mockRequireSuperAdmin.mockImplementation(
+      (_req: express.Request, res: express.Response) =>
+        res.status(403).json({ error: 'Super admin access required' }),
+    );
+
+    const response = await request(buildAdminApp('member-oid', 'member@example.com'))
+      .patch('/api/platform-admin/feature-flags/flag-native-read')
+      .send({ enabled: true });
+
+    expect(response.status).toBe(403);
+    expect(mockService.updateFlag).not.toHaveBeenCalled();
+  });
+});
+
 // ── GET /api/platform-admin/feature-flags ─────────────────────────────────────
 
 describe('GET /api/platform-admin/feature-flags', () => {

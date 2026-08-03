@@ -75,6 +75,8 @@ export const chatThreads = pgTable('chat_threads', {
   status: text('status').notNull().default('idle'),
   kickoff: jsonb('kickoff').$type<ChatThreadKickoff>().notNull(),
   cursorAgentId: text('cursor_agent_id'),
+  groundingMode: text('grounding_mode'),
+  groundedSha: text('grounded_sha'),
   workspaceDir: text('workspace_dir'),
   lastError: text('last_error'),
   savedWikiUrl: text('saved_wiki_url'),

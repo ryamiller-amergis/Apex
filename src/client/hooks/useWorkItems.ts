@@ -18,17 +18,22 @@ export function useWorkItems(
   const normalizedAreaPath = areaPath.replace(/\//g, '\\');
   const from = startDate.toISOString().split('T')[0];
   const to = endDate.toISOString().split('T')[0];
+  // Apex has no ADO backlog; server short-circuits to [] — skip the round-trip.
+  const queryEnabled = enabled && project.toLowerCase() !== 'apex';
   const queryKey = useMemo(
     () => ['workItems', project, normalizedAreaPath, from, to] as const,
     [project, normalizedAreaPath, from, to]
   );
 
-  const { data: workItems = [], isLoading, error } = useQuery({
+  const { data: workItems = [], isLoading, error, isFetching } = useQuery({
     queryKey,
     queryFn: () => workItemService.getWorkItems(from, to, project, normalizedAreaPath),
     refetchInterval: POLL_INTERVAL,
-    enabled,
+    enabled: queryEnabled,
     staleTime: 10_000,
+    // Transient proxy/API blips (e.g. nodemon restart) should retry quietly.
+    retry: 2,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 4000),
   });
 
   const mutation = useMutation({
@@ -71,6 +76,8 @@ export function useWorkItems(
   return {
     workItems,
     loading: isLoading,
+    /** True while a background refetch is in flight (does not flip initial loading). */
+    isFetching,
     error: error ? (error as Error).message : null,
     updateDueDate,
     refetch,

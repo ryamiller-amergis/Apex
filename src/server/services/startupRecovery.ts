@@ -2,7 +2,12 @@ import type { Server } from 'http';
 import { and, eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { prds, designDocs, testCases, devSessions } from '../db/schema';
-import { hydrateThread, isThreadIdle, sendMessage } from './chatAgentService';
+import {
+  hydrateThread,
+  isThreadIdle,
+  reevaluateThreadGroundingForRecovery,
+  sendMessage,
+} from './chatAgentService';
 import { isThreadRunAlive } from './agentRunReaperService';
 import {
   startPrdWatcher,
@@ -113,6 +118,7 @@ export async function recoverStuckInterviewThreads(): Promise<number> {
 
     const ok = await hydrateThread(row.threadId);
     if (ok) {
+      await reevaluateThreadGroundingForRecovery(row.threadId);
       await clearStaleRun(row.threadId);
       recovered++;
       console.log(

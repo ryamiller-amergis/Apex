@@ -1,8 +1,9 @@
 import { Agent } from '@cursor/sdk';
 import type { SDKAgent } from '@cursor/sdk/dist/cjs/agent.js';
-import type { McpServerConfig } from '@cursor/sdk/dist/cjs/options.js';
-import { readFile } from 'fs/promises';
-import path from 'path';
+import type {
+  LocalAgentOptions,
+  McpServerConfig,
+} from '@cursor/sdk/dist/cjs/options.js';
 import { v4 as uuidv4 } from 'uuid';
 import { retryWithBackoff } from '../utils/retry';
 import { listSkillConfigs } from './projectSettingsService';
@@ -11,6 +12,9 @@ import {
   callerGroundingService,
   type CallerGroundingSelection,
 } from './callerGroundingService';
+import type { RepoReader } from '../../shared/types/repoReader';
+import { groundingProfileResolver } from './groundingProfileResolver';
+import { createNativeReadTools } from './nativeReadToolAdapter';
 
 const SESSION_IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const MODEL_ID = 'composer-2.5';
@@ -37,12 +41,6 @@ const SYSTEM_PROMPT_BASE = `You are **Ask Apex** — a senior product owner who 
 # Primary Knowledge Sources
 Your baseline context below includes \`context.md\` (comprehensive product guide) and \`AGENTS.md\` (agent quick-reference with feature map). These are your primary references — start every answer from this knowledge.
 
-# Available MCP tools (via \`github-repo\` server)
-- \`get_skill_file\` — read any file from the repo (source code, docs, skills, config, etc.)
-- \`list_repo_dir\` — browse directory structure to discover files
-- \`search_repo_code\` — search code by keyword to find implementations
-- \`list_skills\` — list all available SKILL.md files in the repo
-
 # How to answer questions
 1. Start with the baseline documentation provided below — \`context.md\` and \`AGENTS.md\` cover most product questions comprehensively.
 2. When a question goes beyond what the baseline covers, USE YOUR TOOLS to look up the answer:
@@ -65,9 +63,35 @@ Do NOT answer off-topic questions even if the user insists — always redirect b
 - You are a READ-ONLY assistant. Do NOT create, write, or modify any files.
 - Only use tools to READ repo content. Do not use any write/edit tools.`;
 
-const FALLBACK_SYSTEM_PROMPT = `${SYSTEM_PROMPT_BASE}
+function buildRepositoryReadGuidance(nativeReads: boolean): string {
+  return nativeReads
+    ? [
+        '# Sandbox workspace and native repository reads',
+        'The current working directory remains the Apex agent sandbox; it is NOT the repository checkout.',
+        'Read the authorized SHA-pinned checkout only through these local checkout-backed read-only tools:',
+        '- `get_skill_file` — read a repository-relative file',
+        '- `list_repo_dir` — list a repository-relative directory',
+        '- `search_repo_code` — search the pinned checkout',
+        'Never use the GitHub or ADO provider MCP servers for repository reads.',
+      ].join('\n')
+    : [
+        '# Sandbox workspace and provider repository reads',
+        'The current working directory is an isolated sandbox, not the project checkout.',
+        'Repository files must be fetched via the `github-repo` MCP server.',
+        '- `get_skill_file` — read any file from the repository',
+        '- `list_repo_dir` — browse repository directories',
+        '- `search_repo_code` — search repository code',
+        '- `list_skills` — list available skills',
+      ].join('\n');
+}
+
+function fallbackSystemPrompt(nativeReads: boolean): string {
+  return `${SYSTEM_PROMPT_BASE}
+
+${buildRepositoryReadGuidance(nativeReads)}
 
 Note: I was unable to load the latest documentation from the repository. I'll do my best to answer using my tools and general knowledge of the application.`;
+}
 
 const CONTEXT_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 interface RepoInfo {
@@ -100,46 +124,39 @@ async function resolveRepoInfo(): Promise<RepoInfo | null> {
   }
 }
 
-function safeLocalContextPath(cwd: string, relativePath: string): string {
-  const root = path.resolve(cwd);
-  const target = path.resolve(root, relativePath);
-  const relative = path.relative(root, target);
-  if (
-    relative === '..' ||
-    relative.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relative)
-  ) {
-    throw new Error('Repository context path is unavailable');
-  }
-  return target;
-}
-
 async function fetchRepoContext(
-  grounding: CallerGroundingSelection,
   repoInfo: RepoInfo | null,
+  runtime: AskApexRepositoryRuntime,
 ): Promise<string> {
-  if (!repoInfo) return FALLBACK_SYSTEM_PROMPT;
+  if (!repoInfo) return fallbackSystemPrompt(runtime.nativeReads);
 
-  const sourceKey = grounding.mode === 'local'
-    ? `local:${grounding.profileId}:${grounding.cwd}`
+  const sourceKey = runtime.nativeReads && runtime.repoReader
+    ? `local:${runtime.repoReader.identity.provider}:${runtime.repoReader.identity.project}:${runtime.repoReader.identity.repo}@${runtime.repoReader.identity.sha}`
     : `remote:${repoInfo.org}/${repoInfo.repo}@${repoInfo.branch}`;
   const cached = contextPromptCache.get(sourceKey);
   if (cached && Date.now() - cached.fetchedAt < CONTEXT_CACHE_TTL_MS) {
     return cached.prompt;
   }
 
-  const remoteCatalog = grounding.mode === 'remote'
-    ? await import('./skillCatalogGitHub')
-    : null;
-  const sections: string[] = [SYSTEM_PROMPT_BASE, ''];
+  const remoteCatalog = runtime.nativeReads
+    ? null
+    : await import('./skillCatalogGitHub');
+  const sections: string[] = [
+    SYSTEM_PROMPT_BASE,
+    '',
+    buildRepositoryReadGuidance(runtime.nativeReads),
+    '',
+  ];
 
-  // Inject repo coordinates so the agent knows what to pass to MCP tools
-  sections.push(
-    `# Repo coordinates (use with MCP tools)`,
-    `  org:    "${repoInfo.org}"`,
-    `  repo:   "${repoInfo.repo}"`,
-    `  branch: "${repoInfo.branch}"`,
-  );
+  if (!runtime.nativeReads) {
+    // Inject repo coordinates so the agent knows what to pass to provider MCP tools.
+    sections.push(
+      `# Repo coordinates (use with MCP tools)`,
+      `  org:    "${repoInfo.org}"`,
+      `  repo:   "${repoInfo.repo}"`,
+      `  branch: "${repoInfo.branch}"`,
+    );
+  }
 
   const filesToFetch = [
     { path: 'context.md', label: 'Product Context Guide' },
@@ -151,11 +168,8 @@ async function fetchRepoContext(
 
   for (const file of filesToFetch) {
     try {
-      const content = grounding.mode === 'local'
-        ? await readFile(
-            safeLocalContextPath(grounding.cwd, file.path),
-            'utf-8',
-          )
+      const content = runtime.repoReader
+        ? await runtime.repoReader.readFile(file.path)
         : await remoteCatalog!.getSkillFile(
             repoInfo.repo,
             file.path,
@@ -170,7 +184,9 @@ async function fetchRepoContext(
     }
   }
 
-  const prompt = sections.length > 4 ? sections.join('\n\n') : FALLBACK_SYSTEM_PROMPT;
+  const prompt = sections.length > 6
+    ? sections.join('\n\n')
+    : fallbackSystemPrompt(runtime.nativeReads);
   contextPromptCache.set(sourceKey, {
     prompt,
     fetchedAt: Date.now(),
@@ -184,27 +200,94 @@ async function fetchRepoContext(
  */
 function buildAskApexMcpServers(
   grounding: CallerGroundingSelection,
+  options?: {
+    nativeReads?: boolean;
+    omitGroundingProfile?: boolean;
+  },
 ): Record<string, McpServerConfig> {
   const port = process.env.PORT ?? '3001';
-  const profilePath = grounding.mode === 'local'
+  const profilePath =
+    grounding.mode === 'local' && !options?.omitGroundingProfile
     ? `/grounding/${grounding.profileId}`
     : '';
+  const browseQuery = options?.nativeReads ? '?enableRepoBrowse=false' : '';
   return {
     'github-repo': {
-      url: `http://localhost:${port}/mcp/github-repo${profilePath}`,
+      url: `http://localhost:${port}/mcp/github-repo${profilePath}${browseQuery}`,
     },
   };
 }
 
-async function buildSystemPrompt(
+interface AskApexRepositoryRuntime {
+  nativeReads: boolean;
+  local: LocalAgentOptions;
+  mcpServers: Record<string, McpServerConfig>;
+  repoReader?: RepoReader;
+}
+
+function isExactAskApexReader(
+  reader: RepoReader,
+  grounding: Extract<CallerGroundingSelection, { mode: 'local' }>,
+  repoInfo: RepoInfo | null,
+): boolean {
+  return Boolean(
+    repoInfo
+    && reader.identity.provider === 'github'
+    && reader.identity.project === 'Apex'
+    && reader.identity.repo === repoInfo.repo
+    && reader.identity.sha === grounding.resolvedSha,
+  );
+}
+
+async function prepareAskApexRepositoryRuntime(
   grounding: CallerGroundingSelection,
   repoInfo: RepoInfo | null,
+): Promise<AskApexRepositoryRuntime> {
+  const requestedNative =
+    grounding.mode === 'local'
+    && grounding.nativeReads;
+  let repoReader: RepoReader | undefined;
+
+  if (requestedNative && grounding.mode === 'local') {
+    try {
+      const resolved =
+        await groundingProfileResolver.resolveConnectionProfile(
+          grounding.profileId,
+        );
+      if (isExactAskApexReader(resolved, grounding, repoInfo)) {
+        repoReader = resolved;
+      }
+    } catch {
+      repoReader = undefined;
+    }
+  }
+
+  const nativeReads = Boolean(repoReader);
+  return {
+    nativeReads,
+    local: {
+      cwd: process.cwd(),
+      ...(repoReader
+        ? { customTools: createNativeReadTools(repoReader) }
+        : {}),
+    },
+    mcpServers: buildAskApexMcpServers(grounding, {
+      nativeReads,
+      omitGroundingProfile: requestedNative,
+    }),
+    repoReader,
+  };
+}
+
+async function buildSystemPrompt(
+  repoInfo: RepoInfo | null,
+  runtime: AskApexRepositoryRuntime,
 ): Promise<string> {
   try {
-    return await fetchRepoContext(grounding, repoInfo);
+    return await fetchRepoContext(repoInfo, runtime);
   } catch (err) {
     console.error('[ask-apex] Failed to build context-aware prompt:', (err as Error).message);
-    return FALLBACK_SYSTEM_PROMPT;
+    return fallbackSystemPrompt(runtime.nativeReads);
   }
 }
 
@@ -380,21 +463,21 @@ export async function sendMessage(sessionId: string, userId: string, text: strin
       ? await ensureSessionGrounding(session)
       : session.grounding;
     if (!grounding) throw new Error('Repository grounding is unavailable');
+    const repositoryRuntime = isFirstTurn
+      ? await prepareAskApexRepositoryRuntime(grounding, session.repoInfo)
+      : null;
 
     const prompt = isFirstTurn
-      ? `${await buildSystemPrompt(grounding, session.repoInfo)}\n\n---\n\nUser: ${text.trim()}`
+      ? `${await buildSystemPrompt(session.repoInfo, repositoryRuntime!)}\n\n---\n\nUser: ${text.trim()}`
       : text.trim();
 
     if (!session.agent) {
-      const mcpServers = buildAskApexMcpServers(grounding);
       session.agent = await retryWithBackoff(
         () => Agent.create({
           apiKey,
           model: { id: MODEL_ID },
-          local: {
-            cwd: grounding.mode === 'local' ? grounding.cwd : process.cwd(),
-          },
-          mcpServers,
+          local: repositoryRuntime!.local,
+          mcpServers: repositoryRuntime!.mcpServers,
         }),
         sdkRetryOpts,
       );

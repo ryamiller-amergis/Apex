@@ -374,7 +374,7 @@ describe('BR-012 / TBI-008 DoD-4 noisy events and deduplication', () => {
 });
 
 describe('BR-012 production AI relevance lifecycle', () => {
-  it('TBI-008 disposes the short-lived Cursor Agent after evaluation', async () => {
+  it('AC-0 / VT-09 groundingImpactEvaluatorService streams and disposes its SDK agent', async () => {
     // Arrange
     const dispose = jest.fn().mockResolvedValue(undefined);
     const stream = async function* () {
@@ -408,6 +408,15 @@ describe('BR-012 production AI relevance lifecycle', () => {
 
       // Assert
       expect(relevant).toBe(true);
+      expect(Agent.create).toHaveBeenCalledWith({
+        apiKey: 'test-key',
+        model: { id: 'project-default-model' },
+      });
+      const options = jest.mocked(Agent.create).mock.calls[0][0];
+      // FEAT-001 verifies that Apex adds no native-read wiring. Host-level tool
+      // denial remains the real-runtime capability gate owned by FEAT-005.
+      expect(options).not.toHaveProperty('tools');
+      expect(options).not.toHaveProperty('nativeTools');
       expect(dispose).toHaveBeenCalledTimes(1);
     } finally {
       process.env.CURSOR_API_KEY = previousApiKey;

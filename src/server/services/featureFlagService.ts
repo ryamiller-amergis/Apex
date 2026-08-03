@@ -23,7 +23,9 @@ import type {
 
 const KEBAB_CASE_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const GROUNDING_FLAG = 'repo-grounding-workspace-profile';
+const LIFECYCLE_BINDING_FLAG = 'repo-grounding-lifecycle-binding';
 const REMOTE_SEARCH_CONVERGENCE_FLAG = 'repo-grounding-remote-search-convergence';
+const NATIVE_READ_FLAG = 'native-read';
 
 // ── listFlags ────────────────────────────────────────────────────────────────
 
@@ -341,9 +343,27 @@ export async function isGroundingEnabledForCaller(
   return evaluateGroundingFlag(GROUNDING_FLAG, ctx, onEvaluationError);
 }
 
+export async function isLifecycleBindingEnabledForCaller(
+  ctx: GroundingFlagContext,
+  onEvaluationError?: FlagEvaluationErrorHandler,
+): Promise<boolean> {
+  return evaluateGroundingFlag(
+    LIFECYCLE_BINDING_FLAG,
+    ctx,
+    onEvaluationError,
+  );
+}
+
 export async function isRemoteSearchConvergenceEnabled(
   ctx: GroundingFlagContext,
   onEvaluationError?: FlagEvaluationErrorHandler,
 ): Promise<boolean> {
   return evaluateGroundingFlag(REMOTE_SEARCH_CONVERGENCE_FLAG, ctx, onEvaluationError);
+}
+
+export async function isNativeReadEnabledForCaller(
+  ctx: GroundingFlagContext,
+  onEvaluationError?: FlagEvaluationErrorHandler,
+): Promise<boolean> {
+  return evaluateGroundingFlag(NATIVE_READ_FLAG, ctx, onEvaluationError);
 }

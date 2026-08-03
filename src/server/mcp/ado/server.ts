@@ -246,6 +246,7 @@ export async function handleAddTestCase(params: {
 export function createAdoMcpServer(
   options?: {
     enableCodeSearch?: boolean;
+    enableRepoBrowse?: boolean;
     repoReader?: RepoReader;
   },
 ): McpServer {
@@ -254,6 +255,7 @@ export function createAdoMcpServer(
     version: '1.0.0',
   });
   const toolTimeoutMs = resolveMcpToolTimeoutMs();
+  const enableRepoBrowse = options?.enableRepoBrowse ?? true;
 
   // ── Skills namespace ────────────────────────────────────────────────────────
 
@@ -314,62 +316,67 @@ export function createAdoMcpServer(
     },
   );
 
-  server.tool(
-    'list_repo_dir',
-    'List the immediate children (files and sub-folders) of a directory in the repo. Use this BEFORE calling get_skill_file when you are unsure of exact file paths — e.g. to discover whether /docs/adr/, /docs/, /handbook/, or /CONTEXT.md exist. Returns each entry with its full path, name, and whether it is a folder. If a path does not exist the tool returns an empty list.',
-    {
-      project: z.string().describe('ADO project name'),
-      repo: z.string().describe('Repository name'),
-      path: z.string().describe('Directory path to list (e.g. "/", "/docs", "/docs/adr"). Leading slash is optional.'),
-      branch: z.string().optional().describe('Branch name'),
-    },
-    async ({ project, repo, path, branch }) => {
-      try {
-        const entries = await raceWithTimeout('list_repo_dir', toolTimeoutMs, () =>
-          options?.repoReader
-            ? options.repoReader.listDir(path)
-            : listRepoDir(project, repo, path, branch),
-        );
-        return {
-          content: [{ type: 'text', text: JSON.stringify(entries, null, 2) }],
-        };
-      } catch {
-        return {
-          content: [{ type: 'text', text: '[]' }],
-        };
-      }
-    },
-  );
+  if (enableRepoBrowse) {
+    server.tool(
+      'list_repo_dir',
+      'List the immediate children (files and sub-folders) of a directory in the repo. Use this BEFORE calling get_skill_file when you are unsure of exact file paths — e.g. to discover whether /docs/adr/, /docs/, /handbook/, or /CONTEXT.md exist. Returns each entry with its full path, name, and whether it is a folder. If a path does not exist the tool returns an empty list.',
+      {
+        project: z.string().describe('ADO project name'),
+        repo: z.string().describe('Repository name'),
+        path: z.string().describe('Directory path to list (e.g. "/", "/docs", "/docs/adr"). Leading slash is optional.'),
+        branch: z.string().optional().describe('Branch name'),
+      },
+      async ({ project, repo, path, branch }) => {
+        try {
+          const entries = await raceWithTimeout('list_repo_dir', toolTimeoutMs, () =>
+            options?.repoReader
+              ? options.repoReader.listDir(path)
+              : listRepoDir(project, repo, path, branch),
+          );
+          return {
+            content: [{ type: 'text', text: JSON.stringify(entries, null, 2) }],
+          };
+        } catch {
+          return {
+            content: [{ type: 'text', text: '[]' }],
+          };
+        }
+      },
+    );
 
-  server.tool(
-    'get_skill_file',
-    'Get the raw content of ANY file in the repo by absolute path (path starts with "/"). Use this for skill supporting files (PRD-FORMAT.md, INTERVIEW-RUBRIC.md, examples/) AND for repo-wide context files the skill may reference such as /CONTEXT.md, /AGENTS.md, /README.md, /docs/adr/*.md, glossaries, etc. The agent runs in a sandbox workspace with no local clone of the repo, so this is the only way to read project files.',
-    {
-      project: z.string().describe('ADO project name'),
-      repo: z.string().describe('Repository name'),
-      path: z.string().describe('Absolute path in the repo, starting with "/" (e.g. "/CONTEXT.md", "/.cursor/skills/foo/PRD-FORMAT.md", "/docs/adr/0001-foo.md")'),
-      branch: z.string().optional().describe('Branch name'),
-    },
-    async ({ project, repo, path, branch }) => {
-      try {
-        const content = await raceWithTimeout('get_skill_file', toolTimeoutMs, () =>
-          options?.repoReader
-            ? options.repoReader.readFile(path)
-            : getSkillFile(project, repo, path, branch),
-        );
-        return {
-          content: [{ type: 'text', text: content }],
-        };
-      } catch (err) {
-        return {
-          content: [{ type: 'text', text: `Error reading file: ${toolErrorMessage(err)}` }],
-          isError: true,
-        };
-      }
-    },
-  );
+    server.tool(
+      'get_skill_file',
+      'Get the raw content of ANY file in the repo by absolute path (path starts with "/"). Use this for skill supporting files (PRD-FORMAT.md, INTERVIEW-RUBRIC.md, examples/) AND for repo-wide context files the skill may reference such as /CONTEXT.md, /AGENTS.md, /README.md, /docs/adr/*.md, glossaries, etc. The agent runs in a sandbox workspace with no local clone of the repo, so this is the only way to read project files.',
+      {
+        project: z.string().describe('ADO project name'),
+        repo: z.string().describe('Repository name'),
+        path: z.string().describe('Absolute path in the repo, starting with "/" (e.g. "/CONTEXT.md", "/.cursor/skills/foo/PRD-FORMAT.md", "/docs/adr/0001-foo.md")'),
+        branch: z.string().optional().describe('Branch name'),
+      },
+      async ({ project, repo, path, branch }) => {
+        try {
+          const content = await raceWithTimeout('get_skill_file', toolTimeoutMs, () =>
+            options?.repoReader
+              ? options.repoReader.readFile(path)
+              : getSkillFile(project, repo, path, branch),
+          );
+          return {
+            content: [{ type: 'text', text: content }],
+          };
+        } catch (err) {
+          return {
+            content: [{ type: 'text', text: `Error reading file: ${toolErrorMessage(err)}` }],
+            isError: true,
+          };
+        }
+      },
+    );
+  }
 
-  if (options?.enableCodeSearch !== false) {
+  if (
+    enableRepoBrowse
+    && options?.enableCodeSearch !== false
+  ) {
     server.tool(
       'search_repo_code',
       'Search code in a repository by keyword and return matching file paths with snippets. Use this when you need to locate implementation areas quickly before reading full files.',

@@ -291,7 +291,7 @@ describe('reapOrphanedRuns', () => {
     );
   });
 
-  it('marks a progress-timeout run failed and publishes cancel', async () => {
+  it('PBI-001 AC-1 / VT-04 bounds a stalled stream with failure and cancel', async () => {
     mockFindMany.mockResolvedValue([
       {
         id: 'run-1',

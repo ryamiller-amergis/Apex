@@ -92,6 +92,20 @@ export interface ChatThreadKickoff {
 
 export type ChatThreadStatus = 'idle' | 'running' | 'error' | 'closed';
 
+export type GroundingBinding =
+  | { mode: 'local'; sha: string }
+  | { mode: 'remote'; sha: null };
+
+export type BindingRecreationReason =
+  | 'legacy-binding-missing'
+  | 'binding-malformed'
+  | 'sha-changed'
+  | 'mode-changed';
+
+export type BindingContinuityDecision =
+  | { decision: 'resume' }
+  | { decision: 'recreate'; reason: BindingRecreationReason };
+
 export interface ChatThread {
   id: string;
   /** Azure AD user identifier from the session */
@@ -101,6 +115,10 @@ export interface ChatThread {
   status: ChatThreadStatus;
   /** Cursor SDK agentId — used to resume across process restarts */
   cursorAgentId?: string;
+  /** Grounding mode bound to the Cursor agent; absent on legacy threads */
+  groundingMode?: GroundingBinding['mode'];
+  /** Commit bound to a local agent; null for remote and legacy threads */
+  groundedSha?: string | null;
   /** Active run ID for the current turn */
   activeRunId?: string;
   /** Path to the temp workspace directory */

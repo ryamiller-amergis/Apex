@@ -1069,7 +1069,7 @@ describe('DELETE /api/admin/users/:oid/project-roles/:roleId', () => {
 describe('GET /api/admin/available-models', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('returns 200 with the model list in { id, displayName } shape', async () => {
+  it('AC-0 / VT-09 modelsService maps Cursor.models.list on SDK 1.0.24', async () => {
     MockCursor.models.list.mockResolvedValue([
       { id: 'claude-3.5-sonnet', displayName: 'Claude 3.5 Sonnet' },
       { id: 'gpt-4o' }, // missing displayName — should fall back to id
