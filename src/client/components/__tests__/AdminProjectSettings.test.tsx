@@ -29,6 +29,14 @@ jest.mock('../../hooks/useGroups', () => ({
   useGroupsWithMembers: jest.fn(),
 }));
 
+jest.mock('../../hooks/useFoundationSkillAdmin', () => ({
+  useProjectAvailableSkills: jest.fn().mockReturnValue({
+    data: [],
+    isLoading: false,
+    isError: false,
+  }),
+}));
+
 jest.mock('../GroupAwarePeoplePicker', () => ({
   GroupAwarePeoplePicker: () => <div data-testid="people-picker" />,
 }));

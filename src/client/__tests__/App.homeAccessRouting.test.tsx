@@ -95,6 +95,8 @@ function makeAppShell(overrides: Record<string, unknown> = {}) {
     isInAnyGroup: () => false,
     userId: 'user-1',
     isSuperAdmin: false,
+    isAdmin: false,
+    groups: [],
     permissionsLoaded: true,
     workItems: [],
     error: null,
