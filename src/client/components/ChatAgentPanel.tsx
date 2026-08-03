@@ -1,10 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { useChatStream } from '../hooks/useChatStream';
+import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import {
-  useSendMessage,
-  useCancelRun,
   useCloseThread,
   useSkillList,
 } from '../hooks/useChatThreads';
@@ -84,6 +82,7 @@ const ChoiceBlockUI: React.FC<ChoiceBlockProps> = ({
               onClick={() => !locked && onSelect(opt.letter)}
               disabled={locked}
               type="button"
+              {...{ 'data-testid': `chat-agent-choice-option-${opt.letter}` }}
             >
               <span className={styles.choiceOptionLetter}>{opt.letter.toUpperCase()}</span>
               <span className={styles.choiceOptionText}>{opt.text}</span>
@@ -96,6 +95,7 @@ const ChoiceBlockUI: React.FC<ChoiceBlockProps> = ({
           onClick={() => !locked && onSelect('other')}
           disabled={locked}
           type="button"
+          {...{ 'data-testid': 'chat-agent-choice-option-other' }}
         >
           <span className={styles.choiceOptionLetter}>✎</span>
           <span className={styles.choiceOptionText}>Other / free-form</span>
@@ -108,6 +108,7 @@ const ChoiceBlockUI: React.FC<ChoiceBlockProps> = ({
           value={freeform}
           onChange={(e) => onFreeform(e.target.value)}
           rows={2}
+          {...{ 'data-testid': 'chat-agent-choice-freeform' }}
         />
       )}
       {locked && freeform && (
@@ -190,7 +191,7 @@ const AgentMessage: React.FC<AgentMessageProps> = ({ msg, onSend, isRunning, hig
   return (
     <div
       data-message-id={msg.id}
-      data-testid={highlighted ? 'chat-message-highlighted' : undefined}
+      {...(highlighted ? { 'data-testid': 'chat-message-highlighted' } : {})}
       className={`${styles.message} ${styles.roleAgent} ${highlighted ? styles.messageHighlighted : ''}`.trim()}
     >
       <div className={styles.agentHeader}>
@@ -230,6 +231,7 @@ const AgentMessage: React.FC<AgentMessageProps> = ({ msg, onSend, isRunning, hig
             onClick={handleSend}
             disabled={!allAnswered || isRunning}
             type="button"
+            {...{ 'data-testid': 'chat-agent-choice-send-btn' }}
           >
             {isRunning ? 'Agent is thinking…' : 'Submit answers ↑'}
           </button>
@@ -249,7 +251,7 @@ function ToolCallBubble({ msg, highlighted }: { msg: ChatMessage; highlighted?: 
   return (
     <div
       data-message-id={msg.id}
-      data-testid={highlighted ? 'chat-message-highlighted' : undefined}
+      {...(highlighted ? { 'data-testid': 'chat-message-highlighted' } : {})}
       className={`${styles.message} ${styles.roleTool} ${highlighted ? styles.messageHighlighted : ''}`.trim()}
     >
       <div className={styles.toolCallChip}>{msg.text}</div>
@@ -263,7 +265,7 @@ function UserBubble({ msg, highlighted }: { msg: ChatMessage; highlighted?: bool
   return (
     <div
       data-message-id={msg.id}
-      data-testid={highlighted ? 'chat-message-highlighted' : undefined}
+      {...(highlighted ? { 'data-testid': 'chat-message-highlighted' } : {})}
       className={`${styles.message} ${styles.roleUser} ${highlighted ? styles.messageHighlighted : ''}`.trim()}
     >
       <div className={styles.userBubble}>
@@ -336,13 +338,17 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     clearAttachments,
   } = useChatAttachments();
 
-  const { messages, streamingText, status, isConnected, prdReady } = useChatStream(
-    thread?.id ?? null,
-    { initialMessages: thread?.messages, initialStatus: thread?.status, initialPrdReady: thread?.prdReady },
-  );
+  const session = useAgentChatSession(thread?.id ?? null, {
+    initialMessages: thread?.messages,
+    initialStatus: thread?.status,
+    initialPrdReady: thread?.prdReady,
+    visibleMessageFilter: (m) =>
+      !(m.role === 'user' && m.text === 'Begin.')
+      && m.toolName !== '_reasoning'
+      && m.toolName !== '_thinking',
+  });
+  const { messages, streamingText, isConnected, prdReady, isRunning, status } = session;
 
-  const sendMessage = useSendMessage(thread?.id ?? '');
-  const cancelRun = useCancelRun(thread?.id ?? '');
   const closeThread = useCloseThread();
 
   const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
@@ -371,7 +377,6 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     );
   }, [slashQuery, threadSkills]);
 
-  const isRunning = status === 'running';
   const hasPrd = prdReady;
 
   const highlightedMessageId = useFocusChatMessage(
@@ -479,13 +484,12 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     if ((!trimmedText && messageAttachments.length === 0) || isRunning || !thread) return;
     setInput('');
     setSkillPickerOpen(false);
-    await sendMessage.mutateAsync({
-      text: trimmedText || 'Please use the attached files as additional context.',
-      model: selectedModel,
-      attachments: messageAttachments,
-    });
+    await session.send(
+      trimmedText || 'Please use the attached files as additional context.',
+      { model: selectedModel, attachments: messageAttachments },
+    );
     if (messageAttachments.length > 0) clearAttachments();
-  }, [isRunning, thread, sendMessage, selectedModel, clearAttachments]);
+  }, [isRunning, thread, session, selectedModel, clearAttachments]);
 
   const selectSkill = useCallback((skill: { name: string; path: string }) => {
     const msg = `Run skill: ${skill.name} (\`${skill.path}\`)`;
@@ -601,6 +605,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
               className={styles.iconBtn}
               onClick={() => setShowHistory((v) => !v)}
               title="Thread history"
+              {...{ 'data-testid': 'chat-agent-history-btn' }}
             >
               {showHistory ? '← Back' : '⏱ History'}
             </button>
@@ -610,10 +615,18 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             onClick={onNewChat}
             title="New chat"
             disabled={!canStartNewChat || isStartingNewChat || isRunning}
+            {...{ 'data-testid': 'chat-agent-new-chat-btn' }}
           >
             {isStartingNewChat ? 'Starting…' : '+ New'}
           </button>
-          <button className={`${styles.iconBtn} ${styles.iconBtnDanger}`} onClick={handleClose} title="Close panel">✕</button>
+          <button
+            className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
+            onClick={handleClose}
+            title="Close panel"
+            {...{ 'data-testid': 'chat-agent-close-btn' }}
+          >
+            ✕
+          </button>
         </div>
       </div>
 
@@ -666,7 +679,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                     <div
                       key={msg.id}
                       data-message-id={msg.id}
-                      data-testid={highlighted ? 'chat-message-highlighted' : undefined}
+                      {...(highlighted ? { 'data-testid': 'chat-message-highlighted' } : {})}
                       className={`${styles.systemErrorMsg} ${highlighted ? styles.messageHighlighted : ''}`.trim()}
                     >
                       <span className={styles.systemErrorText}>{msg.text}</span>
@@ -685,7 +698,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                   <div
                     key={msg.id}
                     data-message-id={msg.id}
-                    data-testid={highlighted ? 'chat-message-highlighted' : undefined}
+                    {...(highlighted ? { 'data-testid': 'chat-message-highlighted' } : {})}
                     className={`${styles.systemMsg} ${highlighted ? styles.messageHighlighted : ''}`.trim()}
                   >
                     {msg.text}
@@ -852,7 +865,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
 
               {/* Send / stop button */}
               {isRunning ? (
-                <button className={styles.cancelBtn} onClick={() => cancelRun.mutate()} title="Stop">■ Stop</button>
+                <button className={styles.cancelBtn} onClick={() => void session.cancel()} title="Stop">■ Stop</button>
               ) : (
                 <button className={styles.sendBtn} onClick={() => doSend(input, attachments)} disabled={(!input.trim() && attachments.length === 0) || status === 'closed'}>Send ↑</button>
               )}

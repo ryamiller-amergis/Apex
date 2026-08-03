@@ -667,8 +667,8 @@
   white-space: nowrap;
   padding: 2px 7px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.18);
-  color: #fff;
+  background: color-mix(in srgb, currentColor 16%, transparent);
+  color: inherit;
   font-size: 0.72rem;
 }
 
@@ -985,15 +985,15 @@
 }
 
 .messageCopyIconBtnInverted {
-  border-color: rgba(255, 255, 255, 0.45);
-  background: rgba(255, 255, 255, 0.16);
-  color: rgba(255, 255, 255, 0.95);
+  border-color: color-mix(in srgb, var(--on-accent) 45%, transparent);
+  background: color-mix(in srgb, var(--on-accent) 16%, transparent);
+  color: var(--on-accent);
 }
 
 .messageCopyIconBtnInverted:hover {
-  border-color: rgba(255, 255, 255, 0.75);
-  background: rgba(255, 255, 255, 0.24);
-  color: #fff;
+  border-color: color-mix(in srgb, var(--on-accent) 75%, transparent);
+  background: color-mix(in srgb, var(--on-accent) 24%, transparent);
+  color: var(--on-accent);
 }
 
 .agentLabel {

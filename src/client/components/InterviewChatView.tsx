@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm';
 import { useAppShell } from '../hooks/useAppShell';
 import { useStartChat, useChatThread, useSkillList, useSkillRepos } from '../hooks/useChatThreads';
 import { useProjectSkillConfig, useGlobalDefaultModel, useAvailableModels } from '../hooks/useProjectSkillConfig';
-import { useChatStream } from '../hooks/useChatStream';
+import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useChatAttachments, formatAttachmentSize } from '../hooks/useChatAttachments';
 import {
   adrAttachmentFileName,
@@ -746,12 +746,10 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
 
   const [input, setInput] = useState('');
-  const [isSending, setIsSending] = useState(false);
-  const [isAwaitingAgentResponse, setIsAwaitingAgentResponse] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitle, setEditTitle] = useState('');
   const [model, setModel] = useState(DEFAULT_MODEL_ID);
-  const [sendError, setSendError] = useState<string | null>(null);
+  const [prdGenError, setPrdGenError] = useState<string | null>(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [wrapUpDismissed, setWrapUpDismissed] = useState(false);
   const [showSendConfirm, setShowSendConfirm] = useState(false);
@@ -759,8 +757,6 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const pendingMessageIdsRef = useRef<Set<string>>(new Set());
-  const pendingObservedRunningRef = useRef(false);
 
   const updateStatus = useUpdateInterviewStatus();
   const updateTitle = useUpdateInterviewTitle();
@@ -799,32 +795,29 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     isError: isChatThreadError,
   } = useChatThread(interview?.chatThreadId ?? null);
 
+  const session = useAgentChatSession(interview?.chatThreadId ?? null, {
+    initialMessages: chatThread?.messages,
+    initialStatus: chatThread?.status,
+    enablePreparationState: interview?.status === 'in_progress',
+  });
+
   const {
     messages,
+    visibleMessages: visibleMessagesForContext,
     streamingText,
-    status: threadStatus,
+    isRunning,
+    isSending,
     isRetrying,
     retryReason,
     progressLabel,
-  } = useChatStream(interview?.chatThreadId ?? null, {
-    initialMessages: chatThread?.messages,
-    initialStatus: chatThread?.status,
-  });
+    isPreparing: isPreparingInterview,
+    hasPreparationError,
+    isInteractionBusy,
+    sendError,
+    clearSendError,
+  } = session;
 
-  const isRunning = threadStatus === 'running';
-
-  const visibleMessagesForContext = messages.filter((m) => !(m.role === 'user' && m.text === 'Begin.'));
-  const isEmptyInProgressInterview = Boolean(
-    interview?.status === 'in_progress'
-      && visibleMessagesForContext.length === 0
-      && !streamingText,
-  );
-  const isPreparingInterview = Boolean(
-    isEmptyInProgressInterview && threadStatus !== 'error',
-  );
-  const hasPreparationError = isEmptyInProgressInterview && threadStatus === 'error';
-  const isAgentProcessing = isRunning || isSending || isAwaitingAgentResponse;
-  const isInteractionBusy = isAgentProcessing || isPreparingInterview;
+  const isAgentProcessing = isRunning || isSending || session.isAwaitingAgentResponse;
   const draftAttachmentChars = attachments.reduce((sum, a) => sum + a.content.length, 0);
   const contextEstimate = useContextEstimate(
     visibleMessagesForContext, input, streamingText, model, draftAttachmentChars,
@@ -855,52 +848,6 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     }
   }, [isEditingTitle]);
 
-  const clearAwaitingAgentResponse = useCallback(() => {
-    pendingMessageIdsRef.current.clear();
-    pendingObservedRunningRef.current = false;
-    setIsAwaitingAgentResponse(false);
-  }, []);
-
-  const beginAwaitingAgentResponse = useCallback(() => {
-    pendingMessageIdsRef.current = new Set(messages.map((message) => message.id));
-    pendingObservedRunningRef.current = false;
-    setIsAwaitingAgentResponse(true);
-  }, [messages]);
-
-  useEffect(() => {
-    if (!isAwaitingAgentResponse) return;
-
-    if (isRunning) {
-      pendingObservedRunningRef.current = true;
-      return;
-    }
-
-    const receivedAgentOutcome = messages.some(
-      (message) =>
-        !pendingMessageIdsRef.current.has(message.id)
-        && (message.role === 'agent' || message.role === 'system'),
-    );
-
-    if (
-      receivedAgentOutcome
-      || pendingObservedRunningRef.current
-      || threadStatus === 'error'
-      || threadStatus === 'closed'
-    ) {
-      clearAwaitingAgentResponse();
-    }
-  }, [
-    clearAwaitingAgentResponse,
-    isAwaitingAgentResponse,
-    isRunning,
-    messages,
-    threadStatus,
-  ]);
-
-  useEffect(() => {
-    clearAwaitingAgentResponse();
-  }, [interview?.chatThreadId, clearAwaitingAgentResponse]);
-
   const sendMessageToAgent = useCallback(async (
     text: string,
     includeDraftAttachments: boolean,
@@ -914,51 +861,20 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
     if (speech.isListening) speech.stop();
     setInput('');
-    setSendError(null);
-    setIsSending(true);
-    beginAwaitingAgentResponse();
-    try {
-      const res = await fetch(`/api/chat/threads/${interview.chatThreadId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          text: text || 'Please use the attached files as context.',
-          attachments: outgoingAttachments,
-          model,
-        }),
-      });
-      if (!res.ok) {
-        let msg = 'Failed to send message';
-        try {
-          const body = await res.json();
-          if (body?.error) msg = body.error;
-        } catch { /* use default msg */ }
-        setSendError(msg);
-        clearAwaitingAgentResponse();
-        return;
-      }
-      if (includeDraftAttachments) clearAttachments();
-    } catch (err: unknown) {
-      trackException(err instanceof Error ? err : new Error(String(err)), {
-        context: 'interview.send',
-        interviewId: id,
-      });
-      const msg = err instanceof Error ? err.message : 'Failed to send message';
-      setSendError(msg);
-      clearAwaitingAgentResponse();
-    } finally {
-      setIsSending(false);
-    }
+    clearSendError();
+    await session.send(text || 'Please use the attached files as context.', {
+      attachments: outgoingAttachments,
+      model,
+    });
+    if (includeDraftAttachments) clearAttachments();
   }, [
     attachments,
-    beginAwaitingAgentResponse,
     clearAttachments,
-    clearAwaitingAgentResponse,
-    id,
+    clearSendError,
     isInteractionBusy,
     interview?.chatThreadId,
     model,
+    session,
     speech,
   ]);
 
@@ -976,16 +892,8 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   }, [handleSend]);
 
   const handleRetryLast = useCallback(() => {
-    if (!interview?.chatThreadId || isInteractionBusy) return;
-    const lastUserMsg = [...visibleMessagesForContext].reverse().find((m) => m.role === 'user');
-    if (!lastUserMsg) return;
-    void sendMessageToAgent(lastUserMsg.text, false);
-  }, [
-    interview?.chatThreadId,
-    isInteractionBusy,
-    sendMessageToAgent,
-    visibleMessagesForContext,
-  ]);
+    session.retryLast();
+  }, [session]);
 
   const handleAttachmentChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     await addFiles(e.currentTarget.files);
@@ -1061,7 +969,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         interviewId: id,
       });
       const msg = err instanceof Error ? err.message : 'Failed to generate PRD';
-      setSendError(msg);
+      setPrdGenError(msg);
     }
   }, [id, interview, messages, toPrdSkill, skillConfig?.prdModel, globalDefaultModel?.value, startChat, createPrd, navigate]);
 
@@ -1306,13 +1214,13 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         </div>
       </div>
 
-      {sendError && (
+      {(sendError || prdGenError) && (
         <div className={styles.sendError}>
-          {sendError}
+          {sendError ?? prdGenError}
           <button
             type="button"
             className={styles.sendErrorDismiss}
-            onClick={() => setSendError(null)}
+            onClick={() => { clearSendError(); setPrdGenError(null); }}
             aria-label="Dismiss error"
             {...{ 'data-testid': 'interview-dismiss-error' }}
           >×</button>
@@ -1631,13 +1539,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               {isRunning ? (
                 <button
                   className={`${styles.sendBtn} ${styles.stopBtn}`}
-                  onClick={async () => {
-                    if (interview?.chatThreadId) {
-                      await fetch(`/api/chat/threads/${interview.chatThreadId}/cancel`, {
-                        method: 'POST', credentials: 'include',
-                      });
-                    }
-                  }}
+                  onClick={() => void session.cancel()}
                   type="button"
                   aria-label="Stop"
                 >

@@ -655,11 +655,8 @@
 }
 
 .themeCardNeon.themeCardActive {
-  border-color: #22F0FF;
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, #22F0FF 55%, transparent),
-    0 0 18px color-mix(in srgb, #22F0FF 28%, transparent),
-    0 0 28px color-mix(in srgb, #FF2BD6 18%, transparent);
+  border-color: var(--accent-color);
+  box-shadow: var(--glow-accent-strong);
 }
 
 .themeCard:focus-visible {

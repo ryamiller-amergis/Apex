@@ -3,7 +3,13 @@
  *
  * Bright themes such as Ice intentionally use a near-white accent. Text and
  * icons rendered on accent/success fills must therefore use the matching
- * semantic foreground token instead of #fff, white, or --bg-primary.
+ * semantic foreground token (--on-accent / --on-success) instead of a fixed
+ * light foreground: #fff, white, rgba(255,255,255,a), --bg-primary, or
+ * --brand-text-inverse (which is near-white on bright themes).
+ *
+ * Note: this is a same-rule check. It cannot see a light child rendered on an
+ * accent-filled parent (e.g. a white badge inside an accent bubble) — for those
+ * prefer `currentColor` / `inherit` so the child tracks the parent foreground.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -13,7 +19,7 @@ const rulePattern = /([^{}]+)\{([^{}]*)\}/gs;
 const backgroundPattern = /(?:^|;)\s*background(?:-color)?\s*:\s*([^;}]+)/gim;
 const foregroundPattern = /(?:^|;)\s*(color|fill|stroke)\s*:\s*([^;}]+)/gim;
 const fixedLightForegroundPattern =
-  /^(?:#fff(?:fff)?|white|var\(--bg-primary\))(?:\s*!important)?$/i;
+  /^(?:#fff(?:fff)?|white|rgba\(\s*255\s*,\s*255\s*,\s*255\s*(?:,\s*[\d.]+\s*)?\)|var\(--bg-primary\)|var\(--brand-text-inverse\))(?:\s*!important)?$/i;
 
 function listCssFiles(directory) {
   return readdirSync(directory, { withFileTypes: true })

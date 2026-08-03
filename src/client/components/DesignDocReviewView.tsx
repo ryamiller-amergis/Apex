@@ -31,7 +31,7 @@ import {
   useOverrideDesignDocValidation,
 } from '../hooks/useInterviews';
 import { ProposedDesignDocChangesReview } from './ProposedDesignDocChangesReview';
-import { useChatStream } from '../hooks/useChatStream';
+import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
 import { ReviewReasonModal } from './ReviewReasonModal';
@@ -340,7 +340,6 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
   const [isCreating, setIsCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [input, setInput] = useState('');
-  const [isSending, setIsSending] = useState(false);
   const [showNewConvConfirm, setShowNewConvConfirm] = useState(false);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
   const [isDragging, setIsDragging] = useState(false);
@@ -349,8 +348,8 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
   const skipAutoCreateRef = useRef(false);
   const qc = useQueryClient();
 
-  const { messages, streamingText, status: threadStatus } = useChatStream(threadId);
-  const isRunning = threadStatus === 'running';
+  const session = useAgentChatSession(threadId, { locked: readOnly });
+  const { messages, streamingText, isRunning, isSending } = session;
   const wasRunningRef = useRef(false);
 
   // When the assistant finishes a run, invalidate the design doc so the main
@@ -481,20 +480,10 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
-    if (!text || isRunning || isSending || !threadId || readOnly) return;
+    if (!text) return;
     setInput('');
-    setIsSending(true);
-    try {
-      await fetch(`/api/chat/threads/${threadId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ text }),
-      });
-    } finally {
-      setIsSending(false);
-    }
-  }, [input, isRunning, isSending, threadId, readOnly]);
+    await session.send(text);
+  }, [input, session]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {

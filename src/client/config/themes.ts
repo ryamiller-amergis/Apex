@@ -186,11 +186,11 @@ export const THEME_OPTIONS: ThemeOption[] = [
   },
   {
     value: 'ice',
-    label: 'Ice',
-    description: 'White-out glow',
+    label: 'Aurora',
+    description: 'Spring green',
     category: 'neon',
-    preview: 'linear-gradient(135deg, #000000 0%, #121418 100%)',
-    accents: ['#000000', '#2A2E34', '#F5F7FA'],
+    preview: 'linear-gradient(135deg, #000000 0%, #0A1E14 100%)',
+    accents: ['#000000', '#06301E', '#00FF85'],
   },
   {
     value: 'flare',

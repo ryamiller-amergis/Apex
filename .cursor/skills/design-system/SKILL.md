@@ -83,6 +83,11 @@ Paste this block into the prototype's `<style>` and reference variables througho
   --error-color: #d32f2f;
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.14);
+  /* Neon glow — `none` on light/classic themes; only the neon-category
+     production themes override these. Prototypes stay light, so leave as none. */
+  --glow-accent: none;
+  --glow-accent-strong: none;
+  --glow-text: none;
   --radius-sm: 6px;
   --radius: 8px;
   --radius-lg: 12px;
@@ -256,12 +261,23 @@ For greenfield features with no natural home, use `new-page` and `targetRoute: n
 - **Selected/active:** accent text + soft tertiary background.
 - **Disabled:** `opacity: 0.45`, `cursor: not-allowed`. Never hide.
 
+### Neon glow (production themes only)
+
+The neon-category themes (neon, volt, plasma, pink, ice, flare) express their identity
+through an accent **glow** applied to signal-carrying elements — the primary CTA,
+active/selected states, focus rings, and live indicators — via `box-shadow: var(--glow-accent)`
+(or `var(--glow-accent-strong)` for a hero CTA / featured card). The token is `none` on
+light/classic themes, so it is safe to reference everywhere and is a no-op in prototypes.
+Never hardcode a neon `box-shadow` or gate it with a JS theme check; reserve glow for a
+small set of high-signal elements, not every surface. Full guidance:
+`.cursor/rules/ui-design-standards.mdc` → "Neon Glow".
+
 ### Theme-safe filled controls — mandatory
 
 - Any solid or gradient background containing `var(--accent-color)` or `var(--accent-hover)` must use `color: var(--on-accent)`.
 - Any solid or gradient background containing `var(--success-color)` or `var(--success-hover)` must use `color: var(--on-success)`.
 - SVG icons on these fills must inherit `currentColor` from the semantic foreground token. Do not use `fill: #fff`, `stroke: #fff`, `color: white`, or `color: var(--bg-primary)`.
-- These rules apply to buttons, badges, avatars, icon tiles, selected states, hover states, and generated prototypes across every theme, including Ice.
+- These rules apply to buttons, badges, avatars, icon tiles, selected states, hover states, and generated prototypes across every theme, including high-luminance accents like Aurora and Volt.
 - Production CSS is enforced by `npm run lint:theme-contrast`; do not bypass the check with an equivalent hard-coded light color.
 
 ---

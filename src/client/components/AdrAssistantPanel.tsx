@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { useChatStream } from '../hooks/useChatStream';
+import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { InterviewAgentMessage } from './InterviewChatView';
 import styles from './PrdAssistantPanel.module.css';
 
@@ -27,7 +27,6 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
   const [input, setInput] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
-  const [isSending, setIsSending] = useState(false);
   const [showNewConfirm, setShowNewConfirm] = useState(false);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
   const [isDragging, setIsDragging] = useState(false);
@@ -36,8 +35,8 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
   const dragStartXRef = useRef(0);
   const dragStartWidthRef = useRef(DEFAULT_PANEL_WIDTH);
   const queryClient = useQueryClient();
-  const { messages, streamingText, status } = useChatStream(threadId);
-  const isRunning = status === 'running';
+  const session = useAgentChatSession(threadId);
+  const { messages, streamingText, isRunning, isSending } = session;
   const wasRunning = useRef(false);
 
   const createThread = useCallback(async (forceNew = false) => {
@@ -106,20 +105,9 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
 
   const sendText = useCallback(async (messageText: string) => {
     const text = messageText.trim();
-    if (!text || !threadId || isRunning || isSending) return;
-    setIsSending(true);
-    try {
-      const response = await fetch(`/api/chat/threads/${threadId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ text }),
-      });
-      if (!response.ok) throw new Error('Failed to send message');
-    } finally {
-      setIsSending(false);
-    }
-  }, [threadId, isRunning, isSending]);
+    if (!text) return;
+    await session.send(text);
+  }, [session]);
 
   const send = useCallback(async () => {
     const text = input.trim();
@@ -139,16 +127,16 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
   return (
     <>
       {showNewConfirm && (
-        <div className={styles.confirmOverlay} role="dialog" aria-modal="true" aria-labelledby="adr-new-conversation-title">
+        <div className={styles.confirmOverlay} role="dialog" aria-modal="true" aria-labelledby="adr-new-conversation-title" {...{ 'data-testid': 'adr-assistant-new-confirm-dialog' }}>
           <div className={styles.confirmCard}>
             <h2 className={styles.confirmTitle} id="adr-new-conversation-title">Start new conversation?</h2>
             <p className={styles.confirmBody}>A fresh ADR refinement conversation will replace the current assistant thread.</p>
             <div className={styles.confirmActions}>
-              <button className={styles.confirmBtnCancel} type="button" onClick={() => setShowNewConfirm(false)}>Cancel</button>
+              <button className={styles.confirmBtnCancel} type="button" onClick={() => setShowNewConfirm(false)} {...{ 'data-testid': 'adr-assistant-new-confirm-cancel' }}>Cancel</button>
               <button className={styles.confirmBtnConfirm} type="button" onClick={() => {
                 setShowNewConfirm(false);
                 void createThread(true);
-              }}>Start new</button>
+              }} {...{ 'data-testid': 'adr-assistant-new-confirm-start' }}>Start new</button>
             </div>
           </div>
         </div>
@@ -167,8 +155,8 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
             <span className={styles.title}>ADR Apex Assistant</span>
           </div>
           <div className={styles.headerActions}>
-            <button className={styles.iconBtn} type="button" aria-label="New conversation" onClick={() => setShowNewConfirm(true)}>↻</button>
-            <button className={styles.closeBtn} type="button" aria-label="Close assistant" onClick={onClose}>×</button>
+            <button className={styles.iconBtn} type="button" aria-label="New conversation" onClick={() => setShowNewConfirm(true)} {...{ 'data-testid': 'adr-assistant-new-btn' }}>↻</button>
+            <button className={styles.closeBtn} type="button" aria-label="Close assistant" onClick={onClose} {...{ 'data-testid': 'adr-assistant-close-btn' }}>×</button>
           </div>
         </div>
         <div className={styles.messages}>
@@ -227,8 +215,9 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
                   void send();
                 }
               }}
+              {...{ 'data-testid': 'adr-assistant-input' }}
             />
-            <button className={styles.sendBtn} type="button" aria-label="Send" disabled={!input.trim() || !threadId || isRunning || isSending} onClick={() => void send()}>→</button>
+            <button className={styles.sendBtn} type="button" aria-label="Send" disabled={!input.trim() || !threadId || isRunning || isSending} onClick={() => void send()} {...{ 'data-testid': 'adr-assistant-send-btn' }}>→</button>
           </div>
         </div>
       </div>

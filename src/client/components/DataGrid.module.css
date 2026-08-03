@@ -56,6 +56,7 @@
   border-color: var(--accent-color);
   background: var(--accent-color);
   color: var(--on-accent);
+  box-shadow: var(--glow-accent);
 }
 
 .buttonPrimary:hover {
@@ -68,6 +69,7 @@
   padding: 4px 10px;
   font-size: 0.8125rem;
   font-weight: 500;
+  white-space: nowrap;
 }
 
 .tableWrap {
@@ -101,7 +103,7 @@
 
 .rowActions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 6px;
 }
 

@@ -1,0 +1,49 @@
+---
+description: Frontend agent chat/streaming surfaces must build on the common useAgentChatSession hook
+globs: src/client/**/*.{ts,tsx}
+alwaysApply: false
+---
+
+# Agent Chat Surfaces (Common Component)
+
+Any client surface that talks to a chat/agent thread (Agent Home, interviews, ADR/PRD/design-doc
+assistants, standups, dev sessions, calendar assistant, etc.) MUST build on the shared hook
+`useAgentChatSession` (`src/client/hooks/useAgentChatSession.ts`), which wraps `useChatStream`
+(`src/client/hooks/useChatStream.ts`) for the SSE subscription.
+
+Do **not** hand-roll agent interaction with raw `fetch` + `EventSource` + `useEffect` polling.
+Reuse the common hook so send/cancel/retry, awaiting-response tracking, preparation state, and
+progress/streaming flags stay consistent across every surface.
+
+## Use the hook's contract
+
+- **Options**: `locked`, `beforeSend` / `afterSend`, `sendEndpoint` / `cancelEndpoint`,
+  `visibleMessageFilter`, `enablePreparationState`, `initialMessages` / `initialStatus`.
+- **Actions**: `send(text, { attachments, model })`, `retryLast()`, `cancel()`.
+- **Derived flags** (drive UI, don't recompute): `isInteractionBusy`, `isRunning`, `isSending`,
+  `isAwaitingAgentResponse`, `isPreparing`, `hasPreparationError`.
+- **Stream state**: `visibleMessages`, `streamingText`, `thinkingText`, `toolProgress`,
+  `phaseEvents`, `runHealth`, `progressLabel`.
+
+## Sanctioned exception to the TanStack rule
+
+`react-coding-standards.mdc` says server/async state goes through TanStack Query and to never
+`fetch` in effects. Agent chat is the **one sanctioned exception**: SSE streaming plus imperative
+send/cancel live inside `useChatStream` / `useAgentChatSession`. Route new agent surfaces through
+these hooks instead of `useQuery`/`useMutation` — do not re-implement the transport elsewhere.
+
+```tsx
+// ✅ GOOD — reuse the common hook
+const session = useAgentChatSession(threadId, {
+  enablePreparationState: true,
+  beforeSend: async () => { /* confirm / sync token */ },
+});
+<button disabled={session.isInteractionBusy} onClick={() => session.send(text)}>Send</button>
+
+// ❌ BAD — bespoke transport per component
+const es = new EventSource(`/api/chat/threads/${threadId}/stream`);
+await fetch(`/api/chat/threads/${threadId}/messages`, { method: 'POST', ... });
+```
+
+If the hook is missing a capability, extend `useAgentChatSession` (add an option) rather than
+forking the logic into a component.

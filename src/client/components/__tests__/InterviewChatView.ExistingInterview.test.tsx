@@ -60,9 +60,9 @@ jest.mock('../../hooks/useInterviews', () => ({
   useDeleteInterview: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
 }));
 
-const mockUseChatStream = jest.fn();
-jest.mock('../../hooks/useChatStream', () => ({
-  useChatStream: (...args: unknown[]) => mockUseChatStream(...args),
+const mockUseAgentChatSession = jest.fn();
+jest.mock('../../hooks/useAgentChatSession', () => ({
+  useAgentChatSession: (...args: unknown[]) => mockUseAgentChatSession(...args),
 }));
 
 jest.mock('../../hooks/useChatAttachments', () => ({
@@ -163,10 +163,39 @@ function makeInterview(overrides: Partial<Interview> = {}): Interview {
   };
 }
 
+const mockSend = jest.fn().mockResolvedValue(undefined);
+const mockCancel = jest.fn().mockResolvedValue(undefined);
+const mockRetryLast = jest.fn();
+const mockClearSendError = jest.fn();
+
 const idleStream = {
   messages: [],
+  visibleMessages: [],
   streamingText: '',
+  thinkingText: '',
+  toolProgress: [],
+  phaseEvents: [],
+  runHealth: null,
+  progressLabel: null,
+  progressPhase: null,
+  prdReady: false,
+  backlogReady: false,
+  isRetrying: false,
+  retryReason: null,
+  isConnected: true,
+  lastProgressAt: null,
   status: 'idle' as const,
+  isRunning: false,
+  isSending: false,
+  isAwaitingAgentResponse: false,
+  isPreparing: false,
+  hasPreparationError: false,
+  isInteractionBusy: false,
+  send: mockSend,
+  retryLast: mockRetryLast,
+  cancel: mockCancel,
+  sendError: null,
+  clearSendError: mockClearSendError,
 };
 
 // ── Render helper ──────────────────────────────────────────────────────────────
@@ -184,7 +213,7 @@ function renderExistingInterview(interviewId = 'iv-1') {
 beforeEach(() => {
   jest.clearAllMocks();
   HTMLElement.prototype.scrollIntoView = jest.fn();
-  mockUseChatStream.mockReturnValue(idleStream);
+  mockUseAgentChatSession.mockReturnValue(idleStream);
   (useChatThread as jest.Mock).mockReturnValue({ data: null });
   (useInterview as jest.Mock).mockReturnValue({
     data: makeInterview(),
@@ -298,9 +327,12 @@ describe('ExistingInterviewView — input locked when not in_progress', () => {
       isLoading: false,
       isError: false,
     });
-    mockUseChatStream.mockReturnValue({
+    mockUseAgentChatSession.mockReturnValue({
       ...idleStream,
       status: 'running',
+      isRunning: true,
+      isPreparing: true,
+      isInteractionBusy: true,
       progressLabel: 'Refreshing the repository mirror…',
     });
     renderExistingInterview();
@@ -319,9 +351,10 @@ describe('ExistingInterviewView — input locked when not in_progress', () => {
         kickoff: { model: 'composer-2' },
       },
     });
-    mockUseChatStream.mockReturnValue({
+    mockUseAgentChatSession.mockReturnValue({
       ...idleStream,
       status: 'error',
+      hasPreparationError: true,
     });
 
     renderExistingInterview();
@@ -539,7 +572,7 @@ describe('ExistingInterviewView — header Reopen button disabled when PRD exist
 
 describe('ExistingInterviewView — Read Aloud', () => {
   it('shows a Read Aloud button on agent messages', () => {
-    mockUseChatStream.mockReturnValue({
+    mockUseAgentChatSession.mockReturnValue({
       ...idleStream,
       messages: [
         {
@@ -571,7 +604,7 @@ describe('ExistingInterviewView — choice block submit gating', () => {
       isLoading: false,
       isError: false,
     });
-    mockUseChatStream.mockReturnValue({
+    mockUseAgentChatSession.mockReturnValue({
       ...idleStream,
       messages: [choiceMessage],
     });
@@ -585,7 +618,7 @@ describe('ExistingInterviewView — choice block submit gating', () => {
       isLoading: false,
       isError: false,
     });
-    mockUseChatStream.mockReturnValue({
+    mockUseAgentChatSession.mockReturnValue({
       ...idleStream,
       messages: [choiceMessage],
     });
@@ -599,7 +632,7 @@ describe('ExistingInterviewView — choice block submit gating', () => {
       isLoading: false,
       isError: false,
     });
-    mockUseChatStream.mockReturnValue({
+    mockUseAgentChatSession.mockReturnValue({
       ...idleStream,
       messages: [choiceMessage],
     });
@@ -618,30 +651,23 @@ describe('ExistingInterviewView — processing state after send', () => {
     ts: '2026-01-01T00:00:00Z',
   };
 
-  it('disables input and shows bouncing dots until the agent responds', async () => {
-    let streamState = {
+  it('disables input and shows bouncing dots while session is busy', async () => {
+    // Simulate session in "awaiting agent response" state
+    mockUseAgentChatSession.mockReturnValue({
       ...idleStream,
       messages: [initialAgentMessage],
-    };
-    mockUseChatStream.mockImplementation(() => streamState);
+      isAwaitingAgentResponse: true,
+      isInteractionBusy: true,
+    });
 
     const view = renderExistingInterview();
     const input = screen.getByTestId('interview-message-input');
-
-    fireEvent.change(input, { target: { value: 'Investigate the retry flow' } });
-    fireEvent.click(screen.getByTestId('interview-send-message'));
-
-    await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith(
-        '/api/chat/threads/thread-iv-1/messages',
-        expect.objectContaining({ method: 'POST' }),
-      );
-      expect(input).toBeDisabled();
-      expect(screen.getByTestId('interview-agent-processing')).toBeInTheDocument();
-    });
+    expect(input).toBeDisabled();
+    expect(screen.getByTestId('interview-agent-processing')).toBeInTheDocument();
     expect(input).toHaveAttribute('placeholder', 'Agent is thinking…');
 
-    streamState = {
+    // Simulate agent responding
+    mockUseAgentChatSession.mockReturnValue({
       ...idleStream,
       messages: [
         initialAgentMessage,
@@ -652,7 +678,7 @@ describe('ExistingInterviewView — processing state after send', () => {
           ts: '2026-01-01T00:00:01Z',
         },
       ],
-    };
+    });
     view.rerender(
       <MemoryRouter initialEntries={['/backlog/interview/iv-1']}>
         <InterviewChatView />
@@ -665,36 +691,29 @@ describe('ExistingInterviewView — processing state after send', () => {
     });
   });
 
-  it('re-enables input and removes processing state when the send fails', async () => {
-    mockUseChatStream.mockReturnValue({
+  it('shows error and re-enables input when the session has a send error', () => {
+    mockUseAgentChatSession.mockReturnValue({
       ...idleStream,
       messages: [initialAgentMessage],
+      sendError: 'Unable to queue message',
     });
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: false,
-      json: () => Promise.resolve({ error: 'Unable to queue message' }),
-    }) as jest.Mock;
 
     renderExistingInterview();
     const input = screen.getByTestId('interview-message-input');
-
-    fireEvent.change(input, { target: { value: 'Investigate the retry flow' } });
-    fireEvent.click(screen.getByTestId('interview-send-message'));
-
-    await waitFor(() => {
-      expect(screen.getByText('Unable to queue message')).toBeInTheDocument();
-      expect(input).toBeEnabled();
-      expect(screen.queryByTestId('interview-agent-processing')).not.toBeInTheDocument();
-    });
+    expect(screen.getByText('Unable to queue message')).toBeInTheDocument();
+    expect(input).toBeEnabled();
+    expect(screen.queryByTestId('interview-agent-processing')).not.toBeInTheDocument();
   });
 
-  it('stays disabled throughout the running state and unlocks when the run ends', async () => {
+  it('stays disabled throughout the running state and unlocks when the run ends', () => {
     let streamState = {
       ...idleStream,
       messages: [initialAgentMessage],
-      status: 'idle' as ChatThreadStatus,
+      status: 'running' as ChatThreadStatus,
+      isRunning: true,
+      isInteractionBusy: true,
     };
-    mockUseChatStream.mockImplementation(() => streamState);
+    mockUseAgentChatSession.mockImplementation(() => streamState);
 
     const view = renderExistingInterview();
     const renderCurrentStream = () => {
@@ -705,26 +724,13 @@ describe('ExistingInterviewView — processing state after send', () => {
       );
     };
 
-    fireEvent.change(screen.getByTestId('interview-message-input'), {
-      target: { value: 'Investigate the retry flow' },
-    });
-    fireEvent.click(screen.getByTestId('interview-send-message'));
-
-    await waitFor(() => {
-      expect(screen.getByTestId('interview-message-input')).toBeDisabled();
-    });
-
-    streamState = { ...streamState, status: 'running' };
-    renderCurrentStream();
     expect(screen.getByTestId('interview-message-input')).toBeDisabled();
     expect(screen.getByTestId('interview-agent-processing')).toBeInTheDocument();
 
-    streamState = { ...streamState, status: 'idle' };
+    streamState = { ...streamState, status: 'idle' as ChatThreadStatus, isRunning: false, isInteractionBusy: false };
     renderCurrentStream();
-    await waitFor(() => {
-      expect(screen.getByTestId('interview-message-input')).toBeEnabled();
-      expect(screen.queryByTestId('interview-agent-processing')).not.toBeInTheDocument();
-    });
+    expect(screen.getByTestId('interview-message-input')).toBeEnabled();
+    expect(screen.queryByTestId('interview-agent-processing')).not.toBeInTheDocument();
   });
 });
 
@@ -737,7 +743,7 @@ describe('ExistingInterviewView — handleGeneratePrd model resolution', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     HTMLElement.prototype.scrollIntoView = jest.fn();
-    mockUseChatStream.mockReturnValue(idleStream);
+    mockUseAgentChatSession.mockReturnValue(idleStream);
 
     // Interview is complete so the "Generate PRD" button is visible
     (useInterview as jest.Mock).mockReturnValue({
@@ -869,7 +875,7 @@ describe('ExistingInterviewView — Generate PRD button disabled when PRD exists
   beforeEach(() => {
     jest.clearAllMocks();
     HTMLElement.prototype.scrollIntoView = jest.fn();
-    mockUseChatStream.mockReturnValue(idleStream);
+    mockUseAgentChatSession.mockReturnValue(idleStream);
     (useAppShell as jest.Mock).mockReturnValue({
       selectedProject: 'MaxView',
       can: jest.fn(() => true),

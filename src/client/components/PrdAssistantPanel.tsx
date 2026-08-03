@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { useChatStream } from '../hooks/useChatStream';
+import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import styles from './PrdAssistantPanel.module.css';
 
 export interface PrdAssistantPanelProps {
@@ -26,7 +26,6 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
   const [isCreating, setIsCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [input, setInput] = useState('');
-  const [isSending, setIsSending] = useState(false);
   const [showNewConvConfirm, setShowNewConvConfirm] = useState(false);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
   const [isDragging, setIsDragging] = useState(false);
@@ -37,8 +36,8 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
 
   const qc = useQueryClient();
 
-  const { messages, streamingText, status: threadStatus } = useChatStream(threadId);
-  const isRunning = threadStatus === 'running';
+  const session = useAgentChatSession(threadId);
+  const { messages, streamingText, isRunning, isSending } = session;
   const wasRunningRef = useRef(false);
 
   // When the assistant finishes a run, invalidate the PRD, generated test
@@ -124,20 +123,10 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
-    if (!text || isRunning || isSending || !threadId) return;
+    if (!text) return;
     setInput('');
-    setIsSending(true);
-    try {
-      await fetch(`/api/chat/threads/${threadId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ text }),
-      });
-    } finally {
-      setIsSending(false);
-    }
-  }, [input, isRunning, isSending, threadId]);
+    await session.send(text);
+  }, [input, session]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -159,6 +148,7 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
           role="dialog"
           aria-modal="true"
           aria-labelledby="prd-new-conv-confirm-title"
+          {...{ 'data-testid': 'prd-assistant-new-confirm-dialog' }}
         >
           <div className={styles.confirmCard}>
             <div className={styles.confirmIconWrap} aria-hidden="true">
@@ -173,6 +163,7 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
                 className={styles.confirmBtnCancel}
                 onClick={() => setShowNewConvConfirm(false)}
                 type="button"
+                {...{ 'data-testid': 'prd-assistant-new-confirm-cancel' }}
               >
                 Cancel
               </button>
@@ -205,6 +196,7 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
                   }
                 }}
                 type="button"
+                {...{ 'data-testid': 'prd-assistant-new-confirm-start' }}
               >
                 Start new
               </button>
@@ -236,6 +228,7 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
               type="button"
               title="New conversation"
               aria-label="New conversation"
+              {...{ 'data-testid': 'prd-assistant-new-btn' }}
             >
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M13 3v4H9" /><path d="M13 7A6 6 0 1 1 9.5 2.5" />
@@ -246,6 +239,7 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
               onClick={onClose}
               type="button"
               aria-label="Close assistant"
+              {...{ 'data-testid': 'prd-assistant-close-btn' }}
             >
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
                 <path d="M1 1l12 12M13 1L1 13" />
@@ -317,6 +311,7 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
               }
               rows={1}
               disabled={isRunning || isSending || isCreating || !threadId}
+              {...{ 'data-testid': 'prd-assistant-input' }}
             />
             <button
               className={styles.sendBtn}
@@ -324,6 +319,7 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
               disabled={!input.trim() || isRunning || isSending || isCreating || !threadId}
               type="button"
               aria-label="Send"
+              {...{ 'data-testid': 'prd-assistant-send-btn' }}
             >
               <svg viewBox="0 0 20 20" fill="currentColor">
                 <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />

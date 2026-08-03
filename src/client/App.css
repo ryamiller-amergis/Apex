@@ -75,6 +75,11 @@
   --status-mix: 14%;
   --shadow-sm: rgba(0, 0, 0, 0.08);
   --shadow-md: rgba(0, 0, 0, 0.14);
+  /* Neon glow — no glow on non-neon themes. Neon-category themes override
+     these with accent-derived outer glows. Reference via box-shadow only. */
+  --glow-accent: none;
+  --glow-accent-strong: none;
+  --glow-text: none;
   --calendar-bg: #E4EAF4;
   --calendar-event-bg: #C8D2E4;
   --calendar-event-border: #2747D9;
@@ -558,6 +563,12 @@
   --status-mix: 24%;
   --shadow-sm: rgba(0, 240, 255, 0.28);
   --shadow-md: rgba(0, 240, 255, 0.42);
+  --glow-accent: 0 0 12px color-mix(in srgb, var(--accent-color) 32%, transparent);
+  --glow-text: 0 0 8px color-mix(in srgb, var(--accent-color) 50%, transparent);
+  --glow-accent-strong:
+    0 0 0 1px color-mix(in srgb, var(--accent-color) 55%, transparent),
+    0 0 18px color-mix(in srgb, var(--accent-color) 32%, transparent),
+    0 0 30px color-mix(in srgb, var(--accent-color) 16%, transparent);
   --calendar-bg: #050A10;
   --calendar-event-bg: #0A141C;
   --calendar-event-border: #00F0FF;
@@ -598,6 +609,12 @@
   --status-mix: 24%;
   --shadow-sm: rgba(200, 255, 0, 0.28);
   --shadow-md: rgba(200, 255, 0, 0.42);
+  --glow-accent: 0 0 12px color-mix(in srgb, var(--accent-color) 32%, transparent);
+  --glow-text: 0 0 8px color-mix(in srgb, var(--accent-color) 50%, transparent);
+  --glow-accent-strong:
+    0 0 0 1px color-mix(in srgb, var(--accent-color) 55%, transparent),
+    0 0 18px color-mix(in srgb, var(--accent-color) 32%, transparent),
+    0 0 30px color-mix(in srgb, var(--accent-color) 16%, transparent);
   --calendar-bg: #060A00;
   --calendar-event-bg: #0E1600;
   --calendar-event-border: #C8FF00;
@@ -638,6 +655,12 @@
   --status-mix: 24%;
   --shadow-sm: rgba(178, 75, 255, 0.3);
   --shadow-md: rgba(178, 75, 255, 0.45);
+  --glow-accent: 0 0 12px color-mix(in srgb, var(--accent-color) 32%, transparent);
+  --glow-text: 0 0 8px color-mix(in srgb, var(--accent-color) 50%, transparent);
+  --glow-accent-strong:
+    0 0 0 1px color-mix(in srgb, var(--accent-color) 55%, transparent),
+    0 0 18px color-mix(in srgb, var(--accent-color) 32%, transparent),
+    0 0 30px color-mix(in srgb, var(--accent-color) 16%, transparent);
   --calendar-bg: #080410;
   --calendar-event-bg: #120820;
   --calendar-event-border: #B24BFF;
@@ -678,50 +701,64 @@
   --status-mix: 24%;
   --shadow-sm: rgba(255, 45, 149, 0.3);
   --shadow-md: rgba(255, 45, 149, 0.45);
+  --glow-accent: 0 0 12px color-mix(in srgb, var(--accent-color) 32%, transparent);
+  --glow-text: 0 0 8px color-mix(in srgb, var(--accent-color) 50%, transparent);
+  --glow-accent-strong:
+    0 0 0 1px color-mix(in srgb, var(--accent-color) 55%, transparent),
+    0 0 18px color-mix(in srgb, var(--accent-color) 32%, transparent),
+    0 0 30px color-mix(in srgb, var(--accent-color) 16%, transparent);
   --calendar-bg: #0C0408;
   --calendar-event-bg: #180810;
   --calendar-event-border: #FF2D95;
   --calendar-event-text: #FF6AB5;
 }
 
-/* White-out ice neon — silver/white glow on pure black (no blue tint). */
+/* Aurora — vivid spring-green neon on a deep green-black base. A high-luminance
+   hue (like cyan) so the glow actually pops, distinct from Volt's chartreuse
+   and the success green used for status. */
 [data-theme="ice"] {
   color-scheme: dark;
-  --brand-primary: #F5F7FA;
-  --brand-primary-light: #FFFFFF;
+  --brand-primary: #00FF85;
+  --brand-primary-light: #5CFFB0;
   --brand-navy: #000000;
-  --brand-surface: #2A2E34;
+  --brand-surface: #06301E;
   --brand-surface-dark: #000000;
-  --brand-text-inverse: #FFFFFF;
+  --brand-text-inverse: #E6FFF2;
   --bg-primary: #000000;
-  --bg-secondary: #08090C;
-  --bg-tertiary: #121418;
+  --bg-secondary: #04100A;
+  --bg-tertiary: #0A1E14;
   --bg-page: #000000;
-  --text-primary: #F5F7FA;
-  --text-secondary: #B8BCC4;
-  --text-muted: #787C88;
-  --border-color: #2A2E38;
-  --border-color-light: #3A404C;
-  --accent-color: #F5F7FA;
-  --accent-hover: #FFFFFF;
-  --accent-teal: #F5F7FA;
-  --accent-teal-hover: #FFFFFF;
-  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 45%, var(--border-color-light));
+  --text-primary: #E6FFF2;
+  --text-secondary: #90D8B4;
+  --text-muted: #548874;
+  --border-color: #0C3824;
+  --border-color-light: #145436;
+  --accent-color: #00FF85;
+  --accent-hover: #5CFFB0;
+  --accent-teal: #00FF85;
+  --accent-teal-hover: #5CFFB0;
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 55%, var(--border-color-light));
   --scrollbar-thumb-hover: var(--accent-color);
   --success-color: #39FF14;
   --success-hover: #7CFF5C;
-  --on-accent: #0A0C10;
+  --on-accent: #002914;
   --on-success: #0A1404;
   --error-color: #FF4D6D;
   --warning-color: #FFE566;
   --warning-text: #FFE566;
   --status-mix: 24%;
-  --shadow-sm: rgba(245, 247, 250, 0.22);
-  --shadow-md: rgba(255, 255, 255, 0.35);
-  --calendar-bg: #08090C;
-  --calendar-event-bg: #121418;
-  --calendar-event-border: #F5F7FA;
-  --calendar-event-text: #FFFFFF;
+  --shadow-sm: rgba(0, 255, 133, 0.28);
+  --shadow-md: rgba(0, 255, 133, 0.42);
+  --glow-accent: 0 0 12px color-mix(in srgb, var(--accent-color) 32%, transparent);
+  --glow-text: 0 0 8px color-mix(in srgb, var(--accent-color) 50%, transparent);
+  --glow-accent-strong:
+    0 0 0 1px color-mix(in srgb, var(--accent-color) 55%, transparent),
+    0 0 18px color-mix(in srgb, var(--accent-color) 32%, transparent),
+    0 0 30px color-mix(in srgb, var(--accent-color) 16%, transparent);
+  --calendar-bg: #04100A;
+  --calendar-event-bg: #0A1E14;
+  --calendar-event-border: #00FF85;
+  --calendar-event-text: #5CFFB0;
 }
 
 /* Toxic orange flare — fluorescent blaze, not muted wine ember. */
@@ -758,6 +795,12 @@
   --status-mix: 24%;
   --shadow-sm: rgba(255, 92, 0, 0.3);
   --shadow-md: rgba(255, 209, 0, 0.4);
+  --glow-accent: 0 0 12px color-mix(in srgb, var(--accent-color) 32%, transparent);
+  --glow-text: 0 0 8px color-mix(in srgb, var(--accent-color) 50%, transparent);
+  --glow-accent-strong:
+    0 0 0 1px color-mix(in srgb, var(--accent-color) 55%, transparent),
+    0 0 18px color-mix(in srgb, var(--accent-color) 32%, transparent),
+    0 0 30px color-mix(in srgb, var(--accent-color) 16%, transparent);
   --calendar-bg: #0A0400;
   --calendar-event-bg: #140800;
   --calendar-event-border: #FF5C00;
@@ -882,6 +925,8 @@ body {
   font-weight: 800;
   letter-spacing: -0.03em;
   line-height: 1;
+  /* Neon themes bloom the wordmark; `none` on every other theme. */
+  text-shadow: var(--glow-text);
   /* Capitals sit optically high in the em-box next to the square mark. */
   transform: translateY(1px);
 }
@@ -993,6 +1038,7 @@ body {
 .view-btn.active {
   background: var(--accent-color);
   color: var(--on-accent);
+  box-shadow: var(--glow-accent);
 }
 
 .agent-launch-btn {
@@ -1147,8 +1193,8 @@ body {
 .saving-spinner {
   width: 16px;
   height: 16px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top-color: white;
+  border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
 }
@@ -1355,6 +1401,7 @@ body {
   right: 0;
   height: 2px;
   background: var(--accent-color);
+  box-shadow: var(--glow-accent);
 }
 
 .planning-content {

@@ -395,8 +395,8 @@
   white-space: nowrap;
   padding: 2px 7px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.18);
-  color: #fff;
+  background: color-mix(in srgb, currentColor 16%, transparent);
+  color: inherit;
   font-size: 11px;
 }
 

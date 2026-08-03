@@ -8,8 +8,8 @@
 
 .filters {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-end;
+  gap: 10px;
   flex-wrap: wrap;
   flex: 1 1 auto;
   min-width: 0;
@@ -48,6 +48,13 @@
 .filterPillActive {
   background: var(--accent-color);
   border-color: var(--accent-color);
+  color: var(--on-accent);
+  box-shadow: var(--glow-accent);
+}
+
+.filterPillActive:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
   color: var(--on-accent);
 }
 

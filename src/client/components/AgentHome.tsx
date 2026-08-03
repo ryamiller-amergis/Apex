@@ -9,7 +9,7 @@ import {
   useSkillList,
 } from '../hooks/useChatThreads';
 import { useProjectSkillConfig, useAvailableModels, useGlobalDefaultModel } from '../hooks/useProjectSkillConfig';
-import { useChatStream } from '../hooks/useChatStream';
+import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { formatAttachmentSize, useChatAttachments } from '../hooks/useChatAttachments';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
@@ -128,6 +128,7 @@ const MessageCopyButton: React.FC<MessageCopyButtonProps> = ({ text, label, inve
       type="button"
       aria-label={label}
       title={copied ? 'Copied' : label}
+      {...{ 'data-testid': 'agent-home-message-copy-btn' }}
     >
       {copied ? (
         <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -206,6 +207,7 @@ const ChoiceBlockUI: React.FC<ChoiceBlockProps> = ({
               onClick={() => !locked && onSelect(opt.letter)}
               disabled={locked}
               type="button"
+              {...{ 'data-testid': `agent-home-choice-option-${opt.letter}` }}
             >
               <span className={styles.choiceOptionLetter}>{opt.letter.toUpperCase()}</span>
               <span className={styles.choiceOptionText}>{opt.text}</span>
@@ -218,6 +220,7 @@ const ChoiceBlockUI: React.FC<ChoiceBlockProps> = ({
             onClick={() => !locked && onSelect('other')}
             disabled={locked}
             type="button"
+            {...{ 'data-testid': 'agent-home-choice-option-other' }}
           >
             <span className={styles.choiceOptionLetter}>✎</span>
             <span className={styles.choiceOptionText}>Other / free-form</span>
@@ -237,6 +240,7 @@ const ChoiceBlockUI: React.FC<ChoiceBlockProps> = ({
             }
           }}
           rows={2}
+          {...{ 'data-testid': 'agent-home-choice-freeform' }}
         />
       )}
       {locked && freeform && (
@@ -325,8 +329,8 @@ const AgentMessage: React.FC<AgentMessageProps> = ({ msg, onSend, isRunning, que
       </div>
       <div className={styles.agentBubblePanel}>
         <div className={`${styles.bubbleActions} ${styles.agentBubbleActions}`}>
-          <ReadAloudButton text={msg.text} />
-          <MessageCopyButton text={msg.text} label="Copy agent response" />
+          <ReadAloudButton text={msg.text} {...{ 'data-testid': 'agent-home-read-aloud' }} />
+          <MessageCopyButton text={msg.text} label="Copy agent response" {...{ 'data-testid': 'agent-home-copy-agent-message' }} />
         </div>
         {parts.map((part) => {
           if (part.type === 'markdown') {
@@ -350,6 +354,7 @@ const AgentMessage: React.FC<AgentMessageProps> = ({ msg, onSend, isRunning, que
               onSelect={(letter) => handleSelect(part.id, letter)}
               onFreeform={(text) => handleFreeform(part.id, text)}
               onSubmit={handleSend}
+              {...{ 'data-testid': `agent-home-choice-block-${part.id}` }}
             />
           );
         })}
@@ -360,6 +365,7 @@ const AgentMessage: React.FC<AgentMessageProps> = ({ msg, onSend, isRunning, que
             onClick={handleSend}
             disabled={!allAnswered || isRunning}
             type="button"
+            {...{ 'data-testid': 'agent-home-choice-submit-btn' }}
           >
             {isRunning ? 'Agent is thinking…' : 'Submit answers ↑'}
           </button>
@@ -397,7 +403,7 @@ function MessageBubble({
     return (
       <div
         data-message-id={msg.id}
-        data-testid={highlightTestId}
+        {...(highlightTestId ? { 'data-testid': highlightTestId } : {})}
         className={`${styles.toolMsg} ${highlightClass}`.trim()}
       >
         <ToolIcon />
@@ -411,11 +417,11 @@ function MessageBubble({
       return (
         <div
           data-message-id={msg.id}
-          data-testid={highlightTestId}
+          {...(highlightTestId ? { 'data-testid': highlightTestId } : {})}
           className={`${styles.systemErrorMsg} ${highlightClass}`.trim()}
         >
           <span className={styles.systemErrorText}>{msg.text}</span>
-          <button className={styles.retryBtn} onClick={onRetry} disabled={isRunning} type="button">
+          <button className={styles.retryBtn} onClick={onRetry} disabled={isRunning} type="button" {...{ 'data-testid': 'agent-home-retry-btn' }}>
             ↺ Try again
           </button>
         </div>
@@ -424,7 +430,7 @@ function MessageBubble({
     return (
       <div
         data-message-id={msg.id}
-        data-testid={highlightTestId}
+        {...(highlightTestId ? { 'data-testid': highlightTestId } : {})}
         className={`${styles.systemMsg} ${highlightClass}`.trim()}
       >
         {msg.text}
@@ -435,12 +441,12 @@ function MessageBubble({
     return (
       <div
         data-message-id={msg.id}
-        data-testid={highlightTestId}
+        {...(highlightTestId ? { 'data-testid': highlightTestId } : {})}
         className={`${styles.userRow} ${highlightClass}`.trim()}
       >
         <div className={styles.userBubble}>
           <div className={styles.bubbleActions}>
-            <MessageCopyButton text={msg.text} label="Copy your message" inverted />
+            <MessageCopyButton text={msg.text} label="Copy your message" inverted {...{ 'data-testid': 'agent-home-copy-user-message' }} />
           </div>
           <span>{msg.text}</span>
           {msg.attachments && msg.attachments.length > 0 && (
@@ -459,7 +465,7 @@ function MessageBubble({
   return (
     <div
       data-message-id={msg.id}
-      data-testid={highlightTestId}
+      {...(highlightTestId ? { 'data-testid': highlightTestId } : {})}
       className={highlightClass || undefined}
     >
       <AgentMessage msg={msg} onSend={onSend} isRunning={isRunning} questionOffset={questionOffset} />
@@ -539,16 +545,15 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
   );
 
   const startChat = useStartChat();
-  const { messages, streamingText, status, prdReady } = useChatStream(threadId, {
+  const session = useAgentChatSession(threadId, {
     initialMessages: seedMessages,
     initialPrdReady,
+    visibleMessageFilter: (m) =>
+      !(m.role === 'user' && m.text === 'Begin.')
+      && m.toolName !== '_reasoning'
+      && m.toolName !== '_thinking',
   });
-  const isRunning = status === 'running';
-
-  const visibleMessages = messages.filter((m) =>
-    !(m.role === 'user' && m.text === 'Begin.') &&
-    m.toolName !== '_reasoning' && m.toolName !== '_thinking'
-  );
+  const { streamingText, prdReady, isRunning, visibleMessages } = session;
 
   const visibleMessageIds = visibleMessages.map((m) => m.id);
   const highlightedMessageId = useFocusChatMessage(focusMessageId, visibleMessageIds);
@@ -781,22 +786,8 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
   const doSend = useCallback(async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || isRunning || isSending || !threadId) return;
-    setIsSending(true);
-    try {
-      const resp = await fetch(`/api/chat/threads/${threadId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ text: trimmed, model }),
-      });
-      if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}));
-        throw new Error((body as { error?: string }).error ?? `HTTP ${resp.status}`);
-      }
-    } finally {
-      setIsSending(false);
-    }
-  }, [threadId, isRunning, isSending, model]);
+    await session.send(trimmed, { model });
+  }, [threadId, isRunning, isSending, model, session]);
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
@@ -944,12 +935,8 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
   }, [skillPickerOpen, filteredSkills, skillPickerIdx, selectSkill, handleSend]);
 
   const handleStop = useCallback(async () => {
-    if (!threadId) return;
-    await fetch(`/api/chat/threads/${threadId}/cancel`, {
-      method: 'POST',
-      credentials: 'include',
-    });
-  }, [threadId]);
+    await session.cancel();
+  }, [session]);
 
   const handleNewSession = useCallback(() => {
     if (isRunning || isSending) return;
@@ -1013,6 +1000,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
               onMouseDown={(e) => { e.preventDefault(); selectSkill(skill); }}
               onMouseEnter={() => setSkillPickerIdx(idx)}
               type="button"
+              {...{ 'data-testid': `agent-home-skill-picker-${skill.id}` }}
             >
               <span className={styles.skillPickerName}>{skill.name}</span>
               {skill.description && (
@@ -1031,6 +1019,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
           className={styles.fileInput}
           onChange={handleAttachmentChange}
           disabled={isRunning || isSending || needsSkillSelection}
+          {...{ 'data-testid': 'agent-home-file-input' }}
         />
         <textarea
           ref={textareaRef}
@@ -1050,6 +1039,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
           // Compose mode focuses the prompt so users can type immediately after load.
           // eslint-disable-next-line jsx-a11y/no-autofocus -- intentional compose UX
           autoFocus={isCompose && !needsSkillSelection}
+          {...{ 'data-testid': 'agent-home-composer-input' }}
         />
         {attachments.length > 0 && (
           <div className={styles.attachmentList}>
@@ -1063,6 +1053,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
                   onClick={() => removeAttachment(attachment.id)}
                   aria-label={`Remove ${attachment.name}`}
                   disabled={isRunning || isSending}
+                  {...{ 'data-testid': `agent-home-attachment-remove-${attachment.id}` }}
                 >
                   ×
                 </button>
@@ -1084,6 +1075,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
             aria-label="Attach files"
             title="Attach files for context"
             disabled={isRunning || isSending || needsSkillSelection}
+            {...{ 'data-testid': 'agent-home-attach-btn' }}
           >
             <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
               <path d="M7 10.5l5.2-5.2a3 3 0 114.2 4.2l-6.7 6.7a5 5 0 01-7.1-7.1l6.4-6.4" />
@@ -1098,6 +1090,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
               ? (isListening ? 'Stop listening' : 'Talk to transcribe into chat')
               : 'Speech recognition is not supported in this browser'}
             disabled={!isSpeechSupported || isRunning || isSending || needsSkillSelection}
+            {...{ 'data-testid': 'agent-home-mic-btn' }}
           >
             <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
               <rect x="7" y="2.5" width="6" height="10" rx="3" />
@@ -1112,6 +1105,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
               value={model}
               onChange={(e) => setModel(e.target.value)}
               disabled={isRunning}
+              {...{ 'data-testid': 'agent-home-model-select' }}
             >
               {modelsLoading || !availableModels?.length ? (
                 <option value="">Loading models…</option>
@@ -1128,6 +1122,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
               onClick={handleStop}
               type="button"
               aria-label="Stop"
+              {...{ 'data-testid': 'agent-home-stop-btn' }}
             >
               <svg viewBox="0 0 20 20" fill="currentColor">
                 <rect x="4" y="4" width="12" height="12" rx="2" />
@@ -1140,6 +1135,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
               disabled={!canSend}
               type="button"
               aria-label="Send"
+              {...{ 'data-testid': 'agent-home-send-btn' }}
             >
               <svg viewBox="0 0 20 20" fill="currentColor">
                 <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
@@ -1171,6 +1167,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
             className={styles.historyToggleBtn}
             onClick={() => setShowHistory((v) => !v)}
             type="button"
+            {...{ 'data-testid': 'agent-home-compose-history-toggle' }}
           >
             {showHistory ? '← Hide History' : '⏱ History'}
           </button>
@@ -1199,6 +1196,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
                         : (pill.model ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID),
                     );
                   }}
+                  {...{ 'data-testid': `agent-home-skill-pill-${pill.skillPath}` }}
                 >
                   {pill.label}
                 </button>
@@ -1220,6 +1218,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
                         : (pill.model ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID),
                     );
                   }}
+                  {...{ 'data-testid': `agent-home-mcp-pill-${pill.mcpServerName}` }}
                 >
                   {pill.label}
                 </button>
@@ -1256,6 +1255,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
                 className={styles.historyToggleBtn}
                 onClick={() => setShowHistory((v) => !v)}
                 type="button"
+                {...{ 'data-testid': 'agent-home-chat-history-toggle' }}
               >
                 {showHistory ? '← Hide' : '⏱ History'}
               </button>
@@ -1277,6 +1277,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
                 onClick={handleNewSession}
                 disabled={isRunning || isSending}
                 type="button"
+                {...{ 'data-testid': 'agent-home-new-session-btn' }}
               >
                 + New chat
               </button>
@@ -1335,7 +1336,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
             <div className={styles.prdBanner}>
               <span className={styles.prdBannerText}>PRD is ready for review</span>
               <div className={styles.prdActions}>
-                <button className={styles.btnSecondary} onClick={() => setShowPrdPreview(true)} type="button">
+                <button className={styles.btnSecondary} onClick={() => setShowPrdPreview(true)} type="button" {...{ 'data-testid': 'agent-home-prd-preview-btn' }}>
                   Preview
                 </button>
               </div>
@@ -1352,6 +1353,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
         <PRDPreviewDrawer
           threadId={threadId}
           onClose={() => setShowPrdPreview(false)}
+          {...{ 'data-testid': 'agent-home-prd-preview-drawer' }}
         />
       )}
     </div>

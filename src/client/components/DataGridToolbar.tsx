@@ -95,6 +95,11 @@ export function DataGridFilterSelect<T extends string>({
   );
 }
 
+/** Thin vertical rule to separate a primary filter group from secondary filters. */
+export const DataGridFilterDivider: React.FC = () => (
+  <span className={styles.filterDivider} aria-hidden="true" />
+);
+
 export interface DataGridToolbarProps {
   searchValue: string;
   onSearchChange: (value: string) => void;

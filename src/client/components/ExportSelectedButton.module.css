@@ -39,8 +39,8 @@
   height: 18px;
   padding: 0 5px;
   border-radius: 9px;
-  background: rgba(255, 255, 255, 0.25);
-  color: #fff;
+  background: color-mix(in srgb, currentColor 22%, transparent);
+  color: inherit;
   font-size: 11px;
   font-weight: 600;
 }
@@ -49,8 +49,8 @@
   display: inline-block;
   width: 14px;
   height: 14px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top-color: #fff;
+  border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
 }
