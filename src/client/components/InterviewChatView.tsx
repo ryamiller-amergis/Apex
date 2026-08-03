@@ -747,6 +747,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [isAwaitingAgentResponse, setIsAwaitingAgentResponse] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitle, setEditTitle] = useState('');
   const [model, setModel] = useState(DEFAULT_MODEL_ID);
@@ -758,6 +759,8 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pendingMessageIdsRef = useRef<Set<string>>(new Set());
+  const pendingObservedRunningRef = useRef(false);
 
   const updateStatus = useUpdateInterviewStatus();
   const updateTitle = useUpdateInterviewTitle();
@@ -820,7 +823,8 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     isEmptyInProgressInterview && threadStatus !== 'error',
   );
   const hasPreparationError = isEmptyInProgressInterview && threadStatus === 'error';
-  const isInteractionBusy = isRunning || isPreparingInterview;
+  const isAgentProcessing = isRunning || isSending || isAwaitingAgentResponse;
+  const isInteractionBusy = isAgentProcessing || isPreparingInterview;
   const draftAttachmentChars = attachments.reduce((sum, a) => sum + a.content.length, 0);
   const contextEstimate = useContextEstimate(
     visibleMessagesForContext, input, streamingText, model, draftAttachmentChars,
@@ -851,13 +855,68 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     }
   }, [isEditingTitle]);
 
-  const handleSend = useCallback(async () => {
-    const text = input.trim();
-    if ((!text && attachments.length === 0) || isRunning || isSending || !interview?.chatThreadId) return;
+  const clearAwaitingAgentResponse = useCallback(() => {
+    pendingMessageIdsRef.current.clear();
+    pendingObservedRunningRef.current = false;
+    setIsAwaitingAgentResponse(false);
+  }, []);
+
+  const beginAwaitingAgentResponse = useCallback(() => {
+    pendingMessageIdsRef.current = new Set(messages.map((message) => message.id));
+    pendingObservedRunningRef.current = false;
+    setIsAwaitingAgentResponse(true);
+  }, [messages]);
+
+  useEffect(() => {
+    if (!isAwaitingAgentResponse) return;
+
+    if (isRunning) {
+      pendingObservedRunningRef.current = true;
+      return;
+    }
+
+    const receivedAgentOutcome = messages.some(
+      (message) =>
+        !pendingMessageIdsRef.current.has(message.id)
+        && (message.role === 'agent' || message.role === 'system'),
+    );
+
+    if (
+      receivedAgentOutcome
+      || pendingObservedRunningRef.current
+      || threadStatus === 'error'
+      || threadStatus === 'closed'
+    ) {
+      clearAwaitingAgentResponse();
+    }
+  }, [
+    clearAwaitingAgentResponse,
+    isAwaitingAgentResponse,
+    isRunning,
+    messages,
+    threadStatus,
+  ]);
+
+  useEffect(() => {
+    clearAwaitingAgentResponse();
+  }, [interview?.chatThreadId, clearAwaitingAgentResponse]);
+
+  const sendMessageToAgent = useCallback(async (
+    text: string,
+    includeDraftAttachments: boolean,
+  ) => {
+    const outgoingAttachments = includeDraftAttachments ? attachments : [];
+    if (
+      (!text && outgoingAttachments.length === 0)
+      || isInteractionBusy
+      || !interview?.chatThreadId
+    ) return;
+
     if (speech.isListening) speech.stop();
     setInput('');
     setSendError(null);
     setIsSending(true);
+    beginAwaitingAgentResponse();
     try {
       const res = await fetch(`/api/chat/threads/${interview.chatThreadId}/messages`, {
         method: 'POST',
@@ -865,7 +924,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         credentials: 'include',
         body: JSON.stringify({
           text: text || 'Please use the attached files as context.',
-          attachments,
+          attachments: outgoingAttachments,
           model,
         }),
       });
@@ -876,9 +935,10 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
           if (body?.error) msg = body.error;
         } catch { /* use default msg */ }
         setSendError(msg);
+        clearAwaitingAgentResponse();
         return;
       }
-      clearAttachments();
+      if (includeDraftAttachments) clearAttachments();
     } catch (err: unknown) {
       trackException(err instanceof Error ? err : new Error(String(err)), {
         context: 'interview.send',
@@ -886,10 +946,27 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
       });
       const msg = err instanceof Error ? err.message : 'Failed to send message';
       setSendError(msg);
+      clearAwaitingAgentResponse();
     } finally {
       setIsSending(false);
     }
-  }, [input, attachments, isRunning, isSending, interview?.chatThreadId, clearAttachments, speech]);
+  }, [
+    attachments,
+    beginAwaitingAgentResponse,
+    clearAttachments,
+    clearAwaitingAgentResponse,
+    id,
+    isInteractionBusy,
+    interview?.chatThreadId,
+    model,
+    speech,
+  ]);
+
+  const handleSend = useCallback(async () => {
+    const text = input.trim();
+    if (!text && attachments.length === 0) return;
+    await sendMessageToAgent(text, true);
+  }, [attachments.length, input, sendMessageToAgent]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -899,16 +976,16 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   }, [handleSend]);
 
   const handleRetryLast = useCallback(() => {
-    if (!interview?.chatThreadId || isRunning) return;
+    if (!interview?.chatThreadId || isInteractionBusy) return;
     const lastUserMsg = [...visibleMessagesForContext].reverse().find((m) => m.role === 'user');
     if (!lastUserMsg) return;
-    void fetch(`/api/chat/threads/${interview.chatThreadId}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ text: lastUserMsg.text, model }),
-    });
-  }, [interview?.chatThreadId, isRunning, visibleMessagesForContext, model]);
+    void sendMessageToAgent(lastUserMsg.text, false);
+  }, [
+    interview?.chatThreadId,
+    isInteractionBusy,
+    sendMessageToAgent,
+    visibleMessagesForContext,
+  ]);
 
   const handleAttachmentChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     await addFiles(e.currentTarget.files);
@@ -1289,7 +1366,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                     <button
                       className={styles.retryBtn}
                       onClick={() => handleRetryLast()}
-                      disabled={isRunning}
+                      disabled={isInteractionBusy}
                       type="button"
                       {...{ 'data-testid': 'interview-retry-message' }}
                     >
@@ -1313,15 +1390,9 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 text={msg.text}
                 onSend={(text) => {
                   if (isChatLocked) return;
-                  setInput('');
-                  void fetch(`/api/chat/threads/${interview.chatThreadId}/messages`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    credentials: 'include',
-                    body: JSON.stringify({ text, model }),
-                  });
+                  void sendMessageToAgent(text, false);
                 }}
-                isRunning={isRunning}
+                isRunning={isInteractionBusy}
                 questionOffset={messageQOffsets.get(msg.id) ?? 0}
                 interviewLocked={isChatLocked}
                 alreadyAnswered={msgIndex < lastUserMsgIndex}
@@ -1336,8 +1407,14 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             </div>
           )}
 
-          {isRunning && !streamingText && !isRetrying && (
-            <div className={styles.typingIndicator}>
+          {isAgentProcessing && !streamingText && !isRetrying && (
+            <div
+              className={styles.typingIndicator}
+              role="status"
+              aria-live="polite"
+              aria-label="Agent is processing your response"
+              {...{ 'data-testid': 'interview-agent-processing' }}
+            >
               <span className={styles.typingDot} />
               <span className={styles.typingDot} />
               <span className={styles.typingDot} />
@@ -1463,7 +1540,10 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             onChange={handleAttachmentChange}
             disabled={isInteractionBusy || isSending}
           />
-          <div className={styles.inputBox}>
+          <div
+            className={`${styles.inputBox} ${isInteractionBusy ? styles.inputBoxBusy : ''}`}
+            aria-busy={isInteractionBusy}
+          >
             <textarea
               ref={textareaRef}
               className={styles.inputField}
@@ -1472,11 +1552,12 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               onKeyDown={handleKeyDown}
               placeholder={isPreparingInterview
                 ? 'Preparing the latest requirements…'
-                : isRunning
+                : isAgentProcessing
                   ? 'Agent is thinking…'
                   : 'Continue the interview… (Enter to send)'}
               rows={1}
               disabled={isInteractionBusy || isSending}
+              {...{ 'data-testid': 'interview-message-input' }}
             />
             {attachments.length > 0 && (
               <div className={styles.attachmentList}>
@@ -1603,7 +1684,10 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                         void handleSend();
                       }
                     }}
-                    disabled={(!input.trim() && attachments.length === 0) || isSending}
+                    disabled={
+                      (!input.trim() && attachments.length === 0)
+                      || isInteractionBusy
+                    }
                     type="button"
                     aria-label="Send"
                     {...{ 'data-testid': 'interview-send-message' }}

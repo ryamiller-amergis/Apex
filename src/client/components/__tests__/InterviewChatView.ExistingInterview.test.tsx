@@ -607,6 +607,125 @@ describe('ExistingInterviewView — choice block submit gating', () => {
   });
 });
 
+// ── Optimistic processing state ───────────────────────────────────────────────
+
+describe('ExistingInterviewView — processing state after send', () => {
+  const initialAgentMessage = {
+    id: 'agent-question-1',
+    role: 'agent' as const,
+    text: 'What problem should we explore?',
+    ts: '2026-01-01T00:00:00Z',
+  };
+
+  it('disables input and shows bouncing dots until the agent responds', async () => {
+    let streamState = {
+      ...idleStream,
+      messages: [initialAgentMessage],
+    };
+    mockUseChatStream.mockImplementation(() => streamState);
+
+    const view = renderExistingInterview();
+    const input = screen.getByTestId('interview-message-input');
+
+    fireEvent.change(input, { target: { value: 'Investigate the retry flow' } });
+    fireEvent.click(screen.getByTestId('interview-send-message'));
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/chat/threads/thread-iv-1/messages',
+        expect.objectContaining({ method: 'POST' }),
+      );
+      expect(input).toBeDisabled();
+      expect(screen.getByTestId('interview-agent-processing')).toBeInTheDocument();
+    });
+    expect(input).toHaveAttribute('placeholder', 'Agent is thinking…');
+
+    streamState = {
+      ...idleStream,
+      messages: [
+        initialAgentMessage,
+        {
+          id: 'agent-response-1',
+          role: 'agent' as const,
+          text: 'Here is the next question.',
+          ts: '2026-01-01T00:00:01Z',
+        },
+      ],
+    };
+    view.rerender(
+      <MemoryRouter initialEntries={['/backlog/interview/iv-1']}>
+        <InterviewChatView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('interview-message-input')).toBeEnabled();
+      expect(screen.queryByTestId('interview-agent-processing')).not.toBeInTheDocument();
+    });
+  });
+
+  it('re-enables input and removes processing state when the send fails', async () => {
+    mockUseChatStream.mockReturnValue({
+      ...idleStream,
+      messages: [initialAgentMessage],
+    });
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      json: () => Promise.resolve({ error: 'Unable to queue message' }),
+    }) as jest.Mock;
+
+    renderExistingInterview();
+    const input = screen.getByTestId('interview-message-input');
+
+    fireEvent.change(input, { target: { value: 'Investigate the retry flow' } });
+    fireEvent.click(screen.getByTestId('interview-send-message'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Unable to queue message')).toBeInTheDocument();
+      expect(input).toBeEnabled();
+      expect(screen.queryByTestId('interview-agent-processing')).not.toBeInTheDocument();
+    });
+  });
+
+  it('stays disabled throughout the running state and unlocks when the run ends', async () => {
+    let streamState = {
+      ...idleStream,
+      messages: [initialAgentMessage],
+    };
+    mockUseChatStream.mockImplementation(() => streamState);
+
+    const view = renderExistingInterview();
+    const renderCurrentStream = () => {
+      view.rerender(
+        <MemoryRouter initialEntries={['/backlog/interview/iv-1']}>
+          <InterviewChatView />
+        </MemoryRouter>,
+      );
+    };
+
+    fireEvent.change(screen.getByTestId('interview-message-input'), {
+      target: { value: 'Investigate the retry flow' },
+    });
+    fireEvent.click(screen.getByTestId('interview-send-message'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('interview-message-input')).toBeDisabled();
+    });
+
+    streamState = { ...streamState, status: 'running' };
+    renderCurrentStream();
+    expect(screen.getByTestId('interview-message-input')).toBeDisabled();
+    expect(screen.getByTestId('interview-agent-processing')).toBeInTheDocument();
+
+    streamState = { ...streamState, status: 'idle' };
+    renderCurrentStream();
+    await waitFor(() => {
+      expect(screen.getByTestId('interview-message-input')).toBeEnabled();
+      expect(screen.queryByTestId('interview-agent-processing')).not.toBeInTheDocument();
+    });
+  });
+});
+
 // ── handleGeneratePrd — model resolution ──────────────────────────────────────
 
 describe('ExistingInterviewView — handleGeneratePrd model resolution', () => {
