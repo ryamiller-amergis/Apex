@@ -55,6 +55,9 @@ temp/
 # Migration output (contains real data, never commit)
 scripts/output/
 
+# Apryse WebViewer — large binary SDK; populated at runtime by npm postinstall
+public/apryse-webviewer/
+
 # Local AI Pilot runtime/scratch artifacts
 .ai-pilot/
 data/chat-threads/

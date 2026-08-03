@@ -1586,6 +1586,8 @@ export const foundationSkillRepoStatus = pgTable('foundation_skill_repo_status',
   project:               text('project').notNull(),
   repo:                  text('repo').notNull(),
   branch:                text('branch').notNull().default('main'),
+  /** Apex project name — the identifier release targeting is keyed on. */
+  apexProject:           text('apex_project'),
   installedVersion:      text('installed_version'),
   selectedSkills:        jsonb('selected_skills').$type<string[]>().notNull().default([]),
   lockHash:              text('lock_hash'),
@@ -1601,6 +1603,7 @@ export const foundationSkillRepoStatus = pgTable('foundation_skill_repo_status',
 }, (t) => ({
   providerProjectRepoIdx: unique('fssrs_provider_project_repo_branch').on(t.provider, t.project, t.repo, t.branch),
   updateAvailableIdx:     index('idx_fssrs_update_available').on(t.updateAvailable, t.lastObservedAt),
+  apexProjectIdx:         index('idx_fssrs_apex_project').on(t.apexProject),
 }));
 
 // ── Foundation Skill Relations ────────────────────────────────────────────────

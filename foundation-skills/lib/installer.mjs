@@ -50,9 +50,16 @@ export async function install({
   const bootstrapped = [];
 
   // ── 1. Prerequisites ──────────────────────────────────────────────────────
-  const { ok: prereqOk } = await doctor({ quiet: !onProgress, strict: false });
+  const { ok: prereqOk } = await doctor({
+    quiet: !onProgress,
+    strict: true,
+    requireRegistry: true,
+    requireFeed: true,
+  });
   if (!prereqOk) {
-    errors.push('Prerequisite checks failed. Run `npx @apex/skills doctor` for details.');
+    errors.push(
+      'Prerequisite checks failed (registry/feed). Run `npx @apex/skills doctor` and fix FAIL items.',
+    );
     return { ok: false, installed, bootstrapped, errors };
   }
 

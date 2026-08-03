@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect, useId } from 'react';
 import {
   useFoundationSkillReleases,
   useFoundationSkillCandidates,
@@ -12,55 +12,40 @@ import {
   useUpdateRepoWithFoundationSkills,
   useCheckFoundationSkillCompatibility,
   useFoundationSkillMatrix,
+  useFoundationSkillTeams,
+  useScanAllFoundationSkillRepos,
+  useFoundationSkillRollbackTargets,
+  useRollbackFoundationSkillRepo,
+  useShippableFoundationSkills,
   type UpdateReleasePayload,
 } from '../hooks/useFoundationSkillAdmin';
 import { useProjects } from '../hooks/useProjects';
-import type { FoundationSkillRelease, FoundationSkillRepoStatus } from '../../shared/types/foundationSkills';
+import type {
+  FoundationSkillRelease,
+  FoundationSkillRepoStatus,
+  FoundationSkillCatalogEntry,
+  FoundationSkillTeamRepo,
+} from '../../shared/types/foundationSkills';
 import styles from './FoundationSkillsAdmin.module.css';
-
-// ── Static catalog (mirrors foundation-skills/catalog.json) ──────────────────
-
-interface CatalogEntry { name: string; summary: string; }
-
-const SKILL_CATALOG: CatalogEntry[] = [
-  { name: 'ui-lab',                   summary: 'Generate and edit interactive UI prototypes using the project\'s own design system.' },
-  { name: 'issue-analysis',           summary: 'Structured priority/risk analysis for reported issues.' },
-  { name: 'technical-analysis',       summary: 'Structured priority/risk analysis for technical backlog items.' },
-  { name: 'feature-request-analysis', summary: 'Evaluate feature requests for clarity, feasibility, impact, and alignment.' },
-  { name: 'design-doc-validation',    summary: 'Score design docs against a weighted rubric and produce a ValidationScorecard.' },
-  { name: 'prd-spec-review',          summary: 'Interactive PRD quality gate: score, report, remediate, and re-score.' },
-  { name: 'design-spec-review',       summary: 'Quality gate for design/tech-spec/assumptions output; depends on prd-spec-review.' },
-  { name: 'to-prd',                   summary: 'PRD markdown and backlog JSON synthesized from a kickoff transcript.' },
-  { name: 'prd-design-spec',          summary: 'Per-Feature design/tech-spec/assumptions; depends on to-prd.' },
-  { name: 'kick-off',                 summary: 'Orchestrate classification → interview → design doc → TDD decomposition.' },
-  { name: 'create-test-case',         summary: 'Senior-QA test cases from backlog JSON; depends on to-prd.' },
-  { name: 'grill-with-docs',          summary: 'Relentless full-repo interview stress-testing a feature plan.' },
-  { name: 'grill-design',             summary: 'Full-repo technical design interview.' },
-  { name: 'app-knowledge',            summary: 'Full-repo product Q&A from docs and code.' },
-  { name: 'daily-standup',            summary: 'Facilitate standup and produce a structured summary.' },
-  { name: 'in-app-notifications',     summary: 'Implement or extend in-app notifications.' },
-  { name: 'update-changelog',         summary: 'Changelog and version bump from git changes.' },
-  { name: 'feature-flags',            summary: 'Add flags using the top-level split pattern.' },
-  { name: 'rbac-management',          summary: 'Manage RBAC permissions and roles.' },
-  { name: 'dev-orchestrator',         summary: 'Multi-agent implementation from a dev plan.' },
-  { name: 'build-test-push',          summary: 'Build, lint, type-check, and test for push readiness.' },
-  { name: 'fullstack-node-bff',       summary: 'Node BFF + React + shared-types standards.' },
-  { name: 'postgresql-migrations',    summary: 'Safe Postgres migrations and ORM sync.' },
-  { name: 'design-module-doc',        summary: 'Technical design doc for a module or subsystem.' },
-  { name: 'adr-interview',            summary: 'Full-repo ADR interview and decision transcript.' },
-  { name: 'adr-finalize',             summary: 'Transcript → MADR ADR; depends on adr-interview.' },
-  { name: 'adr-assistant',            summary: 'Find, explain, update, or supersede ADRs.' },
-  { name: 'azure-async-infra',        summary: 'Blob, Service Bus, workers, and auth patterns for Azure.' },
-  { name: 'terraform-infra',          summary: 'Terraform IaC standards for Azure resources.' },
-  { name: 'create-pull-request',      summary: 'Create a pull request with a structured description.' },
-  { name: 'design-system',            summary: 'Design-system reference consumed by APEX when generating prototypes.' },
-];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function formatTs(ts: string | null | undefined): string {
   if (!ts) return '—';
   return new Date(ts).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+}
+
+/** Human labels for audit action codes stored lowercase in the DB. */
+function formatAuditAction(action: string): string {
+  const labels: Record<string, string> = {
+    created: 'Created',
+    validated: 'Validated',
+    validation_failed: 'Validation failed',
+    published: 'Published',
+    deprecated: 'Deprecated',
+    rollback: 'Rollback',
+  };
+  return labels[action] ?? action.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function statusBadgeClass(status: string): string {
@@ -75,24 +60,194 @@ function compatBadgeClass(status: string): string {
   return styles.badgeDraft;
 }
 
+// ── In-app confirm modal (replaces window.confirm) ────────────────────────────
+
+interface ConfirmActionModalProps {
+  title: string;
+  body: React.ReactNode;
+  hint?: string;
+  confirmLabel: string;
+  pendingLabel?: string;
+  tone?: 'danger' | 'warning';
+  isPending?: boolean;
+  /** When set, shows an optional reason textarea passed to onConfirm. */
+  reasonLabel?: string;
+  reasonPlaceholder?: string;
+  onConfirm: (reason?: string) => void;
+  onCancel: () => void;
+}
+
+const ConfirmActionModal: React.FC<ConfirmActionModalProps> = ({
+  title,
+  body,
+  hint,
+  confirmLabel,
+  pendingLabel,
+  tone = 'warning',
+  isPending = false,
+  reasonLabel,
+  reasonPlaceholder,
+  onConfirm,
+  onCancel,
+}) => {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const [reason, setReason] = useState('');
+
+  useEffect(() => {
+    cancelRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !isPending) onCancel(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onCancel, isPending]);
+
+  return (
+    <div
+      className={styles.confirmOverlay}
+      onClick={(e) => { if (e.target === e.currentTarget && !isPending) onCancel(); }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="fs-confirm-title"
+    >
+      <div className={styles.confirmCard}>
+        <div
+          className={`${styles.confirmIcon} ${tone === 'danger' ? styles.confirmIconDanger : styles.confirmIconWarning}`}
+          aria-hidden="true"
+        >
+          {tone === 'danger' ? (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="3 6 5 6 21 6" />
+              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+              <path d="M10 11v6M14 11v6" />
+              <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+            </svg>
+          ) : (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+              <line x1="12" y1="9" x2="12" y2="13" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+          )}
+        </div>
+
+        <h2 className={styles.confirmTitle} id="fs-confirm-title">{title}</h2>
+        <div className={styles.confirmBody}>{body}</div>
+        {hint && <p className={styles.confirmHint}>{hint}</p>}
+
+        {reasonLabel && (
+          <div>
+            <label className={styles.confirmReasonLabel} htmlFor="fs-confirm-reason">
+              {reasonLabel}
+            </label>
+            <textarea
+              id="fs-confirm-reason"
+              className={`${styles.input} ${styles.confirmReason}`}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder={reasonPlaceholder}
+              disabled={isPending}
+            />
+          </div>
+        )}
+
+        <div className={styles.confirmActions}>
+          <button
+            ref={cancelRef}
+            type="button"
+            className={styles.btnGhost}
+            onClick={onCancel}
+            disabled={isPending}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className={tone === 'danger' ? styles.confirmBtnDanger : styles.confirmBtnAccent}
+            onClick={() => onConfirm(reason.trim() || undefined)}
+            disabled={isPending}
+          >
+            {isPending ? (pendingLabel ?? `${confirmLabel}…`) : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/** "MaxView", "MaxView, Amego", or "3 projects" for compact display. */
+function summarizeProjects(projects: string[]): string {
+  if (projects.length === 0) return 'All projects';
+  if (projects.length <= 2)  return projects.join(', ');
+  return `${projects.length} projects`;
+}
+
 // ── ProjectPicker — reusable multi-select ────────────────────────────────────
+
+/** Viewport-fit bounds for the project dropdown, in px. */
+const DROPDOWN_MAX_H = 300;
+const DROPDOWN_MIN_H = 160;
+const DROPDOWN_GAP   = 12;
 
 const ProjectPicker: React.FC<{
   selected: string[];
   onChange: (projects: string[]) => void;
   placeholder?: string;
-}> = ({ selected, onChange, placeholder = 'Search projects…' }) => {
+}> = ({ selected, onChange, placeholder = 'Select projects…' }) => {
   const [search, setSearch] = useState('');
-  const { data: allProjects = [] } = useProjects();
-  const filtered = allProjects
-    .map(p => p.name)
-    .filter(n => n.toLowerCase().includes(search.toLowerCase()) && !selected.includes(n));
+  const [open, setOpen]     = useState(false);
+  const [placement, setPlacement] = useState<{ up: boolean; maxHeight: number }>({
+    up: false, maxHeight: DROPDOWN_MAX_H,
+  });
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const listId  = useId();
+  const { data: allProjects = [], isLoading } = useProjects();
+
+  const term      = search.trim().toLowerCase();
+  const allNames  = allProjects.map(p => p.name);
+  const filtered  = term ? allNames.filter(n => n.toLowerCase().includes(term)) : allNames;
+
+  // Dismiss the list on outside click or Escape.
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [open]);
+
+  // The list is absolutely positioned, so it adds no page height — if it ran past
+  // the viewport its own scrollbar would be unreachable. Fit it to the space that
+  // actually exists, flipping above the field when there is more room up there.
+  useEffect(() => {
+    if (!open) return;
+    const measure = () => {
+      const rect = wrapRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const below = window.innerHeight - rect.bottom - DROPDOWN_GAP;
+      const above = rect.top - DROPDOWN_GAP;
+      const up    = below < DROPDOWN_MIN_H && above > below;
+      const space = up ? above : below;
+      setPlacement({ up, maxHeight: Math.max(DROPDOWN_MIN_H, Math.min(DROPDOWN_MAX_H, space)) });
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    window.addEventListener('scroll', measure, true);
+    return () => {
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('scroll', measure, true);
+    };
+  }, [open]);
 
   const toggle = (name: string) =>
     onChange(selected.includes(name) ? selected.filter(p => p !== name) : [...selected, name]);
 
   return (
-    <div>
+    <div className={styles.pickerWrap} ref={wrapRef}>
       {selected.length > 0 && (
         <div className={styles.chipRow}>
           {selected.map(p => (
@@ -104,25 +259,98 @@ const ProjectPicker: React.FC<{
           ))}
         </div>
       )}
-      <input className={styles.input} value={search} onChange={e => setSearch(e.target.value)}
-        placeholder={placeholder} />
-      {search && filtered.length > 0 && (
-        <ul className={styles.dropdown}>
-          {filtered.slice(0, 8).map(name => (
-            <li key={name}>
-              <button type="button" className={styles.dropdownItem} onClick={() => { toggle(name); setSearch(''); }}>
-                {name}
-              </button>
-            </li>
-          ))}
+
+      <input
+        className={`${styles.input} ${styles.pickerInput}`}
+        value={search}
+        onChange={e => { setSearch(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        onClick={() => setOpen(true)}
+        placeholder={placeholder}
+        role="combobox"
+        aria-expanded={open}
+        aria-controls={listId}
+        aria-haspopup="listbox"
+        aria-label="Projects"
+      />
+
+      {open && (
+        <ul
+          id={listId}
+          className={`${styles.dropdown} ${placement.up ? styles.dropdownUp : ''}`}
+          style={{ maxHeight: placement.maxHeight }}
+        >
+          {isLoading ? (
+            <li><p className={styles.dropdownEmpty}>Loading projects…</p></li>
+          ) : allNames.length === 0 ? (
+            <li><p className={styles.dropdownEmpty}>No projects found.</p></li>
+          ) : filtered.length === 0 ? (
+            <li><p className={styles.dropdownEmpty}>No projects match “{search}”.</p></li>
+          ) : (
+            <>
+              {filtered.map(name => {
+                const isSelected = selected.includes(name);
+                return (
+                  <li key={name}>
+                    <button
+                      type="button"
+                      className={`${styles.dropdownItem} ${isSelected ? styles.dropdownItemSelected : ''}`}
+                      aria-pressed={isSelected}
+                      onClick={() => toggle(name)}
+                    >
+                      <span className={styles.dropdownCheck} aria-hidden="true">✓</span>
+                      {name}
+                    </button>
+                  </li>
+                );
+              })}
+              <li className={styles.dropdownMeta}>
+                {selected.length} of {allNames.length} selected
+              </li>
+            </>
+          )}
         </ul>
-      )}
-      {search && filtered.length === 0 && (
-        <p className={styles.muted} style={{ margin: '4px 0' }}>No matching projects</p>
       )}
     </div>
   );
 };
+
+// ── AudienceField — segmented mode switch + project picker ───────────────────
+
+const AudienceField: React.FC<{
+  mode: 'all' | 'specific';
+  projects: string[];
+  onModeChange: (mode: 'all' | 'specific') => void;
+  onProjectsChange: (projects: string[]) => void;
+  idPrefix: string;
+}> = ({ mode, projects, onModeChange, onProjectsChange, idPrefix }) => (
+  <>
+    <div className={styles.formRow}>
+      <span className={styles.label} id={`${idPrefix}-audience-label`}>Default audience</span>
+      <p className={styles.fieldHint}>
+        Controls which Apex projects can see and install this release. Individual skills can override this later.
+      </p>
+      <div className={styles.segmented} role="radiogroup" aria-labelledby={`${idPrefix}-audience-label`}>
+        <button type="button" role="radio" aria-checked={mode === 'all'}
+          className={`${styles.segmentedBtn} ${mode === 'all' ? styles.segmentedBtnActive : ''}`}
+          onClick={() => onModeChange('all')}>
+          All projects
+        </button>
+        <button type="button" role="radio" aria-checked={mode === 'specific'}
+          className={`${styles.segmentedBtn} ${mode === 'specific' ? styles.segmentedBtnActive : ''}`}
+          onClick={() => onModeChange('specific')}>
+          Specific projects
+        </button>
+      </div>
+    </div>
+    {mode === 'specific' && (
+      <div className={styles.formRow}>
+        <span className={styles.label}>Projects</span>
+        <ProjectPicker selected={projects} onChange={onProjectsChange} />
+      </div>
+    )}
+  </>
+);
 
 // ── SkillPicker — checklist with per-skill audience override ─────────────────
 
@@ -143,71 +371,115 @@ function buildSkillTargets(picked: Record<string, SkillAudiencePick>): Record<st
 }
 
 const SkillPicker: React.FC<{
+  catalog: FoundationSkillCatalogEntry[];
+  isCatalogLoading?: boolean;
   selectedSkills: string[];
   skillAudiences: Record<string, SkillAudiencePick>;
-  releaseAudienceLabel: string; // human-readable description of release-level audience
+  releaseAudienceLabel: string;
   onSkillToggle: (name: string) => void;
   onAudienceChange: (name: string, pick: SkillAudiencePick) => void;
   onSelectAll: () => void;
   onClearAll: () => void;
-}> = ({ selectedSkills, skillAudiences, releaseAudienceLabel, onSkillToggle, onAudienceChange, onSelectAll, onClearAll }) => {
+}> = ({
+  catalog, isCatalogLoading = false,
+  selectedSkills, skillAudiences, releaseAudienceLabel,
+  onSkillToggle, onAudienceChange, onSelectAll, onClearAll,
+}) => {
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [search, setSearch]     = useState('');
+
+  const term    = search.trim().toLowerCase();
+  const visible = term
+    ? catalog.filter(s =>
+        s.name.toLowerCase().includes(term) || s.summary.toLowerCase().includes(term))
+    : catalog;
 
   return (
     <div className={styles.skillPickerBox}>
       <div className={styles.skillPickerHeader}>
-        <span className={styles.label}>Skills ({selectedSkills.length} of {SKILL_CATALOG.length} selected)</span>
-        <div style={{ display: 'flex', gap: 6 }}>
-          <button type="button" className={styles.btnGhost} style={{ padding: '2px 8px', fontSize: 12 }}
-            onClick={onSelectAll}>Select all</button>
-          <button type="button" className={styles.btnGhost} style={{ padding: '2px 8px', fontSize: 12 }}
-            onClick={onClearAll}>Clear</button>
+        <span className={styles.skillPickerCount}>
+          {selectedSkills.length} of {catalog.length} selected
+        </span>
+        <input
+          className={styles.skillSearch}
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Filter skills…"
+          aria-label="Filter skills"
+        />
+        <div className={`${styles.btnRow} ${styles.pushRight}`}>
+          <button type="button" className={`${styles.btnGhost} ${styles.btnSm}`} onClick={onSelectAll}>
+            Select all
+          </button>
+          <button type="button" className={`${styles.btnGhost} ${styles.btnSm}`} onClick={onClearAll}>
+            Clear
+          </button>
         </div>
       </div>
+
       <div className={styles.skillList}>
-        {SKILL_CATALOG.map(skill => {
-          const checked = selectedSkills.includes(skill.name);
-          const audience = skillAudiences[skill.name];
-          const isExpanded = expanded === skill.name;
+        {isCatalogLoading ? (
+          <p className={`${styles.muted} ${styles.skillEmpty}`}>Loading skill catalog…</p>
+        ) : catalog.length === 0 ? (
+          <p className={`${styles.muted} ${styles.skillEmpty}`}>
+            No releasable skills found in the catalog.
+          </p>
+        ) : visible.length === 0 ? (
+          <p className={`${styles.muted} ${styles.skillEmpty}`}>No skills match “{search}”.</p>
+        ) : visible.map(skill => {
+          const checked     = selectedSkills.includes(skill.name);
+          const audience    = skillAudiences[skill.name];
+          const isExpanded  = expanded === skill.name;
           const hasOverride = audience?.mode === 'specific';
+
           return (
             <div key={skill.name} className={`${styles.skillRow} ${checked ? styles.skillRowChecked : ''}`}>
               <div className={styles.skillRowMain}>
-                <input type="checkbox" id={`skill-${skill.name}`} checked={checked}
-                  onChange={() => onSkillToggle(skill.name)} />
-                <label htmlFor={`skill-${skill.name}`} className={styles.skillName}>
-                  {skill.name}
-                  {hasOverride && (
-                    <span className={styles.overrideBadge} title={`Specific: ${audience.projects.join(', ') || 'none set'}`}>
-                      🔒 {audience.projects.length > 0 ? audience.projects.slice(0, 2).join(', ') + (audience.projects.length > 2 ? ` +${audience.projects.length - 2}` : '') : 'none'}
-                    </span>
-                  )}
+                <input
+                  type="checkbox"
+                  className={styles.checkbox}
+                  id={`skill-${skill.name}`}
+                  checked={checked}
+                  onChange={() => onSkillToggle(skill.name)}
+                />
+                <label htmlFor={`skill-${skill.name}`} className={styles.skillRowText}>
+                  <span className={styles.skillName}>{skill.name}</span>
+                  <span className={styles.skillSummary}>{skill.summary}</span>
                 </label>
-                <span className={styles.skillSummary}>{skill.summary}</span>
                 {checked && (
-                  <button type="button" className={styles.btnGhost}
-                    style={{ padding: '2px 8px', fontSize: 11, marginLeft: 'auto', flexShrink: 0 }}
-                    onClick={() => setExpanded(isExpanded ? null : skill.name)}>
-                    {isExpanded ? '▲ Hide' : '▼ Audience'}
+                  <button
+                    type="button"
+                    className={`${styles.skillAudienceBtn} ${hasOverride ? styles.skillAudienceBtnActive : ''}`}
+                    aria-expanded={isExpanded}
+                    onClick={() => setExpanded(isExpanded ? null : skill.name)}
+                    title={hasOverride
+                      ? `Only: ${audience.projects.join(', ') || 'none set'}`
+                      : `Inherits release audience (${releaseAudienceLabel})`}
+                  >
+                    {hasOverride
+                      ? `Only ${summarizeProjects(audience.projects)}`
+                      : 'Audience'}
                   </button>
                 )}
               </div>
+
               {checked && isExpanded && (
                 <div className={styles.skillAudiencePanel}>
-                  <span className={styles.label} style={{ fontSize: 11 }}>Audience for {skill.name}</span>
-                  <select
-                    className={styles.input}
-                    style={{ fontSize: 12, padding: '4px 8px' }}
-                    value={audience?.mode ?? 'inherit'}
-                    onChange={e => {
-                      const mode = e.target.value as 'inherit' | 'specific';
-                      onAudienceChange(skill.name, { mode, projects: mode === 'inherit' ? [] : (audience?.projects ?? []) });
-                    }}
-                  >
-                    <option value="inherit">Inherit release audience ({releaseAudienceLabel})</option>
-                    <option value="specific">Specific projects only</option>
-                  </select>
-                  {(audience?.mode === 'specific') && (
+                  <span className={styles.skillAudiencePanelLabel}>Who can install {skill.name}?</span>
+                  <div className={`${styles.segmented} ${styles.segmentedSm}`} role="radiogroup"
+                    aria-label={`Audience for ${skill.name}`}>
+                    <button type="button" role="radio" aria-checked={!hasOverride}
+                      className={`${styles.segmentedBtn} ${!hasOverride ? styles.segmentedBtnActive : ''}`}
+                      onClick={() => onAudienceChange(skill.name, { mode: 'inherit', projects: [] })}>
+                      Inherit ({releaseAudienceLabel})
+                    </button>
+                    <button type="button" role="radio" aria-checked={hasOverride}
+                      className={`${styles.segmentedBtn} ${hasOverride ? styles.segmentedBtnActive : ''}`}
+                      onClick={() => onAudienceChange(skill.name, { mode: 'specific', projects: audience?.projects ?? [] })}>
+                      Specific projects
+                    </button>
+                  </div>
+                  {hasOverride && (
                     <ProjectPicker
                       selected={audience.projects}
                       onChange={projects => onAudienceChange(skill.name, { mode: 'specific', projects })}
@@ -224,113 +496,330 @@ const SkillPicker: React.FC<{
   );
 };
 
-// ── CreateReleaseForm ─────────────────────────────────────────────────────────
+// ── CreateReleaseWizard ───────────────────────────────────────────────────────
 
-const CreateReleaseForm: React.FC<{ onCreated: () => void }> = ({ onCreated }) => {
-  const [version, setVersion]              = useState('');
-  const [artifactVersion, setArtifact]     = useState('');
-  const [releaseNotes, setNotes]           = useState('');
-  const [breakingChanges, setBreaking]     = useState('');
-  const [audienceMode, setAudienceMode]    = useState<'all' | 'specific'>('all');
-  const [selectedProjects, setSelected]    = useState<string[]>([]);
-  const [selectedSkills, setSelectedSkills]       = useState<string[]>(SKILL_CATALOG.map(s => s.name));
-  const [skillAudiences, setSkillAudiences]        = useState<Record<string, SkillAudiencePick>>({});
-  const [error, setError]                  = useState<string | null>(null);
+type WizardStep = 'details' | 'audience' | 'skills' | 'review';
 
+const WIZARD_STEPS: Array<{ id: WizardStep; label: string; title: string; hint: string }> = [
+  {
+    id: 'details', label: 'Details', title: 'Release details',
+    hint: 'Name this release and describe what changed. Teams see these notes in their update banner before they install.',
+  },
+  {
+    id: 'audience', label: 'Audience', title: 'Default audience',
+    hint: 'Choose which Apex projects this release is offered to. This is the default — you can narrow individual skills in the next step.',
+  },
+  {
+    id: 'skills', label: 'Skills', title: 'Select skills',
+    hint: 'Pick the foundation skills bundled in this release. Hover a row to give a single skill a narrower audience than the release default.',
+  },
+  {
+    id: 'review', label: 'Review', title: 'Review and create',
+    hint: 'Confirm everything below. The release is created as a draft — nothing reaches teams until you publish it.',
+  },
+];
+
+const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({ onCreated }) => {
+  const [step, setStep]                     = useState<WizardStep>('details');
+  const [version, setVersion]               = useState('');
+  const [artifactVersion, setArtifact]      = useState('');
+  const [releaseNotes, setNotes]            = useState('');
+  const [breakingChanges, setBreaking]      = useState('');
+  const [audienceMode, setAudienceMode]     = useState<'all' | 'specific'>('all');
+  const [selectedProjects, setSelected]     = useState<string[]>([]);
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
+  const [skillAudiences, setSkillAudiences] = useState<Record<string, SkillAudiencePick>>({});
+  const [error, setError]                   = useState<string | null>(null);
+
+  const seededRef = useRef(false);
+
+  const { skills: catalog, isLoading: catalogLoading } = useShippableFoundationSkills();
   const create = useCreateFoundationSkillRelease();
 
-  const releaseAudienceLabel = audienceMode === 'all' ? 'All projects'
-    : selectedProjects.length > 0 ? selectedProjects.join(', ') : 'none selected';
+  // A new release includes everything by default; seed once the catalog arrives.
+  useEffect(() => {
+    if (seededRef.current || catalog.length === 0) return;
+    seededRef.current = true;
+    setSelectedSkills(catalog.map(s => s.name));
+  }, [catalog]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const stepIndex   = WIZARD_STEPS.findIndex(s => s.id === step);
+  const currentMeta = WIZARD_STEPS[stepIndex];
+  const isLastStep  = step === 'review';
+
+  const releaseAudienceLabel = audienceMode === 'all'
+    ? 'All projects'
+    : selectedProjects.length > 0 ? summarizeProjects(selectedProjects) : 'none selected';
+
+  const overrideCount = Object.values(skillAudiences).filter(a => a.mode === 'specific').length;
+
+  /** Returns an error message when the given step is incomplete, else null. */
+  const validateStep = (target: WizardStep): string | null => {
+    if (target === 'details' && !version.trim()) {
+      return 'Suite version is required.';
+    }
+    if (target === 'audience' && audienceMode === 'specific' && selectedProjects.length === 0) {
+      return 'Select at least one project or switch to "All projects".';
+    }
+    if (target === 'skills' && selectedSkills.length === 0) {
+      return 'Select at least one skill to include in this release.';
+    }
+    return null;
+  };
+
+  /** First blocking error across every step up to (not including) target. */
+  const firstErrorBefore = (target: WizardStep): string | null => {
+    const targetIdx = WIZARD_STEPS.findIndex(s => s.id === target);
+    for (let i = 0; i < targetIdx; i++) {
+      const err = validateStep(WIZARD_STEPS[i].id);
+      if (err) return err;
+    }
+    return null;
+  };
+
+  const goTo = (target: WizardStep) => {
+    const blocking = firstErrorBefore(target);
+    if (blocking) { setError(blocking); return; }
     setError(null);
-    if (audienceMode === 'specific' && selectedProjects.length === 0) {
-      setError('Select at least one project or switch to "All projects".');
-      return;
-    }
-    if (selectedSkills.length === 0) {
-      setError('Select at least one skill to include in this release.');
-      return;
-    }
+    setStep(target);
+  };
+
+  const handleBack = () => {
+    setError(null);
+    if (stepIndex > 0) setStep(WIZARD_STEPS[stepIndex - 1].id);
+  };
+
+  const submitRelease = async () => {
+    const blocking = firstErrorBefore('review') ?? validateStep('review');
+    if (blocking) { setError(blocking); return; }
     try {
       await create.mutateAsync({
-        version:          version.trim(),
-        artifactVersion:  artifactVersion.trim() || version.trim(),
+        version:         version.trim(),
+        artifactVersion: artifactVersion.trim() || version.trim(),
         selectedSkills,
-        targetProjects:   audienceMode === 'specific' ? selectedProjects : [],
-        skillTargets:     buildSkillTargets(skillAudiences),
-        releaseNotes:     releaseNotes.trim() || null,
-        breakingChanges:  breakingChanges.trim() || null,
+        targetProjects:  audienceMode === 'specific' ? selectedProjects : [],
+        skillTargets:    buildSkillTargets(skillAudiences),
+        releaseNotes:    releaseNotes.trim()    || null,
+        breakingChanges: breakingChanges.trim() || null,
       });
       setVersion(''); setArtifact(''); setNotes(''); setBreaking('');
-      setAudienceMode('all'); setSelected([]); setSelectedSkills(SKILL_CATALOG.map(s => s.name));
+      setAudienceMode('all'); setSelected([]);
+      setSelectedSkills(catalog.map(s => s.name));
       setSkillAudiences({});
+      setStep('details');
       onCreated();
     } catch (err: unknown) {
       setError((err as Error).message);
     }
   };
 
+  /** Enter key and the footer button both route through here. */
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isLastStep) { void submitRelease(); return; }
+    const err = validateStep(step);
+    if (err) { setError(err); return; }
+    setError(null);
+    setStep(WIZARD_STEPS[stepIndex + 1].id);
+  };
+
   return (
-    <form className={styles.form} style={{ maxWidth: 560 }} onSubmit={handleSubmit}>
-      <h3 className={styles.formTitle}>Create draft release</h3>
-      <div className={styles.formRow}>
-        <label className={styles.label} htmlFor="fs-version">Suite version</label>
-        <input id="fs-version" className={styles.input} value={version}
-          onChange={e => setVersion(e.target.value)} placeholder="e.g. 0.3.0" required />
-      </div>
-      <div className={styles.formRow}>
-        <label className={styles.label} htmlFor="fs-artifact">Artifact version</label>
-        <input id="fs-artifact" className={styles.input} value={artifactVersion}
-          onChange={e => setArtifact(e.target.value)} placeholder="defaults to suite version" />
-      </div>
-
-      {/* Release-level audience */}
-      <div className={styles.formRow}>
-        <label className={styles.label} htmlFor="fs-audience">Default audience</label>
-        <select id="fs-audience" className={styles.input} value={audienceMode}
-          onChange={e => { setAudienceMode(e.target.value as 'all' | 'specific'); setSelected([]); }}>
-          <option value="all">All projects</option>
-          <option value="specific">Specific projects</option>
-        </select>
-      </div>
-      {audienceMode === 'specific' && (
-        <div className={styles.formRow}>
-          <label className={styles.label}>Projects</label>
-          <ProjectPicker selected={selectedProjects} onChange={setSelected} />
-        </div>
-      )}
-
-      {/* Skill picker */}
-      <div className={styles.formRow}>
-        <SkillPicker
-          selectedSkills={selectedSkills}
-          skillAudiences={skillAudiences}
-          releaseAudienceLabel={releaseAudienceLabel}
-          onSkillToggle={(name) =>
-            setSelectedSkills(prev => prev.includes(name) ? prev.filter(s => s !== name) : [...prev, name])
-          }
-          onAudienceChange={(name, pick) => setSkillAudiences(prev => ({ ...prev, [name]: pick }))}
-          onSelectAll={() => setSelectedSkills(SKILL_CATALOG.map(s => s.name))}
-          onClearAll={() => { setSelectedSkills([]); setSkillAudiences({}); }}
-        />
+    // noValidate: native constraint validation can't see fields on inactive
+    // steps, so validateStep is the single source of truth for the whole wizard.
+    <form className={styles.wizard} onSubmit={handleSubmit} noValidate>
+      {/* ── Stepper ── */}
+      <div className={styles.wizardSteps}>
+        {WIZARD_STEPS.map((s, i) => {
+          const state = i === stepIndex ? styles.wizardStepActive
+            : i < stepIndex ? styles.wizardStepDone : '';
+          return (
+            <React.Fragment key={s.id}>
+              {i > 0 && (
+                <div className={`${styles.wizardConnector} ${i <= stepIndex ? styles.wizardConnectorDone : ''}`} />
+              )}
+              <button
+                type="button"
+                className={`${styles.wizardStep} ${state}`}
+                onClick={() => goTo(s.id)}
+                aria-current={i === stepIndex ? 'step' : undefined}
+              >
+                <span className={styles.wizardStepNum}>{i < stepIndex ? '✓' : i + 1}</span>
+                <span className={styles.wizardStepLabel}>{s.label}</span>
+              </button>
+            </React.Fragment>
+          );
+        })}
       </div>
 
-      <div className={styles.formRow}>
-        <label className={styles.label} htmlFor="fs-notes">Release notes</label>
-        <textarea id="fs-notes" className={styles.textarea} value={releaseNotes}
-          onChange={e => setNotes(e.target.value)} rows={3} />
+      {/* ── Step body ── */}
+      <div className={styles.wizardBody}>
+        <h3 className={styles.wizardStepTitle}>{currentMeta.title}</h3>
+        <p className={styles.wizardStepHint}>{currentMeta.hint}</p>
+
+        {step === 'details' && (
+          <div className={styles.stepNarrow}>
+            <div className={styles.fieldGrid}>
+              <div className={styles.formRow}>
+                <label className={styles.label} htmlFor="fs-version">Suite version</label>
+                <input id="fs-version" className={`${styles.input} ${styles.inputMono}`} value={version}
+                  onChange={e => setVersion(e.target.value)} placeholder="0.3.0" aria-required="true" />
+                <p className={styles.fieldHint}>Semver identifier teams will see, e.g. 0.3.0</p>
+              </div>
+              <div className={styles.formRow}>
+                <label className={styles.label} htmlFor="fs-artifact">Artifact version</label>
+                <input id="fs-artifact" className={`${styles.input} ${styles.inputMono}`} value={artifactVersion}
+                  onChange={e => setArtifact(e.target.value)} placeholder="same as suite version" />
+                <p className={styles.fieldHint}>Azure Artifacts package version. Leave blank to match the suite version.</p>
+              </div>
+            </div>
+            <div className={styles.formRow}>
+              <label className={styles.label} htmlFor="fs-notes">Release notes</label>
+              <textarea id="fs-notes" className={styles.textarea} value={releaseNotes}
+                onChange={e => setNotes(e.target.value)} rows={4}
+                placeholder="What changed in this release?" />
+            </div>
+            <div className={styles.formRow}>
+              <label className={styles.label} htmlFor="fs-breaking">Breaking changes</label>
+              <textarea id="fs-breaking" className={styles.textarea} value={breakingChanges}
+                onChange={e => setBreaking(e.target.value)} rows={2}
+                placeholder="Anything that requires manual work from consuming teams" />
+              <p className={styles.fieldHint}>
+                Filling this in flags the release as breaking in every team&apos;s update banner.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {step === 'audience' && (
+          <div className={styles.stepNarrow}>
+            <AudienceField
+              mode={audienceMode}
+              projects={selectedProjects}
+              onModeChange={mode => { setAudienceMode(mode); setSelected([]); }}
+              onProjectsChange={setSelected}
+              idPrefix="fs"
+            />
+          </div>
+        )}
+
+        {step === 'skills' && (
+          <SkillPicker
+            catalog={catalog}
+            isCatalogLoading={catalogLoading}
+            selectedSkills={selectedSkills}
+            skillAudiences={skillAudiences}
+            releaseAudienceLabel={releaseAudienceLabel}
+            onSkillToggle={name =>
+              setSelectedSkills(prev => prev.includes(name) ? prev.filter(s => s !== name) : [...prev, name])
+            }
+            onAudienceChange={(name, pick) => setSkillAudiences(prev => ({ ...prev, [name]: pick }))}
+            onSelectAll={() => setSelectedSkills(catalog.map(s => s.name))}
+            onClearAll={() => { setSelectedSkills([]); setSkillAudiences({}); }}
+          />
+        )}
+
+        {step === 'review' && (
+          <>
+            <div className={styles.reviewGrid}>
+              <div className={styles.reviewItem}>
+                <span className={styles.reviewKey}>Suite version</span>
+                <span className={styles.reviewVal}>{version.trim() || <em className={styles.reviewValMuted}>not set</em>}</span>
+              </div>
+              <div className={styles.reviewItem}>
+                <span className={styles.reviewKey}>Artifact version</span>
+                <span className={styles.reviewVal}>{artifactVersion.trim() || version.trim()}</span>
+              </div>
+              <div className={styles.reviewItem}>
+                <span className={styles.reviewKey}>Default audience</span>
+                <span className={styles.reviewVal}>
+                  {audienceMode === 'all' ? (
+                    <span className={`${styles.badge} ${styles.badgeDraft}`}>All projects</span>
+                  ) : (
+                    <span className={styles.audienceChips}>
+                      {selectedProjects.map(p => <span key={p} className={styles.chip}>{p}</span>)}
+                    </span>
+                  )}
+                </span>
+              </div>
+              <div className={styles.reviewItem}>
+                <span className={styles.reviewKey}>Skills ({selectedSkills.length})</span>
+                <span className={styles.reviewVal}>
+                  <span className={styles.skillPillsRow}>
+                    {selectedSkills.slice(0, 12).map(name => {
+                      const ov = skillAudiences[name];
+                      const isOv = ov?.mode === 'specific';
+                      return (
+                        <span key={name} className={`${styles.skillPill} ${isOv ? styles.skillPillOverride : ''}`}>
+                          {name}
+                        </span>
+                      );
+                    })}
+                    {selectedSkills.length > 12 && (
+                      <span className={styles.skillPill}>+{selectedSkills.length - 12} more</span>
+                    )}
+                  </span>
+                </span>
+              </div>
+              {overrideCount > 0 && (
+                <div className={styles.reviewItem}>
+                  <span className={styles.reviewKey}>Audience overrides</span>
+                  <span className={styles.reviewVal}>
+                    {Object.entries(skillAudiences)
+                      .filter(([, a]) => a.mode === 'specific')
+                      .map(([name, a]) => (
+                        <div key={name}>
+                          <code>{name}</code> → {a.projects.length > 0 ? a.projects.join(', ') : 'all projects'}
+                        </div>
+                      ))}
+                  </span>
+                </div>
+              )}
+              <div className={styles.reviewItem}>
+                <span className={styles.reviewKey}>Release notes</span>
+                <span className={styles.reviewVal}>
+                  {releaseNotes.trim() || <em className={styles.reviewValMuted}>none</em>}
+                </span>
+              </div>
+              <div className={styles.reviewItem}>
+                <span className={styles.reviewKey}>Breaking changes</span>
+                <span className={styles.reviewVal}>
+                  {breakingChanges.trim() || <em className={styles.reviewValMuted}>none</em>}
+                </span>
+              </div>
+            </div>
+            <p className={styles.inlineNote}>
+              Creating this release saves it as a <strong>draft</strong>. Teams only see it once you publish.
+            </p>
+          </>
+        )}
+
+        {error && <p className={styles.error} role="alert">{error}</p>}
       </div>
-      <div className={styles.formRow}>
-        <label className={styles.label} htmlFor="fs-breaking">Breaking changes</label>
-        <textarea id="fs-breaking" className={styles.textarea} value={breakingChanges}
-          onChange={e => setBreaking(e.target.value)} rows={2} />
+
+      {/* ── Footer ── */}
+      <div className={styles.wizardFooter}>
+        <span className={styles.wizardSummary}>
+          <span className={styles.wizardSummaryStrong}>{selectedSkills.length} skills</span>
+          <span className={styles.wizardSep}>·</span>
+          <span className={styles.wizardSummaryStrong}>{releaseAudienceLabel}</span>
+          {overrideCount > 0 && (
+            <>
+              <span className={styles.wizardSep}>·</span>
+              <span className={styles.overrideBadge}>{overrideCount} override{overrideCount > 1 ? 's' : ''}</span>
+            </>
+          )}
+        </span>
+        {stepIndex > 0 && (
+          <button type="button" className={styles.btnGhost} onClick={handleBack}>Back</button>
+        )}
+        {isLastStep ? (
+          <button type="submit" className={styles.btnPrimary} disabled={create.isPending}>
+            {create.isPending ? 'Creating…' : 'Create draft'}
+          </button>
+        ) : (
+          <button type="submit" className={styles.btnPrimary}>Continue</button>
+        )}
       </div>
-      {error && <p className={styles.error}>{error}</p>}
-      <button type="submit" className={styles.btnPrimary} disabled={create.isPending}>
-        {create.isPending ? 'Creating…' : 'Create draft'}
-      </button>
     </form>
   );
 };
@@ -363,41 +852,53 @@ const CompatCheckForm: React.FC = () => {
   };
 
   return (
-    <form className={styles.form} onSubmit={handleCheck}>
-      <h3 className={styles.formTitle}>Run compatibility check</h3>
-      <div className={styles.formRow}>
-        <label className={styles.label} htmlFor="cc-apex">Apex project name</label>
-        <input id="cc-apex" className={styles.input} value={apexProj}
-          onChange={e => setApexProj(e.target.value)} placeholder="e.g. MaxView" />
+    <form className={styles.card} onSubmit={handleCheck}>
+      <div className={styles.cardHeader}>
+        <h3 className={styles.cardTitle}>Run compatibility check</h3>
+        <p className={styles.cardHint}>
+          Inspects a consumer repo&apos;s installed skills and lockfile, then records its status below.
+        </p>
       </div>
-      <div className={styles.formRow}>
-        <label className={styles.label} htmlFor="cc-provider">Provider</label>
-        <select id="cc-provider" className={styles.input} value={provider}
-          onChange={e => setProvider(e.target.value as 'ado' | 'github')}>
-          <option value="ado">Azure DevOps</option>
-          <option value="github">GitHub</option>
-        </select>
+      <div className={styles.cardBody}>
+        <div className={styles.fieldGrid}>
+          <div className={styles.formRow}>
+            <label className={styles.label} htmlFor="cc-apex">Apex project name</label>
+            <input id="cc-apex" className={styles.input} value={apexProj}
+              onChange={e => setApexProj(e.target.value)} placeholder="e.g. MaxView" />
+            <p className={styles.fieldHint}>Used to resolve which release this repo is entitled to.</p>
+          </div>
+          <div className={styles.formRow}>
+            <label className={styles.label} htmlFor="cc-provider">Provider</label>
+            <select id="cc-provider" className={styles.select} value={provider}
+              onChange={e => setProvider(e.target.value as 'ado' | 'github')}>
+              <option value="ado">Azure DevOps</option>
+              <option value="github">GitHub</option>
+            </select>
+          </div>
+          <div className={styles.formRow}>
+            <label className={styles.label} htmlFor="cc-project">ADO project / GitHub org</label>
+            <input id="cc-project" className={styles.input} value={project}
+              onChange={e => setProject(e.target.value)} placeholder="e.g. MaxView" required />
+          </div>
+          <div className={styles.formRow}>
+            <label className={styles.label} htmlFor="cc-repo">Skill repo name</label>
+            <input id="cc-repo" className={styles.input} value={repo}
+              onChange={e => setRepo(e.target.value)} placeholder="e.g. MaxView" required />
+          </div>
+          <div className={styles.formRow}>
+            <label className={styles.label} htmlFor="cc-branch">Skill branch</label>
+            <input id="cc-branch" className={`${styles.input} ${styles.inputMono}`} value={branch}
+              onChange={e => setBranch(e.target.value)} placeholder="main" />
+          </div>
+        </div>
+        {err    && <p className={styles.error} role="alert">{err}</p>}
+        {result && <p className={styles.inlineNote}>{result}</p>}
+        <div className={styles.btnRow}>
+          <button type="submit" className={styles.btnSecondary} disabled={checkCompat.isPending}>
+            {checkCompat.isPending ? 'Checking…' : 'Check compatibility'}
+          </button>
+        </div>
       </div>
-      <div className={styles.formRow}>
-        <label className={styles.label} htmlFor="cc-project">ADO project / GitHub org</label>
-        <input id="cc-project" className={styles.input} value={project}
-          onChange={e => setProject(e.target.value)} placeholder="e.g. MaxView" required />
-      </div>
-      <div className={styles.formRow}>
-        <label className={styles.label} htmlFor="cc-repo">Skill repo name</label>
-        <input id="cc-repo" className={styles.input} value={repo}
-          onChange={e => setRepo(e.target.value)} placeholder="e.g. MaxView" required />
-      </div>
-      <div className={styles.formRow}>
-        <label className={styles.label} htmlFor="cc-branch">Skill branch</label>
-        <input id="cc-branch" className={styles.input} value={branch}
-          onChange={e => setBranch(e.target.value)} placeholder="e.g. skill-packaging-apex" />
-      </div>
-      {err    && <p className={styles.error}>{err}</p>}
-      {result && <p className={styles.muted} style={{ wordBreak: 'break-word' }}>{result}</p>}
-      <button type="submit" className={styles.btnSecondary} disabled={checkCompat.isPending}>
-        {checkCompat.isPending ? 'Checking…' : 'Check compatibility'}
-      </button>
     </form>
   );
 };
@@ -422,10 +923,7 @@ const EditReleasePanel: React.FC<{
   const [selectedProjects, setSelected]   = useState<string[]>(release.targetProjects ?? []);
   const [localErr,         setLocalErr]   = useState<string | null>(null);
 
-  // Skill state
-  const [selectedSkills,  setSelectedSkills]  = useState<string[]>(
-    release.selectedSkills?.length ? release.selectedSkills : SKILL_CATALOG.map(s => s.name),
-  );
+  const [selectedSkills,  setSelectedSkills]  = useState<string[]>(release.selectedSkills ?? []);
   const [skillAudiences, setSkillAudiences] = useState<Record<string, SkillAudiencePick>>(() => {
     const init: Record<string, SkillAudiencePick> = {};
     for (const [name, projects] of Object.entries(release.skillTargets ?? {})) {
@@ -434,8 +932,20 @@ const EditReleasePanel: React.FC<{
     return init;
   });
 
-  const releaseAudienceLabel = audienceMode === 'all' ? 'All projects'
-    : selectedProjects.length > 0 ? selectedProjects.join(', ') : 'none selected';
+  const seededRef = useRef(false);
+
+  const { skills: catalog, isLoading: catalogLoading } = useShippableFoundationSkills();
+
+  // Older releases predate per-skill selection; fall back to "everything".
+  useEffect(() => {
+    if (seededRef.current || catalog.length === 0) return;
+    seededRef.current = true;
+    if (!release.selectedSkills?.length) setSelectedSkills(catalog.map(s => s.name));
+  }, [catalog, release.selectedSkills]);
+
+  const releaseAudienceLabel = audienceMode === 'all'
+    ? 'All projects'
+    : selectedProjects.length > 0 ? summarizeProjects(selectedProjects) : 'none selected';
 
   const handleSave = async () => {
     setLocalErr(null);
@@ -462,62 +972,58 @@ const EditReleasePanel: React.FC<{
       <h4 className={styles.editPanelTitle}>Edit release</h4>
 
       {isDraft && (
-        <>
+        <div className={styles.fieldGrid}>
           <div className={styles.formRow}>
-            <label className={styles.label} htmlFor="er-version">Suite version</label>
-            <input id="er-version" className={styles.input} value={version}
-              onChange={e => setVersion(e.target.value)} />
+            <label className={styles.label} htmlFor={`er-version-${release.id}`}>Suite version</label>
+            <input id={`er-version-${release.id}`} className={`${styles.input} ${styles.inputMono}`}
+              value={version} onChange={e => setVersion(e.target.value)} />
           </div>
           <div className={styles.formRow}>
-            <label className={styles.label} htmlFor="er-artifact">Artifact version</label>
-            <input id="er-artifact" className={styles.input} value={artifactVersion}
-              onChange={e => setArtifact(e.target.value)} />
+            <label className={styles.label} htmlFor={`er-artifact-${release.id}`}>Artifact version</label>
+            <input id={`er-artifact-${release.id}`} className={`${styles.input} ${styles.inputMono}`}
+              value={artifactVersion} onChange={e => setArtifact(e.target.value)} />
           </div>
-        </>
-      )}
-
-      <div className={styles.formRow}>
-        <label className={styles.label} htmlFor="er-audience">Default audience</label>
-        <select id="er-audience" className={styles.input} value={audienceMode}
-          onChange={e => { setAudienceMode(e.target.value as 'all' | 'specific'); setSelected([]); }}>
-          <option value="all">All projects</option>
-          <option value="specific">Specific projects</option>
-        </select>
-      </div>
-      {audienceMode === 'specific' && (
-        <div className={styles.formRow}>
-          <label className={styles.label}>Projects</label>
-          <ProjectPicker selected={selectedProjects} onChange={setSelected} />
         </div>
       )}
 
+      <AudienceField
+        mode={audienceMode}
+        projects={selectedProjects}
+        onModeChange={mode => { setAudienceMode(mode); setSelected([]); }}
+        onProjectsChange={setSelected}
+        idPrefix={`er-${release.id}`}
+      />
+
       <div className={styles.formRow}>
+        <span className={styles.label}>Skills</span>
         <SkillPicker
+          catalog={catalog}
+          isCatalogLoading={catalogLoading}
           selectedSkills={selectedSkills}
           skillAudiences={skillAudiences}
           releaseAudienceLabel={releaseAudienceLabel}
-          onSkillToggle={(name) =>
+          onSkillToggle={name =>
             setSelectedSkills(prev => prev.includes(name) ? prev.filter(s => s !== name) : [...prev, name])
           }
           onAudienceChange={(name, pick) => setSkillAudiences(prev => ({ ...prev, [name]: pick }))}
-          onSelectAll={() => setSelectedSkills(SKILL_CATALOG.map(s => s.name))}
+          onSelectAll={() => setSelectedSkills(catalog.map(s => s.name))}
           onClearAll={() => { setSelectedSkills([]); setSkillAudiences({}); }}
         />
       </div>
 
       <div className={styles.formRow}>
-        <label className={styles.label} htmlFor="er-notes">Release notes</label>
-        <textarea id="er-notes" className={styles.textarea} value={notes}
+        <label className={styles.label} htmlFor={`er-notes-${release.id}`}>Release notes</label>
+        <textarea id={`er-notes-${release.id}`} className={styles.textarea} value={notes}
           onChange={e => setNotes(e.target.value)} rows={5}
           placeholder="What changed in this release?" />
       </div>
       <div className={styles.formRow}>
-        <label className={styles.label} htmlFor="er-breaking">Breaking changes</label>
-        <textarea id="er-breaking" className={styles.textarea} value={breaking}
+        <label className={styles.label} htmlFor={`er-breaking-${release.id}`}>Breaking changes</label>
+        <textarea id={`er-breaking-${release.id}`} className={styles.textarea} value={breaking}
           onChange={e => setBreaking(e.target.value)} rows={2} />
       </div>
 
-      {localErr && <p className={styles.error}>{localErr}</p>}
+      {localErr && <p className={styles.error} role="alert">{localErr}</p>}
       <div className={styles.editNotesBtns}>
         <button className={styles.btnPrimary} type="button" disabled={isSaving}
           onClick={() => void handleSave()}>
@@ -547,7 +1053,7 @@ const AuditDrawer: React.FC<{ releaseId: string; onClose: () => void }> = ({ rel
           <tbody>
             {entries.map(e => (
               <tr key={e.id}>
-                <td><span className={styles.auditAction}>{e.action}</span></td>
+                <td><span className={styles.auditAction}>{formatAuditAction(e.action)}</span></td>
                 <td>{e.actorEmail ?? e.actorId ?? '—'}</td>
                 <td>{formatTs(e.createdAt)}</td>
                 <td className={styles.detailsCell}>
@@ -569,123 +1075,450 @@ const SkillsMatrixTab: React.FC = () => {
   const [search, setSearch] = useState('');
   const [expandedSkill, setExpandedSkill] = useState<string | null>(null);
 
-  const filtered = skills.filter(s =>
-    s.name.toLowerCase().includes(search.toLowerCase()) ||
-    s.summary.toLowerCase().includes(search.toLowerCase()),
-  );
+  const term = search.trim().toLowerCase();
+  const filtered = term
+    ? skills.filter(s => s.name.toLowerCase().includes(term) || s.summary.toLowerCase().includes(term))
+    : skills;
 
   if (isLoading) return <p className={styles.muted}>Loading skills matrix…</p>;
 
   return (
     <div>
-      <div style={{ marginBottom: 16 }}>
-        <input className={styles.input} style={{ maxWidth: 360 }} value={search}
-          onChange={e => setSearch(e.target.value)} placeholder="Search skills…" />
+      <div className={styles.matrixToolbar}>
+        <input className={`${styles.input} ${styles.matrixSearch}`} value={search}
+          onChange={e => setSearch(e.target.value)} placeholder="Search skills…"
+          aria-label="Search skills" />
+        <span className={`${styles.muted} ${styles.pushRight}`}>
+          {filtered.length} of {skills.length} skills
+        </span>
       </div>
 
       {filtered.length === 0 ? (
-        <p className={styles.muted}>No skills match your search.</p>
+        <div className={styles.emptyState}>
+          <p className={styles.emptyStateTitle}>No matching skills</p>
+          <p className={styles.emptyStateText}>
+            Nothing matches “{search}”. Try a shorter search term.
+          </p>
+        </div>
       ) : (
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>Skill</th>
-              <th>In Releases</th>
-              <th>Effective Audience</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map(skill => {
-              const isExpanded = expandedSkill === skill.name;
-              const publishedReleases = skill.releases.filter(r => r.status === 'published');
-              const allProjects = publishedReleases.every(r => r.effectiveTargetProjects.length === 0);
-              const uniqueProjects = Array.from(
-                new Set(publishedReleases.flatMap(r => r.effectiveTargetProjects)),
-              );
+        <div className={styles.tableWrap}>
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th>Skill</th>
+                <th>In releases</th>
+                <th>Effective audience</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(skill => {
+                const isExpanded = expandedSkill === skill.name;
+                const publishedReleases = skill.releases.filter(r => r.status === 'published');
+                const allProjects = publishedReleases.every(r => r.effectiveTargetProjects.length === 0);
+                const uniqueProjects = Array.from(
+                  new Set(publishedReleases.flatMap(r => r.effectiveTargetProjects)),
+                );
 
-              return (
-                <React.Fragment key={skill.name}>
-                  <tr
-                    className={styles.matrixRow}
-                    onClick={() => setExpandedSkill(isExpanded ? null : skill.name)}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <td>
-                      <div className={styles.matrixSkillName}>{skill.name}</div>
-                      <div className={styles.matrixSkillSummary}>{skill.summary}</div>
-                    </td>
-                    <td>
-                      {skill.releases.length === 0 ? (
-                        <span className={styles.muted}>—</span>
-                      ) : (
-                        <div className={styles.chipRow} style={{ margin: 0 }}>
-                          {skill.releases.map(r => (
-                            <span key={r.releaseId}
-                              className={`${styles.badge} ${statusBadgeClass(r.status)}`}
-                              title={`Audience: ${r.effectiveTargetProjects.length === 0 ? 'All projects' : r.effectiveTargetProjects.join(', ')}`}>
-                              v{r.version}
-                            </span>
-                          ))}
+                return (
+                  <React.Fragment key={skill.name}>
+                    <tr
+                      className={styles.matrixRow}
+                      onClick={() => setExpandedSkill(isExpanded ? null : skill.name)}
+                    >
+                      <td>
+                        <div className={styles.matrixSkillName}>
+                          <span className={`${styles.matrixCaret} ${isExpanded ? styles.matrixCaretOpen : ''}`}>▶</span>
+                          {skill.name}
                         </div>
-                      )}
-                    </td>
-                    <td>
-                      {publishedReleases.length === 0 ? (
-                        <span className={styles.muted}>Not in any published release</span>
-                      ) : allProjects ? (
-                        <span className={`${styles.badge} ${styles.badgeDraft}`}>All projects</span>
-                      ) : (
-                        <div className={styles.chipRow} style={{ margin: 0 }}>
-                          {uniqueProjects.slice(0, 4).map(p => (
-                            <span key={p} className={styles.chip}>{p}</span>
-                          ))}
-                          {uniqueProjects.length > 4 && (
-                            <span className={styles.chip}>+{uniqueProjects.length - 4}</span>
-                          )}
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                  {isExpanded && (
-                    <tr>
-                      <td colSpan={3} className={styles.matrixExpanded}>
+                        <div className={styles.matrixSkillSummary}>{skill.summary}</div>
+                      </td>
+                      <td>
                         {skill.releases.length === 0 ? (
-                          <p className={styles.muted}>This skill has not been included in any release yet.</p>
+                          <span className={styles.muted}>—</span>
                         ) : (
-                          <table className={styles.table} style={{ background: 'transparent' }}>
-                            <thead>
-                              <tr><th>Release</th><th>Status</th><th>Audience</th></tr>
-                            </thead>
-                            <tbody>
-                              {skill.releases.map(r => (
-                                <tr key={r.releaseId}>
-                                  <td><code>v{r.version}</code></td>
-                                  <td>
-                                    <span className={`${styles.badge} ${statusBadgeClass(r.status)}`}>{r.status}</span>
-                                  </td>
-                                  <td>
-                                    {r.effectiveTargetProjects.length === 0 ? (
-                                      <span className={`${styles.badge} ${styles.badgeDraft}`}>All projects</span>
-                                    ) : (
-                                      <span title={r.effectiveTargetProjects.join(', ')}>
-                                        {r.effectiveTargetProjects.slice(0, 3).join(', ')}
-                                        {r.effectiveTargetProjects.length > 3 && ` +${r.effectiveTargetProjects.length - 3}`}
-                                      </span>
-                                    )}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
+                          <span className={styles.audienceChips}>
+                            {skill.releases.map(r => (
+                              <span key={r.releaseId}
+                                className={`${styles.badge} ${statusBadgeClass(r.status)}`}
+                                title={`Audience: ${r.effectiveTargetProjects.length === 0 ? 'All projects' : r.effectiveTargetProjects.join(', ')}`}>
+                                v{r.version}
+                              </span>
+                            ))}
+                          </span>
+                        )}
+                      </td>
+                      <td>
+                        {publishedReleases.length === 0 ? (
+                          <span className={styles.muted}>Not in any published release</span>
+                        ) : allProjects ? (
+                          <span className={`${styles.badge} ${styles.badgeDraft}`}>All projects</span>
+                        ) : (
+                          <span className={styles.audienceChips}>
+                            {uniqueProjects.slice(0, 4).map(p => (
+                              <span key={p} className={styles.chip}>{p}</span>
+                            ))}
+                            {uniqueProjects.length > 4 && (
+                              <span className={styles.chip}>+{uniqueProjects.length - 4}</span>
+                            )}
+                          </span>
                         )}
                       </td>
                     </tr>
-                  )}
+                    {isExpanded && (
+                      <tr>
+                        <td colSpan={3} className={styles.matrixExpanded}>
+                          {skill.releases.length === 0 ? (
+                            <p className={styles.muted}>This skill has not been included in any release yet.</p>
+                          ) : (
+                            <table className={styles.matrixNested}>
+                              <thead>
+                                <tr><th>Release</th><th>Status</th><th>Audience</th></tr>
+                              </thead>
+                              <tbody>
+                                {skill.releases.map(r => (
+                                  <tr key={r.releaseId}>
+                                    <td><code>v{r.version}</code></td>
+                                    <td>
+                                      <span className={`${styles.badge} ${statusBadgeClass(r.status)}`}>{r.status}</span>
+                                    </td>
+                                    <td>
+                                      {r.effectiveTargetProjects.length === 0 ? (
+                                        <span className={`${styles.badge} ${styles.badgeDraft}`}>All projects</span>
+                                      ) : (
+                                        <span title={r.effectiveTargetProjects.join(', ')}>
+                                          {r.effectiveTargetProjects.slice(0, 3).join(', ')}
+                                          {r.effectiveTargetProjects.length > 3 && ` +${r.effectiveTargetProjects.length - 3}`}
+                                        </span>
+                                      )}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ── Active teams ──────────────────────────────────────────────────────────────
+
+const TeamsTab: React.FC = () => {
+  const { data: teams = [], isLoading } = useFoundationSkillTeams();
+  const scanAll = useScanAllFoundationSkillRepos();
+  const [search, setSearch] = useState('');
+  const [expandedRepo, setExpandedRepo] = useState<string | null>(null);
+  const [scanMsg, setScanMsg] = useState<string | null>(null);
+
+  const term = search.trim().toLowerCase();
+  const filtered = term
+    ? teams
+        .map(t => ({
+          ...t,
+          repos: t.repos.filter(r =>
+            t.apexProject.toLowerCase().includes(term) ||
+            r.repo.toLowerCase().includes(term) ||
+            r.friendlyName.toLowerCase().includes(term) ||
+            (r.installedVersion ?? '').toLowerCase().includes(term)),
+        }))
+        .filter(t => t.repos.length > 0)
+    : teams;
+
+  const totalRepos = teams.reduce((n, t) => n + t.repos.length, 0);
+  const shownRepos = filtered.reduce((n, t) => n + t.repos.length, 0);
+
+  const handleScanAll = async () => {
+    setScanMsg(null);
+    try {
+      const result = await scanAll.mutateAsync();
+      setScanMsg(
+        `Scanned ${result.scanned} repo(s)${result.failed > 0 ? `, ${result.failed} failed` : ''}.`,
+      );
+    } catch (err: unknown) {
+      setScanMsg(`Scan failed: ${(err as Error).message}`);
+    }
+  };
+
+  if (isLoading) return <p className={styles.muted}>Loading teams…</p>;
+
+  if (teams.length === 0) {
+    return (
+      <div className={styles.emptyState}>
+        <p className={styles.emptyStateTitle}>No teams registered</p>
+        <p className={styles.emptyStateText}>
+          Teams appear here once a project has a skills repo configured in Project Settings.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className={styles.matrixToolbar}>
+        <input className={`${styles.input} ${styles.matrixSearch}`} value={search}
+          onChange={e => setSearch(e.target.value)} placeholder="Search team, repo, or version…"
+          aria-label="Search teams" />
+        <button className={styles.btnSecondary} type="button"
+          disabled={scanAll.isPending} onClick={handleScanAll}>
+          {scanAll.isPending ? 'Scanning…' : 'Refresh all'}
+        </button>
+        <span className={`${styles.muted} ${styles.pushRight}`}>
+          {shownRepos} of {totalRepos} repos · {filtered.length} teams
+        </span>
+      </div>
+
+      {scanMsg && <p className={styles.successMsg} role="status">{scanMsg}</p>}
+
+      {shownRepos === 0 ? (
+        <div className={styles.emptyState}>
+          <p className={styles.emptyStateTitle}>No matching teams</p>
+          <p className={styles.emptyStateText}>Nothing matches “{search}”. Try a shorter search term.</p>
+        </div>
+      ) : (
+        <div className={styles.tableWrap}>
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th>Repo</th>
+                <th>Installed</th>
+                <th>Release</th>
+                <th>Skills received</th>
+                <th>Compatibility</th>
+                <th>Last checked</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(team => (
+                <React.Fragment key={team.apexProject}>
+                  <tr className={styles.teamGroupRow}>
+                    <td colSpan={6}>
+                      <span className={styles.teamGroupName}>{team.apexProject}</span>
+                      <span className={styles.muted}>
+                        {' '}· {team.repos.length} repo{team.repos.length === 1 ? '' : 's'}
+                      </span>
+                    </td>
+                  </tr>
+                  {team.repos.map(repo => {
+                    const key = `${team.apexProject}|${repo.provider}|${repo.repo}|${repo.branch}`;
+                    const isExpanded = expandedRepo === key;
+                    return (
+                      <React.Fragment key={key}>
+                        <tr className={styles.matrixRow}
+                          onClick={() => setExpandedRepo(isExpanded ? null : key)}>
+                          <td>
+                            <div className={styles.matrixSkillName}>
+                              <span className={`${styles.matrixCaret} ${isExpanded ? styles.matrixCaretOpen : ''}`}>▶</span>
+                              {repo.repo}
+                            </div>
+                            <div className={styles.matrixSkillSummary}>
+                              {repo.friendlyName} · {repo.provider} · {repo.branch}
+                            </div>
+                          </td>
+                          <td>
+                            {repo.installedVersion
+                              ? <>v{repo.installedVersion}{repo.updateAvailable &&
+                                  <span className={styles.updateDot} title={`Update available: v${repo.availableVersion}`} />}</>
+                              : <span className={styles.muted}>—</span>}
+                          </td>
+                          <td>
+                            {repo.installedReleaseStatus ? (
+                              <span className={`${styles.badge} ${statusBadgeClass(repo.installedReleaseStatus)}`}>
+                                {repo.installedReleaseStatus}
+                              </span>
+                            ) : <span className={styles.muted}>unmatched</span>}
+                          </td>
+                          <td>
+                            {repo.releasedSkills.length > 0
+                              ? <span title={repo.releasedSkills.join(', ')}>{repo.releasedSkills.length}</span>
+                              : <span className={styles.muted}>—</span>}
+                          </td>
+                          <td>
+                            {repo.observed ? (
+                              <span className={`${styles.badge} ${compatBadgeClass(repo.compatibilityStatus)}`}>
+                                {repo.compatibilityStatus}
+                              </span>
+                            ) : (
+                              <span className={styles.muted} title="Registered but never scanned">not scanned</span>
+                            )}
+                          </td>
+                          <td>{formatTs(repo.compatibilityCheckedAt)}</td>
+                        </tr>
+                        {isExpanded && (
+                          <tr>
+                            <td colSpan={6} className={styles.matrixExpanded}>
+                              <TeamRepoDetail apexProject={team.apexProject} repo={repo} />
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
                 </React.Fragment>
-              );
-            })}
-          </tbody>
-        </table>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/** Expanded detail for one repo: skills + per-repo rollback action. */
+const TeamRepoDetail: React.FC<{ apexProject: string; repo: FoundationSkillTeamRepo }> = ({
+  apexProject,
+  repo,
+}) => {
+  const [targetId, setTargetId] = useState('');
+  const [rollbackMsg, setRollbackMsg] = useState<string | null>(null);
+  const [confirmRollback, setConfirmRollback] = useState(false);
+  const { data: targets = [], isLoading: targetsLoading } = useFoundationSkillRollbackTargets(
+    apexProject,
+    repo.installedVersion,
+  );
+  const rollback = useRollbackFoundationSkillRepo();
+  const pendingTarget = targets.find(t => t.id === targetId) ?? null;
+
+  if (!repo.observed) {
+    return (
+      <p className={styles.muted}>
+        This repo is registered in Project Settings but has never been scanned. Use
+        “Refresh all” to pull its install state.
+      </p>
+    );
+  }
+
+  // Skills the lockfile records that the installed release did not ship to this
+  // project — usually a stale install or a hand-edited lockfile.
+  const releasedSet = new Set(repo.releasedSkills);
+  const extraneous  = repo.installedSkills.filter(s => !releasedSet.has(s));
+
+  const requestRollback = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!targetId || !pendingTarget) return;
+    setConfirmRollback(true);
+  };
+
+  const executeRollback = async () => {
+    if (!pendingTarget) return;
+    setRollbackMsg(null);
+    try {
+      const result = await rollback.mutateAsync({
+        project: apexProject,
+        repo: repo.repo,
+        provider: repo.provider,
+        defaultBranch: repo.branch,
+        apexProject,
+        releaseId: pendingTarget.id,
+        fromVersion: repo.installedVersion,
+      });
+      setConfirmRollback(false);
+      if (result.prUrl) {
+        setRollbackMsg(`Rollback PR opened: ${result.prUrl}`);
+      } else if (result.status === 'no_changes') {
+        setRollbackMsg(`Already at v${result.toVersion} — no PR needed.`);
+      } else if (result.status === 'drift') {
+        setRollbackMsg(`Blocked by foundation drift. ${result.errors.join(' ')}`);
+      } else {
+        setRollbackMsg(`${result.status}: ${result.report}`);
+      }
+    } catch (err: unknown) {
+      setConfirmRollback(false);
+      setRollbackMsg(`Rollback failed: ${(err as Error).message}`);
+    }
+  };
+
+  return (
+    <div onClick={e => e.stopPropagation()}>
+      <h4 className={styles.subHeading}>Released to this team (v{repo.installedVersion ?? '—'})</h4>
+      {repo.releasedSkills.length === 0 ? (
+        <p className={styles.muted}>
+          No release matched v{repo.installedVersion ?? '—'}, so the shipped skill list is unknown.
+        </p>
+      ) : (
+        <span className={styles.audienceChips}>
+          {repo.releasedSkills.map(s => <span key={s} className={styles.chip}>{s}</span>)}
+        </span>
+      )}
+
+      <h4 className={styles.subHeading}>Installed per lockfile</h4>
+      {repo.installedSkills.length === 0 ? (
+        <p className={styles.muted}>No skills recorded in the lockfile.</p>
+      ) : (
+        <span className={styles.audienceChips}>
+          {repo.installedSkills.map(s => <span key={s} className={styles.chip}>{s}</span>)}
+        </span>
+      )}
+
+      {extraneous.length > 0 && (
+        <p className={styles.muted}>
+          Installed but not shipped by this release: {extraneous.join(', ')}
+        </p>
+      )}
+
+      <h4 className={styles.subHeading}>Rollback</h4>
+      {!repo.installedVersion ? (
+        <p className={styles.muted}>Installed version unknown — cannot rollback yet.</p>
+      ) : targetsLoading ? (
+        <p className={styles.muted}>Loading rollback targets…</p>
+      ) : targets.length === 0 ? (
+        <p className={styles.muted}>
+          No older published release is available for {apexProject} from v{repo.installedVersion}.
+        </p>
+      ) : (
+        <div className={styles.btnRow}>
+          <select
+            className={styles.input}
+            aria-label="Rollback target version"
+            value={targetId}
+            onChange={e => setTargetId(e.target.value)}
+            disabled={rollback.isPending}
+          >
+            <option value="">Select older published version…</option>
+            {targets.map(t => (
+              <option key={t.id} value={t.id}>
+                v{t.version}{t.releaseNotes ? ` — ${t.releaseNotes.slice(0, 60)}` : ''}
+              </option>
+            ))}
+          </select>
+          <button
+            className={styles.btnSecondary}
+            type="button"
+            disabled={!targetId || rollback.isPending}
+            onClick={requestRollback}
+          >
+            Open rollback PR
+          </button>
+        </div>
+      )}
+      {rollbackMsg && <p className={styles.successMsg} role="status">{rollbackMsg}</p>}
+
+      {confirmRollback && pendingTarget && (
+        <ConfirmActionModal
+          title={`Rollback ${repo.repo}?`}
+          body={
+            <>
+              Open a PR to roll <strong>{repo.repo}</strong> back from{' '}
+              <strong>v{repo.installedVersion}</strong> to{' '}
+              <strong>v{pendingTarget.version}</strong>.
+            </>
+          }
+          hint="Only .apex/foundation/ and apex-skills.lock.json change. Team adapters in .cursor/skills/ are never overwritten."
+          confirmLabel="Open rollback PR"
+          pendingLabel="Opening PR…"
+          tone="warning"
+          isPending={rollback.isPending}
+          onConfirm={() => { void executeRollback(); }}
+          onCancel={() => setConfirmRollback(false)}
+        />
       )}
     </div>
   );
@@ -693,14 +1526,20 @@ const SkillsMatrixTab: React.FC = () => {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-type Section = 'releases' | 'skills' | 'repos' | 'create';
+type Section = 'releases' | 'skills' | 'teams' | 'repos' | 'create';
 
 const SECTION_LABELS: Record<Section, string> = {
   releases: 'Releases',
   skills:   'Skills',
+  teams:    'Teams',
   repos:    'Consumer Repos',
   create:   'Create Draft',
 };
+
+type PendingConfirm =
+  | { kind: 'deprecate'; release: FoundationSkillRelease }
+  | { kind: 'delete'; release: FoundationSkillRelease }
+  | null;
 
 export const FoundationSkillsAdmin: React.FC = () => {
   const [activeSection, setActiveSection] = useState<Section>('releases');
@@ -708,6 +1547,9 @@ export const FoundationSkillsAdmin: React.FC = () => {
   const [editReleaseId,  setEditReleaseId]  = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionMsg,   setActionMsg]   = useState<string | null>(null);
+  /** Which consumer-repo row is running Check / Open PR (provider|project|repo|branch). */
+  const [busyRepoKey, setBusyRepoKey] = useState<string | null>(null);
+  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm>(null);
 
   const { data: releases = [], isLoading: relLoading } = useFoundationSkillReleases();
   const { data: candidates = [], isLoading: candLoading } = useFoundationSkillCandidates();
@@ -719,8 +1561,21 @@ export const FoundationSkillsAdmin: React.FC = () => {
   const updateRelease = useUpdateFoundationSkillRelease();
   const updateRepo  = useUpdateRepoWithFoundationSkills();
   const checkCompat = useCheckFoundationSkillCompatibility();
+  const scanAllRepos = useScanAllFoundationSkillRepos();
 
   const clearMessages = () => { setActionError(null); setActionMsg(null); };
+
+  const handleScanAllRepos = async () => {
+    clearMessages();
+    try {
+      const result = await scanAllRepos.mutateAsync();
+      setActionMsg(
+        `Scanned ${result.scanned} repo(s)${result.failed > 0 ? `, ${result.failed} failed` : ''}.`,
+      );
+    } catch (err: unknown) {
+      setActionError(`Scan failed: ${(err as Error).message}`);
+    }
+  };
 
   const handlePublish = async (release: FoundationSkillRelease) => {
     clearMessages();
@@ -730,44 +1585,83 @@ export const FoundationSkillsAdmin: React.FC = () => {
     } catch (err: unknown) { setActionError((err as Error).message); }
   };
 
-  const handleDeprecate = async (release: FoundationSkillRelease) => {
-    if (!confirm(`Deprecate v${release.version}?`)) return;
-    clearMessages();
-    try {
-      await deprecate.mutateAsync({ id: release.id });
-      setActionMsg(`v${release.version} deprecated.`);
-    } catch (err: unknown) { setActionError((err as Error).message); }
+  const handleDeprecate = (release: FoundationSkillRelease) => {
+    setPendingConfirm({ kind: 'deprecate', release });
   };
 
-  const handleDelete = async (release: FoundationSkillRelease) => {
-    if (!confirm(`Delete draft v${release.version}?`)) return;
+  const handleDelete = (release: FoundationSkillRelease) => {
+    setPendingConfirm({ kind: 'delete', release });
+  };
+
+  const executePendingConfirm = async (reason?: string) => {
+    if (!pendingConfirm) return;
     clearMessages();
     try {
-      await deleteDraft.mutateAsync(release.id);
-      setActionMsg(`Draft v${release.version} deleted.`);
-    } catch (err: unknown) { setActionError((err as Error).message); }
+      if (pendingConfirm.kind === 'deprecate') {
+        await deprecate.mutateAsync({ id: pendingConfirm.release.id, reason });
+        setActionMsg(`v${pendingConfirm.release.version} deprecated.`);
+      } else {
+        await deleteDraft.mutateAsync(pendingConfirm.release.id);
+        setActionMsg(`Draft v${pendingConfirm.release.version} deleted.`);
+      }
+      setPendingConfirm(null);
+    } catch (err: unknown) {
+      setPendingConfirm(null);
+      setActionError((err as Error).message);
+    }
   };
+
+  const repoRowKey = (s: Pick<FoundationSkillRepoStatus, 'provider' | 'project' | 'repo' | 'branch'>) =>
+    `${s.provider}|${s.project}|${s.repo}|${s.branch}`;
 
   const handleUpdateRepo = async (s: FoundationSkillRepoStatus) => {
     clearMessages();
+    setBusyRepoKey(repoRowKey(s));
     try {
-      const result = await updateRepo.mutateAsync({ project: s.project, repo: s.repo, provider: s.provider });
+      const result = await updateRepo.mutateAsync({
+        project: s.project,
+        repo: s.repo,
+        provider: s.provider,
+        // Must match the observed row — defaulting to main creates a wrong-branch PR
+        // (and MaxView / similar teams use development).
+        defaultBranch: s.branch || 'main',
+        apexProject: s.apexProject ?? s.project,
+      });
       if (result.prUrl) {
         setActionMsg(`PR opened: ${result.prUrl}`);
       } else if (result.status === 'no_changes') {
         setActionMsg('Already up to date — no PR needed.');
       } else {
-        setActionMsg(`Update result: ${result.status}. ${result.errors.join(' ')}`);
+        setActionError(`Update ${result.status}: ${result.errors.join(' ') || result.report || 'unknown error'}`);
       }
-    } catch (err: unknown) { setActionError((err as Error).message); }
+    } catch (err: unknown) {
+      setActionError((err as Error).message);
+    } finally {
+      setBusyRepoKey(null);
+    }
   };
 
   const handleCheckCompat = async (s: FoundationSkillRepoStatus) => {
     clearMessages();
+    setBusyRepoKey(repoRowKey(s));
     try {
-      const result = await checkCompat.mutateAsync({ project: s.project, repo: s.repo, provider: s.provider });
-      setActionMsg(`Compatibility: ${result.report.status}. ${result.report.errors.join(' ') || result.report.warnings.join(' ') || 'OK'}`);
-    } catch (err: unknown) { setActionError((err as Error).message); }
+      const result = await checkCompat.mutateAsync({
+        project: s.project,
+        repo: s.repo,
+        provider: s.provider,
+        // Upsert key includes branch — omitting it defaults to main and inserts a duplicate row.
+        branch: s.branch || 'main',
+        apexProject: s.apexProject ?? s.project,
+      });
+      setActionMsg(
+        `Compatibility (${s.repo}@${s.branch}): ${result.report.status}. ` +
+        `${result.report.errors.join(' ') || result.report.warnings.join(' ') || 'OK'}`,
+      );
+    } catch (err: unknown) {
+      setActionError((err as Error).message);
+    } finally {
+      setBusyRepoKey(null);
+    }
   };
 
   return (
@@ -784,12 +1678,17 @@ export const FoundationSkillsAdmin: React.FC = () => {
         </span>
       </div>
 
-      {actionError && <p className={styles.errorMsg} role="alert">{actionError}</p>}
-      {actionMsg   && <p className={styles.successMsg} role="status">{actionMsg}</p>}
+      {/* Repos tab renders these inline next to the table so they stay in view. */}
+      {actionError && activeSection !== 'repos' && (
+        <p className={styles.errorMsg} role="alert">{actionError}</p>
+      )}
+      {actionMsg && activeSection !== 'repos' && (
+        <p className={styles.successMsg} role="status">{actionMsg}</p>
+      )}
 
       {/* Tab nav */}
       <div className={styles.subNav} role="tablist">
-        {(['releases', 'skills', 'repos', 'create'] as const).map(s => (
+        {(['releases', 'skills', 'teams', 'repos', 'create'] as const).map(s => (
           <button key={s} type="button" role="tab"
             aria-selected={activeSection === s}
             className={`${styles.subNavBtn} ${activeSection === s ? styles.subNavBtnActive : ''}`}
@@ -803,17 +1702,25 @@ export const FoundationSkillsAdmin: React.FC = () => {
       {activeSection === 'releases' && (
         <>
           {relLoading ? <p className={styles.muted}>Loading releases…</p> : releases.length === 0 ? (
-            <p className={styles.muted}>No releases yet. Use "Create Draft" to add one.</p>
+            <div className={styles.emptyState}>
+              <p className={styles.emptyStateTitle}>No releases yet</p>
+              <p className={styles.emptyStateText}>
+                Create your first draft release to bundle foundation skills and target them at specific projects.
+              </p>
+              <button type="button" className={styles.btnPrimary}
+                onClick={() => { clearMessages(); setActiveSection('create'); }}>
+                Create draft release
+              </button>
+            </div>
           ) : (
             <div className={styles.releaseList}>
               {releases.map(r => {
-                const hasOverrides = Object.keys(r.skillTargets ?? {}).length > 0;
+                const overrideKeys = Object.keys(r.skillTargets ?? {});
                 return (
                   <div key={r.id} className={styles.releaseCard}>
                     <div className={styles.releaseCardHeader}>
                       <span className={styles.releaseVersion}>v{r.version}</span>
                       <span className={`${styles.badge} ${statusBadgeClass(r.status)}`}>{r.status}</span>
-                      {/* Release-level audience */}
                       {r.targetProjects && r.targetProjects.length > 0 ? (
                         <span className={styles.audienceChips} title={r.targetProjects.join(', ')}>
                           {r.targetProjects.slice(0, 3).map(p => (
@@ -826,15 +1733,15 @@ export const FoundationSkillsAdmin: React.FC = () => {
                       ) : (
                         <span className={`${styles.badge} ${styles.badgeDraft}`}>All projects</span>
                       )}
-                      {hasOverrides && (
-                        <span className={styles.overrideBadge} title={`${Object.keys(r.skillTargets).length} skill(s) have audience overrides`}>
-                          🔒 {Object.keys(r.skillTargets).length} override{Object.keys(r.skillTargets).length > 1 ? 's' : ''}
+                      {overrideKeys.length > 0 && (
+                        <span className={styles.overrideBadge}
+                          title={`Skills with a narrower audience: ${overrideKeys.join(', ')}`}>
+                          {overrideKeys.length} override{overrideKeys.length > 1 ? 's' : ''}
                         </span>
                       )}
                       <span className={styles.releaseDate}>{formatTs(r.createdAt)}</span>
                     </div>
 
-                    {/* Skill pills */}
                     {r.selectedSkills && r.selectedSkills.length > 0 && (
                       <div className={styles.skillPillsRow}>
                         {r.selectedSkills.slice(0, 8).map(name => {
@@ -842,8 +1749,10 @@ export const FoundationSkillsAdmin: React.FC = () => {
                           return (
                             <span key={name}
                               className={`${styles.skillPill} ${override ? styles.skillPillOverride : ''}`}
-                              title={override ? `Audience: ${override.length > 0 ? override.join(', ') : 'all'}` : undefined}>
-                              {name}{override ? ' 🔒' : ''}
+                              title={override
+                                ? `Audience: ${override.length > 0 ? override.join(', ') : 'all projects'}`
+                                : undefined}>
+                              {name}
                             </span>
                           );
                         })}
@@ -853,9 +1762,9 @@ export const FoundationSkillsAdmin: React.FC = () => {
                       </div>
                     )}
 
-                    {r.releaseNotes && <p className={styles.releaseNotes}>{r.releaseNotes.slice(0, 120)}</p>}
+                    {r.releaseNotes && <p className={styles.releaseNotes}>{r.releaseNotes.slice(0, 160)}</p>}
                     {r.breakingChanges && (
-                      <p className={styles.breakingChanges}>Breaking: {r.breakingChanges.slice(0, 100)}</p>
+                      <p className={styles.breakingChanges}>Breaking: {r.breakingChanges.slice(0, 140)}</p>
                     )}
                     <div className={styles.releaseActions}>
                       {r.status === 'draft' && (
@@ -925,53 +1834,145 @@ export const FoundationSkillsAdmin: React.FC = () => {
       {/* ── Skills matrix ── */}
       {activeSection === 'skills' && <SkillsMatrixTab />}
 
+      {/* ── Active teams ── */}
+      {activeSection === 'teams' && <TeamsTab />}
+
       {/* ── Consumer repos ── */}
       {activeSection === 'repos' && (
         <>
-          <div style={{ marginBottom: 24 }}>
-            <CompatCheckForm />
+          <CompatCheckForm />
+          <div className={styles.candidatesBox}>
+            <div className={styles.matrixToolbar}>
+              <h3 className={`${styles.subHeading} ${styles.toolbarHeading}`}>Observed consumer repos</h3>
+              <button
+                className={styles.btnSecondary}
+                type="button"
+                disabled={scanAllRepos.isPending}
+                onClick={() => { void handleScanAllRepos(); }}
+              >
+                {scanAllRepos.isPending ? 'Scanning…' : 'Refresh all'}
+              </button>
+              <span className={`${styles.muted} ${styles.pushRight}`}>
+                Re-checks every registered skills repo (same as Teams). Open PR is optional —
+                teams normally update via CLI / slash commands.
+              </span>
+            </div>
+            {actionError && activeSection === 'repos' && (
+              <p className={styles.errorMsg} role="alert">{actionError}</p>
+            )}
+            {actionMsg && activeSection === 'repos' && (
+              <p className={styles.successMsg} role="status">{actionMsg}</p>
+            )}
+            {repoLoading ? <p className={styles.muted}>Loading repo statuses…</p> :
+            repoStatuses.length === 0 ? (
+              <p className={styles.muted}>
+                No consumer repos observed yet. Use Refresh all (registered Project Settings repos)
+                or run a compatibility check above.
+              </p>
+            ) : (
+              <div className={styles.tableWrap}>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>
+                      <th>Repo</th><th>Installed</th><th>Available</th><th>Compatibility</th><th>Checked</th><th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {repoStatuses.map(s => {
+                      const rowKey = repoRowKey(s);
+                      const isBusy = busyRepoKey === rowKey;
+                      return (
+                      <tr key={s.id}>
+                        <td>
+                          <strong>{s.repo}</strong>
+                          <br />
+                          <small className={styles.muted}>{s.project} · {s.branch}</small>
+                        </td>
+                        <td>{s.installedVersion ?? '—'}</td>
+                        <td>{s.availableVersion ?? '—'}{s.updateAvailable && <span className={styles.updateDot} title="Update available" />}</td>
+                        <td>
+                          <span className={`${styles.badge} ${compatBadgeClass(s.compatibilityStatus ?? 'unknown')}`}>
+                            {s.compatibilityStatus ?? 'unknown'}
+                          </span>
+                        </td>
+                        <td>{formatTs(s.compatibilityCheckedAt)}</td>
+                        <td>
+                          <div className={styles.btnRow}>
+                            <button
+                              className={`${styles.btnGhost} ${styles.btnSm}`}
+                              type="button"
+                              disabled={checkCompat.isPending || updateRepo.isPending}
+                              onClick={() => { void handleCheckCompat(s); }}
+                            >
+                              {isBusy && checkCompat.isPending ? 'Checking…' : 'Check'}
+                            </button>
+                            {s.updateAvailable && (
+                              <button
+                                className={`${styles.btnSuccess} ${styles.btnSm}`}
+                                type="button"
+                                disabled={checkCompat.isPending || updateRepo.isPending}
+                                onClick={() => { void handleUpdateRepo(s); }}
+                              >
+                                {isBusy && updateRepo.isPending ? 'Opening…' : 'Open PR'}
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-          {repoLoading ? <p className={styles.muted}>Loading repo statuses…</p> :
-          repoStatuses.length === 0 ? (
-            <p className={styles.muted}>No consumer repos observed yet. Run a compatibility check above to populate.</p>
-          ) : (
-            <table className={styles.table}>
-              <thead>
-                <tr>
-                  <th>Repo</th><th>Installed</th><th>Available</th><th>Compatibility</th><th>Checked</th><th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {repoStatuses.map(s => (
-                  <tr key={s.id}>
-                    <td><strong>{s.repo}</strong><br /><small className={styles.muted}>{s.project}</small></td>
-                    <td>{s.installedVersion ?? '—'}</td>
-                    <td>{s.availableVersion ?? '—'}{s.updateAvailable && <span className={styles.updateDot} title="Update available" />}</td>
-                    <td>
-                      <span className={`${styles.badge} ${compatBadgeClass(s.compatibilityStatus ?? 'unknown')}`}>
-                        {s.compatibilityStatus ?? 'unknown'}
-                      </span>
-                    </td>
-                    <td>{formatTs(s.compatibilityCheckedAt)}</td>
-                    <td>
-                      <button className={styles.btnGhost} type="button" disabled={checkCompat.isPending}
-                        onClick={() => handleCheckCompat(s)}>Check</button>
-                      {s.updateAvailable && (
-                        <button className={styles.btnSuccess} type="button" disabled={updateRepo.isPending}
-                          onClick={() => handleUpdateRepo(s)}>Open PR</button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
         </>
       )}
 
       {/* ── Create draft ── */}
       {activeSection === 'create' && (
-        <CreateReleaseForm onCreated={() => setActiveSection('releases')} />
+        <CreateReleaseWizard onCreated={() => setActiveSection('releases')} />
+      )}
+
+      {pendingConfirm?.kind === 'deprecate' && (
+        <ConfirmActionModal
+          title={`Deprecate v${pendingConfirm.release.version}?`}
+          body={
+            <>
+              Mark <strong>v{pendingConfirm.release.version}</strong> as deprecated.
+              Teams already on this version can keep using it; new installs and updates
+              will no longer offer it.
+            </>
+          }
+          hint="This does not uninstall the package from any consumer repo."
+          confirmLabel="Deprecate"
+          pendingLabel="Deprecating…"
+          tone="warning"
+          isPending={deprecate.isPending}
+          reasonLabel="Reason (optional)"
+          reasonPlaceholder="e.g. superseded by v1.1.0 — broken bootstrap for MaxView"
+          onConfirm={(reason) => { void executePendingConfirm(reason); }}
+          onCancel={() => setPendingConfirm(null)}
+        />
+      )}
+
+      {pendingConfirm?.kind === 'delete' && (
+        <ConfirmActionModal
+          title={`Delete draft v${pendingConfirm.release.version}?`}
+          body={
+            <>
+              Permanently delete draft <strong>v{pendingConfirm.release.version}</strong>.
+              This only removes the unpublished draft record.
+            </>
+          }
+          hint="This action cannot be undone."
+          confirmLabel="Delete draft"
+          pendingLabel="Deleting…"
+          tone="danger"
+          isPending={deleteDraft.isPending}
+          onConfirm={() => { void executePendingConfirm(); }}
+          onCancel={() => setPendingConfirm(null)}
+        />
       )}
     </section>
   );

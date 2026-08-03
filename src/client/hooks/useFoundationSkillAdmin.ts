@@ -6,7 +6,11 @@ import type {
   ArtifactCandidate,
   CreateFoundationSkillReleaseRequest,
   SkillMatrixEntry,
+  FoundationSkillTeam,
+  RollbackFoundationSkillRepoResult,
   ProjectAvailableSkill,
+  FoundationSkillCatalogEntry,
+  FoundationSkillCatalogResponse,
 } from '../../shared/types/foundationSkills';
 
 // ── Fetch helper ──────────────────────────────────────────────────────────────
@@ -29,6 +33,10 @@ export const foundationSkillAdminKeys = {
   release:        (id: string) => ['foundation-skills-admin', 'releases', id] as const,
   audit:          (id: string) => ['foundation-skills-admin', 'audit', id] as const,
   repoStatuses:   ['foundation-skills-admin', 'repo-statuses']  as const,
+  teams:          ['foundation-skills-admin', 'teams']          as const,
+  rollbackTargets:(apexProject: string, installedVersion: string) =>
+    ['foundation-skills-admin', 'rollback-targets', apexProject, installedVersion] as const,
+  catalog:        ['foundation-skills-admin', 'catalog']        as const,
   skillsMatrix:   ['foundation-skills-admin', 'skills-matrix']  as const,
   projectSkills:  (project: string) => ['foundation-skills-admin', 'project-skills', project] as const,
 };
@@ -178,7 +186,14 @@ export function useUpdateRepoWithFoundationSkills() {
   return useMutation<
     { status: string; prUrl: string | null; report: string; errors: string[] },
     Error,
-    { project: string; repo: string; provider?: string; defaultBranch?: string; releaseId?: string }
+    {
+      project: string;
+      repo: string;
+      provider?: string;
+      defaultBranch?: string;
+      releaseId?: string;
+      apexProject?: string | null;
+    }
   >({
     mutationFn: (body) =>
       adminFetch('/api/platform-admin/foundation-skills/update-repo', {
@@ -187,6 +202,93 @@ export function useUpdateRepoWithFoundationSkills() {
         body: JSON.stringify(body),
       }),
     onSuccess: () => {
+      qc.invalidateQueries({ queryKey: foundationSkillAdminKeys.repoStatuses });
+    },
+  });
+}
+
+// ── Active teams ──────────────────────────────────────────────────────────────
+
+/**
+ * Every Apex project with a registered skills repo, its installed version, that
+ * version's release status, and the skills shipped to it.
+ */
+export function useFoundationSkillTeams() {
+  return useQuery<FoundationSkillTeam[]>({
+    queryKey: foundationSkillAdminKeys.teams,
+    queryFn: async () => {
+      const data = await adminFetch<{ teams: FoundationSkillTeam[] }>(
+        '/api/platform-admin/foundation-skills/teams',
+      );
+      return data.teams;
+    },
+    staleTime: 60_000,
+  });
+}
+
+/** Re-scan every registered repo so the teams grid reflects current state. */
+export function useScanAllFoundationSkillRepos() {
+  const qc = useQueryClient();
+  return useMutation<{ scanned: number; failed: number; errors: string[] }, Error, void>({
+    mutationFn: () =>
+      adminFetch('/api/platform-admin/foundation-skills/repos/scan-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: foundationSkillAdminKeys.teams });
+      qc.invalidateQueries({ queryKey: foundationSkillAdminKeys.repoStatuses });
+    },
+  });
+}
+
+/** Published releases older than the installed version for a given Apex project. */
+export function useFoundationSkillRollbackTargets(
+  apexProject: string | null | undefined,
+  installedVersion: string | null | undefined,
+) {
+  return useQuery<FoundationSkillRelease[]>({
+    queryKey: foundationSkillAdminKeys.rollbackTargets(apexProject ?? '', installedVersion ?? ''),
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        apexProject: apexProject!,
+        installedVersion: installedVersion!,
+      });
+      const data = await adminFetch<{ releases: FoundationSkillRelease[] }>(
+        `/api/platform-admin/foundation-skills/rollback-targets?${params.toString()}`,
+      );
+      return data.releases;
+    },
+    enabled: !!(apexProject && installedVersion),
+    staleTime: 60_000,
+  });
+}
+
+/** Open a rollback PR that re-vendors an older published release into a consumer repo. */
+export function useRollbackFoundationSkillRepo() {
+  const qc = useQueryClient();
+  return useMutation<
+    RollbackFoundationSkillRepoResult,
+    Error,
+    {
+      project: string;
+      repo: string;
+      apexProject: string;
+      releaseId: string;
+      provider?: string;
+      defaultBranch?: string;
+      fromVersion?: string | null;
+    }
+  >({
+    mutationFn: (body) =>
+      adminFetch('/api/platform-admin/foundation-skills/rollback-repo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: foundationSkillAdminKeys.teams });
       qc.invalidateQueries({ queryKey: foundationSkillAdminKeys.repoStatuses });
     },
   });
@@ -209,6 +311,34 @@ export function useCheckFoundationSkillCompatibility() {
       qc.invalidateQueries({ queryKey: foundationSkillAdminKeys.repoStatuses });
     },
   });
+}
+
+// ── Catalog ───────────────────────────────────────────────────────────────────
+
+/**
+ * The catalog of known foundation skills, served from catalog.json. This is the
+ * only place the UI learns which skills exist — adding one to catalog.json makes
+ * it appear here with no client change.
+ */
+export function useFoundationSkillCatalog() {
+  return useQuery<FoundationSkillCatalogResponse>({
+    queryKey: foundationSkillAdminKeys.catalog,
+    queryFn: () =>
+      adminFetch<FoundationSkillCatalogResponse>('/api/platform-admin/foundation-skills/catalog'),
+    staleTime: 5 * 60_000,
+  });
+}
+
+/** Catalog entries that may actually be released to projects. */
+export function useShippableFoundationSkills(): {
+  skills: FoundationSkillCatalogEntry[];
+  isLoading: boolean;
+} {
+  const { data, isLoading } = useFoundationSkillCatalog();
+  return {
+    skills: (data?.skills ?? []).filter((s) => s.tier !== 'apex-only'),
+    isLoading,
+  };
 }
 
 // ── Skills matrix ─────────────────────────────────────────────────────────────

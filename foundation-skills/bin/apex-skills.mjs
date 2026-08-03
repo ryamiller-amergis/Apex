@@ -4,6 +4,7 @@
  *
  * Usage:
  *   npx @apex/skills doctor
+ *   npx @apex/skills init-registry [--org] [--feed] [--dry-run]
  *   npx @apex/skills install <skill...> [--dry-run] [--fill]
  *   npx @apex/skills check
  *   npx @apex/skills update [<skill...>]
@@ -15,6 +16,7 @@
 
 import { parseArgs } from 'node:util';
 import { doctor }    from '../lib/commands/doctor.mjs';
+import { initRegistryCommand } from '../lib/commands/init-registry.mjs';
 import { install }   from '../lib/commands/install.mjs';
 import { check }     from '../lib/commands/check.mjs';
 import { update }    from '../lib/commands/update.mjs';
@@ -27,8 +29,15 @@ const USAGE = `
 APEX Foundation Skills CLI
 
 Commands:
-  doctor                   Verify prerequisites (Node >=18, Git, feed auth)
+  doctor                   Health check (Node, Git, @apex registry .npmrc, feed auth)
+    --skip-feed            Skip Azure Artifacts reachability check (local maintainers)
+  init-registry            Create/merge local .npmrc from .npmrc.template (+ @apex scope)
+    --org <name>           Azure DevOps org (default: amergis / AZURE_ARTIFACTS_ORG)
+    --feed <name>          Artifacts feed (default: apex-skills / AZURE_ARTIFACTS_FEED)
+    --project <name>       Optional project-scoped feed
+    --dry-run              Preview without writing .npmrc
   install <skill...>       Install selected skill foundations + scaffold adapters
+                           (refuses until doctor hard checks pass)
     --dry-run              Preview what would be written without writing anything
     --fill                 Re-run the bootstrap adapter pre-fill (for existing installs)
     --enrich               Opt-in: use AI to improve adapter prose within evidence bounds
@@ -49,9 +58,40 @@ async function main() {
 
   try {
     switch (command) {
-      case 'doctor':
-        await doctor();
+      case 'doctor': {
+        const { values } = parseArgs({
+          args: rest,
+          options: {
+            'skip-feed': { type: 'boolean', default: false },
+          },
+          allowPositionals: true,
+        });
+        await doctor({
+          requireRegistry: true,
+          requireFeed: !values['skip-feed'],
+        });
         break;
+      }
+
+      case 'init-registry': {
+        const { values } = parseArgs({
+          args: rest,
+          options: {
+            org:       { type: 'string' },
+            feed:      { type: 'string' },
+            project:   { type: 'string' },
+            'dry-run': { type: 'boolean', default: false },
+          },
+          allowPositionals: true,
+        });
+        await initRegistryCommand({
+          org: values.org,
+          feed: values.feed,
+          project: values.project,
+          dryRun: values['dry-run'],
+        });
+        break;
+      }
 
       case 'install': {
         const { values, positionals } = parseArgs({

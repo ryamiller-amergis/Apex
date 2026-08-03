@@ -7,9 +7,10 @@ description: Project adapter for azure-async-infra. Customize for your project.
 
 <!-- Managed loader: loads .apex/foundation/azure-async-infra/SKILL.md -->
 
-Inspect these files before proposing any infrastructure change:
-- `infra/shared-async.tf` — shared Blob and Service Bus baseline (if present)
-- `infra/README.md` — environment and module naming conventions (if present)
+Inspect this project's infrastructure definitions before proposing any change:
+- The shared async baseline (Blob containers and Service Bus queues/topics) —
+  usually a Terraform file under this repo's infrastructure directory
+- The infrastructure README covering environment and module naming conventions
 
 ## Project-specific scale-up triggers (require ADR before deviating from defaults)
 

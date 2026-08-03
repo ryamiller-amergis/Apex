@@ -25,11 +25,13 @@ import type {
   FoundationSkillAuditAction,
   SkillMatrixEntry,
   ProjectAvailableSkill,
+  FoundationSkillTier,
 } from '../../shared/types/foundationSkills';
 import {
   isAzureArtifactsConfigured,
   promoteToReleaseView,
   computePackageIntegrity,
+  deprecatePackageVersion,
 } from './azureArtifactsSkillService';
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
@@ -107,6 +109,24 @@ export function getVisibleSkillsForProject(
 export interface CatalogSkillEntry {
   name: string;
   summary: string;
+  tier: FoundationSkillTier;
+}
+
+/** Skills that may be included in a release (i.e. shipped to consumer projects). */
+export function shippableSkills(catalog: CatalogSkillEntry[]): CatalogSkillEntry[] {
+  return catalog.filter((s) => s.tier !== 'apex-only');
+}
+
+/**
+ * Returns the subset of `selected` that must not be released to teams.
+ * Unknown names are ignored here — name validity is a separate concern.
+ */
+export function rejectNonShippableSkills(
+  selected: string[],
+  catalog: CatalogSkillEntry[],
+): string[] {
+  const apexOnly = new Set(catalog.filter((s) => s.tier === 'apex-only').map((s) => s.name));
+  return selected.filter((name) => apexOnly.has(name));
 }
 
 /**
@@ -196,6 +216,51 @@ export async function getRelease(id: string): Promise<FoundationSkillRelease | n
     .from(foundationSkillReleases)
     .where(eq(foundationSkillReleases.id, id));
   return rows[0] ? mapRow(rows[0]) : null;
+}
+
+/** Get a release by its suite version. Returns null when not found. */
+export async function getReleaseByVersion(version: string): Promise<FoundationSkillRelease | null> {
+  const rows = await db
+    .select()
+    .from(foundationSkillReleases)
+    .where(eq(foundationSkillReleases.version, version));
+  return rows[0] ? mapRow(rows[0]) : null;
+}
+
+/** True when `a` is strictly greater than `b` as X.Y.Z semver (missing parts = 0). */
+export function semverGreaterThan(a: string, b: string): boolean {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    const va = pa[i] ?? 0;
+    const vb = pb[i] ?? 0;
+    if (va > vb) return true;
+    if (va < vb) return false;
+  }
+  return false;
+}
+
+/**
+ * Published releases visible to `apexProject` with a version strictly lower than
+ * `installedVersion` — valid rollback targets for that team.
+ * Newest candidates first.
+ */
+export async function listRollbackTargets(
+  apexProject: string,
+  installedVersion: string,
+): Promise<FoundationSkillRelease[]> {
+  const rows = await db
+    .select()
+    .from(foundationSkillReleases)
+    .where(eq(foundationSkillReleases.status, 'published'))
+    .orderBy(desc(foundationSkillReleases.publishedAt));
+
+  return rows
+    .map(mapRow)
+    .filter((rel) =>
+      isReleaseVisibleToProject(rel, apexProject) &&
+      semverGreaterThan(installedVersion, rel.version),
+    );
 }
 
 /**
@@ -326,6 +391,10 @@ export async function publishRelease(
 /**
  * Deprecate a published release. Idempotent — already-deprecated is a no-op.
  * Throws if the release is in 'draft' state (drafts are deleted, not deprecated).
+ *
+ * Also flags the version on the Azure Artifacts feed so a manual `npm install`
+ * warns. Feed failure is non-fatal: the DB state is the source of truth for
+ * targeting, and the failure is recorded in the audit details.
  */
 export async function deprecateRelease(
   id: string,
@@ -338,6 +407,19 @@ export async function deprecateRelease(
     throw new Error(`Draft releases cannot be deprecated — delete the draft instead`);
   }
   if (existing.status === 'deprecated') return existing; // idempotent
+
+  let feedError: string | null = null;
+  if (isAzureArtifactsConfigured()) {
+    const message = reason
+      ? `Deprecated in APEX: ${reason}`
+      : `Deprecated in APEX — no longer offered to new installs.`;
+    try {
+      await deprecatePackageVersion(existing.artifactVersion, message);
+    } catch (e: unknown) {
+      feedError = (e as Error).message;
+      console.warn(`[foundationSkillReleaseService] Feed deprecation failed for ${id}: ${feedError}`);
+    }
+  }
 
   const now = new Date().toISOString();
 
@@ -354,7 +436,9 @@ export async function deprecateRelease(
       action:         'deprecated',
       actorId:        actor.id,
       actorEmail:     actor.email ?? null,
-      details:        reason ? { reason } : null,
+      details:        (reason || feedError)
+        ? { ...(reason ? { reason } : {}), ...(feedError ? { feedError } : {}) }
+        : null,
     });
 
     return mapRow(updated);

@@ -17,7 +17,13 @@ export function defaultPackageRoot() {
 }
 
 export function cmdDoctor(opts, log) {
-  const result = runDoctor({ checkFeed: opts.feed === true });
+  const skipFeed = opts.skipFeed === true || opts['skip-feed'] === true;
+  const result = runDoctor({
+    // Default: full health check. --feed remains supported; --skip-feed for local package maintainers.
+    requireRegistry: opts.skipRegistry !== true,
+    requireFeed: skipFeed ? false : true,
+    checkFeed: opts.feed === true ? true : undefined,
+  });
   log(formatDoctor(result));
   return result.ok ? 0 : 1;
 }
@@ -35,11 +41,15 @@ export function cmdInstall(opts, log) {
   const pkgRoot = opts.package ? path.resolve(opts.package) : defaultPackageRoot();
   const repoRoot = path.resolve(opts.cwd ?? process.cwd());
 
-  // Hard prerequisite gate.
-  const doc = runDoctor({ checkFeed: false });
+  // Hard prerequisite gate — registry + feed must be healthy before install.
+  const doc = runDoctor({
+    repoRoot: path.resolve(opts.cwd ?? process.cwd()),
+    requireRegistry: true,
+    requireFeed: true,
+  });
   if (!doc.ok) {
-    log(formatDoctor(doc));
-    log('\nInstall refused: fix hard prerequisites above.');
+    log(formatDoctor(doc, { showNextSteps: false }));
+    log('\nInstall refused: fix hard prerequisites above, then re-run doctor / install.');
     return 1;
   }
 

@@ -13,7 +13,7 @@ import { eq, and } from 'drizzle-orm';
 import crypto from 'crypto';
 import { db } from '../db/drizzle';
 import { foundationSkillRepoStatus } from '../db/schema';
-import { getLatestPublishedRelease } from './foundationSkillReleaseService';
+import { getLatestPublishedRelease, getReleaseByVersion } from './foundationSkillReleaseService';
 import * as facade from './skillCatalogFacade';
 import type {
   FoundationSkillCompatibilityReport,
@@ -43,6 +43,7 @@ function mapStatusRow(row: typeof foundationSkillRepoStatus.$inferSelect): Found
     project:               row.project,
     repo:                  row.repo,
     branch:                row.branch,
+    apexProject:           row.apexProject ?? null,
     installedVersion:      row.installedVersion ?? null,
     selectedSkills:        (row.selectedSkills as string[]) ?? [],
     lockHash:              row.lockHash ?? null,
@@ -114,6 +115,7 @@ export async function checkCompatibility(
   const driftedFiles: string[] = [];
   let status: FoundationSkillCompatibilityStatus = 'unknown';
   let installedVersion: string | null = null;
+  let installedReleaseStatus: FoundationSkillCompatibilityReport['installedReleaseStatus'] = null;
   let selectedSkills: string[] = [];
   let lockHash: string | null = null;
   let updateAvailable = false;
@@ -134,6 +136,20 @@ export async function checkCompatibility(
       status = 'incompatible';
     } else if (candidateVersion && semverGt(candidateVersion, installedVersion)) {
       updateAvailable = true;
+    }
+
+    // Flag a deprecated installed release. Advisory only — it must not set
+    // `updateAvailable`, since the replacement release may be a lower semver
+    // (or may not exist yet) and teams are never force-migrated.
+    if (installedVersion) {
+      const installedRelease = await getReleaseByVersion(installedVersion);
+      installedReleaseStatus = installedRelease?.status ?? null;
+      if (installedReleaseStatus === 'deprecated') {
+        warnings.push(
+          `Installed release v${installedVersion} is deprecated — it keeps working, ` +
+          `but it is no longer offered to new installs. Move to a supported release when convenient.`,
+        );
+      }
     }
 
     // Check for foundation file drift (files recorded in lockfile that no longer match)
@@ -179,6 +195,7 @@ export async function checkCompatibility(
     installedVersion,
     candidateVersion: candidateVersion ?? 'unknown',
     status,
+    installedReleaseStatus,
     errors,
     warnings,
     driftedFiles,
@@ -191,6 +208,7 @@ export async function checkCompatibility(
     project,
     repo,
     branch,
+    apexProject: req.apexProject ?? null,
     installedVersion,
     selectedSkills,
     lockHash,
@@ -211,6 +229,7 @@ export async function upsertRepoStatus(data: {
   project: string;
   repo: string;
   branch: string;
+  apexProject?: string | null;
   installedVersion: string | null;
   selectedSkills: string[];
   lockHash: string | null;
@@ -237,6 +256,8 @@ export async function upsertRepoStatus(data: {
     const [updated] = await db
       .update(foundationSkillRepoStatus)
       .set({
+        // Preserve a previously recorded Apex project when this caller didn't supply one
+        ...(data.apexProject ? { apexProject: data.apexProject } : {}),
         installedVersion:      data.installedVersion,
         selectedSkills:        data.selectedSkills,
         lockHash:              data.lockHash,
@@ -261,6 +282,7 @@ export async function upsertRepoStatus(data: {
       project:               data.project,
       repo:                  data.repo,
       branch:                data.branch,
+      apexProject:           data.apexProject ?? null,
       installedVersion:      data.installedVersion,
       selectedSkills:        data.selectedSkills,
       lockHash:              data.lockHash,

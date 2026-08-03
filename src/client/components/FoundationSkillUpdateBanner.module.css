@@ -1,19 +1,27 @@
-/* Full-width notification strip — sits at the top of the page content area */
+/* Notification strip — sits at the top of the page content area */
 
 .strip {
+  --b-accent: var(--accent-color);
+  --b-on-accent: var(--on-accent);
+  --b-radius: 10px;
+
   display: flex;
   flex-direction: column;
-  padding: 10px 24px;
-  background: color-mix(in srgb, var(--accent-color) 10%, var(--bg-secondary));
-  border-bottom: 1px solid color-mix(in srgb, var(--accent-color) 35%, var(--border-color));
+  padding: 14px 24px;
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--b-accent) 13%, var(--bg-secondary)),
+    color-mix(in srgb, var(--b-accent) 6%, var(--bg-secondary))
+  );
+  border-bottom: 1px solid color-mix(in srgb, var(--b-accent) 30%, var(--border-color));
   font-size: 13px;
   width: 100%;
   box-sizing: border-box;
 }
 
 .stripWarning {
-  background: color-mix(in srgb, #f59e0b 12%, var(--bg-secondary));
-  border-bottom-color: color-mix(in srgb, #f59e0b 40%, var(--border-color));
+  --b-accent: #f59e0b;
+  --b-on-accent: #1a1a1a;
 }
 
 /* ── Main row ─────────────────────────────────────────────────────────────── */
@@ -21,85 +29,131 @@
 .mainRow {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 14px;
   flex-wrap: wrap;
   width: 100%;
+}
+
+/* Leading glyph tile */
+.icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--b-radius);
+  background: var(--b-accent);
+  color: var(--b-on-accent);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 220px;
+}
+
+.title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--text-primary);
+  letter-spacing: -0.005em;
 }
 
 .badge {
   flex-shrink: 0;
   padding: 2px 8px;
-  background: var(--accent-color);
-  color: var(--on-accent);
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  background: color-mix(in srgb, var(--b-accent) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--b-accent) 40%, transparent);
+  color: var(--b-accent);
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   white-space: nowrap;
 }
 
-.stripWarning .badge {
-  background: #f59e0b;
-  color: #1a1a1a;
+.subtitle {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
 }
 
-.text {
+.version {
+  font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
+  font-weight: 650;
   color: var(--text-primary);
-  flex: 1;
-  min-width: 0;
+}
+
+.breakingFlag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, #f59e0b 16%, transparent);
+  border: 1px solid color-mix(in srgb, #f59e0b 42%, transparent);
+  color: #f59e0b;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* ── Toggle buttons ──────────────────────────────────────────────────────── */
+
+.toggleRow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .notesToggle {
-  flex-shrink: 0;
-  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-primary);
   border: 1px solid var(--border-color);
-  border-radius: 4px;
-  padding: 2px 9px;
-  font-size: 11px;
+  border-radius: 7px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 550;
+  font-family: inherit;
   color: var(--text-secondary);
   cursor: pointer;
   white-space: nowrap;
-  transition: border-color 0.15s ease, color 0.15s ease;
+  transition: border-color 0.16s ease, color 0.16s ease, background 0.16s ease;
 }
 
 .notesToggle:hover {
-  border-color: var(--accent-color);
+  border-color: var(--b-accent);
   color: var(--text-primary);
 }
 
-.actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.or {
-  color: var(--text-muted);
-  font-size: 11px;
-}
-
-.codeBtn {
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  padding: 3px 8px;
-  cursor: pointer;
-  transition: border-color 0.15s ease;
+.notesToggleActive {
+  border-color: var(--b-accent);
+  background: color-mix(in srgb, var(--b-accent) 12%, var(--bg-primary));
   color: var(--text-primary);
-  white-space: nowrap;
 }
 
-.codeBtn:hover {
-  border-color: var(--accent-color);
+.caret {
+  font-size: 8px;
+  line-height: 1;
+  transition: transform 0.2s ease;
 }
 
-.codeBtn code {
-  font-size: 11px;
-  font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
-  color: var(--accent-color);
-}
+.caretOpen { transform: rotate(180deg); }
 
 .dismiss {
   flex-shrink: 0;
@@ -109,40 +163,39 @@
   font-size: 14px;
   line-height: 1;
   cursor: pointer;
-  padding: 2px 4px;
-  border-radius: 3px;
-  margin-left: auto;
-  transition: color 0.15s ease, background 0.15s ease;
+  padding: 7px 9px;
+  border-radius: 7px;
+  transition: color 0.16s ease, background 0.16s ease;
 }
 
 .dismiss:hover {
   color: var(--text-primary);
-  background: var(--bg-hover, rgba(255,255,255,0.08));
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
 }
 
-/* ── Expandable notes panel ────────────────────────────────────────────────── */
+/* ── Expandable panel ────────────────────────────────────────────────────── */
 
 .notesPanel {
-  margin-top: 10px;
+  margin-top: 14px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding-top: 10px;
-  border-top: 1px solid color-mix(in srgb, var(--border-color) 60%, transparent);
+  gap: 14px;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
 }
 
 .notesSection {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
 }
 
 .notesSectionLabel {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 620;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-primary);
 }
 
 .notesPre {
@@ -152,18 +205,18 @@
   color: var(--text-primary);
   white-space: pre-wrap;
   word-break: break-word;
-  line-height: 1.55;
-  background: color-mix(in srgb, var(--bg-primary) 60%, transparent);
+  line-height: 1.6;
+  background: var(--bg-primary);
   border: 1px solid var(--border-color);
-  border-radius: 6px;
-  padding: 8px 12px;
+  border-radius: var(--b-radius);
+  padding: 12px 14px;
 }
 
 .noNotes {
   margin: 0;
   font-size: 12.5px;
+  line-height: 1.55;
   color: var(--text-muted);
-  font-style: italic;
 }
 
 /* ── Steps list (getting started / how to update) ─────────────────────────── */
@@ -171,26 +224,79 @@
 .stepsList {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-top: 4px;
+  gap: 10px;
 }
 
 .stepRow {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 11px;
 }
 
 .stepNum {
+  display: grid;
+  place-items: center;
   flex-shrink: 0;
-  font-size: 12px;
-  color: var(--text-muted);
-  width: 14px;
-  text-align: right;
+  width: 21px;
+  height: 21px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--b-accent) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--b-accent) 38%, transparent);
+  color: var(--b-accent);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
 }
+
+.stepBody {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.codeBtn {
+  align-self: flex-start;
+  max-width: 100%;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  padding: 6px 11px;
+  cursor: pointer;
+  transition: border-color 0.16s ease, background 0.16s ease;
+  color: var(--text-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.codeBtn:hover {
+  border-color: var(--b-accent);
+  background: color-mix(in srgb, var(--b-accent) 7%, var(--bg-primary));
+}
+
+.codeBtn code {
+  font-size: 12px;
+  font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
+  color: var(--b-accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.copyHint {
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+
+.codeBtn:hover .copyHint { opacity: 1; }
 
 .stepDesc {
   font-size: 12px;
   color: var(--text-secondary);
-  line-height: 1.4;
+  line-height: 1.5;
 }

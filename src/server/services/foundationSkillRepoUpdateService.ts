@@ -40,11 +40,21 @@ import {
 import { resolveGitRemote } from './repoCacheService';
 import { AzureDevOpsService } from './azureDevOps';
 import * as githubCatalog from './skillCatalogGitHub';
-import { getRelease, getLatestPublishedRelease, isReleaseVisibleToProject } from './foundationSkillReleaseService';
-import { checkCompatibility } from './foundationSkillCompatibilityService';
+import {
+  getRelease,
+  getLatestPublishedRelease,
+  isReleaseVisibleToProject,
+  listRollbackTargets,
+  semverGreaterThan,
+  appendAudit,
+} from './foundationSkillReleaseService';
+import { checkCompatibility, getRepoStatus } from './foundationSkillCompatibilityService';
 import { git, safeArgs, LONG_TIMEOUT_MS } from '../utils/asyncGit';
 import type { SkillProvider } from '../../shared/types/projectSettings';
-import type { FoundationSkillRelease } from '../../shared/types/foundationSkills';
+import type {
+  FoundationSkillRelease,
+  RollbackFoundationSkillRepoResult,
+} from '../../shared/types/foundationSkills';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -61,7 +71,27 @@ export interface UpdateRepoOptions {
   selectedSkills?: string[];
   /** Apex project name — used to filter releases by targetProjects allowlist */
   apexProject?: string | null;
+  /**
+   * `update` (default) installs the latest / chosen release forward.
+   * `rollback` installs a lower published version and uses rollback PR copy.
+   */
+  intent?: 'update' | 'rollback';
+  /** When intent is rollback, the version currently installed (for PR messaging). */
+  fromVersion?: string | null;
   /** Actor for PR attribution */
+  actor?: { id?: string | null; email?: string | null; displayName?: string | null };
+}
+
+export interface RollbackRepoOptions {
+  project: string;
+  repo: string;
+  defaultBranch?: string;
+  provider?: SkillProvider;
+  apexProject: string;
+  /** Target published release id to roll back to. */
+  releaseId: string;
+  /** Optional override; defaults to last observed installed version. */
+  fromVersion?: string | null;
   actor?: { id?: string | null; email?: string | null; displayName?: string | null };
 }
 
@@ -91,12 +121,17 @@ function makeSessionId(repoName: string, version: string): string {
 }
 
 /**
- * Run `npx @apex/skills install <skills...>` inside the workspace.
+ * Run `npx @apex/skills@<version> install <skills...>` inside the workspace.
  * Returns stdout/stderr combined. Throws on non-zero exit.
+ *
+ * The artifact version is pinned explicitly: an unpinned `npx @apex/skills`
+ * resolves the feed's latest tag, which may not be the version recorded on the
+ * release row (and may even be a deprecated build).
  */
-function runCliInstall(workspaceDir: string, skills: string[]): string {
+function runCliInstall(workspaceDir: string, skills: string[], artifactVersion: string): string {
   const skillArgs = skills.length > 0 ? skills.join(' ') : '';
-  const cmd = `npx @apex/skills install ${skillArgs}`.trim();
+  const spec = artifactVersion ? `@apex/skills@${artifactVersion}` : '@apex/skills';
+  const cmd = `npx ${spec} install ${skillArgs}`.trim();
   console.log(`[foundationSkillRepoUpdateService] Running: ${cmd}`);
   try {
     return execSync(cmd, {
@@ -143,15 +178,31 @@ function detectDrift(workspaceDir: string): string[] {
 }
 
 /** Build a structured PR description from release notes and CLI output. */
-function buildPrDescription(release: FoundationSkillRelease, cliOutput: string): string {
+function buildPrDescription(
+  release: FoundationSkillRelease,
+  cliOutput: string,
+  intent: 'update' | 'rollback' = 'update',
+  fromVersion?: string | null,
+): string {
   const sections: string[] = [];
 
-  sections.push(`## APEX Foundation Skills — Update to v${release.version}`);
-  sections.push(
-    `This PR was opened automatically by APEX. It updates the vendored foundation files ` +
-    `under \`.apex/foundation/\` and refreshes \`apex-skills.lock.json\`.\n` +
-    `Team-owned adapter files in \`.cursor/skills/\` are **never overwritten**.`,
-  );
+  if (intent === 'rollback') {
+    sections.push(`## APEX Foundation Skills — Rollback to v${release.version}`);
+    sections.push(
+      `This PR was opened automatically by APEX to **roll back** foundation skills` +
+      (fromVersion ? ` from v${fromVersion}` : '') +
+      ` to v${release.version}.\n\n` +
+      `It re-vendors managed files under \`.apex/foundation/\` and refreshes \`apex-skills.lock.json\`.\n` +
+      `Team-owned adapter files in \`.cursor/skills/\` are **never overwritten**.`,
+    );
+  } else {
+    sections.push(`## APEX Foundation Skills — Update to v${release.version}`);
+    sections.push(
+      `This PR was opened automatically by APEX. It updates the vendored foundation files ` +
+      `under \`.apex/foundation/\` and refreshes \`apex-skills.lock.json\`.\n` +
+      `Team-owned adapter files in \`.cursor/skills/\` are **never overwritten**.`,
+    );
+  }
 
   if (release.releaseNotes?.trim()) {
     sections.push(`## Release notes\n\n${release.releaseNotes.trim()}`);
@@ -194,6 +245,8 @@ export async function updateRepoWithFoundationSkills(
     repo,
     provider = 'ado',
     actor,
+    intent = 'update',
+    fromVersion = null,
   } = opts;
   const errors: string[] = [];
 
@@ -222,7 +275,9 @@ export async function updateRepoWithFoundationSkills(
   const version        = release.version;
   const skills         = opts.selectedSkills ?? release.selectedSkills ?? [];
   const defaultBranch  = opts.defaultBranch ?? 'main';
-  const branchName     = `chore/apex-skills-${version.replace(/\./g, '-')}`;
+  const branchName     = intent === 'rollback'
+    ? `chore/apex-skills-rollback-${version.replace(/\./g, '-')}`
+    : `chore/apex-skills-${version.replace(/\./g, '-')}`;
   const sessionId      = makeSessionId(repo, version);
   const remote         = resolveGitRemote(provider, project, repo);
 
@@ -247,7 +302,7 @@ export async function updateRepoWithFoundationSkills(
     // 3. Run the CLI
     let cliOutput = '';
     try {
-      cliOutput = runCliInstall(workspaceDir, skills);
+      cliOutput = runCliInstall(workspaceDir, skills, release.artifactVersion);
       console.log(`[foundationSkillRepoUpdateService] CLI install complete`);
     } catch (e: unknown) {
       errors.push((e as Error).message);
@@ -285,11 +340,20 @@ export async function updateRepoWithFoundationSkills(
     }
 
     // 5. Commit and push
-    const commitMsg =
-      `chore(apex-skills): update foundation skills to v${version}\n\n` +
-      `Installed via APEX foundation skills distribution.\n` +
-      `Selected skills: ${skills.join(', ') || '(all)'}\n` +
-      (release.breakingChanges ? `\nBreaking changes: ${release.breakingChanges.slice(0, 200)}` : '');
+    const commitMsg = intent === 'rollback'
+      ? (
+        `chore(apex-skills): rollback foundation skills to v${version}\n\n` +
+        `Rollback via APEX foundation skills distribution` +
+        (fromVersion ? ` from v${fromVersion}` : '') + `.\n` +
+        `Selected skills: ${skills.join(', ') || '(all)'}\n` +
+        `Only .apex/foundation/ and apex-skills.lock.json are changed; adapters are untouched.`
+      )
+      : (
+        `chore(apex-skills): update foundation skills to v${version}\n\n` +
+        `Installed via APEX foundation skills distribution.\n` +
+        `Selected skills: ${skills.join(', ') || '(all)'}\n` +
+        (release.breakingChanges ? `\nBreaking changes: ${release.breakingChanges.slice(0, 200)}` : '')
+      );
 
     await git(safeArgs(workspaceDir, ['commit', '-m', commitMsg]), {
       cwd: workspaceDir,
@@ -305,8 +369,10 @@ export async function updateRepoWithFoundationSkills(
     console.log(`[foundationSkillRepoUpdateService] Pushed ${branchName}`);
 
     // 6. Open PR
-    const prTitle = `chore: update APEX foundation skills to v${version}`;
-    const prBody  = buildPrDescription(release, cliOutput);
+    const prTitle = intent === 'rollback'
+      ? `chore: rollback APEX foundation skills to v${version}`
+      : `chore: update APEX foundation skills to v${version}`;
+    const prBody  = buildPrDescription(release, cliOutput, intent, fromVersion);
 
     if (provider === 'github') {
       prUrl = await githubCatalog.createPullRequest({
@@ -337,7 +403,9 @@ export async function updateRepoWithFoundationSkills(
       prUrl,
       branchName,
       changedFiles: changed,
-      report: `Foundation skills updated to v${version}. PR: ${prUrl ?? 'pending'}`,
+      report: intent === 'rollback'
+        ? `Foundation skills rolled back to v${version}. PR: ${prUrl ?? 'pending'}`
+        : `Foundation skills updated to v${version}. PR: ${prUrl ?? 'pending'}`,
       releaseVersion: version,
       errors,
     };
@@ -354,4 +422,124 @@ export async function updateRepoWithFoundationSkills(
       try { cleanupWorkspace(sessionId); } catch { /* non-fatal */ }
     }
   }
+}
+
+/**
+ * Roll a consumer repo back to a lower published release.
+ *
+ * Safety rules:
+ *   - Target release must be published and visible to the Apex project
+ *   - Target version must be strictly lower than the installed version
+ *   - Only managed foundation files + lockfile are rewritten (via CLI install)
+ *   - Drift / incompatible states abort with no PR (same gates as update)
+ *   - Opens a PR; never merges to the default branch
+ */
+export async function rollbackRepoWithFoundationSkills(
+  opts: RollbackRepoOptions,
+  adoService?: AzureDevOpsService | null,
+): Promise<RollbackFoundationSkillRepoResult> {
+  const provider = opts.provider ?? 'ado';
+  const branch   = opts.defaultBranch ?? 'main';
+  const errors: string[] = [];
+
+  const target = await getRelease(opts.releaseId);
+  if (!target) {
+    return {
+      status: 'error', prUrl: null, branchName: null, changedFiles: [],
+      report: `Release not found: ${opts.releaseId}`,
+      fromVersion: opts.fromVersion ?? null, toVersion: null, errors: [`Release not found: ${opts.releaseId}`],
+    };
+  }
+  if (target.status !== 'published') {
+    const msg = `Rollback target v${target.version} is not published (status: ${target.status})`;
+    return {
+      status: 'error', prUrl: null, branchName: null, changedFiles: [],
+      report: msg, fromVersion: opts.fromVersion ?? null, toVersion: target.version, errors: [msg],
+    };
+  }
+  if (!isReleaseVisibleToProject(target, opts.apexProject)) {
+    const msg = `Release v${target.version} is not targeted at Apex project "${opts.apexProject}"`;
+    return {
+      status: 'error', prUrl: null, branchName: null, changedFiles: [],
+      report: msg, fromVersion: opts.fromVersion ?? null, toVersion: target.version, errors: [msg],
+    };
+  }
+
+  // Resolve current installed version from status when not provided
+  let fromVersion = opts.fromVersion ?? null;
+  if (!fromVersion) {
+    const status = await getRepoStatus(provider, opts.project, opts.repo, branch);
+    fromVersion = status?.installedVersion ?? null;
+  }
+  if (!fromVersion) {
+    const msg = 'Cannot rollback — installed version unknown. Run Refresh all / Check first.';
+    return {
+      status: 'error', prUrl: null, branchName: null, changedFiles: [],
+      report: msg, fromVersion: null, toVersion: target.version, errors: [msg],
+    };
+  }
+  if (!semverGreaterThan(fromVersion, target.version)) {
+    const msg = `Rollback target v${target.version} is not older than installed v${fromVersion}`;
+    return {
+      status: 'error', prUrl: null, branchName: null, changedFiles: [],
+      report: msg, fromVersion, toVersion: target.version, errors: [msg],
+    };
+  }
+
+  // Confirm the target is still a valid rollback candidate for this project
+  const candidates = await listRollbackTargets(opts.apexProject, fromVersion);
+  if (!candidates.some((c) => c.id === target.id)) {
+    const msg = `v${target.version} is not a valid rollback target for ${opts.apexProject} from v${fromVersion}`;
+    return {
+      status: 'error', prUrl: null, branchName: null, changedFiles: [],
+      report: msg, fromVersion, toVersion: target.version, errors: [msg],
+    };
+  }
+
+  const result = await updateRepoWithFoundationSkills(
+    {
+      project: opts.project,
+      repo: opts.repo,
+      provider,
+      defaultBranch: branch,
+      releaseId: target.id,
+      apexProject: opts.apexProject,
+      intent: 'rollback',
+      fromVersion,
+      actor: opts.actor,
+    },
+    adoService,
+  );
+
+  // Audit against the target release (best-effort — never fail the rollback on audit)
+  try {
+    await appendAudit(
+      target.id,
+      target.version,
+      'rollback',
+      { id: opts.actor?.id ?? null, email: opts.actor?.email ?? null },
+      {
+        fromVersion,
+        toVersion: target.version,
+        project: opts.project,
+        repo: opts.repo,
+        apexProject: opts.apexProject,
+        status: result.status,
+        prUrl: result.prUrl,
+      },
+    );
+  } catch (e: unknown) {
+    console.warn(`[foundationSkillRepoUpdateService] Rollback audit failed: ${(e as Error).message}`);
+  }
+
+  return {
+    status: result.status,
+    prUrl: result.prUrl,
+    branchName: result.branchName,
+    changedFiles: result.changedFiles,
+    report: result.report,
+    fromVersion,
+    toVersion: target.version,
+    errors: [...errors, ...result.errors],
+  };
 }

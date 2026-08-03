@@ -1,18 +1,22 @@
 /**
  * Prerequisite self-check. Verifies Node >= 18, npm/npx, git, Cursor project
- * presence, and (softly) Azure Artifacts feed reachability. Returns structured
- * results so `install` can gate on hard failures and print actionable remediation.
+ * presence, project @apex registry config, and Azure Artifacts feed reachability.
+ * Returns structured results so `install` can gate on hard failures and print
+ * actionable remediation (including a ready-to-paste .npmrc).
  */
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
-function tryCmd(cmd, args) {
+const PACKAGE_NAME = '@apex/skills';
+
+function tryCmd(cmd, args, { cwd } = {}) {
   try {
     // shell:true so Windows resolves .cmd/.bat shims (npm.cmd, git via PATH).
     const res = spawnSync(cmd, args, {
       encoding: 'utf8',
       shell: true,
+      cwd,
       stdio: ['ignore', 'pipe', 'ignore'],
     });
     if (res.status !== 0 || !res.stdout) return null;
@@ -22,8 +26,110 @@ function tryCmd(cmd, args) {
   }
 }
 
-export function runDoctor({ checkFeed = false, packageName = '@apex/skills', repoRoot = process.cwd() } = {}) {
+/** Org/feed placeholders — prefer env so remediation matches the team's feed. */
+function feedCoords() {
+  const org = process.env.AZURE_ARTIFACTS_ORG?.trim() || '{ORG}';
+  const feed = process.env.AZURE_ARTIFACTS_FEED?.trim() || '{FEED}';
+  const registry =
+    `https://pkgs.dev.azure.com/${org}/_packaging/${feed}/npm/registry/`;
+  return { org, feed, registry };
+}
+
+/** Multi-line remediation: init-registry from template + auth + verify. */
+export function apexRegistryRemediation(repoRoot = process.cwd()) {
+  const { org, feed, registry } = feedCoords();
+  const tokenHost = `//pkgs.dev.azure.com/${org}/_packaging/${feed}/npm/registry/`;
+  const templatePath = path.join(path.resolve(repoRoot), '.npmrc.template');
+  const hasTemplate = fs.existsSync(templatePath);
+
+  return [
+    'The @apex scope must resolve to the private Azure Artifacts feed — not registry.npmjs.org.',
+    '',
+    'Repos typically gitignore .npmrc (tokens) and commit .npmrc.template (URLs only).',
+    '',
+    '1) Create/merge local .npmrc from the template (or defaults):',
+    '',
+    hasTemplate
+      ? '   npx @apex/skills init-registry'
+      : '   npx @apex/skills init-registry --org ' + org + ' --feed ' + feed,
+    '',
+    hasTemplate
+      ? '   (found .npmrc.template — init-registry will copy it and ensure @apex:registry)'
+      : '   Tip: commit .npmrc.template with registry URLs so teammates get this after clone.',
+    '',
+    '   Expected @apex line:',
+    '   @apex:registry=' + registry,
+    '',
+    '2) Authenticate on your machine (token stays local / in CI secrets):',
+    '',
+    '   npx vsts-npm-auth -config .npmrc',
+    '',
+    '   # or:',
+    `   npm config set ${tokenHost}:_authToken "%AZURE_ARTIFACTS_PAT%"`,
+    '',
+    '3) Verify, then re-run doctor / install:',
+    '',
+    `   npm view ${PACKAGE_NAME} version`,
+    '   npx @apex/skills doctor',
+    '   npx @apex/skills install',
+  ].join('\n');
+}
+
+/**
+ * Walk from repoRoot upward (stopping at .git) collecting .npmrc paths,
+ * then parse the first @apex:registry= assignment found.
+ */
+export function resolveApexRegistry(repoRoot) {
+  let dir = path.resolve(repoRoot);
+  for (;;) {
+    const npmrcPath = path.join(dir, '.npmrc');
+    if (fs.existsSync(npmrcPath)) {
+      try {
+        const text = fs.readFileSync(npmrcPath, 'utf8');
+        const match = text.match(/^\s*@apex:registry\s*=\s*(\S+)/m);
+        if (match?.[1]) {
+          return { registry: match[1].trim(), source: npmrcPath };
+        }
+      } catch {
+        // ignore unreadable .npmrc
+      }
+    }
+    if (fs.existsSync(path.join(dir, '.git'))) break;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+
+  const fromNpm = tryCmd('npm', ['config', 'get', '@apex:registry'], { cwd: repoRoot });
+  if (fromNpm && fromNpm !== 'undefined' && fromNpm !== 'null' && fromNpm !== '') {
+    return { registry: fromNpm, source: 'npm config (@apex:registry)' };
+  }
+  return null;
+}
+
+/**
+ * @param {object} [opts]
+ * @param {string} [opts.repoRoot]
+ * @param {string} [opts.packageName]
+ * @param {boolean} [opts.requireRegistry=true] Hard-fail when @apex registry is missing
+ * @param {boolean} [opts.requireFeed=true] Hard-fail when the package is not reachable via npm
+ * @param {boolean} [opts.checkFeed] Deprecated alias — when false, skips feed (and if
+ *   requireRegistry not set, also skips registry). Prefer requireRegistry/requireFeed.
+ */
+export function runDoctor({
+  checkFeed,
+  packageName = PACKAGE_NAME,
+  repoRoot = process.cwd(),
+  requireRegistry,
+  requireFeed,
+} = {}) {
+  // Backward compat: older callers used checkFeed:false to skip network checks.
+  const legacySkip = checkFeed === false;
+  const wantRegistry = requireRegistry ?? !legacySkip;
+  const wantFeed = requireFeed ?? (checkFeed === true ? true : !legacySkip);
+
   const checks = [];
+  const root = path.resolve(repoRoot);
 
   // ── Runtime ──────────────────────────────────────────────────────────────────
   const nodeMajor = Number(process.versions.node.split('.')[0]);
@@ -54,7 +160,7 @@ export function runDoctor({ checkFeed = false, packageName = '@apex/skills', rep
   });
 
   // ── Project context ───────────────────────────────────────────────────────────
-  const hasCursorDir = fs.existsSync(path.join(repoRoot, '.cursor'));
+  const hasCursorDir = fs.existsSync(path.join(root, '.cursor'));
   checks.push({
     id: 'cursor-project',
     ok: hasCursorDir,
@@ -63,7 +169,7 @@ export function runDoctor({ checkFeed = false, packageName = '@apex/skills', rep
     remediation: 'Open this repository in Cursor IDE at least once, or create a .cursor/ directory manually.',
   });
 
-  const hasPackageJson = fs.existsSync(path.join(repoRoot, 'package.json'));
+  const hasPackageJson = fs.existsSync(path.join(root, 'package.json'));
   checks.push({
     id: 'node-project',
     ok: true, // non-Node repos are fully supported — this is info only
@@ -77,7 +183,7 @@ export function runDoctor({ checkFeed = false, packageName = '@apex/skills', rep
         'Node.js is only required to run this CLI installer.',
   });
 
-  const lockPath = path.join(repoRoot, 'apex-skills.lock.json');
+  const lockPath = path.join(root, 'apex-skills.lock.json');
   const hasLock = fs.existsSync(lockPath);
   let installedVersion = null;
   if (hasLock) {
@@ -96,15 +202,60 @@ export function runDoctor({ checkFeed = false, packageName = '@apex/skills', rep
     remediation: null,
   });
 
-  if (checkFeed) {
-    const view = tryCmd('npm', ['view', packageName, 'version']);
+  // ── Private feed (@apex registry + reachability) ────────────────────────────
+  let registryInfo = null;
+  if (wantRegistry || wantFeed) {
+    registryInfo = resolveApexRegistry(root);
+  }
+
+  if (wantRegistry) {
+    const hasTemplate = fs.existsSync(path.join(root, '.npmrc.template'));
     checks.push({
-      id: 'feed',
-      ok: Boolean(view),
-      hard: false,
-      detail: view ? `${packageName}@${view} reachable` : 'feed/package not reachable or not authenticated',
-      remediation: 'Configure .npmrc with the Azure Artifacts feed + PAT (vsts-npm-auth or npm config).',
+      id: 'apex-registry',
+      ok: Boolean(registryInfo?.registry),
+      hard: true,
+      detail: registryInfo
+        ? `@apex:registry → ${registryInfo.registry} (${registryInfo.source})`
+        : hasTemplate
+          ? 'No local .npmrc with @apex:registry (found .npmrc.template — run init-registry)'
+          : 'No @apex:registry in project .npmrc or npm config',
+      remediation: apexRegistryRemediation(root),
     });
+  }
+
+  if (wantFeed) {
+    // Only attempt network check when registry is configured — otherwise the
+    // registry FAIL already explains what to do, and npm view would hit public npm.
+    if (registryInfo?.registry) {
+      const view = tryCmd('npm', ['view', packageName, 'version'], { cwd: root });
+      checks.push({
+        id: 'feed',
+        ok: Boolean(view),
+        hard: true,
+        detail: view
+          ? `${packageName}@${view} reachable via configured registry`
+          : `${packageName} not reachable — auth missing, wrong feed, or package not published`,
+        remediation: [
+          'Registry is configured but the package could not be resolved.',
+          '',
+          '  npx vsts-npm-auth -config .npmrc',
+          `  npm view ${packageName} version`,
+          '',
+          'Confirm the feed has a Release (or Local) view with this package, and your PAT has Packaging Read.',
+          '',
+          apexRegistryRemediation(root),
+        ].join('\n'),
+      });
+    } else if (!wantRegistry) {
+      // Feed requested without registry gate — still report soft/hard failure.
+      checks.push({
+        id: 'feed',
+        ok: false,
+        hard: true,
+        detail: `${packageName} not checked — @apex:registry is not configured`,
+        remediation: apexRegistryRemediation(root),
+      });
+    }
   }
 
   const hardFailures = checks.filter((c) => c.hard && !c.ok);
@@ -115,12 +266,18 @@ export function runDoctor({ checkFeed = false, packageName = '@apex/skills', rep
 export function formatDoctor(result, { showNextSteps = true } = {}) {
   const lines = result.checks.map((c) => {
     const mark = c.ok ? 'PASS' : c.hard ? 'FAIL' : 'WARN';
-    const rem = (!c.ok && c.remediation) ? `\n       -> ${c.remediation}` : '';
+    let rem = '';
+    if (!c.ok && c.remediation) {
+      const remLines = String(c.remediation).split('\n');
+      rem = '\n' + remLines.map((l) => `       ${l}`).join('\n');
+    }
     return `  [${mark}] ${c.id}: ${c.detail}${rem}`;
   });
 
   if (!result.ok) {
-    lines.push('\nHard prerequisites missing — see remediation above.');
+    lines.push('\nHard prerequisites missing — fix the FAIL items above, then re-run:');
+    lines.push('  npx @apex/skills doctor');
+    lines.push('  npx @apex/skills install');
     return lines.join('\n');
   }
 
@@ -130,9 +287,10 @@ export function formatDoctor(result, { showNextSteps = true } = {}) {
     if (result.isFirstInstall) {
       lines.push(`
 Next steps — first-time setup:
-  1. npx @apex/skills install        Install all 30 foundation skill files
-  2. npx @apex/skills bootstrap      Teach the skills your repo (scans codebase, fills adapter templates)
-  3. Review .cursor/skills/<skill>/  Verify adapter content, then commit
+  1. Commit .npmrc (@apex:registry) if you just added it — never commit auth tokens
+  2. npx @apex/skills install        Install foundation skill files + scaffold adapters
+  3. npx @apex/skills bootstrap      Teach the skills your repo (fills adapter templates)
+  4. Review .cursor/skills/<skill>/  Verify adapter content, then commit
 
 Note: skills are plain Markdown — they work in any language repo. Only this CLI requires Node.`);
     } else {

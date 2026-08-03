@@ -18,7 +18,8 @@ export type FoundationSkillAuditAction =
   | 'validated'
   | 'validation_failed'
   | 'published'
-  | 'deprecated';
+  | 'deprecated'
+  | 'rollback';
 
 export type FoundationSkillCompatibilityStatus =
   | 'compatible'
@@ -73,9 +74,12 @@ export interface FoundationSkillReleaseAuditEntry {
 export interface FoundationSkillRepoStatus {
   id: string;
   provider: 'ado' | 'github';
+  /** ADO/GitHub project that owns the repo. */
   project: string;
   repo: string;
   branch: string;
+  /** Apex project name — the identifier release targeting is keyed on. */
+  apexProject: string | null;
   installedVersion: string | null;
   selectedSkills: string[];
   lockHash: string | null;
@@ -141,6 +145,8 @@ export interface FoundationSkillCompatibilityReport {
   installedVersion: string | null;
   candidateVersion: string;
   status: FoundationSkillCompatibilityStatus;
+  /** Status of the release matching `installedVersion`; null when unmatched. */
+  installedReleaseStatus: FoundationSkillReleaseStatus | null;
   errors: string[];
   warnings: string[];
   driftedFiles: string[];
@@ -154,6 +160,28 @@ export interface CheckCompatibilityRequest {
   branch?: string;
   candidateVersion?: string; // defaults to latest published visible to apexProject
   apexProject?: string | null; // Apex project name for targeted-release filtering
+}
+
+// ── Catalog ───────────────────────────────────────────────────────────────────
+
+/**
+ * Whether a skill may be released to consumer projects.
+ *   shippable — lands in team repos and is offered in the release picker.
+ *   apex-only — executes inside the Apex platform itself; never released to teams.
+ * Absent in catalog.json means `shippable`.
+ */
+export type FoundationSkillTier = 'shippable' | 'apex-only';
+
+/** One entry from foundation-skills/catalog.json, as served to the client. */
+export interface FoundationSkillCatalogEntry {
+  name: string;
+  summary: string;
+  tier: FoundationSkillTier;
+}
+
+export interface FoundationSkillCatalogResponse {
+  suiteVersion: string;
+  skills: FoundationSkillCatalogEntry[];
 }
 
 // ── Skills matrix ─────────────────────────────────────────────────────────────
@@ -189,6 +217,70 @@ export interface ProjectAvailableSkill {
 
 export interface ProjectAvailableSkillsResponse {
   skills: ProjectAvailableSkill[];
+}
+
+// ── Active teams grid (Platform Admin) ────────────────────────────────────────
+
+/** One registered consumer repo belonging to an Apex project. */
+export interface FoundationSkillTeamRepo {
+  provider: 'ado' | 'github';
+  /** ADO/GitHub project that owns the repo. */
+  project: string;
+  repo: string;
+  branch: string;
+  /** Display label from the project's skill config. */
+  friendlyName: string;
+  /** False when the repo is registered but has never been scanned. */
+  observed: boolean;
+  installedVersion: string | null;
+  /** Status of the release matching `installedVersion`; null when unmatched. */
+  installedReleaseStatus: FoundationSkillReleaseStatus | null;
+  /** Skill names recorded in the repo's lockfile. */
+  installedSkills: string[];
+  /** Skills the installed release shipped to this team, after targeting. */
+  releasedSkills: string[];
+  availableVersion: string | null;
+  updateAvailable: boolean;
+  compatibilityStatus: FoundationSkillCompatibilityStatus;
+  compatibilityCheckedAt: string | null;
+  lastObservedAt: string | null;
+}
+
+/** One Apex project ("team") with every repo registered under it. */
+export interface FoundationSkillTeam {
+  apexProject: string;
+  repos: FoundationSkillTeamRepo[];
+}
+
+export interface FoundationSkillTeamsResponse {
+  teams: FoundationSkillTeam[];
+}
+
+// ── Rollback ──────────────────────────────────────────────────────────────────
+
+export interface RollbackFoundationSkillRepoRequest {
+  /** ADO/GitHub project that owns the repo. */
+  project: string;
+  repo: string;
+  provider?: 'ado' | 'github';
+  defaultBranch?: string;
+  /** Apex project name — used for targeting and audit. */
+  apexProject: string;
+  /** Target published release to roll back to. */
+  releaseId: string;
+  /** Optional installed version override; defaults to last observed status. */
+  fromVersion?: string | null;
+}
+
+export interface RollbackFoundationSkillRepoResult {
+  status: 'pr_created' | 'no_changes' | 'drift' | 'incompatible' | 'error';
+  prUrl: string | null;
+  branchName: string | null;
+  changedFiles: string[];
+  report: string;
+  fromVersion: string | null;
+  toVersion: string | null;
+  errors: string[];
 }
 
 // ── Azure Artifacts ───────────────────────────────────────────────────────────

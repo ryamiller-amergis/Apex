@@ -11,8 +11,8 @@ interface FoundationSkillUpdateBannerProps {
 
 const FIRST_TIME_STEPS = [
   { cmd: 'npx @apex/skills doctor',    label: 'Check prerequisites (Node 18+, Cursor project, feed auth)' },
-  { cmd: 'npx @apex/skills install',   label: 'Install all 30 foundation skill files into your repo' },
-  { cmd: 'npx @apex/skills bootstrap', label: 'Teach skills your repo — scans codebase and fills adapter templates with your ADO org, team names, and project structure' },
+  { cmd: 'npx @apex/skills install',   label: 'Install the foundation skill files into your repo' },
+  { cmd: 'npx @apex/skills bootstrap', label: 'Teach skills your repo — scans the codebase and fills adapter templates with your ADO org, team names, and project structure' },
 ];
 
 const UPDATE_STEPS = [
@@ -45,7 +45,7 @@ export const FoundationSkillUpdateBanner: React.FC<FoundationSkillUpdateBannerPr
   const isFirstInstall = !repoStatus.installedVersion;
   const hasBreaking    = !!latest.breakingChanges;
   const steps          = isFirstInstall ? FIRST_TIME_STEPS : UPDATE_STEPS;
-  const stepsLabel     = isFirstInstall ? 'Getting started ▼' : 'How to update ▼';
+  const stepsLabel     = isFirstInstall ? 'Getting started' : 'How to update';
 
   function copy(text: string) {
     navigator.clipboard?.writeText(text).catch(() => undefined);
@@ -59,42 +59,52 @@ export const FoundationSkillUpdateBanner: React.FC<FoundationSkillUpdateBannerPr
     >
       {/* ── Main row ── */}
       <div className={styles.mainRow}>
-        <span className={styles.badge}>{isFirstInstall ? 'Skills available' : 'Skills update'}</span>
+        <span className={styles.icon} aria-hidden="true">{isFirstInstall ? '✦' : '↑'}</span>
 
-        <span className={styles.text}>
-          APEX foundation skills <strong>v{latest.version}</strong>
-          {isFirstInstall
-            ? ' is available for your project.'
-            : ` is available (installed: v${repoStatus.installedVersion}).`}
-          {hasBreaking ? ' ⚠ Breaking changes — review before updating.' : ''}
+        <span className={styles.copy}>
+          <span className={styles.title}>
+            {isFirstInstall ? 'Foundation skills are available' : 'Foundation skills update available'}
+            <span className={styles.badge}>{isFirstInstall ? 'New' : 'Update'}</span>
+            {hasBreaking && <span className={styles.breakingFlag}>Breaking changes</span>}
+          </span>
+          <span className={styles.subtitle}>
+            APEX foundation skills <span className={styles.version}>v{latest.version}</span>
+            {isFirstInstall
+              ? ' is ready to install in your repo.'
+              : <> — you currently have <span className={styles.version}>v{repoStatus.installedVersion}</span>.</>}
+          </span>
         </span>
 
-        <button
-          className={styles.notesToggle}
-          type="button"
-          onClick={() => setStepsOpen(v => !v)}
-          aria-expanded={stepsOpen}
-        >
-          {stepsOpen ? 'Hide ▲' : stepsLabel}
-        </button>
+        <span className={styles.toggleRow}>
+          <button
+            className={`${styles.notesToggle} ${stepsOpen ? styles.notesToggleActive : ''}`}
+            type="button"
+            onClick={() => setStepsOpen(v => !v)}
+            aria-expanded={stepsOpen}
+          >
+            {stepsLabel}
+            <span className={`${styles.caret} ${stepsOpen ? styles.caretOpen : ''}`} aria-hidden="true">▼</span>
+          </button>
 
-        <button
-          className={styles.notesToggle}
-          type="button"
-          onClick={() => setNotesOpen(v => !v)}
-          aria-expanded={notesOpen}
-        >
-          {notesOpen ? 'Hide notes ▲' : 'Release notes ▼'}
-        </button>
+          <button
+            className={`${styles.notesToggle} ${notesOpen ? styles.notesToggleActive : ''}`}
+            type="button"
+            onClick={() => setNotesOpen(v => !v)}
+            aria-expanded={notesOpen}
+          >
+            Release notes
+            <span className={`${styles.caret} ${notesOpen ? styles.caretOpen : ''}`} aria-hidden="true">▼</span>
+          </button>
 
-        <button
-          className={styles.dismiss}
-          onClick={() => setDismissed(true)}
-          type="button"
-          aria-label="Dismiss skills update notice"
-        >
-          ✕
-        </button>
+          <button
+            className={styles.dismiss}
+            onClick={() => setDismissed(true)}
+            type="button"
+            aria-label="Dismiss skills update notice"
+          >
+            ✕
+          </button>
+        </span>
       </div>
 
       {/* ── Getting started / how-to-update steps ── */}
@@ -102,23 +112,24 @@ export const FoundationSkillUpdateBanner: React.FC<FoundationSkillUpdateBannerPr
         <div className={styles.notesPanel}>
           <div className={styles.notesSection}>
             <span className={styles.notesSectionLabel}>
-              {isFirstInstall
-                ? 'Run these 3 commands in your repo — forward to your developer:'
-                : 'Run these commands in your repo — forward to your developer:'}
+              Run these commands in your repo — forward to your developer
             </span>
             <div className={styles.stepsList}>
               {steps.map((s, i) => (
                 <div key={s.cmd} className={styles.stepRow}>
-                  <span className={styles.stepNum}>{i + 1}.</span>
-                  <button
-                    className={styles.codeBtn}
-                    title="Copy command"
-                    onClick={() => copy(s.cmd)}
-                    type="button"
-                  >
-                    <code>{s.cmd}</code>
-                  </button>
-                  <span className={styles.stepDesc}>{s.label}</span>
+                  <span className={styles.stepNum}>{i + 1}</span>
+                  <span className={styles.stepBody}>
+                    <button
+                      className={styles.codeBtn}
+                      title="Copy command"
+                      onClick={() => copy(s.cmd)}
+                      type="button"
+                    >
+                      <code>{s.cmd}</code>
+                      <span className={styles.copyHint}>Copy</span>
+                    </button>
+                    <span className={styles.stepDesc}>{s.label}</span>
+                  </span>
                 </div>
               ))}
             </div>

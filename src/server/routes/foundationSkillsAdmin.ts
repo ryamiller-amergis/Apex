@@ -20,34 +20,65 @@ import {
   updateRelease,
   getSkillsMatrix,
   getProjectAvailableSkills,
+  listRollbackTargets,
+  rejectNonShippableSkills,
   type CatalogSkillEntry,
 } from '../services/foundationSkillReleaseService';
 import {
   checkCompatibility,
   listRepoStatuses,
 } from '../services/foundationSkillCompatibilityService';
+import { getFoundationSkillTeams } from '../services/foundationSkillTeamsService';
+import { sweepAllRepos } from '../services/foundationSkillScanScheduler';
 import { listCandidates } from '../services/azureArtifactsSkillService';
-import { updateRepoWithFoundationSkills } from '../services/foundationSkillRepoUpdateService';
+import {
+  updateRepoWithFoundationSkills,
+  rollbackRepoWithFoundationSkills,
+} from '../services/foundationSkillRepoUpdateService';
 import { AzureDevOpsService } from '../services/azureDevOps';
 import type { CreateFoundationSkillReleaseRequest } from '../../shared/types/foundationSkills';
 
 // ── Catalog helper ────────────────────────────────────────────────────────────
 
-let _catalogCache: CatalogSkillEntry[] | null = null;
+interface CatalogFile {
+  suiteVersion: string;
+  skills: CatalogSkillEntry[];
+}
 
-function loadCatalog(): CatalogSkillEntry[] {
+let _catalogCache: CatalogFile | null = null;
+
+/**
+ * Reads foundation-skills/catalog.json — the single source of truth for which
+ * skills exist. Cached per process, so a newly added skill needs a server
+ * restart (or a call to invalidateCatalogCache) to appear.
+ */
+function loadCatalogFile(): CatalogFile {
   if (_catalogCache) return _catalogCache;
   try {
     const catalogPath = path.resolve(__dirname, '../../../foundation-skills/catalog.json');
     const raw = JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
-    _catalogCache = (raw.skills as Array<{ name: string; summary: string }>).map((s) => ({
-      name:    s.name,
-      summary: s.summary ?? '',
-    }));
+    _catalogCache = {
+      suiteVersion: raw.suiteVersion ?? '0.0.0',
+      skills: (raw.skills as Array<{ name: string; summary?: string; tier?: string }>).map((s) => ({
+        name:    s.name,
+        summary: s.summary ?? '',
+        // Absent tier means the skill ships to teams.
+        tier:    s.tier === 'apex-only' ? 'apex-only' as const : 'shippable' as const,
+      })),
+    };
   } catch {
-    _catalogCache = [];
+    _catalogCache = { suiteVersion: '0.0.0', skills: [] };
   }
   return _catalogCache;
+}
+
+function loadCatalog(): CatalogSkillEntry[] {
+  return loadCatalogFile().skills;
+}
+
+/** Exported for tests and for picking up a newly added skill without a restart. */
+export function invalidateCatalogCache(): void {
+  _catalogCache = null;
 }
 
 const router = Router();
@@ -87,6 +118,13 @@ router.post('/releases', async (req: Request, res: Response): Promise<void> => {
     // skillTargets is optional — default {} means all skills inherit release-level targetProjects
     if (body.skillTargets !== undefined && (typeof body.skillTargets !== 'object' || Array.isArray(body.skillTargets))) {
       res.status(400).json({ error: 'skillTargets must be an object mapping skill names to project arrays' });
+      return;
+    }
+    const notShippable = rejectNonShippableSkills(body.selectedSkills, loadCatalog());
+    if (notShippable.length > 0) {
+      res.status(400).json({
+        error: `These skills run inside Apex and cannot be released to projects: ${notShippable.join(', ')}`,
+      });
       return;
     }
 
@@ -164,6 +202,15 @@ router.patch('/releases/:id', async (req: Request, res: Response): Promise<void>
       releaseNotes, breakingChanges, targetProjects, skillTargets, selectedSkills,
       version, artifactVersion, artifactFeed,
     } = req.body;
+    if (Array.isArray(selectedSkills)) {
+      const notShippable = rejectNonShippableSkills(selectedSkills, loadCatalog());
+      if (notShippable.length > 0) {
+        res.status(400).json({
+          error: `These skills run inside Apex and cannot be released to projects: ${notShippable.join(', ')}`,
+        });
+        return;
+      }
+    }
     const release = await updateRelease(req.params.id, actor(req), {
       ...(releaseNotes    !== undefined && { releaseNotes }),
       ...(breakingChanges !== undefined && { breakingChanges }),
@@ -214,6 +261,13 @@ router.post('/update-repo', async (req: Request, res: Response): Promise<void> =
   if (!project?.trim()) { res.status(400).json({ error: 'project is required' }); return; }
   if (!repo?.trim())    { res.status(400).json({ error: 'repo is required' }); return; }
 
+  console.log(
+    `[foundationSkillsAdmin] update-repo ` +
+    `${provider ?? 'ado'}/${project}/${repo}@${defaultBranch ?? 'main'}` +
+    (apexProject ? ` apexProject=${apexProject}` : '') +
+    (releaseId ? ` releaseId=${releaseId}` : ''),
+  );
+
   const actorInfo = actor(req);
 
   // Build an ADO service using the app-level PAT (Platform Admin action — no user token needed)
@@ -247,6 +301,69 @@ router.post('/update-repo', async (req: Request, res: Response): Promise<void> =
   }
 });
 
+/**
+ * GET /api/platform-admin/foundation-skills/rollback-targets
+ * Published releases older than installedVersion and visible to the Apex project.
+ * Query: apexProject, installedVersion
+ */
+router.get('/rollback-targets', async (req: Request, res: Response): Promise<void> => {
+  const apexProject = (req.query.apexProject as string | undefined)?.trim();
+  const installedVersion = (req.query.installedVersion as string | undefined)?.trim();
+  if (!apexProject) { res.status(400).json({ error: 'apexProject query param is required' }); return; }
+  if (!installedVersion) { res.status(400).json({ error: 'installedVersion query param is required' }); return; }
+
+  try {
+    const releases = await listRollbackTargets(apexProject, installedVersion);
+    res.json({ releases });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message ?? 'Failed to list rollback targets' });
+  }
+});
+
+/**
+ * POST /api/platform-admin/foundation-skills/rollback-repo
+ * Roll a consumer repo back to a lower published release and open a PR.
+ * Body: { project, repo, apexProject, releaseId, provider?, defaultBranch?, fromVersion? }
+ */
+router.post('/rollback-repo', async (req: Request, res: Response): Promise<void> => {
+  const { project, repo, provider, defaultBranch, releaseId, apexProject, fromVersion } = req.body;
+  if (!project?.trim())     { res.status(400).json({ error: 'project is required' }); return; }
+  if (!repo?.trim())        { res.status(400).json({ error: 'repo is required' }); return; }
+  if (!apexProject?.trim()) { res.status(400).json({ error: 'apexProject is required' }); return; }
+  if (!releaseId?.trim())   { res.status(400).json({ error: 'releaseId is required' }); return; }
+
+  const actorInfo = actor(req);
+
+  let adoService: AzureDevOpsService | null = null;
+  if (!provider || provider === 'ado') {
+    try {
+      adoService = new AzureDevOpsService(project);
+    } catch {
+      // Non-fatal — PR creation will be skipped with a warning
+    }
+  }
+
+  try {
+    const result = await rollbackRepoWithFoundationSkills(
+      {
+        project,
+        repo,
+        provider: provider ?? 'ado',
+        defaultBranch: defaultBranch ?? 'main',
+        apexProject: apexProject.trim(),
+        releaseId: releaseId.trim(),
+        fromVersion: fromVersion ?? null,
+        actor: { id: actorInfo.id, email: actorInfo.email },
+      },
+      adoService,
+    );
+    res.json(result);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
+  }
+});
+
 // ── Skills matrix ─────────────────────────────────────────────────────────────
 
 /**
@@ -254,6 +371,15 @@ router.post('/update-repo', async (req: Request, res: Response): Promise<void> =
  * Returns the skills matrix: all 31 skills × all releases they appear in,
  * with resolved effective audience per release.
  */
+/**
+ * The catalog of known skills. This is the single source of truth the admin UI
+ * reads, so adding a skill to catalog.json is enough to make it selectable.
+ */
+router.get('/catalog', (_req: Request, res: Response): void => {
+  const { suiteVersion, skills } = loadCatalogFile();
+  res.json({ suiteVersion, skills });
+});
+
 router.get('/skills/matrix', async (_req: Request, res: Response): Promise<void> => {
   try {
     const catalog = loadCatalog();
@@ -278,6 +404,34 @@ router.get('/project-skills', async (req: Request, res: Response): Promise<void>
     res.json({ skills });
   } catch (err: any) {
     res.status(500).json({ error: err.message ?? 'Failed to get project skills' });
+  }
+});
+
+/**
+ * GET /api/platform-admin/foundation-skills/teams
+ * Active teams grid: every Apex project with a registered skills repo, its
+ * installed version, that version's release status, and the skills shipped to it.
+ */
+router.get('/teams', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const teams = await getFoundationSkillTeams();
+    res.json({ teams });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message ?? 'Failed to load teams' });
+  }
+});
+
+/**
+ * POST /api/platform-admin/foundation-skills/repos/scan-all
+ * Re-checks every registered repo on demand. The scheduler does this on a timer;
+ * this is the manual refresh for when an admin wants current data immediately.
+ */
+router.post('/repos/scan-all', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const result = await sweepAllRepos(getUserId(req));
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message ?? 'Failed to sweep repos' });
   }
 });
 

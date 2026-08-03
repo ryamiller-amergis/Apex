@@ -233,10 +233,36 @@ export async function promoteToReleaseView(version: string): Promise<void> {
   const url = `${base}/npm/packagesBatch?api-version=7.1-preview.1`;
 
   await post(url, {
-    data: [{ id: '@apex/skills', version, protocolType: 'Npm' }],
-    operation: 3, // PromotePackage operation
-    views: { op: 0, path: '', value: 'Release' },
+    operation: 'promote',
+    data: { viewId: 'Release' },
+    packages: [{ id: '@apex/skills', version, protocolType: 'Npm' }],
   });
 
   console.log(`[azureArtifactsSkillService] Promoted @apex/skills@${version} to Release view`);
+}
+
+/**
+ * Mark a version deprecated on the feed so `npm install` surfaces a warning and
+ * the feed UI flags it. Pass an empty `message` to undeprecate.
+ *
+ * Deliberately non-destructive: unpublish/delete would 404 for teams already
+ * pinned to this version and break their builds. Preventing *new* adoption is
+ * handled by release targeting in APEX, which never resolves a deprecated
+ * release as an install candidate.
+ */
+export async function deprecatePackageVersion(version: string, message: string): Promise<void> {
+  if (!isAzureArtifactsConfigured()) {
+    throw new Error('Azure Artifacts feed not configured — set AZURE_ARTIFACTS_ORG, AZURE_ARTIFACTS_FEED, and AZURE_ARTIFACTS_PAT');
+  }
+
+  const base = feedBaseUrl()!;
+  const url = `${base}/npm/packagesBatch?api-version=7.1-preview.1`;
+
+  await post(url, {
+    operation: 'deprecate',
+    data: { message },
+    packages: [{ id: '@apex/skills', version, protocolType: 'Npm' }],
+  });
+
+  console.log(`[azureArtifactsSkillService] Deprecated @apex/skills@${version} on the feed`);
 }

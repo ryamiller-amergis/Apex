@@ -66,6 +66,7 @@
     {
       "name": "design-doc-validation",
       "summary": "Automated scoring engine that grades design docs against a weighted rubric and emits a ValidationScorecard.",
+      "tier": "apex-only",
       "scanScope": "targeted",
       "foundationFiles": [
         "SKILL.md"

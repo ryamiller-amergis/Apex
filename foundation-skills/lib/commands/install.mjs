@@ -6,14 +6,23 @@ import { findGitRoot } from '../util.mjs';
 export async function install({ skills = null, dryRun = false, fill = false, enrich = false } = {}) {
   const repoRoot = findGitRoot();
 
-  // Pre-flight: verify prerequisites before writing anything.
+  // Pre-flight: verify prerequisites (incl. @apex registry + feed) before writing.
   console.log(`[apex-skills] Repo root: ${repoRoot}`);
-  console.log('[apex-skills] Running pre-flight checks...');
-  const doctorResult = runDoctor({ repoRoot });
+  console.log('[apex-skills] Running pre-flight health check...');
+  const doctorResult = runDoctor({
+    repoRoot,
+    requireRegistry: true,
+    requireFeed: true,
+  });
   console.log(formatDoctor(doctorResult, { showNextSteps: false }));
 
   if (!doctorResult.ok) {
-    console.error('\n[apex-skills] Cannot install — hard prerequisites not met. Fix the issues above and retry.');
+    console.error(
+      '\n[apex-skills] Cannot install — hard prerequisites not met.\n' +
+      'Fix the FAIL items above (especially apex-registry / feed), then re-run:\n' +
+      '  npx @apex/skills doctor\n' +
+      '  npx @apex/skills install',
+    );
     process.exit(1);
   }
 

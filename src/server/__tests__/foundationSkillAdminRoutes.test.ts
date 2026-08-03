@@ -13,6 +13,8 @@ import * as releaseService from '../services/foundationSkillReleaseService';
 import * as compatService from '../services/foundationSkillCompatibilityService';
 import * as artifactsService from '../services/azureArtifactsSkillService';
 import * as updateService from '../services/foundationSkillRepoUpdateService';
+import * as teamsService from '../services/foundationSkillTeamsService';
+import * as scanScheduler from '../services/foundationSkillScanScheduler';
 import { requireSuperAdmin } from '../middleware/rbac';
 
 jest.mock('../services/foundationSkillReleaseService', () => ({
@@ -24,6 +26,10 @@ jest.mock('../services/foundationSkillReleaseService', () => ({
   deleteDraftRelease: jest.fn(),
   getReleaseAudit: jest.fn(),
   getLatestPublishedRelease: jest.fn(),
+  listRollbackTargets: jest.fn(),
+  // Tier gate: default to "nothing rejected"; individual tests override it.
+  rejectNonShippableSkills: jest.fn(() => []),
+  shippableSkills: jest.fn((catalog: unknown[]) => catalog),
 }));
 
 jest.mock('../services/foundationSkillCompatibilityService', () => ({
@@ -43,6 +49,16 @@ jest.mock('../services/azureArtifactsSkillService', () => ({
 
 jest.mock('../services/foundationSkillRepoUpdateService', () => ({
   updateRepoWithFoundationSkills: jest.fn(),
+  rollbackRepoWithFoundationSkills: jest.fn(),
+}));
+
+jest.mock('../services/foundationSkillTeamsService', () => ({
+  getFoundationSkillTeams: jest.fn(),
+  listRegisteredSkillRepos: jest.fn(),
+}));
+
+jest.mock('../services/foundationSkillScanScheduler', () => ({
+  sweepAllRepos: jest.fn(),
 }));
 
 // Mock the existing platform-admin services so they don't blow up
@@ -103,6 +119,8 @@ const mockRelease    = releaseService   as jest.Mocked<typeof releaseService>;
 const mockCompat     = compatService    as jest.Mocked<typeof compatService>;
 const mockArtifacts  = artifactsService as jest.Mocked<typeof artifactsService>;
 const mockUpdate     = updateService    as jest.Mocked<typeof updateService>;
+const mockTeams      = teamsService     as jest.Mocked<typeof teamsService>;
+const mockScan       = scanScheduler    as jest.Mocked<typeof scanScheduler>;
 const mockRequireSuperAdmin = requireSuperAdmin as jest.Mock;
 
 function buildAdminApp() {
@@ -179,6 +197,42 @@ describe('Foundation Skills Admin Routes', () => {
         .send({ artifactVersion: '1.0.0', selectedSkills: [] });
       expect(res.status).toBe(400);
       expect(mockRelease.createRelease).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 when an apex-only skill is selected', async () => {
+      (mockRelease.rejectNonShippableSkills as jest.Mock)
+        .mockReturnValueOnce(['design-doc-validation']);
+      const res = await request(buildAdminApp())
+        .post('/api/platform-admin/foundation-skills/releases')
+        .send({
+          version: '1.0.0', artifactVersion: '1.0.0',
+          selectedSkills: ['ui-lab', 'design-doc-validation'],
+        });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('design-doc-validation');
+      expect(mockRelease.createRelease).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /api/platform-admin/foundation-skills/catalog', () => {
+    it('serves the catalog read from catalog.json', async () => {
+      const res = await request(buildAdminApp())
+        .get('/api/platform-admin/foundation-skills/catalog');
+      expect(res.status).toBe(200);
+      expect(typeof res.body.suiteVersion).toBe('string');
+      expect(Array.isArray(res.body.skills)).toBe(true);
+      expect(res.body.skills.length).toBeGreaterThanOrEqual(30);
+      // Every entry carries a resolved tier, defaulting to shippable.
+      for (const skill of res.body.skills) {
+        expect(['shippable', 'apex-only']).toContain(skill.tier);
+      }
+    });
+
+    it('marks design-doc-validation as apex-only', async () => {
+      const res = await request(buildAdminApp())
+        .get('/api/platform-admin/foundation-skills/catalog');
+      const entry = res.body.skills.find((s: { name: string }) => s.name === 'design-doc-validation');
+      expect(entry?.tier).toBe('apex-only');
     });
   });
 
@@ -266,6 +320,7 @@ describe('Foundation Skills Admin Routes', () => {
     it('returns observed repo statuses', async () => {
       mockCompat.listRepoStatuses.mockResolvedValue([
         { id: 's1', provider: 'ado', project: 'MaxView', repo: 'MaxView', branch: 'main',
+          apexProject: 'MaxView',
           installedVersion: '1.0.0', selectedSkills: [], lockHash: 'abc',
           compatibilityStatus: 'compatible', compatibilityErrors: [],
           availableVersion: '1.0.1', updateAvailable: true,
@@ -280,12 +335,118 @@ describe('Foundation Skills Admin Routes', () => {
     });
   });
 
+  describe('GET /api/platform-admin/foundation-skills/teams', () => {
+    it('returns the active teams grid', async () => {
+      mockTeams.getFoundationSkillTeams.mockResolvedValue([
+        {
+          apexProject: 'MaxView',
+          repos: [{
+            provider: 'ado', project: 'MaxView', repo: 'MaxView', branch: 'main',
+            friendlyName: 'MaxView skills', observed: true,
+            installedVersion: '1.0.0', installedReleaseStatus: 'deprecated',
+            installedSkills: ['ui-lab'], releasedSkills: ['ui-lab'],
+            availableVersion: '1.0.0', updateAvailable: false,
+            compatibilityStatus: 'compatible',
+            compatibilityCheckedAt: '2026-08-03T00:00:00.000Z',
+            lastObservedAt: '2026-08-03T00:00:00.000Z',
+          }],
+        },
+      ]);
+      const res = await request(buildAdminApp())
+        .get('/api/platform-admin/foundation-skills/teams');
+      expect(res.status).toBe(200);
+      expect(res.body.teams).toHaveLength(1);
+      expect(res.body.teams[0].apexProject).toBe('MaxView');
+      expect(res.body.teams[0].repos[0].installedReleaseStatus).toBe('deprecated');
+    });
+
+    it('returns 500 when the teams service fails', async () => {
+      mockTeams.getFoundationSkillTeams.mockRejectedValue(new Error('db down'));
+      const res = await request(buildAdminApp())
+        .get('/api/platform-admin/foundation-skills/teams');
+      expect(res.status).toBe(500);
+      expect(res.body.error).toBe('db down');
+    });
+  });
+
+  describe('GET /api/platform-admin/foundation-skills/rollback-targets', () => {
+    it('returns older published releases for a project', async () => {
+      mockRelease.listRollbackTargets.mockResolvedValue([
+        { ...sampleRelease, id: 'rel-0', version: '0.9.0' },
+      ]);
+      const res = await request(buildAdminApp())
+        .get('/api/platform-admin/foundation-skills/rollback-targets?apexProject=MaxView&installedVersion=1.0.0');
+      expect(res.status).toBe(200);
+      expect(res.body.releases).toHaveLength(1);
+      expect(res.body.releases[0].version).toBe('0.9.0');
+    });
+
+    it('returns 400 when query params are missing', async () => {
+      const res = await request(buildAdminApp())
+        .get('/api/platform-admin/foundation-skills/rollback-targets?apexProject=MaxView');
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('POST /api/platform-admin/foundation-skills/rollback-repo', () => {
+    it('returns the rollback result', async () => {
+      mockUpdate.rollbackRepoWithFoundationSkills.mockResolvedValue({
+        status: 'pr_created',
+        prUrl: 'https://example.com/pr/1',
+        branchName: 'chore/apex-skills-rollback-0-9-0',
+        changedFiles: ['apex-skills.lock.json'],
+        report: 'ok',
+        fromVersion: '1.0.0',
+        toVersion: '0.9.0',
+        errors: [],
+      });
+      const res = await request(buildAdminApp())
+        .post('/api/platform-admin/foundation-skills/rollback-repo')
+        .send({
+          project: 'MaxView',
+          repo: 'MaxView',
+          apexProject: 'MaxView',
+          releaseId: 'rel-0',
+          fromVersion: '1.0.0',
+        });
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('pr_created');
+      expect(res.body.toVersion).toBe('0.9.0');
+    });
+
+    it('returns 400 when releaseId is missing', async () => {
+      const res = await request(buildAdminApp())
+        .post('/api/platform-admin/foundation-skills/rollback-repo')
+        .send({ project: 'MaxView', repo: 'MaxView', apexProject: 'MaxView' });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('POST /api/platform-admin/foundation-skills/repos/scan-all', () => {
+    it('returns the sweep result', async () => {
+      mockScan.sweepAllRepos.mockResolvedValue({ scanned: 3, failed: 1, errors: ['MaxView/MaxView: 404'] });
+      const res = await request(buildAdminApp())
+        .post('/api/platform-admin/foundation-skills/repos/scan-all');
+      expect(res.status).toBe(200);
+      expect(res.body.scanned).toBe(3);
+      expect(res.body.failed).toBe(1);
+    });
+
+    it('returns 500 when the sweep throws', async () => {
+      mockScan.sweepAllRepos.mockRejectedValue(new Error('registry unavailable'));
+      const res = await request(buildAdminApp())
+        .post('/api/platform-admin/foundation-skills/repos/scan-all');
+      expect(res.status).toBe(500);
+    });
+  });
+
   describe('POST /api/platform-admin/foundation-skills/check-compatibility', () => {
     it('returns a compatibility report', async () => {
       mockCompat.checkCompatibility.mockResolvedValue({
         provider: 'ado', project: 'MaxView', repo: 'MaxView', branch: 'main',
         installedVersion: '1.0.0', candidateVersion: '1.0.1',
-        status: 'compatible', errors: [], warnings: [], driftedFiles: [],
+        status: 'compatible', installedReleaseStatus: 'published',
+        errors: [], warnings: [], driftedFiles: [],
         checkedAt: '2026-07-28T00:00:00.000Z',
       });
       const res = await request(buildAdminApp())
@@ -375,6 +536,7 @@ describe('Foundation Skills Consumer Endpoints (skills router)', () => {
     it('returns repo status for project/repo query', async () => {
       mockCompat.getRepoStatus.mockResolvedValue({
         id: 's1', provider: 'ado', project: 'MaxView', repo: 'MaxView', branch: 'main',
+        apexProject: 'MaxView',
         installedVersion: '1.0.0', selectedSkills: ['ui-lab'], lockHash: 'hash1',
         compatibilityStatus: 'compatible', compatibilityErrors: [],
         availableVersion: '1.0.1', updateAvailable: true,

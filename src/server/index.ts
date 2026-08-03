@@ -51,6 +51,7 @@ import featureRequestRoutes from './routes/featureRequests';
 import askApexRoutes from './routes/askApex';
 import { standupScheduler } from './services/standupScheduler';
 import { aiCostScheduler } from './services/aiCostScheduler';
+import { foundationSkillScanScheduler } from './services/foundationSkillScanScheduler';
 import { resolveDataRoot } from './utils/dataDir';
 
 type FileStoreFactory = (
@@ -325,6 +326,9 @@ const server = app.listen(PORT, () => {
 
   aiCostScheduler.start();
   console.log('AI cost scheduler started');
+
+  foundationSkillScanScheduler.start();
+  console.log('Foundation skill scan scheduler started');
 
   startPdfProcessingPoller();
 
