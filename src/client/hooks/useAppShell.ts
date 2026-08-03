@@ -63,7 +63,8 @@ function deriveWhatsNewFromLegacy(d: MyPermissionsResponse): WhatsNewState {
   };
 }
 
-export function useAppShell() {
+export function useAppShell(options?: { workItemsEnabled?: boolean }) {
+  const workItemsEnabled = options?.workItemsEnabled ?? false;
   const queryClient = useQueryClient();
   const [currentDate] = useState(new Date());
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
@@ -152,8 +153,12 @@ export function useAppShell() {
       .finally(() => setPermissionsLoaded(true));
   }, [isAuthenticated, selectedProject]);
 
-  const { workItems, loading, error, updateDueDate, refetch } = useWorkItems(
-    startDate, endDate, selectedProject, selectedAreaPath, isAuthenticated === true
+  const { workItems, loading, error, isFetching, updateDueDate, refetch } = useWorkItems(
+    startDate,
+    endDate,
+    selectedProject,
+    selectedAreaPath,
+    isAuthenticated === true && workItemsEnabled
   );
 
   useEffect(() => { localStorage.setItem('selectedProject', selectedProject); }, [selectedProject]);
@@ -339,6 +344,8 @@ export function useAppShell() {
     workItems,
     loading,
     error,
+    isFetchingWorkItems: isFetching,
+    refetchWorkItems: refetch,
     isLoading: loading || isChangingTeam,
     isSaving,
     selectedItem,

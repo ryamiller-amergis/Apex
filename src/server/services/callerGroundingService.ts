@@ -1,14 +1,23 @@
 import type { SkillProvider } from '../../shared/types/projectSettings';
 import type {
+  BindingContinuityDecision,
+  GroundingBinding,
+} from '../../shared/types/chat';
+import type {
   GroundingProfile,
   GroundingProfileId,
 } from '../../shared/types/repoReader';
+import type { NativeReadCapabilityResult } from '../../shared/types/groundingOperations';
 import type {
   ActivateRunGroundingsResult,
   RunGroundingService,
 } from './runGroundingService';
 import type { RunGrounding, RunRef } from '../../shared/types/runGrounding';
-import { isGroundingEnabledForCaller as evaluateGroundingFlag } from './featureFlagService';
+import {
+  isGroundingEnabledForCaller as evaluateGroundingFlag,
+  isNativeReadEnabledForCaller as evaluateNativeReadFlag,
+} from './featureFlagService';
+import { evaluateNativeReadCapability as evaluateNativeReadCapabilityCheck } from './nativeReadCapabilityService';
 import {
   groundingProfileResolver,
   type GroundingCallerContext,
@@ -46,6 +55,8 @@ export interface LocalCallerGrounding {
   mode: 'local';
   cwd: string;
   profileId: GroundingProfileId;
+  resolvedSha: string;
+  nativeReads: boolean;
   release(): Promise<void>;
 }
 
@@ -58,6 +69,48 @@ export type CallerGroundingSelection =
   | LocalCallerGrounding
   | RemoteCallerGrounding;
 
+export function callerGroundingSelectionToBinding(
+  selection: CallerGroundingSelection
+): GroundingBinding {
+  return selection.mode === 'local'
+    ? { mode: 'local', sha: selection.resolvedSha }
+    : { mode: 'remote', sha: null };
+}
+
+function isValidGroundingBinding(value: unknown): value is GroundingBinding {
+  if (!value || typeof value !== 'object') return false;
+
+  const candidate = value as { mode?: unknown; sha?: unknown };
+  if (candidate.mode === 'local') {
+    return typeof candidate.sha === 'string' && candidate.sha.trim().length > 0;
+  }
+  return candidate.mode === 'remote' && candidate.sha === null;
+}
+
+export function evaluateBindingContinuity(
+  stored: unknown,
+  resolved: GroundingBinding
+): BindingContinuityDecision {
+  if (stored == null) {
+    return {
+      decision: 'recreate',
+      reason: 'legacy-binding-missing',
+    };
+  }
+  if (!isValidGroundingBinding(stored)) {
+    return { decision: 'recreate', reason: 'binding-malformed' };
+  }
+  if (stored.mode !== resolved.mode) {
+    return { decision: 'recreate', reason: 'mode-changed' };
+  }
+  if (stored.mode === 'local' && resolved.mode === 'local') {
+    return stored.sha === resolved.sha
+      ? { decision: 'resume' }
+      : { decision: 'recreate', reason: 'sha-changed' };
+  }
+  return { decision: 'resume' };
+}
+
 type GroundingServiceDependency = Pick<
   RunGroundingService,
   'activateGroundings' | 'getGroundings' | 'markTerminalInactive'
@@ -65,6 +118,8 @@ type GroundingServiceDependency = Pick<
 
 export interface CallerGroundingDependencies {
   isGroundingEnabledForCaller: typeof evaluateGroundingFlag;
+  isNativeReadEnabledForCaller: typeof evaluateNativeReadFlag;
+  evaluateNativeReadCapability: typeof evaluateNativeReadCapabilityCheck;
   ensureRepoCache: (options: {
     provider: SkillProvider;
     project: string;
@@ -131,6 +186,21 @@ function callerRunTitle(caller: string): string {
   return `${words.join(' ')} run`;
 }
 
+function isNativeReadCapabilityResult(
+  value: unknown
+): value is NativeReadCapabilityResult {
+  if (!value || typeof value !== 'object') return false;
+
+  const candidate = value as { proven?: unknown; reason?: unknown };
+  return (
+    typeof candidate.proven === 'boolean' &&
+    typeof candidate.reason === 'string' &&
+    candidate.reason.length > 0 &&
+    candidate.reason.length <= 64 &&
+    /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate.reason)
+  );
+}
+
 export function createCallerGroundingService(
   dependencies: CallerGroundingDependencies
 ): {
@@ -193,7 +263,9 @@ export function createCallerGroundingService(
         );
       }
 
-      if (!grounding) return fallback(input, 'activation-unavailable');
+      if (!grounding || grounding.groundedSha.trim().length === 0) {
+        return fallback(input, 'activation-unavailable');
+      }
 
       const materialized = await dependencies.materialize(grounding, input.run);
       if (
@@ -233,6 +305,8 @@ export function createCallerGroundingService(
         mode: 'local',
         cwd: materialized.workspacePath,
         profileId: profile.id,
+        resolvedSha: grounding.groundedSha,
+        nativeReads: false,
         release: async () => {
           if (released) return;
           released = true;
@@ -251,6 +325,37 @@ export function createCallerGroundingService(
 
   return {
     async start(input) {
+      let nativeReadEnabled = false;
+      let nativeReadEvaluationFailed = false;
+      try {
+        nativeReadEnabled = await dependencies.isNativeReadEnabledForCaller(
+          {
+            userId: input.userId,
+            project: input.run.project,
+            caller: input.caller,
+          },
+          () => {
+            nativeReadEvaluationFailed = true;
+          }
+        );
+      } catch {
+        nativeReadEvaluationFailed = true;
+      }
+
+      telemetry.nativeReadFlagEvaluated(
+        telemetryContext(input),
+        nativeReadEvaluationFailed
+          ? 'error'
+          : nativeReadEnabled
+            ? 'enabled'
+            : 'disabled',
+        nativeReadEvaluationFailed
+          ? 'evaluation-failed'
+          : nativeReadEnabled
+            ? 'targeted-rollout'
+            : 'default-off'
+      );
+
       let enabled = false;
       let evaluationFailed = false;
       try {
@@ -301,13 +406,82 @@ export function createCallerGroundingService(
       }
       // @feature-flag:repo-grounding-workspace-profile enabled-end
       // @feature-flag:repo-grounding-workspace-profile end
-      return local;
+
+      if (local.mode === 'remote') {
+        return local;
+      }
+
+      let selected: LocalCallerGrounding;
+      // Retain enabled after two stable sprints at full rollout.
+      // @feature-flag:native-read start winner=enabled
+      if (nativeReadEnabled && !nativeReadEvaluationFailed) {
+        // @feature-flag:native-read enabled-start
+        let nativeReads = false;
+        try {
+          const capability = dependencies.evaluateNativeReadCapability({
+            usableShaPinnedCheckout: true,
+            pathConfinementGuardsActive: true,
+          });
+          if (!isNativeReadCapabilityResult(capability)) {
+            telemetry.nativeReadCapabilitySelfCheck(
+              telemetryContext(input),
+              'error',
+              'malformed-result'
+            );
+            telemetry.fallback(
+              telemetryContext(input),
+              'native-read-capability-evaluation-failed'
+            );
+          } else {
+            telemetry.nativeReadCapabilitySelfCheck(
+              telemetryContext(input),
+              capability.proven ? 'proven' : 'not-proven',
+              capability.reason
+            );
+            if (capability.proven) {
+              nativeReads = true;
+              telemetry.nativeReadEngaged(telemetryContext(input));
+            } else {
+              telemetry.fallback(
+                telemetryContext(input),
+                'native-read-capability-unproven'
+              );
+            }
+          }
+        } catch {
+          telemetry.nativeReadCapabilitySelfCheck(
+            telemetryContext(input),
+            'error',
+            'evaluation-failed'
+          );
+          telemetry.fallback(
+            telemetryContext(input),
+            'native-read-capability-evaluation-failed'
+          );
+        }
+        selected = { ...local, nativeReads };
+        // @feature-flag:native-read enabled-end
+      } else {
+        // @feature-flag:native-read disabled-start
+        telemetry.fallback(
+          telemetryContext(input),
+          nativeReadEvaluationFailed
+            ? 'native-read-flag-evaluation-failed'
+            : 'native-read-flag-off'
+        );
+        selected = local;
+        // @feature-flag:native-read disabled-end
+      }
+      // @feature-flag:native-read end
+      return selected;
     },
   };
 }
 
 export const callerGroundingService = createCallerGroundingService({
   isGroundingEnabledForCaller: evaluateGroundingFlag,
+  isNativeReadEnabledForCaller: evaluateNativeReadFlag,
+  evaluateNativeReadCapability: evaluateNativeReadCapabilityCheck,
   ensureRepoCache: ensureRepositoryCache,
   groundingService: runGroundingService,
   materialize: materializeRunGroundingWithPath,

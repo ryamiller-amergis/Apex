@@ -43,11 +43,31 @@ jest.mock('../services/skillCatalogGitHub', () => ({
   getSkillFile: mockRemoteGetSkillFile,
 }));
 
+const nativeReader = {
+  identity: {
+    provider: 'github',
+    project: 'Apex',
+    repo: 'AI-Pilot',
+    sha: 'ask-pinned-sha',
+  },
+  readFile: jest.fn().mockResolvedValue('pinned local context'),
+  listDir: jest.fn().mockResolvedValue([]),
+  searchCode: jest.fn().mockResolvedValue([]),
+};
+const mockResolveConnectionProfile = jest.fn().mockResolvedValue(nativeReader);
+jest.mock('../services/groundingProfileResolver', () => ({
+  groundingProfileResolver: {
+    resolveConnectionProfile: mockResolveConnectionProfile,
+  },
+}));
+
 const release = jest.fn().mockResolvedValue(undefined);
 const start = jest.fn().mockResolvedValue({
   mode: 'local',
   cwd: 'C:\\data\\grounding-workspaces\\ask-profile',
   profileId: 'opaque-profile',
+  resolvedSha: 'ask-pinned-sha',
+  nativeReads: true,
   release,
 });
 jest.mock('../services/callerGroundingService', () => ({
@@ -80,7 +100,7 @@ describe('PBI-005 Ask Apex shared grounding lifecycle', () => {
     delete process.env.CURSOR_API_KEY;
   });
 
-  it('AC-0 / VT-06 uses the shared profile checkout and cleanup without private temp files', async () => {
+  it('AC-0 / VT-07 uses the profile-resolved local reader with sandbox cwd and shared cleanup', async () => {
     // Arrange
     const sessionId = createSession('developer-1');
 
@@ -105,14 +125,26 @@ describe('PBI-005 Ask Apex shared grounding lifecycle', () => {
       },
     }));
     expect(agentCreate).toHaveBeenCalledWith(expect.objectContaining({
-      local: { cwd: 'C:\\data\\grounding-workspaces\\ask-profile' },
+      local: expect.objectContaining({
+        cwd: process.cwd(),
+        customTools: expect.objectContaining({
+          get_skill_file: expect.any(Object),
+          list_repo_dir: expect.any(Object),
+          search_repo_code: expect.any(Object),
+        }),
+      }),
       mcpServers: {
         'github-repo': {
-          url: 'http://localhost:3001/mcp/github-repo/grounding/opaque-profile',
+          url: 'http://localhost:3001/mcp/github-repo?enableRepoBrowse=false',
         },
       },
     }));
-    expect(mockLocalReadFile).toHaveBeenCalledTimes(5);
+    expect(agentCreate.mock.calls[0][0].local.cwd).not.toBe(
+      'C:\\data\\grounding-workspaces\\ask-profile',
+    );
+    expect(mockResolveConnectionProfile).toHaveBeenCalledWith('opaque-profile');
+    expect(nativeReader.readFile).toHaveBeenCalledTimes(5);
+    expect(mockLocalReadFile).not.toHaveBeenCalled();
     expect(mockRemoteGetSkillFile).not.toHaveBeenCalled();
     expect(closed).toBe(true);
     expect(release).toHaveBeenCalledTimes(1);

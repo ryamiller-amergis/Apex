@@ -1,7 +1,10 @@
 import type { RunGrounding, RunRef } from '../../shared/types/runGrounding';
 import type { GroundingProfileId } from '../../shared/types/repoReader';
+import type { GroundingBinding } from '../../shared/types/chat';
 import {
+  callerGroundingSelectionToBinding,
   createCallerGroundingService,
+  evaluateBindingContinuity,
   type CallerGroundingDependencies,
 } from '../services/callerGroundingService';
 
@@ -30,6 +33,11 @@ function dependencies(
 ): CallerGroundingDependencies {
   return {
     isGroundingEnabledForCaller: jest.fn().mockResolvedValue(true),
+    isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(false),
+    evaluateNativeReadCapability: jest.fn().mockReturnValue({
+      proven: false,
+      reason: 'harness-not-run',
+    }),
     ensureRepoCache: jest.fn().mockResolvedValue({
       baseSha: grounding.groundedSha,
     }),
@@ -419,7 +427,15 @@ describe('PBI-005 shared caller grounding startup', () => {
 
     // Then it uses the normal existing remote path without failure telemetry.
     expect(selected).toMatchObject({ mode: 'remote' });
-    expect(deps.trackEvent).not.toHaveBeenCalled();
+    expect(deps.trackEvent).toHaveBeenCalledWith(
+      'native-read.flag.evaluated',
+      expect.objectContaining({
+        flag: 'native-read',
+        outcome: 'disabled',
+        reason: 'default-off',
+      }),
+      { evaluationCount: 1 }
+    );
     expect(deps.groundingService.getGroundings).not.toHaveBeenCalled();
     expect(deps.profiles.registerConnectionProfile).not.toHaveBeenCalled();
     expect(deps.impactContexts.register).not.toHaveBeenCalled();
@@ -554,4 +570,551 @@ describe('PBI-005 shared caller grounding startup', () => {
     ).toHaveLength(1);
     expect(deps.profiles.registerConnectionProfile).not.toHaveBeenCalled();
   });
+});
+
+describe('TBI-005 / PBI-004 guarded native-read startup', () => {
+  const startInput = {
+    caller: 'chat-agent',
+    userId: 'developer-1',
+    run,
+    repository: {
+      provider: 'github' as const,
+      repo: 'AI-Pilot',
+      branch: 'main',
+    },
+    reauthorize: async () => true,
+  };
+
+  it.each([
+    ['local', true, 'local'],
+    ['remote', false, 'remote'],
+  ])(
+    'AC-0 / VT-01 preserves the existing MCP-backed %s selection when native-read is disabled',
+    async (_scenario, baseGroundingEnabled, expectedMode) => {
+      const deps = dependencies({
+        isGroundingEnabledForCaller: jest
+          .fn()
+          .mockResolvedValue(baseGroundingEnabled),
+      });
+      const service = createCallerGroundingService(deps);
+
+      const selected = await service.start(startInput);
+
+      expect(selected.mode).toBe(expectedMode);
+      expect(deps.isNativeReadEnabledForCaller).toHaveBeenCalledTimes(1);
+      expect(deps.evaluateNativeReadCapability).not.toHaveBeenCalled();
+      expect(deps.trackEvent).toHaveBeenCalledWith(
+        'native-read.flag.evaluated',
+        expect.objectContaining({
+          flag: 'native-read',
+          outcome: 'disabled',
+          reason: 'default-off',
+        }),
+        { evaluationCount: 1 }
+      );
+      expect(
+        jest
+          .mocked(deps.trackEvent)
+          .mock.calls.some(([name]) => name === 'native-read.engaged')
+      ).toBe(false);
+    }
+  );
+
+  it.each([
+    [
+      'callback-reported failure',
+      jest
+        .fn()
+        .mockImplementation(async (_context, onError) => {
+          onError?.();
+          return false;
+        }),
+    ],
+    [
+      'thrown evaluation',
+      jest
+        .fn()
+        .mockRejectedValue(
+          new Error(
+            'secret=flag-value C:\\private\\repo --raw-argument'
+          )
+        ),
+    ],
+  ])(
+    'AC-1 / VT-02 keeps the existing MCP selection after %s',
+    async (_scenario, nativeFlag) => {
+      const deps = dependencies({
+        isNativeReadEnabledForCaller: nativeFlag,
+      });
+      const service = createCallerGroundingService(deps);
+
+      const selected = await service.start(startInput);
+
+      expect(selected.mode).toBe('local');
+      expect(nativeFlag).toHaveBeenCalledTimes(1);
+      expect(deps.evaluateNativeReadCapability).not.toHaveBeenCalled();
+      expect(deps.trackEvent).toHaveBeenCalledWith(
+        'native-read.flag.evaluated',
+        expect.objectContaining({
+          outcome: 'error',
+          reason: 'evaluation-failed',
+        }),
+        { evaluationCount: 1 }
+      );
+      const serialized = JSON.stringify(
+        jest.mocked(deps.trackEvent).mock.calls
+      );
+      expect(serialized).not.toContain('flag-value');
+      expect(serialized).not.toContain('private');
+      expect(serialized).not.toContain('raw-argument');
+    }
+  );
+
+  it.each([
+    [
+      'thrown self-check',
+      jest
+        .fn()
+        .mockImplementation(() => {
+          throw new Error(
+            'Bearer credential C:\\private\\repo --raw-argument'
+          );
+        }),
+      'evaluation-failed',
+    ],
+    [
+      'malformed self-check',
+      jest.fn().mockReturnValue({
+        proven: 'yes',
+        reason: 'C:\\private\\repo --raw-argument',
+      }),
+      'malformed-result',
+    ],
+  ])(
+    'AC-1 / VT-03 keeps the existing MCP selection after a %s',
+    async (_scenario, capabilityCheck, expectedReason) => {
+      const deps = dependencies({
+        isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(true),
+        evaluateNativeReadCapability: capabilityCheck,
+      });
+      const service = createCallerGroundingService(deps);
+
+      const selected = await service.start(startInput);
+
+      expect(selected.mode).toBe('local');
+      expect(deps.isNativeReadEnabledForCaller).toHaveBeenCalledTimes(1);
+      expect(capabilityCheck).toHaveBeenCalledTimes(1);
+      expect(deps.trackEvent).toHaveBeenCalledWith(
+        'native-read.capability.self-check',
+        expect.objectContaining({
+          outcome: 'error',
+          selfCheckReason: expectedReason,
+        }),
+        { selfCheckCount: 1 }
+      );
+      const serialized = JSON.stringify(
+        jest.mocked(deps.trackEvent).mock.calls
+      );
+      expect(serialized).not.toContain('Bearer');
+      expect(serialized).not.toContain('private');
+      expect(serialized).not.toContain('raw-argument');
+    }
+  );
+
+  it('AC-2 / VT-04 keeps MCP when targeted on but capability is not proven', async () => {
+    const deps = dependencies({
+      isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(true),
+      evaluateNativeReadCapability: jest.fn().mockReturnValue({
+        proven: false,
+        reason: 'harness-not-run',
+      }),
+    });
+    const service = createCallerGroundingService(deps);
+
+    const selected = await service.start(startInput);
+
+    expect(selected.mode).toBe('local');
+    expect(deps.isNativeReadEnabledForCaller).toHaveBeenCalledTimes(1);
+    expect(deps.evaluateNativeReadCapability).toHaveBeenCalledTimes(1);
+    expect(deps.trackEvent).toHaveBeenCalledWith(
+      'native-read.flag.evaluated',
+      expect.objectContaining({
+        outcome: 'enabled',
+        reason: 'targeted-rollout',
+      }),
+      { evaluationCount: 1 }
+    );
+    expect(deps.trackEvent).toHaveBeenCalledWith(
+      'native-read.capability.self-check',
+      expect.objectContaining({
+        outcome: 'not-proven',
+        selfCheckReason: 'harness-not-run',
+      }),
+      { selfCheckCount: 1 }
+    );
+    expect(
+      jest
+        .mocked(deps.trackEvent)
+        .mock.calls.some(([name]) => name === 'native-read.engaged')
+    ).toBe(false);
+  });
+});
+
+describe('TBI-006 / PBI-005 S1 native-read activation', () => {
+  const startInput = {
+    caller: 'chat-agent',
+    userId: 'developer-1',
+    run,
+    repository: {
+      provider: 'github' as const,
+      repo: 'AI-Pilot',
+      branch: 'main',
+    },
+    reauthorize: async () => true,
+  };
+
+  it('VT-01 activates native reads only after usable SHA-pinned checkout and capability proof', async () => {
+    // Arrange
+    const deps = dependencies({
+      isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(true),
+      evaluateNativeReadCapability: jest.fn().mockReturnValue({
+        proven: true,
+        reason: 'pinned-checkout-confined',
+      }),
+    });
+    const service = createCallerGroundingService(deps);
+
+    // Act
+    const selected = await service.start(startInput);
+
+    // Assert
+    expect(selected).toMatchObject({
+      mode: 'local',
+      cwd: 'C:\\data\\grounding-workspaces\\opaque',
+      resolvedSha: grounding.groundedSha,
+      nativeReads: true,
+    });
+    expect(jest.mocked(deps.materialize).mock.invocationCallOrder[0]).toBeLessThan(
+      jest.mocked(deps.evaluateNativeReadCapability).mock.invocationCallOrder[0]
+    );
+    expect(deps.evaluateNativeReadCapability).toHaveBeenCalledWith({
+      usableShaPinnedCheckout: true,
+      pathConfinementGuardsActive: true,
+    });
+    expect(deps.trackEvent).toHaveBeenCalledWith(
+      'native-read.engaged',
+      {
+        caller: 'chat-agent',
+        project: 'Apex',
+        runId: 'thread-1',
+        runType: 'chat',
+      },
+      { engagementCount: 1 }
+    );
+  });
+
+  it.each([
+    {
+      scenario: 'flag off',
+      nativeFlag: jest.fn().mockResolvedValue(false),
+      capability: jest.fn().mockReturnValue({
+        proven: true,
+        reason: 'pinned-checkout-confined',
+      }),
+      fallbackReason: 'native-read-flag-off',
+      capabilityCalls: 0,
+    },
+    {
+      scenario: 'flag evaluation error',
+      nativeFlag: jest
+        .fn()
+        .mockImplementation(async (_context, onError) => {
+          onError?.();
+          return false;
+        }),
+      capability: jest.fn().mockReturnValue({
+        proven: true,
+        reason: 'pinned-checkout-confined',
+      }),
+      fallbackReason: 'native-read-flag-evaluation-failed',
+      capabilityCalls: 0,
+    },
+    {
+      scenario: 'capability unproven',
+      nativeFlag: jest.fn().mockResolvedValue(true),
+      capability: jest.fn().mockReturnValue({
+        proven: false,
+        reason: 'path-confinement-unproven',
+      }),
+      fallbackReason: 'native-read-capability-unproven',
+      capabilityCalls: 1,
+    },
+    {
+      scenario: 'capability evaluation error',
+      nativeFlag: jest.fn().mockResolvedValue(true),
+      capability: jest.fn().mockImplementation(() => {
+        throw new Error(
+          'secret=capability C:\\private\\repo --raw-argument'
+        );
+      }),
+      fallbackReason: 'native-read-capability-evaluation-failed',
+      capabilityCalls: 1,
+    },
+  ])(
+    'VT-02 fails closed for $scenario with sanitized deterministic telemetry',
+    async ({
+      nativeFlag,
+      capability,
+      fallbackReason,
+      capabilityCalls,
+    }) => {
+      // Arrange
+      const deps = dependencies({
+        isNativeReadEnabledForCaller: nativeFlag,
+        evaluateNativeReadCapability: capability,
+      });
+      const service = createCallerGroundingService(deps);
+
+      // Act
+      const selected = await service.start(startInput);
+
+      // Assert
+      expect(selected).toMatchObject({
+        mode: 'local',
+        nativeReads: false,
+      });
+      expect(capability).toHaveBeenCalledTimes(capabilityCalls);
+      expect(deps.trackEvent).toHaveBeenCalledWith(
+        'grounding.fallback',
+        {
+          caller: 'chat-agent',
+          project: 'Apex',
+          runId: 'thread-1',
+          runType: 'chat',
+          reason: fallbackReason,
+        },
+        { fallbackCount: 1 }
+      );
+      expect(
+        jest
+          .mocked(deps.trackEvent)
+          .mock.calls.some(([name]) => name === 'native-read.engaged')
+      ).toBe(false);
+      const serialized = JSON.stringify(
+        jest.mocked(deps.trackEvent).mock.calls
+      );
+      expect(serialized).not.toContain('private');
+      expect(serialized).not.toContain('raw-argument');
+      expect(serialized).not.toContain('secret=capability');
+    }
+  );
+
+  it('VT-02 keeps remote fallback and skips capability evaluation for an unusable checkout', async () => {
+    // Arrange
+    const deps = dependencies({
+      isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(true),
+      evaluateNativeReadCapability: jest.fn().mockReturnValue({
+        proven: true,
+        reason: 'pinned-checkout-confined',
+      }),
+      materialize: jest.fn().mockResolvedValue({ state: 'unavailable' }),
+    });
+    const service = createCallerGroundingService(deps);
+
+    // Act
+    const selected = await service.start(startInput);
+
+    // Assert
+    expect(selected).toEqual({
+      mode: 'remote',
+      release: expect.any(Function),
+    });
+    expect(deps.evaluateNativeReadCapability).not.toHaveBeenCalled();
+    expect(deps.trackEvent).toHaveBeenCalledWith(
+      'grounding.fallback',
+      expect.objectContaining({ reason: 'materialization-unavailable' }),
+      { fallbackCount: 1 }
+    );
+  });
+});
+
+describe('TBI-003 grounding binding continuity', () => {
+  it('TBI-003 DoD-0 / VT-08 exposes the SHA acquired during the same local start operation', async () => {
+    // Arrange
+    const deps = dependencies();
+    const service = createCallerGroundingService(deps);
+
+    // Act
+    const selected = await service.start({
+      caller: 'chat-agent',
+      userId: 'developer-1',
+      run,
+      repository: {
+        provider: 'github',
+        repo: 'AI-Pilot',
+        branch: 'main',
+      },
+      reauthorize: async () => true,
+    });
+
+    // Assert
+    expect(selected).toMatchObject({
+      mode: 'local',
+      resolvedSha: grounding.groundedSha,
+    });
+    expect(deps.groundingService.getGroundings).toHaveBeenCalledTimes(1);
+    expect(callerGroundingSelectionToBinding(selected)).toEqual({
+      mode: 'local',
+      sha: grounding.groundedSha,
+    });
+  });
+
+  it('TBI-003 DoD-1 / VT-09 converts a remote selection to a null-SHA binding', async () => {
+    // Arrange
+    const deps = dependencies({
+      isGroundingEnabledForCaller: jest.fn().mockResolvedValue(false),
+    });
+    const service = createCallerGroundingService(deps);
+
+    // Act
+    const selected = await service.start({
+      caller: 'chat-agent',
+      userId: 'developer-1',
+      run,
+      repository: {
+        provider: 'github',
+        repo: 'AI-Pilot',
+        branch: 'main',
+      },
+      reauthorize: async () => true,
+    });
+
+    // Assert
+    expect(selected.mode).toBe('remote');
+    expect(callerGroundingSelectionToBinding(selected)).toEqual({
+      mode: 'remote',
+      sha: null,
+    });
+  });
+
+  it('TBI-003 DoD-0 / VT-08 never exposes a blank acquired SHA as local', async () => {
+    // Arrange
+    const deps = dependencies();
+    jest
+      .mocked(deps.groundingService.getGroundings)
+      .mockResolvedValue([{ ...grounding, groundedSha: '   ' }]);
+    const service = createCallerGroundingService(deps);
+
+    // Act
+    const selected = await service.start({
+      caller: 'chat-agent',
+      userId: 'developer-1',
+      run,
+      repository: {
+        provider: 'github',
+        repo: 'AI-Pilot',
+        branch: 'main',
+      },
+      reauthorize: async () => true,
+    });
+
+    // Assert
+    expect(selected.mode).toBe('remote');
+    expect(deps.materialize).not.toHaveBeenCalled();
+    expect(callerGroundingSelectionToBinding(selected)).toEqual({
+      mode: 'remote',
+      sha: null,
+    });
+  });
+
+  const localX: GroundingBinding = { mode: 'local', sha: 'sha-x' };
+  const localY: GroundingBinding = { mode: 'local', sha: 'sha-y' };
+  const remote: GroundingBinding = { mode: 'remote', sha: null };
+
+  it.each([
+    {
+      boundary: 'matching local SHA',
+      stored: localX,
+      resolved: localX,
+      expected: { decision: 'resume' },
+      criterion: 'AC-0 / VT-01',
+    },
+    {
+      boundary: 'matching remote mode',
+      stored: remote,
+      resolved: remote,
+      expected: { decision: 'resume' },
+      criterion: 'AC-0 / VT-01',
+    },
+    {
+      boundary: 'null legacy binding',
+      stored: null,
+      resolved: localX,
+      expected: {
+        decision: 'recreate',
+        reason: 'legacy-binding-missing',
+      },
+      criterion: 'AC-1 / VT-02',
+    },
+    {
+      boundary: 'invalid stored mode',
+      stored: { mode: 'hybrid', sha: null },
+      resolved: remote,
+      expected: { decision: 'recreate', reason: 'binding-malformed' },
+      criterion: 'AC-1 / VT-03',
+    },
+    {
+      boundary: 'local null SHA',
+      stored: { mode: 'local', sha: null },
+      resolved: localX,
+      expected: { decision: 'recreate', reason: 'binding-malformed' },
+      criterion: 'AC-1 / VT-03',
+    },
+    {
+      boundary: 'local blank SHA',
+      stored: { mode: 'local', sha: '   ' },
+      resolved: localX,
+      expected: { decision: 'recreate', reason: 'binding-malformed' },
+      criterion: 'AC-1 / VT-03',
+    },
+    {
+      boundary: 'remote non-null SHA',
+      stored: { mode: 'remote', sha: 'unexpected-sha' },
+      resolved: remote,
+      expected: { decision: 'recreate', reason: 'binding-malformed' },
+      criterion: 'AC-1 / VT-03',
+    },
+    {
+      boundary: 'changed local SHA',
+      stored: localX,
+      resolved: localY,
+      expected: { decision: 'recreate', reason: 'sha-changed' },
+      criterion: 'AC-2 / VT-04',
+    },
+    {
+      boundary: 'local to remote mode change',
+      stored: localX,
+      resolved: remote,
+      expected: { decision: 'recreate', reason: 'mode-changed' },
+      criterion: 'AC-3 / VT-05',
+    },
+    {
+      boundary: 'remote to local mode change',
+      stored: remote,
+      resolved: localX,
+      expected: { decision: 'recreate', reason: 'mode-changed' },
+      criterion: 'AC-3 / VT-05',
+    },
+  ])(
+    'TBI-003 DoD-2/DoD-3 $criterion deterministically evaluates $boundary',
+    ({ stored, resolved, expected }) => {
+      // Act
+      const first = evaluateBindingContinuity(stored, resolved);
+      const second = evaluateBindingContinuity(stored, resolved);
+
+      // Assert
+      expect(first).toEqual(expected);
+      expect(second).toEqual(expected);
+    }
+  );
 });

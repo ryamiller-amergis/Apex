@@ -1137,6 +1137,44 @@ body {
   font-size: 14px;
 }
 
+/* Soft, view-scoped notice for calendar/planning work-item fetch failures */
+.work-items-inline-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 16px 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.work-items-inline-error-retry {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.work-items-inline-error-retry:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.work-items-inline-error-retry:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .loading-overlay {
   position: fixed;
   top: 0;
@@ -1634,6 +1672,11 @@ body {
   .error-banner {
     padding: 8px 12px;
     font-size: 12px;
+  }
+
+  .work-items-inline-error {
+    margin: 0 8px 8px;
+    flex-wrap: wrap;
   }
 }
 

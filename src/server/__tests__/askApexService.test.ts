@@ -15,6 +15,20 @@ jest.mock('../services/projectSettingsService', () => ({
   listSkillConfigs: jest.fn().mockResolvedValue([]),
 }));
 
+const mockCallerGroundingStart = jest.fn();
+jest.mock('../services/callerGroundingService', () => ({
+  callerGroundingService: {
+    start: mockCallerGroundingStart,
+  },
+}));
+
+const mockResolveConnectionProfile = jest.fn();
+jest.mock('../services/groundingProfileResolver', () => ({
+  groundingProfileResolver: {
+    resolveConnectionProfile: mockResolveConnectionProfile,
+  },
+}));
+
 jest.mock('uuid', () => ({
   v4: jest.fn(),
 }));
@@ -44,9 +58,21 @@ import {
 } from '../services/askApexService';
 import { v4 as uuidv4 } from 'uuid';
 import { Agent } from '@cursor/sdk';
+import type {
+  GroundingProfileId,
+  RepoReader,
+} from '../../shared/types/repoReader';
 
 const mockUuid = uuidv4 as jest.Mock;
 const mockAgentCreate = Agent.create as jest.Mock;
+const { retryWithBackoff: mockRetryWithBackoff } = jest.requireMock('../utils/retry') as {
+  retryWithBackoff: jest.Mock;
+};
+const { listSkillConfigs: mockListSkillConfigs } = jest.requireMock(
+  '../services/projectSettingsService',
+) as {
+  listSkillConfigs: jest.Mock;
+};
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
 
@@ -63,6 +89,8 @@ describe('askApexService', () => {
     jest.useFakeTimers();
     uuidCounter = 0;
     mockUuid.mockImplementation(nextUuid);
+    mockRetryWithBackoff.mockImplementation((operation: () => unknown) => operation());
+    mockListSkillConfigs.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -228,6 +256,226 @@ describe('askApexService', () => {
       expect(eventTypes).toContain('done');
 
       process.env.CURSOR_API_KEY = originalEnv;
+    });
+
+    it('AC-0 / VT-01 Ask Apex streams through repository MCP without native-read wiring', async () => {
+      // Given a live Ask Apex session and a streaming Cursor SDK agent.
+      const sid = createSession('user-1');
+      const cb = jest.fn();
+      subscribeToSession(sid, 'user-1', cb);
+      const stream = async function* () {
+        yield {
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: 'Repository answer' }] },
+        };
+      };
+      mockAgentCreate.mockResolvedValue({
+        send: jest.fn().mockResolvedValue({
+          supports: jest.fn().mockReturnValue(true),
+          stream,
+        }),
+        [Symbol.asyncDispose]: jest.fn().mockResolvedValue(undefined),
+      });
+      process.env.CURSOR_API_KEY = 'test-key';
+
+      // When the public session API runs a real streamed turn.
+      await sendMessage(sid, 'user-1', 'Read the repository');
+
+      // Then output completes and Apex adds no native-read tool configuration.
+      expect(getSessionMessages(sid, 'user-1')).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ role: 'assistant', text: 'Repository answer' }),
+        ]),
+      );
+      const options = mockAgentCreate.mock.calls[0][0];
+      expect(options.mcpServers).toEqual({
+        'github-repo': expect.objectContaining({
+          url: expect.stringMatching(/\/mcp\/github-repo/),
+        }),
+      });
+      expect(options).not.toHaveProperty('tools');
+      expect(options).not.toHaveProperty('nativeTools');
+      expect(cb.mock.calls.map((call: any[]) => call[0].type)).toContain('done');
+    });
+
+    it('AC-0 / DoD-0 / DoD-1 / BR-010 / VT-07 Ask Apex uses the exact pinned reader with sandbox cwd and no provider browse', async () => {
+      // Given Ask Apex resolves one usable, authorized, SHA-pinned local checkout.
+      const reader: jest.Mocked<RepoReader> = {
+        identity: {
+          provider: 'github',
+          project: 'Apex',
+          repo: 'AI-Pilot',
+          sha: 'sha-pinned',
+        },
+        readFile: jest.fn().mockResolvedValue('pinned repository context'),
+        listDir: jest.fn().mockResolvedValue([]),
+        searchCode: jest.fn().mockResolvedValue([]),
+      };
+      mockListSkillConfigs.mockResolvedValue([{
+        skillProvider: 'github',
+        isDefault: true,
+        skillRepo: 'org/AI-Pilot',
+        skillBranch: 'main',
+      }]);
+      mockCallerGroundingStart.mockResolvedValue({
+        mode: 'local',
+        cwd: 'C:\\checkouts\\sha-pinned',
+        profileId: 'ask-profile' as GroundingProfileId,
+        resolvedSha: 'sha-pinned',
+        nativeReads: true,
+        release: jest.fn(),
+      });
+      mockResolveConnectionProfile.mockResolvedValue(reader);
+      const agent = {
+        send: jest.fn().mockResolvedValue({
+          supports: jest.fn().mockReturnValue(false),
+        }),
+        [Symbol.asyncDispose]: jest.fn().mockResolvedValue(undefined),
+      };
+      mockAgentCreate.mockResolvedValue(agent);
+      process.env.CURSOR_API_KEY = 'test-key';
+      const sid = createSession('user-native');
+
+      // When the public Ask Apex API prepares and sends the first turn.
+      await sendMessage(sid, 'user-native', 'Read the pinned repository');
+
+      // Then exactly three in-process tools serve the checkout, cwd is not the checkout,
+      // provider browse is absent, and the prompt describes native sandbox semantics.
+      expect(mockResolveConnectionProfile).toHaveBeenCalledWith('ask-profile');
+      const options = mockAgentCreate.mock.calls[0][0];
+      expect(options.local.cwd).toBe(process.cwd());
+      expect(options.local.cwd).not.toBe('C:\\checkouts\\sha-pinned');
+      expect(Object.keys(options.local.customTools)).toEqual([
+        'get_skill_file',
+        'list_repo_dir',
+        'search_repo_code',
+      ]);
+      expect(options.mcpServers).toEqual({
+        'github-repo': {
+          url: 'http://localhost:3001/mcp/github-repo?enableRepoBrowse=false',
+        },
+      });
+      expect(agent.send).toHaveBeenCalledWith(
+        expect.stringContaining('local checkout-backed read-only tools'),
+      );
+      expect(agent.send.mock.calls[0][0]).not.toContain('must be fetched via');
+    });
+
+    it('AC-1 / BR-009 / VT-08 Ask Apex falls back to configured provider MCP when the native reader is unusable', async () => {
+      // Given grounding selected native reads but the authorized checkout cannot be resolved.
+      mockListSkillConfigs.mockResolvedValue([{
+        skillProvider: 'github',
+        isDefault: true,
+        skillRepo: 'org/AI-Pilot',
+        skillBranch: 'main',
+      }]);
+      mockCallerGroundingStart.mockResolvedValue({
+        mode: 'local',
+        cwd: 'C:\\checkouts\\missing',
+        profileId: 'ask-missing' as GroundingProfileId,
+        resolvedSha: 'sha-missing',
+        nativeReads: true,
+        release: jest.fn(),
+      });
+      mockResolveConnectionProfile.mockRejectedValue(
+        new Error('authorized checkout unavailable'),
+      );
+      const agent = {
+        send: jest.fn().mockResolvedValue({
+          supports: jest.fn().mockReturnValue(false),
+        }),
+        [Symbol.asyncDispose]: jest.fn().mockResolvedValue(undefined),
+      };
+      mockAgentCreate.mockResolvedValue(agent);
+      process.env.CURSOR_API_KEY = 'test-key';
+      const sid = createSession('user-fallback');
+
+      // When the public Ask Apex API prepares the turn.
+      await sendMessage(sid, 'user-fallback', 'Read with fallback');
+
+      // Then no native tools leak and provider MCP plus fallback prompt are restored.
+      const options = mockAgentCreate.mock.calls[0][0];
+      expect(options.local).toEqual({ cwd: process.cwd() });
+      expect(options.mcpServers).toEqual({
+        'github-repo': {
+          url: 'http://localhost:3001/mcp/github-repo',
+        },
+      });
+      expect(agent.send).toHaveBeenCalledWith(
+        expect.stringContaining('must be fetched via the `github-repo` MCP server'),
+      );
+    });
+
+    it('AC-1 / VT-04 Ask Apex retries transient creation and terminates without hanging', async () => {
+      // Given the SDK transport fails transiently before a successful create.
+      const sid = createSession('user-1');
+      const cb = jest.fn();
+      subscribeToSession(sid, 'user-1', cb);
+      const agent = {
+        send: jest.fn().mockResolvedValue({
+          supports: jest.fn().mockReturnValue(false),
+        }),
+        [Symbol.asyncDispose]: jest.fn().mockResolvedValue(undefined),
+      };
+      mockAgentCreate
+        .mockRejectedValueOnce(new Error('503 transport unavailable'))
+        .mockResolvedValueOnce(agent);
+      mockRetryWithBackoff.mockImplementation(
+        async (
+          operation: () => Promise<unknown>,
+          options?: { maxRetries?: number; shouldRetry?: (error: unknown) => boolean },
+        ) => {
+          let lastError: unknown;
+          for (let attempt = 0; attempt <= (options?.maxRetries ?? 0); attempt += 1) {
+            try {
+              return await operation();
+            } catch (error) {
+              lastError = error;
+              if (!options?.shouldRetry?.(error)) throw error;
+            }
+          }
+          throw lastError;
+        },
+      );
+      process.env.CURSOR_API_KEY = 'test-key';
+
+      // When the existing bounded retry policy runs.
+      await sendMessage(sid, 'user-1', 'Complete after retry');
+
+      // Then it recovers within the configured attempt bound and emits completion.
+      expect(mockAgentCreate).toHaveBeenCalledTimes(2);
+      expect(getSession(sid, 'user-1')?.status).toBe('idle');
+      expect(cb.mock.calls.map((call: any[]) => call[0].type)).toContain('done');
+    });
+
+    it('AC-1 / VT-04 Ask Apex stream failure terminates with idle and done', async () => {
+      // Given the SDK stream fails after transport creation.
+      const sid = createSession('user-1');
+      const cb = jest.fn();
+      subscribeToSession(sid, 'user-1', cb);
+      const stream = async function* () {
+        throw new Error('stream destroyed');
+        yield undefined;
+      };
+      mockAgentCreate.mockResolvedValue({
+        send: jest.fn().mockResolvedValue({
+          supports: jest.fn().mockReturnValue(true),
+          stream,
+        }),
+        [Symbol.asyncDispose]: jest.fn().mockResolvedValue(undefined),
+      });
+      process.env.CURSOR_API_KEY = 'test-key';
+
+      // When streaming fails.
+      await sendMessage(sid, 'user-1', 'Do not hang');
+
+      // Then the public lifecycle returns to idle and emits terminal completion.
+      expect(getSession(sid, 'user-1')?.status).toBe('idle');
+      expect(cb.mock.calls.map((call: any[]) => call[0].type)).toEqual(
+        expect.arrayContaining(['message', 'status', 'done']),
+      );
+      const messages = getSessionMessages(sid, 'user-1') ?? [];
+      expect(messages[messages.length - 1]?.text).toContain('stream destroyed');
     });
 
     it('broadcasts error when CURSOR_API_KEY is missing', async () => {

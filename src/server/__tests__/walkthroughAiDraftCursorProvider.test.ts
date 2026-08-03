@@ -10,6 +10,10 @@ import {
 } from '../services/walkthroughAiDraftService';
 import { WalkthroughAiError } from '../../shared/types/walkthroughAiDraft';
 
+jest.mock('@cursor/sdk', () => ({
+  Agent: { create: jest.fn() },
+}));
+
 jest.mock('../services/projectSettingsService', () => ({
   resolveSkillConfig: jest.fn().mockResolvedValue({
     developmentModel: 'composer-2.5',
@@ -25,6 +29,8 @@ jest.mock('../services/walkthroughAnchorRegistryService', () => ({
   listCatalogRecordsForResolution: jest.fn(async () => []),
   getAnchorByKey: jest.fn(async () => null),
 }));
+
+import { Agent } from '@cursor/sdk';
 
 const VALID_PROPOSAL_JSON = JSON.stringify({
   internalName: 'test-draft',
@@ -62,6 +68,49 @@ describe('walkthroughAiDraftService — Cursor provider wiring', () => {
 
   afterEach(() => {
     setWalkthroughAiProviderForTests(null);
+  });
+
+  it('AC-0 / VT-09 walkthroughAiDraftService creates and streams on SDK 1.0.24', async () => {
+    // Given the production Cursor provider receives a structured streaming response.
+    setWalkthroughAiProviderForTests(null);
+    const stream = async function* () {
+      yield {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'text', text: VALID_PROPOSAL_JSON.slice(0, 40) },
+            { type: 'text', text: VALID_PROPOSAL_JSON.slice(40) },
+          ],
+        },
+      };
+    };
+    jest.mocked(Agent.create).mockResolvedValue({
+      send: jest.fn().mockResolvedValue({
+        supports: jest.fn().mockReturnValue(true),
+        stream,
+      }),
+    } as never);
+    process.env.CURSOR_API_KEY = 'test-key';
+
+    try {
+      // When the public proposal API uses its default provider.
+      const proposal = await generateProposal({
+        projectId: 'Apex',
+        intent: 'Create a profile tour',
+      });
+
+      // Then streamed output is parsed and Apex adds no native-read tool wiring.
+      expect(proposal.steps).toHaveLength(1);
+      expect(jest.mocked(Agent.create)).toHaveBeenCalledWith({
+        apiKey: 'test-key',
+        model: { id: 'composer-2.5' },
+      });
+      const options = jest.mocked(Agent.create).mock.calls[0][0];
+      expect(options).not.toHaveProperty('tools');
+      expect(options).not.toHaveProperty('nativeTools');
+    } finally {
+      delete process.env.CURSOR_API_KEY;
+    }
   });
 
   it('passes model override from request to provider', async () => {

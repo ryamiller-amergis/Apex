@@ -1,18 +1,22 @@
 # TDD prompts (Feature Executor Phase F4)
 
-Read this file immediately before dispatching inner-wave subagents. Paste the matching blocks into each item prompt.
+Read this file immediately before dispatching execution-wave subagents. Paste the matching blocks into each execution-bundle prompt.
 
-## Subagent task template
+## Subagent execution-bundle template
 
 ```
-## Task: <item id> — <item title>
+## Execution Bundle: <bundle id> — <task ids>
 
 ### Goal
-<1-2 sentences: the deliverable for this PBI/TBI>
+<1-2 sentences describing the bundle deliverable>
 
-### Full work-item contract (from backlog — paste verbatim fields)
-<For PBI: userStory, businessRules, NFRs, outOfScope, and EVERY acceptanceCriteria entry as AC-N: Given/When/Then>
-<For TBI: description, technicalDependencies, NFRs, and EVERY definitionOfDone entry as DoD-N: …>
+### Tech-spec tasks
+<For every task: ID, goal verbatim, blockers, owning item IDs, criteria/VT mappings, verification-owner rows, and expected files>
+
+### Full owning-item contracts (from backlog — paste verbatim fields)
+<For every owning PBI: userStory, businessRules, NFRs, outOfScope, and EVERY acceptanceCriteria entry relevant to or constrained by this bundle as AC-N: Given/When/Then>
+<For every owning TBI: description, technicalDependencies, NFRs, and EVERY definitionOfDone entry relevant to or constrained by this bundle as DoD-N: …>
+<Include the complete item contract when the bundle is its final implementation task; never omit sibling criteria that constrain the implementation>
 
 ### Design-spec anchors (excerpts — do not paraphrase away constraints)
 From {feature-slug}-tech-spec.md:
@@ -22,14 +26,14 @@ From {feature-slug}-design.md:   (required for PBIs; include for TBIs when UI-ad
 From {feature-slug}-assumptions.md:
 <assumptions that constrain this item>
 
-### Requirements → Test Matrix rows for this item
-<table rows for this item only — each AC/DoD must appear>
+### Requirements → Test Matrix rows for this bundle
+<table rows enabled or verification-owned by these tasks; label each row as enabling-only or verification-owner>
 
 ### Files to create or edit
 <explicit list — no others unless unavoidable; align with tech-spec module/file guidance>
 
 ### Verification targets (from test-cases.json)
-<the test cases whose traceability.pbiId maps to this item, by id + acceptanceCriteriaIndex>
+<the test cases whose traceability.pbiId maps to an owning item, by id + acceptanceCriteriaIndex>
 <e2e-playwright: AUTHOR the Playwright spec; DEFER execution only when Playwright env is unavailable>
 <Reminder: backlog AC/DoD remain authoritative even when a TC execution is deferred>
 
@@ -43,27 +47,30 @@ From {feature-slug}-assumptions.md:
 - UI: every interactive element in a staged client TSX file MUST have data-testid via spread `{...{ 'data-testid': 'kebab-id' }}` (not `data-testid="…"`; match design.md; whole-file scan). Source of truth: `scripts/check-data-testid.mjs` (includes `form`, `*Panel`, and the full PascalCase suffix list — do not use a shortened list). After GREEN, run `node scripts/check-data-testid.mjs` (stage touched client TSX first) and fix until exit 0. Also clear ESLint **errors** on touched files (`cross-env ESLINT_USE_FLAT_CONFIG=false npx eslint <files>`). Hook failures → /resolve-pre-commit-data-testid or /resolve-pre-commit-eslint.
 
 ### TDD Instructions (see below)
-<paste the TDD block matching this item's layer>
+<paste the TDD block for every layer touched by this bundle>
 <also paste the AC/DoD binding rules below>
 
-### Cross-item contracts
-<interfaces / types / signatures this item must respect from earlier inner waves>
-<relevant sibling PBI/TBI fields this item depends on>
+### Cross-task and cross-item contracts
+<interfaces / types / signatures produced by completed predecessor tasks>
+<relevant sibling PBI/TBI fields and item-completion constraints>
 
 <paste the Context Block from Phase F1>
 ```
 
-## AC/DoD binding rules (paste into every item prompt)
+In item fallback mode, use one item as the bundle and omit only the inapplicable multi-task labels.
+
+## AC/DoD binding rules (paste into every execution-bundle prompt)
 
 ```
 AC/DoD binding (mandatory):
 
-- RED tests MUST encode the Given/When/Then (PBI) or DoD bullet (TBI) as assertions — one focused test (or describe block) per matrix row for this item.
+- RED tests MUST encode the Given/When/Then (PBI) or DoD bullet (TBI) as assertions — one focused test (or describe block) per verification-owner matrix row for this bundle.
 - Name or document each test with its criterion id (e.g. `AC-0`, `DoD-2`, or `TC-PBI-001-001`) so traceability is greppable.
 - GREEN implementation must make those assertions pass without weakening the Then/DoD.
 - Do not mark an AC/DoD done because a vaguely related test passes — the assertion must match the criterion.
 - Prefer design-spec details (status codes, field names, UI states) when the AC is abstract.
-- Re-run the item's tests after GREEN and confirm every matrix row for this item is covered.
+- Enabling-only tasks must run their assigned deterministic check but leave the criterion `enabled`; only its verification owner may mark it `covered`.
+- Re-run the bundle's tests/checks after GREEN and confirm every owned matrix row is covered and every enabling row is reported accurately.
 ```
 
 ## Server task TDD block
@@ -72,7 +79,7 @@ AC/DoD binding (mandatory):
 TDD — Red to Green:
 
 1. RED: Write src/server/__tests__/<module>.test.ts first.
-   - Derive cases from this item's matrix rows (AC-*/DoD-*/BR/NFR) BEFORE writing implementation
+   - Derive cases from this bundle's verification-owner matrix rows (AC-*/DoD-*/BR/NFR/VT-*) BEFORE writing implementation
    - Mock the Drizzle db instance: jest.mock('../db/drizzle', () => ({ db: { ... } }))
    - Follow the mock shape in src/server/__tests__/rbacService.test.ts
    - Use AAA (Arrange / Act / Assert); test public API only
@@ -94,7 +101,7 @@ TDD — Red to Green:
 
 1. RED: Write src/client/components/__tests__/<Component>.test.tsx
         or src/client/hooks/__tests__/<hook>.test.ts first.
-   - Derive cases from this item's matrix rows (AC-*/linked TCs) BEFORE writing implementation
+   - Derive cases from this bundle's verification-owner matrix rows (AC-*/linked TCs) BEFORE writing implementation
    - Use @testing-library/react + jest-environment-jsdom
    - Mock fetch and external hooks; use MSW or inline jest.fn() mocks
    - Use AAA pattern; test user-visible behavior matching Given/When/Then, not implementation details

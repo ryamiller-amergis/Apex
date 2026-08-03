@@ -25,6 +25,7 @@ function toolErrorMessage(err: unknown): string {
 export function createGitHubMcpServer(
   options?: {
     enableCodeSearch?: boolean;
+    enableRepoBrowse?: boolean;
     repoReader?: RepoReader;
   },
 ): McpServer {
@@ -33,56 +34,62 @@ export function createGitHubMcpServer(
     version: '1.0.0',
   });
   const toolTimeoutMs = resolveMcpToolTimeoutMs();
+  const enableRepoBrowse = options?.enableRepoBrowse ?? true;
 
-  server.tool(
-    'get_skill_file',
-    'Read the raw content of any file in the GitHub repo by path. ' +
-    'Use this to read source code, documentation, SKILL.md files, CHANGELOG, README, etc.',
-    {
-      repo: z.string().describe('Repository name'),
-      path: z.string().describe('File path in the repo (e.g. "src/client/components/Foo.tsx", "README.md")'),
-      branch: z.string().optional().describe('Branch name (defaults to "main")'),
-      org: z.string().optional().describe('GitHub org (defaults to GITHUB_ORG env)'),
-    },
-    async ({ repo, path, branch, org }) => {
-      try {
-        const content = await raceWithTimeout('get_skill_file', toolTimeoutMs, () =>
-          options?.repoReader
-            ? options.repoReader.readFile(path)
-            : getSkillFile(repo, path, branch, org),
-        );
-        return { content: [{ type: 'text', text: content }] };
-      } catch (err) {
-        return { content: [{ type: 'text', text: `Error reading file: ${toolErrorMessage(err)}` }] };
-      }
-    },
-  );
+  if (enableRepoBrowse) {
+    server.tool(
+      'get_skill_file',
+      'Read the raw content of any file in the GitHub repo by path. ' +
+      'Use this to read source code, documentation, SKILL.md files, CHANGELOG, README, etc.',
+      {
+        repo: z.string().describe('Repository name'),
+        path: z.string().describe('File path in the repo (e.g. "src/client/components/Foo.tsx", "README.md")'),
+        branch: z.string().optional().describe('Branch name (defaults to "main")'),
+        org: z.string().optional().describe('GitHub org (defaults to GITHUB_ORG env)'),
+      },
+      async ({ repo, path, branch, org }) => {
+        try {
+          const content = await raceWithTimeout('get_skill_file', toolTimeoutMs, () =>
+            options?.repoReader
+              ? options.repoReader.readFile(path)
+              : getSkillFile(repo, path, branch, org),
+          );
+          return { content: [{ type: 'text', text: content }] };
+        } catch (err) {
+          return { content: [{ type: 'text', text: `Error reading file: ${toolErrorMessage(err)}` }] };
+        }
+      },
+    );
 
-  server.tool(
-    'list_repo_dir',
-    'List the immediate children (files and sub-folders) of a directory in the GitHub repo. ' +
-    'Use this to discover file structure before reading specific files.',
-    {
-      repo: z.string().describe('Repository name'),
-      path: z.string().describe('Directory path (e.g. "/", "src/client/components", ".cursor/skills")'),
-      branch: z.string().optional().describe('Branch name (defaults to "main")'),
-      org: z.string().optional().describe('GitHub org (defaults to GITHUB_ORG env)'),
-    },
-    async ({ repo, path, branch, org }) => {
-      try {
-        const entries = await raceWithTimeout('list_repo_dir', toolTimeoutMs, () =>
-          options?.repoReader
-            ? options.repoReader.listDir(path)
-            : listRepoDir(repo, path, branch, org),
-        );
-        return { content: [{ type: 'text', text: JSON.stringify(entries, null, 2) }] };
-      } catch {
-        return { content: [{ type: 'text', text: '[]' }] };
-      }
-    },
-  );
+    server.tool(
+      'list_repo_dir',
+      'List the immediate children (files and sub-folders) of a directory in the GitHub repo. ' +
+      'Use this to discover file structure before reading specific files.',
+      {
+        repo: z.string().describe('Repository name'),
+        path: z.string().describe('Directory path (e.g. "/", "src/client/components", ".cursor/skills")'),
+        branch: z.string().optional().describe('Branch name (defaults to "main")'),
+        org: z.string().optional().describe('GitHub org (defaults to GITHUB_ORG env)'),
+      },
+      async ({ repo, path, branch, org }) => {
+        try {
+          const entries = await raceWithTimeout('list_repo_dir', toolTimeoutMs, () =>
+            options?.repoReader
+              ? options.repoReader.listDir(path)
+              : listRepoDir(repo, path, branch, org),
+          );
+          return { content: [{ type: 'text', text: JSON.stringify(entries, null, 2) }] };
+        } catch {
+          return { content: [{ type: 'text', text: '[]' }] };
+        }
+      },
+    );
+  }
 
-  if (options?.enableCodeSearch !== false) {
+  if (
+    enableRepoBrowse
+    && options?.enableCodeSearch !== false
+  ) {
     server.tool(
       'search_repo_code',
       'Search code in the GitHub repo by keyword. Returns matching file paths with text snippets. ' +

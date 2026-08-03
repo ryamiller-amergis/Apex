@@ -149,6 +149,51 @@ function checkout(label: string): { root: string; sha: string } {
 }
 
 describe('PBI-005 MCP RepoReader delegation contracts', () => {
+  it('VT-03 omits exactly ADO repo-browse tools and retains staging and non-browse tools', () => {
+    // Arrange
+    const enabled = asTestServer(createAdoMcpServer());
+
+    // Act
+    const disabled = asTestServer(createAdoMcpServer({ enableRepoBrowse: false }));
+    const removed = [...enabled.handlers.keys()]
+      .filter((name) => !disabled.handlers.has(name));
+
+    // Assert
+    expect(removed).toEqual([
+      'list_repo_dir',
+      'get_skill_file',
+      'search_repo_code',
+    ]);
+    expect([...disabled.handlers.keys()]).toEqual(expect.arrayContaining([
+      'update_design_doc',
+      'update_prd',
+      'update_adr',
+      'resolve_prd_comment',
+      'add_test_case',
+      'list_skills',
+      'search_skills',
+      'query_work_items',
+    ]));
+  });
+
+  it('VT-04 omits all three GitHub repo-browse tools and retains non-browse tools', () => {
+    // Arrange
+    const enabled = asTestServer(createGitHubMcpServer());
+
+    // Act
+    const disabled = asTestServer(createGitHubMcpServer({ enableRepoBrowse: false }));
+    const removed = [...enabled.handlers.keys()]
+      .filter((name) => !disabled.handlers.has(name));
+
+    // Assert
+    expect(removed).toEqual([
+      'get_skill_file',
+      'list_repo_dir',
+      'search_repo_code',
+    ]);
+    expect([...disabled.handlers.keys()]).toEqual(['list_skills']);
+  });
+
   it('AC-0 / VT-01 and VT-07: two profile-bound handlers read only their pinned checkout through all three tools', async () => {
     // Given two concurrent connection profiles pinned to distinct local checkouts.
     const alpha = checkout('alpha');

@@ -41,6 +41,7 @@ export function mountGitHubMcp(app: Application, basePath = '/mcp/github-repo'):
 
     const server = createGitHubMcpServer({
       enableCodeSearch: req.query.profile !== 'interview',
+      enableRepoBrowse: req.query.enableRepoBrowse !== 'false',
       repoReader,
     });
     const timeoutMs = resolveMcpHttpTimeoutMs();

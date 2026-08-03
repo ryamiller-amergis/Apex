@@ -205,6 +205,8 @@ function App() {
     favicon.href = IS_BETA_RELEASE ? '/favicon-beta.svg' : '/favicon.svg';
   }, []);
 
+  const needsWorkItems = currentView === 'calendar' || currentView === 'planning';
+
   const {
     isAuthenticated,
     authenticatedUser,
@@ -215,6 +217,8 @@ function App() {
     permissionsLoaded,
     workItems,
     error,
+    isFetchingWorkItems,
+    refetchWorkItems,
     isLoading,
     isSaving,
     selectedItem,
@@ -250,7 +254,7 @@ function App() {
     handleFieldUpdate,
     betaAnnouncementDismissed,
     handleDismissBetaAnnouncement,
-  } = useAppShell();
+  } = useAppShell({ workItemsEnabled: needsWorkItems });
 
   const showBetaAnnouncement = useFeatureFlag('beta-to-prod-announcement', selectedProject);
   const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
@@ -597,7 +601,6 @@ function App() {
               />
             </div>
           )}
-          {error && <div className="error-banner">{error}</div>}
 
           {currentView === 'home' && canAccessHome ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
@@ -611,6 +614,23 @@ function App() {
           ) : currentView === 'calendar' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
+                {error && !isLoading && (
+                  <div className="work-items-inline-error" role="status" data-testid="work-items-inline-error">
+                    <span>
+                      Calendar work items couldn&apos;t be refreshed
+                      {workItems.length > 0 ? ' — showing the last loaded data.' : '.'}
+                    </span>
+                    <button
+                      type="button"
+                      className="work-items-inline-error-retry"
+                      onClick={() => { void refetchWorkItems(); }}
+                      disabled={isFetchingWorkItems}
+                      data-testid="work-items-retry"
+                    >
+                      {isFetchingWorkItems ? 'Retrying…' : 'Retry'}
+                    </button>
+                  </div>
+                )}
                 {!isLoading && (
                   <div className="calendar-view">
                     <UnscheduledList
@@ -925,6 +945,23 @@ function App() {
           ) : currentView === 'planning' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <div className="planning-view">
+                {error && !isLoading && (
+                  <div className="work-items-inline-error" role="status" data-testid="work-items-inline-error">
+                    <span>
+                      Planning work items couldn&apos;t be refreshed
+                      {workItems.length > 0 ? ' — showing the last loaded data.' : '.'}
+                    </span>
+                    <button
+                      type="button"
+                      className="work-items-inline-error-retry"
+                      onClick={() => { void refetchWorkItems(); }}
+                      disabled={isFetchingWorkItems}
+                      data-testid="work-items-retry"
+                    >
+                      {isFetchingWorkItems ? 'Retrying…' : 'Retry'}
+                    </button>
+                  </div>
+                )}
                 <PlanningTabs
                   activeTab={planningTab}
                   can={can}

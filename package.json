@@ -67,7 +67,7 @@
     "@azure/identity": "^4.13.0",
     "@azure/msal-node": "^5.2.5",
     "@azure/storage-blob": "12.32.0",
-    "@cursor/sdk": "^1.0.12",
+    "@cursor/sdk": "^1.0.24",
     "@floating-ui/react": "^0.27.20",
     "@hookform/resolvers": "^5.2.2",
     "@matbee/libreoffice-converter": "^2.7.0",
@@ -111,6 +111,7 @@
     "remark-gfm": "^4.0.1",
     "session-file-store": "^1.5.0",
     "sharp": "^0.34.5",
+    "sqlite3": "^5.1.7",
     "uuid": "^9.0.0",
     "zod": "^4.3.6"
   },
