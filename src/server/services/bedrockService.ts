@@ -392,9 +392,11 @@ export async function generateFeatureFromBedrock(
   const text = body.content[0]?.text ?? '';
   const parsed = JSON.parse(extractJson(text, 'Feature')) as GeneratedFeatureWithPBIs;
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Bedrock clarification JSON is loosely shaped
   const normClarificationQuestions = (arr: any): ClarificationQuestion[] | undefined => {
     if (!Array.isArray(arr) || arr.length === 0) return undefined;
     const valid = arr.filter(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Bedrock clarification JSON is loosely shaped
       (q: any) => q && typeof q.title === 'string' && Array.isArray(q.answers) && q.answers.length > 0
     ) as ClarificationQuestion[];
     return valid.length > 0 ? valid : undefined;
@@ -637,6 +639,7 @@ export async function resolveClarificationWithBedrock(
     ? (parsed.action as ClarificationAction)
     : 'update';
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Bedrock clarification PBI JSON is loosely shaped
   const normPBI = (p: any): ClarificationPBIData => ({
     title: p?.title ?? '',
     description: p?.description ?? '',
@@ -683,6 +686,7 @@ export async function resolveClarificationWithBedrock(
   }
 
   // create-pbi
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- legacy Bedrock payload field name
   const pbi = parsed.newPBI ?? (parsed as any).newChild;
   return {
     action: 'create-pbi',
@@ -2429,6 +2433,7 @@ function parseUiPlanResult(text: string): UiSurfacePlan {
   const validContributions: PbiContributionType[] = ['new-section', 'new-tab', 'table-column', 'filter', 'action', 'state', 'modal', 'drawer', 'no-ui'];
 
   const pbiContributions: PbiContribution[] = Array.isArray(parsed.pbiContributions)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Bedrock UI plan contributions are loosely shaped
     ? (parsed.pbiContributions as any[]).map(c => ({
         pbiId: typeof c.pbiId === 'string' ? c.pbiId : '',
         pbiTitle: typeof c.pbiTitle === 'string' ? c.pbiTitle : '',
@@ -2580,6 +2585,142 @@ ${commentLines}
   return fenced ? fenced[1].trim() : text.trim();
 }
 
+/**
+ * Regenerate a single region inside an already-proposed markdown document.
+ * Returns the complete revised proposed markdown.
+ */
+export async function regenerateMarkdownRegionWithBedrock(
+  documentLabel: string,
+  fullProposed: string,
+  targetOld: string,
+  targetNew: string,
+  feedback: string,
+  modelId?: string | null,
+  maxTokens?: number | null,
+  usageCtx?: BedrockUsageContext,
+): Promise<string> {
+  const prompt = `You are a senior engineer reviewing a proposed ${documentLabel} revision section by section.
+The reviewer rejected the current wording for ONE change region and asked for a different fix.
+
+## Full proposed ${documentLabel} (current draft)
+
+${fullProposed || '(empty)'}
+
+## Targeted change region
+
+### Previous live text
+${targetOld || '(empty / insertion)'}
+
+### Current proposed text (to revise)
+${targetNew || '(empty / deletion)'}
+
+## Reviewer feedback
+
+${feedback}
+
+## Instructions
+
+- Revise ONLY the targeted region to satisfy the reviewer feedback.
+- Keep every other part of the document unchanged.
+- Produce the complete revised document as clean markdown.
+- Do NOT add a preamble, summary, or explanation — output ONLY the revised markdown.`;
+
+  const resolvedModel = modelId ?? MODEL_ID;
+  const resolvedMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
+  const text = await invokeModel(
+    prompt,
+    undefined,
+    resolvedModel,
+    resolvedMaxTokens,
+    undefined,
+    usageCtx ?? { feature: 'prd-review', project: 'unknown' },
+  );
+  const fenced = text.match(/```(?:markdown)?\s*([\s\S]*?)\s*```/);
+  return fenced ? fenced[1].trim() : text.trim();
+}
+
+/**
+ * Regenerate a single region inside an already-proposed PRD markdown document.
+ * Returns the complete revised proposed markdown.
+ */
+export async function regeneratePrdContentRegionWithBedrock(
+  fullProposed: string,
+  targetOld: string,
+  targetNew: string,
+  feedback: string,
+  modelId?: string | null,
+  maxTokens?: number | null,
+  usageCtx?: BedrockUsageContext,
+): Promise<string> {
+  return regenerateMarkdownRegionWithBedrock(
+    'PRD',
+    fullProposed,
+    targetOld,
+    targetNew,
+    feedback,
+    modelId,
+    maxTokens,
+    usageCtx,
+  );
+}
+
+/**
+ * Regenerate a single backlog item inside an already-proposed backlog JSON.
+ * Returns the complete revised backlog object, or null if the model output is invalid JSON.
+ */
+export async function regeneratePrdBacklogItemWithBedrock(
+  proposedBacklog: unknown,
+  itemPath: string,
+  targetOld: string,
+  targetNew: string,
+  feedback: string,
+  modelId?: string | null,
+  maxTokens?: number | null,
+  usageCtx?: BedrockUsageContext,
+): Promise<unknown> {
+  const backlogStr = JSON.stringify(proposedBacklog, null, 2);
+  const prompt = `You are a senior product owner. A proposed backlog revision is under section-by-section review.
+The reviewer rejected the current change for ONE backlog item and asked for a different fix.
+
+## Full proposed backlog JSON
+
+\`\`\`json
+${backlogStr}
+\`\`\`
+
+## Targeted backlog item
+
+Path: ${itemPath || '(unknown)'}
+
+### Previous live summary
+${targetOld || '(not present)'}
+
+### Current proposed summary
+${targetNew || '(removed)'}
+
+## Reviewer feedback
+
+${feedback}
+
+## Instructions
+
+- Revise ONLY the targeted backlog item (and its fields) to satisfy the reviewer feedback.
+- Keep every other epic/feature/item unchanged.
+- Output ONLY the complete revised backlog as valid JSON (no markdown fences, no preamble, no explanation).
+- Preserve the exact same JSON structure and all existing fields elsewhere.`;
+
+  const resolvedModel = modelId ?? MODEL_ID;
+  const resolvedMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
+  const text = await invokeModel(prompt, undefined, resolvedModel, resolvedMaxTokens, undefined, usageCtx ?? { feature: 'prd-review', project: 'unknown' });
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  const cleaned = fenced ? fenced[1].trim() : text.trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    return null;
+  }
+}
+
 /** Apply ADR review comments and return the complete revised ADR markdown. */
 export async function fixAdrContentWithBedrock(
   adrContent: string,
@@ -2674,23 +2815,49 @@ ${commentLines}
 /* ── Persona / user-type enrichment ───────────────────────────────────────── */
 
 /**
- * Canonical user-type (persona) slug vocabulary. The Business Analyst speaks in
- * persona names during the interview (e.g. "external employee", "coder"); this
- * map is handed to the model so free-text persona names get normalised to the
- * stable slugs the design-prototype generator consumes.
+ * Canonical Apex persona vocabulary for backlog `userTypes`. Interview free-text
+ * (including "Super Admin") is normalised to these exact enum names for design
+ * prototypes. Do not use MaxView/timeclock letter slugs.
  */
 const USER_TYPE_SLUG_VOCABULARY = [
-  'S = System Admin',
-  'I = Internal',
-  'C = Contact',
-  'E = External',
-  'CO = Coder',
-  'Q = QR Scanner',
-  'PA = Portal Admin',
-  'SC = Subcontractor',
+  'Product-Owner',
+  'BA',
+  'UI/UX',
+  'Manager',
+  'Developer',
+  'QA',
+  'Platform Admin  (also maps from: Super Admin, System Admin, platform administrator)',
+  'Project Admin',
+  'Authenticated User',
 ].join('\n');
 
-const VALID_USER_TYPE_SLUGS = new Set(['S', 'I', 'C', 'E', 'CO', 'Q', 'PA', 'SC']);
+const VALID_USER_TYPE_SLUGS = new Set([
+  'Product-Owner',
+  'BA',
+  'UI/UX',
+  'Manager',
+  'Developer',
+  'QA',
+  'Platform Admin',
+  'Project Admin',
+  'Authenticated User',
+]);
+
+/** Case-insensitive aliases → Apex persona enum name. */
+const USER_TYPE_ALIASES: Record<string, string> = {
+  'super admin': 'Platform Admin',
+  'superadmin': 'Platform Admin',
+  'system admin': 'Platform Admin',
+  'platform administrator': 'Platform Admin',
+  'platform admin': 'Platform Admin',
+  'project administrator': 'Project Admin',
+  'project admin': 'Project Admin',
+  'product owner': 'Product-Owner',
+  'product-owner': 'Product-Owner',
+  'authenticated user': 'Authenticated User',
+  'ui/ux': 'UI/UX',
+  'uiux': 'UI/UX',
+};
 
 interface PersonaBacklogItem {
   type?: string;
@@ -2798,13 +2965,27 @@ function stripTbiPersonaAnnotations(backlogJson: unknown): void {
   }
 }
 
+function normaliseUserTypeSlug(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (VALID_USER_TYPE_SLUGS.has(trimmed)) return trimmed;
+  const alias = USER_TYPE_ALIASES[trimmed.toLowerCase()];
+  if (alias && VALID_USER_TYPE_SLUGS.has(alias)) return alias;
+  // Case-insensitive match against canonical enum names
+  const lower = trimmed.toLowerCase();
+  for (const canonical of VALID_USER_TYPE_SLUGS) {
+    if (canonical.toLowerCase() === lower) return canonical;
+  }
+  return null;
+}
+
 function sanitiseSlugList(input: unknown): string[] {
   if (!Array.isArray(input)) return [];
   const out: string[] = [];
   for (const raw of input) {
     if (typeof raw !== 'string') continue;
-    const slug = raw.trim().toUpperCase();
-    if (VALID_USER_TYPE_SLUGS.has(slug) && !out.includes(slug)) out.push(slug);
+    const slug = normaliseUserTypeSlug(raw);
+    if (slug && !out.includes(slug)) out.push(slug);
   }
   return out;
 }
@@ -2860,13 +3041,13 @@ export async function enrichBacklogPersonasWithBedrock(
     ? `\n## Interview transcript (the BA's own words about who each feature is for and any per-persona behaviour differences)\n\n${interviewTranscript.trim().slice(0, 24000)}\n`
     : '';
 
-  const prompt = `You are a senior product owner mapping each backlog item to the user types (personas) it serves.
+  const prompt = `You are a senior product owner mapping each backlog item to the Apex personas it serves.
 
-## Canonical user-type slugs (map every persona name to one of these EXACT slugs)
+## Canonical Apex persona names (map every free-text persona to one of these EXACT names)
 
 ${USER_TYPE_SLUG_VOCABULARY}
 
-Map free-text persona names the team uses to the closest slug — e.g. "external employee" → E, "coder" → CO, "system administrator" → S, "internal staff" → I, "subcontractor" → SC, "portal admin" → PA, "QR scanner" → Q, "contact" → C.
+Map free-text names to the closest Apex persona — e.g. "super admin" / "system admin" → Platform Admin, "project administrator" → Project Admin, "product owner" → Product-Owner, "any signed-in user" → Authenticated User. Never invent MaxView letter slugs (S, I, C, E, CO, etc.).
 
 ## Backlog items to annotate
 
@@ -2876,15 +3057,15 @@ ${JSON.stringify(itemsForPrompt, null, 2)}
 ${transcriptSection}
 ## Instructions
 
-- For EACH item "ref", decide which user types it serves and return them as "userTypes": an array of the canonical slugs above. Infer from the user-story persona, affectedPersonas, description, and the interview transcript.
-- When the SAME control/screen behaves DIFFERENTLY for different persona groups (e.g. a Timecards button that does action A for S/I/C but action B for E/CO), capture each divergent group in "personaBehaviors": an array of { "userTypes": [...slugs], "behavior": "what the control does for this group" }. Omit "personaBehaviors" entirely when behaviour does not diverge by persona.
-- Only include slugs you have real evidence for. If an item's audience is genuinely unclear, return an empty "userTypes" array for it.
+- For EACH item "ref", decide which Apex personas it serves and return them as "userTypes": an array of the canonical names above. Infer from the user-story persona, affectedPersonas, description, and the interview transcript.
+- When the SAME control/screen behaves DIFFERENTLY for different persona groups (e.g. a settings panel that does action A for Platform Admin but action B for Project Admin), capture each divergent group in "personaBehaviors": an array of { "userTypes": [...names], "behavior": "what the control does for this group" }. Omit "personaBehaviors" entirely when behaviour does not diverge by persona.
+- Only include personas you have real evidence for. If an item's audience is genuinely unclear, return an empty "userTypes" array for it.
 - Do NOT invent routes or any other fields. Routes are handled separately.
 - Output ONLY a JSON object keyed by each item "ref" — no markdown fences, no preamble, no explanation:
 
 {
-  "f0": { "userTypes": ["S", "I"], "personaBehaviors": [{ "userTypes": ["E", "CO"], "behavior": "..." }] },
-  "f0_p0": { "userTypes": ["S"] }
+  "f0": { "userTypes": ["Platform Admin", "Project Admin"], "personaBehaviors": [{ "userTypes": ["Project Admin"], "behavior": "..." }] },
+  "f0_p0": { "userTypes": ["Platform Admin"] }
 }`;
 
   const resolvedModel = modelId ?? MODEL_ID;
@@ -2942,7 +3123,7 @@ export async function fixDesignDocSectionWithBedrock(
   comments: PrdComment[],
   modelId?: string | null,
   maxTokens?: number | null,
-  usageCtx?: BedrockUsageContext,
+  _usageCtx?: BedrockUsageContext,
 ): Promise<string> {
   const commentLines = formatCommentsForPrompt(comments);
 
@@ -3111,6 +3292,7 @@ function normalisePlanTargetRoute(raw: unknown): string | undefined {
 
 function parseDesignPlanResult(text: string, input: GenerateDesignPlanInput): DesignPlanFeature[] {
   const parsed = JSON.parse(extractJson(text, 'DesignPlan')) as unknown;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Bedrock design-plan array elements are loosely shaped
   const arr: any[] = Array.isArray(parsed) ? parsed : [];
 
   const validDecisions = ['new-page', 'update-page', 'no-ui'];
@@ -3125,6 +3307,7 @@ function parseDesignPlanResult(text: string, input: GenerateDesignPlanInput): De
     const layoutPattern = validLayouts.includes(match.layoutPattern) ? match.layoutPattern as UiLayoutPattern : undefined;
 
     const pbiContributions = Array.isArray(match.pbiContributions) && match.pbiContributions.length > 0
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Bedrock design-plan contributions are loosely shaped
       ? match.pbiContributions.map((c: any) => ({
           pbiTitle: typeof c?.pbiTitle === 'string' ? c.pbiTitle : '',
           contribution: typeof c?.contribution === 'string' ? c.contribution : '',
@@ -3187,6 +3370,32 @@ export async function generateDesignPlanForPrd(
   const effectiveMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : DESIGN_PLAN_MAX_TOKENS;
   const text = await invokeModel(prompt, undefined, effectiveModel, effectiveMaxTokens, undefined, usageCtx ?? { feature: 'design-plan', project: 'unknown' });
   return parseDesignPlanResult(text, input);
+}
+
+/**
+ * FEAT-004 — structured JSON generation for staged Walkthrough AI drafts.
+ * Model/token/timeout come from the caller (project settings + policy preset).
+ */
+export async function generateWalkthroughAiJsonFromBedrock(
+  prompt: string,
+  options?: {
+    modelId?: string;
+    maxTokens?: number;
+    timeoutMs?: number;
+    usageCtx?: BedrockUsageContext;
+  },
+): Promise<string> {
+  const effectiveModel = options?.modelId ?? UI_MOCK_MODEL_ID;
+  const effectiveMaxTokens =
+    options?.maxTokens != null && options.maxTokens > 0 ? options.maxTokens : DESIGN_PLAN_MAX_TOKENS;
+  return invokeModel(
+    prompt,
+    undefined,
+    effectiveModel,
+    effectiveMaxTokens,
+    options?.timeoutMs,
+    options?.usageCtx ?? { feature: 'other', project: 'unknown' },
+  );
 }
 
 /* ════════════════════════════════════════════════════════════
