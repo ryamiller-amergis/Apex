@@ -41,28 +41,35 @@ export function createNativeReadTools(
     get_skill_file: {
       description: 'Read a file from the authorized pinned repository checkout.',
       inputSchema: pathInputSchema,
-      execute: (args) => repoReader.readFile(args.path as string),
+      // Ignore any root-widening keys (root, checkoutPath, command, …); confinement
+      // is owned by the constructed RepoReader, not caller-supplied roots.
+      execute: ({ path: requestedPath }) =>
+        repoReader.readFile(String(requestedPath ?? '')),
     },
     list_repo_dir: {
       description: 'List a directory in the authorized pinned repository checkout.',
       inputSchema: pathInputSchema,
-      execute: async (args) => ({
+      execute: async ({ path: requestedPath }) => ({
         content: [{
           type: 'text',
-          text: JSON.stringify(await repoReader.listDir(args.path as string), null, 2),
+          text: JSON.stringify(
+            await repoReader.listDir(String(requestedPath ?? '')),
+            null,
+            2,
+          ),
         }],
       }),
     },
     search_repo_code: {
       description: 'Search code in the authorized pinned repository checkout.',
       inputSchema: searchInputSchema,
-      execute: async (args) => ({
+      execute: async ({ query, limit }) => ({
         content: [{
           type: 'text',
           text: JSON.stringify(
             await repoReader.searchCode(
-              args.query as string,
-              args.limit as number | undefined,
+              String(query ?? ''),
+              typeof limit === 'number' ? limit : undefined,
             ),
             null,
             2,

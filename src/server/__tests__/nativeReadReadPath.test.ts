@@ -417,25 +417,32 @@ describe('FEAT-005 S5 VT-10 actual custom-tool confinement', () => {
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'native-read-s5-outside-'));
     const outsideContent = 'outside repository secret';
     fs.writeFileSync(path.join(outside, 'secret.txt'), outsideContent);
-    fs.symlinkSync(outside, path.join(target.root, 'escape-link'), 'junction');
+    // 'junction' is Windows-only; on Linux/macOS use a directory symlink.
+    fs.symlinkSync(
+      outside,
+      path.join(target.root, 'escape-link'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
     const tools = createNativeReadTools(
       reader(target.root, 'target-repo', target.sha),
     );
 
     try {
-      // Act
+      // Act — start each attempt only after the previous settles so rejected
+      // promises are never briefly unhandled (Jest treats that as a failure).
       const attempts = [
-        execute(tools.get_skill_file, { path: '../secret.txt' }),
-        execute(tools.get_skill_file, {
+        () => execute(tools.get_skill_file, { path: '../secret.txt' }),
+        () => execute(tools.get_skill_file, {
           path: path.join(outside, 'secret.txt'),
         }),
-        execute(tools.get_skill_file, { path: '\\\\host\\share\\secret.txt' }),
-        execute(tools.get_skill_file, { path: 'escape-link/secret.txt' }),
+        // Portable host-absolute / UNC-style path (matches repoReader.test.ts).
+        () => execute(tools.get_skill_file, { path: '//host/share/secret.txt' }),
+        () => execute(tools.get_skill_file, { path: 'escape-link/secret.txt' }),
       ];
 
       // Assert
-      for (const operation of attempts) {
-        const denied = await operation.then(
+      for (const attempt of attempts) {
+        const denied = await attempt().then(
           () => undefined,
           (error: unknown) => error,
         );
