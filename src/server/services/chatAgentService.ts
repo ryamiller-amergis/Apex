@@ -518,6 +518,13 @@ export function buildMcpServers(
     restrictRepoSearch?: boolean;
     groundingProfileId?: GroundingProfileId;
     enableRepoBrowse?: boolean;
+    /**
+     * When native (in-process) repository reads are engaged, the provider
+     * repo-read MCP servers are redundant. In that case we DE-MOUNT any server
+     * whose sole purpose is repository reading (github-repo), and mount
+     * ado-skills only when it is still required for document write-back.
+     */
+    nativeReads?: boolean;
   },
 ): Record<string, McpServerConfig> {
   const servers: Record<string, McpServerConfig> = {};
@@ -537,7 +544,11 @@ export function buildMcpServers(
   // GitHub-backed projects pre-fetch skills server-side, but still need
   // github-repo MCP for search_repo_code / list_repo_dir / get_skill_file
   // (e.g. Design Module scoping against the connected skill repo).
-  if (kickoff.skillProvider === 'github') {
+  //
+  // github-repo is a purely read-only repository server. When native reads are
+  // engaged, in-process customTools cover every read, so we de-mount it entirely
+  // (no idle connection, no residual list_skills escape hatch back to GitHub).
+  if (kickoff.skillProvider === 'github' && !options?.nativeReads) {
     const profilePath = options?.groundingProfileId
       ? `/grounding/${options.groundingProfileId}`
       : '';
@@ -556,7 +567,17 @@ export function buildMcpServers(
   // which live on ado-skills. Mount it for ADO projects always, and ALSO for
   // GitHub-backed document assistants — those tools only touch Postgres and do
   // not require ADO credentials.
-  if (kickoff.skillProvider !== 'github' || resolveDocumentAssistantType(kickoff)) {
+  //
+  // Native reads: ado-skills also hosts repo-read tools, so under native reads
+  // we only keep it when it provides something native reads cannot — i.e. the
+  // document write-back tools. A plain ADO repo-reading chat drops it entirely
+  // (native customTools cover the reads); document assistants keep it, but with
+  // enableRepoBrowse=false so its repo-read tools are stripped.
+  const documentAssistant = Boolean(resolveDocumentAssistantType(kickoff));
+  if (
+    (!options?.nativeReads && kickoff.skillProvider !== 'github') ||
+    documentAssistant
+  ) {
     const profilePath = options?.groundingProfileId
       ? `/grounding/${options.groundingProfileId}`
       : '';
@@ -684,6 +705,7 @@ export async function prepareRepositoryReadRuntime(options: {
       restrictRepoSearch: options.restrictRepoSearch,
       groundingProfileId,
       enableRepoBrowse: !nativeReads,
+      nativeReads,
     },
   );
   const local: LocalAgentOptions = {
@@ -971,10 +993,11 @@ function buildFreeChatPrompt(
 ): string {
   const branch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
   const isGitHub = kickoff.skillProvider === 'github';
+  const nativeReads = options?.nativeReads ?? false;
   const parts: string[] = [
     ...buildRepositoryReadPromptLines(
       kickoff,
-      options?.nativeReads ?? false,
+      nativeReads,
     ),
     `# Session context`,
     `  project: "${kickoff.project}"`,
@@ -989,6 +1012,15 @@ function buildFreeChatPrompt(
       `# Mode`,
       `You are the internal project assistant for the **${kickoff.project}** team.`,
       `Skills from this project's GitHub repo are pre-loaded into the conversation by the system when applicable.`,
+      ...buildScopePolicyLines(kickoff),
+    );
+  } else if (nativeReads) {
+    // Native reads are engaged: the ado-skills repo-read tools are not mounted,
+    // so read exclusively through the local checkout tools described above.
+    parts.push(
+      `# Mode`,
+      `You are the internal project assistant for the **${kickoff.project}** team.`,
+      `Skills from this project's repo are pre-loaded into the conversation by the system when applicable; read any other repository files with the local checkout tools above.`,
       ...buildScopePolicyLines(kickoff),
     );
   } else {
