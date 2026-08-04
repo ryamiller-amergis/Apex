@@ -7,6 +7,7 @@ import { bootstrapSkill } from './bootstrap.mjs';
 import { runDoctor, formatDoctor } from './doctor.mjs';
 import { validatePackage } from './validatePackage.mjs';
 import { loadCatalog } from './catalog.mjs';
+import { readLockfile } from './lockfile.mjs';
 import { writeTextFile, assertWithin, toPosix } from './util.mjs';
 import { ADAPTER_DIR } from './layout.mjs';
 
@@ -40,6 +41,24 @@ export function cmdValidate(opts, log) {
 export function cmdInstall(opts, log) {
   const pkgRoot = opts.package ? path.resolve(opts.package) : defaultPackageRoot();
   const repoRoot = path.resolve(opts.cwd ?? process.cwd());
+
+  // Require explicit skill names or --all. Bare install used to silently install
+  // the full catalog; now it's an error so teams only get what their APEX release selected.
+  if (!opts._.length && !opts.all) {
+    log(
+      '[apex-skills] ERROR: No skills specified.\n' +
+      '\n' +
+      'Use the install command from the APEX Getting started banner (it lists your project\'s\n' +
+      'selected skills), or pass skill names explicitly:\n' +
+      '\n' +
+      '  npx @apex/skills install skill-a skill-b …\n' +
+      '\n' +
+      'To install every skill in the package (not recommended for first-time onboarding):\n' +
+      '\n' +
+      '  npx @apex/skills install --all',
+    );
+    return 1;
+  }
 
   // Hard prerequisite gate — registry + feed must be healthy before install.
   const doc = runDoctor({
@@ -94,7 +113,31 @@ export function cmdCheck(opts, log) {
 export function cmdBootstrap(opts, log) {
   const pkgRoot = opts.package ? path.resolve(opts.package) : defaultPackageRoot();
   const repoRoot = path.resolve(opts.cwd ?? process.cwd());
-  const skills = opts._.length ? opts._ : allSkillNames(pkgRoot);
+
+  // Default to skills recorded in the lockfile, not the full catalog.
+  // This prevents "installed 4 skills, bootstrap touched 31" after a scoped install.
+  let skills;
+  if (opts._.length) {
+    skills = opts._;
+  } else if (opts.all) {
+    skills = allSkillNames(pkgRoot);
+  } else {
+    const lock = readLockfile(repoRoot);
+    if (!lock || !Object.keys(lock.skills ?? {}).length) {
+      log(
+        '[apex-skills] ERROR: No apex-skills.lock.json found (or no skills installed).\n' +
+        'Run install first, or pass skill names explicitly:\n' +
+        '\n' +
+        '  npx @apex/skills bootstrap skill-a skill-b …\n' +
+        '\n' +
+        'To bootstrap every skill in the package:\n' +
+        '\n' +
+        '  npx @apex/skills bootstrap --all',
+      );
+      return 1;
+    }
+    skills = Object.keys(lock.skills);
+  }
   for (const name of skills) {
     const boot = bootstrapSkill(pkgRoot, repoRoot, name, { enrich: opts.enrich });
     const wrote = writeBootstrapFiles(repoRoot, name, boot.files);

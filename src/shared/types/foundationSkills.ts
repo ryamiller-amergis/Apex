@@ -293,3 +293,48 @@ export interface ArtifactCandidate {
   integrity: string | null;
   manifestUrl: string | null;
 }
+
+// ── Pure release-targeting helpers (shared client + server) ──────────────────
+
+/**
+ * Returns true if the release is visible to the given Apex project.
+ * An empty targetProjects array means the release is visible to all projects.
+ */
+export function isReleaseVisibleToProject(
+  release: Pick<FoundationSkillRelease, 'targetProjects'>,
+  apexProject: string | null | undefined,
+): boolean {
+  if (!release.targetProjects || release.targetProjects.length === 0) return true;
+  if (!apexProject) return false;
+  return release.targetProjects.includes(apexProject);
+}
+
+/**
+ * Returns the effective project allowlist for a specific skill in a release.
+ * Resolution rule: skillTargets[skill] ?? release.targetProjects.
+ * An empty array means "all projects".
+ */
+export function getEffectiveTargetProjects(
+  release: Pick<FoundationSkillRelease, 'targetProjects' | 'skillTargets'>,
+  skillName: string,
+): string[] {
+  const override = release.skillTargets?.[skillName];
+  if (override !== undefined) return override;
+  return release.targetProjects ?? [];
+}
+
+/**
+ * Returns the skill names from this release that are visible to the given project.
+ * Applies per-skill overrides via getEffectiveTargetProjects.
+ */
+export function getVisibleSkillsForProject(
+  release: Pick<FoundationSkillRelease, 'selectedSkills' | 'targetProjects' | 'skillTargets'>,
+  apexProject: string | null | undefined,
+): string[] {
+  return (release.selectedSkills ?? []).filter((skill) => {
+    const effective = getEffectiveTargetProjects(release, skill);
+    if (effective.length === 0) return true;
+    if (!apexProject) return false;
+    return effective.includes(apexProject);
+  });
+}

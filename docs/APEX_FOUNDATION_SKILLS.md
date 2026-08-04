@@ -65,24 +65,31 @@ Before running the CLI, verify the following with `npx @apex/skills doctor`:
 **Quick start:**
 
 ```bash
-# 1. Health check (fails hard if @apex registry / feed is missing — with remediation)
-npx @apex/skills doctor
-
-# 2. If doctor fails on apex-registry: create/merge local .npmrc from template
-npx @apex/skills init-registry
+# 1. Add @apex:registry to .npmrc (see §3a — paste the line; do this before any npx @apex/skills command)
+# Then authenticate:
 npx vsts-npm-auth -config .npmrc
+npm view @apex/skills version   # expect 1.0.x — confirms feed is wired
 
-# 3. Re-check, then install
+# 2. Health check
 npx @apex/skills doctor
-npx @apex/skills install ui-lab to-prd grill-with-docs
 
-# 4. Or install all shippable skills
-npx @apex/skills install
+# 3. Install — use the command from the APEX Getting started banner (it lists your project's selected skills)
+npx @apex/skills install ui-lab to-prd grill-with-docs design-system
+
+# 4. Bootstrap adapters (defaults to skills in the lockfile from step 3)
+npx @apex/skills bootstrap
+
+# To install every skill in the package (not recommended for first-time onboarding):
+npx @apex/skills install --all
 ```
 
-> **Chicken-and-egg:** the first `npx @apex/skills …` needs the feed already
-> reachable. Until then, run the CLI from a local Apex checkout:
-> `node /path/to/Apex/foundation-skills/bin/apex-skills.mjs <command>`.
+> **Bare `install` / `bootstrap` are blocked.** Since 1.0.1, running without skill names
+> or `--all` exits with an error. The APEX Home banner always shows the exact
+> command with your project's selected skills.
+
+> **Chicken-and-egg:** the first `npx @apex/skills …` needs `@apex:registry` already
+> in `.npmrc`. Use Feed setup (Direct) in the banner, or paste the line manually.
+> Once the feed is wired, the CLI works normally.
 
 ---
 
@@ -140,16 +147,34 @@ template exists.
 
 ### 3b. Run the installer
 
+Skill names are **required** (since 1.0.1). Copy the exact command from the APEX Home banner — it always includes your project's selected skills. Use `--all` only when intentionally installing the full package catalog.
+
 ```bash
 # Preview what will be written (no side effects)
 npx @apex/skills install ui-lab --dry-run
 
-# Install with adapter pre-fill from your repo's detected tokens/components
-npx @apex/skills install ui-lab to-prd grill-with-docs
+# Install selected skills — vendor foundations + scaffold adapters in one step
+npx @apex/skills install ui-lab to-prd grill-with-docs design-system
 
-# Re-run adapter pre-fill without re-installing foundations
+# Bootstrap defaults to skills in the lockfile; re-fills adapters with repo evidence
+npx @apex/skills bootstrap
+
+# Re-run bootstrap for a specific skill with slot diagnostics
 npx @apex/skills bootstrap ui-lab --explain
+
+# Install full catalog (not recommended for first-time onboarding)
+npx @apex/skills install --all
 ```
+
+**Install vs bootstrap — file layout per skill:**
+
+| Location | Owner | Written by |
+|---|---|---|
+| `.apex/foundation/<skill>/` | Package (managed) | `install` always |
+| `.cursor/skills/<skill>/` | Team (editable) | `install` on first scaffold; `bootstrap` on re-fill |
+| `apex-skills.lock.json` | Repo | `install` |
+
+Bootstrap re-renders adapters from repo evidence (design tokens, components, ADO org). Foundations are **never** touched by bootstrap.
 
 ### 3c. Review adapter TODO placeholders
 
@@ -331,7 +356,7 @@ Consumer repos see "Update available" banner in APEX
         │
         ▼
 POST /api/platform-admin/foundation-skills/update-repo
-  → clones repo, runs `npx @apex/skills install`, opens PR
+  → clones repo, runs `npx @apex/skills install <selected-skills>`, opens PR
 ```
 
 ### Candidate-to-release step-by-step

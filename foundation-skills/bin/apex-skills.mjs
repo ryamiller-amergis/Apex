@@ -37,14 +37,16 @@ Commands:
     --project <name>       Optional project-scoped feed
     --dry-run              Preview without writing .npmrc
   install <skill...>       Install selected skill foundations + scaffold adapters
-                           (refuses until doctor hard checks pass)
+                           (refuses until doctor hard checks pass; skill names required)
+    --all                  Install every skill in the package (use named skills instead)
     --dry-run              Preview what would be written without writing anything
     --fill                 Re-run the bootstrap adapter pre-fill (for existing installs)
     --enrich               Opt-in: use AI to improve adapter prose within evidence bounds
   check                    Report which installed foundations have available updates
   update [<skill...>]      Update foundations; never overwrites existing adapters
   validate                 Validate catalog coverage, contracts, and lockfile integrity
-  bootstrap [<skill...>]   Re-run adapter pre-fill for named skills (or all installed)
+  bootstrap [<skill...>]   Re-run adapter pre-fill for named skills (or installed skills)
+    --all                  Bootstrap every skill in the package regardless of lockfile
     --explain              Print evidence + source file/line for each filled slot
     --enrich               Opt-in: AI-enriched prose within evidence bounds
   help                     Print this message
@@ -100,11 +102,12 @@ async function main() {
             'dry-run': { type: 'boolean', default: false },
             fill:      { type: 'boolean', default: false },
             enrich:    { type: 'boolean', default: false },
+            all:       { type: 'boolean', default: false },
           },
           allowPositionals: true,
         });
         const skills = positionals.length > 0 ? positionals : null;
-        await install({ skills, dryRun: values['dry-run'], fill: values.fill, enrich: values.enrich });
+        await install({ skills, all: values.all, dryRun: values['dry-run'], fill: values.fill, enrich: values.enrich });
         break;
       }
 
@@ -129,11 +132,12 @@ async function main() {
           options: {
             explain: { type: 'boolean', default: false },
             enrich:  { type: 'boolean', default: false },
+            all:     { type: 'boolean', default: false },
           },
           allowPositionals: true,
         });
         const skills = positionals.length > 0 ? positionals : null;
-        await bootstrap({ skills, explain: values.explain, enrich: values.enrich });
+        await bootstrap({ skills, all: values.all, explain: values.explain, enrich: values.enrich });
         break;
       }
 

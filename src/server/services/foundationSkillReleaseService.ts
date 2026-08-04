@@ -28,6 +28,16 @@ import type {
   FoundationSkillTier,
 } from '../../shared/types/foundationSkills';
 import {
+  isReleaseVisibleToProject,
+  getEffectiveTargetProjects,
+  getVisibleSkillsForProject,
+} from '../../shared/types/foundationSkills';
+export {
+  isReleaseVisibleToProject,
+  getEffectiveTargetProjects,
+  getVisibleSkillsForProject,
+} from '../../shared/types/foundationSkills';
+import {
   isAzureArtifactsConfigured,
   promoteToReleaseView,
   computePackageIntegrity,
@@ -60,49 +70,6 @@ function mapRow(row: typeof foundationSkillReleases.$inferSelect): FoundationSki
     createdAt:           row.createdAt,
     updatedAt:           row.updatedAt,
   };
-}
-
-/**
- * Returns true if `release` is visible to the given Apex project name.
- * An empty `targetProjects` array means the release is visible to all projects.
- */
-export function isReleaseVisibleToProject(
-  release: FoundationSkillRelease,
-  apexProject: string | null | undefined,
-): boolean {
-  if (!release.targetProjects || release.targetProjects.length === 0) return true;
-  if (!apexProject) return false;
-  return release.targetProjects.includes(apexProject);
-}
-
-/**
- * Returns the effective project allowlist for a specific skill in a release.
- * Resolution rule: skillTargets[skillName] ?? release.targetProjects.
- * An empty array means "all projects".
- */
-export function getEffectiveTargetProjects(
-  release: FoundationSkillRelease,
-  skillName: string,
-): string[] {
-  const override = release.skillTargets?.[skillName];
-  if (override !== undefined) return override;
-  return release.targetProjects ?? [];
-}
-
-/**
- * Returns the skill names from this release that are visible to the given project.
- * Applies per-skill overrides via getEffectiveTargetProjects.
- */
-export function getVisibleSkillsForProject(
-  release: FoundationSkillRelease,
-  apexProject: string | null | undefined,
-): string[] {
-  return (release.selectedSkills ?? []).filter((skill) => {
-    const effective = getEffectiveTargetProjects(release, skill);
-    if (effective.length === 0) return true;   // all projects
-    if (!apexProject) return false;
-    return effective.includes(apexProject);
-  });
 }
 
 /** Catalog entry shape (subset of catalog.json skill entries). */

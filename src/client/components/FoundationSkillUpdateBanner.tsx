@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useLatestFoundationSkillRelease, useFoundationSkillRepoStatus } from '../hooks/useFoundationSkillUpdateStatus';
+import { getVisibleSkillsForProject } from '../../shared/types/foundationSkills';
 import { BrandLogo } from './BrandLogo';
 import styles from './FoundationSkillUpdateBanner.module.css';
 
@@ -30,19 +31,36 @@ function apexRegistryLine(artifactFeed: string | null | undefined): string {
   return `@apex:registry=${raw}`;
 }
 
-const FIRST_TIME_INSTALL_STEPS: Step[] = [
-  { cmd: 'npx @apex/skills doctor', label: 'Check Node, Git, registry, and feed auth' },
-  { cmd: 'npx @apex/skills install', label: 'Install foundation skill files into the repo' },
-  {
-    cmd: 'npx @apex/skills bootstrap',
-    label: 'Fill adapters from your repo (ADO org, teams, structure), then review and commit',
-  },
-];
+function buildInstallSteps(skillList: string[]): Step[] {
+  const skillArgs = skillList.length > 0 ? ' ' + skillList.join(' ') : ' --all';
+  return [
+    { cmd: 'npx @apex/skills doctor', label: 'Check Node, Git, registry, and feed auth' },
+    {
+      cmd: `npx @apex/skills install${skillArgs}`,
+      label: skillList.length > 0
+        ? `Vendor foundations + scaffold adapters for ${skillList.length} skill${skillList.length === 1 ? '' : 's'}: ${skillList.join(', ')}`
+        : 'Vendor all foundation skill files and scaffold adapters',
+    },
+    {
+      cmd: `npx @apex/skills bootstrap${skillArgs}`,
+      label: 'Fill adapters from your repo evidence (ADO org, teams, structure) — install already scaffolds adapters; bootstrap refines them. Review and commit the result.',
+    },
+  ];
+}
 
-const UPDATE_STEPS: Step[] = [
-  { cmd: 'npx @apex/skills update', label: 'Pull latest foundation files (adapters are never overwritten)' },
-  { cmd: 'npx @apex/skills bootstrap', label: 'Refresh adapters with updated repo knowledge, then review and commit' },
-];
+function buildUpdateSteps(skillList: string[]): Step[] {
+  const skillArgs = skillList.length > 0 ? ' ' + skillList.join(' ') : '';
+  return [
+    {
+      cmd: `npx @apex/skills update${skillArgs}`,
+      label: 'Pull latest foundation files (adapters are never overwritten)',
+    },
+    {
+      cmd: `npx @apex/skills bootstrap${skillArgs || ' --all'}`,
+      label: 'Refresh adapters with updated repo knowledge, then review and commit',
+    },
+  ];
+}
 
 /** Cheat sheet — doctor prints the live fix under each FAIL; this is the short map. */
 const TROUBLESHOOT_ROWS: TroubleshootRow[] = [
@@ -247,6 +265,8 @@ export const FoundationSkillUpdateBanner: React.FC<FoundationSkillUpdateBannerPr
   const hasBreaking = !!latest.breakingChanges;
   const stepsLabel = isFirstInstall ? 'Getting started' : 'How to update';
   const registryLine = apexRegistryLine(latest.artifactFeed);
+  const scopedSkills = getVisibleSkillsForProject(latest, project ?? null);
+  const installSteps = buildInstallSteps(scopedSkills);
 
   function copy(text: string) {
     navigator.clipboard?.writeText(text).catch(() => undefined);
@@ -356,14 +376,25 @@ export const FoundationSkillUpdateBanner: React.FC<FoundationSkillUpdateBannerPr
                   <FeedDirectSetup registryLine={registryLine} onCopy={copy} />
                 ) : firstTimeTab === 'install' ? (
                   <>
-                    <StepList
-                      steps={FIRST_TIME_INSTALL_STEPS}
-                      idPrefix="foundation-skills-banner-install"
-                      onCopy={copy}
-                    />
-                    <p className={styles.noNotes}>
-                      Only do this after Feed setup shows a version from <code>npm view @apex/skills version</code>.
-                    </p>
+                    {scopedSkills.length === 0 ? (
+                      <p className={styles.noNotes}>
+                        <strong>No skills are configured for this project.</strong>{' '}
+                        A Platform Admin must publish a release with <code>selectedSkills</code> targeting
+                        this project before you can install. Contact your APEX admin.
+                      </p>
+                    ) : (
+                      <>
+                        <StepList
+                          steps={installSteps}
+                          idPrefix="foundation-skills-banner-install"
+                          onCopy={copy}
+                        />
+                        <p className={styles.noNotes}>
+                          Only do this after Feed setup shows a version from <code>npm view @apex/skills version</code>.
+                          Install vendors foundation files and scaffolds adapters in one step; bootstrap refines them.
+                        </p>
+                      </>
+                    )}
                   </>
                 ) : (
                   <>
@@ -400,7 +431,7 @@ export const FoundationSkillUpdateBanner: React.FC<FoundationSkillUpdateBannerPr
                   Run these in your repo root
                 </span>
                 <StepList
-                  steps={UPDATE_STEPS}
+                  steps={buildUpdateSteps(scopedSkills)}
                   idPrefix="foundation-skills-banner-update"
                   onCopy={copy}
                 />
