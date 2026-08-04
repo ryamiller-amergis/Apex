@@ -12,6 +12,10 @@ jest.mock('../../hooks/useProjects', () => ({
   useProjects: jest.fn(),
 }));
 
+jest.mock('../UserMenu', () => ({
+  UserMenu: () => <div data-testid="user-menu" />,
+}));
+
 jest.mock('../../hooks/usePlatformAdmin', () => ({
   useCreateProjectAccessRequests: jest.fn(),
   useMyProjectAccessRequests: jest.fn(),

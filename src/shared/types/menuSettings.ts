@@ -10,7 +10,8 @@ export type MenuItemKey =
   | 'feature-requests'
   | 'pdf-tools'
   | 'ai-cost'
-  | 'design-module';
+  | 'design-module'
+  | 'load-tests';
 
 export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'calendar', label: 'Calendar' },
@@ -25,6 +26,7 @@ export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'pdf-tools', label: 'PDF Assembly Tool' },
   { key: 'ai-cost', label: 'AI Cost Analytics' },
   { key: 'design-module', label: 'Design Module' },
+  { key: 'load-tests', label: 'Load Tests' },
 ];
 
 /** Default enabled views when a project has no explicit menu config row. */

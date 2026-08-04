@@ -3,19 +3,19 @@
  */
 
 import request from 'supertest';
-import express from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import type { ChatThread } from '../../shared/types/chat';
 
 let mockPermissionGranted = true;
 
 jest.mock('../middleware/rbac', () => ({
   requirePermission: (..._keys: string[]) =>
-    (_req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }, next: () => void) => {
+    (_req: Request, res: Response, next: NextFunction) => {
       if (mockPermissionGranted) next();
       else res.status(403).json({ error: 'Forbidden', missing: _keys });
     },
-  requireAnyPermission: () => (_req: unknown, _res: unknown, next: () => void) => next(),
-  attachPermissions: (_req: unknown, _res: unknown, next: () => void) => next(),
+  requireAnyPermission: () => (_req: Request, _res: Response, next: NextFunction) => next(),
+  attachPermissions: (_req: Request, _res: Response, next: NextFunction) => next(),
 }));
 
 jest.mock('../services/chatAgentService', () => ({
@@ -23,6 +23,7 @@ jest.mock('../services/chatAgentService', () => ({
   getThread: jest.fn(),
   getThreadAsync: jest.fn(),
   listThreadSummaries: jest.fn().mockResolvedValue([]),
+  searchThreadSummaries: jest.fn().mockResolvedValue([]),
   sendMessage: jest.fn().mockResolvedValue(undefined),
   subscribeToThread: jest.fn().mockReturnValue(() => {}),
   cancelRun: jest.fn(),
@@ -73,8 +74,10 @@ const readThread: ChatThread = {
 function buildApp() {
   const app = express();
   app.use(express.json());
-  app.use((req: any, _res: any, next: any) => {
-    req.user = { profile: { oid: 'viewer-1' } };
+  app.use((req: Request, _res: Response, next: NextFunction) => {
+    (req as Request & { user?: { profile: { oid: string } } }).user = {
+      profile: { oid: 'viewer-1' },
+    };
     next();
   });
   app.use('/api/chat', chatRouter);

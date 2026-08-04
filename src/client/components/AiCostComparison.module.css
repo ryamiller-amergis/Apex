@@ -116,7 +116,7 @@
 .presetBtnActive {
   background: var(--accent-color);
   border-color: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 /* ── Section wrapper ─────────────────────────────────────────────────────── */

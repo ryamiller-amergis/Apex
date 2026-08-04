@@ -49,6 +49,7 @@ import { isSuperAdminRequest } from '../utils/superAdmin';
 import type { ProjectSkillConfig, SkillProvider } from '../../shared/types/projectSettings';
 import { logMyWorkSession } from '../services/myWorkSessionLogger';
 import { buildLocalDevContext } from '../services/localDevContextService';
+import { getApexFeatureContext } from '../services/devWorkbenchFeatureContextService';
 
 const router = Router();
 
@@ -100,6 +101,9 @@ router.get('/backlog-features', async (req: Request, res: Response) => {
       const backlog = prd.backlogJson as any;
       if (!backlog?.epics) continue;
 
+      // Features enter My Work as Ready when the PRD is approved.
+      const readyAt = prd.reviewedAt ?? prd.updatedAt ?? prd.createdAt ?? null;
+
       const docs = await db
         .select({ id: designDocs.id, featureIndex: designDocs.featureIndex, status: designDocs.status })
         .from(designDocs)
@@ -132,6 +136,7 @@ router.get('/backlog-features', async (req: Request, res: Response) => {
             itemCount: items.length,
             pbiCount,
             tbiCount,
+            readyAt,
           });
 
           globalFeatureIdx++;
@@ -143,7 +148,7 @@ router.get('/backlog-features', async (req: Request, res: Response) => {
       }
 
       if (epics.length > 0) {
-        result.push({ prdId: prd.id, prdTitle: prd.title, epics });
+        result.push({ prdId: prd.id, prdTitle: prd.title, readyAt, epics });
       }
     }
 
@@ -151,6 +156,38 @@ router.get('/backlog-features', async (req: Request, res: Response) => {
   } catch (err) {
     console.error('[dev-workbench] getBacklogFeatures failed:', (err as Error).message);
     res.status(500).json({ error: 'Failed to fetch backlog features' });
+  }
+});
+
+// GET /features/:prdId/:featureId/context?project=Apex — lazy feature reference context
+router.get('/features/:prdId/:featureId/context', async (req: Request, res: Response) => {
+  try {
+    const project = req.query.project as string | undefined;
+    const { prdId, featureId } = req.params;
+
+    if (!project) {
+      res.status(400).json({ error: 'project query parameter is required' });
+      return;
+    }
+    if (project !== 'Apex') {
+      res.status(400).json({ error: 'Feature context is only available for the Apex project' });
+      return;
+    }
+    if (!prdId || !featureId) {
+      res.status(400).json({ error: 'prdId and featureId are required' });
+      return;
+    }
+
+    const context = await getApexFeatureContext(project, prdId, featureId);
+    if (!context) {
+      res.status(404).json({ error: 'Approved PRD feature context not found' });
+      return;
+    }
+
+    res.json(context);
+  } catch (err) {
+    console.error('[dev-workbench] getFeatureContext failed:', (err as Error).message);
+    res.status(500).json({ error: 'Failed to fetch feature context' });
   }
 });
 
@@ -195,8 +232,68 @@ router.get('/local-dev-context', async (req: Request, res: Response) => {
   }
 });
 
+// POST /features/start-local — mark an Apex feature In Progress for local development
+// by inserting a synthetic in_progress session (no cloud workspace / chat thread).
+router.post('/features/start-local', async (req: Request, res: Response) => {
+  try {
+    const { prdId, featureId, project } = req.body as { prdId: string; featureId: string; project: string };
+    if (!prdId || !featureId || !project) {
+      res.status(400).json({ error: 'prdId, featureId, and project are required' });
+      return;
+    }
+
+    const userId = getUserId(req);
+
+    const completed = await db.query.devSessions.findFirst({
+      where: and(
+        eq(devSessions.prdId, prdId),
+        eq(devSessions.featureId, featureId),
+        eq(devSessions.status, 'completed'),
+        eq(devSessions.authorId, userId),
+      ),
+    });
+    if (completed) {
+      res.json({ ok: true, sessionId: completed.id, status: 'completed' as const });
+      return;
+    }
+
+    const active = await db.query.devSessions.findFirst({
+      where: and(
+        eq(devSessions.prdId, prdId),
+        eq(devSessions.featureId, featureId),
+        eq(devSessions.authorId, userId),
+        inArray(devSessions.status, ['setting_up', 'in_progress', 'conflict']),
+      ),
+    });
+    if (active) {
+      res.json({ ok: true, sessionId: active.id, status: active.status });
+      return;
+    }
+
+    const sessionId = uuidv4();
+    const now = new Date().toISOString();
+
+    await db.insert(devSessions).values({
+      id: sessionId,
+      project,
+      authorId: userId,
+      prdId,
+      featureId,
+      status: 'in_progress',
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    res.json({ ok: true, sessionId, status: 'in_progress' as const });
+  } catch (err) {
+    console.error('[dev-workbench] startLocalFeature failed:', (err as Error).message);
+    res.status(500).json({ error: 'Failed to mark feature as in progress' });
+  }
+});
+
 // POST /features/complete — mark a feature as complete by inserting a synthetic
 // completed session, which unblocks any downstream features that depend on it.
+// Allowed from Ready or In Progress (Start Local / Start Development not required).
 router.post('/features/complete', async (req: Request, res: Response) => {
   try {
     const { prdId, featureId, project } = req.body as { prdId: string; featureId: string; project: string };
@@ -206,6 +303,7 @@ router.post('/features/complete', async (req: Request, res: Response) => {
     }
 
     const userId = getUserId(req);
+    const now = new Date().toISOString();
 
     const existing = await db.query.devSessions.findFirst({
       where: and(
@@ -220,8 +318,26 @@ router.post('/features/complete', async (req: Request, res: Response) => {
       return;
     }
 
+    // Prefer promoting an active session (cloud or local) to completed.
+    const active = await db.query.devSessions.findFirst({
+      where: and(
+        eq(devSessions.prdId, prdId),
+        eq(devSessions.featureId, featureId),
+        eq(devSessions.authorId, userId),
+        inArray(devSessions.status, ['setting_up', 'in_progress', 'conflict']),
+      ),
+    });
+
+    if (active) {
+      await db
+        .update(devSessions)
+        .set({ status: 'completed', updatedAt: now })
+        .where(eq(devSessions.id, active.id));
+      res.json({ ok: true, sessionId: active.id });
+      return;
+    }
+
     const sessionId = uuidv4();
-    const now = new Date().toISOString();
 
     await db.insert(devSessions).values({
       id: sessionId,
@@ -619,6 +735,7 @@ router.get('/sessions', async (req: Request, res: Response) => {
         status: devSessions.status,
         prUrl: devSessions.prUrl,
         createdAt: devSessions.createdAt,
+        updatedAt: devSessions.updatedAt,
         prdId: devSessions.prdId,
         featureId: devSessions.featureId,
       })

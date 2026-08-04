@@ -185,7 +185,7 @@
 
 .btnPrimary {
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: 1px solid var(--accent-color);
   border-radius: 6px;
   padding: 7px 16px;

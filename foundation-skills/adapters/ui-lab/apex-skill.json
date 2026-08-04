@@ -1,0 +1,11 @@
+{
+  "apiVersion": 1,
+  "skill": "ui-lab",
+  "foundation": {
+    "package": "@apex/skills",
+    "range": ">=0.1.0"
+  },
+  "managedFoundationFiles": [".apex/foundation/ui-lab/SKILL.md"],
+  "extensionFiles": ["SKILL.md"],
+  "capabilities": ["design-tokens", "component-index"]
+}

@@ -501,7 +501,7 @@ describe('getInterview', () => {
 describe('updateInterviewStatus', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('updates status when the requesting user is the author', async () => {
+  it('DoD-4 persists terminal status before making grounding cleanup-eligible', async () => {
     mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
     const whereMock = jest.fn().mockResolvedValue(undefined);
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
@@ -509,9 +509,14 @@ describe('updateInterviewStatus', () => {
 
     await updateInterviewStatus('interview-1', 'user-1', 'complete');
 
-    expect(mockDb.update).toHaveBeenCalledTimes(1);
-    expect(setMock).toHaveBeenCalledWith(
+    expect(mockDb.update).toHaveBeenCalledTimes(2);
+    expect(setMock).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({ status: 'complete' }),
+    );
+    expect(setMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ isActive: false }),
     );
   });
 

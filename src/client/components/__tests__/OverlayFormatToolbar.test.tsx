@@ -1,0 +1,301 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import type { OverlayTextBox } from '../../../shared/types/pdf';
+import { OverlayFormatToolbar } from '../OverlayFormatToolbar';
+import { OverlayTextBox as OverlayTextBoxPreview } from '../OverlayTextBox';
+
+const overlay: OverlayTextBox = {
+  id: 'overlay-1',
+  pageId: 'page-1',
+  x: 10,
+  y: 10,
+  width: 30,
+  height: 10,
+  text: 'First\nSecond\nThird',
+  fontFamily: 'Helvetica',
+  fontSize: 14,
+  bold: false,
+  italic: false,
+  color: '#000000',
+  horizontalAlign: 'left',
+  verticalAlign: 'top',
+  opacity: 100,
+  rotation: 0,
+  listStyle: 'none',
+  linkUrl: null,
+  linkDisplayText: null,
+  zIndex: 1,
+};
+
+describe('OverlayFormatToolbar', () => {
+  it('warns when collision-safe bounds cannot contain replacement text', () => {
+    render(
+      <OverlayFormatToolbar
+        overlay={{
+          ...overlay,
+          kind: 'replace',
+          backgroundColor: '#FFFFFF',
+          replacementOverflow: true,
+        }}
+        onChange={jest.fn()}
+      />
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Replacement text does not fit without overlapping nearby PDF content.'
+    );
+  });
+
+  it('applies core and rich formatting patches', () => {
+    const onChange = jest.fn();
+    render(<OverlayFormatToolbar overlay={overlay} onChange={onChange} />);
+
+    expect(
+      screen
+        .getAllByTestId('overlay-format-font-family')[0]
+        .querySelectorAll('option')
+    ).toHaveLength(9);
+
+    fireEvent.change(screen.getByTestId('overlay-format-font-family'), {
+      target: { value: 'Times-Roman' },
+    });
+    fireEvent.change(screen.getByTestId('overlay-format-font-size'), {
+      target: { value: '72' },
+    });
+    fireEvent.click(screen.getByTestId('overlay-format-bold'));
+    fireEvent.click(screen.getByRole('button', { name: 'Align center' }));
+    fireEvent.change(screen.getByTestId('overlay-format-opacity'), {
+      target: { value: '60' },
+    });
+    fireEvent.change(screen.getByTestId('overlay-format-rotation'), {
+      target: { value: '15' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Align middle' }));
+    fireEvent.change(screen.getByTestId('overlay-format-list-style'), {
+      target: { value: 'numbered' },
+    });
+
+    expect(onChange).toHaveBeenCalledWith({ fontFamily: 'Times-Roman' });
+    expect(onChange).toHaveBeenCalledWith({ fontSize: 72 });
+    expect(onChange).toHaveBeenCalledWith({ bold: true });
+    expect(onChange).toHaveBeenCalledWith({ horizontalAlign: 'center' });
+    expect(onChange).toHaveBeenCalledWith({ opacity: 60 });
+    expect(onChange).toHaveBeenCalledWith({ rotation: 15 });
+    expect(onChange).toHaveBeenCalledWith({ verticalAlign: 'middle' });
+    expect(onChange).toHaveBeenCalledWith({ listStyle: 'numbered' });
+  });
+
+  it('refuses invalid size and rotation values', () => {
+    const onChange = jest.fn();
+    render(<OverlayFormatToolbar overlay={overlay} onChange={onChange} />);
+
+    fireEvent.change(screen.getByTestId('overlay-format-font-size'), {
+      target: { value: '73' },
+    });
+    fireEvent.change(screen.getByTestId('overlay-format-rotation'), {
+      target: { value: '181' },
+    });
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('toggles underline and applies a color via native picker', () => {
+    const onChange = jest.fn();
+    render(<OverlayFormatToolbar overlay={overlay} onChange={onChange} />);
+
+    fireEvent.click(screen.getByTestId('overlay-format-underline'));
+    expect(onChange).toHaveBeenCalledWith({ underline: true });
+
+    fireEvent.change(screen.getByTestId('overlay-format-color'), {
+      target: { value: '#ff0000' },
+    });
+    expect(onChange).toHaveBeenCalledWith({ color: '#FF0000' });
+  });
+
+  it('adjusts numeric values with custom stepper controls', () => {
+    const onChange = jest.fn();
+    render(<OverlayFormatToolbar overlay={overlay} onChange={onChange} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Increase Font size' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Decrease Rotation' }));
+
+    expect(onChange).toHaveBeenCalledWith({ fontSize: 15 });
+    expect(onChange).toHaveBeenCalledWith({ rotation: -1 });
+  });
+
+  it('applies and validates an http link', async () => {
+    const onChange = jest.fn();
+    const onValidationChange = jest.fn();
+    render(
+      <OverlayFormatToolbar
+        overlay={overlay}
+        onChange={onChange}
+        onValidationChange={onValidationChange}
+      />
+    );
+
+    fireEvent.change(screen.getByTestId('overlay-format-link-url'), {
+      target: { value: 'https://example.com' },
+    });
+    fireEvent.change(screen.getByTestId('overlay-format-link-display'), {
+      target: { value: 'Example' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply link' }));
+
+    await waitFor(() =>
+      expect(onChange).toHaveBeenCalledWith({
+        linkUrl: 'https://example.com',
+        linkDisplayText: 'Example',
+      })
+    );
+  });
+
+  it('blocks an unsafe link and announces its field error', async () => {
+    const onChange = jest.fn();
+    const onValidationChange = jest.fn();
+    render(
+      <OverlayFormatToolbar
+        overlay={overlay}
+        onChange={onChange}
+        onValidationChange={onValidationChange}
+      />
+    );
+
+    fireEvent.change(screen.getByTestId('overlay-format-link-url'), {
+      target: { value: 'javascript:alert(1)' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply link' }));
+
+    expect(
+      await screen.findByTestId('overlay-format-link-error')
+    ).toHaveTextContent(/http/);
+    expect(onChange).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(onValidationChange).toHaveBeenLastCalledWith(true)
+    );
+  });
+
+  it('renders list markers and linked display text in the preview', () => {
+    const { rerender } = render(
+      <OverlayTextBoxPreview
+        overlay={{ ...overlay, listStyle: 'bullet' }}
+        selected={false}
+        onSelect={jest.fn()}
+      />
+    );
+    expect(
+      screen.getByTestId('pdf-tools-overlay-drag-surface')
+    ).toHaveTextContent('• First • Second • Third');
+
+    rerender(
+      <OverlayTextBoxPreview
+        overlay={{
+          ...overlay,
+          linkUrl: 'https://example.com',
+          linkDisplayText: 'Example',
+        }}
+        selected={false}
+        onSelect={jest.fn()}
+      />
+    );
+    const box = screen.getByTestId('pdf-tools-overlay-box');
+    expect(screen.getByText('Example')).toBeInTheDocument();
+    expect(box).toHaveStyle({
+      textDecoration: 'underline',
+      fontSize: '14px',
+    });
+  });
+
+  it('keeps toolbar controls active for multiline replacements', () => {
+    const onChange = jest.fn();
+    render(
+      <OverlayFormatToolbar
+        overlay={{
+          ...overlay,
+          kind: 'replace',
+          backgroundColor: '#FFFFFF',
+          text: 'Line one\nLine two',
+        }}
+        onChange={onChange}
+      />
+    );
+
+    fireEvent.change(screen.getByTestId('overlay-format-font-family'), {
+      target: { value: 'Times-Roman' },
+    });
+    fireEvent.change(screen.getByTestId('overlay-format-color'), {
+      target: { value: '#112233' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Align center' }));
+
+    expect(onChange).toHaveBeenCalledWith({ fontFamily: 'Times-Roman' });
+    expect(onChange).toHaveBeenCalledWith({ color: '#112233' });
+    expect(onChange).toHaveBeenCalledWith({ horizontalAlign: 'center' });
+  });
+
+  describe('replacement text textarea', () => {
+    it('renders a labeled textarea prefilled with replacement overlay text', () => {
+      render(
+        <OverlayFormatToolbar
+          overlay={{
+            ...overlay,
+            kind: 'replace',
+            backgroundColor: '#FFFFFF',
+            text: 'Sales Assistant',
+          }}
+          onChange={jest.fn()}
+        />
+      );
+
+      const textarea = screen.getByLabelText('Replacement text');
+      expect(textarea).toBeInTheDocument();
+      expect(textarea).toHaveValue('Sales Assistant');
+      expect(textarea.tagName).toBe('TEXTAREA');
+    });
+
+    it('does not render the replacement textarea for additive overlays', () => {
+      render(<OverlayFormatToolbar overlay={overlay} onChange={jest.fn()} />);
+
+      expect(
+        screen.queryByLabelText('Replacement text')
+      ).not.toBeInTheDocument();
+    });
+
+    it('fires onReplacementTextChange when textarea is edited', () => {
+      const onReplacementTextChange = jest.fn();
+      render(
+        <OverlayFormatToolbar
+          overlay={{
+            ...overlay,
+            kind: 'replace',
+            backgroundColor: '#FFFFFF',
+            text: 'Sales Assistant',
+          }}
+          onChange={jest.fn()}
+          onReplacementTextChange={onReplacementTextChange}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText('Replacement text'), {
+        target: { value: 'Marketing Manager' },
+      });
+      expect(onReplacementTextChange).toHaveBeenCalledWith('Marketing Manager');
+    });
+
+    it('supports multiline content in the replacement textarea', () => {
+      render(
+        <OverlayFormatToolbar
+          overlay={{
+            ...overlay,
+            kind: 'replace',
+            backgroundColor: '#FFFFFF',
+            text: 'Line one\nLine two\nLine three',
+          }}
+          onChange={jest.fn()}
+        />
+      );
+
+      const textarea = screen.getByLabelText('Replacement text');
+      expect(textarea).toHaveValue('Line one\nLine two\nLine three');
+    });
+  });
+});

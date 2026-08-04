@@ -6,6 +6,14 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 3.0"
     }
+    azuread = {
+      source  = "hashicorp/azuread"
+      version = "~> 3.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.0"
+    }
   }
 }
 
@@ -14,4 +22,8 @@ provider "azurerm" {
 
   # Prod subscription users often lack subscription-level provider register permission.
   skip_provider_registration = true
+}
+
+provider "azuread" {
+  tenant_id = var.azure_tenant_id
 }

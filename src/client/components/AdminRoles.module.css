@@ -187,7 +187,7 @@
 .btnPrimary {
   padding: 9px 20px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 7px;
   font-size: 14px;

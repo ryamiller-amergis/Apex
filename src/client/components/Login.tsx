@@ -67,8 +67,15 @@ export const Login: React.FC = () => {
   if (checking) {
     return (
       <div className={styles['login-container']}>
-        <div className={styles['login-card']}>
-          <p>Checking authentication...</p>
+        <div className={styles['login-split']} data-testid="login-split">
+          <div className={styles['login-brand-panel']} data-testid="login-brand-panel" aria-label="Apex brand">
+            <div className={styles['login-logo']}>
+              <BrandLogo tone="inverse" beta={IS_BETA_RELEASE} align="center" />
+            </div>
+          </div>
+          <div className={styles['login-action-panel']} data-testid="login-action-panel" aria-label="Sign in">
+            <p className={styles['login-action-copy']}>Checking authentication...</p>
+          </div>
         </div>
       </div>
     );
@@ -76,35 +83,43 @@ export const Login: React.FC = () => {
 
   return (
     <div className={styles['login-container']}>
-      <div className={styles['login-card']}>
-        <div className={styles['login-logo']}>
-          <BrandLogo tone="inverse" beta={IS_BETA_RELEASE} />
+      <div className={styles['login-split']} data-testid="login-split">
+        <div className={styles['login-brand-panel']} data-testid="login-brand-panel" aria-label="Apex brand">
+          <div className={styles['login-logo']}>
+            <BrandLogo tone="inverse" beta={IS_BETA_RELEASE} align="center" />
+          </div>
         </div>
-        <p>Sign in with your Amergis account to continue.</p>
-        <button className={styles['login-button']} onClick={handleLogin}>
-          Sign in with Amergis SSO
-        </button>
 
-        {devLoginAvailable && devPersonas.length > 0 && (
-          <>
-            <div className={styles['login-divider']}>
-              <span>or sign in as</span>
-            </div>
-            <div className={styles['dev-login-buttons']}>
-              {devPersonas.map((persona) => (
-                <button
-                  key={persona.id}
-                  className={styles['dev-login-button']}
-                  onClick={() => handleDevLogin(persona.id)}
-                  disabled={devLoggingIn !== null}
-                  title={persona.displayName}
-                >
-                  {devLoggingIn === persona.id ? 'Signing in...' : persona.label}
-                </button>
-              ))}
-            </div>
-          </>
-        )}
+        <div className={styles['login-action-panel']} data-testid="login-action-panel" aria-label="Sign in">
+          <div className={styles['login-action-content']}>
+            <h1 className={styles['login-action-title']}>Sign in</h1>
+            <p className={styles['login-action-copy']}>Continue with your Amergis account.</p>
+            <button className={styles['login-button']} onClick={handleLogin}>
+              Sign in with Amergis SSO
+            </button>
+
+            {devLoginAvailable && devPersonas.length > 0 && (
+              <>
+                <div className={styles['login-divider']}>
+                  <span>or sign in as</span>
+                </div>
+                <div className={styles['dev-login-buttons']}>
+                  {devPersonas.map((persona) => (
+                    <button
+                      key={persona.id}
+                      className={styles['dev-login-button']}
+                      onClick={() => handleDevLogin(persona.id)}
+                      disabled={devLoggingIn !== null}
+                      title={persona.displayName}
+                    >
+                      {devLoggingIn === persona.id ? 'Signing in...' : persona.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );

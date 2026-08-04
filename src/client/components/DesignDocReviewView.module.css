@@ -283,9 +283,30 @@
   background: #dc2626;
 }
 
+.failureBannerBtnPrimaryAccent {
+  composes: failureBannerBtnPrimary;
+  background: var(--accent-color);
+  color: var(--on-accent);
+}
+
+.failureBannerBtnPrimaryAccent:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
 .failureBannerBtnPrimary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Generation-failed strip — same language as validation failure, sits above tabs */
+.generationFailedBanner {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px 24px;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--error-color) 6%, var(--bg-secondary));
+  border-bottom: 1px solid color-mix(in srgb, var(--error-color) 30%, var(--border-color));
 }
 
 .failureBannerBtnSecondary {
@@ -526,6 +547,88 @@
   background: color-mix(in srgb, var(--accent-color) 8%, transparent);
 }
 
+.actionMenu {
+  position: relative;
+  display: inline-flex;
+}
+
+.actionMenuPanel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 60;
+  min-width: 220px;
+  padding: 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-md);
+}
+
+.actionMenuItem {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.actionMenuItem:hover:not(:disabled),
+.actionMenuItemActive {
+  background: color-mix(in srgb, var(--accent-color) 8%, var(--bg-secondary));
+  color: var(--accent-color);
+}
+
+.actionMenuItem:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.actionMenuItemDanger {
+  color: var(--error-color);
+}
+
+.actionMenuItemDanger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--error-color) 8%, var(--bg-secondary));
+  color: var(--error-color);
+}
+
+.actionMenuIcon {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: var(--bg-secondary);
+  color: currentColor;
+  flex-shrink: 0;
+}
+
+.actionMenuIcon svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.actionMenuLabel {
+  flex: 1;
+  min-width: 0;
+}
+
 .actionDivider {
   width: 1px;
   height: 18px;
@@ -539,7 +642,7 @@
 .actionBtnPrimary {
   composes: actionBtn;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border-color: var(--accent-color);
   font-weight: 600;
 }
@@ -547,7 +650,7 @@
 .actionBtnPrimary:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .actionBtnPrimary:disabled {
@@ -576,14 +679,14 @@
   composes: actionBtn;
   background: var(--success-color);
   border-color: var(--success-color);
-  color: #fff;
+  color: var(--on-success);
   font-weight: 600;
 }
 
 .btnApprove:hover:not(:disabled) {
   background: color-mix(in srgb, var(--success-color) 85%, #000);
   border-color: color-mix(in srgb, var(--success-color) 85%, #000);
-  color: #fff;
+  color: var(--on-success);
 }
 
 .btnApprove:disabled {
@@ -850,7 +953,7 @@
 .btnPrimary {
   padding: 9px 18px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 7px;
   font-size: 0.88rem;
@@ -1024,7 +1127,7 @@
   gap: 6px;
   padding: 8px 16px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 7px;
   font-size: 0.85rem;
@@ -1073,7 +1176,7 @@
 .qaMessageBubbleUser {
   align-self: flex-end;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border-bottom-right-radius: 3px;
 }
 
@@ -1206,7 +1309,7 @@
 
 .qaChoiceOptionSelected .qaChoiceOptionLetter {
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .qaChoiceOptionText {
@@ -1242,7 +1345,7 @@
   align-self: flex-end;
   padding: 7px 16px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 7px;
   font-size: 0.82rem;
@@ -1348,7 +1451,7 @@
   background: var(--accent-color);
   border: none;
   border-radius: 7px;
-  color: #fff;
+  color: var(--on-accent);
   cursor: pointer;
   flex-shrink: 0;
   transition: background 0.2s ease;
@@ -1669,7 +1772,7 @@
 .confirmBtnConfirm {
   padding: 7px 16px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 7px;
   font-size: 0.875rem;
@@ -1751,19 +1854,22 @@
   padding: 4px 0 0;
 }
 
-/* ── Content + Review Sidebar layout ─────────────────────────────────────── */
+/* ── Content main (document column) ──────────────────────────────────────── */
 
+.contentMain {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Legacy wrapper kept for any residual layout nesting */
 .contentWithSidebar {
   display: flex;
   gap: 0;
   min-height: 0;
   flex: 1;
-}
-
-.contentMain {
-  flex: 1;
-  min-width: 0;
-  overflow-y: auto;
 }
 
 /* ── Comment modal ───────────────────────────────────────────────────────── */
@@ -1911,7 +2017,8 @@
     padding: 10px 16px;
   }
 
-  .validationFailureBanner {
+  .validationFailureBanner,
+  .generationFailedBanner {
     padding: 12px 16px;
   }
 
@@ -2014,7 +2121,8 @@
     font-size: 0.84rem;
   }
 
-  .validationFailureBanner {
+  .validationFailureBanner,
+  .generationFailedBanner {
     padding: 10px 12px;
     gap: 10px;
   }
@@ -2333,77 +2441,80 @@
   padding: 18px 20px;
 }
 
-/* ── Validation side panel (permanent right column) ─────────────────────── */
+/* ── Review side dock (stacked Comments / Validation tabs) ──────────────── */
 
-.valPanel {
-  width: 340px;
+.reviewDock {
+  display: flex;
+  flex-direction: row;
+  flex-shrink: 0;
+  height: 100%;
+  min-height: 0;
+  border-left: 1px solid var(--border-color);
+  background: var(--bg-primary);
+}
+
+.reviewDockTabs {
+  width: 44px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid var(--border-color);
-  border-top: 3px solid transparent;
-  background: var(--bg-primary);
-  overflow: hidden;
-  transition: width 0.2s ease, border-top-color 0.3s ease;
+  align-items: stretch;
+  background: var(--bg-secondary);
 }
 
-.valPanelCollapsed {
-  width: 48px;
-}
-
-/* Collapsed vertical strip */
-.valPanelStrip {
+.reviewDockTab {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 8px 0 16px;
-  gap: 10px;
-  width: 100%;
-}
-
-.valPanelStripBtn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
+  gap: 8px;
+  padding: 14px 0;
   border: none;
-  border-radius: 6px;
+  border-left: 3px solid transparent;
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
-  flex-shrink: 0;
+  transition: background 0.15s ease, color 0.15s ease, border-left-color 0.15s ease;
+  min-height: 112px;
 }
 
-.valPanelStripBtn:hover {
+.reviewDockTab:hover {
   background: var(--bg-tertiary);
-  color: var(--accent-color);
+  color: var(--text-primary);
 }
 
-.valPanelStripBtn svg {
-  width: 14px;
-  height: 14px;
+.reviewDockTabActive {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border-left-color: var(--accent-color);
 }
 
-/* Score displayed vertically in collapsed strip */
-.valPanelStripScore {
-  writing-mode: vertical-rl;
-  text-orientation: mixed;
-  transform: rotate(180deg);
-  font-size: 1.1rem;
+.reviewDockTabComments {
+  border-left-color: var(--accent-color);
+}
+
+.reviewDockTabBadge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 10px;
+  background: var(--accent-color);
+  color: var(--on-accent);
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.reviewDockTabScore {
+  font-size: 0.78rem;
   font-weight: 800;
   line-height: 1;
   letter-spacing: -0.02em;
 }
 
-.valPanelStripPct {
-  font-size: 0.65rem;
-  font-weight: 600;
-  opacity: 0.8;
-}
-
-.valPanelStripLabel {
+.reviewDockTabLabel {
   writing-mode: vertical-rl;
   text-orientation: mixed;
   transform: rotate(180deg);
@@ -2411,7 +2522,85 @@
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
+}
+
+/* ── Comments side panel (expanded content inside review dock) ──────────── */
+
+.commentsPanel {
+  width: 340px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+  overflow: hidden;
+  border-right: 1px solid var(--border-color);
+}
+
+.commentsPanelHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: none;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  flex-shrink: 0;
+  transition: background 0.15s ease;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.commentsPanelHeader:hover {
+  background: var(--bg-tertiary);
+}
+
+.commentsPanelChevron {
+  width: 14px;
+  height: 14px;
   color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.commentsPanelTitle {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.02em;
+}
+
+.commentsPanelCountBadge {
+  margin-left: auto;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.commentsPanelBody {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Validation side panel (expanded content inside review dock) ────────── */
+
+.valPanel {
+  width: 340px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-top: 3px solid transparent;
+  border-right: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  overflow: hidden;
+  transition: border-top-color 0.3s ease;
 }
 
 /* Expanded header */
@@ -2738,6 +2927,11 @@
 
   .pinnedPane {
     max-width: 50vw;
+  }
+
+  .commentsPanel,
+  .valPanel {
+    max-width: 45vw;
   }
 
   .centerSplitRight {

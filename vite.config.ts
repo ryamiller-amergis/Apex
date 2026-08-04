@@ -12,7 +12,9 @@ export default defineConfig({
   },
   optimizeDeps: {
     include: ['pdfjs-dist'],
-    exclude: ['pdfjs-dist/build/pdf.worker.mjs'],
+    // Nutrient is loaded via CDN UMD script (src/client/lib/nutrientViewer.ts),
+    // not Vite ESM import — keep the package out of the dep optimizer.
+    exclude: ['pdfjs-dist/build/pdf.worker.mjs', '@nutrient-sdk/viewer'],
   },
   worker: {
     format: 'es',

@@ -14,6 +14,7 @@ import {
   COLD_CACHE_IDLE_TIMEOUT_MS,
   COLD_CACHE_TIMEOUT_MS,
   WORKTREE_GIT_TIMEOUT_MS,
+  ensureGitSafeDirectory,
 } from './repoGitSettings';
 import { materializeWorkspaceFromCache } from './repoWorkspaceService';
 
@@ -36,33 +37,6 @@ export function redactSecrets(text: string, pat?: string): string {
     out = out.split(pat).join('***');
   }
   return out.replace(/\/\/[^/@\s:]*:[^/@\s]*@/g, '//***:***@');
-}
-
-let safeDirectoryConfigured = false;
-
-/**
- * Trusts all repo directories at the global/system git config level so that
- * git commands run OUTSIDE this service — notably the Cursor agent, which
- * operates in the cloned workspace — also clear the dubious-ownership guard.
- * Only needed on Azure App Service; a no-op locally.
- */
-async function ensureGitSafeDirectory(): Promise<void> {
-  if (safeDirectoryConfigured) return;
-  safeDirectoryConfigured = true;
-
-  const onAzureAppService = Boolean(
-    process.env.WEBSITE_SITE_NAME || process.env.WEBSITE_INSTANCE_ID,
-  );
-  if (!onAzureAppService) return;
-
-  for (const scope of ['--system', '--global']) {
-    try {
-      await git(['config', scope, '--add', 'safe.directory', '*']);
-      return;
-    } catch {
-      // Try the next scope; --system needs root, --global needs a writable HOME.
-    }
-  }
 }
 
 export function slugify(title: string): string {

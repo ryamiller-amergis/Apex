@@ -1,0 +1,8 @@
+import React from 'react';
+
+/** Test files under __tests__ must be excluded from discovery. */
+export const IgnoredTestFile: React.FC = () => (
+  <button type="button" {...{ 'data-testid': 'should-not-be-discovered' }}>
+    Test only
+  </button>
+);

@@ -77,17 +77,45 @@ function toNotificationPreference(row: typeof notificationPreferences.$inferSele
 export async function createNotification(
   userId: string,
   payload: { type: NotificationType; title: string; body?: string; link?: string },
+  options?: { dedupeKey?: string },
 ): Promise<AppNotification> {
-  const [row] = await db
-    .insert(notifications)
-    .values({
-      userId,
-      type: payload.type,
-      title: payload.title,
-      body: payload.body ?? null,
-      link: payload.link ?? null,
-    })
-    .returning();
+  const dedupeKey = options?.dedupeKey ?? null;
+
+  if (dedupeKey) {
+    const existing = await db.query.notifications.findFirst({
+      where: eq(notifications.dedupeKey, dedupeKey),
+    });
+    if (existing) {
+      return toAppNotification(existing);
+    }
+  }
+
+  let row: typeof notifications.$inferSelect;
+  try {
+    const inserted = await db
+      .insert(notifications)
+      .values({
+        userId,
+        type: payload.type,
+        title: payload.title,
+        body: payload.body ?? null,
+        link: payload.link ?? null,
+        dedupeKey,
+      })
+      .returning();
+    row = inserted[0];
+  } catch (err) {
+    // Race: concurrent insert with the same dedupe key — return the winner without re-pushing.
+    if (dedupeKey) {
+      const existing = await db.query.notifications.findFirst({
+        where: eq(notifications.dedupeKey, dedupeKey),
+      });
+      if (existing) {
+        return toAppNotification(existing);
+      }
+    }
+    throw err;
+  }
 
   const notification = toAppNotification(row);
 

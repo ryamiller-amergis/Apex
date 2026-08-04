@@ -1,0 +1,120 @@
+---
+name: Walkthrough Anchor Smart Tagging
+description: Classifies newly discovered walkthrough anchor candidates with evidence-based smart tags, route/label suggestions, confidence, and rationale
+---
+
+# Walkthrough Anchor Smart Tagging
+
+Classify **newly discovered** Apex walkthrough anchor candidates. Produce structured smart-tag suggestions grounded in repository evidence — never invent product behavior, routes, or UI that is not in the source. **Do not evaluate coachmark placements** — always allow all four sides; preferred side is chosen later when authoring walkthrough steps.
+
+This skill is invoked programmatically (Wave 2) via the Cursor SDK, mirroring `walkthroughGenerationService.ts`. Wave 1 authors the contract only.
+
+## Trigger
+
+The kickoff context (delivered as the freeform message that starts this run) lists candidate test IDs with source paths/snippets and, when available, **pre-resolved evidence**. Classify only those candidates.
+
+## Inputs (from kickoff context)
+
+| Field                       | Required | Description                                                                                                                                                  |
+| --------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| candidates                  | Yes      | Array of `{ testId, sourceLocations[], sourceKind?, codeSnippets? }`. `codeSnippets` are the actual source lines around each occurrence.                     |
+| Pre-Resolved Candidate Evidence | No   | Per-testId `owningPageEntries[]` (`component`, `routePattern`, `suggestedRoute`, `moduleKey`, `moduleLabel`) resolved deterministically from the import graph |
+| accessiblePageModules       | Yes      | All application modules managed from Platform Admin, plus fixed Home/Admin/Profile modules, with page entries and stable suggested routes                     |
+| curatedRoutes               | Yes      | Snapshot of allow-listed routes from `walkthroughRoutes.ts`                                                                                                  |
+| existingCatalogHints        | No       | Existing labels/tags for nearby anchors (do not copy blindly)                                                                                                |
+
+## Procedure
+
+**Classify from the supplied evidence. Do NOT browse, search, or open the repository unless a candidate is missing both `codeSnippets` and pre-resolved `owningPageEntries` (only then fall back to reading the referenced `sourceLocations.filePath`).** Avoiding repository browsing is required — it is slow and unreliable in the deployment environment.
+
+1. **Read the kickoff context** (the freeform message). Note the `candidates`, the `## Pre-Resolved Candidate Evidence` block (when present), the accessible page modules, and curated routes.
+2. **Classify each candidate from evidence:**
+   - Use each candidate's `codeSnippets` to confirm the `data-testid` / `anchorTestIdProps(...)` occurrence and read the surrounding UI intent — do not re-open the file when a snippet is present.
+   - Use the candidate's `owningPageEntries` (from Pre-Resolved Candidate Evidence) to determine the hosting page module. When several owning entries are listed, choose the most specific verified page/workflow for the label, tags, and rationale (for example, `prd-review` for a modal owned by `PrdReviewView`).
+   - Only when a candidate has **no** `owningPageEntries` should you trace imports yourself: open the listed `sourceLocations.filePath`, follow references upward to a page entry in `accessiblePageModules`, and classify against that page module (never infer ownership from a shared component's filename alone).
+   - Treat a page entry `routePattern` containing `:placeholders` as ownership evidence only. Never emit a placeholder route.
+   - Emit the matched page entry's stable `suggestedRoute`; page-specific query routes are preferred over broad module routes.
+   - Verify any `suggestedRoute` against the supplied `curatedRoutes` (exact match only). If none matches, emit `null`.
+   - Always set `allowedPlacements` to `["top", "right", "bottom", "left"]`. Do **not** infer a preferred side from layout — placement is chosen per step when building the walkthrough.
+3. **Assign smart tags** using the controlled rubric below (3–8 tags).
+4. **Write the output** to `.ai-pilot/output/walkthrough-anchor-smart-tagging.json` using the Write tool.
+
+## Controlled tagging rubric
+
+Every suggestion must include **3–8 lowercase kebab-case** tags drawn from these dimensions. Prefer concrete, searchable tokens over vague ones. Cover multiple dimensions when evidence supports it.
+
+| Dimension          | Purpose                         | Example tags                                                                                             |
+| ------------------ | ------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| **domain**         | Product area / feature          | `ado`, `profile`, `notifications`, `backlog`, `standup`, `calendar`, `admin`, `walkthrough`, `changelog` |
+| **action**         | What the user does              | `open`, `edit`, `save`, `dismiss`, `navigate`, `filter`, `create`, `approve`                             |
+| **UI element**     | Control / surface type          | `button`, `menu-item`, `modal`, `section`, `tab`, `input`, `avatar`, `header`, `banner`                  |
+| **state / signal** | Condition the coachmark teaches | `error`, `success`, `warning`, `empty`, `loading`                                                        |
+| **workflow**       | Journey the control supports    | `onboarding`, `settings`, `review`, `authoring`, `reporting`, `navigation`                               |
+| **audience**       | Who typically uses it           | `all-users`, `project-admin`, `super-admin`, `contributor`                                               |
+| **intent**         | Coaching purpose                | `discover`, `configure`, `complete-task`, `troubleshoot`, `announce`                                     |
+
+Rules for tags:
+
+- Lowercase kebab-case only (`^[a-z0-9]+(?:-[a-z0-9]+)*$`).
+- Deduplicate; do not pad with synonyms just to hit 8.
+- Do not invent domains or workflows that the source file does not support.
+- Prefer tags that help walkthrough generation match intent → anchors later.
+- **Evidence-first (required):** Any meaningful token already present in `testId` / label / visible copy (e.g. `ado-create-error` → include `ado`, `create`, `error`) **must** appear in `smartTags` when it is a valid kebab token of length ≥ 3. Do not replace those with only generic workflow tags like `backlog` / `review` / `modal`.
+- If the rationale mentions a product system or failure mode (ADO, error banner, etc.), those same concepts must be reflected as tags.
+
+## Output Schema
+
+Write exactly this JSON shape to `.ai-pilot/output/walkthrough-anchor-smart-tagging.json`:
+
+```json
+{
+  "suggestions": [
+    {
+      "testId": "string — exact discovered data-testid",
+      "anchorKey": "string — stable allow-list key (usually matches testId)",
+      "suggestedLabel": "string — human-readable authoring label",
+      "suggestedRoute": "/curated-route or null",
+      "allowedPlacements": ["top|right|bottom|left"],
+      "smartTags": ["kebab-case-tag", "..."],
+      "confidence": 0.0,
+      "rationale": "string — evidence citing file paths / UI observed in source"
+    }
+  ]
+}
+```
+
+**Root shape (required):** the file contents must be a single JSON **object** whose only top-level key is `suggestions`. Never write a bare array (`[{...}]`). Never wrap the JSON in markdown fences. Chat-only JSON does not count — the Write tool must create that exact path before you end the turn.
+
+Field requirements:
+
+- `suggestions` — exactly one entry for every input candidate; never return a partial batch.
+- `testId` / `anchorKey` / `suggestedLabel` / `rationale` — required non-empty strings.
+- `suggestedRoute` — `null` or an exact curated route from `walkthroughRoutes.ts`.
+- `allowedPlacements` — always exactly `["top", "right", "bottom", "left"]` (do not subset).
+- `smartTags` — **3–8** lowercase kebab-case strings.
+- `confidence` — finite number in inclusive range **[0, 1]**.
+- **No invented / extra fields** at the root or inside a suggestion.
+
+## Constraints (MUST follow)
+
+1. **No invented behavior.** Describe only controls and pages verified in source. If evidence is weak, lower confidence and say so in `rationale`; do not fabricate features.
+2. **Routes must come from `walkthroughRoutes.ts`.** Never invent routes or entity IDs.
+3. **Do not evaluate placements.** Always emit all four: `top`, `right`, `bottom`, `left`. Preferred side is chosen later in walkthrough step authoring (and may flip at runtime).
+4. **Tags are lowercase kebab-case**, length 3–8 after dedupe.
+5. **Do not wrap output in markdown fences.** Write raw JSON.
+6. **Do not ask questions.** Execute silently and write the output file. Do not end the turn until `.ai-pilot/output/walkthrough-anchor-smart-tagging.json` exists with the object root `{ "suggestions": [...] }` (never a bare array).
+7. **Never skip a candidate.** Sync already limited the batch to reachable source files. If ownership is shared or ambiguous, choose the closest verified page entry, lower confidence, and explain the ambiguity.
+8. **Stay within accessible modules.** Classify candidates only against modules supplied in `accessiblePageModules`; Home, Admin, and Profile are valid fixed modules.
+
+## Confidence guidance
+
+| Range       | When to use                                                                   |
+| ----------- | ----------------------------------------------------------------------------- |
+| `0.85–1.0`  | Explicit walkthrough marker or clear page ownership + visible label in source |
+| `0.55–0.84` | Stable `data-testid` with reasonable route inference                          |
+| `0.25–0.54` | Ambiguous container / shared layout; Super Admin should review carefully      |
+| `0.0–0.24`  | Speculative — only if the ID exists but purpose is unclear                    |
+
+## Evidence trail
+
+Ground each `rationale` in the supplied evidence — cite the candidate's `codeSnippets` (file path + line) and the resolved owning page module. Only read the actual source file when a candidate has no snippet and no pre-resolved owning entry. Use the matched page entry's stable `suggestedRoute` when ownership is ambiguous.

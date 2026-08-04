@@ -36,7 +36,8 @@ These are either nondeterministic, cost-generating, or better verified at a lowe
 | Behavior | Correct layer |
 |---------|--------------|
 | AI/Cursor SDK agent output text | Unit mock of chatAgentService |
-| Validation scorecard numeric score | Golden fixture + documentValidationService unit |
+| Live validation scorecard numeric score from a model | Golden fixture + documentValidationService unit |
+| Seeded validation score / threshold gating in the UI | Playwright `@interview-flow` (deterministic seed) |
 | ADO work item content | azureDevOps.ts unit tests |
 | Teams notification delivery | teamsBotService unit mock |
 | RC/ETL sync timing | MaxView integration tests |
@@ -81,9 +82,39 @@ The Vite dev server proxies `/api` and `/auth` to Express as in normal developme
 | `ado-export.spec.ts` | ba | Export button gating, modal, success, failure |
 | `a11y.spec.ts` | developer, ba | WCAG 2.1 Level A/AA critical/serious violations |
 
+## Deterministic interview flow tier (`@interview-flow`)
+
+Fast, seed-driven Playwright coverage for the Interview → PRD → Prototype → Design Doc document pipeline. All AI/Bedrock traffic is intercepted (no tokens). Live AI correctness is intentionally out of scope for Playwright (validated separately).
+
+| Spec | Covers |
+|------|--------|
+| `interview-flow-interview.spec.ts` | Start-interview RBAC, complete/reopen/archive, Generate PRD nav (stubbed), owner chips |
+| `interview-flow-prd-review.spec.ts` | Readiness gate, comment blocking, reviewer/QA/owner approve, revision, tabs |
+| `interview-flow-prd-validation.spec.ts` | Under/over threshold, proceed-anyway override |
+| `interview-flow-prototype-review.spec.ts` | Reviewer/owner approve, request changes, regenerate, approved badge |
+| `interview-flow-design-doc-review.spec.ts` | Two-step approval, validation badge, Comments/Validation dock |
+| `interview-flow-ai-fix.spec.ts` | Fix single / Fix all (stubbed), proposed-changes accept/reject |
+| `interview-flow-project-settings.spec.ts` | Validation skill off, threshold, approvalMode, prototypeStageEnabled |
+
+Seed helpers live in `tests/e2e/data/seed.ts` (`seedInterview`, extended `seedPrd`, `seedDesignPrototype`, `seedDesignDoc`, `seedReviewComment`, `seedApproverAssignments`, `seedProjectSettings`). AI stubs live in `tests/e2e/support/api-stubs.ts` (`stubAllAiTraffic`, `stubFixWithAi`, etc.).
+
+Run with:
+
+```powershell
+npm run test:e2e:interview-flow
+```
+
+Equivalent raw command:
+
+```powershell
+npx playwright test --grep "@interview-flow"
+```
+
+**CI gates:** `@interview-flow` runs on every PR to `main` (blocking job `e2e-interview-flow` in `.github/workflows/pr-tests.yml`, parallel to smoke) and again in the nightly full regression suite.
+
 ## Tier 1 journeys (next milestone)
 
-Design docs, prototypes, standups, feature requests, platform admin (menu toggle), planning permissions, Dev Workbench, super-admin browser behavior.
+Standups, feature requests, platform admin (menu toggle), planning permissions, Dev Workbench, super-admin browser behavior.
 
 ## Quality targets
 
@@ -112,7 +143,7 @@ These are measurement targets — not hard gates — until three CI baseline run
 
 ## Traceability
 
-Each spec file opens with an `AC:` comment naming the acceptance criterion group it covers. Tests are tagged with `@smoke`, `@critical`, `@regression`, or `@a11y`. Future work will link test IDs to Apex-generated test cases (`test_cases` table) via the `// test-case-id: TC-PBI-xxx-xxx` comment convention.
+Each spec file opens with an `AC:` comment naming the acceptance criterion group it covers. Tests are tagged with `@smoke`, `@critical`, `@regression`, `@pipeline`, or `@a11y`. Use `@interview-flow` only on specs that cover the Interview → PRD → Prototype → Design Doc flow (it is not a default tag for unrelated suites). Future work will link test IDs to Apex-generated test cases (`test_cases` table) via the `// test-case-id: TC-PBI-xxx-xxx` comment convention.
 
 ## Cursor SDK maintenance automation
 

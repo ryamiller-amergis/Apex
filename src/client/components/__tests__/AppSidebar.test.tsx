@@ -30,10 +30,16 @@ beforeEach(() => {
 });
 
 describe('AppSidebar — desktop navigation', () => {
-  it('renders Home and collapse controls', () => {
-    render(<AppSidebar {...baseProps} />);
+  it('renders Home and collapse controls when canAccessHome is true (default)', () => {
+    render(<AppSidebar {...baseProps} canAccessHome />);
     expect(screen.getByRole('navigation', { name: 'Main navigation' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument();
+  });
+
+  it('hides the Home button when canAccessHome is false', () => {
+    render(<AppSidebar {...baseProps} canAccessHome={false} />);
+    expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument();
   });
 
@@ -144,6 +150,60 @@ describe('AppSidebar — desktop navigation', () => {
       />,
     );
     expect(screen.queryByRole('button', { name: 'UI Lab' })).not.toBeInTheDocument();
+  });
+});
+
+describe('AppSidebar — grouped sections', () => {
+  const allViews = [
+    'calendar', 'planning', 'cloudcost', 'backlog', 'adr',
+    'my-work', 'standup', 'ui-lab', 'feature-requests',
+    'pdf-tools', 'ai-cost', 'design-module', 'load-tests',
+  ];
+  const superAdminProps = {
+    ...baseProps,
+    isSuperAdmin: true,
+    selectedProject: 'Apex',
+    menuEnabledViews: allViews,
+    onNavigateMyWork: jest.fn(),
+    onNavigateStandup: jest.fn(),
+    onNavigateUiLab: jest.fn(),
+    onNavigateFeatureRequests: jest.fn(),
+    onNavigatePdfTools: jest.fn(),
+    onNavigateAiCost: jest.fn(),
+    onNavigateDesignModule: jest.fn(),
+    onNavigateLoadTests: jest.fn(),
+    onNavigateAdr: jest.fn(),
+  };
+
+  it('shows section labels when expanded and items are visible', () => {
+    render(<AppSidebar {...superAdminProps} collapsed={false} />);
+    expect(screen.getByText('Build')).toBeInTheDocument();
+    expect(screen.getByText('Delivery')).toBeInTheDocument();
+    expect(screen.getByText('Insights')).toBeInTheDocument();
+    expect(screen.getByText('Tools')).toBeInTheDocument();
+  });
+
+  it('hides section labels when collapsed', () => {
+    render(<AppSidebar {...superAdminProps} collapsed />);
+    expect(screen.queryByText('Build')).not.toBeInTheDocument();
+    expect(screen.queryByText('Delivery')).not.toBeInTheDocument();
+    expect(screen.queryByText('Insights')).not.toBeInTheDocument();
+    expect(screen.queryByText('Tools')).not.toBeInTheDocument();
+  });
+
+  it('does not render a group label when all items in the group are hidden', () => {
+    const can = (key: string) => key === 'planning:view';
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={can}
+        menuEnabledViews={['planning']}
+      />,
+    );
+    expect(screen.getByText('Insights')).toBeInTheDocument();
+    expect(screen.queryByText('Build')).not.toBeInTheDocument();
+    expect(screen.queryByText('Delivery')).not.toBeInTheDocument();
+    expect(screen.queryByText('Tools')).not.toBeInTheDocument();
   });
 });
 

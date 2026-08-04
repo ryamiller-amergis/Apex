@@ -1,21 +1,26 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { useChatStream } from '../hooks/useChatStream';
+import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import {
-  useSendMessage,
-  useCancelRun,
   useCloseThread,
   useSkillList,
 } from '../hooks/useChatThreads';
 import { DEFAULT_MODEL_ID, modelBadge } from '../config/models';
 import { useAvailableModels, useGlobalDefaultModel } from '../hooks/useProjectSkillConfig';
 import { formatAttachmentSize, useChatAttachments } from '../hooks/useChatAttachments';
-import type { ChatAttachment, ChatThread, ChatMessage } from '../../shared/types/chat';
+import type {
+  ChatAttachment,
+  ChatThread,
+  ChatMessage,
+  SelectChatThreadHandler,
+  SelectChatThreadOptions,
+} from '../../shared/types/chat';
 import { PRDPreviewDrawer } from './PRDPreviewDrawer';
 import { ThreadHistorySidebar } from './ThreadHistorySidebar';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
+import { useFocusChatMessage } from '../hooks/useFocusChatMessage';
 import styles from './ChatAgentPanel.module.css';
 
 const MIN_WIDTH = 340;
@@ -77,6 +82,7 @@ const ChoiceBlockUI: React.FC<ChoiceBlockProps> = ({
               onClick={() => !locked && onSelect(opt.letter)}
               disabled={locked}
               type="button"
+              {...{ 'data-testid': `chat-agent-choice-option-${opt.letter}` }}
             >
               <span className={styles.choiceOptionLetter}>{opt.letter.toUpperCase()}</span>
               <span className={styles.choiceOptionText}>{opt.text}</span>
@@ -89,6 +95,7 @@ const ChoiceBlockUI: React.FC<ChoiceBlockProps> = ({
           onClick={() => !locked && onSelect('other')}
           disabled={locked}
           type="button"
+          {...{ 'data-testid': 'chat-agent-choice-option-other' }}
         >
           <span className={styles.choiceOptionLetter}>✎</span>
           <span className={styles.choiceOptionText}>Other / free-form</span>
@@ -101,6 +108,7 @@ const ChoiceBlockUI: React.FC<ChoiceBlockProps> = ({
           value={freeform}
           onChange={(e) => onFreeform(e.target.value)}
           rows={2}
+          {...{ 'data-testid': 'chat-agent-choice-freeform' }}
         />
       )}
       {locked && freeform && (
@@ -116,6 +124,7 @@ interface AgentMessageProps {
   msg: ChatMessage;
   onSend: (text: string) => void;
   isRunning: boolean;
+  highlighted?: boolean;
 }
 
 interface QuestionState {
@@ -123,7 +132,7 @@ interface QuestionState {
   freeform: string;
 }
 
-const AgentMessage: React.FC<AgentMessageProps> = ({ msg, onSend, isRunning }) => {
+const AgentMessage: React.FC<AgentMessageProps> = ({ msg, onSend, isRunning, highlighted }) => {
   const parts = parseAgentMessage(msg.text);
   const choiceBlocks = parts.filter((p): p is ChoiceBlock => p.type === 'choices');
 
@@ -180,7 +189,11 @@ const AgentMessage: React.FC<AgentMessageProps> = ({ msg, onSend, isRunning }) =
   let questionCounter = 0;
 
   return (
-    <div className={`${styles.message} ${styles.roleAgent}`}>
+    <div
+      data-message-id={msg.id}
+      {...(highlighted ? { 'data-testid': 'chat-message-highlighted' } : {})}
+      className={`${styles.message} ${styles.roleAgent} ${highlighted ? styles.messageHighlighted : ''}`.trim()}
+    >
       <div className={styles.agentHeader}>
         <span className={styles.agentAvatar}>AI</span>
         <span className={styles.agentLabel}>Agent</span>
@@ -218,6 +231,7 @@ const AgentMessage: React.FC<AgentMessageProps> = ({ msg, onSend, isRunning }) =
             onClick={handleSend}
             disabled={!allAnswered || isRunning}
             type="button"
+            {...{ 'data-testid': 'chat-agent-choice-send-btn' }}
           >
             {isRunning ? 'Agent is thinking…' : 'Submit answers ↑'}
           </button>
@@ -233,9 +247,13 @@ const AgentMessage: React.FC<AgentMessageProps> = ({ msg, onSend, isRunning }) =
 
 // ── Tool call chip ────────────────────────────────────────────────────────────
 
-function ToolCallBubble({ msg }: { msg: ChatMessage }) {
+function ToolCallBubble({ msg, highlighted }: { msg: ChatMessage; highlighted?: boolean }) {
   return (
-    <div className={`${styles.message} ${styles.roleTool}`}>
+    <div
+      data-message-id={msg.id}
+      {...(highlighted ? { 'data-testid': 'chat-message-highlighted' } : {})}
+      className={`${styles.message} ${styles.roleTool} ${highlighted ? styles.messageHighlighted : ''}`.trim()}
+    >
       <div className={styles.toolCallChip}>{msg.text}</div>
     </div>
   );
@@ -243,9 +261,13 @@ function ToolCallBubble({ msg }: { msg: ChatMessage }) {
 
 // ── User bubble ───────────────────────────────────────────────────────────────
 
-function UserBubble({ msg }: { msg: ChatMessage }) {
+function UserBubble({ msg, highlighted }: { msg: ChatMessage; highlighted?: boolean }) {
   return (
-    <div className={`${styles.message} ${styles.roleUser}`}>
+    <div
+      data-message-id={msg.id}
+      {...(highlighted ? { 'data-testid': 'chat-message-highlighted' } : {})}
+      className={`${styles.message} ${styles.roleUser} ${highlighted ? styles.messageHighlighted : ''}`.trim()}
+    >
       <div className={styles.userBubble}>
         <span className={styles.userBubbleText}>{msg.text}</span>
         {msg.attachments && msg.attachments.length > 0 && (
@@ -270,7 +292,7 @@ interface ChatAgentPanelProps {
   isOpen: boolean;
   onClose: () => void;
   onNewChat: () => void | Promise<void>;
-  onSelectThread?: (threadId: string) => void;
+  onSelectThread?: SelectChatThreadHandler;
   canStartNewChat?: boolean;
   isStartingNewChat?: boolean;
   newChatError?: string;
@@ -290,6 +312,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
 }) => {
   const [input, setInput] = useState('');
   const [showHistory, setShowHistory] = useState(false);
+  const [focusMessageId, setFocusMessageId] = useState<string | undefined>();
   const [skillPickerOpen, setSkillPickerOpen] = useState(false);
   const [skillPickerIdx, setSkillPickerIdx] = useState(0);
   const [showPrdPreview, setShowPrdPreview] = useState(false);
@@ -315,13 +338,17 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     clearAttachments,
   } = useChatAttachments();
 
-  const { messages, streamingText, status, isConnected, prdReady } = useChatStream(
-    thread?.id ?? null,
-    { initialMessages: thread?.messages, initialStatus: thread?.status, initialPrdReady: thread?.prdReady },
-  );
+  const session = useAgentChatSession(thread?.id ?? null, {
+    initialMessages: thread?.messages,
+    initialStatus: thread?.status,
+    initialPrdReady: thread?.prdReady,
+    visibleMessageFilter: (m) =>
+      !(m.role === 'user' && m.text === 'Begin.')
+      && m.toolName !== '_reasoning'
+      && m.toolName !== '_thinking',
+  });
+  const { messages, streamingText, isConnected, prdReady, isRunning, status } = session;
 
-  const sendMessage = useSendMessage(thread?.id ?? '');
-  const cancelRun = useCancelRun(thread?.id ?? '');
   const closeThread = useCloseThread();
 
   const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
@@ -350,16 +377,40 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     );
   }, [slashQuery, threadSkills]);
 
-  const isRunning = status === 'running';
   const hasPrd = prdReady;
 
+  const highlightedMessageId = useFocusChatMessage(
+    focusMessageId,
+    messages
+      .filter(
+        (m) =>
+          !(m.role === 'user' && m.text === 'Begin.') &&
+          m.toolName !== '_reasoning' &&
+          m.toolName !== '_thinking',
+      )
+      .map((m) => m.id),
+  );
+
+  const handleSelectThreadFromHistory = useCallback(
+    (id: string, options?: SelectChatThreadOptions) => {
+      setFocusMessageId(options?.focusMessageId);
+      onSelectThread?.(id, options);
+      setShowHistory(false);
+    },
+    [onSelectThread],
+  );
+
+  const skipScrollToEndRef = useRef(false);
+  skipScrollToEndRef.current = Boolean(focusMessageId || highlightedMessageId);
   useEffect(() => {
+    if (skipScrollToEndRef.current) return;
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamingText]);
 
   useEffect(() => {
     if (thread) {
       // Sync the model dropdown to whatever the thread was started with
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional sync when thread id changes
       setSelectedModel(thread.kickoff.model ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID);
       // Reset auto-open guard for the new thread
       prdAutoOpenedRef.current = false;
@@ -370,6 +421,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   useEffect(() => {
     if (prdReady && !prdAutoOpenedRef.current) {
       prdAutoOpenedRef.current = true;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot open when PRD becomes ready
       setShowPrdPreview(true);
     }
   }, [prdReady]);
@@ -432,13 +484,12 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     if ((!trimmedText && messageAttachments.length === 0) || isRunning || !thread) return;
     setInput('');
     setSkillPickerOpen(false);
-    await sendMessage.mutateAsync({
-      text: trimmedText || 'Please use the attached files as additional context.',
-      model: selectedModel,
-      attachments: messageAttachments,
-    });
+    await session.send(
+      trimmedText || 'Please use the attached files as additional context.',
+      { model: selectedModel, attachments: messageAttachments },
+    );
     if (messageAttachments.length > 0) clearAttachments();
-  }, [isRunning, thread, sendMessage, selectedModel, clearAttachments]);
+  }, [isRunning, thread, session, selectedModel, clearAttachments]);
 
   const selectSkill = useCallback((skill: { name: string; path: string }) => {
     const msg = `Run skill: ${skill.name} (\`${skill.path}\`)`;
@@ -527,6 +578,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
       aria-label="Agent chat panel"
     >
       {/* Resize handle */}
+      {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions -- drag resize */}
       <div className={styles.resizeHandle} onMouseDown={onResizeMouseDown} title="Drag to resize" />
 
       {/* Header */}
@@ -553,6 +605,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
               className={styles.iconBtn}
               onClick={() => setShowHistory((v) => !v)}
               title="Thread history"
+              {...{ 'data-testid': 'chat-agent-history-btn' }}
             >
               {showHistory ? '← Back' : '⏱ History'}
             </button>
@@ -562,10 +615,18 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             onClick={onNewChat}
             title="New chat"
             disabled={!canStartNewChat || isStartingNewChat || isRunning}
+            {...{ 'data-testid': 'chat-agent-new-chat-btn' }}
           >
             {isStartingNewChat ? 'Starting…' : '+ New'}
           </button>
-          <button className={`${styles.iconBtn} ${styles.iconBtnDanger}`} onClick={handleClose} title="Close panel">✕</button>
+          <button
+            className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
+            onClick={handleClose}
+            title="Close panel"
+            {...{ 'data-testid': 'chat-agent-close-btn' }}
+          >
+            ✕
+          </button>
         </div>
       </div>
 
@@ -581,7 +642,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
       {showHistory && onSelectThread ? (
         <ThreadHistorySidebar
           activeThreadId={thread?.id ?? null}
-          onSelectThread={(id) => { onSelectThread(id); setShowHistory(false); }}
+          onSelectThread={handleSelectThreadFromHistory}
           onDeleteThread={(id) => { if (id === thread?.id) onSelectThread(''); }}
           onClose={() => setShowHistory(false)}
           project={selectedProject}
@@ -605,8 +666,9 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
         <>
           <div className={styles.messages}>
             {visibleMessages.map((msg, idx) => {
-              if (msg.role === 'tool') return <ToolCallBubble key={msg.id} msg={msg} />;
-              if (msg.role === 'user') return <UserBubble key={msg.id} msg={msg} />;
+              const highlighted = highlightedMessageId === msg.id;
+              if (msg.role === 'tool') return <ToolCallBubble key={msg.id} msg={msg} highlighted={highlighted} />;
+              if (msg.role === 'user') return <UserBubble key={msg.id} msg={msg} highlighted={highlighted} />;
               if (msg.role === 'system') {
                 const isError = msg.text.startsWith('Error:');
                 const lastUserText = isError
@@ -614,7 +676,12 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                   : null;
                 if (isError && lastUserText) {
                   return (
-                    <div key={msg.id} className={styles.systemErrorMsg}>
+                    <div
+                      key={msg.id}
+                      data-message-id={msg.id}
+                      {...(highlighted ? { 'data-testid': 'chat-message-highlighted' } : {})}
+                      className={`${styles.systemErrorMsg} ${highlighted ? styles.messageHighlighted : ''}`.trim()}
+                    >
                       <span className={styles.systemErrorText}>{msg.text}</span>
                       <button
                         className={styles.retryBtn}
@@ -627,9 +694,26 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                     </div>
                   );
                 }
-                return <div key={msg.id} className={styles.systemMsg}>{msg.text}</div>;
+                return (
+                  <div
+                    key={msg.id}
+                    data-message-id={msg.id}
+                    {...(highlighted ? { 'data-testid': 'chat-message-highlighted' } : {})}
+                    className={`${styles.systemMsg} ${highlighted ? styles.messageHighlighted : ''}`.trim()}
+                  >
+                    {msg.text}
+                  </div>
+                );
               }
-              return <AgentMessage key={msg.id} msg={msg} onSend={doSend} isRunning={isRunning} />;
+              return (
+                <AgentMessage
+                  key={msg.id}
+                  msg={msg}
+                  onSend={doSend}
+                  isRunning={isRunning}
+                  highlighted={highlighted}
+                />
+              );
             })}
 
             {/* Loading spinner — shown while waiting for first tokens */}
@@ -781,7 +865,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
 
               {/* Send / stop button */}
               {isRunning ? (
-                <button className={styles.cancelBtn} onClick={() => cancelRun.mutate()} title="Stop">■ Stop</button>
+                <button className={styles.cancelBtn} onClick={() => void session.cancel()} title="Stop">■ Stop</button>
               ) : (
                 <button className={styles.sendBtn} onClick={() => doSend(input, attachments)} disabled={(!input.trim() && attachments.length === 0) || status === 'closed'}>Send ↑</button>
               )}

@@ -1,7 +1,7 @@
-* {
+﻿* {
   box-sizing: border-box;
   scrollbar-width: thin;
-  scrollbar-color: var(--border-color) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 *::-webkit-scrollbar {
@@ -15,44 +15,51 @@
 }
 
 *::-webkit-scrollbar-thumb {
-  background: var(--border-color);
+  background: var(--scrollbar-thumb);
   border-radius: 4px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: var(--text-muted);
+  background: var(--scrollbar-thumb-hover);
   border: 2px solid transparent;
   background-clip: content-box;
 }
 
 :root {
-  /* ── Responsive Breakpoints ──────────────────────
+  /* â”€â”€ Responsive Breakpoints â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
      Phone:        max-width 480px
      Tablet:       max-width 768px
      Small desktop: max-width 1024px
      Usage: @media (max-width: 768px) { ... }
-     ─────────────────────────────────────────────── */
+     â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
+  color-scheme: light;
   --brand-primary: #2747D9;
   --brand-primary-light: #7C8CFF;
   --brand-navy: #050506;
-  --brand-surface: #EEF2FF;
+  --brand-surface: #D5DDEC;
   --brand-surface-dark: #18181B;
   --brand-text-inverse: #F9FAFB;
-  --bg-primary: #F8FAFF;
-  --bg-secondary: #EEF2FF;
-  --bg-tertiary: #E0E7FF;
+  /* Softened cool slate â€” less glare than near-white, still AA with muted text. */
+  --bg-primary: #E4EAF4;
+  --bg-secondary: #D5DDEC;
+  --bg-tertiary: #C8D2E4;
+  --bg-page: #E4EAF4;
   --text-primary: #111827;
-  --text-secondary: #4B5563;
-  --text-muted: #6B7280;
-  --border-color: #D6DDF7;
-  --border-color-light: #E5E9FF;
+  --text-secondary: #3F4B5C;
+  /* #4B5563 keeps â‰¥4.5:1 on primary/secondary/tertiary (was failing on #EEF2FF). */
+  --text-muted: #4B5563;
+  --border-color: #B8C3D9;
+  --border-color-light: #C9D2E6;
   --accent-color: #2747D9;
   --accent-hover: #1C33A6;
   --accent-teal: #2747D9;
   --accent-teal-hover: #1C33A6;
+  /* Scrollbar â€” muted accent so thumbs match the active theme everywhere. */
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 45%, var(--border-color));
+  --scrollbar-thumb-hover: var(--accent-color);
   --success-color: #16A34A;
   --success-hover: #15803D;
   /* Text color that renders ON accent/success fills (WCAG AA >= 4.5:1).
@@ -61,10 +68,20 @@
   --on-accent: #ffffff;
   --on-success: #0b1220;
   --error-color: #d32f2f;
+  /* Warning / pending â€” dark amber text on pale wash (AA on light surfaces). */
+  --warning-color: #f59e0b;
+  --warning-text: #92400e;
+  /* Mix % for success/error/warning surface washes (light needs less tint). */
+  --status-mix: 14%;
   --shadow-sm: rgba(0, 0, 0, 0.08);
   --shadow-md: rgba(0, 0, 0, 0.14);
-  --calendar-bg: #F8FAFF;
-  --calendar-event-bg: #E0E7FF;
+  /* Neon glow — no glow on non-neon themes. Neon-category themes override
+     these with accent-derived outer glows. Reference via box-shadow only. */
+  --glow-accent: none;
+  --glow-accent-strong: none;
+  --glow-text: none;
+  --calendar-bg: #E4EAF4;
+  --calendar-event-bg: #C8D2E4;
   --calendar-event-border: #2747D9;
   --calendar-event-text: #1C33A6;
   /* Work Board semantic status tokens
@@ -92,6 +109,7 @@
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
   --brand-primary: #2747D9;
   --brand-primary-light: #7C8CFF;
   --brand-navy: #050506;
@@ -101,6 +119,7 @@
   --bg-primary: #050506;
   --bg-secondary: #111113;
   --bg-tertiary: #18181B;
+  --bg-page: #050506;
   --text-primary: #F9FAFB;
   --text-secondary: #D4D4D8;
   --text-muted: #A1A1AA;
@@ -110,6 +129,8 @@
   --accent-hover: #9CA8FF;
   --accent-teal: #7C8CFF;
   --accent-teal-hover: #9CA8FF;
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 50%, var(--border-color-light));
+  --scrollbar-thumb-hover: var(--accent-color);
   --success-color: #4ADE80;
   --success-hover: #86EFAC;
   /* Dark-theme accent/success fills are light (periwinkle / bright green),
@@ -117,6 +138,9 @@
   --on-accent: #0b1220;
   --on-success: #0b1220;
   --error-color: #ef5350;
+  --warning-color: #f59e0b;
+  --warning-text: #fbbf24;
+  --status-mix: 22%;
   --shadow-sm: rgba(0, 0, 0, 0.3);
   --shadow-md: rgba(0, 0, 0, 0.5);
   --calendar-bg: #111113;
@@ -147,6 +171,7 @@
 }
 
 [data-theme="amergis"] {
+  color-scheme: dark;
   --brand-primary: #5ACCA6;
   --brand-primary-light: #5ACCA6;
   --brand-navy: #1e1e1e;
@@ -156,6 +181,7 @@
   --bg-primary: #1e1e1e;
   --bg-secondary: #2d2d2d;
   --bg-tertiary: #3d3d3d;
+  --bg-page: #1e1e1e;
   --text-primary: #e0e0e0;
   --text-secondary: #b0b0b0;
   --text-muted: #808080;
@@ -165,6 +191,8 @@
   --accent-hover: #6ed9b4;
   --accent-teal: #5ACCA6;
   --accent-teal-hover: #6ed9b4;
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 50%, var(--border-color-light));
+  --scrollbar-thumb-hover: var(--accent-color);
   --success-color: #5ACCA6;
   --success-hover: #6ed9b4;
   /* Accent/success are the light mint brand color; white text is only 1.97:1.
@@ -173,6 +201,9 @@
   --on-accent: #0B3B2E;
   --on-success: #0B3B2E;
   --error-color: #ef5350;
+  --warning-color: #f59e0b;
+  --warning-text: #fbbf24;
+  --status-mix: 22%;
   --shadow-sm: rgba(0, 0, 0, 0.3);
   --shadow-md: rgba(0, 0, 0, 0.5);
   --calendar-bg: #2d2d2d;
@@ -202,6 +233,644 @@
   --status-done-glow: #22c55e30;
 }
 
+/* Elevated steel classic — mid gray with warm copper (not near-black). */
+[data-theme="slate"] {
+  color-scheme: dark;
+  --brand-primary: #D4A574;
+  --brand-primary-light: #E4C49A;
+  --brand-navy: #2A2E36;
+  --brand-surface: #4A5160;
+  --brand-surface-dark: #2A2E36;
+  --brand-text-inverse: #F2EEE8;
+  --bg-primary: #2A2E36;
+  --bg-secondary: #343A46;
+  --bg-tertiary: #424958;
+  --bg-page: #2A2E36;
+  --text-primary: #F2EEE8;
+  --text-secondary: #C8C0B4;
+  --text-muted: #9A9288;
+  --border-color: #525A6A;
+  --border-color-light: #646C7C;
+  --accent-color: #D4A574;
+  --accent-hover: #E4C49A;
+  --accent-teal: #D4A574;
+  --accent-teal-hover: #E4C49A;
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 50%, var(--border-color-light));
+  --scrollbar-thumb-hover: var(--accent-color);
+  --success-color: #4ADE80;
+  --success-hover: #86EFAC;
+  --on-accent: #1A140C;
+  --on-success: #0b1220;
+  --error-color: #ef5350;
+  --warning-color: #f59e0b;
+  --warning-text: #fbbf24;
+  --status-mix: 22%;
+  --shadow-sm: rgba(0, 0, 0, 0.28);
+  --shadow-md: rgba(0, 0, 0, 0.45);
+  --calendar-bg: #343A46;
+  --calendar-event-bg: #424958;
+  --calendar-event-border: #D4A574;
+  --calendar-event-text: #F2EEE8;
+}
+
+/* Sea teal classic — green-teal (not navy blue). */
+[data-theme="ocean"] {
+  color-scheme: dark;
+  --brand-primary: #2DD4BF;
+  --brand-primary-light: #5EEAD4;
+  --brand-navy: #0A1F1C;
+  --brand-surface: #115E59;
+  --brand-surface-dark: #0A1F1C;
+  --brand-text-inverse: #E6FFFA;
+  --bg-primary: #0A1F1C;
+  --bg-secondary: #0F2E2A;
+  --bg-tertiary: #164842;
+  --bg-page: #0A1F1C;
+  --text-primary: #E6FFFA;
+  --text-secondary: #A7D4CC;
+  --text-muted: #739E96;
+  --border-color: #1F5C54;
+  --border-color-light: #2A7369;
+  --accent-color: #2DD4BF;
+  --accent-hover: #5EEAD4;
+  --accent-teal: #2DD4BF;
+  --accent-teal-hover: #5EEAD4;
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 50%, var(--border-color-light));
+  --scrollbar-thumb-hover: var(--accent-color);
+  --success-color: #4ADE80;
+  --success-hover: #86EFAC;
+  --on-accent: #04201C;
+  --on-success: #0b1220;
+  --error-color: #ef5350;
+  --warning-color: #f59e0b;
+  --warning-text: #fbbf24;
+  --status-mix: 22%;
+  --shadow-sm: rgba(0, 0, 0, 0.3);
+  --shadow-md: rgba(0, 0, 0, 0.5);
+  --calendar-bg: #0F2E2A;
+  --calendar-event-bg: #164842;
+  --calendar-event-border: #2DD4BF;
+  --calendar-event-text: #E6FFFA;
+}
+
+/* Warm ivory classic — soft pearl surfaces with terracotta accent. */
+[data-theme="pearl"] {
+  color-scheme: light;
+  --brand-primary: #C45C26;
+  --brand-primary-light: #D97A48;
+  --brand-navy: #2A221C;
+  --brand-surface: #E6DFD4;
+  --brand-surface-dark: #2A221C;
+  --brand-text-inverse: #FFF8F2;
+  --bg-primary: #F4F0EA;
+  --bg-secondary: #EBE5DC;
+  --bg-tertiary: #E0D8CC;
+  --bg-page: #F4F0EA;
+  --text-primary: #2A221C;
+  --text-secondary: #5A4E44;
+  --text-muted: #6F6358;
+  --border-color: #D0C6B8;
+  --border-color-light: #DED5C8;
+  --accent-color: #C45C26;
+  --accent-hover: #A34A1C;
+  --accent-teal: #C45C26;
+  --accent-teal-hover: #A34A1C;
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 45%, var(--border-color));
+  --scrollbar-thumb-hover: var(--accent-color);
+  --success-color: #16A34A;
+  --success-hover: #15803D;
+  --on-accent: #ffffff;
+  --on-success: #0b1220;
+  --error-color: #d32f2f;
+  --warning-color: #f59e0b;
+  --warning-text: #92400e;
+  --status-mix: 14%;
+  --shadow-sm: rgba(42, 34, 28, 0.08);
+  --shadow-md: rgba(42, 34, 28, 0.14);
+  --calendar-bg: #EBE5DC;
+  --calendar-event-bg: #E0D8CC;
+  --calendar-event-border: #C45C26;
+  --calendar-event-text: #A34A1C;
+}
+
+/* Deep indigo night — muted periwinkle, soft cinematic wash. */
+[data-theme="midnight"] {
+  color-scheme: dark;
+  --brand-primary: #8B95D9;
+  --brand-primary-light: #A8B0E8;
+  --brand-navy: #0B1020;
+  --brand-surface: #1A2140;
+  --brand-surface-dark: #0B1020;
+  --brand-text-inverse: #E8ECFF;
+  --bg-primary: #0B1020;
+  --bg-secondary: #151B2E;
+  --bg-tertiary: #1E2640;
+  --bg-page: linear-gradient(165deg, #080C18 0%, #121A32 48%, #1A1235 100%);
+  --text-primary: #E8ECFF;
+  --text-secondary: #A8B0C8;
+  --text-muted: #8B93A8;
+  --border-color: #2A3352;
+  --border-color-light: #3A4568;
+  --accent-color: #8B95D9;
+  --accent-hover: #A8B0E8;
+  --accent-teal: #8B95D9;
+  --accent-teal-hover: #A8B0E8;
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 50%, var(--border-color-light));
+  --scrollbar-thumb-hover: var(--accent-color);
+  --success-color: #4ADE80;
+  --success-hover: #86EFAC;
+  --on-accent: #0b1220;
+  --on-success: #0b1220;
+  --error-color: #ef5350;
+  --warning-color: #f59e0b;
+  --warning-text: #fbbf24;
+  --status-mix: 22%;
+  --shadow-sm: rgba(0, 0, 0, 0.35);
+  --shadow-md: rgba(0, 0, 0, 0.55);
+  --calendar-bg: #151B2E;
+  --calendar-event-bg: #1E2640;
+  --calendar-event-border: #8B95D9;
+  --calendar-event-text: #E8ECFF;
+}
+
+/* Plum dusk hour — warm peach accent, soft shadows only. */
+[data-theme="dusk"] {
+  color-scheme: dark;
+  --brand-primary: #E8A87C;
+  --brand-primary-light: #F0C4A0;
+  --brand-navy: #14101A;
+  --brand-surface: #2A2230;
+  --brand-surface-dark: #14101A;
+  --brand-text-inverse: #F3EDE6;
+  --bg-primary: #14101A;
+  --bg-secondary: #1E1826;
+  --bg-tertiary: #2A2230;
+  --bg-page: linear-gradient(165deg, #100C14 0%, #1A1422 46%, #241820 100%);
+  --text-primary: #F3EDE6;
+  --text-secondary: #C4B8AE;
+  --text-muted: #9A8F86;
+  --border-color: #3A3240;
+  --border-color-light: #4A4250;
+  --accent-color: #E8A87C;
+  --accent-hover: #F0C4A0;
+  --accent-teal: #E8A87C;
+  --accent-teal-hover: #F0C4A0;
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 50%, var(--border-color-light));
+  --scrollbar-thumb-hover: var(--accent-color);
+  --success-color: #6BCB8B;
+  --success-hover: #8FDBA8;
+  --on-accent: #1A1008;
+  --on-success: #0b1220;
+  --error-color: #ef5350;
+  --warning-color: #f59e0b;
+  --warning-text: #fbbf24;
+  --status-mix: 22%;
+  --shadow-sm: rgba(0, 0, 0, 0.35);
+  --shadow-md: rgba(0, 0, 0, 0.55);
+  --calendar-bg: #1E1826;
+  --calendar-event-bg: #2A2230;
+  --calendar-event-border: #E8A87C;
+  --calendar-event-text: #F3EDE6;
+}
+
+/* Soft orchid aurora — muted lilac + apricot, not neon magenta. */
+[data-theme="aurora"] {
+  color-scheme: dark;
+  --brand-primary: #B89BC8;
+  --brand-primary-light: #D0B8DC;
+  --brand-navy: #1A1224;
+  --brand-surface: #2E1A38;
+  --brand-surface-dark: #1A1224;
+  --brand-text-inverse: #F3E8FF;
+  --bg-primary: #1A1224;
+  --bg-secondary: #221830;
+  --bg-tertiary: #2E1A38;
+  --bg-page: linear-gradient(160deg, #14101C 0%, #221830 40%, #3A2430 78%, #2A2018 100%);
+  --text-primary: #F3E8FF;
+  --text-secondary: #C4B0C8;
+  --text-muted: #9B8A9D;
+  --border-color: #3D2A48;
+  --border-color-light: #4E3A58;
+  --accent-color: #B89BC8;
+  --accent-hover: #D0B8DC;
+  --accent-teal: #D4A574;
+  --accent-teal-hover: #E4C49A;
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 50%, var(--border-color-light));
+  --scrollbar-thumb-hover: var(--accent-color);
+  --success-color: #6BCB8B;
+  --success-hover: #8FDBA8;
+  --on-accent: #1A1020;
+  --on-success: #0b1220;
+  --error-color: #ef5350;
+  --warning-color: #f59e0b;
+  --warning-text: #fbbf24;
+  --status-mix: 22%;
+  --shadow-sm: rgba(0, 0, 0, 0.35);
+  --shadow-md: rgba(0, 0, 0, 0.55);
+  --calendar-bg: #221830;
+  --calendar-event-bg: #2E1A38;
+  --calendar-event-border: #D4A574;
+  --calendar-event-text: #F3E8FF;
+}
+
+/* Muted fog glacier — desaturated blue-gray, not ice neon. */
+[data-theme="glacier"] {
+  color-scheme: dark;
+  --brand-primary: #9BB0BC;
+  --brand-primary-light: #B8C8D0;
+  --brand-navy: #10161C;
+  --brand-surface: #2A3840;
+  --brand-surface-dark: #10161C;
+  --brand-text-inverse: #E8EEF0;
+  --bg-primary: #10161C;
+  --bg-secondary: #181E24;
+  --bg-tertiary: #243038;
+  --bg-page: linear-gradient(165deg, #0C1216 0%, #1C2830 52%, #243038 100%);
+  --text-primary: #E8EEF0;
+  --text-secondary: #A8B4BC;
+  --text-muted: #7A8890;
+  --border-color: #344048;
+  --border-color-light: #445058;
+  --accent-color: #9BB0BC;
+  --accent-hover: #B8C8D0;
+  --accent-teal: #9BB0BC;
+  --accent-teal-hover: #B8C8D0;
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 50%, var(--border-color-light));
+  --scrollbar-thumb-hover: var(--accent-color);
+  --success-color: #6BCB8B;
+  --success-hover: #8FDBA8;
+  --on-accent: #101418;
+  --on-success: #0b1220;
+  --error-color: #ef5350;
+  --warning-color: #f59e0b;
+  --warning-text: #fbbf24;
+  --status-mix: 22%;
+  --shadow-sm: rgba(0, 0, 0, 0.35);
+  --shadow-md: rgba(0, 0, 0, 0.55);
+  --calendar-bg: #181E24;
+  --calendar-event-bg: #243038;
+  --calendar-event-border: #9BB0BC;
+  --calendar-event-text: #E8EEF0;
+}
+
+/* Wine ember — burgundy copper wash, not toxic orange. */
+[data-theme="ember"] {
+  color-scheme: dark;
+  --brand-primary: #C47A5A;
+  --brand-primary-light: #D49878;
+  --brand-navy: #1A0E10;
+  --brand-surface: #3A2420;
+  --brand-surface-dark: #1A0E10;
+  --brand-text-inverse: #F8EDE8;
+  --bg-primary: #1A0E10;
+  --bg-secondary: #221416;
+  --bg-tertiary: #2E1C1A;
+  --bg-page: linear-gradient(165deg, #140A0C 0%, #2A1818 48%, #3A2018 100%);
+  --text-primary: #F8EDE8;
+  --text-secondary: #D0B0A4;
+  --text-muted: #A08880;
+  --border-color: #4A302C;
+  --border-color-light: #5A403C;
+  --accent-color: #C47A5A;
+  --accent-hover: #D49878;
+  --accent-teal: #C47A5A;
+  --accent-teal-hover: #D49878;
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 50%, var(--border-color-light));
+  --scrollbar-thumb-hover: var(--accent-color);
+  --success-color: #6BCB8B;
+  --success-hover: #8FDBA8;
+  --on-accent: #1A0C08;
+  --on-success: #0b1220;
+  --error-color: #ef5350;
+  --warning-color: #f59e0b;
+  --warning-text: #fbbf24;
+  --status-mix: 22%;
+  --shadow-sm: rgba(0, 0, 0, 0.35);
+  --shadow-md: rgba(0, 0, 0, 0.55);
+  --calendar-bg: #221416;
+  --calendar-event-bg: #2E1C1A;
+  --calendar-event-border: #C47A5A;
+  --calendar-event-text: #F8EDE8;
+}
+
+/* Sage mist haze — olive green atmosphere, distinct from indigo/violet. */
+[data-theme="haze"] {
+  color-scheme: dark;
+  --brand-primary: #A8B89A;
+  --brand-primary-light: #C4D0B8;
+  --brand-navy: #121612;
+  --brand-surface: #2A3228;
+  --brand-surface-dark: #121612;
+  --brand-text-inverse: #F0F4EC;
+  --bg-primary: #121612;
+  --bg-secondary: #1A1E18;
+  --bg-tertiary: #242A22;
+  --bg-page: linear-gradient(165deg, #0E120E 0%, #1C221C 48%, #283028 100%);
+  --text-primary: #F0F4EC;
+  --text-secondary: #B8C4B0;
+  --text-muted: #889480;
+  --border-color: #343C34;
+  --border-color-light: #444C44;
+  --accent-color: #A8B89A;
+  --accent-hover: #C4D0B8;
+  --accent-teal: #A8B89A;
+  --accent-teal-hover: #C4D0B8;
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 50%, var(--border-color-light));
+  --scrollbar-thumb-hover: var(--accent-color);
+  --success-color: #6BCB8B;
+  --success-hover: #8FDBA8;
+  --on-accent: #141810;
+  --on-success: #0b1220;
+  --error-color: #ef5350;
+  --warning-color: #f59e0b;
+  --warning-text: #fbbf24;
+  --status-mix: 22%;
+  --shadow-sm: rgba(0, 0, 0, 0.35);
+  --shadow-md: rgba(0, 0, 0, 0.55);
+  --calendar-bg: #1A1E18;
+  --calendar-event-bg: #242A22;
+  --calendar-event-border: #A8B89A;
+  --calendar-event-text: #F0F4EC;
+}
+
+/* Pure-black void + electric cyan — fluorescent glow only. */
+[data-theme="neon"] {
+  color-scheme: dark;
+  --brand-primary: #00F0FF;
+  --brand-primary-light: #7AFAFF;
+  --brand-navy: #000000;
+  --brand-surface: #003040;
+  --brand-surface-dark: #000000;
+  --brand-text-inverse: #E8FBFF;
+  --bg-primary: #000000;
+  --bg-secondary: #050A10;
+  --bg-tertiary: #0A141C;
+  --bg-page: #000000;
+  --text-primary: #E8FBFF;
+  --text-secondary: #8CB8C8;
+  --text-muted: #5A8898;
+  --border-color: #0A3848;
+  --border-color-light: #145868;
+  --accent-color: #00F0FF;
+  --accent-hover: #7AFAFF;
+  --accent-teal: #00F0FF;
+  --accent-teal-hover: #7AFAFF;
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 55%, var(--border-color-light));
+  --scrollbar-thumb-hover: var(--accent-color);
+  --success-color: #39FF14;
+  --success-hover: #7CFF5C;
+  --on-accent: #001018;
+  --on-success: #031018;
+  --error-color: #FF4D6D;
+  --warning-color: #FFE566;
+  --warning-text: #FFE566;
+  --status-mix: 24%;
+  --shadow-sm: rgba(0, 240, 255, 0.28);
+  --shadow-md: rgba(0, 240, 255, 0.42);
+  --glow-accent: 0 0 12px color-mix(in srgb, var(--accent-color) 32%, transparent);
+  --glow-text: 0 0 8px color-mix(in srgb, var(--accent-color) 50%, transparent);
+  --glow-accent-strong:
+    0 0 0 1px color-mix(in srgb, var(--accent-color) 55%, transparent),
+    0 0 18px color-mix(in srgb, var(--accent-color) 32%, transparent),
+    0 0 30px color-mix(in srgb, var(--accent-color) 16%, transparent);
+  --calendar-bg: #050A10;
+  --calendar-event-bg: #0A141C;
+  --calendar-event-border: #00F0FF;
+  --calendar-event-text: #7AFAFF;
+}
+
+/* Acid chartreuse neon — pure black + toxic lime. */
+[data-theme="volt"] {
+  color-scheme: dark;
+  --brand-primary: #C8FF00;
+  --brand-primary-light: #E0FF66;
+  --brand-navy: #000000;
+  --brand-surface: #1A3000;
+  --brand-surface-dark: #000000;
+  --brand-text-inverse: #F2FFE8;
+  --bg-primary: #000000;
+  --bg-secondary: #060A00;
+  --bg-tertiary: #0E1600;
+  --bg-page: #000000;
+  --text-primary: #F2FFE8;
+  --text-secondary: #B0D080;
+  --text-muted: #708850;
+  --border-color: #1E4000;
+  --border-color-light: #2E6000;
+  --accent-color: #C8FF00;
+  --accent-hover: #E0FF66;
+  --accent-teal: #C8FF00;
+  --accent-teal-hover: #E0FF66;
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 55%, var(--border-color-light));
+  --scrollbar-thumb-hover: var(--accent-color);
+  --success-color: #39FF14;
+  --success-hover: #7CFF5C;
+  --on-accent: #0A1400;
+  --on-success: #0A1404;
+  --error-color: #FF4D6D;
+  --warning-color: #FFE566;
+  --warning-text: #FFE566;
+  --status-mix: 24%;
+  --shadow-sm: rgba(200, 255, 0, 0.28);
+  --shadow-md: rgba(200, 255, 0, 0.42);
+  --glow-accent: 0 0 12px color-mix(in srgb, var(--accent-color) 32%, transparent);
+  --glow-text: 0 0 8px color-mix(in srgb, var(--accent-color) 50%, transparent);
+  --glow-accent-strong:
+    0 0 0 1px color-mix(in srgb, var(--accent-color) 55%, transparent),
+    0 0 18px color-mix(in srgb, var(--accent-color) 32%, transparent),
+    0 0 30px color-mix(in srgb, var(--accent-color) 16%, transparent);
+  --calendar-bg: #060A00;
+  --calendar-event-bg: #0E1600;
+  --calendar-event-border: #C8FF00;
+  --calendar-event-text: #E0FF66;
+}
+
+/* Electric violet plasma — purple neon, distinct from candy pink. */
+[data-theme="plasma"] {
+  color-scheme: dark;
+  --brand-primary: #B24BFF;
+  --brand-primary-light: #D08AFF;
+  --brand-navy: #000000;
+  --brand-surface: #2A0850;
+  --brand-surface-dark: #000000;
+  --brand-text-inverse: #F5E8FF;
+  --bg-primary: #000000;
+  --bg-secondary: #080410;
+  --bg-tertiary: #120820;
+  --bg-page: #000000;
+  --text-primary: #F5E8FF;
+  --text-secondary: #C0A0E0;
+  --text-muted: #8868A8;
+  --border-color: #3A1068;
+  --border-color-light: #521890;
+  --accent-color: #B24BFF;
+  --accent-hover: #D08AFF;
+  --accent-teal: #B24BFF;
+  --accent-teal-hover: #D08AFF;
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 55%, var(--border-color-light));
+  --scrollbar-thumb-hover: var(--accent-color);
+  --success-color: #39FF14;
+  --success-hover: #7CFF5C;
+  --on-accent: #120020;
+  --on-success: #0A1404;
+  --error-color: #FF4D6D;
+  --warning-color: #FFE566;
+  --warning-text: #FFE566;
+  --status-mix: 24%;
+  --shadow-sm: rgba(178, 75, 255, 0.3);
+  --shadow-md: rgba(178, 75, 255, 0.45);
+  --glow-accent: 0 0 12px color-mix(in srgb, var(--accent-color) 32%, transparent);
+  --glow-text: 0 0 8px color-mix(in srgb, var(--accent-color) 50%, transparent);
+  --glow-accent-strong:
+    0 0 0 1px color-mix(in srgb, var(--accent-color) 55%, transparent),
+    0 0 18px color-mix(in srgb, var(--accent-color) 32%, transparent),
+    0 0 30px color-mix(in srgb, var(--accent-color) 16%, transparent);
+  --calendar-bg: #080410;
+  --calendar-event-bg: #120820;
+  --calendar-event-border: #B24BFF;
+  --calendar-event-text: #D08AFF;
+}
+
+/* Candy hot pink neon — rose fluorescent, not violet plasma. */
+[data-theme="pink"] {
+  color-scheme: dark;
+  --brand-primary: #FF2D95;
+  --brand-primary-light: #FF6AB5;
+  --brand-navy: #000000;
+  --brand-surface: #400028;
+  --brand-surface-dark: #000000;
+  --brand-text-inverse: #FFE8F4;
+  --bg-primary: #000000;
+  --bg-secondary: #0C0408;
+  --bg-tertiary: #180810;
+  --bg-page: #000000;
+  --text-primary: #FFE8F4;
+  --text-secondary: #D890B0;
+  --text-muted: #986078;
+  --border-color: #501030;
+  --border-color-light: #781848;
+  --accent-color: #FF2D95;
+  --accent-hover: #FF6AB5;
+  --accent-teal: #FF2D95;
+  --accent-teal-hover: #FF6AB5;
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 55%, var(--border-color-light));
+  --scrollbar-thumb-hover: var(--accent-color);
+  --success-color: #39FF14;
+  --success-hover: #7CFF5C;
+  --on-accent: #1A0010;
+  --on-success: #0A1404;
+  --error-color: #FF4D6D;
+  --warning-color: #FFE566;
+  --warning-text: #FFE566;
+  --status-mix: 24%;
+  --shadow-sm: rgba(255, 45, 149, 0.3);
+  --shadow-md: rgba(255, 45, 149, 0.45);
+  --glow-accent: 0 0 12px color-mix(in srgb, var(--accent-color) 32%, transparent);
+  --glow-text: 0 0 8px color-mix(in srgb, var(--accent-color) 50%, transparent);
+  --glow-accent-strong:
+    0 0 0 1px color-mix(in srgb, var(--accent-color) 55%, transparent),
+    0 0 18px color-mix(in srgb, var(--accent-color) 32%, transparent),
+    0 0 30px color-mix(in srgb, var(--accent-color) 16%, transparent);
+  --calendar-bg: #0C0408;
+  --calendar-event-bg: #180810;
+  --calendar-event-border: #FF2D95;
+  --calendar-event-text: #FF6AB5;
+}
+
+/* Aurora — vivid spring-green neon on a deep green-black base. A high-luminance
+   hue (like cyan) so the glow actually pops, distinct from Volt's chartreuse
+   and the success green used for status. */
+[data-theme="ice"] {
+  color-scheme: dark;
+  --brand-primary: #00FF85;
+  --brand-primary-light: #5CFFB0;
+  --brand-navy: #000000;
+  --brand-surface: #06301E;
+  --brand-surface-dark: #000000;
+  --brand-text-inverse: #E6FFF2;
+  --bg-primary: #000000;
+  --bg-secondary: #04100A;
+  --bg-tertiary: #0A1E14;
+  --bg-page: #000000;
+  --text-primary: #E6FFF2;
+  --text-secondary: #90D8B4;
+  --text-muted: #548874;
+  --border-color: #0C3824;
+  --border-color-light: #145436;
+  --accent-color: #00FF85;
+  --accent-hover: #5CFFB0;
+  --accent-teal: #00FF85;
+  --accent-teal-hover: #5CFFB0;
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 55%, var(--border-color-light));
+  --scrollbar-thumb-hover: var(--accent-color);
+  --success-color: #39FF14;
+  --success-hover: #7CFF5C;
+  --on-accent: #002914;
+  --on-success: #0A1404;
+  --error-color: #FF4D6D;
+  --warning-color: #FFE566;
+  --warning-text: #FFE566;
+  --status-mix: 24%;
+  --shadow-sm: rgba(0, 255, 133, 0.28);
+  --shadow-md: rgba(0, 255, 133, 0.42);
+  --glow-accent: 0 0 12px color-mix(in srgb, var(--accent-color) 32%, transparent);
+  --glow-text: 0 0 8px color-mix(in srgb, var(--accent-color) 50%, transparent);
+  --glow-accent-strong:
+    0 0 0 1px color-mix(in srgb, var(--accent-color) 55%, transparent),
+    0 0 18px color-mix(in srgb, var(--accent-color) 32%, transparent),
+    0 0 30px color-mix(in srgb, var(--accent-color) 16%, transparent);
+  --calendar-bg: #04100A;
+  --calendar-event-bg: #0A1E14;
+  --calendar-event-border: #00FF85;
+  --calendar-event-text: #5CFFB0;
+}
+
+/* Toxic orange flare — fluorescent blaze, not muted wine ember. */
+[data-theme="flare"] {
+  color-scheme: dark;
+  --brand-primary: #FF5C00;
+  --brand-primary-light: #FF8A3D;
+  --brand-navy: #000000;
+  --brand-surface: #3A1400;
+  --brand-surface-dark: #000000;
+  --brand-text-inverse: #FFF4E8;
+  --bg-primary: #000000;
+  --bg-secondary: #0A0400;
+  --bg-tertiary: #140800;
+  --bg-page: #000000;
+  --text-primary: #FFF4E8;
+  --text-secondary: #D8A880;
+  --text-muted: #987050;
+  --border-color: #502000;
+  --border-color-light: #783000;
+  --accent-color: #FF5C00;
+  --accent-hover: #FF8A3D;
+  --accent-teal: #FFD100;
+  --accent-teal-hover: #FFE566;
+  --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 55%, var(--border-color-light));
+  --scrollbar-thumb-hover: var(--accent-color);
+  --success-color: #39FF14;
+  --success-hover: #7CFF5C;
+  --on-accent: #1A0800;
+  --on-success: #0A1404;
+  --error-color: #FF4D6D;
+  --warning-color: #FFE566;
+  --warning-text: #FFE566;
+  --status-mix: 24%;
+  --shadow-sm: rgba(255, 92, 0, 0.3);
+  --shadow-md: rgba(255, 209, 0, 0.4);
+  --glow-accent: 0 0 12px color-mix(in srgb, var(--accent-color) 32%, transparent);
+  --glow-text: 0 0 8px color-mix(in srgb, var(--accent-color) 50%, transparent);
+  --glow-accent-strong:
+    0 0 0 1px color-mix(in srgb, var(--accent-color) 55%, transparent),
+    0 0 18px color-mix(in srgb, var(--accent-color) 32%, transparent),
+    0 0 30px color-mix(in srgb, var(--accent-color) 16%, transparent);
+  --calendar-bg: #0A0400;
+  --calendar-event-bg: #140800;
+  --calendar-event-border: #FF5C00;
+  --calendar-event-text: #FFD100;
+}
+
 body {
   margin: 0;
   font-family:
@@ -209,7 +878,8 @@ body {
     Cantarell, 'Helvetica Neue', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: var(--bg-primary);
+  background: var(--bg-page, var(--bg-primary));
+  background-attachment: fixed;
   color: var(--text-primary);
   transition: background-color 0.3s ease, color 0.3s ease;
 }
@@ -221,13 +891,18 @@ body {
   overflow: hidden;
 }
 
-/* ── Main Content Area (offset by sidebar) ────────────────────────────── */
+/* â”€â”€ Main Content Area (offset by sidebar) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .app-main {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  /* Shell scroll container for header + routed views. Use auto (not scroll) so a
+     classic Windows scrollbar is not painted when content fits; scrollbar-gutter
+     still reserves space so overlays/walkthroughs cannot shift AppHeader. */
+  overflow-x: hidden;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   transition: margin-left 0.2s ease;
 }
 
@@ -262,6 +937,9 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex: 0 0 auto;
+  width: 100%;
+  box-sizing: border-box;
   padding: 8px 20px;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border-color);
@@ -293,17 +971,49 @@ body {
 }
 
 .app-brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
   width: 32px;
   height: 32px;
+  line-height: 0;
 }
 
 .app-brand-text {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  height: 32px; /* match .app-brand-mark so flex centering shares the same box */
   font-size: 1rem;
   font-weight: 800;
   letter-spacing: -0.03em;
+  line-height: 1;
+  /* Neon themes bloom the wordmark; `none` on every other theme. */
+  text-shadow: var(--glow-text);
+  /* Capitals sit optically high in the em-box next to the square mark. */
+  transform: translateY(1px);
+}
+
+.app-brand-separator {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  /* Hide the Â· glyph; the CSS circle is optically centered with the type. */
+  font-size: 0;
+  line-height: 0;
+  color: transparent;
+  overflow: hidden;
+}
+
+.app-brand-project {
+  color: var(--text-secondary);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1;
 }
 
 .app-brand-beta {
@@ -312,7 +1022,7 @@ body {
   padding: 2px 6px;
   border-radius: 4px;
   background: var(--accent-color);
-  color: var(--bg-primary);
+  color: var(--on-accent);
   font-size: 0.58rem;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -323,6 +1033,8 @@ body {
   display: flex;
   gap: 12px;
   align-items: center;
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .selector-group {
@@ -389,7 +1101,8 @@ body {
 
 .view-btn.active {
   background: var(--accent-color);
-  color: white;
+  color: var(--on-accent);
+  box-shadow: var(--glow-accent);
 }
 
 .agent-launch-btn {
@@ -423,7 +1136,7 @@ body {
   height: 24px;
   border-radius: 50%;
   background: var(--accent-color);
-  color: white;
+  color: var(--on-accent);
   flex-shrink: 0;
 }
 
@@ -488,6 +1201,44 @@ body {
   font-size: 14px;
 }
 
+/* Soft, view-scoped notice for calendar/planning work-item fetch failures */
+.work-items-inline-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 16px 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.work-items-inline-error-retry {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.work-items-inline-error-retry:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.work-items-inline-error-retry:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .loading-overlay {
   position: fixed;
   top: 0;
@@ -530,7 +1281,7 @@ body {
 
 .saving-content {
   background: var(--accent-color);
-  color: white;
+  color: var(--on-accent);
   padding: 12px 20px;
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
@@ -544,8 +1295,8 @@ body {
 .saving-spinner {
   width: 16px;
   height: 16px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top-color: white;
+  border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
 }
@@ -752,6 +1503,7 @@ body {
   right: 0;
   height: 2px;
   background: var(--accent-color);
+  box-shadow: var(--glow-accent);
 }
 
 .planning-content {
@@ -791,7 +1543,7 @@ body {
   height: 20px;
 }
 
-/* ── Admin layout ─────────────────────────────────────────────────────────── */
+/* â”€â”€ Admin layout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 .admin-container {
   flex: 1;
@@ -833,7 +1585,7 @@ body {
   font-weight: 600;
 }
 
-/* ── Responsive Utilities ──────────────────────────────────────────────── */
+/* â”€â”€ Responsive Utilities â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 @media (max-width: 768px) {
   .hide-mobile { display: none !important; }
 }
@@ -841,7 +1593,7 @@ body {
   .show-mobile-only { display: none !important; }
 }
 
-/* ── Header — Tablet ───────────────────────────────────────────────────── */
+/* â”€â”€ Header â€” Tablet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 @media (max-width: 768px) {
   .app-header {
     padding: 8px 12px;
@@ -870,7 +1622,7 @@ body {
   }
 }
 
-/* ── Header — Phone ───────────────────────────────────────────────────── */
+/* â”€â”€ Header â€” Phone â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 @media (max-width: 480px) {
   .app-header {
     padding: 8px;
@@ -890,7 +1642,7 @@ body {
   }
 }
 
-/* ── Planning Tabs — Tablet ────────────────────────────────────────────── */
+/* â”€â”€ Planning Tabs â€” Tablet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 @media (max-width: 768px) {
   .planning-tabs {
     overflow-x: auto;
@@ -910,7 +1662,7 @@ body {
   }
 }
 
-/* ── Admin Tabs — Tablet ───────────────────────────────────────────────── */
+/* â”€â”€ Admin Tabs â€” Tablet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 @media (max-width: 768px) {
   .admin-tabs {
     overflow-x: auto;
@@ -929,9 +1681,9 @@ body {
   }
 }
 
-/* ── View Container Responsive ─────────────────────────────────────────── */
+/* â”€â”€ View Container Responsive â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
-/* ── Calendar View — Tablet ────────────────────────────────────────────── */
+/* â”€â”€ Calendar View â€” Tablet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 @media (max-width: 768px) {
   .calendar-view {
     flex-direction: column;
@@ -940,7 +1692,7 @@ body {
   }
 }
 
-/* ── Planning View — Tablet ────────────────────────────────────────────── */
+/* â”€â”€ Planning View â€” Tablet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 @media (max-width: 768px) {
   .planning-view {
     padding: 0;
@@ -951,43 +1703,48 @@ body {
   }
 }
 
-/* ── Cloud Cost View — Tablet ──────────────────────────────────────────── */
+/* â”€â”€ Cloud Cost View â€” Tablet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 @media (max-width: 768px) {
   .cloudcost-view {
     overflow-y: auto;
   }
 }
 
-/* ── Backlog View — Tablet ─────────────────────────────────────────────── */
+/* â”€â”€ Backlog View â€” Tablet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 @media (max-width: 768px) {
   .backlog-view {
     overflow-y: auto;
   }
 }
 
-/* ── My Work View — Tablet ─────────────────────────────────────────────── */
+/* â”€â”€ My Work View â€” Tablet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 @media (max-width: 768px) {
   .my-work-view {
     overflow-y: auto;
   }
 }
 
-/* ── Admin Container — Tablet ──────────────────────────────────────────── */
+/* â”€â”€ Admin Container â€” Tablet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 @media (max-width: 768px) {
   .admin-container {
     overflow-y: auto;
   }
 }
 
-/* ── Error Banner — Phone ──────────────────────────────────────────────── */
+/* â”€â”€ Error Banner â€” Phone â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 @media (max-width: 480px) {
   .error-banner {
     padding: 8px 12px;
     font-size: 12px;
   }
+
+  .work-items-inline-error {
+    margin: 0 8px 8px;
+    flex-wrap: wrap;
+  }
 }
 
-/* ── Loading Spinner — Phone ───────────────────────────────────────────── */
+/* â”€â”€ Loading Spinner â€” Phone â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 @media (max-width: 480px) {
   .loading-spinner-container {
     padding: 24px 16px;

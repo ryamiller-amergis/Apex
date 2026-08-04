@@ -1,6 +1,13 @@
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { adrs, appUsers, reviewComments } from '../db/schema';
+import {
+  adrs,
+  appUsers,
+  documentApproverAssignments,
+  documentOwnerApprovals,
+  featureRequestAdrs,
+  reviewComments,
+} from '../db/schema';
 import type { Adr, AdrStatus, AdrSummary } from '../../shared/types/adr';
 import { markAsInterviewThread, readOutputAdr } from './chatAgentService';
 import { getSkillSettingsName } from './projectSettingsService';
@@ -227,8 +234,10 @@ export async function stageAdrProposedContent(
 ): Promise<void> {
   const row = await requireAuthor(id, userId);
   if (row.status !== 'proposed') throw httpError('ADR edits can be proposed only while the ADR is proposed', 409);
-  if (row.adrAssistantThreadId !== threadId) throw httpError('Thread is not linked to this ADR assistant', 403);
+  // Always stage for the calling assistant thread. If the author started a new
+  // conversation, re-link so propose/review still works.
   await db.update(adrs).set({
+    adrAssistantThreadId: threadId,
     proposedContent: forceProposedStatus(content),
     fixCommentId: null,
     updatedAt: new Date().toISOString(),
@@ -250,11 +259,16 @@ export async function stageAdrReviewFix(
   }).where(eq(adrs.id, id));
 }
 
-export async function applyAdrProposedContent(id: string, userId: string): Promise<void> {
+export async function applyAdrProposedContent(
+  id: string,
+  userId: string,
+  options?: { mergedContent?: string },
+): Promise<void> {
   const row = await requireAuthor(id, userId);
   if (row.status !== 'proposed') throw httpError('Proposed edits can be applied only while the ADR is proposed', 409);
-  if (row.proposedContent == null) throw httpError('No proposed ADR edits to apply', 409);
-  const content = forceProposedStatus(row.proposedContent);
+  const source = options?.mergedContent ?? row.proposedContent;
+  if (source == null) throw httpError('No proposed ADR edits to apply', 409);
+  const content = forceProposedStatus(source);
   const metadata = parseFrontmatter(content);
   const now = new Date().toISOString();
   await db.update(adrs).set({
@@ -297,7 +311,20 @@ export async function rejectAdrProposedContent(id: string, userId: string): Prom
 
 export async function deleteAdr(id: string, userId: string): Promise<void> {
   await requireAuthor(id, userId);
-  await db.delete(adrs).where(eq(adrs.id, id));
+  // feature_request_adrs.adr_id is RESTRICT (or CASCADE after migration); clear
+  // junction + softeless approval rows before deleting the ADR itself.
+  await db.transaction(async (tx) => {
+    await tx.delete(featureRequestAdrs).where(eq(featureRequestAdrs.adrId, id));
+    await tx.delete(documentApproverAssignments).where(and(
+      eq(documentApproverAssignments.documentId, id),
+      eq(documentApproverAssignments.documentType, 'adr'),
+    ));
+    await tx.delete(documentOwnerApprovals).where(and(
+      eq(documentOwnerApprovals.documentId, id),
+      eq(documentOwnerApprovals.documentType, 'adr'),
+    ));
+    await tx.delete(adrs).where(eq(adrs.id, id));
+  });
 }
 
 export async function markAdrGenerating(id: string, userId: string): Promise<void> {

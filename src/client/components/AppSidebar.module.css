@@ -37,7 +37,26 @@
   flex: 1;
   overflow-y: auto;
   padding: 4px 8px;
+  /* Keep menu scrollable when items overflow, but hide the scrollbar chrome
+     until hover — nav rails shouldn't look like scrollable panes by default. */
+  scrollbar-width: none;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+.modules:hover,
+.modules:focus-within {
   scrollbar-width: thin;
+}
+
+.modules::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.modules:hover::-webkit-scrollbar,
+.modules:focus-within::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
 }
 
 .bottom {
@@ -50,6 +69,34 @@
   height: 1px;
   margin: 8px 12px;
   background: var(--border-color);
+}
+
+/* ── Groups ──────────────────────────────────────────────────────────── */
+.group {
+  /* no extra spacing needed; groupLabel and groupDivider handle it */
+}
+
+.groupLabel {
+  padding: 12px 12px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  /* Prefer text-secondary: text-muted fails WCAG AA on --bg-secondary */
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.group:first-child > .groupLabel {
+  padding-top: 4px;
+}
+
+.groupDivider {
+  height: 1px;
+  margin: 6px 16px;
+  background: var(--border-color-light);
 }
 
 /* ── Nav Items ────────────────────────────────────────────────────────── */
@@ -90,6 +137,15 @@
 
 .navItem.active:hover {
   background: color-mix(in srgb, var(--accent-color) 20%, transparent);
+}
+
+/* Collapsed: center icons so the active highlight frames them evenly */
+.collapsed .navItem,
+.collapsed .collapseBtn {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+  gap: 0;
 }
 
 /* ── Icon & Label ─────────────────────────────────────────────────────── */

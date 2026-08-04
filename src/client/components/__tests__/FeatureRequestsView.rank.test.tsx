@@ -166,20 +166,19 @@ describe('FeatureRequestsView rank reordering', () => {
   });
 });
 
-describe('FeatureRequestsView action menu', () => {
+describe('FeatureRequestsView row actions', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  it('offers Kick Off Interview and View Interview from the row actions menu', () => {
+  it('offers Kick off interview and View interview as row action buttons', () => {
     renderView([
       makeRequest('a', 'Alpha', 1),
       makeRequest('b', 'Beta', 2, 'interview-1'),
     ]);
 
-    fireEvent.click(screen.getByLabelText('Actions for Alpha'));
     fireEvent.click(
-      screen.getByRole('menuitem', { name: 'Kick Off Interview' })
+      screen.getByRole('button', { name: 'Kick off interview' })
     );
     expect(navigateMock).toHaveBeenCalledWith('/backlog/interview/new', {
       state: {
@@ -194,8 +193,7 @@ describe('FeatureRequestsView action menu', () => {
       },
     });
 
-    fireEvent.click(screen.getByLabelText('Actions for Beta'));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'View Interview' }));
+    fireEvent.click(screen.getByRole('button', { name: 'View interview' }));
     expect(navigateMock).toHaveBeenCalledWith('/backlog/interview/interview-1');
   });
 });
@@ -214,8 +212,8 @@ describe('FeatureRequestsView submission', () => {
   });
 });
 
-describe('FeatureRequestsView work item tabs', () => {
-  it('shows counts and filters items by the selected query-param tab', () => {
+describe('FeatureRequestsView work item type filter', () => {
+  it('shows counts and filters items by the selected query-param type', () => {
     renderView(
       [
         makeRequest('f', 'Feature Alpha', 1),
@@ -225,16 +223,15 @@ describe('FeatureRequestsView work item tabs', () => {
       '/feature-requests?tab=technical',
     );
 
-    expect(screen.getByRole('tab', { name: /Technical 1/i })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
+    expect(
+      screen.getByRole('button', { name: /Technical 1/i }),
+    ).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByText('Technical Beta')).toBeInTheDocument();
     expect(screen.queryByText('Feature Alpha')).not.toBeInTheDocument();
     expect(screen.queryByText('Issue Gamma')).not.toBeInTheDocument();
   });
 
-  it('opens a type-aware modal from the active tab', () => {
+  it('opens a type-aware modal from the active type', () => {
     renderView([], '/feature-requests?tab=issue');
 
     fireEvent.click(screen.getByRole('button', { name: 'New issue' }));
@@ -247,8 +244,7 @@ describe('FeatureRequestsView work item tabs', () => {
       '/feature-requests?tab=technical',
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Actions for Technical Beta' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Kick Off Interview' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Kick off interview' }));
 
     expect(navigateMock).toHaveBeenCalledWith('/backlog/interview/new', {
       state: {

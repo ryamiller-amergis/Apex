@@ -49,7 +49,7 @@
 .clear-filters-btn {
   padding: 8px 10px;
   background: var(--accent-color);
-  color: white;
+  color: var(--on-accent);
   border: 1px solid var(--border-color);
   border-radius: 4px;
   font-size: 13px;
@@ -217,7 +217,7 @@
 
 .rbc-show-more {
   background: var(--accent-color) !important;
-  color: white !important;
+  color: var(--on-accent) !important;
   padding: 4px 8px !important;
   border-radius: 4px !important;
   font-weight: 600 !important;

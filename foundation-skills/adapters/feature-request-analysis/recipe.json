@@ -1,0 +1,15 @@
+{
+  "skill": "feature-request-analysis",
+  "scanScope": "targeted",
+  "targetedGlobs": ["package.json", "**/CONTEXT.md", "**/context.md", "**/AGENTS.md"],
+  "detectors": ["stack", "glossary", "repo-docs"],
+  "capFiles": 500,
+  "capMs": 45000,
+  "slots": {
+    "projectName": { "type": "value", "detector": "stack", "key": "projectName" },
+    "glossary": { "type": "table", "detector": "glossary", "columns": ["key", "value"], "limit": 30 },
+    "contextFile": { "type": "value", "detector": "repo-docs", "key": "contextFile" },
+    "agentsFile": { "type": "value", "detector": "repo-docs", "key": "agentsFile" },
+    "aiPilotDir": { "type": "value", "detector": "repo-docs", "key": "aiPilotDir" }
+  }
+}

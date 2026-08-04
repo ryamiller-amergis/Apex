@@ -4,6 +4,11 @@ node_modules/
 # Build output
 dist/
 build/
+# Generated from @pdftron/webviewer during dev/build.
+public/apryse-webviewer/
+
+# Apryse Structured Output (PDF→Office) add-on binaries — download locally, do not commit.
+apryse-modules/
 
 # Environment variables
 .env
@@ -54,6 +59,9 @@ temp/
 
 # Migration output (contains real data, never commit)
 scripts/output/
+
+# Apryse WebViewer — large binary SDK; populated at runtime by npm postinstall
+public/apryse-webviewer/
 
 # Local AI Pilot runtime/scratch artifacts
 .ai-pilot/

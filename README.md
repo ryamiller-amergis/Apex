@@ -25,6 +25,72 @@ For a full product overview, see [`context.md`](./context.md). For agent and con
 - Shared local env files from the team (preferred) — or values to fill `.env` yourself
 - Azure DevOps access / PAT with Work Items (Read, Write) permissions
 - Azure AD app registration configured for local sign-in (redirect: `http://localhost:3001/auth/callback`)
+- Docker Desktop (required to build/run the load-test k6 runner image locally; not required for day-to-day `npm run dev`)
+
+### Windows developer tooling (Chocolatey)
+
+Use [Chocolatey](https://chocolatey.org/) to install the host tools Apex developers commonly need. Run the installers in an **elevated** PowerShell.
+
+#### 1. Install Chocolatey (once)
+
+```powershell
+# Run as Administrator
+Set-ExecutionPolicy Bypass -Scope Process -Force
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+choco --version
+```
+
+#### 2. Install project dependencies
+
+```powershell
+# --- Core: local app (API + Vite UI + Jest) ---
+choco install nodejs --version=24.0.0 -y
+# Or latest Node from Chocolatey; confirm `node -v` is >= 24:
+#   choco install nodejs -y
+
+choco install git -y
+choco install postgresql16 -y          # local DB option; skip if you use a shared/cloud DATABASE_URL
+
+# --- Optional but common ---
+choco install azure-cli -y             # Azure AD/ACR/Key Vault/Service Bus auth from the host
+choco install terraform -y             # work under infra/ (fmt/validate/plan)
+
+# --- Load-test runner (FEAT-008) ---
+choco install docker-desktop -y        # required to `docker build` / run runners/load-test-k6
+choco install k6 -y                    # optional: host k6 without the Docker image
+
+# --- E2E (Playwright browsers are installed via npm, not Chocolatey) ---
+# After npm install:
+#   npm run playwright:install
+```
+
+After **Docker Desktop** installs, reboot if prompted, start Docker Desktop, and wait until it is running. On Windows, enable the **WSL2** engine if `docker version` fails (`wsl --install` / `wsl --update` as Administrator, then Docker Desktop → Settings → General).
+
+#### 3. Verify
+
+```powershell
+node -v                  # >= v24
+npm -v
+git --version
+psql --version           # if you installed local Postgres
+az version               # if you installed Azure CLI
+terraform version        # if you installed Terraform
+docker version           # if you will build the load-test runner
+k6 version               # optional host k6
+```
+
+| Tool | Chocolatey package | Needed for |
+|------|--------------------|------------|
+| Node.js 24+ | `nodejs` | `npm install`, `npm run dev`, Jest, builds |
+| Git | `git` | Clone / commits |
+| PostgreSQL 14+ | `postgresql16` (or similar) | Local `DATABASE_URL` / `aipilot` DB |
+| Azure CLI | `azure-cli` | Optional cloud auth from the host |
+| Terraform | `terraform` | Optional `infra/` work |
+| Docker Desktop | `docker-desktop` | Load-test k6 runner image (`runners/load-test-k6`) |
+| k6 | `k6` | Optional host smoke without Docker |
+
+Playwright Chromium is **not** a Chocolatey package — after `npm install`, run `npm run playwright:install` when you need e2e.
 
 ## First-run checklist
 
@@ -144,7 +210,10 @@ npm run changelog    # helper for release notes
 npm run build && npm start   # production-style build/run
 ```
 
-A Husky **pre-commit** hook runs ESLint via `lint-staged` on staged `src/{client,server,shared}/**/*.{ts,tsx}` files only (untouched files are skipped). Warnings and errors both fail the commit (`--max-warnings=0`). Fix with `npm run lint:fix` or address findings manually, then re-stage.
+A Husky **pre-commit** hook runs:
+
+1. ESLint via `lint-staged` on staged `src/{client,server,shared}/**/*.{ts,tsx}` files only (untouched files are skipped). Warnings and errors both fail the commit (`--max-warnings=0`). Fix with `npm run lint:fix` or address findings manually, then re-stage.
+2. A **data-testid** policy (`scripts/check-data-testid.mjs`) on staged client TSX under `src/client/` (excludes tests). When a file is staged, **every** interactive element in that file must include a `data-testid` (or `anchorTestIdProps`) — not only newly added lines. Covered: `button`, `input`, `select`, `textarea`, `a`, `form`, `dialog`, elements with click/submit handlers, and common `*Button` / `*Modal` / … components. Escape hatch: `// data-testid-exempt` on the line above the tag. In Cursor: `/resolve-pre-commit-data-testid` or `/resolve-pre-commit-eslint` for the matching hook failure.
 
 Pull requests opened in GitHub use the description template in [`.github/PULL_REQUEST_TEMPLATE.md`](./.github/PULL_REQUEST_TEMPLATE.md). In Cursor, developers can kick off a filled PR with the [`create-pull-request`](./.cursor/skills/create-pull-request/SKILL.md) skill (`/create-pull-request`).
 

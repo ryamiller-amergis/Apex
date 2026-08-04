@@ -61,8 +61,10 @@ import {
   RejectProposalRequestSchema,
 } from '../../shared/types/calendarWorkItemAssistant';
 
+import runGroundingsRouter from './runGroundings';
 const router = express.Router();
 
+router.use('/run-groundings', runGroundingsRouter);
 // GET /api/available-models — accessible to all authenticated users so that
 // non-admin roles (e.g. interviews:manage) can populate model dropdowns.
 router.get('/available-models', async (_req: Request, res: Response) => {
@@ -4010,7 +4012,15 @@ import { getUserPermissions, getUserRoleNames, getChangelogPrefs, updateChangelo
 import { getUserGroupNames } from '../services/groupService';
 import { getMenuConfig } from '../services/menuSettingsService';
 import { ALL_MENU_VIEWS } from '../../shared/types/menuSettings';
-import { getChangelogPayload, getCurrentChangelogVersion } from '../services/changelogService';
+import {
+  ChangelogContentError,
+  getChangelogPayload,
+} from '../services/changelogService';
+import {
+  acknowledgeWhatsNew,
+  evaluateWhatsNewState,
+  updateWhatsNewPreference,
+} from '../services/whatsNewStateService';
 
 router.get('/changelog', async (_req: Request, res: Response): Promise<void> => {
   try {
@@ -4019,8 +4029,9 @@ router.get('/changelog', async (_req: Request, res: Response): Promise<void> => 
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
     res.json(payload);
-  } catch {
-    res.status(500).json({ error: 'Failed to load changelog' });
+  } catch (err) {
+    const status = err instanceof ChangelogContentError ? 503 : 500;
+    res.status(status).json({ error: 'Failed to load changelog' });
   }
 });
 
@@ -4033,12 +4044,12 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
     }
     const superAdmin = isSuperAdminRequest(req);
     const project = typeof req.query.project === 'string' ? req.query.project : undefined;
-    const [permSet, roles, userGroups, changelogPrefs, currentVersion] = await Promise.all([
+    const [permSet, roles, userGroups, whatsNew, changelogPrefs] = await Promise.all([
       getUserPermissions(userId, project),
       getUserRoleNames(userId),
       getUserGroupNames(userId),
+      evaluateWhatsNewState(userId),
       getChangelogPrefs(userId),
-      getCurrentChangelogVersion(),
     ]);
     if (superAdmin && !roles.includes('admin')) {
       roles.push('admin');
@@ -4049,11 +4060,13 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       groups: userGroups,
       userId,
       isSuperAdmin: superAdmin,
-      changelogUnread: changelogPrefs.lastSeenVersion !== currentVersion,
-      currentChangelogVersion: currentVersion,
-      lastSeenChangelogVersion: changelogPrefs.lastSeenVersion,
-      showChangelogOnLogin: changelogPrefs.showOnLogin,
+      // Legacy compatibility fields — sourced from the same WhatsNewState
+      changelogUnread: whatsNew.unread,
+      currentChangelogVersion: whatsNew.currentVersion ?? '',
+      lastSeenChangelogVersion: whatsNew.lastSeenVersion,
+      showChangelogOnLogin: whatsNew.showOnLogin,
       betaAnnouncementDismissed: changelogPrefs.dismissedBetaProdAnnouncement,
+      whatsNew,
     });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
@@ -4062,7 +4075,7 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
 
 // ── PATCH /api/me/preferences ─────────────────────────────────────────────────
 // Updates the authenticated user's preferences.
-// Body: { markChangelogRead?: boolean; showChangelogOnLogin?: boolean; dismissBetaAnnouncement?: boolean }
+// Body: { markChangelogRead?: boolean; lastSeenVersion?: string; showChangelogOnLogin?: boolean; dismissBetaAnnouncement?: boolean }
 
 router.patch('/me/preferences', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -4071,17 +4084,42 @@ router.patch('/me/preferences', async (req: Request, res: Response): Promise<voi
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-    const { markChangelogRead, showChangelogOnLogin, dismissBetaAnnouncement } = req.body as {
+    const { markChangelogRead, lastSeenVersion, showChangelogOnLogin, dismissBetaAnnouncement } = req.body as {
       markChangelogRead?: boolean;
+      lastSeenVersion?: string;
       showChangelogOnLogin?: boolean;
       dismissBetaAnnouncement?: boolean;
     };
-    const updates: Parameters<typeof updateChangelogPrefs>[1] = {};
-    if (markChangelogRead === true) updates.lastSeenChangelogVersion = await getCurrentChangelogVersion();
-    if (typeof showChangelogOnLogin === 'boolean') updates.showChangelogOnLogin = showChangelogOnLogin;
-    if (dismissBetaAnnouncement === true) updates.dismissedBetaProdAnnouncement = true;
-    await updateChangelogPrefs(userId, updates);
-    res.json({ ok: true });
+
+    let whatsNew = await evaluateWhatsNewState(userId);
+
+    if (typeof lastSeenVersion === 'string' || markChangelogRead === true) {
+      try {
+        whatsNew = await acknowledgeWhatsNew(
+          userId,
+          typeof lastSeenVersion === 'string' ? lastSeenVersion : undefined,
+        );
+      } catch (err) {
+        const statusCode = (err as Error & { statusCode?: number }).statusCode;
+        if (statusCode === 400 || err instanceof ChangelogContentError) {
+          res.status(statusCode === 400 ? 400 : 503).json({
+            error: err instanceof Error ? err.message : 'Acknowledgement failed',
+          });
+          return;
+        }
+        throw err;
+      }
+    }
+
+    if (typeof showChangelogOnLogin === 'boolean') {
+      whatsNew = await updateWhatsNewPreference(userId, showChangelogOnLogin);
+    }
+
+    if (dismissBetaAnnouncement === true) {
+      await updateChangelogPrefs(userId, { dismissedBetaProdAnnouncement: true });
+    }
+
+    res.json({ ok: true, whatsNew });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }

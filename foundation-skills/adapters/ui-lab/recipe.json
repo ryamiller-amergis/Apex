@@ -1,0 +1,39 @@
+{
+  "skill": "ui-lab",
+  "scanScope": "targeted",
+  "targetedGlobs": [
+    "package.json",
+    "CONTEXT.md",
+    "context.md",
+    "AGENTS.md",
+    "README.md",
+    "**/*.css",
+    "**/*.scss",
+    "**/*.module.css",
+    "**/*.module.scss",
+    "**/*theme*.ts",
+    "**/*Theme*.ts",
+    "**/*theme*.tsx",
+    "**/*Theme*.tsx",
+    "**/*tokens*.ts",
+    "**/*Tokens*.ts",
+    "**/*globals*.css",
+    "**/*variables*.css",
+    "**/*variables*.scss",
+    "**/components/**/*.tsx",
+    "**/components/**/*.jsx"
+  ],
+  "ignore": ["node_modules", ".git", "dist", "build", "out", "coverage", ".apex", ".next", ".nuxt", "__pycache__", "vendor"],
+  "detectors": ["stack", "css-variables", "components", "dir-conventions", "repo-docs"],
+  "capFiles": 3000,
+  "capMs": 60000,
+  "slots": {
+    "projectName": { "type": "value", "detector": "stack", "key": "projectName" },
+    "stack": { "type": "list", "detector": "stack", "format": "  - {key}: {value}", "limit": 20 },
+    "designTokens": { "type": "table", "detector": "css-variables", "columns": ["key", "value"], "limit": 60 },
+    "components": { "type": "list", "detector": "components", "format": "- {key}", "limit": 80 },
+    "dirConventions": { "type": "list", "detector": "dir-conventions", "format": "- {value}" },
+    "contextFile": { "type": "value", "detector": "repo-docs", "key": "contextFile" },
+    "agentsFile": { "type": "value", "detector": "repo-docs", "key": "agentsFile" }
+  }
+}

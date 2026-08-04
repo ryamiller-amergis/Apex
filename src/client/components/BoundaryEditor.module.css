@@ -62,7 +62,7 @@
 
 .saveBtn {
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 6px;
   padding: 6px 14px;

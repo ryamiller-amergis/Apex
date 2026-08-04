@@ -1087,7 +1087,7 @@
   letter-spacing: 0.04em;
   border-radius: 4px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   white-space: nowrap;
 }
 
@@ -1343,7 +1343,7 @@
 .editFormBtnPrimary {
   padding: 8px 16px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 6px;
   font-size: 0.85rem;

@@ -23,6 +23,7 @@ jest.mock('../db/drizzle', () => {
     db: {
       query: {
         chatThreads: { findFirst: jest.fn() },
+        interviews: { findFirst: jest.fn() },
         prds: { findFirst: jest.fn() },
         testCases: { findFirst: jest.fn() },
       },
@@ -65,6 +66,7 @@ import {
   readOutputTestCasesMd,
   syncTestCaseOutput,
   triggerTestCaseGeneration,
+  extractUncoveredCoverageItems,
 } from '../services/testCaseService';
 
 const { db: mockDb, __mockUpdateChains: mockUpdateChains } = jest.requireMock('../db/drizzle') as {
@@ -191,6 +193,26 @@ describe('testCaseService', () => {
   });
 
   describe('triggerTestCaseGeneration', () => {
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('skips generation when test cases are disabled for the interview', async () => {
+      mockDb.query.prds.findFirst.mockResolvedValue({
+        id: 'prd-1',
+        interviewId: 'interview-1',
+        project: 'proj-alpha',
+        title: 'Feature PRD',
+      });
+      mockDb.query.interviews.findFirst.mockResolvedValue({ testCasesEnabled: false });
+
+      await expect(triggerTestCaseGeneration('prd-1', 'source-thread')).resolves.toBe(false);
+
+      expect(mockDb.query.testCases.findFirst).not.toHaveBeenCalled();
+      expect(mockGetSkillConfig).not.toHaveBeenCalled();
+      expect(mockCreateThread).not.toHaveBeenCalled();
+    });
+
     it('skips generation when the PRD project has no test-case skill configured', async () => {
       mockDb.query.prds.findFirst.mockResolvedValue({
         id: 'prd-1',
@@ -206,6 +228,7 @@ describe('testCaseService', () => {
     });
 
     it('creates a generation thread and writes kickoff files when a test-case skill is configured', async () => {
+      jest.useFakeTimers();
       const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-pilot-test-cases-'));
       mockCreateThread.mockResolvedValue({ id: 'thread-tc', workspaceDir });
       mockDb.query.prds.findFirst.mockResolvedValue({
@@ -249,6 +272,12 @@ describe('testCaseService', () => {
           [],
           { hidden: true },
         );
+
+        // Drain the watcher started by triggerTestCaseGeneration so it cannot
+        // keep polling after this test file moves on to other mocks.
+        mockDb.query.testCases.findFirst.mockResolvedValue(null);
+        jest.advanceTimersByTime(5_000);
+        for (let i = 0; i < 10; i++) await Promise.resolve();
       } finally {
         fs.rmSync(workspaceDir, { recursive: true, force: true });
       }
@@ -396,6 +425,42 @@ describe('testCaseService', () => {
       } finally {
         fs.rmSync(workspaceDir, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe('extractUncoveredCoverageItems', () => {
+    it('returns uncovered AC and BR entries from coverageMatrix', () => {
+      const items = extractUncoveredCoverageItems({
+        coverageMatrix: {
+          acceptanceCriteria: [
+            { pbiId: 'PBI-1', index: 0, text: 'Covered AC', covered: true },
+            { pbiId: 'PBI-1', index: 1, text: 'Missing AC', covered: false },
+          ],
+          businessRules: [
+            { id: 'BR-1', text: 'Covered BR', covered: true },
+            { id: 'BR-2', text: 'Missing BR', covered: false },
+          ],
+        },
+      });
+
+      expect(items).toEqual([
+        {
+          kind: 'acceptance_criteria',
+          pbiId: 'PBI-1',
+          index: 1,
+          text: 'Missing AC',
+        },
+        {
+          kind: 'business_rule',
+          id: 'BR-2',
+          pbiId: undefined,
+          text: 'Missing BR',
+        },
+      ]);
+    });
+
+    it('returns an empty array when there is no coverage matrix', () => {
+      expect(extractUncoveredCoverageItems({ suites: [] })).toEqual([]);
     });
   });
 });

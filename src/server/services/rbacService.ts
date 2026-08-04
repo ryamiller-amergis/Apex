@@ -11,6 +11,7 @@ import {
 } from '../db/schema';
 import type { AppPermission, AppRole, RoleWithPermissions, UserWithRoles } from '../../shared/types/rbac';
 import type { ActiveUser } from '../../shared/types/interview';
+import { resolveCurrentChangelogVersion } from './changelogService';
 
 // ── getUserPermissions ─────────────────────────────────────────────────────────
 
@@ -388,9 +389,19 @@ export async function upsertAppUser(
   displayName: string,
   email: string,
 ): Promise<void> {
+  // Seed lastSeenChangelogVersion only on INSERT (first login). Conflict updates
+  // preserve the existing acknowledgement (FEAT-006 / TBI-009).
+  const seedVersion = await resolveCurrentChangelogVersion();
+
   await db
     .insert(appUsers)
-    .values({ oid, displayName, email, lastSeenAt: new Date().toISOString() })
+    .values({
+      oid,
+      displayName,
+      email,
+      lastSeenAt: new Date().toISOString(),
+      ...(seedVersion ? { lastSeenChangelogVersion: seedVersion } : {}),
+    })
     .onConflictDoUpdate({
       target: appUsers.oid,
       set: { displayName, email, lastSeenAt: new Date().toISOString() },

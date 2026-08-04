@@ -95,6 +95,19 @@ function makeLimitSelectChain(rows: any[]) {
   return { from: fromMock };
 }
 
+/** select → from → leftJoin → leftJoin → where → limit */
+function makeLeftJoinLimitSelectChain(rows: any[]) {
+  const limitMock = jest.fn().mockResolvedValue(rows);
+  const whereMock = jest.fn().mockReturnValue({ limit: limitMock });
+  const chain: { leftJoin: jest.Mock; where: jest.Mock } = {
+    leftJoin: jest.fn(),
+    where: whereMock,
+  };
+  chain.leftJoin.mockReturnValue(chain);
+  const fromMock = jest.fn().mockReturnValue(chain);
+  return { from: fromMock };
+}
+
 /** select → from → innerJoin → where → limit  (resolves to rows) */
 function makeInnerJoinLimitSelectChain(rows: any[]) {
   const limitMock = jest.fn().mockResolvedValue(rows);
@@ -388,6 +401,21 @@ describe('resolveComment', () => {
     mockIsAssignedApprover.mockResolvedValue(true);
 
     await expect(resolveComment('comment-1', 'approver-99')).resolves.toBeUndefined();
+    expect(mockDb.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows the design-doc interview owner to resolve', async () => {
+    mockDb.query.reviewComments.findFirst.mockResolvedValue({
+      ...baseComment,
+      documentId: 'doc-1',
+      documentType: 'design_doc',
+    });
+    mockDb.select.mockReturnValueOnce(
+      makeLeftJoinLimitSelectChain([{ authorId: 'doc-author-1', designDocOwnerId: 'doc-owner-2' }]),
+    );
+    mockIsAssignedApprover.mockResolvedValue(false);
+
+    await expect(resolveComment('comment-1', 'doc-owner-2')).resolves.toBeUndefined();
     expect(mockDb.update).toHaveBeenCalledTimes(1);
   });
 

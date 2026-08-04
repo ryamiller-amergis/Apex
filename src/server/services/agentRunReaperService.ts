@@ -8,7 +8,7 @@
  */
 import { db } from '../db/drizzle';
 import { agentRuns, chatThreads } from '../db/schema';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
 import { randomUUID } from 'crypto';
 import type {
   AgentRunEventStatus,
@@ -33,6 +33,14 @@ export interface AgentRunHealthConfig {
   heartbeatTimeoutMs: number;
   queuedTimeoutMs: number;
   progressStaleMs: number;
+  /** Fail the run after this much time without meaningful progress (must be >= progressStaleMs). */
+  progressAbortMs: number;
+  /**
+   * Hard cap for a single in-flight tool (`… running`). Beyond this, abort even
+   * while heartbeat is alive — prevents hung MCP/SDK tools from pinning a local
+   * Cursor CLI on the App Service forever (see progress refresh exemption).
+   */
+  inFlightToolMaxMs: number;
   longRunMs: number;
   hardLimitMs: number;
 }
@@ -43,6 +51,8 @@ export interface AgentRunHealthSnapshot {
   startedAt: string | null;
   heartbeatAt: string | null;
   progressAt?: string | null;
+  /** Last progress detail, e.g. "edit running" / "edit completed". */
+  progressLabel?: string | null;
   timeoutAt: string | null;
 }
 
@@ -57,10 +67,21 @@ function positiveDuration(value: string | undefined, fallback: number): number {
 }
 
 export function resolveAgentRunHealthConfig(): AgentRunHealthConfig {
+  const progressStaleMs = positiveDuration(process.env.AGENT_PROGRESS_STALE_MS, 2 * 60_000);
+  const progressAbortMs = Math.max(
+    progressStaleMs,
+    positiveDuration(process.env.AGENT_PROGRESS_ABORT_MS, 5 * 60_000),
+  );
+  const inFlightToolMaxMs = Math.max(
+    progressAbortMs,
+    positiveDuration(process.env.AGENT_IN_FLIGHT_TOOL_MAX_MS, 6 * 60_000),
+  );
   return {
     heartbeatTimeoutMs: positiveDuration(process.env.AGENT_HEARTBEAT_TIMEOUT_MS, 5 * 60_000),
     queuedTimeoutMs: positiveDuration(process.env.AGENT_QUEUE_TIMEOUT_MS, 90_000),
-    progressStaleMs: positiveDuration(process.env.AGENT_PROGRESS_STALE_MS, 2 * 60_000),
+    progressStaleMs,
+    progressAbortMs,
+    inFlightToolMaxMs,
     longRunMs: positiveDuration(process.env.AGENT_LONG_RUN_MS, 30 * 60_000),
     hardLimitMs: positiveDuration(process.env.AGENT_RUN_HARD_LIMIT_MS, 2 * 60 * 60_000),
   };
@@ -103,6 +124,16 @@ function ageMs(timestamp: string | null | undefined, nowMs: number): number {
   return Number.isFinite(parsed) ? nowMs - parsed : Number.POSITIVE_INFINITY;
 }
 
+/**
+ * True when the last progress label indicates a tool is still executing
+ * (e.g. "edit running", "Write:path running"). Long file edits can exceed
+ * progressAbortMs without further stream events while the worker remains healthy.
+ */
+export function isInFlightToolProgressLabel(label: string | null | undefined): boolean {
+  if (!label) return false;
+  return /\brunning$/i.test(label.trim());
+}
+
 export function assessAgentRunHealth(
   run: AgentRunHealthSnapshot,
   nowMs: number,
@@ -122,7 +153,18 @@ export function assessAgentRunHealth(
   // progressAt is intentionally independent of heartbeatAt. The fallback keeps
   // pre-migration rows bounded until the progress_at column is populated.
   const meaningfulProgressAt = run.progressAt ?? run.startedAt ?? run.createdAt;
-  if (ageMs(meaningfulProgressAt, nowMs) >= config.progressStaleMs) return 'progress_stale';
+  const progressAge = ageMs(meaningfulProgressAt, nowMs);
+  if (progressAge >= config.progressAbortMs) {
+    // Long `edit`/tool calls can exceed progressAbortMs with no stream events.
+    // Stay in progress_stale (warn) until inFlightToolMaxMs, then abort — a
+    // hung MCP/CLI must not pin the App Service for the full hardLimitMs.
+    if (isInFlightToolProgressLabel(run.progressLabel)) {
+      if (progressAge >= config.inFlightToolMaxMs) return 'progress_timeout';
+      return progressAge >= config.progressStaleMs ? 'progress_stale' : 'healthy';
+    }
+    return 'progress_timeout';
+  }
+  if (progressAge >= config.progressStaleMs) return 'progress_stale';
   if (ageMs(runStartedAt, nowMs) >= config.longRunMs) return 'long_running';
   return 'healthy';
 }
@@ -131,9 +173,11 @@ export function assessAgentRunHealth(
  * Cross-instance liveness check for a thread's agent run.
  *
  * Unlike in-memory `isThreadIdle`, this reads `agent_runs` and treats a run as
- * alive while any queued/running row is not terminal (`worker_lost`,
- * `hard_timeout`, `never_claimed`). Use this before failing generation so
- * non-owner instances do not discard work still owned by another worker.
+ * alive while any queued/running row is not process-dead (`worker_lost`,
+ * `hard_timeout`, `never_claimed`). `progress_timeout` is intentionally NOT
+ * treated as dead here: long model-thinking phases keep heartbeats alive while
+ * progress may lag, and recover/hydrate must not cancel those runs. The reaper
+ * still fails true progress-timeouts; callers should wait for a terminal row.
  */
 export async function isThreadRunAlive(
   threadId: string,
@@ -146,8 +190,11 @@ export async function isThreadRunAlive(
   });
   return rows.some((row) => {
     const progressAt = (row as typeof row & { progressAt?: string | null }).progressAt;
-    const health = assessAgentRunHealth({ ...row, progressAt }, nowMs, config);
-    return health !== 'worker_lost' && health !== 'hard_timeout' && health !== 'never_claimed';
+    const progressLabel = (row as typeof row & { progressLabel?: string | null }).progressLabel;
+    const health = assessAgentRunHealth({ ...row, progressAt, progressLabel }, nowMs, config);
+    return health !== 'worker_lost'
+      && health !== 'hard_timeout'
+      && health !== 'never_claimed';
   });
 }
 
@@ -158,18 +205,33 @@ export function isTerminalAgentRunStatus(status: string): boolean {
 }
 
 /**
+ * How long a non-owner watcher waits after a terminal agent_runs row before
+ * taking over finalization. Gives the owning instance a chance to persist
+ * output / mark generation_failed; after this, any instance may finalize so
+ * docs cannot stay stuck in `generating` forever after a crash/deploy.
+ */
+export const GENERATION_FAIL_ORPHAN_GRACE_MS = 2 * 60_000;
+
+/**
  * Return the most recent agent_runs row for a thread (by createdAt DESC).
  */
 export async function getLatestThreadRun(threadId: string): Promise<{
   status: string;
   ownerInstance: string | null;
+  updatedAt: string;
 } | null> {
   const row = await db.query.agentRuns.findFirst({
     where: eq(agentRuns.threadId, threadId),
     orderBy: desc(agentRuns.createdAt),
-    columns: { status: true, ownerInstance: true },
+    columns: { status: true, ownerInstance: true, updatedAt: true },
   });
   return row ?? null;
+}
+
+export interface CanFailGenerationOptions {
+  now?: () => number;
+  /** Override orphan grace (tests). Defaults to GENERATION_FAIL_ORPHAN_GRACE_MS. */
+  orphanGraceMs?: number;
 }
 
 /**
@@ -177,18 +239,31 @@ export async function getLatestThreadRun(threadId: string): Promise<{
  * `generation_failed`. Returns false when:
  * - No agent_runs row exists yet (kickoff still starting — keep polling).
  * - The latest run is non-terminal (still alive — the liveness gate handles it).
- * - The latest run is terminal but owned by a different instance (that instance
- *   is responsible for finalization).
+ * - The latest run is terminal but owned by a different instance AND still
+ *   within the orphan grace window (owner may still be finalizing).
  *
- * Returns true when this instance owned the terminal run (or ownerInstance is
- * null — legacy/reaped rows where no owner was recorded).
+ * Returns true when this instance owned the terminal run, ownerInstance is
+ * null (legacy/reaped), or the foreign owner's terminal run is older than the
+ * orphan grace (owner crashed/deployed away without finalizing).
  */
-export async function canThisInstanceFailGeneration(threadId: string): Promise<boolean> {
+export async function canThisInstanceFailGeneration(
+  threadId: string,
+  options: CanFailGenerationOptions = {},
+): Promise<boolean> {
   const latest = await getLatestThreadRun(threadId);
   if (!latest) return false;
   if (!isTerminalAgentRunStatus(latest.status)) return false;
-  if (latest.ownerInstance && latest.ownerInstance !== RUN_EVENT_SOURCE_INSTANCE) return false;
-  return true;
+  if (!latest.ownerInstance || latest.ownerInstance === RUN_EVENT_SOURCE_INSTANCE) {
+    return true;
+  }
+
+  const orphanGraceMs = options.orphanGraceMs ?? GENERATION_FAIL_ORPHAN_GRACE_MS;
+  const nowMs = options.now?.() ?? Date.now();
+  const updatedMs = Date.parse(latest.updatedAt);
+  if (Number.isFinite(updatedMs) && nowMs - updatedMs >= orphanGraceMs) {
+    return true;
+  }
+  return false;
 }
 
 function warningFor(health: AgentRunHealth, config: AgentRunHealthConfig): string | null {
@@ -235,14 +310,34 @@ async function failRun(
     .update(agentRuns)
     .set({ status: 'failed', lastError: message, updatedAt })
     .where(and(eq(agentRuns.id, id), eq(agentRuns.status, 'running')));
+  // Also clear desynced threads where recovery wiped active_run_id while this
+  // run was still live (activeRunId null + idle/running).
   await db
     .update(chatThreads)
     .set({ status: 'idle', activeRunId: null, lastError: message, lastActivityAt: updatedAt })
     .where(and(
       eq(chatThreads.id, threadId),
-      eq(chatThreads.activeRunId, id),
-      eq(chatThreads.status, 'running'),
+      or(
+        eq(chatThreads.activeRunId, id),
+        isNull(chatThreads.activeRunId),
+      ),
     ));
+}
+
+async function publishCancelSignal(threadId: string, runId: string, timestamp: string): Promise<void> {
+  await notifyRunEvent({
+    eventId: randomUUID(),
+    threadId,
+    runId,
+    sourceInstance: WATCHDOG_SOURCE_INSTANCE,
+    sequence: nextRunEventSequence(runId, WATCHDOG_SOURCE_INSTANCE),
+    timestamp,
+    type: 'cancel',
+    phase: 'completion',
+    status: 'cancelled',
+    detail: 'Run cancelled by watchdog',
+    event: { type: 'cancel' },
+  }, { persist: true });
 }
 
 /**
@@ -259,7 +354,8 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
 
     for (const row of rows) {
       const progressAt = (row as typeof row & { progressAt?: string | null }).progressAt;
-      const health = assessAgentRunHealth({ ...row, progressAt }, nowMs, config);
+      const progressLabel = (row as typeof row & { progressLabel?: string | null }).progressLabel;
+      const health = assessAgentRunHealth({ ...row, progressAt, progressLabel }, nowMs, config);
 
       if (health === 'worker_lost') {
         const detail = 'Worker lost (heartbeat expired)';
@@ -274,6 +370,8 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
           phase: row.progressPhase,
           status: 'failed',
         }).catch((err) => console.error('[reaper] Failed to publish worker-loss event:', err));
+        await publishCancelSignal(row.threadId, row.id, updatedAt)
+          .catch((err) => console.error('[reaper] Failed to publish cancel after worker-loss:', err));
         console.log(`[reaper] Reaped orphaned run (id=${row.id}, threadId=${row.threadId}) — heartbeat expired`);
         continue;
       }
@@ -290,7 +388,27 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
           phase: row.progressPhase,
           status: 'failed',
         }).catch((err) => console.error('[reaper] Failed to publish timeout event:', err));
+        await publishCancelSignal(row.threadId, row.id, updatedAt)
+          .catch((err) => console.error('[reaper] Failed to publish cancel after hard timeout:', err));
         console.log(`[reaper] Reaped timed-out run (id=${row.id}, threadId=${row.threadId})`);
+        continue;
+      }
+      if (health === 'progress_timeout') {
+        const detail = `No meaningful progress for more than ${Math.round(config.progressAbortMs / 60_000)} minutes — run aborted`;
+        await failRun(row.id, row.threadId, detail, updatedAt);
+        await logMyWorkHealth(row.threadId, row.id, health, detail, 'error');
+        await publishHealthEvent({
+          runId: row.id,
+          threadId: row.threadId,
+          health,
+          detail,
+          timestamp: updatedAt,
+          phase: row.progressPhase,
+          status: 'failed',
+        }).catch((err) => console.error('[reaper] Failed to publish progress-timeout event:', err));
+        await publishCancelSignal(row.threadId, row.id, updatedAt)
+          .catch((err) => console.error('[reaper] Failed to publish cancel after progress timeout:', err));
+        console.log(`[reaper] Reaped progress-stalled run (id=${row.id}, threadId=${row.threadId})`);
         continue;
       }
       if (health === 'never_claimed') {

@@ -35,7 +35,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
+  color: var(--on-accent);
   font-size: 16px;
 }
 
@@ -116,7 +116,7 @@
 .presetBtnActive {
   background: var(--accent-color);
   border-color: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .filterSep {
@@ -669,7 +669,7 @@
 .briefBannerGlow { position: absolute; top: -50px; right: -50px; width: 160px; height: 160px; border-radius: 50%; background: radial-gradient(circle, rgba(99,102,241,0.1) 0%, transparent 70%); pointer-events: none; }
 .briefBannerHeader { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .briefBannerLeft { display: flex; align-items: center; gap: 10px; }
-.briefBannerBadge { display: flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 20px; background: linear-gradient(90deg, var(--accent-color), #8b5cf6); color: #fff; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }
+.briefBannerBadge { display: flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 20px; background: linear-gradient(90deg, var(--accent-color), #8b5cf6); color: var(--on-accent); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }
 .briefBannerDate { font-size: 12px; color: var(--text-muted); }
 .briefBannerActions { display: flex; align-items: center; gap: 8px; }
 .briefBannerHeadline { font-size: 16px; font-weight: 600; color: var(--text-primary); margin: 0 0 14px; line-height: 1.4; }

@@ -157,6 +157,7 @@
   color: var(--accent-color);
   background: color-mix(in srgb, var(--accent-color) 8%, transparent);
   font-weight: 600;
+  box-shadow: var(--glow-accent);
 }
 
 .repo-switcher-group {

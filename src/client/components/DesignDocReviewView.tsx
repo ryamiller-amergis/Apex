@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef, useReducer } from 'react';
+import React, { useState, useCallback, useEffect, useRef, useReducer, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
@@ -28,15 +28,19 @@ import {
   useDesignDocOwnerApproval,
   useDesignDocOwnerApprove,
   useRetryGenerateDesignDoc,
+  useOverrideDesignDocValidation,
 } from '../hooks/useInterviews';
 import { ProposedDesignDocChangesReview } from './ProposedDesignDocChangesReview';
-import { useChatStream } from '../hooks/useChatStream';
+import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
-import { AnnotationLayer } from './AnnotationLayer';
+import { ReviewReasonModal } from './ReviewReasonModal';
+import { ValidationOverrideAudit } from './ValidationOverrideAudit';
+import { AnnotationLayer, unwrapCommentMarks } from './AnnotationLayer';
 import { ReviewCommentSidebar } from './ReviewCommentSidebar';
-import { FixValidationPanel, FixingProgressView } from './FixValidationPanel';
+import { FixValidationPanel } from './FixValidationPanel';
 import { ApexFixRunningBanner } from './ApexFixRunningBanner';
+import { RunGroundingStatus } from './RunGroundingStatus';
 import type { ContentSnapshot, GapChangeEntry } from './FixValidationPanel';
 import type { DesignDocStatus, ValidationScorecardGap, ValidationScorecard, ValidationScorecardFeature } from '../../shared/types/interview';
 import {
@@ -44,8 +48,12 @@ import {
   isDesignDocSingleCommentFixPending,
 } from '../utils/apexFixHelpers';
 import {
+  APEX_FIX_TIMEOUT_MS,
+  agentErrorFromChatThreadStatus,
+  cancelChatThread,
   clearApexFixInProgress,
   fetchChatThreadStatus,
+  isTerminalChatThreadStatus,
   markApexFixInProgress,
   readApexFixInProgress,
 } from '../utils/apexFixSession';
@@ -58,7 +66,6 @@ import {
   useReopenComment as useReopenReviewComment,
   useDeleteComment,
 } from '../hooks/useReviewComments';
-import { normalizeMermaidBlocks } from '../utils/mermaidMarkdown';
 import { MarkdownWithMermaid, MermaidDiagram } from './MarkdownWithMermaid';
 import type { ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
 import styles from './DesignDocReviewView.module.css';
@@ -333,7 +340,6 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
   const [isCreating, setIsCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [input, setInput] = useState('');
-  const [isSending, setIsSending] = useState(false);
   const [showNewConvConfirm, setShowNewConvConfirm] = useState(false);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
   const [isDragging, setIsDragging] = useState(false);
@@ -342,8 +348,8 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
   const skipAutoCreateRef = useRef(false);
   const qc = useQueryClient();
 
-  const { messages, streamingText, status: threadStatus } = useChatStream(threadId);
-  const isRunning = threadStatus === 'running';
+  const session = useAgentChatSession(threadId, { locked: readOnly });
+  const { messages, streamingText, isRunning, isSending } = session;
   const wasRunningRef = useRef(false);
 
   // When the assistant finishes a run, invalidate the design doc so the main
@@ -474,20 +480,10 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
-    if (!text || isRunning || isSending || !threadId || readOnly) return;
+    if (!text) return;
     setInput('');
-    setIsSending(true);
-    try {
-      await fetch(`/api/chat/threads/${threadId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ text }),
-      });
-    } finally {
-      setIsSending(false);
-    }
-  }, [input, isRunning, isSending, threadId, readOnly]);
+    await session.send(text);
+  }, [input, session]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -683,8 +679,7 @@ interface ValidationSidePanelProps {
   scorecard: ValidationScorecard | null | undefined;
   reportMarkdown: string | null | undefined;
   isValidating: boolean;
-  collapsed: boolean;
-  onToggle: () => void;
+  onCollapse: () => void;
   markdownComponents: Components;
 }
 
@@ -709,13 +704,135 @@ function gapResolutionDot(resolution: ValidationScorecardGap['resolution']): str
   }
 }
 
+interface CommentsSidePanelProps {
+  openCount: number;
+  onCollapse: () => void;
+  children: React.ReactNode;
+}
+
+const CommentsSidePanel: React.FC<CommentsSidePanelProps> = ({
+  openCount,
+  onCollapse,
+  children,
+}) => {
+  return (
+    <div className={styles.commentsPanel}>
+      <button
+        className={styles.commentsPanelHeader}
+        onClick={onCollapse}
+        type="button"
+        aria-expanded={true}
+        aria-label="Collapse comments panel"
+      >
+        <svg className={styles.commentsPanelChevron} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M4 6l4 4 4-4" />
+        </svg>
+        <span className={styles.commentsPanelTitle}>Comments</span>
+        {openCount > 0 && (
+          <span className={styles.commentsPanelCountBadge}>{openCount} open</span>
+        )}
+      </button>
+      <div className={styles.commentsPanelBody}>
+        {children}
+      </div>
+    </div>
+  );
+};
+
+interface ReviewSideDockProps {
+  showComments: boolean;
+  showValidation: boolean;
+  commentsCollapsed: boolean;
+  validationCollapsed: boolean;
+  onToggleComments: () => void;
+  onToggleValidation: () => void;
+  openCommentCount: number;
+  validationScore: number | null | undefined;
+  isValidating: boolean;
+  commentsPanel: React.ReactNode;
+  validationPanel: React.ReactNode;
+}
+
+const ReviewSideDock: React.FC<ReviewSideDockProps> = ({
+  showComments,
+  showValidation,
+  commentsCollapsed,
+  validationCollapsed,
+  onToggleComments,
+  onToggleValidation,
+  openCommentCount,
+  validationScore,
+  isValidating,
+  commentsPanel,
+  validationPanel,
+}) => {
+  if (!showComments && !showValidation) return null;
+
+  return (
+    <div className={styles.reviewDock} {...{ 'data-testid': 'dd-review-dock' }}>
+      {showComments && !commentsCollapsed && commentsPanel}
+      {showValidation && !validationCollapsed && validationPanel}
+
+      <div className={styles.reviewDockTabs} role="tablist" aria-orientation="vertical" aria-label="Review tools">
+        {showComments && (
+          <button
+            className={`${styles.reviewDockTab} ${styles.reviewDockTabComments} ${!commentsCollapsed ? styles.reviewDockTabActive : ''}`}
+            onClick={onToggleComments}
+            type="button"
+            role="tab"
+            aria-selected={!commentsCollapsed}
+            title={commentsCollapsed ? 'Expand comments' : 'Collapse comments'}
+            {...{ 'data-testid': 'dd-dock-comments-tab' }}
+          >
+            {openCommentCount > 0 && (
+              <span className={styles.reviewDockTabBadge}>{openCommentCount}</span>
+            )}
+            <span className={styles.reviewDockTabLabel}>Comments</span>
+          </button>
+        )}
+        {showValidation && (
+          <button
+            className={`${styles.reviewDockTab} ${!validationCollapsed ? styles.reviewDockTabActive : ''}`}
+            onClick={onToggleValidation}
+            type="button"
+            role="tab"
+            aria-selected={!validationCollapsed}
+            title={validationCollapsed ? 'Expand validation' : 'Collapse validation'}
+            {...{ 'data-testid': 'dd-dock-validation-tab' }}
+            style={
+              validationScore !== null && validationScore !== undefined
+                ? { borderLeftColor: scoreColor(validationScore) }
+                : undefined
+            }
+          >
+            {isValidating && (validationScore === null || validationScore === undefined) && (
+              <svg className={styles.valPanelSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+              </svg>
+            )}
+            {validationScore !== null && validationScore !== undefined && (
+              <span
+                className={styles.reviewDockTabScore}
+                style={{ color: scoreColor(validationScore) }}
+                {...{ 'data-testid': 'dd-validation-score' }}
+              >
+                {validationScore}%
+              </span>
+            )}
+            <span className={styles.reviewDockTabLabel}>Validation</span>
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const ValidationSidePanel: React.FC<ValidationSidePanelProps> = ({
   score,
   scorecard,
   reportMarkdown,
   isValidating,
-  collapsed,
-  onToggle,
+  onCollapse,
   markdownComponents,
 }) => {
   const [reportExpanded, setReportExpanded] = useState(false);
@@ -737,74 +854,36 @@ const ValidationSidePanel: React.FC<ValidationSidePanelProps> = ({
 
   return (
     <div
-      className={`${styles.valPanel} ${collapsed ? styles.valPanelCollapsed : ''}`}
+      className={styles.valPanel}
       style={score !== null && score !== undefined ? { borderTopColor: scoreColor(score) } : undefined}
     >
-      {collapsed ? (
-        /* Collapsed strip — shows score badge vertically + expand button */
-        <div className={styles.valPanelStrip}>
-          <button
-            className={styles.valPanelStripBtn}
-            onClick={onToggle}
-            type="button"
-            aria-expanded={false}
-            aria-label="Expand validation panel"
-            title="Expand validation panel"
-          >
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M10 4L6 8l4 4" />
-            </svg>
-          </button>
-
-          {isValidating && !score && (
-            <svg className={styles.valPanelSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-            </svg>
-          )}
-
-          {score !== null && score !== undefined && (
-            <span
-              className={styles.valPanelStripScore}
-              style={{ color: scoreColor(score) }}
-              title={`Validation score: ${score}%`}
-            >
-              {score}<span className={styles.valPanelStripPct}>%</span>
-            </span>
-          )}
-
-          <span className={styles.valPanelStripLabel}>Validation</span>
-        </div>
-      ) : (
-        /* Expanded header */
-        <button
-          className={styles.valPanelHeader}
-          onClick={onToggle}
-          type="button"
-          aria-expanded={true}
-          aria-label="Collapse validation panel"
-        >
-          <svg className={styles.valPanelChevron} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M4 6l4 4 4-4" />
+      <button
+        className={styles.valPanelHeader}
+        onClick={onCollapse}
+        type="button"
+        aria-expanded={true}
+        aria-label="Collapse validation panel"
+      >
+        <svg className={styles.valPanelChevron} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M4 6l4 4 4-4" />
+        </svg>
+        <span className={styles.valPanelTitle}>Validation</span>
+        {isValidating && !score && (
+          <svg className={styles.valPanelSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M21 12a9 9 0 1 1-6.219-8.56" />
           </svg>
-          <span className={styles.valPanelTitle}>Validation</span>
-          {isValidating && !score && (
-            <svg className={styles.valPanelSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-            </svg>
-          )}
-          {score !== null && score !== undefined && (
-            <span
-              className={styles.valPanelScoreBadge}
-              style={{ background: scoreBarBg(score), color: scoreColor(score) }}
-            >
-              {score}%
-            </span>
-          )}
-        </button>
-      )}
+        )}
+        {score !== null && score !== undefined && (
+          <span
+            className={styles.valPanelScoreBadge}
+            style={{ background: scoreBarBg(score), color: scoreColor(score) }}
+          >
+            {score}%
+          </span>
+        )}
+      </button>
 
-      {!collapsed && (
-        <div className={styles.valPanelBody}>
+      <div className={styles.valPanelBody}>
           {isValidating && !scorecard && (
             <div className={styles.valPanelValidating}>
               <svg className={styles.valPanelSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -892,8 +971,7 @@ const ValidationSidePanel: React.FC<ValidationSidePanelProps> = ({
           {!scorecard && !reportMarkdown && !isValidating && (
             <div className={styles.valPanelEmpty}>No validation data yet.</div>
           )}
-        </div>
-      )}
+      </div>
     </div>
   );
 };
@@ -921,6 +999,7 @@ export const DesignDocReviewView: React.FC = () => {
   const fixValidation = useFixValidation();
   const acceptFixValidation = useAcceptFixValidation();
   const revertSection = useRevertDesignDocSection();
+  const overrideDesignDocValidation = useOverrideDesignDocValidation();
   const fixDesignDocWithAi = useFixDesignDocWithAi(id ?? '');
   const fixDesignDocCommentWithAi = useFixDesignDocCommentWithAi(id ?? '');
 
@@ -957,23 +1036,22 @@ export const DesignDocReviewView: React.FC = () => {
       }
       const thread = await fetchChatThreadStatus(threadId);
       if (cancelled) return;
-      if (thread && thread.status !== 'idle' && thread.status !== 'error') {
+      if (thread && !isTerminalChatThreadStatus(thread.status)) {
         fixFlowDispatch({ type: 'START_FIX', baseline, threadId });
         return;
       }
-      if (thread && (thread.status === 'idle' || thread.status === 'error')) {
+      if (thread && isTerminalChatThreadStatus(thread.status)) {
         await qc.refetchQueries({ queryKey: ['design-doc', doc.id] });
         if (cancelled) return;
         const res = await fetch(`/api/chat/threads/${threadId}`, { credentials: 'include' });
         const fullThread = res.ok ? await res.json() : null;
         const gapChanges = parseGapChangesFromMessages(fullThread?.messages ?? []);
+        clearApexFixInProgress('design-doc-validation', doc.id);
         fixFlowDispatch({ type: 'START_FIX', baseline, threadId });
         fixFlowDispatch({
           type: 'FIX_COMPLETE',
           gapChanges,
-          agentError: thread.status === 'error'
-            ? (thread.lastError ?? 'The AI agent encountered an error and could not complete the fix.')
-            : undefined,
+          agentError: agentErrorFromChatThreadStatus(thread.status, thread.lastError),
         });
         return;
       }
@@ -994,7 +1072,7 @@ export const DesignDocReviewView: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<TabId>('design');
 
-  const markdownComponents: Components = {
+  const markdownComponents: Components = useMemo(() => ({
     h1({ children, ...props }) {
       return <h1 id={slugify(nodeToText(children))} {...props}>{children}</h1>;
     },
@@ -1026,6 +1104,7 @@ export const DesignDocReviewView: React.FC = () => {
               type="button"
               onClick={() => setActiveTab('assumptions')}
               style={{ color: 'var(--accent-color)', background: 'none', border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'underline' }}
+              {...{ 'data-testid': 'dd-markdown-assumptions-link' }}
             >
               {children}
             </button>
@@ -1037,6 +1116,7 @@ export const DesignDocReviewView: React.FC = () => {
               type="button"
               onClick={() => setActiveTab('tech-spec')}
               style={{ color: 'var(--accent-color)', background: 'none', border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'underline' }}
+              {...{ 'data-testid': 'dd-markdown-tech-spec-link' }}
             >
               {children}
             </button>
@@ -1048,15 +1128,26 @@ export const DesignDocReviewView: React.FC = () => {
               type="button"
               onClick={() => setActiveTab('design')}
               style={{ color: 'var(--accent-color)', background: 'none', border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'underline' }}
+              {...{ 'data-testid': 'dd-markdown-design-link' }}
             >
               {children}
             </button>
           );
         }
       }
-      return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
+      return (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          {...props}
+          {...{ 'data-testid': 'dd-markdown-external-link' }}
+        >
+          {children}
+        </a>
+      );
     },
-  };
+  }), []);
 
   // Per-tab edit state
   const [editingTab, setEditingTab] = useState<TabId | null>(null);
@@ -1070,8 +1161,11 @@ export const DesignDocReviewView: React.FC = () => {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showApproverModal, setShowApproverModal] = useState(false);
   const [showReassignModal, setShowReassignModal] = useState(false);
+  const [showOverrideModal, setShowOverrideModal] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [discussContext, setDiscussContext] = useState<DiscussContext | null>(null);
+  const [actionMenuOpen, setActionMenuOpen] = useState(false);
+  const actionMenuRef = useRef<HTMLDivElement>(null);
 
   // ── 3-zone workspace layout state (outline rail + center + pinned pane) ──────
   const [pinnedTab, setPinnedTab] = useState<TabId | null>(null);
@@ -1083,8 +1177,9 @@ export const DesignDocReviewView: React.FC = () => {
   const pinnedDragStartXRef = useRef(0);
   const pinnedDragStartWidthRef = useRef(DEFAULT_PINNED_WIDTH);
 
-  // Validation side panel (always-present right column)
-  const [validationPanelCollapsed, setValidationPanelCollapsed] = useState(false);
+  // Right rails: Comments + Validation — collapsed by default so the doc is readable
+  const [commentsPanelCollapsed, setCommentsPanelCollapsed] = useState(true);
+  const [validationPanelCollapsed, setValidationPanelCollapsed] = useState(true);
 
   // Center split pane (Design + Tech Spec side by side)
   const [splitTab, setSplitTab] = useState<Exclude<TabId, 'validation'> | null>(null);
@@ -1093,6 +1188,8 @@ export const DesignDocReviewView: React.FC = () => {
   const splitDragStartXRef = useRef(0);
   const splitDragStartPercentRef = useRef(DEFAULT_SPLIT_PERCENT);
   const tabContentSplitRef = useRef<HTMLDivElement>(null);
+  // Restore React-owned text before this render's commit (tab/split remounts).
+  unwrapCommentMarks(tabContentSplitRef.current);
 
   const { data: assignments = [] } = useDocumentAssignments(id, 'design_doc');
   useDesignDocOwnerApproval(id);
@@ -1209,6 +1306,12 @@ export const DesignDocReviewView: React.FC = () => {
     await markValidationReady.mutateAsync(id);
   }, [id, markValidationReady]);
 
+  const handleOverrideValidation = useCallback(async (reason: string) => {
+    if (!id) return;
+    await overrideDesignDocValidation.mutateAsync({ designDocId: id, reason });
+    setShowOverrideModal(false);
+  }, [id, overrideDesignDocValidation]);
+
   // ── Fix Validation Flow handlers ─────────────────────────────────────────
 
   const handleStartFixWithAI = useCallback(async () => {
@@ -1231,7 +1334,7 @@ export const DesignDocReviewView: React.FC = () => {
   }, [id, doc, fixValidation]);
 
   // Poll the assistant thread status during the fixing phase.
-  // Only transition to reviewing once the agent is idle (done with all MCP calls).
+  // Only transition to reviewing once the agent is terminal (done with all MCP calls).
   useEffect(() => {
     if (fixFlow.phase !== 'fixing' || !id) return;
     const { threadId } = fixFlow;
@@ -1255,14 +1358,12 @@ export const DesignDocReviewView: React.FC = () => {
           return;
         }
         notFoundCount = 0;
-        if (thread.status === 'idle' || thread.status === 'error') {
+        if (isTerminalChatThreadStatus(thread.status)) {
           await qc.refetchQueries({ queryKey: ['design-doc', id] });
           const res = await fetch(`/api/chat/threads/${threadId}`, { credentials: 'include' });
           const fullThread = res.ok ? await res.json() : null;
           const gapChanges = parseGapChangesFromMessages(fullThread?.messages ?? []);
-          const agentError = thread.status === 'error'
-            ? (thread.lastError ?? 'The AI agent encountered an error and could not complete the fix.')
-            : undefined;
+          const agentError = agentErrorFromChatThreadStatus(thread.status, thread.lastError);
           if (!cancelled) {
             clearApexFixInProgress('design-doc-validation', id);
             fixFlowDispatch({ type: 'FIX_COMPLETE', gapChanges, agentError });
@@ -1281,6 +1382,21 @@ export const DesignDocReviewView: React.FC = () => {
       window.clearInterval(interval);
     };
   }, [fixFlow, id, qc]);
+
+  // Hard wall-clock timeout so the fixing overlay can never spin indefinitely.
+  useEffect(() => {
+    if (fixFlow.phase !== 'fixing' || !id) return;
+    const timeoutId = window.setTimeout(() => {
+      clearApexFixInProgress('design-doc-validation', id);
+      void cancelChatThread(fixFlow.threadId);
+      fixFlowDispatch({
+        type: 'FIX_COMPLETE',
+        gapChanges: [],
+        agentError: 'The fix took too long and was stopped. You can try again.',
+      });
+    }, APEX_FIX_TIMEOUT_MS);
+    return () => window.clearTimeout(timeoutId);
+  }, [fixFlow, id]);
 
   const handleFixAcceptSection = useCallback((_section: 'design' | 'tech-spec' | 'assumptions') => {
     // Accept = keep current AI changes (already persisted) — no-op on server
@@ -1348,9 +1464,14 @@ export const DesignDocReviewView: React.FC = () => {
   }, [id, fixFlow, revertSection]);
 
   const handleFixCancel = useCallback(() => {
+    const threadId =
+      fixFlow.phase === 'fixing'
+        ? fixFlow.threadId
+        : (doc?.docAssistantThreadId ?? undefined);
+    if (threadId) void cancelChatThread(threadId);
     if (id) clearApexFixInProgress('design-doc-validation', id);
     fixFlowDispatch({ type: 'RESET' });
-  }, [id]);
+  }, [id, fixFlow, doc?.docAssistantThreadId]);
 
   // When the assistant panel closes during discuss phase, return to reviewing
   const handleAssistantClose = useCallback(() => {
@@ -1365,6 +1486,7 @@ export const DesignDocReviewView: React.FC = () => {
   // Selecting a tab brings it to the center pane; if it was pinned, unpin it so
   // the same section never shows in both places at once.
   const selectTab = useCallback((tab: TabId) => {
+    unwrapCommentMarks(tabContentSplitRef.current);
     setActiveTab(tab);
     setPinnedTab((prev) => (prev === tab ? null : prev));
   }, []);
@@ -1372,6 +1494,7 @@ export const DesignDocReviewView: React.FC = () => {
   // Pinning a tab sends it to the right-hand reference pane. If the pinned tab
   // is currently active in the center, move the center to another available tab.
   const handlePinTab = useCallback((tab: TabId) => {
+    unwrapCommentMarks(tabContentSplitRef.current);
     setPinnedTab((prev) => (prev === tab ? null : tab));
     setActiveTab((cur) => {
       if (cur !== tab) return cur;
@@ -1415,6 +1538,7 @@ export const DesignDocReviewView: React.FC = () => {
   }, [isDraggingPinned]);
 
   const handleSplitTab = useCallback((tab: Exclude<TabId, 'validation'>) => {
+    unwrapCommentMarks(tabContentSplitRef.current);
     setSplitTab((prev) => (prev === tab ? null : tab));
     // If the chosen tab is currently active in center, swap center to the other content tab
     setActiveTab((cur) => {
@@ -1488,15 +1612,6 @@ export const DesignDocReviewView: React.FC = () => {
     doc?.validationReportMd,
   ]);
 
-  // Auto-initialise the workspace layout the first time the doc loads:
-  // pin Validation Report to the right panel and split Tech Spec into the center.
-  const didInitLayoutRef = useRef(false);
-  useEffect(() => {
-    if (!doc || didInitLayoutRef.current) return;
-    didInitLayoutRef.current = true;
-    if (doc.techSpecContent) setSplitTab('tech-spec');
-  }, [doc?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
   // When the validation report first appears while the doc is still validating,
   // auto-trigger a score refresh so the DB/status update happens without user action.
   const didAutoRefreshRef = useRef(false);
@@ -1526,6 +1641,30 @@ export const DesignDocReviewView: React.FC = () => {
     'assumptions': 'assumptions',
   };
 
+  const expandCommentsPanel = useCallback(() => {
+    setCommentsPanelCollapsed(false);
+    setValidationPanelCollapsed(true);
+  }, []);
+
+  const expandValidationPanel = useCallback(() => {
+    setValidationPanelCollapsed(false);
+    setCommentsPanelCollapsed(true);
+  }, []);
+
+  const toggleCommentsPanel = useCallback(() => {
+    setCommentsPanelCollapsed((collapsed) => {
+      if (collapsed) setValidationPanelCollapsed(true);
+      return !collapsed;
+    });
+  }, []);
+
+  const toggleValidationPanel = useCallback(() => {
+    setValidationPanelCollapsed((collapsed) => {
+      if (collapsed) setCommentsPanelCollapsed(true);
+      return !collapsed;
+    });
+  }, []);
+
   const handleCommentClick = useCallback((commentId: string) => {
     const comment = reviewComments.find((c) => c.id === commentId);
     if (comment) {
@@ -1533,12 +1672,14 @@ export const DesignDocReviewView: React.FC = () => {
       if (targetTab) setActiveTab(targetTab);
     }
     setActiveCommentId(commentId);
-  }, [reviewComments]);
+    expandCommentsPanel();
+  }, [reviewComments, expandCommentsPanel]);
 
   const handleAddComment = useCallback((sectionKey: ReviewSectionKey, selector: TextSelector) => {
     setPendingSelector({ sectionKey, selector });
     setNewCommentBody('');
-  }, []);
+    expandCommentsPanel();
+  }, [expandCommentsPanel]);
 
   const handleSubmitComment = useCallback(async () => {
     if (!pendingSelector || !newCommentBody.trim()) return;
@@ -1623,20 +1764,49 @@ export const DesignDocReviewView: React.FC = () => {
     return () => window.clearInterval(interval);
   }, [id, doc?.fixBaseline, fixFlow.phase, qc]);
 
+  useEffect(() => {
+    if (!actionMenuOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (actionMenuRef.current?.contains(event.target as Node)) return;
+      setActionMenuOpen(false);
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setActionMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [actionMenuOpen]);
+
   if (isLoading) return <div className={styles.loadingState}>Loading Design Doc…</div>;
   if (isError || !doc) return <div className={styles.errorState}>Design doc not found.</div>;
 
   const isAuthor = doc.authorId === userId;
   const isOwner = doc.ownerId === userId;
-  const validationBlocking = !isAdmin && doc.validationScore !== undefined && doc.validationScore !== null && doc.validationScore < 90;
+  const validationThreshold = doc.validationScoreThreshold ?? 90;
+  const scoreBelowThreshold =
+    doc.validationScore !== undefined &&
+    doc.validationScore !== null &&
+    doc.validationScore < validationThreshold;
+  const hasValidationOverride = !!doc.validationOverride;
+  const validationBlocking = scoreBelowThreshold && !hasValidationOverride;
   const canManage = can('interviews:manage');
   const canReview = can('design-docs:review');
   const isAssignedApprover = assignments.some((a) => a.approverUserId === userId);
   const isReviewer = canReview && (!isAuthor || isAdmin) && (!isOwner || isAdmin);
   const canPerformReview = isReviewer && (isAssignedApprover || isAdmin);
   const showOwnerApproveButton = doc.status === 'reviewer_approved' && (isOwner || isAdmin);
-  const canEdit = canManage && (isAuthor || isAdmin) && doc.status !== 'approved' && doc.status !== 'reviewer_approved';
-  const canUseAssistant = (isReviewer || isOwner || isAdmin) &&
+  const canEdit = canManage && (isAuthor || isOwner || isAdmin) && doc.status !== 'approved' && doc.status !== 'reviewer_approved';
+  const canUseAssistant = (isReviewer || isOwner || isAuthor || isAdmin) &&
     (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'reviewer_approved' || doc.status === 'revision_requested');
 
   const validationFixSession = id ? readApexFixInProgress('design-doc-validation', id) : null;
@@ -1645,27 +1815,49 @@ export const DesignDocReviewView: React.FC = () => {
       return {
         title: 'Apex is fixing validation gaps…',
         subtitle: 'You can leave this page — progress will resume when you return.',
+        hint: 'Typically 1–3 min',
+        showCancel: fixFlow.phase === 'fixing',
       };
     }
     if (bulkCommentFixRunning || fixDesignDocWithAi.isPending) {
       return {
         title: 'Apex is applying review comment fixes…',
         subtitle: 'Proposed changes will appear here when complete.',
+        hint: undefined as string | undefined,
+        showCancel: false,
       };
     }
     if (fixingCommentId || isDesignDocSingleCommentFixPending(doc)) {
       return {
         title: 'Apex is fixing a review comment…',
         subtitle: 'The proposed edit will appear when complete.',
+        hint: undefined as string | undefined,
+        showCancel: false,
       };
     }
     return null;
   })();
   const isBulkCommentFixing = bulkCommentFixRunning || fixDesignDocWithAi.isPending;
-  const canWriteAssistant = canEdit || canPerformReview || isOwner;
+  const canWriteAssistant = canEdit || canPerformReview || isOwner || isAuthor;
 
   const hasAnyContent = !!(doc.designContent || doc.techSpecContent || doc.assumptionsContent);
   const hasValidationTab = !!doc.validationThreadId;
+  const canManageAuthorActions = canManage && (isAuthor || isOwner || isAdmin);
+  const canRunValidationAction =
+    canManageAuthorActions &&
+    hasAnyContent &&
+    (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'revision_requested');
+  const canWithdrawAction = canManageAuthorActions && doc.status === 'pending_review';
+  const canShowApproversAction = doc.status === 'pending_review';
+  const canDeleteDocAction = canManageAuthorActions;
+  const canShowHeaderActionMenu =
+    canRunValidationAction ||
+    canWithdrawAction ||
+    canShowApproversAction ||
+    canDeleteDocAction;
+  const approverDisplayNames = assignments.map(
+    (a) => a.approverDisplayName ?? a.approverUserId,
+  );
 
   const showCommentLayer =
     (doc.status === 'pending_review' || doc.status === 'reviewer_approved' || doc.status === 'revision_requested') &&
@@ -1680,7 +1872,7 @@ export const DesignDocReviewView: React.FC = () => {
   const activeSectionComments = reviewComments.filter((c) => c.sectionKey === activeSectionKey);
 
   const showFixBanner =
-    validationBlocking &&
+    scoreBelowThreshold &&
     (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'revision_requested') &&
     fixFlow.phase === 'idle';
 
@@ -1698,7 +1890,8 @@ export const DesignDocReviewView: React.FC = () => {
   const bannerSeverity: 'amber' | 'red' =
     doc.validationScore !== null && doc.validationScore !== undefined && doc.validationScore < 70 ? 'red' : 'amber';
 
-  const showFixFlow = fixFlow.phase !== 'idle';
+  /** Review/discuss panels replace document content; fixing keeps content visible under the banner. */
+  const showFixReviewPanel = fixFlow.phase === 'reviewing' || fixFlow.phase === 'discussing';
 
   const tabLabel: Record<TabId, string> = {
     design: 'Design',
@@ -1766,30 +1959,57 @@ export const DesignDocReviewView: React.FC = () => {
     if (!content) {
       return <div className={styles.emptyPreview}>No content yet.</div>;
     }
-    return (
+    const preview = (
       <div className={styles.preview}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-          {normalizeMermaidBlocks(content)}
-        </ReactMarkdown>
+        <MarkdownWithMermaid content={content} components={markdownComponents} />
       </div>
     );
+    // Split/pinned panes must support the same select-to-comment flow as the
+    // active tab; without AnnotationLayer, selection in those panes is ignored.
+    const sectionKey = tabToSectionKey[tab];
+    if (showCommentLayer && sectionKey) {
+      const sectionComments = reviewComments.filter((c) => c.sectionKey === sectionKey);
+      return (
+        <AnnotationLayer
+          sectionKey={sectionKey}
+          comments={sectionComments}
+          activeCommentId={activeCommentId}
+          onAddComment={handleAddComment}
+          onCommentClick={handleCommentClick}
+        >
+          {preview}
+        </AnnotationLayer>
+      );
+    }
+    return preview;
   };
 
   return (
-    <div className={styles.container}>
+    <div className={styles.container} {...{ 'data-testid': 'design-doc-review' }}>
       <div className={styles.header}>
         <div className={styles.headerLeft}>
-          <button className={styles.backBtn} onClick={() => navigate('/backlog?tab=design-docs')} type="button">
+          <button
+            className={styles.backBtn}
+            onClick={() => navigate('/backlog?tab=design-docs')}
+            type="button"
+            {...{ 'data-testid': 'dd-review-back-btn' }}
+          >
             ←
           </button>
           <div className={styles.headerInfo}>
             <div className={styles.titleRow}>
               <h1 className={styles.title}>{doc.title}</h1>
-              <span className={`${styles.statusBadge} ${statusBadgeClass(doc.status)}`}>
+              <span
+                className={`${styles.statusBadge} ${statusBadgeClass(doc.status)}`}
+                {...{ 'data-testid': 'dd-status-badge' }}
+              >
                 {statusLabel(doc.status)}
               </span>
               {doc.validationScore !== null && doc.validationScore !== undefined && (
-                <span className={`${styles.validationBadge} ${doc.validationScore >= 90 ? styles.validationBadgeGood : doc.validationScore >= 70 ? styles.validationBadgeMid : styles.validationBadgeBad}`}>
+                <span
+                  className={`${styles.validationBadge} ${doc.validationScore >= validationThreshold ? styles.validationBadgeGood : doc.validationScore >= 70 ? styles.validationBadgeMid : styles.validationBadgeBad}`}
+                  {...{ 'data-testid': 'dd-validation-badge' }}
+                >
                   {doc.validationScore}% validated
                 </span>
               )}
@@ -1832,6 +2052,7 @@ export const DesignDocReviewView: React.FC = () => {
                   onClick={() => navigate(`/backlog/prd/${sourcePrd.id}`)}
                   type="button"
                   title={`View PRD: ${sourcePrd.title}`}
+                  {...{ 'data-testid': 'dd-parent-prd-link' }}
                 >
                   <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
                     <rect x="2" y="1" width="10" height="12" rx="1.5" />
@@ -1844,6 +2065,11 @@ export const DesignDocReviewView: React.FC = () => {
                 </button>
               </div>
             )}
+            <RunGroundingStatus
+              surface="design_doc"
+              domainRunId={doc.id}
+              project={doc.project}
+            />
           </div>
         </div>
 
@@ -1880,78 +2106,47 @@ export const DesignDocReviewView: React.FC = () => {
             </button>
           )}
 
-          {canManage && (isAuthor || isAdmin) && (
-            <>
-              {canUseAssistant && <span className={styles.actionDivider} />}
-              {hasAnyContent &&
-                (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'revision_requested') && (
-                <button
-                  className={styles.actionBtn}
-                  onClick={() => void createValidationThread.mutateAsync(doc.id)}
-                  disabled={createValidationThread.isPending}
-                  type="button"
-                  title={doc.validationThreadId ? 'Re-run the validation agent with the latest content' : 'Run the validation agent against this design doc'}
-                >
-                  {createValidationThread.isPending ? 'Starting…' : doc.validationThreadId ? 'Re-run Validation' : 'Run Validation'}
-                </button>
-              )}
-              {doc.status === 'validating' && (
-                <button
-                  className={styles.actionBtn}
-                  onClick={() => void cancelValidation.mutateAsync(doc.id)}
-                  disabled={cancelValidation.isPending}
-                  type="button"
-                  title="Stop validation and return to draft"
-                >
-                  {cancelValidation.isPending ? 'Cancelling…' : 'Cancel Validation'}
-                </button>
-              )}
-              {(doc.status === 'draft' || doc.status === 'revision_requested') && (
-                <button
-                  className={styles.actionBtnPrimary}
-                  onClick={handleSubmit}
-                  disabled={submitDoc.isPending || !hasAnyContent}
-                  type="button"
-                >
-                  Submit for Review
-                </button>
-              )}
-              {doc.status === 'validating' && doc.validationScore !== null && doc.validationScore !== undefined && doc.validationScore >= 90 && (
-                <button
-                  className={styles.actionBtnPrimary}
-                  onClick={() => void handleMarkValidationReady()}
-                  disabled={markValidationReady.isPending}
-                  type="button"
-                >
-                  {markValidationReady.isPending ? 'Submitting…' : 'Submit for Review (Score ≥ 90%)'}
-                </button>
-              )}
-              {doc.status === 'pending_review' && (
-                <button
-                  className={styles.actionBtn}
-                  onClick={() => void handleWithdraw()}
-                  disabled={withdrawDoc.isPending}
-                  type="button"
-                >
-                  Withdraw
-                </button>
-              )}
-              <button
-                className={styles.btnDeleteDoc}
-                onClick={() => setShowDeleteModal(true)}
-                disabled={deleteDoc.isPending}
-                title="Delete Design Doc"
-                type="button"
-              >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <polyline points="2 4 4 4 14 4" />
-                  <path d="M13 4l-.7 9.3A1 1 0 0 1 12.3 14H3.7a1 1 0 0 1-1-.7L2 4" />
-                  <path d="M6.5 7v4M9.5 7v4" />
-                  <path d="M5.5 4V2.7A.7.7 0 0 1 6.2 2h3.6a.7.7 0 0 1 .7.7V4" />
-                </svg>
-              </button>
-            </>
+          {canManageAuthorActions && doc.status === 'validating' && (
+            <button
+              className={styles.actionBtn}
+              onClick={() => void cancelValidation.mutateAsync(doc.id)}
+              disabled={cancelValidation.isPending}
+              type="button"
+              title="Stop validation and return to draft"
+            >
+              {cancelValidation.isPending ? 'Cancelling…' : 'Cancel Validation'}
+            </button>
           )}
+
+          {canManageAuthorActions && (doc.status === 'draft' || doc.status === 'revision_requested') && (
+            <button
+              className={styles.actionBtnPrimary}
+              onClick={handleSubmit}
+              disabled={submitDoc.isPending || !hasAnyContent}
+              type="button"
+              {...{ 'data-testid': 'dd-submit-btn' }}
+            >
+              Submit for Review
+            </button>
+          )}
+
+          {canManageAuthorActions &&
+            doc.status === 'validating' &&
+            doc.validationScore !== null &&
+            doc.validationScore !== undefined &&
+            doc.validationScore >= validationThreshold && (
+              <button
+                className={styles.actionBtnPrimary}
+                onClick={() => void handleMarkValidationReady()}
+                disabled={markValidationReady.isPending}
+                type="button"
+                {...{ 'data-testid': 'dd-submit-btn' }}
+              >
+                {markValidationReady.isPending
+                  ? 'Submitting…'
+                  : `Submit for Review (Score ≥ ${validationThreshold}%)`}
+              </button>
+            )}
 
           {isReviewer && doc.status === 'pending_review' && (
             <>
@@ -1967,10 +2162,11 @@ export const DesignDocReviewView: React.FC = () => {
                       : unresolvedCount > 0
                         ? 'Resolve all comments before approving'
                         : validationBlocking
-                          ? `Validation score must be ≥ 90% (current: ${doc.validationScore}%)`
+                          ? `Validation score must be ≥ ${validationThreshold}% (current: ${doc.validationScore}%)`
                           : undefined
                   }
                   type="button"
+                  {...{ 'data-testid': 'dd-approve-btn' }}
                 >
                   Approve
                 </button>
@@ -1987,6 +2183,7 @@ export const DesignDocReviewView: React.FC = () => {
                   onClick={() => void handleOwnerApprove()}
                   disabled={ownerApproveMutation.isPending}
                   type="button"
+                  {...{ 'data-testid': 'dd-approve-owner-btn' }}
                 >
                   Approve as Owner
                 </button>
@@ -1994,25 +2191,144 @@ export const DesignDocReviewView: React.FC = () => {
             </>
           )}
 
-          {doc.status === 'pending_review' && (
-            <>
-              <span className={styles.actionDivider} />
+          {canShowHeaderActionMenu && (
+            <div className={styles.actionMenu} ref={actionMenuRef}>
               <button
-                className={styles.actionBtn}
-                onClick={() => setShowReassignModal(true)}
+                className={`${styles.actionBtn} ${actionMenuOpen ? styles.actionBtnActive : ''}`}
+                onClick={() => setActionMenuOpen((open) => !open)}
                 type="button"
-                title={assignments.length > 0
-                  ? `Approvers: ${assignments.map(a => a.approverDisplayName ?? a.approverUserId).join(', ')}`
-                  : 'Assign approvers'}
+                aria-haspopup="menu"
+                aria-expanded={actionMenuOpen}
+                aria-label="More actions"
               >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <circle cx="6" cy="5" r="2.5" />
-                  <path d="M1 13c0-2.5 2.24-4.5 5-4.5s5 2 5 4.5" />
-                  <path d="M12 5.5l2 2 2-2" />
+                More
+                <svg
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M4 6l4 4 4-4" />
                 </svg>
-                {assignments.length > 0 ? `${assignments.length} Approver${assignments.length > 1 ? 's' : ''}` : 'Approvers'}
               </button>
-            </>
+
+              {actionMenuOpen && (
+                <div
+                  className={styles.actionMenuPanel}
+                  role="menu"
+                  aria-label="More design doc actions"
+                >
+                  {canRunValidationAction && (
+                    <button
+                      className={styles.actionMenuItem}
+                      onClick={() => {
+                        setActionMenuOpen(false);
+                        void createValidationThread.mutateAsync(doc.id);
+                      }}
+                      disabled={createValidationThread.isPending}
+                      type="button"
+                      role="menuitem"
+                      title={
+                        doc.validationThreadId
+                          ? 'Re-run the validation agent with the latest content'
+                          : 'Run the validation agent against this design doc'
+                      }
+                    >
+                      <span className={styles.actionMenuIcon}>
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                          <circle cx="8" cy="8" r="6" />
+                          <path d="M5 8l2 2 4-4" />
+                        </svg>
+                      </span>
+                      <span className={styles.actionMenuLabel}>
+                        {createValidationThread.isPending
+                          ? 'Starting…'
+                          : doc.validationThreadId
+                            ? 'Re-run Validation'
+                            : 'Run Validation'}
+                      </span>
+                    </button>
+                  )}
+
+                  {canWithdrawAction && (
+                    <button
+                      className={styles.actionMenuItem}
+                      onClick={() => {
+                        setActionMenuOpen(false);
+                        void handleWithdraw();
+                      }}
+                      disabled={withdrawDoc.isPending}
+                      type="button"
+                      role="menuitem"
+                    >
+                      <span className={styles.actionMenuIcon}>
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                          <path d="M4 8h8" />
+                          <path d="M7 5L4 8l3 3" />
+                        </svg>
+                      </span>
+                      <span className={styles.actionMenuLabel}>Withdraw</span>
+                    </button>
+                  )}
+
+                  {canShowApproversAction && (
+                    <button
+                      className={styles.actionMenuItem}
+                      onClick={() => {
+                        setActionMenuOpen(false);
+                        setShowReassignModal(true);
+                      }}
+                      type="button"
+                      role="menuitem"
+                      title={
+                        approverDisplayNames.length > 0
+                          ? `Approvers: ${approverDisplayNames.join(', ')}`
+                          : 'Assign approvers'
+                      }
+                    >
+                      <span className={styles.actionMenuIcon}>
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                          <circle cx="6" cy="5" r="2.5" />
+                          <path d="M1 13c0-2.5 2.24-4.5 5-4.5s5 2 5 4.5" />
+                          <path d="M12 5.5l2 2 2-2" />
+                        </svg>
+                      </span>
+                      <span className={styles.actionMenuLabel}>
+                        {approverDisplayNames.length > 0
+                          ? `${approverDisplayNames.length} Approver${approverDisplayNames.length > 1 ? 's' : ''}`
+                          : 'Approvers'}
+                      </span>
+                    </button>
+                  )}
+
+                  {canDeleteDocAction && (
+                    <button
+                      className={`${styles.actionMenuItem} ${styles.actionMenuItemDanger}`}
+                      onClick={() => {
+                        setActionMenuOpen(false);
+                        setShowDeleteModal(true);
+                      }}
+                      disabled={deleteDoc.isPending}
+                      type="button"
+                      role="menuitem"
+                    >
+                      <span className={styles.actionMenuIcon}>
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                          <polyline points="2 4 4 4 14 4" />
+                          <path d="M13 4l-.7 9.3A1 1 0 0 1 12.3 14H3.7a1 1 0 0 1-1-.7L2 4" />
+                          <path d="M6.5 7v4M9.5 7v4" />
+                          <path d="M5.5 4V2.7A.7.7 0 0 1 6.2 2h3.6a.7.7 0 0 1 .7.7V4" />
+                        </svg>
+                      </span>
+                      <span className={styles.actionMenuLabel}>Delete Design Doc</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -2021,26 +2337,54 @@ export const DesignDocReviewView: React.FC = () => {
         <ApexFixRunningBanner
           title={apexFixRunningBanner.title}
           subtitle={apexFixRunningBanner.subtitle}
+          hint={apexFixRunningBanner.hint}
+          onCancel={apexFixRunningBanner.showCancel ? handleFixCancel : undefined}
         />
       )}
 
       {isGenerationFailed && (
         /* ── Generation failed banner ────────────────────────────────── */
-        <div className={styles.generatingBanner} style={{ borderColor: 'var(--error-color)' }}>
-          <div>
-            <div style={{ fontWeight: 600, color: 'var(--error-color)' }}>Generation failed</div>
-            <div style={{ marginTop: 4, color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+        <div
+          className={styles.generationFailedBanner}
+          role="alert"
+          {...{ 'data-testid': 'dd-generation-failed-banner' }}
+        >
+          <svg
+            className={`${styles.failureBannerIcon} ${styles.failureBannerIconRed}`}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="10" />
+            <line x1="15" y1="9" x2="9" y2="15" />
+            <line x1="9" y1="9" x2="15" y2="15" />
+          </svg>
+          <div className={styles.failureBannerBody}>
+            <div className={styles.failureBannerTitle}>Generation failed</div>
+            <div className={styles.failureBannerSummary}>
               {doc?.generationError ?? 'The AI agent did not produce the required output files.'}
             </div>
+            <div className={styles.failureBannerActions}>
+              <button
+                className={styles.failureBannerBtnPrimaryAccent}
+                onClick={() => id && retryGenerate.mutate(id)}
+                disabled={retryGenerate.isPending}
+                type="button"
+              >
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M2.5 8a5.5 5.5 0 0 1 9.6-3.7" />
+                  <polyline points="12.5 2.5 12.5 4.8 10.2 4.8" />
+                  <path d="M13.5 8a5.5 5.5 0 0 1-9.6 3.7" />
+                  <polyline points="3.5 13.5 3.5 11.2 5.8 11.2" />
+                </svg>
+                {retryGenerate.isPending ? 'Retrying…' : 'Retry Generation'}
+              </button>
+            </div>
           </div>
-          <button
-            className={styles.btnApprove}
-            onClick={() => id && retryGenerate.mutate(id)}
-            disabled={retryGenerate.isPending}
-            type="button"
-          >
-            {retryGenerate.isPending ? 'Retrying…' : 'Retry Generation'}
-          </button>
         </div>
       )}
 
@@ -2102,7 +2446,10 @@ export const DesignDocReviewView: React.FC = () => {
         <>
           {/* ── Validation failure banner ─────────────────────────────── */}
           {showFixBanner && (
-            <div className={bannerSeverity === 'red' ? styles.validationFailureBannerRed : styles.validationFailureBannerAmber}>
+            <div
+              className={bannerSeverity === 'red' ? styles.validationFailureBannerRed : styles.validationFailureBannerAmber}
+              {...{ 'data-testid': 'dd-fix-banner' }}
+            >
               <svg
                 className={`${styles.failureBannerIcon} ${bannerSeverity === 'red' ? styles.failureBannerIconRed : styles.failureBannerIconAmber}`}
                 viewBox="0 0 24 24"
@@ -2125,10 +2472,22 @@ export const DesignDocReviewView: React.FC = () => {
                   </span>
                 </div>
                 <div className={styles.failureBannerSummary}>
-                  {pendingGapCount > 0
-                    ? `${pendingGapCount} gap${pendingGapCount === 1 ? '' : 's'} need${pendingGapCount === 1 ? 's' : ''} attention across the design doc sections.`
-                    : 'The validation score is below the 90% threshold required for submission.'}
+                  {hasValidationOverride
+                    ? `Validation score is below the ${validationThreshold}% threshold, but an authorized override allows review to proceed.`
+                    : pendingGapCount > 0
+                      ? `${pendingGapCount} gap${pendingGapCount === 1 ? '' : 's'} need${pendingGapCount === 1 ? 's' : ''} attention across the design doc sections.`
+                      : `The validation score is below the ${validationThreshold}% threshold required for submission.`}
                 </div>
+                {doc.validationOverride && (
+                  <ValidationOverrideAudit
+                    override={doc.validationOverride}
+                    legacySummary={
+                      doc.validationOverride.validationScore === null
+                        ? `Overrode missing validation score (threshold ${doc.validationOverride.validationThreshold}%)`
+                        : `Overrode validation score ${doc.validationOverride.validationScore}% (threshold ${doc.validationOverride.validationThreshold}%)`
+                    }
+                  />
+                )}
                 <div className={styles.failureBannerActions}>
                   <button
                     className={bannerSeverity === 'red' ? styles.failureBannerBtnPrimaryRed : styles.failureBannerBtnPrimaryAmber}
@@ -2144,23 +2503,27 @@ export const DesignDocReviewView: React.FC = () => {
                   </button>
                   <button
                     className={styles.failureBannerBtnSecondary}
-                    onClick={() => setValidationPanelCollapsed(false)}
+                    onClick={expandValidationPanel}
                     type="button"
                   >
                     Review Report
                   </button>
+                  {canManage && !hasValidationOverride && (
+                    <button
+                      className={styles.failureBannerBtnSecondary}
+                      onClick={() => setShowOverrideModal(true)}
+                      type="button"
+                    >
+                      Proceed anyway
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
           )}
 
-          {/* ── Fix flow: fixing progress ────────────────────────────── */}
-          {fixFlow.phase === 'fixing' && (
-            <FixingProgressView onCancel={handleFixCancel} />
-          )}
-
           {/* ── Fix flow: reviewing/discussing diff panel ────────────── */}
-          {(fixFlow.phase === 'reviewing' || fixFlow.phase === 'discussing') && (
+          {showFixReviewPanel && (
             <FixValidationPanel
               baseline={(fixFlow as any).baseline as ContentSnapshot}
               currentDesign={doc.designContent}
@@ -2181,8 +2544,8 @@ export const DesignDocReviewView: React.FC = () => {
             />
           )}
 
-          {/* ── Normal content (hidden during fix flow) ──────────────── */}
-          {!showFixFlow && (
+          {/* ── Normal content (visible while fixing; hidden during review panel) ── */}
+          {!showFixReviewPanel && (
             <>
               {(doc.proposedDesignContent != null || doc.proposedTechSpecContent != null || doc.proposedAssumptionsContent != null) && (
                 <ProposedDesignDocChangesReview
@@ -2193,6 +2556,7 @@ export const DesignDocReviewView: React.FC = () => {
                   proposedDesignContent={doc.proposedDesignContent}
                   proposedTechSpecContent={doc.proposedTechSpecContent}
                   proposedAssumptionsContent={doc.proposedAssumptionsContent}
+                  fixCommentId={doc.fixCommentId}
                 />
               )}
               <div className={styles.workspace}>
@@ -2283,82 +2647,62 @@ export const DesignDocReviewView: React.FC = () => {
                       ref={centerScrollRef}
                       className={splitTab ? styles.centerSplitLeft : styles.centerSingleContent}
                     >
-                      <div className={styles.contentWithSidebar}>
-                          <div className={styles.contentMain}>
-                            {doc.status === 'validating' && (
-                              <div className={styles.validatingBanner}>
-                                <svg className={styles.bannerSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ width: 18, height: 18, flexShrink: 0, marginTop: 2 }}>
-                                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                                </svg>
-                                <div className={styles.validatingBannerText}>
-                                  <div className={styles.validatingBannerTitle}>Validation in progress</div>
-                                  <div className={styles.validatingBannerSub}>
-                                    The agent is scoring your design doc. Results will appear in the <strong>Validation Report</strong> tab automatically when ready.
-                                  </div>
-                                </div>
+                      <div className={styles.contentMain}>
+                        {doc.status === 'validating' && (
+                          <div className={styles.validatingBanner}>
+                            <svg className={styles.bannerSpinner} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ width: 18, height: 18, flexShrink: 0, marginTop: 2 }}>
+                              <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                            </svg>
+                            <div className={styles.validatingBannerText}>
+                              <div className={styles.validatingBannerTitle}>Validation in progress</div>
+                              <div className={styles.validatingBannerSub}>
+                                The agent is scoring your design doc. Results will appear in the <strong>Validation Report</strong> tab automatically when ready.
                               </div>
-                            )}
-                            {showCommentLayer && editingTab !== activeTab ? (
-                              <AnnotationLayer
-                                sectionKey={activeSectionKey}
-                                comments={activeSectionComments}
-                                activeCommentId={activeCommentId}
-                                onAddComment={handleAddComment}
-                                onCommentClick={handleCommentClick}
-                              >
-                                <ContentPane
-                                  content={tabContent[activeTab]}
-                                  isEditing={false}
-                                  editValue=""
-                                  isDirty={false}
-                                  isSaving={false}
-                                  canEdit={canEdit}
-                                  placeholder={tabPlaceholder[activeTab]}
-                                  markdownComponents={markdownComponents}
-                                  onEditChange={() => {}}
-                                  onSave={() => {}}
-                                  onDiscard={() => {}}
-                                />
-                              </AnnotationLayer>
-                            ) : (
-                              <ContentPane
-                                content={tabContent[activeTab]}
-                                isEditing={editingTab === activeTab}
-                                editValue={
-                                  activeTab === 'design' ? designEdit :
-                                  activeTab === 'tech-spec' ? techSpecEdit :
-                                  assumptionsEdit
-                                }
-                                isDirty={dirtyTabs.has(activeTab)}
-                                isSaving={updateContent.isPending}
-                                canEdit={canEdit}
-                                placeholder={tabPlaceholder[activeTab]}
-                                markdownComponents={markdownComponents}
-                                onEditChange={(v) => handleEditChange(activeTab as Exclude<TabId, 'validation'>, v)}
-                                onSave={() => void handleSave(activeTab as Exclude<TabId, 'validation'>)}
-                                onDiscard={() => handleDiscard(activeTab as Exclude<TabId, 'validation'>)}
-                              />
-                            )}
+                            </div>
                           </div>
-                          {showCommentLayer && (
-                            <ReviewCommentSidebar
-                              comments={reviewComments}
-                              activeCommentId={activeCommentId}
-                              currentUserId={userId ?? ''}
-                              documentAuthorUserId={doc.authorId}
-                              onCommentClick={handleCommentClick}
-                              onReply={(commentId, body) => void handleCommentReply(commentId, body)}
-                              onResolve={(commentId) => resolveComment.mutate(commentId)}
-                              onReopen={(commentId) => reopenReviewComment.mutate(commentId)}
-                              onDelete={(commentId) => deleteComment.mutate(commentId)}
-                              onFixWithAi={canEdit ? () => void handleFixAllCommentsWithAi() : undefined}
-                              isFixingWithAi={isBulkCommentFixing}
-                              fixAiError={fixDesignDocWithAi.error?.message}
-                              onFixCommentWithAi={canEdit ? handleFixCommentWithAi : undefined}
-                              fixingCommentId={fixingCommentId}
+                        )}
+                        {showCommentLayer && editingTab !== activeTab ? (
+                          <AnnotationLayer
+                            sectionKey={activeSectionKey}
+                            comments={activeSectionComments}
+                            activeCommentId={activeCommentId}
+                            onAddComment={handleAddComment}
+                            onCommentClick={handleCommentClick}
+                          >
+                            <ContentPane
+                              content={tabContent[activeTab]}
+                              isEditing={false}
+                              editValue=""
+                              isDirty={false}
+                              isSaving={false}
+                              canEdit={canEdit}
+                              placeholder={tabPlaceholder[activeTab]}
+                              markdownComponents={markdownComponents}
+                              onEditChange={() => {}}
+                              onSave={() => {}}
+                              onDiscard={() => {}}
                             />
-                          )}
-                        </div>
+                          </AnnotationLayer>
+                        ) : (
+                          <ContentPane
+                            content={tabContent[activeTab]}
+                            isEditing={editingTab === activeTab}
+                            editValue={
+                              activeTab === 'design' ? designEdit :
+                              activeTab === 'tech-spec' ? techSpecEdit :
+                              assumptionsEdit
+                            }
+                            isDirty={dirtyTabs.has(activeTab)}
+                            isSaving={updateContent.isPending}
+                            canEdit={canEdit}
+                            placeholder={tabPlaceholder[activeTab]}
+                            markdownComponents={markdownComponents}
+                            onEditChange={(v) => handleEditChange(activeTab as Exclude<TabId, 'validation'>, v)}
+                            onSave={() => void handleSave(activeTab as Exclude<TabId, 'validation'>)}
+                            onDiscard={() => handleDiscard(activeTab as Exclude<TabId, 'validation'>)}
+                          />
+                        )}
+                      </div>
                     </div>
 
                     {/* Center split: secondary pane (e.g. Design + Tech Spec side by side) */}
@@ -2376,7 +2720,10 @@ export const DesignDocReviewView: React.FC = () => {
                             <span className={styles.centerSplitRightTitle}>{tabLabel[splitTab]}</span>
                             <button
                               className={styles.centerSplitRightClose}
-                              onClick={() => setSplitTab(null)}
+                              onClick={() => {
+                                unwrapCommentMarks(tabContentSplitRef.current);
+                                setSplitTab(null);
+                              }}
                               type="button"
                               title="Close split view"
                               aria-label="Close split view"
@@ -2395,15 +2742,53 @@ export const DesignDocReviewView: React.FC = () => {
                   </div>
                 </div>
 
-                {hasValidationTab && (
-                  <ValidationSidePanel
-                    score={doc.validationScore}
-                    scorecard={doc.validationScorecard}
-                    reportMarkdown={validationReport?.markdown ?? doc.validationReportMd}
+                {(showCommentLayer || hasValidationTab) && (
+                  <ReviewSideDock
+                    showComments={showCommentLayer}
+                    showValidation={hasValidationTab}
+                    commentsCollapsed={commentsPanelCollapsed}
+                    validationCollapsed={validationPanelCollapsed}
+                    onToggleComments={toggleCommentsPanel}
+                    onToggleValidation={toggleValidationPanel}
+                    openCommentCount={reviewComments.filter((c) => c.status === 'open').length}
+                    validationScore={doc.validationScore}
                     isValidating={doc.status === 'validating'}
-                    collapsed={validationPanelCollapsed}
-                    onToggle={() => setValidationPanelCollapsed((v) => !v)}
-                    markdownComponents={markdownComponents}
+                    commentsPanel={
+                      <CommentsSidePanel
+                        openCount={reviewComments.filter((c) => c.status === 'open').length}
+                        onCollapse={() => setCommentsPanelCollapsed(true)}
+                      >
+                        <ReviewCommentSidebar
+                          embedded
+                          comments={reviewComments}
+                          activeCommentId={activeCommentId}
+                          currentUserId={userId ?? ''}
+                          documentAuthorUserId={doc.authorId}
+                          documentOwnerUserId={doc.ownerId}
+                          isAssignedApprover={isAssignedApprover}
+                          onCommentClick={handleCommentClick}
+                          onReply={(commentId, body) => void handleCommentReply(commentId, body)}
+                          onResolve={(commentId) => resolveComment.mutate(commentId)}
+                          onReopen={(commentId) => reopenReviewComment.mutate(commentId)}
+                          onDelete={(commentId) => deleteComment.mutate(commentId)}
+                          onFixWithAi={canEdit ? () => void handleFixAllCommentsWithAi() : undefined}
+                          isFixingWithAi={isBulkCommentFixing}
+                          fixAiError={fixDesignDocWithAi.error?.message}
+                          onFixCommentWithAi={canEdit ? handleFixCommentWithAi : undefined}
+                          fixingCommentId={fixingCommentId}
+                        />
+                      </CommentsSidePanel>
+                    }
+                    validationPanel={
+                      <ValidationSidePanel
+                        score={doc.validationScore}
+                        scorecard={doc.validationScorecard}
+                        reportMarkdown={validationReport?.markdown ?? doc.validationReportMd}
+                        isValidating={doc.status === 'validating'}
+                        onCollapse={() => setValidationPanelCollapsed(true)}
+                        markdownComponents={markdownComponents}
+                      />
+                    }
                   />
                 )}
 
@@ -2464,6 +2849,17 @@ export const DesignDocReviewView: React.FC = () => {
             });
           }}
           onCancel={() => setShowDeleteModal(false)}
+        />
+      )}
+
+      {showOverrideModal && (
+        <ReviewReasonModal
+          title="Proceed with low validation score?"
+          placeholder="Why are you proceeding without meeting the validation threshold?"
+          confirmLabel="Proceed anyway"
+          isPending={overrideDesignDocValidation.isPending}
+          onConfirm={(reason) => void handleOverrideValidation(reason)}
+          onCancel={() => setShowOverrideModal(false)}
         />
       )}
 

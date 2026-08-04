@@ -3,6 +3,10 @@ import type { AdoProject, AdoRepo, SkillEntry, SkillDetail, SupportingFile, Skil
 
 const ORG_URL = process.env.ADO_ORG || '';
 const PAT = process.env.ADO_PAT || '';
+/** Bound ADO code-search HTTP calls so MCP tools cannot hang the agent stream forever. */
+const ADO_FETCH_TIMEOUT_MS = Number(process.env.ADO_FETCH_TIMEOUT_MS) > 0
+  ? Number(process.env.ADO_FETCH_TIMEOUT_MS)
+  : 30_000;
 
 /** Roots to search for SKILL.md files within a repo, in priority order */
 const SKILL_ROOTS = ['skills', '.cursor/skills'];
@@ -246,7 +250,7 @@ export async function getSkill(
   const content = await fetchFileContent(project, repo, path, resolvedBranch, gitApi);
   const { frontmatter } = parseFrontmatter(content);
 
-  // Find sibling files (other files in the same folder)
+  // Collect sibling files + check for apex-skill.json contract
   const folder = path.substring(0, path.lastIndexOf('/'));
   const supportingFiles: SupportingFile[] = [];
 
@@ -262,10 +266,30 @@ export async function getSkill(
       undefined,
       { versionType: 0, version: resolvedBranch },
     );
+    let apexSkillJsonPath: string | null = null;
     for (const item of siblings ?? []) {
       if (!item.path || item.path === path || item.isFolder) continue;
       const name = item.path.substring(item.path.lastIndexOf('/') + 1);
       supportingFiles.push({ path: item.path, name });
+      if (name === 'apex-skill.json') apexSkillJsonPath = item.path;
+    }
+
+    // Resolve declared foundation dependencies from apex-skill.json
+    if (apexSkillJsonPath) {
+      try {
+        const contractText = await fetchFileContent(project, repo, apexSkillJsonPath, resolvedBranch, gitApi);
+        const contract = JSON.parse(contractText) as { managedFoundationFiles?: string[] };
+        for (const depPath of contract.managedFoundationFiles ?? []) {
+          if (!depPath) continue;
+          const depName = depPath.split('/').filter(Boolean).pop() ?? depPath;
+          // Only add if not already in the list
+          if (!supportingFiles.some(f => f.path === depPath)) {
+            supportingFiles.push({ path: depPath, name: depName, isFoundationDep: true });
+          }
+        }
+      } catch {
+        // Non-fatal — apex-skill.json may be absent or malformed
+      }
     }
   } catch {
     // Couldn't list folder — non-fatal
@@ -424,6 +448,7 @@ export async function searchRepoCode(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(ADO_FETCH_TIMEOUT_MS),
   });
 
   if (!response.ok) {

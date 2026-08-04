@@ -6,6 +6,7 @@
  */
 
 import type { SkillProvider } from '../../shared/types/projectSettings';
+import type { RepoDirEntry, RepoSearchResult } from '../../shared/types/repoReader';
 import type { SkillEntry, SkillDetail } from '../../shared/types/skills';
 import * as adoCatalog from './skillCatalog';
 import * as githubCatalog from './skillCatalogGitHub';
@@ -87,6 +88,34 @@ export async function getSkillFile(
     return githubCatalog.getSkillFile(repo, path, branch);
   }
   return adoCatalog.getSkillFile(project, repo, path, branch);
+}
+
+export async function listRepoDir(
+  project: string,
+  repo: string,
+  dirPath: string,
+  branch?: string,
+  provider: SkillProvider = 'ado',
+): Promise<RepoDirEntry[]> {
+  if (provider === 'github') {
+    return githubCatalog.listRepoDir(repo, dirPath, branch);
+  }
+  return adoCatalog.listRepoDir(project, repo, dirPath, branch);
+}
+
+export async function searchRepoCode(
+  project: string,
+  repo: string,
+  query: string,
+  branch?: string,
+  limit = 10,
+  provider: SkillProvider = 'ado',
+): Promise<RepoSearchResult[]> {
+  const boundedLimit = Math.min(Math.max(Math.floor(limit), 1), 30);
+  if (provider === 'github') {
+    return githubCatalog.searchRepoCode(repo, query, branch, undefined, boundedLimit);
+  }
+  return adoCatalog.searchRepoCode(project, repo, query, branch, boundedLimit);
 }
 
 export function invalidateCache(

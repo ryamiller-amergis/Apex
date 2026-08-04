@@ -1,7 +1,15 @@
 import fs from 'fs';
 import path from 'path';
 import type { ChangelogEntry } from '../../shared/types/changelog';
+import { semverCompare, semverValid } from '../../shared/utils/semverStrict';
 import { getAppSetting } from './appSettingsService';
+
+export class ChangelogContentError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ChangelogContentError';
+  }
+}
 
 function resolveChangelogPath(): string {
   // Compiled to dist/server/services — client build lives at dist/client (see index.ts).
@@ -12,29 +20,69 @@ function resolveChangelogPath(): string {
 
 let cachedEntries: ChangelogEntry[] | null = null;
 let cachedMtime = 0;
+let cachedInvalid = false;
 
 /** @internal — reset in-memory cache (tests only) */
 export function resetChangelogCache(): void {
   cachedEntries = null;
   cachedMtime = 0;
+  cachedInvalid = false;
 }
 
+function assertValidEntries(entries: ChangelogEntry[]): void {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    throw new ChangelogContentError('Changelog is empty or unreadable');
+  }
+  for (const entry of entries) {
+    if (!entry || typeof entry.version !== 'string' || !semverValid(entry.version)) {
+      throw new ChangelogContentError(`Malformed changelog SemVer: ${String(entry?.version)}`);
+    }
+  }
+}
+
+/**
+ * Reads bundled changelog entries. Returns [] on I/O/parse failure (legacy callers).
+ * Prefer `readValidChangelogEntries` when fail-closed behavior is required.
+ */
 export function readChangelogEntries(): ChangelogEntry[] {
-  const filePath = resolveChangelogPath();
   try {
-    const stat = fs.statSync(filePath);
-    if (cachedEntries && stat.mtimeMs === cachedMtime) return cachedEntries;
-    const raw = fs.readFileSync(filePath, 'utf8');
-    cachedEntries = JSON.parse(raw) as ChangelogEntry[];
-    cachedMtime = stat.mtimeMs;
-    return cachedEntries;
+    return readValidChangelogEntries();
   } catch {
     return [];
   }
 }
 
-/** Semver-ish compare: returns positive when `a` is newer than `b`. */
+/** Reads and validates bundled changelog; throws ChangelogContentError on failure. */
+export function readValidChangelogEntries(): ChangelogEntry[] {
+  const filePath = resolveChangelogPath();
+  try {
+    const stat = fs.statSync(filePath);
+    if (cachedEntries && !cachedInvalid && stat.mtimeMs === cachedMtime) {
+      return cachedEntries;
+    }
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const parsed = JSON.parse(raw) as ChangelogEntry[];
+    assertValidEntries(parsed);
+    cachedEntries = parsed;
+    cachedMtime = stat.mtimeMs;
+    cachedInvalid = false;
+    return cachedEntries;
+  } catch (err) {
+    cachedEntries = null;
+    cachedInvalid = true;
+    if (err instanceof ChangelogContentError) throw err;
+    throw new ChangelogContentError('Changelog is empty or unreadable');
+  }
+}
+
+/**
+ * @deprecated Prefer strict SemVer helpers in `semverStrict` / `whatsNewStateService`.
+ * Retained for transitional callers; coerces invalid segments (legacy behavior).
+ */
 export function compareVersions(a: string, b: string): number {
+  const va = semverValid(a);
+  const vb = semverValid(b);
+  if (va && vb) return semverCompare(va, vb);
   const pa = a.split('.').map((n) => parseInt(n, 10) || 0);
   const pb = b.split('.').map((n) => parseInt(n, 10) || 0);
   const len = Math.max(pa.length, pb.length);
@@ -46,24 +94,42 @@ export function compareVersions(a: string, b: string): number {
 }
 
 /**
- * Resolves the live release version. Uses the deployed CHANGELOG.json as the
- * primary source of truth and takes the newer of file vs DB so unread state
- * stays correct even when a version-sync migration has not run yet.
+ * Resolves the live UI release version.
+ * Bundled CHANGELOG.json is authoritative. DB `current_changelog_version` is used
+ * only when it is valid SemVer AND represented by a loadable changelog entry.
  */
 export async function getCurrentChangelogVersion(): Promise<string> {
-  const fromFile = readChangelogEntries()[0]?.version ?? null;
-  const fromDb = await getAppSetting('current_changelog_version');
-  if (fromFile && fromDb) {
-    return compareVersions(fromFile, fromDb) >= 0 ? fromFile : fromDb;
+  const resolved = await resolveCurrentChangelogVersion();
+  return resolved ?? '0.0.0';
+}
+
+export async function resolveCurrentChangelogVersion(): Promise<string | null> {
+  let entries: ChangelogEntry[];
+  try {
+    entries = readValidChangelogEntries();
+  } catch {
+    return null;
   }
-  return fromFile ?? fromDb ?? '0.0.0';
+
+  const fromFile = semverValid(entries[0]?.version ?? null);
+  if (!fromFile) return null;
+
+  const fromDbRaw = await getAppSetting('current_changelog_version');
+  const fromDb = semverValid(fromDbRaw);
+  if (fromDb && entries.some((e) => e.version === fromDb)) {
+    return semverCompare(fromFile, fromDb) >= 0 ? fromFile : fromDb;
+  }
+  return fromFile;
 }
 
 export async function getChangelogPayload(): Promise<{
   currentVersion: string;
   entries: ChangelogEntry[];
 }> {
-  const entries = readChangelogEntries();
-  const currentVersion = await getCurrentChangelogVersion();
+  const entries = readValidChangelogEntries();
+  const currentVersion = await resolveCurrentChangelogVersion();
+  if (!currentVersion) {
+    throw new ChangelogContentError('No valid current changelog version');
+  }
   return { currentVersion, entries };
 }

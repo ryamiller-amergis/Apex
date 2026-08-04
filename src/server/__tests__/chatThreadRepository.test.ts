@@ -1,3 +1,5 @@
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import {
   upsertThread,
   insertMessage,
@@ -90,6 +92,25 @@ const sampleThread: ChatThread = {
   lastActivityAt: '2026-01-01T01:00:00.000Z',
 };
 
+// ── migration contract ───────────────────────────────────────────────────────
+
+describe('chat-thread grounding binding migration', () => {
+  it('DoD-0 adds nullable binding columns and removes both on rollback', () => {
+    const migration = readFileSync(
+      resolve(process.cwd(), 'migrations/20260803140000_add-chat-thread-grounding-binding.sql'),
+      'utf8',
+    );
+    const [up = '', down = ''] = migration.split(/-- Down Migration/i);
+
+    expect(up).toMatch(/ADD COLUMN\s+grounding_mode\s+TEXT\b/i);
+    expect(up).toMatch(/ADD COLUMN\s+grounded_sha\s+TEXT\b/i);
+    expect(up).not.toMatch(/grounding_mode\s+TEXT\s+NOT NULL/i);
+    expect(up).not.toMatch(/grounded_sha\s+TEXT\s+NOT NULL/i);
+    expect(down).toMatch(/DROP COLUMN IF EXISTS\s+grounding_mode\b/i);
+    expect(down).toMatch(/DROP COLUMN IF EXISTS\s+grounded_sha\b/i);
+  });
+});
+
 // ── upsertThread ──────────────────────────────────────────────────────────────
 
 describe('upsertThread', () => {
@@ -180,6 +201,45 @@ describe('upsertThread', () => {
     expect(updateSet).not.toHaveProperty('createdAt');
     expect(updateSet).toHaveProperty('status');
     expect(updateSet).toHaveProperty('lastActivityAt');
+  });
+
+  it('DoD-1 maps grounding binding fields on write', async () => {
+    await upsertThread({
+      ...sampleThread,
+      groundingMode: 'local',
+      groundedSha: 'abc123',
+    });
+
+    const chain = (db.insert as jest.Mock).mock.results[0].value;
+    const valuesCall = chain.values.mock.calls[0][0];
+    expect(valuesCall.groundingMode).toBe('local');
+    expect(valuesCall.groundedSha).toBe('abc123');
+  });
+
+  it('DoD-2 / BR-006 atomically upserts agent identity and binding', async () => {
+    await upsertThread({
+      ...sampleThread,
+      cursorAgentId: 'agent-123',
+      groundingMode: 'local',
+      groundedSha: 'abc123',
+    });
+
+    expect(db.insert).toHaveBeenCalledTimes(1);
+    const chain = (db.insert as jest.Mock).mock.results[0].value;
+    expect(chain.values).toHaveBeenCalledTimes(1);
+    const valuesCall = chain.values.mock.calls[0][0];
+    const updateCall = chain.values.mock.results[0].value.onConflictDoUpdate.mock.calls[0][0].set;
+
+    expect(valuesCall).toMatchObject({
+      cursorAgentId: 'agent-123',
+      groundingMode: 'local',
+      groundedSha: 'abc123',
+    });
+    expect(updateCall).toMatchObject({
+      cursorAgentId: 'agent-123',
+      groundingMode: 'local',
+      groundedSha: 'abc123',
+    });
   });
 });
 
@@ -404,6 +464,8 @@ describe('loadFullThread', () => {
     status: 'idle',
     kickoff: sampleKickoff,
     cursorAgentId: null,
+    groundingMode: 'local',
+    groundedSha: 'abc123',
     workspaceDir: '/tmp/workspace',
     lastError: null,
     savedWikiUrl: null,
@@ -515,6 +577,28 @@ describe('loadFullThread', () => {
     const result = await loadFullThread('thread-1');
 
     expect(result!.cursorAgentId).toBeUndefined();
+  });
+
+  it('DoD-1 / VT-06 maps grounding binding fields on read', async () => {
+    (db.query.chatThreads.findFirst as jest.Mock).mockResolvedValue(dbResult);
+
+    const result = await loadFullThread('thread-1');
+
+    expect(result!.groundingMode).toBe('local');
+    expect(result!.groundedSha).toBe('abc123');
+  });
+
+  it('DoD-3 / VT-07 loads a null database binding as legacy without error', async () => {
+    (db.query.chatThreads.findFirst as jest.Mock).mockResolvedValue({
+      ...dbResult,
+      groundingMode: null,
+      groundedSha: null,
+    });
+
+    await expect(loadFullThread('thread-1')).resolves.toMatchObject({
+      groundingMode: undefined,
+      groundedSha: null,
+    });
   });
 
   it('maps null path in attachment to undefined', async () => {

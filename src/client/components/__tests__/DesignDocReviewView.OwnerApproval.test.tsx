@@ -5,10 +5,11 @@
  *  1. "Approve as Owner" shown when status=reviewer_approved and user is owner
  *  2. Reviewer "Approve" shown when status=pending_review (not owner-only stage)
  *  3. Owner approval UI hidden in draft / pending_review statuses
+ *  4. Secondary header actions live in a More dropdown (PRD-style)
  */
 
 import type { ReactNode } from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { DesignDocReviewView } from '../DesignDocReviewView';
@@ -48,6 +49,7 @@ jest.mock('../../hooks/useInterviews', () => ({
   useFixValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useAcceptFixValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useRevertDesignDocSection: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useOverrideDesignDocValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useFixDesignDocWithAi: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
   useFixDesignDocCommentWithAi: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useReassignApprovers: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
@@ -68,15 +70,16 @@ jest.mock('../../hooks/useChatStream', () => ({
   })),
 }));
 
+const mockUseReviewComments = jest.fn();
+
 jest.mock('../../hooks/useReviewComments', () => ({
-  useReviewComments: jest.fn(() => ({ data: [] })),
+  useReviewComments: (...args: unknown[]) => mockUseReviewComments(...args),
   useUnresolvedCommentCount: jest.fn(() => ({ data: { count: 0 } })),
   useCreateComment: jest.fn(() => ({ mutateAsync: jest.fn() })),
   useResolveComment: jest.fn(() => ({ mutate: jest.fn() })),
   useReopenComment: jest.fn(() => ({ mutate: jest.fn() })),
   useDeleteComment: jest.fn(() => ({ mutate: jest.fn() })),
 }));
-
 jest.mock('react-markdown', () => ({
   __esModule: true,
   default: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -87,8 +90,8 @@ jest.mock('../ConfirmDeleteModal', () => ({ ConfirmDeleteModal: () => null }));
 jest.mock('../ApproverSelectModal', () => ({ ApproverSelectModal: () => null }));
 jest.mock('../AnnotationLayer', () => ({
   AnnotationLayer: ({ children }: { children: ReactNode }) => <>{children}</>,
+  unwrapCommentMarks: jest.fn(),
 }));
-jest.mock('../ReviewCommentSidebar', () => ({ ReviewCommentSidebar: () => null }));
 jest.mock('../FixValidationPanel', () => ({
   FixValidationPanel: () => null,
   FixingProgressView: () => null,
@@ -135,6 +138,7 @@ function renderView() {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockUseReviewComments.mockReturnValue({ data: [] });
   mockUseDesignDoc.mockReturnValue({ data: baseDoc, isLoading: false, isError: false });
   mockUseDesignDocOwnerApprove.mockReturnValue({ mutateAsync: jest.fn(), isPending: false });
   mockUseAppShell.mockReturnValue({
@@ -246,5 +250,115 @@ describe('Owner Approval in DesignDocReviewView', () => {
     renderView();
 
     expect(screen.queryByRole('button', { name: 'Approve as Owner' })).not.toBeInTheDocument();
+  });
+});
+
+describe('More actions menu in DesignDocReviewView', () => {
+  it('keeps primary actions visible and hides secondary ones behind More', () => {
+    mockUseAppShell.mockReturnValue({
+      can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
+      userId: 'user-author',
+      isAdmin: false,
+      groups: [],
+    });
+    mockUseDesignDoc.mockReturnValue({
+      data: { ...baseDoc, status: 'draft' },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderView();
+
+    expect(screen.getByRole('button', { name: 'Submit for Review' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /More actions/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Run Validation' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete Design Doc' })).not.toBeInTheDocument();
+  });
+
+  it('exposes Run Validation, Withdraw, Approvers, and Delete from the More menu', () => {
+    mockUseAppShell.mockReturnValue({
+      can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
+      userId: 'user-author',
+      isAdmin: false,
+      groups: [],
+    });
+    mockUseDesignDoc.mockReturnValue({
+      data: {
+        ...baseDoc,
+        status: 'pending_review',
+        reviewerId: null,
+        reviewerName: null,
+        reviewedAt: null,
+        validationThreadId: 'validation-thread-1',
+      },
+      isLoading: false,
+      isError: false,
+    });
+    mockUseDocumentAssignments.mockReturnValue({
+      data: [{ approverUserId: 'user-reviewer', approverDisplayName: 'Carol Reviewer', status: 'pending' }],
+    });
+
+    renderView();
+
+    expect(screen.queryByRole('button', { name: 'Withdraw' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Approver/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /More actions/i }));
+
+    expect(screen.getByRole('menuitem', { name: 'Re-run Validation' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Withdraw' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: '1 Approver' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Delete Design Doc' })).toBeInTheDocument();
+  });
+});
+
+describe('Design-doc owner (non-author) capabilities', () => {
+  it('lets the owner edit, submit, and resolve comments during revision_requested', () => {
+    mockUseReviewComments.mockReturnValue({
+      data: [{
+        id: 'comment-1',
+        documentId: 'doc-1',
+        documentType: 'design_doc',
+        sectionKey: 'design',
+        authorUserId: 'user-reviewer',
+        authorDisplayName: 'Carol Reviewer',
+        body: 'Please clarify the owning layer',
+        selector: { exact: 'Content', prefix: '', suffix: '', start: 0, end: 7 },
+        status: 'open',
+        createdAt: '2026-01-04T00:00:00Z',
+        updatedAt: '2026-01-04T00:00:00Z',
+        replies: [],
+      }],
+    });
+
+    mockUseAppShell.mockReturnValue({
+      can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
+      userId: 'user-owner',
+      isAdmin: false,
+      groups: [],
+    });
+    mockUseDesignDoc.mockReturnValue({
+      data: {
+        ...baseDoc,
+        status: 'revision_requested',
+        reviewerId: null,
+        reviewerName: null,
+        reviewedAt: null,
+      },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderView();
+
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Submit for Review' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Ask Apex' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: /Comments/i }));
+    expect(screen.getByRole('button', { name: 'Resolve' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /More actions/i }));
+    expect(screen.getByRole('menuitem', { name: 'Delete Design Doc' })).toBeInTheDocument();
   });
 });

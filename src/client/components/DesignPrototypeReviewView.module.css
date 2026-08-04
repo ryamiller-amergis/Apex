@@ -326,7 +326,7 @@
   border-radius: 6px;
   border: 1px solid var(--accent-color);
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
@@ -488,7 +488,7 @@
   border-radius: 6px;
   border: none;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
@@ -550,7 +550,7 @@
 .stateChipActive {
   background: var(--accent-color);
   border-color: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .stateChipActive:hover:not(:disabled) {
@@ -635,7 +635,7 @@
   height: 18px;
   border-radius: 50%;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 10px;
   font-weight: 600;
   display: flex;

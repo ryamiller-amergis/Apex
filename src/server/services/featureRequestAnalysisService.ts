@@ -109,6 +109,24 @@ async function updateAiFields(
     .where(eq(featureRequests.id, requestId));
 }
 
+/**
+ * Mark failed only while still analyzing.
+ * Multi-instance recovery can attach duplicate watchers; a sibling may already
+ * have synced complete + cleaned the workspace. Blind failed updates must not
+ * clobber that success (prod race: sync on instance A, "without output" on B).
+ */
+async function markAiFailedIfAnalyzing(requestId: string): Promise<boolean> {
+  const updated = await db
+    .update(featureRequests)
+    .set({ aiStatus: 'failed', updatedAt: new Date().toISOString() })
+    .where(and(
+      eq(featureRequests.id, requestId),
+      eq(featureRequests.aiStatus, 'analyzing'),
+    ))
+    .returning({ id: featureRequests.id });
+  return updated.length > 0;
+}
+
 export async function autoStartFeatureRequestAnalysis(requestId: string): Promise<void> {
   const request = await db.query.featureRequests.findFirst({
     where: eq(featureRequests.id, requestId),
@@ -217,7 +235,10 @@ export function startWatcher(
       clearInterval(interval);
       activeWatchers.delete(requestId);
       console.warn(`[featureRequestAnalysis] Timed out — requestId=${requestId}`);
-      await updateAiFields(requestId, { aiStatus: 'failed' });
+      const marked = await markAiFailedIfAnalyzing(requestId);
+      if (!marked) {
+        console.log(`[featureRequestAnalysis] Timeout ignored — no longer analyzing (requestId=${requestId})`);
+      }
       return;
     }
 
@@ -233,7 +254,10 @@ export function startWatcher(
         clearInterval(interval);
         activeWatchers.delete(requestId);
         console.warn(`[featureRequestAnalysis] Agent completed without output — requestId=${requestId}`);
-        await updateAiFields(requestId, { aiStatus: 'failed' });
+        const marked = await markAiFailedIfAnalyzing(requestId);
+        if (!marked) {
+          console.log(`[featureRequestAnalysis] Without-output ignored — no longer analyzing (requestId=${requestId})`);
+        }
       }
       return;
     }
@@ -263,7 +287,10 @@ export function startWatcher(
       cleanupWorkspace(threadId);
     } catch (err) {
       console.error(`[featureRequestAnalysis] Failed to parse/sync output (requestId=${requestId})`, err);
-      await updateAiFields(requestId, { aiStatus: 'failed' });
+      const marked = await markAiFailedIfAnalyzing(requestId);
+      if (!marked) {
+        console.log(`[featureRequestAnalysis] Parse-fail ignored — no longer analyzing (requestId=${requestId})`);
+      }
     }
   }, WATCHER_INTERVAL_MS);
 
@@ -314,7 +341,7 @@ export async function recoverAnalyzingFeatureRequests(): Promise<number> {
       console.warn(
         `[featureRequestAnalysis] Recovery hydrate failed — marking failed (requestId=${request.id}, threadId=${request.aiThreadId})`,
       );
-      await updateAiFields(request.id, { aiStatus: 'failed' });
+      await markAiFailedIfAnalyzing(request.id);
       recovered += 1;
       continue;
     }

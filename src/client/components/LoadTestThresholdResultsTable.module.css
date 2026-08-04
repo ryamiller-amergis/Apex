@@ -1,0 +1,66 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.empty {
+  padding: 16px;
+  border: 1px dashed var(--border-color);
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+}
+
+.overallPass {
+  margin: 0;
+  font-weight: 600;
+  color: var(--success-color);
+}
+
+.overallFail {
+  margin: 0;
+  font-weight: 600;
+  color: var(--error-color);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--bg-primary);
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color-light);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+}
+
+.table th {
+  color: var(--text-secondary);
+  font-weight: 600;
+  background: var(--bg-secondary);
+}
+
+.code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+}
+
+.pass {
+  font-weight: 600;
+  color: var(--success-color);
+}
+
+.fail {
+  font-weight: 600;
+  color: var(--error-color);
+}
+
+.unknown {
+  font-weight: 600;
+  color: var(--text-muted);
+}

@@ -1,0 +1,26 @@
+{
+  "skill": "app-knowledge",
+  "scanScope": "targeted",
+  "targetedGlobs": [
+    "package.json",
+    "CONTEXT.md", "context.md", "AGENTS.md", "README.md",
+    "**/*.md",
+    "public/CHANGELOG.json", "CHANGELOG.md", "CHANGELOG.json",
+    "design-docs/**", ".ai-pilot/**", "docs/**",
+    "**/*route*", "**/*Route*",
+    "**/components/**/*.tsx", "**/components/**/*.jsx",
+    "src/**/*.ts", "src/**/*.tsx", "app/**/*.ts", "app/**/*.tsx"
+  ],
+  "ignore": ["node_modules", ".git", "dist", "build", "out", "coverage", ".apex", ".next", ".nuxt", "__pycache__", "vendor"],
+  "detectors": ["stack", "glossary", "routes", "dir-conventions", "components", "repo-docs"],
+  "capFiles": 8000,
+  "capMs": 90000,
+  "slots": {
+    "projectName": { "type": "value", "detector": "stack", "key": "projectName" },
+    "dirConventions": { "type": "list", "detector": "dir-conventions", "format": "- {value}" },
+    "contextFile": { "type": "value", "detector": "repo-docs", "key": "contextFile" },
+    "agentsFile": { "type": "value", "detector": "repo-docs", "key": "agentsFile" },
+    "changelogFile": { "type": "value", "detector": "repo-docs", "key": "changelogFile" },
+    "skillsDir": { "type": "value", "detector": "repo-docs", "key": "skillsDir" }
+  }
+}

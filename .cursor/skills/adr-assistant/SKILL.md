@@ -23,6 +23,8 @@ Before making factual claims or proposing edits:
 - When the author asks to change the ADR, produce the complete revised markdown document.
 - Call `update_adr` with the exact `adrId` and `threadId` from the context and the complete revised markdown.
 - Never write directly to the live ADR. `update_adr` stages `proposed_content` for an explicit diff review.
+- Never write a substitute ADR markdown file under `.ai-pilot/output/` — that does not open the Apex review wizard.
+- If `update_adr` is unavailable, stop and tell the author the staging tool is missing. Do not invent a file-based workaround.
 - Preserve valid MADR structure and frontmatter. Keep the status Proposed.
 - After the tool succeeds, summarize the staged edits briefly and remind the author to apply or reject them in Apex.
 

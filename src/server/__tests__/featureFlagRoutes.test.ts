@@ -21,10 +21,19 @@ jest.mock('../services/groupService', () => ({
 }));
 
 jest.mock('../middleware/rbac', () => ({
-  requireSuperAdmin: (_req: any, _res: any, next: any) => next(),
+  requireSuperAdmin: jest.fn((_req: any, _res: any, next: any) => next()),
 }));
 
 const mockService = featureFlagService as jest.Mocked<typeof featureFlagService>;
+const { requireSuperAdmin: mockRequireSuperAdmin } = jest.requireMock(
+  '../middleware/rbac',
+) as { requireSuperAdmin: jest.Mock };
+
+beforeEach(() => {
+  mockRequireSuperAdmin.mockImplementation(
+    (_req: express.Request, _res: express.Response, next: express.NextFunction) => next(),
+  );
+});
 
 // ── App factory ────────────────────────────────────────────────────────────────
 
@@ -73,6 +82,48 @@ const ruleFixture = {
   createdBy: 'admin-oid',
   createdAt: '2026-06-30T00:00:00Z',
 };
+
+describe('PBI-006 rollout mutation authorization', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('AC-3 rejects unauthorized rule and kill-switch mutations without changing state', async () => {
+    mockRequireSuperAdmin.mockImplementation(
+      (_req: express.Request, res: express.Response) =>
+        res.status(403).json({ error: 'Super admin access required' }),
+    );
+    const app = buildAdminApp('member-oid', 'member@example.com');
+
+    const addRuleResponse = await request(app)
+      .post('/api/platform-admin/feature-flags/flag-1/rules')
+      .send({ type: 'caller', value: 'interview' });
+    const killSwitchResponse = await request(app)
+      .patch('/api/platform-admin/feature-flags/flag-1')
+      .send({ enabled: false });
+
+    expect(addRuleResponse.status).toBe(403);
+    expect(killSwitchResponse.status).toBe(403);
+    expect(mockService.addRule).not.toHaveBeenCalled();
+    expect(mockService.updateFlag).not.toHaveBeenCalled();
+  });
+});
+
+describe('PBI-004 native-read governance authorization', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('AC-3 / VT-05 rejects non-Platform-Admin mutation before native-read state changes', async () => {
+    mockRequireSuperAdmin.mockImplementation(
+      (_req: express.Request, res: express.Response) =>
+        res.status(403).json({ error: 'Super admin access required' }),
+    );
+
+    const response = await request(buildAdminApp('member-oid', 'member@example.com'))
+      .patch('/api/platform-admin/feature-flags/flag-native-read')
+      .send({ enabled: true });
+
+    expect(response.status).toBe(403);
+    expect(mockService.updateFlag).not.toHaveBeenCalled();
+  });
+});
 
 // ── GET /api/platform-admin/feature-flags ─────────────────────────────────────
 
@@ -140,6 +191,21 @@ describe('POST /api/platform-admin/feature-flags', () => {
 
     expect(res.status).toBe(500);
   });
+
+  it('DoD-2 forwards a kill-switch disable with the authenticated actor for audit', async () => {
+    mockService.updateFlag.mockResolvedValue({ ...flagFixture, enabled: false });
+
+    const res = await request(buildAdminApp('operator-oid', 'operator@example.com'))
+      .patch('/api/platform-admin/feature-flags/flag-1')
+      .send({ enabled: false });
+
+    expect(res.status).toBe(200);
+    expect(mockService.updateFlag).toHaveBeenCalledWith(
+      'flag-1',
+      { enabled: false },
+      { id: 'operator-oid', email: 'operator@example.com' },
+    );
+  });
 });
 
 // ── PATCH /api/platform-admin/feature-flags/:id ───────────────────────────────
@@ -177,6 +243,42 @@ describe('PATCH /api/platform-admin/feature-flags/:id', () => {
       .send({ enabled: true });
 
     expect(res.status).toBe(500);
+  });
+
+  it.each(['caller', 'environment'] as const)(
+    'DoD-1 accepts a non-empty %s rollout rule and retains actor audit context',
+    async (type) => {
+      mockService.addRule.mockResolvedValue({
+        ...ruleFixture,
+        type,
+        value: type === 'caller' ? 'interview' : 'dev',
+      });
+      const value = type === 'caller' ? 'interview' : 'dev';
+
+      const res = await request(buildAdminApp('operator-oid', 'operator@example.com'))
+        .post('/api/platform-admin/feature-flags/flag-1/rules')
+        .send({ type, value });
+
+      expect(res.status).toBe(201);
+      expect(mockService.addRule).toHaveBeenCalledWith(
+        'flag-1',
+        { type, value },
+        { id: 'operator-oid', email: 'operator@example.com' },
+      );
+    },
+  );
+
+  it.each([
+    { type: 'caller', value: '   ' },
+    { type: 'environment', value: '' },
+    { type: 'unsupported', value: 'anything' },
+  ])('DoD-1 rejects invalid rollout rule input %#', async (body) => {
+    const res = await request(buildAdminApp())
+      .post('/api/platform-admin/feature-flags/flag-1/rules')
+      .send(body);
+
+    expect(res.status).toBe(400);
+    expect(mockService.addRule).not.toHaveBeenCalled();
   });
 });
 

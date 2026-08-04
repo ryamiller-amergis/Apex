@@ -32,7 +32,48 @@ border: 1px solid #ddd;
 | Accent | `--accent-color`, `--accent-hover` |
 | Borders | `--border-color`, `--border-color-light` |
 | Shadows | `--shadow-sm`, `--shadow-md` |
+| Glow (neon) | `--glow-accent`, `--glow-accent-strong` |
 | Status | `--success-color`, `--error-color` |
+
+## Neon Glow — `--glow-accent` / `--glow-accent-strong`
+
+The "Neon" theme category (neon, volt, plasma, pink, ice, flare) is defined by an
+outer accent **glow**, not just cyan-on-black colors. The glow is a *token*, so it
+is opt-in per element and automatically **empty (`none`) on every non-neon theme** —
+never gate glow with a JS theme check or a hardcoded `box-shadow`.
+
+| Token | Use for |
+|-------|---------|
+| `--glow-accent` | Standard accent glow (`box-shadow`) — active/selected states, primary buttons, focus rings, live/status indicators |
+| `--glow-accent-strong` | Layered hero glow (ring + halo) — the single primary CTA or featured/selected card on a screen |
+| `--glow-text` | Text bloom (`text-shadow`) — brand wordmark, headings, accent-colored labels. **Never on body/paragraph text** (readability + paint cost) |
+
+```css
+/* ✅ GOOD — glows only under neon themes, no-op elsewhere */
+.tab.active { box-shadow: var(--glow-accent); }
+.primary-cta { box-shadow: var(--glow-accent); }
+
+/* ❌ BAD — one-off hardcoded neon that ignores the theme system */
+.card.active { box-shadow: 0 0 18px #22F0FF; }
+```
+
+**Rules:**
+- Reserve glow for **signal-carrying** elements (primary CTA, active/selected state,
+  focus, live indicators, brand mark). Do **not** glow every card, input, or row —
+  full-screen glow hurts readability.
+- `--glow-text` bloom goes only on high-contrast display text (wordmark, headings,
+  accent labels) sitting on the near-black neon background. Never apply it to body
+  copy — it must not lower any text/background contrast ratio (WCAG AA).
+- Each neon theme derives its glow from its own `--accent-color`, so a single token
+  reference lights up in the correct color for every variant.
+- Values live only in `App.css` (`:root` = `none`; each neon `[data-theme=...]` block
+  overrides). Never redefine the glow inline or per-component.
+
+## Form Inputs
+
+- Prefer `--bg-secondary` for field backgrounds (use `--bg-tertiary` when the field sits on a `--bg-secondary` card).
+- Keep the **same** background on `:focus` and `:-webkit-autofill` — do not allow the browser to flash white.
+- For discrete numeric values, use `NumberStepper` (`src/client/components/NumberStepper.tsx`) instead of `<input type="number">`.
 
 ## Dark Mode
 
@@ -106,3 +147,12 @@ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubun
 ## Spacing & Sizing
 
 Align spacing with existing components — avoid arbitrary magic numbers. Prefer values from the existing scale (4, 8, 12, 16, 24, 32 px).
+
+## Data grids (admin tables)
+
+For tabular list views with filters and search, use the shared **Data Grid** pattern — do not invent a one-off layout.
+
+- Components: `DataGridToolbar`, `DataGridFilterPills`, styles in `DataGrid.module.css`
+- Layout: filter pills (default) or `DataGridFilterSelect` dropdowns when appropriate on the **left**, search on the **right** (same as Interviews)
+- Table: dedicated **Actions** column with ghost buttons; primary identifier column is **not** clickable
+- Procedure: load `.cursor/skills/data-grid-ui/SKILL.md` when adding or substantially changing a data grid

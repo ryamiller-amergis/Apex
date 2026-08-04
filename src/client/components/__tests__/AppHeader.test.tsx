@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { AppHeader } from '../AppHeader';
 
 jest.mock('react-markdown', () => ({
@@ -37,14 +37,25 @@ jest.mock('../UserMenu', () => ({
   UserMenu: () => <div data-testid="user-menu" />,
 }));
 
+jest.mock('../FeatureRequestFab', () => ({
+  FeatureRequestFab: () => null,
+}));
+
 // ── No menu config, not super admin (default) ─────────────────────────────────
 
 describe('AppHeader — no menuEnabledViews, not super admin', () => {
   const can = (_key: string) => false;
 
-  it('renders the Home button (always visible)', () => {
-    render(<AppHeader {...baseProps} can={can} />);
-    expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument();
+  it('renders the project name with a middle-dot separator in the brand', () => {
+    render(<AppHeader {...baseProps} can={can} selectedProject="MaxView" canAccessHome />);
+    expect(screen.getByText('Apex')).toBeInTheDocument();
+    expect(screen.getByText('MaxView')).toBeInTheDocument();
+    expect(screen.getByText('·')).toBeInTheDocument();
+  });
+
+  it('hides the Home button when canAccessHome is false', () => {
+    render(<AppHeader {...baseProps} can={can} canAccessHome={false} />);
+    expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument();
   });
 
   it('does NOT render Calendar (not in enabledViews)', () => {
@@ -138,13 +149,49 @@ describe('AppHeader — UI Lab admin-gated behavior', () => {
   });
 });
 
+// ── Work Board is super-admin + Apex-project only ─────────────────────────────
+
+describe('AppHeader — Work Board visibility', () => {
+  const can = (_key: string) => false;
+
+  it('renders Work Board for a super admin on the Apex project', () => {
+    render(<AppHeader {...baseProps} can={can} isSuperAdmin selectedProject="Apex" />);
+    expect(screen.getByRole('button', { name: 'Work Board' })).toBeInTheDocument();
+  });
+
+  it('does NOT render Work Board for a non-super-admin on the Apex project', () => {
+    render(<AppHeader {...baseProps} can={can} selectedProject="Apex" />);
+    expect(screen.queryByRole('button', { name: 'Work Board' })).not.toBeInTheDocument();
+  });
+
+  it('does NOT render Work Board for a super admin on a non-Apex project', () => {
+    render(<AppHeader {...baseProps} can={can} isSuperAdmin selectedProject="MaxView" />);
+    expect(screen.queryByRole('button', { name: 'Work Board' })).not.toBeInTheDocument();
+  });
+
+  it('navigates to the work board when the Work Board item is clicked', () => {
+    const onNavigateWorkBoard = jest.fn();
+    render(
+      <AppHeader
+        {...baseProps}
+        can={can}
+        isSuperAdmin
+        selectedProject="Apex"
+        onNavigateWorkBoard={onNavigateWorkBoard}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Work Board' }));
+    expect(onNavigateWorkBoard).toHaveBeenCalledTimes(1);
+  });
+});
+
 // ── Super admin sees all feature views ─────────────────────────────────────────
 
 describe('AppHeader — isSuperAdmin=true', () => {
   const can = (key: string) => key === 'admin:roles';
 
   it('renders all feature views for super admin regardless of permissions or menu config', () => {
-    render(<AppHeader {...baseProps} can={can} isSuperAdmin menuEnabledViews={[]} />);
+    render(<AppHeader {...baseProps} can={can} isSuperAdmin menuEnabledViews={[]} canAccessHome />);
     expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Calendar' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Planning' })).toBeInTheDocument();

@@ -1,0 +1,17 @@
+import React from 'react';
+import {
+  WalkthroughAnchorKeys,
+  anchorTestIdProps,
+} from '../../shared/walkthroughAnchors';
+
+/** Explicit walkthrough opt-in via anchorTestIdProps — high-confidence. */
+export const ExplicitAnchors: React.FC = () => (
+  <div>
+    <button type="button" {...anchorTestIdProps(WalkthroughAnchorKeys.USER_MENU_TRIGGER)}>
+      Menu
+    </button>
+    <button type="button" {...anchorTestIdProps('user-menu-profile')}>
+      Profile
+    </button>
+  </div>
+);

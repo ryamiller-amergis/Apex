@@ -21,10 +21,18 @@ jest.mock('../hooks/useChatThreads', () => ({
 
 jest.mock('../hooks/useFeatureFlags', () => ({
   useFeatureFlag: jest.fn().mockReturnValue(false),
+  useFeatureFlags: jest.fn().mockReturnValue({
+    flags: { 'agent-home': true },
+    isLoading: false,
+  }),
 }));
 
 jest.mock('../components/BetaAnnouncementModal', () => ({
   BetaAnnouncementModal: () => null,
+}));
+
+jest.mock('../components/GuidedWalkthroughHost', () => ({
+  GuidedWalkthroughHost: () => null,
 }));
 
 jest.mock('../hooks/useProjectRepoConfigs', () => ({
@@ -84,6 +92,8 @@ function setupAppShell() {
     isAuthenticated: true,
     authenticatedUser: { name: 'Super Admin', email: 'admin@example.com' },
     can: (key: string) => key === 'admin:roles',
+    isInAnyGroup: () => false,
+    userId: 'admin-1',
     isSuperAdmin: true,
     permissionsLoaded: true,
     workItems: [],
@@ -99,7 +109,13 @@ function setupAppShell() {
     hasUnreadChangelog: false,
     showChangelogOnLogin: false,
     handleMarkChangelogAsRead: jest.fn(),
+    handleDismissWhatsNewBanner: jest.fn(),
     handleToggleShowChangelogOnLogin: jest.fn(),
+    whatsNewLastSeenVersion: null,
+    whatsNewManualUnavailable: false,
+    whatsNewCurrentVersion: '1.0.0',
+    whatsNewAutomaticOverlaySettled: true,
+    whatsNewBlocksAutomaticWalkthrough: false,
     betaAnnouncementDismissed: false,
     handleDismissBetaAnnouncement: jest.fn(),
     handleLogout: jest.fn(),
@@ -108,6 +124,8 @@ function setupAppShell() {
     availableProjects: ['MaxView'],
     changeProject: jest.fn(),
     changeAreaPath: jest.fn(),
+    changeSkillSettings: jest.fn(),
+    selectedSkillSettingsId: null,
     scheduledItems: [],
     unscheduledItems: [],
     pendingDueDateChange: null,

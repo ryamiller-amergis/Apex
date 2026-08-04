@@ -3,9 +3,10 @@
  *
  * Coverage:
  *  1. "Approve as Owner" button shown when status=pending_review and user is owner
- *  2. "Pending Review" label shown when status=pending_review and user is NOT owner
- *  3. Owner approval buttons hidden in other statuses
- *  4. Approvals modal opens and shows groups
+ *  2. "Request Revision" is not shown (comments drive revision_requested)
+ *  3. "Pending Review" label shown when status=pending_review and user is NOT owner
+ *  4. Owner approval buttons hidden in other statuses
+ *  5. Approvals modal opens and shows groups
  */
 
 import type { ReactNode } from 'react';
@@ -50,6 +51,8 @@ jest.mock('../../hooks/useInterviews', () => ({
   useReassignApprovers: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
   useFixPrdWithAi: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
   useFixPrdCommentWithAi: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useApplyProposedPrd: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
+  useRejectProposedPrd: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
   useCreatePrdValidationThread: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useCancelPrdValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useRefreshPrdValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
@@ -58,7 +61,14 @@ jest.mock('../../hooks/useInterviews', () => ({
     isPending: false,
   })),
   useAcceptFixPrdValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useFixPrdCoverage: jest.fn(() => ({
+    mutateAsync: jest.fn().mockResolvedValue({ threadId: 'coverage-thread-1' }),
+    isPending: false,
+  })),
+  useAcceptFixPrdCoverage: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useOverridePrdReadiness: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useRevertPrdSection: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useDismissPrdFixSession: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useScreenInventoryRoutes: jest.fn(() => ({ data: [] })),
   usePrdValidationReport: jest.fn(() => ({ data: null })),
   useDocumentAssignments: (...args: unknown[]) => mockUseDocumentAssignments(...args),
@@ -178,7 +188,7 @@ describe('Owner Approval in PrdReviewView', () => {
     renderView();
 
     expect(screen.getByText('Approve as Owner')).toBeInTheDocument();
-    expect(screen.getByText('Request Revision')).toBeInTheDocument();
+    expect(screen.queryByText('Request Revision')).not.toBeInTheDocument();
   });
 
   it('shows "Approve as Owner" button for admin even if not owner', () => {
@@ -207,7 +217,7 @@ describe('Owner Approval in PrdReviewView', () => {
       'title',
       'Reviewers must approve the PRD before owner approval',
     );
-    expect(screen.getByText('Request Revision')).not.toBeDisabled();
+    expect(screen.queryByText('Request Revision')).not.toBeInTheDocument();
   });
 
   it('enables "Approve as Owner" once the assigned reviewer is approved', () => {

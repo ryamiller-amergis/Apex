@@ -162,7 +162,7 @@
   height: 28px;
   border-radius: 50%;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 12px;
   font-weight: 600;
   display: flex;
@@ -227,7 +227,7 @@
   height: 28px;
   border-radius: 50%;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 12px;
   font-weight: 600;
   display: flex;
@@ -314,13 +314,13 @@
 .stepActive {
   border-color: var(--accent-color);
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .stepComplete {
   border-color: var(--success-color);
   background: var(--success-color);
-  color: #fff;
+  color: var(--on-success);
 }
 
 .stepLine {
@@ -369,7 +369,7 @@
 .btnConfirm {
   padding: 8px 20px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 6px;
   font-size: 14px;
@@ -455,7 +455,7 @@
 
 .chipSelected {
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border-color: var(--accent-color);
 }
 

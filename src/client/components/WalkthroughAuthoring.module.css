@@ -1,0 +1,663 @@
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.title {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.subtitle {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.button {
+  padding: 8px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.button:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.buttonPrimary {
+  composes: button;
+  border-color: var(--accent-color);
+  background: var(--accent-color);
+  color: var(--on-accent);
+}
+
+.buttonPrimary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  color: var(--on-accent);
+}
+
+.buttonDanger {
+  composes: button;
+  border-color: var(--error-color);
+  color: var(--error-color);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-secondary);
+}
+
+.sectionTitle {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.fieldGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.requiredOption {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.requiredOption input {
+  margin-top: 3px;
+  accent-color: var(--accent-color);
+}
+
+.requiredOption span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.requiredOption small {
+  color: var(--text-secondary);
+}
+
+.input,
+.textarea,
+.select {
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+/* Match text input height (padding 8px + line box + border). */
+.priorityStepper {
+  height: calc(1.25em + 16px + 2px);
+  min-height: calc(1.25em + 16px + 2px);
+  padding: 1px;
+  background: var(--bg-tertiary);
+}
+
+.projectPicker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+}
+
+.projectPickerActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.projectPickerList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.projectPickerOption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.projectPickerOption input {
+  accent-color: var(--accent-color);
+}
+
+.projectPickerHint {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.input:focus,
+.textarea:focus,
+.select:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+
+.fieldError {
+  margin: 0;
+  color: var(--error-color);
+  font-size: 0.75rem;
+}
+
+.fieldHint {
+  margin: -4px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.fieldWarning {
+  margin: -4px 0 0;
+  color: var(--warning-color, #b8860b);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.pickerFilters {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(220px, 1.2fr);
+  gap: 12px;
+}
+
+.subsection {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-color-light);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+}
+
+.subsectionTitle {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.subsection .fieldHint,
+.subsection .fieldWarning {
+  margin: 0;
+}
+
+.anchorDetails {
+  display: grid;
+  grid-template-columns: minmax(140px, 180px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.inputReadonly {
+  composes: input;
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.selectFull {
+  composes: select;
+  width: 100%;
+  max-width: 100%;
+}
+
+.pickerEmpty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.anchorCombobox {
+  position: relative;
+  width: 100%;
+}
+
+.anchorComboboxInput {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 36px 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.anchorComboboxInput:focus {
+  outline: none;
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 12%, transparent);
+}
+
+.anchorComboboxChevron {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  color: var(--text-muted);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.anchorComboboxList {
+  position: absolute;
+  z-index: 1000;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-md);
+}
+
+.anchorComboboxOption {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.anchorComboboxOption:hover,
+.anchorComboboxOptionActive {
+  background: color-mix(in srgb, var(--accent-color) 12%, var(--bg-primary));
+}
+
+.anchorComboboxOption[aria-selected='true'] {
+  color: var(--accent-color);
+  font-weight: 600;
+}
+
+.anchorComboboxOption small {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+
+.anchorComboboxEmpty {
+  margin: 0;
+  padding: 12px 10px;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+}
+
+.validationSummary {
+  padding: 12px 16px;
+  border: 1px solid var(--error-color);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--error-color) 8%, transparent);
+}
+
+.validationSummaryTitle {
+  margin: 0 0 8px;
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--error-color);
+}
+
+.validationList {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--error-color);
+  font-size: 0.8125rem;
+}
+
+.stepList {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.stepCard {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-primary);
+}
+
+.stepHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.stepTitle {
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+.stepHeaderTitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stepActions {
+  display: flex;
+  gap: 4px;
+}
+
+.infoButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent-color);
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.2s ease;
+}
+
+.infoButton:hover,
+.infoButton[aria-expanded='true'] {
+  opacity: 1;
+}
+
+.infoButton:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+  opacity: 1;
+}
+
+.infoButton svg {
+  display: block;
+}
+
+.infoPanel {
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--accent-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.infoPanelIntro {
+  margin: 0 0 12px;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+.infoPanelList {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin: 0;
+}
+
+.infoPanelList > div {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 12px;
+  align-items: start;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color-light);
+  border-radius: 8px;
+  background: var(--bg-primary);
+}
+
+.infoPanelList dt {
+  margin: 0;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.infoPanelList dd {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.infoPanelList dd strong {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.infoPanelList code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@media (max-width: 640px) {
+  .infoPanelList > div {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .pickerFilters {
+    grid-template-columns: 1fr;
+  }
+
+  .anchorDetails {
+    grid-template-columns: 1fr;
+  }
+}
+
+.iconButton {
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.iconButton:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.iconButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.preview {
+  padding: 12px;
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+}
+
+.previewImage {
+  max-width: 100%;
+  margin-top: 8px;
+  border-radius: 8px;
+}
+
+.reorderLive {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.dialogOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.dialog {
+  width: min(480px, 100%);
+  padding: 24px;
+  border-radius: 12px;
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-md);
+}
+
+.dialogTitle {
+  margin: 0 0 8px;
+  font-size: 1.125rem;
+}
+
+.dialogBody {
+  margin: 0 0 16px;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.modeOptions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.modeOption {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.modeOptionSelected {
+  border-color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 8%, transparent);
+}
+
+.dialogActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.statusMessage {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+/* AI step builder modal — wider, scrollable shell with stacked sections */
+.dialogWide {
+  width: min(640px, 100%);
+  max-height: 85vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.aiBadge {
+  display: inline-block;
+  align-self: flex-start;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.positionRow {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.positionRow .field {
+  flex: 1;
+}

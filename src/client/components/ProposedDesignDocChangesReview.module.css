@@ -93,7 +93,7 @@
 .acceptBtn {
   background: var(--success-color);
   border-color: var(--success-color);
-  color: #fff;
+  color: var(--on-success);
   font-weight: 600;
 }
 

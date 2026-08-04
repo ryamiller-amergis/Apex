@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 120" fill="none">
+  <!-- Transparent canvas — drop on any background -->
+  <rect x="10" y="10" width="76" height="76" rx="20" fill="#EEF2FF"/>
+  <path d="M76 72L53 22H40L62 72H76Z" fill="#2747D9"/>
+  <path d="M44 22L18 72H35L53 38L44 22Z" fill="#2747D9" opacity="0.9"/>
+  <path d="M40 72L49 54L58 72H40Z" fill="#FFFFFF"/>
+  <text x="106" y="58" fill="#111827" font-size="42" font-weight="800" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" letter-spacing="-0.03em">Apex</text>
+  <text x="10" y="112" fill="#2747D9" font-size="16" font-weight="600" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" letter-spacing="0.01em">Build higher, faster.</text>
+</svg>

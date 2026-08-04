@@ -17,13 +17,27 @@ import {
 } from '../../services/wikiCatalog';
 import { AzureDevOpsService } from '../../services/azureDevOps';
 import { getThread } from '../../services/chatAgentService';
-import { updateDesignDocContent, syncDesignDocContent, getDesignDoc } from '../../services/designDocService';
+import { syncDesignDocContent, getDesignDoc, stageDesignDocProposedContent } from '../../services/designDocService';
 import { resolvePrdCommentWithApply } from '../../services/prdService';
 import { addTestCaseToPrd } from '../../services/testCaseService';
 import { stageAdrProposedContent } from '../../services/adrService';
 import { db } from '../../db/drizzle';
 import { eq } from 'drizzle-orm';
 import { prds } from '../../db/schema';
+import type { ContentSnapshot, PrdValidationBaseline } from '../../../shared/types/interview';
+import type { RepoReader } from '../../../shared/types/repoReader';
+import { raceWithTimeout, resolveMcpToolTimeoutMs } from '../mcpTimeout';
+
+function toolErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function isActiveFixThread(
+  baseline: { fixThreadId?: string } | null | undefined,
+  threadId: string,
+): boolean {
+  return !!baseline?.fixThreadId && baseline.fixThreadId === threadId;
+}
 
 // ── Exported handlers (testable units) ────────────────────────────────────────
 
@@ -39,10 +53,40 @@ export async function handleUpdatePrd(params: {
   }
   try {
     const now = new Date().toISOString();
+    // Only the active Fix-with-Apex validation/coverage thread writes live.
+    // The normal PRD assistant always stages proposed_* for owner review —
+    // even if a leftover fixBaseline row still exists on the PRD.
+    const prdRow = await db.query.prds.findFirst({
+      where: eq(prds.id, params.prdId),
+      columns: { fixBaseline: true, prdAssistantThreadId: true },
+    });
+    if (!prdRow) {
+      return { content: [{ type: 'text', text: JSON.stringify({ error: 'PRD not found' }) }] };
+    }
+    const baseline = (prdRow?.fixBaseline as PrdValidationBaseline | null) ?? null;
+    const fixMode = isActiveFixThread(baseline, params.threadId);
+    const assistantMode = prdRow.prdAssistantThreadId === params.threadId;
+    if (!fixMode && !assistantMode) {
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({ error: 'Thread is not authorized to update this PRD' }),
+        }],
+      };
+    }
+
     if (params.section === 'content') {
       await db
         .update(prds)
-        .set({ proposedContent: params.content, updatedAt: now })
+        .set(
+          fixMode
+            ? {
+                content: params.content,
+                proposedContent: null,
+                updatedAt: now,
+              }
+            : { proposedContent: params.content, updatedAt: now },
+        )
         .where(eq(prds.id, params.prdId));
     } else {
       let parsed: unknown;
@@ -53,11 +97,24 @@ export async function handleUpdatePrd(params: {
       }
       await db
         .update(prds)
-        .set({ proposedBacklogJson: parsed as any, updatedAt: now })
+        .set(
+          fixMode
+            ? {
+                backlogJson: parsed as (typeof prds.$inferInsert)['backlogJson'],
+                proposedBacklogJson: null,
+                updatedAt: now,
+              }
+            : {
+                proposedBacklogJson: parsed as (typeof prds.$inferInsert)['proposedBacklogJson'],
+                updatedAt: now,
+              },
+        )
         .where(eq(prds.id, params.prdId));
     }
-    console.log(`[MCP] update_prd: saved ${params.section} for prd ${params.prdId}`);
-    return { content: [{ type: 'text', text: JSON.stringify({ ok: true, section: params.section }) }] };
+    console.log(
+      `[MCP] update_prd: saved ${params.section} for prd ${params.prdId} (fixMode=${fixMode})`,
+    );
+    return { content: [{ type: 'text', text: JSON.stringify({ ok: true, section: params.section, fixMode }) }] };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[MCP] update_prd: FAILED ${params.section} for prd ${params.prdId} — ${message}`);
@@ -81,6 +138,43 @@ export async function handleUpdateAdr(params: {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[MCP] update_adr: FAILED for adr ${params.adrId} — ${message}`);
+    return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
+  }
+}
+
+export async function handleUpdateDesignDoc(params: {
+  threadId: string;
+  docId: string;
+  section: 'design' | 'tech-spec' | 'assumptions';
+  content: string;
+}): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
+  const thread = await getThread(params.threadId);
+  if (!thread) {
+    return { content: [{ type: 'text', text: JSON.stringify({ error: 'Thread not found' }) }] };
+  }
+  const opts =
+    params.section === 'design' ? { designContent: params.content } :
+    params.section === 'tech-spec' ? { techSpecContent: params.content } :
+    { assumptionsContent: params.content };
+  try {
+    const doc = await getDesignDoc(params.docId);
+    const baseline = (doc?.fixBaseline as ContentSnapshot | null) ?? null;
+    // Fix-validation thread writes live; normal assistant stages proposed_* for review.
+    const fixMode = isActiveFixThread(baseline, params.threadId);
+    if (fixMode) {
+      await syncDesignDocContent(params.docId, opts);
+    } else {
+      await stageDesignDocProposedContent(params.docId, thread.userId, opts);
+    }
+    console.log(
+      `[MCP] update_design_doc: saved ${params.section} for doc ${params.docId} (fixMode=${fixMode})`,
+    );
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ ok: true, section: params.section, fixMode }) }],
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[MCP] update_design_doc: FAILED ${params.section} for doc ${params.docId} — ${message}`);
     return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
   }
 }
@@ -149,11 +243,19 @@ export async function handleAddTestCase(params: {
   }
 }
 
-export function createAdoMcpServer(): McpServer {
+export function createAdoMcpServer(
+  options?: {
+    enableCodeSearch?: boolean;
+    enableRepoBrowse?: boolean;
+    repoReader?: RepoReader;
+  },
+): McpServer {
   const server = new McpServer({
     name: 'ado-skills',
     version: '1.0.0',
   });
+  const toolTimeoutMs = resolveMcpToolTimeoutMs();
+  const enableRepoBrowse = options?.enableRepoBrowse ?? true;
 
   // ── Skills namespace ────────────────────────────────────────────────────────
 
@@ -214,63 +316,96 @@ export function createAdoMcpServer(): McpServer {
     },
   );
 
-  server.tool(
-    'list_repo_dir',
-    'List the immediate children (files and sub-folders) of a directory in the repo. Use this BEFORE calling get_skill_file when you are unsure of exact file paths — e.g. to discover whether /docs/adr/, /docs/, /handbook/, or /CONTEXT.md exist. Returns each entry with its full path, name, and whether it is a folder. If a path does not exist the tool returns an empty list.',
-    {
-      project: z.string().describe('ADO project name'),
-      repo: z.string().describe('Repository name'),
-      path: z.string().describe('Directory path to list (e.g. "/", "/docs", "/docs/adr"). Leading slash is optional.'),
-      branch: z.string().optional().describe('Branch name'),
-    },
-    async ({ project, repo, path, branch }) => {
-      try {
-        const entries = await listRepoDir(project, repo, path, branch);
-        return {
-          content: [{ type: 'text', text: JSON.stringify(entries, null, 2) }],
-        };
-      } catch {
-        return {
-          content: [{ type: 'text', text: '[]' }],
-        };
-      }
-    },
-  );
+  if (enableRepoBrowse) {
+    server.tool(
+      'list_repo_dir',
+      'List the immediate children (files and sub-folders) of a directory in the repo. Use this BEFORE calling get_skill_file when you are unsure of exact file paths — e.g. to discover whether /docs/adr/, /docs/, /handbook/, or /CONTEXT.md exist. Returns each entry with its full path, name, and whether it is a folder. If a path does not exist the tool returns an empty list.',
+      {
+        project: z.string().describe('ADO project name'),
+        repo: z.string().describe('Repository name'),
+        path: z.string().describe('Directory path to list (e.g. "/", "/docs", "/docs/adr"). Leading slash is optional.'),
+        branch: z.string().optional().describe('Branch name'),
+      },
+      async ({ project, repo, path, branch }) => {
+        try {
+          const entries = await raceWithTimeout('list_repo_dir', toolTimeoutMs, () =>
+            options?.repoReader
+              ? options.repoReader.listDir(path)
+              : listRepoDir(project, repo, path, branch),
+          );
+          return {
+            content: [{ type: 'text', text: JSON.stringify(entries, null, 2) }],
+          };
+        } catch {
+          return {
+            content: [{ type: 'text', text: '[]' }],
+          };
+        }
+      },
+    );
 
-  server.tool(
-    'get_skill_file',
-    'Get the raw content of ANY file in the repo by absolute path (path starts with "/"). Use this for skill supporting files (PRD-FORMAT.md, INTERVIEW-RUBRIC.md, examples/) AND for repo-wide context files the skill may reference such as /CONTEXT.md, /AGENTS.md, /README.md, /docs/adr/*.md, glossaries, etc. The agent runs in a sandbox workspace with no local clone of the repo, so this is the only way to read project files.',
-    {
-      project: z.string().describe('ADO project name'),
-      repo: z.string().describe('Repository name'),
-      path: z.string().describe('Absolute path in the repo, starting with "/" (e.g. "/CONTEXT.md", "/.cursor/skills/foo/PRD-FORMAT.md", "/docs/adr/0001-foo.md")'),
-      branch: z.string().optional().describe('Branch name'),
-    },
-    async ({ project, repo, path, branch }) => {
-      const content = await getSkillFile(project, repo, path, branch);
-      return {
-        content: [{ type: 'text', text: content }],
-      };
-    },
-  );
+    server.tool(
+      'get_skill_file',
+      'Get the raw content of ANY file in the repo by absolute path (path starts with "/"). Use this for skill supporting files (PRD-FORMAT.md, INTERVIEW-RUBRIC.md, examples/) AND for repo-wide context files the skill may reference such as /CONTEXT.md, /AGENTS.md, /README.md, /docs/adr/*.md, glossaries, etc. The agent runs in a sandbox workspace with no local clone of the repo, so this is the only way to read project files.',
+      {
+        project: z.string().describe('ADO project name'),
+        repo: z.string().describe('Repository name'),
+        path: z.string().describe('Absolute path in the repo, starting with "/" (e.g. "/CONTEXT.md", "/.cursor/skills/foo/PRD-FORMAT.md", "/docs/adr/0001-foo.md")'),
+        branch: z.string().optional().describe('Branch name'),
+      },
+      async ({ project, repo, path, branch }) => {
+        try {
+          const content = await raceWithTimeout('get_skill_file', toolTimeoutMs, () =>
+            options?.repoReader
+              ? options.repoReader.readFile(path)
+              : getSkillFile(project, repo, path, branch),
+          );
+          return {
+            content: [{ type: 'text', text: content }],
+          };
+        } catch (err) {
+          return {
+            content: [{ type: 'text', text: `Error reading file: ${toolErrorMessage(err)}` }],
+            isError: true,
+          };
+        }
+      },
+    );
+  }
 
-  server.tool(
-    'search_repo_code',
-    'Search code in a repository by keyword and return matching file paths with snippets. Use this when you need to locate implementation areas quickly before reading full files.',
-    {
-      project: z.string().describe('ADO project name'),
-      repo: z.string().describe('Repository name'),
-      query: z.string().describe('Search query (keywords, symbol, or phrase)'),
-      branch: z.string().optional().describe('Branch name (best-effort; may use indexed default branch)'),
-      limit: z.number().int().min(1).max(50).optional().describe('Maximum results (default 10)'),
-    },
-    async ({ project, repo, query, branch, limit }) => {
-      const results = await searchRepoCode(project, repo, query, branch, limit ?? 10);
-      return {
-        content: [{ type: 'text', text: JSON.stringify(results, null, 2) }],
-      };
-    },
-  );
+  if (
+    enableRepoBrowse
+    && options?.enableCodeSearch !== false
+  ) {
+    server.tool(
+      'search_repo_code',
+      'Search code in a repository by keyword and return matching file paths with snippets. Use this when you need to locate implementation areas quickly before reading full files.',
+      {
+        project: z.string().describe('ADO project name'),
+        repo: z.string().describe('Repository name'),
+        query: z.string().describe('Search query (keywords, symbol, or phrase)'),
+        branch: z.string().optional().describe('Branch name (best-effort; may use indexed default branch)'),
+        limit: z.number().int().min(1).max(50).optional().describe('Maximum results (default 10)'),
+      },
+      async ({ project, repo, query, branch, limit }) => {
+        try {
+          const results = await raceWithTimeout('search_repo_code', toolTimeoutMs, () =>
+            options?.repoReader
+              ? options.repoReader.searchCode(query, limit ?? 10)
+              : searchRepoCode(project, repo, query, branch, limit ?? 10),
+          );
+          return {
+            content: [{ type: 'text', text: JSON.stringify(results, null, 2) }],
+          };
+        } catch (err) {
+          return {
+            content: [{ type: 'text', text: `Search error: ${toolErrorMessage(err)}` }],
+            isError: true,
+          };
+        }
+      },
+    );
+  }
 
   server.tool(
     'search_skills',
@@ -295,43 +430,17 @@ export function createAdoMcpServer(): McpServer {
 
   server.tool(
     'update_design_doc',
-    'Update one section of the current design doc (design, tech-spec, or assumptions) and save it to the database. ' +
+    'Update one section of the current design doc (design, tech-spec, or assumptions) and save it as a proposed draft for the owner to review. ' +
     'Call this when the user explicitly asks you to apply, save, or write changes to the doc. ' +
-    'Only one section can be updated per call — make multiple calls to update multiple sections.',
+    'Only one section can be updated per call — make multiple calls to update multiple sections. ' +
+    'After calling this tool, changes appear as a proposed diff the owner can accept or reject section by section.',
     {
       threadId: z.string().describe('The current session thread ID (from .ai-pilot/session.json)'),
       docId: z.string().describe('The design doc ID (from .ai-pilot/kickoff-context.md)'),
       section: z.enum(['design', 'tech-spec', 'assumptions']).describe('Which section to update'),
       content: z.string().describe('The full new markdown content for the section'),
     },
-    async ({ threadId, docId, section, content }) => {
-      const thread = await getThread(threadId);
-      if (!thread) {
-        return { content: [{ type: 'text', text: JSON.stringify({ error: 'Thread not found' }) }] };
-      }
-      const opts =
-        section === 'design'      ? { designContent: content } :
-        section === 'tech-spec'   ? { techSpecContent: content } :
-                                    { assumptionsContent: content };
-      try {
-        // Check if the doc is in fix mode (has fixBaseline set). If so, the
-        // update was initiated by the fix-validation flow and the thread may
-        // have been created by a different user (e.g. a reviewer). Use the
-        // auth-free syncDesignDocContent to avoid permission mismatches.
-        const doc = await getDesignDoc(docId);
-        if (doc?.fixBaseline) {
-          await syncDesignDocContent(docId, opts);
-        } else {
-          await updateDesignDocContent(docId, thread.userId, opts);
-        }
-        console.log(`[MCP] update_design_doc: saved ${section} for doc ${docId} (fixMode=${!!doc?.fixBaseline})`);
-        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, section }) }] };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(`[MCP] update_design_doc: FAILED ${section} for doc ${docId} — ${message}`);
-        return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
-      }
-    },
+    async (params) => handleUpdateDesignDoc(params),
   );
 
   // ── PRD write-back ──────────────────────────────────────────────────────────
@@ -680,7 +789,7 @@ export function createAdoMcpServer(): McpServer {
     async ({ sessionId }) => {
       try {
         const { eq } = await import('drizzle-orm');
-        const { standupSessions, standupParticipants, appUsers, chatMessages } = await import('../../db/schema');
+        const { standupSessions, appUsers, chatMessages } = await import('../../db/schema');
         const session = await db.query.standupSessions.findFirst({
           where: eq(standupSessions.id, sessionId),
           with: {
@@ -693,7 +802,12 @@ export function createAdoMcpServer(): McpServer {
         }
 
         const participantData = await Promise.all(
-          session.participants.map(async (p: any) => {
+          session.participants.map(async (p: {
+              userId: string;
+              threadId: string | null;
+              status: string;
+              structuredUpdate: unknown;
+            }) => {
             const user = await db.query.appUsers.findFirst({
               where: eq(appUsers.oid, p.userId),
               columns: { displayName: true, email: true },
@@ -704,7 +818,7 @@ export function createAdoMcpServer(): McpServer {
                 .select({ role: chatMessages.role, text: chatMessages.text })
                 .from(chatMessages)
                 .where(eq(chatMessages.threadId, p.threadId));
-              transcript = messages.map((m: any) => `[${m.role}] ${m.text}`);
+              transcript = messages.map((m) => `[${m.role}] ${m.text}`);
             }
             return {
               userId: p.userId,

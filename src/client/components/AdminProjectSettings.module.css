@@ -211,7 +211,7 @@
 .btnPrimary {
   padding: 9px 20px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 7px;
   font-size: 14px;
@@ -413,7 +413,7 @@
 }
 
 .accordionBodyOpen {
-  max-height: 2000px;
+  max-height: 12000px;
   opacity: 1;
   padding: 0 16px 16px;
   overflow: visible;
@@ -437,6 +437,201 @@
   color: var(--text-muted);
   margin-top: 2px;
   font-style: italic;
+}
+
+/* ── Pipeline stage cards ────────────────────────────────────────────────── */
+
+.pipelineFlow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.pipelineFlowStep {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary, var(--bg-primary));
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.pipelineFlowArrow {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.pipelineFlowHint {
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-left: 4px;
+}
+
+.stageList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.stageCard {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+.stageCardHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  transition: background 0.15s ease;
+}
+
+.stageCardHeader:hover {
+  background: color-mix(in srgb, var(--accent-color) 4%, transparent);
+}
+
+.stageCardChevron {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+}
+
+.stageCardChevronOpen {
+  transform: rotate(90deg);
+}
+
+.stageCardTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.stageCardOptional {
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+}
+
+.stageCardHint {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stageCardBody {
+  padding: 0 12px 12px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.stageFieldGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.stageFieldSingle {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.sharedModelRow {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color-light);
+  border-radius: 8px;
+  background: var(--bg-tertiary, var(--bg-primary));
+}
+
+.interviewOptions {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color-light);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.interviewOptionsHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.interviewOptionsTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+.interviewOptionBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.interviewOptionRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.interviewOptionRow .select,
+.interviewOptionRow .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.interviewOptionFlags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  padding-left: 2px;
+}
+
+.interviewOptionFlag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.interviewOptionFlag input {
+  margin: 0;
 }
 
 /* ── User picker (approver section) ──────────────────────────────────────── */
@@ -851,6 +1046,9 @@
   .pageHeader { flex-direction: column; align-items: stretch; }
   .formGrid { grid-template-columns: 1fr; }
   .formGridThreeCol { grid-template-columns: 1fr; }
+  .stageFieldGrid { grid-template-columns: 1fr; }
+  .interviewOptionRow { flex-direction: column; align-items: stretch; }
+  .interviewOptionsHeader { flex-direction: column; }
   .tableWrapper { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .table { min-width: 600px; }
 
@@ -1058,4 +1256,130 @@
   color: var(--text-secondary);
   margin-top: 2px;
   line-height: 1.4;
+}
+
+/* ── Foundation Skills (read-only project view) ───────────────────────────── */
+
+.fsSection {
+  margin-top: 24px;
+  border-top: 1px solid var(--border-color);
+}
+
+.fsToggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 16px 0;
+  text-align: left;
+  font-family: inherit;
+}
+
+.fsToggleTitle {
+  font-size: 14px;
+  font-weight: 620;
+  color: var(--text-primary);
+}
+
+.fsCount {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-color) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-color) 32%, transparent);
+  color: var(--accent-color);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.fsCaret {
+  margin-left: auto;
+  font-size: 9px;
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+}
+
+.fsCaretOpen { transform: rotate(180deg); }
+
+.fsBody { padding-bottom: 20px; }
+
+.fsHint {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-muted);
+  margin: 0 0 14px;
+  max-width: 72ch;
+}
+
+.fsEmpty {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-muted);
+  margin: 0;
+  padding: 24px;
+  text-align: center;
+  border: 1px dashed var(--border-color-light);
+  border-radius: 12px;
+}
+
+.fsTableWrap {
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg-secondary);
+}
+
+.fsTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.fsTable th {
+  text-align: left;
+  padding: 11px 16px;
+  background: color-mix(in srgb, var(--bg-tertiary) 45%, transparent);
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 620;
+  white-space: nowrap;
+}
+
+.fsTable td {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: top;
+}
+
+.fsTable tbody tr:last-child td { border-bottom: none; }
+
+.fsSkillName {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.fsSkillSummary {
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.fsVersion {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--success-color) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success-color) 34%, transparent);
+  color: var(--success-color);
+  font-size: 11.5px;
+  font-weight: 620;
+  white-space: nowrap;
+  font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
 }

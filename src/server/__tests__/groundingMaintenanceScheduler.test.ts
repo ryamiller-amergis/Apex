@@ -1,0 +1,89 @@
+jest.mock('../db/drizzle', () => ({ db: {} }));
+
+import type { PreWarmTarget } from '../../shared/types/runGrounding';
+import { createGroundingMaintenanceScheduler } from '../services/groundingMaintenanceScheduler';
+
+const target: PreWarmTarget = {
+  provider: 'github',
+  project: 'Apex',
+  repository: 'AI-Pilot',
+  branch: 'main',
+};
+
+describe('TBI-007 groundingMaintenanceScheduler', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('DoD-0 runs a staggered startup sweep, five-minute interval, and internal active-set events', async () => {
+    // Arrange
+    const sweep = jest.fn().mockResolvedValue(undefined);
+    const preWarm = jest.fn().mockResolvedValue(undefined);
+    const evictIdle = jest.fn().mockResolvedValue(undefined);
+    const evaluateActive = jest.fn().mockResolvedValue([]);
+    let eventHandler: ((changed: PreWarmTarget) => void) | undefined;
+    const unsubscribe = jest.fn();
+    const scheduler = createGroundingMaintenanceScheduler({
+      preWarmService: { sweep, preWarm },
+      evictionService: { evictIdle },
+      stalenessService: { evaluateActive },
+      subscribe: (handler) => {
+        eventHandler = handler;
+        return unsubscribe;
+      },
+      startupDelayMs: 100,
+      intervalMs: 5 * 60 * 1000,
+    });
+
+    // Act
+    scheduler.start();
+    await jest.advanceTimersByTimeAsync(100);
+    eventHandler?.(target);
+    await Promise.resolve();
+    await jest.advanceTimersByTimeAsync(5 * 60 * 1000 - 100);
+    scheduler.stop();
+
+    // Assert
+    expect(sweep).toHaveBeenCalledTimes(2);
+    expect(evictIdle).toHaveBeenCalledTimes(2);
+    expect(preWarm).toHaveBeenCalledWith(target);
+    expect(evaluateActive).toHaveBeenCalledWith(target);
+    expect(evaluateActive).toHaveBeenCalledWith();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('DoD-4 prevents overlapping maintenance sweeps', async () => {
+    // Arrange
+    let releaseSweep!: () => void;
+    const pendingSweep = new Promise<void>((resolve) => {
+      releaseSweep = resolve;
+    });
+    const sweep = jest.fn(() => pendingSweep);
+    const evictIdle = jest.fn().mockResolvedValue(undefined);
+    const evaluateActive = jest.fn().mockResolvedValue([]);
+    const scheduler = createGroundingMaintenanceScheduler({
+      preWarmService: {
+        sweep,
+        preWarm: jest.fn().mockResolvedValue(undefined),
+      },
+      evictionService: { evictIdle },
+      stalenessService: { evaluateActive },
+      subscribe: () => jest.fn(),
+    });
+
+    // Act
+    const first = scheduler.runNow();
+    const overlapping = scheduler.runNow();
+    releaseSweep();
+    await Promise.all([first, overlapping]);
+
+    // Assert
+    expect(sweep).toHaveBeenCalledTimes(1);
+    expect(evictIdle).toHaveBeenCalledTimes(1);
+    expect(evaluateActive).toHaveBeenCalledTimes(1);
+  });
+});

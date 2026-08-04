@@ -44,7 +44,7 @@
   border: 1px solid var(--accent-color);
   border-radius: 8px;
   background: var(--accent-color);
-  color: var(--bg-primary);
+  color: var(--on-accent);
   cursor: pointer;
   font-weight: 700;
   transition: all 0.2s ease;
@@ -124,7 +124,7 @@
   height: 40px;
   border-radius: 8px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   flex-shrink: 0;
 }
 
@@ -166,7 +166,7 @@
   height: 20px;
   border-radius: 50%;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .cardBadge svg {

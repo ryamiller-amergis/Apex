@@ -36,7 +36,7 @@ import {
 import { getOwnerApproval, recordOwnerApproval } from '../services/ownerApprovalService';
 import { getComments, getUnresolvedCount } from '../services/reviewCommentService';
 import { createNotification } from '../services/notificationService';
-import { fixAdrContentWithBedrock, BedrockModelTruncatedError } from '../services/bedrockService';
+import { fixAdrContentWithBedrock, regenerateMarkdownRegionWithBedrock, BedrockModelTruncatedError } from '../services/bedrockService';
 import type { OwnerApproveRequest } from '../../shared/types/approvals';
 
 const router = Router();
@@ -374,6 +374,7 @@ router.post('/:id/assistant-thread', requirePermission('adr:view'), requirePermi
       'Use repository sandbox/MCP tools to inspect relevant code and documentation before making claims or proposing edits.',
       'To stage an edit, call `update_adr` with the identifiers above and the complete revised ADR markdown.',
       'The tool writes only proposed content. Never modify live ADR content or workflow status.',
+      'After staging, the author reviews changes section by section (approve / reject / ask AI to change).',
       '',
       '## Current ADR',
       adr.content || '(empty)',
@@ -548,6 +549,68 @@ router.post('/:id/apply-proposed', requirePermission('adr:view'), requirePermiss
     await applyAdrProposedContent(req.params.id, getUserId(req));
     res.json({ ok: true });
   } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/:id/apply-proposed-selective', requirePermission('adr:view'), requirePermission('adr:edit'), async (req, res, next) => {
+  try {
+    const body = req.body as { content?: string };
+    if (body.content == null || typeof body.content !== 'string') {
+      res.status(400).json({ error: 'content is required' });
+      return;
+    }
+    await applyAdrProposedContent(req.params.id, getUserId(req), { mergedContent: body.content });
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/:id/regenerate-proposed-section', requirePermission('adr:view'), requirePermission('adr:edit'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const adr = await getAdr(req.params.id);
+    if (!adr) {
+      res.status(404).json({ error: 'ADR not found' });
+      return;
+    }
+    if (adr.authorId !== userId) {
+      res.status(403).json({ error: 'Only the ADR owner can regenerate proposed edits' });
+      return;
+    }
+    if (adr.proposedContent == null) {
+      res.status(400).json({ error: 'No proposed ADR content to regenerate' });
+      return;
+    }
+    const body = req.body as { oldText?: string; newText?: string; feedback?: string };
+    if (!body.feedback || !String(body.feedback).trim()) {
+      res.status(400).json({ error: 'feedback is required' });
+      return;
+    }
+
+    const projectConfig = await resolveSkillConfig({
+      project: adr.project,
+      settingsId: adr.skillSettingsId ?? undefined,
+    });
+    const revised = await regenerateMarkdownRegionWithBedrock(
+      'ADR',
+      adr.proposedContent,
+      body.oldText ?? '',
+      body.newText ?? '',
+      String(body.feedback).trim(),
+      projectConfig?.prdReviewBedrockModelId,
+      projectConfig?.prdReviewBedrockMaxTokens,
+      { feature: 'other', project: adr.project, entityType: 'adr', entityId: adr.id, userId },
+    );
+    await stageAdrReviewFix(adr.id, userId, revised, adr.fixCommentId ?? null);
+    const updated = await getAdr(adr.id);
+    res.json({ proposedContent: updated?.proposedContent ?? revised });
+  } catch (error) {
+    if (error instanceof BedrockModelTruncatedError) {
+      res.status(422).json({ error: error.message });
+      return;
+    }
     next(error);
   }
 });

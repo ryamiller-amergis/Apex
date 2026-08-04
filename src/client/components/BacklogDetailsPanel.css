@@ -455,7 +455,7 @@
 
 .btn-save {
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border-color: var(--accent-color);
 }
 
@@ -1922,8 +1922,8 @@
 .bdp-gen-spinner--sm {
   width: 12px;
   height: 12px;
-  border: 2px solid rgba(255, 255, 255, 0.35);
-  border-top-color: #fff;
+  border: 2px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-top-color: currentColor;
   border-radius: 50%;
   animation: bdp-spin 0.7s linear infinite;
   display: inline-block;
@@ -1985,12 +1985,12 @@
 
 .bdp-wizard-step--active .bdp-wizard-step-num {
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .bdp-wizard-step--done .bdp-wizard-step-num {
   background: var(--success-color);
-  color: #fff;
+  color: var(--on-success);
 }
 
 /* Questions */

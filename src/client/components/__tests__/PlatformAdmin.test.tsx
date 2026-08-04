@@ -24,6 +24,44 @@ import {
   useRemoveFlagRule,
   useUpdateFeatureFlag,
 } from '../../hooks/usePlatformAdminFeatureFlags';
+import type {
+  PendingProjectAssignment,
+  PlatformAdminAccessRequest,
+} from '../../../shared/types/platformAdmin';
+import type { FeatureFlagWithRules } from '../../../shared/types/featureFlags';
+
+jest.mock('../UserMenu', () => ({
+  UserMenu: () => <div data-testid="user-menu" />,
+}));
+
+jest.mock('../WalkthroughsAdminPanel', () => ({
+  WalkthroughsAdminPanel: () => (
+    <div data-testid="walkthroughs-admin-panel">
+      <div data-testid="walkthrough-catalog" />
+    </div>
+  ),
+}));
+
+jest.mock('../GroundingRolloutStatus', () => ({
+  GroundingRolloutStatus: ({
+    stage,
+    onAdvance,
+  }: {
+    stage: string;
+    onAdvance: () => void;
+  }) => (
+    <section data-testid="grounding-rollout-status">
+      <span>{stage}</span>
+      <button
+        type="button"
+        data-testid="grounding-advance-button"
+        onClick={onAdvance}
+      >
+        Review advancement controls
+      </button>
+    </section>
+  ),
+}));
 
 jest.mock('../../hooks/usePlatformAdmin', () => ({
   useApproveProjectAccessRequest: jest.fn(),
@@ -72,8 +110,10 @@ const mockUseFlagAudit = useFlagAudit as jest.Mock;
 
 function setupPlatformAdmin(
   projects = [{ id: 'project-1', name: 'MaxView', description: 'Delivery planning' }],
-  accessRequests: any[] = [],
-  pendingAssignmentsByProject: Record<string, any[]> = {},
+  accessRequests: PlatformAdminAccessRequest[] = [],
+  pendingAssignmentsByProject: Record<string, PendingProjectAssignment[]> = {},
+  flags: FeatureFlagWithRules[] = [],
+  groups: Array<{ id: string; name: string; project: string }> = [],
 ) {
   const saveAssignments = jest.fn().mockResolvedValue(undefined);
   const approveRequest = jest.fn().mockResolvedValue(undefined);
@@ -108,13 +148,13 @@ function setupPlatformAdmin(
     error: null,
   });
   mockUsePlatformAdminGroups.mockReturnValue({
-    data: [],
+    data: groups,
     isLoading: false,
     isError: false,
     error: null,
   });
   mockUseFeatureFlagsList.mockReturnValue({
-    data: [],
+    data: flags,
     isLoading: false,
     isError: false,
     error: null,
@@ -323,7 +363,7 @@ describe('PlatformAdmin user-project access', () => {
 describe('PlatformAdmin feature flags', () => {
   const flagFixture = {
     id: 'flag-1',
-    key: 'example-flag',
+    key: 'repo-grounding-workspace-profile',
     description: 'Demo flag',
     enabled: false,
     lifecycle: 'active' as const,
@@ -336,23 +376,17 @@ describe('PlatformAdmin feature flags', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    setupPlatformAdmin();
-    mockUseFeatureFlagsList.mockReturnValue({
-      data: [flagFixture],
-      isLoading: false,
-      isError: false,
-      error: null,
-    });
-    mockUsePlatformAdminGroups.mockReturnValue({
-      data: [
+    setupPlatformAdmin(
+      undefined,
+      [],
+      {},
+      [flagFixture],
+      [
         { id: 'group-1', name: 'Developer', project: 'MaxView' },
         { id: 'group-2', name: 'Developer', project: 'Apex' },
         { id: 'group-3', name: 'QA', project: 'MaxView' },
       ],
-      isLoading: false,
-      isError: false,
-      error: null,
-    });
+    );
   });
 
   it('renders the feature flags tab and lists existing flags', async () => {
@@ -361,7 +395,25 @@ describe('PlatformAdmin feature flags', () => {
     await user.click(screen.getByRole('tab', { name: /feature flags/i }));
 
     expect(screen.getByRole('heading', { name: /feature flags/i })).toBeInTheDocument();
-    expect(screen.getByText('example-flag')).toBeInTheDocument();
+    expect(screen.getByText('repo-grounding-workspace-profile')).toBeInTheDocument();
+  });
+
+  it('AC-0 / BR-011 mounts the current rollout scorecard and focuses manual audited controls', async () => {
+    const user = userEvent.setup({ delay: null });
+
+    await user.click(screen.getByRole('tab', { name: /feature flags/i }));
+
+    expect(screen.getByTestId('grounding-rollout-status')).toHaveTextContent(
+      'design-module',
+    );
+    await user.click(screen.getByTestId('grounding-advance-button'));
+
+    await waitFor(() => {
+      expect(
+        document.getElementById('grounding-rollout-feature-flag-controls'),
+      ).toHaveFocus();
+    });
+    expect(screen.getByRole('button', { name: /hide rules/i })).toBeVisible();
   });
 
   it('lets a super admin add project targeting rules via typeahead multi-select', async () => {
@@ -445,6 +497,58 @@ describe('PlatformAdmin feature flags', () => {
     });
   });
 
+  it('AC-0 / accessibility NFR exposes labeled keyboard-operable rollout controls', async () => {
+    const user = userEvent.setup({ delay: null });
+    const addRule = jest.fn().mockResolvedValue(undefined);
+    mockUseAddFlagRule.mockReturnValue({
+      mutateAsync: addRule,
+      isPending: false,
+      error: null,
+    });
+
+    await user.click(screen.getByRole('tab', { name: /feature flags/i }));
+    await user.click(screen.getByRole('button', { name: /rules \(0\)/i }));
+
+    expect(screen.getByTestId('feature-flag-kill-switch-toggle')).toHaveAccessibleName(
+      'repo-grounding-workspace-profile kill switch',
+    );
+    expect(screen.getByTestId('feature-flag-rule-type-caller')).toHaveValue('caller');
+    expect(screen.getByTestId('feature-flag-rule-type-environment')).toHaveValue('environment');
+
+    const targetType = screen.getByLabelText(/target type/i);
+    expect(targetType).toHaveAccessibleName('Target type');
+    await user.selectOptions(targetType, 'caller');
+    const valueInput = screen.getByTestId('feature-flag-rule-value-input');
+    expect(valueInput).toHaveAccessibleName('Caller key');
+    await user.type(valueInput, 'interview');
+    const addButton = screen.getByRole('button', { name: /add rule/i });
+    addButton.focus();
+    await user.keyboard('{Enter}');
+
+    await waitFor(() => {
+      expect(addRule).toHaveBeenCalledWith({
+        flagId: 'flag-1',
+        type: 'caller',
+        value: 'interview',
+      });
+    });
+
+    await user.selectOptions(screen.getByLabelText(/target type/i), 'environment');
+    const environmentInput = screen.getByTestId('feature-flag-rule-value-input');
+    expect(environmentInput).toHaveAccessibleName('Environment name');
+    await user.type(environmentInput, 'dev');
+    screen.getByRole('button', { name: /add rule/i }).focus();
+    await user.keyboard('{Enter}');
+
+    await waitFor(() => {
+      expect(addRule).toHaveBeenCalledWith({
+        flagId: 'flag-1',
+        type: 'environment',
+        value: 'dev',
+      });
+    });
+  });
+
   it('opens a custom delete modal and deletes the flag on confirm', async () => {
     const user = userEvent.setup({ delay: null });
     const deleteMutate = jest.fn();
@@ -460,7 +564,7 @@ describe('PlatformAdmin feature flags', () => {
     await user.click(screen.getAllByRole('button', { name: /^delete$/i })[0]);
 
     const dialog = screen.getByRole('dialog', { name: /delete feature flag/i });
-    expect(within(dialog).getByText(/example-flag/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/repo-grounding-workspace-profile/)).toBeInTheDocument();
 
     await user.click(within(dialog).getByRole('button', { name: /^delete$/i }));
 
@@ -468,5 +572,76 @@ describe('PlatformAdmin feature flags', () => {
       { id: 'flag-1' },
       expect.objectContaining({ onSuccess: expect.any(Function) }),
     );
+  });
+});
+
+// ── APEX Skills tab ───────────────────────────────────────────────────────────
+
+// Every hook the module exports is stubbed, so adding a hook to
+// FoundationSkillsAdmin does not silently break this suite with an
+// "is not a function" render crash.
+jest.mock('../../hooks/useFoundationSkillAdmin', () => {
+  const query = (data: unknown) => jest.fn().mockReturnValue({
+    data, isLoading: false, isError: false, error: null,
+  });
+  const mutation = () => jest.fn().mockReturnValue({
+    mutate: jest.fn(), mutateAsync: jest.fn(), isPending: false, error: null, reset: jest.fn(),
+  });
+
+  return {
+    useFoundationSkillCandidates:         query([]),
+    useFoundationSkillReleases:           query([]),
+    useFoundationSkillReleaseAudit:       query([]),
+    useFoundationSkillRepoStatuses:       query([]),
+    useFoundationSkillTeams:              query([]),
+    useFoundationSkillRollbackTargets:    query([]),
+    useFoundationSkillMatrix:             query([]),
+    useProjectAvailableSkills:            query([]),
+    useFoundationSkillCatalog:            query({ suiteVersion: '0.0.0', skills: [] }),
+    useShippableFoundationSkills:         jest.fn().mockReturnValue({ skills: [], isLoading: false }),
+    useCreateFoundationSkillRelease:      mutation(),
+    usePublishFoundationSkillRelease:     mutation(),
+    useDeprecateFoundationSkillRelease:   mutation(),
+    useDeleteDraftFoundationSkillRelease: mutation(),
+    useUpdateFoundationSkillRelease:      mutation(),
+    useUpdateRepoWithFoundationSkills:    mutation(),
+    useScanAllFoundationSkillRepos:       mutation(),
+    useRollbackFoundationSkillRepo:       mutation(),
+    useCheckFoundationSkillCompatibility: mutation(),
+  };
+});
+
+jest.mock('../../hooks/useProjects', () => ({
+  useProjects: jest.fn().mockReturnValue({ data: [], isLoading: false }),
+}));
+
+describe('PlatformAdmin — APEX Skills tab', () => {
+  it('renders the APEX Skills tab button', () => {
+    setupPlatformAdmin();
+    expect(screen.getByRole('tab', { name: /APEX Skills/i })).toBeInTheDocument();
+  });
+
+  it('shows FoundationSkillsAdmin section when APEX Skills tab is clicked', async () => {
+    const user = userEvent.setup();
+    setupPlatformAdmin();
+
+    await user.click(screen.getByRole('tab', { name: /APEX Skills/i }));
+    // The FoundationSkillsAdmin renders its own section heading
+    expect(screen.getByText('APEX Foundation Skills')).toBeInTheDocument();
+  });
+});
+
+describe('PlatformAdmin walkthroughs tab', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('renders walkthrough catalog when walkthroughs tab is selected', async () => {
+    const user = userEvent.setup();
+    setupPlatformAdmin();
+
+    await user.click(screen.getByTestId('platform-admin-tab-walkthroughs'));
+
+    expect(screen.getByTestId('walkthrough-catalog')).toBeInTheDocument();
   });
 });

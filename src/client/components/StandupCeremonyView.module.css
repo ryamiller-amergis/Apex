@@ -85,7 +85,7 @@
 
 .badge {
   background: var(--success-color);
-  color: white;
+  color: var(--on-success);
   padding: 3px 10px;
   border-radius: 12px;
   font-size: 0.75rem;
@@ -168,7 +168,7 @@
 
 .message.user .bubble {
   background: var(--accent-color);
-  color: white;
+  color: var(--on-accent);
   border-radius: 12px 4px 12px 12px;
 }
 
@@ -495,13 +495,13 @@
 .micBtnActive {
   background: var(--accent-color);
   border-color: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .micBtnActive:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .actions {
@@ -535,7 +535,7 @@
 
 .submitBtn {
   background: var(--success-color);
-  color: white;
+  color: var(--on-success);
 }
 
 .submitBtn:hover:not(:disabled) {
@@ -576,7 +576,7 @@
   margin-top: 12px;
   padding: 10px 20px;
   background: var(--accent-color);
-  color: white;
+  color: var(--on-accent);
   border: none;
   border-radius: 8px;
   cursor: pointer;

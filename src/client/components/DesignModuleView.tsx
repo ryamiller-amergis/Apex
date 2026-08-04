@@ -7,6 +7,7 @@ import {
   useDesignModules,
   useRegenerateDesignModule,
 } from '../hooks/useDesignModules';
+import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { DesignModuleFormModal } from './DesignModuleFormModal';
 import { MarkdownWithMermaid } from './MarkdownWithMermaid';
 import styles from './DesignModuleView.module.css';
@@ -22,16 +23,34 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
   const [formMode, setFormMode] = useState<'create' | 'edit' | null>(null);
   const [forceRegeneration, setForceRegeneration] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const modulesQuery = useDesignModules();
-  const moduleQuery = useDesignModule(selectedSlug);
-  const regenerate = useRegenerateDesignModule();
-  const deleteModule = useDeleteDesignModule();
+  const [pendingGenerationSlug, setPendingGenerationSlug] = useState<
+    string | null
+  >(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const modulesQuery = useDesignModules(selectedProject);
+  const moduleQuery = useDesignModule(selectedProject, selectedSlug);
+  const regenerate = useRegenerateDesignModule(selectedProject);
+  const deleteModule = useDeleteDesignModule(selectedProject);
   const { can } = useAppShell();
 
-  const modules = modulesQuery.data ?? [];
+  const modules = [...(modulesQuery.data ?? [])].sort((a, b) =>
+    a.label.localeCompare(b.label, undefined, { sensitivity: 'base' })
+  );
   const activeModule = moduleQuery.data ?? null;
   const canManage = can('design-module:manage');
   const canRegenerate = can('design-module:regenerate');
+  const isGenerating =
+    Boolean(pendingGenerationSlug) &&
+    activeModule?.slug === pendingGenerationSlug &&
+    !activeModule.hasContent;
+
+  useEffect(() => {
+    setSelectedSlug(null);
+    setPendingGenerationSlug(null);
+    setNotice(null);
+    setFormMode(null);
+    setShowDeleteConfirm(false);
+  }, [selectedProject]);
 
   useEffect(() => {
     if (!selectedSlug && modules.length > 0) setSelectedSlug(modules[0].slug);
@@ -40,42 +59,68 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
       modules.length > 0 &&
       !modules.some((module) => module.slug === selectedSlug)
     ) {
+      if (selectedSlug === pendingGenerationSlug) return;
       setSelectedSlug(modules[0].slug);
     }
-  }, [modules, selectedSlug]);
+  }, [modules, selectedSlug, pendingGenerationSlug]);
 
   useEffect(() => {
     setForceRegeneration(false);
-    setNotice(null);
   }, [selectedSlug]);
+
+  useEffect(() => {
+    if (
+      pendingGenerationSlug &&
+      activeModule?.slug === pendingGenerationSlug &&
+      activeModule.hasContent
+    ) {
+      setPendingGenerationSlug(null);
+      setNotice('Architecture document is ready.');
+    }
+  }, [activeModule, pendingGenerationSlug]);
 
   const handleRegenerate = async (): Promise<void> => {
     if (!activeModule) return;
     setNotice(null);
-    const result = await regenerate.mutateAsync({
-      slug: activeModule.slug,
-      input: { project: selectedProject, force: forceRegeneration },
-    });
-    setNotice(
-      result.started
-        ? 'Generation started. This page will refresh when the architecture document is ready.'
-        : 'The source has not changed, so no AI generation was started.'
-    );
+    setPendingGenerationSlug(activeModule.slug);
+    try {
+      const result = await regenerate.mutateAsync({
+        slug: activeModule.slug,
+        input: { project: selectedProject, force: forceRegeneration },
+      });
+      if (!result.started) {
+        setPendingGenerationSlug(null);
+        setNotice(
+          'The source has not changed, so no AI generation was started.'
+        );
+        return;
+      }
+      setNotice(
+        'Generation started. This page will refresh when the architecture document is ready.'
+      );
+    } catch {
+      setPendingGenerationSlug(null);
+    }
   };
 
   const handleDelete = async (): Promise<void> => {
     if (!activeModule) return;
-    const confirmed = window.confirm(
-      `Delete the "${activeModule.label}" architecture module?`
-    );
-    if (!confirmed) return;
-    await deleteModule.mutateAsync(activeModule.slug);
-    setSelectedSlug(null);
+    try {
+      await deleteModule.mutateAsync(activeModule.slug);
+      setShowDeleteConfirm(false);
+      setSelectedSlug(null);
+    } catch {
+      // Error surface via deleteModule.error
+    }
   };
 
   return (
-    <main className={styles.layout}>
-      <aside className={styles.rail} aria-label="Architecture modules">
+    <main className={styles.layout} {...{ 'data-testid': 'design-module-page' }}>
+      <aside
+        className={styles.rail}
+        aria-label="Architecture modules"
+        {...{ 'data-testid': 'design-module-sidebar' }}
+      >
         <div className={styles.railHeader}>
           <div>
             <h1>Design Module</h1>
@@ -86,6 +131,7 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
               type="button"
               className={styles.addButton}
               onClick={() => setFormMode('create')}
+              {...{ 'data-testid': 'design-module-add-btn' }}
             >
               Add Module
             </button>
@@ -97,11 +143,17 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
         ) : modulesQuery.error ? (
           <div className={styles.error}>{modulesQuery.error.message}</div>
         ) : modules.length === 0 ? (
-          <div className={styles.railMessage}>
+          <div
+            className={styles.railMessage}
+            {...{ 'data-testid': 'design-module-list-empty' }}
+          >
             No architecture modules are configured.
           </div>
         ) : (
-          <div className={styles.moduleList}>
+          <div
+            className={styles.moduleList}
+            {...{ 'data-testid': 'design-module-list' }}
+          >
             {modules.map((module) => {
               const Icon = getDesignModuleIcon(module.iconKey);
               return (
@@ -109,7 +161,11 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
                   key={module.slug}
                   type="button"
                   className={`${styles.moduleButton} ${selectedSlug === module.slug ? styles.active : ''}`}
-                  onClick={() => setSelectedSlug(module.slug)}
+                  onClick={() => {
+                    setNotice(null);
+                    setSelectedSlug(module.slug);
+                  }}
+                  {...{ 'data-testid': `design-module-select-${module.slug}` }}
                 >
                   <span className={styles.moduleIcon}>
                     <Icon size={22} />
@@ -131,18 +187,27 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
         )}
       </aside>
 
-      <section className={styles.content}>
+      <section
+        className={styles.content}
+        {...{ 'data-testid': 'design-module-content-panel' }}
+      >
         {moduleQuery.isLoading && selectedSlug ? (
           <div className={styles.empty}>Loading architecture…</div>
         ) : moduleQuery.error ? (
           <div className={styles.error}>{moduleQuery.error.message}</div>
         ) : !activeModule ? (
-          <div className={styles.empty}>
+          <div
+            className={styles.empty}
+            {...{ 'data-testid': 'design-module-content-empty' }}
+          >
             Select a module to explore its architecture.
           </div>
         ) : (
           <>
-            <header className={styles.contentHeader}>
+            <header
+              className={styles.contentHeader}
+              {...{ 'data-testid': 'design-module-content-header' }}
+            >
               <div>
                 <div className={styles.titleRow}>
                   <h2>{activeModule.label}</h2>
@@ -157,6 +222,9 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
                   {activeModule.lastGeneratedAt
                     ? `Last generated ${new Date(activeModule.lastGeneratedAt).toLocaleString()}`
                     : 'Curated architecture document'}
+                  {activeModule.lastGeneratedAt &&
+                    activeModule.generatedByModel &&
+                    ` · ${activeModule.generatedByModel}`}
                   {!activeModule.sourceAvailable &&
                     ' · Local source unavailable'}
                 </div>
@@ -168,14 +236,16 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
                       type="button"
                       className={styles.secondary}
                       onClick={() => setFormMode('edit')}
+                      {...{ 'data-testid': 'design-module-edit-btn' }}
                     >
                       Edit
                     </button>
                     <button
                       type="button"
                       className={styles.danger}
-                      onClick={handleDelete}
+                      onClick={() => setShowDeleteConfirm(true)}
                       disabled={deleteModule.isPending}
+                      {...{ 'data-testid': 'design-module-delete-btn' }}
                     >
                       Delete
                     </button>
@@ -185,7 +255,10 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
             </header>
 
             {canRegenerate && (
-              <div className={styles.generationBar}>
+              <div
+                className={styles.generationBar}
+                {...{ 'data-testid': 'design-module-generation-bar' }}
+              >
                 <div>
                   <strong>
                     {activeModule.hasContent
@@ -203,6 +276,7 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
                     onChange={(event) =>
                       setForceRegeneration(event.target.checked)
                     }
+                    {...{ 'data-testid': 'design-module-force-regenerate' }}
                   />
                   Force
                 </label>
@@ -212,10 +286,12 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
                   onClick={handleRegenerate}
                   disabled={
                     regenerate.isPending ||
+                    isGenerating ||
                     (!activeModule.isStale && !forceRegeneration)
                   }
+                  {...{ 'data-testid': 'design-module-generate-btn' }}
                 >
-                  {regenerate.isPending
+                  {regenerate.isPending || isGenerating
                     ? 'Starting…'
                     : activeModule.hasContent
                       ? 'Regenerate'
@@ -224,7 +300,14 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
               </div>
             )}
 
-            {notice && <div className={styles.notice}>{notice}</div>}
+            {notice && (
+              <div
+                className={styles.notice}
+                {...{ 'data-testid': 'design-module-notice-banner' }}
+              >
+                {notice}
+              </div>
+            )}
             {regenerate.error && (
               <div className={styles.error}>{regenerate.error.message}</div>
             )}
@@ -232,15 +315,22 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
               <div className={styles.error}>{deleteModule.error.message}</div>
             )}
 
-            <article className={styles.document}>
+            <article
+              className={styles.document}
+              {...{ 'data-testid': 'design-module-document-panel' }}
+            >
               {activeModule.content ? (
                 <MarkdownWithMermaid content={activeModule.content} />
               ) : (
-                <div className={styles.emptyDocument}>
+                <div
+                  className={styles.emptyDocument}
+                  {...{ 'data-testid': 'design-module-document-empty' }}
+                >
                   <h3>No architecture content yet</h3>
                   <p>
-                    Generate this module from its curated source scope to create
-                    the first document.
+                    {isGenerating
+                      ? 'Generation is in progress. This page will refresh when the architecture document is ready.'
+                      : 'Generate this module from its curated source scope to create the first document.'}
                   </p>
                 </div>
               )}
@@ -250,12 +340,41 @@ export const DesignModuleView: React.FC<DesignModuleViewProps> = ({
       </section>
 
       {formMode && (
+        // data-testid-exempt — DesignModuleFormModal root already sets data-testid
         <DesignModuleFormModal
+          project={selectedProject}
           module={formMode === 'edit' ? activeModule : null}
           onClose={() => setFormMode(null)}
-          onSaved={(slug) => {
+          onSaved={(slug, meta) => {
             setSelectedSlug(slug);
             setFormMode(null);
+            if (meta?.generationStarted) {
+              setPendingGenerationSlug(slug);
+              setNotice(
+                'Generation started. This page will refresh when the architecture document is ready.'
+              );
+              return;
+            }
+            if (meta?.generationError) {
+              setPendingGenerationSlug(null);
+              setNotice(
+                `Module saved, but generation failed to start: ${meta.generationError}`
+              );
+            }
+          }}
+        />
+      )}
+
+      {showDeleteConfirm && activeModule && (
+        // data-testid-exempt — shared ConfirmDeleteModal; delete flow covered by design-module-delete-btn
+        <ConfirmDeleteModal
+          title="Delete architecture module"
+          itemName={activeModule.label}
+          description="Are you sure you want to delete the architecture module"
+          isPending={deleteModule.isPending}
+          onCancel={() => setShowDeleteConfirm(false)}
+          onConfirm={() => {
+            void handleDelete();
           }}
         />
       )}

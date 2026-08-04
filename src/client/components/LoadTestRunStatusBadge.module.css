@@ -1,0 +1,43 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.unknown {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  border: 1px solid var(--border-color-light);
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+}
+
+.inProgress {
+  color: var(--accent-color);
+  border-color: var(--accent-color);
+}
+
+.passed {
+  color: var(--success-color);
+  border-color: var(--success-color);
+}
+
+.failed {
+  color: var(--error-color);
+  border-color: var(--error-color);
+}
+
+.neutral {
+  color: var(--text-secondary);
+}

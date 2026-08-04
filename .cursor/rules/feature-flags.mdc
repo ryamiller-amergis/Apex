@@ -1,5 +1,5 @@
 ---
-description: When introducing, modifying, or removing a feature flag, load the feature-flags skill and follow its workflows
+description: When introducing, modifying, or removing a feature flag, load the matching implementation or cleanup skill
 globs: src/server/services/featureFlagService.ts,src/server/routes/featureFlags.ts,src/client/hooks/useFeatureFlags.ts,src/client/components/PlatformAdmin.tsx,**/featureFlag*,**/useFeatureFlag*
 alwaysApply: false
 ---
@@ -8,14 +8,18 @@ alwaysApply: false
 
 When any change introduces, modifies, or removes a feature flag:
 
-1. **Load the skill**: Read `.cursor/skills/feature-flags/SKILL.md` and follow the appropriate workflow (wrap or cleanup).
+1. **Load the matching skill**:
+   - Adding or changing a gate: `.cursor/skills/feature-flags/SKILL.md`
+   - Retiring, archiving, deleting, or removing a gate: `.cursor/skills/feature-flag-cleanup/SKILL.md`
 
 2. **Top-level split only**: Feature flag checks belong at the feature's entry point (route handler or top-level component). Never scatter `useFeatureFlag()` or `isFeatureEnabled()` deep inside nested components or utility functions.
 
-3. **Audit trail**: All flag changes (create, toggle, add/remove rules, lifecycle transitions) are automatically audited by the service. Do not bypass the service layer for direct DB writes.
+3. **Cleanup-ready markers**: Every new gate must use the exact `@feature-flag:<key>` start/end and enabled/disabled branch markers defined by the implementation skill. Marker regions must be balanced and must not be nested.
 
-4. **Lifecycle discipline**: Every new flag starts as `active`. When fully rolled out, transition to `stale`. When cleanup is approved, mark `cleanup_ready: true`. After code cleanup, archive or delete.
+4. **Audit trail**: All flag changes (create, toggle, add/remove rules, lifecycle transitions) are automatically audited by the service. Do not bypass the service layer for direct DB writes.
 
-5. **Naming**: Flag keys are kebab-case, named after the feature (not the ticket). Must be unique.
+5. **Lifecycle discipline**: Every new flag starts as `active`. When fully rolled out, transition to `stale`. When cleanup is approved, mark `cleanup_ready: true`. After code cleanup, archive or delete.
 
-6. **Cleanup plan**: When creating a flag, document the expected cleanup criteria (e.g. "remove after 2 sprints of stable rollout to all projects").
+6. **Naming**: Flag keys are kebab-case, named after the feature (not the ticket). Must be unique.
+
+7. **Cleanup plan**: When creating a flag, document the expected winning branch and cleanup criteria (e.g. "retain enabled after 2 stable sprints at full rollout").

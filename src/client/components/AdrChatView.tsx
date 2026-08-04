@@ -3,7 +3,7 @@ import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAppShell } from '../hooks/useAppShell';
-import { useChatStream } from '../hooks/useChatStream';
+import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useChatThread, useSkillRepos, useStartChat } from '../hooks/useChatThreads';
 import { useAvailableModels, useGlobalDefaultModel, useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
 import {
@@ -14,6 +14,7 @@ import {
   useAssignAdrReviewers,
   useCreateAdrComment,
   useCreateAdr,
+  useDeleteAdr,
   useDeleteAdrComment,
   useFixAdrCommentWithAi,
   useFixAdrWithAi,
@@ -31,7 +32,9 @@ import { AdrAssistantPanel } from './AdrAssistantPanel';
 import { ProposedAdrChangesReview } from './ProposedAdrChangesReview';
 import { AdrReviewerModal } from './AdrReviewerModal';
 import { AnnotationLayer } from './AnnotationLayer';
+import { MarkdownWithMermaid } from './MarkdownWithMermaid';
 import { ReviewCommentSidebar } from './ReviewCommentSidebar';
+import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { useChatAttachments, formatAttachmentSize } from '../hooks/useChatAttachments';
 import { useSpeechInput } from '../hooks/useSpeechInput';
 import type { ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
@@ -51,6 +54,7 @@ const NewAdrCompose: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [showReviewerModal, setShowReviewerModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const titleInputRef = useRef<HTMLInputElement>(null);
   const { selectedProject, selectedSkillSettingsId, authenticatedUser } = useAppShell();
   const navigate = useNavigate();
   const { data: skillConfig } = useProjectSkillConfig(selectedProject || null, selectedSkillSettingsId);
@@ -75,6 +79,10 @@ const NewAdrCompose: React.FC = () => {
     ?? repos.find((candidate) => candidate.name === repo)?.defaultBranch
     ?? 'main';
   const pending = startChat.isPending || createAdr.isPending;
+
+  useEffect(() => {
+    titleInputRef.current?.focus();
+  }, []);
 
   useEffect(() => {
     setModel(skillConfig?.adrModel ?? globalDefault?.value ?? DEFAULT_MODEL_ID);
@@ -138,7 +146,14 @@ const NewAdrCompose: React.FC = () => {
 
   return (
     <div className={styles.composeContainer}>
-      <button className={styles.backBtn} onClick={() => navigate('/adr')} type="button">← Back</button>
+      <button
+        className={styles.backBtn}
+        onClick={() => navigate('/adr')}
+        type="button"
+        {...{ 'data-testid': 'adr-compose-back' }}
+      >
+        ← Back
+      </button>
       <div className={styles.composeInner}>
         <h1 className={styles.composeHeading}>What architecture decision needs to be made?</h1>
         <div className={styles.composePills}>
@@ -155,16 +170,18 @@ const NewAdrCompose: React.FC = () => {
             className={styles.fileInput}
             onChange={handleAttachmentChange}
             disabled={pending}
+            {...{ 'data-testid': 'adr-compose-file-input' }}
           />
           <div className={styles.composeTitleRow}>
             <label className={styles.composeTitleLabel} htmlFor="adr-title">Title</label>
             <input
               id="adr-title"
+              ref={titleInputRef}
               className={styles.composeTitleInput}
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               placeholder="Short decision title"
-              autoFocus
+              {...{ 'data-testid': 'adr-compose-title' }}
             />
           </div>
           <textarea
@@ -173,6 +190,7 @@ const NewAdrCompose: React.FC = () => {
             onChange={(event) => setInput(event.target.value)}
             placeholder="Describe what is being built or refactored, the decision to resolve, and known constraints."
             rows={5}
+            {...{ 'data-testid': 'adr-compose-message' }}
           />
           {attachments.length > 0 && (
             <div className={styles.attachmentList}>
@@ -186,6 +204,7 @@ const NewAdrCompose: React.FC = () => {
                     onClick={() => removeAttachment(attachment.id)}
                     disabled={pending}
                     aria-label={`Remove ${attachment.name}`}
+                    {...{ 'data-testid': `adr-attachment-remove-${attachment.id}` }}
                   >
                     ×
                   </button>
@@ -204,6 +223,7 @@ const NewAdrCompose: React.FC = () => {
               aria-label="Attach files"
               title="Attach files for context"
               disabled={pending}
+              {...{ 'data-testid': 'adr-compose-attach' }}
             >
               <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M7 10.5l5.2-5.2a3 3 0 114.2 4.2l-6.7 6.7a5 5 0 01-7.1-7.1l6.4-6.4" />
@@ -218,6 +238,7 @@ const NewAdrCompose: React.FC = () => {
                 ? (speech.isListening ? 'Stop listening' : 'Talk to transcribe into chat')
                 : 'Speech recognition not supported in this browser'}
               disabled={!speech.isSpeechSupported || pending}
+              {...{ 'data-testid': 'adr-compose-microphone' }}
             >
               <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="7" y="2.5" width="6" height="10" rx="3" />
@@ -226,7 +247,12 @@ const NewAdrCompose: React.FC = () => {
                 <path d="M7.5 18h5" />
               </svg>
             </button>
-            <select className={styles.modelSelect} value={model} onChange={(event) => setModel(event.target.value)}>
+            <select
+              className={styles.modelSelect}
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+              {...{ 'data-testid': 'adr-compose-model' }}
+            >
               {models.length ? models.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>) : <option value={model}>{model}</option>}
             </select>
             <button
@@ -235,6 +261,7 @@ const NewAdrCompose: React.FC = () => {
               aria-label="Start ADR"
               disabled={!title.trim() || (!input.trim() && attachments.length === 0) || !repo || pending}
               onClick={() => void handleStart()}
+              {...{ 'data-testid': 'adr-compose-start' }}
             >
               {pending ? '…' : '→'}
             </button>
@@ -249,6 +276,7 @@ const NewAdrCompose: React.FC = () => {
           isSubmitting={pending}
           onCancel={() => setShowReviewerModal(false)}
           onConfirm={(reviewerIds) => void handleCreateAdr(reviewerIds)}
+          {...{ 'data-testid': 'adr-reviewer-modal' }}
         />
       )}
     </div>
@@ -265,7 +293,9 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const [newCommentBody, setNewCommentBody] = useState('');
   const [fixingCommentId, setFixingCommentId] = useState<string | null>(null);
   const [reviewerModalOpen, setReviewerModalOpen] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const commentInputRef = useRef<HTMLTextAreaElement>(null);
   const navigate = useNavigate();
   const { can, userId } = useAppShell();
   const { data: adr, isLoading, isError } = useAdr(id);
@@ -274,12 +304,14 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const { data: reviewComments = [] } = useAdrComments(id);
   const { data: ownerApproval } = useAdrOwnerApproval(id);
   const { data: thread } = useChatThread(adr?.chatThreadId ?? null);
-  const { messages, streamingText, status } = useChatStream(adr?.chatThreadId ?? null, {
+  const session = useAgentChatSession(adr?.chatThreadId ?? null, {
     initialMessages: thread?.messages,
     initialStatus: thread?.status,
   });
+  const { messages, streamingText } = session;
   const generateAdr = useGenerateAdr();
   const updateAdr = useUpdateAdr();
+  const deleteAdr = useDeleteAdr();
   const createComment = useCreateAdrComment(id);
   const replyToComment = useReplyToAdrComment(id);
   const resolveComment = useResolveAdrComment(id);
@@ -290,7 +322,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const assignReviewers = useAssignAdrReviewers(id);
   const fixWithAi = useFixAdrWithAi(id);
   const fixCommentWithAi = useFixAdrCommentWithAi(id);
-  const isRunning = status === 'running';
+  const isRunning = session.isRunning;
   const isAuthor = adr?.authorId === userId;
   const chatLocked = !isAuthor || adr?.status !== 'in_progress';
 
@@ -324,6 +356,16 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   }, [messages.length, streamingText]);
 
   useEffect(() => {
+    if (!pendingSelector) return;
+    commentInputRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPendingSelector(null);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [pendingSelector]);
+
+  useEffect(() => {
     if (adr?.status !== 'generating') return;
     setGenerationNow(Date.now());
     const intervalId = window.setInterval(() => setGenerationNow(Date.now()), 1_000);
@@ -334,14 +376,14 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     if (!adr || !text.trim() || isRunning || chatLocked) return;
     setInput('');
     setError(null);
-    const response = await fetch(`/api/chat/threads/${adr.chatThreadId}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ text: text.trim(), model: adr.model }),
-    });
-    if (!response.ok) setError('Failed to send message');
-  }, [adr, isRunning, chatLocked]);
+    await session.send(text.trim(), { model: adr.model });
+    if (session.sendError) setError(session.sendError);
+  }, [adr, isRunning, chatLocked, session]);
+
+  const cancelActiveRun = useCallback(async () => {
+    setError(null);
+    await session.cancel();
+  }, [session]);
 
   if (isLoading) return <div className={styles.loadingState}>Loading ADR…</div>;
   if (isError || !adr) return <div className={styles.errorState}>ADR not found.</div>;
@@ -387,7 +429,14 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     <div className={styles.container}>
       <div className={styles.header}>
         <div className={styles.headerLeft}>
-          <button className={styles.backBtn} onClick={() => navigate('/adr')} type="button">← Back</button>
+          <button
+            className={styles.backBtn}
+            onClick={() => navigate('/adr')}
+            type="button"
+            {...{ 'data-testid': 'adr-back-btn' }}
+          >
+            ← Back
+          </button>
           <div className={styles.titleBlock}>
             <h1 className={styles.title}>{adr.title}</h1>
             <div className={styles.titleMeta}>
@@ -402,6 +451,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
               type="button"
               disabled={isRunning || generateAdr.isPending}
               onClick={() => generateAdr.mutate(id)}
+              {...{ 'data-testid': 'adr-generate-btn' }}
             >
               {generateAdr.isPending ? 'Generating…' : 'Generate ADR'}
             </button>
@@ -412,6 +462,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                 className={styles.actionBtn}
                 type="button"
                 onClick={() => setReviewerModalOpen(true)}
+                {...{ 'data-testid': 'adr-manage-reviewers-btn' }}
               >
                 Manage Reviewers
               </button>
@@ -420,6 +471,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                 type="button"
                 aria-expanded={assistantOpen}
                 onClick={() => setAssistantOpen((open) => !open)}
+                {...{ 'data-testid': 'adr-assistant-toggle-btn' }}
               >
                 ADR Apex Assistant
               </button>
@@ -443,6 +495,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                     { onError: (caught) => setError(caught.message) },
                   );
                 }}
+                {...{ 'data-testid': 'adr-accept-btn' }}
               >
                 {respondToOwnerApproval.isPending ? 'Accepting…' : 'Accept ADR'}
               </button>
@@ -456,6 +509,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                 disabled={unresolvedCount > 0 || respondToReview.isPending}
                 title={unresolvedCount > 0 ? 'Resolve all review comments before approving' : undefined}
                 onClick={() => respondToReview.mutate({ status: 'approved' })}
+                {...{ 'data-testid': 'adr-approve-btn' }}
               >
                 Approve ADR
               </button>
@@ -467,19 +521,67 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                   status: 'revision_requested',
                   comment: 'Revision requested by reviewer',
                 })}
+                {...{ 'data-testid': 'adr-request-revision-btn' }}
               >
                 Request Revision
               </button>
             </>
           )}
           {isAuthor && adr.status === 'accepted' && can('adr:edit') && (
-            <button className={styles.actionBtnDanger} type="button" onClick={() => updateAdr.mutate({ id, changes: { status: 'superseded' } })}>
+            <button
+              className={styles.actionBtnDanger}
+              type="button"
+              onClick={() => updateAdr.mutate({ id, changes: { status: 'superseded' } })}
+              {...{ 'data-testid': 'adr-mark-superseded-btn' }}
+            >
               Mark Superseded
+            </button>
+          )}
+          {isAuthor && can('adr:delete') && (
+            <button
+              className={styles.actionBtnDanger}
+              onClick={() => setShowDeleteModal(true)}
+              disabled={deleteAdr.isPending}
+              type="button"
+              title="Delete this ADR"
+              {...{ 'data-testid': 'adr-delete-btn' }}
+            >
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="2 4 4 4 14 4" />
+                <path d="M13 4l-.7 9.3A1 1 0 0 1 12.3 14H3.7a1 1 0 0 1-1-.7L2 4" />
+                <path d="M6.5 7v4M9.5 7v4" />
+                <path d="M5.5 4V2.7A.7.7 0 0 1 6.2 2h3.6a.7.7 0 0 1 .7.7V4" />
+              </svg>
+              Delete
             </button>
           )}
         </div>
       </div>
-      {error && <div className={styles.sendError}>{error}</div>}
+      {error && (
+        <div className={styles.sendError}>
+          <span>{error}</span>
+          {error.toLowerCase().includes('already running') && (
+            <button
+              type="button"
+              className={styles.sendErrorDismiss}
+              onClick={() => void cancelActiveRun()}
+              title="Stop the stuck agent"
+              {...{ 'data-testid': 'adr-error-stop-btn' }}
+            >
+              Stop
+            </button>
+          )}
+          <button
+            type="button"
+            className={styles.sendErrorDismiss}
+            onClick={() => setError(null)}
+            aria-label="Dismiss"
+            {...{ 'data-testid': 'adr-error-dismiss-btn' }}
+          >
+            ×
+          </button>
+        </div>
+      )}
       {adr.content && (
         <div className={styles.adrMetadataSummary}>
           <span><strong>Owner:</strong> {adr.ownerName}</span>
@@ -492,6 +594,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
         adrId={adr.id}
         currentContent={adr.content}
         proposedContent={adr.proposedContent}
+        fixCommentId={adr.fixCommentId}
       />
       {adr.content && (
         <div className={styles.adrReviewLayout}>
@@ -506,12 +609,12 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                 readOnly={adr.status === 'accepted'}
               >
                 <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant} ${styles.adrMarkdown}`}>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{adr.content}</ReactMarkdown>
+                  <MarkdownWithMermaid content={adr.content} />
                 </div>
               </AnnotationLayer>
             ) : (
               <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant} ${styles.adrMarkdown}`}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{adr.content}</ReactMarkdown>
+                <MarkdownWithMermaid content={adr.content} />
               </div>
             )}
           </div>
@@ -608,8 +711,32 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
               }}
               placeholder={isRunning ? 'Architect is thinking…' : 'Continue the ADR interview…'}
               disabled={isRunning}
+              {...{ 'data-testid': 'adr-message-input' }}
             />
-            <button className={styles.sendBtn} type="button" disabled={!input.trim() || isRunning} onClick={() => void send(input)}>→</button>
+            {isRunning ? (
+              <button
+                className={`${styles.sendBtn} ${styles.stopBtn}`}
+                type="button"
+                onClick={() => void cancelActiveRun()}
+                aria-label="Stop"
+                title="Stop"
+                {...{ 'data-testid': 'adr-stop-btn' }}
+              >
+                <svg viewBox="0 0 20 20" fill="currentColor">
+                  <rect x="4" y="4" width="12" height="12" rx="2" />
+                </svg>
+              </button>
+            ) : (
+              <button
+                className={styles.sendBtn}
+                type="button"
+                disabled={!input.trim()}
+                onClick={() => void send(input)}
+                {...{ 'data-testid': 'adr-send-btn' }}
+              >
+                →
+              </button>
+            )}
           </div>
         </div>
       ))}
@@ -619,28 +746,35 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
           role="dialog"
           aria-modal="true"
           aria-labelledby="adr-comment-title"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) setPendingSelector(null);
-          }}
+          {...{ 'data-testid': 'adr-comment-modal' }}
         >
           <div className={styles.commentModalCard}>
             <h3 className={styles.commentModalTitle} id="adr-comment-title">Add ADR Comment</h3>
             <blockquote className={styles.commentModalQuote}>{pendingSelector.selector.exact}</blockquote>
             <textarea
+              ref={commentInputRef}
               className={styles.commentModalInput}
               value={newCommentBody}
               onChange={(event) => setNewCommentBody(event.target.value)}
               placeholder="Write your review comment…"
               rows={3}
-              autoFocus
+              {...{ 'data-testid': 'adr-comment-input' }}
             />
             <div className={styles.commentModalActions}>
-              <button className={styles.actionBtn} type="button" onClick={() => setPendingSelector(null)}>Cancel</button>
+              <button
+                className={styles.actionBtn}
+                type="button"
+                onClick={() => setPendingSelector(null)}
+                {...{ 'data-testid': 'adr-comment-cancel-btn' }}
+              >
+                Cancel
+              </button>
               <button
                 className={styles.actionBtnPrimary}
                 type="button"
                 disabled={!newCommentBody.trim() || createComment.isPending}
                 onClick={() => void handleSubmitComment()}
+                {...{ 'data-testid': 'adr-comment-post-btn' }}
               >
                 {createComment.isPending ? 'Posting…' : 'Post Comment'}
               </button>
@@ -653,6 +787,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
         open={assistantOpen && isAuthor && adr.status === 'proposed' && can('adr:edit')}
         onClose={() => setAssistantOpen(false)}
         existingThreadId={adr.adrAssistantThreadId}
+        {...{ 'data-testid': 'adr-assistant-panel' }}
       />
       {reviewerModalOpen && (
         <AdrReviewerModal
@@ -669,6 +804,26 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
               onError: (caught) => setError(caught.message),
             });
           }}
+          {...{ 'data-testid': 'adr-reviewer-modal-edit' }}
+        />
+      )}
+      {showDeleteModal && (
+        <ConfirmDeleteModal
+          title="Delete ADR"
+          itemName={adr.title}
+          description="Are you sure you want to permanently delete the ADR"
+          isPending={deleteAdr.isPending}
+          onConfirm={() => {
+            deleteAdr.mutate(id, {
+              onSuccess: () => navigate('/adr'),
+              onError: (caught) => {
+                setShowDeleteModal(false);
+                setError(caught.message);
+              },
+            });
+          }}
+          onCancel={() => setShowDeleteModal(false)}
+          {...{ 'data-testid': 'adr-delete-modal' }}
         />
       )}
     </div>

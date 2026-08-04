@@ -2,8 +2,8 @@ import React, { useState, useRef, useEffect, useCallback, Suspense, lazy } from 
 import { useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { useChatThread, useSendMessage } from '../hooks/useChatThreads';
-import { useChatStream } from '../hooks/useChatStream';
+import { useChatThread } from '../hooks/useChatThreads';
+import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useAppShell } from '../hooks/useAppShell';
 import { useSpeechInput } from '../hooks/useSpeechInput';
 import type { WorkItem } from '../types/workitem';
@@ -28,6 +28,7 @@ const StandupSubNav: React.FC<{ active: 'standup' | 'standup-summary' | 'standup
       <button
         className={`${styles.subNavBtn} ${active === 'standup' ? styles.subNavActive : ''}`}
         onClick={() => navigate('/standup')}
+        {...{ 'data-testid': 'standup-subnav-my-standup' }}
       >
         My Standup
       </button>
@@ -35,6 +36,7 @@ const StandupSubNav: React.FC<{ active: 'standup' | 'standup-summary' | 'standup
         <button
           className={`${styles.subNavBtn} ${active === 'standup-summary' ? styles.subNavActive : ''}`}
           onClick={() => navigate('/standup-summary')}
+          {...{ 'data-testid': 'standup-subnav-summary' }}
         >
           Summary
         </button>
@@ -43,6 +45,7 @@ const StandupSubNav: React.FC<{ active: 'standup' | 'standup-summary' | 'standup
         <button
           className={`${styles.subNavBtn} ${active === 'standup-manage' ? styles.subNavActive : ''}`}
           onClick={() => navigate('/standup-manage')}
+          {...{ 'data-testid': 'standup-subnav-manage' }}
         >
           Manage
         </button>
@@ -94,6 +97,7 @@ function renderWorkItemLinks(text: string, onWorkItemClick: (id: number) => void
           className={styles.workItemLink}
           onClick={(e) => { e.preventDefault(); onWorkItemClick(id); }}
           title={`View work item #${id}`}
+          {...{ 'data-testid': `standup-work-item-link-${id}` }}
         >
           {part}
         </button>
@@ -185,18 +189,29 @@ export const StandupCeremonyView: React.FC = () => {
 
   const threadId = session?.threadId ?? null;
   const { data: thread } = useChatThread(threadId);
+
+  const syncToken = useCallback(async (tid: string) => {
+    try {
+      await fetch(`/api/standup/threads/${tid}/sync-token`, { method: 'POST' });
+    } catch {
+      // non-fatal
+    }
+  }, []);
+
+  const chatSession = useAgentChatSession(threadId, {
+    initialMessages: thread?.messages,
+    initialStatus: thread?.status,
+    beforeSend: async () => { if (threadId) await syncToken(threadId); },
+  });
   const {
     messages,
     streamingText,
     thinkingText,
-    status: streamStatus,
     isRetrying,
     retryReason,
-  } = useChatStream(threadId, {
-    initialMessages: thread?.messages,
-    initialStatus: thread?.status,
-  });
-  const sendMessage = useSendMessage(threadId ?? '');
+    isRunning,
+    status: streamStatus,
+  } = chatSession;
   const speech = useSpeechInput(useCallback((text: string) => setInput(text), []));
 
   useEffect(() => {
@@ -213,14 +228,6 @@ export const StandupCeremonyView: React.FC = () => {
       });
   }, []);
 
-  const syncToken = useCallback(async (tid: string) => {
-    try {
-      await fetch(`/api/standup/threads/${tid}/sync-token`, { method: 'POST' });
-    } catch {
-      // non-fatal
-    }
-  }, []);
-
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamingText, thinkingText, streamStatus]);
@@ -235,10 +242,9 @@ export const StandupCeremonyView: React.FC = () => {
   const handleSend = useCallback(async () => {
     if (!input.trim() || !threadId) return;
     if (speech.isListening) speech.stop();
-    await syncToken(threadId);
-    sendMessage.mutate({ text: input.trim() });
+    await chatSession.send(input.trim());
     setInput('');
-  }, [input, threadId, sendMessage, syncToken, speech]);
+  }, [input, threadId, chatSession, speech]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -296,8 +302,6 @@ export const StandupCeremonyView: React.FC = () => {
     m.toolName !== '_thinking' &&
     m.toolName !== '_reasoning'
   );
-  const isRunning = streamStatus === 'running';
-
   return (
     <div className={styles.container}>
       <StandupSubNav active="standup" />

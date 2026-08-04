@@ -1,0 +1,55 @@
+.status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.badge {
+  padding: 4px 8px;
+  border: 1px solid var(--border-color-light);
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+}
+
+.notice {
+  flex: 1 1 240px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.action {
+  padding: 4px 8px;
+  border: 1px solid var(--accent-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--accent-color);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.action:hover:not(:disabled) {
+  background: var(--accent-color);
+  color: var(--on-accent);
+}
+
+.action:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.explanation,
+.loading,
+.unavailable {
+  color: var(--text-muted);
+  font-size: 12px;
+}

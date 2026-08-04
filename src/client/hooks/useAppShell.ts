@@ -2,15 +2,15 @@ import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { startOfMonth, endOfMonth } from 'date-fns';
 import { useWorkItems } from './useWorkItems';
+import { useWhatsNewState } from './useWhatsNewState';
 import { env } from '../config/env';
 import type { WorkItem } from '../types/workitem';
 import type { MyPermissionsResponse } from '../../shared/types/rbac';
+import type { WhatsNewState } from '../../shared/types/whatsNew';
 
-export type ThemeMode = 'light' | 'dark' | 'amergis';
+import { THEME_CYCLE, isThemeMode, type ThemeMode } from '../config/themes';
 
-const isThemeMode = (value: string | null): value is ThemeMode => (
-  value === 'light' || value === 'dark' || value === 'amergis'
-);
+export type { ThemeMode };
 
 interface AuthenticatedUser {
   name: string;
@@ -51,7 +51,20 @@ function parseTeamsEnv(): { availableProjects: string[]; availableAreaPaths: str
   };
 }
 
-export function useAppShell() {
+function deriveWhatsNewFromLegacy(d: MyPermissionsResponse): WhatsNewState {
+  if (d.whatsNew) return d.whatsNew;
+  return {
+    status: d.changelogUnread ? 'ready' : 'seeded',
+    currentVersion: d.currentChangelogVersion || null,
+    lastSeenVersion: d.lastSeenChangelogVersion,
+    unread: d.changelogUnread,
+    showOnLogin: d.showChangelogOnLogin,
+    seeded: !d.changelogUnread,
+  };
+}
+
+export function useAppShell(options?: { workItemsEnabled?: boolean }) {
+  const workItemsEnabled = options?.workItemsEnabled ?? false;
   const queryClient = useQueryClient();
   const [currentDate] = useState(new Date());
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
@@ -67,9 +80,8 @@ export function useAppShell() {
     const storedTheme = localStorage.getItem('theme');
     return isThemeMode(storedTheme) ? storedTheme : 'amergis';
   });
-  const [showChangelog, setShowChangelog] = useState(false);
-  const [hasUnreadChangelog, setHasUnreadChangelog] = useState(false);
-  const [showChangelogOnLogin, setShowChangelogOnLogin] = useState(true);
+  const [whatsNewBootstrap, setWhatsNewBootstrap] = useState<WhatsNewState | null>(null);
+  const whatsNewCapturedRef = useRef(false);
   const [betaAnnouncementDismissed, setBetaAnnouncementDismissed] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [pendingDueDateChange, setPendingDueDateChange] = useState<DueDateChange | null>(null);
@@ -129,11 +141,11 @@ export function useAppShell() {
           setGroups(d.groups ?? []);
           setUserId(d.userId ?? '');
           setIsSuperAdmin(d.isSuperAdmin ?? false);
-          setHasUnreadChangelog(d.changelogUnread);
-          setShowChangelogOnLogin(d.showChangelogOnLogin);
           setBetaAnnouncementDismissed(d.betaAnnouncementDismissed);
-          if (d.changelogUnread && d.showChangelogOnLogin) {
-            setShowChangelog(true);
+          // Capture What's New once per authenticated session (no project re-eval).
+          if (!whatsNewCapturedRef.current) {
+            whatsNewCapturedRef.current = true;
+            setWhatsNewBootstrap(deriveWhatsNewFromLegacy(d));
           }
         }
       })
@@ -141,8 +153,12 @@ export function useAppShell() {
       .finally(() => setPermissionsLoaded(true));
   }, [isAuthenticated, selectedProject]);
 
-  const { workItems, loading, error, updateDueDate, refetch } = useWorkItems(
-    startDate, endDate, selectedProject, selectedAreaPath, isAuthenticated === true
+  const { workItems, loading, error, isFetching, updateDueDate, refetch } = useWorkItems(
+    startDate,
+    endDate,
+    selectedProject,
+    selectedAreaPath,
+    isAuthenticated === true && workItemsEnabled
   );
 
   useEffect(() => { localStorage.setItem('selectedProject', selectedProject); }, [selectedProject]);
@@ -255,15 +271,28 @@ export function useAppShell() {
     [isSuperAdmin, permissions, roles, groups],
   );
 
+  const whatsNew = useWhatsNewState({
+    bootstrap: whatsNewBootstrap,
+    enabled: isAuthenticated === true,
+  });
+
+  const {
+    dismiss: dismissWhatsNew,
+    setShowOnLogin: setWhatsNewShowOnLogin,
+    open: openWhatsNew,
+    closeWithoutAck: closeWhatsNewWithoutAck,
+    manualUnavailable: whatsNewManualUnavailable,
+    automaticOverlaySettled: whatsNewAutomaticOverlaySettled,
+    blocksAutomaticWalkthrough: whatsNewBlocksAutomaticWalkthrough,
+  } = whatsNew;
+
   const handleMarkChangelogAsRead = useCallback(() => {
-    setHasUnreadChangelog(false);
-    void fetch('/api/me/preferences', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ markChangelogRead: true }),
-    });
-  }, []);
+    dismissWhatsNew('modal');
+  }, [dismissWhatsNew]);
+
+  const handleDismissWhatsNewBanner = useCallback(() => {
+    dismissWhatsNew('banner');
+  }, [dismissWhatsNew]);
 
   const handleDismissBetaAnnouncement = useCallback(() => {
     setBetaAnnouncementDismissed(true);
@@ -276,14 +305,14 @@ export function useAppShell() {
   }, []);
 
   const handleToggleShowChangelogOnLogin = useCallback((show: boolean) => {
-    setShowChangelogOnLogin(show);
-    void fetch('/api/me/preferences', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ showChangelogOnLogin: show }),
-    });
-  }, []);
+    setWhatsNewShowOnLogin(show);
+  }, [setWhatsNewShowOnLogin]);
+
+  const setShowChangelog = useCallback((open: boolean) => {
+    if (open) openWhatsNew('manual');
+    else if (whatsNewManualUnavailable) closeWhatsNewWithoutAck();
+    else dismissWhatsNew('modal');
+  }, [openWhatsNew, closeWhatsNewWithoutAck, dismissWhatsNew, whatsNewManualUnavailable]);
 
   const handleLogout = useCallback(async () => {
     sessionStorage.removeItem('agentHomeThreadId');
@@ -315,19 +344,27 @@ export function useAppShell() {
     workItems,
     loading,
     error,
+    isFetchingWorkItems: isFetching,
+    refetchWorkItems: refetch,
     isLoading: loading || isChangingTeam,
     isSaving,
     selectedItem,
     setSelectedItem,
     theme,
     setThemeMode: setTheme,
-    toggleTheme: () => setTheme(p => p === 'light' ? 'dark' : p === 'dark' ? 'amergis' : 'light'),
-    showChangelog,
+    toggleTheme: () => setTheme(p => THEME_CYCLE[(THEME_CYCLE.indexOf(p) + 1) % THEME_CYCLE.length]),
+    showChangelog: whatsNew.isOpen,
     setShowChangelog,
-    hasUnreadChangelog,
-    showChangelogOnLogin,
+    hasUnreadChangelog: whatsNew.unread,
+    showChangelogOnLogin: whatsNew.showOnLogin,
     handleMarkChangelogAsRead,
+    handleDismissWhatsNewBanner,
     handleToggleShowChangelogOnLogin,
+    whatsNewLastSeenVersion: whatsNew.lastSeenVersion,
+    whatsNewManualUnavailable: whatsNew.manualUnavailable,
+    whatsNewCurrentVersion: whatsNew.currentVersion,
+    whatsNewAutomaticOverlaySettled,
+    whatsNewBlocksAutomaticWalkthrough,
     betaAnnouncementDismissed,
     handleDismissBetaAnnouncement,
     handleLogout,

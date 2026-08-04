@@ -17,7 +17,14 @@ jest.mock('../db/drizzle', () => ({
     }),
     update: jest.fn().mockReturnValue({
       set: jest.fn().mockReturnValue({
-        where: jest.fn().mockResolvedValue(undefined),
+        // Thenable so `await …where()` works for updateAiFields, and also
+        // exposes `.returning()` for markAiFailedIfAnalyzing.
+        where: jest.fn().mockImplementation(() => ({
+          returning: jest.fn().mockResolvedValue([{ id: 'req-1' }]),
+          then(onFulfilled: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown) {
+            return Promise.resolve(undefined).then(onFulfilled, onRejected);
+          },
+        })),
       }),
     }),
   },

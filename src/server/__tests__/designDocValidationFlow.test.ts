@@ -19,6 +19,8 @@ jest.mock('../db/drizzle', () => ({
     query: {
       designDocs: { findFirst: jest.fn() },
       chatThreads: { findFirst: jest.fn() },
+      prds: { findFirst: jest.fn() },
+      interviews: { findFirst: jest.fn() },
     },
     insert: jest.fn(),
     update: jest.fn(),
@@ -342,7 +344,7 @@ describe('cancelValidation', () => {
     mockDb.query.designDocs.findFirst.mockResolvedValue(makeDocRow({ status: 'validating' }));
 
     await expect(cancelValidation('doc-1', 'user-other')).rejects.toMatchObject({
-      message: 'Only the author can cancel validation',
+      message: 'Only the author or owner can cancel validation',
       status: 403,
     });
   });
