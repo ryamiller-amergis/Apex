@@ -6,6 +6,7 @@ import { normalizeAdoHtml } from '../utils/adoRichText';
 import { sanitizeSlug, resolveFeatureIndex } from './devContextService';
 import { getSkillConfig } from './projectSettingsService';
 import type { LocalDevContextFile, LocalDevContextResponse } from '../../shared/types/devWorkbench';
+import { isAppNativeRequirementsProject } from '../../shared/types/devWorkbench';
 
 export interface BuildLocalDevContextInput {
   project: string;
@@ -154,7 +155,13 @@ function buildPrompt(args: {
 
 async function buildApexContext(project: string, prdId: string, featureId: string): Promise<LocalDevContextResponse> {
   const [prdRow, skillConfig] = await Promise.all([
-    db.query.prds.findFirst({ where: eq(prds.id, prdId) }),
+    db.query.prds.findFirst({
+      where: and(
+        eq(prds.id, prdId),
+        eq(prds.project, project),
+        eq(prds.status, 'approved'),
+      ),
+    }),
     getSkillConfig(project).catch(() => null),
   ]);
   const devSkillPath = skillConfig?.developmentSkillPath ?? null;
@@ -239,7 +246,7 @@ async function buildApexContext(project: string, prdId: string, featureId: strin
     title,
     slug,
     idLabel: `feature ${featureId} (PRD ${prdId})`,
-    typeLabel: 'Apex Feature',
+    typeLabel: `${project} Feature`,
     filePaths,
     prototypePath,
     devSkillPath,
@@ -421,7 +428,19 @@ export async function buildLocalDevContext(
   }
 
   if (hasApexPath) {
+    if (!isAppNativeRequirementsProject(project)) {
+      throw Object.assign(
+        new Error('PRD feature context requires an app-native requirements project'),
+        { status: 400 },
+      );
+    }
     return buildApexContext(project, prdId!, featureId!);
+  }
+  if (isAppNativeRequirementsProject(project)) {
+    throw Object.assign(
+      new Error('This project uses app-native PRD requirements, not Azure DevOps work items'),
+      { status: 400 },
+    );
   }
   return buildAdoContext(project, workItemId!);
 }

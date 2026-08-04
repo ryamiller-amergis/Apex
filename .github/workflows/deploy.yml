@@ -146,6 +146,7 @@ jobs:
               SESSION_SECRET="${{ secrets.SESSION_SECRET }}" \
               CURSOR_API_KEY="${{ secrets.CURSOR_API_KEY }}" \
               CURSOR_TEAM_API_KEY="${{ secrets.CURSOR_TEAM_API_KEY }}" \
+              AGENT_RUN_HARD_LIMIT_MS="${{ secrets.AGENT_RUN_HARD_LIMIT_MS }}" \
               PORT=8080 \
               POLL_INTERVAL=30 \
               WEBSITES_ENABLE_APP_SERVICE_STORAGE=true \

@@ -171,6 +171,8 @@ export interface SseToolCallEvent {
 export interface SseStatusEvent {
   type: 'status';
   status: ChatThreadStatus;
+  /** True when durable terminals/replay are authoritative and polling is disabled. */
+  eventDrivenTermination?: boolean;
 }
 
 export type SseErrorCode = 'transient' | 'rate_limit' | 'context_overflow' | 'auth' | 'fatal';

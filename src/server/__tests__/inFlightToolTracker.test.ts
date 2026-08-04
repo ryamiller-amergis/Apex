@@ -1,5 +1,6 @@
 import {
   clearToolInFlight,
+  createMcpToolDeadlineController,
   findExpiredMcpTool,
   identifyMcpTool,
   markToolInFlight,
@@ -72,5 +73,68 @@ describe('inFlightToolTracker', () => {
     markToolInFlight(calls, 'call-1', 'mcp', input, 30_000);
 
     expect(calls.get('call-1')?.startedAtMs).toBe(1_000);
+  });
+
+  it('TBI-001 DoD-0 / PBI-001 AC-0 arms an event-driven deadline per MCP call', () => {
+    jest.useFakeTimers();
+    try {
+      const expired = jest.fn();
+      const controller = createMcpToolDeadlineController(60_000, expired);
+
+      controller.arm('call-1', 'mcp', {
+        providerIdentifier: 'github-repo',
+        toolName: 'search_repo_code',
+      });
+      jest.advanceTimersByTime(59_999);
+      expect(expired).not.toHaveBeenCalled();
+
+      jest.advanceTimersByTime(1);
+      expect(expired).toHaveBeenCalledTimes(1);
+      expect(expired).toHaveBeenCalledWith(
+        expect.objectContaining({ key: 'call-1', mcpLabel: 'mcp:search_repo_code' }),
+      );
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('TBI-001 DoD-1 / VT-04 cancels the deadline when the tool completes', () => {
+    jest.useFakeTimers();
+    try {
+      const expired = jest.fn();
+      const controller = createMcpToolDeadlineController(60_000, expired);
+      const input = {
+        providerIdentifier: 'github-repo',
+        toolName: 'get_skill_file',
+      };
+
+      controller.arm('assistant-id', 'mcp', input);
+      controller.complete('sdk-id', 'mcp', input);
+      jest.advanceTimersByTime(60_000);
+
+      expect(expired).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('TBI-001 DoD-0 does not create duplicate deadlines for SDK aliases', () => {
+    jest.useFakeTimers();
+    try {
+      const expired = jest.fn();
+      const controller = createMcpToolDeadlineController(60_000, expired);
+      const input = {
+        providerIdentifier: 'github-repo',
+        toolName: 'get_skill_file',
+      };
+
+      controller.arm('assistant-id', 'mcp', input);
+      controller.arm('sdk-id', 'mcp', input);
+      jest.advanceTimersByTime(60_000);
+
+      expect(expired).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

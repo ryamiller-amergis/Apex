@@ -34,6 +34,7 @@ const featureRequestService = jest.requireMock(
   '../services/featureRequestService'
 ) as {
   createFeatureRequest: jest.Mock;
+  listFeatureRequests: jest.Mock;
   resolveApexReviewers: jest.Mock;
 };
 const analysisService = jest.requireMock(
@@ -137,5 +138,33 @@ describe('feature request work item submission', () => {
       'Apex',
       expect.objectContaining({ type: 'technical', adrIds: [adrId] }),
     );
+  });
+});
+
+describe('shared Apex backlog listing', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    featureRequestService.listFeatureRequests.mockResolvedValue([
+      { id: 'request-1', title: 'Shared request' },
+    ]);
+  });
+
+  it('returns the backlog for a non-Apex project', async () => {
+    const response = await request(buildApp())
+      .get('/api/feature-requests?project=Amego');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([
+      { id: 'request-1', title: 'Shared request' },
+    ]);
+    expect(featureRequestService.listFeatureRequests).toHaveBeenCalledTimes(1);
+  });
+
+  it('requires the selected project query parameter', async () => {
+    const response = await request(buildApp()).get('/api/feature-requests');
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toMatch(/project query parameter is required/i);
+    expect(featureRequestService.listFeatureRequests).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,5 @@
 const mockFindMany = jest.fn();
+const mockAgentRunsFindMany = jest.fn();
 const mockUpdateWhere = jest.fn();
 const mockUpdateSet = jest.fn(() => ({ where: mockUpdateWhere }));
 
@@ -6,6 +7,7 @@ jest.mock('../db/drizzle', () => ({
   db: {
     query: {
       devSessions: { findMany: (...args: unknown[]) => mockFindMany(...args) },
+      agentRuns: { findMany: (...args: unknown[]) => mockAgentRunsFindMany(...args) },
     },
     update: jest.fn(() => ({ set: mockUpdateSet })),
   },
@@ -47,10 +49,18 @@ jest.mock('../services/featureRequestAnalysisService', () => ({
 jest.mock('../services/agentRunReaperService', () => ({
   isThreadRunAlive: jest.fn(),
 }));
+jest.mock('../services/pgNotifyService', () => ({
+  RUN_EVENT_SOURCE_INSTANCE: 'worker-a',
+  finalizeOwnedAgentRun: jest.fn(),
+  nextRunEventSequence: jest.fn()
+    .mockReturnValueOnce(1)
+    .mockReturnValueOnce(2),
+}));
 
 import {
   recoverStaleDevSessionSetups,
   recoverStuckInterviewThreads,
+  finalizeOwnedRunsForShutdown,
   registerProcessGuards,
 } from '../services/startupRecovery';
 import { findRunningInterviewThreads, clearStaleRun } from '../services/chatThreadRepository';
@@ -59,6 +69,7 @@ import {
   reevaluateThreadGroundingForRecovery,
 } from '../services/chatAgentService';
 import { isThreadRunAlive } from '../services/agentRunReaperService';
+import { finalizeOwnedAgentRun } from '../services/pgNotifyService';
 
 const mockedFindRunning = findRunningInterviewThreads as jest.MockedFunction<typeof findRunningInterviewThreads>;
 const mockedClearStale = clearStaleRun as jest.MockedFunction<typeof clearStaleRun>;
@@ -162,6 +173,43 @@ describe('recoverStaleDevSessionSetups', () => {
 
     expect(recovered).toBe(0);
     expect(mockUpdateSet).not.toHaveBeenCalled();
+  });
+});
+
+describe('TBI-001 DoD-2 / VT-05 graceful owner finalization', () => {
+  it('finalizes only this instance non-terminal runs and persists terminal events', async () => {
+    mockAgentRunsFindMany.mockResolvedValue([
+      { id: 'run-owned', threadId: 'thread-owned' },
+    ]);
+    jest.mocked(finalizeOwnedAgentRun).mockResolvedValue(true);
+
+    const finalized = await finalizeOwnedRunsForShutdown({
+      ownerInstance: 'worker-a',
+      now: () => Date.parse('2026-08-04T12:00:00.000Z'),
+    });
+
+    expect(finalized).toBe(1);
+    expect(finalizeOwnedAgentRun).toHaveBeenCalledTimes(1);
+    expect(finalizeOwnedAgentRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: 'run-owned',
+        threadId: 'thread-owned',
+        ownerInstance: 'worker-a',
+        status: 'failed',
+        detail: expect.stringMatching(/shutdown/i),
+      }),
+    );
+  });
+
+  it('leaves owner-mismatched runs untouched when the CAS loses', async () => {
+    mockAgentRunsFindMany.mockResolvedValue([
+      { id: 'run-raced', threadId: 'thread-raced' },
+    ]);
+    jest.mocked(finalizeOwnedAgentRun).mockResolvedValue(false);
+
+    await expect(finalizeOwnedRunsForShutdown({
+      ownerInstance: 'worker-a',
+    })).resolves.toBe(0);
   });
 });
 

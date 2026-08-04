@@ -115,6 +115,34 @@ describe('AppHeader — menuEnabledViews=[calendar] + calendar:view permission',
   });
 });
 
+describe('AppHeader — Apex Backlog project menu visibility', () => {
+  const can = (key: string) => key === 'feature-requests:view';
+
+  it('renders Apex Backlog in a non-Apex project when enabled and permitted', () => {
+    render(
+      <AppHeader
+        {...baseProps}
+        can={can}
+        selectedProject="Amego"
+        menuEnabledViews={['feature-requests']}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Apex Backlog' })).toBeInTheDocument();
+  });
+
+  it('hides Apex Backlog when menu visibility disables it', () => {
+    render(
+      <AppHeader
+        {...baseProps}
+        can={can}
+        selectedProject="Amego"
+        menuEnabledViews={[]}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Apex Backlog' })).not.toBeInTheDocument();
+  });
+});
+
 // ── UI Lab now follows the standard admin-gated pattern ───────────────────────
 
 describe('AppHeader — UI Lab admin-gated behavior', () => {

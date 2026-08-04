@@ -41,7 +41,15 @@ export interface GroundingMaterializerDependencies {
   runGit?: typeof git;
   publishBundle?: GroundingBundlePublisher['publish'];
   telemetry?: typeof trackEvent;
+  exactCommitFetch?: (
+    cache: Pick<RepoCacheResult, 'cacheDir' | 'remote'>,
+    sha: string,
+    timeoutMs: number,
+  ) => Promise<void>;
+  now?: () => number;
 }
+
+export const EXACT_COMMIT_FETCH_TIMEOUT_MS = 45_000;
 
 function cacheProvider(provider: RunGrounding['provider']): SkillProvider {
   return provider === 'azure_devops' ? 'ado' : 'github';
@@ -91,6 +99,35 @@ export function createRunGroundingMaterializer(
     dependencies.materializeWorkspaceFromCache ?? materializeWorkspaceFromCache;
   const runGit = dependencies.runGit ?? git;
   const telemetry = dependencies.telemetry ?? trackEvent;
+  const now = dependencies.now ?? Date.now;
+  const safeTelemetry: typeof trackEvent = (name, properties, measurements) => {
+    try {
+      telemetry(name, properties, measurements);
+    } catch {
+      // Application Insights is best effort and cannot fail grounding.
+    }
+  };
+  const exactCommitFetch =
+    dependencies.exactCommitFetch ??
+    (async (
+      cache: Pick<RepoCacheResult, 'cacheDir' | 'remote'>,
+      sha: string,
+      timeoutMs: number,
+    ): Promise<void> => {
+      await runGit(
+        safeArgs(cache.cacheDir, [
+          'fetch',
+          '--no-tags',
+          cache.remote.url,
+          sha,
+        ]),
+        {
+          cwd: cache.cacheDir,
+          timeout: timeoutMs,
+          env: cache.remote.env,
+        },
+      );
+    });
   const branchesByDestination = new Map<string, string>();
   const createBundleStore =
     dependencies.createBundleStore ?? createGroundingBundleStore;
@@ -133,7 +170,7 @@ export function createRunGroundingMaterializer(
             })
           )
           .then((outcome) => {
-            telemetry('grounding.bundle.publish', {
+            safeTelemetry('grounding.bundle.publish', {
               provider: String(identity.provider),
               project: identity.project,
               repository: redactSecrets(identity.repo),
@@ -142,7 +179,7 @@ export function createRunGroundingMaterializer(
             });
           })
           .catch(() => {
-            telemetry('grounding.bundle.publish', {
+            safeTelemetry('grounding.bundle.publish', {
               provider: String(identity.provider),
               project: identity.project,
               repository: redactSecrets(identity.repo),
@@ -158,19 +195,44 @@ export function createRunGroundingMaterializer(
         publishFromCache(cache);
         return true;
       } catch {
+        const exactFetchStartedAt = now();
+        try {
+          await exactCommitFetch(
+            cache,
+            identity.sha,
+            EXACT_COMMIT_FETCH_TIMEOUT_MS,
+          );
+          await materializePinnedSha(cache);
+          safeTelemetry('grounding.materialization.exact-fetch', {
+            provider: String(identity.provider),
+            project: identity.project,
+            repository: redactSecrets(identity.repo),
+            branch,
+            reason: 'pinned-sha-miss',
+            outcome: 'materialized',
+          }, {
+            durationMs: Math.max(0, now() - exactFetchStartedAt),
+          });
+          publishFromCache(cache);
+          return true;
+        } catch {
+          safeTelemetry('grounding.materialization.fallback', {
+            provider: String(identity.provider),
+            project: identity.project,
+            repository: redactSecrets(identity.repo),
+            branch,
+            reason: 'pinned-sha-unavailable',
+            outcome: 'unavailable',
+          }, {
+            durationMs: Math.max(0, now() - exactFetchStartedAt),
+          });
+        }
         try {
           const repairedCache = await repairCache(cacheOptions);
           await materializePinnedSha(repairedCache);
           publishFromCache(repairedCache);
           return true;
         } catch {
-          telemetry('grounding.materialization.fallback', {
-            provider: String(identity.provider),
-            project: identity.project,
-            repository: redactSecrets(identity.repo),
-            branch,
-            reason: 'pinned-sha-unavailable',
-          });
           return false;
         }
       }

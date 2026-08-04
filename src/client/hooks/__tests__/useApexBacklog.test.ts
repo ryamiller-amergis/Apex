@@ -48,7 +48,7 @@ const sampleContext: ApexFeatureContextResponse = {
 describe('useApexBacklogFeatures', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('does not fetch when project is not Apex', () => {
+  it('does not fetch when the project uses ADO requirements', () => {
     mockFetchOk([]);
     const { wrapper } = createWrapper();
     const { result } = renderHook(() => useApexBacklogFeatures('MaxView'), { wrapper });
@@ -66,12 +66,23 @@ describe('useApexBacklogFeatures', () => {
       expect.objectContaining({ credentials: 'include' }),
     );
   });
+
+  it('fetches app-native backlog features for Amego', async () => {
+    mockFetchOk([]);
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(() => useApexBacklogFeatures('Amego'), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/dev-workbench/backlog-features?project=Amego',
+      expect.objectContaining({ credentials: 'include' }),
+    );
+  });
 });
 
 describe('useApexFeatureContext', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('is disabled when project is not Apex', () => {
+  it('is disabled when the project uses ADO requirements', () => {
     mockFetchOk(sampleContext);
     const { wrapper } = createWrapper();
     const { result } = renderHook(
@@ -80,6 +91,20 @@ describe('useApexFeatureContext', () => {
     );
     expect(result.current.fetchStatus).toBe('idle');
     expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('loads feature context for Amego', async () => {
+    mockFetchOk(sampleContext);
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(
+      () => useApexFeatureContext('Amego', 'prd-1', 'FEAT-001'),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/dev-workbench/features/prd-1/FEAT-001/context?project=Amego',
+      expect.objectContaining({ credentials: 'include' }),
+    );
   });
 
   it('is disabled when prdId or featureId is missing', () => {

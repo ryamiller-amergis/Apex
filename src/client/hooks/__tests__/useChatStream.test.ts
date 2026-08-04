@@ -90,6 +90,42 @@ describe('useChatStream', () => {
     expect(result.current.isConnected).toBe(false);
   });
 
+  it('PBI-002 AC-0 does not poll run status after event-driven stream disconnect', () => {
+    jest.useFakeTimers();
+    const originalFetch = global.fetch;
+    const fetchSpy = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: 'running' }),
+    } as Response);
+    global.fetch = fetchSpy;
+    try {
+      const { result } = renderHook(() =>
+        useChatStream('t1', { initialStatus: 'running' }),
+      );
+      act(() => {
+        lastES!.emit('message', {
+          type: 'status',
+          status: 'running',
+          eventDrivenTermination: true,
+        });
+        lastES!.emitError();
+      });
+      act(() => {
+        jest.advanceTimersByTime(15_000);
+      });
+
+      expect(result.current.isConnected).toBe(false);
+      expect(fetchSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining('/run-status'),
+        expect.anything(),
+      );
+    } finally {
+      if (originalFetch) global.fetch = originalFetch;
+      else delete (global as { fetch?: typeof fetch }).fetch;
+      jest.useRealTimers();
+    }
+  });
+
   it('accumulates token events into streamingText', () => {
     const { result } = renderHook(() => useChatStream('t1'));
     act(() => {
@@ -346,6 +382,26 @@ describe('useChatStream', () => {
     expect(result.current.lastProgressAt).toBeNull();
   });
 
+  it('PBI-002 AC-1 ignores heartbeat health in event-driven mode', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+
+    act(() => {
+      lastES!.emit('message', {
+        type: 'status',
+        status: 'running',
+        eventDrivenTermination: true,
+      });
+      lastES!.emit('message', {
+        type: 'health',
+        health: 'worker_lost',
+        detail: 'legacy health must not control Retire mode',
+      }, 'health-retire');
+    });
+
+    expect(result.current.runHealth).toBeNull();
+    expect(result.current.status).toBe('running');
+  });
+
   it('clears thinkingText on tool_call without adding a message', () => {
     const { result } = renderHook(() => useChatStream('t1'));
     act(() => {
@@ -395,6 +451,17 @@ describe('useChatStream', () => {
     expect(result.current.messages).toHaveLength(1);
     expect(result.current.messages[0].role).toBe('system');
     expect(result.current.messages[0].text).toContain('Something went wrong');
+  });
+
+  it('PBI-002 AC-2 renders one terminal when live and replay share an event id', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+    act(() => {
+      lastES!.emit('message', { type: 'error', error: 'Owner deadline expired' }, 'terminal-1');
+      lastES!.emit('message', { type: 'error', error: 'Owner deadline expired' }, 'terminal-1');
+    });
+
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0].text).toContain('Owner deadline expired');
   });
 
   it('clears streamingText on done event', () => {

@@ -80,12 +80,12 @@ router.post('/', requirePermission('feature-requests:submit'), async (req, res, 
   }
 });
 
-// GET / — list feature requests (Apex project only)
+// GET / — list the shared Apex backlog from any project where the module is visible
 router.get('/', requirePermission('feature-requests:view'), async (req, res, next) => {
   try {
-    const project = req.query.project as string | undefined;
-    if (project !== 'Apex') {
-      return res.status(400).json({ error: 'project query parameter must be "Apex"' });
+    const project = (req.query.project as string | undefined)?.trim();
+    if (!project) {
+      return res.status(400).json({ error: 'project query parameter is required' });
     }
 
     const requests = await listFeatureRequests();
