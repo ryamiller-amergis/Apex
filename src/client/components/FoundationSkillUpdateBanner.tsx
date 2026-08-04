@@ -21,22 +21,14 @@ interface TroubleshootRow {
   cmd?: string;
 }
 
-/** One-time feed wiring — must succeed before any `npx @apex/skills` command. */
-const FIRST_TIME_FEED_STEPS: Step[] = [
-  {
-    cmd: 'npx @apex/skills init-registry',
-    label:
-      'Add @apex:registry to your local .npmrc (keeps existing scopes like @maxview). If this 404s on public npm, paste the @apex:registry line into .npmrc first, then re-run.',
-  },
-  {
-    cmd: 'npx vsts-npm-auth -config .npmrc',
-    label: 'Sign in to Azure Artifacts (token stays on your machine — never commit it)',
-  },
-  {
-    cmd: 'npm view @apex/skills version',
-    label: 'Confirm the private feed resolves (expect a version like 1.0.0, not a 404)',
-  },
-];
+/** Fallback when a release has no artifactFeed stored. */
+const DEFAULT_APEX_NPM_REGISTRY =
+  'https://pkgs.dev.azure.com/amergis/_packaging/apex-skills/npm/registry/';
+
+function apexRegistryLine(artifactFeed: string | null | undefined): string {
+  const raw = (artifactFeed?.trim() || DEFAULT_APEX_NPM_REGISTRY).replace(/\/?$/, '/');
+  return `@apex:registry=${raw}`;
+}
 
 const FIRST_TIME_INSTALL_STEPS: Step[] = [
   { cmd: 'npx @apex/skills doctor', label: 'Check Node, Git, registry, and feed auth' },
@@ -66,8 +58,8 @@ const TROUBLESHOOT_ROWS: TroubleshootRow[] = [
   },
   {
     symptom: 'npx @apex/skills → 404 on registry.npmjs.org',
-    fix: 'Feed setup is incomplete. Add @apex:registry (init-registry or .npmrc.template), then auth.',
-    cmd: 'npx @apex/skills init-registry',
+    fix: 'Use Feed setup and paste the @apex:registry line into .npmrc before any npx @apex/skills command.',
+    cmd: 'npm view @apex/skills version',
   },
   {
     symptom: 'npm view @apex/skills fails / 401',
@@ -122,6 +114,106 @@ function StepList({
   );
 }
 
+function FeedDirectSetup({
+  registryLine,
+  onCopy,
+}: {
+  registryLine: string;
+  onCopy: (text: string) => void;
+}) {
+  return (
+    <div className={styles.stepsList}>
+      <p className={styles.noNotes}>
+        Paste the registry line by hand first — do not start with <code>npx @apex/skills</code> until
+        this works (that package is not on public npm).
+      </p>
+
+      <div className={styles.stepRow}>
+        <span className={styles.stepNum}>1</span>
+        <span className={styles.stepBody}>
+          <span className={styles.stepDesc}>
+            In your <strong>repo root</strong> (same folder as the project <code>.git</code>), open
+            {' '}<code>.npmrc</code>. Create the file if it does not exist. Keep any existing scopes
+            (for example <code>@maxview:registry=…</code>). Do not commit auth tokens —
+            {' '}<code>.npmrc</code> is often gitignored.
+          </span>
+        </span>
+      </div>
+
+      <div className={styles.stepRow}>
+        <span className={styles.stepNum}>2</span>
+        <span className={styles.stepBody}>
+          <span className={styles.stepDesc}>
+            Add this <strong>exact</strong> line (new line at the end of the file is fine):
+          </span>
+          <button
+            className={styles.codeBtn}
+            title="Copy registry line"
+            onClick={() => onCopy(registryLine)}
+            type="button"
+            {...{ 'data-testid': 'foundation-skills-banner-feed-direct-copy-registry-btn' }}
+          >
+            <code>{registryLine}</code>
+            <span className={styles.copyHint}>Copy</span>
+          </button>
+          <span className={styles.stepDesc}>
+            Optional: if the file does not already have it, also add{' '}
+            <button
+              className={styles.inlineCodeBtn}
+              type="button"
+              title="Copy always-auth line"
+              onClick={() => onCopy('always-auth=true')}
+              {...{ 'data-testid': 'foundation-skills-banner-feed-direct-copy-always-auth-btn' }}
+            >
+              <code>always-auth=true</code>
+            </button>
+            .
+          </span>
+        </span>
+      </div>
+
+      <div className={styles.stepRow}>
+        <span className={styles.stepNum}>3</span>
+        <span className={styles.stepBody}>
+          <button
+            className={styles.codeBtn}
+            title="Copy command"
+            onClick={() => onCopy('npx vsts-npm-auth -config .npmrc')}
+            type="button"
+            {...{ 'data-testid': 'foundation-skills-banner-feed-direct-copy-cmd-btn-0' }}
+          >
+            <code>npx vsts-npm-auth -config .npmrc</code>
+            <span className={styles.copyHint}>Copy</span>
+          </button>
+          <span className={styles.stepDesc}>
+            Sign in to Azure Artifacts from the repo root. Tokens stay on your machine — never commit them.
+          </span>
+        </span>
+      </div>
+
+      <div className={styles.stepRow}>
+        <span className={styles.stepNum}>4</span>
+        <span className={styles.stepBody}>
+          <button
+            className={styles.codeBtn}
+            title="Copy command"
+            onClick={() => onCopy('npm view @apex/skills version')}
+            type="button"
+            {...{ 'data-testid': 'foundation-skills-banner-feed-direct-copy-cmd-btn-1' }}
+          >
+            <code>npm view @apex/skills version</code>
+            <span className={styles.copyHint}>Copy</span>
+          </button>
+          <span className={styles.stepDesc}>
+            Expect a version like <code>1.0.0</code>. If you still see registry.npmjs.org 404, the
+            {' '}<code>@apex:registry</code> line is missing or in the wrong folder.
+          </span>
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export const FoundationSkillUpdateBanner: React.FC<FoundationSkillUpdateBannerProps> = ({
   project,
   repo,
@@ -154,6 +246,7 @@ export const FoundationSkillUpdateBanner: React.FC<FoundationSkillUpdateBannerPr
 
   const hasBreaking = !!latest.breakingChanges;
   const stepsLabel = isFirstInstall ? 'Getting started' : 'How to update';
+  const registryLine = apexRegistryLine(latest.artifactFeed);
 
   function copy(text: string) {
     navigator.clipboard?.writeText(text).catch(() => undefined);
@@ -260,18 +353,7 @@ export const FoundationSkillUpdateBanner: React.FC<FoundationSkillUpdateBannerPr
                   </button>
                 </div>
                 {firstTimeTab === 'feed' ? (
-                  <>
-                    <StepList
-                      steps={FIRST_TIME_FEED_STEPS}
-                      idPrefix="foundation-skills-banner-feed"
-                      onCopy={copy}
-                    />
-                    <p className={styles.noNotes}>
-                      If <code>init-registry</code> 404s on registry.npmjs.org, your .npmrc is missing
-                      {' '}@apex:registry. Add that line (or copy from .npmrc.template), then auth and
-                      {' '}<code>npm view</code> before any other @apex/skills command.
-                    </p>
-                  </>
+                  <FeedDirectSetup registryLine={registryLine} onCopy={copy} />
                 ) : firstTimeTab === 'install' ? (
                   <>
                     <StepList
