@@ -48,6 +48,26 @@ interface CatalogFile {
 let _catalogCache: CatalogFile | null = null;
 
 /**
+ * Resolve catalog.json across local (ts-node) and deployed (dist/) layouts.
+ *
+ * Candidates (first existing wins):
+ *   1. ../../../foundation-skills — repo root from src/server/routes, or wwwroot from dist/server/routes
+ *   2. ../../foundation-skills    — dist/foundation-skills when catalog is copied next to compiled server
+ *   3. process.cwd()/foundation-skills — App Service wwwroot cwd fallback
+ */
+function resolveCatalogPath(): string | null {
+  const candidates = [
+    path.resolve(__dirname, '../../../foundation-skills/catalog.json'),
+    path.resolve(__dirname, '../../foundation-skills/catalog.json'),
+    path.resolve(process.cwd(), 'foundation-skills/catalog.json'),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
  * Reads foundation-skills/catalog.json — the single source of truth for which
  * skills exist. Cached per process, so a newly added skill needs a server
  * restart (or a call to invalidateCatalogCache) to appear.
@@ -55,7 +75,18 @@ let _catalogCache: CatalogFile | null = null;
 function loadCatalogFile(): CatalogFile {
   if (_catalogCache) return _catalogCache;
   try {
-    const catalogPath = path.resolve(__dirname, '../../../foundation-skills/catalog.json');
+    const catalogPath = resolveCatalogPath();
+    if (!catalogPath) {
+      console.error(
+        '[foundation-skills] catalog.json not found. Tried paths relative to',
+        __dirname,
+        'and cwd',
+        process.cwd(),
+        '— Skills picker will be empty until the file is packaged into the deploy.',
+      );
+      _catalogCache = { suiteVersion: '0.0.0', skills: [] };
+      return _catalogCache;
+    }
     const raw = JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
     _catalogCache = {
       suiteVersion: raw.suiteVersion ?? '0.0.0',
@@ -66,7 +97,12 @@ function loadCatalogFile(): CatalogFile {
         tier:    s.tier === 'apex-only' ? 'apex-only' as const : 'shippable' as const,
       })),
     };
-  } catch {
+    console.log(
+      `[foundation-skills] Loaded catalog ${_catalogCache.suiteVersion} ` +
+      `(${_catalogCache.skills.length} skills) from ${catalogPath}`,
+    );
+  } catch (err) {
+    console.error('[foundation-skills] Failed to parse catalog.json:', err);
     _catalogCache = { suiteVersion: '0.0.0', skills: [] };
   }
   return _catalogCache;

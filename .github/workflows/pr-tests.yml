@@ -468,6 +468,11 @@ jobs:
           cp package*.json deploy/
           cp server.js deploy/ 2>/dev/null || true
           cp -r scripts deploy/
+          # Platform Admin APEX Skills reads this at runtime for the skill picker /
+          # Skills matrix. Without it the UI shows 0 skills after deploy.
+          mkdir -p deploy/foundation-skills deploy/dist/foundation-skills
+          cp foundation-skills/catalog.json deploy/foundation-skills/catalog.json
+          cp foundation-skills/catalog.json deploy/dist/foundation-skills/catalog.json
           mv node_modules deploy/
           (cd deploy && zip -r ../deploy.zip .)
 
@@ -544,7 +549,10 @@ jobs:
               SENDGRID_API_KEY="${{ secrets.SENDGRID_API_KEY }}" \
               GITHUB_TOKEN="${{ secrets.GH_SKILL_TOKEN }}" \
               GITHUB_ORG="${{ secrets.GH_SKILL_ORG }}" \
-              TAVILY_AUTH="${{ secrets.TAVILY_AUTH }}"
+              TAVILY_AUTH="${{ secrets.TAVILY_AUTH }}" \
+              AZURE_ARTIFACTS_ORG="${{ secrets.AZURE_ARTIFACTS_ORG }}" \
+              AZURE_ARTIFACTS_FEED="${{ secrets.AZURE_ARTIFACTS_FEED }}" \
+              AZURE_ARTIFACTS_PAT="${{ secrets.AZURE_ARTIFACTS_PAT }}"
 
           # The Azure Node/Linux image ships without git, and the Dev Workbench
           # feature shells out to git at runtime. Install it on boot before
