@@ -44,7 +44,10 @@ import type {
   ApexBacklogGroup,
   BacklogFeatureItem,
 } from '../../shared/types/devWorkbench';
-import { evaluateDevStartEligibility } from '../../shared/types/devWorkbench';
+import {
+  evaluateDevStartEligibility,
+  isAppNativeRequirementsProject,
+} from '../../shared/types/devWorkbench';
 import { isSuperAdminRequest } from '../utils/superAdmin';
 import type { ProjectSkillConfig, SkillProvider } from '../../shared/types/projectSettings';
 import { logMyWorkSession } from '../services/myWorkSessionLogger';
@@ -64,6 +67,10 @@ router.get('/workitems', async (req: Request, res: Response) => {
       res.status(400).json({ error: 'project query parameter is required' });
       return;
     }
+    if (isAppNativeRequirementsProject(project)) {
+      res.status(400).json({ error: 'This project uses app-native PRD requirements' });
+      return;
+    }
 
     const displayName = (req.user as any)?.profile?.displayName;
     if (!displayName) {
@@ -81,12 +88,16 @@ router.get('/workitems', async (req: Request, res: Response) => {
   }
 });
 
-// GET /backlog-features?project=<project> — Apex PRD-sourced feature backlog
+// GET /backlog-features?project=<project> — app-native PRD-sourced feature backlog
 router.get('/backlog-features', async (req: Request, res: Response) => {
   try {
     const project = req.query.project as string;
     if (!project) {
       res.status(400).json({ error: 'project query parameter is required' });
+      return;
+    }
+    if (!isAppNativeRequirementsProject(project)) {
+      res.status(400).json({ error: 'This project uses Azure DevOps requirements' });
       return;
     }
 
@@ -159,7 +170,7 @@ router.get('/backlog-features', async (req: Request, res: Response) => {
   }
 });
 
-// GET /features/:prdId/:featureId/context?project=Apex — lazy feature reference context
+// GET /features/:prdId/:featureId/context — lazy app-native feature reference context
 router.get('/features/:prdId/:featureId/context', async (req: Request, res: Response) => {
   try {
     const project = req.query.project as string | undefined;
@@ -169,8 +180,8 @@ router.get('/features/:prdId/:featureId/context', async (req: Request, res: Resp
       res.status(400).json({ error: 'project query parameter is required' });
       return;
     }
-    if (project !== 'Apex') {
-      res.status(400).json({ error: 'Feature context is only available for the Apex project' });
+    if (!isAppNativeRequirementsProject(project)) {
+      res.status(400).json({ error: 'Feature context requires an app-native requirements project' });
       return;
     }
     if (!prdId || !featureId) {
@@ -232,7 +243,7 @@ router.get('/local-dev-context', async (req: Request, res: Response) => {
   }
 });
 
-// POST /features/start-local — mark an Apex feature In Progress for local development
+// POST /features/start-local — mark an app-native feature In Progress for local development
 // by inserting a synthetic in_progress session (no cloud workspace / chat thread).
 router.post('/features/start-local', async (req: Request, res: Response) => {
   try {
@@ -241,11 +252,16 @@ router.post('/features/start-local', async (req: Request, res: Response) => {
       res.status(400).json({ error: 'prdId, featureId, and project are required' });
       return;
     }
+    if (!isAppNativeRequirementsProject(project)) {
+      res.status(400).json({ error: 'Local PRD feature development requires an app-native requirements project' });
+      return;
+    }
 
     const userId = getUserId(req);
 
     const completed = await db.query.devSessions.findFirst({
       where: and(
+        eq(devSessions.project, project),
         eq(devSessions.prdId, prdId),
         eq(devSessions.featureId, featureId),
         eq(devSessions.status, 'completed'),
@@ -259,6 +275,7 @@ router.post('/features/start-local', async (req: Request, res: Response) => {
 
     const active = await db.query.devSessions.findFirst({
       where: and(
+        eq(devSessions.project, project),
         eq(devSessions.prdId, prdId),
         eq(devSessions.featureId, featureId),
         eq(devSessions.authorId, userId),
@@ -301,12 +318,21 @@ router.post('/features/complete', async (req: Request, res: Response) => {
       res.status(400).json({ error: 'prdId, featureId, and project are required' });
       return;
     }
+    if (!isAppNativeRequirementsProject(project)) {
+      res.status(400).json({ error: 'Feature completion requires an app-native requirements project' });
+      return;
+    }
 
     const userId = getUserId(req);
     const now = new Date().toISOString();
 
+    // Completion belongs to one user's exact PRD feature. Keep every read and
+    // write scoped to the same identity so another feature, PRD, project, or
+    // developer cannot satisfy or receive this transition.
     const existing = await db.query.devSessions.findFirst({
       where: and(
+        eq(devSessions.project, project),
+        eq(devSessions.authorId, userId),
         eq(devSessions.prdId, prdId),
         eq(devSessions.featureId, featureId),
         eq(devSessions.status, 'completed'),
@@ -321,9 +347,10 @@ router.post('/features/complete', async (req: Request, res: Response) => {
     // Prefer promoting an active session (cloud or local) to completed.
     const active = await db.query.devSessions.findFirst({
       where: and(
+        eq(devSessions.project, project),
+        eq(devSessions.authorId, userId),
         eq(devSessions.prdId, prdId),
         eq(devSessions.featureId, featureId),
-        eq(devSessions.authorId, userId),
         inArray(devSessions.status, ['setting_up', 'in_progress', 'conflict']),
       ),
     });
@@ -332,7 +359,14 @@ router.post('/features/complete', async (req: Request, res: Response) => {
       await db
         .update(devSessions)
         .set({ status: 'completed', updatedAt: now })
-        .where(eq(devSessions.id, active.id));
+        .where(and(
+          eq(devSessions.id, active.id),
+          eq(devSessions.project, project),
+          eq(devSessions.authorId, userId),
+          eq(devSessions.prdId, prdId),
+          eq(devSessions.featureId, featureId),
+          inArray(devSessions.status, ['setting_up', 'in_progress', 'conflict']),
+        ));
       res.json({ ok: true, sessionId: active.id });
       return;
     }

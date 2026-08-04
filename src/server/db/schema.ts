@@ -1457,6 +1457,10 @@ export const agentRuns = pgTable('agent_runs', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
   statusHeartbeatIdx: index('idx_agent_runs_status_heartbeat').on(t.status, t.heartbeatAt),
+  nonTerminalTimeoutCheck: check(
+    'agent_runs_non_terminal_timeout_at_check',
+    sql`${t.status} NOT IN ('queued', 'running') OR ${t.timeoutAt} IS NOT NULL`,
+  ),
 }));
 
 export const agentRunEvents = pgTable('agent_run_events', {

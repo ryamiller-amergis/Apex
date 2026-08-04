@@ -3,6 +3,7 @@ import type {
   ApexBacklogGroup,
   ApexFeatureContextResponse,
 } from '../../shared/types/devWorkbench';
+import { isAppNativeRequirementsProject } from '../../shared/types/devWorkbench';
 
 async function apiFetch<T>(url: string): Promise<T> {
   const res = await fetch(url, { credentials: 'include' });
@@ -17,14 +18,13 @@ export function useApexBacklogFeatures(project: string | null) {
   return useQuery<ApexBacklogGroup[]>({
     queryKey: ['dev-workbench', 'backlog-features', project],
     queryFn: () => apiFetch(`/api/dev-workbench/backlog-features?project=${encodeURIComponent(project!)}`),
-    enabled: project === 'Apex',
+    enabled: isAppNativeRequirementsProject(project),
     staleTime: 60_000,
   });
 }
 
 /**
- * Lazy-loads reference context for one Apex feature when the View Context dialog is open.
- * Disabled unless project is Apex and both identifiers are present.
+ * Lazy-loads reference context for an app-native PRD feature when the dialog opens.
  */
 export function useApexFeatureContext(
   project: string | null,
@@ -37,7 +37,7 @@ export function useApexFeatureContext(
       apiFetch(
         `/api/dev-workbench/features/${encodeURIComponent(prdId!)}/${encodeURIComponent(featureId!)}/context?project=${encodeURIComponent(project!)}`,
       ),
-    enabled: project === 'Apex' && !!prdId && !!featureId,
+    enabled: isAppNativeRequirementsProject(project) && !!prdId && !!featureId,
     staleTime: 60_000,
   });
 }

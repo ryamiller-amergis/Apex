@@ -352,8 +352,8 @@ function expandPrdAndEpic() {
   fireEvent.click(screen.getByRole('button', { name: /Core Platform/i }));
 }
 
-function mockApexWorkbenchHooks() {
-  (useAppShell as jest.Mock).mockReturnValue({ selectedProject: 'Apex' });
+function mockApexWorkbenchHooks(project = 'Apex') {
+  (useAppShell as jest.Mock).mockReturnValue({ selectedProject: project });
   (useAssignedWorkItems as jest.Mock).mockReturnValue({
     data: undefined,
     isLoading: false,
@@ -481,6 +481,17 @@ describe('DevWorkbenchView — Apex backlog (Mark Complete)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockApexWorkbenchHooks();
+  });
+
+  it('uses the app-native PRD backlog for Amego instead of ADO work items', () => {
+    mockApexWorkbenchHooks('Amego');
+
+    renderView();
+
+    expect(useAssignedWorkItems).toHaveBeenCalledWith(null);
+    expect(useApexBacklogFeatures).toHaveBeenCalledWith('Amego');
+    expect(screen.getByText('PDF Assembly')).toBeInTheDocument();
+    expect(screen.queryByText('Implement login')).not.toBeInTheDocument();
   });
 
   it('defaults PRD and Epic sections to collapsed', () => {
@@ -624,6 +635,22 @@ describe('DevWorkbenchView — Apex backlog (Mark Complete)', () => {
     expect(screen.getAllByRole('button', { name: /start local development/i })).toHaveLength(1);
     expect(screen.queryByRole('button', { name: /^Start Development$/i })).not.toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /view context/i }).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('completes only the selected feature and rolls parents up from all children', async () => {
+    mockCompleteMutateAsync.mockResolvedValue({ ok: true, sessionId: 'session-new' });
+
+    renderView();
+    expandPrdAndEpic();
+    fireEvent.click(screen.getAllByRole('button', { name: /mark complete/i })[0]);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('my-work-feature-status-FEAT-001')).toHaveTextContent('Complete');
+    });
+    expect(screen.getByTestId('my-work-feature-status-FEAT-002')).toHaveTextContent('Ready');
+    expect(screen.getByTestId('my-work-prd-status-prd-1')).toHaveTextContent('In Progress');
+    expect(screen.getByTestId('my-work-epic-status-prd-1-0')).toHaveTextContent('In Progress');
+    expect(screen.getAllByText('Done')).toHaveLength(1);
   });
 
   it('hides Start Local Development when a feature already has a completed session', () => {

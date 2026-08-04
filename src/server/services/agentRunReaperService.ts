@@ -17,17 +17,21 @@ import type {
   SseHealthEvent,
 } from '../../shared/types/chat';
 import {
+  finalizeReconciledAgentRun,
   nextRunEventSequence,
   notifyRunEvent,
   RUN_EVENT_SOURCE_INSTANCE,
 } from './pgNotifyService';
 import { getMyWorkSessionContext, logMyWorkSession } from './myWorkSessionLogger';
+import { isFeatureEnabled } from './featureFlagService';
 
 const REAP_INTERVAL_MS = 60_000;
+export const RETIRE_REAP_INTERVAL_MS = 5 * 60_000;
 const LONG_RUNNING_PREFIX = 'Long-running agent run';
 const WATCHDOG_SOURCE_INSTANCE = `${RUN_EVENT_SOURCE_INSTANCE}:watchdog`;
 
 let reaperTimer: ReturnType<typeof setInterval> | null = null;
+let lastRetireReapAt = 0;
 
 export interface AgentRunHealthConfig {
   heartbeatTimeoutMs: number;
@@ -59,11 +63,17 @@ export interface AgentRunHealthSnapshot {
 export interface ReaperOptions {
   now?: () => number;
   config?: AgentRunHealthConfig;
+  eventDrivenTerminationEnabled?: (threadId: string) => Promise<boolean>;
+  retireReconcileDue?: boolean;
 }
 
 function positiveDuration(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export function resolveAgentRunHardLimitMs(): number {
+  return positiveDuration(process.env.AGENT_RUN_HARD_LIMIT_MS, 2 * 60 * 60_000);
 }
 
 export function resolveAgentRunHealthConfig(): AgentRunHealthConfig {
@@ -83,8 +93,27 @@ export function resolveAgentRunHealthConfig(): AgentRunHealthConfig {
     progressAbortMs,
     inFlightToolMaxMs,
     longRunMs: positiveDuration(process.env.AGENT_LONG_RUN_MS, 30 * 60_000),
-    hardLimitMs: positiveDuration(process.env.AGENT_RUN_HARD_LIMIT_MS, 2 * 60 * 60_000),
+    hardLimitMs: resolveAgentRunHardLimitMs(),
   };
+}
+
+export function shouldRunRetireReconciler(lastRunAt: number, nowMs: number): boolean {
+  return nowMs - lastRunAt >= RETIRE_REAP_INTERVAL_MS;
+}
+
+export async function isEventDrivenTerminationEnabledForThread(
+  threadId: string,
+): Promise<boolean> {
+  const thread = await db.query.chatThreads.findFirst({
+    where: eq(chatThreads.id, threadId),
+    columns: { userId: true, kickoff: true },
+  });
+  const project = thread?.kickoff?.project;
+  if (!thread?.userId || !project) return false;
+  return isFeatureEnabled('event-driven-run-termination', {
+    userId: thread.userId,
+    project,
+  });
 }
 
 async function publishHealthEvent(input: {
@@ -185,9 +214,19 @@ export async function isThreadRunAlive(
 ): Promise<boolean> {
   const config = options.config ?? resolveAgentRunHealthConfig();
   const nowMs = options.now?.() ?? Date.now();
+  const eventDrivenTerminationEnabled =
+    options.eventDrivenTerminationEnabled ?? isEventDrivenTerminationEnabledForThread;
   const rows = await db.query.agentRuns.findMany({
     where: and(eq(agentRuns.threadId, threadId), inArray(agentRuns.status, ['queued', 'running'])),
   });
+  const eventDrivenEnabled = await eventDrivenTerminationEnabled(threadId).catch(() => false);
+  // @feature-flag:event-driven-run-termination start winner=enabled
+  if (eventDrivenEnabled) {
+    // @feature-flag:event-driven-run-termination enabled-start
+    return rows.some((row) => !row.timeoutAt || Date.parse(row.timeoutAt) > nowMs);
+    // @feature-flag:event-driven-run-termination enabled-end
+  }
+  // @feature-flag:event-driven-run-termination disabled-start
   return rows.some((row) => {
     const progressAt = (row as typeof row & { progressAt?: string | null }).progressAt;
     const progressLabel = (row as typeof row & { progressLabel?: string | null }).progressLabel;
@@ -196,6 +235,8 @@ export async function isThreadRunAlive(
       && health !== 'hard_timeout'
       && health !== 'never_claimed';
   });
+  // @feature-flag:event-driven-run-termination disabled-end
+  // @feature-flag:event-driven-run-termination end
 }
 
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
@@ -309,7 +350,7 @@ async function failRun(
   await db
     .update(agentRuns)
     .set({ status: 'failed', lastError: message, updatedAt })
-    .where(and(eq(agentRuns.id, id), eq(agentRuns.status, 'running')));
+    .where(and(eq(agentRuns.id, id), inArray(agentRuns.status, ['queued', 'running'])));
   // Also clear desynced threads where recovery wiped active_run_id while this
   // run was still live (activeRunId null + idle/running).
   await db
@@ -351,8 +392,69 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
     const rows = await db.query.agentRuns.findMany({
       where: inArray(agentRuns.status, ['queued', 'running']),
     });
+    const eventDrivenTerminationEnabled =
+      options.eventDrivenTerminationEnabled ??
+      isEventDrivenTerminationEnabledForThread;
 
     for (const row of rows) {
+      const eventDrivenEnabled = await eventDrivenTerminationEnabled(row.threadId)
+        .catch(() => false);
+      // @feature-flag:event-driven-run-termination start winner=enabled
+      if (eventDrivenEnabled) {
+        // @feature-flag:event-driven-run-termination enabled-start
+        if (options.retireReconcileDue === false) continue;
+        const expired = Boolean(row.timeoutAt && Date.parse(row.timeoutAt) <= nowMs);
+        if (expired) {
+          const detail = 'Run exceeded configured hard limit';
+          const errorEvent = {
+            eventId: randomUUID(),
+            threadId: row.threadId,
+            runId: row.id,
+            sourceInstance: WATCHDOG_SOURCE_INSTANCE,
+            sequence: nextRunEventSequence(row.id, WATCHDOG_SOURCE_INSTANCE),
+            timestamp: updatedAt,
+            type: 'error' as const,
+            phase: 'completion' as const,
+            status: 'failed' as const,
+            detail,
+            event: { type: 'error' as const, error: detail },
+          };
+          const cancelEvent = {
+            eventId: randomUUID(),
+            threadId: row.threadId,
+            runId: row.id,
+            sourceInstance: WATCHDOG_SOURCE_INSTANCE,
+            sequence: nextRunEventSequence(row.id, WATCHDOG_SOURCE_INSTANCE),
+            timestamp: updatedAt,
+            type: 'cancel' as const,
+            phase: 'completion' as const,
+            status: 'cancelled' as const,
+            detail: 'Run cancelled by timeout reconciler',
+            event: { type: 'cancel' as const },
+          };
+          const won = await finalizeReconciledAgentRun({
+            runId: row.id,
+            threadId: row.threadId,
+            status: 'failed',
+            detail,
+            events: [errorEvent, cancelEvent],
+          });
+          if (won) {
+            await db
+              .update(chatThreads)
+              .set({ status: 'idle', activeRunId: null, lastError: detail, lastActivityAt: updatedAt })
+              .where(and(
+                eq(chatThreads.id, row.threadId),
+                or(eq(chatThreads.activeRunId, row.id), isNull(chatThreads.activeRunId)),
+              ));
+            await logMyWorkHealth(row.threadId, row.id, 'hard_timeout', detail, 'error');
+          }
+        }
+        // @feature-flag:event-driven-run-termination enabled-end
+        continue;
+      }
+
+      // @feature-flag:event-driven-run-termination disabled-start
       const progressAt = (row as typeof row & { progressAt?: string | null }).progressAt;
       const progressLabel = (row as typeof row & { progressLabel?: string | null }).progressLabel;
       const health = assessAgentRunHealth({ ...row, progressAt, progressLabel }, nowMs, config);
@@ -473,6 +575,8 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
           status: 'running',
         }).catch((err) => console.error('[reaper] Failed to publish recovery event:', err));
       }
+      // @feature-flag:event-driven-run-termination disabled-end
+      // @feature-flag:event-driven-run-termination end
     }
   } catch (err) {
     console.error('[reaper] Failed to reap orphaned runs:', err);
@@ -483,12 +587,16 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
  * Start the reaper: run immediately on startup, then repeat on interval.
  */
 export function startReaper(): void {
-  reapOrphanedRuns().catch((err) => {
+  lastRetireReapAt = Date.now();
+  reapOrphanedRuns({ retireReconcileDue: true }).catch((err) => {
     console.error('[reaper] Initial reap failed:', err);
   });
 
   reaperTimer = setInterval(() => {
-    reapOrphanedRuns().catch((err) => {
+    const nowMs = Date.now();
+    const retireReconcileDue = shouldRunRetireReconciler(lastRetireReapAt, nowMs);
+    if (retireReconcileDue) lastRetireReapAt = nowMs;
+    reapOrphanedRuns({ retireReconcileDue }).catch((err) => {
       console.error('[reaper] Periodic reap failed:', err);
     });
   }, REAP_INTERVAL_MS);

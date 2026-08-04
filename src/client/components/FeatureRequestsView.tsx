@@ -139,7 +139,7 @@ export const FeatureRequestsView: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const { can, isInAnyGroup, permissionsLoaded, selectedProject } =
     useAppShell();
-  const { data: requests, isLoading, error } = useFeatureRequests();
+  const { data: requests, isLoading, error } = useFeatureRequests(selectedProject);
   const updateMutation = useUpdateFeatureRequest();
   const reorderMutation = useReorderFeatureRequests();
   const reanalyzeMutation = useReanalyzeFeatureRequest();

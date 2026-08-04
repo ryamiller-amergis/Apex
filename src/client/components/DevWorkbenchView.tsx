@@ -11,7 +11,10 @@ import {
 } from '../hooks/useDevWorkbench';
 import { useApexBacklogFeatures } from '../hooks/useApexBacklog';
 import type { BacklogFeatureItem, ActiveDevSession, ApexBacklogGroup } from '../../shared/types/devWorkbench';
-import { evaluateDevStartEligibility } from '../../shared/types/devWorkbench';
+import {
+  evaluateDevStartEligibility,
+  isAppNativeRequirementsProject,
+} from '../../shared/types/devWorkbench';
 import {
   computeFeatureWorkStatus,
   formatMyWorkStatusLabel,
@@ -514,9 +517,11 @@ const ApexBacklogView: React.FC<{
 export const DevWorkbenchView: React.FC = () => {
   const navigate = useNavigate();
   const { selectedProject, isSuperAdmin } = useAppShell();
-  const isApex = selectedProject === 'Apex';
+  const usesAppNativeRequirements = isAppNativeRequirementsProject(selectedProject);
 
-  const { data: workItems, isLoading, error } = useAssignedWorkItems(isApex ? null : (selectedProject || null));
+  const { data: workItems, isLoading, error } = useAssignedWorkItems(
+    usesAppNativeRequirements ? null : (selectedProject || null),
+  );
   const { data: activeSessions } = useActiveSessions(selectedProject || null);
   const startSession = useStartDevSession();
   const closeSession = useCloseDevSession();
@@ -569,7 +574,7 @@ export const DevWorkbenchView: React.FC = () => {
     }
   };
 
-  if (isApex) {
+  if (usesAppNativeRequirements && selectedProject) {
     return (
       <div className={styles.container} {...{ 'data-testid': 'my-work-page' }}>
         <div className={styles.header} {...{ 'data-testid': 'my-work-header' }}>
@@ -585,7 +590,7 @@ export const DevWorkbenchView: React.FC = () => {
             <h2 id="feature-backlog-heading">Feature Backlog</h2>
             <p>Approved PRD features</p>
           </div>
-          <ApexBacklogView project="Apex" activeSessions={activeSessions ?? []} />
+          <ApexBacklogView project={selectedProject} activeSessions={activeSessions ?? []} />
         </section>
       </div>
     );

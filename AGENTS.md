@@ -56,7 +56,7 @@ Apex is an internal product-building and project-management platform. It central
 | **Super Admin** | A platform-level administrator who bypasses all menu visibility and most permission checks |
 | **Platform Admin** | The admin panel for cross-project settings: access management, menu visibility, feature flags, and walkthrough authoring/reporting |
 | **Project Admin** | Per-project admin panel for roles, users, groups, project settings, and notifications |
-| **Apex (project)** | The virtual project representing the AI-Pilot platform itself; feature request review is scoped to this project |
+| **Apex (project)** | The virtual project representing the AI-Pilot platform itself; the shared Apex Backlog may also be exposed in other projects through Platform Admin menu visibility |
 | **Feature Flag** | A runtime toggle that gates feature access by user, project, or group without redeploying |
 | **SSE** | Server-Sent Events — used for real-time notification delivery and chat streaming |
 | **Facilitator** | The standup agent that summarizes team updates after all participants submit or the deadline is reached |

@@ -654,6 +654,20 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
     expect(prompt).not.toContain('local checkout-backed read-only tools');
   });
 
+  it('does not advertise ado-skills read tools in ADO free-chat under native reads', () => {
+    // Given a plain (no-skill) ADO chat with native reads engaged.
+    const kickoff = baseKickoff({ skillProvider: 'ado', repo: 'Apex' });
+
+    // When the free-chat prompt is built.
+    const prompt = buildInitialPrompt(kickoff, { nativeReads: true });
+
+    // Then reads are directed at the local checkout tools and the de-mounted
+    // ado-skills repo-read tools are neither advertised nor invoked via get_skill.
+    expect(prompt).toContain('local checkout-backed read-only tools');
+    expect(prompt).not.toContain('# Available MCP tools (via `ado-skills` server)');
+    expect(prompt).not.toContain('call `get_skill`');
+  });
+
   it('AC-0 / DoD-0 / DoD-1 / BR-009 / BR-010 / VT-07 wires the exact pinned reader while retaining staging MCP', async () => {
     // Given native reads are authorized for one SHA-pinned GitHub grounding profile.
     const reader = pinnedReader();
@@ -694,9 +708,9 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
       {},
     );
     expect(reader.readFile).toHaveBeenCalledWith('src/pinned.ts');
-    expect(runtime.mcpServers['github-repo']).toEqual({
-      url: 'http://localhost:3001/mcp/github-repo?enableRepoBrowse=false',
-    });
+    // Native reads engaged → the read-only github-repo MCP is de-mounted, while
+    // ado-skills is retained for PRD write-back with its repo-read tools stripped.
+    expect(runtime.mcpServers['github-repo']).toBeUndefined();
     expect(runtime.mcpServers['ado-skills']).toEqual({
       url: 'http://localhost:3001/mcp/ado-skills?enableRepoBrowse=false',
     });
@@ -772,10 +786,10 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
 
     // Then no stale native tool/MCP/prompt state survives into the recreated turn.
     expect(first.local.customTools).toBeDefined();
-    expect(first.mcpServers['github-repo']).toEqual({
-      url: 'http://localhost:3001/mcp/github-repo?enableRepoBrowse=false',
-    });
+    // Native turn de-mounts the read-only github-repo MCP entirely...
+    expect(first.mcpServers['github-repo']).toBeUndefined();
     expect(second.local.customTools).toBeUndefined();
+    // ...and the remote recreation restores it.
     expect(second.mcpServers['github-repo']).toBeDefined();
     expect(buildInitialPrompt(baseKickoff(), { nativeReads: first.nativeReads }))
       .toContain('local checkout-backed read-only tools');
@@ -1241,6 +1255,47 @@ describe('document assistant MCP wiring', () => {
 
     expect(servers['github-repo']).toBeUndefined();
     expect(servers['ado-skills']).toBeDefined();
+  });
+
+  it('de-mounts github-repo entirely on the native-read success path', () => {
+    const servers = buildMcpServers(
+      baseKickoff(),
+      'http://localhost:3001/mcp/ado-skills',
+      { nativeReads: true, enableRepoBrowse: false },
+    );
+
+    // GitHub free-chat + native reads → no provider repo-read MCP at all.
+    expect(servers['github-repo']).toBeUndefined();
+    expect(servers['ado-skills']).toBeUndefined();
+  });
+
+  it('de-mounts ado-skills for a plain ADO chat when native reads are engaged', () => {
+    const servers = buildMcpServers(
+      baseKickoff({ skillProvider: 'ado', repo: 'Apex' }),
+      'http://localhost:3001/mcp/ado-skills',
+      { nativeReads: true, enableRepoBrowse: false },
+    );
+
+    // ADO repo-reading chat: native customTools cover reads, so ado-skills drops.
+    expect(servers['github-repo']).toBeUndefined();
+    expect(servers['ado-skills']).toBeUndefined();
+  });
+
+  it('retains ado-skills for document write-back under native reads with repo browse stripped', () => {
+    const servers = buildMcpServers(
+      baseKickoff({
+        assistantType: 'prd',
+        freeformContext: 'prd_id: prd-1\nthread_id: t-1',
+      }),
+      'http://localhost:3001/mcp/ado-skills',
+      { nativeReads: true, enableRepoBrowse: false },
+    );
+
+    // GitHub PRD assistant: reads go native, write-back stays on ado-skills.
+    expect(servers['github-repo']).toBeUndefined();
+    expect(servers['ado-skills']).toEqual({
+      url: 'http://localhost:3001/mcp/ado-skills?enableRepoBrowse=false',
+    });
   });
 
   it('uses repository MCP profiles without broad code search for interviews', () => {

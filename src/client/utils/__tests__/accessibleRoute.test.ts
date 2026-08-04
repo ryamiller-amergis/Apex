@@ -87,22 +87,22 @@ describe('resolveAccessibleRoute', () => {
     });
   });
 
-  describe('Project-restricted modules', () => {
-    it('returns /feature-requests only when selectedProject is Apex', () => {
-      const apexResult = resolveAccessibleRoute({
-        ...base,
-        can: (k) => k === 'feature-requests:view',
-        enabledViews: ['feature-requests'],
-        selectedProject: 'Apex',
-      });
-      expect(apexResult).toBe('/feature-requests');
-    });
-
-    it('skips /feature-requests when project is not Apex', () => {
+  describe('Menu-controlled modules', () => {
+    it('returns /feature-requests for any project when enabled and permitted', () => {
       const result = resolveAccessibleRoute({
         ...base,
         can: (k) => k === 'feature-requests:view',
         enabledViews: ['feature-requests'],
+        selectedProject: 'OtherProject',
+      });
+      expect(result).toBe('/feature-requests');
+    });
+
+    it('skips /feature-requests when Platform Admin menu visibility disables it', () => {
+      const result = resolveAccessibleRoute({
+        ...base,
+        can: (k) => k === 'feature-requests:view',
+        enabledViews: [],
         selectedProject: 'OtherProject',
       });
       expect(result).toBe('/');

@@ -129,6 +129,28 @@ describe('computeFeatureWorkStatus', () => {
     expect(result.blockedBy).toBe('FEAT-000');
   });
 
+  it('does not satisfy a dependency from a different PRD with the same feature id', () => {
+    const blockedFeature = { ...feature, featureId: 'FEAT-002', dependsOn: ['FEAT-001'] };
+    const otherPrdCompletion: ActiveDevSession = {
+      id: 'other-prd-session',
+      workItemId: null,
+      chatThreadId: null,
+      branchName: null,
+      status: 'completed',
+      prUrl: null,
+      createdAt: '2026-07-03T08:00:00.000Z',
+      prdId: 'prd-2',
+      featureId: 'FEAT-001',
+    };
+
+    expect(
+      computeFeatureWorkStatus(blockedFeature, [], [otherPrdCompletion]),
+    ).toMatchObject({
+      state: 'ready',
+      blockedBy: 'FEAT-001',
+    });
+  });
+
   it('prefers completed over an older active session for the same feature', () => {
     const sessions: ActiveDevSession[] = [
       {

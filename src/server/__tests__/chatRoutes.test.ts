@@ -57,6 +57,10 @@ jest.mock('../services/pgNotifyService', () => ({
   subscribeRunEvents: jest.fn().mockReturnValue(() => {}),
 }));
 
+jest.mock('../services/featureFlagService', () => ({
+  isFeatureEnabled: jest.fn().mockResolvedValue(false),
+}));
+
 jest.mock('../utils/requestUser', () => ({
   getUserId: jest.fn().mockReturnValue('user-1'),
 }));
@@ -70,12 +74,14 @@ jest.mock('../services/threadAccessService', () => ({
 }));
 
 import chatRouter, {
+  buildStreamStatusEvent,
   buildRunStatusResponse,
   formatRunEventSse,
   shouldAssignRunEventSseId,
   shouldForwardPgRunEvent,
 } from '../routes/chat';
 import * as chatAgentService from '../services/chatAgentService';
+import { isFeatureEnabled } from '../services/featureFlagService';
 import type {
   AgentRunEventEnvelope,
   ChatThread,
@@ -140,6 +146,19 @@ describe('chat run-event SSE transport', () => {
       type: 'token',
       event: { type: 'token', text: 'ephemeral' },
     })).toBe(false);
+  });
+
+  it('PBI-002 AC-0 advertises event-driven authority in the initial stream status', () => {
+    expect(buildStreamStatusEvent('running', true)).toEqual({
+      type: 'status',
+      status: 'running',
+      eventDrivenTermination: true,
+    });
+    expect(buildStreamStatusEvent('running', false)).toEqual({
+      type: 'status',
+      status: 'running',
+      eventDrivenTermination: false,
+    });
   });
 
   it('exposes watchdog health and persisted progress without using heartbeat as progress', () => {
@@ -577,6 +596,36 @@ describe('chat thread lifecycle', () => {
 
     expect(listAfterDeleteRes.status).toBe(200);
     expect(listAfterDeleteRes.body).toEqual([]);
+  });
+});
+
+describe('GET /api/chat/threads/:id/run-status feature-flag rollback split', () => {
+  const thread = {
+    id: 'thread-retire',
+    userId: 'user-1',
+    kickoff: { project: 'Apex', repo: 'AI-Pilot' },
+    messages: [],
+    status: 'running',
+    workspaceDir: '/tmp/ws',
+    flagged: false,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    lastActivityAt: '2026-01-01T00:00:00.000Z',
+  } as ChatThread;
+
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    jest.clearAllMocks();
+    mockResolveThreadAccess.mockResolvedValue({ thread, access: 'owner' });
+  });
+
+  it('TBI-003 DoD-4 returns 404 in event-driven mode without querying legacy status', async () => {
+    jest.mocked(isFeatureEnabled).mockResolvedValue(true);
+
+    const response = await request(buildApp())
+      .get('/api/chat/threads/thread-retire/run-status');
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: 'Run status polling is disabled' });
   });
 });
 

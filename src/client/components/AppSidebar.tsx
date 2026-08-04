@@ -180,7 +180,6 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   isInAnyGroup,
   menuEnabledViews = [],
   isSuperAdmin = false,
-  selectedProject,
   canAccessHome = true,
   onNavigateHome,
   onNavigateCalendar,
@@ -253,7 +252,6 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       return true;
     }
     if (item.view === 'feature-requests') {
-      if (selectedProject !== 'Apex') return false;
       if (!isSuperAdmin && !menuEnabledViews.includes('feature-requests')) return false;
       if (!isSuperAdmin && !can('feature-requests:view')) return false;
       return true;

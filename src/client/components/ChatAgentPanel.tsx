@@ -682,7 +682,13 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                       {...(highlighted ? { 'data-testid': 'chat-message-highlighted' } : {})}
                       className={`${styles.systemErrorMsg} ${highlighted ? styles.messageHighlighted : ''}`.trim()}
                     >
-                      <span className={styles.systemErrorText}>{msg.text}</span>
+                      <span
+                        className={styles.systemErrorText}
+                        role="alert"
+                        {...{ 'data-testid': 'chat-run-terminal' }}
+                      >
+                        {msg.text}
+                      </span>
                       <button
                         className={styles.retryBtn}
                         onClick={() => doSend(lastUserText)}
@@ -701,7 +707,11 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                     {...(highlighted ? { 'data-testid': 'chat-message-highlighted' } : {})}
                     className={`${styles.systemMsg} ${highlighted ? styles.messageHighlighted : ''}`.trim()}
                   >
-                    {msg.text}
+                    {isError ? (
+                      <span role="alert" {...{ 'data-testid': 'chat-run-terminal' }}>
+                        {msg.text}
+                      </span>
+                    ) : msg.text}
                   </div>
                 );
               }
@@ -718,7 +728,13 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
 
             {/* Loading spinner — shown while waiting for first tokens */}
             {isRunning && !streamingText && (
-              <div className={styles.message}>
+              <div
+                className={styles.message}
+                role="status"
+                aria-live="polite"
+                aria-label="Agent is processing"
+                {...{ 'data-testid': 'chat-run-spinner' }}
+              >
                 <div className={styles.agentHeader}>
                   <span className={styles.agentAvatar}>AI</span>
                   <span className={styles.agentLabel}>Agent</span>

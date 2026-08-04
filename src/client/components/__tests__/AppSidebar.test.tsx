@@ -61,13 +61,27 @@ describe('AppSidebar — desktop navigation', () => {
     expect(screen.getByRole('button', { name: 'Planning' })).toBeInTheDocument();
   });
 
-  it('hides Feature Requests when project is not Apex', () => {
+  it('shows Apex Backlog for another project when enabled and permitted', () => {
     const can = (key: string) => key === 'feature-requests:view';
     render(
       <AppSidebar
         {...baseProps}
         can={can}
         menuEnabledViews={['feature-requests']}
+        selectedProject="OtherProject"
+        onNavigateFeatureRequests={jest.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Apex Backlog' })).toBeInTheDocument();
+  });
+
+  it('hides Apex Backlog when Platform Admin menu visibility disables it', () => {
+    const can = (key: string) => key === 'feature-requests:view';
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={can}
+        menuEnabledViews={[]}
         selectedProject="OtherProject"
         onNavigateFeatureRequests={jest.fn()}
       />,

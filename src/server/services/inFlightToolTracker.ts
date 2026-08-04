@@ -9,6 +9,12 @@ export interface ExpiredMcpToolCall extends InFlightToolCall {
   elapsedMs: number;
 }
 
+export interface McpToolDeadlineController {
+  arm(key: string, toolName: string, input: unknown): void;
+  complete(key: string, toolName: string, input: unknown): void;
+  clear(): void;
+}
+
 function nestedToolName(input: unknown): string | null {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const value = (input as Record<string, unknown>).toolName;
@@ -95,4 +101,56 @@ export function findExpiredMcpTool(
     }
   }
   return oldest;
+}
+
+/**
+ * Arms one wall-clock timer per logical MCP call. Cursor can report the same
+ * call under assistant and SDK identifiers, so MCP identity is the timer key.
+ */
+export function createMcpToolDeadlineController(
+  timeoutMs: number,
+  onExpired: (call: ExpiredMcpToolCall) => void,
+): McpToolDeadlineController {
+  const deadlines = new Map<string, {
+    key: string;
+    toolName: string;
+    startedAtMs: number;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+
+  return {
+    arm(key, toolName, input) {
+      const mcpLabel = identifyMcpTool(toolName, input);
+      if (!mcpLabel || deadlines.has(mcpLabel)) return;
+      const startedAtMs = Date.now();
+      const timer = setTimeout(() => {
+        deadlines.delete(mcpLabel);
+        onExpired({
+          key,
+          toolName,
+          mcpLabel,
+          startedAtMs,
+          elapsedMs: Math.max(timeoutMs, Date.now() - startedAtMs),
+        });
+      }, timeoutMs);
+      deadlines.set(mcpLabel, { key, toolName, startedAtMs, timer });
+    },
+    complete(_key, toolName, input) {
+      const completedMcpLabel = identifyMcpTool(toolName, input);
+      if (!completedMcpLabel) return;
+      const labels = completedMcpLabel.toLowerCase() === 'mcp'
+        ? [...deadlines.keys()]
+        : [completedMcpLabel];
+      for (const label of labels) {
+        const deadline = deadlines.get(label);
+        if (!deadline) continue;
+        clearTimeout(deadline.timer);
+        deadlines.delete(label);
+      }
+    },
+    clear() {
+      for (const deadline of deadlines.values()) clearTimeout(deadline.timer);
+      deadlines.clear();
+    },
+  };
 }
