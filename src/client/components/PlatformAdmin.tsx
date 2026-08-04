@@ -25,6 +25,7 @@ import {
   useRemoveFlagRule,
   useFlagAudit,
 } from '../hooks/usePlatformAdminFeatureFlags';
+import { FoundationSkillsAdmin } from './FoundationSkillsAdmin';
 import { WalkthroughsAdminPanel } from './WalkthroughsAdminPanel';
 import { UserMenu } from './UserMenu';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
@@ -50,7 +51,7 @@ const menuSchema = z.object({
 
 type MenuFormValues = z.infer<typeof menuSchema>;
 
-type PlatformAdminTab = 'access' | 'menu' | 'flags' | 'walkthroughs';
+type PlatformAdminTab = 'access' | 'menu' | 'flags' | 'skills' | 'walkthroughs';
 
 function resolveGroundingRolloutStage(
   flags: FeatureFlagWithRules[],
@@ -373,6 +374,17 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
             <button
               type="button"
               role="tab"
+              id="platform-admin-tab-skills"
+              aria-selected={activeTab === 'skills'}
+              aria-controls="platform-admin-panel-skills"
+              className={`${styles.tabButton} ${activeTab === 'skills' ? styles.tabButtonActive : ''}`}
+              onClick={() => setActiveTab('skills')}
+            >
+              APEX Skills
+            </button>
+            <button
+              type="button"
+              role="tab"
               id="platform-admin-tab-walkthroughs"
               aria-selected={activeTab === 'walkthroughs'}
               aria-controls="platform-admin-panel-walkthroughs"
@@ -453,6 +465,16 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
               className={styles.tabPanel}
             >
               <FeatureFlagsSection />
+            </div>
+          )}
+          {activeTab === 'skills' && (
+            <div
+              id="platform-admin-panel-skills"
+              role="tabpanel"
+              aria-labelledby="platform-admin-tab-skills"
+              className={styles.tabPanel}
+            >
+              <FoundationSkillsAdmin />
             </div>
           )}
           {activeTab === 'walkthroughs' && (

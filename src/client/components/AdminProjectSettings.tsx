@@ -14,6 +14,7 @@ import { useSkillRepos, useSkillBranches, useSkillList } from '../hooks/useChatT
 import { useUsers } from '../hooks/useRbac';
 import { useGroupsWithMembers } from '../hooks/useGroups';
 import { GroupAwarePeoplePicker } from './GroupAwarePeoplePicker';
+import { useProjectAvailableSkills } from '../hooks/useFoundationSkillAdmin';
 import styles from './AdminProjectSettings.module.css';
 
 // ── BranchCombobox ─────────────────────────────────────────────────────────────
@@ -2730,7 +2731,73 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         )}
 
         {formError && !edit && <p className={styles.formError}>{formError}</p>}
+
+        {/* ── Foundation Skills (read-only) ────────────────────────────── */}
+        {!edit && selectedProject && (
+          <FoundationSkillsProjectView project={selectedProject} />
+        )}
       </div>
+    </div>
+  );
+};
+
+// ── FoundationSkillsProjectView ───────────────────────────────────────────────
+
+const FoundationSkillsProjectView: React.FC<{ project: string }> = ({ project }) => {
+  const [expanded, setExpanded] = useState(false);
+  const { data: skills = [], isLoading } = useProjectAvailableSkills(project);
+
+  return (
+    <div className={styles.fsSection}>
+      <button
+        type="button"
+        className={styles.fsToggle}
+        onClick={() => setExpanded(p => !p)}
+        aria-expanded={expanded}
+      >
+        <span className={styles.fsToggleTitle}>Foundation Skills</span>
+        {skills.length > 0 && (
+          <span className={styles.fsCount}>{skills.length} available</span>
+        )}
+        <span className={`${styles.fsCaret} ${expanded ? styles.fsCaretOpen : ''}`} aria-hidden="true">▼</span>
+      </button>
+
+      {expanded && (
+        <div className={styles.fsBody}>
+          <p className={styles.fsHint}>
+            Foundation skills available to <strong>{project}</strong> from the latest published release.
+            Contact a Platform Admin to request additional skills.
+          </p>
+          {isLoading ? (
+            <p className={styles.fsEmpty}>Loading…</p>
+          ) : skills.length === 0 ? (
+            <p className={styles.fsEmpty}>
+              No foundation skills have been released to this project yet.
+            </p>
+          ) : (
+            <div className={styles.fsTableWrap}>
+              <table className={styles.fsTable}>
+                <thead>
+                  <tr>
+                    <th>Skill</th>
+                    <th>Summary</th>
+                    <th>Version</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {skills.map(skill => (
+                    <tr key={skill.name}>
+                      <td className={styles.fsSkillName}>{skill.name}</td>
+                      <td className={styles.fsSkillSummary}>{skill.summary}</td>
+                      <td><span className={styles.fsVersion}>v{skill.version}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };

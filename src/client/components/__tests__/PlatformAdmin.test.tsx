@@ -575,6 +575,62 @@ describe('PlatformAdmin feature flags', () => {
   });
 });
 
+// ── APEX Skills tab ───────────────────────────────────────────────────────────
+
+// Every hook the module exports is stubbed, so adding a hook to
+// FoundationSkillsAdmin does not silently break this suite with an
+// "is not a function" render crash.
+jest.mock('../../hooks/useFoundationSkillAdmin', () => {
+  const query = (data: unknown) => jest.fn().mockReturnValue({
+    data, isLoading: false, isError: false, error: null,
+  });
+  const mutation = () => jest.fn().mockReturnValue({
+    mutate: jest.fn(), mutateAsync: jest.fn(), isPending: false, error: null, reset: jest.fn(),
+  });
+
+  return {
+    useFoundationSkillCandidates:         query([]),
+    useFoundationSkillReleases:           query([]),
+    useFoundationSkillReleaseAudit:       query([]),
+    useFoundationSkillRepoStatuses:       query([]),
+    useFoundationSkillTeams:              query([]),
+    useFoundationSkillRollbackTargets:    query([]),
+    useFoundationSkillMatrix:             query([]),
+    useProjectAvailableSkills:            query([]),
+    useFoundationSkillCatalog:            query({ suiteVersion: '0.0.0', skills: [] }),
+    useShippableFoundationSkills:         jest.fn().mockReturnValue({ skills: [], isLoading: false }),
+    useCreateFoundationSkillRelease:      mutation(),
+    usePublishFoundationSkillRelease:     mutation(),
+    useDeprecateFoundationSkillRelease:   mutation(),
+    useDeleteDraftFoundationSkillRelease: mutation(),
+    useUpdateFoundationSkillRelease:      mutation(),
+    useUpdateRepoWithFoundationSkills:    mutation(),
+    useScanAllFoundationSkillRepos:       mutation(),
+    useRollbackFoundationSkillRepo:       mutation(),
+    useCheckFoundationSkillCompatibility: mutation(),
+  };
+});
+
+jest.mock('../../hooks/useProjects', () => ({
+  useProjects: jest.fn().mockReturnValue({ data: [], isLoading: false }),
+}));
+
+describe('PlatformAdmin — APEX Skills tab', () => {
+  it('renders the APEX Skills tab button', () => {
+    setupPlatformAdmin();
+    expect(screen.getByRole('tab', { name: /APEX Skills/i })).toBeInTheDocument();
+  });
+
+  it('shows FoundationSkillsAdmin section when APEX Skills tab is clicked', async () => {
+    const user = userEvent.setup();
+    setupPlatformAdmin();
+
+    await user.click(screen.getByRole('tab', { name: /APEX Skills/i }));
+    // The FoundationSkillsAdmin renders its own section heading
+    expect(screen.getByText('APEX Foundation Skills')).toBeInTheDocument();
+  });
+});
+
 describe('PlatformAdmin walkthroughs tab', () => {
   beforeEach(() => {
     jest.clearAllMocks();

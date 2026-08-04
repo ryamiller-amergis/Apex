@@ -346,7 +346,7 @@ export async function getSkill(
   const content = await fetchFileContent(resolvedOrg, repo, normalizedPath, resolvedBranch);
   const { frontmatter } = parseFrontmatter(content);
 
-  // Find sibling files
+  // Find sibling files + check for apex-skill.json contract
   const folder = normalizedPath.substring(0, normalizedPath.lastIndexOf('/'));
   const supportingFiles: SupportingFile[] = [];
 
@@ -354,9 +354,28 @@ export async function getSkill(
     const items = await ghFetch<Array<{ name: string; path: string; type: string }>>(
       `/repos/${encodeURIComponent(resolvedOrg)}/${encodeURIComponent(repo)}/contents/${encodeURIComponent(folder)}?ref=${encodeURIComponent(resolvedBranch)}`,
     );
+    let apexSkillJsonPath: string | null = null;
     for (const item of items) {
       if (item.type !== 'file' || item.path === normalizedPath) continue;
       supportingFiles.push({ path: `/${item.path}`, name: item.name });
+      if (item.name === 'apex-skill.json') apexSkillJsonPath = `/${item.path}`;
+    }
+
+    // Resolve declared foundation dependencies from apex-skill.json
+    if (apexSkillJsonPath) {
+      try {
+        const contractText = await fetchFileContent(resolvedOrg, repo, apexSkillJsonPath.slice(1), resolvedBranch);
+        const contract = JSON.parse(contractText) as { managedFoundationFiles?: string[] };
+        for (const depPath of contract.managedFoundationFiles ?? []) {
+          if (!depPath) continue;
+          const depName = depPath.split('/').filter(Boolean).pop() ?? depPath;
+          if (!supportingFiles.some(f => f.path === depPath)) {
+            supportingFiles.push({ path: depPath, name: depName, isFoundationDep: true });
+          }
+        }
+      } catch {
+        // Non-fatal
+      }
     }
   } catch {
     // Non-fatal

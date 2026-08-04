@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "skill": "adr-assistant",
+  "foundation": { "package": "@apex/skills", "range": ">=0.1.0" },
+  "managedFoundationFiles": [".apex/foundation/adr-assistant/SKILL.md"],
+  "extensionFiles": ["SKILL.md"],
+  "capabilities": ["adr-management"],
+  "dependsOn": ["adr-interview", "adr-finalize"]
+}

@@ -214,6 +214,8 @@ function App() {
     isInAnyGroup,
     userId,
     isSuperAdmin,
+    isAdmin,
+    groups,
     permissionsLoaded,
     workItems,
     error,
@@ -606,7 +608,7 @@ function App() {
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               {/* Top-level split: demo component gated by "example-flag-demo" flag */}
               <FeatureFlagDemo project={selectedProject} />
-              <AgentHome selectedProject={selectedProject} selectedSkillSettingsId={selectedSkillSettingsId} />
+              <AgentHome selectedProject={selectedProject} selectedSkillSettingsId={selectedSkillSettingsId} isAdmin={isSuperAdmin || isAdmin || (groups ?? []).includes('Manager') || (groups ?? []).includes('Product-Owner')} />
             </ErrorBoundary>
           ) : currentView === 'home' ? (
             /* Access controls still loading — withhold content to avoid a flash */

@@ -1,0 +1,24 @@
+{
+  "skill": "grill-with-docs",
+  "scanScope": "targeted",
+  "targetedGlobs": [
+    "package.json",
+    "CONTEXT.md", "context.md", "AGENTS.md", "README.md",
+    "**/*.md",
+    "design-docs/**", ".ai-pilot/**", "docs/**",
+    "**/*route*", "**/*Route*",
+    "src/**/*.ts", "src/**/*.tsx", "app/**/*.ts", "app/**/*.tsx"
+  ],
+  "ignore": ["node_modules", ".git", "dist", "build", "out", "coverage", ".apex", ".next", ".nuxt", "__pycache__", "vendor"],
+  "detectors": ["stack", "glossary", "routes", "dir-conventions", "repo-docs"],
+  "capFiles": 8000,
+  "capMs": 90000,
+  "slots": {
+    "projectName": { "type": "value", "detector": "stack", "key": "projectName" },
+    "glossary": { "type": "table", "detector": "glossary", "columns": ["key", "value"], "limit": 30 },
+    "contextFile": { "type": "value", "detector": "repo-docs", "key": "contextFile" },
+    "agentsFile": { "type": "value", "detector": "repo-docs", "key": "agentsFile" },
+    "designDocsDir": { "type": "value", "detector": "repo-docs", "key": "designDocsDir" },
+    "skillsDir": { "type": "value", "detector": "repo-docs", "key": "skillsDir" }
+  }
+}

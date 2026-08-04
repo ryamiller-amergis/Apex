@@ -1,0 +1,162 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "apex-dev-plan",
+  "title": "Apex Dev Orchestrator Plan",
+  "description": "Coordinator output for the dev-orchestrator skill. Orders Features into execution waves using feature-level edges only. Contains NO item-level (PBI/TBI) edges — item dependencies are intra-Feature by construction and irrelevant to Feature ordering.",
+  "type": "object",
+  "required": ["slug", "sourceBacklog", "generatedAt", "features", "waves", "syncPoints", "conflicts", "deferredE2E"],
+  "additionalProperties": false,
+  "properties": {
+    "slug": {
+      "type": "string",
+      "description": "Kebab-slug matching the source backlog file."
+    },
+    "sourceBacklog": {
+      "type": "string",
+      "description": "Filename of the backlog JSON used as input (e.g. {slug}.backlog.json)."
+    },
+    "sourceTestCases": {
+      "type": ["string", "null"],
+      "description": "Filename of the optional test-cases JSON used to catalog deferred e2e. null when absent."
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "features": {
+      "type": "array",
+      "description": "Feature nodes in the dependency graph.",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/featureNode" }
+    },
+    "waves": {
+      "type": "array",
+      "description": "Ordered execution waves. Wave 1 executes first; a wave may contain multiple Features that are safe to build in parallel.",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/wave" }
+    },
+    "syncPoints": {
+      "type": "array",
+      "description": "Wave-boundary sync points. Downstream Feature branches are cut only after all upstream Features have merged.",
+      "items": { "$ref": "#/definitions/syncPoint" }
+    },
+    "conflicts": {
+      "type": "array",
+      "description": "Phase/DAG conflicts flagged by the coordinator: a feature.dependsOn edge whose ordering disagrees with implementationPhases. Empty array when none.",
+      "items": { "$ref": "#/definitions/conflict" }
+    },
+    "deferredE2E": {
+      "type": "array",
+      "description": "Test cases with automation.recommendedTier === 'e2e-playwright' — cataloged and skipped by the Feature Executor. Empty array when none.",
+      "items": { "$ref": "#/definitions/deferredE2E" }
+    }
+  },
+  "definitions": {
+    "featureId": {
+      "type": "string",
+      "pattern": "^FEAT-[0-9]{3}$",
+      "description": "Feature identifier matching the backlog."
+    },
+    "featureNode": {
+      "type": "object",
+      "required": ["id", "title", "epic", "phase", "dependsOn"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/definitions/featureId" },
+        "title": { "type": "string" },
+        "epic": {
+          "type": "string",
+          "description": "Title of the parent epic this Feature belongs to."
+        },
+        "phase": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "implementationPhases phase number assigned to this Feature's parent epic."
+        },
+        "dependsOn": {
+          "type": "array",
+          "description": "FEATURE-LEVEL edges only. Feature IDs this Feature depends on. Empty array if none. No item-level (PBI/TBI) edges are ever recorded here.",
+          "items": { "$ref": "#/definitions/featureId" }
+        }
+      }
+    },
+    "wave": {
+      "type": "object",
+      "required": ["wave", "featureIds"],
+      "additionalProperties": false,
+      "properties": {
+        "wave": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "1-based wave number. Lower numbers execute first."
+        },
+        "featureIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/featureId" },
+          "description": "Features in this wave — safe to build in parallel."
+        },
+        "rationale": {
+          "type": "string",
+          "description": "Why these Features share a wave, or why the wave must follow the previous one."
+        }
+      }
+    },
+    "syncPoint": {
+      "type": "object",
+      "required": ["afterWave", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "afterWave": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The wave whose Features must all merge before the next wave's branches are cut."
+        },
+        "mustMergeFeatureIds": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/featureId" },
+          "description": "Features that must be merged at this sync point."
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable sync-point note."
+        }
+      }
+    },
+    "conflict": {
+      "type": "object",
+      "required": ["feature", "dependsOnFeature", "featurePhase", "dependsOnPhase", "detail"],
+      "additionalProperties": false,
+      "properties": {
+        "feature": { "$ref": "#/definitions/featureId" },
+        "dependsOnFeature": { "$ref": "#/definitions/featureId" },
+        "featurePhase": { "type": "integer", "minimum": 1 },
+        "dependsOnPhase": { "type": "integer", "minimum": 1 },
+        "detail": {
+          "type": "string",
+          "description": "Explanation, e.g. 'FEAT-002 dependsOn FEAT-003 but is in an earlier or equal phase — reconcile in /to-prd.'"
+        }
+      }
+    },
+    "deferredE2E": {
+      "type": "object",
+      "required": ["testCaseId", "pbiId", "featureId"],
+      "additionalProperties": false,
+      "properties": {
+        "testCaseId": {
+          "type": "string",
+          "pattern": "^TC-PBI-[0-9]{3}-[0-9]{3}$"
+        },
+        "pbiId": {
+          "type": "string",
+          "pattern": "^PBI-[0-9]{3}$"
+        },
+        "featureId": { "$ref": "#/definitions/featureId" },
+        "note": {
+          "type": "string",
+          "description": "Defaults to 'deferred: e2e'."
+        }
+      }
+    }
+  }
+}

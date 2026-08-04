@@ -1,6 +1,5 @@
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { BedrockClient, ListInferenceProfilesCommand } from '@aws-sdk/client-bedrock';
-import https from 'https';
 import { retryWithBackoff } from '../utils/retry';
 import { getFigmaReference } from './figmaReferenceService';
 import { getMaxviewColorTokens } from './designTokensService';
@@ -185,92 +184,26 @@ export async function listAvailableBedrockModels(): Promise<BedrockModelOption[]
   return AVAILABLE_BEDROCK_MODELS;
 }
 
-/* ── SDLC skill content cache ─────────────────────────────── */
+/* ── SDLC skill content ────────────────────────────────────── */
 
-const SKILL_REPO = 'MaxView';
-const SKILL_PROJECT = 'MaxView';
-const SKILL_PATHS = [
-  '/.cursor/skills/sdlc-backlog',
-  '/.cursor/skills/sdlc-backlog/SKILL.md',
-  '/.cursor/skills/sdlc-backlog/README.md',
-];
+import { resolveLocalSkillBundle, logBundleDiagnostics } from './foundationSkillResolverService';
 
-interface SkillCache {
-  content: string;
-  fetchedAt: number;
-}
-
-let skillCache: SkillCache | null = null;
-const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-
-function fetchRawFileFromADO(orgUrl: string, pat: string, path: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const token = Buffer.from(`:${pat}`).toString('base64');
-    const encodedPath = encodeURIComponent(path);
-    const apiUrl = new URL(
-      `${orgUrl}/${SKILL_PROJECT}/_apis/git/repositories/${SKILL_REPO}/items?path=${encodedPath}&api-version=7.1&$format=text`
-    );
-
-    const options: https.RequestOptions = {
-      hostname: apiUrl.hostname,
-      path: apiUrl.pathname + apiUrl.search,
-      method: 'GET',
-      headers: {
-        Authorization: `Basic ${token}`,
-        Accept: 'text/plain',
-      },
-    };
-
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
-      res.on('end', () => {
-        if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-          resolve(data);
-        } else {
-          reject(new Error(`ADO returned ${res.statusCode} for path ${path}`));
-        }
-      });
-    });
-
-    req.on('error', reject);
-    req.setTimeout(8000, () => {
-      req.destroy();
-      reject(new Error(`Timeout fetching skill file at ${path}`));
-    });
-    req.end();
-  });
-}
-
+/**
+ * Load the SDLC formatting standards for feature/PBI generation prompts.
+ *
+ * Precedence (all local disk reads — non-fatal at every step):
+ *   1. APEX adapter   .cursor/skills/to-prd/SKILL.md
+ *   2. APEX foundation .apex/foundation/to-prd/SKILL.md
+ *   3. Empty string (prompt still works without it)
+ *
+ * Previous implementation fetched MaxView's `sdlc-backlog` from ADO.
+ * That was stale — this project has no sdlc-backlog skill. Replaced with
+ * the project-local to-prd foundation which captures SDLC standards.
+ */
 async function loadSkillContent(): Promise<string> {
-  const now = Date.now();
-  if (skillCache && now - skillCache.fetchedAt < CACHE_TTL_MS) {
-    return skillCache.content;
-  }
-
-  const orgUrl = process.env.ADO_ORG;
-  const pat = process.env.ADO_PAT;
-
-  if (!orgUrl || !pat) {
-    console.warn('[bedrockService] ADO_ORG or ADO_PAT not set — skipping SDLC skill fetch');
-    return '';
-  }
-
-  for (const path of SKILL_PATHS) {
-    try {
-      const content = await fetchRawFileFromADO(orgUrl, pat, path);
-      if (content.trim()) {
-        skillCache = { content, fetchedAt: now };
-        console.log(`[bedrockService] Loaded SDLC skill from ADO path: ${path} (${content.length} chars)`);
-        return content;
-      }
-    } catch (err: any) { // eslint-disable-line @typescript-eslint/no-explicit-any -- ADO fetch errors are untyped
-      console.warn(`[bedrockService] Could not fetch skill at ${path}: ${err.message}`);
-    }
-  }
-
-  console.warn('[bedrockService] SDLC skill file not found in any tried path — using built-in format rules');
-  return '';
+  const bundle = resolveLocalSkillBundle('to-prd');
+  logBundleDiagnostics('to-prd (bedrockService)', bundle);
+  return bundle.content;
 }
 
 /* ── Public types ─────────────────────────────────────────── */

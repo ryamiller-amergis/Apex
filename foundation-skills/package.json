@@ -1,0 +1,35 @@
+{
+  "name": "@apex/skills",
+  "version": "1.0.0",
+  "description": "APEX Foundation Skills — project-agnostic AI agent skill foundations for Cursor",
+  "type": "module",
+  "bin": {
+    "apex-skills": "./bin/apex-skills.mjs"
+  },
+  "main": "./lib/index.mjs",
+  "exports": {
+    ".": "./lib/index.mjs",
+    "./catalog": "./catalog.json",
+    "./lockfile": "./lib/lockfile.mjs"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "foundation/",
+    "catalog.json",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "validate": "node scripts/validate.mjs",
+    "lint": "node --check bin/apex-skills.mjs lib/**/*.mjs"
+  },
+  "keywords": ["apex", "cursor", "ai-skills", "foundation-skills", "sdlc"],
+  "license": "UNLICENSED",
+  "publishConfig": {
+    "registry": "https://pkgs.dev.azure.com/{AZURE_ARTIFACTS_ORG}/_packaging/{AZURE_ARTIFACTS_FEED}/npm/registry/"
+  }
+}

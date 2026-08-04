@@ -50,6 +50,7 @@ import featureRequestRoutes from './routes/featureRequests';
 import askApexRoutes from './routes/askApex';
 import { standupScheduler } from './services/standupScheduler';
 import { aiCostScheduler } from './services/aiCostScheduler';
+import { foundationSkillScanScheduler } from './services/foundationSkillScanScheduler';
 import { groundingMaintenanceScheduler } from './services/groundingMaintenanceScheduler';
 import { createSessionOptions, createSessionStore } from './sessionStore';
 import uiLabRoutes from './routes/uiLab';
@@ -315,6 +316,9 @@ const server = app.listen(PORT, () => {
 
   aiCostScheduler.start();
   console.log('AI cost scheduler started');
+
+  foundationSkillScanScheduler.start();
+  console.log('Foundation skill scan scheduler started');
 
   groundingMaintenanceScheduler.start();
   console.log('Grounding maintenance scheduler started');

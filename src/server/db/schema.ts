@@ -2017,3 +2017,90 @@ export const walkthroughProgressRelations = relations(walkthroughProgress, ({ on
     references: [walkthroughSteps.id],
   }),
 }));
+
+// ── Foundation Skill Releases ─────────────────────────────────────────────────
+
+import type {
+  FoundationSkillReleaseStatus,
+  FoundationSkillAuditAction,
+  FoundationSkillCompatibilityStatus,
+} from '../../shared/types/foundationSkills';
+
+export const foundationSkillReleases = pgTable('foundation_skill_releases', {
+  id:                  uuid('id').primaryKey().defaultRandom(),
+  version:             text('version').notNull().unique(),
+  status:              text('status').$type<FoundationSkillReleaseStatus>().notNull().default('draft'),
+  artifactPackage:     text('artifact_package').notNull().default('@apex/skills'),
+  artifactVersion:     text('artifact_version').notNull(),
+  artifactFeed:        text('artifact_feed'),
+  integritySha256:     text('integrity_sha256'),
+  contractApiVersion:  integer('contract_api_version').notNull().default(1),
+  selectedSkills:      jsonb('selected_skills').$type<string[]>().notNull().default([]),
+  targetProjects:      jsonb('target_projects').$type<string[]>().notNull().default([]),
+  skillTargets:        jsonb('skill_targets').$type<Record<string, string[]>>().notNull().default({}),
+  manifestSnapshot:    jsonb('manifest_snapshot').$type<Record<string, unknown>>(),
+  releaseNotes:        text('release_notes'),
+  breakingChanges:     text('breaking_changes'),
+  publishedBy:         text('published_by'),
+  publishedAt:         timestamp('published_at', { withTimezone: true, mode: 'string' }),
+  deprecatedBy:        text('deprecated_by'),
+  deprecatedAt:        timestamp('deprecated_at', { withTimezone: true, mode: 'string' }),
+  createdBy:           text('created_by').notNull(),
+  createdAt:           timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt:           timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  statusVersionIdx: index('idx_fsr_status_version').on(t.status, t.version),
+}));
+
+export const foundationSkillReleaseAudit = pgTable('foundation_skill_release_audit', {
+  id:             uuid('id').primaryKey().defaultRandom(),
+  releaseId:      uuid('release_id').references(() => foundationSkillReleases.id, { onDelete: 'set null' }),
+  releaseVersion: text('release_version').notNull(),
+  action:         text('action').$type<FoundationSkillAuditAction>().notNull(),
+  actorId:        text('actor_id'),
+  actorEmail:     text('actor_email'),
+  details:        jsonb('details').$type<Record<string, unknown>>(),
+  createdAt:      timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  releaseCreatedIdx: index('idx_fsra_release_created').on(t.releaseId, t.createdAt),
+  actionCreatedIdx:  index('idx_fsra_action_created').on(t.action, t.createdAt),
+}));
+
+export const foundationSkillRepoStatus = pgTable('foundation_skill_repo_status', {
+  id:                    uuid('id').primaryKey().defaultRandom(),
+  provider:              text('provider').notNull().default('ado'),
+  project:               text('project').notNull(),
+  repo:                  text('repo').notNull(),
+  branch:                text('branch').notNull().default('main'),
+  /** Apex project name — the identifier release targeting is keyed on. */
+  apexProject:           text('apex_project'),
+  installedVersion:      text('installed_version'),
+  selectedSkills:        jsonb('selected_skills').$type<string[]>().notNull().default([]),
+  lockHash:              text('lock_hash'),
+  compatibilityStatus:   text('compatibility_status').$type<FoundationSkillCompatibilityStatus>(),
+  compatibilityErrors:   jsonb('compatibility_errors').$type<string[]>().notNull().default([]),
+  availableVersion:      text('available_version'),
+  updateAvailable:       boolean('update_available').notNull().default(false),
+  compatibilityCheckedAt: timestamp('compatibility_checked_at', { withTimezone: true, mode: 'string' }),
+  lastObservedAt:        timestamp('last_observed_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  observedBy:            text('observed_by'),
+  createdAt:             timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt:             timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  providerProjectRepoIdx: unique('fssrs_provider_project_repo_branch').on(t.provider, t.project, t.repo, t.branch),
+  updateAvailableIdx:     index('idx_fssrs_update_available').on(t.updateAvailable, t.lastObservedAt),
+  apexProjectIdx:         index('idx_fssrs_apex_project').on(t.apexProject),
+}));
+
+// ── Foundation Skill Relations ────────────────────────────────────────────────
+
+export const foundationSkillReleasesRelations = relations(foundationSkillReleases, ({ many }) => ({
+  auditLog: many(foundationSkillReleaseAudit),
+}));
+
+export const foundationSkillReleaseAuditRelations = relations(foundationSkillReleaseAudit, ({ one }) => ({
+  release: one(foundationSkillReleases, {
+    fields: [foundationSkillReleaseAudit.releaseId],
+    references: [foundationSkillReleases.id],
+  }),
+}));

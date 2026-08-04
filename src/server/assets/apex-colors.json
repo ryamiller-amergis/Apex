@@ -1,0 +1,53 @@
+{
+  "$meta": {
+    "name": "APEX Light",
+    "source": "src/client/App.css — :root CSS custom properties",
+    "companion": "./apex-colors.md",
+    "description": "Canonical color tokens for the APEX (AI-Pilot) application. Generated from src/client/App.css. AI agents and developers MUST use these exact values when generating UI for APEX. Do not invent hex/rgba values; pick the closest semantic token."
+  },
+  "brand": {
+    "primary":      { "value": "#2747D9", "description": "--brand-primary",      "usage": "Primary brand / interactive accent." },
+    "primaryLight": { "value": "#7C8CFF", "description": "--brand-primary-light","usage": "Soft primary tint — hover highlights, badges." },
+    "navy":         { "value": "#050506", "description": "--brand-navy",          "usage": "Deep dark background (dark-theme base)." },
+    "surface":      { "value": "#EEF2FF", "description": "--brand-surface",       "usage": "Light-theme accent surface / chip background." },
+    "surfaceDark":  { "value": "#18181B", "description": "--brand-surface-dark",  "usage": "Dark-theme surface / elevated card background." },
+    "textInverse":  { "value": "#F9FAFB", "description": "--brand-text-inverse",  "usage": "Text on dark or brand-colored fills." }
+  },
+  "background": {
+    "primary":   { "value": "#F8FAFF", "description": "--bg-primary",   "usage": "Page-level background." },
+    "secondary": { "value": "#EEF2FF", "description": "--bg-secondary",  "usage": "Panel / header / sidebar background." },
+    "tertiary":  { "value": "#E0E7FF", "description": "--bg-tertiary",   "usage": "Selected row, hover surface, input background." }
+  },
+  "text": {
+    "primary":   { "value": "#111827", "description": "--text-primary",   "usage": "Default body and heading text." },
+    "secondary": { "value": "#4B5563", "description": "--text-secondary",  "usage": "Supporting text, labels, captions." },
+    "muted":     { "value": "#6B7280", "description": "--text-muted",      "usage": "Placeholder, de-emphasised content." }
+  },
+  "border": {
+    "default": { "value": "#D6DDF7", "description": "--border-color",       "usage": "Standard component borders." },
+    "light":   { "value": "#E5E9FF", "description": "--border-color-light", "usage": "Subtle dividers, hairlines." }
+  },
+  "accent": {
+    "color":     { "value": "#2747D9", "description": "--accent-color",      "usage": "Interactive accent: buttons, links, focus rings." },
+    "hover":     { "value": "#1C33A6", "description": "--accent-hover",      "usage": "Accent hover state." },
+    "teal":      { "value": "#2747D9", "description": "--accent-teal",       "usage": "Alias of accent — used in some component contexts." },
+    "tealHover": { "value": "#1C33A6", "description": "--accent-teal-hover", "usage": "Alias of accent hover." },
+    "onAccent":  { "value": "#ffffff", "description": "--on-accent",         "usage": "Text/icons placed on top of accent-colored fills (WCAG AA)." }
+  },
+  "status": {
+    "success":      { "value": "#16A34A", "description": "--success-color", "usage": "Success state, positive indicators." },
+    "successHover": { "value": "#15803D", "description": "--success-hover",  "usage": "Success hover." },
+    "onSuccess":    { "value": "#0b1220", "description": "--on-success",     "usage": "Text/icons on success fills (WCAG AA)." },
+    "error":        { "value": "#d32f2f", "description": "--error-color",    "usage": "Error / destructive state." }
+  },
+  "shadow": {
+    "sm": { "value": "rgba(0,0,0,0.08)", "description": "--shadow-sm", "usage": "Subtle card / button elevation." },
+    "md": { "value": "rgba(0,0,0,0.14)", "description": "--shadow-md", "usage": "Modal / elevated panel shadow." }
+  },
+  "calendar": {
+    "bg":          { "value": "#F8FAFF", "description": "--calendar-bg",           "usage": "Calendar view background." },
+    "eventBg":     { "value": "#E0E7FF", "description": "--calendar-event-bg",     "usage": "Calendar event chip background." },
+    "eventBorder": { "value": "#2747D9", "description": "--calendar-event-border", "usage": "Calendar event chip border." },
+    "eventText":   { "value": "#1C33A6", "description": "--calendar-event-text",   "usage": "Calendar event chip text." }
+  }
+}

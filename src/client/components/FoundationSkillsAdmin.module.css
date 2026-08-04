@@ -1,0 +1,1514 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Foundation Skills Admin
+   Local tokens layer on top of the global theme so this surface stays in sync
+   with light / dark / classic themes.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.section {
+  --fs-radius-sm: 6px;
+  --fs-radius: 10px;
+  --fs-radius-lg: 14px;
+  --fs-warning: #f59e0b;
+  --fs-accent-wash: color-mix(in srgb, var(--accent-color) 8%, transparent);
+  --fs-accent-line: color-mix(in srgb, var(--accent-color) 32%, transparent);
+  --fs-ring: 0 0 0 3px color-mix(in srgb, var(--accent-color) 22%, transparent);
+  --fs-elev: 0 1px 2px var(--shadow-sm);
+  --fs-elev-lg: 0 8px 28px var(--shadow-md);
+
+  padding: 0;
+}
+
+/* ── Page header ──────────────────────────────────────────────────────────── */
+
+.sectionHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.sectionTitle {
+  font-size: 21px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  margin: 0 0 6px;
+}
+
+.sectionHint {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  margin: 0;
+  max-width: 68ch;
+}
+
+.countBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--fs-accent-wash);
+  border: 1px solid var(--fs-accent-line);
+  color: var(--accent-color);
+  font-size: 12.5px;
+  font-weight: 600;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* ── Tab nav ──────────────────────────────────────────────────────────────── */
+
+.subNav {
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--fs-radius);
+  margin-bottom: 24px;
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.subNavBtn {
+  padding: 8px 18px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  font-weight: 550;
+  cursor: pointer;
+  border-radius: var(--fs-radius-sm);
+  white-space: nowrap;
+  transition: background 0.16s ease, color 0.16s ease;
+}
+
+.subNavBtn:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.subNavBtnActive,
+.subNavBtnActive:hover {
+  background: var(--accent-color);
+  color: var(--on-accent);
+  font-weight: 600;
+  box-shadow: var(--fs-elev);
+}
+
+/* ── Cards ────────────────────────────────────────────────────────────────── */
+
+.card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--fs-radius-lg);
+  overflow: hidden;
+}
+
+.cardHeader {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--bg-tertiary) 40%, transparent);
+}
+
+.cardTitle {
+  font-size: 14.5px;
+  font-weight: 620;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.cardHint {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  margin: 4px 0 0;
+}
+
+.cardBody {
+  padding: 20px;
+}
+
+/* ── Form primitives ─────────────────────────────────────────────────────── */
+
+.form { width: 100%; }
+
+.formTitle {
+  font-size: 16px;
+  font-weight: 620;
+  margin: 0 0 18px;
+  color: var(--text-primary);
+}
+
+.formRow {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-bottom: 20px;
+}
+
+.formRow:last-child { margin-bottom: 0; }
+
+/* Two-up grid for short paired fields (e.g. version + artifact version) */
+.fieldGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 20px;
+  margin-bottom: 20px;
+}
+
+.fieldGrid .formRow { margin-bottom: 0; }
+
+/* Sentence-case label — deliberately not uppercase/letter-spaced */
+.label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.fieldHint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  margin: -2px 0 0;
+}
+
+.input,
+.textarea,
+.select {
+  padding: 10px 13px;
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--fs-radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13.5px;
+  font-family: inherit;
+  line-height: 1.45;
+  width: 100%;
+  box-sizing: border-box;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.input::placeholder,
+.textarea::placeholder { color: var(--text-muted); }
+
+.input:hover,
+.textarea:hover,
+.select:hover { border-color: color-mix(in srgb, var(--accent-color) 45%, var(--border-color-light)); }
+
+.input:focus,
+.textarea:focus,
+.select:focus {
+  outline: none;
+  border-color: var(--accent-color);
+  box-shadow: var(--fs-ring);
+}
+
+.textarea {
+  resize: vertical;
+  min-height: 76px;
+}
+
+/* Native select needs its OS chrome replaced */
+.select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 38px;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23A1A1AA' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 13px center;
+  cursor: pointer;
+}
+
+.inputMono {
+  font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
+  letter-spacing: 0.01em;
+}
+
+/* ── Custom checkbox ─────────────────────────────────────────────────────── */
+
+.checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  flex-shrink: 0;
+  position: relative;
+  border: 1.5px solid var(--border-color-light);
+  border-radius: 5px;
+  background: var(--bg-primary);
+  cursor: pointer;
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+
+.checkbox:hover { border-color: var(--accent-color); }
+
+.checkbox:checked {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+}
+
+.checkbox:checked::after {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 2px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--on-accent);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.checkbox:focus-visible {
+  outline: none;
+  box-shadow: var(--fs-ring);
+}
+
+/* ── Segmented control (replaces audience <select>) ──────────────────────── */
+
+.segmented {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--fs-radius-sm);
+  width: fit-content;
+  max-width: 100%;
+}
+
+.segmentedBtn {
+  padding: 7px 16px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 550;
+  font-family: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+  white-space: nowrap;
+  transition: background 0.16s ease, color 0.16s ease;
+}
+
+.segmentedBtn:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+
+.segmentedBtnActive,
+.segmentedBtnActive:hover {
+  background: var(--accent-color);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+.segmentedSm .segmentedBtn { padding: 5px 11px; font-size: 12px; }
+
+/* ── Buttons ──────────────────────────────────────────────────────────────── */
+
+.btnPrimary,
+.btnSuccess,
+.btnSecondary,
+.btnDanger,
+.btnGhost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 18px;
+  border-radius: var(--fs-radius-sm);
+  font-size: 13.5px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.1s ease;
+}
+
+.btnPrimary:active,
+.btnSuccess:active,
+.btnSecondary:active,
+.btnDanger:active,
+.btnGhost:active { transform: translateY(1px); }
+
+.btnPrimary   { background: var(--accent-color);  color: var(--on-accent);  box-shadow: var(--fs-elev); }
+.btnSuccess   { background: var(--success-color); color: var(--on-success); box-shadow: var(--fs-elev); }
+.btnSecondary { background: var(--bg-tertiary);   color: var(--text-primary); border-color: var(--border-color); }
+.btnDanger    { background: transparent; color: var(--error-color); border-color: color-mix(in srgb, var(--error-color) 45%, transparent); }
+.btnGhost     { background: transparent; color: var(--text-secondary); border-color: var(--border-color); }
+
+.btnPrimary:hover   { background: var(--accent-hover); }
+.btnSuccess:hover   { background: var(--success-hover); }
+.btnSecondary:hover { background: var(--border-color); }
+.btnDanger:hover    { background: color-mix(in srgb, var(--error-color) 12%, transparent); border-color: var(--error-color); }
+.btnGhost:hover     { background: var(--bg-tertiary); color: var(--text-primary); border-color: var(--border-color-light); }
+
+.btnSm {
+  padding: 5px 11px;
+  font-size: 12px;
+  font-weight: 550;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none !important;
+}
+
+.btnRow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* ── Wizard ───────────────────────────────────────────────────────────────── */
+
+/* No overflow:hidden here — the project combobox dropdown must be able to
+   escape the card. Corners are rounded on the header/footer instead. */
+.wizard {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--fs-radius-lg);
+}
+
+.wizardSteps {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  padding: 22px 28px;
+  background: color-mix(in srgb, var(--bg-tertiary) 40%, transparent);
+  border-bottom: 1px solid var(--border-color);
+  border-radius: calc(var(--fs-radius-lg) - 1px) calc(var(--fs-radius-lg) - 1px) 0 0;
+  overflow-x: auto;
+}
+
+.wizardStep {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  cursor: pointer;
+  flex-shrink: 0;
+  min-width: 84px;
+}
+
+.wizardStep:disabled { cursor: default; }
+
+.wizardStepNum {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-color-light);
+  background: var(--bg-primary);
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 650;
+  transition: all 0.18s ease;
+}
+
+.wizardStepLabel {
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--text-muted);
+  white-space: nowrap;
+  transition: color 0.18s ease;
+}
+
+.wizardStep:not(:disabled):hover .wizardStepNum { border-color: var(--accent-color); }
+.wizardStep:not(:disabled):hover .wizardStepLabel { color: var(--text-secondary); }
+
+.wizardStepActive .wizardStepNum {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: var(--on-accent);
+  box-shadow: var(--fs-ring);
+}
+
+.wizardStepActive .wizardStepLabel {
+  color: var(--text-primary);
+  font-weight: 650;
+}
+
+.wizardStepDone .wizardStepNum {
+  background: var(--fs-accent-wash);
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.wizardStepDone .wizardStepLabel { color: var(--text-secondary); }
+
+/* Connector line between step markers — sits level with the 32px circles */
+.wizardConnector {
+  flex: 1;
+  min-width: 20px;
+  height: 2px;
+  margin-top: 15px;
+  border-radius: 1px;
+  background: var(--border-color);
+  transition: background 0.18s ease;
+}
+
+.wizardConnectorDone { background: var(--accent-color); }
+
+.wizardBody {
+  padding: 26px 28px;
+  min-height: 300px;
+}
+
+.wizardStepTitle {
+  font-size: 16.5px;
+  font-weight: 620;
+  color: var(--text-primary);
+  margin: 0 0 5px;
+}
+
+.wizardStepHint {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-muted);
+  margin: 0 0 22px;
+  max-width: 70ch;
+}
+
+.wizardFooter {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 28px;
+  border-top: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--bg-tertiary) 45%, var(--bg-secondary));
+  border-radius: 0 0 calc(var(--fs-radius-lg) - 1px) calc(var(--fs-radius-lg) - 1px);
+  position: sticky;
+  bottom: 0;
+}
+
+.wizardSummary {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  margin-right: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.wizardSummaryStrong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.wizardSep { opacity: 0.45; }
+
+/* ── Review step ─────────────────────────────────────────────────────────── */
+
+.reviewGrid {
+  display: grid;
+  gap: 1px;
+  background: var(--border-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--fs-radius);
+  overflow: hidden;
+  margin-bottom: 20px;
+}
+
+.reviewItem {
+  display: grid;
+  grid-template-columns: minmax(140px, 200px) 1fr;
+  gap: 16px;
+  padding: 13px 16px;
+  background: var(--bg-secondary);
+  align-items: start;
+}
+
+.reviewKey {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.reviewVal {
+  font-size: 13.5px;
+  color: var(--text-primary);
+  min-width: 0;
+  word-break: break-word;
+}
+
+.reviewValMuted { color: var(--text-muted); font-style: italic; }
+
+/* ── Project chips + search dropdown ─────────────────────────────────────── */
+
+.audienceChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+
+.chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 8px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--fs-accent-wash);
+  border: 1px solid var(--fs-accent-line);
+  color: var(--accent-color);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chipRemove {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+  opacity: 0.6;
+  transition: opacity 0.14s ease;
+}
+
+.chipRemove:hover { opacity: 1; }
+
+.pickerWrap { position: relative; }
+
+/* Combobox input — chevron signals the field opens a list */
+.pickerInput {
+  padding-right: 38px;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23A1A1AA' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 13px center;
+  cursor: pointer;
+}
+
+/* max-height is set inline from the measured viewport space; this is the fallback. */
+.dropdown {
+  list-style: none;
+  margin: 0;
+  padding: 5px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--fs-radius-sm);
+  box-shadow: var(--fs-elev-lg);
+  max-height: 300px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  position: absolute;
+  top: 100%;
+  margin-top: 4px;
+  z-index: 20;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Flipped above the field when there is not enough room below it. */
+.dropdownUp {
+  top: auto;
+  bottom: 100%;
+  margin-top: 0;
+  margin-bottom: 4px;
+}
+
+.dropdown::-webkit-scrollbar { width: 10px; }
+.dropdown::-webkit-scrollbar-track { background: transparent; }
+.dropdown::-webkit-scrollbar-thumb {
+  background: var(--border-color-light);
+  border-radius: 5px;
+  border: 3px solid var(--bg-primary);
+}
+
+.dropdownItem {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 10px;
+  background: none;
+  border: none;
+  border-radius: 5px;
+  text-align: left;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.dropdownItem:hover { background: var(--bg-tertiary); }
+
+.dropdownItem:focus-visible {
+  outline: none;
+  background: var(--bg-tertiary);
+  box-shadow: inset 0 0 0 1px var(--accent-color);
+}
+
+.dropdownItemSelected { color: var(--accent-color); font-weight: 600; }
+
+/* Faux checkbox mirroring .checkbox so the list reads as multi-select */
+.dropdownCheck {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--border-color-light);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: transparent;
+  font-size: 10px;
+  line-height: 1;
+  transition: background 0.14s ease, border-color 0.14s ease;
+}
+
+.dropdownItemSelected .dropdownCheck {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: var(--on-accent);
+}
+
+.dropdownEmpty {
+  padding: 14px 12px;
+  margin: 0;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.dropdownMeta {
+  padding: 7px 10px 3px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-color);
+  margin-top: 4px;
+}
+
+/* ── Skill picker ─────────────────────────────────────────────────────────── */
+
+.skillPickerBox {
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--fs-radius);
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+.skillPickerHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.skillPickerCount {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.skillSearch {
+  flex: 1;
+  min-width: 160px;
+  max-width: 280px;
+  padding: 7px 11px;
+  font-size: 12.5px;
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--fs-radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: inherit;
+  box-sizing: border-box;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.skillSearch::placeholder { color: var(--text-muted); }
+
+.skillSearch:focus {
+  outline: none;
+  border-color: var(--accent-color);
+  box-shadow: var(--fs-ring);
+}
+
+.skillList {
+  max-height: 460px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.skillList::-webkit-scrollbar { width: 10px; }
+.skillList::-webkit-scrollbar-track { background: transparent; }
+.skillList::-webkit-scrollbar-thumb {
+  background: var(--border-color-light);
+  border-radius: 5px;
+  border: 3px solid var(--bg-primary);
+}
+.skillList::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+.skillRow {
+  border-bottom: 1px solid var(--border-color);
+  transition: background 0.14s ease;
+}
+
+.skillRow:last-child { border-bottom: none; }
+.skillRow:hover { background: var(--bg-secondary); }
+
+.skillRowChecked { background: var(--fs-accent-wash); }
+.skillRowChecked:hover { background: color-mix(in srgb, var(--accent-color) 13%, transparent); }
+
+/* Two-line row: checkbox | (name + summary) | audience control */
+.skillRowMain {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.skillRowText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  cursor: pointer;
+}
+
+.skillName {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
+}
+
+/* Summary wraps to two lines instead of a single truncated line */
+.skillSummary {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Audience affordance stays quiet until the row is hovered or overridden */
+.skillAudienceBtn {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px dashed var(--border-color-light);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 550;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.skillRow:hover .skillAudienceBtn,
+.skillAudienceBtn:focus-visible,
+.skillAudienceBtnActive { opacity: 1; }
+
+.skillAudienceBtn:hover {
+  border-color: var(--accent-color);
+  border-style: solid;
+  color: var(--accent-color);
+}
+
+.skillAudienceBtnActive {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--fs-warning) 45%, transparent);
+  background: color-mix(in srgb, var(--fs-warning) 14%, transparent);
+  color: var(--fs-warning);
+  font-weight: 600;
+}
+
+.skillAudiencePanel {
+  padding: 4px 14px 16px 44px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px dashed var(--border-color);
+  margin-top: 2px;
+  padding-top: 14px;
+}
+
+.skillAudiencePanelLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* The skill list scrolls, so an overlay dropdown would be clipped here.
+   Expand it inline instead and let the list scroll to it. */
+.skillAudiencePanel .dropdown {
+  position: static;
+  width: auto;
+  /* Beats the measured inline max-height, which assumes an overlay. */
+  max-height: 190px !important;
+  margin: 0;
+  box-shadow: none;
+  background: var(--bg-secondary);
+}
+
+.overrideBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--fs-warning) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--fs-warning) 35%, transparent);
+  color: var(--fs-warning);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  font-family: system-ui, sans-serif;
+}
+
+/* ── Releases list ───────────────────────────────────────────────────────── */
+
+.releaseList {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.releaseCard {
+  border: 1px solid var(--border-color);
+  border-radius: var(--fs-radius-lg);
+  padding: 18px 20px;
+  background: var(--bg-secondary);
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.releaseCard:hover {
+  border-color: var(--border-color-light);
+  box-shadow: var(--fs-elev);
+}
+
+.releaseCardHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.releaseVersion {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
+}
+
+.releaseDate {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.releaseNotes {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  margin: 0 0 10px;
+}
+
+.breakingChanges {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--error-color);
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border-radius: var(--fs-radius-sm);
+  background: color-mix(in srgb, var(--error-color) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--error-color) 28%, transparent);
+}
+
+.releaseActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+/* Skill pills on release cards */
+.skillPillsRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 0 0 12px;
+}
+
+.skillPill {
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 550;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
+  white-space: nowrap;
+}
+
+.skillPillOverride {
+  background: color-mix(in srgb, var(--fs-warning) 13%, transparent);
+  color: var(--fs-warning);
+  border-color: color-mix(in srgb, var(--fs-warning) 34%, transparent);
+}
+
+/* ── Badges ───────────────────────────────────────────────────────────────── */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.badgePublished {
+  background: color-mix(in srgb, var(--success-color) 15%, transparent);
+  border-color: color-mix(in srgb, var(--success-color) 35%, transparent);
+  color: var(--success-color);
+}
+
+.badgeDeprecated {
+  background: color-mix(in srgb, var(--error-color) 12%, transparent);
+  border-color: color-mix(in srgb, var(--error-color) 32%, transparent);
+  color: var(--error-color);
+}
+
+.badgeDraft {
+  background: var(--bg-tertiary);
+  border-color: var(--border-color);
+  color: var(--text-muted);
+}
+
+.updateDot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-color);
+  margin-left: 7px;
+  vertical-align: middle;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 22%, transparent);
+}
+
+/* ── Feedback ─────────────────────────────────────────────────────────────── */
+
+.errorMsg,
+.successMsg {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 12px 16px;
+  border-radius: var(--fs-radius);
+  font-size: 13px;
+  line-height: 1.5;
+  margin-bottom: 18px;
+  word-break: break-word;
+}
+
+.errorMsg {
+  background: color-mix(in srgb, var(--error-color) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--error-color) 35%, transparent);
+  color: var(--error-color);
+}
+
+.successMsg {
+  background: color-mix(in srgb, var(--success-color) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success-color) 35%, transparent);
+  color: var(--success-color);
+}
+
+.error {
+  color: var(--error-color);
+  font-size: 12.5px;
+  line-height: 1.5;
+  margin: 0 0 12px;
+}
+
+.muted {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+/* ── Empty state ─────────────────────────────────────────────────────────── */
+
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 48px 24px;
+  text-align: center;
+  border: 1px dashed var(--border-color-light);
+  border-radius: var(--fs-radius-lg);
+  background: color-mix(in srgb, var(--bg-secondary) 55%, transparent);
+}
+
+.emptyStateTitle {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.emptyStateText {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-muted);
+  margin: 0;
+  max-width: 46ch;
+}
+
+/* ── Edit panel ──────────────────────────────────────────────────────────── */
+
+.editNotesPanel {
+  margin-top: 16px;
+  padding: 20px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--fs-radius);
+  display: flex;
+  flex-direction: column;
+}
+
+.editPanelTitle {
+  margin: 0 0 18px;
+  font-size: 14.5px;
+  font-weight: 620;
+  color: var(--text-primary);
+}
+
+.editNotesBtns {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border-color);
+}
+
+/* ── Audit drawer ────────────────────────────────────────────────────────── */
+
+.drawer {
+  margin-top: 16px;
+  padding: 16px 18px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--fs-radius);
+}
+
+.drawerHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.drawerTitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 620;
+  color: var(--text-primary);
+}
+
+.closeBtn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 5px 8px;
+  border-radius: var(--fs-radius-sm);
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.closeBtn:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+
+.auditAction {
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.detailsCell {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  font-family: ui-monospace, monospace;
+  max-width: 220px;
+}
+
+/* ── Candidates ──────────────────────────────────────────────────────────── */
+
+.candidatesBox {
+  margin-top: 28px;
+  padding: 18px 20px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--fs-radius-lg);
+  background: var(--bg-secondary);
+}
+
+.subHeading {
+  font-size: 14px;
+  font-weight: 620;
+  color: var(--text-primary);
+  margin: 0 0 14px;
+}
+
+/* ── Table ────────────────────────────────────────────────────────────────── */
+
+.tableWrap {
+  border: 1px solid var(--border-color);
+  border-radius: var(--fs-radius-lg);
+  overflow: hidden;
+  background: var(--bg-secondary);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.table th {
+  text-align: left;
+  padding: 11px 16px;
+  background: color-mix(in srgb, var(--bg-tertiary) 45%, transparent);
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-weight: 620;
+  font-size: 12px;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.table td {
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-primary);
+  vertical-align: middle;
+}
+
+.table tbody tr:last-child td { border-bottom: none; }
+
+.table code {
+  font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
+  font-size: 12.5px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+/* ── Skills matrix ───────────────────────────────────────────────────────── */
+
+.matrixToolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.toolbarHeading {
+  margin: 0;
+}
+
+.matrixSearch {
+  max-width: 340px;
+  flex: 1;
+  min-width: 200px;
+}
+
+.matrixRow { cursor: pointer; transition: background 0.14s ease; }
+.matrixRow:hover td { background: var(--fs-accent-wash); }
+
+.matrixSkillName {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.matrixCaret {
+  font-size: 9px;
+  color: var(--text-muted);
+  transition: transform 0.18s ease;
+  font-family: system-ui, sans-serif;
+}
+
+.matrixCaretOpen { transform: rotate(90deg); }
+
+.matrixSkillSummary {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  margin-top: 4px;
+  max-width: 52ch;
+}
+
+.matrixExpanded {
+  background: var(--bg-primary);
+  padding: 18px 20px 18px 42px;
+}
+
+.matrixNested {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.matrixNested th {
+  text-align: left;
+  padding: 7px 12px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 620;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.matrixNested td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-primary);
+}
+
+.matrixNested tbody tr:last-child td { border-bottom: none; }
+
+/* ── Teams grid ──────────────────────────────────────────────────────────── */
+
+.teamGroupRow td {
+  background: var(--bg-tertiary);
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.teamGroupName {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text-primary);
+  letter-spacing: 0.01em;
+}
+
+/* ── Confirm action modal ────────────────────────────────────────────────── */
+
+.confirmOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+  padding: 16px;
+  animation: fsConfirmFade 0.15s ease;
+}
+
+@keyframes fsConfirmFade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.confirmCard {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 28px;
+  width: 100%;
+  max-width: 440px;
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation: fsConfirmSlide 0.18s ease;
+}
+
+@keyframes fsConfirmSlide {
+  from { transform: translateY(8px); opacity: 0; }
+  to   { transform: translateY(0);   opacity: 1; }
+}
+
+.confirmIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.confirmIconDanger {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1.5px solid rgba(239, 68, 68, 0.3);
+  color: var(--error-color);
+}
+
+.confirmIconWarning {
+  background: var(--fs-accent-wash);
+  border: 1.5px solid var(--fs-accent-line);
+  color: var(--accent-color);
+}
+
+.confirmIcon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.confirmTitle {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.confirmBody {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.55;
+  margin: 0;
+}
+
+.confirmBody strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.confirmHint {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 1.45;
+}
+
+.confirmReasonLabel {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.confirmReason {
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.confirmActions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.confirmBtnDanger {
+  padding: 8px 18px;
+  background: var(--error-color);
+  color: #fff;
+  border: none;
+  border-radius: 7px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s ease, background 0.2s ease;
+}
+
+.confirmBtnDanger:hover:not(:disabled) { opacity: 0.9; }
+.confirmBtnDanger:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.confirmBtnAccent {
+  padding: 8px 18px;
+  background: var(--accent-color);
+  color: var(--on-accent);
+  border: none;
+  border-radius: 7px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s ease, background 0.2s ease;
+}
+
+.confirmBtnAccent:hover:not(:disabled) { opacity: 0.9; }
+.confirmBtnAccent:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* ── Utilities ───────────────────────────────────────────────────────────── */
+
+.pushRight { margin-left: auto; }
+
+/* Constrains short-field steps so inputs don't stretch across a wide viewport */
+.stepNarrow { max-width: 640px; }
+
+.skillEmpty {
+  padding: 28px 16px;
+  margin: 0;
+  text-align: center;
+}
+
+.inlineNote {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 11px 14px;
+  border-radius: var(--fs-radius-sm);
+  background: var(--fs-accent-wash);
+  border: 1px solid var(--fs-accent-line);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  margin: 0;
+}

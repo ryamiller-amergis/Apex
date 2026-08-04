@@ -250,7 +250,7 @@ export async function getSkill(
   const content = await fetchFileContent(project, repo, path, resolvedBranch, gitApi);
   const { frontmatter } = parseFrontmatter(content);
 
-  // Find sibling files (other files in the same folder)
+  // Collect sibling files + check for apex-skill.json contract
   const folder = path.substring(0, path.lastIndexOf('/'));
   const supportingFiles: SupportingFile[] = [];
 
@@ -266,10 +266,30 @@ export async function getSkill(
       undefined,
       { versionType: 0, version: resolvedBranch },
     );
+    let apexSkillJsonPath: string | null = null;
     for (const item of siblings ?? []) {
       if (!item.path || item.path === path || item.isFolder) continue;
       const name = item.path.substring(item.path.lastIndexOf('/') + 1);
       supportingFiles.push({ path: item.path, name });
+      if (name === 'apex-skill.json') apexSkillJsonPath = item.path;
+    }
+
+    // Resolve declared foundation dependencies from apex-skill.json
+    if (apexSkillJsonPath) {
+      try {
+        const contractText = await fetchFileContent(project, repo, apexSkillJsonPath, resolvedBranch, gitApi);
+        const contract = JSON.parse(contractText) as { managedFoundationFiles?: string[] };
+        for (const depPath of contract.managedFoundationFiles ?? []) {
+          if (!depPath) continue;
+          const depName = depPath.split('/').filter(Boolean).pop() ?? depPath;
+          // Only add if not already in the list
+          if (!supportingFiles.some(f => f.path === depPath)) {
+            supportingFiles.push({ path: depPath, name: depName, isFoundationDep: true });
+          }
+        }
+      } catch {
+        // Non-fatal — apex-skill.json may be absent or malformed
+      }
     }
   } catch {
     // Couldn't list folder — non-fatal
