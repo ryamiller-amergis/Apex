@@ -241,6 +241,21 @@ describe('FoundationSkillsAdmin', () => {
       expect(screen.getByRole('heading', { name: 'Release details' })).toBeInTheDocument();
     });
 
+    it('prefills suite and artifact version from the newest feed candidate', () => {
+      mockCandidates.mockReturnValue({
+        data: [
+          { version: '1.0.0', publishedAt: '2026-08-04T00:00:00.000Z', packageName: '@apex/skills' },
+          { version: '0.9.0', publishedAt: '2026-08-01T00:00:00.000Z', packageName: '@apex/skills' },
+        ],
+        isLoading: false,
+      });
+      renderComponent();
+      fireEvent.click(screen.getByRole('tab', { name: 'Create Draft' }));
+
+      expect(screen.getByLabelText('Suite version')).toHaveValue('1.0.0');
+      expect(screen.getByLabelText('Artifact version')).toHaveValue('1.0.0');
+    });
+
     it('blocks submitting when every skill has been cleared', async () => {
       const mutateAsync = jest.fn();
       mockCreate.mockReturnValue({ mutateAsync, isPending: false });

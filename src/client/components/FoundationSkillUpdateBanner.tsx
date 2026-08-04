@@ -32,17 +32,28 @@ export const FoundationSkillUpdateBanner: React.FC<FoundationSkillUpdateBannerPr
   const { data: latest }            = useLatestFoundationSkillRelease(project);
   const { data: repoStatus }        = useFoundationSkillRepoStatus(provider, project, repo, branch);
 
+  // Show when:
+  //  - a published release targets this Apex project, AND
+  //  - the consumer repo is not on that version yet (including never scanned /
+  //    not-installed — Project Settings can list skills while the banner used
+  //    to stay hidden because updateAvailable was false without a lockfile).
+  const availableVersion =
+    repoStatus?.availableVersion ?? latest?.version ?? null;
+  const installedVersion = repoStatus?.installedVersion ?? null;
+  const isFirstInstall = !installedVersion;
+  const updatePending =
+    !!availableVersion && availableVersion !== installedVersion;
+
   const shouldShow =
     !dismissed &&
     !!latest &&
-    !!repoStatus &&
-    repoStatus.updateAvailable &&
-    !!repoStatus.availableVersion &&
-    repoStatus.availableVersion !== repoStatus.installedVersion;
+    !!project &&
+    !!repo &&
+    updatePending &&
+    (isFirstInstall || !!repoStatus?.updateAvailable);
 
   if (!shouldShow || !latest) return null;
 
-  const isFirstInstall = !repoStatus.installedVersion;
   const hasBreaking    = !!latest.breakingChanges;
   const steps          = isFirstInstall ? FIRST_TIME_STEPS : UPDATE_STEPS;
   const stepsLabel     = isFirstInstall ? 'Getting started' : 'How to update';
@@ -71,7 +82,7 @@ export const FoundationSkillUpdateBanner: React.FC<FoundationSkillUpdateBannerPr
             APEX foundation skills <span className={styles.version}>v{latest.version}</span>
             {isFirstInstall
               ? ' is ready to install in your repo.'
-              : <> — you currently have <span className={styles.version}>v{repoStatus.installedVersion}</span>.</>}
+              : <> — you currently have <span className={styles.version}>v{installedVersion}</span>.</>}
           </span>
         </span>
 
@@ -81,6 +92,7 @@ export const FoundationSkillUpdateBanner: React.FC<FoundationSkillUpdateBannerPr
             type="button"
             onClick={() => setStepsOpen(v => !v)}
             aria-expanded={stepsOpen}
+            {...{ 'data-testid': isFirstInstall ? 'foundation-skills-banner-getting-started-btn' : 'foundation-skills-banner-how-to-update-btn' }}
           >
             {stepsLabel}
             <span className={`${styles.caret} ${stepsOpen ? styles.caretOpen : ''}`} aria-hidden="true">▼</span>
@@ -91,6 +103,7 @@ export const FoundationSkillUpdateBanner: React.FC<FoundationSkillUpdateBannerPr
             type="button"
             onClick={() => setNotesOpen(v => !v)}
             aria-expanded={notesOpen}
+            {...{ 'data-testid': 'foundation-skills-banner-release-notes-btn' }}
           >
             Release notes
             <span className={`${styles.caret} ${notesOpen ? styles.caretOpen : ''}`} aria-hidden="true">▼</span>
@@ -101,6 +114,7 @@ export const FoundationSkillUpdateBanner: React.FC<FoundationSkillUpdateBannerPr
             onClick={() => setDismissed(true)}
             type="button"
             aria-label="Dismiss skills update notice"
+            {...{ 'data-testid': 'foundation-skills-banner-dismiss-btn' }}
           >
             ✕
           </button>
@@ -124,6 +138,7 @@ export const FoundationSkillUpdateBanner: React.FC<FoundationSkillUpdateBannerPr
                       title="Copy command"
                       onClick={() => copy(s.cmd)}
                       type="button"
+                      {...{ 'data-testid': `foundation-skills-banner-copy-cmd-btn-${i}` }}
                     >
                       <code>{s.cmd}</code>
                       <span className={styles.copyHint}>Copy</span>

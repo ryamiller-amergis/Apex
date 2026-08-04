@@ -126,6 +126,11 @@ export async function checkCompatibility(
   if (!lockfile) {
     status = 'not-installed';
     warnings.push('apex-skills.lock.json not found in this repo — @apex/skills may not be installed');
+    // A published release that targets this project is an available first install.
+    // Without this, Agent Home never shows the "Getting started" banner.
+    if (candidateVersion) {
+      updateAvailable = true;
+    }
   } else {
     installedVersion = lockfile.suiteVersion ?? lockfile.foundation?.version ?? null;
     selectedSkills   = lockfile.selectedSkills ?? Object.keys(lockfile.skills ?? {});

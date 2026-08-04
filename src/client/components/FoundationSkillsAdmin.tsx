@@ -107,6 +107,7 @@ const ConfirmActionModal: React.FC<ConfirmActionModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="fs-confirm-title"
+      {...{ 'data-testid': 'fs-confirm-modal' }}
     >
       <div className={styles.confirmCard}>
         <div
@@ -145,6 +146,7 @@ const ConfirmActionModal: React.FC<ConfirmActionModalProps> = ({
               onChange={(e) => setReason(e.target.value)}
               placeholder={reasonPlaceholder}
               disabled={isPending}
+              {...{ 'data-testid': 'fs-confirm-reason' }}
             />
           </div>
         )}
@@ -156,6 +158,7 @@ const ConfirmActionModal: React.FC<ConfirmActionModalProps> = ({
             className={styles.btnGhost}
             onClick={onCancel}
             disabled={isPending}
+            {...{ 'data-testid': 'fs-confirm-cancel' }}
           >
             Cancel
           </button>
@@ -164,6 +167,7 @@ const ConfirmActionModal: React.FC<ConfirmActionModalProps> = ({
             className={tone === 'danger' ? styles.confirmBtnDanger : styles.confirmBtnAccent}
             onClick={() => onConfirm(reason.trim() || undefined)}
             disabled={isPending}
+            {...{ 'data-testid': 'fs-confirm-submit' }}
           >
             {isPending ? (pendingLabel ?? `${confirmLabel}…`) : confirmLabel}
           </button>
@@ -254,7 +258,8 @@ const ProjectPicker: React.FC<{
             <span key={p} className={styles.chip}>
               {p}
               <button type="button" className={styles.chipRemove}
-                onClick={() => onChange(selected.filter(x => x !== p))} aria-label={`Remove ${p}`}>×</button>
+                onClick={() => onChange(selected.filter(x => x !== p))} aria-label={`Remove ${p}`}
+                {...{ 'data-testid': `fs-project-chip-remove-${p}` }}>×</button>
             </span>
           ))}
         </div>
@@ -272,6 +277,7 @@ const ProjectPicker: React.FC<{
         aria-controls={listId}
         aria-haspopup="listbox"
         aria-label="Projects"
+        {...{ 'data-testid': 'fs-project-picker-input' }}
       />
 
       {open && (
@@ -297,6 +303,7 @@ const ProjectPicker: React.FC<{
                       className={`${styles.dropdownItem} ${isSelected ? styles.dropdownItemSelected : ''}`}
                       aria-pressed={isSelected}
                       onClick={() => toggle(name)}
+                      {...{ 'data-testid': `fs-project-picker-option-${name}` }}
                     >
                       <span className={styles.dropdownCheck} aria-hidden="true">✓</span>
                       {name}
@@ -333,12 +340,14 @@ const AudienceField: React.FC<{
       <div className={styles.segmented} role="radiogroup" aria-labelledby={`${idPrefix}-audience-label`}>
         <button type="button" role="radio" aria-checked={mode === 'all'}
           className={`${styles.segmentedBtn} ${mode === 'all' ? styles.segmentedBtnActive : ''}`}
-          onClick={() => onModeChange('all')}>
+          onClick={() => onModeChange('all')}
+          {...{ 'data-testid': `fs-audience-all-${idPrefix}` }}>
           All projects
         </button>
         <button type="button" role="radio" aria-checked={mode === 'specific'}
           className={`${styles.segmentedBtn} ${mode === 'specific' ? styles.segmentedBtnActive : ''}`}
-          onClick={() => onModeChange('specific')}>
+          onClick={() => onModeChange('specific')}
+          {...{ 'data-testid': `fs-audience-specific-${idPrefix}` }}>
           Specific projects
         </button>
       </div>
@@ -346,7 +355,8 @@ const AudienceField: React.FC<{
     {mode === 'specific' && (
       <div className={styles.formRow}>
         <span className={styles.label}>Projects</span>
-        <ProjectPicker selected={projects} onChange={onProjectsChange} />
+        <ProjectPicker selected={projects} onChange={onProjectsChange}
+          {...{ 'data-testid': `fs-audience-project-picker-${idPrefix}` }} />
       </div>
     )}
   </>
@@ -406,12 +416,15 @@ const SkillPicker: React.FC<{
           onChange={e => setSearch(e.target.value)}
           placeholder="Filter skills…"
           aria-label="Filter skills"
+          {...{ 'data-testid': 'fs-skill-search' }}
         />
         <div className={`${styles.btnRow} ${styles.pushRight}`}>
-          <button type="button" className={`${styles.btnGhost} ${styles.btnSm}`} onClick={onSelectAll}>
+          <button type="button" className={`${styles.btnGhost} ${styles.btnSm}`} onClick={onSelectAll}
+            {...{ 'data-testid': 'fs-skill-select-all' }}>
             Select all
           </button>
-          <button type="button" className={`${styles.btnGhost} ${styles.btnSm}`} onClick={onClearAll}>
+          <button type="button" className={`${styles.btnGhost} ${styles.btnSm}`} onClick={onClearAll}
+            {...{ 'data-testid': 'fs-skill-clear-all' }}>
             Clear
           </button>
         </div>
@@ -441,6 +454,7 @@ const SkillPicker: React.FC<{
                   id={`skill-${skill.name}`}
                   checked={checked}
                   onChange={() => onSkillToggle(skill.name)}
+                  {...{ 'data-testid': `fs-skill-checkbox-${skill.name}` }}
                 />
                 <label htmlFor={`skill-${skill.name}`} className={styles.skillRowText}>
                   <span className={styles.skillName}>{skill.name}</span>
@@ -455,6 +469,7 @@ const SkillPicker: React.FC<{
                     title={hasOverride
                       ? `Only: ${audience.projects.join(', ') || 'none set'}`
                       : `Inherits release audience (${releaseAudienceLabel})`}
+                    {...{ 'data-testid': `fs-skill-audience-toggle-${skill.name}` }}
                   >
                     {hasOverride
                       ? `Only ${summarizeProjects(audience.projects)}`
@@ -470,12 +485,14 @@ const SkillPicker: React.FC<{
                     aria-label={`Audience for ${skill.name}`}>
                     <button type="button" role="radio" aria-checked={!hasOverride}
                       className={`${styles.segmentedBtn} ${!hasOverride ? styles.segmentedBtnActive : ''}`}
-                      onClick={() => onAudienceChange(skill.name, { mode: 'inherit', projects: [] })}>
+                      onClick={() => onAudienceChange(skill.name, { mode: 'inherit', projects: [] })}
+                      {...{ 'data-testid': `fs-skill-audience-inherit-${skill.name}` }}>
                       Inherit ({releaseAudienceLabel})
                     </button>
                     <button type="button" role="radio" aria-checked={hasOverride}
                       className={`${styles.segmentedBtn} ${hasOverride ? styles.segmentedBtnActive : ''}`}
-                      onClick={() => onAudienceChange(skill.name, { mode: 'specific', projects: audience?.projects ?? [] })}>
+                      onClick={() => onAudienceChange(skill.name, { mode: 'specific', projects: audience?.projects ?? [] })}
+                      {...{ 'data-testid': `fs-skill-audience-specific-${skill.name}` }}>
                       Specific projects
                     </button>
                   </div>
@@ -484,6 +501,7 @@ const SkillPicker: React.FC<{
                       selected={audience.projects}
                       onChange={projects => onAudienceChange(skill.name, { mode: 'specific', projects })}
                       placeholder="Add project override…"
+                      {...{ 'data-testid': `fs-skill-project-picker-${skill.name}` }}
                     />
                   )}
                 </div>
@@ -532,8 +550,10 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({ onCreated })
   const [error, setError]                   = useState<string | null>(null);
 
   const seededRef = useRef(false);
+  const versionSeededRef = useRef(false);
 
   const { skills: catalog, isLoading: catalogLoading } = useShippableFoundationSkills();
+  const { data: candidates = [], isLoading: candidatesLoading } = useFoundationSkillCandidates();
   const create = useCreateFoundationSkillRelease();
 
   // A new release includes everything by default; seed once the catalog arrives.
@@ -542,6 +562,22 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({ onCreated })
     seededRef.current = true;
     setSelectedSkills(catalog.map(s => s.name));
   }, [catalog]);
+
+  // Prefill suite + artifact from the newest Azure Artifacts candidate so Publish
+  // cannot target a version that was never published to the feed.
+  useEffect(() => {
+    if (versionSeededRef.current || candidatesLoading || candidates.length === 0) return;
+    versionSeededRef.current = true;
+    const latestCandidate = candidates[0].version;
+    setVersion(latestCandidate);
+    setArtifact(latestCandidate);
+  }, [candidates, candidatesLoading]);
+
+  const applyCandidateVersion = (next: string) => {
+    setArtifact(next);
+    // Keep suite in lockstep when the admin hasn't customized it away from the artifact.
+    setVersion((current) => (!current.trim() || current.trim() === artifactVersion.trim() ? next : current));
+  };
 
   const stepIndex   = WIZARD_STEPS.findIndex(s => s.id === step);
   const currentMeta = WIZARD_STEPS[stepIndex];
@@ -602,7 +638,11 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({ onCreated })
         releaseNotes:    releaseNotes.trim()    || null,
         breakingChanges: breakingChanges.trim() || null,
       });
-      setVersion(''); setArtifact(''); setNotes(''); setBreaking('');
+      const nextCandidate = candidates[0]?.version ?? '';
+      setVersion(nextCandidate);
+      setArtifact(nextCandidate);
+      versionSeededRef.current = candidates.length > 0;
+      setNotes(''); setBreaking('');
       setAudienceMode('all'); setSelected([]);
       setSelectedSkills(catalog.map(s => s.name));
       setSkillAudiences({});
@@ -626,7 +666,8 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({ onCreated })
   return (
     // noValidate: native constraint validation can't see fields on inactive
     // steps, so validateStep is the single source of truth for the whole wizard.
-    <form className={styles.wizard} onSubmit={handleSubmit} noValidate>
+    <form className={styles.wizard} onSubmit={handleSubmit} noValidate
+      {...{ 'data-testid': 'fs-create-wizard-form' }}>
       {/* ── Stepper ── */}
       <div className={styles.wizardSteps}>
         {WIZARD_STEPS.map((s, i) => {
@@ -642,6 +683,7 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({ onCreated })
                 className={`${styles.wizardStep} ${state}`}
                 onClick={() => goTo(s.id)}
                 aria-current={i === stepIndex ? 'step' : undefined}
+                {...{ 'data-testid': `fs-wizard-step-${s.id}` }}
               >
                 <span className={styles.wizardStepNum}>{i < stepIndex ? '✓' : i + 1}</span>
                 <span className={styles.wizardStepLabel}>{s.label}</span>
@@ -662,27 +704,63 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({ onCreated })
               <div className={styles.formRow}>
                 <label className={styles.label} htmlFor="fs-version">Suite version</label>
                 <input id="fs-version" className={`${styles.input} ${styles.inputMono}`} value={version}
-                  onChange={e => setVersion(e.target.value)} placeholder="0.3.0" aria-required="true" />
-                <p className={styles.fieldHint}>Semver identifier teams will see, e.g. 0.3.0</p>
+                  onChange={e => setVersion(e.target.value)} placeholder="1.0.0" aria-required="true"
+                  {...{ 'data-testid': 'fs-wizard-version' }} />
+                <p className={styles.fieldHint}>
+                  Label teams see in APEX. Defaults to the newest feed candidate; you can rename it.
+                </p>
               </div>
               <div className={styles.formRow}>
                 <label className={styles.label} htmlFor="fs-artifact">Artifact version</label>
-                <input id="fs-artifact" className={`${styles.input} ${styles.inputMono}`} value={artifactVersion}
-                  onChange={e => setArtifact(e.target.value)} placeholder="same as suite version" />
-                <p className={styles.fieldHint}>Azure Artifacts package version. Leave blank to match the suite version.</p>
+                {candidates.length > 0 ? (
+                  <select
+                    id="fs-artifact"
+                    className={`${styles.select} ${styles.inputMono}`}
+                    value={artifactVersion}
+                    onChange={e => applyCandidateVersion(e.target.value)}
+                    aria-required="true"
+                    {...{ 'data-testid': 'fs-wizard-artifact-select' }}
+                  >
+                    {candidates.map(c => (
+                      <option key={c.version} value={c.version}>
+                        {c.version}
+                        {c === candidates[0] ? ' (latest in feed)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    id="fs-artifact"
+                    className={`${styles.input} ${styles.inputMono}`}
+                    value={artifactVersion}
+                    onChange={e => setArtifact(e.target.value)}
+                    placeholder={candidatesLoading ? 'Loading feed…' : 'e.g. 1.0.0'}
+                    disabled={candidatesLoading}
+                    {...{ 'data-testid': 'fs-wizard-artifact-input' }}
+                  />
+                )}
+                <p className={styles.fieldHint}>
+                  {candidates.length > 0
+                    ? 'Must be a version already published to Azure Artifacts (auto-filled from the feed).'
+                    : candidatesLoading
+                      ? 'Loading candidates from Azure Artifacts…'
+                      : 'No feed candidates found yet. Run the publish-apex-skills workflow, then refresh.'}
+                </p>
               </div>
             </div>
             <div className={styles.formRow}>
               <label className={styles.label} htmlFor="fs-notes">Release notes</label>
               <textarea id="fs-notes" className={styles.textarea} value={releaseNotes}
                 onChange={e => setNotes(e.target.value)} rows={4}
-                placeholder="What changed in this release?" />
+                placeholder="What changed in this release?"
+                {...{ 'data-testid': 'fs-wizard-notes' }} />
             </div>
             <div className={styles.formRow}>
               <label className={styles.label} htmlFor="fs-breaking">Breaking changes</label>
               <textarea id="fs-breaking" className={styles.textarea} value={breakingChanges}
                 onChange={e => setBreaking(e.target.value)} rows={2}
-                placeholder="Anything that requires manual work from consuming teams" />
+                placeholder="Anything that requires manual work from consuming teams"
+                {...{ 'data-testid': 'fs-wizard-breaking' }} />
               <p className={styles.fieldHint}>
                 Filling this in flags the release as breaking in every team&apos;s update banner.
               </p>
@@ -698,6 +776,7 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({ onCreated })
               onModeChange={mode => { setAudienceMode(mode); setSelected([]); }}
               onProjectsChange={setSelected}
               idPrefix="fs"
+              {...{ 'data-testid': 'fs-wizard-audience-field' }}
             />
           </div>
         )}
@@ -810,14 +889,17 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({ onCreated })
           )}
         </span>
         {stepIndex > 0 && (
-          <button type="button" className={styles.btnGhost} onClick={handleBack}>Back</button>
+          <button type="button" className={styles.btnGhost} onClick={handleBack}
+            {...{ 'data-testid': 'fs-wizard-back' }}>Back</button>
         )}
         {isLastStep ? (
-          <button type="submit" className={styles.btnPrimary} disabled={create.isPending}>
+          <button type="submit" className={styles.btnPrimary} disabled={create.isPending}
+            {...{ 'data-testid': 'fs-wizard-create-draft' }}>
             {create.isPending ? 'Creating…' : 'Create draft'}
           </button>
         ) : (
-          <button type="submit" className={styles.btnPrimary}>Continue</button>
+          <button type="submit" className={styles.btnPrimary}
+            {...{ 'data-testid': 'fs-wizard-continue' }}>Continue</button>
         )}
       </div>
     </form>
@@ -852,7 +934,8 @@ const CompatCheckForm: React.FC = () => {
   };
 
   return (
-    <form className={styles.card} onSubmit={handleCheck}>
+    <form className={styles.card} onSubmit={handleCheck}
+      {...{ 'data-testid': 'fs-compat-check-form' }}>
       <div className={styles.cardHeader}>
         <h3 className={styles.cardTitle}>Run compatibility check</h3>
         <p className={styles.cardHint}>
@@ -864,13 +947,15 @@ const CompatCheckForm: React.FC = () => {
           <div className={styles.formRow}>
             <label className={styles.label} htmlFor="cc-apex">Apex project name</label>
             <input id="cc-apex" className={styles.input} value={apexProj}
-              onChange={e => setApexProj(e.target.value)} placeholder="e.g. MaxView" />
+              onChange={e => setApexProj(e.target.value)} placeholder="e.g. MaxView"
+              {...{ 'data-testid': 'fs-compat-apex-project' }} />
             <p className={styles.fieldHint}>Used to resolve which release this repo is entitled to.</p>
           </div>
           <div className={styles.formRow}>
             <label className={styles.label} htmlFor="cc-provider">Provider</label>
             <select id="cc-provider" className={styles.select} value={provider}
-              onChange={e => setProvider(e.target.value as 'ado' | 'github')}>
+              onChange={e => setProvider(e.target.value as 'ado' | 'github')}
+              {...{ 'data-testid': 'fs-compat-provider' }}>
               <option value="ado">Azure DevOps</option>
               <option value="github">GitHub</option>
             </select>
@@ -878,23 +963,27 @@ const CompatCheckForm: React.FC = () => {
           <div className={styles.formRow}>
             <label className={styles.label} htmlFor="cc-project">ADO project / GitHub org</label>
             <input id="cc-project" className={styles.input} value={project}
-              onChange={e => setProject(e.target.value)} placeholder="e.g. MaxView" required />
+              onChange={e => setProject(e.target.value)} placeholder="e.g. MaxView" required
+              {...{ 'data-testid': 'fs-compat-project' }} />
           </div>
           <div className={styles.formRow}>
             <label className={styles.label} htmlFor="cc-repo">Skill repo name</label>
             <input id="cc-repo" className={styles.input} value={repo}
-              onChange={e => setRepo(e.target.value)} placeholder="e.g. MaxView" required />
+              onChange={e => setRepo(e.target.value)} placeholder="e.g. MaxView" required
+              {...{ 'data-testid': 'fs-compat-repo' }} />
           </div>
           <div className={styles.formRow}>
             <label className={styles.label} htmlFor="cc-branch">Skill branch</label>
             <input id="cc-branch" className={`${styles.input} ${styles.inputMono}`} value={branch}
-              onChange={e => setBranch(e.target.value)} placeholder="main" />
+              onChange={e => setBranch(e.target.value)} placeholder="main"
+              {...{ 'data-testid': 'fs-compat-branch' }} />
           </div>
         </div>
         {err    && <p className={styles.error} role="alert">{err}</p>}
         {result && <p className={styles.inlineNote}>{result}</p>}
         <div className={styles.btnRow}>
-          <button type="submit" className={styles.btnSecondary} disabled={checkCompat.isPending}>
+          <button type="submit" className={styles.btnSecondary} disabled={checkCompat.isPending}
+            {...{ 'data-testid': 'fs-compat-check-submit' }}>
             {checkCompat.isPending ? 'Checking…' : 'Check compatibility'}
           </button>
         </div>
@@ -968,7 +1057,7 @@ const EditReleasePanel: React.FC<{
   };
 
   return (
-    <div className={styles.editNotesPanel}>
+    <div className={styles.editNotesPanel} {...{ 'data-testid': `fs-edit-release-panel-${release.id}` }}>
       <h4 className={styles.editPanelTitle}>Edit release</h4>
 
       {isDraft && (
@@ -976,12 +1065,14 @@ const EditReleasePanel: React.FC<{
           <div className={styles.formRow}>
             <label className={styles.label} htmlFor={`er-version-${release.id}`}>Suite version</label>
             <input id={`er-version-${release.id}`} className={`${styles.input} ${styles.inputMono}`}
-              value={version} onChange={e => setVersion(e.target.value)} />
+              value={version} onChange={e => setVersion(e.target.value)}
+              {...{ 'data-testid': `fs-edit-version-${release.id}` }} />
           </div>
           <div className={styles.formRow}>
             <label className={styles.label} htmlFor={`er-artifact-${release.id}`}>Artifact version</label>
             <input id={`er-artifact-${release.id}`} className={`${styles.input} ${styles.inputMono}`}
-              value={artifactVersion} onChange={e => setArtifact(e.target.value)} />
+              value={artifactVersion} onChange={e => setArtifact(e.target.value)}
+              {...{ 'data-testid': `fs-edit-artifact-${release.id}` }} />
           </div>
         </div>
       )}
@@ -992,6 +1083,7 @@ const EditReleasePanel: React.FC<{
         onModeChange={mode => { setAudienceMode(mode); setSelected([]); }}
         onProjectsChange={setSelected}
         idPrefix={`er-${release.id}`}
+        {...{ 'data-testid': `fs-edit-audience-field-${release.id}` }}
       />
 
       <div className={styles.formRow}>
@@ -1015,21 +1107,25 @@ const EditReleasePanel: React.FC<{
         <label className={styles.label} htmlFor={`er-notes-${release.id}`}>Release notes</label>
         <textarea id={`er-notes-${release.id}`} className={styles.textarea} value={notes}
           onChange={e => setNotes(e.target.value)} rows={5}
-          placeholder="What changed in this release?" />
+          placeholder="What changed in this release?"
+          {...{ 'data-testid': `fs-edit-notes-${release.id}` }} />
       </div>
       <div className={styles.formRow}>
         <label className={styles.label} htmlFor={`er-breaking-${release.id}`}>Breaking changes</label>
         <textarea id={`er-breaking-${release.id}`} className={styles.textarea} value={breaking}
-          onChange={e => setBreaking(e.target.value)} rows={2} />
+          onChange={e => setBreaking(e.target.value)} rows={2}
+          {...{ 'data-testid': `fs-edit-breaking-${release.id}` }} />
       </div>
 
       {localErr && <p className={styles.error} role="alert">{localErr}</p>}
       <div className={styles.editNotesBtns}>
         <button className={styles.btnPrimary} type="button" disabled={isSaving}
-          onClick={() => void handleSave()}>
+          onClick={() => void handleSave()}
+          {...{ 'data-testid': `fs-edit-save-${release.id}` }}>
           {isSaving ? 'Saving…' : 'Save changes'}
         </button>
-        <button className={styles.btnGhost} type="button" onClick={onCancel}>Cancel</button>
+        <button className={styles.btnGhost} type="button" onClick={onCancel}
+          {...{ 'data-testid': `fs-edit-cancel-${release.id}` }}>Cancel</button>
       </div>
     </div>
   );
@@ -1040,10 +1136,11 @@ const EditReleasePanel: React.FC<{
 const AuditDrawer: React.FC<{ releaseId: string; onClose: () => void }> = ({ releaseId, onClose }) => {
   const { data: entries = [], isLoading } = useFoundationSkillReleaseAudit(releaseId);
   return (
-    <div className={styles.drawer}>
+    <div className={styles.drawer} {...{ 'data-testid': `fs-audit-drawer-${releaseId}` }}>
       <div className={styles.drawerHeader}>
         <h3 className={styles.drawerTitle}>Audit log</h3>
-        <button className={styles.closeBtn} onClick={onClose} type="button" aria-label="Close">✕</button>
+        <button className={styles.closeBtn} onClick={onClose} type="button" aria-label="Close"
+          {...{ 'data-testid': 'fs-audit-close' }}>✕</button>
       </div>
       {isLoading ? <p className={styles.muted}>Loading…</p> : entries.length === 0 ? (
         <p className={styles.muted}>No audit entries.</p>
@@ -1083,11 +1180,12 @@ const SkillsMatrixTab: React.FC = () => {
   if (isLoading) return <p className={styles.muted}>Loading skills matrix…</p>;
 
   return (
-    <div>
+    <div {...{ 'data-testid': 'fs-skills-matrix-tab' }}>
       <div className={styles.matrixToolbar}>
         <input className={`${styles.input} ${styles.matrixSearch}`} value={search}
           onChange={e => setSearch(e.target.value)} placeholder="Search skills…"
-          aria-label="Search skills" />
+          aria-label="Search skills"
+          {...{ 'data-testid': 'fs-matrix-search' }} />
         <span className={`${styles.muted} ${styles.pushRight}`}>
           {filtered.length} of {skills.length} skills
         </span>
@@ -1124,6 +1222,7 @@ const SkillsMatrixTab: React.FC = () => {
                     <tr
                       className={styles.matrixRow}
                       onClick={() => setExpandedSkill(isExpanded ? null : skill.name)}
+                      {...{ 'data-testid': `fs-matrix-row-${skill.name}` }}
                     >
                       <td>
                         <div className={styles.matrixSkillName}>
@@ -1262,13 +1361,15 @@ const TeamsTab: React.FC = () => {
   }
 
   return (
-    <div>
+    <div {...{ 'data-testid': 'fs-teams-tab' }}>
       <div className={styles.matrixToolbar}>
         <input className={`${styles.input} ${styles.matrixSearch}`} value={search}
           onChange={e => setSearch(e.target.value)} placeholder="Search team, repo, or version…"
-          aria-label="Search teams" />
+          aria-label="Search teams"
+          {...{ 'data-testid': 'fs-teams-search' }} />
         <button className={styles.btnSecondary} type="button"
-          disabled={scanAll.isPending} onClick={handleScanAll}>
+          disabled={scanAll.isPending} onClick={handleScanAll}
+          {...{ 'data-testid': 'fs-teams-scan-all' }}>
           {scanAll.isPending ? 'Scanning…' : 'Refresh all'}
         </button>
         <span className={`${styles.muted} ${styles.pushRight}`}>
@@ -1313,7 +1414,8 @@ const TeamsTab: React.FC = () => {
                     return (
                       <React.Fragment key={key}>
                         <tr className={styles.matrixRow}
-                          onClick={() => setExpandedRepo(isExpanded ? null : key)}>
+                          onClick={() => setExpandedRepo(isExpanded ? null : key)}
+                          {...{ 'data-testid': `fs-teams-row-${key}` }}>
                           <td>
                             <div className={styles.matrixSkillName}>
                               <span className={`${styles.matrixCaret} ${isExpanded ? styles.matrixCaretOpen : ''}`}>▶</span>
@@ -1437,7 +1539,9 @@ const TeamRepoDetail: React.FC<{ apexProject: string; repo: FoundationSkillTeamR
   };
 
   return (
-    <div onClick={e => e.stopPropagation()}>
+    <>
+      {/* data-testid-exempt */}
+      <div onClick={e => e.stopPropagation()}>
       <h4 className={styles.subHeading}>Released to this team (v{repo.installedVersion ?? '—'})</h4>
       {repo.releasedSkills.length === 0 ? (
         <p className={styles.muted}>
@@ -1481,6 +1585,7 @@ const TeamRepoDetail: React.FC<{ apexProject: string; repo: FoundationSkillTeamR
             value={targetId}
             onChange={e => setTargetId(e.target.value)}
             disabled={rollback.isPending}
+            {...{ 'data-testid': `fs-rollback-target-${repo.repo}` }}
           >
             <option value="">Select older published version…</option>
             {targets.map(t => (
@@ -1494,6 +1599,7 @@ const TeamRepoDetail: React.FC<{ apexProject: string; repo: FoundationSkillTeamR
             type="button"
             disabled={!targetId || rollback.isPending}
             onClick={requestRollback}
+            {...{ 'data-testid': `fs-rollback-open-pr-${repo.repo}` }}
           >
             Open rollback PR
           </button>
@@ -1518,9 +1624,11 @@ const TeamRepoDetail: React.FC<{ apexProject: string; repo: FoundationSkillTeamR
           isPending={rollback.isPending}
           onConfirm={() => { void executeRollback(); }}
           onCancel={() => setConfirmRollback(false)}
+          {...{ 'data-testid': `fs-rollback-confirm-modal-${repo.repo}` }}
         />
       )}
-    </div>
+      </div>
+    </>
   );
 };
 
@@ -1692,7 +1800,8 @@ export const FoundationSkillsAdmin: React.FC = () => {
           <button key={s} type="button" role="tab"
             aria-selected={activeSection === s}
             className={`${styles.subNavBtn} ${activeSection === s ? styles.subNavBtnActive : ''}`}
-            onClick={() => { clearMessages(); setActiveSection(s); }}>
+            onClick={() => { clearMessages(); setActiveSection(s); }}
+            {...{ 'data-testid': `fs-tab-${s}` }}>
             {SECTION_LABELS[s]}
           </button>
         ))}
@@ -1708,7 +1817,8 @@ export const FoundationSkillsAdmin: React.FC = () => {
                 Create your first draft release to bundle foundation skills and target them at specific projects.
               </p>
               <button type="button" className={styles.btnPrimary}
-                onClick={() => { clearMessages(); setActiveSection('create'); }}>
+                onClick={() => { clearMessages(); setActiveSection('create'); }}
+                {...{ 'data-testid': 'fs-empty-create-draft' }}>
                 Create draft release
               </button>
             </div>
@@ -1770,21 +1880,26 @@ export const FoundationSkillsAdmin: React.FC = () => {
                       {r.status === 'draft' && (
                         <>
                           <button className={styles.btnSuccess} type="button" disabled={publish.isPending}
-                            onClick={() => handlePublish(r)}>Publish</button>
+                            onClick={() => handlePublish(r)}
+                            {...{ 'data-testid': `fs-release-publish-${r.id}` }}>Publish</button>
                           <button className={styles.btnDanger} type="button" disabled={deleteDraft.isPending}
-                            onClick={() => handleDelete(r)}>Delete draft</button>
+                            onClick={() => handleDelete(r)}
+                            {...{ 'data-testid': `fs-release-delete-${r.id}` }}>Delete draft</button>
                         </>
                       )}
                       {r.status === 'published' && (
                         <button className={styles.btnSecondary} type="button" disabled={deprecate.isPending}
-                          onClick={() => handleDeprecate(r)}>Deprecate</button>
+                          onClick={() => handleDeprecate(r)}
+                          {...{ 'data-testid': `fs-release-deprecate-${r.id}` }}>Deprecate</button>
                       )}
                       <button className={styles.btnGhost} type="button"
-                        onClick={() => { setEditReleaseId(editReleaseId === r.id ? null : r.id); setAuditReleaseId(null); }}>
+                        onClick={() => { setEditReleaseId(editReleaseId === r.id ? null : r.id); setAuditReleaseId(null); }}
+                        {...{ 'data-testid': `fs-release-edit-${r.id}` }}>
                         {editReleaseId === r.id ? 'Cancel' : 'Edit'}
                       </button>
                       <button className={styles.btnGhost} type="button"
-                        onClick={() => { setAuditReleaseId(auditReleaseId === r.id ? null : r.id); setEditReleaseId(null); }}>
+                        onClick={() => { setAuditReleaseId(auditReleaseId === r.id ? null : r.id); setEditReleaseId(null); }}
+                        {...{ 'data-testid': `fs-release-audit-${r.id}` }}>
                         {auditReleaseId === r.id ? 'Hide audit' : 'Audit log'}
                       </button>
                     </div>
@@ -1801,10 +1916,12 @@ export const FoundationSkillsAdmin: React.FC = () => {
                         }}
                         onCancel={() => setEditReleaseId(null)}
                         isSaving={updateRelease.isPending}
+                        {...{ 'data-testid': `fs-edit-release-panel-mount-${r.id}` }}
                       />
                     )}
                     {auditReleaseId === r.id && (
-                      <AuditDrawer releaseId={r.id} onClose={() => setAuditReleaseId(null)} />
+                      <AuditDrawer releaseId={r.id} onClose={() => setAuditReleaseId(null)}
+                        {...{ 'data-testid': `fs-audit-drawer-mount-${r.id}` }} />
                     )}
                   </div>
                 );
@@ -1832,15 +1949,15 @@ export const FoundationSkillsAdmin: React.FC = () => {
       )}
 
       {/* ── Skills matrix ── */}
-      {activeSection === 'skills' && <SkillsMatrixTab />}
+      {activeSection === 'skills' && <SkillsMatrixTab {...{ 'data-testid': 'fs-skills-matrix-tab-mount' }} />}
 
       {/* ── Active teams ── */}
-      {activeSection === 'teams' && <TeamsTab />}
+      {activeSection === 'teams' && <TeamsTab {...{ 'data-testid': 'fs-teams-tab-mount' }} />}
 
       {/* ── Consumer repos ── */}
       {activeSection === 'repos' && (
         <>
-          <CompatCheckForm />
+          <CompatCheckForm {...{ 'data-testid': 'fs-compat-check-form-mount' }} />
           <div className={styles.candidatesBox}>
             <div className={styles.matrixToolbar}>
               <h3 className={`${styles.subHeading} ${styles.toolbarHeading}`}>Observed consumer repos</h3>
@@ -1849,6 +1966,7 @@ export const FoundationSkillsAdmin: React.FC = () => {
                 type="button"
                 disabled={scanAllRepos.isPending}
                 onClick={() => { void handleScanAllRepos(); }}
+                {...{ 'data-testid': 'fs-repos-scan-all' }}
               >
                 {scanAllRepos.isPending ? 'Scanning…' : 'Refresh all'}
               </button>
@@ -1903,6 +2021,7 @@ export const FoundationSkillsAdmin: React.FC = () => {
                               type="button"
                               disabled={checkCompat.isPending || updateRepo.isPending}
                               onClick={() => { void handleCheckCompat(s); }}
+                              {...{ 'data-testid': `fs-repo-check-${s.id}` }}
                             >
                               {isBusy && checkCompat.isPending ? 'Checking…' : 'Check'}
                             </button>
@@ -1912,6 +2031,7 @@ export const FoundationSkillsAdmin: React.FC = () => {
                                 type="button"
                                 disabled={checkCompat.isPending || updateRepo.isPending}
                                 onClick={() => { void handleUpdateRepo(s); }}
+                                {...{ 'data-testid': `fs-repo-open-pr-${s.id}` }}
                               >
                                 {isBusy && updateRepo.isPending ? 'Opening…' : 'Open PR'}
                               </button>
@@ -1953,6 +2073,7 @@ export const FoundationSkillsAdmin: React.FC = () => {
           reasonPlaceholder="e.g. superseded by v1.1.0 — broken bootstrap for MaxView"
           onConfirm={(reason) => { void executePendingConfirm(reason); }}
           onCancel={() => setPendingConfirm(null)}
+          {...{ 'data-testid': 'fs-deprecate-modal' }}
         />
       )}
 
@@ -1972,6 +2093,7 @@ export const FoundationSkillsAdmin: React.FC = () => {
           isPending={deleteDraft.isPending}
           onConfirm={() => { void executePendingConfirm(); }}
           onCancel={() => setPendingConfirm(null)}
+          {...{ 'data-testid': 'fs-delete-draft-modal' }}
         />
       )}
     </section>
