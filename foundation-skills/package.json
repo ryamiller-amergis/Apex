@@ -4,7 +4,7 @@
   "description": "APEX Foundation Skills — project-agnostic AI agent skill foundations for Cursor",
   "type": "module",
   "bin": {
-    "apex-skills": "./bin/apex-skills.mjs"
+    "apex-skills": "bin/apex-skills.mjs"
   },
   "main": "./lib/index.mjs",
   "exports": {

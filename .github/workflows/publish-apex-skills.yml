@@ -76,21 +76,31 @@ jobs:
           AZURE_ARTIFACTS_PROJECT: ${{ secrets.AZURE_ARTIFACTS_PROJECT }}
           AZURE_ARTIFACTS_PAT: ${{ secrets.AZURE_ARTIFACTS_PAT }}
         run: |
-          # Build the feed registry URL.  Project-scoped feeds include the
-          # project segment; org-scoped feeds omit it.
-          if [ -n "$AZURE_ARTIFACTS_PROJECT" ]; then
-            REGISTRY="https://pkgs.dev.azure.com/${AZURE_ARTIFACTS_ORG}/${AZURE_ARTIFACTS_PROJECT}/_packaging/${AZURE_ARTIFACTS_FEED}/npm/registry/"
-          else
-            REGISTRY="https://pkgs.dev.azure.com/${AZURE_ARTIFACTS_ORG}/_packaging/${AZURE_ARTIFACTS_FEED}/npm/registry/"
+          set -euo pipefail
+
+          if [ -z "${AZURE_ARTIFACTS_ORG:-}" ] || [ -z "${AZURE_ARTIFACTS_FEED:-}" ] || [ -z "${AZURE_ARTIFACTS_PAT:-}" ]; then
+            echo "::error::Missing required secrets. Set AZURE_ARTIFACTS_ORG, AZURE_ARTIFACTS_FEED, and AZURE_ARTIFACTS_PAT."
+            exit 1
           fi
 
-          # Write the scoped registry + auth token to the package's .npmrc so
-          # `npm publish` resolves to the correct feed without touching the root .npmrc.
-          TOKEN_B64=$(echo -n ":${AZURE_ARTIFACTS_PAT}" | base64)
-          cat >> foundation-skills/.npmrc <<EOF
-          @apex:registry=${REGISTRY}
-          ${REGISTRY}:_authToken=${TOKEN_B64}
-          EOF
+          # Build the feed registry URL. Project-scoped feeds include the
+          # project segment; org-scoped feeds omit it.
+          if [ -n "${AZURE_ARTIFACTS_PROJECT:-}" ]; then
+            REGISTRY="https://pkgs.dev.azure.com/${AZURE_ARTIFACTS_ORG}/${AZURE_ARTIFACTS_PROJECT}/_packaging/${AZURE_ARTIFACTS_FEED}/npm/registry/"
+            AUTH_HOST="//pkgs.dev.azure.com/${AZURE_ARTIFACTS_ORG}/${AZURE_ARTIFACTS_PROJECT}/_packaging/${AZURE_ARTIFACTS_FEED}/npm/registry/"
+          else
+            REGISTRY="https://pkgs.dev.azure.com/${AZURE_ARTIFACTS_ORG}/_packaging/${AZURE_ARTIFACTS_FEED}/npm/registry/"
+            AUTH_HOST="//pkgs.dev.azure.com/${AZURE_ARTIFACTS_ORG}/_packaging/${AZURE_ARTIFACTS_FEED}/npm/registry/"
+          fi
+
+          # Azure Artifacts auth keys must use the //host/path/ form (no https:).
+          # Use the raw PAT in _authToken (not base64). Keep lines unindented so
+          # npm does not misparse the token as a config key name.
+          {
+            echo "@apex:registry=${REGISTRY}"
+            echo "always-auth=true"
+            echo "${AUTH_HOST}:_authToken=${AZURE_ARTIFACTS_PAT}"
+          } > foundation-skills/.npmrc
 
           echo "APEX_SKILLS_REGISTRY=${REGISTRY}" >> "$GITHUB_ENV"
 
@@ -98,16 +108,14 @@ jobs:
         if: ${{ !inputs.dry_run }}
         working-directory: foundation-skills
         run: |
-          # The publishConfig.registry in package.json is a placeholder template;
-          # override it at publish time with the real feed URL resolved above.
+          # Override publishConfig.registry placeholder with the real feed URL.
           npm publish \
             --registry "$APEX_SKILLS_REGISTRY" \
             --access restricted \
             --tag candidate
 
-          echo "Published @apex/skills to ${APEX_SKILLS_REGISTRY}"
-          echo "Next step: a Platform Admin promotes this candidate to the Release"
-          echo "view via APEX UI > Platform Admin > APEX Skills > Publish."
+          echo "Published @apex/skills to Azure Artifacts (candidate tag)."
+          echo "Next step: Platform Admin promotes via APEX UI > Platform Admin > APEX Skills > Publish."
 
       # Capture the tarball as a build artifact so the SHA-256 can be recorded
       # in the release record without re-downloading from the feed.
