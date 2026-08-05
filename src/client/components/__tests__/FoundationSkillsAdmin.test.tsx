@@ -238,6 +238,8 @@ describe('FoundationSkillsAdmin', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
 
       expect(screen.getByRole('alert')).toHaveTextContent('Suite version is required.');
+      // Advisory feed callout uses role="status" so it never collides with validation alerts.
+      expect(screen.getByTestId('fs-wizard-feed-unreachable')).toHaveAttribute('role', 'status');
       expect(screen.getByRole('heading', { name: 'Release details' })).toBeInTheDocument();
     });
 

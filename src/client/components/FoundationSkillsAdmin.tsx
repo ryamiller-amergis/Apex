@@ -703,7 +703,7 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({ onCreated })
             {!candidatesLoading && candidates.length === 0 && (
               <div
                 className={styles.feedWarning}
-                role="alert"
+                role="status"
                 {...{ 'data-testid': 'fs-wizard-feed-unreachable' }}
               >
                 <span className={styles.feedWarningIcon} aria-hidden="true">⚠</span>
