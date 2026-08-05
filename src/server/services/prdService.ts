@@ -8,7 +8,7 @@ const authorUser = alias(appUsers, 'author_user');
 const prdOwnerUser = alias(appUsers, 'prd_owner_user');
 import type { Prd, PrdStatus, PrdSummary, PrdValidationBaseline, PrdReadinessOverride, ReviewPrdRequest, TestCaseSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { CreatePrdAdoItemsRequest, CreatePrdAdoItemsResponse, SelectedBacklogEpic, SelectedBacklogFeature, SelectedBacklogPBI, GlobalBusinessRule, DependencyGraphNode } from '../../shared/types/interview';
-import { readOutputPrd, readOutputBacklog, sendMessage, createThread as createChatThread } from './chatAgentService';
+import { readOutputPrd, readOutputBacklog, sendMessage, createThread as createChatThread, cancelRun } from './chatAgentService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import { createNotification } from './notificationService';
 import { isAdminUser } from '../utils/rbacHelpers';
@@ -1460,6 +1460,12 @@ export async function deletePrd(id: string, requestingUserId: string): Promise<v
   if (row.authorId !== requestingUserId && ownerId !== requestingUserId && !(await isAdminUser(requestingUserId))) {
     throw forbidden('Only the author or owner can delete this PRD');
   }
+  const linkedThreadIds = [
+    row.chatThreadId,
+    row.validationThreadId,
+    row.prdAssistantThreadId,
+  ].filter((threadId): threadId is string => Boolean(threadId));
+  await Promise.all([...new Set(linkedThreadIds)].map((threadId) => cancelRun(threadId)));
   stopPrdWatcher(id);
   await db.delete(prds).where(eq(prds.id, id));
 }

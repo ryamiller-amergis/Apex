@@ -116,6 +116,9 @@ import {
 } from '../services/designDocService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
+const { cancelRun: mockCancelRun } = jest.requireMock('../services/chatAgentService') as {
+  cancelRun: jest.Mock;
+};
 
 // ── Select chain helper ────────────────────────────────────────────────────────
 function makeSelectChain(data: unknown[], terminal: 'limit' | 'orderBy' = 'limit') {
@@ -695,8 +698,27 @@ describe('deleteDesignDoc', () => {
 
     await deleteDesignDoc('doc-1', 'user-1');
 
+    expect(mockCancelRun).toHaveBeenCalledWith('thread-1');
     expect(mockDb.delete).toHaveBeenCalledTimes(1);
     expect(whereMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels every linked active-work thread before deleting', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(makeDocRow({
+      chatThreadId: 'thread-generation',
+      validationThreadId: 'thread-validation',
+      docAssistantThreadId: 'thread-assistant',
+    }));
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    mockDb.delete.mockReturnValue({ where: whereMock });
+
+    await deleteDesignDoc('doc-1', 'user-1');
+
+    expect(mockCancelRun).toHaveBeenCalledTimes(3);
+    expect(mockCancelRun).toHaveBeenCalledWith('thread-generation');
+    expect(mockCancelRun).toHaveBeenCalledWith('thread-validation');
+    expect(mockCancelRun).toHaveBeenCalledWith('thread-assistant');
+    expect(mockDb.delete).toHaveBeenCalledTimes(1);
   });
 
   it('throws 404 when design doc does not exist', async () => {

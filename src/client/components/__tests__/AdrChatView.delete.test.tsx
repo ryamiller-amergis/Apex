@@ -8,6 +8,11 @@ const mockNavigate = jest.fn();
 const deleteMutate = jest.fn();
 const mockCan = jest.fn((key: string) => key === 'adr:delete' || key === 'adr:edit' || key === 'adr:review');
 let mockUserId = 'owner-1';
+let mockStreamState: {
+  messages: Array<{ id: string; role: 'agent' | 'user'; text: string }>;
+  streamingText: string;
+  status: 'idle' | 'running';
+} = { messages: [], streamingText: '', status: 'idle' };
 
 jest.mock('react-markdown', () => ({
   __esModule: true,
@@ -28,7 +33,7 @@ jest.mock('../../hooks/useAppShell', () => ({
 }));
 
 jest.mock('../../hooks/useChatStream', () => ({
-  useChatStream: () => ({ messages: [], streamingText: '', status: 'idle' }),
+  useChatStream: () => mockStreamState,
 }));
 
 jest.mock('../../hooks/useChatThreads', () => ({
@@ -128,6 +133,7 @@ describe('AdrChatView — delete', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockUserId = 'owner-1';
+    mockStreamState = { messages: [], streamingText: '', status: 'idle' };
     mockCan.mockImplementation((key: string) => key === 'adr:delete' || key === 'adr:edit' || key === 'adr:review');
     (useAdr as jest.Mock).mockReturnValue({ data: sampleAdr, isLoading: false, isError: false });
   });
@@ -199,5 +205,22 @@ describe('AdrChatView — delete', () => {
     renderAdrView();
 
     expect(screen.getByTestId('adr-markdown-with-mermaid')).toHaveAttribute('data-content', content);
+  });
+
+  it('numbers questions cumulatively across ADR agent messages', () => {
+    mockStreamState = {
+      messages: [
+        { id: 'agent-1', role: 'agent', text: 'First decision?\n\na. Option A\nb. Option B' },
+        { id: 'user-1', role: 'user', text: 'Q1: a. Option A' },
+        { id: 'agent-2', role: 'agent', text: 'Second decision?\n\na. Option C\nb. Option D' },
+      ],
+      streamingText: '',
+      status: 'idle',
+    };
+
+    renderAdrView();
+
+    expect(screen.getByText('Q1')).toBeInTheDocument();
+    expect(screen.getByText('Q2')).toBeInTheDocument();
   });
 });

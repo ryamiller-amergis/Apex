@@ -941,7 +941,8 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
       // Resolve the to-prd skill path; fall back to the convention if not in the skill list yet
       const skillPath = toPrdSkill?.path ?? '.cursor/skills/to-prd/SKILL.md';
 
-      // Create the generation thread — NOT skipAutoKickoff so the agent starts automatically
+      // Create the row and watcher before starting the agent so kickoff is
+      // deterministic and output cannot beat PRD persistence.
       const prdModel = skillConfig?.prdModel ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID;
       const threadResult = await startChat.mutateAsync({
         kickoff: {
@@ -954,6 +955,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
           model: prdModel,
           skillSettingsId: skillConfig?.id ?? undefined,
         },
+        skipAutoKickoff: true,
       });
 
       const prdResult = await createPrd.mutateAsync({
@@ -961,6 +963,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         chatThreadId: threadResult.threadId,
         title: interview.title,
         model: prdModel,
+        kickoffGeneration: true,
       });
       navigate(`/backlog/prd/${prdResult.prdId}`);
     } catch (err: unknown) {

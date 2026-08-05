@@ -9,7 +9,7 @@ import {
   reviewComments,
 } from '../db/schema';
 import type { Adr, AdrStatus, AdrSummary } from '../../shared/types/adr';
-import { markAsInterviewThread, readOutputAdr } from './chatAgentService';
+import { cancelRun, markAsInterviewThread, readOutputAdr } from './chatAgentService';
 import { getSkillSettingsName } from './projectSettingsService';
 import { assignApprovers, isApprovalComplete } from './documentApprovalService';
 import { getUnresolvedCount } from './reviewCommentService';
@@ -310,7 +310,12 @@ export async function rejectAdrProposedContent(id: string, userId: string): Prom
 }
 
 export async function deleteAdr(id: string, userId: string): Promise<void> {
-  await requireAuthor(id, userId);
+  const row = await requireAuthor(id, userId);
+  const linkedThreadIds = [
+    row.chatThreadId,
+    row.adrAssistantThreadId,
+  ].filter((threadId): threadId is string => Boolean(threadId));
+  await Promise.all([...new Set(linkedThreadIds)].map((threadId) => cancelRun(threadId)));
   // feature_request_adrs.adr_id is RESTRICT (or CASCADE after migration); clear
   // junction + softeless approval rows before deleting the ADR itself.
   await db.transaction(async (tx) => {

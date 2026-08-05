@@ -52,6 +52,7 @@ jest.mock('../services/chatAgentService', () => ({
   readOutputValidationScorecardMd: jest.fn().mockReturnValue(null),
   sendMessage: jest.fn().mockResolvedValue(undefined),
   createThread: jest.fn().mockResolvedValue({ id: 'thread-new', workspaceDir: '/tmp/thread-new' }),
+  cancelRun: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('../utils/rbacHelpers', () => ({
@@ -1094,6 +1095,8 @@ describe('deletePrd', () => {
 
     await deletePrd('prd-1', 'user-1');
 
+    const { cancelRun } = jest.requireMock('../services/chatAgentService') as { cancelRun: jest.Mock };
+    expect(cancelRun).toHaveBeenCalledWith('thread-1');
     expect(mockDb.delete).toHaveBeenCalledTimes(1);
     expect(whereMock).toHaveBeenCalledTimes(1);
   });
