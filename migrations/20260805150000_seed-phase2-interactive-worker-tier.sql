@@ -32,7 +32,8 @@ DECLARE
 BEGIN
   SELECT backlog_json INTO v_bj FROM prds WHERE id = v_prd_id;
   IF v_bj IS NULL THEN
-    RAISE EXCEPTION 'PRD % not found or has a null backlog_json; aborting Phase 2 seed', v_prd_id;
+    RAISE NOTICE 'PRD % not found or has a null backlog_json; skipping Phase 2 seed', v_prd_id;
+    RETURN;
   END IF;
 
   -- Guarded, idempotent append: only when the Phase 2 epic is not already present.
