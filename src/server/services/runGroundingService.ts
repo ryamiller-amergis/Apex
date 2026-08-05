@@ -17,7 +17,10 @@ import {
   RunGroundingRepositoryError,
   type RunGroundingRepository,
 } from './runGroundingRepository';
-import { readCachedOriginSha as readCachedOriginShaFromRepoCache } from './repoCacheService';
+import {
+  hasCachedCommit as hasCachedCommitInRepoCache,
+  readCachedOriginSha as readCachedOriginShaFromRepoCache,
+} from './repoCacheService';
 import { isFeatureEnabled as evaluateFeatureFlag } from './featureFlagService';
 import { materializeRunGrounding } from './runGroundingMaterializer';
 import { emitGroundingActiveSetChanged } from './groundingMaintenanceEvents';
@@ -117,6 +120,7 @@ export interface RunGroundingServiceOptions {
     destination: RunRef
   ) => Promise<GroundingMaterializationState>;
   readCachedOriginSha?: (grounding: RunGrounding) => Promise<string | null>;
+  hasCachedCommit?: (grounding: RunGrounding) => Promise<boolean>;
   evaluateStaleness?: (
     grounding: RunGrounding
   ) => Promise<GroundingStalenessState>;
@@ -332,6 +336,8 @@ export function createRunGroundingService(
   const materialize = options.materialize ?? materializeRunGrounding;
   const readCachedOriginSha =
     options.readCachedOriginSha ?? readCachedOriginShaFromRepoCache;
+  const hasPinnedCommit =
+    options.hasCachedCommit ?? hasCachedCommitInRepoCache;
   const evaluateStaleness =
     options.evaluateStaleness ??
     ((grounding: RunGrounding) =>
@@ -458,11 +464,13 @@ export function createRunGroundingService(
       const materialization = materializationStates.get(
         materializationKey(ref, role),
       );
+      const pinnedCommitAvailable =
+        materialization === 'materialized' || await hasPinnedCommit(grounding);
       const stalenessState = await evaluateStaleness(grounding);
       const driftState =
-        materialization === 'unavailable' || cachedOriginSha === null
+        materialization === 'unavailable' || !pinnedCommitAvailable
           ? 'unavailable'
-          : cachedOriginSha === grounding.groundedSha
+          : cachedOriginSha === null || cachedOriginSha === grounding.groundedSha
             ? 'grounded'
             : 'source-changed';
       if (driftState === 'source-changed') {

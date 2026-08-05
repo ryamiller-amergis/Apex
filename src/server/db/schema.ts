@@ -540,7 +540,11 @@ export const designDocs = pgTable('design_docs', {
   reviewedAt: timestamp('reviewed_at', { withTimezone: true, mode: 'string' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
-});
+}, (t) => ({
+  directFeatureUq: uniqueIndex('uq_design_docs_prd_direct_feature')
+    .on(t.prdId, t.featureIndex)
+    .where(sql`${t.designPrototypeId} IS NULL AND ${t.featureIndex} IS NOT NULL`),
+}));
 
 // ── Interview Relations ────────────────────────────────────────────────────────
 

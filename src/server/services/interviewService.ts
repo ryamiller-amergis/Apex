@@ -3,7 +3,7 @@ import { db } from '../db/drizzle';
 import { interviews, prds } from '../db/schema';
 import type { Interview, InterviewStatus, InterviewSummary, PrdSummary } from '../../shared/types/interview';
 import type { PrdStatus } from '../../shared/types/interview';
-import { markAsInterviewThread } from './chatAgentService';
+import { cancelRun, markAsInterviewThread } from './chatAgentService';
 import { createNotification } from './notificationService';
 import { getSkillSettingsName } from './projectSettingsService';
 import { runGroundingService } from './runGroundingService';
@@ -370,5 +370,6 @@ export async function deleteInterview(id: string, requestingUserId: string): Pro
     (err as any).status = 403;
     throw err;
   }
+  await cancelRun(row.chatThreadId);
   await db.delete(interviews).where(eq(interviews.id, id));
 }

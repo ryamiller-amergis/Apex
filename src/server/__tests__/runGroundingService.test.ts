@@ -349,6 +349,7 @@ describe('TBI-008 runtime drift telemetry', () => {
     const drift = jest.fn();
     const service = createRunGroundingService(repository, {
       readCachedOriginSha: jest.fn().mockResolvedValue('new-origin-sha'),
+      hasCachedCommit: jest.fn().mockResolvedValue(true),
       evaluateStaleness: jest.fn().mockResolvedValue('fresh'),
       telemetry: { drift },
     });
@@ -365,5 +366,19 @@ describe('TBI-008 runtime drift telemetry', () => {
         runId: 'run-1',
       }),
     );
+  });
+
+  it('reports grounded when the pinned commit exists but the cached branch tip is unavailable', async () => {
+    const repository = repositoryMock();
+    repository.findByRun.mockResolvedValue([grounding('target')]);
+    const service = createRunGroundingService(repository, {
+      readCachedOriginSha: jest.fn().mockResolvedValue(null),
+      hasCachedCommit: jest.fn().mockResolvedValue(true),
+      evaluateStaleness: jest.fn().mockResolvedValue('fresh'),
+    });
+
+    const status = await service.getStatus(run, 'target', true);
+
+    expect(status?.driftState).toBe('grounded');
   });
 });

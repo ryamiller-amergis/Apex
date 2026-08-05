@@ -7,7 +7,7 @@ import { getAdoTokenForUser } from '../services/adoUserToken';
 import { isAdoUserAuthError } from '../services/adoFactory';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { db } from '../db/drizzle';
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, isNull, sql } from 'drizzle-orm';
 import { designDocs as designDocsTable, chatThreads as chatThreadsTable, prds as prdsTable, reviewComments as reviewCommentsTable, designPrototypes as designPrototypesTable, interviews as interviewsTable, documentApproverAssignments } from '../db/schema';
 import { getComments } from '../services/reviewCommentService';
 import { fixPrdContentWithBedrock, fixPrdBacklogWithBedrock, fixDesignDocSectionWithBedrock, regeneratePrdContentRegionWithBedrock, regeneratePrdBacklogItemWithBedrock, regenerateMarkdownRegionWithBedrock, BedrockModelTruncatedError } from '../services/bedrockService';
@@ -69,7 +69,7 @@ import {
   overrideDesignDocValidation,
   syncValidationResult,
 } from '../services/designDocService';
-import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, updateThreadKickoffContext } from '../services/chatAgentService';
+import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, sendMessage, updateThreadKickoffContext } from '../services/chatAgentService';
 import { getApproverPoolForProject, resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import { assignApprovers, getAssignments, getAvailableApprovers, isApprovalComplete, isAssignedApprover, reassignApprovers, recordApproverResponse } from '../services/documentApprovalService';
@@ -418,22 +418,13 @@ router.post('/prds/:prdId/sync', requirePermission('interviews:manage'), async (
   }
 });
 
-// POST /prds/:prdId/design-docs — create one design doc per feature from an approved PRD
-// Spawns a separate agent thread for each feature, mirroring the per-prototype path.
-router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), async (req, res, next) => {
-  try {
-    const userId = getUserId(req);
-    const prd = await getPrd(req.params.prdId);
+type PrdForDesignDocGeneration = NonNullable<Awaited<ReturnType<typeof getPrd>>>;
 
-    if (!prd) {
-      res.status(404).json({ error: 'PRD not found' });
-      return;
-    }
-    if (prd.status !== 'approved') {
-      res.status(409).json({ error: 'Design docs can only be created from approved PRDs' });
-      return;
-    }
-
+async function startDesignDocsForApprovedPrd(
+  prdId: string,
+  userId: string,
+  prd: PrdForDesignDocGeneration,
+): Promise<Array<{ designDocId: string; threadId: string; featureTitle: string }>> {
     const skillConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
     const designDocSkillPath = skillConfig?.designDocSkillPath ?? undefined;
     const globalModel = await getDefaultModel();
@@ -444,8 +435,10 @@ router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), 
     const backlogFeatures = extractFeatures(prd.backlogJson);
 
     if (backlogFeatures.length === 0) {
-      res.status(422).json({ error: 'PRD backlog has no features to generate design docs for' });
-      return;
+      throw Object.assign(
+        new Error('PRD backlog has no features to generate design docs for'),
+        { status: 422 },
+      );
     }
 
     // ── Load design plan (optional enrichment) ──
@@ -458,7 +451,7 @@ router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), 
     try {
       const { designPlans } = await import('../db/schema');
       const found = await db.query.designPlans.findFirst({
-        where: eq(designPlans.prdId, req.params.prdId),
+        where: eq(designPlans.prdId, prdId),
       });
       if (found?.features && Array.isArray(found.features)) {
         planFeatures = found.features as PlanFeature[];
@@ -490,10 +483,27 @@ router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), 
       const featureTitle = feature.title ?? `Feature ${featureIndex + 1}`;
 
       try {
+      const existingDoc = await db.query.designDocs.findFirst({
+        where: and(
+          eq(designDocsTable.prdId, prdId),
+          eq(designDocsTable.featureIndex, featureIndex),
+          isNull(designDocsTable.designPrototypeId),
+        ),
+        columns: { id: true, chatThreadId: true, title: true },
+      });
+      if (existingDoc) {
+        createdDocs.push({
+          designDocId: existingDoc.id,
+          threadId: existingDoc.chatThreadId ?? '',
+          featureTitle: existingDoc.title,
+        });
+        console.log(`[interviews] Reused existing design doc for feature "${featureTitle}" (docId=${existingDoc.id})`);
+        continue;
+      }
+
       const planFeature = planFeatures.find(
         (pf) => pf.featureIndex === featureIndex || pf.featureName === featureTitle,
       );
-      const decision = planFeature?.decision ?? 'new-page';
       const targetRoute = planFeature?.targetRoute?.trim() || feature.route?.trim() || undefined;
 
       const contextParts: string[] = [
@@ -565,11 +575,12 @@ router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), 
         },
         {
           kickoffMessage: `Generate the design doc for the single feature "${featureTitle}" using the PRD, backlog, and context provided in \`.ai-pilot/kickoff-context.md\`. This is a non-interactive generation task — do not ask questions. Write all three output files (\`design-doc-design.md\`, \`design-doc-tech-spec.md\`, \`design-doc-assumptions.md\`) to \`.ai-pilot/output/\`.`,
+          skipAutoKickoff: true,
         },
       );
 
       const { designDocId } = await createDesignDoc({
-        prdId: req.params.prdId,
+        prdId,
         project: prd.project,
         userId,
         chatThreadId: thread.id,
@@ -579,7 +590,16 @@ router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), 
         skillSettingsId: prd.skillSettingsId ?? null,
       });
 
-      startSingleFeatureDocWatcher(designDocId, thread.id, req.params.prdId, prd.project);
+      startSingleFeatureDocWatcher(designDocId, thread.id, prdId, prd.project);
+      sendMessage(
+        thread.id,
+        `Generate the design doc for the single feature "${featureTitle}" using the PRD, backlog, and context provided in \`.ai-pilot/kickoff-context.md\`. This is a non-interactive generation task — do not ask questions. Write all three output files (\`design-doc-design.md\`, \`design-doc-tech-spec.md\`, \`design-doc-assumptions.md\`) to \`.ai-pilot/output/\`.`,
+        undefined,
+        [],
+        { hidden: true },
+      ).catch((err: Error) => {
+        console.error(`[interviews] Failed to kick off design doc generation (docId=${designDocId}, threadId=${thread.id}):`, err);
+      });
 
       createdDocs.push({ designDocId, threadId: thread.id, featureTitle });
       console.log(`[interviews] Started design doc generation for feature "${featureTitle}" (docId=${designDocId}, threadId=${thread.id})`);
@@ -589,6 +609,26 @@ router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), 
       }
     }
 
+    return createdDocs;
+}
+
+// POST /prds/:prdId/design-docs — create one design doc per feature from an approved PRD
+// Spawns a separate agent thread for each feature, mirroring the per-prototype path.
+router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const prd = await getPrd(req.params.prdId);
+
+    if (!prd) {
+      res.status(404).json({ error: 'PRD not found' });
+      return;
+    }
+    if (prd.status !== 'approved') {
+      res.status(409).json({ error: 'Design docs can only be created from approved PRDs' });
+      return;
+    }
+
+    const createdDocs = await startDesignDocsForApprovedPrd(req.params.prdId, userId, prd);
     res.status(201).json({
       designDocIds: createdDocs.map(d => d.designDocId),
       count: createdDocs.length,
@@ -2428,7 +2468,12 @@ router.delete('/:id', requirePermission('interviews:manage'), async (req, res, n
 router.post('/:interviewId/prds', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
-    const { chatThreadId, title, model } = req.body as { chatThreadId: string; title?: string; model?: string };
+    const { chatThreadId, title, model, kickoffGeneration } = req.body as {
+      chatThreadId: string;
+      title?: string;
+      model?: string;
+      kickoffGeneration?: boolean;
+    };
 
     if (!chatThreadId) {
       res.status(400).json({ error: 'chatThreadId is required' });
@@ -2451,6 +2496,11 @@ router.post('/:interviewId/prds', requirePermission('interviews:manage'), async 
       skillSettingsId: interview.skillSettingsId ?? null,
     });
     startPrdWatcher(result.prdId, chatThreadId);
+    if (kickoffGeneration) {
+      sendMessage(chatThreadId, 'Begin.', undefined, [], { hidden: true }).catch((err: Error) => {
+        console.error(`[interviews] Failed to kick off PRD generation (prdId=${result.prdId}, threadId=${chatThreadId}):`, err);
+      });
+    }
     res.status(201).json(result);
   } catch (err) {
     next(err);
@@ -2522,7 +2572,11 @@ router.post('/prds/:prdId/owner-approve', requirePermission('prds:review'), asyn
 
       // Re-fetch so prototypeStageEnabled includes skill-option resolution / stale-false heal.
       const approvedPrd = await getPrd(prdId);
-      if (approvedPrd?.prototypeStageEnabled !== false) {
+      if (approvedPrd?.prototypeStageEnabled === false) {
+        startDesignDocsForApprovedPrd(prdId, userId, approvedPrd).catch(err => {
+          console.error('[owner-approve] Automatic design doc generation failed:', err);
+        });
+      } else if (approvedPrd) {
         generateDesignPlan(prdId).catch(err => {
           console.error('[owner-approve] Design plan generation failed:', err);
         });
