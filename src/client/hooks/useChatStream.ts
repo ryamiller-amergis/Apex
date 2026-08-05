@@ -430,7 +430,11 @@ export function useChatStream(
           const retryEvent = event as SseRetryingEvent;
           setLastProgressAt(Date.now());
           setIsRetrying(true);
-          setRetryReason(`Retrying… (attempt ${retryEvent.attempt} of ${retryEvent.maxAttempts})`);
+          setRetryReason(
+            retryEvent.reason === 'reconnecting'
+              ? 'Reconnecting to the agent…'
+              : `Retrying… (attempt ${retryEvent.attempt} of ${retryEvent.maxAttempts})`,
+          );
           clearRetryTimeout();
           break;
         }

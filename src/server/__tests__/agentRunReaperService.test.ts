@@ -306,6 +306,56 @@ describe('reapOrphanedRuns', () => {
     );
   });
 
+  it('does not mislabel an event-driven run as worker_lost when its heartbeat is stale', async () => {
+    // Event-driven runs never write a heartbeat by design. The persisted marker
+    // must force the timeout_at-only branch even without a live flag lookup, so a
+    // stale heartbeat is NOT treated as "Worker lost (heartbeat expired)".
+    mockFindMany.mockResolvedValue([
+      {
+        id: 'run-ed',
+        threadId: 'thread-ed',
+        status: 'running',
+        eventDriven: true,
+        createdAt: timestamp(10 * 60_000),
+        startedAt: timestamp(10 * 60_000),
+        heartbeatAt: timestamp(10 * 60_000), // 10 min stale → legacy worker_lost
+        progressAt: timestamp(10 * 60_000),
+        timeoutAt: timestamp(-60 * 60_000), // 1h in the future → not expired
+        lastError: null,
+      },
+    ]);
+
+    // No eventDrivenTerminationEnabled option: classification must come from the row.
+    await reapOrphanedRuns({ now: () => now, config });
+
+    expect(mockUpdateSet).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'failed' }),
+    );
+    expect(finalizeReconciledAgentRun).not.toHaveBeenCalled();
+    expect(notifyRunEvent).not.toHaveBeenCalled();
+  });
+
+  it('still reaps an event-driven run once its absolute timeout_at is reached', async () => {
+    mockFindMany.mockResolvedValue([
+      {
+        id: 'run-ed-expired',
+        threadId: 'thread-ed',
+        status: 'running',
+        eventDriven: true,
+        createdAt: timestamp(3 * 60 * 60_000),
+        startedAt: timestamp(3 * 60 * 60_000),
+        heartbeatAt: timestamp(3 * 60 * 60_000),
+        progressAt: timestamp(3 * 60 * 60_000),
+        timeoutAt: timestamp(60_000), // expired 60s ago
+        lastError: null,
+      },
+    ]);
+
+    await reapOrphanedRuns({ now: () => now, config, retireReconcileDue: true });
+
+    expect(finalizeReconciledAgentRun).toHaveBeenCalledTimes(1);
+  });
+
   it('PBI-001 AC-1 / VT-04 bounds a stalled stream with failure and cancel', async () => {
     mockFindMany.mockResolvedValue([
       {

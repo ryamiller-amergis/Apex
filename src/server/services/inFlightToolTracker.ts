@@ -15,6 +15,43 @@ export interface McpToolDeadlineController {
   clear(): void;
 }
 
+export interface FirstEventDeadlineController {
+  /** Cancel the deadline. Idempotent; safe to call after it has fired. */
+  clear(): void;
+  /** True once the deadline has fired (used only for tests/assertions). */
+  readonly fired: boolean;
+}
+
+/**
+ * Single-shot wall-clock deadline for the first stream event of a run. Arm once
+ * before entering the stream loop and `clear()` on the first event received. If
+ * no event arrives within `timeoutMs`, `onExpired` fires exactly once. Create a
+ * fresh controller per attempt to re-arm.
+ */
+export function createFirstEventDeadline(
+  timeoutMs: number,
+  onExpired: () => void,
+): FirstEventDeadlineController {
+  let settled = false;
+  const timer = setTimeout(() => {
+    if (settled) return;
+    settled = true;
+    fired = true;
+    onExpired();
+  }, timeoutMs);
+  let fired = false;
+  return {
+    clear() {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+    },
+    get fired() {
+      return fired;
+    },
+  };
+}
+
 function nestedToolName(input: unknown): string | null {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const value = (input as Record<string, unknown>).toolName;

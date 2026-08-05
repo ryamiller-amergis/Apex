@@ -1,6 +1,7 @@
 import {
   clearToolInFlight,
   createMcpToolDeadlineController,
+  createFirstEventDeadline,
   findExpiredMcpTool,
   identifyMcpTool,
   markToolInFlight,
@@ -132,6 +133,60 @@ describe('inFlightToolTracker', () => {
       controller.arm('sdk-id', 'mcp', input);
       jest.advanceTimersByTime(60_000);
 
+      expect(expired).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
+
+describe('createFirstEventDeadline', () => {
+  it('fires exactly once when no first event arrives before the timeout', () => {
+    jest.useFakeTimers();
+    try {
+      const expired = jest.fn();
+      const deadline = createFirstEventDeadline(45_000, expired);
+
+      jest.advanceTimersByTime(44_999);
+      expect(expired).not.toHaveBeenCalled();
+      expect(deadline.fired).toBe(false);
+
+      jest.advanceTimersByTime(1);
+      expect(expired).toHaveBeenCalledTimes(1);
+      expect(deadline.fired).toBe(true);
+
+      // Never fires twice even if more time elapses.
+      jest.advanceTimersByTime(45_000);
+      expect(expired).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('does not fire once cleared on the first event', () => {
+    jest.useFakeTimers();
+    try {
+      const expired = jest.fn();
+      const deadline = createFirstEventDeadline(45_000, expired);
+
+      jest.advanceTimersByTime(10_000);
+      deadline.clear();
+      jest.advanceTimersByTime(60_000);
+
+      expect(expired).not.toHaveBeenCalled();
+      expect(deadline.fired).toBe(false);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('is idempotent when cleared after firing', () => {
+    jest.useFakeTimers();
+    try {
+      const expired = jest.fn();
+      const deadline = createFirstEventDeadline(1_000, expired);
+      jest.advanceTimersByTime(1_000);
+      expect(() => deadline.clear()).not.toThrow();
       expect(expired).toHaveBeenCalledTimes(1);
     } finally {
       jest.useRealTimers();

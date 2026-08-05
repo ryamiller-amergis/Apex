@@ -200,8 +200,22 @@ describe('TBI-003 Retire-mode liveness writes', () => {
       status: 'running',
       ownerInstance: 'worker-a',
       updatedAt: '2026-08-04T12:00:00.000Z',
+      eventDriven: true,
     });
     expect(JSON.stringify(update)).not.toMatch(/heartbeatAt|progressAt|progressLabel|progressPhase/);
+  });
+
+  it('marks the run event-driven so the reaper classifies it from the row', () => {
+    expect(buildAgentRunClaimUpdate(
+      true,
+      'worker-a',
+      '2026-08-04T12:00:00.000Z',
+    )).toMatchObject({ eventDriven: true });
+    expect(buildAgentRunClaimUpdate(
+      false,
+      'worker-a',
+      '2026-08-04T12:00:00.000Z',
+    )).toMatchObject({ eventDriven: false });
   });
 
   it('DoD-2 preserves legacy heartbeat/progress writes when the flag is disabled', () => {
@@ -214,6 +228,7 @@ describe('TBI-003 Retire-mode liveness writes', () => {
       progressAt: '2026-08-04T12:00:00.000Z',
       progressLabel: 'Agent run started',
       progressPhase: 'implementation',
+      eventDriven: false,
     });
   });
 

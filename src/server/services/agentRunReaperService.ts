@@ -76,6 +76,16 @@ export function resolveAgentRunHardLimitMs(): number {
   return positiveDuration(process.env.AGENT_RUN_HARD_LIMIT_MS, 2 * 60 * 60_000);
 }
 
+/**
+ * Fast owner-side deadline for the FIRST stream event of an event-driven run.
+ * A resumed agent that emits nothing (cold-resume zombie) has no tool_call for
+ * the MCP deadline to bound; this bounds that dead-on-arrival window to seconds
+ * instead of the coarse ~2h hard limit.
+ */
+export function resolveAgentFirstEventTimeoutMs(): number {
+  return positiveDuration(process.env.AGENT_FIRST_EVENT_TIMEOUT_MS, 45_000);
+}
+
 export function resolveAgentRunHealthConfig(): AgentRunHealthConfig {
   const progressStaleMs = positiveDuration(process.env.AGENT_PROGRESS_STALE_MS, 2 * 60_000);
   const progressAbortMs = Math.max(
@@ -219,7 +229,13 @@ export async function isThreadRunAlive(
   const rows = await db.query.agentRuns.findMany({
     where: and(eq(agentRuns.threadId, threadId), inArray(agentRuns.status, ['queued', 'running'])),
   });
-  const eventDrivenEnabled = await eventDrivenTerminationEnabled(threadId).catch(() => false);
+  // Prefer the persisted per-row marker (set at claim). Event-driven runs never
+  // heartbeat, so a live flag miss must not route them through legacy liveness.
+  const rowMarkedEventDriven = rows.some(
+    (row) => (row as typeof row & { eventDriven?: boolean }).eventDriven === true,
+  );
+  const eventDrivenEnabled = rowMarkedEventDriven
+    || await eventDrivenTerminationEnabled(threadId).catch(() => false);
   // @feature-flag:event-driven-run-termination start winner=enabled
   if (eventDrivenEnabled) {
     // @feature-flag:event-driven-run-termination enabled-start
@@ -397,8 +413,13 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
       isEventDrivenTerminationEnabledForThread;
 
     for (const row of rows) {
-      const eventDrivenEnabled = await eventDrivenTerminationEnabled(row.threadId)
-        .catch(() => false);
+      // The persisted marker is authoritative: an event-driven run intentionally
+      // never writes a heartbeat, so classifying it via the legacy branch (on a
+      // transient flag-eval miss) would mislabel it "Worker lost". Only fall back
+      // to the live flag when the row predates the marker column.
+      const eventDrivenEnabled =
+        (row as typeof row & { eventDriven?: boolean }).eventDriven === true
+        || await eventDrivenTerminationEnabled(row.threadId).catch(() => false);
       // @feature-flag:event-driven-run-termination start winner=enabled
       if (eventDrivenEnabled) {
         // @feature-flag:event-driven-run-termination enabled-start

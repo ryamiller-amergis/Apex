@@ -42,6 +42,7 @@ import { interviews, adrs, prds, designDocs, testCases, devSessions, agentRuns, 
 import {
   isThreadRunAlive,
   resolveAgentRunHardLimitMs,
+  resolveAgentFirstEventTimeoutMs,
 } from './agentRunReaperService';
 import { isExternalRunAbortEvent } from './agentRunAbort';
 import { syncPrdContent } from './prdService';
@@ -80,6 +81,7 @@ import {
 import {
   clearToolInFlight,
   createMcpToolDeadlineController,
+  createFirstEventDeadline,
   markToolInFlight,
   type InFlightToolCall,
   type McpToolDeadlineController,
@@ -109,6 +111,13 @@ const WORKSPACE_BASE = process.env.AI_PILOT_WORKSPACE_DIR
     : path.join(os.tmpdir(), 'ai-pilot-workspaces');
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const INTERVIEW_IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours
+// After this much thread inactivity, a resumed SDK session is likely cold and
+// prone to emitting zero events. Proactively recreate the agent (with history)
+// instead of resuming a stale session. Overridable for tests/tuning.
+const AGENT_STALE_RESUME_MS = (() => {
+  const parsed = Number(process.env.AGENT_STALE_RESUME_MS);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 10 * 60 * 1000; // 10 minutes
+})();
 
 // ── In-memory state ───────────────────────────────────────────────────────────
 
@@ -1953,6 +1962,12 @@ function makeOwnerDeadlineError(reason: string): Error & { _ownerDeadline: true 
   return Object.assign(new Error(reason), { _ownerDeadline: true as const });
 }
 
+function makeStartupDeadlineError(
+  reason: string,
+): Error & { _startupDeadline: true } {
+  return Object.assign(new Error(reason), { _startupDeadline: true as const });
+}
+
 const TERMINAL_DETAIL_MAX_CHARS = 2_000;
 const AGENT_DISPOSAL_TIMEOUT_MS = 10_000;
 
@@ -2163,6 +2178,7 @@ export function buildAgentRunClaimUpdate(
   status: 'running';
   ownerInstance: string;
   updatedAt: string;
+  eventDriven: boolean;
   heartbeatAt?: string;
   progressAt?: string;
   progressLabel?: string;
@@ -2172,6 +2188,10 @@ export function buildAgentRunClaimUpdate(
     status: 'running' as const,
     ownerInstance,
     updatedAt: timestamp,
+    // Stamp the run so the reaper classifies it from the row rather than a
+    // live flag lookup. Event-driven runs are terminated only via owner-side
+    // deadlines / timeout_at — never the legacy heartbeat worker_lost rule.
+    eventDriven: eventDrivenTerminationEnabled,
   };
   // @feature-flag:event-driven-run-termination start winner=enabled
   if (eventDrivenTerminationEnabled) {
@@ -3402,6 +3422,29 @@ export async function sendMessage(
   }
   // @feature-flag:repo-grounding-lifecycle-binding end
 
+  // Root-cause mitigation: a thread that resumes after a long idle gap tends to
+  // reuse a cold SDK session that emits zero events. Proactively recreate the
+  // agent (with PostgreSQL history) instead of resuming a stale one. Read
+  // lastActivityAt BEFORE it is overwritten by this turn's user message below.
+  const idleGapMs = state.thread.lastActivityAt
+    ? Date.now() - Date.parse(state.thread.lastActivityAt)
+    : 0;
+  const staleIdleResume =
+    eventDrivenTerminationEnabled
+    && Number.isFinite(idleGapMs)
+    && idleGapMs > AGENT_STALE_RESUME_MS
+    && Boolean(state.agent || state.thread.cursorAgentId);
+  if (staleIdleResume) {
+    if (state.agent) {
+      await state.agent[Symbol.asyncDispose]().catch(() => {});
+      state.agent = null;
+    }
+    trackEvent('agent.stale_idle_recreate', {
+      threadId,
+      idleGapMs: String(idleGapMs),
+    });
+  }
+
   const maxviewEnabled = await isMaxviewMcpEnabled(state.thread.userId, state.thread.kickoff.project);
   const calendarSessionId = state.thread.kickoff.assistantType === 'calendar-work-item'
     ? (state.thread.kickoff.calendarAssistantSessionId ?? undefined)
@@ -3506,7 +3549,7 @@ export async function sendMessage(
       const priorCursorAgentId = state.thread.cursorAgentId;
       const acquisition = await resumeOrCreateAgent({
         cursorAgentId: priorCursorAgentId,
-        forceRecreate: boundaryRecreationReason !== null,
+        forceRecreate: boundaryRecreationReason !== null || staleIdleResume,
         resume: async () => {
           logMyWork('agent.resume_started', {
             cursorAgentId: priorCursorAgentId,
@@ -3694,7 +3737,7 @@ export async function sendMessage(
     // without emitting text tokens (thinking phases, tool_use, long tool_call waits).
     // agentRunId is always assigned before this function is ever called.
     let streamAbortError:
-      (Error & { _cancelled?: true; _ownerDeadline?: true }) | null = null;
+      (Error & { _cancelled?: true; _ownerDeadline?: true; _startupDeadline?: true }) | null = null;
     const bumpHeartbeat = async (): Promise<void> => {
       if (eventDrivenTerminationEnabled) return;
       if (Date.now() - lastHeartbeatMs < HEARTBEAT_INTERVAL_MS) return;
@@ -3864,14 +3907,44 @@ export async function sendMessage(
     }
     // @feature-flag:event-driven-run-termination end
 
+    // Fast first-event backstop for event-driven runs: a resumed agent that
+    // emits nothing has no tool_call for the MCP deadline to bound, so bound the
+    // dead-on-arrival window here instead of the coarse ~2h timeout_at.
+    const firstEventTimeoutMs = resolveAgentFirstEventTimeoutMs();
+    let startupRetryConsumed = false;
+
     for (let attempt = 0; attempt <= MAX_RUN_RETRIES; attempt++) {
       agentTextBuffer = '';
       throwIfAborted();
 
       // Stream tokens and tool calls — wrapped in try/catch for stream-level failures
       if (currentRun.supports('stream')) {
+        // Arm the first-event deadline for event-driven runs only. On expiry we
+        // dispose the (silent) agent so the blocked async iterator unblocks and
+        // throws into the catch below, which recreates + retries once.
+        let firstEventSeen = false;
+        const firstEventDeadline = eventDrivenTerminationEnabled
+          ? createFirstEventDeadline(firstEventTimeoutMs, () => {
+              if (firstEventSeen || streamAbortError) return;
+              streamAbortError = makeStartupDeadlineError(
+                'The agent did not start responding.',
+              );
+              const runId = agentRunId!;
+              void (async () => {
+                await cancelSdkRunBestEffort(state, runId);
+                await forceDisposeThreadAgent(state, {
+                  clearCursorAgentId: false,
+                  reason: 'startup_deadline',
+                });
+              })();
+            })
+          : null;
         try {
           for await (const event of currentRun.stream()) {
+            if (!firstEventSeen) {
+              firstEventSeen = true;
+              firstEventDeadline?.clear();
+            }
             throwIfAborted();
             if (event.type === 'assistant') {
               for (const block of event.message.content) {
@@ -4020,7 +4093,99 @@ export async function sendMessage(
               await bumpHeartbeat();
             }
           }
+          firstEventDeadline?.clear();
         } catch (streamErr) {
+          firstEventDeadline?.clear();
+
+          // First-event startup deadline: the resumed agent emitted nothing.
+          const startupDeadline =
+            !!streamAbortError
+            && Boolean((streamAbortError as { _startupDeadline?: unknown })._startupDeadline);
+          if (startupDeadline) {
+            if (attempt < MAX_RUN_RETRIES && !startupRetryConsumed) {
+              // Transparently recreate a fresh agent (with history) and retry once.
+              startupRetryConsumed = true;
+              trackEvent('agent.run.startup_deadline', {
+                threadId,
+                mode: 'enforce',
+                attempt: String(attempt + 1),
+                recovered: 'true',
+              }, { firstEventTimeoutMs });
+              console.warn(
+                `[chat] First-event deadline on attempt ${attempt + 1}/${MAX_RUN_RETRIES + 1} for thread ${threadId}; recreating agent and retrying`,
+              );
+              await publishRunEvent(state, agentRunId!, {
+                type: 'retrying',
+                attempt: attempt + 1,
+                maxAttempts: MAX_RUN_RETRIES + 1,
+                reason: 'reconnecting',
+              });
+              // Clear the abort so the loop-top throwIfAborted() does not refire.
+              streamAbortError = null;
+              if (state.agent) {
+                await state.agent[Symbol.asyncDispose]().catch(() => {});
+                state.agent = null;
+              }
+              // Recreate (not resume) with PostgreSQL history so the fresh
+              // session continues the conversation instead of restarting it.
+              state.thread.cursorAgentId = undefined;
+              prompt = await buildNewAgentTurnPrompt(
+                state.thread.kickoff,
+                promptText,
+                maxviewEnabled,
+                recoveryContext,
+                {
+                  preloadRepositoryContext:
+                    state.isInterviewThread && grounding.mode === 'remote',
+                  repoSearchEnabled: !state.isInterviewThread,
+                  nativeReads: repositoryRuntime.nativeReads,
+                  repoReader: repositoryRuntime.repoReader,
+                },
+              );
+              state.agent = await retryWithBackoff(
+                () => Agent.create({
+                  apiKey,
+                  model: { id: resolvedModel },
+                  local: localAgentOptions,
+                  mcpServers,
+                  agents: { 'code-reviewer': codeReviewerAgent },
+                }),
+                sdkRetryOpts,
+              );
+              currentRun = await state.agent.send(prompt);
+              state.thread.cursorAgentId = state.agent.agentId ?? state.thread.cursorAgentId;
+              state.thread.activeRunId = getRunId(currentRun);
+              continue;
+            }
+
+            // Final attempt still produced nothing — finalize a terminal failure
+            // through the owner path so the user gets an actionable message and
+            // can resend, instead of a silent spinner up to the hard limit.
+            const detail = 'The agent did not start responding. Please resend your last message.';
+            trackEvent('agent.run.startup_deadline', {
+              threadId,
+              mode: 'enforce',
+              attempt: String(attempt + 1),
+              recovered: 'false',
+            }, { firstEventTimeoutMs });
+            terminalFinalized = await finalizeOwnerTerminal(
+              state,
+              agentRunId!,
+              'failed',
+              detail,
+              [{ type: 'error', error: detail }, { type: 'done', runId: agentRunId }],
+            );
+            state.thread.lastError = detail;
+            state.thread.status = 'idle';
+            state.thread.activeRunId = undefined;
+            if (state.agent) {
+              await state.agent[Symbol.asyncDispose]().catch(() => {});
+              state.agent = null;
+            }
+            streamAbortError = null;
+            break;
+          }
+
           if (streamAbortError) throw streamAbortError;
           if (attempt < MAX_RUN_RETRIES && isTransientSdkError(streamErr)) {
             console.warn(`[chat] Stream error on attempt ${attempt + 1}/${MAX_RUN_RETRIES + 1} for thread ${threadId}, retrying…`, describeError(streamErr));

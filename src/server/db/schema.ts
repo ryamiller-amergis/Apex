@@ -1452,6 +1452,10 @@ export const agentRuns = pgTable('agent_runs', {
   progressPhase: text('progress_phase').$type<AgentRunPhase>(),
   startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   timeoutAt: timestamp('timeout_at', { withTimezone: true, mode: 'string' }),
+  // True when the run was claimed under event-driven-run-termination. Lets the
+  // reaper classify deterministically from the row (event-driven runs never
+  // write a heartbeat by design) instead of re-evaluating the flag per sweep.
+  eventDriven: boolean('event_driven').notNull().default(false),
   lastError: text('last_error'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),

@@ -601,6 +601,21 @@ describe('useChatStream', () => {
     expect(result.current.retryReason).toBe('Retrying… (attempt 1 of 3)');
   });
 
+  it('shows a reconnecting reason for a startup-deadline retry without closing SSE', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+    act(() => {
+      lastES!.emit('message', {
+        type: 'retrying',
+        attempt: 1,
+        maxAttempts: 3,
+        reason: 'reconnecting',
+      });
+    });
+    expect(result.current.isRetrying).toBe(true);
+    expect(result.current.retryReason).toBe('Reconnecting to the agent…');
+    expect(lastES!.close).not.toHaveBeenCalled();
+  });
+
   it('clears isRetrying when a token event arrives after retrying', () => {
     const { result } = renderHook(() => useChatStream('t1'));
     act(() => {
