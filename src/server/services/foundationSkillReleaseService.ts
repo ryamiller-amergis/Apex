@@ -321,8 +321,15 @@ export async function publishRelease(
   if (isAzureArtifactsConfigured()) {
     await promoteToReleaseView(existing.artifactVersion);
   } else {
-    console.warn('[foundationSkillReleaseService] Azure Artifacts not configured — skipping Release-view promotion');
+    console.warn(
+      `[foundationSkillReleaseService] Azure Artifacts not configured — publishing ${existing.version} ` +
+      `without verifying that @apex/skills@${existing.artifactVersion} exists on the feed`,
+    );
   }
+
+  // Recorded so an unverified publish is auditable rather than inferable only
+  // from a missing integrity hash.
+  const feedVerified = Boolean(integrity);
 
   const now = new Date().toISOString();
 
@@ -348,6 +355,7 @@ export async function publishRelease(
       details:        {
         artifactVersion: existing.artifactVersion,
         targetProjects: existing.targetProjects,
+        feedVerified,
       },
     });
 

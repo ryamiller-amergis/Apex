@@ -5,9 +5,9 @@
  * Usage:
  *   npx @apex/skills doctor
  *   npx @apex/skills init-registry [--org] [--feed] [--dry-run]
- *   npx @apex/skills install <skill...> [--dry-run] [--fill]
+ *   npx @apex/skills install <skill...> [--dry-run] [--fill] [--skip-apex-check]
  *   npx @apex/skills check
- *   npx @apex/skills update [<skill...>]
+ *   npx @apex/skills update [<skill...>] [--skip-apex-check]
  *   npx @apex/skills validate
  *   npx @apex/skills bootstrap [<skill...>] [--explain]
  *
@@ -29,8 +29,9 @@ const USAGE = `
 APEX Foundation Skills CLI
 
 Commands:
-  doctor                   Health check (Node, Git, @apex registry .npmrc, feed auth)
+  doctor                   Health check (Node, Git, @apex registry, feed auth, APEX entitlement)
     --skip-feed            Skip Azure Artifacts reachability check (local maintainers)
+    --skip-apex-check      Skip the APEX entitlement check (maintainers / air-gapped)
   init-registry            Create/merge local .npmrc from .npmrc.template (+ @apex scope)
     --org <name>           Azure DevOps org (default: amergis / AZURE_ARTIFACTS_ORG)
     --feed <name>          Artifacts feed (default: apex-skills / AZURE_ARTIFACTS_FEED)
@@ -38,12 +39,14 @@ Commands:
     --dry-run              Preview without writing .npmrc
   install <skill...>       Install selected skill foundations + scaffold adapters
                            (refuses until doctor hard checks pass; skill names required)
-    --all                  Install every skill in the package (use named skills instead)
+    --all                  Install every skill your APEX release ships to this project
     --dry-run              Preview what would be written without writing anything
     --fill                 Re-run the bootstrap adapter pre-fill (for existing installs)
     --enrich               Opt-in: use AI to improve adapter prose within evidence bounds
+    --skip-apex-check      Skip the APEX entitlement check (maintainers / air-gapped)
   check                    Report which installed foundations have available updates
   update [<skill...>]      Update foundations; never overwrites existing adapters
+    --skip-apex-check      Skip the APEX entitlement check (maintainers / air-gapped)
   validate                 Validate catalog coverage, contracts, and lockfile integrity
   bootstrap [<skill...>]   Re-run adapter pre-fill for named skills (or installed skills)
     --all                  Bootstrap every skill in the package regardless of lockfile
@@ -65,12 +68,14 @@ async function main() {
           args: rest,
           options: {
             'skip-feed': { type: 'boolean', default: false },
+            'skip-apex-check': { type: 'boolean', default: false },
           },
           allowPositionals: true,
         });
         await doctor({
           requireRegistry: true,
           requireFeed: !values['skip-feed'],
+          skipApexCheck: values['skip-apex-check'],
         });
         break;
       }
@@ -103,11 +108,19 @@ async function main() {
             fill:      { type: 'boolean', default: false },
             enrich:    { type: 'boolean', default: false },
             all:       { type: 'boolean', default: false },
+            'skip-apex-check': { type: 'boolean', default: false },
           },
           allowPositionals: true,
         });
         const skills = positionals.length > 0 ? positionals : null;
-        await install({ skills, all: values.all, dryRun: values['dry-run'], fill: values.fill, enrich: values.enrich });
+        await install({
+          skills,
+          all: values.all,
+          dryRun: values['dry-run'],
+          fill: values.fill,
+          enrich: values.enrich,
+          skipApexCheck: values['skip-apex-check'],
+        });
         break;
       }
 
@@ -116,9 +129,15 @@ async function main() {
         break;
 
       case 'update': {
-        const { positionals } = parseArgs({ args: rest, options: {}, allowPositionals: true });
+        const { values, positionals } = parseArgs({
+          args: rest,
+          options: {
+            'skip-apex-check': { type: 'boolean', default: false },
+          },
+          allowPositionals: true,
+        });
         const skills = positionals.length > 0 ? positionals : null;
-        await update({ skills });
+        await update({ skills, skipApexCheck: values['skip-apex-check'] });
         break;
       }
 

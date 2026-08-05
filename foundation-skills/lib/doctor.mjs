@@ -297,6 +297,7 @@ Next steps — first-time setup:
 File layout per skill:
   .apex/foundation/<skill>/    Foundation files (managed; never hand-edit)
   .cursor/skills/<skill>/      Adapter files (team-owned; ~2 files per skill)
+  .apex/config.json            Records the APEX release that authorized this install (commit this)
   apex-skills.lock.json        Records installed skills and file hashes (commit this)
 
 Note: skills are plain Markdown — they work in any language repo. Only this CLI requires Node.`);

@@ -31,32 +31,69 @@ function apexRegistryLine(artifactFeed: string | null | undefined): string {
   return `@apex:registry=${raw}`;
 }
 
-function buildInstallSteps(skillList: string[]): Step[] {
+/** This APEX instance, as the CLI needs to reach it for the entitlement check. */
+function apexUrl(): string {
+  return typeof window !== 'undefined' ? window.location.origin : 'https://your-apex-host';
+}
+
+/**
+ * The CLI verifies your project is entitled to these skills before installing,
+ * so it needs to know where APEX lives. PowerShell is the default here because
+ * that is what most teams on Windows will paste into.
+ */
+function apexUrlStep(): Step {
+  return {
+    cmd: `$env:APEX_URL="${apexUrl()}"`,
+    label:
+      'Point the CLI at APEX so it can confirm your project is entitled to these skills. ' +
+      `On bash/zsh use: export APEX_URL="${apexUrl()}"`,
+  };
+}
+
+/**
+ * Pin the package to the version this release shipped.
+ *
+ * Azure Artifacts does not support npm dist-tags — `latest` is not maintained
+ * per view, so a bare `npx @apex/skills` can resolve a version this project was
+ * never granted, which the CLI then refuses. Naming the version here means the
+ * command APEX hands out always agrees with the version the CLI enforces.
+ *
+ * Falls back to the unpinned form for releases created before artifactVersion
+ * was recorded.
+ */
+function cliRef(artifactVersion: string | null | undefined): string {
+  return artifactVersion ? `@apex/skills@${artifactVersion}` : '@apex/skills';
+}
+
+function buildInstallSteps(skillList: string[], artifactVersion: string | null | undefined): Step[] {
   const skillArgs = skillList.length > 0 ? ' ' + skillList.join(' ') : ' --all';
+  const cli = cliRef(artifactVersion);
   return [
-    { cmd: 'npx @apex/skills doctor', label: 'Check Node, Git, registry, and feed auth' },
+    apexUrlStep(),
+    { cmd: `npx ${cli} doctor`, label: 'Check Node, Git, registry, feed auth, and APEX entitlement' },
     {
-      cmd: `npx @apex/skills install${skillArgs}`,
+      cmd: `npx ${cli} install${skillArgs}`,
       label: skillList.length > 0
         ? `Vendor foundations + scaffold adapters for ${skillList.length} skill${skillList.length === 1 ? '' : 's'}: ${skillList.join(', ')}`
         : 'Vendor all foundation skill files and scaffold adapters',
     },
     {
-      cmd: `npx @apex/skills bootstrap${skillArgs}`,
+      cmd: `npx ${cli} bootstrap${skillArgs}`,
       label: 'Fill adapters from your repo evidence (ADO org, teams, structure) — install already scaffolds adapters; bootstrap refines them. Review and commit the result.',
     },
   ];
 }
 
-function buildUpdateSteps(skillList: string[]): Step[] {
+function buildUpdateSteps(skillList: string[], artifactVersion: string | null | undefined): Step[] {
   const skillArgs = skillList.length > 0 ? ' ' + skillList.join(' ') : '';
+  const cli = cliRef(artifactVersion);
   return [
     {
-      cmd: `npx @apex/skills update${skillArgs}`,
+      cmd: `npx ${cli} update${skillArgs}`,
       label: 'Pull latest foundation files (adapters are never overwritten)',
     },
     {
-      cmd: `npx @apex/skills bootstrap${skillArgs || ' --all'}`,
+      cmd: `npx ${cli} bootstrap${skillArgs || ' --all'}`,
       label: 'Refresh adapters with updated repo knowledge, then review and commit',
     },
   ];
@@ -88,6 +125,40 @@ const TROUBLESHOOT_ROWS: TroubleshootRow[] = [
     symptom: 'Git missing (WARN)',
     fix: 'Optional for install; required for update/PR flow. Install Git and re-run doctor.',
     cmd: 'git --version',
+  },
+  {
+    symptom: 'apex-authorization FAIL — APEX_URL is not set',
+    fix: 'Set APEX_URL to this APEX instance (step 1 of Install), then re-run doctor. The CLI needs it to confirm your project is entitled to these skills.',
+    cmd: 'npx @apex/skills doctor',
+  },
+  {
+    symptom: 'apex-authorization FAIL — no published release targets your project',
+    fix: 'Your repo is registered but no release ships to it yet. Ask an APEX admin to publish a release targeting your project under Platform Admin → Foundation Skills → Releases.',
+  },
+  {
+    symptom: 'apex-authorization FAIL — repo is not registered',
+    fix: 'The repo\'s git origin does not match any project in APEX. Ask an APEX admin to register it under Project Admin → Project Settings.',
+    cmd: 'git remote -v',
+  },
+  {
+    symptom: 'apex-authorization FAIL — could not reach APEX',
+    fix: 'Check APEX_URL is correct and reachable (VPN?). A previously recorded .apex/config.json is deliberately not accepted as a substitute, so that revoked access takes effect. For genuinely air-gapped use, pass --skip-apex-check.',
+  },
+  {
+    symptom: 'apex-authorization FAIL — APEX is reachable but could not answer',
+    fix: 'APEX is up but its authorization lookup timed out. Nothing on your machine is wrong, so do not change APEX_URL or your network. Wait a moment and re-run the same command; report it to the APEX team if it keeps happening.',
+  },
+  {
+    symptom: 'install refuses with "Version mismatch"',
+    fix: 'Your release pins a specific @apex/skills version. Copy the commands from the Install tab — they already name that version. Typing the command unpinned can pull a different version, because the feed does not maintain an npm "latest" tag.',
+  },
+  {
+    symptom: 'install warns "Version mismatch — continuing anyway"',
+    fix: 'Not an error, and your install completed. APEX could not confirm the pinned version exists on the feed, so the mismatch is treated as a gap in the release record rather than an entitlement problem. Mention it to an APEX admin so the release can be corrected.',
+  },
+  {
+    symptom: 'install refuses a skill as "not released to your project"',
+    fix: 'Install only the skills your release ships. Use the Install command above — it already lists exactly those, and --all resolves to them.',
   },
   {
     symptom: 'doctor FAIL — any other check',
@@ -266,7 +337,7 @@ export const FoundationSkillUpdateBanner: React.FC<FoundationSkillUpdateBannerPr
   const stepsLabel = isFirstInstall ? 'Getting started' : 'How to update';
   const registryLine = apexRegistryLine(latest.artifactFeed);
   const scopedSkills = getVisibleSkillsForProject(latest, project ?? null);
-  const installSteps = buildInstallSteps(scopedSkills);
+  const installSteps = buildInstallSteps(scopedSkills, latest.artifactVersion);
 
   function copy(text: string) {
     navigator.clipboard?.writeText(text).catch(() => undefined);
@@ -431,7 +502,7 @@ export const FoundationSkillUpdateBanner: React.FC<FoundationSkillUpdateBannerPr
                   Run these in your repo root
                 </span>
                 <StepList
-                  steps={buildUpdateSteps(scopedSkills)}
+                  steps={buildUpdateSteps(scopedSkills, latest.artifactVersion)}
                   idPrefix="foundation-skills-banner-update"
                   onCopy={copy}
                 />

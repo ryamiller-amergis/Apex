@@ -700,6 +700,28 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({ onCreated })
 
         {step === 'details' && (
           <div className={styles.stepNarrow}>
+            {!candidatesLoading && candidates.length === 0 && (
+              <div
+                className={styles.feedWarning}
+                role="alert"
+                {...{ 'data-testid': 'fs-wizard-feed-unreachable' }}
+              >
+                <span className={styles.feedWarningIcon} aria-hidden="true">⚠</span>
+                <div>
+                  <p className={styles.feedWarningTitle}>Azure Artifacts feed unreachable</p>
+                  <p>
+                    The artifact version below is free text and will not be checked against
+                    the feed — on publish or afterwards. A version that was never published
+                    will be accepted here, and installs are pinned to whatever you enter.
+                  </p>
+                  <p>
+                    Set <code>AZURE_ARTIFACTS_ORG</code>, <code>AZURE_ARTIFACTS_FEED</code> and{' '}
+                    <code>AZURE_ARTIFACTS_PAT</code> on the APEX App Service to restore the
+                    version picker and publish-time verification.
+                  </p>
+                </div>
+              </div>
+            )}
             <div className={styles.fieldGrid}>
               <div className={styles.formRow}>
                 <label className={styles.label} htmlFor="fs-version">Suite version</label>
@@ -1831,6 +1853,19 @@ export const FoundationSkillsAdmin: React.FC = () => {
                     <div className={styles.releaseCardHeader}>
                       <span className={styles.releaseVersion}>v{r.version}</span>
                       <span className={`${styles.badge} ${statusBadgeClass(r.status)}`}>{r.status}</span>
+                      {r.status !== 'draft' && !r.integritySha256 && (
+                        <span
+                          className={`${styles.badge} ${styles.badgeUnverified}`}
+                          title={
+                            `Published without Azure Artifacts configured, so @apex/skills@${r.artifactVersion} ` +
+                            'was never confirmed to exist on the feed. The CLI warns on a version ' +
+                            'mismatch for this release instead of blocking.'
+                          }
+                          {...{ 'data-testid': `fs-release-unverified-${r.id}` }}
+                        >
+                          unverified
+                        </span>
+                      )}
                       {r.targetProjects && r.targetProjects.length > 0 ? (
                         <span className={styles.audienceChips} title={r.targetProjects.join(', ')}>
                           {r.targetProjects.slice(0, 3).map(p => (

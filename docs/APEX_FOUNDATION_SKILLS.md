@@ -61,6 +61,7 @@ Before running the CLI, verify the following with `npx @apex/skills doctor`:
 | **npm / npx** | Ships with Node | Included in Node installer | `npm -v` |
 | **Git 2.x** | Required for update/PR flow | [git-scm.com](https://git-scm.com) · `winget install Git.Git` | `git --version` |
 | **Azure Artifacts feed auth** | The package is published to a private feed | `.npmrc.template` (committed) → local `.npmrc` via `init-registry` + PAT (see §3a) | `npm view @apex/skills version` |
+| **`APEX_URL`** | The CLI verifies your project is entitled to these skills before installing (see §2a) | Set the env var to your APEX instance; the value is shown in the Getting started banner | `npx @apex/skills doctor` |
 
 **Quick start:**
 
@@ -68,18 +69,22 @@ Before running the CLI, verify the following with `npx @apex/skills doctor`:
 # 1. Add @apex:registry to .npmrc (see §3a — paste the line; do this before any npx @apex/skills command)
 # Then authenticate:
 npx vsts-npm-auth -config .npmrc
-npm view @apex/skills version   # expect 1.0.x — confirms feed is wired
+npm view @apex/skills version   # expect 1.1.x — confirms feed is wired
 
-# 2. Health check
+# 2. Point the CLI at APEX so it can verify entitlement
+$env:APEX_URL="https://your-apex-host"     # PowerShell
+export APEX_URL="https://your-apex-host"   # bash / zsh
+
+# 3. Health check
 npx @apex/skills doctor
 
-# 3. Install — use the command from the APEX Getting started banner (it lists your project's selected skills)
+# 4. Install — use the command from the APEX Getting started banner (it lists your project's selected skills)
 npx @apex/skills install ui-lab to-prd grill-with-docs design-system
 
-# 4. Bootstrap adapters (defaults to skills in the lockfile from step 3)
+# 5. Bootstrap adapters (defaults to skills in the lockfile from step 4)
 npx @apex/skills bootstrap
 
-# To install every skill in the package (not recommended for first-time onboarding):
+# To install every skill your release ships to your project:
 npx @apex/skills install --all
 ```
 
@@ -90,6 +95,133 @@ npx @apex/skills install --all
 > **Chicken-and-egg:** the first `npx @apex/skills …` needs `@apex:registry` already
 > in `.npmrc`. Use Feed setup (Direct) in the banner, or paste the line manually.
 > Once the feed is wired, the CLI works normally.
+
+---
+
+## 2a. Install authorization (since 1.1.0)
+
+`install` and `update` verify with APEX that this repo is entitled to foundation
+skills before writing anything. Feed access alone is no longer sufficient.
+
+**How a repo is authorized.** The CLI reads the repo's `origin` remote and asks
+APEX about it:
+
+```
+GET {APEX_URL}/api/internal/foundation-skills/authorize?remote=<origin url>
+```
+
+APEX authorizes the repo when both hold:
+
+1. the remote maps to a repo registered under an Apex project
+   (Project Admin → Project Settings), and
+2. that project has a **published** release visible to it.
+
+Entitlement is derived at request time, never stored as a grant — so deprecating
+the release or removing the repo registration revokes access immediately, with
+nothing to clean up.
+
+**What gets recorded.** On success the CLI writes `.apex/config.json`:
+
+```json
+{
+  "apexProject": "maxview",
+  "apexUrl": "https://your-apex-host",
+  "repo": "MaxView",
+  "releaseVersion": "1.0.0",
+  "artifactVersion": "1.1.0",
+  "authorizedSkills": ["design-system", "grill-with-docs", "prd-design-spec", "to-prd"],
+  "authorizedAt": "2026-08-04T22:41:00.000Z"
+}
+```
+
+**Commit this file.** It is the auditable record of which release authorized the
+install.
+
+> **`.apex/config.json` is not a credential.** It records a past decision; it does
+> not grant anything. A live check runs on **every** `install` and `update`, so a
+> project removed from release targeting is refused on its next run even though
+> the file is still present. The only thing the CLI reuses from it is `apexUrl`,
+> as a convenience so `APEX_URL` need not be re-exported every shell.
+>
+> Earlier drafts accepted a recorded authorization when APEX was unreachable.
+> That was removed: it made the gate bypassable in one step (point `APEX_URL` at
+> a dead port, or delete the `apexUrl` key) and let a de-targeted project keep
+> installing indefinitely. Offline use must now be explicit via
+> `--skip-apex-check`.
+
+**Scope enforcement.** Because APEX returns the exact skill list for your
+project, `install` refuses any skill outside it, and `--all` resolves to *your
+released skills* rather than the whole catalog.
+
+**Version pinning.** APEX also returns the release's `artifactVersion` — the
+`@apex/skills` semver that release shipped. On a mismatch the CLI either blocks
+or warns, depending on whether APEX ever verified that version exists:
+
+| `artifactVersionVerified` | Meaning | CLI behaviour on mismatch |
+|---|---|---|
+| `true` | Release has an integrity hash, computed against the feed at publish time | **Blocks.** The pinned version is real, so installing anything else vendors ungranted content |
+| `false` | Published with Azure Artifacts unconfigured — the version was typed by hand and never checked | **Warns and continues.** Blocking on a value nothing validated would lock a team out over an APEX-side data gap |
+
+A blocking mismatch looks like this:
+
+```
+[apex-skills] Version mismatch — refusing to install.
+
+  Running package:    @apex/skills@1.1.0
+  Release authorizes: @apex/skills@0.4.0 (release 0.4.0)
+```
+
+Fix by installing the pinned version — `npx @apex/skills@0.4.0 install <skill…>` —
+or by publishing a newer release targeting the project. Releases created before
+`artifactVersion` was populated skip this check entirely.
+
+Enforcement tightens on its own: once the feed is configured and new releases are
+published, they carry integrity hashes and their mismatches start blocking. No
+code change or flag flip is involved.
+
+**Why the banner pins the version.** Azure Artifacts does not implement npm
+dist-tags — [`latest` is not maintained per feed view][ado-dist-tags], so a bare
+`npx @apex/skills` can resolve a version the project was never granted, which the
+CLI then refuses. Promotion between the Local and Release views (what
+`promoteToReleaseView` does) is the only supported mechanism and it does not move
+`latest`. The Getting started banner therefore emits
+`npx @apex/skills@<artifactVersion> …`, taken from the release itself, so the
+command APEX hands out always agrees with the version the CLI enforces. Copy the
+commands from the banner rather than typing them unpinned.
+
+[ado-dist-tags]: https://github.com/microsoft/azure-pipelines-tasks/issues/9743
+
+> **Admin note:** a release's `artifactVersion` must match a version that actually
+> exists on the feed. Configure `AZURE_ARTIFACTS_ORG`, `AZURE_ARTIFACTS_FEED` and
+> `AZURE_ARTIFACTS_PAT` on the APEX App Service and the release wizard populates
+> this field from a feed-backed dropdown, publish verifies it, and the value
+> becomes trustworthy. Without those settings the field is free text, the wizard
+> warns, and published releases are badged **unverified** in Platform Admin.
+
+**Failure modes** — all fail closed:
+
+| `doctor` detail | Cause | Fix |
+|---|---|---|
+| `APEX_URL is not set…` | No env var and no `apexUrl` in config | Set `APEX_URL` (step 2 above) |
+| `no git "origin" remote found` | Local-only clone | `git remote -v`; add the hosted remote |
+| `not authorized (repo-not-registered)` | Remote matches no Apex project | Admin registers the repo in Project Settings |
+| `not authorized (no-release)` | Project has no published release | Admin publishes a release targeting the project |
+| `not authorized (no-skills)` | Release is visible but ships nothing to the project | Admin adds skills or fixes per-skill targeting |
+| `could not reach APEX…` | Wrong URL, VPN, APEX down | Fix connectivity; a recorded config is **not** accepted as a substitute |
+| `reachable but could not answer` | APEX is up but its authorization lookup timed out (HTTP 503) | Nothing to fix locally — retry shortly, and report it if it persists |
+| `Version mismatch — refusing to install` | Running package ≠ a **verified** release `artifactVersion` | Install the pinned version, or publish a newer release |
+
+**Escape hatch.** Package maintainers and air-gapped environments can bypass the
+check. Use it deliberately — it installs files no release can later manage:
+
+```bash
+npx @apex/skills install <skill…> --skip-apex-check
+```
+
+> **This is not the security boundary.** Reading the package still requires an
+> Azure Artifacts token. The check exists so installs stay *managed* — a repo
+> that bypasses it gets no update notifications, no rollback, and no APEX
+> tracking.
 
 ---
 
@@ -172,6 +304,7 @@ npx @apex/skills install --all
 |---|---|---|
 | `.apex/foundation/<skill>/` | Package (managed) | `install` always |
 | `.cursor/skills/<skill>/` | Team (editable) | `install` on first scaffold; `bootstrap` on re-fill |
+| `.apex/config.json` | Repo | `install` / `update` — records the authorizing release (§2a) |
 | `apex-skills.lock.json` | Repo | `install` |
 
 Bootstrap re-renders adapters from repo evidence (design tokens, components, ADO org). Foundations are **never** touched by bootstrap.

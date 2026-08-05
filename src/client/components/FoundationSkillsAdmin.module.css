@@ -1028,6 +1028,39 @@ button:disabled {
   color: var(--text-muted);
 }
 
+.badgeUnverified {
+  background: color-mix(in srgb, var(--fs-warning) 13%, transparent);
+  border-color: color-mix(in srgb, var(--fs-warning) 34%, transparent);
+  color: var(--fs-warning);
+}
+
+/* Feed-unreachable callout — shown wherever an unverified artifact version can
+   be introduced or has already been recorded. */
+.feedWarning {
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px;
+  margin: 0 0 16px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--fs-warning) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--fs-warning) 32%, transparent);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.feedWarningIcon {
+  flex-shrink: 0;
+  color: var(--fs-warning);
+  margin-top: 1px;
+}
+
+.feedWarningTitle {
+  font-weight: 650;
+  color: var(--fs-warning);
+  margin: 0 0 3px;
+}
+
 .updateDot {
   display: inline-block;
   width: 7px;
