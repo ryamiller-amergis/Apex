@@ -3354,6 +3354,47 @@ export async function sendMessage(
     console.warn('[chat] Failed to insert provisional agent_runs row:', e),
   );
 
+  // Compute idle gap BEFORE the user message overwrites lastActivityAt.
+  // The stale-idle agent dispose runs later (after grounding), but the
+  // calculation must use the pre-mutation timestamp.
+  const idleGapMs = state.thread.lastActivityAt
+    ? Date.now() - Date.parse(state.thread.lastActivityAt)
+    : 0;
+  const staleIdleResume =
+    eventDrivenTerminationEnabled
+    && Number.isFinite(idleGapMs)
+    && idleGapMs > AGENT_STALE_RESUME_MS
+    && Boolean(state.agent || state.thread.cursorAgentId);
+
+  // Persist + broadcast the user message immediately so the UI reflects it
+  // before the (potentially slow) grounding / agent acquisition below.
+  const turnId = uuidv4();
+  const attachmentMeta = await writeMessageAttachments(state.thread.workspaceDir, turnId, attachments);
+  const promptText = buildPromptWithAttachments(text, attachmentMeta);
+  const priorMessages = [...state.thread.messages];
+  const recoveryContext = state.isInterviewThread
+    ? buildAgentRecoveryContext(priorMessages)
+    : null;
+
+  const userMsg: ChatMessage = {
+    id: turnId,
+    role: 'user',
+    text: text.trim() || 'Uploaded files for context.',
+    ts: new Date().toISOString(),
+    attachments: attachmentMeta.length > 0 ? attachmentMeta : undefined,
+    ...(options?.hidden ? { hidden: true } : {}),
+  };
+  state.thread.messages.push(userMsg);
+  state.thread.lastActivityAt = userMsg.ts;
+  broadcast(state, { type: 'message', message: userMsg });
+  await pgInsertMessage(threadId, userMsg);
+  logMyWork('message.persisted', {
+    turnId,
+    messageLength: userMsg.text.length,
+    attachmentCount: attachmentMeta.length,
+  });
+
+  // ── Grounding + agent lifecycle (may be slow after idle) ────────────────
   const mcpServerUrl = `http://localhost:${process.env.PORT ?? 3001}/mcp/ado-skills`;
   let grounding: CallerGroundingSelection;
   try {
@@ -3422,18 +3463,7 @@ export async function sendMessage(
   }
   // @feature-flag:repo-grounding-lifecycle-binding end
 
-  // Root-cause mitigation: a thread that resumes after a long idle gap tends to
-  // reuse a cold SDK session that emits zero events. Proactively recreate the
-  // agent (with PostgreSQL history) instead of resuming a stale one. Read
-  // lastActivityAt BEFORE it is overwritten by this turn's user message below.
-  const idleGapMs = state.thread.lastActivityAt
-    ? Date.now() - Date.parse(state.thread.lastActivityAt)
-    : 0;
-  const staleIdleResume =
-    eventDrivenTerminationEnabled
-    && Number.isFinite(idleGapMs)
-    && idleGapMs > AGENT_STALE_RESUME_MS
-    && Boolean(state.agent || state.thread.cursorAgentId);
+  // Apply the stale-idle agent dispose computed earlier.
   if (staleIdleResume) {
     if (state.agent) {
       await state.agent[Symbol.asyncDispose]().catch(() => {});
@@ -3465,33 +3495,6 @@ export async function sendMessage(
     maxviewEnabled,
     maxviewConfigured: isMaxviewConfigured(),
     nativeReads: repositoryRuntime.nativeReads,
-  });
-
-  const turnId = uuidv4();
-  const attachmentMeta = await writeMessageAttachments(agentWorkspaceDir, turnId, attachments);
-  const promptText = buildPromptWithAttachments(text, attachmentMeta);
-  const priorMessages = [...state.thread.messages];
-  const recoveryContext = state.isInterviewThread
-    ? buildAgentRecoveryContext(priorMessages)
-    : null;
-
-  // Record the user message
-  const userMsg: ChatMessage = {
-    id: turnId,
-    role: 'user',
-    text: text.trim() || 'Uploaded files for context.',
-    ts: new Date().toISOString(),
-    attachments: attachmentMeta.length > 0 ? attachmentMeta : undefined,
-    ...(options?.hidden ? { hidden: true } : {}),
-  };
-  state.thread.messages.push(userMsg);
-  state.thread.lastActivityAt = userMsg.ts;
-  broadcast(state, { type: 'message', message: userMsg });
-  await pgInsertMessage(threadId, userMsg);
-  logMyWork('message.persisted', {
-    turnId,
-    messageLength: userMsg.text.length,
-    attachmentCount: attachmentMeta.length,
   });
 
   // A missing cursorAgentId can mean either a brand-new conversation or a

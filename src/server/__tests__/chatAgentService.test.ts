@@ -1138,6 +1138,68 @@ describe('document assistant MCP wiring', () => {
     }
   });
 
+  it('broadcasts user message before grounding completes', async () => {
+    // Given a thread that has been idle and grounding is slow.
+    const groundingStarted = { value: false };
+    const {
+      insertMessage: mockPgInsertMessage,
+    } = jest.requireMock('../services/chatThreadRepository') as {
+      insertMessage: jest.Mock;
+    };
+    mockPgInsertMessage.mockClear();
+
+    // Track ordering: was the message persisted before grounding started?
+    let messagePersisted = false;
+    let messagePersistedBeforeGrounding = false;
+    mockPgInsertMessage.mockImplementation(async () => {
+      messagePersisted = true;
+    });
+
+    // Grounding will resolve after a tick, letting us observe the order.
+    mockCallerGroundingStart.mockImplementation(async () => {
+      groundingStarted.value = true;
+      messagePersistedBeforeGrounding = messagePersisted;
+      // Return a valid selection but throw downstream so the test
+      // doesn't need the full agent lifecycle mocked.
+      return {
+        mode: 'remote' as const,
+        release: jest.fn().mockResolvedValue(undefined),
+      } satisfies CallerGroundingSelection;
+    });
+    const resolved = { mode: 'remote' as const, sha: null };
+    mockCallerGroundingSelectionToBinding.mockReturnValue(resolved);
+    // Throw after grounding to short-circuit before agent acquisition.
+    const stopAfterBinding = new Error('stop after binding');
+    mockEvaluateBindingContinuity.mockImplementation(() => {
+      throw stopAfterBinding;
+    });
+
+    process.env.CURSOR_API_KEY = 'test-key';
+    const thread = await createThread(
+      'developer-1',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+
+    try {
+      await expect(
+        sendMessage(thread.id, 'Hello after idle'),
+      ).rejects.toBe(stopAfterBinding);
+
+      // Then the user message was persisted (via pgInsertMessage) before
+      // ensureThreadGrounding ran.
+      expect(groundingStarted.value).toBe(true);
+      expect(messagePersistedBeforeGrounding).toBe(true);
+      expect(mockPgInsertMessage).toHaveBeenCalledWith(
+        thread.id,
+        expect.objectContaining({ role: 'user', text: 'Hello after idle' }),
+      );
+    } finally {
+      delete process.env.CURSOR_API_KEY;
+      await closeThread(thread.id);
+    }
+  });
+
   it('AC-0 skips shared repository grounding for calendar-only assistants', () => {
     // Given the calendar assistant builds only its restricted calendar MCP server.
     const kickoff = baseKickoff({
