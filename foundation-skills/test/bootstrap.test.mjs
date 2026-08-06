@@ -128,3 +128,49 @@ test('bootstrap command writes filled adapter content to disk', () => {
     cleanup(repo);
   }
 });
+
+test('bootstrap preserves project tail and backs up in-fence edits', () => {
+  const repo = makeRepo(SAMPLE_REPO);
+  const logs = [];
+  try {
+    executeInstall(PKG_ROOT, repo, ['ui-lab']);
+    const adapterPath = path.join(repo, '.cursor/skills/ui-lab/SKILL.md');
+    let text = fs.readFileSync(adapterPath, 'utf8');
+
+    // Edit below the fence (must survive)
+    text = text.replace(
+      '<!-- Yours. APEX never writes below this line. -->\n',
+      '<!-- Yours. APEX never writes below this line. -->\n\nPROJECT_TAIL_MARKER\n',
+    );
+    // Edit above the fence (must be replaced + backed up)
+    text = text.replace('<!-- APEX:END managed -->', 'IN_FENCE_EDIT\n<!-- APEX:END managed -->');
+    fs.writeFileSync(adapterPath, text, 'utf8');
+
+    const code = cmdBootstrap({ _: ['ui-lab'], package: PKG_ROOT, cwd: repo }, (m) => logs.push(m));
+    assert.equal(code, 0);
+
+    const after = fs.readFileSync(adapterPath, 'utf8');
+    assert.ok(after.includes('PROJECT_TAIL_MARKER'), 'project notes below fence must survive');
+    assert.ok(!after.includes('IN_FENCE_EDIT'), 'in-fence edits must be replaced');
+    const backups = fs.readdirSync(path.join(repo, '.apex/backups/ui-lab'));
+    assert.ok(backups.some((f) => f.startsWith('SKILL.md.')), 'backup of drifted region must exist');
+  } finally {
+    cleanup(repo);
+  }
+});
+
+test('bootstrap --all scopes to lockfile skills, not the full catalog', () => {
+  const repo = makeRepo(SAMPLE_REPO);
+  const logs = [];
+  try {
+    executeInstall(PKG_ROOT, repo, ['ui-lab']);
+    const code = cmdBootstrap({ all: true, package: PKG_ROOT, cwd: repo }, (m) => logs.push(m));
+    assert.equal(code, 0);
+    assert.ok(logs.some((l) => /scopes to 1 installed skill/.test(l)));
+    // Only ui-lab should exist under .cursor/skills
+    const skills = fs.readdirSync(path.join(repo, '.cursor/skills'));
+    assert.deepEqual(skills.sort(), ['ui-lab']);
+  } finally {
+    cleanup(repo);
+  }
+});

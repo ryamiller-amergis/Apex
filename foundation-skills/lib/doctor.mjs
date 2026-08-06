@@ -295,17 +295,18 @@ Next steps — first-time setup:
   4. Review .cursor/skills/<skill>/       Verify adapter content, then commit
 
 File layout per skill:
-  .apex/foundation/<skill>/    Foundation files (managed; never hand-edit)
-  .cursor/skills/<skill>/      Adapter files (team-owned; ~2 files per skill)
-  .apex/config.json            Records the APEX release that authorized this install (commit this)
-  apex-skills.lock.json        Records installed skills and file hashes (commit this)
+  .cursor/skills/<skill>/SKILL.md   Fenced managed region + project notes (edit below APEX:END managed)
+  .cursor/skills/<skill>/*          Companion files (schemas/templates; fully managed)
+  .apex/config.json                 Records the APEX release that authorized this install (commit this)
+  .apex/backups/<skill>/            Backups of in-fence edits before overwrite
+  apex-skills.lock.json             Records installed skills and file hashes (commit this)
 
 Note: skills are plain Markdown — they work in any language repo. Only this CLI requires Node.`);
     } else {
       lines.push(`
 Next steps — apply the update:
-  1. npx @apex/skills update [<skill…>]   Pull latest foundation files (adapters are never overwritten)
-  2. npx @apex/skills bootstrap [<skill…>] Refresh adapters; defaults to locked skills if no names given
+  1. npx @apex/skills update [<skill…>]   Pull latest managed content (project notes below the fence are preserved)
+  2. npx @apex/skills bootstrap [<skill…>] Refresh managed region from repo evidence; defaults to locked skills
   3. Review and commit changes`);
     }
   }

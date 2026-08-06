@@ -8,8 +8,10 @@
  *   schemas/**                   JSON schemas
  *
  * In a consuming repo (after install):
- *   .apex/foundation/<skill>/**  vendored immutable foundation (managed)
- *   .cursor/skills/<skill>/**    editable adapter (scaffolded once, never clobbered)
+ *   .cursor/skills/<skill>/**    fenced SKILL.md (managed region + project tail)
+ *                                + companion files (fully managed)
+ *   .apex/config.json            APEX authorization cache (unchanged)
+ *   .apex/backups/<skill>/**     backups of in-fence edits before overwrite
  *   apex-skills.lock.json        version + integrity lockfile
  */
 import path from 'node:path';
@@ -19,8 +21,12 @@ export const CONTRACT_NAME = 'apex-skill.json';
 export const RECIPE_NAME = 'recipe.json';
 export const CATALOG_NAME = 'catalog.json';
 
-export const VENDOR_DIR = '.apex/foundation';
+/** @deprecated v1 layout — kept for migration reads only */
+export const LEGACY_VENDOR_DIR = '.apex/foundation';
+
 export const ADAPTER_DIR = '.cursor/skills';
+export const BACKUP_DIR = '.apex/backups';
+export const APEX_DIR = '.apex';
 
 export const CONTRACT_API_VERSION = 1;
 
@@ -30,11 +36,14 @@ export function pkgFoundationDir(pkgRoot, skill) {
 export function pkgAdapterDir(pkgRoot, skill) {
   return path.join(pkgRoot, 'adapters', skill);
 }
-export function repoVendorDir(repoRoot, skill) {
-  return path.join(repoRoot, VENDOR_DIR, skill);
-}
 export function repoAdapterDir(repoRoot, skill) {
   return path.join(repoRoot, ADAPTER_DIR, skill);
+}
+export function repoBackupDir(repoRoot, skill) {
+  return path.join(repoRoot, BACKUP_DIR, skill);
+}
+export function repoLegacyVendorDir(repoRoot, skill) {
+  return path.join(repoRoot, LEGACY_VENDOR_DIR, skill);
 }
 export function repoLockfilePath(repoRoot) {
   return path.join(repoRoot, LOCKFILE_NAME);

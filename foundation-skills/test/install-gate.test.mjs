@@ -94,7 +94,7 @@ test('bare bootstrap uses only skills from lockfile', () => {
   }
 });
 
-test('bare bootstrap --all uses full catalog even if lockfile is smaller', () => {
+test('bare bootstrap --all scopes to lockfile skills, not the full catalog', () => {
   const repo = makeRepo(SAMPLE_REPO);
   const logs = [];
   try {
@@ -102,9 +102,10 @@ test('bare bootstrap --all uses full catalog even if lockfile is smaller', () =>
 
     const code = cmdBootstrap({ _: [], all: true, cwd: repo, package: PKG_ROOT }, (m) => logs.push(m));
     assert.equal(code, 0);
-    // More than just ui-lab should have been bootstrapped.
+    assert.ok(logs.some((l) => /scopes to 1 installed skill/.test(l)));
     const bootstrapped = logs.filter((l) => /Bootstrapped "/.test(l));
-    assert.ok(bootstrapped.length > 1, '--all should bootstrap multiple skills');
+    assert.equal(bootstrapped.length, 1, '--all must not expand beyond the lockfile');
+    assert.ok(bootstrapped[0].includes('ui-lab'));
   } finally {
     cleanup(repo);
   }

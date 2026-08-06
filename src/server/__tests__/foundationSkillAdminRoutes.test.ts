@@ -468,7 +468,7 @@ describe('Foundation Skills Admin Routes', () => {
     it('initiates a repo update PR', async () => {
       mockUpdate.updateRepoWithFoundationSkills.mockResolvedValue({
         status: 'pr_created', prUrl: 'https://example.com/pr/1', branchName: 'chore/apex-skills-1-0-1',
-        changedFiles: ['.apex/foundation/ui-lab/SKILL.md'], report: 'PR opened', releaseVersion: '1.0.1', errors: [],
+        changedFiles: ['.cursor/skills/ui-lab/SKILL.md'], report: 'PR opened', releaseVersion: '1.0.1', errors: [],
       });
       const res = await request(buildAdminApp())
         .post('/api/platform-admin/foundation-skills/update-repo')

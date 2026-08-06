@@ -1,15 +1,19 @@
 /** Command implementations shared by the CLI and the Cursor wrapper. */
+import fs from 'node:fs';
 import path from 'node:path';
 import url from 'node:url';
-import { executeInstall, planInstall } from './install.mjs';
+import { executeInstall, applyManagedSkillMd } from './install.mjs';
 import { checkRepo } from './check.mjs';
 import { bootstrapSkill } from './bootstrap.mjs';
 import { runDoctor, formatDoctor } from './doctor.mjs';
 import { validatePackage } from './validatePackage.mjs';
 import { loadCatalog } from './catalog.mjs';
-import { readLockfile } from './lockfile.mjs';
-import { writeTextFile, assertWithin, toPosix } from './util.mjs';
-import { ADAPTER_DIR } from './layout.mjs';
+import { readLockfile, serializeLockfile, LOCKFILE_VERSION } from './lockfile.mjs';
+import {
+  writeTextFile, assertWithin, toPosix, normalizeText, sha256, listFilesRel,
+} from './util.mjs';
+import { ADAPTER_DIR, pkgFoundationDir } from './layout.mjs';
+import { composeManaged, hashManaged } from './managedRegion.mjs';
 
 /** The package root is two levels up from lib/commands.mjs. */
 export function defaultPackageRoot() {
@@ -102,9 +106,14 @@ export function cmdCheck(opts, log) {
   }
   log(`Installed suite ${result.installedSuite}; available ${result.available}.`);
   for (const s of result.skills) {
-    const flags = [s.compatible ? 'compatible' : 'INCOMPATIBLE', s.drift ? 'DRIFT' : null, s.updateAvailable ? 'update-available' : null]
-      .filter(Boolean)
-      .join(', ');
+    const flags = [
+      s.compatible ? 'compatible' : 'INCOMPATIBLE',
+      s.missingFence ? 'MISSING-FENCE' : null,
+      s.managedRegionDrift ? 'MANAGED-DRIFT' : null,
+      s.companionDrift ? 'COMPANION-DRIFT' : null,
+      s.drift && !s.missingFence && !s.managedRegionDrift && !s.companionDrift ? 'DRIFT' : null,
+      s.updateAvailable ? 'update-available' : null,
+    ].filter(Boolean).join(', ');
     log(`  - ${s.name}: ${flags}`);
   }
   return 0;
@@ -113,14 +122,13 @@ export function cmdCheck(opts, log) {
 export function cmdBootstrap(opts, log) {
   const pkgRoot = opts.package ? path.resolve(opts.package) : defaultPackageRoot();
   const repoRoot = path.resolve(opts.cwd ?? process.cwd());
+  const named = opts._ ?? [];
 
-  // Default to skills recorded in the lockfile, not the full catalog.
+  // Default / --all: skills recorded in the lockfile only.
   // This prevents "installed 4 skills, bootstrap touched 31" after a scoped install.
   let skills;
-  if (opts._.length) {
-    skills = opts._;
-  } else if (opts.all) {
-    skills = allSkillNames(pkgRoot);
+  if (named.length) {
+    skills = named;
   } else {
     const lock = readLockfile(repoRoot);
     if (!lock || !Object.keys(lock.skills ?? {}).length) {
@@ -130,18 +138,26 @@ export function cmdBootstrap(opts, log) {
         '\n' +
         '  npx @apex/skills bootstrap skill-a skill-b …\n' +
         '\n' +
-        'To bootstrap every skill in the package:\n' +
+        'To bootstrap every installed skill:\n' +
         '\n' +
         '  npx @apex/skills bootstrap --all',
       );
       return 1;
     }
     skills = Object.keys(lock.skills);
+    if (opts.all) {
+      log(`[apex-skills] bootstrap --all scopes to ${skills.length} installed skill(s) from the lockfile.`);
+    }
   }
+
+  const catalog = loadCatalog(pkgRoot);
+  const lock = readLockfile(repoRoot);
+
   for (const name of skills) {
     const boot = bootstrapSkill(pkgRoot, repoRoot, name, { enrich: opts.enrich });
-    const wrote = writeBootstrapFiles(repoRoot, name, boot.files);
+    const wrote = writeBootstrapFiles(pkgRoot, repoRoot, name, boot.files, catalog.suiteVersion, lock);
     log(`Bootstrapped "${name}": ${boot.meta.filesScanned} files scanned, capHit=${boot.meta.capHit}, wrote ${wrote.length} file(s).`);
+    for (const w of wrote.warnings ?? []) log(`WARN  ${w}`);
     if (opts.explain) {
       for (const [file, explain] of Object.entries(boot.explain)) {
         for (const [slot, info] of Object.entries(explain)) {
@@ -151,19 +167,96 @@ export function cmdBootstrap(opts, log) {
       }
     }
   }
+
+  // Refresh lockfile hashes for skills we touched.
+  refreshLockfileHashes(pkgRoot, repoRoot, skills);
+
   return 0;
 }
 
-/** Persist rendered adapter files from bootstrapSkill into the consumer repo. */
-function writeBootstrapFiles(repoRoot, skill, files) {
+/**
+ * Persist bootstrapped content:
+ *   - SKILL.md via fenced splice (never clobber project tail / unfenced files)
+ *   - companion foundation files always overwritten
+ *   - apex-skill.json written when scaffolding or already present
+ */
+function writeBootstrapFiles(pkgRoot, repoRoot, skill, files, suiteVersion, lock) {
   const wrote = [];
-  for (const [rel, text] of Object.entries(files)) {
+  const warnings = [];
+
+  const foundationDir = pkgFoundationDir(pkgRoot, skill);
+  const foundationSkillMd = path.join(foundationDir, 'SKILL.md');
+  const foundationText = fs.existsSync(foundationSkillMd)
+    ? fs.readFileSync(foundationSkillMd, 'utf8')
+    : '';
+
+  const newManaged = composeManaged(
+    foundationText,
+    files['SKILL.md'] ?? '',
+    skill,
+    suiteVersion,
+  );
+
+  const expectedHash = lock?.skills?.[skill]?.managedRegionHash ?? null;
+  const result = applyManagedSkillMd(repoRoot, skill, newManaged, { expectedHash });
+  if (result.warning) warnings.push(result.warning);
+  if (result.backedUp) wrote.push(result.backedUp);
+  if (result.wrote) wrote.push(result.wrote);
+
+  // Companions from package foundation
+  for (const rel of listFilesRel(foundationDir)) {
+    if (rel === 'SKILL.md') continue;
     const destRel = toPosix(path.join(ADAPTER_DIR, skill, rel));
     assertWithin(repoRoot, destRel);
-    writeTextFile(path.join(repoRoot, destRel), text);
+    writeTextFile(path.join(repoRoot, destRel), fs.readFileSync(path.join(foundationDir, rel), 'utf8'));
     wrote.push(destRel);
   }
+
+  // apex-skill.json from adapter template (if produced)
+  if (files['apex-skill.json']) {
+    const destRel = toPosix(path.join(ADAPTER_DIR, skill, 'apex-skill.json'));
+    assertWithin(repoRoot, destRel);
+    writeTextFile(path.join(repoRoot, destRel), files['apex-skill.json']);
+    wrote.push(destRel);
+  }
+
+  wrote.warnings = warnings;
   return wrote;
+}
+
+function refreshLockfileHashes(pkgRoot, repoRoot, skills) {
+  const lock = readLockfile(repoRoot);
+  if (!lock) return;
+  lock.lockfileVersion = LOCKFILE_VERSION;
+  for (const name of skills) {
+    if (!lock.skills[name]) continue;
+    const skillMd = path.join(repoRoot, ADAPTER_DIR, name, 'SKILL.md');
+    if (fs.existsSync(skillMd)) {
+      lock.skills[name].managedRegionHash = hashManaged(fs.readFileSync(skillMd, 'utf8'));
+    }
+    const managedFiles = {};
+    const foundationDir = pkgFoundationDir(pkgRoot, name);
+    for (const rel of listFilesRel(foundationDir)) {
+      if (rel === 'SKILL.md') continue;
+      const destRel = toPosix(path.join(ADAPTER_DIR, name, rel));
+      const abs = path.join(repoRoot, destRel);
+      if (fs.existsSync(abs)) {
+        managedFiles[destRel] = sha256(normalizeText(fs.readFileSync(abs, 'utf8')));
+      }
+    }
+    const contractPath = path.join(repoRoot, ADAPTER_DIR, name, 'apex-skill.json');
+    if (fs.existsSync(contractPath)) {
+      const destRel = toPosix(path.join(ADAPTER_DIR, name, 'apex-skill.json'));
+      managedFiles[destRel] = sha256(normalizeText(fs.readFileSync(contractPath, 'utf8')));
+    }
+    lock.skills[name].managedFiles = managedFiles;
+    if (lock.skills[name].vendored) delete lock.skills[name].vendored;
+  }
+  fs.writeFileSync(
+    path.join(repoRoot, 'apex-skills.lock.json'),
+    serializeLockfile({ ...lock, generatedAt: new Date().toISOString() }),
+    'utf8',
+  );
 }
 
 function allSkillNames(pkgRoot) {
@@ -177,8 +270,8 @@ function allSkillNames(pkgRoot) {
 function countWrites(actions) {
   let n = 0;
   for (const a of actions) {
-    n += Object.keys(a.vendored).length;
-    if (a.adapterScaffolded || a.adapterFilled) n += Object.keys(a.adapterFiles).length;
+    n += Object.keys(a.companions ?? {}).length;
+    if (a.skillMdAction === 'create' || a.skillMdAction === 'splice') n += 1;
   }
   return n + 1; // lockfile
 }

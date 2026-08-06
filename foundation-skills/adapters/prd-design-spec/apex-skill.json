@@ -1,8 +1,21 @@
 {
   "apiVersion": 1,
   "skill": "prd-design-spec",
-  "foundation": { "package": "@apex/skills", "range": ">=0.1.0" },
-  "managedFoundationFiles": [".apex/foundation/prd-design-spec/SKILL.md"],
-  "extensionFiles": ["SKILL.md"],
-  "capabilities": ["design-spec-synthesis", "layer-ownership"]
+  "foundation": {
+    "package": "@apex/skills",
+    "range": ">=0.1.0"
+  },
+  "extensionFiles": [
+    "SKILL.md"
+  ],
+  "capabilities": [
+    "design-spec-synthesis",
+    "layer-ownership"
+  ],
+  "managedFiles": [
+    "SKILL.md",
+    "assumptions-template.md",
+    "design-template.md",
+    "tech-spec-template.md"
+  ]
 }

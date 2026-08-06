@@ -27,26 +27,24 @@ UI Lab output change, and recovery / deprecation procedures.
 
 Foundation skills are the **project-agnostic workflow procedures** that power
 APEX's AI-guided SDLC — `to-prd`, `grill-with-docs`, `ui-lab`, ADR interview,
-standup, and 26 others. They ship as immutable markdown files vendored into a
-consuming repo under `.apex/foundation/<skill>/`, alongside editable per-project
-adapters in `.cursor/skills/<skill>/`.
+standup, and 26 others. They ship baked into a fenced managed region inside
+`.cursor/skills/<skill>/SKILL.md`, with companion schemas/templates alongside.
+Project notes live **below** the `<!-- APEX:END managed -->` fence and are
+never overwritten.
 
 ```
 Your repo/
-  .apex/
-    foundation/          ← managed by @apex/skills; do NOT edit
-      ui-lab/
-        SKILL.md
-      to-prd/
-        SKILL.md
-        backlog-schema.json
   .cursor/
-    skills/              ← owned by your team; edit freely
+    skills/                    ← fenced SKILL.md + companions
       ui-lab/
-        SKILL.md         ← your project design tokens, components, rules
+        SKILL.md               ← managed region (above fence) + project notes (below)
       to-prd/
-        SKILL.md         ← your personas, context sources, schema extensions
-  apex-skills.lock.json  ← managed; records version + file hashes
+        SKILL.md
+        backlog-schema.json    ← fully managed companion
+  .apex/
+    config.json                ← authorizing release cache
+    backups/                   ← in-fence edit backups
+  apex-skills.lock.json        ← managed; records version + file hashes
 ```
 
 ---
@@ -302,12 +300,13 @@ npx @apex/skills install --all
 
 | Location | Owner | Written by |
 |---|---|---|
-| `.apex/foundation/<skill>/` | Package (managed) | `install` always |
-| `.cursor/skills/<skill>/` | Team (editable) | `install` on first scaffold; `bootstrap` on re-fill |
+| `.cursor/skills/<skill>/SKILL.md` managed region | Package | `install` / `update` / `bootstrap` (splices; preserves project notes) |
+| `.cursor/skills/<skill>/SKILL.md` below fence | Team | never overwritten by CLI |
+| `.cursor/skills/<skill>/*` companions | Package | `install` / `update` / `bootstrap` always |
 | `.apex/config.json` | Repo | `install` / `update` — records the authorizing release (§2a) |
 | `apex-skills.lock.json` | Repo | `install` |
 
-Bootstrap re-renders adapters from repo evidence (design tokens, components, ADO org). Foundations are **never** touched by bootstrap.
+Bootstrap re-renders the **managed region** from repo evidence (design tokens, components, ADO org). Project notes below the fence survive.
 
 ### 3c. Review adapter TODO placeholders
 
@@ -537,9 +536,9 @@ npx @apex/skills update ui-lab to-prd
 A Platform Admin can open a PR on your behalf:
 `Platform Admin → APEX Skills → Consumer Repos → Open PR`
 
-The PR updates `.apex/foundation/` and `apex-skills.lock.json`. Your adapter
-files in `.cursor/skills/` are never touched. Review, run
-`npx @apex/skills validate`, and merge.
+The PR updates the fenced managed region inside `.cursor/skills/`, managed
+companions, and `apex-skills.lock.json`. Project notes below the fence are
+preserved. Review, run `npx @apex/skills check`, and merge.
 
 ---
 
@@ -576,8 +575,8 @@ $CLI install ui-lab to-prd grill-with-docs
 ```
 
 This creates:
-- `.apex/foundation/<skill>/SKILL.md` — managed, do not edit
-- `.cursor/skills/<skill>/SKILL.md` — your team adapter (safe to edit)
+- `.cursor/skills/<skill>/SKILL.md` — fenced managed region + project notes stub
+- `.cursor/skills/<skill>/*` companions (if any) — fully managed
 - `apex-skills.lock.json` — version + file hashes
 
 ### Step 3 — Review adapters
@@ -605,9 +604,10 @@ git commit -m "chore: install @apex/skills foundation skills"
 
 ### Step 5 — Day-to-day rules
 
-- Edit only `.cursor/skills/**` adapters.
-- Never edit `.apex/foundation/**` — drift blocks future installs.
-- Run `$CLI validate` to verify no drift.
+- Put project customization **below** `<!-- APEX:END managed -->` in each `SKILL.md`.
+- Edits inside the fence are backed up to `.apex/backups/` then replaced on update.
+- Companion schemas/templates are fully managed — do not fork them in place.
+- Run `$CLI check` to verify managed-region / companion integrity.
 
 ### Step 6 — Receiving a targeted update from APEX
 
@@ -696,28 +696,25 @@ Deprecation is recorded in the audit log. Consumer repos already on this version
 continue working — the `check` command will warn that the installed release is
 deprecated and a newer release is available.
 
-### Handle foundation file drift
+### Handle managed-region drift
 
-If a team hand-edited `.apex/foundation/` files (which they should not), the
-`update` command will abort:
+If a team edited content **above** `<!-- APEX:END managed -->`, the next
+`update` / `bootstrap` backs up the file to `.apex/backups/<skill>/` and
+replaces the managed region. Project notes below the fence are never touched.
 
 ```
-Foundation drift detected — existing managed files modified: .apex/foundation/ui-lab/SKILL.md
+WARN  Managed region drift for "ui-lab" — will back up to .apex/backups/ui-lab/ before updating
+WARN  Backed up drifted managed region to .apex/backups/ui-lab/SKILL.md.<timestamp>
 ```
 
-Resolution:
+To recover a backed-up edit:
 ```bash
-# Revert the edited foundation file to the installed version
-git checkout HEAD -- .apex/foundation/ui-lab/SKILL.md
-
-# Then re-run update
-npx @apex/skills update
+# Inspect the backup, then copy desired project content below the fence
+ls .apex/backups/ui-lab/
 ```
 
-Or, if the edit was intentional, accept the drift and reset the lockfile:
-```bash
-npx @apex/skills install ui-lab --fill   # re-installs and refreshes lockfile
-```
+Unfenced (hand-written) adapters are left untouched with a warning — APEX will
+not wrap or overwrite them unless you migrate deliberately.
 
 ### Rolling back a bad release
 

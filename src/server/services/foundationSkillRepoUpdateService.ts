@@ -6,11 +6,12 @@
  *
  *   1. Clone the consumer repo at its default branch
  *   2. Create a unique `chore/apex-skills-<version>` update branch
- *   3. Run `npx @apex/skills install` inside the workspace to vendor foundations
- *      and scaffold absent adapters (the CLI writes .apex/foundation/ + lockfile)
+ *   3. Run `npx @apex/skills install` inside the workspace to refresh the
+ *      fenced managed region inside .cursor/skills/<skill>/SKILL.md + companions
+ *      (project notes below the fence are preserved; lockfile is refreshed)
  *   4. Validate the resulting diff — abort if:
  *        - no changes were written (nothing to PR)
- *        - foundation checksums drift (existing managed files were hand-edited)
+ *        - post-install managed-file checksums drift (integrity failure)
  *        - the installed version is incompatible with adapters in this repo
  *   5. Commit with a structured message, push the branch
  *   6. Open a PR (ADO or GitHub) with release notes and compatibility summary
@@ -156,20 +157,36 @@ async function changedFiles(workspaceDir: string): Promise<string[]> {
   return out.split('\n').filter(Boolean);
 }
 
-/** Check for drift (managed foundation files that differ from lockfile hashes). */
+/**
+ * Post-install integrity check: managed companion files recorded in the
+ * lockfile must still match their hashes. (Managed SKILL.md region drift is
+ * handled by the CLI via backup-and-splice; companions are always overwritten.)
+ */
 function detectDrift(workspaceDir: string): string[] {
   const lockPath = path.join(workspaceDir, 'apex-skills.lock.json');
   if (!fs.existsSync(lockPath)) return [];
   try {
     const lock = JSON.parse(fs.readFileSync(lockPath, 'utf-8'));
     const drifted: string[] = [];
+    for (const info of Object.values(lock.skills ?? {}) as Array<{ managedFiles?: Record<string, string>; vendored?: Record<string, string> }>) {
+      const files = info?.managedFiles ?? info?.vendored ?? {};
+      for (const [rel, expected] of Object.entries(files)) {
+        const abs = path.join(workspaceDir, ...rel.split('/'));
+        if (!fs.existsSync(abs)) continue;
+        const actual = createHash('sha256')
+          .update(fs.readFileSync(abs, 'utf-8').replace(/\r\n/g, '\n'))
+          .digest('hex');
+        if (actual !== expected) drifted.push(rel);
+      }
+    }
+    // Legacy top-level files map (pre-v1)
     for (const [rel, expected] of Object.entries(lock.files ?? {})) {
-      const abs = path.join(workspaceDir, ...rel.split('/'));
+      const abs = path.join(workspaceDir, ...String(rel).split('/'));
       if (!fs.existsSync(abs)) continue;
       const actual = createHash('sha256')
         .update(fs.readFileSync(abs, 'utf-8').replace(/\r\n/g, '\n'))
         .digest('hex');
-      if (actual !== expected) drifted.push(rel);
+      if (actual !== expected) drifted.push(String(rel));
     }
     return drifted;
   } catch {
@@ -192,15 +209,17 @@ function buildPrDescription(
       `This PR was opened automatically by APEX to **roll back** foundation skills` +
       (fromVersion ? ` from v${fromVersion}` : '') +
       ` to v${release.version}.\n\n` +
-      `It re-vendors managed files under \`.apex/foundation/\` and refreshes \`apex-skills.lock.json\`.\n` +
-      `Team-owned adapter files in \`.cursor/skills/\` are **never overwritten**.`,
+      `It refreshes the **fenced managed region** inside \`.cursor/skills/<skill>/SKILL.md\`, ` +
+      `overwrites managed companion files, and refreshes \`apex-skills.lock.json\`.\n` +
+      `Project notes below the \`<!-- APEX:END managed -->\` fence are **preserved**.`,
     );
   } else {
     sections.push(`## APEX Foundation Skills — Update to v${release.version}`);
     sections.push(
-      `This PR was opened automatically by APEX. It updates the vendored foundation files ` +
-      `under \`.apex/foundation/\` and refreshes \`apex-skills.lock.json\`.\n` +
-      `Team-owned adapter files in \`.cursor/skills/\` are **never overwritten**.`,
+      `This PR was opened automatically by APEX. It updates the **fenced managed region** ` +
+      `inside \`.cursor/skills/<skill>/SKILL.md\`, overwrites managed companion files, ` +
+      `and refreshes \`apex-skills.lock.json\`.\n` +
+      `Project notes below the \`<!-- APEX:END managed -->\` fence are **preserved**.`,
     );
   }
 
@@ -220,9 +239,9 @@ function buildPrDescription(
 
   sections.push(
     `## Checklist\n` +
-    `- [ ] Review adapter files in \`.cursor/skills/\` for any TODO placeholders to fill\n` +
-    `- [ ] Verify the foundation files in \`.apex/foundation/\` are not hand-edited\n` +
-    `- [ ] Run \`npx @apex/skills validate\` locally to confirm clean state`,
+    `- [ ] Review the managed region diff inside \`.cursor/skills/**/SKILL.md\`\n` +
+    `- [ ] Confirm project notes below \`<!-- APEX:END managed -->\` are unchanged\n` +
+    `- [ ] Run \`npx @apex/skills check\` locally to confirm clean state`,
   );
 
   return sections.join('\n\n');
@@ -312,8 +331,8 @@ export async function updateRepoWithFoundationSkills(
     // 4a. Check for drift in existing managed files
     const drifted = detectDrift(workspaceDir);
     if (drifted.length > 0) {
-      errors.push(`Foundation drift detected — existing managed files modified: ${drifted.join(', ')}`);
-      errors.push('Resolve drift by reverting hand-edits to .apex/foundation/ before updating.');
+      errors.push(`Managed file integrity check failed after install: ${drifted.join(', ')}`);
+      errors.push('Re-run install locally, or restore drifted companion files under .cursor/skills/.');
       return { status: 'drift', prUrl: null, branchName, changedFiles: drifted, report: errors.join('\n'), releaseVersion: version, errors };
     }
 
@@ -346,7 +365,7 @@ export async function updateRepoWithFoundationSkills(
         `Rollback via APEX foundation skills distribution` +
         (fromVersion ? ` from v${fromVersion}` : '') + `.\n` +
         `Selected skills: ${skills.join(', ') || '(all)'}\n` +
-        `Only .apex/foundation/ and apex-skills.lock.json are changed; adapters are untouched.`
+        `Only the fenced managed region in .cursor/skills/ and apex-skills.lock.json are changed; project notes below the fence are preserved.`
       )
       : (
         `chore(apex-skills): update foundation skills to v${version}\n\n` +

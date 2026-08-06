@@ -5,7 +5,6 @@ description: Project adapter for in-app-notifications. Customize for your projec
 
 # in-app-notifications — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/in-app-notifications/SKILL.md -->
 
 - Project: {{slot:projectName}}
 - Service: project's notification service (see {{slot:agentsFile}} Feature Map)

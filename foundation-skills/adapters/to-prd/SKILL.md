@@ -5,7 +5,6 @@ description: Project adapter for to-prd. Customize for your project.
 
 # to-prd — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/to-prd/SKILL.md -->
 
 **Invocation:** `/to-prd`
 

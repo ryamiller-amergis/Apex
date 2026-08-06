@@ -52,13 +52,14 @@ foundationVersion: ">=1.0.0"
 
 # ${name} — Project Adapter
 
-Load the foundation:
+<!-- APEX:BEGIN managed (${name} @ {{suiteVersion}}) -->
+<!-- Put project customization below the END marker. -->
 
-\`\`\`
-Read: .apex/foundation/${name}/SKILL.md
-\`\`\`
+(Managed foundation + adapter body is composed here by install/bootstrap.)
 
-## Project-specific context
+<!-- APEX:END managed -->
+
+## Project notes
 
 TODO: Add project-specific context, conventions, file paths, and rules for this skill.
 `;

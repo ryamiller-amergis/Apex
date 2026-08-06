@@ -5,7 +5,6 @@ description: Project adapter for terraform-infra. Customize for your project.
 
 # terraform-infra — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/terraform-infra/SKILL.md -->
 
 - Project: {{slot:projectName}}
 - Infra root: `infra/`

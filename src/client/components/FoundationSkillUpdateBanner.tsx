@@ -90,7 +90,7 @@ function buildUpdateSteps(skillList: string[], artifactVersion: string | null | 
   return [
     {
       cmd: `npx ${cli} update${skillArgs}`,
-      label: 'Pull latest foundation files (adapters are never overwritten)',
+      label: 'Pull latest managed skill content (project notes below the fence are preserved)',
     },
     {
       cmd: `npx ${cli} bootstrap${skillArgs || ' --all'}`,

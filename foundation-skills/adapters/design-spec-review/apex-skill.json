@@ -1,8 +1,19 @@
 {
   "apiVersion": 1,
   "skill": "design-spec-review",
-  "foundation": { "package": "@apex/skills", "range": ">=0.1.0" },
-  "managedFoundationFiles": [".apex/foundation/prd-spec-review/SKILL.md"],
-  "extensionFiles": ["SKILL.md", "rubric.md"],
-  "capabilities": ["interactive-review", "scoring-rubric"]
+  "foundation": {
+    "package": "@apex/skills",
+    "range": ">=0.1.0"
+  },
+  "extensionFiles": [
+    "SKILL.md",
+    "rubric.md"
+  ],
+  "capabilities": [
+    "interactive-review",
+    "scoring-rubric"
+  ],
+  "managedFiles": [
+    "SKILL.md"
+  ]
 }

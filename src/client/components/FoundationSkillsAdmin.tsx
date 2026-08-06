@@ -1639,7 +1639,7 @@ const TeamRepoDetail: React.FC<{ apexProject: string; repo: FoundationSkillTeamR
               <strong>v{pendingTarget.version}</strong>.
             </>
           }
-          hint="Only .apex/foundation/ and apex-skills.lock.json change. Team adapters in .cursor/skills/ are never overwritten."
+          hint="Only the fenced managed region inside .cursor/skills/ and apex-skills.lock.json change. Project notes below the APEX:END managed fence are preserved."
           confirmLabel="Open rollback PR"
           pendingLabel="Opening PR…"
           tone="warning"
