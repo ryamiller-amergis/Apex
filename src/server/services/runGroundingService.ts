@@ -29,6 +29,9 @@ import {
   groundingTelemetry,
   type GroundingTelemetry,
 } from './groundingTelemetry';
+import {
+  materializeLinkedContextForPipelineHandoff,
+} from './linkedContextMaterializerService';
 
 export type RepositoryGroundingPin = Pick<
   CreateRunGroundingInput,
@@ -297,8 +300,21 @@ export async function propagatePipelineGrounding(
   options: {
     service?: RunGroundingService;
     isFeatureEnabled?: typeof evaluateFeatureFlag;
+    propagateLinkedContext?: typeof materializeLinkedContextForPipelineHandoff;
   } = {}
 ): Promise<CopyGroundingByValueResult | null> {
+  try {
+    await (
+      options.propagateLinkedContext ??
+      materializeLinkedContextForPipelineHandoff
+    )(from, to, userId);
+  } catch (error) {
+    const errorName = error instanceof Error ? error.name : 'Error';
+    console.warn(
+      `[linked-context] pipeline propagation unavailable error=${errorName}`,
+    );
+  }
+
   const enabled = await (options.isFeatureEnabled ?? evaluateFeatureFlag)(
     'repo-grounding-workspace-profile',
     { userId, project: to.project }

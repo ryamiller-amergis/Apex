@@ -7,6 +7,10 @@ description: Reads .ai-pilot/kickoff-transcript.md and silently synthesizes a PR
 
 Reads `.ai-pilot/kickoff-transcript.md` and produces two artifacts — a PRD markdown file and an SDLC backlog JSON file — written to `.ai-pilot/output/`. Do NOT ask the user any questions. Synthesize entirely from the transcript and codebase exploration.
 
+## Linked context pre-read
+
+If `.ai-pilot/linked-context.md` is present in the workspace, read it before proceeding. Treat its provenance-labeled sections as authoritative project grounding. If it is absent, proceed normally.
+
 ## Phase 1 — Load inputs
 
 Read each of the following before writing anything:

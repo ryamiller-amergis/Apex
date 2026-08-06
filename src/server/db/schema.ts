@@ -441,6 +441,30 @@ export const interviews = pgTable('interviews', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
 
+/** Typed Interview ↔ ADR grounding links (FEAT-001). */
+export const interviewAdrLinks = pgTable('interview_adr_links', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  interviewId: uuid('interview_id').notNull().references(() => interviews.id, { onDelete: 'cascade' }),
+  adrId: uuid('adr_id').notNull().references(() => adrs.id, { onDelete: 'cascade' }),
+  linkedBy: text('linked_by').notNull(),
+  linkedAt: timestamp('linked_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  interviewAdrUq: unique('uq_interview_adr_links_interview_adr').on(t.interviewId, t.adrId),
+  interviewIdx: index('idx_interview_adr_links_interview_id').on(t.interviewId),
+}));
+
+/** Typed Interview ↔ Design Module grounding links (FEAT-001). */
+export const interviewDesignModuleLinks = pgTable('interview_design_module_links', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  interviewId: uuid('interview_id').notNull().references(() => interviews.id, { onDelete: 'cascade' }),
+  designModuleId: uuid('design_module_id').notNull().references(() => designModules.id, { onDelete: 'cascade' }),
+  linkedBy: text('linked_by').notNull(),
+  linkedAt: timestamp('linked_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  interviewModuleUq: unique('uq_interview_design_module_links_interview_module').on(t.interviewId, t.designModuleId),
+  interviewIdx: index('idx_interview_design_module_links_interview_id').on(t.interviewId),
+}));
+
 export const adrs = pgTable('adrs', {
   id: uuid('id').primaryKey().defaultRandom(),
   chatThreadId: uuid('chat_thread_id').notNull().unique().references(() => chatThreads.id, { onDelete: 'cascade' }),
@@ -574,6 +598,30 @@ export const interviewsRelations = relations(interviews, ({ one, many }) => ({
     relationName: 'interviewTestCaseOwner',
   }),
   prds: many(prds),
+  adrLinks: many(interviewAdrLinks),
+  designModuleLinks: many(interviewDesignModuleLinks),
+}));
+
+export const interviewAdrLinksRelations = relations(interviewAdrLinks, ({ one }) => ({
+  interview: one(interviews, {
+    fields: [interviewAdrLinks.interviewId],
+    references: [interviews.id],
+  }),
+  adr: one(adrs, {
+    fields: [interviewAdrLinks.adrId],
+    references: [adrs.id],
+  }),
+}));
+
+export const interviewDesignModuleLinksRelations = relations(interviewDesignModuleLinks, ({ one }) => ({
+  interview: one(interviews, {
+    fields: [interviewDesignModuleLinks.interviewId],
+    references: [interviews.id],
+  }),
+  designModule: one(designModules, {
+    fields: [interviewDesignModuleLinks.designModuleId],
+    references: [designModules.id],
+  }),
 }));
 
 export const adrsRelations = relations(adrs, ({ one, many }) => ({
@@ -595,6 +643,7 @@ export const adrsRelations = relations(adrs, ({ one, many }) => ({
     references: [projectSkillSettings.id],
   }),
   featureRequestLinks: many(featureRequestAdrs),
+  interviewLinks: many(interviewAdrLinks),
 }));
 
 export const prdsRelations = relations(prds, ({ one, many }) => ({
@@ -880,6 +929,10 @@ export const designModules = pgTable('design_modules', {
   projectSlugUnique: uniqueIndex('design_modules_project_slug_key').on(t.project, t.slug),
   projectIdx: index('idx_design_modules_project').on(t.project),
   sortOrderIdx: index('idx_design_modules_sort_order').on(t.sortOrder, t.label),
+}));
+
+export const designModulesRelations = relations(designModules, ({ many }) => ({
+  interviewLinks: many(interviewDesignModuleLinks),
 }));
 
 export const teamsConversationReferences = pgTable('teams_conversation_references', {
