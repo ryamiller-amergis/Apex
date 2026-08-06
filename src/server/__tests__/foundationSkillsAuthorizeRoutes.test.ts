@@ -27,8 +27,10 @@ const AUTHORIZED: FoundationSkillAuthorizeResult = {
 const REMOTE = 'https://dev.azure.com/amergis/MaxView/_git/MaxView';
 const ORIGINAL_TIMEOUT = process.env.FOUNDATION_SKILLS_AUTHORIZE_TIMEOUT_MS;
 
-function get() {
-  return request(app).get('/api/internal/foundation-skills/authorize').query({ remote: REMOTE });
+function get(artifactVersion?: string) {
+  return request(app)
+    .get('/api/internal/foundation-skills/authorize')
+    .query({ remote: REMOTE, ...(artifactVersion ? { artifactVersion } : {}) });
 }
 
 beforeEach(() => {
@@ -53,6 +55,15 @@ describe('GET /authorize', () => {
     expect(res.body.authorized).toBe(true);
     expect(res.body.artifactVersion).toBe('1.0.0');
     expect(res.body.artifactVersionVerified).toBe(true);
+  });
+
+  it('passes the requested artifact version to authorization', async () => {
+    mockAuthorize.mockResolvedValue(AUTHORIZED);
+
+    const res = await get('1.0.0');
+
+    expect(res.status).toBe(200);
+    expect(mockAuthorize).toHaveBeenCalledWith(REMOTE, '1.0.0');
   });
 
   it('reports a denial as 200 so the CLI can tell it apart from an outage', async () => {

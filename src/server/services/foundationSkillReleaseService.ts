@@ -12,7 +12,7 @@
  * be updated — only deprecated).
  */
 
-import { eq, desc } from 'drizzle-orm';
+import { and, eq, desc } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import {
   foundationSkillReleases,
@@ -40,9 +40,13 @@ export {
 import {
   isAzureArtifactsConfigured,
   promoteToReleaseView,
-  computePackageIntegrity,
   deprecatePackageVersion,
+  verifyPackageArtifact,
 } from './azureArtifactsSkillService';
+import {
+  validateReleaseArtifactManifest,
+  validateReleaseUpdate,
+} from './foundationSkillArtifactManifest';
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -59,7 +63,7 @@ function mapRow(row: typeof foundationSkillReleases.$inferSelect): FoundationSki
     selectedSkills:      (row.selectedSkills as string[]) ?? [],
     targetProjects:      (row.targetProjects as string[]) ?? [],
     skillTargets:        (row.skillTargets as Record<string, string[]>) ?? {},
-    manifestSnapshot:    (row.manifestSnapshot as Record<string, unknown>) ?? null,
+    manifestSnapshot:    row.manifestSnapshot ?? null,
     releaseNotes:        row.releaseNotes ?? null,
     breakingChanges:     row.breakingChanges ?? null,
     publishedBy:         row.publishedBy ?? null,
@@ -251,6 +255,32 @@ export async function getLatestPublishedRelease(
 }
 
 /**
+ * Resolve a specific immutable package artifact previously published to a
+ * project. Deprecated releases are intentionally excluded.
+ */
+export async function getPublishedReleaseByArtifactVersion(
+  artifactVersion: string,
+  apexProject: string,
+): Promise<FoundationSkillRelease | null> {
+  const rows = await db
+    .select()
+    .from(foundationSkillReleases)
+    .where(eq(foundationSkillReleases.status, 'published'))
+    .orderBy(desc(foundationSkillReleases.publishedAt));
+
+  for (const row of rows) {
+    const release = mapRow(row);
+    if (
+      release.artifactVersion === artifactVersion &&
+      isReleaseVisibleToProject(release, apexProject)
+    ) {
+      return release;
+    }
+  }
+  return null;
+}
+
+/**
  * Create a draft release record.
  * Throws when a release with the same version already exists.
  */
@@ -264,12 +294,12 @@ export async function createRelease(
       .values({
         version:             input.version,
         artifactVersion:     input.artifactVersion,
-        artifactFeed:        input.artifactFeed ?? null,
-        integritySha256:     input.integritySha256 ?? null,
+        artifactFeed:        null,
+        integritySha256:     null,
         selectedSkills:      input.selectedSkills,
         targetProjects:      input.targetProjects ?? [],
         skillTargets:        input.skillTargets ?? {},
-        manifestSnapshot:    input.manifestSnapshot ?? null,
+        manifestSnapshot:    null,
         releaseNotes:        input.releaseNotes ?? null,
         breakingChanges:     input.breakingChanges ?? null,
         createdBy:           actor.id,
@@ -290,9 +320,11 @@ export async function createRelease(
 
 /**
  * Publish a draft release:
- *   1. Verify the artifact exists and compute integrity if not already set
- *   2. Promote to Azure Artifacts Release view (if feed is configured)
- *   3. Update status → 'published' + record published_by / published_at
+ *   1. Claim draft → publishing using optimistic concurrency
+ *   2. Download the exact artifact, compute integrity, and extract its manifest
+ *   3. Validate release selection against that immutable manifest
+ *   4. Promote to Azure Artifacts Release view
+ *   5. Update status → published and record the verified artifact evidence
  *
  * Throws if the release is not in 'draft' state, or if the feed promotion fails.
  * A failed step leaves the release in 'draft' (no partial publish).
@@ -303,64 +335,111 @@ export async function publishRelease(
 ): Promise<FoundationSkillRelease> {
   const existing = await getRelease(id);
   if (!existing) throw new Error(`Release not found: ${id}`);
-  if (existing.status !== 'draft') {
+  const stalePublishing =
+    existing.status === 'publishing' &&
+    Date.now() - new Date(existing.updatedAt).getTime() > 15 * 60_000;
+  if (existing.status !== 'draft' && !stalePublishing) {
     throw new Error(`Release ${id} is not in 'draft' state (current: ${existing.status})`);
   }
 
-  // Compute integrity if not yet set and feed is available
-  let integrity = existing.integritySha256;
-  if (!integrity && isAzureArtifactsConfigured()) {
-    try {
-      integrity = await computePackageIntegrity(existing.artifactVersion);
-    } catch (e: any) {
-      console.warn(`[foundationSkillReleaseService] Could not compute integrity for ${id}: ${e.message}`);
-    }
+  const claimAt = new Date().toISOString();
+  const [claimed] = await db
+    .update(foundationSkillReleases)
+    .set({ status: 'publishing', updatedAt: claimAt })
+    .where(and(
+      eq(foundationSkillReleases.id, id),
+      eq(foundationSkillReleases.status, existing.status),
+      eq(foundationSkillReleases.updatedAt, existing.updatedAt),
+    ))
+    .returning();
+  if (!claimed) {
+    throw new Error(`Release ${id} changed while publication was starting`);
   }
 
-  // Promote to Release view (throws on failure — leaving release in 'draft')
-  if (isAzureArtifactsConfigured()) {
+  let promoted = false;
+  try {
+    const verification = await verifyPackageArtifact(existing.artifactVersion);
+    validateReleaseArtifactManifest(existing, verification.manifest);
     await promoteToReleaseView(existing.artifactVersion);
-  } else {
-    console.warn(
-      `[foundationSkillReleaseService] Azure Artifacts not configured — publishing ${existing.version} ` +
-      `without verifying that @apex/skills@${existing.artifactVersion} exists on the feed`,
-    );
-  }
+    promoted = true;
 
-  // Recorded so an unverified publish is auditable rather than inferable only
-  // from a missing integrity hash.
-  const feedVerified = Boolean(integrity);
-
-  const now = new Date().toISOString();
-
-  return db.transaction(async (tx) => {
-    const [updated] = await tx
+    const now = new Date().toISOString();
+    return await db.transaction(async (tx) => {
+      const [updated] = await tx
       .update(foundationSkillReleases)
       .set({
         status:          'published',
-        integritySha256: integrity ?? existing.integritySha256,
+        integritySha256: verification.integritySha256,
+        artifactFeed: verification.artifactFeed,
+        manifestSnapshot: verification.manifest,
         publishedBy:     actor.id,
         publishedAt:     now,
         updatedAt:       now,
       })
-      .where(eq(foundationSkillReleases.id, id))
+      .where(and(
+        eq(foundationSkillReleases.id, id),
+        eq(foundationSkillReleases.status, 'publishing'),
+        eq(foundationSkillReleases.updatedAt, claimAt),
+      ))
       .returning();
+      if (!updated) {
+        throw new Error(`Release ${id} lost its publication claim`);
+      }
 
-    await tx.insert(foundationSkillReleaseAudit).values({
-      releaseId:      id,
-      releaseVersion: existing.version,
-      action:         'published',
-      actorId:        actor.id,
-      actorEmail:     actor.email ?? null,
-      details:        {
-        artifactVersion: existing.artifactVersion,
-        targetProjects: existing.targetProjects,
-        feedVerified,
-      },
+      await tx.insert(foundationSkillReleaseAudit).values({
+        releaseId:      id,
+        releaseVersion: existing.version,
+        action:         'published',
+        actorId:        actor.id,
+        actorEmail:     actor.email ?? null,
+        details:        {
+          artifactVersion: existing.artifactVersion,
+          integritySha256: verification.integritySha256,
+          targetProjects: existing.targetProjects,
+          manifestSkillCount: verification.manifest.skills.length,
+        },
+      });
+
+      return mapRow(updated);
     });
-
-    return mapRow(updated);
-  });
+  } catch (error) {
+    try {
+      await db.transaction(async (tx) => {
+        if (!promoted) {
+          const failedAt = new Date().toISOString();
+          await tx
+            .update(foundationSkillReleases)
+            .set({ status: 'draft', updatedAt: failedAt })
+            .where(and(
+              eq(foundationSkillReleases.id, id),
+              eq(foundationSkillReleases.status, 'publishing'),
+              eq(foundationSkillReleases.updatedAt, claimAt),
+            ));
+        }
+        await tx.insert(foundationSkillReleaseAudit).values({
+          releaseId: id,
+          releaseVersion: existing.version,
+          action: 'validation_failed',
+          actorId: actor.id,
+          actorEmail: actor.email ?? null,
+          details: {
+            error: error instanceof Error ? error.message : String(error),
+            promoted,
+            requiresReconciliation: promoted,
+          },
+        });
+      });
+    } catch (auditError) {
+      const combined = new Error(
+        `Release publication failed and its failure audit could not be persisted: ` +
+        `${auditError instanceof Error ? auditError.message : String(auditError)}`,
+      ) as Error & { publicationError?: unknown; auditError?: unknown };
+      combined.publicationError = error;
+      combined.auditError = auditError;
+      throw combined;
+    }
+    throw error;
+  }
 }
 
 /**
@@ -378,8 +457,8 @@ export async function deprecateRelease(
 ): Promise<FoundationSkillRelease> {
   const existing = await getRelease(id);
   if (!existing) throw new Error(`Release not found: ${id}`);
-  if (existing.status === 'draft') {
-    throw new Error(`Draft releases cannot be deprecated — delete the draft instead`);
+  if (existing.status !== 'published' && existing.status !== 'deprecated') {
+    throw new Error(`Only published releases can be deprecated (current: ${existing.status})`);
   }
   if (existing.status === 'deprecated') return existing; // idempotent
 
@@ -444,7 +523,17 @@ export async function deleteDraftRelease(
       actorEmail:     actor.email ?? null,
       details:        { reason: 'draft deleted by Platform Admin' },
     });
-    await tx.delete(foundationSkillReleases).where(eq(foundationSkillReleases.id, id));
+    const [deleted] = await tx
+      .delete(foundationSkillReleases)
+      .where(and(
+        eq(foundationSkillReleases.id, id),
+        eq(foundationSkillReleases.status, 'draft'),
+        eq(foundationSkillReleases.updatedAt, existing.updatedAt),
+      ))
+      .returning({ id: foundationSkillReleases.id });
+    if (!deleted) {
+      throw new Error(`Release ${id} changed while draft deletion was starting`);
+    }
   });
 }
 
@@ -459,7 +548,6 @@ export interface UpdateReleaseInput {
   /** Only allowed for draft releases */
   version?:         string;
   artifactVersion?: string;
-  artifactFeed?:    string | null;
 }
 
 export async function updateRelease(
@@ -470,10 +558,7 @@ export async function updateRelease(
   const existing = await getRelease(id);
   if (!existing) throw new Error(`Release not found: ${id}`);
 
-  if ((input.version !== undefined || input.artifactVersion !== undefined || input.artifactFeed !== undefined)
-      && existing.status !== 'draft') {
-    throw new Error(`Version and artifact fields can only be changed on draft releases`);
-  }
+  validateReleaseUpdate(existing, input as Record<string, unknown>);
 
   return db.transaction(async (tx) => {
     const [updated] = await tx
@@ -486,15 +571,21 @@ export async function updateRelease(
         ...(input.selectedSkills  !== undefined && { selectedSkills:  input.selectedSkills }),
         ...(input.version         !== undefined && { version:         input.version }),
         ...(input.artifactVersion !== undefined && { artifactVersion: input.artifactVersion }),
-        ...(input.artifactFeed    !== undefined && { artifactFeed:    input.artifactFeed    ?? null }),
         updatedAt: new Date().toISOString(),
       })
-      .where(eq(foundationSkillReleases.id, id))
+      .where(and(
+        eq(foundationSkillReleases.id, id),
+        eq(foundationSkillReleases.status, existing.status),
+        eq(foundationSkillReleases.updatedAt, existing.updatedAt),
+      ))
       .returning();
+    if (!updated) {
+      throw new Error(`Release ${id} changed while it was being edited`);
+    }
     await tx.insert(foundationSkillReleaseAudit).values({
       releaseId:      id,
       releaseVersion: existing.version,
-      action:         'published',
+      action:         'edited',
       actorId:        actor.id,
       actorEmail:     actor.email ?? null,
       details:        { action: 'release_edited', fields: Object.keys(input) },

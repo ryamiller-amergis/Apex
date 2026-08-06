@@ -101,10 +101,17 @@ export function resolveApexUrl(repoRoot) {
 }
 
 /** Query APEX for this remote's entitlement. Throws only on transport failure. */
-export async function fetchAuthorization(apexUrl, remote, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+export async function fetchAuthorization(
+  apexUrl,
+  remote,
+  { timeoutMs = DEFAULT_TIMEOUT_MS, packageVersion = null } = {},
+) {
   const endpoint =
     `${apexUrl}/api/internal/foundation-skills/authorize` +
-    `?remote=${encodeURIComponent(remote)}`;
+    `?remote=${encodeURIComponent(remote)}` +
+    (packageVersion
+      ? `&artifactVersion=${encodeURIComponent(packageVersion)}`
+      : '');
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -149,7 +156,11 @@ function remediation(lines) {
  * @param {string} opts.repoRoot
  * @param {boolean} [opts.skip=false] Honour --skip-apex-check
  */
-export async function checkApexAuthorization({ repoRoot, skip = false } = {}) {
+export async function checkApexAuthorization({
+  repoRoot,
+  skip = false,
+  packageVersion = null,
+} = {}) {
   if (skip) {
     return {
       id: 'apex-authorization',
@@ -208,7 +219,11 @@ export async function checkApexAuthorization({ repoRoot, skip = false } = {}) {
 
   let payload;
   try {
-    payload = await fetchAuthorization(apex.url, remote);
+    payload = await fetchAuthorization(
+      apex.url,
+      remote,
+      { packageVersion },
+    );
   } catch (err) {
     // Deliberately does NOT fall back to a recorded .apex/config.json. Accepting
     // a cached grant here made the gate bypassable in one step (point APEX_URL at
@@ -382,7 +397,11 @@ export function partitionRequestedSkills(requested, authorizedSkills) {
   const allowed = [];
   const rejected = [];
   for (const name of requested) {
-    (allowedSet.has(name) ? allowed : rejected).push(name);
+    if (allowedSet.has(name)) {
+      allowed.push(name);
+    } else {
+      rejected.push(name);
+    }
   }
   return { allowed, rejected };
 }

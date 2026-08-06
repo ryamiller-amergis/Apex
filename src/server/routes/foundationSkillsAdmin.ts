@@ -123,6 +123,13 @@ function actor(req: Request) {
   return { id: getUserId(req) ?? 'unknown', email: getUserEmail(req) ?? null };
 }
 
+function apexBaseUrl(req: Request): string | null {
+  const configured = process.env.APEX_URL?.trim();
+  if (configured) return configured;
+  if (process.env.NODE_ENV === 'production') return null;
+  return `${req.protocol}://${req.get('host')}`;
+}
+
 // ── Candidates (from Azure Artifacts Local view) ──────────────────────────────
 
 router.get('/candidates', async (_req: Request, res: Response): Promise<void> => {
@@ -148,6 +155,18 @@ router.get('/releases', async (_req: Request, res: Response): Promise<void> => {
 router.post('/releases', async (req: Request, res: Response): Promise<void> => {
   try {
     const body = req.body as CreateFoundationSkillReleaseRequest;
+    const rawBody = req.body as Record<string, unknown>;
+    if (
+      rawBody.integritySha256 !== undefined ||
+      rawBody.manifestSnapshot !== undefined ||
+      rawBody.artifactFeed !== undefined
+    ) {
+      res.status(400).json({
+        error:
+          'integritySha256, manifestSnapshot, and artifactFeed are server-derived at publish time',
+      });
+      return;
+    }
     if (!body.version?.trim())         { res.status(400).json({ error: 'version is required' }); return; }
     if (!body.artifactVersion?.trim()) { res.status(400).json({ error: 'artifactVersion is required' }); return; }
     if (!Array.isArray(body.selectedSkills)) { res.status(400).json({ error: 'selectedSkills must be an array' }); return; }
@@ -190,7 +209,14 @@ router.post('/releases/:id/publish', async (req: Request, res: Response): Promis
     const release = await publishRelease(req.params.id, actor(req));
     res.json({ release });
   } catch (err: any) {
-    if (err.message?.includes('not in \'draft\'')) {
+    if (err.message?.includes('not found')) {
+      res.status(404).json({ error: 'Release not found' });
+      return;
+    }
+    if (
+      err.message?.includes('not in \'draft\'') ||
+      err.message?.includes('changed while publication')
+    ) {
       res.status(409).json({ error: err.message });
       return;
     }
@@ -203,7 +229,10 @@ router.post('/releases/:id/deprecate', async (req: Request, res: Response): Prom
     const release = await deprecateRelease(req.params.id, actor(req), req.body?.reason ?? null);
     res.json({ release });
   } catch (err: any) {
-    if (err.message?.includes('draft')) {
+    if (
+      err.message?.includes('draft') ||
+      err.message?.includes('Only published')
+    ) {
       res.status(409).json({ error: err.message });
       return;
     }
@@ -224,7 +253,10 @@ router.delete('/releases/:id', async (req: Request, res: Response): Promise<void
       res.status(404).json({ error: 'Release not found' });
       return;
     }
-    if (err.message?.includes('Only draft')) {
+    if (
+      err.message?.includes('Only draft') ||
+      err.message?.includes('changed while draft deletion')
+    ) {
       res.status(409).json({ error: err.message });
       return;
     }
@@ -238,6 +270,27 @@ router.patch('/releases/:id', async (req: Request, res: Response): Promise<void>
       releaseNotes, breakingChanges, targetProjects, skillTargets, selectedSkills,
       version, artifactVersion, artifactFeed,
     } = req.body;
+    if (artifactFeed !== undefined) {
+      res.status(400).json({ error: 'artifactFeed is server-derived at publish time' });
+      return;
+    }
+    if (selectedSkills !== undefined && !Array.isArray(selectedSkills)) {
+      res.status(400).json({ error: 'selectedSkills must be an array' });
+      return;
+    }
+    if (targetProjects !== undefined && !Array.isArray(targetProjects)) {
+      res.status(400).json({ error: 'targetProjects must be an array' });
+      return;
+    }
+    if (
+      skillTargets !== undefined &&
+      (typeof skillTargets !== 'object' || Array.isArray(skillTargets))
+    ) {
+      res.status(400).json({
+        error: 'skillTargets must be an object mapping skill names to project arrays',
+      });
+      return;
+    }
     if (Array.isArray(selectedSkills)) {
       const notShippable = rejectNonShippableSkills(selectedSkills, loadCatalog());
       if (notShippable.length > 0) {
@@ -255,12 +308,19 @@ router.patch('/releases/:id', async (req: Request, res: Response): Promise<void>
       ...(selectedSkills  !== undefined && { selectedSkills }),
       ...(version         !== undefined && { version }),
       ...(artifactVersion !== undefined && { artifactVersion }),
-      ...(artifactFeed    !== undefined && { artifactFeed }),
     });
     res.json({ release });
   } catch (err: any) {
     if (err.message?.includes('not found')) { res.status(404).json({ error: 'Release not found' }); return; }
-    if (err.message?.includes('draft')) { res.status(409).json({ error: err.message }); return; }
+    if (
+      err.message?.includes('draft') ||
+      err.message?.includes('immutable') ||
+      err.message?.includes('publishing') ||
+      err.message?.includes('changed')
+    ) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
     res.status(500).json({ error: err.message ?? 'Failed to update release' });
   }
 });
@@ -290,12 +350,22 @@ router.get('/repo-statuses', async (_req: Request, res: Response): Promise<void>
 /**
  * POST /api/platform-admin/foundation-skills/update-repo
  * Clone a consumer repo, install the selected release, and open a PR.
- * Body: { project, repo, provider?, defaultBranch?, releaseId?, selectedSkills? }
+ * Body: { project, repo, apexProject, provider?, defaultBranch?, releaseId? }
  */
 router.post('/update-repo', async (req: Request, res: Response): Promise<void> => {
-  const { project, repo, provider, defaultBranch, releaseId, selectedSkills, apexProject } = req.body;
+  const { project, repo, provider, defaultBranch, releaseId, apexProject } = req.body;
   if (!project?.trim()) { res.status(400).json({ error: 'project is required' }); return; }
   if (!repo?.trim())    { res.status(400).json({ error: 'repo is required' }); return; }
+  if (!apexProject?.trim()) { res.status(400).json({ error: 'apexProject is required' }); return; }
+  if (provider && provider !== 'ado' && provider !== 'github') {
+    res.status(400).json({ error: 'provider must be ado or github' });
+    return;
+  }
+  const apexUrl = apexBaseUrl(req);
+  if (!apexUrl) {
+    res.status(503).json({ error: 'APEX_URL must be configured for generated PRs' });
+    return;
+  }
 
   console.log(
     `[foundationSkillsAdmin] update-repo ` +
@@ -324,8 +394,8 @@ router.post('/update-repo', async (req: Request, res: Response): Promise<void> =
         provider: provider ?? 'ado',
         defaultBranch: defaultBranch ?? 'main',
         releaseId,
-        selectedSkills: Array.isArray(selectedSkills) ? selectedSkills : undefined,
-        apexProject: apexProject ?? null,
+        apexProject: apexProject.trim(),
+        apexUrl,
         actor: { id: actorInfo.id, email: actorInfo.email },
       },
       adoService,
@@ -367,6 +437,15 @@ router.post('/rollback-repo', async (req: Request, res: Response): Promise<void>
   if (!repo?.trim())        { res.status(400).json({ error: 'repo is required' }); return; }
   if (!apexProject?.trim()) { res.status(400).json({ error: 'apexProject is required' }); return; }
   if (!releaseId?.trim())   { res.status(400).json({ error: 'releaseId is required' }); return; }
+  if (provider && provider !== 'ado' && provider !== 'github') {
+    res.status(400).json({ error: 'provider must be ado or github' });
+    return;
+  }
+  const apexUrl = apexBaseUrl(req);
+  if (!apexUrl) {
+    res.status(503).json({ error: 'APEX_URL must be configured for generated PRs' });
+    return;
+  }
 
   const actorInfo = actor(req);
 
@@ -387,6 +466,7 @@ router.post('/rollback-repo', async (req: Request, res: Response): Promise<void>
         provider: provider ?? 'ado',
         defaultBranch: defaultBranch ?? 'main',
         apexProject: apexProject.trim(),
+      apexUrl,
         releaseId: releaseId.trim(),
         fromVersion: fromVersion ?? null,
         actor: { id: actorInfo.id, email: actorInfo.email },

@@ -123,3 +123,26 @@ test('bootstrap with explicit skill names ignores lockfile', () => {
     cleanup(repo);
   }
 });
+
+test('bootstrap rejects a skill outside the authorized release manifest', () => {
+  const repo = makeRepo(SAMPLE_REPO);
+  const logs = [];
+  try {
+    const code = cmdBootstrap(
+      {
+        _: ['ui-lab'],
+        all: false,
+        cwd: repo,
+        package: PKG_ROOT,
+        authorizedSkills: ['to-prd'],
+      },
+      (message) => logs.push(message),
+    );
+
+    assert.equal(code, 1);
+    assert.ok(logs.some((message) => /not released|not authorized/i.test(message)));
+    assert.equal(fs.existsSync(path.join(repo, '.cursor/skills/ui-lab/SKILL.md')), false);
+  } finally {
+    cleanup(repo);
+  }
+});

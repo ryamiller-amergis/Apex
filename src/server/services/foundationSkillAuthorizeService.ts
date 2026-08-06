@@ -20,14 +20,18 @@
 import { listSkillConfigs } from './projectSettingsService';
 import {
   getLatestPublishedRelease,
+  getPublishedReleaseByArtifactVersion,
   getVisibleSkillsForProject,
 } from './foundationSkillReleaseService';
+import type { FoundationSkillRelease } from '../../shared/types/foundationSkills';
 
 export type FoundationSkillAuthorizeReason =
   | 'authorized'
   | 'remote-unparsable'
   | 'repo-not-registered'
   | 'no-release'
+  | 'release-not-entitled'
+  | 'release-unverified'
   | 'no-skills';
 
 export interface FoundationSkillAuthorizeResult {
@@ -58,53 +62,162 @@ export interface FoundationSkillAuthorizeResult {
   message: string;
 }
 
-/**
- * Reduce a git remote URL to a bare repo name.
- *
- * Handles the forms teams actually have configured:
- *   https://org@dev.azure.com/org/Project/_git/Repo
- *   https://org.visualstudio.com/Project/_git/Repo
- *   git@ssh.dev.azure.com:v3/org/Project/Repo
- *   https://github.com/org/Repo.git
- *   git@github.com:org/Repo.git
- *
- * Returns null when nothing repo-shaped can be extracted.
- */
-export function parseRepoFromRemote(remoteUrl: string): string | null {
+export interface RepositoryIdentity {
+  provider: 'ado' | 'github';
+  organization: string;
+  project: string | null;
+  repo: string;
+}
+
+/** Parse the hosted repository coordinates needed for collision-safe matching. */
+export function parseRepositoryIdentity(
+  remoteUrl: string,
+): RepositoryIdentity | null {
   const raw = remoteUrl?.trim();
   if (!raw) return null;
 
-  // Drop any embedded credentials before parsing so tokens never reach the logs.
-  let cleaned = raw.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, '$1');
-
-  // scp-style SSH (git@host:path) has no scheme — normalize the colon to a slash.
-  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(cleaned)) {
-    cleaned = cleaned.replace(/^[^@]*@/, '').replace(':', '/');
-  } else {
-    cleaned = cleaned.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+  const adoSshUri = raw.match(
+    /^ssh:\/\/(?:[^@/]+@)?ssh\.dev\.azure\.com\/v3\/([^/]+)\/([^/]+)\/(.+)$/i,
+  );
+  if (adoSshUri) {
+    return identity('ado', adoSshUri[1], adoSshUri[2], adoSshUri[3]);
   }
 
-  cleaned = cleaned.replace(/\.git$/i, '').replace(/\/+$/, '');
+  const adoSsh = raw.match(
+    /^(?:[^@]+@)?ssh\.dev\.azure\.com:v3\/([^/]+)\/([^/]+)\/(.+)$/i,
+  );
+  if (adoSsh) {
+    return identity('ado', adoSsh[1], adoSsh[2], adoSsh[3]);
+  }
 
-  // Azure DevOps puts the repo after the /_git/ marker, which is authoritative.
-  const gitMarker = cleaned.match(/\/_git\/([^/]+)$/i);
-  if (gitMarker?.[1]) return decodeURIComponent(gitMarker[1]);
+  const cleaned = raw
+    .replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, '$1')
+    .replace(/^[^@]+@([^:]+):/, '$1/')
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+    .replace(/\/+$/, '');
 
-  const segments = cleaned.split('/').filter(Boolean);
-  // segments[0] is the host; a bare host carries no repo.
-  if (segments.length < 2) return null;
+  const modernAdo = cleaned.match(
+    /^dev\.azure\.com\/([^/]+)\/([^/]+)\/_git\/([^/]+?)(?:\.git)?$/i,
+  );
+  if (modernAdo) {
+    return identity('ado', modernAdo[1], modernAdo[2], modernAdo[3]);
+  }
 
-  const last = segments[segments.length - 1];
-  return last ? decodeURIComponent(last) : null;
+  const legacyAdo = cleaned.match(
+    /^([^./]+)\.visualstudio\.com\/([^/]+)\/_git\/([^/]+?)(?:\.git)?$/i,
+  );
+  if (legacyAdo) {
+    return identity('ado', legacyAdo[1], legacyAdo[2], legacyAdo[3]);
+  }
+
+  const github = cleaned.match(
+    /^github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/i,
+  );
+  if (github) {
+    return identity('github', github[1], null, github[2]);
+  }
+
+  return null;
 }
 
-/** Comparison key for repo names — ADO is case-insensitive and `.git` is noise. */
-function repoMatchKey(repo: string): string {
-  const trimmed = repo.trim().replace(/\.git$/i, '');
-  // GitHub configs may store `org/name`; compare on the name only.
-  const slash = trimmed.lastIndexOf('/');
-  const name = slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
-  return name.toLowerCase();
+/** Backward-compatible repo-name parser used by existing diagnostics/tests. */
+export function parseRepoFromRemote(remoteUrl: string): string | null {
+  return parseRepositoryIdentity(remoteUrl)?.repo ?? null;
+}
+
+function identity(
+  provider: RepositoryIdentity['provider'],
+  organization: string,
+  project: string | null,
+  repo: string,
+): RepositoryIdentity | null {
+  try {
+    return {
+      provider,
+      organization: decodeURIComponent(organization),
+      project: project ? decodeURIComponent(project) : null,
+      repo: decodeURIComponent(repo.replace(/\.git$/i, '')),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function identityMatchesConfig(
+  wanted: RepositoryIdentity,
+  config: {
+    project: string;
+    skillProvider?: 'ado' | 'github';
+    skillRepo: string;
+  },
+): boolean {
+  const provider = config.skillProvider ?? 'ado';
+  if (provider !== wanted.provider) return false;
+
+  const configured = config.skillRepo
+    .trim()
+    .replace(/\.git$/i, '')
+    .split('/')
+    .filter(Boolean);
+  const configuredRepo = configured[configured.length - 1];
+  if (!configuredRepo || configuredRepo.toLowerCase() !== wanted.repo.toLowerCase()) {
+    return false;
+  }
+
+  if (wanted.provider === 'github') {
+    const configuredOrg =
+      configured.length >= 2 ? configured[configured.length - 2] : null;
+    return configuredOrg?.toLowerCase() === wanted.organization.toLowerCase();
+  }
+
+  const configuredOrganization = configuredAdoOrganization();
+  if (
+    !configuredOrganization ||
+    configuredOrganization.toLowerCase() !== wanted.organization.toLowerCase()
+  ) {
+    return false;
+  }
+  const configuredProject =
+    configured.length >= 2
+      ? configured[configured.length - 2]
+      : config.project;
+  return configuredProject.toLowerCase() === wanted.project?.toLowerCase();
+}
+
+function configuredAdoOrganization(): string | null {
+  const configured = process.env.ADO_ORG?.trim();
+  if (!configured) return null;
+  try {
+    const url = new URL(configured);
+    if (url.hostname === 'dev.azure.com') {
+      return url.pathname.split('/').filter(Boolean)[0] ?? null;
+    }
+    const legacy = url.hostname.match(/^([^.]+)\.visualstudio\.com$/i);
+    return legacy?.[1] ?? null;
+  } catch {
+    return configured.replace(/^\/+|\/+$/g, '') || null;
+  }
+}
+
+export function validateConfiguredRepository(
+  provider: 'ado' | 'github' | undefined,
+  skillRepo: string,
+): string | null {
+  if (provider !== undefined && provider !== 'ado' && provider !== 'github') {
+    return `Unsupported skill provider: ${String(provider)}`;
+  }
+  const parts = skillRepo
+    .trim()
+    .replace(/\.git$/i, '')
+    .split('/')
+    .filter(Boolean);
+  if ((provider ?? 'ado') === 'github' && parts.length !== 2) {
+    return 'GitHub skillRepo must use organization/repo format';
+  }
+  if ((provider ?? 'ado') === 'ado' && (parts.length < 1 || parts.length > 2)) {
+    return 'Azure DevOps skillRepo must use repo or project/repo format';
+  }
+  return null;
 }
 
 /**
@@ -114,10 +227,12 @@ function repoMatchKey(repo: string): string {
  */
 export async function authorizeSkillInstall(
   remoteUrl: string,
+  requestedArtifactVersion?: string | null,
 ): Promise<FoundationSkillAuthorizeResult> {
-  const repo = parseRepoFromRemote(remoteUrl);
+  const repository = parseRepositoryIdentity(remoteUrl);
+  const repo = repository?.repo ?? null;
 
-  if (!repo) {
+  if (!repository || !repo) {
     return {
       authorized: false,
       reason: 'remote-unparsable',
@@ -135,9 +250,10 @@ export async function authorizeSkillInstall(
   }
 
   const configs = await listSkillConfigs();
-  const wanted = repoMatchKey(repo);
   const match = configs.find(
-    (c) => c.skillRepo?.trim() && repoMatchKey(c.skillRepo) === wanted,
+    (config) =>
+      config.skillRepo?.trim() &&
+      identityMatchesConfig(repository, config),
   );
 
   if (!match) {
@@ -158,9 +274,29 @@ export async function authorizeSkillInstall(
   }
 
   const apexProject = match.project;
-  const release = await getLatestPublishedRelease(apexProject);
+  const release = requestedArtifactVersion
+    ? await getPublishedReleaseByArtifactVersion(
+        requestedArtifactVersion,
+        apexProject,
+      )
+    : await getLatestPublishedRelease(apexProject);
 
   if (!release) {
+    if (requestedArtifactVersion) {
+      return {
+        authorized: false,
+        reason: 'release-not-entitled',
+        repo,
+        apexProject,
+        version: null,
+        artifactVersion: requestedArtifactVersion,
+        artifactVersionVerified: false,
+        skills: [],
+        message:
+          `No published APEX release grants @apex/skills@${requestedArtifactVersion} ` +
+          `to project "${apexProject}". Use the package version shown in APEX.`,
+      };
+    }
     return {
       authorized: false,
       reason: 'no-release',
@@ -177,7 +313,24 @@ export async function authorizeSkillInstall(
     };
   }
 
-  const skills = getVisibleSkillsForProject(release, apexProject);
+  if (!release.integritySha256 || !release.manifestSnapshot) {
+    return {
+      authorized: false,
+      reason: 'release-unverified',
+      repo,
+      apexProject,
+      version: release.version,
+      artifactVersion: release.artifactVersion ?? null,
+      artifactVersionVerified: false,
+      skills: [],
+      message:
+        `Release ${release.version} has no server-verified artifact manifest and ` +
+        `cannot authorize installs. Publish a verified replacement release.`,
+    };
+  }
+
+  const releaseSkills = getVisibleSkillsForProject(release, apexProject);
+  const skills = withReleaseAlwaysInstallSkills(release, releaseSkills);
 
   if (skills.length === 0) {
     return {
@@ -209,4 +362,28 @@ export async function authorizeSkillInstall(
       `Authorized for "${apexProject}" via release ${release.version} ` +
       `(${skills.length} skill${skills.length === 1 ? '' : 's'}).`,
   };
+}
+
+function withReleaseAlwaysInstallSkills(
+  release: FoundationSkillRelease,
+  skills: string[],
+): string[] {
+  const snapshotSkills = (
+    release.manifestSnapshot as { skills?: Array<{ name?: string; alwaysInstall?: boolean }> } | null
+  )?.skills;
+  if (!Array.isArray(snapshotSkills)) return [...skills];
+
+  const out = [...skills];
+  const seen = new Set(out);
+  for (const entry of snapshotSkills) {
+    if (
+      entry?.alwaysInstall === true &&
+      typeof entry.name === 'string' &&
+      !seen.has(entry.name)
+    ) {
+      out.push(entry.name);
+      seen.add(entry.name);
+    }
+  }
+  return out;
 }

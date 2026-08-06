@@ -1,5 +1,5 @@
 {
-  "suiteVersion": "0.2.0",
+  "suiteVersion": "2.0.0",
   "package": "@apex/skills",
   "contractApiVersion": 1,
   "skills": [
@@ -509,6 +509,22 @@
       "name": "design-system",
       "summary": "Project design system reference consumed by APEX when generating feature prototypes. Contains CSS tokens, component library, app shell, and spacing/typography conventions.",
       "scanScope": "full-repo",
+      "foundationFiles": [
+        "SKILL.md"
+      ],
+      "adapterFiles": [
+        "SKILL.md",
+        "apex-skill.json",
+        "recipe.json"
+      ],
+      "dependsOn": [],
+      "supportingOwners": {}
+    },
+    {
+      "name": "post-skill-bootstrap",
+      "summary": "After install/bootstrap, interview for unfilled lockfile-skill gaps and replace markers inside APEX:slot anchors. Always installed with any release.",
+      "alwaysInstall": true,
+      "scanScope": "targeted",
       "foundationFiles": [
         "SKILL.md"
       ],

@@ -167,6 +167,15 @@ test('partitionRequestedSkills separates released from unreleased skills', () =>
   assert.deepEqual(rejected, ['ui-lab']);
 });
 
+test('partitionRequestedSkills rejects companions absent from the authorized release manifest', () => {
+  const { allowed, rejected } = partitionRequestedSkills(
+    ['to-prd', 'post-skill-bootstrap'],
+    ['to-prd'],
+  );
+  assert.deepEqual(allowed, ['to-prd']);
+  assert.deepEqual(rejected, ['post-skill-bootstrap']);
+});
+
 test('partitionRequestedSkills allows everything when no allowlist is known', () => {
   const { allowed, rejected } = partitionRequestedSkills(['to-prd'], []);
   assert.deepEqual(allowed, ['to-prd']);
@@ -314,6 +323,38 @@ test('an APEX approval passes and returns the entitlement for recording', async 
     assert.equal(check.authorization.apexProject, 'maxview');
     assert.equal(check.authorization.releaseVersion, '1.0.0');
     assert.deepEqual(check.authorization.authorizedSkills, ['to-prd', 'grill-with-docs']);
+  } finally {
+    cleanup(repo);
+  }
+});
+
+test('authorization requests the release matching the running package version', async () => {
+  const repo = makeGitRepo();
+  let requestedUrl = '';
+  try {
+    process.env.APEX_URL = 'https://apex.example.com';
+    globalThis.fetch = async (url) => {
+      requestedUrl = String(url);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          authorized: true,
+          reason: 'authorized',
+          repo: 'MaxView',
+          apexProject: 'maxview',
+          version: '2.0.0',
+          artifactVersion: '2.0.0',
+          skills: ['to-prd'],
+          message: 'Authorized.',
+        }),
+      };
+    };
+
+    await checkApexAuthorization({ repoRoot: repo, packageVersion: '2.0.0' });
+
+    const parsed = new URL(requestedUrl);
+    assert.equal(parsed.searchParams.get('artifactVersion'), '2.0.0');
   } finally {
     cleanup(repo);
   }

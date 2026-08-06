@@ -1060,21 +1060,24 @@ const EditReleasePanel: React.FC<{
 
   const handleSave = async () => {
     setLocalErr(null);
-    if (audienceMode === 'specific' && selectedProjects.length === 0) {
+    if (isDraft && audienceMode === 'specific' && selectedProjects.length === 0) {
       setLocalErr('Select at least one project or switch to "All projects".');
       return;
     }
-    if (selectedSkills.length === 0) {
+    if (isDraft && selectedSkills.length === 0) {
       setLocalErr('At least one skill must be selected.');
       return;
     }
     await onSave({
-      ...(isDraft && { version: version.trim(), artifactVersion: artifactVersion.trim() || version.trim() }),
+      ...(isDraft && {
+        version: version.trim(),
+        artifactVersion: artifactVersion.trim() || version.trim(),
+        targetProjects: audienceMode === 'specific' ? selectedProjects : [],
+        selectedSkills,
+        skillTargets: buildSkillTargets(skillAudiences),
+      }),
       releaseNotes:    notes.trim()    || null,
       breakingChanges: breaking.trim() || null,
-      targetProjects:  audienceMode === 'specific' ? selectedProjects : [],
-      selectedSkills,
-      skillTargets:    buildSkillTargets(skillAudiences),
     });
   };
 
@@ -1099,31 +1102,35 @@ const EditReleasePanel: React.FC<{
         </div>
       )}
 
-      <AudienceField
-        mode={audienceMode}
-        projects={selectedProjects}
-        onModeChange={mode => { setAudienceMode(mode); setSelected([]); }}
-        onProjectsChange={setSelected}
-        idPrefix={`er-${release.id}`}
-        {...{ 'data-testid': `fs-edit-audience-field-${release.id}` }}
-      />
+      {isDraft && (
+        <>
+          <AudienceField
+            mode={audienceMode}
+            projects={selectedProjects}
+            onModeChange={mode => { setAudienceMode(mode); setSelected([]); }}
+            onProjectsChange={setSelected}
+            idPrefix={`er-${release.id}`}
+            {...{ 'data-testid': `fs-edit-audience-field-${release.id}` }}
+          />
 
-      <div className={styles.formRow}>
-        <span className={styles.label}>Skills</span>
-        <SkillPicker
-          catalog={catalog}
-          isCatalogLoading={catalogLoading}
-          selectedSkills={selectedSkills}
-          skillAudiences={skillAudiences}
-          releaseAudienceLabel={releaseAudienceLabel}
-          onSkillToggle={name =>
-            setSelectedSkills(prev => prev.includes(name) ? prev.filter(s => s !== name) : [...prev, name])
-          }
-          onAudienceChange={(name, pick) => setSkillAudiences(prev => ({ ...prev, [name]: pick }))}
-          onSelectAll={() => setSelectedSkills(catalog.map(s => s.name))}
-          onClearAll={() => { setSelectedSkills([]); setSkillAudiences({}); }}
-        />
-      </div>
+          <div className={styles.formRow}>
+            <span className={styles.label}>Skills</span>
+            <SkillPicker
+              catalog={catalog}
+              isCatalogLoading={catalogLoading}
+              selectedSkills={selectedSkills}
+              skillAudiences={skillAudiences}
+              releaseAudienceLabel={releaseAudienceLabel}
+              onSkillToggle={name =>
+                setSelectedSkills(prev => prev.includes(name) ? prev.filter(s => s !== name) : [...prev, name])
+              }
+              onAudienceChange={(name, pick) => setSkillAudiences(prev => ({ ...prev, [name]: pick }))}
+              onSelectAll={() => setSelectedSkills(catalog.map(s => s.name))}
+              onClearAll={() => { setSelectedSkills([]); setSkillAudiences({}); }}
+            />
+          </div>
+        </>
+      )}
 
       <div className={styles.formRow}>
         <label className={styles.label} htmlFor={`er-notes-${release.id}`}>Release notes</label>
@@ -1746,6 +1753,12 @@ export const FoundationSkillsAdmin: React.FC = () => {
 
   const handleUpdateRepo = async (s: FoundationSkillRepoStatus) => {
     clearMessages();
+    if (!s.apexProject) {
+      setActionError(
+        'This repo has no Apex project identity. Run compatibility refresh before opening an update PR.',
+      );
+      return;
+    }
     setBusyRepoKey(repoRowKey(s));
     try {
       const result = await updateRepo.mutateAsync({
@@ -1755,7 +1768,7 @@ export const FoundationSkillsAdmin: React.FC = () => {
         // Must match the observed row — defaulting to main creates a wrong-branch PR
         // (and MaxView / similar teams use development).
         defaultBranch: s.branch || 'main',
-        apexProject: s.apexProject ?? s.project,
+        apexProject: s.apexProject,
       });
       if (result.prUrl) {
         setActionMsg(`PR opened: ${result.prUrl}`);
@@ -1773,6 +1786,12 @@ export const FoundationSkillsAdmin: React.FC = () => {
 
   const handleCheckCompat = async (s: FoundationSkillRepoStatus) => {
     clearMessages();
+    if (!s.apexProject) {
+      setActionError(
+        'This repo has no Apex project identity. Re-register it before checking compatibility.',
+      );
+      return;
+    }
     setBusyRepoKey(repoRowKey(s));
     try {
       const result = await checkCompat.mutateAsync({
@@ -1781,7 +1800,7 @@ export const FoundationSkillsAdmin: React.FC = () => {
         provider: s.provider,
         // Upsert key includes branch — omitting it defaults to main and inserts a duplicate row.
         branch: s.branch || 'main',
-        apexProject: s.apexProject ?? s.project,
+        apexProject: s.apexProject,
       });
       setActionMsg(
         `Compatibility (${s.repo}@${s.branch}): ${result.report.status}. ` +
@@ -1927,11 +1946,13 @@ export const FoundationSkillsAdmin: React.FC = () => {
                           onClick={() => handleDeprecate(r)}
                           {...{ 'data-testid': `fs-release-deprecate-${r.id}` }}>Deprecate</button>
                       )}
-                      <button className={styles.btnGhost} type="button"
-                        onClick={() => { setEditReleaseId(editReleaseId === r.id ? null : r.id); setAuditReleaseId(null); }}
-                        {...{ 'data-testid': `fs-release-edit-${r.id}` }}>
-                        {editReleaseId === r.id ? 'Cancel' : 'Edit'}
-                      </button>
+                      {r.status !== 'publishing' && (
+                        <button className={styles.btnGhost} type="button"
+                          onClick={() => { setEditReleaseId(editReleaseId === r.id ? null : r.id); setAuditReleaseId(null); }}
+                          {...{ 'data-testid': `fs-release-edit-${r.id}` }}>
+                          {editReleaseId === r.id ? 'Cancel' : 'Edit'}
+                        </button>
+                      )}
                       <button className={styles.btnGhost} type="button"
                         onClick={() => { setAuditReleaseId(auditReleaseId === r.id ? null : r.id); setEditReleaseId(null); }}
                         {...{ 'data-testid': `fs-release-audit-${r.id}` }}>

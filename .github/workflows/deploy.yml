@@ -182,6 +182,7 @@ jobs:
               AZURE_ARTIFACTS_ORG="${{ secrets.AZURE_ARTIFACTS_ORG }}" \
               AZURE_ARTIFACTS_FEED="${{ secrets.AZURE_ARTIFACTS_FEED }}" \
               AZURE_ARTIFACTS_PAT="${{ secrets.AZURE_ARTIFACTS_PAT }}" \
+              APEX_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net" \
               WEBSITE_SWAP_WARMUP_PING_PATH="/api/health/db" \
               WEBSITE_SWAP_WARMUP_PING_STATUSES="200"
 
@@ -195,14 +196,16 @@ jobs:
             --slot-settings \
               AZURE_REDIRECT_URL="${STAGING_REDIRECT_URL}" \
               APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}" \
-              LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net"
+              LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net" \
+              APEX_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net"
 
           # Production slot sticky callback + shared MI runner auth (not swapped away).
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
             --slot-settings \
-              LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net"
+              LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net" \
+              APEX_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net"
 
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \

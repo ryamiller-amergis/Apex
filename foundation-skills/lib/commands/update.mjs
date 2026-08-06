@@ -6,7 +6,9 @@ import {
   writeApexConfig,
   readPackageVersion,
   verifyArtifactVersion,
+  partitionRequestedSkills,
 } from '../apexAuthorize.mjs';
+import { ensureAlwaysInstallSkills } from '../alwaysInstall.mjs';
 import { findGitRoot } from '../util.mjs';
 
 export async function update({ skills = null, skipApexCheck = false } = {}) {
@@ -39,9 +41,34 @@ export async function update({ skills = null, skipApexCheck = false } = {}) {
     console.warn('\n' + versionCheck.message);
   }
 
+  // Prefer the release allowlist; always keep companion skills on the update set.
+  const authSkills = doctorResult.authorization?.authorizedSkills;
+  let requestedSkills = skills?.length ? [...skills] : null;
+  if (requestedSkills && authSkills?.length) {
+    const { allowed, rejected } = partitionRequestedSkills(
+      requestedSkills,
+      authSkills,
+    );
+    if (rejected.length) {
+      console.error(
+        `\n[apex-skills] Cannot update skills absent from this release:\n` +
+        `  ${rejected.join(', ')}`,
+      );
+      process.exit(1);
+    }
+    requestedSkills = allowed;
+  }
+
+  let updateSkills = requestedSkills
+    ? ensureAlwaysInstallSkills(requestedSkills)
+    : (authSkills?.length ? [...authSkills] : []);
+  if (authSkills?.length) {
+    const authorized = new Set(authSkills);
+    updateSkills = updateSkills.filter((name) => authorized.has(name));
+  }
   // update = install with --fill=false (preserves adapters)
   const exitCode = cmdInstall(
-    { _: skills ?? [], dryRun: false, enrich: false, cwd: repoRoot },
+    { _: updateSkills, dryRun: false, enrich: false, cwd: repoRoot },
     (msg) => console.log(msg),
   );
   if (exitCode !== 0) process.exit(exitCode);

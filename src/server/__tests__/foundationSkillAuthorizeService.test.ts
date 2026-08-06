@@ -12,22 +12,38 @@ jest.mock('../services/projectSettingsService', () => ({
 
 jest.mock('../services/foundationSkillReleaseService', () => ({
   getLatestPublishedRelease: jest.fn(),
+  getPublishedReleaseByArtifactVersion: jest.fn(),
   getVisibleSkillsForProject: jest.fn(),
 }));
 
-import { parseRepoFromRemote, authorizeSkillInstall } from '../services/foundationSkillAuthorizeService';
+import {
+  parseRepoFromRemote,
+  parseRepositoryIdentity,
+  validateConfiguredRepository,
+  authorizeSkillInstall,
+} from '../services/foundationSkillAuthorizeService';
 import { listSkillConfigs } from '../services/projectSettingsService';
 import {
   getLatestPublishedRelease,
+  getPublishedReleaseByArtifactVersion,
   getVisibleSkillsForProject,
 } from '../services/foundationSkillReleaseService';
 
 const mockListSkillConfigs = listSkillConfigs as jest.Mock;
 const mockGetLatestPublishedRelease = getLatestPublishedRelease as jest.Mock;
+const mockGetPublishedReleaseByArtifactVersion =
+  getPublishedReleaseByArtifactVersion as jest.Mock;
 const mockGetVisibleSkillsForProject = getVisibleSkillsForProject as jest.Mock;
+const originalAdoOrg = process.env.ADO_ORG;
 
 beforeEach(() => {
   jest.clearAllMocks();
+  process.env.ADO_ORG = 'https://dev.azure.com/amergis';
+});
+
+afterAll(() => {
+  if (originalAdoOrg === undefined) delete process.env.ADO_ORG;
+  else process.env.ADO_ORG = originalAdoOrg;
 });
 
 describe('parseRepoFromRemote', () => {
@@ -61,6 +77,63 @@ describe('parseRepoFromRemote', () => {
   });
 });
 
+describe('parseRepositoryIdentity', () => {
+  it('keeps provider, organization, project, and repo for Azure DevOps', () => {
+    expect(
+      parseRepositoryIdentity(
+        'https://dev.azure.com/amergis/MaxView/_git/Workforce',
+      ),
+    ).toEqual({
+      provider: 'ado',
+      organization: 'amergis',
+      project: 'MaxView',
+      repo: 'Workforce',
+    });
+  });
+
+  it('parses Azure DevOps ssh URI remotes', () => {
+    expect(
+      parseRepositoryIdentity(
+        'ssh://git@ssh.dev.azure.com/v3/amergis/MaxView/My%20Repo',
+      ),
+    ).toEqual({
+      provider: 'ado',
+      organization: 'amergis',
+      project: 'MaxView',
+      repo: 'My Repo',
+    });
+  });
+
+  it('keeps provider, organization, and repo for GitHub', () => {
+    expect(
+      parseRepositoryIdentity('git@github.com:amergis/Workforce.git'),
+    ).toEqual({
+      provider: 'github',
+      organization: 'amergis',
+      project: null,
+      repo: 'Workforce',
+    });
+  });
+});
+
+describe('validateConfiguredRepository', () => {
+  it('requires organization/repo for GitHub configs', () => {
+    expect(validateConfiguredRepository('github', 'Workforce')).toMatch(
+      /organization\/repo/i,
+    );
+    expect(validateConfiguredRepository('github', 'amergis/Workforce')).toBeNull();
+  });
+
+  it('rejects unsupported providers at the API boundary', () => {
+    expect(
+      validateConfiguredRepository(
+        'gitlab' as unknown as 'ado',
+        'amergis/Workforce',
+      ),
+    ).toMatch(/unsupported/i);
+  });
+});
+
 describe('authorizeSkillInstall', () => {
   const release = {
     id: 'rel-1',
@@ -69,6 +142,10 @@ describe('authorizeSkillInstall', () => {
     targetProjects: ['maxview'],
     skillTargets: {},
     selectedSkills: ['to-prd', 'grill-with-docs'],
+    integritySha256: 'abc123',
+    manifestSnapshot: {
+      skills: [{ name: 'post-skill-bootstrap', alwaysInstall: true }],
+    },
   };
 
   it('authorizes a registered repo whose project has a published release', async () => {
@@ -84,7 +161,7 @@ describe('authorizeSkillInstall', () => {
     expect(result.reason).toBe('authorized');
     expect(result.apexProject).toBe('maxview');
     expect(result.version).toBe('1.0.0');
-    expect(result.skills).toEqual(['to-prd', 'grill-with-docs']);
+    expect(result.skills).toEqual(['to-prd', 'grill-with-docs', 'post-skill-bootstrap']);
   });
 
   it('returns artifactVersion so the CLI can refuse a mismatched package', async () => {
@@ -111,7 +188,7 @@ describe('authorizeSkillInstall', () => {
     expect(result.artifactVersionVerified).toBe(true);
   });
 
-  it('marks it unverified when the release was published without a feed', async () => {
+  it('denies a published row without verified artifact evidence', async () => {
     mockListSkillConfigs.mockResolvedValue([
       { project: 'maxview', skillRepo: 'MaxView', skillBranch: 'development' },
     ]);
@@ -119,8 +196,8 @@ describe('authorizeSkillInstall', () => {
     mockGetVisibleSkillsForProject.mockReturnValue(['to-prd']);
 
     const result = await authorizeSkillInstall('https://dev.azure.com/amergis/MaxView/_git/MaxView');
-    expect(result.authorized).toBe(true);
-    expect(result.artifactVersionVerified).toBe(false);
+    expect(result.authorized).toBe(false);
+    expect(result.reason).toBe('release-unverified');
   });
 
   it('reports a null artifactVersion for releases that predate the field', async () => {
@@ -148,7 +225,12 @@ describe('authorizeSkillInstall', () => {
 
   it('matches a GitHub config stored as org/name', async () => {
     mockListSkillConfigs.mockResolvedValue([
-      { project: 'maxview', skillRepo: 'amergis/MaxView', skillBranch: 'main' },
+      {
+        project: 'maxview',
+        skillProvider: 'github',
+        skillRepo: 'amergis/MaxView',
+        skillBranch: 'main',
+      },
     ]);
     mockGetLatestPublishedRelease.mockResolvedValue(release);
     mockGetVisibleSkillsForProject.mockReturnValue(['to-prd']);
@@ -158,12 +240,106 @@ describe('authorizeSkillInstall', () => {
     expect(result.apexProject).toBe('maxview');
   });
 
+  it('does not authorize a same-named repo from a different ADO project', async () => {
+    mockListSkillConfigs.mockResolvedValue([
+      {
+        project: 'maxview',
+        skillProvider: 'ado',
+        skillRepo: 'Workforce',
+        skillBranch: 'main',
+      },
+    ]);
+
+    const result = await authorizeSkillInstall(
+      'https://dev.azure.com/amergis/MatterWorx/_git/Workforce',
+    );
+
+    expect(result.authorized).toBe(false);
+    expect(result.reason).toBe('repo-not-registered');
+    expect(mockGetLatestPublishedRelease).not.toHaveBeenCalled();
+  });
+
+  it('does not authorize the same project and repo from another ADO organization', async () => {
+    mockListSkillConfigs.mockResolvedValue([
+      {
+        project: 'maxview',
+        skillProvider: 'ado',
+        skillRepo: 'MaxView',
+        skillBranch: 'main',
+      },
+    ]);
+
+    const result = await authorizeSkillInstall(
+      'https://dev.azure.com/another-org/MaxView/_git/MaxView',
+    );
+
+    expect(result.authorized).toBe(false);
+    expect(result.reason).toBe('repo-not-registered');
+  });
+
+  it('authorizes a prior published artifact release explicitly', async () => {
+    const historical = {
+      ...release,
+      id: 'rel-old',
+      version: '1.0.0',
+      artifactVersion: '1.0.0',
+      selectedSkills: ['to-prd'],
+      manifestSnapshot: { skills: [] },
+    };
+    mockListSkillConfigs.mockResolvedValue([
+      {
+        project: 'maxview',
+        skillProvider: 'ado',
+        skillRepo: 'MaxView',
+        skillBranch: 'development',
+      },
+    ]);
+    mockGetPublishedReleaseByArtifactVersion.mockResolvedValue(historical);
+    mockGetVisibleSkillsForProject.mockReturnValue(['to-prd']);
+
+    const result = await authorizeSkillInstall(
+      'https://dev.azure.com/amergis/MaxView/_git/MaxView',
+      '1.0.0',
+    );
+
+    expect(result.authorized).toBe(true);
+    expect(result.artifactVersion).toBe('1.0.0');
+    expect(result.skills).toEqual(['to-prd']);
+    expect(mockGetPublishedReleaseByArtifactVersion).toHaveBeenCalledWith(
+      '1.0.0',
+      'maxview',
+    );
+    expect(mockGetLatestPublishedRelease).not.toHaveBeenCalled();
+  });
+
+  it('denies an artifact version never released to the project', async () => {
+    mockListSkillConfigs.mockResolvedValue([
+      {
+        project: 'maxview',
+        skillProvider: 'ado',
+        skillRepo: 'MaxView',
+        skillBranch: 'development',
+      },
+    ]);
+    mockGetPublishedReleaseByArtifactVersion.mockResolvedValue(null);
+
+    const result = await authorizeSkillInstall(
+      'https://dev.azure.com/amergis/MaxView/_git/MaxView',
+      '9.9.9',
+    );
+
+    expect(result.authorized).toBe(false);
+    expect(result.reason).toBe('release-not-entitled');
+  });
+
   it('denies a repo that is not registered with any project', async () => {
     mockListSkillConfigs.mockResolvedValue([
       { project: 'maxview', skillRepo: 'MaxView', skillBranch: 'development' },
     ]);
 
-    const result = await authorizeSkillInstall('https://dev.azure.com/amergis/X/_git/MatterWorx');
+    const result = await authorizeSkillInstall(
+      'https://dev.azure.com/amergis/MatterWorx/_git/MatterWorx',
+    );
 
     expect(result.authorized).toBe(false);
     expect(result.reason).toBe('repo-not-registered');
@@ -179,7 +355,9 @@ describe('authorizeSkillInstall', () => {
     ]);
     mockGetLatestPublishedRelease.mockResolvedValue(null);
 
-    const result = await authorizeSkillInstall('https://dev.azure.com/amergis/X/_git/MatterWorx');
+    const result = await authorizeSkillInstall(
+      'https://dev.azure.com/amergis/MatterWorx/_git/MatterWorx',
+    );
 
     expect(result.authorized).toBe(false);
     expect(result.reason).toBe('no-release');
@@ -191,14 +369,34 @@ describe('authorizeSkillInstall', () => {
     mockListSkillConfigs.mockResolvedValue([
       { project: 'matterworx', skillRepo: 'MatterWorx', skillBranch: 'main' },
     ]);
-    mockGetLatestPublishedRelease.mockResolvedValue(release);
+    mockGetLatestPublishedRelease.mockResolvedValue({
+      ...release,
+      manifestSnapshot: { skills: [] },
+    });
     mockGetVisibleSkillsForProject.mockReturnValue([]);
 
-    const result = await authorizeSkillInstall('https://dev.azure.com/amergis/X/_git/MatterWorx');
+    const result = await authorizeSkillInstall(
+      'https://dev.azure.com/amergis/MatterWorx/_git/MatterWorx',
+    );
 
     expect(result.authorized).toBe(false);
     expect(result.reason).toBe('no-skills');
     expect(result.version).toBe('1.0.0');
+  });
+
+  it('authorizes artifact-specific always-install skills even when selected skills are not visible', async () => {
+    mockListSkillConfigs.mockResolvedValue([
+      { project: 'maxview', skillRepo: 'MaxView', skillBranch: 'main' },
+    ]);
+    mockGetLatestPublishedRelease.mockResolvedValue(release);
+    mockGetVisibleSkillsForProject.mockReturnValue([]);
+
+    const result = await authorizeSkillInstall(
+      'https://dev.azure.com/amergis/MaxView/_git/MaxView',
+    );
+
+    expect(result.authorized).toBe(true);
+    expect(result.skills).toEqual(['post-skill-bootstrap']);
   });
 
   it('denies an unparsable remote without touching project config', async () => {

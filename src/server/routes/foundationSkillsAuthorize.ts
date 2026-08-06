@@ -63,6 +63,10 @@ function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
  */
 router.get('/authorize', async (req: Request, res: Response): Promise<void> => {
   const remote = typeof req.query.remote === 'string' ? req.query.remote.trim() : '';
+  const artifactVersion =
+    typeof req.query.artifactVersion === 'string'
+      ? req.query.artifactVersion.trim()
+      : null;
 
   if (!remote) {
     res.status(400).json({ error: 'remote query param is required' });
@@ -72,7 +76,10 @@ router.get('/authorize', async (req: Request, res: Response): Promise<void> => {
   const timeoutMs = authorizeTimeoutMs();
 
   try {
-    const result = await withTimeout(authorizeSkillInstall(remote), timeoutMs);
+    const result = await withTimeout(
+      authorizeSkillInstall(remote, artifactVersion || null),
+      timeoutMs,
+    );
     // Log the decision, never the raw remote — it can carry embedded credentials.
     console.log(
       `[foundation-skills-authorize] repo=${result.repo ?? 'unknown'} ` +

@@ -133,7 +133,6 @@ export interface UpdateReleasePayload {
   /** Draft-only fields */
   version?:         string;
   artifactVersion?: string;
-  artifactFeed?:    string | null;
 }
 
 export function useUpdateFoundationSkillRelease() {
@@ -189,10 +188,10 @@ export function useUpdateRepoWithFoundationSkills() {
     {
       project: string;
       repo: string;
-      provider?: string;
+      provider?: 'ado' | 'github';
       defaultBranch?: string;
       releaseId?: string;
-      apexProject?: string | null;
+      apexProject: string;
     }
   >({
     mutationFn: (body) =>

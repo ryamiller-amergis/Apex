@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
 import { useLatestFoundationSkillRelease, useFoundationSkillRepoStatus } from '../hooks/useFoundationSkillUpdateStatus';
-import { getVisibleSkillsForProject } from '../../shared/types/foundationSkills';
+import {
+  getVisibleSkillsForProject,
+  withAlwaysInstallSkills,
+} from '../../shared/types/foundationSkills';
 import { BrandLogo } from './BrandLogo';
 import styles from './FoundationSkillUpdateBanner.module.css';
 
@@ -31,9 +34,12 @@ function apexRegistryLine(artifactFeed: string | null | undefined): string {
   return `@apex:registry=${raw}`;
 }
 
-/** This APEX instance, as the CLI needs to reach it for the entitlement check. */
+/**
+ * Origin of the APEX site the user is viewing (prod, QA, or local).
+ * Never hardcode a host — the banner must work the same in every environment.
+ */
 function apexUrl(): string {
-  return typeof window !== 'undefined' ? window.location.origin : 'https://your-apex-host';
+  return typeof window !== 'undefined' ? window.location.origin : '';
 }
 
 /**
@@ -42,11 +48,18 @@ function apexUrl(): string {
  * that is what most teams on Windows will paste into.
  */
 function apexUrlStep(): Step {
+  const origin = apexUrl();
+  const cmd = origin
+    ? `$env:APEX_URL="${origin}"`
+    : '$env:APEX_URL="<this-apex-site-origin>"';
+  const bashHint = origin
+    ? `export APEX_URL="${origin}"`
+    : 'export APEX_URL="<this-apex-site-origin>"';
   return {
-    cmd: `$env:APEX_URL="${apexUrl()}"`,
+    cmd,
     label:
-      'Point the CLI at APEX so it can confirm your project is entitled to these skills. ' +
-      `On bash/zsh use: export APEX_URL="${apexUrl()}"`,
+      'Point the CLI at this APEX site (the page you are on now) so it can confirm ' +
+      `your project is entitled to these skills. On bash/zsh use: ${bashHint}`,
   };
 }
 
@@ -79,7 +92,12 @@ function buildInstallSteps(skillList: string[], artifactVersion: string | null |
     },
     {
       cmd: `npx ${cli} bootstrap${skillArgs}`,
-      label: 'Fill adapters from your repo evidence (ADO org, teams, structure) — install already scaffolds adapters; bootstrap refines them. Review and commit the result.',
+      label: 'Fill any unfilled project slot anchors from repo evidence. Existing project prose and filled slots are preserved.',
+    },
+    {
+      cmd: '/post-skill-bootstrap',
+      label:
+        'In Cursor (not a terminal): run this slash skill. It scans lockfile-installed skills for unfilled markers, asks about gaps, and replaces those markers with confirmed values (re-run skips when none remain).',
     },
   ];
 }
@@ -94,7 +112,12 @@ function buildUpdateSteps(skillList: string[], artifactVersion: string | null | 
     },
     {
       cmd: `npx ${cli} bootstrap${skillArgs || ' --all'}`,
-      label: 'Refresh adapters with updated repo knowledge, then review and commit',
+      label: 'Fill newly introduced or still-unfilled project slot anchors, then review and commit',
+    },
+    {
+      cmd: '/post-skill-bootstrap',
+      label:
+        'In Cursor: address any new unfilled markers after the update (filled slots are kept; skip if none remain).',
     },
   ];
 }
@@ -128,7 +151,7 @@ const TROUBLESHOOT_ROWS: TroubleshootRow[] = [
   },
   {
     symptom: 'apex-authorization FAIL — APEX_URL is not set',
-    fix: 'Set APEX_URL to this APEX instance (step 1 of Install), then re-run doctor. The CLI needs it to confirm your project is entitled to these skills.',
+    fix: 'Set APEX_URL to the origin of the APEX site you are viewing (step 1 of Install — it is not a fixed environment URL), then re-run doctor.',
     cmd: 'npx @apex/skills doctor',
   },
   {
@@ -151,10 +174,6 @@ const TROUBLESHOOT_ROWS: TroubleshootRow[] = [
   {
     symptom: 'install refuses with "Version mismatch"',
     fix: 'Your release pins a specific @apex/skills version. Copy the commands from the Install tab — they already name that version. Typing the command unpinned can pull a different version, because the feed does not maintain an npm "latest" tag.',
-  },
-  {
-    symptom: 'install warns "Version mismatch — continuing anyway"',
-    fix: 'Not an error, and your install completed. APEX could not confirm the pinned version exists on the feed, so the mismatch is treated as a gap in the release record rather than an entitlement problem. Mention it to an APEX admin so the release can be corrected.',
   },
   {
     symptom: 'install refuses a skill as "not released to your project"',
@@ -336,7 +355,11 @@ export const FoundationSkillUpdateBanner: React.FC<FoundationSkillUpdateBannerPr
   const hasBreaking = !!latest.breakingChanges;
   const stepsLabel = isFirstInstall ? 'Getting started' : 'How to update';
   const registryLine = apexRegistryLine(latest.artifactFeed);
-  const scopedSkills = getVisibleSkillsForProject(latest, project ?? null);
+  const releaseSkills = getVisibleSkillsForProject(latest, project ?? null);
+  // Companion skills only accompany a real release skill set — never alone.
+  const scopedSkills = releaseSkills.length > 0
+    ? withAlwaysInstallSkills(releaseSkills)
+    : [];
   const installSteps = buildInstallSteps(scopedSkills, latest.artifactVersion);
 
   function copy(text: string) {
@@ -462,7 +485,9 @@ export const FoundationSkillUpdateBanner: React.FC<FoundationSkillUpdateBannerPr
                         />
                         <p className={styles.noNotes}>
                           Only do this after Feed setup shows a version from <code>npm view @apex/skills version</code>.
-                          Install vendors foundation files and scaffolds adapters in one step; bootstrap refines them.
+                          Install vendors foundations and scaffolds project content once; bootstrap only fills unfilled anchored slots;
+                          then run <code>/post-skill-bootstrap</code> in Cursor to clear remaining gaps.
+                          <code>post-skill-bootstrap</code> is always included with the install.
                         </p>
                       </>
                     )}

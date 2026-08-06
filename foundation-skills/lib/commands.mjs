@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import url from 'node:url';
-import { executeInstall, applyManagedSkillMd } from './install.mjs';
+import { executeInstall, applyAdapterSkillMd } from './install.mjs';
 import { checkRepo } from './check.mjs';
 import { bootstrapSkill } from './bootstrap.mjs';
 import { runDoctor, formatDoctor } from './doctor.mjs';
@@ -13,7 +13,7 @@ import {
   writeTextFile, assertWithin, toPosix, normalizeText, sha256, listFilesRel,
 } from './util.mjs';
 import { ADAPTER_DIR, pkgFoundationDir } from './layout.mjs';
-import { composeManaged, hashManaged } from './managedRegion.mjs';
+import { composeAdapter, hashManaged } from './managedRegion.mjs';
 
 /** The package root is two levels up from lib/commands.mjs. */
 export function defaultPackageRoot() {
@@ -67,8 +67,8 @@ export function cmdInstall(opts, log) {
   // Hard prerequisite gate — registry + feed must be healthy before install.
   const doc = runDoctor({
     repoRoot: path.resolve(opts.cwd ?? process.cwd()),
-    requireRegistry: true,
-    requireFeed: true,
+    requireRegistry: opts.skipFeed !== true,
+    requireFeed: opts.skipFeed !== true,
   });
   if (!doc.ok) {
     log(formatDoctor(doc, { showNextSteps: false }));
@@ -116,7 +116,10 @@ export function cmdCheck(opts, log) {
     ].filter(Boolean).join(', ');
     log(`  - ${s.name}: ${flags}`);
   }
-  return 0;
+  const invalid =
+    result.lockfileIntegrityValid === false ||
+    result.skills.some((skill) => skill.drift || !skill.compatible);
+  return invalid ? 1 : 0;
 }
 
 export function cmdBootstrap(opts, log) {
@@ -150,6 +153,18 @@ export function cmdBootstrap(opts, log) {
     }
   }
 
+  if (Array.isArray(opts.authorizedSkills)) {
+    const authorized = new Set(opts.authorizedSkills);
+    const rejected = skills.filter((name) => !authorized.has(name));
+    if (rejected.length) {
+      log(
+        `[apex-skills] ERROR: Cannot bootstrap skills not released for this package version:\n` +
+        `  ${rejected.join(', ')}`,
+      );
+      return 1;
+    }
+  }
+
   const catalog = loadCatalog(pkgRoot);
   const lock = readLockfile(repoRoot);
 
@@ -176,9 +191,10 @@ export function cmdBootstrap(opts, log) {
 
 /**
  * Persist bootstrapped content:
- *   - SKILL.md via fenced splice (never clobber project tail / unfenced files)
+ *   - SKILL.md adapter zone merged (filled APEX:slot values preserved;
+ *     foundation fence + project notes untouched)
  *   - companion foundation files always overwritten
- *   - apex-skill.json written when scaffolding or already present
+ *   - apex-skill.json written when produced by the template
  */
 function writeBootstrapFiles(pkgRoot, repoRoot, skill, files, suiteVersion, lock) {
   const wrote = [];
@@ -190,20 +206,15 @@ function writeBootstrapFiles(pkgRoot, repoRoot, skill, files, suiteVersion, lock
     ? fs.readFileSync(foundationSkillMd, 'utf8')
     : '';
 
-  const newManaged = composeManaged(
+  const adapterRegion = composeAdapter(files['SKILL.md'] ?? '', skill, suiteVersion);
+  const result = applyAdapterSkillMd(repoRoot, skill, adapterRegion, {
     foundationText,
-    files['SKILL.md'] ?? '',
-    skill,
-    suiteVersion,
-  );
-
-  const expectedHash = lock?.skills?.[skill]?.managedRegionHash ?? null;
-  const result = applyManagedSkillMd(repoRoot, skill, newManaged, { expectedHash });
+    version: suiteVersion,
+  });
   if (result.warning) warnings.push(result.warning);
   if (result.backedUp) wrote.push(result.backedUp);
   if (result.wrote) wrote.push(result.wrote);
 
-  // Companions from package foundation
   for (const rel of listFilesRel(foundationDir)) {
     if (rel === 'SKILL.md') continue;
     const destRel = toPosix(path.join(ADAPTER_DIR, skill, rel));
@@ -212,7 +223,6 @@ function writeBootstrapFiles(pkgRoot, repoRoot, skill, files, suiteVersion, lock
     wrote.push(destRel);
   }
 
-  // apex-skill.json from adapter template (if produced)
   if (files['apex-skill.json']) {
     const destRel = toPosix(path.join(ADAPTER_DIR, skill, 'apex-skill.json'));
     assertWithin(repoRoot, destRel);
@@ -271,7 +281,11 @@ function countWrites(actions) {
   let n = 0;
   for (const a of actions) {
     n += Object.keys(a.companions ?? {}).length;
-    if (a.skillMdAction === 'create' || a.skillMdAction === 'splice') n += 1;
+    if (
+      a.skillMdAction === 'create' ||
+      a.skillMdAction === 'splice' ||
+      a.skillMdAction === 'adopt'
+    ) n += 1;
   }
   return n + 1; // lockfile
 }

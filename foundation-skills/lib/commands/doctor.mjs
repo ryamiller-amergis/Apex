@@ -1,7 +1,17 @@
 /** doctor command — delegates to lib/doctor.mjs */
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { runDoctor, formatDoctor } from '../doctor.mjs';
-import { checkApexAuthorization } from '../apexAuthorize.mjs';
+import {
+  checkApexAuthorization,
+  readPackageVersion,
+} from '../apexAuthorize.mjs';
 import { findGitRoot } from '../util.mjs';
+
+const PACKAGE_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../..',
+);
 
 /**
  * @param {object} [opts]
@@ -46,8 +56,19 @@ export async function doctor({
  * Run the APEX entitlement check and merge it into a doctor result in place,
  * recomputing `ok` / `hardFailures`. Shared by doctor, install, and update.
  */
-export async function appendApexAuthorization(result, { repoRoot, skip = false }) {
-  const check = await checkApexAuthorization({ repoRoot, skip });
+export async function appendApexAuthorization(
+  result,
+  {
+    repoRoot,
+    skip = false,
+    packageVersion = readPackageVersion(PACKAGE_ROOT),
+  },
+) {
+  const check = await checkApexAuthorization({
+    repoRoot,
+    skip,
+    packageVersion,
+  });
   result.checks.push(check);
   result.authorization = check.authorization ?? null;
   result.hardFailures = result.checks.filter((c) => c.hard && !c.ok);

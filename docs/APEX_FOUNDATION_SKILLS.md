@@ -27,23 +27,29 @@ UI Lab output change, and recovery / deprecation procedures.
 
 Foundation skills are the **project-agnostic workflow procedures** that power
 APEX's AI-guided SDLC — `to-prd`, `grill-with-docs`, `ui-lab`, ADR interview,
-standup, and 26 others. They ship baked into a fenced managed region inside
-`.cursor/skills/<skill>/SKILL.md`, with companion schemas/templates alongside.
-Project notes live **below** the `<!-- APEX:END managed -->` fence and are
-never overwritten.
+standup, and others. Each installed `.cursor/skills/<skill>/SKILL.md` has one
+strict ownership boundary:
+
+1. **APEX-owned:** YAML frontmatter plus `APEX:BEGIN/END managed`. Install and
+   update hash, back up, and replace this foundation content.
+2. **Project-owned:** everything after `APEX:END managed`, including the adapter
+   scaffold and Project notes. Standard install/update never replace it.
+3. **Explicit fill:** `bootstrap` or `install --fill` may fill only unfilled
+   `APEX:slot(...)` anchors. Filled slots and free-form project content survive.
 
 ```
 Your repo/
   .cursor/
-    skills/                    ← fenced SKILL.md + companions
+    skills/
       ui-lab/
-        SKILL.md               ← managed region (above fence) + project notes (below)
+        SKILL.md               ← APEX frontmatter/foundation | project-owned tail
       to-prd/
         SKILL.md
         backlog-schema.json    ← fully managed companion
   .apex/
-    config.json                ← authorizing release cache
-    backups/                   ← in-fence edit backups
+    config.json                ← last live authorization record (not a credential)
+    backups/                   ← foundation-fence edit backups
+    rollback-backups/          ← quarantined skills removed by update/rollback
   apex-skills.lock.json        ← managed; records version + file hashes
 ```
 
@@ -67,7 +73,7 @@ Before running the CLI, verify the following with `npx @apex/skills doctor`:
 # 1. Add @apex:registry to .npmrc (see §3a — paste the line; do this before any npx @apex/skills command)
 # Then authenticate:
 npx vsts-npm-auth -config .npmrc
-npm view @apex/skills version   # expect 1.1.x — confirms feed is wired
+npm view @apex/skills version   # expect 2.x — confirms feed is wired
 
 # 2. Point the CLI at APEX so it can verify entitlement
 $env:APEX_URL="https://your-apex-host"     # PowerShell
@@ -82,6 +88,11 @@ npx @apex/skills install ui-lab to-prd grill-with-docs design-system
 # 5. Bootstrap adapters (defaults to skills in the lockfile from step 4)
 npx @apex/skills bootstrap
 
+# 6. In Cursor (not the terminal) — readiness interview for unfilled markers
+#    Replaces markers with confirmed values inside APEX:slot anchors (re-run is a no-op when none remain).
+#    Always installed with any entitled release as `post-skill-bootstrap`
+/post-skill-bootstrap
+
 # To install every skill your release ships to your project:
 npx @apex/skills install --all
 ```
@@ -94,25 +105,35 @@ npx @apex/skills install --all
 > in `.npmrc`. Use Feed setup (Direct) in the banner, or paste the line manually.
 > Once the feed is wired, the CLI works normally.
 
+> **1.1.0 was a test-only package.** Its single fence combined foundation and
+> adapter text, so 2.0.0 refuses to guess where project ownership begins. Discard
+> disposable 1.1.0 pilot branches and install 2.0.0 cleanly. The CLI leaves any
+> encountered single-fence file unchanged.
+
 ---
 
-## 2a. Install authorization (since 1.1.0)
+## 2a. Release authorization (production contract in 2.0.0)
 
-`install` and `update` verify with APEX that this repo is entitled to foundation
-skills before writing anything. Feed access alone is no longer sufficient.
+`install`, `update`, and `bootstrap` verify with APEX that this repository may
+use the exact package version currently running. Feed access alone is not
+authorization.
 
 **How a repo is authorized.** The CLI reads the repo's `origin` remote and asks
 APEX about it:
 
 ```
-GET {APEX_URL}/api/internal/foundation-skills/authorize?remote=<origin url>
+GET {APEX_URL}/api/internal/foundation-skills/authorize
+    ?remote=<origin url>
+    &artifactVersion=<running package version>
 ```
 
 APEX authorizes the repo when both hold:
 
-1. the remote maps to a repo registered under an Apex project
-   (Project Admin → Project Settings), and
-2. that project has a **published** release visible to it.
+1. The canonical remote identity matches the registered provider and
+   ADO project/repository or GitHub organization/repository.
+2. That Apex project received this exact artifact in a published release.
+3. The release has a server-derived SHA-256 and immutable manifest extracted
+   from the exact npm tarball. Legacy unverified rows cannot authorize installs.
 
 Entitlement is derived at request time, never stored as a grant — so deprecating
 the release or removing the repo registration revokes access immediately, with
@@ -125,8 +146,8 @@ nothing to clean up.
   "apexProject": "maxview",
   "apexUrl": "https://your-apex-host",
   "repo": "MaxView",
-  "releaseVersion": "1.0.0",
-  "artifactVersion": "1.1.0",
+  "releaseVersion": "2.0.0",
+  "artifactVersion": "2.0.0",
   "authorizedSkills": ["design-system", "grill-with-docs", "prd-design-spec", "to-prd"],
   "authorizedAt": "2026-08-04T22:41:00.000Z"
 }
@@ -136,7 +157,8 @@ nothing to clean up.
 install.
 
 > **`.apex/config.json` is not a credential.** It records a past decision; it does
-> not grant anything. A live check runs on **every** `install` and `update`, so a
+> not grant anything. A live check runs on **every** install, update, and
+> bootstrap, so a
 > project removed from release targeting is refused on its next run even though
 > the file is still present. The only thing the CLI reuses from it is `apexUrl`,
 > as a convenience so `APEX_URL` need not be re-exported every shell.
@@ -151,31 +173,22 @@ install.
 project, `install` refuses any skill outside it, and `--all` resolves to *your
 released skills* rather than the whole catalog.
 
-**Version pinning.** APEX also returns the release's `artifactVersion` — the
-`@apex/skills` semver that release shipped. On a mismatch the CLI either blocks
-or warns, depending on whether APEX ever verified that version exists:
-
-| `artifactVersionVerified` | Meaning | CLI behaviour on mismatch |
-|---|---|---|
-| `true` | Release has an integrity hash, computed against the feed at publish time | **Blocks.** The pinned version is real, so installing anything else vendors ungranted content |
-| `false` | Published with Azure Artifacts unconfigured — the version was typed by hand and never checked | **Warns and continues.** Blocking on a value nothing validated would lock a team out over an APEX-side data gap |
+**Version pinning.** APEX returns the release's exact `artifactVersion`. A
+mismatch or unverified release always blocks. Prior published versions remain
+usable only by projects that received those versions; this is what makes
+rollback authorization possible.
 
 A blocking mismatch looks like this:
 
 ```
 [apex-skills] Version mismatch — refusing to install.
 
-  Running package:    @apex/skills@1.1.0
-  Release authorizes: @apex/skills@0.4.0 (release 0.4.0)
+  Running package:    @apex/skills@2.1.0
+  Release authorizes: @apex/skills@2.0.0 (release 2.0.0)
 ```
 
-Fix by installing the pinned version — `npx @apex/skills@0.4.0 install <skill…>` —
-or by publishing a newer release targeting the project. Releases created before
-`artifactVersion` was populated skip this check entirely.
-
-Enforcement tightens on its own: once the feed is configured and new releases are
-published, they carry integrity hashes and their mismatches start blocking. No
-code change or flag flip is involved.
+Fix by installing the pinned version from the APEX banner or by publishing a
+newer verified release targeting the project.
 
 **Why the banner pins the version.** Azure Artifacts does not implement npm
 dist-tags — [`latest` is not maintained per feed view][ado-dist-tags], so a bare
@@ -189,12 +202,11 @@ commands from the banner rather than typing them unpinned.
 
 [ado-dist-tags]: https://github.com/microsoft/azure-pipelines-tasks/issues/9743
 
-> **Admin note:** a release's `artifactVersion` must match a version that actually
-> exists on the feed. Configure `AZURE_ARTIFACTS_ORG`, `AZURE_ARTIFACTS_FEED` and
-> `AZURE_ARTIFACTS_PAT` on the APEX App Service and the release wizard populates
-> this field from a feed-backed dropdown, publish verifies it, and the value
-> becomes trustworthy. Without those settings the field is free text, the wizard
-> warns, and published releases are badged **unverified** in Platform Admin.
+> **Admin note:** publication is fail-closed. APEX must download the candidate,
+> validate its tar structure and complete manifest, verify dependency/audience
+> closure, compute SHA-256, and promote that exact artifact. Missing feed
+> configuration, failed verification, or invalid manifests leave the release
+> unpublished.
 
 **Failure modes** — all fail closed:
 
@@ -204,10 +216,12 @@ commands from the banner rather than typing them unpinned.
 | `no git "origin" remote found` | Local-only clone | `git remote -v`; add the hosted remote |
 | `not authorized (repo-not-registered)` | Remote matches no Apex project | Admin registers the repo in Project Settings |
 | `not authorized (no-release)` | Project has no published release | Admin publishes a release targeting the project |
+| `not authorized (release-not-entitled)` | This exact package version was not released to the project | Use the pinned command shown in APEX |
+| `not authorized (release-unverified)` | Release lacks server-derived digest/manifest | Publish a verified replacement |
 | `not authorized (no-skills)` | Release is visible but ships nothing to the project | Admin adds skills or fixes per-skill targeting |
 | `could not reach APEX…` | Wrong URL, VPN, APEX down | Fix connectivity; a recorded config is **not** accepted as a substitute |
 | `reachable but could not answer` | APEX is up but its authorization lookup timed out (HTTP 503) | Nothing to fix locally — retry shortly, and report it if it persists |
-| `Version mismatch — refusing to install` | Running package ≠ a **verified** release `artifactVersion` | Install the pinned version, or publish a newer release |
+| `Version mismatch — refusing to install` | Running package ≠ release `artifactVersion` | Install the pinned version, or publish a newer release |
 
 **Escape hatch.** Package maintainers and air-gapped environments can bypass the
 check. Use it deliberately — it installs files no release can later manage:
@@ -300,13 +314,14 @@ npx @apex/skills install --all
 
 | Location | Owner | Written by |
 |---|---|---|
-| `.cursor/skills/<skill>/SKILL.md` managed region | Package | `install` / `update` / `bootstrap` (splices; preserves project notes) |
-| `.cursor/skills/<skill>/SKILL.md` below fence | Team | never overwritten by CLI |
-| `.cursor/skills/<skill>/*` companions | Package | `install` / `update` / `bootstrap` always |
+| `SKILL.md` frontmatter + managed fence | Package | `install` / `update`; hashed and replaced |
+| `SKILL.md` below `APEX:END managed` | Team | never replaced; explicit fill touches only unfilled slot bodies |
+| Non-SKILL companion files | Package | `install` / `update`; overwritten and integrity-checked |
 | `.apex/config.json` | Repo | `install` / `update` — records the authorizing release (§2a) |
 | `apex-skills.lock.json` | Repo | `install` |
 
-Bootstrap re-renders the **managed region** from repo evidence (design tokens, components, ADO org). Project notes below the fence survive.
+Bootstrap fills only unfilled anchored project slots from repository evidence.
+It does not re-render the project-owned adapter or the foundation.
 
 ### 3c. Review adapter TODO placeholders
 
@@ -315,7 +330,7 @@ your detected design tokens, component list, routes, and conventions. Fields
 the scanner could not determine are marked:
 
 ```html
-<!-- TODO(colorTokens): no css-variables evidence — fill in manually -->
+<!-- APEX:unfilled(colorTokens): no css-variables evidence -->
 ```
 
 Review these and fill them in for the best agent output. Run `--explain` to see
@@ -480,30 +495,37 @@ POST /api/platform-admin/foundation-skills/releases  (create draft)
         │
         ▼
 POST /api/platform-admin/foundation-skills/releases/:id/publish
+  → status: draft → publishing
+  → downloads exact tgz; validates manifest; computes SHA-256
   → promotes to Azure Artifacts Release view
-  → status: draft → published
+  → status: publishing → published
         │
         ▼
 Consumer repos see "Update available" banner in APEX
         │
         ▼
 POST /api/platform-admin/foundation-skills/update-repo
-  → clones repo, runs `npx @apex/skills install <selected-skills>`, opens PR
+  → clones repo, downloads and SHA-verifies exact tgz
+  → safely extracts and runs its local CLI with no feed credentials
+  → validates the complete diff and opens PR
 ```
 
 ### Candidate-to-release step-by-step
 
 1. Merge a `foundation-skills/` change to `main`.
 2. CI runs `validate-and-publish` and publishes a candidate to the Local view.
-3. In Platform Admin → APEX Skills → **Create Draft**, enter the same version and
-   artifact version as the CI-published candidate. Add release notes and mark any
-   breaking changes.
+3. In Platform Admin → APEX Skills → **Create Draft**, select the CI candidate.
+   Suite version and artifact version must match.
 4. **Select audience** — choose **All projects** (default) or **Specific projects**
    (searchable picker; e.g. select `MaxView` for a targeted rollout). Empty allowlist
    means every Apex project will see the update; a non-empty list restricts visibility.
-5. Click **Publish** — promotes the tarball from Local to Release view and records SHA-256.
+5. Click **Publish**. APEX derives the manifest, digest, and feed URL from the
+   exact artifact. Client-provided evidence is rejected.
 6. Only Apex projects in the allowlist (or all, if unrestricted) see the update
    notice in Agent Home.
+
+Published artifact coordinates, skill selection, and targeting are immutable.
+Only release notes and breaking-change copy remain editable.
 
 ---
 
@@ -538,7 +560,9 @@ A Platform Admin can open a PR on your behalf:
 
 The PR updates the fenced managed region inside `.cursor/skills/`, managed
 companions, and `apex-skills.lock.json`. Project notes below the fence are
-preserved. Review, run `npx @apex/skills check`, and merge.
+preserved. Skills removed from the target release are quarantined under
+`.apex/rollback-backups/<version>/` instead of being discarded. Generated PRs
+are rejected if they touch `.npmrc` or any unrelated path.
 
 ---
 
@@ -689,18 +713,18 @@ Or via API:
 ```bash
 curl -X POST https://your-apex/api/platform-admin/foundation-skills/releases/{id}/deprecate \
   -H "Content-Type: application/json" \
-  -d '{"reason": "superseded by v1.1.0"}'
+  -d '{"reason": "superseded by v2.0.1"}'
 ```
 
 Deprecation is recorded in the audit log. Consumer repos already on this version
-continue working — the `check` command will warn that the installed release is
-deprecated and a newer release is available.
+keep their committed files, but the release can no longer authorize new install,
+update, or bootstrap operations. APEX repo status identifies deprecated installs.
 
 ### Handle managed-region drift
 
-If a team edited content **above** `<!-- APEX:END managed -->`, the next
-`update` / `bootstrap` backs up the file to `.apex/backups/<skill>/` and
-replaces the managed region. Project notes below the fence are never touched.
+If a team edited frontmatter or content inside the managed fence, the next
+install/update backs up the file to `.apex/backups/<skill>/` and restores the
+package foundation. Everything below the fence remains project-owned.
 
 ```
 WARN  Managed region drift for "ui-lab" — will back up to .apex/backups/ui-lab/ before updating
@@ -713,14 +737,17 @@ To recover a backed-up edit:
 ls .apex/backups/ui-lab/
 ```
 
-Unfenced (hand-written) adapters are left untouched with a warning — APEX will
-not wrap or overwrite them unless you migrate deliberately.
+On first 2.0.0 adoption, an unfenced same-name team skill is backed up and
+preserved as the project-owned tail beneath the new foundation. Malformed,
+reversed, or duplicate APEX markers fail closed and leave the file unchanged.
 
 ### Rolling back a bad release
 
 1. Deprecate the bad release in Platform Admin.
-2. Create and publish a patch release with the fix.
-3. Consumers run `npx @apex/skills update` or accept the APEX-generated PR.
+2. Select a prior verified release under Consumer Repos → Rollback.
+3. Open the generated rollback PR. Skills absent from the target release are
+   quarantined under `.apex/rollback-backups/`.
+4. Create and publish a corrected release before resuming forward updates.
 
 ---
 
@@ -750,7 +777,8 @@ foundation-skills/          @apex/skills npm package
   adapters/<skill>/         — adapter template + recipe.json + apex-skill.json
   lib/                      — installer, bootstrapper, detectors, lockfile, check
   bin/apex-skills.mjs       — CLI entry point
-  test/                     — Node built-in test suite (23 tests)
+  test/                     — Node built-in regression suite (124 tests)
+  scripts/consumer-regression.mjs — isolated real-repo pilot runner
 
 src/server/services/
   foundationSkillResolverService.ts    — local disk skill resolution (Wave 4)

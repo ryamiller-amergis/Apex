@@ -28,15 +28,15 @@
  */
 
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { randomBytes, createHash } from 'crypto';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import {
   checkoutDefaultBranch,
   checkoutNewBranch,
   pushBranch,
   cleanupWorkspace,
-  getWorkspaceDir,
 } from './repoCheckoutService';
 import { resolveGitRemote } from './repoCacheService';
 import { AzureDevOpsService } from './azureDevOps';
@@ -49,13 +49,16 @@ import {
   semverGreaterThan,
   appendAudit,
 } from './foundationSkillReleaseService';
-import { checkCompatibility, getRepoStatus } from './foundationSkillCompatibilityService';
-import { git, safeArgs, LONG_TIMEOUT_MS } from '../utils/asyncGit';
+import { downloadPackageArtifact } from './azureArtifactsSkillService';
+import { extractNpmTarballSafely } from './foundationSkillArtifactManifest';
+import { getRepoStatus } from './foundationSkillCompatibilityService';
+import { git, safeArgs } from '../utils/asyncGit';
 import type { SkillProvider } from '../../shared/types/projectSettings';
 import type {
   FoundationSkillRelease,
   RollbackFoundationSkillRepoResult,
 } from '../../shared/types/foundationSkills';
+import { getVisibleSkillsForProject } from '../../shared/types/foundationSkills';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -68,10 +71,10 @@ export interface UpdateRepoOptions {
   provider?: SkillProvider;
   /** Specific release id to install; defaults to the latest published release */
   releaseId?: string;
-  /** Override which skills to install; defaults to the release's selectedSkills */
-  selectedSkills?: string[];
   /** Apex project name — used to filter releases by targetProjects allowlist */
-  apexProject?: string | null;
+  apexProject: string;
+  /** Canonical APEX origin supplied to the CLI authorization check. */
+  apexUrl: string;
   /**
    * `update` (default) installs the latest / chosen release forward.
    * `rollback` installs a lower published version and uses rollback PR copy.
@@ -89,6 +92,7 @@ export interface RollbackRepoOptions {
   defaultBranch?: string;
   provider?: SkillProvider;
   apexProject: string;
+  apexUrl: string;
   /** Target published release id to roll back to. */
   releaseId: string;
   /** Optional override; defaults to last observed installed version. */
@@ -121,40 +125,398 @@ function makeSessionId(repoName: string, version: string): string {
   return `skill-update-${repoName.slice(0, 20)}-${version.replace(/\./g, '-')}-${rand}`;
 }
 
-/**
- * Run `npx @apex/skills@<version> install <skills...>` inside the workspace.
- * Returns stdout/stderr combined. Throws on non-zero exit.
- *
- * The artifact version is pinned explicitly: an unpinned `npx @apex/skills`
- * resolves the feed's latest tag, which may not be the version recorded on the
- * release row (and may even be a deprecated build).
- */
-function runCliInstall(workspaceDir: string, skills: string[], artifactVersion: string): string {
-  const skillArgs = skills.length > 0 ? skills.join(' ') : '';
-  const spec = artifactVersion ? `@apex/skills@${artifactVersion}` : '@apex/skills';
-  const cmd = `npx ${spec} install ${skillArgs}`.trim();
-  console.log(`[foundationSkillRepoUpdateService] Running: ${cmd}`);
+export function resolveReleasedSkillsForProject(
+  release: FoundationSkillRelease,
+  apexProject: string,
+): string[] {
+  if (!release.integritySha256 || !release.manifestSnapshot) {
+    throw new Error(`Release ${release.version} has no verified artifact manifest`);
+  }
+  const visible = getVisibleSkillsForProject(release, apexProject);
+  const out = [...visible];
+  const seen = new Set(out);
+  for (const skill of release.manifestSnapshot.skills) {
+    if (skill.alwaysInstall && !seen.has(skill.name)) {
+      out.push(skill.name);
+      seen.add(skill.name);
+    }
+  }
+  return out;
+}
+
+export function buildArtifactCliArgs(
+  artifactVersion: string,
+  skills: string[],
+  cliPath = 'bin/apex-skills.mjs',
+): string[] {
+  if (!parseSemver(artifactVersion)) {
+    throw new Error(`Invalid artifact version: ${artifactVersion}`);
+  }
+  for (const skill of skills) {
+    if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(skill)) {
+      throw new Error(`Invalid skill name: ${skill}`);
+    }
+  }
+  return [
+    cliPath,
+    'install',
+    ...skills,
+    '--skip-feed',
+  ];
+}
+
+async function runCliInstall(
+  workspaceDir: string,
+  skills: string[],
+  release: FoundationSkillRelease,
+  apexUrl: string,
+): Promise<string> {
+  buildArtifactCliArgs(release.artifactVersion, skills);
+  const downloaded = await downloadPackageArtifact(release.artifactVersion);
+  if (downloaded.integritySha256 !== release.integritySha256) {
+    throw new Error(
+      `Downloaded artifact integrity mismatch for ${release.artifactVersion}`,
+    );
+  }
+  const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-skills-exec-'));
   try {
-    return execSync(cmd, {
+    const extractDir = path.join(artifactDir, 'extracted');
+    fs.mkdirSync(extractDir);
+    extractNpmTarballSafely(downloaded.tarball, extractDir);
+    const cliPath = path.join(extractDir, 'package', 'bin', 'apex-skills.mjs');
+    if (!fs.existsSync(cliPath)) {
+      throw new Error('Verified artifact does not contain bin/apex-skills.mjs');
+    }
+    const cliArgs = buildArtifactCliArgs(
+      release.artifactVersion,
+      skills,
+      cliPath,
+    );
+    const installOutput = execFileSync(process.execPath, cliArgs, {
       cwd: workspaceDir,
       encoding: 'utf-8',
-      timeout: 5 * 60_000, // 5 min cap for full install
-      env: { ...process.env, FORCE_COLOR: '0' },
+      timeout: 5 * 60_000,
+      env: buildGeneratedCliEnv(apexUrl),
+      shell: false,
     });
+    const checkOutput = execFileSync(process.execPath, [cliPath, 'check'], {
+      cwd: workspaceDir,
+      encoding: 'utf-8',
+      timeout: 2 * 60_000,
+      env: buildGeneratedCliEnv(apexUrl),
+      shell: false,
+    });
+    return `${installOutput}\n${checkOutput}`.trim();
   } catch (e: unknown) {
     const err = e as { message?: string; stdout?: string; stderr?: string };
-    const output = [err.stdout, err.stderr, err.message].filter(Boolean).join('\n');
+    const output = redactSecrets(
+      [err.stdout, err.stderr, err.message].filter(Boolean).join('\n'),
+    );
     throw new Error(`@apex/skills install failed:\n${output.slice(0, 2000)}`);
+  } finally {
+    fs.rmSync(artifactDir, { recursive: true, force: true });
   }
+}
+
+export function buildGeneratedCliEnv(apexUrl: string): NodeJS.ProcessEnv {
+  const parsed = new URL(apexUrl);
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error('APEX URL cannot contain credentials, query, or fragment');
+  }
+  const local =
+    parsed.hostname === 'localhost' ||
+    parsed.hostname === '127.0.0.1' ||
+    parsed.hostname === '::1';
+  if (parsed.protocol !== 'https:' && !(local && parsed.protocol === 'http:')) {
+    throw new Error('APEX URL must use HTTPS outside local development');
+  }
+  const allowed = [
+    'PATH', 'Path', 'SystemRoot', 'WINDIR', 'HOME', 'USERPROFILE',
+    'TEMP', 'TMP', 'TMPDIR', 'NODE_ENV',
+  ];
+  const env: NodeJS.ProcessEnv = {
+    FORCE_COLOR: '0',
+    APEX_URL: parsed.toString().replace(/\/$/, ''),
+  };
+  for (const key of allowed) {
+    if (process.env[key] !== undefined) env[key] = process.env[key];
+  }
+  return env;
+}
+
+function redactSecrets(text: string): string {
+  const pat = process.env.AZURE_ARTIFACTS_PAT;
+  return pat ? text.split(pat).join('[REDACTED]') : text;
 }
 
 /** Read changed files in the workspace relative to HEAD. */
 async function changedFiles(workspaceDir: string): Promise<string[]> {
   await git(safeArgs(workspaceDir, ['add', '-A']), { cwd: workspaceDir });
-  const out = await git(safeArgs(workspaceDir, ['diff', '--cached', '--name-only']), {
-    cwd: workspaceDir,
+  const out = await git(
+    safeArgs(workspaceDir, [
+      'diff',
+      '--cached',
+      '--name-status',
+      '--find-renames',
+      '-z',
+    ]),
+    { cwd: workspaceDir },
+  );
+  const tokens = out.split('\0').filter(Boolean);
+  const files: string[] = [];
+  for (let index = 0; index < tokens.length;) {
+    const status = tokens[index++];
+    if (/^[RC]/.test(status)) {
+      if (tokens[index]) files.push(tokens[index++]);
+      if (tokens[index]) files.push(tokens[index++]);
+    } else if (tokens[index]) {
+      files.push(tokens[index++]);
+    }
+  }
+  return [...new Set(files)];
+}
+
+export function validateGeneratedDiff(
+  changed: string[],
+  managedSkills: string[],
+  reconciliationVersion: string | null,
+): void {
+  const skillRoots = managedSkills.map((skill) => `.cursor/skills/${skill}/`);
+  const backupRoots = managedSkills.map((skill) => `.apex/backups/${skill}/`);
+  const unexpected = changed.filter((raw) => {
+    const file = raw.replace(/\\/g, '/');
+    if (
+      file.includes('../') ||
+      path.posix.basename(file).toLowerCase() === '.npmrc'
+    ) return true;
+    if (file === 'apex-skills.lock.json' || file === '.apex/config.json') {
+      return false;
+    }
+    if (skillRoots.some((root) => file.startsWith(root))) return false;
+    if (backupRoots.some((root) => file.startsWith(root))) return false;
+    if (
+      reconciliationVersion &&
+      managedSkills.some((skill) =>
+        file.startsWith(
+          `.apex/rollback-backups/${reconciliationVersion}/${skill}/`,
+        ),
+      )
+    ) return false;
+    return true;
   });
-  return out.split('\n').filter(Boolean);
+  if (unexpected.length) {
+    throw new Error(
+      `Unexpected generated files outside the APEX skills allowlist: ` +
+      `${unexpected.join(', ')}`,
+    );
+  }
+}
+
+export function reconcileRollbackWorkspace(
+  workspaceDir: string,
+  targetSkills: string[],
+  targetVersion: string,
+  direction: 'update' | 'rollback',
+  expectedSourceVersion?: string | null,
+  requireLock = true,
+): { removedSkills: string[]; managedSkills: string[] } {
+  buildArtifactCliArgs(targetVersion, targetSkills);
+  const lockPath = path.join(workspaceDir, 'apex-skills.lock.json');
+  if (!fs.existsSync(lockPath)) {
+    if (requireLock) {
+      throw new Error('Cannot reconcile release without apex-skills.lock.json');
+    }
+    return { removedSkills: [], managedSkills: [...targetSkills] };
+  }
+  const lock = readVerifiedConsumerLock(lockPath);
+  if (lock.package !== '@apex/skills') {
+    throw new Error(`Source lock package is not @apex/skills`);
+  }
+  if (
+    expectedSourceVersion &&
+    lock.suiteVersion !== expectedSourceVersion
+  ) {
+    throw new Error(
+      `Source lock version ${lock.suiteVersion ?? 'missing'} does not match ` +
+      `expected installed version ${expectedSourceVersion}`,
+    );
+  }
+  if (direction === 'update' && lock.suiteVersion !== targetVersion) {
+    if (!isGreaterVersion(targetVersion, lock.suiteVersion!)) {
+      throw new Error(
+        `Update target ${targetVersion} must be newer than source ` +
+        `${lock.suiteVersion}`,
+      );
+    }
+  }
+  if (direction === 'rollback') {
+    if (!isGreaterVersion(lock.suiteVersion!, targetVersion)) {
+      throw new Error(
+        `Rollback source ${lock.suiteVersion} must be newer than target ` +
+        `${targetVersion}`,
+      );
+    }
+  }
+  const installed = Object.keys(lock.skills ?? {});
+  for (const skill of installed) buildArtifactCliArgs(targetVersion, [skill]);
+  const target = new Set(targetSkills);
+  const removedSkills = installed.filter((skill) => !target.has(skill)).sort();
+
+  for (const skill of removedSkills) {
+    const source = path.join(workspaceDir, '.cursor', 'skills', skill);
+    if (!fs.existsSync(source)) continue;
+    const destination = path.join(
+      workspaceDir,
+      '.apex',
+      'rollback-backups',
+      targetVersion,
+      skill,
+      `attempt-${Date.now()}-${randomBytes(3).toString('hex')}`,
+    );
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.renameSync(source, destination);
+  }
+  fs.rmSync(lockPath, { force: true });
+  return {
+    removedSkills,
+    managedSkills: [...new Set([...targetSkills, ...removedSkills])],
+  };
+}
+
+function isGreaterVersion(a: string, b: string): boolean {
+  const left = parseSemver(a)!;
+  const right = parseSemver(b)!;
+  for (let index = 0; index < 3; index += 1) {
+    const comparison = compareNumericStrings(
+      left.core[index],
+      right.core[index],
+    );
+    if (comparison !== 0) return comparison > 0;
+  }
+  if (!left.prerelease.length && right.prerelease.length) return true;
+  if (left.prerelease.length && !right.prerelease.length) return false;
+  if (!left.prerelease.length && !right.prerelease.length) return false;
+
+  const count = Math.max(left.prerelease.length, right.prerelease.length);
+  for (let index = 0; index < count; index += 1) {
+    const leftId = left.prerelease[index];
+    const rightId = right.prerelease[index];
+    if (leftId === undefined) return false;
+    if (rightId === undefined) return true;
+    if (leftId === rightId) continue;
+    const leftNumeric = /^\d+$/.test(leftId);
+    const rightNumeric = /^\d+$/.test(rightId);
+    if (leftNumeric && rightNumeric) {
+      return compareNumericStrings(leftId, rightId) > 0;
+    }
+    if (leftNumeric) return false;
+    if (rightNumeric) return true;
+    return leftId > rightId;
+  }
+  return false;
+}
+
+function parseSemver(
+  version: string,
+): { core: [string, string, string]; prerelease: string[] } | null {
+  const match = version.match(
+    /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/,
+  );
+  if (!match) return null;
+  const core = [match[1], match[2], match[3]] as [string, string, string];
+  if (core.some((part) => part.length > 1 && part.startsWith('0'))) return null;
+  const prerelease = match[4]?.split('.') ?? [];
+  if (
+    prerelease.some(
+      (part) => /^\d+$/.test(part) && part.length > 1 && part.startsWith('0'),
+    )
+  ) {
+    return null;
+  }
+  return { core, prerelease };
+}
+
+function compareNumericStrings(left: string, right: string): number {
+  if (left.length !== right.length) return left.length > right.length ? 1 : -1;
+  if (left === right) return 0;
+  return left > right ? 1 : -1;
+}
+
+function validateInstalledLock(
+  workspaceDir: string,
+  release: FoundationSkillRelease,
+  expectedSkills: string[],
+): void {
+  const lockPath = path.join(workspaceDir, 'apex-skills.lock.json');
+  if (!fs.existsSync(lockPath)) {
+    throw new Error('Installer did not create apex-skills.lock.json');
+  }
+  const lock = readVerifiedConsumerLock(lockPath);
+  if (lock.package !== '@apex/skills' || lock.suiteVersion !== release.version) {
+    throw new Error(
+      `Installed lock does not match release ${release.version}`,
+    );
+  }
+  const actual = Object.keys(lock.skills ?? {}).sort();
+  const expected = [...expectedSkills].sort();
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(
+      `Installed lock skill set mismatch: expected ${expected.join(', ')}, ` +
+      `got ${actual.join(', ')}`,
+    );
+  }
+}
+
+function readVerifiedConsumerLock(lockPath: string): {
+  lockfileVersion?: number;
+  suiteVersion?: string;
+  package?: string;
+  integrity?: string;
+  generatedAt?: string;
+  skills?: Record<string, unknown>;
+  [key: string]: unknown;
+} {
+  let lock;
+  try {
+    lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+  } catch {
+    throw new Error('apex-skills.lock.json is not valid JSON');
+  }
+  if (
+    lock?.lockfileVersion !== 2 ||
+    typeof lock.suiteVersion !== 'string' ||
+    !parseSemver(lock.suiteVersion) ||
+    typeof lock.integrity !== 'string' ||
+    !lock.skills ||
+    typeof lock.skills !== 'object' ||
+    Array.isArray(lock.skills)
+  ) {
+    throw new Error('apex-skills.lock.json has an invalid v2 schema');
+  }
+  const { generatedAt: _generatedAt, integrity, ...rest } = lock;
+  const expected = createHash('sha256')
+    .update(stableJson(rest), 'utf8')
+    .digest('hex');
+  if (integrity !== expected) {
+    throw new Error('apex-skills.lock.json integrity mismatch');
+  }
+  return lock;
+}
+
+function stableJson(value: unknown): string {
+  const sort = (item: unknown): unknown => {
+    if (Array.isArray(item)) return item.map(sort);
+    if (item && typeof item === 'object') {
+      return Object.keys(item as Record<string, unknown>)
+        .sort()
+        .reduce<Record<string, unknown>>((out, key) => {
+          out[key] = sort((item as Record<string, unknown>)[key]);
+          return out;
+        }, {});
+    }
+    return item;
+  };
+  return JSON.stringify(sort(value), null, 2) + '\n';
 }
 
 /**
@@ -164,15 +526,26 @@ async function changedFiles(workspaceDir: string): Promise<string[]> {
  */
 function detectDrift(workspaceDir: string): string[] {
   const lockPath = path.join(workspaceDir, 'apex-skills.lock.json');
-  if (!fs.existsSync(lockPath)) return [];
+  if (!fs.existsSync(lockPath)) return ['apex-skills.lock.json (missing)'];
   try {
     const lock = JSON.parse(fs.readFileSync(lockPath, 'utf-8'));
     const drifted: string[] = [];
     for (const info of Object.values(lock.skills ?? {}) as Array<{ managedFiles?: Record<string, string>; vendored?: Record<string, string> }>) {
       const files = info?.managedFiles ?? info?.vendored ?? {};
       for (const [rel, expected] of Object.entries(files)) {
+        const normalized = rel.replace(/\\/g, '/');
+        if (
+          normalized.includes('../') ||
+          !normalized.startsWith('.cursor/skills/')
+        ) {
+          drifted.push(`${rel} (invalid path)`);
+          continue;
+        }
         const abs = path.join(workspaceDir, ...rel.split('/'));
-        if (!fs.existsSync(abs)) continue;
+        if (!fs.existsSync(abs)) {
+          drifted.push(`${rel} (missing)`);
+          continue;
+        }
         const actual = createHash('sha256')
           .update(fs.readFileSync(abs, 'utf-8').replace(/\r\n/g, '\n'))
           .digest('hex');
@@ -181,8 +554,16 @@ function detectDrift(workspaceDir: string): string[] {
     }
     // Legacy top-level files map (pre-v1)
     for (const [rel, expected] of Object.entries(lock.files ?? {})) {
+      const normalized = String(rel).replace(/\\/g, '/');
+      if (normalized.includes('../')) {
+        drifted.push(`${String(rel)} (invalid path)`);
+        continue;
+      }
       const abs = path.join(workspaceDir, ...String(rel).split('/'));
-      if (!fs.existsSync(abs)) continue;
+      if (!fs.existsSync(abs)) {
+        drifted.push(`${String(rel)} (missing)`);
+        continue;
+      }
       const actual = createHash('sha256')
         .update(fs.readFileSync(abs, 'utf-8').replace(/\r\n/g, '\n'))
         .digest('hex');
@@ -190,7 +571,7 @@ function detectDrift(workspaceDir: string): string[] {
     }
     return drifted;
   } catch {
-    return [];
+    return ['apex-skills.lock.json (invalid)'];
   }
 }
 
@@ -266,6 +647,8 @@ export async function updateRepoWithFoundationSkills(
     actor,
     intent = 'update',
     fromVersion = null,
+    apexProject,
+    apexUrl,
   } = opts;
   const errors: string[] = [];
 
@@ -274,7 +657,7 @@ export async function updateRepoWithFoundationSkills(
   try {
     release = opts.releaseId
       ? await getRelease(opts.releaseId)
-      : await getLatestPublishedRelease(opts.apexProject ?? null);
+      : await getLatestPublishedRelease(apexProject);
   } catch (e: unknown) {
     errors.push(`Failed to resolve release: ${(e as Error).message}`);
   }
@@ -286,17 +669,23 @@ export async function updateRepoWithFoundationSkills(
     errors.push(`Release ${release.id} is not published (status: ${release.status})`);
     return { status: 'error', prUrl: null, branchName: null, changedFiles: [], report: errors.join('\n'), releaseVersion: release.version, errors };
   }
-  if (opts.apexProject && !isReleaseVisibleToProject(release, opts.apexProject)) {
-    errors.push(`Release ${release.version} is not targeted at Apex project "${opts.apexProject}" — update the release targeting or use a different release`);
+  if (!isReleaseVisibleToProject(release, apexProject)) {
+    errors.push(`Release ${release.version} is not targeted at Apex project "${apexProject}" — update the release targeting or use a different release`);
     return { status: 'error', prUrl: null, branchName: null, changedFiles: [], report: errors.join('\n'), releaseVersion: release.version, errors };
   }
 
   const version        = release.version;
-  const skills         = opts.selectedSkills ?? release.selectedSkills ?? [];
+  let skills: string[];
+  try {
+    skills = resolveReleasedSkillsForProject(release, apexProject);
+  } catch (error) {
+    errors.push((error as Error).message);
+    return { status: 'error', prUrl: null, branchName: null, changedFiles: [], report: errors.join('\n'), releaseVersion: release.version, errors };
+  }
   const defaultBranch  = opts.defaultBranch ?? 'main';
   const branchName     = intent === 'rollback'
-    ? `chore/apex-skills-rollback-${version.replace(/\./g, '-')}`
-    : `chore/apex-skills-${version.replace(/\./g, '-')}`;
+    ? `chore/apex-skills-rollback-${version.replace(/\./g, '-')}-${randomBytes(3).toString('hex')}`
+    : `chore/apex-skills-${version.replace(/\./g, '-')}-${randomBytes(3).toString('hex')}`;
   const sessionId      = makeSessionId(repo, version);
   const remote         = resolveGitRemote(provider, project, repo);
 
@@ -320,8 +709,22 @@ export async function updateRepoWithFoundationSkills(
 
     // 3. Run the CLI
     let cliOutput = '';
+    let managedSkills = [...skills];
+    let reconciliationVersion: string | null = null;
     try {
-      cliOutput = runCliInstall(workspaceDir, skills, release.artifactVersion);
+      const reconciliation = reconcileRollbackWorkspace(
+        workspaceDir,
+        skills,
+        version,
+        intent,
+        intent === 'rollback' ? fromVersion : null,
+        intent === 'rollback',
+      );
+      managedSkills = reconciliation.managedSkills;
+      reconciliationVersion =
+        reconciliation.removedSkills.length > 0 ? version : null;
+      cliOutput = await runCliInstall(workspaceDir, skills, release, apexUrl);
+      validateInstalledLock(workspaceDir, release, skills);
       console.log(`[foundationSkillRepoUpdateService] CLI install complete`);
     } catch (e: unknown) {
       errors.push((e as Error).message);
@@ -338,24 +741,19 @@ export async function updateRepoWithFoundationSkills(
 
     // 4b. Check for actual changes
     const changed = await changedFiles(workspaceDir);
+    try {
+      validateGeneratedDiff(
+        changed,
+        managedSkills,
+        reconciliationVersion,
+      );
+    } catch (error) {
+      errors.push((error as Error).message);
+      return { status: 'error', prUrl: null, branchName, changedFiles: changed, report: errors.join('\n'), releaseVersion: version, errors };
+    }
     if (changed.length === 0) {
       console.log(`[foundationSkillRepoUpdateService] No changes — repo already at v${version}`);
       return { status: 'no_changes', prUrl: null, branchName, changedFiles: [], report: `Already up to date with v${version}`, releaseVersion: version, errors };
-    }
-
-    // 4c. Compatibility check against the installed version
-    try {
-      const compatReport = await checkCompatibility(
-        { provider, project, repo, branch: defaultBranch, candidateVersion: version },
-        { id: actor?.id ?? null },
-      );
-      if (compatReport.status === 'incompatible') {
-        errors.push(`Compatibility check failed: ${compatReport.errors.join('; ')}`);
-        return { status: 'incompatible', prUrl: null, branchName, changedFiles: changed, report: errors.join('\n'), releaseVersion: version, errors };
-      }
-    } catch (e: unknown) {
-      // Non-fatal — log and continue
-      console.warn(`[foundationSkillRepoUpdateService] Compatibility check error (non-fatal): ${(e as Error).message}`);
     }
 
     // 5. Commit and push
@@ -395,6 +793,7 @@ export async function updateRepoWithFoundationSkills(
 
     if (provider === 'github') {
       prUrl = await githubCatalog.createPullRequest({
+        org: project,
         repo,
         sourceBranch: branchName,
         targetBranch: defaultBranch,
@@ -411,11 +810,30 @@ export async function updateRepoWithFoundationSkills(
         description: prBody,
       });
     } else {
-      // ADO service not provided — PR creation skipped, branch is available
-      console.warn('[foundationSkillRepoUpdateService] No ADO service — branch pushed but PR not created');
       errors.push('Branch pushed but PR could not be opened — ADO service not available');
+      return {
+        status: 'error',
+        prUrl: null,
+        branchName,
+        changedFiles: changed,
+        report: errors.join('\n'),
+        releaseVersion: version,
+        errors,
+      };
     }
 
+    if (!prUrl) {
+      errors.push('Pull request provider returned no PR URL');
+      return {
+        status: 'error',
+        prUrl: null,
+        branchName,
+        changedFiles: changed,
+        report: errors.join('\n'),
+        releaseVersion: version,
+        errors,
+      };
+    }
     console.log(`[foundationSkillRepoUpdateService] Done: ${prUrl ?? '(no PR)'}`);
     return {
       status: 'pr_created',
@@ -523,6 +941,7 @@ export async function rollbackRepoWithFoundationSkills(
       defaultBranch: branch,
       releaseId: target.id,
       apexProject: opts.apexProject,
+      apexUrl: opts.apexUrl,
       intent: 'rollback',
       fromVersion,
       actor: opts.actor,

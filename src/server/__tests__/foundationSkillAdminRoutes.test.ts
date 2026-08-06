@@ -212,6 +212,22 @@ describe('Foundation Skills Admin Routes', () => {
       expect(res.body.error).toContain('design-doc-validation');
       expect(mockRelease.createRelease).not.toHaveBeenCalled();
     });
+
+    it('rejects client-supplied integrity and manifest evidence', async () => {
+      const res = await request(buildAdminApp())
+        .post('/api/platform-admin/foundation-skills/releases')
+        .send({
+          version: '2.0.0',
+          artifactVersion: '2.0.0',
+          selectedSkills: ['ui-lab'],
+          integritySha256: 'forged',
+          manifestSnapshot: { skills: [] },
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/server-derived/i);
+      expect(mockRelease.createRelease).not.toHaveBeenCalled();
+    });
   });
 
   describe('GET /api/platform-admin/foundation-skills/catalog', () => {
@@ -472,7 +488,11 @@ describe('Foundation Skills Admin Routes', () => {
       });
       const res = await request(buildAdminApp())
         .post('/api/platform-admin/foundation-skills/update-repo')
-        .send({ project: 'MaxView', repo: 'MaxView' });
+        .send({
+          project: 'MaxView',
+          repo: 'MaxView',
+          apexProject: 'MaxView',
+        });
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('pr_created');
       expect(res.body.prUrl).toBe('https://example.com/pr/1');

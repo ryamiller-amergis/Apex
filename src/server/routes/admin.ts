@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { requirePermission } from '../middleware/rbac';
 import * as rbacService from '../services/rbacService';
 import * as projectSettingsService from '../services/projectSettingsService';
+import { validateConfiguredRepository } from '../services/foundationSkillAuthorizeService';
 import * as groupService from '../services/groupService';
 import { getDefaultModel, getAppSetting, setAppSetting } from '../services/appSettingsService';
 import { fetchAvailableModels } from '../services/modelsService';
@@ -332,6 +333,11 @@ router.post('/project-settings', async (req: Request, res: Response): Promise<vo
       res.status(400).json({ error: 'project, friendlyName, skillRepo, and skillBranch are required' });
       return;
     }
+    const repoError = validateConfiguredRepository(body.skillProvider, body.skillRepo);
+    if (repoError) {
+      res.status(400).json({ error: repoError });
+      return;
+    }
     const updatedBy = (req.user as any)?.profile?.displayName ?? (req.user as any)?.profile?.upn ?? undefined;
     const config = await projectSettingsService.upsertSkillConfig({ ...body, updatedBy });
     res.status(201).json(config);
@@ -346,6 +352,11 @@ router.put('/project-settings/:id', async (req: Request, res: Response): Promise
     const body = req.body as UpsertProjectSkillConfigRequest & { project: string };
     if (!body.skillRepo || !body.skillBranch) {
       res.status(400).json({ error: 'skillRepo and skillBranch are required' });
+      return;
+    }
+    const repoError = validateConfiguredRepository(body.skillProvider, body.skillRepo);
+    if (repoError) {
+      res.status(400).json({ error: repoError });
       return;
     }
     const updatedBy = (req.user as any)?.profile?.displayName ?? (req.user as any)?.profile?.upn ?? undefined;

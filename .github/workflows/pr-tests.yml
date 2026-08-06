@@ -552,7 +552,8 @@ jobs:
               TAVILY_AUTH="${{ secrets.TAVILY_AUTH }}" \
               AZURE_ARTIFACTS_ORG="${{ secrets.AZURE_ARTIFACTS_ORG }}" \
               AZURE_ARTIFACTS_FEED="${{ secrets.AZURE_ARTIFACTS_FEED }}" \
-              AZURE_ARTIFACTS_PAT="${{ secrets.AZURE_ARTIFACTS_PAT }}"
+              AZURE_ARTIFACTS_PAT="${{ secrets.AZURE_ARTIFACTS_PAT }}" \
+              APEX_URL="https://app-scrum-dev.azurewebsites.net"
 
           # The Azure Node/Linux image ships without git, and the Dev Workbench
           # feature shells out to git at runtime. Install it on boot before

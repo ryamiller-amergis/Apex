@@ -37,13 +37,13 @@ test('bootstrap fills slots from real evidence with sources', () => {
   }
 });
 
-test('missing signals render TODO placeholders, not blanks', () => {
+test('missing signals render APEX:unfilled placeholders, not blanks', () => {
   const repo = makeRepo({ 'package.json': JSON.stringify({ name: 'bare' }) });
   try {
     const boot = bootstrapSkill(PKG_ROOT, repo, 'ui-lab');
     const skill = boot.files['SKILL.md'];
-    assert.match(skill, /TODO\(designTokens\)/);
-    assert.match(skill, /TODO\(components\)/);
+    assert.match(skill, /APEX:unfilled\(designTokens\)/);
+    assert.match(skill, /APEX:unfilled\(components\)/);
     // projectName is present though.
     assert.match(skill, /bare/);
   } finally {
@@ -103,7 +103,7 @@ test('bootstrap command writes filled adapter content to disk', () => {
   try {
     executeInstall(PKG_ROOT, repo, ['ui-lab']);
     const adapterPath = path.join(repo, '.cursor/skills/ui-lab/SKILL.md');
-    assert.match(fs.readFileSync(adapterPath, 'utf8'), /TODO\(designTokens\)/);
+    assert.match(fs.readFileSync(adapterPath, 'utf8'), /APEX:unfilled\(designTokens\)/);
 
     fs.mkdirSync(path.join(repo, 'src/client/components'), { recursive: true });
     fs.writeFileSync(
@@ -121,15 +121,15 @@ test('bootstrap command writes filled adapter content to disk', () => {
     const after = fs.readFileSync(adapterPath, 'utf8');
     assert.match(after, /--color-primary/);
     assert.match(after, /Button/);
-    assert.doesNotMatch(after, /TODO\(designTokens\)/);
-    assert.doesNotMatch(after, /TODO\(components\)/);
+    assert.doesNotMatch(after, /APEX:unfilled\(designTokens\)/);
+    assert.doesNotMatch(after, /APEX:unfilled\(components\)/);
     assert.ok(logs.some((l) => /wrote \d+ file/.test(l)));
   } finally {
     cleanup(repo);
   }
 });
 
-test('bootstrap preserves project tail and backs up in-fence edits', () => {
+test('bootstrap merges adapter — foundation fence + project notes + filled slots survive', () => {
   const repo = makeRepo(SAMPLE_REPO);
   const logs = [];
   try {
@@ -137,23 +137,30 @@ test('bootstrap preserves project tail and backs up in-fence edits', () => {
     const adapterPath = path.join(repo, '.cursor/skills/ui-lab/SKILL.md');
     let text = fs.readFileSync(adapterPath, 'utf8');
 
-    // Edit below the fence (must survive)
+    // Edit project notes (must survive)
     text = text.replace(
       '<!-- Yours. APEX never writes below this line. -->\n',
       '<!-- Yours. APEX never writes below this line. -->\n\nPROJECT_TAIL_MARKER\n',
     );
-    // Edit above the fence (must be replaced + backed up)
-    text = text.replace('<!-- APEX:END managed -->', 'IN_FENCE_EDIT\n<!-- APEX:END managed -->');
+    // Edit foundation fence (must survive bootstrap — only install/update rewrites it)
+    text = text.replace('<!-- APEX:END managed -->', 'FOUNDATION_EDIT\n<!-- APEX:END managed -->');
+    // Simulate /post-skill-bootstrap filling a slot that detectors leave empty
+    text = text.replace(
+      /<!--\s*APEX:slot\(designTokens\)\s*-->[\s\S]*?<!--\s*APEX:\/slot\(designTokens\)\s*-->/,
+      '<!-- APEX:slot(designTokens) -->\nHUMAN_FILLED_TOKENS\n<!-- APEX:/slot(designTokens) -->',
+    );
+    // Freeform project content outside slots must survive.
+    text = text.replace('<!-- APEX:END adapter -->', 'ADAPTER_EDIT\n<!-- APEX:END adapter -->');
     fs.writeFileSync(adapterPath, text, 'utf8');
 
     const code = cmdBootstrap({ _: ['ui-lab'], package: PKG_ROOT, cwd: repo }, (m) => logs.push(m));
     assert.equal(code, 0);
 
     const after = fs.readFileSync(adapterPath, 'utf8');
-    assert.ok(after.includes('PROJECT_TAIL_MARKER'), 'project notes below fence must survive');
-    assert.ok(!after.includes('IN_FENCE_EDIT'), 'in-fence edits must be replaced');
-    const backups = fs.readdirSync(path.join(repo, '.apex/backups/ui-lab'));
-    assert.ok(backups.some((f) => f.startsWith('SKILL.md.')), 'backup of drifted region must exist');
+    assert.ok(after.includes('PROJECT_TAIL_MARKER'), 'project notes must survive bootstrap');
+    assert.ok(after.includes('FOUNDATION_EDIT'), 'foundation fence must survive bootstrap');
+    assert.ok(after.includes('HUMAN_FILLED_TOKENS'), 'filled APEX:slot values must survive merge');
+    assert.ok(after.includes('ADAPTER_EDIT'), 'unanchored adapter freeform edits must survive');
   } finally {
     cleanup(repo);
   }

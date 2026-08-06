@@ -43,15 +43,17 @@ Commands:
     --dry-run              Preview what would be written without writing anything
     --fill                 Re-run the bootstrap adapter pre-fill (for existing installs)
     --enrich               Opt-in: use AI to improve adapter prose within evidence bounds
+    --skip-feed            Skip registry/feed checks for a pre-verified local artifact
     --skip-apex-check      Skip the APEX entitlement check (maintainers / air-gapped)
   check                    Report which installed foundations have available updates
   update [<skill...>]      Update foundations; never overwrites existing adapters
     --skip-apex-check      Skip the APEX entitlement check (maintainers / air-gapped)
   validate                 Validate catalog coverage, contracts, and lockfile integrity
   bootstrap [<skill...>]   Re-run adapter pre-fill for named skills (or installed skills)
-    --all                  Bootstrap every skill in the package regardless of lockfile
+    --all                  Bootstrap every authorized skill already in the lockfile
     --explain              Print evidence + source file/line for each filled slot
     --enrich               Opt-in: AI-enriched prose within evidence bounds
+    --skip-apex-check      Skip the APEX entitlement check (maintainers / air-gapped)
   help                     Print this message
 `.trim();
 
@@ -108,6 +110,7 @@ async function main() {
             fill:      { type: 'boolean', default: false },
             enrich:    { type: 'boolean', default: false },
             all:       { type: 'boolean', default: false },
+            'skip-feed': { type: 'boolean', default: false },
             'skip-apex-check': { type: 'boolean', default: false },
           },
           allowPositionals: true,
@@ -119,6 +122,7 @@ async function main() {
           dryRun: values['dry-run'],
           fill: values.fill,
           enrich: values.enrich,
+          skipFeed: values['skip-feed'],
           skipApexCheck: values['skip-apex-check'],
         });
         break;
@@ -152,11 +156,18 @@ async function main() {
             explain: { type: 'boolean', default: false },
             enrich:  { type: 'boolean', default: false },
             all:     { type: 'boolean', default: false },
+            'skip-apex-check': { type: 'boolean', default: false },
           },
           allowPositionals: true,
         });
         const skills = positionals.length > 0 ? positionals : null;
-        await bootstrap({ skills, all: values.all, explain: values.explain, enrich: values.enrich });
+        await bootstrap({
+          skills,
+          all: values.all,
+          explain: values.explain,
+          enrich: values.enrich,
+          skipApexCheck: values['skip-apex-check'],
+        });
         break;
       }
 
