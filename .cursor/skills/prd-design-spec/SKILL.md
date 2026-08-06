@@ -9,6 +9,10 @@ Reads `.ai-pilot/output/{slug}.prd.md` and `.ai-pilot/output/{slug}.backlog.json
 
 The agent does **not** silently resolve ambiguity. After loading all inputs, it surfaces every unresolved question and open decision to the user in a structured review session before writing any files. User responses are incorporated into the final artifacts.
 
+## Linked context pre-read
+
+If `.ai-pilot/linked-context.md` is present in the workspace, read it before proceeding. Treat its provenance-labeled sections as authoritative project grounding. If it is absent, proceed normally.
+
 ## Invocation
 
 ```

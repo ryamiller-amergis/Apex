@@ -26,6 +26,10 @@ No arguments. The session runs against whatever plan, design, or idea is current
 
 ---
 
+## Linked context pre-read
+
+If `.ai-pilot/linked-context.md` is present in the workspace, read it before proceeding. Treat its provenance-labeled sections as authoritative project grounding. If it is absent, proceed normally.
+
 ## Pre-read (do this before the first question)
 
 1. Read `context.md` (repo root) — the product context guide. In a remote-repo/MCP context, call `get_skill_file` with this exact path; do not search for it. Know the features, terminology, and workflows. This is the only mandatory pre-read.
