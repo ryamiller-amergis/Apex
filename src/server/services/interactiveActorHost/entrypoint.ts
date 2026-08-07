@@ -19,6 +19,8 @@ import {
   ActorProxyBuilder,
   CommunicationProtocolEnum,
   DaprServer,
+  HttpMethod,
+  type DaprInvokerCallbackContent,
 } from '@dapr/dapr';
 import { DefaultAzureCredential } from '@azure/identity';
 import { createAiRunsCallbackClient } from '../aiRunsWorker/callbackClient';
@@ -37,6 +39,98 @@ import {
 
 /** Warm checkout carrying the reader the execution factory needs. */
 type ReaderCheckout = WarmThreadCheckout & { reader: LocalCheckoutReader };
+
+export interface InteractiveDispatchRequest {
+  threadId: string;
+  runId: string;
+  dispatchMessageId: string;
+}
+
+interface InteractiveDispatchInvoker {
+  listen(
+    methodName: string,
+    callback: (data: DaprInvokerCallbackContent) => Promise<unknown>,
+    options: { method: HttpMethod },
+  ): Promise<unknown>;
+}
+
+function parseDispatchBody(body: string | undefined): unknown {
+  if (!body) return null;
+  try {
+    return JSON.parse(body) as unknown;
+  } catch {
+    throw new Error('Interactive dispatch body must be valid JSON');
+  }
+}
+
+export function parseInteractiveDispatchRequest(
+  content: DaprInvokerCallbackContent,
+): InteractiveDispatchRequest {
+  const payload = parseDispatchBody(content.body) as Partial<InteractiveDispatchRequest> | null;
+  if (
+    !payload
+    || typeof payload.threadId !== 'string'
+    || typeof payload.runId !== 'string'
+    || typeof payload.dispatchMessageId !== 'string'
+  ) {
+    throw new Error('Interactive dispatch requires threadId, runId, and dispatchMessageId');
+  }
+  return {
+    threadId: payload.threadId,
+    runId: payload.runId,
+    dispatchMessageId: payload.dispatchMessageId,
+  };
+}
+
+export async function registerInteractiveDispatchHandler(
+  invoker: InteractiveDispatchInvoker,
+  resolveActor: (threadId: string) => IInteractiveSessionActor,
+): Promise<void> {
+  await invoker.listen(
+    'dispatch',
+    async (content) => {
+      let payload: InteractiveDispatchRequest;
+      try {
+        payload = parseInteractiveDispatchRequest(content);
+      } catch (error) {
+        console.warn(JSON.stringify({
+          event: 'InteractiveDispatchRejected',
+          errorType: error instanceof Error ? error.name : 'UnknownError',
+        }));
+        return { accepted: false };
+      }
+      console.log(JSON.stringify({
+        event: 'InteractiveDispatchAccepted',
+        threadId: payload.threadId,
+        runId: payload.runId,
+        dispatchMessageId: payload.dispatchMessageId,
+      }));
+      const actor = resolveActor(payload.threadId);
+      void actor.handleTurn({
+        runId: payload.runId,
+        dispatchMessageId: payload.dispatchMessageId,
+      }).then((outcome) => {
+        console.log(JSON.stringify({
+          event: 'InteractiveDispatchCompleted',
+          threadId: payload.threadId,
+          runId: payload.runId,
+          dispatchMessageId: payload.dispatchMessageId,
+          status: outcome.status,
+        }));
+      }).catch((error) => {
+        console.error(JSON.stringify({
+          event: 'InteractiveDispatchFailed',
+          threadId: payload.threadId,
+          runId: payload.runId,
+          dispatchMessageId: payload.dispatchMessageId,
+          errorType: error instanceof Error ? error.name : 'UnknownError',
+        }));
+      });
+      return { accepted: true };
+    },
+    { method: HttpMethod.POST },
+  );
+}
 
 async function getCallbackToken(): Promise<string> {
   const staticToken =
@@ -113,27 +207,12 @@ export async function main(): Promise<void> {
     server.client,
   );
 
-  // The API dispatches { threadId, runId, dispatchMessageId }; we resolve the
-  // thread's actor and invoke its turn. Only identifiers cross the wire.
-  await server.invoker.listen('dispatch', async (data: unknown) => {
-    const payload = (data ?? {}) as {
-      threadId?: unknown;
-      runId?: unknown;
-      dispatchMessageId?: unknown;
-    };
-    if (
-      typeof payload.threadId !== 'string' ||
-      typeof payload.runId !== 'string' ||
-      typeof payload.dispatchMessageId !== 'string'
-    ) {
-      throw new Error('Interactive dispatch requires threadId, runId, and dispatchMessageId');
-    }
-    const actor = proxyBuilder.build(new ActorId(payload.threadId));
-    return actor.handleTurn({
-      runId: payload.runId,
-      dispatchMessageId: payload.dispatchMessageId,
-    });
-  });
+  // The API POSTs { threadId, runId, dispatchMessageId }; Dapr wraps the JSON
+  // request body in DaprInvokerCallbackContent before invoking this handler.
+  await registerInteractiveDispatchHandler(
+    server.invoker,
+    (threadId) => proxyBuilder.build(new ActorId(threadId)),
+  );
 
   await server.start();
   console.log(

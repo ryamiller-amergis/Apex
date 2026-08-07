@@ -1501,7 +1501,7 @@ export const agentRuns = pgTable('agent_runs', {
     .where(sql`${t.lane} = 'background' AND ${t.status} = 'queued'`),
   laneCheck: check(
     'agent_runs_lane_check',
-    sql`${t.lane} IS NULL OR ${t.lane} = 'background'`,
+    sql`${t.lane} IS NULL OR ${t.lane} IN ('background', 'ai-runs-interactive')`,
   ),
   terminalReasonCheck: check(
     'agent_runs_terminal_reason_check',

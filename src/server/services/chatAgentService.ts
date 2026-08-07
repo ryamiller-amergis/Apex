@@ -3215,7 +3215,10 @@ async function postInteractiveActorDispatch(dispatch: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(dispatch),
   });
-  if (!response.ok) {
+  const result = await response.json().catch(() => null) as {
+    accepted?: unknown;
+  } | null;
+  if (!response.ok || result?.accepted !== true) {
     throw new Error(`Interactive actor dispatch failed (${response.status})`);
   }
 }
@@ -3237,6 +3240,7 @@ async function tryDispatchInteractiveTurn(
   if (!process.env[INTERACTIVE_DISPATCH_URL_ENV]?.trim()) return false;
 
   let queuedRunId: string | undefined;
+  let dispatchStage = 'load-thread';
   try {
     const state = await ensureThreadState(threadId);
     if (!state) return false;
@@ -3245,6 +3249,7 @@ async function tryDispatchInteractiveTurn(
     if (!userId || !project) return false;
 
     const workflowClass = resolveInteractiveWorkflowClass(state);
+    dispatchStage = 'prepare-turn';
     const prepared = await prepareBackgroundWorkflowTurn(threadId, text);
     const snapshot: ExecutionSnapshot = {
       prompt: prepared.prompt,
@@ -3258,6 +3263,7 @@ async function tryDispatchInteractiveTurn(
     const timeoutAt = new Date(
       Date.now() + resolveAgentRunHardLimitMs(),
     ).toISOString();
+    dispatchStage = 'enqueue';
     const enqueued = await enqueue({
       threadId,
       projectId: prepared.projectId,
@@ -3267,6 +3273,7 @@ async function tryDispatchInteractiveTurn(
     });
     queuedRunId = enqueued.runId;
 
+    dispatchStage = 'route';
     const decision = await interactiveWorkflowRouter.route({
       userId,
       project,
@@ -3289,7 +3296,19 @@ async function tryDispatchInteractiveTurn(
     // Shed / race-lost / eval-error: discard the transient queued row.
     await db.delete(agentRuns).where(eq(agentRuns.id, enqueued.runId)).catch(() => {});
     return false;
-  } catch {
+  } catch (error) {
+    const errorType = error instanceof Error ? error.name : 'UnknownError';
+    console.warn('[chat] Interactive dispatch failed; using in-process fallback', {
+      threadId,
+      runId: queuedRunId,
+      stage: dispatchStage,
+      errorType,
+    });
+    trackEvent('interactive.dispatch.failed', {
+      threadId,
+      stage: dispatchStage,
+      errorType,
+    });
     if (queuedRunId) {
       await db.delete(agentRuns).where(eq(agentRuns.id, queuedRunId)).catch(() => {});
     }
