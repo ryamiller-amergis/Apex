@@ -422,7 +422,7 @@ INSERT INTO design_docs (
   author_id, title, model, design_content, tech_spec_content, assumptions_content,
   status, reviewer_id, reviewed_at, validation_score, skill_settings_id, created_at, updated_at
 )
-VALUES (
+SELECT
   'b2d3f4a5-1c2e-4f3a-9b4c-7d8e9f0a1027',
   '45f17f84-bdb9-437e-bb6e-9c10ff5a2b37', 'Apex', NULL, NULL, 6,
   '110b196f-3f0d-4890-969f-5571085039de',
@@ -679,6 +679,8 @@ Each must be decided before the relevant implementation step starts.
 - **`agent_runs.lane` carries `ai-runs-interactive`:** reuses the Phase 1 lifecycle/lane column and indexes; no new queue table.
 $assume$,
   'approved', '1ceaafde-4871-4411-9ef7-5432c7b4e080', now(), 97, 'df2ab8a5-3a3e-4cbe-b685-1a3e6f0e6d73', now(), now()
+WHERE EXISTS (
+  SELECT 1 FROM prds WHERE id = '45f17f84-bdb9-437e-bb6e-9c10ff5a2b37'
 )
 ON CONFLICT (id) DO UPDATE
 SET design_content = EXCLUDED.design_content,
