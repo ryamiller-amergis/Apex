@@ -7,13 +7,16 @@ import { checkRepo } from './check.mjs';
 import { bootstrapSkill } from './bootstrap.mjs';
 import { runDoctor, formatDoctor } from './doctor.mjs';
 import { validatePackage } from './validatePackage.mjs';
-import { loadCatalog } from './catalog.mjs';
+import {
+  loadCatalog, findSkill, listAdapterRuntimeFiles, resolveSkillDependencyClosure,
+} from './catalog.mjs';
 import { readLockfile, serializeLockfile, LOCKFILE_VERSION } from './lockfile.mjs';
 import {
   writeTextFile, assertWithin, toPosix, normalizeText, sha256, listFilesRel,
 } from './util.mjs';
 import { ADAPTER_DIR, pkgFoundationDir } from './layout.mjs';
 import { composeAdapter, hashManaged } from './managedRegion.mjs';
+import { ensureAlwaysInstallSkills } from './alwaysInstall.mjs';
 
 /** The package root is two levels up from lib/commands.mjs. */
 export function defaultPackageRoot() {
@@ -76,8 +79,11 @@ export function cmdInstall(opts, log) {
     return 1;
   }
 
-  const skills = opts._.length ? opts._ : allSkillNames(pkgRoot);
   try {
+    const catalog = loadCatalog(pkgRoot);
+    const skills = opts._.length
+      ? ensureAlwaysInstallSkills(resolveSkillDependencyClosure(catalog, opts._))
+      : allSkillNames(pkgRoot);
     const result = executeInstall(pkgRoot, repoRoot, skills, {
       dryRun: opts.dryRun,
       enrich: opts.enrich,
@@ -169,8 +175,13 @@ export function cmdBootstrap(opts, log) {
   const lock = readLockfile(repoRoot);
 
   for (const name of skills) {
+    const skillDef = findSkill(catalog, name);
+    if (!skillDef) {
+      log(`[apex-skills] ERROR: Unknown skill in catalog: ${name}`);
+      return 1;
+    }
     const boot = bootstrapSkill(pkgRoot, repoRoot, name, { enrich: opts.enrich });
-    const wrote = writeBootstrapFiles(pkgRoot, repoRoot, name, boot.files, catalog.suiteVersion, lock);
+    const wrote = writeBootstrapFiles(pkgRoot, repoRoot, skillDef, boot.files, catalog.suiteVersion);
     log(`Bootstrapped "${name}": ${boot.meta.filesScanned} files scanned, capHit=${boot.meta.capHit}, wrote ${wrote.length} file(s).`);
     for (const w of wrote.warnings ?? []) log(`WARN  ${w}`);
     if (opts.explain) {
@@ -196,9 +207,10 @@ export function cmdBootstrap(opts, log) {
  *   - companion foundation files always overwritten
  *   - apex-skill.json written when produced by the template
  */
-function writeBootstrapFiles(pkgRoot, repoRoot, skill, files, suiteVersion, lock) {
+function writeBootstrapFiles(pkgRoot, repoRoot, skillDef, files, suiteVersion) {
   const wrote = [];
   const warnings = [];
+  const skill = skillDef.name;
 
   const foundationDir = pkgFoundationDir(pkgRoot, skill);
   const foundationSkillMd = path.join(foundationDir, 'SKILL.md');
@@ -223,10 +235,13 @@ function writeBootstrapFiles(pkgRoot, repoRoot, skill, files, suiteVersion, lock
     wrote.push(destRel);
   }
 
-  if (files['apex-skill.json']) {
-    const destRel = toPosix(path.join(ADAPTER_DIR, skill, 'apex-skill.json'));
+  for (const rel of listAdapterRuntimeFiles(skillDef)) {
+    if (typeof files[rel] !== 'string') {
+      throw new Error(`Skill "${skill}" is missing declared adapter runtime companion "${rel}" during bootstrap`);
+    }
+    const destRel = toPosix(path.join(ADAPTER_DIR, skill, rel));
     assertWithin(repoRoot, destRel);
-    writeTextFile(path.join(repoRoot, destRel), files['apex-skill.json']);
+    writeTextFile(path.join(repoRoot, destRel), files[rel]);
     wrote.push(destRel);
   }
 
@@ -237,9 +252,12 @@ function writeBootstrapFiles(pkgRoot, repoRoot, skill, files, suiteVersion, lock
 function refreshLockfileHashes(pkgRoot, repoRoot, skills) {
   const lock = readLockfile(repoRoot);
   if (!lock) return;
+  const catalog = loadCatalog(pkgRoot);
   lock.lockfileVersion = LOCKFILE_VERSION;
   for (const name of skills) {
     if (!lock.skills[name]) continue;
+    const skillDef = findSkill(catalog, name);
+    if (!skillDef) continue;
     const skillMd = path.join(repoRoot, ADAPTER_DIR, name, 'SKILL.md');
     if (fs.existsSync(skillMd)) {
       lock.skills[name].managedRegionHash = hashManaged(fs.readFileSync(skillMd, 'utf8'));
@@ -254,10 +272,12 @@ function refreshLockfileHashes(pkgRoot, repoRoot, skills) {
         managedFiles[destRel] = sha256(normalizeText(fs.readFileSync(abs, 'utf8')));
       }
     }
-    const contractPath = path.join(repoRoot, ADAPTER_DIR, name, 'apex-skill.json');
-    if (fs.existsSync(contractPath)) {
-      const destRel = toPosix(path.join(ADAPTER_DIR, name, 'apex-skill.json'));
-      managedFiles[destRel] = sha256(normalizeText(fs.readFileSync(contractPath, 'utf8')));
+    for (const rel of listAdapterRuntimeFiles(skillDef)) {
+      const destRel = toPosix(path.join(ADAPTER_DIR, name, rel));
+      const abs = path.join(repoRoot, destRel);
+      if (fs.existsSync(abs)) {
+        managedFiles[destRel] = sha256(normalizeText(fs.readFileSync(abs, 'utf8')));
+      }
     }
     lock.skills[name].managedFiles = managedFiles;
     if (lock.skills[name].vendored) delete lock.skills[name].vendored;

@@ -11,6 +11,9 @@
   "capabilities": [
     "azure-infra-patterns"
   ],
+  "dependsOn": [
+    "terraform-infra"
+  ],
   "managedFiles": [
     "SKILL.md"
   ]

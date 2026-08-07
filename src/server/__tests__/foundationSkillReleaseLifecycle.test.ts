@@ -3,7 +3,12 @@ const mockUpdateRows: unknown[][] = [];
 const mockTxUpdateRows: unknown[][] = [];
 
 function updateChain(queue: unknown[][]) {
-  const chain: any = {
+  const chain: {
+    set: jest.Mock;
+    where: jest.Mock;
+    returning: jest.Mock;
+    then: (resolve: (value: unknown) => unknown) => Promise<unknown>;
+  } = {
     set: jest.fn(),
     where: jest.fn(),
     returning: jest.fn(),
@@ -56,6 +61,7 @@ import {
   promoteToReleaseView,
 } from '../services/azureArtifactsSkillService';
 import type { FoundationSkillArtifactManifest } from '../../shared/types/foundationSkills';
+import { FoundationSkillReleaseValidationError } from '../../shared/foundationSkillDependencies';
 
 const mockVerify = verifyPackageArtifact as jest.Mock;
 const mockPromote = promoteToReleaseView as jest.Mock;
@@ -146,6 +152,52 @@ describe('publishRelease', () => {
     expect(mockPromote).not.toHaveBeenCalled();
     expect(mockDb.update).toHaveBeenCalledTimes(1);
     expect(mockTx.update).toHaveBeenCalled();
+  });
+
+  it('returns the claim to draft when typed release validation fails before promotion', async () => {
+    const dependentManifest: FoundationSkillArtifactManifest = {
+      ...manifest,
+      skills: [
+        {
+          name: 'design-spec-review',
+          summary: 'Review.',
+          tier: 'shippable',
+          alwaysInstall: false,
+          dependsOn: ['to-prd'],
+        },
+        {
+          name: 'to-prd',
+          summary: 'Generate.',
+          tier: 'shippable',
+          alwaysInstall: false,
+          dependsOn: [],
+        },
+      ],
+    };
+
+    mockSelectRows.push([
+      {
+        ...row('draft'),
+        selectedSkills: ['design-spec-review'],
+      },
+    ]);
+    mockUpdateRows.push([row('publishing')]);
+    mockVerify.mockResolvedValue({
+      integritySha256: 'sha256',
+      artifactFeed: 'https://pkgs.dev.azure.com/org/_packaging/feed/npm/registry/',
+      manifest: dependentManifest,
+    });
+
+    await expect(
+      publishRelease('release-1', { id: 'admin' }),
+    ).rejects.toBeInstanceOf(FoundationSkillReleaseValidationError);
+
+    expect(mockPromote).not.toHaveBeenCalled();
+    expect(mockTx.update).toHaveBeenCalled();
+    const revertChain = mockTx.update.mock.results[0]?.value as { set: jest.Mock };
+    expect(revertChain.set).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'draft' }),
+    );
   });
 
   it('rejects a concurrent publish when the draft claim is lost', async () => {

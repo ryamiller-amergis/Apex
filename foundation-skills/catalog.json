@@ -1,5 +1,5 @@
 {
-  "suiteVersion": "2.0.1",
+  "suiteVersion": "2.0.2",
   "package": "@apex/skills",
   "contractApiVersion": 1,
   "skills": [
@@ -93,11 +93,15 @@
         "SKILL.md",
         "apex-skill.json",
         "recipe.json",
-        "rubric.md"
+        "rubric.md",
+        "scorecard-template.md"
       ],
-      "dependsOn": [],
+      "dependsOn": [
+        "to-prd"
+      ],
       "supportingOwners": {
-        "rubric.md": "adapter"
+        "rubric.md": "adapter",
+        "scorecard-template.md": "adapter"
       }
     },
     {
@@ -111,13 +115,16 @@
         "SKILL.md",
         "apex-skill.json",
         "recipe.json",
-        "rubric.md"
+        "rubric.md",
+        "scorecard-template.md"
       ],
       "dependsOn": [
-        "prd-spec-review"
+        "prd-design-spec",
+        "to-prd"
       ],
       "supportingOwners": {
-        "rubric.md": "adapter"
+        "rubric.md": "adapter",
+        "scorecard-template.md": "adapter"
       }
     },
     {
@@ -340,7 +347,9 @@
         "apex-skill.json",
         "recipe.json"
       ],
-      "dependsOn": [],
+      "dependsOn": [
+        "to-prd"
+      ],
       "supportingOwners": {
         "dev-plan-schema.json": "foundation",
         "dev-plan-example.json": "foundation"
@@ -418,7 +427,10 @@
         "apex-skill.json",
         "recipe.json"
       ],
-      "dependsOn": [],
+      "dependsOn": [
+        "azure-async-infra",
+        "terraform-infra"
+      ],
       "supportingOwners": {}
     },
     {
@@ -432,14 +444,14 @@
       "adapterFiles": [
         "SKILL.md",
         "apex-skill.json",
-        "recipe.json",
-        "adr-template.md"
+        "recipe.json"
       ],
       "dependsOn": [
-        "adr-interview"
+        "adr-interview",
+        "azure-async-infra"
       ],
       "supportingOwners": {
-        "adr-template.md": "adapter"
+        "adr-template.md": "foundation"
       }
     },
     {
@@ -472,7 +484,9 @@
         "apex-skill.json",
         "recipe.json"
       ],
-      "dependsOn": [],
+      "dependsOn": [
+        "terraform-infra"
+      ],
       "supportingOwners": {}
     },
     {

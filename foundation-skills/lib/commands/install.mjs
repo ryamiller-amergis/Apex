@@ -10,7 +10,59 @@ import {
   CONFIG_REL_PATH,
 } from '../apexAuthorize.mjs';
 import { ensureAlwaysInstallSkills } from '../alwaysInstall.mjs';
+import { loadCatalog, resolveSkillDependencyClosure } from '../catalog.mjs';
 import { findGitRoot } from '../util.mjs';
+
+function rejectUnauthorizedExpandedSkills(expandedSkills, authorizedSkills, noun = 'install') {
+  const { allowed, rejected } = partitionRequestedSkills(expandedSkills, authorizedSkills);
+  if (rejected.length) {
+    throw new Error(
+      `\n[apex-skills] Cannot ${noun} — the requested scope expands to unreleased dependencies:\n` +
+      `  ${rejected.join(', ')}\n` +
+      `\nRelease authorization only includes:\n` +
+      `  ${authorizedSkills.join(', ')}`,
+    );
+  }
+  return allowed;
+}
+
+export function resolveInstallSkills({
+  catalog,
+  skills = null,
+  all = false,
+  authorizedSkills = null,
+} = {}) {
+  let effectiveSkills = skills?.length
+    ? resolveSkillDependencyClosure(catalog, skills)
+    : skills;
+  let effectiveAll = all;
+
+  if (authorizedSkills?.length) {
+    if (all) {
+      effectiveSkills = [...authorizedSkills];
+      effectiveAll = false;
+    } else if (effectiveSkills?.length) {
+      effectiveSkills = rejectUnauthorizedExpandedSkills(
+        effectiveSkills,
+        authorizedSkills,
+        'install',
+      );
+    }
+  }
+
+  if (effectiveSkills?.length) {
+    effectiveSkills = ensureAlwaysInstallSkills(effectiveSkills);
+    if (authorizedSkills?.length) {
+      effectiveSkills = rejectUnauthorizedExpandedSkills(
+        effectiveSkills,
+        authorizedSkills,
+        'install',
+      );
+    }
+  }
+
+  return { skills: effectiveSkills, all: effectiveAll };
+}
 
 export async function install({
   skills = null,
@@ -61,52 +113,25 @@ export async function install({
 
   let effectiveSkills = skills;
   let effectiveAll = all;
+  const catalog = loadCatalog(defaultPackageRoot());
 
-  if (auth?.authorizedSkills?.length) {
-    if (all) {
-      // --all means "everything I'm entitled to", not "the whole catalog".
-      effectiveSkills = [...auth.authorizedSkills];
-      effectiveAll = false;
-      console.log(
-        `\n[apex-skills] --all resolved to this project's released skills: ` +
-        `${effectiveSkills.join(', ')}`,
-      );
-    } else if (skills?.length) {
-      const { allowed, rejected } = partitionRequestedSkills(skills, auth.authorizedSkills);
-      if (rejected.length) {
-        console.error(
-          `\n[apex-skills] Cannot install — not released to "${auth.apexProject}":\n` +
-          `  ${rejected.join(', ')}\n` +
-          `\nRelease ${auth.releaseVersion} ships these skills to your project:\n` +
-          `  ${auth.authorizedSkills.join(', ')}\n` +
-          `\nAsk an APEX admin to add the missing skills to the release, or install\n` +
-          'only the released ones.',
-        );
-        process.exit(1);
-      }
-      effectiveSkills = allowed;
-    }
+  try {
+    ({ skills: effectiveSkills, all: effectiveAll } = resolveInstallSkills({
+      catalog,
+      skills,
+      all,
+      authorizedSkills: auth?.authorizedSkills ?? null,
+    }));
+  } catch (error) {
+    console.error(error.message);
+    process.exit(1);
   }
 
-  // Every install that names skills also receives always-install companions
-  // (readiness skill, etc.), even when the release selectedSkills omitted them.
-  // `--all` without an allowlist installs the whole catalog (already includes it).
-  if (effectiveSkills?.length) {
-    const before = effectiveSkills.length;
-    const withCompanions = ensureAlwaysInstallSkills(effectiveSkills);
-    if (auth?.authorizedSkills?.length) {
-      const authorized = new Set(auth.authorizedSkills);
-      effectiveSkills = withCompanions.filter((name) => authorized.has(name));
-    } else {
-      effectiveSkills = withCompanions;
-    }
-    if (effectiveSkills.length > before) {
-      const added = effectiveSkills.slice(before);
-      console.log(
-        `\n[apex-skills] Also installing always-on companion skill` +
-        `${added.length === 1 ? '' : 's'}: ${added.join(', ')}`,
-      );
-    }
+  if (auth?.authorizedSkills?.length && all) {
+    console.log(
+      `\n[apex-skills] --all resolved to this project's released skills: ` +
+      `${effectiveSkills.join(', ')}`,
+    );
   }
 
   console.log('');

@@ -12,6 +12,9 @@
     "design-spec-synthesis",
     "layer-ownership"
   ],
+  "dependsOn": [
+    "to-prd"
+  ],
   "managedFiles": [
     "SKILL.md",
     "assumptions-template.md",

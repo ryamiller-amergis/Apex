@@ -3,9 +3,187 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { executeInstall, planInstall } from '../lib/install.mjs';
+import { loadCatalog, findSkill, listAdapterRuntimeFiles } from '../lib/catalog.mjs';
 import { readLockfile, lockfileIntegrity, LOCKFILE_VERSION } from '../lib/lockfile.mjs';
 import { hasFence, hashManaged, END_MARKER } from '../lib/managedRegion.mjs';
+import { ensureAlwaysInstallSkills } from '../lib/alwaysInstall.mjs';
+import { cmdBootstrap, cmdInstall } from '../lib/commands.mjs';
 import { PKG_ROOT, makeRepo, cleanup, SAMPLE_REPO } from './helpers.mjs';
+
+function declaredAdapterRuntimeFiles(skill) {
+  return (skill.adapterFiles ?? []).filter(
+    (rel) =>
+      rel === 'apex-skill.json'
+      || (
+        rel !== 'SKILL.md'
+        && rel !== 'recipe.json'
+        && skill.supportingOwners?.[rel] === 'adapter'
+      ),
+  );
+}
+
+function expectedManagedFiles(skill) {
+  const foundationFiles = (skill.foundationFiles ?? [])
+    .filter((rel) => rel !== 'SKILL.md')
+    .map((rel) => `.cursor/skills/${skill.name}/${rel}`);
+  const adapterFiles = listAdapterRuntimeFiles(skill)
+    .map((rel) => `.cursor/skills/${skill.name}/${rel}`);
+  return [...foundationFiles, ...adapterFiles].sort();
+}
+
+function assertManagedFilesInstalledAndTracked(repo, lock, skill) {
+  for (const rel of expectedManagedFiles(skill)) {
+    assert.ok(fs.existsSync(path.join(repo, rel)), `missing installed managed file ${rel}`);
+    assert.ok(lock.skills[skill.name]?.managedFiles?.[rel], `lockfile did not track ${rel}`);
+  }
+  assert.equal(
+    fs.existsSync(path.join(repo, '.cursor/skills', skill.name, 'recipe.json')),
+    false,
+    `recipe.json should stay package-internal for ${skill.name}`,
+  );
+}
+
+function makeMaxViewCleanInstallFixture() {
+  return {
+    'package.json': JSON.stringify({ name: 'timeclock', private: true }, null, 2) + '\n',
+    'AGENTS.md': `# MaxView
+
+Workforce management platform for timekeeping, scheduling, credentialing, and staffing operations.
+
+## Key Terminology
+
+| Term | Meaning |
+| --- | --- |
+| **PBI** | Product Backlog Item |
+| **TBI** | Technical Backlog Item |
+| **RBAC** | Role-Based Access Control |
+`,
+    'CONTEXT-MAP.md': `# MaxView Context Map
+
+Primary domain docs live here.
+`,
+    'docs/AGENTS.md': `# Nested Docs
+
+## Key Terminology
+
+| Term | Meaning |
+| --- | --- |
+| **MatterWorx** | Wrong project reference |
+`,
+    'docs/local-debug/CONTEXT.md': `# Local Debug Guide
+
+## Key Terminology
+
+| Term | Meaning |
+| --- | --- |
+| Docker Port | 5432 |
+| MatterWorx | Another product |
+`,
+    'src/Maxim.TimeClock.Web/ClientApp/package.json': JSON.stringify(
+      {
+        name: 'clientapp',
+        dependencies: {
+          react: '^18.2.0',
+          '@mui/material': '^5.15.0',
+        },
+        devDependencies: {
+          webpack: '^5.0.0',
+        },
+      },
+      null,
+      2,
+    ) + '\n',
+    'src/Maxim.TimeClock.Web/ClientApp/src/styles/theme.css': [
+      ':root {',
+      '  --color-primary: #123456;',
+      '  --text-primary: #222222;',
+      '  --broken-token: { color: red };',
+      '}',
+      '',
+    ].join('\n'),
+    'src/Maxim.TimeClock.Web/ClientApp/wwwroot/css/site.css': ':root { --wwwroot-token: #ffffff; }\n',
+    'docs/styles/tokens.css': ':root { --docs-token: #000000; }\n',
+    'src/Maxim.TimeClock.Web/ClientApp/js/components/ShiftCard.tsx': 'export const ShiftCard = () => null;\n',
+  };
+}
+
+function makeMatterWorxCleanInstallFixture() {
+  return {
+    'package.json': JSON.stringify(
+      {
+        name: 'matterworx',
+        description: 'Stale package metadata that must be ignored.',
+        private: true,
+      },
+      null,
+      2,
+    ) + '\n',
+    'AGENTS.md': `# MatterWorx Monorepo
+
+Vendor management system for healthcare staffing operations.
+
+## Key Terminology
+
+| Term | Meaning |
+| --- | --- |
+| **PBI** | Product Backlog Item |
+| **TBI** | Technical Backlog Item |
+`,
+    'CONTEXT-MAP.md': `# MatterWorx Context Map
+
+Primary domain docs live here.
+`,
+    'docs/AGENTS.md': `# Nested docs
+
+Do not use this file for project identity.
+`,
+    'docs/local-debug/CONTEXT.md': `# Local Debug Guide
+
+## Key Terminology
+
+| Term | Meaning |
+| --- | --- |
+| Docker Port | 5432 |
+| infra/shared-async.tf | Not part of MatterWorx mission context |
+`,
+    'frontend/package.json': JSON.stringify(
+      {
+        name: 'frontend',
+        dependencies: {
+          next: '^15.0.0',
+          react: '^19.0.0',
+        },
+        devDependencies: {
+          tailwindcss: '^4.0.0',
+        },
+      },
+      null,
+      2,
+    ) + '\n',
+  };
+}
+
+function installAndBootstrap(repo, requestedSkills) {
+  const logs = [];
+  const installExit = cmdInstall(
+    {
+      _: ensureAlwaysInstallSkills(requestedSkills),
+      cwd: repo,
+      package: PKG_ROOT,
+      skipFeed: true,
+    },
+    (message) => logs.push(message),
+  );
+  assert.equal(installExit, 0, `install failed:\n${logs.join('\n')}`);
+
+  const bootstrapExit = cmdBootstrap(
+    { all: true, cwd: repo, package: PKG_ROOT },
+    (message) => logs.push(message),
+  );
+  assert.equal(bootstrapExit, 0, `bootstrap failed:\n${logs.join('\n')}`);
+
+  return { logs, lock: readLockfile(repo) };
+}
 
 test('install writes fenced SKILL.md, companions path, and v2 lockfile (no .apex/foundation)', () => {
   const repo = makeRepo(SAMPLE_REPO);
@@ -25,7 +203,7 @@ test('install writes fenced SKILL.md, companions path, and v2 lockfile (no .apex
 
     const lock = readLockfile(repo);
     assert.equal(lock.lockfileVersion, LOCKFILE_VERSION);
-    assert.equal(lock.suiteVersion, '2.0.1');
+    assert.equal(lock.suiteVersion, '2.0.2');
     assert.ok(lock.skills['ui-lab'].managedRegionHash);
     assert.equal(typeof lock.skills['ui-lab'].managedFiles, 'object');
     assert.equal(lock.skills['ui-lab'].adapterScaffolded, true);
@@ -257,6 +435,176 @@ test('install companions for to-prd land under .cursor/skills', () => {
     assert.equal(fs.existsSync(path.join(repo, '.apex/foundation/to-prd/backlog-schema.json')), false);
     const lock = readLockfile(repo);
     assert.ok(lock.skills['to-prd'].managedFiles['.cursor/skills/to-prd/backlog-schema.json']);
+  } finally {
+    cleanup(repo);
+  }
+});
+
+test('install writes review scorecards and adr template from adapter-owned runtime companions', () => {
+  const repo = makeRepo(SAMPLE_REPO);
+  try {
+    executeInstall(PKG_ROOT, repo, ['prd-spec-review', 'design-spec-review', 'adr-finalize']);
+
+    const expectedFiles = [
+      '.cursor/skills/prd-spec-review/rubric.md',
+      '.cursor/skills/prd-spec-review/scorecard-template.md',
+      '.cursor/skills/design-spec-review/rubric.md',
+      '.cursor/skills/design-spec-review/scorecard-template.md',
+      '.cursor/skills/adr-finalize/adr-template.md',
+    ];
+
+    for (const rel of expectedFiles) {
+      assert.ok(fs.existsSync(path.join(repo, rel)), `missing installed runtime companion ${rel}`);
+    }
+
+    assert.equal(fs.existsSync(path.join(repo, '.cursor/skills/prd-spec-review/recipe.json')), false);
+    assert.equal(fs.existsSync(path.join(repo, '.cursor/skills/design-spec-review/recipe.json')), false);
+    assert.equal(fs.existsSync(path.join(repo, '.cursor/skills/adr-finalize/recipe.json')), false);
+
+    const lock = readLockfile(repo);
+    for (const rel of expectedFiles) {
+      const [, , skill] = rel.split('/');
+      assert.ok(
+        lock.skills[skill].managedFiles[rel],
+        `lockfile did not track ${rel}`,
+      );
+      assert.ok(
+        lock.skills[skill].managedFiles[rel].length > 0,
+        `lockfile hash missing for ${rel}`,
+      );
+    }
+  } finally {
+    cleanup(repo);
+  }
+});
+
+test('install iterates every shippable catalog skill in isolation, tracks managed companions, and preserves always-install scope', () => {
+  const catalog = loadCatalog(PKG_ROOT);
+  const shippableSkills = catalog.skills.filter((skill) => skill.tier !== 'apex-only');
+
+  for (const skill of shippableSkills) {
+    const repo = makeRepo(SAMPLE_REPO);
+    try {
+      executeInstall(PKG_ROOT, repo, ensureAlwaysInstallSkills([skill.name]));
+
+      const lock = readLockfile(repo);
+      const expectedScope = ensureAlwaysInstallSkills([skill.name]).sort();
+      assert.deepEqual(Object.keys(lock.skills).sort(), expectedScope);
+
+      for (const installedSkillName of expectedScope) {
+        const installedSkill = findSkill(catalog, installedSkillName);
+        assert.ok(installedSkill, `catalog missing expected skill ${installedSkillName}`);
+        assertManagedFilesInstalledAndTracked(repo, lock, installedSkill);
+      }
+    } finally {
+      cleanup(repo);
+    }
+  }
+});
+
+test('MaxView-shaped install + bootstrap keeps scope exact and generates clean project-specific adapters', () => {
+  const repo = makeRepo(makeMaxViewCleanInstallFixture());
+  try {
+    const { lock } = installAndBootstrap(repo, ['ui-lab', 'issue-analysis', 'technical-analysis']);
+    const expectedScope = ['issue-analysis', 'post-skill-bootstrap', 'technical-analysis', 'ui-lab'];
+    assert.deepEqual(Object.keys(lock.skills).sort(), expectedScope);
+    assert.deepEqual(
+      fs.readdirSync(path.join(repo, '.cursor/skills')).sort(),
+      expectedScope,
+    );
+
+    const catalog = loadCatalog(PKG_ROOT);
+    for (const skillName of expectedScope) {
+      assertManagedFilesInstalledAndTracked(repo, lock, findSkill(catalog, skillName));
+    }
+
+    const uiLabText = fs.readFileSync(path.join(repo, '.cursor/skills/ui-lab/SKILL.md'), 'utf8');
+    const issueText = fs.readFileSync(path.join(repo, '.cursor/skills/issue-analysis/SKILL.md'), 'utf8');
+    const technicalText = fs.readFileSync(path.join(repo, '.cursor/skills/technical-analysis/SKILL.md'), 'utf8');
+    const bootstrapText = fs.readFileSync(path.join(repo, '.cursor/skills/post-skill-bootstrap/SKILL.md'), 'utf8');
+    const combined = [uiLabText, issueText, technicalText, bootstrapText].join('\n');
+
+    assert.match(combined, /MaxView/);
+    assert.doesNotMatch(combined, /MatterWorx/);
+
+    assert.match(uiLabText, /--color-primary/);
+    assert.match(uiLabText, /#123456/);
+    assert.doesNotMatch(uiLabText, /--broken-token/);
+    assert.doesNotMatch(uiLabText, /\{ color: red \}/);
+    assert.doesNotMatch(uiLabText, /--docs-token/);
+    assert.doesNotMatch(uiLabText, /--wwwroot-token/);
+
+    assert.match(issueText, /PBI/);
+    assert.match(issueText, /TBI/);
+    assert.match(issueText, /RBAC/);
+    assert.match(technicalText, /projectName: MaxView/);
+    assert.match(bootstrapText, /CONTEXT-MAP\.md/);
+    assert.match(bootstrapText, /AGENTS\.md/);
+  } finally {
+    cleanup(repo);
+  }
+});
+
+test('MatterWorx-shaped install + bootstrap keeps review dependencies clean and rooted in top-level docs', () => {
+  const repo = makeRepo(makeMatterWorxCleanInstallFixture());
+  try {
+    const requested = [
+      'feature-request-analysis',
+      'prd-spec-review',
+      'design-spec-review',
+      'to-prd',
+      'prd-design-spec',
+    ];
+    const { lock } = installAndBootstrap(repo, requested);
+    const expectedScope = [...ensureAlwaysInstallSkills(requested)].sort();
+
+    assert.deepEqual(Object.keys(lock.skills).sort(), expectedScope);
+    assert.deepEqual(
+      fs.readdirSync(path.join(repo, '.cursor/skills')).sort(),
+      expectedScope,
+    );
+
+    const catalog = loadCatalog(PKG_ROOT);
+    for (const skillName of expectedScope) {
+      assertManagedFilesInstalledAndTracked(repo, lock, findSkill(catalog, skillName));
+    }
+
+    const reviewCompanions = [
+      '.cursor/skills/prd-spec-review/rubric.md',
+      '.cursor/skills/prd-spec-review/scorecard-template.md',
+      '.cursor/skills/design-spec-review/rubric.md',
+      '.cursor/skills/design-spec-review/scorecard-template.md',
+    ];
+    for (const rel of reviewCompanions) {
+      assert.ok(fs.existsSync(path.join(repo, rel)), `missing review companion ${rel}`);
+      const [, , skillName] = rel.split('/');
+      assert.ok(lock.skills[skillName].managedFiles[rel], `lockfile missing hash for ${rel}`);
+    }
+
+    const skillTexts = expectedScope.map((skillName) =>
+      fs.readFileSync(path.join(repo, '.cursor/skills', skillName, 'SKILL.md'), 'utf8')
+    );
+    const combined = skillTexts.join('\n');
+    const featureRequestText = fs.readFileSync(
+      path.join(repo, '.cursor/skills/feature-request-analysis/SKILL.md'),
+      'utf8',
+    );
+    const nonInstructionalUnfilledSlots = [...combined.matchAll(/APEX:unfilled\(([^)]+)\)/g)]
+      .map((match) => match[1])
+      .filter((slot) => slot !== 'slotName');
+
+    assert.match(combined, /MatterWorx/);
+    assert.match(combined, /CONTEXT-MAP\.md/);
+    assert.match(combined, /AGENTS\.md/);
+    assert.doesNotMatch(combined, /Docker Port/);
+    assert.doesNotMatch(combined, /\b5432\b/);
+    assert.doesNotMatch(combined, /infra\/shared-async\.tf/);
+
+    assert.match(featureRequestText, /APEX:slot\(mission\)/);
+    assert.match(featureRequestText, /APEX:unfilled\(mission\)/);
+    assert.doesNotMatch(featureRequestText, /TODO\(mission\)/);
+
+    assert.deepEqual(nonInstructionalUnfilledSlots, ['mission']);
   } finally {
     cleanup(repo);
   }

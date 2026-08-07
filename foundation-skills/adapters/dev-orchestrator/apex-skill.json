@@ -11,6 +11,9 @@
   "capabilities": [
     "multi-agent-orchestration"
   ],
+  "dependsOn": [
+    "to-prd"
+  ],
   "managedFiles": [
     "SKILL.md",
     "dev-plan-example.json",

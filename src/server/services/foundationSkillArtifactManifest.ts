@@ -7,6 +7,10 @@ import type {
   FoundationSkillArtifactManifestSkill,
   FoundationSkillRelease,
 } from '../../shared/types/foundationSkills';
+import {
+  FoundationSkillReleaseValidationError,
+  collectFoundationSkillValidationIssues,
+} from '../../shared/foundationSkillDependencies';
 
 const CATALOG_PATH = 'package/catalog.json';
 const MAX_MANIFEST_BYTES = 2 * 1024 * 1024;
@@ -190,18 +194,16 @@ export function validateReleaseArtifactManifest(
     if (skill.tier === 'apex-only') {
       throw new Error(`Release cannot include apex-only skill "${name}"`);
     }
-    for (const dependency of skill.dependsOn) {
-      if (!effective.has(dependency)) {
-        throw new Error(`Skill "${name}" depends on missing skill "${dependency}"`);
-      }
-      const dependencyAudience = effectiveAudience(release, dependency);
-      const dependentAudience = effectiveAudience(release, name);
-      if (!audienceContains(dependencyAudience, dependentAudience)) {
-        throw new Error(
-          `Skill "${name}" audience is not covered by dependency "${dependency}" audience`,
-        );
-      }
-    }
+  }
+
+  const issues = collectFoundationSkillValidationIssues({
+    skills: manifest.skills,
+    selectedSkills: [...effective],
+    targetProjects: release.targetProjects,
+    skillTargets: release.skillTargets,
+  });
+  if (issues.length > 0) {
+    throw new FoundationSkillReleaseValidationError(issues);
   }
 }
 
@@ -297,13 +299,6 @@ function normalizeSkill(value: unknown): FoundationSkillArtifactManifestSkill {
   };
 }
 
-function effectiveAudience(
-  release: FoundationSkillRelease,
-  skillName: string,
-): string[] {
-  return release.skillTargets?.[skillName] ?? release.targetProjects ?? [];
-}
-
 function validateManifestDependencyGraph(
   skills: FoundationSkillArtifactManifestSkill[],
   byName: Map<string, FoundationSkillArtifactManifestSkill>,
@@ -332,13 +327,6 @@ function validateManifestDependencyGraph(
     visited.add(name);
   };
   for (const skill of skills) visit(skill.name);
-}
-
-function audienceContains(container: string[], contained: string[]): boolean {
-  if (container.length === 0) return true;
-  if (contained.length === 0) return false;
-  const allowed = new Set(container.map((project) => project.toLowerCase()));
-  return contained.every((project) => allowed.has(project.toLowerCase()));
 }
 
 function verifyTarChecksum(header: Buffer): void {

@@ -199,11 +199,32 @@ export interface FoundationSkillCatalogEntry {
   name: string;
   summary: string;
   tier: FoundationSkillTier;
+  dependsOn?: string[];
 }
 
 export interface FoundationSkillCatalogResponse {
   suiteVersion: string;
   skills: FoundationSkillCatalogEntry[];
+}
+
+export type FoundationSkillReleaseValidationIssueType =
+  | 'missing_dependency'
+  | 'audience_gap';
+
+export interface FoundationSkillReleaseValidationIssue {
+  type: FoundationSkillReleaseValidationIssueType;
+  dependentSkill: string;
+  dependency: string;
+  message: string;
+  remediation: string;
+  dependentProjects: string[];
+  dependencyProjects: string[];
+}
+
+export interface FoundationSkillReleaseValidationErrorResponse {
+  error: string;
+  code: 'release_validation_failed';
+  issues: FoundationSkillReleaseValidationIssue[];
 }
 
 // ── Skills matrix ─────────────────────────────────────────────────────────────

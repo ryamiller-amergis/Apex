@@ -6,11 +6,14 @@
     "range": ">=0.1.0"
   },
   "extensionFiles": [
-    "SKILL.md",
-    "adr-template.md"
+    "SKILL.md"
   ],
   "capabilities": [
     "adr-generation"
+  ],
+  "dependsOn": [
+    "adr-interview",
+    "azure-async-infra"
   ],
   "managedFiles": [
     "SKILL.md",

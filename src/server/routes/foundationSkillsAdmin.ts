@@ -90,11 +90,14 @@ function loadCatalogFile(): CatalogFile {
     const raw = JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
     _catalogCache = {
       suiteVersion: raw.suiteVersion ?? '0.0.0',
-      skills: (raw.skills as Array<{ name: string; summary?: string; tier?: string }>).map((s) => ({
-        name:    s.name,
+      skills: (
+        raw.skills as Array<{ name: string; summary?: string; tier?: string; dependsOn?: string[] }>
+      ).map((s) => ({
+        name: s.name,
         summary: s.summary ?? '',
         // Absent tier means the skill ships to teams.
-        tier:    s.tier === 'apex-only' ? 'apex-only' as const : 'shippable' as const,
+        tier: s.tier === 'apex-only' ? 'apex-only' as const : 'shippable' as const,
+        dependsOn: Array.isArray(s.dependsOn) ? s.dependsOn.filter((value) => typeof value === 'string') : [],
       })),
     };
     console.log(
@@ -209,6 +212,14 @@ router.post('/releases/:id/publish', async (req: Request, res: Response): Promis
     const release = await publishRelease(req.params.id, actor(req));
     res.json({ release });
   } catch (err: any) {
+    if (err?.code === 'release_validation_failed' && Array.isArray(err?.issues)) {
+      res.status(422).json({
+        error: err.message ?? 'Release validation failed',
+        code: 'release_validation_failed',
+        issues: err.issues,
+      });
+      return;
+    }
     if (err.message?.includes('not found')) {
       res.status(404).json({ error: 'Release not found' });
       return;

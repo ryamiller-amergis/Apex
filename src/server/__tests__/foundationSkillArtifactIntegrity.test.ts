@@ -9,6 +9,7 @@ import {
   validateReleaseArtifactManifest,
   validateReleaseUpdate,
 } from '../services/foundationSkillArtifactManifest';
+import { FoundationSkillReleaseValidationError } from '../../shared/foundationSkillDependencies';
 import {
   downloadPackageArtifact,
   isTrustedArtifactUrl,
@@ -97,6 +98,28 @@ function release(overrides: Partial<FoundationSkillRelease> = {}): FoundationSki
     updatedAt: '2026-08-06T00:00:00.000Z',
     ...overrides,
   };
+}
+
+function loadActualManifest(): FoundationSkillArtifactManifest {
+  return JSON.parse(
+    fs.readFileSync(
+      path.resolve(__dirname, '../../../foundation-skills/catalog.json'),
+      'utf8',
+    ),
+  ) as FoundationSkillArtifactManifest;
+}
+
+function releaseForManifest(
+  manifest: FoundationSkillArtifactManifest,
+  overrides: Partial<FoundationSkillRelease> = {},
+): FoundationSkillRelease {
+  return release({
+    version: manifest.suiteVersion,
+    artifactVersion: manifest.suiteVersion,
+    artifactPackage: manifest.package,
+    contractApiVersion: manifest.contractApiVersion,
+    ...overrides,
+  });
 }
 
 describe('extractCatalogFromNpmTarball', () => {
@@ -267,57 +290,123 @@ describe('artifact download authentication', () => {
 });
 
 describe('validateReleaseArtifactManifest', () => {
-  it('accepts matching versions, shippable selections, and dependency closure', () => {
+  it('accepts real-catalog per-skill audiences when dependency audiences cover MaxView and MatterWorx', () => {
+    const actualManifest = loadActualManifest();
+
     expect(() =>
-      validateReleaseArtifactManifest(release(), manifest),
+      validateReleaseArtifactManifest(
+        releaseForManifest(actualManifest, {
+          selectedSkills: ['prd-spec-review', 'design-spec-review', 'to-prd', 'prd-design-spec'],
+          targetProjects: [],
+          skillTargets: {
+            'prd-spec-review': ['MaxView'],
+            'design-spec-review': ['MatterWorx'],
+            'prd-design-spec': ['MatterWorx'],
+            'to-prd': ['MaxView', 'MatterWorx'],
+            'post-skill-bootstrap': ['MaxView', 'MatterWorx'],
+          },
+        }),
+        actualManifest,
+      ),
     ).not.toThrow();
   });
 
-  it('rejects suite-version mismatch and apex-only selections', () => {
+  it('rejects suite-version mismatch and real apex-only selections', () => {
+    const actualManifest = loadActualManifest();
+
     expect(() =>
       validateReleaseArtifactManifest(
-        release({ version: '2.0.1' }),
-        manifest,
+        releaseForManifest(actualManifest, { version: `${actualManifest.suiteVersion}-drift` }),
+        actualManifest,
       ),
     ).toThrow(/suite version/i);
     expect(() =>
       validateReleaseArtifactManifest(
-        release({ selectedSkills: ['internal-only'] }),
-        manifest,
+        releaseForManifest(actualManifest, { selectedSkills: ['design-doc-validation'] }),
+        actualManifest,
       ),
     ).toThrow(/apex-only/i);
   });
 
-  it('rejects contract-version mismatch and broken per-project dependency audiences', () => {
+  it('rejects contract-version mismatch and aggregates every missing real-catalog dependency', () => {
+    const actualManifest = loadActualManifest();
+
     expect(() =>
       validateReleaseArtifactManifest(
-        release({ contractApiVersion: 2 }),
-        manifest,
+        releaseForManifest(actualManifest, { contractApiVersion: actualManifest.contractApiVersion + 1 }),
+        actualManifest,
       ),
     ).toThrow(/contract api/i);
 
-    expect(() =>
+    try {
       validateReleaseArtifactManifest(
-        release({
-          selectedSkills: ['to-prd', 'post-skill-bootstrap'],
-          targetProjects: [],
-          skillTargets: {
-            'post-skill-bootstrap': [],
-            'to-prd': ['MaxView'],
-          },
+        releaseForManifest(actualManifest, {
+          selectedSkills: ['design-spec-review'],
         }),
-        manifest,
-      ),
-    ).toThrow(/audience.*dependency|dependency.*audience/i);
+        actualManifest,
+      );
+      throw new Error('expected validation to fail');
+    } catch (error) {
+      expect(error).toBeInstanceOf(FoundationSkillReleaseValidationError);
+      expect(error).toMatchObject({
+        code: 'release_validation_failed',
+        issues: [
+          expect.objectContaining({
+            type: 'missing_dependency',
+            dependentSkill: 'design-spec-review',
+            dependency: 'prd-design-spec',
+          }),
+          expect.objectContaining({
+            type: 'missing_dependency',
+            dependentSkill: 'design-spec-review',
+            dependency: 'to-prd',
+          }),
+        ],
+      });
+    }
   });
 
-  it('rejects a selected or always-installed skill with a missing dependency', () => {
-    expect(() =>
+  it('aggregates multiple broken per-project dependency audiences from the real catalog', () => {
+    const actualManifest = loadActualManifest();
+
+    try {
       validateReleaseArtifactManifest(
-        release({ selectedSkills: [] }),
-        manifest,
-      ),
-    ).toThrow(/depends on.*to-prd/i);
+        releaseForManifest(actualManifest, {
+          selectedSkills: ['prd-spec-review', 'design-spec-review', 'to-prd', 'prd-design-spec'],
+          targetProjects: [],
+          skillTargets: {
+            'prd-spec-review': ['Apex'],
+            'design-spec-review': ['MatterWorx'],
+            'prd-design-spec': ['MaxView'],
+            'to-prd': ['Apex'],
+            'post-skill-bootstrap': ['Apex'],
+          },
+        }),
+        actualManifest,
+      );
+      throw new Error('expected validation to fail');
+    } catch (error) {
+      expect(error).toBeInstanceOf(FoundationSkillReleaseValidationError);
+      expect((error as FoundationSkillReleaseValidationError).issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'audience_gap',
+            dependentSkill: 'design-spec-review',
+            dependency: 'to-prd',
+          }),
+          expect.objectContaining({
+            type: 'audience_gap',
+            dependentSkill: 'design-spec-review',
+            dependency: 'prd-design-spec',
+          }),
+          expect.objectContaining({
+            type: 'audience_gap',
+            dependentSkill: 'prd-design-spec',
+            dependency: 'to-prd',
+          }),
+        ]),
+      );
+    }
   });
 
   it('rejects invalid dependencies anywhere in the artifact manifest', () => {

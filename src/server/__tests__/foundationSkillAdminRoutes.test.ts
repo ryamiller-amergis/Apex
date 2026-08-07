@@ -16,6 +16,7 @@ import * as updateService from '../services/foundationSkillRepoUpdateService';
 import * as teamsService from '../services/foundationSkillTeamsService';
 import * as scanScheduler from '../services/foundationSkillScanScheduler';
 import { requireSuperAdmin } from '../middleware/rbac';
+import { FoundationSkillReleaseValidationError } from '../../shared/foundationSkillDependencies';
 
 jest.mock('../services/foundationSkillReleaseService', () => ({
   listReleases: jest.fn(),
@@ -266,6 +267,54 @@ describe('Foundation Skills Admin Routes', () => {
       const res = await request(buildAdminApp())
         .post('/api/platform-admin/foundation-skills/releases/rel-1/publish');
       expect(res.status).toBe(409);
+    });
+
+    it('returns 422 with structured issues when release validation fails', async () => {
+      mockRelease.publishRelease.mockRejectedValue(
+        new FoundationSkillReleaseValidationError([
+          {
+            type: 'missing_dependency',
+            dependentSkill: 'design-spec-review',
+            dependency: 'prd-design-spec',
+            message: 'Skill "design-spec-review" requires dependency "prd-design-spec".',
+            remediation: 'Add "prd-design-spec" to this release.',
+            dependentProjects: [],
+            dependencyProjects: [],
+          },
+          {
+            type: 'missing_dependency',
+            dependentSkill: 'design-spec-review',
+            dependency: 'to-prd',
+            message: 'Skill "design-spec-review" requires dependency "to-prd".',
+            remediation: 'Add "to-prd" to this release.',
+            dependentProjects: [],
+            dependencyProjects: [],
+          },
+        ]),
+      );
+
+      const res = await request(buildAdminApp())
+        .post('/api/platform-admin/foundation-skills/releases/rel-1/publish');
+
+      expect(res.status).toBe(422);
+      expect(res.body).toEqual({
+        error: 'Release validation failed',
+        code: 'release_validation_failed',
+        issues: [
+          expect.objectContaining({ dependency: 'prd-design-spec' }),
+          expect.objectContaining({ dependency: 'to-prd' }),
+        ],
+      });
+    });
+
+    it('keeps unrelated publish failures as 500 errors', async () => {
+      mockRelease.publishRelease.mockRejectedValue(new Error('Azure Artifacts down'));
+
+      const res = await request(buildAdminApp())
+        .post('/api/platform-admin/foundation-skills/releases/rel-1/publish');
+
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({ error: 'Azure Artifacts down' });
     });
   });
 

@@ -11,6 +11,9 @@
   "capabilities": [
     "test-case-synthesis"
   ],
+  "dependsOn": [
+    "to-prd"
+  ],
   "managedFiles": [
     "SKILL.md",
     "test-case-example.json",

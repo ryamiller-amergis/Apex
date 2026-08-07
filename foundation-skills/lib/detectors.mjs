@@ -26,7 +26,10 @@ function entry(detector, key, value, file, line) {
 /** CSS custom-property extractor: `--token: value;` across stylesheet files. */
 export function detectCssVariables(ctx) {
   const out = [];
-  const files = ctx.files.filter((f) => /\.(css|scss|less)$/i.test(f));
+  const files = ctx.files
+    .filter((f) => /\.(css|scss|less)$/i.test(f))
+    .filter((f) => isAllowedCssPath(f))
+    .sort(compareCssPriority);
   const re = /(--[a-z0-9-]+)\s*:\s*([^;]+);/gi;
   // Third-party tool prefixes that are never part of an app's own design system.
   const VENDOR_PREFIXES = ['--ifm-', '--docusaurus-', '--swm-', '--prism-'];
@@ -38,8 +41,10 @@ export function detectCssVariables(ctx) {
       re.lastIndex = 0;
       while ((m = re.exec(lines[i])) !== null) {
         const key = m[1].trim();
+        const value = m[2].trim();
         if (VENDOR_PREFIXES.some((p) => key.startsWith(p))) continue;
-        out.push(entry('css-variables', key, m[2].trim(), rel, i + 1));
+        if (isUnsafeCssValue(value)) continue;
+        out.push(entry('css-variables', key, value, rel, i + 1));
       }
     }
   }
@@ -84,21 +89,32 @@ export function detectRoutes(ctx) {
 /** Package/stack reader: name, framework signals, scripts from package.json. */
 export function detectStack(ctx) {
   const out = [];
-  const pkgRel = ctx.files.find((f) => f === 'package.json');
-  if (!pkgRel) return out;
-  let pkg;
-  try {
-    pkg = JSON.parse(fs.readFileSync(path.join(ctx.repoRoot, pkgRel), 'utf8'));
-  } catch {
-    return out;
+  const pkgFiles = ctx.files
+    .filter((f) => /(^|\/)package\.json$/i.test(f))
+    .sort(comparePackagePriority);
+
+  const projectTitle = findProjectTitle(ctx);
+  if (projectTitle) {
+    out.push(entry('stack', 'projectName', projectTitle.value, projectTitle.file, projectTitle.line));
   }
-  if (pkg.name) out.push(entry('stack', 'projectName', pkg.name, pkgRel));
-  const deps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
-  const known = ['react', 'vue', 'svelte', 'express', 'next', 'vite', '@mui/material', 'tailwindcss'];
-  for (const dep of known) {
-    if (deps[dep]) out.push(entry('stack', `dep:${dep}`, deps[dep], pkgRel));
+
+  const known = ['react', 'react-dom', 'vue', 'svelte', 'express', 'next', 'vite', '@mui/material', 'tailwindcss'];
+  for (const pkgRel of pkgFiles) {
+    let pkg;
+    try {
+      pkg = JSON.parse(fs.readFileSync(path.join(ctx.repoRoot, pkgRel), 'utf8'));
+    } catch {
+      continue;
+    }
+    if (pkgRel === 'package.json' && pkg.name) {
+      out.push(entry('stack', 'projectName', pkg.name, pkgRel));
+    }
+    const deps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
+    for (const dep of known) {
+      if (deps[dep]) out.push(entry('stack', `dep:${dep}`, deps[dep], pkgRel));
+    }
   }
-  return out;
+  return dedupeByKey(out);
 }
 
 /**
@@ -107,18 +123,30 @@ export function detectStack(ctx) {
  */
 export function detectGlossary(ctx) {
   const out = [];
-  const files = ctx.files.filter((f) => /\.md$/i.test(f) && /(context|glossary|agents)/i.test(f));
-  const rowRe = /^\|\s*([^|]+?)\s*\|\s*(.+?)\s*\|\s*$/;
+  const files = ctx.files
+    .filter((f) => /\.md$/i.test(f) && isGlossaryCandidate(f))
+    .filter((f) => !isExcludedGlossaryPath(f))
+    .sort(compareGlossaryPriority);
+  const rowRe = /^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*$/;
   for (const rel of files) {
     const lines = readLines(path.join(ctx.repoRoot, rel));
     if (!lines) continue;
+    let inSection = false;
     for (let i = 0; i < lines.length; i++) {
+      if (TERMINOLOGY_HEADING_RE.test(lines[i])) {
+        inSection = true;
+        continue;
+      }
+      if (inSection && /^##\s+/.test(lines[i])) {
+        inSection = false;
+      }
+      if (!inSection) continue;
       const m = rowRe.exec(lines[i]);
       if (!m) continue;
-      const term = m[1].trim();
+      const term = stripMarkdownDecorators(m[1].trim());
       const meaning = m[2].trim();
-      if (/^-+$/.test(term) || /term/i.test(term) === false && meaning.length < 3) continue;
-      if (/^-+$/.test(meaning)) continue;
+      if (isTableSeparator(term) || isTableSeparator(meaning)) continue;
+      if (isGlossaryHeader(term, meaning)) continue;
       out.push(entry('glossary', term, meaning, rel, i + 1));
     }
   }
@@ -253,31 +281,38 @@ export function detectAppShell(ctx) {
  */
 export function detectRepoDocs(ctx) {
   const out = [];
-  const all = ctx.files.map((f) => f.toLowerCase());
 
   // Primary context / product guide file
-  const contextCandidates = ['context.md', 'contexts.md', 'agents.md', 'readme.md'];
-  for (const candidate of ['CONTEXT.md', 'context.md', 'docs/context.md']) {
-    if (ctx.files.includes(candidate)) {
-      out.push(entry('repo-docs', 'contextFile', candidate, candidate));
-      break;
-    }
-  }
-  if (!out.find((e) => e.key === 'contextFile')) {
-    // Fallback: uppercase README or context variant
-    const fallback = ctx.files.find((f) => /^(context|readme)\.md$/i.test(f));
-    if (fallback) out.push(entry('repo-docs', 'contextFile', fallback, fallback));
-  }
+  const contextFile = findFirstPath(
+    ctx.files,
+    [
+      'CONTEXT.md',
+      'context.md',
+      'CONTEXT-MAP.md',
+      'context-map.md',
+      'README.md',
+      'readme.md',
+      'docs/CONTEXT.md',
+      'docs/context.md',
+      'docs/CONTEXT-MAP.md',
+      'docs/context-map.md',
+    ],
+    /(^|\/)(context(?:-map)?|readme)\.md$/i,
+  );
+  if (contextFile) out.push(entry('repo-docs', 'contextFile', contextFile, contextFile));
 
   // AGENTS.md
-  const agentsFile = ctx.files.find((f) => /^agents\.md$/i.test(f));
+  const agentsFile = findFirstPath(ctx.files, ['AGENTS.md', 'agents.md'], /(^|\/)agents\.md$/i);
   if (agentsFile) out.push(entry('repo-docs', 'agentsFile', agentsFile, agentsFile));
+
+  const mission = findMissionEvidence(ctx);
+  if (mission) out.push(entry('repo-docs', 'mission', mission.value, mission.file, mission.line));
 
   // Changelog
   const changelogCandidates = ['public/CHANGELOG.json', 'CHANGELOG.md', 'CHANGELOG.json', 'changelog.md'];
   for (const c of changelogCandidates) {
-    if (ctx.files.includes(c) || ctx.files.map((f) => f.toLowerCase()).includes(c.toLowerCase())) {
-      const actual = ctx.files.find((f) => f.toLowerCase() === c.toLowerCase()) ?? c;
+    const actual = ctx.files.find((f) => f.toLowerCase() === c.toLowerCase());
+    if (actual) {
       out.push(entry('repo-docs', 'changelogFile', actual, actual));
       break;
     }
@@ -310,6 +345,211 @@ function dedupeByKey(entries) {
   }
   return [...seen.values()];
 }
+
+const TERMINOLOGY_HEADING_RE = /^##\s+(Glossary|Terms|Key Terms|Terminology|Key Terminology)\b/i;
+const CSS_EXCLUDED_SEGMENTS = new Set(['vendor', 'wwwroot', 'docs', 'dist', 'build', 'out', 'coverage', '.next', '.nuxt']);
+const GLOSSARY_EXCLUDED_SEGMENTS = new Set(['local-debug', 'infrastructure', 'infra']);
+
+function comparePackagePriority(a, b) {
+  return packagePriority(a) - packagePriority(b) || a.localeCompare(b);
+}
+
+function packagePriority(rel) {
+  return rel === 'package.json' ? 0 : rel.split('/').length;
+}
+
+function compareGlossaryPriority(a, b) {
+  return docPriority(a) - docPriority(b) || a.localeCompare(b);
+}
+
+function compareCssPriority(a, b) {
+  return cssPriority(a) - cssPriority(b) || a.localeCompare(b);
+}
+
+function cssPriority(rel) {
+  const lower = rel.toLowerCase();
+  if (/(^|\/)(theme|tokens?|variables?|globals?)(\/|[-_.])/.test(lower) || /(theme|tokens?|variables?|globals?)/.test(path.basename(lower))) {
+    return 0;
+  }
+  if (/\.module\.(css|scss|less)$/.test(lower)) return 1;
+  return 2;
+}
+
+function isAllowedCssPath(rel) {
+  const segments = rel.toLowerCase().split('/');
+  return !segments.some((segment) => CSS_EXCLUDED_SEGMENTS.has(segment));
+}
+
+function isUnsafeCssValue(value) {
+  return !value
+    || value.length > 180
+    || /[{}]/.test(value)
+    || /\n/.test(value)
+    || /\/\*/.test(value);
+}
+
+function isGlossaryCandidate(rel) {
+  return /^(AGENTS|agents|CONTEXT|context|CONTEXT-MAP|context-map|README|readme|GLOSSARY|glossary)\.md$/i.test(rel)
+    || /^docs\/GLOSSARY\.md$/i.test(rel);
+}
+
+function isExcludedGlossaryPath(rel) {
+  const segments = rel.toLowerCase().split('/');
+  return segments.some((segment) => GLOSSARY_EXCLUDED_SEGMENTS.has(segment));
+}
+
+function isTableSeparator(value) {
+  return /^:?-{3,}:?$/.test(value);
+}
+
+function isGlossaryHeader(term, meaning) {
+  return /^(term|key|name|abbreviation|acronym)$/i.test(term)
+    && /^(meaning|definition|value|description|purpose)$/i.test(meaning);
+}
+
+function stripMarkdownDecorators(value) {
+  return value.replace(/^\*\*|\*\*$/g, '').trim();
+}
+
+function findProjectTitle(ctx) {
+  for (const rel of primaryContextCandidates()) {
+    if (!ctx.files.includes(rel)) continue;
+    const title = extractRootH1(path.join(ctx.repoRoot, rel));
+    if (!title) continue;
+    const normalized = normalizeProjectTitle(title.text, rel);
+    if (!normalized) continue;
+    return { value: normalized, file: rel, line: title.line };
+  }
+  for (const rel of ['AGENTS.md', 'agents.md']) {
+    if (!ctx.files.includes(rel)) continue;
+    const title = extractRootH1(path.join(ctx.repoRoot, rel));
+    if (!title) continue;
+    const normalized = normalizeProjectTitle(title.text, rel);
+    if (!normalized) continue;
+    return { value: normalized, file: rel, line: title.line };
+  }
+  return null;
+}
+
+function extractRootH1(absPath) {
+  const lines = readLines(absPath);
+  if (!lines) return null;
+  for (let i = 0; i < lines.length; i++) {
+    const match = /^#\s+(.+?)\s*$/.exec(lines[i]);
+    if (match) {
+      return { text: match[1].trim(), line: i + 1 };
+    }
+  }
+  return null;
+}
+
+function normalizeProjectTitle(title, rel = '') {
+  const metadataDerived = extractMetadataStyleProductTitle(title, rel);
+  if (metadataDerived !== null) {
+    title = metadataDerived;
+  }
+
+  const cleaned = title
+    .replace(/\s+[\/|]\s+.+$/, '')
+    .replace(/\s+[—–-]\s+.+$/, '')
+    .replace(/\s+(Monorepo|Repository|Repo|Context Map)$/i, '')
+    .trim();
+  if (!cleaned) return null;
+  if (/^(agents\.md|context\.md|context-map\.md|readme\.md)$/i.test(cleaned)) return null;
+  if (/^(context|overview|introduction)$/i.test(cleaned)) return null;
+  return cleaned;
+}
+
+function findFirstPath(files, preferred, fallbackRe) {
+  for (const candidate of preferred) {
+    if (files.includes(candidate)) return candidate;
+  }
+  return files
+    .filter((file) => fallbackRe.test(file))
+    .sort((a, b) => docPriority(a) - docPriority(b) || a.localeCompare(b))[0] ?? null;
+}
+
+function docPriority(rel) {
+  if (!rel.includes('/')) {
+    if (/^agents\.md$/i.test(rel)) return 0;
+    if (/^context\.md$/i.test(rel)) return 1;
+    if (/^context-map\.md$/i.test(rel)) return 2;
+    if (/^readme\.md$/i.test(rel)) return 3;
+    return 4;
+  }
+  return 10 + rel.split('/').length;
+}
+
+function findMissionEvidence(ctx) {
+  const primaryContext = findPrimaryContextPath(ctx.files);
+  if (!primaryContext) return null;
+  const summary = extractTrustedProductSection(path.join(ctx.repoRoot, primaryContext));
+  if (summary) return { value: summary.text, file: primaryContext, line: summary.line };
+  return null;
+}
+
+function extractTrustedProductSection(absPath) {
+  const lines = readLines(absPath);
+  if (!lines) return null;
+  let inTrustedSection = false;
+  const paragraph = [];
+  let startLine = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (TRUSTED_PRODUCT_SECTION_RE.test(line)) {
+      inTrustedSection = true;
+      paragraph.length = 0;
+      startLine = 0;
+      continue;
+    }
+    if (!inTrustedSection) continue;
+    if (/^##\s+/.test(line)) break;
+    if (!line) {
+      if (paragraph.length > 0) break;
+      continue;
+    }
+    if (/^[-*]\s+/.test(line) || /^\|/.test(line) || /^>/.test(line)) break;
+    if (paragraph.length === 0) startLine = i + 1;
+    paragraph.push(line);
+  }
+  const text = normalizeMissionText(paragraph.join(' '));
+  return text ? { text, line: startLine } : null;
+}
+
+function normalizeMissionText(text) {
+  if (typeof text !== 'string') return null;
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return null;
+  if (normalized.length < 24 || normalized.length > 220) return null;
+  return normalized;
+}
+
+function primaryContextCandidates() {
+  return ['CONTEXT.md', 'context.md', 'CONTEXT-MAP.md', 'context-map.md', 'README.md', 'readme.md'];
+}
+
+function findPrimaryContextPath(files) {
+  return findFirstPath(
+    files,
+    [
+      ...primaryContextCandidates(),
+      'docs/CONTEXT.md',
+      'docs/context.md',
+      'docs/CONTEXT-MAP.md',
+      'docs/context-map.md',
+    ],
+    /(^|\/)(context(?:-map)?|readme)\.md$/i,
+  );
+}
+
+function extractMetadataStyleProductTitle(title, rel) {
+  if (!/^agents\.md$/i.test(path.basename(rel || ''))) return null;
+  if (!/^agents\.md\b/i.test(title)) return null;
+  const extracted = /^agents\.md\s*[—–-]\s*([A-Za-z][A-Za-z0-9]+)\b/i.exec(title);
+  return extracted ? extracted[1] : '';
+}
+
+const TRUSTED_PRODUCT_SECTION_RE = /^##\s+(What is .+\?|Application Summary|Product Overview|Purpose)\s*$/i;
 
 export const DETECTORS = {
   'css-variables': detectCssVariables,

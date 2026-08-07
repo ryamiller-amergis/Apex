@@ -13,6 +13,7 @@
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { FoundationSkillsAdmin } from '../FoundationSkillsAdmin';
+import { FoundationSkillReleaseValidationClientError } from '../../hooks/useFoundationSkillAdmin';
 import {
   useFoundationSkillReleases,
   useFoundationSkillCandidates,
@@ -34,6 +35,18 @@ import {
 } from '../../hooks/useFoundationSkillAdmin';
 
 jest.mock('../../hooks/useFoundationSkillAdmin', () => ({
+  FoundationSkillReleaseValidationClientError: class FoundationSkillReleaseValidationClientError extends Error {
+    code = 'release_validation_failed' as const;
+    issues: unknown[];
+    status: number;
+
+    constructor(message: string, issues: unknown[], status: number) {
+      super(message);
+      this.name = 'FoundationSkillReleaseValidationClientError';
+      this.issues = issues;
+      this.status = status;
+    }
+  },
   useFoundationSkillReleases:           jest.fn(),
   useFoundationSkillCandidates:         jest.fn(),
   useFoundationSkillRepoStatuses:       jest.fn(),
@@ -58,6 +71,7 @@ const catalogSkills = Array.from({ length: 31 }, (_, i) => ({
   name:    `skill-${i + 1}`,
   summary: `Summary for skill ${i + 1}.`,
   tier:    'shippable' as const,
+  dependsOn: [],
 }));
 
 jest.mock('../../hooks/useProjects', () => ({
@@ -284,6 +298,212 @@ describe('FoundationSkillsAdmin', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Continue' })); // blocked
 
       expect(screen.getByRole('alert')).toHaveTextContent('Select at least one project');
+    });
+  });
+
+  describe('release dependency UX', () => {
+    function dependencyCatalog() {
+      return [
+        { name: 'prd-spec-review', summary: 'Review PRDs.', tier: 'shippable' as const, dependsOn: ['to-prd'] },
+        { name: 'design-spec-review', summary: 'Review design specs.', tier: 'shippable' as const, dependsOn: ['prd-design-spec', 'to-prd'] },
+        { name: 'to-prd', summary: 'Generate PRDs.', tier: 'shippable' as const, dependsOn: [] },
+        { name: 'prd-design-spec', summary: 'Generate design specs.', tier: 'shippable' as const, dependsOn: ['to-prd'] },
+      ];
+    }
+
+    function openSkillsStep() {
+      fireEvent.click(screen.getByRole('tab', { name: 'Create Draft' }));
+      fireEvent.change(screen.getByLabelText('Suite version'), { target: { value: '2.0.0' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    }
+
+    it('auto-selects transitive dependencies and locks auto-required rows after clearing', () => {
+      mockCatalog.mockReturnValue({ skills: dependencyCatalog(), isLoading: false });
+      renderComponent();
+      openSkillsStep();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+      fireEvent.click(screen.getByTestId('fs-skill-checkbox-design-spec-review'));
+
+      expect(screen.getByText('3 of 4 selected')).toBeInTheDocument();
+      expect(screen.getByTestId('fs-skill-checkbox-design-spec-review')).toBeChecked();
+      expect(screen.getByTestId('fs-skill-checkbox-prd-design-spec')).toBeChecked();
+      expect(screen.getByTestId('fs-skill-checkbox-to-prd')).toBeChecked();
+      expect(screen.getByTestId('fs-skill-checkbox-prd-design-spec')).toBeDisabled();
+      expect(screen.getByTestId('fs-skill-checkbox-to-prd')).toBeDisabled();
+      expect(screen.getByText('Required by design-spec-review')).toBeInTheDocument();
+      expect(screen.getByText('Required by design-spec-review, prd-design-spec')).toBeInTheDocument();
+    });
+
+    it('associates the required-by reason with locked dependency checkboxes', () => {
+      mockCatalog.mockReturnValue({ skills: dependencyCatalog(), isLoading: false });
+      renderComponent();
+      openSkillsStep();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+      fireEvent.click(screen.getByTestId('fs-skill-checkbox-design-spec-review'));
+
+      const dependencyCheckbox = screen.getByTestId('fs-skill-checkbox-to-prd');
+      const descriptionId = dependencyCheckbox.getAttribute('aria-describedby');
+
+      expect(descriptionId).toBeTruthy();
+      expect(dependencyCheckbox).toBeDisabled();
+      expect(document.getElementById(descriptionId!)).toHaveTextContent(
+        'Required by design-spec-review, prd-design-spec',
+      );
+    });
+
+    it('removes orphaned auto-selected dependencies but keeps shared dependencies', () => {
+      mockCatalog.mockReturnValue({ skills: dependencyCatalog(), isLoading: false });
+      renderComponent();
+      openSkillsStep();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+      fireEvent.click(screen.getByTestId('fs-skill-checkbox-design-spec-review'));
+      fireEvent.click(screen.getByTestId('fs-skill-checkbox-prd-spec-review'));
+
+      expect(screen.getByText('4 of 4 selected')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('fs-skill-checkbox-prd-spec-review'));
+      expect(screen.getByTestId('fs-skill-checkbox-to-prd')).toBeChecked();
+      expect(screen.getByText('Required by design-spec-review, prd-design-spec')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('fs-skill-checkbox-design-spec-review'));
+      expect(screen.getByText('0 of 4 selected')).toBeInTheDocument();
+      expect(screen.getByTestId('fs-skill-checkbox-to-prd')).not.toBeChecked();
+      expect(screen.getByTestId('fs-skill-checkbox-prd-design-spec')).not.toBeChecked();
+    });
+
+    it('assigns skills per project and derives skillTargets without audience gaps', async () => {
+      const mutateAsync = jest.fn().mockResolvedValue({ ...draftRelease });
+      mockCreate.mockReturnValue({ mutateAsync, isPending: false });
+      mockCatalog.mockReturnValue({ skills: dependencyCatalog(), isLoading: false });
+      renderComponent();
+      fireEvent.click(screen.getByRole('tab', { name: 'Create Draft' }));
+      fireEvent.change(screen.getByLabelText('Suite version'), { target: { value: '2.0.0' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+      fireEvent.click(screen.getByRole('radio', { name: 'Specific projects' }));
+      fireEvent.focus(screen.getByRole('combobox', { name: 'Projects' }));
+      fireEvent.click(screen.getByRole('button', { name: 'MaxView' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Apex' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+
+      expect(screen.getByRole('heading', { name: 'Assign skills to projects' })).toBeInTheDocument();
+      expect(screen.getByTestId('fs-project-skill-assignment')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('fs-project-skill-clear-MaxView'));
+      fireEvent.click(screen.getByTestId('fs-project-skill-checkbox-MaxView-design-spec-review'));
+      expect(screen.getByTestId('fs-project-skill-checkbox-MaxView-to-prd')).toBeChecked();
+      expect(screen.getByTestId('fs-project-skill-checkbox-MaxView-to-prd')).toBeDisabled();
+
+      fireEvent.click(screen.getByTestId('fs-project-skill-toggle-Apex'));
+      fireEvent.click(screen.getByTestId('fs-project-skill-clear-Apex'));
+      fireEvent.click(screen.getByTestId('fs-project-skill-checkbox-Apex-prd-spec-review'));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+      expect(screen.getByTestId('fs-review-project-MaxView')).toHaveTextContent('MaxView');
+      expect(screen.getByTestId('fs-review-project-Apex')).toHaveTextContent('Apex');
+      fireEvent.submit(screen.getByText('Create draft').closest('form')!);
+
+      await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
+      expect(mutateAsync.mock.calls[0][0]).toEqual(
+        expect.objectContaining({
+          targetProjects: ['MaxView', 'Apex'],
+          selectedSkills: expect.arrayContaining([
+            'to-prd',
+            'prd-design-spec',
+            'design-spec-review',
+            'prd-spec-review',
+          ]),
+          skillTargets: expect.objectContaining({
+            'design-spec-review': ['MaxView'],
+            'prd-design-spec': ['MaxView'],
+            'prd-spec-review': ['Apex'],
+          }),
+        }),
+      );
+      // Shared dependency covers both projects → inherits release default
+      expect(mutateAsync.mock.calls[0][0].skillTargets['to-prd']).toBeUndefined();
+    });
+
+    it('copies picks from another project via the Copy from control', () => {
+      mockCatalog.mockReturnValue({ skills: dependencyCatalog(), isLoading: false });
+      renderComponent();
+      fireEvent.click(screen.getByRole('tab', { name: 'Create Draft' }));
+      fireEvent.change(screen.getByLabelText('Suite version'), { target: { value: '2.0.0' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+      fireEvent.click(screen.getByRole('radio', { name: 'Specific projects' }));
+      fireEvent.focus(screen.getByRole('combobox', { name: 'Projects' }));
+      fireEvent.click(screen.getByRole('button', { name: 'MaxView' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Apex' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+
+      fireEvent.click(screen.getByTestId('fs-project-skill-clear-MaxView'));
+      fireEvent.click(screen.getByTestId('fs-project-skill-checkbox-MaxView-prd-spec-review'));
+
+      fireEvent.click(screen.getByTestId('fs-project-skill-toggle-Apex'));
+      fireEvent.click(screen.getByTestId('fs-project-skill-clear-Apex'));
+      fireEvent.change(screen.getByTestId('fs-project-skill-copy-from-Apex'), {
+        target: { value: 'MaxView' },
+      });
+
+      expect(screen.getByTestId('fs-project-skill-checkbox-Apex-prd-spec-review')).toBeChecked();
+      expect(screen.getByTestId('fs-project-skill-checkbox-Apex-to-prd')).toBeChecked();
+    });
+
+    it('submits dependency-first closure from the all-projects skill checklist', async () => {
+      const mutateAsync = jest.fn().mockResolvedValue({ ...draftRelease });
+      mockCreate.mockReturnValue({ mutateAsync, isPending: false });
+      mockCatalog.mockReturnValue({ skills: dependencyCatalog(), isLoading: false });
+      renderComponent();
+      fireEvent.click(screen.getByRole('tab', { name: 'Create Draft' }));
+      fireEvent.change(screen.getByLabelText('Suite version'), { target: { value: '2.0.0' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+      fireEvent.click(screen.getByTestId('fs-skill-checkbox-prd-spec-review'));
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+      fireEvent.submit(screen.getByText('Create draft').closest('form')!);
+
+      await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
+      expect(mutateAsync.mock.calls[0][0]).toEqual(
+        expect.objectContaining({
+          selectedSkills: ['to-prd', 'prd-spec-review'],
+          skillTargets: {},
+        }),
+      );
+    });
+
+    it('submits dependency-first closure from draft edit payloads', async () => {
+      const mutateAsync = jest.fn().mockResolvedValue({ release: draftRelease });
+      mockUpdateRelease.mockReturnValue({ mutateAsync, isPending: false });
+      mockCatalog.mockReturnValue({ skills: dependencyCatalog(), isLoading: false });
+      mockReleases.mockReturnValue({
+        data: [
+          {
+            ...draftRelease,
+            selectedSkills: ['design-spec-review'],
+            targetProjects: [],
+            skillTargets: {},
+            artifactVersion: '2.0.0',
+          },
+        ],
+        isLoading: false,
+      });
+
+      renderComponent();
+      fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+      fireEvent.click(screen.getByTestId('fs-edit-save-rel-2'));
+
+      await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
+      expect(mutateAsync.mock.calls[0][0]).toEqual(
+        expect.objectContaining({
+          id: 'rel-2',
+          selectedSkills: ['to-prd', 'prd-design-spec', 'design-spec-review'],
+          skillTargets: {},
+        }),
+      );
     });
   });
 
@@ -657,6 +877,75 @@ describe('FoundationSkillsAdmin', () => {
           reason: 'superseded by v1.3.0',
         });
       });
+    });
+  });
+
+  describe('publish validation rendering', () => {
+    it('renders all structured publish issues and remediations together', async () => {
+      const mutateAsync = jest.fn().mockRejectedValue(
+        new FoundationSkillReleaseValidationClientError(
+          'Release validation failed',
+          [
+            {
+              type: 'missing_dependency',
+              dependentSkill: 'design-spec-review',
+              dependency: 'prd-design-spec',
+              message: 'Skill "design-spec-review" requires dependency "prd-design-spec".',
+              remediation: 'Add "prd-design-spec" to this release.',
+              dependentProjects: [],
+              dependencyProjects: [],
+            },
+            {
+              type: 'missing_dependency',
+              dependentSkill: 'design-spec-review',
+              dependency: 'to-prd',
+              message: 'Skill "design-spec-review" requires dependency "to-prd".',
+              remediation: 'Add "to-prd" to this release.',
+              dependentProjects: [],
+              dependencyProjects: [],
+            },
+          ],
+          422,
+        ),
+      );
+      mockPublish.mockReturnValue({ mutateAsync, isPending: false });
+
+      renderComponent();
+      fireEvent.click(screen.getAllByText('Publish')[0]);
+
+      expect(await screen.findByText('Release validation failed')).toBeInTheDocument();
+      expect(screen.getByText('Skill "design-spec-review" requires dependency "prd-design-spec".')).toBeInTheDocument();
+      expect(screen.getByText('Add "prd-design-spec" to this release.')).toBeInTheDocument();
+      expect(screen.getByText('Skill "design-spec-review" requires dependency "to-prd".')).toBeInTheDocument();
+      expect(screen.getByText('Add "to-prd" to this release.')).toBeInTheDocument();
+    });
+  });
+
+  describe('review accessibility', () => {
+    it('announces review validation issues with alert semantics when coverage fails', async () => {
+      // Force a client-side review alert by submitting a release whose selected set
+      // is empty after clearing every project's picks under Specific projects.
+      mockCatalog.mockReturnValue({
+        skills: [
+          { name: 'prd-spec-review', summary: 'Review PRDs.', tier: 'shippable' as const, dependsOn: ['to-prd'] },
+          { name: 'to-prd', summary: 'Generate PRDs.', tier: 'shippable' as const, dependsOn: [] },
+        ],
+        isLoading: false,
+      });
+      renderComponent();
+      fireEvent.click(screen.getByRole('tab', { name: 'Create Draft' }));
+      fireEvent.change(screen.getByLabelText('Suite version'), { target: { value: '2.0.0' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+      fireEvent.click(screen.getByRole('radio', { name: 'Specific projects' }));
+      fireEvent.focus(screen.getByRole('combobox', { name: 'Projects' }));
+      fireEvent.click(screen.getByRole('button', { name: 'MaxView' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+      fireEvent.click(screen.getByTestId('fs-project-skill-clear-MaxView'));
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Select at least one skill to include in this release.',
+      );
     });
   });
 });

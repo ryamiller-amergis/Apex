@@ -11,14 +11,44 @@ import type {
   ProjectAvailableSkill,
   FoundationSkillCatalogEntry,
   FoundationSkillCatalogResponse,
+  FoundationSkillReleaseValidationErrorResponse,
+  FoundationSkillReleaseValidationIssue,
 } from '../../shared/types/foundationSkills';
 
 // ── Fetch helper ──────────────────────────────────────────────────────────────
 
-async function adminFetch<T>(url: string, init?: RequestInit): Promise<T> {
+export class FoundationSkillReleaseValidationClientError extends Error {
+  readonly code = 'release_validation_failed' as const;
+  readonly issues: FoundationSkillReleaseValidationIssue[];
+  readonly status: number;
+
+  constructor(
+    message: string,
+    issues: FoundationSkillReleaseValidationIssue[],
+    status: number,
+  ) {
+    super(message);
+    this.name = 'FoundationSkillReleaseValidationClientError';
+    this.issues = issues;
+    this.status = status;
+  }
+}
+
+export async function adminFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: 'include', ...init });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
+    if (
+      res.status === 422 &&
+      (body as FoundationSkillReleaseValidationErrorResponse).code === 'release_validation_failed' &&
+      Array.isArray((body as FoundationSkillReleaseValidationErrorResponse).issues)
+    ) {
+      throw new FoundationSkillReleaseValidationClientError(
+        (body as FoundationSkillReleaseValidationErrorResponse).error ?? 'Release validation failed',
+        (body as FoundationSkillReleaseValidationErrorResponse).issues,
+        res.status,
+      );
+    }
     throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
   }
   if (res.status === 204 || res.headers.get('content-length') === '0') return undefined as T;

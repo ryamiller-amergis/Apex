@@ -23,7 +23,7 @@ import {
   pkgFoundationDir, repoAdapterDir, repoLegacyVendorDir,
   ADAPTER_DIR, LEGACY_VENDOR_DIR, BACKUP_DIR,
 } from './layout.mjs';
-import { loadCatalog, findSkill } from './catalog.mjs';
+import { loadCatalog, findSkill, listAdapterRuntimeFiles } from './catalog.mjs';
 import {
   readLockfile, emptyLockfile, serializeLockfile, isV1Lockfile,
   verifyLockfileIntegrity, LOCKFILE_VERSION,
@@ -147,13 +147,24 @@ export function planInstall(pkgRoot, repoRoot, skillNames, opts = {}) {
     const suiteVersion = catalog.suiteVersion;
 
     const adapterExtras = {};
-    for (const [rel, text] of Object.entries(boot.files)) {
-      if (rel === 'SKILL.md') continue;
-      if (rel === 'apex-skill.json') {
-        const destRel = toPosix(path.join(ADAPTER_DIR, name, rel));
-        assertWithin(repoRoot, destRel);
-        adapterExtras[destRel] = { text: normalizeText(text), hash: sha256(normalizeText(text)) };
+    const adapterRuntimeFiles = listAdapterRuntimeFiles(skill);
+    const missingAdapterFiles = [];
+    for (const rel of adapterRuntimeFiles) {
+      const text = boot.files[rel];
+      if (typeof text !== 'string') {
+        missingAdapterFiles.push(rel);
+        continue;
       }
+      const destRel = toPosix(path.join(ADAPTER_DIR, name, rel));
+      assertWithin(repoRoot, destRel);
+      const normalized = normalizeText(text);
+      adapterExtras[destRel] = { text: normalized, hash: sha256(normalized) };
+    }
+    if (missingAdapterFiles.length) {
+      errors.push(
+        `Skill "${name}" is missing declared adapter runtime companion(s): ${missingAdapterFiles.join(', ')}`,
+      );
+      continue;
     }
 
     let skillMdAction = null;

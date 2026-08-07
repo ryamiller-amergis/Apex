@@ -16,4 +16,4 @@ the project's own glossary/feature vocabulary where available:
 
 {{slot:glossary}}
 
-<!-- TODO(mission): summarize this product's mission in one sentence for alignment scoring -->
+{{slot:mission}}

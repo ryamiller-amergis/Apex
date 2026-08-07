@@ -7,13 +7,20 @@
   },
   "extensionFiles": [
     "SKILL.md",
-    "rubric.md"
+    "rubric.md",
+    "scorecard-template.md"
   ],
   "capabilities": [
     "interactive-review",
     "scoring-rubric"
   ],
+  "dependsOn": [
+    "prd-design-spec",
+    "to-prd"
+  ],
   "managedFiles": [
-    "SKILL.md"
+    "SKILL.md",
+    "rubric.md",
+    "scorecard-template.md"
   ]
 }

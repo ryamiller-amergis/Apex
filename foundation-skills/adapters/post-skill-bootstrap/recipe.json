@@ -1,7 +1,7 @@
 {
   "skill": "post-skill-bootstrap",
   "scanScope": "targeted",
-  "targetedGlobs": ["package.json", "**/CONTEXT.md", "**/context.md", "**/AGENTS.md", "apex-skills.lock.json"],
+  "targetedGlobs": ["package.json", "AGENTS.md", "agents.md", "CONTEXT.md", "context.md", "CONTEXT-MAP.md", "context-map.md", "README.md", "readme.md", "**/CONTEXT.md", "**/context.md", "**/AGENTS.md", "**/agents.md", "**/CONTEXT-MAP.md", "**/context-map.md", "apex-skills.lock.json"],
   "detectors": ["stack", "repo-docs"],
   "capFiles": 200,
   "capMs": 30000,

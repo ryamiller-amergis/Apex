@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { bootstrapSkill } from '../lib/bootstrap.mjs';
 import { collectEvidence, gatherFiles, globToRegExp } from '../lib/evidence.mjs';
+import { checkRepo } from '../lib/check.mjs';
 import { cmdBootstrap } from '../lib/commands.mjs';
 import { executeInstall } from '../lib/install.mjs';
 import { PKG_ROOT, makeRepo, cleanup, SAMPLE_REPO } from './helpers.mjs';
@@ -177,6 +178,56 @@ test('bootstrap --all scopes to lockfile skills, not the full catalog', () => {
     // Only ui-lab should exist under .cursor/skills
     const skills = fs.readdirSync(path.join(repo, '.cursor/skills'));
     assert.deepEqual(skills.sort(), ['ui-lab']);
+  } finally {
+    cleanup(repo);
+  }
+});
+
+test('bootstrap restores adapter-owned runtime companions and refreshes drift tracking', () => {
+  const repo = makeRepo(SAMPLE_REPO);
+  const logs = [];
+  const skills = ['prd-spec-review', 'design-spec-review', 'adr-finalize'];
+  const expectedFiles = [
+    '.cursor/skills/prd-spec-review/rubric.md',
+    '.cursor/skills/prd-spec-review/scorecard-template.md',
+    '.cursor/skills/design-spec-review/rubric.md',
+    '.cursor/skills/design-spec-review/scorecard-template.md',
+    '.cursor/skills/adr-finalize/adr-template.md',
+  ];
+  try {
+    executeInstall(PKG_ROOT, repo, skills);
+
+    for (const rel of expectedFiles) {
+      fs.rmSync(path.join(repo, rel), { force: true });
+    }
+
+    const before = checkRepo(PKG_ROOT, repo);
+    for (const skill of skills) {
+      assert.equal(
+        before.skills.find((entry) => entry.name === skill)?.companionDrift,
+        true,
+        `expected companion drift before bootstrap for ${skill}`,
+      );
+    }
+
+    const code = cmdBootstrap({ _: skills, package: PKG_ROOT, cwd: repo }, (message) => logs.push(message));
+    assert.equal(code, 0);
+
+    for (const rel of expectedFiles) {
+      assert.ok(fs.existsSync(path.join(repo, rel)), `missing restored runtime companion ${rel}`);
+    }
+    assert.equal(fs.existsSync(path.join(repo, '.cursor/skills/prd-spec-review/recipe.json')), false);
+    assert.equal(fs.existsSync(path.join(repo, '.cursor/skills/design-spec-review/recipe.json')), false);
+    assert.equal(fs.existsSync(path.join(repo, '.cursor/skills/adr-finalize/recipe.json')), false);
+
+    const after = checkRepo(PKG_ROOT, repo);
+    for (const skill of skills) {
+      const result = after.skills.find((entry) => entry.name === skill);
+      assert.equal(result?.drift, false, `expected clean check after bootstrap for ${skill}`);
+      assert.equal(result?.companionDrift, false, `expected companion drift cleared for ${skill}`);
+    }
+
+    assert.ok(logs.some((message) => /wrote \d+ file/.test(message)));
   } finally {
     cleanup(repo);
   }

@@ -1,4 +1,4 @@
-# prd-spec-review — APEX rubric (adapter-owned)
+# prd-spec-review rubric (adapter-owned)
 
 ## PRD markdown sections (weight sum = 100)
 
@@ -15,7 +15,7 @@
 | Feature Flag | 7 |
 | Implementation Decisions | 8 |
 | Assumptions Made | 8 |
-| Apex Terminology Compliance | 7 |
+| Project Terminology Consistency | 7 |
 | No Residual Template Tokens | 1 |
 
 ## Backlog JSON sections (weight sum = 100)
@@ -36,21 +36,21 @@
 
 ## Cross-cutting checks
 
-| Check | Signal | Feeds into |
-|-------|--------|-----------|
-| Template token scan | `\{[A-Za-z][^}]*\}` in non-code content | No Residual Template Tokens |
-| `[TBD]` / `TODO` / `FIXME` scan | Any match | No Residual Template Tokens |
-| Persona enum compliance | Persona not in Apex groups enum | User story contract; Personas |
-| Feature ↔ PBI persona alignment | PBI persona not in `affectedPersonas` | Feature structure; PBI structure |
-| User story ↔ PBI traceability | Orphan PBI story | User story contract; PBI structure |
-| PRD scope traceability | Backlog item not grounded in PRD narrative | Feature structure; PBI structure |
-| Out of scope alignment | PRD vs backlog exclusion contradiction | Proposed Solution; Feature structure |
-| Target surface alignment | PRD surface label vs backlog PBI/TBI behavior | Target Surface; PBI structure |
-| NFR consistency | PRD NFR contradicts PBI/TBI fields | Non-Functional Requirements; PBI structure |
-| Business rule traceability | Orphan `BR-NNN` reference | Business Rules; PBI structure |
-| AC scenario coverage | PBI missing (a)-(d) rows | Acceptance Criteria coverage |
-| dependsOn DAG validity | Cycle or dangling reference | dependsOn graph validity |
-| Dependency locality (hard gate) | item-level `dependsOn` crosses Feature boundary | dependsOn graph validity |
-| Implementation phase coverage | Epic not assigned to phase, or ordering contradicts deps | Implementation Phases |
-| Feature flag alignment | PRD No + backlog flag present, or mismatch | Feature Flag; Feature structure |
-| Terminology compliance | Non-canonical Apex term | Terminology Compliance |
+| ID | Check | Signal | Feeds into |
+|----|-------|--------|-----------|
+| `template_tokens` | Template token scan | `\{[A-Za-z][^}]*\}` appears in non-code content | No Residual Template Tokens |
+| `tbd_markers` | `[TBD]` / `TODO` / `FIXME` scan | Any unresolved placeholder marker appears in prose or structured fields | No Residual Template Tokens |
+| `persona_vocabulary_compliance` | Persona vocabulary compliance | Persona is missing from the backlog persona inventory or the project-defined persona glossary | User story contract (backlog-owned); Personas |
+| `feature_pbi_persona_alignment` | Feature <-> PBI persona alignment | PBI persona is not present in the parent Feature `affectedPersonas` list | Feature structure; PBI user stories and structure |
+| `user_story_pbi_traceability` | User story <-> PBI traceability | A user story has no grounded PBI, or a PBI has no user story trace | User story contract (backlog-owned); PBI user stories and structure |
+| `scope_traceability` | PRD scope traceability | Backlog item is not grounded in the PRD narrative | Feature structure; PBI user stories and structure |
+| `out_of_scope_alignment` | Out-of-scope alignment | PRD exclusions contradict backlog scope | Proposed Solution; Feature structure |
+| `target_surface_alignment` | Target surface alignment | PRD surface label conflicts with described backlog behavior | Target Surface; PBI user stories and structure |
+| `nfr_consistency` | Non-functional requirements consistency | PRD NFRs contradict backlog delivery expectations or fields | Non-Functional Requirements; PBI user stories and structure |
+| `business_rule_traceability` | Business rule traceability | `BR-NNN` reference is orphaned or never enforced downstream | Business Rules; PBI user stories and structure |
+| `ac_scenario_coverage` | Acceptance-criteria scenario coverage | PBI is missing required scenario rows such as happy path, validation, authorization, or failure handling | Acceptance Criteria coverage |
+| `depends_on_dag_validity` | dependsOn DAG validity | `dependsOn` contains a cycle, self-edge, or dangling reference | dependsOn graph validity |
+| `dependency_locality` | Dependency locality | Item-level `dependsOn` crosses the owning Feature boundary | dependsOn graph validity |
+| `implementation_phase_coverage` | Implementation-phase coverage | An Epic is missing from `implementationPhases`, or phase ordering contradicts dependencies | Implementation Phases |
+| `feature_flag_alignment` | Feature-flag alignment | PRD flag intent conflicts with backlog flag usage | Feature Flag; Feature structure |
+| `terminology_consistency` | Project terminology consistency | A non-canonical project or domain term is used where a glossary-defined term exists | Project Terminology Consistency |

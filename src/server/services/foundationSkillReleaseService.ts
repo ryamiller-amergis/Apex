@@ -81,6 +81,7 @@ export interface CatalogSkillEntry {
   name: string;
   summary: string;
   tier: FoundationSkillTier;
+  dependsOn?: string[];
 }
 
 /** Skills that may be included in a release (i.e. shipped to consumer projects). */
