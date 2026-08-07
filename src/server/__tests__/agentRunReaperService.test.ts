@@ -18,6 +18,7 @@ jest.mock('../services/pgNotifyService', () => ({
   RUN_EVENT_SOURCE_INSTANCE: 'worker-a',
   nextRunEventSequence: jest.fn().mockReturnValue(1),
   notifyRunEvent: jest.fn().mockResolvedValue(undefined),
+  finalizeReconciledAgentRun: jest.fn().mockResolvedValue(true),
 }));
 
 import {
@@ -29,9 +30,10 @@ import {
   getLatestThreadRun,
   canThisInstanceFailGeneration,
   reapOrphanedRuns,
+  shouldRunRetireReconciler,
   type AgentRunHealthConfig,
 } from '../services/agentRunReaperService';
-import { notifyRunEvent } from '../services/pgNotifyService';
+import { finalizeReconciledAgentRun, notifyRunEvent } from '../services/pgNotifyService';
 
 const config: AgentRunHealthConfig = {
   heartbeatTimeoutMs: 5 * 60_000,
@@ -49,6 +51,19 @@ function timestamp(msAgo: number): string {
 }
 
 describe('assessAgentRunHealth', () => {
+  it('TBI-001 DoD-3 uses the env-overridable two-hour hard-run budget', () => {
+    const previous = process.env.AGENT_RUN_HARD_LIMIT_MS;
+    try {
+      delete process.env.AGENT_RUN_HARD_LIMIT_MS;
+      expect(resolveAgentRunHealthConfig().hardLimitMs).toBe(7_200_000);
+      process.env.AGENT_RUN_HARD_LIMIT_MS = '9000000';
+      expect(resolveAgentRunHealthConfig().hardLimitMs).toBe(9_000_000);
+    } finally {
+      if (previous === undefined) delete process.env.AGENT_RUN_HARD_LIMIT_MS;
+      else process.env.AGENT_RUN_HARD_LIMIT_MS = previous;
+    }
+  });
+
   it('defaults the in-flight tool wall-clock cap to six minutes', () => {
     const previous = process.env.AGENT_IN_FLIGHT_TOOL_MAX_MS;
     try {
@@ -291,6 +306,56 @@ describe('reapOrphanedRuns', () => {
     );
   });
 
+  it('does not mislabel an event-driven run as worker_lost when its heartbeat is stale', async () => {
+    // Event-driven runs never write a heartbeat by design. The persisted marker
+    // must force the timeout_at-only branch even without a live flag lookup, so a
+    // stale heartbeat is NOT treated as "Worker lost (heartbeat expired)".
+    mockFindMany.mockResolvedValue([
+      {
+        id: 'run-ed',
+        threadId: 'thread-ed',
+        status: 'running',
+        eventDriven: true,
+        createdAt: timestamp(10 * 60_000),
+        startedAt: timestamp(10 * 60_000),
+        heartbeatAt: timestamp(10 * 60_000), // 10 min stale → legacy worker_lost
+        progressAt: timestamp(10 * 60_000),
+        timeoutAt: timestamp(-60 * 60_000), // 1h in the future → not expired
+        lastError: null,
+      },
+    ]);
+
+    // No eventDrivenTerminationEnabled option: classification must come from the row.
+    await reapOrphanedRuns({ now: () => now, config });
+
+    expect(mockUpdateSet).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'failed' }),
+    );
+    expect(finalizeReconciledAgentRun).not.toHaveBeenCalled();
+    expect(notifyRunEvent).not.toHaveBeenCalled();
+  });
+
+  it('still reaps an event-driven run once its absolute timeout_at is reached', async () => {
+    mockFindMany.mockResolvedValue([
+      {
+        id: 'run-ed-expired',
+        threadId: 'thread-ed',
+        status: 'running',
+        eventDriven: true,
+        createdAt: timestamp(3 * 60 * 60_000),
+        startedAt: timestamp(3 * 60 * 60_000),
+        heartbeatAt: timestamp(3 * 60 * 60_000),
+        progressAt: timestamp(3 * 60 * 60_000),
+        timeoutAt: timestamp(60_000), // expired 60s ago
+        lastError: null,
+      },
+    ]);
+
+    await reapOrphanedRuns({ now: () => now, config, retireReconcileDue: true });
+
+    expect(finalizeReconciledAgentRun).toHaveBeenCalledTimes(1);
+  });
+
   it('PBI-001 AC-1 / VT-04 bounds a stalled stream with failure and cancel', async () => {
     mockFindMany.mockResolvedValue([
       {
@@ -363,6 +428,94 @@ describe('reapOrphanedRuns', () => {
       }),
       { persist: true }
     );
+  });
+
+  it('TBI-001 S4 reconciles only expired timeout_at rows in event-driven enforce mode', async () => {
+    mockFindMany.mockResolvedValue([
+      {
+        id: 'run-unexpired',
+        threadId: 'thread-1',
+        status: 'running',
+        createdAt: timestamp(10 * 60_000),
+        startedAt: timestamp(10 * 60_000),
+        heartbeatAt: timestamp(10 * 60_000),
+        progressAt: timestamp(10 * 60_000),
+        timeoutAt: timestamp(-60_000),
+        lastError: null,
+      },
+      {
+        id: 'run-expired',
+        threadId: 'thread-2',
+        status: 'running',
+        createdAt: timestamp(3 * 60 * 60_000),
+        startedAt: timestamp(3 * 60 * 60_000),
+        heartbeatAt: timestamp(10_000),
+        progressAt: timestamp(10_000),
+        timeoutAt: timestamp(60_000),
+        lastError: null,
+      },
+    ]);
+
+    await reapOrphanedRuns({
+      now: () => now,
+      config,
+      eventDrivenTerminationEnabled: jest.fn().mockResolvedValue(true),
+    });
+
+    expect(finalizeReconciledAgentRun).toHaveBeenCalledTimes(1);
+    expect(finalizeReconciledAgentRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: 'run-expired',
+        status: 'failed',
+        events: expect.arrayContaining([
+          expect.objectContaining({ type: 'error' }),
+          expect.objectContaining({ type: 'cancel' }),
+        ]),
+      }),
+    );
+    expect(JSON.stringify(jest.mocked(finalizeReconciledAgentRun).mock.calls))
+      .not.toContain('run-unexpired');
+    expect(JSON.stringify(jest.mocked(finalizeReconciledAgentRun).mock.calls))
+      .not.toContain('"type":"health"');
+    expect(notifyRunEvent).not.toHaveBeenCalled();
+  });
+
+  it('TBI-003 DoD-0 / NFR reconciles an expired row only once across instances', async () => {
+    mockFindMany.mockResolvedValue([{
+      id: 'run-expired',
+      threadId: 'thread-1',
+      status: 'running',
+      ownerInstance: 'worker-a',
+      createdAt: timestamp(3 * 60 * 60_000),
+      startedAt: timestamp(3 * 60 * 60_000),
+      heartbeatAt: timestamp(10_000),
+      progressAt: timestamp(10_000),
+      timeoutAt: timestamp(60_000),
+      lastError: null,
+    }]);
+    jest.mocked(finalizeReconciledAgentRun)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false);
+
+    const options = {
+      now: () => now,
+      config,
+      eventDrivenTerminationEnabled: jest.fn().mockResolvedValue(true),
+    };
+    await Promise.all([
+      reapOrphanedRuns(options),
+      reapOrphanedRuns(options),
+      reapOrphanedRuns(options),
+    ]);
+
+    expect(finalizeReconciledAgentRun).toHaveBeenCalledTimes(3);
+    expect(notifyRunEvent).not.toHaveBeenCalled();
+  });
+
+  it('TBI-003 retire reconciler is due every five minutes', () => {
+    expect(shouldRunRetireReconciler(0, 299_999)).toBe(false);
+    expect(shouldRunRetireReconciler(0, 300_000)).toBe(true);
   });
 
   it('publishes a durable healthy recovery event without moving progressAt', async () => {
@@ -490,6 +643,44 @@ describe('isThreadRunAlive', () => {
     await expect(
       isThreadRunAlive('thread-1', { now: () => now, config }),
     ).resolves.toBe(false);
+  });
+
+  it('PBI-002 AC-3 ignores missing liveness writes in event-driven mode before timeout_at', async () => {
+    mockFindMany.mockResolvedValue([{
+      id: 'run-1',
+      threadId: 'thread-1',
+      status: 'running',
+      createdAt: timestamp(10 * 60_000),
+      startedAt: timestamp(10 * 60_000),
+      heartbeatAt: timestamp(60 * 60_000),
+      progressAt: null,
+      timeoutAt: timestamp(-60_000),
+    }]);
+
+    await expect(isThreadRunAlive('thread-1', {
+      now: () => now,
+      config,
+      eventDrivenTerminationEnabled: jest.fn().mockResolvedValue(true),
+    })).resolves.toBe(true);
+  });
+
+  it('BR-006 treats only expired timeout_at as dead in event-driven mode', async () => {
+    mockFindMany.mockResolvedValue([{
+      id: 'run-1',
+      threadId: 'thread-1',
+      status: 'running',
+      createdAt: timestamp(10 * 60_000),
+      startedAt: timestamp(10 * 60_000),
+      heartbeatAt: timestamp(10_000),
+      progressAt: timestamp(10_000),
+      timeoutAt: timestamp(1),
+    }]);
+
+    await expect(isThreadRunAlive('thread-1', {
+      now: () => now,
+      config,
+      eventDrivenTerminationEnabled: jest.fn().mockResolvedValue(true),
+    })).resolves.toBe(false);
   });
 });
 

@@ -470,7 +470,7 @@ export function useCreatePrd() {
   return useMutation<
     CreatePrdResponse,
     Error,
-    { interviewId: string; chatThreadId: string; title?: string; model?: string }
+    { interviewId: string; chatThreadId: string; title?: string; model?: string; kickoffGeneration?: boolean }
   >({
     mutationFn: ({ interviewId, ...body }) =>
       apiFetch(`/api/interviews/${interviewId}/prds`, {
@@ -568,6 +568,7 @@ export function useReviewPrd() {
         body: JSON.stringify(body),
       }),
     onSuccess: (_data, { prdId }) => {
+      qc.invalidateQueries({ queryKey: ['document-assignments', prdId, 'prd'] });
       qc.invalidateQueries({ queryKey: ['prd', prdId] });
       qc.invalidateQueries({ queryKey: ['prds'] });
       qc.invalidateQueries({ queryKey: ['design-docs'] });
@@ -1420,7 +1421,14 @@ export function useOwnerApprove(prdId: string | null, documentType: OwnerApprova
       }),
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: ['prd', prdId] });
+      qc.invalidateQueries({ queryKey: ['prds'] });
+      qc.invalidateQueries({ queryKey: ['document-assignments', prdId, documentType] });
       qc.invalidateQueries({ queryKey: ['owner-approval', prdId, documentType] });
+      if (documentType === 'prd') {
+        // Owner approval can automatically start direct design-doc generation.
+        qc.invalidateQueries({ queryKey: ['design-docs', { prdId }] });
+        qc.invalidateQueries({ queryKey: ['design-docs'] });
+      }
       if (documentType === 'design_prototype') {
         // Invalidate the specific prototype, the PRD's prototype list, and design doc lists.
         if (variables.prototypeId) {

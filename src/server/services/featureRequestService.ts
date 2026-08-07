@@ -190,7 +190,7 @@ export async function createFeatureRequest(
 
 // ── listFeatureRequests ───────────────────────────────────────────────────────
 
-export async function listFeatureRequests(): Promise<FeatureRequest[]> {
+export async function listFeatureRequests(project: string): Promise<FeatureRequest[]> {
   const rows = await db
     .select({
       id: featureRequests.id,
@@ -217,6 +217,7 @@ export async function listFeatureRequests(): Promise<FeatureRequest[]> {
     })
     .from(featureRequests)
     .leftJoin(appUsers, eq(featureRequests.submittedBy, appUsers.oid))
+    .where(eq(featureRequests.sourceProject, project))
     .orderBy(sql`${featureRequests.rank} NULLS LAST`, desc(featureRequests.createdAt));
 
   const linksByRequest = await loadLinkedAdrs(rows.map((row) => row.id));
@@ -318,10 +319,13 @@ export async function linkInterview(
   return toFeatureRequest(row);
 }
 
-// ── resolveApexReviewers ──────────────────────────────────────────────────────
+// ── resolveFeatureRequestReviewers ────────────────────────────────────────────
 
-export async function resolveApexReviewers(): Promise<string[]> {
-  // Users assigned to 'Apex' project who hold the 'feature-requests:manage' permission
+/**
+ * Returns user IDs who hold `feature-requests:manage` for the given project,
+ * unioned with super admins. Used for triage notifications.
+ */
+export async function resolveFeatureRequestReviewers(project: string): Promise<string[]> {
   const permissionRows = await db
     .select({ userId: userProjectAssignments.userId })
     .from(userProjectAssignments)
@@ -330,7 +334,7 @@ export async function resolveApexReviewers(): Promise<string[]> {
     .innerJoin(appPermissions, eq(appRolePermissions.permissionId, appPermissions.id))
     .where(
       and(
-        eq(userProjectAssignments.project, 'Apex'),
+        eq(userProjectAssignments.project, project),
         eq(appPermissions.key, 'feature-requests:manage'),
       ),
     );
@@ -352,3 +356,6 @@ export async function resolveApexReviewers(): Promise<string[]> {
 
   return [...userIds];
 }
+
+/** @deprecated Use resolveFeatureRequestReviewers('Apex') instead */
+export const resolveApexReviewers = () => resolveFeatureRequestReviewers('Apex');

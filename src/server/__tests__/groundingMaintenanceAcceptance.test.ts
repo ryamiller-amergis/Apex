@@ -205,7 +205,8 @@ describe('PBI-007 grounding maintenance acceptance', () => {
       ]);
       expect(telemetry).toHaveBeenCalledWith(
         'grounding.materialization.fallback',
-        expect.objectContaining({ reason: 'pinned-sha-unavailable' })
+        expect.objectContaining({ reason: 'pinned-sha-unavailable' }),
+        expect.objectContaining({ durationMs: expect.any(Number) }),
       );
       const operationalMetadata = JSON.stringify(telemetry.mock.calls);
       expect(operationalMetadata).not.toContain(credential);

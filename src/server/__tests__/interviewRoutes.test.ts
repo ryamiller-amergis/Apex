@@ -24,6 +24,7 @@ jest.mock('../services/chatAgentService', () => ({
   readOutputValidationScorecard: jest.fn().mockReturnValue(null),
   readOutputValidationScorecardMd: jest.fn().mockReturnValue(null),
   createThread: jest.fn().mockResolvedValue({ id: 'thread-mock' }),
+  sendMessage: jest.fn().mockResolvedValue(undefined),
   getThreadAsync: jest.fn().mockResolvedValue(null),
 }));
 
@@ -866,6 +867,7 @@ describe('POST /api/interviews/prds/:prdId/design-docs — design doc model reso
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockDb.query.designDocs.findFirst.mockResolvedValue(null);
     mockCreateDesignDoc.mockResolvedValue({ designDocId: 'design-doc-1' });
     mockStartDesignDocWatcher.mockReturnValue(undefined);
     mockStartSingleFeatureDocWatcher.mockReturnValue(undefined);
@@ -938,6 +940,25 @@ describe('POST /api/interviews/prds/:prdId/design-docs — design doc model reso
 
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({ designDocIds: ['design-doc-1'], count: 1 });
+  });
+
+  it('reuses an existing direct design doc instead of starting a duplicate agent', async () => {
+    mockPrdService.getPrd.mockResolvedValue(approvedPrd);
+    mockDb.query.designDocs.findFirst.mockResolvedValue({
+      id: 'design-doc-existing',
+      chatThreadId: 'thread-existing',
+      title: 'Feature A',
+    });
+
+    const res = await request(buildApp()).post('/api/interviews/prds/prd-1/design-docs');
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      designDocIds: ['design-doc-existing'],
+      count: 1,
+    });
+    expect(mockCreateThread).not.toHaveBeenCalled();
+    expect(mockCreateDesignDoc).not.toHaveBeenCalled();
   });
 
   it('returns 404 when the PRD does not exist', async () => {
@@ -1206,6 +1227,36 @@ describe('POST /api/interviews/prds/:prdId/owner-approve', () => {
     expect(res.body).toEqual({ ok: true });
     expect(mockRecordOwnerApproval).toHaveBeenCalledWith('prd-1', 'prd', 'user-test', 'approved', undefined);
     expect(mockDb.update).toHaveBeenCalled();
+  });
+
+  it('automatically starts design docs when the approved PRD has no prototype stage', async () => {
+    mockPrdService.getPrd
+      .mockResolvedValueOnce({
+        ...prd,
+        status: 'pending_review',
+        interviewId: 'interview-1',
+        project: 'proj-alpha',
+      })
+      .mockResolvedValueOnce({
+        ...prd,
+        status: 'approved',
+        interviewId: 'interview-1',
+        project: 'proj-alpha',
+        prototypeStageEnabled: false,
+        backlogJson: { features: [{ title: 'Feature A' }] },
+      });
+    mockDb.query.designDocs.findFirst.mockResolvedValue(null);
+    mockCreateDesignDoc.mockResolvedValue({ designDocId: 'design-doc-auto' });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/owner-approve')
+      .send({ status: 'approved' });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(res.status).toBe(200);
+    expect(mockCreateDesignDoc).toHaveBeenCalledWith(
+      expect.objectContaining({ prdId: 'prd-1', featureIndex: 0 }),
+    );
   });
 
   it('returns 409 when reviewers have not completed approval', async () => {
@@ -1855,6 +1906,7 @@ describe('POST /api/interviews/prds/:prdId/design-docs — enriched freeformCont
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockDb.query.designDocs.findFirst.mockResolvedValue(null);
     mockCreateDesignDoc.mockResolvedValue({ designDocId: 'design-doc-1' });
     mockStartDesignDocWatcher.mockReturnValue(undefined);
     mockStartSingleFeatureDocWatcher.mockReturnValue(undefined);

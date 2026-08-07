@@ -433,6 +433,7 @@ describe('TBI-004 cached drift and explicit re-ground contracts', () => {
     const readCachedOriginSha = jest.fn().mockResolvedValue(shaB);
     const service = createRunGroundingService(repository, {
       readCachedOriginSha,
+      hasCachedCommit: jest.fn().mockResolvedValue(true),
       evaluateStaleness: jest.fn().mockResolvedValue('fresh'),
     });
 
@@ -471,6 +472,7 @@ describe('TBI-004 cached drift and explicit re-ground contracts', () => {
     });
     const service = createRunGroundingService(repository, {
       readCachedOriginSha: jest.fn().mockResolvedValue(shaB),
+      hasCachedCommit: jest.fn().mockResolvedValue(true),
       materialize: jest.fn().mockResolvedValue('materialized'),
     });
 

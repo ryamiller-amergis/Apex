@@ -25,7 +25,9 @@ import type {
   AgentRunPhase,
   ChatAttachment,
   ChatThread,
+  ChatThreadStatus,
   SseEvent,
+  SseStatusEvent,
   StartChatRequest,
   SendMessageRequest,
 } from '../../shared/types/chat';
@@ -44,6 +46,7 @@ import {
   type AgentRunHealthSnapshot,
 } from '../services/agentRunReaperService';
 import { getMyWorkSessionContext, logMyWorkSession } from '../services/myWorkSessionLogger';
+import { isFeatureEnabled } from '../services/featureFlagService';
 
 const router = Router();
 
@@ -65,6 +68,22 @@ export function eventForRunEnvelope(envelope: AgentRunEventEnvelope): SseEvent {
     semanticStatus: envelope.status,
     ...(envelope.detail ? { semanticDetail: envelope.detail } : {}),
   };
+}
+
+export function buildStreamStatusEvent(
+  status: ChatThreadStatus,
+  eventDrivenTermination: boolean,
+): SseStatusEvent {
+  return { type: 'status', status, eventDrivenTermination };
+}
+
+async function isEventDrivenTerminationEnabled(thread: ChatThread): Promise<boolean> {
+  const project = thread.kickoff?.project;
+  if (!project) return false;
+  return isFeatureEnabled('event-driven-run-termination', {
+    userId: thread.userId,
+    project,
+  }).catch(() => false);
 }
 
 export function formatRunEventSse(envelope: AgentRunEventEnvelope): string {
@@ -315,6 +334,7 @@ router.get('/threads/:id', requireThreadRead, (req: Request, res: Response) => {
  */
 router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: Response) => {
   const thread = (req as ThreadRequest).thread!;
+  const eventDrivenTermination = await isEventDrivenTerminationEnabled(thread);
   const streamStartedAt = Date.now();
   const myWorkContext = thread.kickoff?.mode === 'development'
     ? await getMyWorkSessionContext(req.params.id).catch(() => null)
@@ -416,7 +436,10 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
   // Send current status after the message replay so the client can render
   // the full history before seeing the running/idle indicator. Prefer the
   // hydrated status since it reflects the normalized in-memory state.
-  sendEvent({ type: 'status', status: hydrated?.status ?? thread.status });
+  sendEvent(buildStreamStatusEvent(
+    hydrated?.status ?? thread.status,
+    eventDrivenTermination,
+  ));
 
   unsubscribe = subscribeToThread(req.params.id, sendLocalEvent);
 
@@ -576,25 +599,37 @@ router.patch('/threads/:id/flag', requireThreadWrite, async (req: Request, res: 
  */
 router.get('/threads/:id/run-status', requireThreadRead, async (req: Request, res: Response) => {
   try {
-    const [row] = await db
-      .select({
-        id: agentRuns.id,
-        status: agentRuns.status,
-        lastError: agentRuns.lastError,
-        progressAt: agentRuns.progressAt,
-        progressLabel: agentRuns.progressLabel,
-        progressPhase: agentRuns.progressPhase,
-        createdAt: agentRuns.createdAt,
-        startedAt: agentRuns.startedAt,
-        heartbeatAt: agentRuns.heartbeatAt,
-        timeoutAt: agentRuns.timeoutAt,
-      })
-      .from(agentRuns)
-      .where(eq(agentRuns.threadId, req.params.id))
-      .orderBy(desc(agentRuns.createdAt))
-      .limit(1);
+    const thread = (req as ThreadRequest).thread!;
+    const eventDrivenTermination = await isEventDrivenTerminationEnabled(thread);
+    // @feature-flag:event-driven-run-termination start winner=enabled
+    if (eventDrivenTermination) {
+      // @feature-flag:event-driven-run-termination enabled-start
+      res.status(404).json({ error: 'Run status polling is disabled' });
+      // @feature-flag:event-driven-run-termination enabled-end
+    } else {
+      // @feature-flag:event-driven-run-termination disabled-start
+      const [row] = await db
+        .select({
+          id: agentRuns.id,
+          status: agentRuns.status,
+          lastError: agentRuns.lastError,
+          progressAt: agentRuns.progressAt,
+          progressLabel: agentRuns.progressLabel,
+          progressPhase: agentRuns.progressPhase,
+          createdAt: agentRuns.createdAt,
+          startedAt: agentRuns.startedAt,
+          heartbeatAt: agentRuns.heartbeatAt,
+          timeoutAt: agentRuns.timeoutAt,
+        })
+        .from(agentRuns)
+        .where(eq(agentRuns.threadId, req.params.id))
+        .orderBy(desc(agentRuns.createdAt))
+        .limit(1);
 
-    res.json(buildRunStatusResponse(row ?? null));
+      res.json(buildRunStatusResponse(row ?? null));
+      // @feature-flag:event-driven-run-termination disabled-end
+    }
+    // @feature-flag:event-driven-run-termination end
   } catch (err: unknown) {
     console.error('[chat] run-status error:', errorMessage(err));
     res.status(500).json({ error: errorMessage(err) || 'Failed to fetch run status' });

@@ -75,7 +75,12 @@ export function computeFeatureWorkStatus(
   let blockedBy: string | undefined;
   if (feature.dependsOn.length > 0) {
     for (const dep of feature.dependsOn) {
-      const depDone = allSessions.find((s) => s.featureId === dep && s.status === 'completed');
+      const depDone = allSessions.find(
+        (s) =>
+          s.prdId === feature.prdId &&
+          s.featureId === dep &&
+          s.status === 'completed',
+      );
       if (!depDone) {
         blockedBy = dep;
         break;

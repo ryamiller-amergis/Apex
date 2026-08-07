@@ -142,7 +142,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       return true;
     }
     if (item.view === 'feature-requests') {
-      if (selectedProject !== 'Apex') return false;
       if (!isSuperAdmin && !menuEnabledViews.includes('feature-requests')) return false;
       if (!isSuperAdmin && !can('feature-requests:view')) return false;
       return true;
@@ -291,9 +290,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       )}
 
       {workItemType && selectedProject && (
-        // data-testid-exempt — pre-existing modal mount; FEAT-006 only extends Fab Help seam
+        // data-testid-exempt — FAB submissions always target the Apex project (platform triage queue)
         <FeatureRequestModal
-          selectedProject={selectedProject}
+          selectedProject="Apex"
           type={workItemType}
           onClose={() => setWorkItemType(null)}
         />

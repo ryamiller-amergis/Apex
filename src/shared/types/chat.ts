@@ -171,6 +171,8 @@ export interface SseToolCallEvent {
 export interface SseStatusEvent {
   type: 'status';
   status: ChatThreadStatus;
+  /** True when durable terminals/replay are authoritative and polling is disabled. */
+  eventDrivenTermination?: boolean;
 }
 
 export type SseErrorCode = 'transient' | 'rate_limit' | 'context_overflow' | 'auth' | 'fatal';
@@ -185,6 +187,12 @@ export interface SseRetryingEvent {
   type: 'retrying';
   attempt: number;
   maxAttempts: number;
+  /**
+   * Optional retry cause. `reconnecting` is emitted when an event-driven run
+   * produced no first stream event and is being transparently recreated, so the
+   * client can show "Reconnecting…" instead of a generic "Retrying…" message.
+   */
+  reason?: 'reconnecting';
 }
 
 export interface SseDoneEvent {

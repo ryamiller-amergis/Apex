@@ -338,7 +338,7 @@ function App() {
     if (currentView === 'standup'        && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:participate'))) navigate(fallback);
     if (currentView === 'standup-manage' && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:manage')))      navigate(fallback);
     if (currentView === 'standup-summary' && !isSuperAdmin && (!enabledViews.includes('standup') || !can('standup:participate'))) navigate(fallback);
-    if (currentView === 'feature-requests' && !isSuperAdmin && (selectedProject !== 'Apex' || !enabledViews.includes('feature-requests') || !can('feature-requests:view'))) navigate(fallback);
+    if (currentView === 'feature-requests' && !isSuperAdmin && (!enabledViews.includes('feature-requests') || !can('feature-requests:view'))) navigate(fallback);
     if (currentView === 'ui-lab'        && !isSuperAdmin && (!enabledViews.includes('ui-lab') || !can('ui-lab:view') || !isInAnyGroup(['UI/UX']))) navigate(fallback);
     if (currentView === 'pdf-tools'     && !isSuperAdmin && (!enabledViews.includes('pdf-tools') || !can('pdf-assembly:use'))) navigate(fallback);
     if (currentView === 'design-module' && !isSuperAdmin && (!enabledViews.includes('design-module') || !can('design-module:view'))) navigate(fallback);

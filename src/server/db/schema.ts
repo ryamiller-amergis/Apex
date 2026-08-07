@@ -540,7 +540,11 @@ export const designDocs = pgTable('design_docs', {
   reviewedAt: timestamp('reviewed_at', { withTimezone: true, mode: 'string' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
-});
+}, (t) => ({
+  directFeatureUq: uniqueIndex('uq_design_docs_prd_direct_feature')
+    .on(t.prdId, t.featureIndex)
+    .where(sql`${t.designPrototypeId} IS NULL AND ${t.featureIndex} IS NOT NULL`),
+}));
 
 // ── Interview Relations ────────────────────────────────────────────────────────
 
@@ -1336,6 +1340,7 @@ export const featureRequests = pgTable('feature_requests', {
   statusCreatedIdx: index('idx_feature_requests_status_created').on(t.status, t.createdAt),
   typeStatusCreatedIdx: index('idx_feature_requests_type_status_created').on(t.type, t.status, t.createdAt),
   submittedByIdx: index('idx_feature_requests_submitted_by').on(t.submittedBy),
+  sourceProjectIdx: index('idx_feature_requests_source_project').on(t.sourceProject),
 }));
 
 export const featureRequestAdrs = pgTable('feature_request_adrs', {
@@ -1452,11 +1457,19 @@ export const agentRuns = pgTable('agent_runs', {
   progressPhase: text('progress_phase').$type<AgentRunPhase>(),
   startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   timeoutAt: timestamp('timeout_at', { withTimezone: true, mode: 'string' }),
+  // True when the run was claimed under event-driven-run-termination. Lets the
+  // reaper classify deterministically from the row (event-driven runs never
+  // write a heartbeat by design) instead of re-evaluating the flag per sweep.
+  eventDriven: boolean('event_driven').notNull().default(false),
   lastError: text('last_error'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
   statusHeartbeatIdx: index('idx_agent_runs_status_heartbeat').on(t.status, t.heartbeatAt),
+  nonTerminalTimeoutCheck: check(
+    'agent_runs_non_terminal_timeout_at_check',
+    sql`${t.status} NOT IN ('queued', 'running') OR ${t.timeoutAt} IS NOT NULL`,
+  ),
 }));
 
 export const agentRunEvents = pgTable('agent_run_events', {

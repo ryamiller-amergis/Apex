@@ -102,7 +102,7 @@ Per-project Azure cloud cost visualization and analysis.
 
 ### 9. Feature Requests
 
-A global submission system where any authenticated user can request product features, with an Apex-team-only review module.
+A global submission system where any authenticated user can request product features. The shared Apex Backlog review module can be exposed in any project through Platform Admin menu visibility.
 
 - **Global submit** — a floating action button lets any user submit a feature request with title, description, and expected advantage
 - **AI analysis** — each request is automatically analyzed by an AI skill that suggests priority (low/medium/high/critical), risk (low/medium/high), and rationale
@@ -132,8 +132,8 @@ Platform admins can create and manage feature flags for targeted rollout.
 
 A developer-focused view for managing personal work items and development sessions (visible to users in the Developer group).
 
-- **Apex PRD features** appear as PRD → Epic → Feature rows from approved PRDs. Each feature offers **View Context** (read-only PRD, backlog, design doc, tech spec, assumptions, and sandboxed prototype), **Start Local Development**, **Mark Complete**, and **Clear Progress** when in progress. Cloud Start/Resume/Close session actions are not offered on Apex feature rows.
-- **Non-Apex projects** continue to list ADO assigned work items with Start Development / Resume Session / local development actions unchanged.
+- **Apex and Amego PRD features** appear as PRD → Epic → Feature rows from approved in-app PRDs. Each feature offers **View Context** (read-only PRD, backlog, design doc, tech spec, assumptions, and sandboxed prototype), **Start Local Development**, **Mark Complete**, and **Clear Progress** when in progress. Their requirements remain in Apex and are not loaded from Azure DevOps.
+- **Other projects** continue to list ADO assigned work items with Start Development / Resume Session / local development actions unchanged.
 
 ### 13. What's New / Changelog
 
@@ -244,7 +244,7 @@ Per-user settings accessible from the header user menu.
 1. Click the floating **Request a Feature** button (available on any page)
 2. Fill in the title, what you want, and what advantage it would bring
 3. Submit — Apex admins are notified and an AI automatically analyzes priority and risk
-4. Track your request's status through the Feature Requests module (Apex project only)
+4. Track your request through Apex Backlog when Platform Admin has enabled that menu for the selected project
 
 ### How do I get notified?
 
@@ -345,7 +345,7 @@ Per-user settings accessible from the header user menu.
 | My Work | `/my-work` | `dev-workbench:view` + Developer group + menu enabled | Developer workbench and sessions |
 | Standup | `/standup` | `standup:participate` + menu enabled | Daily standup ceremony participation |
 | UI Lab | `/ui-lab` | `ui-lab:view` + UI/UX group + menu enabled | AI-assisted UI mockup generation |
-| Apex Backlog | `/feature-requests` | `feature-requests:view` + Apex project only + menu enabled | Feature request review and triage (Apex admins) |
+| Apex Backlog | `/feature-requests` | `feature-requests:view` + menu enabled | Shared feature request review and triage; availability is configured per project |
 | PDF Assembly Tool | `/pdf-tools` | `pdf-assembly:use` + menu enabled | PDF merge, reorder, and export workspace |
 | AI Cost Analytics | `/ai-cost` | `analytics:ai-cost:view` + menu enabled | AI usage and cost dashboards |
 | Design Module | `/design-module` | `design-module:view` + menu enabled | Repository module catalog and AI scoping |

@@ -21,7 +21,7 @@ isProject: false
 
 ## Current State
 
-`src/client/components/DevWorkbenchView.tsx` shows approved Apex PRDs as PRD → Epic → Feature rows. A feature row exposes priority, PBI/TBI counts, design status, and development actions, but it does not expose the content a developer is expected to implement. Developers must leave My Work and locate the corresponding PRD, feature backlog, design document, technical specification, assumptions, and prototype across separate review views.
+`src/client/components/DevWorkbenchView.tsx` shows approved app-native PRDs for Apex and Amego as PRD → Epic → Feature rows. Requirements for these projects stay in the Apex application rather than being loaded from Azure DevOps.
 
 The required data already exists in PostgreSQL:
 
@@ -164,7 +164,7 @@ Create `src/client/components/__tests__/FeatureContextModal.test.tsx` covering l
 
 ### My Work integration: `src/client/components/DevWorkbenchView.tsx`
 
-For Apex PRD-backed feature rows only:
+For app-native Apex and Amego PRD-backed feature rows:
 
 - Add `selectedContextFeature: BacklogFeatureItem | null`.
 - Show “View Context” for every feature status and open `FeatureContextModal` for the selected feature.

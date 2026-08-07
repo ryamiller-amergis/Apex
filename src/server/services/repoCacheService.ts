@@ -163,6 +163,33 @@ export async function readCachedOriginSha(
   }
 }
 
+/** Returns whether the exact pinned commit is present in the local bare cache. */
+export async function hasCachedCommit(
+  grounding: Pick<
+    RunGrounding,
+    'provider' | 'project' | 'repository' | 'branch' | 'groundedSha'
+  >,
+): Promise<boolean> {
+  const options: RepoCacheOptions = {
+    provider: grounding.provider === 'azure_devops' ? 'ado' : 'github',
+    project: grounding.project,
+    repo: grounding.repository,
+    branch: grounding.branch,
+  };
+  const cacheDir = getRepoCacheDir(options);
+  if (!cacheExists(cacheDir)) return false;
+
+  try {
+    await git(
+      safeArgs(cacheDir, ['cat-file', '-e', `${grounding.groundedSha}^{commit}`]),
+      { cwd: cacheDir },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function verifyBaseCommitLightweight(
   cacheDir: string,
   branch: string,

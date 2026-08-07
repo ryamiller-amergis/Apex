@@ -589,9 +589,8 @@ describe('FEAT-005 S5 VT-15 exact targeted repository identity and NFRs', () => 
       expect(content).toBe('target repository content\n');
       expect(content).not.toContain('sibling repository content');
       expect(targetedRuntime.nativeReads).toBe(true);
-      expect(targetedRuntime.mcpServers['github-repo']).toEqual({
-        url: 'http://localhost:3001/mcp/github-repo?enableRepoBrowse=false',
-      });
+      // Native reads engaged → the read-only github-repo MCP is de-mounted entirely.
+      expect(targetedRuntime.mcpServers['github-repo']).toBeUndefined();
       expect(siblingRuntime.nativeReads).toBe(false);
       expect(siblingRuntime.local.customTools).toBeUndefined();
       expect(siblingRuntime.mcpServers['github-repo']).toEqual({
@@ -654,9 +653,8 @@ describe('FEAT-005 S5 VT-15 exact targeted repository identity and NFRs', () => 
         .map(([, , measurements]) => measurements.durationMs);
       expect(durations).toEqual([12, 18, 30]);
       expect(Math.max(...durations)).toBeLessThanOrEqual(50);
-      expect(prepared.mcpServers['github-repo']).toEqual({
-        url: 'http://localhost:3001/mcp/github-repo?enableRepoBrowse=false',
-      });
+      // Native reads engaged → github-repo is not mounted at all (zero provider surface).
+      expect(prepared.mcpServers['github-repo']).toBeUndefined();
       expect(providerCall).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(target.root, { recursive: true, force: true });

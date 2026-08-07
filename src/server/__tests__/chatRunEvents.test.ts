@@ -80,8 +80,12 @@ jest.mock('../services/pgNotifyService', () => ({
 
 import {
   ThinkingPhaseCoalescer,
+  buildAgentRunClaimUpdate,
   buildDevelopmentPrompt,
   createRunEventEnvelope,
+  disposeAgentWithinDeadline,
+  sanitizeTerminalDetail,
+  shouldPersistAgentRunProgress,
 } from '../services/chatAgentService';
 
 describe('ThinkingPhaseCoalescer', () => {
@@ -132,6 +136,105 @@ describe('createRunEventEnvelope', () => {
       status: 'running',
       detail: 'Implementing FEAT-001',
     });
+  });
+});
+
+describe('authoritative terminal safety', () => {
+  it('PBI-001 Security NFR normalizes controls, redacts secrets and caps detail at 2,000 characters', () => {
+    const detail = [
+      'failure\u0000\r\n',
+      'Bearer live-token',
+      ' password=hunter2',
+      ' postgresql://admin:secret@example.invalid/apex',
+      ' Server=db;Database=apex;User Id=admin;Password=secret;',
+      'x'.repeat(3_000),
+    ].join('');
+
+    const sanitized = sanitizeTerminalDetail(detail);
+
+    expect(sanitized.length).toBeLessThanOrEqual(2_000);
+    expect(sanitized).not.toMatch(/live-token|hunter2|admin:secret|Password=secret/i);
+    expect([...sanitized].every((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint > 31 && codePoint !== 127;
+    })).toBe(true);
+    expect(sanitized).toContain('[redacted]');
+  });
+
+  it('PBI-001 AC-1 / VT-02 bounds stalled SDK disposal at 10 seconds', async () => {
+    jest.useFakeTimers();
+    try {
+      const dispose = jest.fn(() => new Promise<void>(() => undefined));
+      const pending = disposeAgentWithinDeadline(
+        { [Symbol.asyncDispose]: dispose },
+        10_000,
+      );
+
+      jest.advanceTimersByTime(10_000);
+
+      await expect(pending).resolves.toBe(false);
+      expect(dispose).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('TBI-001 DoD-4 retains failure when SDK disposal rejects', async () => {
+    const dispose = jest.fn().mockRejectedValue(new Error('pipe closed'));
+
+    await expect(disposeAgentWithinDeadline({
+      [Symbol.asyncDispose]: dispose,
+    })).resolves.toBe(false);
+  });
+});
+
+describe('TBI-003 Retire-mode liveness writes', () => {
+  it('DoD-2 omits heartbeat and progress fields when claiming an event-driven run', () => {
+    const update = buildAgentRunClaimUpdate(
+      true,
+      'worker-a',
+      '2026-08-04T12:00:00.000Z',
+    );
+
+    expect(update).toEqual({
+      status: 'running',
+      ownerInstance: 'worker-a',
+      updatedAt: '2026-08-04T12:00:00.000Z',
+      eventDriven: true,
+    });
+    expect(JSON.stringify(update)).not.toMatch(/heartbeatAt|progressAt|progressLabel|progressPhase/);
+  });
+
+  it('marks the run event-driven so the reaper classifies it from the row', () => {
+    expect(buildAgentRunClaimUpdate(
+      true,
+      'worker-a',
+      '2026-08-04T12:00:00.000Z',
+    )).toMatchObject({ eventDriven: true });
+    expect(buildAgentRunClaimUpdate(
+      false,
+      'worker-a',
+      '2026-08-04T12:00:00.000Z',
+    )).toMatchObject({ eventDriven: false });
+  });
+
+  it('DoD-2 preserves legacy heartbeat/progress writes when the flag is disabled', () => {
+    expect(buildAgentRunClaimUpdate(
+      false,
+      'worker-a',
+      '2026-08-04T12:00:00.000Z',
+    )).toMatchObject({
+      heartbeatAt: '2026-08-04T12:00:00.000Z',
+      progressAt: '2026-08-04T12:00:00.000Z',
+      progressLabel: 'Agent run started',
+      progressPhase: 'implementation',
+      eventDriven: false,
+    });
+  });
+
+  it('BR-005 persists semantic events but not liveness columns in event-driven mode', () => {
+    expect(shouldPersistAgentRunProgress(true)).toBe(false);
+    expect(shouldPersistAgentRunProgress(false)).toBe(true);
   });
 });
 

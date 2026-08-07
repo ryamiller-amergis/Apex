@@ -670,9 +670,9 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
     // If syncOutputToDb already processed this run (it nulls seed's chatThreadId), just cleanup
     const seedDoc = await db.query.designDocs.findFirst({
       where: eq(designDocs.id, seedDocId),
-      columns: { id: true, chatThreadId: true, prdId: true, project: true, authorId: true, model: true, skillSettingsId: true },
+      columns: { id: true, chatThreadId: true, prdId: true, project: true, authorId: true, model: true, skillSettingsId: true, status: true },
     });
-    if (!seedDoc || !seedDoc.chatThreadId) {
+    if (!seedDoc || !seedDoc.chatThreadId || (seedDoc.status && seedDoc.status !== 'generating')) {
       clearInterval(interval);
       activeDocWatchers.delete(seedDocId);
       await cleanupWorkspace(chatThreadId);
@@ -695,6 +695,19 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
         const finalStatus: DesignDocStatus = skillConfig?.designDocValidationSkillPath ? 'validating' : 'pending_review';
 
         for (const feat of newFeatures) {
+          const stillActive = await db.query.designDocs.findFirst({
+            where: and(
+              eq(designDocs.id, seedDocId),
+              eq(designDocs.chatThreadId, chatThreadId),
+              eq(designDocs.status, 'generating'),
+            ),
+            columns: { id: true },
+          });
+          if (!stillActive) {
+            clearInterval(interval);
+            activeDocWatchers.delete(seedDocId);
+            return;
+          }
           const [row] = await db
             .insert(designDocs)
             .values({
@@ -1137,9 +1150,18 @@ export async function deleteDesignDoc(id: string, requestingUserId: string): Pro
   const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
   if (!row) throw notFound('Design doc not found');
   await assertAuthorOrOwnerOrAdmin(row, requestingUserId, 'delete this design doc');
+
   stopDocWatcher(id);
   stopValidationWatcher(id);
+  const linkedThreadIds = [
+    row.chatThreadId,
+    row.validationThreadId,
+    row.docAssistantThreadId,
+  ].filter((threadId): threadId is string => Boolean(threadId));
+  await Promise.all([...new Set(linkedThreadIds)].map((threadId) => cancelRun(threadId)));
+
   await db.delete(designDocs).where(eq(designDocs.id, id));
+  await Promise.all(linkedThreadIds.map((threadId) => cleanupWorkspace(threadId)));
 }
 
 function rowToSummary(

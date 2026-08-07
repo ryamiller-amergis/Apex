@@ -229,6 +229,109 @@ export async function notifyRunEvent(
   await pool.query(`SELECT pg_notify($1, $2)`, [CHANNEL, payload]);
 }
 
+export interface FinalizeOwnedAgentRunInput {
+  runId: string;
+  threadId: string;
+  ownerInstance: string;
+  status: 'completed' | 'failed' | 'cancelled';
+  detail: string;
+  events: AgentRunEventEnvelope[];
+}
+
+export interface FinalizeReconciledAgentRunInput {
+  runId: string;
+  threadId: string;
+  status: 'completed' | 'failed' | 'cancelled';
+  detail: string;
+  events: AgentRunEventEnvelope[];
+}
+
+/**
+ * Atomically claims a terminal transition and appends its durable events.
+ * Fan-out occurs only after commit; a notification failure remains replayable.
+ */
+async function finalizeAgentRun(
+  input: FinalizeReconciledAgentRunInput,
+  ownerInstance?: string,
+): Promise<boolean> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const ownerClause = ownerInstance ? '\n          AND owner_instance = $4' : '';
+    const params = ownerInstance
+      ? [input.status, input.status === 'failed' ? input.detail : null, input.runId, ownerInstance]
+      : [input.status, input.status === 'failed' ? input.detail : null, input.runId];
+    const result = await client.query(
+      `UPDATE agent_runs
+          SET status = $1, last_error = $2, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $3
+          ${ownerClause}
+          AND status IN ('queued', 'running')
+      RETURNING id`,
+      params,
+    );
+    if (result.rowCount !== 1) {
+      await client.query('ROLLBACK');
+      return false;
+    }
+
+    for (const event of input.events) {
+      await client.query(
+        `INSERT INTO agent_run_events (
+           event_id, thread_id, run_id, source_instance, sequence,
+           event_timestamp, event_type, phase, status, detail, event
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+         ON CONFLICT (event_id) DO NOTHING`,
+        [
+          event.eventId,
+          event.threadId,
+          event.runId,
+          event.sourceInstance,
+          event.sequence,
+          event.timestamp,
+          event.type,
+          event.phase,
+          event.status,
+          event.detail ?? null,
+          JSON.stringify(event.event),
+        ],
+      );
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  for (const event of input.events) {
+    await notifyRunEvent(event, { persist: false }).catch((error) => {
+      console.error(
+        `[pgNotify] Terminal event ${event.eventId} persisted but fan-out failed:`,
+        error instanceof Error ? error.message : String(error),
+      );
+    });
+  }
+  return true;
+}
+
+export async function finalizeOwnedAgentRun(
+  input: FinalizeOwnedAgentRunInput,
+): Promise<boolean> {
+  return finalizeAgentRun(input, input.ownerInstance);
+}
+
+/**
+ * Hard-crash reconciliation may run on any instance. The non-terminal CAS is
+ * the ownership boundary: only one reconciler can persist and fan out events.
+ */
+export async function finalizeReconciledAgentRun(
+  input: FinalizeReconciledAgentRunInput,
+): Promise<boolean> {
+  return finalizeAgentRun(input);
+}
+
 export async function replayRunEvents(
   threadId: string,
   afterEventId?: string,

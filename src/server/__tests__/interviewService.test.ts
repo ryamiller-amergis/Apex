@@ -11,6 +11,7 @@ jest.mock('../services/notificationService', () => ({
 
 jest.mock('../services/chatAgentService', () => ({
   markAsInterviewThread: jest.fn(),
+  cancelRun: jest.fn().mockResolvedValue(undefined),
 }));
 
 // ── DB mock ────────────────────────────────────────────────────────────────────
@@ -590,6 +591,8 @@ describe('deleteInterview', () => {
 
     await deleteInterview('interview-1', 'user-1');
 
+    const { cancelRun } = jest.requireMock('../services/chatAgentService') as { cancelRun: jest.Mock };
+    expect(cancelRun).toHaveBeenCalledWith(interviewRow.chatThreadId);
     expect(mockDb.delete).toHaveBeenCalledTimes(1);
     expect(whereMock).toHaveBeenCalledTimes(1);
   });

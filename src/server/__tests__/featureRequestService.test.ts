@@ -44,6 +44,7 @@ import {
   updateFeatureRequest,
   linkInterview,
   resolveApexReviewers,
+  resolveFeatureRequestReviewers,
 } from '../services/featureRequestService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
@@ -195,7 +196,8 @@ describe('listFeatureRequests', () => {
   it('returns mapped feature requests with submitter names', async () => {
     const rows = [makeRow(), makeRow({ id: 'fr-2', title: 'Keyboard shortcuts', submitterName: 'Bob' })];
     const orderByMock = jest.fn().mockResolvedValue(rows);
-    const leftJoinMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
+    const whereMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
+    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
     const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
     mockDb.select
       .mockReturnValueOnce({ from: fromMock })
@@ -213,7 +215,7 @@ describe('listFeatureRequests', () => {
         }),
       });
 
-    const result = await listFeatureRequests();
+    const result = await listFeatureRequests('Apex');
 
     expect(result).toHaveLength(2);
     expect(result[0]).toMatchObject({
@@ -226,11 +228,12 @@ describe('listFeatureRequests', () => {
 
   it('returns empty array when no requests', async () => {
     const orderByMock = jest.fn().mockResolvedValue([]);
-    const leftJoinMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
+    const whereMock = jest.fn().mockReturnValue({ orderBy: orderByMock });
+    const leftJoinMock = jest.fn().mockReturnValue({ where: whereMock });
     const fromMock = jest.fn().mockReturnValue({ leftJoin: leftJoinMock });
     mockDb.select.mockReturnValue({ from: fromMock });
 
-    const result = await listFeatureRequests();
+    const result = await listFeatureRequests('Apex');
 
     expect(result).toEqual([]);
   });
@@ -371,7 +374,7 @@ describe('linkInterview', () => {
   });
 });
 
-// ── resolveApexReviewers ──────────────────────────────────────────────────────
+// ── resolveFeatureRequestReviewers / resolveApexReviewers ─────────────────────
 
 describe('resolveApexReviewers', () => {
   beforeEach(() => jest.clearAllMocks());

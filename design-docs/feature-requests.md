@@ -1,6 +1,6 @@
 ---
 name: Feature Requests
-overview: A global "Request a Feature" submission modal for any authenticated user, plus an Apex-only review module where Apex admins triage, rank, and manage requests. Incoming requests are auto-analyzed by an AI skill (selectable model) that suggests priority, risk, and rationale.
+overview: A global "Request a Feature" submission modal for any authenticated user, plus a shared Apex Backlog review module exposed per project through Platform Admin menu visibility. Incoming requests are auto-analyzed by an AI skill (selectable model) that suggests priority, risk, and rationale.
 todos:
   - id: phase-1a-db-migration
     content: "Phase 1a: Create migration(s) for the feature_requests table, add feature_request_skill_path + feature_request_model columns to project_skill_settings, seed RBAC permissions (feature-requests:submit/view/manage), and update src/server/db/schema.ts to match."
@@ -69,7 +69,7 @@ flowchart TD
 
   subgraph client [React Client]
     modal["FeatureRequestModal.tsx (new, global)"]
-    view["FeatureRequestsView.tsx (new, Apex-only)"]
+    view["FeatureRequestsView.tsx (shared, project-menu controlled)"]
     hook["hooks/useFeatureRequests.ts (new)"]
     header["AppHeader.tsx (entry + nav)"]
   end
@@ -153,7 +153,7 @@ Mount at `/api/feature-requests` behind `ensureAuthenticated` in [src/server/ind
 | Method | Path | Auth | Body / Params | Returns |
 |--------|------|------|---------------|---------|
 | `POST` | `/` | `feature-requests:submit` | `{ title, request, advantage, project }` | `201` + created request; fires analysis + notifications |
-| `GET` | `/` | `feature-requests:view` + project must be `Apex` | `?project=Apex` | `FeatureRequest[]` |
+| `GET` | `/` | `feature-requests:view` | `?project={selectedProject}` | Shared `FeatureRequest[]` |
 | `GET` | `/:id` | `feature-requests:view` | — | `FeatureRequest` |
 | `PATCH` | `/:id` | `feature-requests:manage` | `{ status?, teamPriority?, teamRisk?, rank? }` | updated request |
 | `POST` | `/:id/reanalyze` | `feature-requests:manage` | — | `202` |
@@ -181,7 +181,7 @@ export function useFeatureRequests() {
 - `react-hook-form` + `zod`; **all three fields required**: Title, Request, Advantage. Submits the current `selectedProject` as `project`.
 - CSS Module using variables from `App.css`.
 
-### Component: `src/client/components/FeatureRequestsView.tsx` (new, Apex-only)
+### Component: `src/client/components/FeatureRequestsView.tsx` (shared Apex Backlog)
 
 - Lazy-loaded at `/feature-requests`. Lists requests with AI priority/risk badges, AI rationale, submitter, status.
 - Team controls (with `feature-requests:manage`): override priority/risk, change status dropdown, drag/keyboard re-rank (persist `rank` via PATCH), re-analyze button.
@@ -190,8 +190,8 @@ export function useFeatureRequests() {
 ### `App.tsx` + `AppHeader.tsx` changes
 
 - Add `'feature-requests'` to `CurrentView` union; add `/feature-requests` path matching; lazy-import `FeatureRequestsView` in `Suspense` + `ErrorBoundary`.
-- Route guard: `selectedProject === 'Apex' && enabledViews.includes('feature-requests') && can('feature-requests:view')` (redirect to `/home` otherwise; super admin skips menu check).
-- Nav item in `AppHeader.tsx` with the same Apex-name guard (mirrors the extra-guard pattern used for `my-work`).
+- Route guard: `enabledViews.includes('feature-requests') && can('feature-requests:view')` (redirect to the accessible fallback otherwise; super admin skips menu and permission checks).
+- Nav items in `AppHeader.tsx` and `AppSidebar.tsx` use the same per-project menu visibility and RBAC checks without a project-name restriction.
 
 ### `AdminProjectSettings.tsx` changes
 
@@ -199,11 +199,11 @@ export function useFeatureRequests() {
 
 ## Key Design Decisions
 
-- **Global submit, Apex-only review**: submission is available to any authenticated user in any project via a header entry (`feature-requests:submit`), but the review module and all list/manage endpoints enforce `project === 'Apex'`. This centralizes triage with the AI-Pilot builders.
+- **Global submit, shared review backlog**: submission is available to any authenticated user in any project. Platform Admin controls which projects expose the shared Apex Backlog review module; RBAC still controls view/manage actions.
 - **"Apex admins" as recipients**: RBAC is global, so `resolveApexReviewers()` intersects `user_project_assignments (project = 'Apex')` with holders of `feature-requests:manage`, plus super admins. This operationalizes "admin users within Apex" without a new project-scoped permission model.
 - **AI via Cursor-agent skill + per-project override**: analysis uses the existing skill/model pattern (`feature_request_skill_path` + `feature_request_model` on `project_skill_settings`), so Apex ships a default skill but any project can later point at its own repo/skill/model. Runs async via the validation watcher pattern so submission is never blocked on the LLM.
 - **AI suggests, team decides**: AI writes `ai_priority/ai_risk/ai_rationale`; the team can override via `team_priority/team_risk`, set `status`, and manually re-order via `rank`. AI values are preserved for reference.
-- **Apex-only hardening beyond the menu toggle**: because unconfigured projects default to all menu keys on, we also add a structural `selectedProject === 'Apex'` guard (client nav + route + server endpoints). Platform Admin > Menu then controls on/off *within* Apex, matching the requested admin control.
+- **Per-project menu control**: Apex Backlog follows the standard menu contract. Platform Admin can enable or disable `feature-requests` for each project, and the client combines that setting with `feature-requests:view`; the list API accepts the selected project while returning the shared backlog.
 - **No feature flag**: per decision, gating relies on the Apex-only menu setting + RBAC permissions.
 
 ## Phase Summary and Parallelization

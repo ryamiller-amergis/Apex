@@ -1,7 +1,9 @@
 import type { Server } from 'http';
-import { and, eq } from 'drizzle-orm';
+import { randomUUID } from 'crypto';
+import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { prds, designDocs, testCases, devSessions } from '../db/schema';
+import { prds, designDocs, testCases, devSessions, agentRuns } from '../db/schema';
+import type { AgentRunEventEnvelope } from '../../shared/types/chat';
 import {
   hydrateThread,
   isThreadIdle,
@@ -28,6 +30,11 @@ import {
 } from './chatThreadRepository';
 import { expireOldSessions } from './pdfAssemblyService';
 import { recoverAnalyzingFeatureRequests } from './featureRequestAnalysisService';
+import {
+  finalizeOwnedAgentRun,
+  nextRunEventSequence,
+  RUN_EVENT_SOURCE_INSTANCE,
+} from './pgNotifyService';
 
 const RECOVERY_INTERVAL_MS = 60_000;
 const SHUTDOWN_GRACE_MS = 10_000;
@@ -459,6 +466,68 @@ export function registerProcessGuards(): void {
   });
 }
 
+export interface FinalizeOwnedRunsForShutdownOptions {
+  ownerInstance?: string;
+  now?: () => number;
+}
+
+export async function finalizeOwnedRunsForShutdown(
+  options: FinalizeOwnedRunsForShutdownOptions = {},
+): Promise<number> {
+  const ownerInstance = options.ownerInstance ?? RUN_EVENT_SOURCE_INSTANCE;
+  const timestamp = new Date(options.now?.() ?? Date.now()).toISOString();
+  const detail = 'Agent run interrupted by owner shutdown';
+  const rows = await db.query.agentRuns.findMany({
+    where: and(
+      eq(agentRuns.ownerInstance, ownerInstance),
+      inArray(agentRuns.status, ['queued', 'running']),
+    ),
+    columns: { id: true, threadId: true },
+  });
+  let finalized = 0;
+  for (const row of rows) {
+    const events: AgentRunEventEnvelope[] = [
+      {
+        eventId: randomUUID(),
+        threadId: row.threadId,
+        runId: row.id,
+        sourceInstance: ownerInstance,
+        sequence: nextRunEventSequence(row.id, ownerInstance),
+        timestamp,
+        type: 'error',
+        phase: 'completion',
+        status: 'failed',
+        detail,
+        event: { type: 'error', error: detail },
+      },
+      {
+        eventId: randomUUID(),
+        threadId: row.threadId,
+        runId: row.id,
+        sourceInstance: ownerInstance,
+        sequence: nextRunEventSequence(row.id, ownerInstance),
+        timestamp,
+        type: 'done',
+        phase: 'completion',
+        status: 'completed',
+        detail: 'Run completed',
+        event: { type: 'done', runId: row.id },
+      },
+    ];
+    if (await finalizeOwnedAgentRun({
+      runId: row.id,
+      threadId: row.threadId,
+      ownerInstance,
+      status: 'failed',
+      detail,
+      events,
+    })) {
+      finalized += 1;
+    }
+  }
+  return finalized;
+}
+
 /**
  * Register SIGTERM / SIGINT handlers for graceful shutdown.
  * Stops accepting new connections and waits for in-flight requests
@@ -481,9 +550,19 @@ export function registerGracefulShutdown(server: Server): void {
       recoveryTimer = null;
     }
 
+    const finalization = finalizeOwnedRunsForShutdown()
+      .then((count) => {
+        console.log(`[shutdown] Finalized ${count} owned non-terminal run(s)`);
+      })
+      .catch((error) => {
+        console.error('[shutdown] Failed to finalize owned agent runs:', error);
+      });
+
     server.close(() => {
-      console.log('[shutdown] All connections drained — exiting');
-      process.exit(0);
+      void finalization.finally(() => {
+        console.log('[shutdown] All connections drained — exiting');
+        process.exit(0);
+      });
     });
 
     setTimeout(() => {

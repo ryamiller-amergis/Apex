@@ -245,7 +245,7 @@ describe('TBI-004 default independent grounding materializer', () => {
 
     // Assert
     expect(result).toBe('materialized');
-    expect(repairRepoCache).toHaveBeenCalledTimes(1);
+    expect(repairRepoCache).not.toHaveBeenCalled();
     expect(materializeWorkspaceFromCache).toHaveBeenCalledTimes(2);
     expect(
       runGit.mock.calls.filter(([args]) => args.includes('checkout'))
@@ -305,16 +305,128 @@ describe('TBI-004 default independent grounding materializer', () => {
     // Assert
     expect(result).toBe('unavailable');
     expect(repairRepoCache).toHaveBeenCalledTimes(1);
-    expect(runGit).toHaveBeenCalledTimes(2);
+    expect(runGit).toHaveBeenCalledTimes(3);
     expect(telemetry).toHaveBeenCalledWith(
       'grounding.materialization.fallback',
-      {
+      expect.objectContaining({
         provider: 'github',
         project: 'Apex',
         repository: 'AI-Pilot',
         branch: 'main',
         reason: 'pinned-sha-unavailable',
-      }
+        outcome: 'unavailable',
+      }),
+      expect.objectContaining({ durationMs: expect.any(Number) }),
     );
+  });
+
+  it('TBI-002 DoD-0 / VT-10 attempts one 45-second exact-commit fetch after a pinned miss', async () => {
+    const exactCommitFetch = jest.fn().mockResolvedValue(undefined);
+    let checkoutAttempts = 0;
+    const runGit = jest.fn(async (args: string[]) => {
+      if (args.includes('checkout') && ++checkoutAttempts === 1) {
+        throw new Error('pinned commit missing');
+      }
+      return '';
+    });
+    const createBundleStore: GroundingMaterializerDependencies['createBundleStore'] =
+      jest.fn((options) => ({
+        rehydrate: jest.fn(async (identity, destination) => (
+          await options.repairAndMaterialize({ identity, destination })
+            ? { status: 'materialized' as const, source: 'repair' as const }
+            : { status: 'remote-fallback' as const, reason: 'repair-failed' as const }
+        )),
+      }));
+    const materialize = createRunGroundingMaterializer({
+      dataRoot: 'C:\\persistent-data',
+      createBundleStore,
+      ensureRepoCache: jest.fn().mockResolvedValue({
+        cacheDir: 'C:\\cache\\repo.git',
+        remote: {
+          url: 'https://example.invalid/repo.git',
+          env: {},
+          secret: 'not-exported',
+        },
+      }),
+      materializeWorkspaceFromCache: jest.fn().mockResolvedValue(undefined),
+      runGit,
+      exactCommitFetch,
+    });
+
+    await expect(materialize(grounding, run('exact-fetch'))).resolves.toBe('materialized');
+    expect(exactCommitFetch).toHaveBeenCalledTimes(1);
+    expect(exactCommitFetch).toHaveBeenCalledWith(
+      expect.objectContaining({ cacheDir: 'C:\\cache\\repo.git' }),
+      sha,
+      45_000,
+    );
+  });
+
+  it('TBI-002 DoD-1/DoD-2 reports bounded fallback after exact-commit timeout', async () => {
+    const telemetry = jest.fn();
+    const createBundleStore: GroundingMaterializerDependencies['createBundleStore'] =
+      jest.fn((options) => ({
+        rehydrate: jest.fn(async (identity, destination) => (
+          await options.repairAndMaterialize({ identity, destination })
+            ? { status: 'materialized' as const, source: 'repair' as const }
+            : { status: 'remote-fallback' as const, reason: 'repair-failed' as const }
+        )),
+      }));
+    const materialize = createRunGroundingMaterializer({
+      dataRoot: 'C:\\persistent-data',
+      createBundleStore,
+      ensureRepoCache: jest.fn().mockResolvedValue({
+        cacheDir: 'C:\\cache\\repo.git',
+        remote: {
+          url: 'https://user:secret@example.invalid/repo.git',
+          env: {},
+          secret: 'not-exported',
+        },
+      }),
+      repairRepoCache: jest.fn().mockRejectedValue(new Error('unavailable')),
+      materializeWorkspaceFromCache: jest.fn().mockRejectedValue(new Error('missing')),
+      exactCommitFetch: jest.fn().mockRejectedValue(new Error('timed out')),
+      telemetry,
+      now: jest.fn().mockReturnValueOnce(1_000).mockReturnValueOnce(46_000),
+    });
+
+    await expect(materialize(grounding, run('exact-timeout'))).resolves.toBe('unavailable');
+    expect(telemetry).toHaveBeenCalledWith(
+      'grounding.materialization.fallback',
+      expect.objectContaining({
+        reason: 'pinned-sha-unavailable',
+        outcome: 'unavailable',
+      }),
+      { durationMs: 45_000 },
+    );
+    expect(JSON.stringify(telemetry.mock.calls)).not.toContain('user:secret');
+    expect(JSON.stringify(telemetry.mock.calls)).not.toContain('not-exported');
+  });
+
+  it('TBI-002 DoD-3 keeps telemetry export failure from failing materialization', async () => {
+    const createBundleStore: GroundingMaterializerDependencies['createBundleStore'] =
+      jest.fn((options) => ({
+        rehydrate: jest.fn(async (identity, destination) => (
+          await options.repairAndMaterialize({ identity, destination })
+            ? { status: 'materialized' as const, source: 'repair' as const }
+            : { status: 'remote-fallback' as const, reason: 'repair-failed' as const }
+        )),
+      }));
+    const materialize = createRunGroundingMaterializer({
+      dataRoot: 'C:\\persistent-data',
+      createBundleStore,
+      ensureRepoCache: jest.fn().mockResolvedValue({
+        cacheDir: 'C:\\cache\\repo.git',
+        remote: { url: 'https://example.invalid/repo.git', env: {}, secret: '' },
+      }),
+      repairRepoCache: jest.fn().mockRejectedValue(new Error('unavailable')),
+      materializeWorkspaceFromCache: jest.fn().mockRejectedValue(new Error('missing')),
+      exactCommitFetch: jest.fn().mockRejectedValue(new Error('unavailable')),
+      telemetry: jest.fn(() => {
+        throw new Error('Application Insights unavailable');
+      }),
+    });
+
+    await expect(materialize(grounding, run('telemetry-failure'))).resolves.toBe('unavailable');
   });
 });

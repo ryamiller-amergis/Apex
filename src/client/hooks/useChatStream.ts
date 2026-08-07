@@ -185,6 +185,7 @@ export function useChatStream(
   const [backlogReady, setBacklogReady] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
   const [retryReason, setRetryReason] = useState<string | null>(null);
+  const [eventDrivenTermination, setEventDrivenTermination] = useState(false);
 
   const esRef = useRef<EventSource | null>(null);
   // Buffer tokens into the in-progress message
@@ -193,6 +194,7 @@ export function useChatStream(
   const pollTimerRef = useRef<number | null>(null);
   const seenEventIdsRef = useRef<Set<string>>(new Set());
   const seenEventIdOrderRef = useRef<string[]>([]);
+  const eventDrivenTerminationRef = useRef(false);
   // Keep latest seed options in refs so REST refetches (new array identity after
   // sendMessage) do not recreate `reset` and tear down a live EventSource mid-run.
   const initialMessagesRef = useRef(options.initialMessages);
@@ -245,6 +247,8 @@ export function useChatStream(
     setBacklogReady(false);
     setIsRetrying(false);
     setRetryReason(null);
+    setEventDrivenTermination(false);
+    eventDrivenTerminationRef.current = false;
     streamBufferRef.current = '';
     seenEventIdsRef.current.clear();
     seenEventIdOrderRef.current = [];
@@ -374,8 +378,18 @@ export function useChatStream(
           break;
         }
         case 'health': {
-          const normalized = normalizeHealthEvent(event as SseHealthEvent);
-          if (normalized) setRunHealth(normalized);
+          // @feature-flag:event-driven-run-termination start winner=enabled
+          if (eventDrivenTerminationRef.current) {
+            // @feature-flag:event-driven-run-termination enabled-start
+            // Retire mode uses only durable terminal done/error events.
+            // @feature-flag:event-driven-run-termination enabled-end
+          } else {
+            // @feature-flag:event-driven-run-termination disabled-start
+            const normalized = normalizeHealthEvent(event as SseHealthEvent);
+            if (normalized) setRunHealth(normalized);
+            // @feature-flag:event-driven-run-termination disabled-end
+          }
+          // @feature-flag:event-driven-run-termination end
           break;
         }
         case 'tool_status': {
@@ -401,6 +415,14 @@ export function useChatStream(
           break;
         }
         case 'status': {
+          if (typeof event.eventDrivenTermination === 'boolean') {
+            eventDrivenTerminationRef.current = event.eventDrivenTermination;
+            setEventDrivenTermination(event.eventDrivenTermination);
+            if (event.eventDrivenTermination) {
+              setRunHealth(null);
+              clearPollTimer();
+            }
+          }
           setStatus(event.status);
           break;
         }
@@ -408,7 +430,11 @@ export function useChatStream(
           const retryEvent = event as SseRetryingEvent;
           setLastProgressAt(Date.now());
           setIsRetrying(true);
-          setRetryReason(`Retrying… (attempt ${retryEvent.attempt} of ${retryEvent.maxAttempts})`);
+          setRetryReason(
+            retryEvent.reason === 'reconnecting'
+              ? 'Reconnecting to the agent…'
+              : `Retrying… (attempt ${retryEvent.attempt} of ${retryEvent.maxAttempts})`,
+          );
           clearRetryTimeout();
           break;
         }
@@ -499,6 +525,14 @@ export function useChatStream(
   // Polling fallback: when status is 'running' and SSE is disconnected, poll
   // the server every 5 seconds to detect terminal status from Postgres.
   useEffect(() => {
+    // @feature-flag:event-driven-run-termination start winner=enabled
+    if (eventDrivenTermination) {
+      // @feature-flag:event-driven-run-termination enabled-start
+      clearPollTimer();
+      return;
+      // @feature-flag:event-driven-run-termination enabled-end
+    }
+    // @feature-flag:event-driven-run-termination disabled-start
     if (!threadId || status !== 'running' || isConnected) {
       clearPollTimer();
       return;
@@ -584,7 +618,9 @@ export function useChatStream(
       window.clearTimeout(initialPollDelay);
       clearPollTimer();
     };
-  }, [threadId, status, isConnected, clearPollTimer]);
+    // @feature-flag:event-driven-run-termination disabled-end
+    // @feature-flag:event-driven-run-termination end
+  }, [threadId, status, isConnected, eventDrivenTermination, clearPollTimer]);
 
   return {
     messages,
