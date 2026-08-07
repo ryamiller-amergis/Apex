@@ -51,6 +51,7 @@ beforeEach(() => {
   __resetAiRunnerAuthJwksCacheForTests();
   process.env = { ...ORIGINAL_ENV };
   delete process.env.AI_RUNS_RUNNER_CALLBACK_TOKEN;
+  delete process.env.AI_RUNS_ALLOW_STATIC_CALLBACK_TOKEN;
   delete process.env.AI_RUNS_CALLBACK_TOKEN_AUDIENCE;
   delete process.env.AI_RUNS_RUNNER_ALLOWED_CLIENT_IDS;
 });
@@ -85,6 +86,19 @@ describe('requireAiRunnerAuth', () => {
 
     expect(res.status).toBe(503);
     expect(res.body.code).toBe('AI_RUNNER_AUTH_UNCONFIGURED');
+  });
+
+  it('accepts the static token in production only with explicit operator opt-in', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.AI_RUNS_RUNNER_CALLBACK_TOKEN = 'dev-runner-secret';
+    process.env.AI_RUNS_ALLOW_STATIC_CALLBACK_TOKEN = 'true';
+
+    const res = await request(buildApp())
+      .get('/secure')
+      .set('Authorization', 'Bearer dev-runner-secret');
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
   });
 
   it('TBI-005 DoD-0: rejects a valid managed-identity JWT without AiRun.Runner', async () => {

@@ -12,6 +12,7 @@ import {
 } from 'crypto';
 import type { JsonWebKey as CryptoJsonWebKey } from 'crypto';
 import type { NextFunction, Request, Response } from 'express';
+import { resolveStaticAiRunnerCallbackToken } from '../services/aiRunnerCallbackAuthConfig';
 
 export const AI_RUNNER_AUTH_HEADER = 'authorization';
 const REQUIRED_ROLE = 'AiRun.Runner';
@@ -65,8 +66,7 @@ function resolveAllowedClientIds(): string[] {
 }
 
 function resolveStaticToken(): string | undefined {
-  if (process.env.NODE_ENV === 'production') return undefined;
-  return process.env.AI_RUNS_RUNNER_CALLBACK_TOKEN?.trim() || undefined;
+  return resolveStaticAiRunnerCallbackToken();
 }
 
 function authConfigured(): boolean {

@@ -25,6 +25,7 @@ import {
 import { DefaultAzureCredential } from '@azure/identity';
 import { createAiRunsCallbackClient } from '../aiRunsWorker/callbackClient';
 import { openLocalCheckout } from '../aiRunsWorker/workspace';
+import { resolveStaticAiRunnerCallbackToken } from '../aiRunnerCallbackAuthConfig';
 import type { LocalCheckoutReader } from '../localCheckoutReader';
 import { createInteractiveCursorExecution } from './interactiveCursorExecution';
 import {
@@ -133,10 +134,7 @@ export async function registerInteractiveDispatchHandler(
 }
 
 async function getCallbackToken(): Promise<string> {
-  const staticToken =
-    process.env.NODE_ENV === 'production'
-      ? undefined
-      : process.env.AI_RUNS_RUNNER_CALLBACK_TOKEN?.trim();
+  const staticToken = resolveStaticAiRunnerCallbackToken();
   if (staticToken) return staticToken;
 
   const audience = process.env.AI_RUNS_CALLBACK_TOKEN_AUDIENCE?.trim();
