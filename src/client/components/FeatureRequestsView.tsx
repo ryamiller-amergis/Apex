@@ -316,13 +316,15 @@ export const FeatureRequestsView: React.FC = () => {
 
   const filtersActive = statusFilter !== '' || searchQuery !== '';
 
+  const backlogTitle = selectedProject === 'Apex' ? 'Apex Backlog' : `${selectedProject} Backlog`;
+
   if (isLoading) {
-    return <div className={styles['loading']}>Loading Apex Backlog…</div>;
+    return <div className={styles['loading']}>Loading {backlogTitle}…</div>;
   }
   if (error) {
     return (
       <div className={styles['error']}>
-        Failed to load Apex Backlog: {(error as Error).message}
+        Failed to load {backlogTitle}: {(error as Error).message}
       </div>
     );
   }
@@ -338,7 +340,7 @@ export const FeatureRequestsView: React.FC = () => {
         >
           <div className={gridStyles.header}>
             <div>
-              <h2 className={gridStyles.title}>Apex Backlog</h2>
+              <h2 className={gridStyles.title}>{backlogTitle}</h2>
               <p className={gridStyles.hint}>
                 {sorted.length}{' '}
                 {sorted.length === 1 ? itemNoun : `${itemNoun}s`}

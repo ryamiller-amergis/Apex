@@ -1340,6 +1340,7 @@ export const featureRequests = pgTable('feature_requests', {
   statusCreatedIdx: index('idx_feature_requests_status_created').on(t.status, t.createdAt),
   typeStatusCreatedIdx: index('idx_feature_requests_type_status_created').on(t.type, t.status, t.createdAt),
   submittedByIdx: index('idx_feature_requests_submitted_by').on(t.submittedBy),
+  sourceProjectIdx: index('idx_feature_requests_source_project').on(t.sourceProject),
 }));
 
 export const featureRequestAdrs = pgTable('feature_request_adrs', {
