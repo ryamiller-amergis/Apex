@@ -5,7 +5,6 @@ description: Project adapter for fullstack-node-bff. Customize for your project.
 
 # fullstack-node-bff — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/fullstack-node-bff/SKILL.md -->
 
 - Project: {{slot:projectName}}
 - Backend: project's server layer (see {{slot:agentsFile}} Directory Structure)

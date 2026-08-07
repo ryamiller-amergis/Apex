@@ -5,7 +5,6 @@ description: Project adapter for design-module-doc. Customize for your project.
 
 # design-module-doc — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/design-module-doc/SKILL.md -->
 
 - Project: {{slot:projectName}}
 - Context: `{{slot:contextFile}}`, `{{slot:agentsFile}}`

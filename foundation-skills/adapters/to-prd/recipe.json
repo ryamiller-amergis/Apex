@@ -1,7 +1,7 @@
 {
   "skill": "to-prd",
   "scanScope": "targeted",
-  "targetedGlobs": ["package.json", "**/CONTEXT.md", "**/context.md", "**/AGENTS.md"],
+  "targetedGlobs": ["package.json", "AGENTS.md", "agents.md", "CONTEXT.md", "context.md", "CONTEXT-MAP.md", "context-map.md", "README.md", "readme.md", "**/CONTEXT.md", "**/context.md", "**/AGENTS.md", "**/agents.md", "**/CONTEXT-MAP.md", "**/context-map.md"],
   "detectors": ["stack", "glossary", "repo-docs"],
   "capFiles": 500,
   "capMs": 45000,

@@ -5,7 +5,6 @@ description: Project adapter for adr-interview. Customize for your project.
 
 # adr-interview — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/adr-interview/SKILL.md -->
 
 - Project: {{slot:projectName}}
 - Context: `{{slot:contextFile}}`, `{{slot:agentsFile}}`, existing `{{slot:designDocsDir}}`, `{{slot:skillsDir}}`

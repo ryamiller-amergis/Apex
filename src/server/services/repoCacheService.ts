@@ -94,12 +94,12 @@ export function resolveGitRemote(
   repo: string,
 ): GitRemote {
   if (provider === 'github') {
-    const org = process.env.GITHUB_ORG || '';
+    const org = project.trim();
     const secret = process.env.GITHUB_TOKEN
       || process.env.GITHUB_PAT
       || process.env.GH_SKILL_TOKEN
       || '';
-    if (!org) throw new Error('GITHUB_ORG must be set for GitHub repo checkout');
+    if (!org) throw new Error('GitHub organization is required for repo checkout');
     if (!secret) {
       throw new Error('GITHUB_TOKEN, GITHUB_PAT, or GH_SKILL_TOKEN must be set for GitHub repo checkout');
     }

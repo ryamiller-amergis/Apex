@@ -1,8 +1,17 @@
 {
   "apiVersion": 1,
   "skill": "issue-analysis",
-  "foundation": { "package": "@apex/skills", "range": ">=0.1.0" },
-  "managedFoundationFiles": [".apex/foundation/issue-analysis/SKILL.md"],
-  "extensionFiles": ["SKILL.md"],
-  "capabilities": ["project-glossary"]
+  "foundation": {
+    "package": "@apex/skills",
+    "range": ">=0.1.0"
+  },
+  "extensionFiles": [
+    "SKILL.md"
+  ],
+  "capabilities": [
+    "project-glossary"
+  ],
+  "managedFiles": [
+    "SKILL.md"
+  ]
 }

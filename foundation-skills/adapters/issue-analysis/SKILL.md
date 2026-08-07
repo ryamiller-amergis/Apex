@@ -5,7 +5,6 @@ description: Project adapter for issue-analysis. Customize for your project.
 
 # Issue Analysis — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/issue-analysis/SKILL.md -->
 Applies the generic issue-analysis method to this project.
 
 - Project: {{slot:projectName}}

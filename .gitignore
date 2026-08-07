@@ -86,3 +86,6 @@ e2e-*.log
 # Captured SSO storageState for deployed-smoke runs — contains a live session,
 # never commit it (see tests/e2e/support/capture-storage-state.ts)
 tests/e2e/.auth/
+
+# Local agent scratch state — per-machine, not shared
+.agents/

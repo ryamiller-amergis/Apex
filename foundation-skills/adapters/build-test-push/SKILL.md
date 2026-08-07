@@ -5,7 +5,6 @@ description: Project adapter for build-test-push. Customize for your project.
 
 # build-test-push — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/build-test-push/SKILL.md -->
 
 - Project: {{slot:projectName}}
 - Build: `npm run build` (or project's equivalent build command)

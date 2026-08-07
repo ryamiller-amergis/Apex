@@ -5,10 +5,8 @@
  * identical across Windows (PowerShell/cmd/Git Bash) and POSIX shells.
  */
 
-import { createRequire } from 'node:module';
 import { dirname, join, resolve, relative, sep, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readFileSync } from 'node:fs';
 
 /** Absolute path to the root of the @apex/skills package (foundation-skills/) */
 export const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -23,9 +21,11 @@ export const FOUNDATION_DIR = join(PACKAGE_ROOT, 'foundation');
  * Standard install destination paths relative to the target repo root.
  * The repo root is the current working directory when `apex-skills install` runs.
  */
-export const LOCK_FILENAME    = 'apex-skills.lock.json';
-export const FOUNDATION_DEST  = '.apex/foundation';  // immutable vendored foundations
-export const ADAPTER_DEST     = '.cursor/skills';     // editable project adapters
+export const LOCK_FILENAME   = 'apex-skills.lock.json';
+export const ADAPTER_DEST    = '.cursor/skills';     // fenced adapters + companions
+export const BACKUP_DEST     = '.apex/backups';       // in-fence edit backups
+/** @deprecated v1 layout — migration only */
+export const FOUNDATION_DEST = '.apex/foundation';
 
 /**
  * Convert an OS path to a POSIX string (for lockfile storage).

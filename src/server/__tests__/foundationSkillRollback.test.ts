@@ -154,6 +154,7 @@ describe('rollbackRepoWithFoundationSkills gates', () => {
       project: 'MaxView',
       repo: 'MaxView',
       apexProject: 'MaxView',
+      apexUrl: 'https://apex.example.com',
       releaseId: 'r1',
     });
 
@@ -168,6 +169,7 @@ describe('rollbackRepoWithFoundationSkills gates', () => {
       project: 'MaxView',
       repo: 'MaxView',
       apexProject: 'MaxView',
+      apexUrl: 'https://apex.example.com',
       releaseId: 'r2',
       fromVersion: '1.0.0',
     });
@@ -183,6 +185,7 @@ describe('rollbackRepoWithFoundationSkills gates', () => {
       project: 'MaxView',
       repo: 'MaxView',
       apexProject: 'MaxView',
+      apexUrl: 'https://apex.example.com',
       releaseId: 'r0',
       fromVersion: '1.0.0',
     });
@@ -198,6 +201,7 @@ describe('rollbackRepoWithFoundationSkills gates', () => {
       project: 'MaxView',
       repo: 'MaxView',
       apexProject: 'MaxView',
+      apexUrl: 'https://apex.example.com',
       releaseId: 'missing',
       fromVersion: '1.0.0',
     });

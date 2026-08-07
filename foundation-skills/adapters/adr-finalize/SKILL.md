@@ -5,7 +5,6 @@ description: Project adapter for adr-finalize. Customize for your project.
 
 # adr-finalize — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/adr-finalize/SKILL.md -->
 
 - Project: {{slot:projectName}}
 - Template: see `adr-template.md` in this adapter — follow exactly

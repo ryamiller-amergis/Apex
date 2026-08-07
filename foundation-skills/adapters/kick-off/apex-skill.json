@@ -1,8 +1,20 @@
 {
   "apiVersion": 1,
   "skill": "kick-off",
-  "foundation": { "package": "@apex/skills", "range": ">=0.1.0" },
-  "managedFoundationFiles": [".apex/foundation/kick-off/SKILL.md"],
-  "extensionFiles": ["SKILL.md"],
-  "capabilities": ["orchestration", "design-doc", "tdd-decomposition"]
+  "foundation": {
+    "package": "@apex/skills",
+    "range": ">=0.1.0"
+  },
+  "extensionFiles": [
+    "SKILL.md"
+  ],
+  "capabilities": [
+    "orchestration",
+    "design-doc",
+    "tdd-decomposition"
+  ],
+  "managedFiles": [
+    "SKILL.md",
+    "design-doc-template.md"
+  ]
 }

@@ -5,7 +5,6 @@ description: Project adapter for daily-standup. Customize for your project.
 
 # daily-standup — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/daily-standup/SKILL.md -->
 
 - Project: {{slot:projectName}}
 - Service: project's standup service (see {{slot:agentsFile}} Feature Map)

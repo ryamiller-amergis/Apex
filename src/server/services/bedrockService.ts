@@ -193,12 +193,12 @@ import { resolveLocalSkillBundle, logBundleDiagnostics } from './foundationSkill
  *
  * Precedence (all local disk reads — non-fatal at every step):
  *   1. APEX adapter   .cursor/skills/to-prd/SKILL.md
- *   2. APEX foundation .apex/foundation/to-prd/SKILL.md
- *   3. Empty string (prompt still works without it)
+ *      (contains the fenced managed foundation region + project notes)
+ *   2. Empty string (prompt still works without it)
  *
  * Previous implementation fetched MaxView's `sdlc-backlog` from ADO.
  * That was stale — this project has no sdlc-backlog skill. Replaced with
- * the project-local to-prd foundation which captures SDLC standards.
+ * the project-local to-prd skill which captures SDLC standards.
  */
 async function loadSkillContent(): Promise<string> {
   const bundle = resolveLocalSkillBundle('to-prd');

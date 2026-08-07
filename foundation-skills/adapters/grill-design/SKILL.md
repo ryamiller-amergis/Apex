@@ -5,7 +5,6 @@ description: Project adapter for grill-design. Customize for your project.
 
 # grill-design — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/grill-design/SKILL.md -->
 
 **Invocation:** `/grill-design`
 
