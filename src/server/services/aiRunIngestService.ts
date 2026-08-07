@@ -40,6 +40,7 @@ import {
   type AiRunProgressIngest,
   type AiRunTerminalIngest,
 } from '../../shared/types/aiRunIngest';
+import { INTERACTIVE_LANE } from '../../shared/types/interactiveWorkflow';
 import { workerTierTelemetry } from './workerTierTelemetry';
 
 const MAX_DETAIL_LENGTH = 500;
@@ -212,7 +213,7 @@ async function loadRun(
 }
 
 /**
- * Return the frozen worker bootstrap only for the current background dispatch.
+ * Return the frozen worker bootstrap only for the current external dispatch.
  * The lookup is intentionally read-only and the fence is checked before all
  * other lifecycle details so stale workers deterministically receive conflict.
  */
@@ -238,13 +239,13 @@ export async function getBootstrap(
     );
   }
   if (
-    existing.lane !== 'background'
+    (existing.lane !== 'background' && existing.lane !== INTERACTIVE_LANE)
     || (existing.status !== 'dispatched' && existing.status !== 'running')
     || !existing.projectId
     || !existing.executionSnapshot
   ) {
     throw new AiRunIngestError(
-      'AI run is not available for background bootstrap',
+      'AI run is not available for external bootstrap',
       'AI_RUN_ILLEGAL_TRANSITION',
     );
   }
@@ -559,7 +560,9 @@ export async function ingest(
     return { run, cancelRequested: true };
   }
 
-  if (body.artifactsFlushed !== true) {
+  const mayFailWithoutArtifactFlush =
+    existing.lane === INTERACTIVE_LANE && body.status === 'failed';
+  if (body.artifactsFlushed !== true && !mayFailWithoutArtifactFlush) {
     throw new AiRunIngestError(
       'Terminal ingest requires durable workspace artifacts',
       'AI_RUN_ARTIFACTS_NOT_FLUSHED',

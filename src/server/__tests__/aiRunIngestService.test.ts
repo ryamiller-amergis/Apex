@@ -183,6 +183,25 @@ describe('GET bootstrap fenced snapshot seam', () => {
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 
+  it('FEAT-007: returns the frozen snapshot for the current interactive dispatch', async () => {
+    mockFindFirst.mockResolvedValue(baseRow({
+      status: 'dispatched',
+      lane: 'ai-runs-interactive',
+      executionSnapshot,
+    }));
+
+    await expect(getBootstrap('run-1', 'dispatch-current')).resolves.toEqual({
+      projectId: 'project-1',
+      run: expect.objectContaining({
+        id: 'run-1',
+        lane: 'ai-runs-interactive',
+        status: 'dispatched',
+        dispatchMessageId: 'dispatch-current',
+        executionSnapshot,
+      }),
+    });
+  });
+
   it('TBI-004 DoD-2 / PBI-004 AC-3 / VT-06: rejects a stale bootstrap fence without mutation', async () => {
     mockFindFirst.mockResolvedValue(baseRow({
       status: 'running',
@@ -508,6 +527,34 @@ describe('aiRunIngestService durable terminal completion', () => {
       expect(mockMarkTerminal).toHaveBeenCalledTimes(1);
     },
   );
+
+  it('FEAT-007: accepts an unflushed failed terminal from the warm interactive actor', async () => {
+    mockFindFirst.mockResolvedValue(baseRow({
+      lane: 'ai-runs-interactive',
+      executionSnapshot,
+    }));
+
+    await ingest('project-1', 'run-1', {
+      dispatchMessageId: 'dispatch-current',
+      kind: 'terminal',
+      status: 'failed',
+      artifactsFlushed: false,
+    }, {
+      consumeCompletedArtifacts: mockConsumeCompletedArtifacts,
+    });
+
+    expect(mockConsumeCompletedArtifacts).not.toHaveBeenCalled();
+    expect(mockMarkTerminal).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({
+        status: 'failed',
+        events: [expect.objectContaining({
+          status: 'failed',
+          event: expect.objectContaining({ type: 'error' }),
+        })],
+      }),
+    );
+  });
 
   it('PBI-004 AC-3 regression: stale completed callback consumes nothing', async () => {
     mockFindFirst.mockResolvedValue(baseRow({ executionSnapshot }));
