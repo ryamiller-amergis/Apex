@@ -10,6 +10,7 @@ import {
   validateReleaseUpdate,
 } from '../services/foundationSkillArtifactManifest';
 import {
+  downloadPackageArtifact,
   isTrustedArtifactUrl,
   listCandidates,
 } from '../services/azureArtifactsSkillService';
@@ -181,6 +182,35 @@ describe('extractNpmTarballSafely', () => {
 });
 
 describe('artifact download authentication', () => {
+  it('downloads the scoped npm artifact through the canonical package path', async () => {
+    const oldOrg = process.env.AZURE_ARTIFACTS_ORG;
+    const oldFeed = process.env.AZURE_ARTIFACTS_FEED;
+    const oldPat = process.env.AZURE_ARTIFACTS_PAT;
+    process.env.AZURE_ARTIFACTS_ORG = 'amergis';
+    process.env.AZURE_ARTIFACTS_FEED = 'apex-skills';
+    process.env.AZURE_ARTIFACTS_PAT = 'test-pat';
+    const requestSpy = jest
+      .spyOn(https, 'request')
+      .mockImplementation((() => {
+        throw new Error('request captured');
+      }) as typeof https.request);
+
+    try {
+      await expect(downloadPackageArtifact('2.0.0')).rejects.toThrow('request captured');
+      expect(String(requestSpy.mock.calls[0][0])).toBe(
+        'https://pkgs.dev.azure.com/amergis/_apis/packaging/feeds/apex-skills/npm/packages/@apex/skills/versions/2.0.0/content?api-version=7.1',
+      );
+    } finally {
+      requestSpy.mockRestore();
+      if (oldOrg === undefined) delete process.env.AZURE_ARTIFACTS_ORG;
+      else process.env.AZURE_ARTIFACTS_ORG = oldOrg;
+      if (oldFeed === undefined) delete process.env.AZURE_ARTIFACTS_FEED;
+      else process.env.AZURE_ARTIFACTS_FEED = oldFeed;
+      if (oldPat === undefined) delete process.env.AZURE_ARTIFACTS_PAT;
+      else process.env.AZURE_ARTIFACTS_PAT = oldPat;
+    }
+  });
+
   it('queries package metadata through the Azure Artifacts REST API host', async () => {
     const oldOrg = process.env.AZURE_ARTIFACTS_ORG;
     const oldFeed = process.env.AZURE_ARTIFACTS_FEED;

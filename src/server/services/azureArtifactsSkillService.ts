@@ -63,6 +63,12 @@ export function artifactRegistryUrl(): string | null {
     : `https://pkgs.dev.azure.com/${encodeURIComponent(org)}/_packaging/${encodeURIComponent(feed)}/npm/registry/`;
 }
 
+function packageDownloadUrl(version: string): string | null {
+  const base = feedBaseUrl();
+  if (!base) return null;
+  return `${base}/npm/packages/@apex/skills/versions/${encodeURIComponent(version)}/content?api-version=7.1`;
+}
+
 export function isTrustedArtifactUrl(url: string): boolean {
   const base = feedBaseUrl();
   if (!base) return false;
@@ -189,8 +195,7 @@ export async function verifyPackageIntegrity(
 ): Promise<boolean | null> {
   if (!isAzureArtifactsConfigured()) return null;
 
-  const base = feedBaseUrl()!;
-  const downloadUrl = `${base}/npm/packages/@apex%2Fskills/${encodeURIComponent(version)}/content`;
+  const downloadUrl = packageDownloadUrl(version)!;
 
   return new Promise((resolve) => {
     const auth = authHeader()!;
@@ -227,8 +232,7 @@ export async function verifyPackageIntegrity(
 export async function computePackageIntegrity(version: string): Promise<string | null> {
   if (!isAzureArtifactsConfigured()) return null;
 
-  const base = feedBaseUrl()!;
-  const downloadUrl = `${base}/npm/packages/@apex%2Fskills/${encodeURIComponent(version)}/content`;
+  const downloadUrl = packageDownloadUrl(version)!;
 
   return new Promise((resolve) => {
     const auth = authHeader()!;
@@ -280,9 +284,7 @@ export async function downloadPackageArtifact(
       'Azure Artifacts feed not configured — release publication is blocked',
     );
   }
-  const base = feedBaseUrl()!;
-  const downloadUrl =
-    `${base}/npm/packages/@apex%2Fskills/${encodeURIComponent(version)}/content`;
+  const downloadUrl = packageDownloadUrl(version)!;
   const tarball = await downloadBuffer(downloadUrl);
   const artifactFeed = artifactRegistryUrl();
   if (!artifactFeed) {
