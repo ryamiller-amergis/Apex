@@ -42,6 +42,17 @@ function feedBaseUrl(): string | null {
   return base;
 }
 
+function feedMetadataBaseUrl(): string | null {
+  const org   = process.env.AZURE_ARTIFACTS_ORG;
+  const feed  = process.env.AZURE_ARTIFACTS_FEED;
+  if (!org || !feed) return null;
+
+  const project = process.env.AZURE_ARTIFACTS_PROJECT;
+  return project
+    ? `https://feeds.dev.azure.com/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/packaging/feeds/${encodeURIComponent(feed)}`
+    : `https://feeds.dev.azure.com/${encodeURIComponent(org)}/_apis/packaging/feeds/${encodeURIComponent(feed)}`;
+}
+
 export function artifactRegistryUrl(): string | null {
   const org = process.env.AZURE_ARTIFACTS_ORG;
   const feed = process.env.AZURE_ARTIFACTS_FEED;
@@ -135,7 +146,7 @@ function post<T>(url: string, body: unknown): Promise<T> {
  * Returns an empty array when the feed is not configured (non-fatal).
  */
 export async function listCandidates(): Promise<ArtifactCandidate[]> {
-  const base = feedBaseUrl();
+  const base = feedMetadataBaseUrl();
   if (!base) {
     console.warn('[azureArtifactsSkillService] Feed not configured — listCandidates returning []');
     return [];

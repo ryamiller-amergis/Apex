@@ -121,13 +121,30 @@ jobs:
         if: ${{ !inputs.dry_run }}
         working-directory: foundation-skills
         run: |
-          # Publish the exact tarball that passed the packed-artifact tests.
-          npm publish "$APEX_SKILLS_TARBALL" \
-            --registry "$APEX_SKILLS_REGISTRY" \
-            --access restricted \
-            --tag candidate
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          LOCAL_INTEGRITY=$(node -e "const fs=require('fs'); const [result]=JSON.parse(fs.readFileSync('artifacts/pack.json','utf8')); if (!result?.integrity) process.exit(1); process.stdout.write(result.integrity)")
 
-          echo "Published @apex/skills to Azure Artifacts (candidate tag)."
+          # Reruns are safe: a previous attempt may have published successfully
+          # and failed later while uploading the GitHub artifact.
+          if REMOTE_JSON=$(npm view "@apex/skills@${VERSION}" dist.integrity \
+            --json \
+            --registry "$APEX_SKILLS_REGISTRY" 2>/dev/null); then
+            REMOTE_INTEGRITY=$(node -e "const value=JSON.parse(process.argv[1]); if (typeof value !== 'string') process.exit(1); process.stdout.write(value)" "$REMOTE_JSON")
+            if [ "$REMOTE_INTEGRITY" != "$LOCAL_INTEGRITY" ]; then
+              echo "::error::@apex/skills@${VERSION} already exists with different integrity."
+              exit 1
+            fi
+            echo "@apex/skills@${VERSION} already exists with matching integrity; skipping publish."
+          else
+            # Publish the exact tarball that passed the packed-artifact tests.
+            npm publish "$APEX_SKILLS_TARBALL" \
+              --registry "$APEX_SKILLS_REGISTRY" \
+              --access restricted \
+              --tag candidate
+          fi
+
+          echo "@apex/skills@${VERSION} is available in Azure Artifacts."
           echo "Next step: Platform Admin promotes via APEX UI > Platform Admin > APEX Skills > Publish."
 
       # Capture the tarball as a build artifact so the SHA-256 can be recorded

@@ -1,5 +1,6 @@
 import { gzipSync } from 'zlib';
 import fs from 'fs';
+import https from 'https';
 import os from 'os';
 import path from 'path';
 import {
@@ -8,7 +9,10 @@ import {
   validateReleaseArtifactManifest,
   validateReleaseUpdate,
 } from '../services/foundationSkillArtifactManifest';
-import { isTrustedArtifactUrl } from '../services/azureArtifactsSkillService';
+import {
+  isTrustedArtifactUrl,
+  listCandidates,
+} from '../services/azureArtifactsSkillService';
 import type {
   FoundationSkillRelease,
   FoundationSkillArtifactManifest,
@@ -177,6 +181,35 @@ describe('extractNpmTarballSafely', () => {
 });
 
 describe('artifact download authentication', () => {
+  it('queries package metadata through the Azure Artifacts REST API host', async () => {
+    const oldOrg = process.env.AZURE_ARTIFACTS_ORG;
+    const oldFeed = process.env.AZURE_ARTIFACTS_FEED;
+    const oldPat = process.env.AZURE_ARTIFACTS_PAT;
+    process.env.AZURE_ARTIFACTS_ORG = 'amergis';
+    process.env.AZURE_ARTIFACTS_FEED = 'apex-skills';
+    process.env.AZURE_ARTIFACTS_PAT = 'test-pat';
+    const requestSpy = jest
+      .spyOn(https, 'request')
+      .mockImplementation((() => {
+        throw new Error('request captured');
+      }) as typeof https.request);
+
+    try {
+      await expect(listCandidates()).rejects.toThrow('request captured');
+      expect(String(requestSpy.mock.calls[0][0])).toMatch(
+        /^https:\/\/feeds\.dev\.azure\.com\/amergis\/_apis\/packaging\/feeds\/apex-skills\/packages/,
+      );
+    } finally {
+      requestSpy.mockRestore();
+      if (oldOrg === undefined) delete process.env.AZURE_ARTIFACTS_ORG;
+      else process.env.AZURE_ARTIFACTS_ORG = oldOrg;
+      if (oldFeed === undefined) delete process.env.AZURE_ARTIFACTS_FEED;
+      else process.env.AZURE_ARTIFACTS_FEED = oldFeed;
+      if (oldPat === undefined) delete process.env.AZURE_ARTIFACTS_PAT;
+      else process.env.AZURE_ARTIFACTS_PAT = oldPat;
+    }
+  });
+
   it('sends feed credentials only to the exact configured origin', () => {
     const oldOrg = process.env.AZURE_ARTIFACTS_ORG;
     const oldFeed = process.env.AZURE_ARTIFACTS_FEED;
