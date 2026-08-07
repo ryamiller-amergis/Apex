@@ -1,6 +1,6 @@
 {
   "name": "@apex/skills",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "APEX Foundation Skills — project-agnostic AI agent skill foundations for Cursor",
   "type": "module",
   "bin": {
