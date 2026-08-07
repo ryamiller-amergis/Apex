@@ -7,6 +7,7 @@ import type {
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { v4 as uuidv4 } from 'uuid';
 import type {
   ChatAttachment,
@@ -15,15 +16,12 @@ import type {
   ChatMessage,
   ChatThreadKickoff,
   AgentRunEventEnvelope,
-  AgentRunEventStatus,
-  AgentRunEventType,
   AgentRunPhase,
   BindingContinuityDecision,
   BindingRecreationReason,
   GroundingBinding,
   SseEvent,
   SseErrorCode,
-  SsePhaseEvent,
 } from '../../shared/types/chat';
 import { isAzureWwwroot, resolveDataRoot } from '../utils/dataDir';
 import { recordAiUsage, estimateTokens, resolveFeatureFromKickoff } from './aiUsageService';
@@ -44,6 +42,13 @@ import {
   resolveAgentRunHardLimitMs,
   resolveAgentFirstEventTimeoutMs,
 } from './agentRunReaperService';
+import { enqueue } from './agentRunLifecycleService';
+import {
+  INTERACTIVE_LANE,
+  INTERACTIVE_WORKFLOW_FLAG,
+  type InteractiveWorkflowClass,
+} from '../../shared/types/interactiveWorkflow';
+import { interactiveWorkflowRouter } from './interactiveWorkflowRouter';
 import { isExternalRunAbortEvent } from './agentRunAbort';
 import { syncPrdContent } from './prdService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
@@ -100,6 +105,17 @@ import type {
 import { groundingTelemetry } from './groundingTelemetry';
 import { groundingProfileResolver } from './groundingProfileResolver';
 import { createNativeReadTools } from './nativeReadToolAdapter';
+import {
+  createCursorRunEventEnvelope,
+  CursorExecutionWaitError,
+  executeCursorExecutionCore,
+  sanitizeCursorTerminalDetail,
+  ThinkingPhaseCoalescer,
+  type CursorExecutionRun,
+} from './cursorExecutionCore';
+import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
+
+export { ThinkingPhaseCoalescer } from './cursorExecutionCore';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -1769,6 +1785,54 @@ async function buildNewAgentTurnPrompt(
   return `${initialPrompt}\n\n---\n\n${promptText}`;
 }
 
+export interface PreparedBackgroundWorkflowTurn {
+  prompt: string;
+  model: string;
+  skillPath: string;
+  projectId: string;
+  threadWorkspacePath: string;
+}
+
+export function buildBackgroundWorkflowPrompt(
+  kickoff: ChatThreadKickoff,
+  promptText: string,
+): Promise<string> {
+  return buildNewAgentTurnPrompt(
+    kickoff,
+    promptText,
+    false,
+    undefined,
+    {
+      repoSearchEnabled: false,
+      nativeReads: true,
+    },
+  );
+}
+
+/**
+ * Freezes the same first-turn system and skill context used by sendMessage,
+ * while directing a background worker to its pinned local checkout only.
+ * Skill content is still preloaded on the authorized web tier.
+ */
+export async function prepareBackgroundWorkflowTurn(
+  threadId: string,
+  promptText: string,
+): Promise<PreparedBackgroundWorkflowTurn> {
+  const state = await ensureThreadState(threadId);
+  if (!state) {
+    throw new Error('Generation thread is unavailable');
+  }
+
+  const kickoff = state.thread.kickoff;
+  return {
+    prompt: await buildBackgroundWorkflowPrompt(kickoff, promptText),
+    model: resolveModelId(kickoff.model),
+    skillPath: kickoff.skillPath ?? '',
+    projectId: kickoff.project,
+    threadWorkspacePath: state.thread.workspaceDir,
+  };
+}
+
 export function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
   const branch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
   const isGitHub = kickoff.skillProvider === 'github';
@@ -1915,45 +1979,6 @@ function broadcast(state: ThreadState, event: SseEvent, envelope?: AgentRunEvent
   }
 }
 
-function inferRunEventType(event: SseEvent): AgentRunEventType {
-  if (event.type === 'tool_call' || event.type === 'tool_status') return 'tool';
-  if (event.type === 'thinking') return 'phase';
-  return event.type;
-}
-
-function inferRunEventPhase(event: SseEvent): AgentRunPhase {
-  if (event.type === 'phase') return event.phase;
-  if (event.type === 'health') return 'completion';
-  if (event.type === 'done') return 'completion';
-  if (event.type === 'tool_call' || event.type === 'tool_status') {
-    const toolName = event.toolName.toLowerCase();
-    if (/test|jest|vitest|playwright/.test(toolName)) return 'testing';
-    if (/type.?check|tsc/.test(toolName)) return 'typecheck';
-    if (/push|git/.test(toolName)) return 'push';
-  }
-  if (event.type === 'thinking') return 'analysis';
-  return 'implementation';
-}
-
-function inferRunEventStatus(event: SseEvent): AgentRunEventStatus {
-  if (event.type === 'phase') return event.status;
-  if (event.type === 'health') {
-    return event.health === 'worker_lost'
-      || event.health === 'hard_timeout'
-      || event.health === 'never_claimed'
-      || event.health === 'progress_timeout'
-      ? 'failed'
-      : 'running';
-  }
-  if (event.type === 'error') return 'failed';
-  if (event.type === 'done') return 'completed';
-  if (event.type === 'status') return event.status === 'running' ? 'running' : 'completed';
-  if (event.type === 'tool_status') {
-    return event.status === 'error' ? 'failed' : event.status === 'completed' ? 'completed' : 'running';
-  }
-  return 'running';
-}
-
 function makeCancelledError(reason: string): Error & { _cancelled: true } {
   return Object.assign(new Error(reason), { _cancelled: true as const });
 }
@@ -1968,34 +1993,10 @@ function makeStartupDeadlineError(
   return Object.assign(new Error(reason), { _startupDeadline: true as const });
 }
 
-const TERMINAL_DETAIL_MAX_CHARS = 2_000;
 const AGENT_DISPOSAL_TIMEOUT_MS = 10_000;
 
 export function sanitizeTerminalDetail(detail: string): string {
-  const normalizedControls = [...detail]
-    .map((character) => {
-      const codePoint = character.codePointAt(0) ?? 0;
-      return codePoint <= 31 || codePoint === 127 ? ' ' : character;
-    })
-    .join('');
-  return normalizedControls
-    .replace(
-      /\b(?:postgres(?:ql)?|mongodb(?:\+srv)?|mysql|redis):\/\/\S+/gi,
-      '[redacted-connection-string]',
-    )
-    .replace(
-      /\b(?:Server|Data Source|Host)=[^;\s]+;(?:[^;\r\n]+;){1,10}/gi,
-      '[redacted-connection-string]',
-    )
-    .replace(/\bBearer\s+\S+/gi, 'Bearer [redacted]')
-    .replace(
-      /\b(token|password|passwd|secret|credential|api[_-]?key|connection[_-]?string)\s*[=:]\s*[^\s;]+/gi,
-      '$1=[redacted]',
-    )
-    .replace(/:\/\/[^/\s@:]+:[^/\s@]+@/g, '://[redacted]@')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, TERMINAL_DETAIL_MAX_CHARS);
+  return sanitizeCursorTerminalDetail(detail);
 }
 
 export async function disposeAgentWithinDeadline(
@@ -2065,63 +2066,6 @@ async function cancelSdkRunBestEffort(
   }
 }
 
-function inferRunEventDetail(event: SseEvent): string | undefined {
-  let detail: string | undefined;
-  if (event.type === 'phase') detail = event.detail;
-  else if (event.type === 'health') detail = event.detail;
-  else if (event.type === 'tool_call' || event.type === 'tool_status') {
-    const nestedSource = event.type === 'tool_status' ? event.args : event.input;
-    const nestedName = nestedSource
-      && typeof nestedSource === 'object'
-      && !Array.isArray(nestedSource)
-      && typeof (nestedSource as Record<string, unknown>).toolName === 'string'
-      ? String((nestedSource as Record<string, unknown>).toolName)
-      : undefined;
-    const label = nestedName ? `${event.toolName}:${nestedName}` : event.toolName;
-    detail = `${label} ${event.type === 'tool_status' ? event.status : 'started'}`;
-  }
-  else if (event.type === 'error') detail = event.error;
-  else if (event.type === 'retrying') detail = `Retrying (${event.attempt}/${event.maxAttempts})`;
-  else if (event.type === 'done') detail = 'Run completed';
-  if (!detail) return undefined;
-  if (event.type === 'error') return sanitizeTerminalDetail(detail);
-  return detail.replace(/\s+/g, ' ').trim().slice(0, 500);
-}
-
-function summarizeToolInput(input: unknown): unknown {
-  if (input === null || input === undefined) return undefined;
-  if (Array.isArray(input)) return { itemCount: input.length };
-  if (typeof input === 'object') {
-    const obj = input as Record<string, unknown>;
-    // Cursor SDK MCP wrapper — keep identity fields so hung tools are diagnosable.
-    if (typeof obj.toolName === 'string' || typeof obj.providerIdentifier === 'string') {
-      return {
-        ...(typeof obj.providerIdentifier === 'string'
-          ? { providerIdentifier: obj.providerIdentifier.slice(0, 120) }
-          : {}),
-        ...(typeof obj.toolName === 'string' ? { toolName: obj.toolName.slice(0, 120) } : {}),
-        args: summarizeToolInput(obj.args),
-      };
-    }
-    return { keys: Object.keys(obj).slice(0, 20) };
-  }
-  return { type: typeof input };
-}
-
-function summarizeToolResult(result: unknown): string | undefined {
-  if (typeof result !== 'string') return undefined;
-  return result.length === 0 ? 'Completed with no output' : `Completed with ${result.length} characters of output`;
-}
-
-function inferToolPhase(toolName: string, input: unknown): AgentRunPhase {
-  const diagnostic = `${toolName} ${JSON.stringify(input ?? '')}`.toLowerCase();
-  if (/\b(npm ci|npm install|pnpm install|yarn install)\b/.test(diagnostic)) return 'dependencies';
-  if (/\b(jest|vitest|playwright|pytest|dotnet test|npm test)\b/.test(diagnostic)) return 'testing';
-  if (/\b(tsc|typecheck|type-check)\b/.test(diagnostic)) return 'typecheck';
-  if (/\bgit\s+push\b/.test(diagnostic)) return 'push';
-  return 'implementation';
-}
-
 export function createRunEventEnvelope(input: {
   eventId?: string;
   threadId: string;
@@ -2131,19 +2075,10 @@ export function createRunEventEnvelope(input: {
   event: SseEvent;
   phase?: AgentRunPhase;
 }): AgentRunEventEnvelope {
-  return {
-    eventId: input.eventId ?? uuidv4(),
-    threadId: input.threadId,
-    runId: input.runId,
+  return createCursorRunEventEnvelope({
+    ...input,
     sourceInstance: RUN_EVENT_SOURCE_INSTANCE,
-    sequence: input.sequence,
-    timestamp: input.timestamp ?? new Date().toISOString(),
-    type: inferRunEventType(input.event),
-    phase: input.phase ?? inferRunEventPhase(input.event),
-    status: inferRunEventStatus(input.event),
-    detail: inferRunEventDetail(input.event),
-    event: input.event,
-  };
+  });
 }
 
 function shouldPersistRunEvent(event: SseEvent): boolean {
@@ -2250,6 +2185,17 @@ async function publishRunEvent(
     event,
     phase: metadata?.phase,
   });
+  await publishRunEventEnvelope(state, envelope);
+  return envelope;
+}
+
+async function publishRunEventEnvelope(
+  state: ThreadState,
+  envelope: AgentRunEventEnvelope,
+): Promise<void> {
+  if (envelope.event.type === 'cancel') return;
+  const event = envelope.event;
+  const runId = envelope.runId;
   const persist = shouldPersistRunEvent(event);
   if (!persist) {
     broadcast(state, event, envelope);
@@ -2257,7 +2203,7 @@ async function publishRunEvent(
       console.error(`[chat] Failed to fan out run event ${envelope.eventId}:`, (err as Error).message);
     });
     void persistMeaningfulProgress(runId, envelope);
-    return envelope;
+    return;
   }
   try {
     await notifyRunEvent(envelope, { persist });
@@ -2266,7 +2212,6 @@ async function publishRunEvent(
   }
   await persistMeaningfulProgress(runId, envelope);
   broadcast(state, event, envelope);
-  return envelope;
 }
 
 async function finalizeOwnerTerminal(
@@ -2317,36 +2262,6 @@ async function publishRunCancellation(threadId: string, runId: string): Promise<
     event: { type: 'cancel' },
   };
   await notifyRunEvent(envelope, { persist: true });
-}
-
-export class ThinkingPhaseCoalescer {
-  private startedAt: number | null = null;
-  private reportedDurationMs = 0;
-
-  constructor(private readonly now: () => number = Date.now) {}
-
-  observe(fragment: { text?: string; durationMs?: number }): boolean {
-    const isFirstFragment = this.startedAt === null;
-    if (isFirstFragment) this.startedAt = this.now();
-    if (typeof fragment.durationMs === 'number') {
-      this.reportedDurationMs = Math.max(this.reportedDurationMs, fragment.durationMs);
-    }
-    return isFirstFragment;
-  }
-
-  flush(at = this.now()): SsePhaseEvent | null {
-    if (this.startedAt === null) return null;
-    const durationMs = Math.max(0, at - this.startedAt, this.reportedDurationMs);
-    this.startedAt = null;
-    this.reportedDurationMs = 0;
-    return {
-      type: 'phase',
-      phase: 'analysis',
-      status: 'completed',
-      detail: 'Analysis completed',
-      durationMs,
-    };
-  }
 }
 
 // ── Idle cleanup ──────────────────────────────────────────────────────────────
@@ -2833,7 +2748,23 @@ function logAgentError(threadId: string, err: unknown): void {
  * After an agent run completes, sync workspace output files directly to Postgres
  * by looking up which entity (PRD or design doc) owns this thread.
  */
-async function syncOutputToDb(threadId: string, workspaceDir: string, agentText?: string): Promise<void> {
+const outputWorkspaceContext = new AsyncLocalStorage<{
+  threadId: string;
+  workspaceDir: string;
+}>();
+
+export async function syncOutputToDb(
+  threadId: string,
+  workspaceDir: string,
+  agentText?: string,
+): Promise<void> {
+  return outputWorkspaceContext.run(
+    { threadId, workspaceDir },
+    () => syncOutputToDbFromWorkspace(threadId, workspaceDir, agentText),
+  );
+}
+
+async function syncOutputToDbFromWorkspace(threadId: string, workspaceDir: string, agentText?: string): Promise<void> {
   let fullySynced = false;
 
   // Check if this thread belongs to a test-case generation run
@@ -2841,7 +2772,12 @@ async function syncOutputToDb(threadId: string, workspaceDir: string, agentText?
     where: eq(testCases.chatThreadId, threadId),
   });
   if (testCaseRow) {
-    const synced = await syncTestCaseOutput(testCaseRow.id, testCaseRow.prdId, threadId);
+    const synced = await syncTestCaseOutput(
+      testCaseRow.id,
+      testCaseRow.prdId,
+      threadId,
+      workspaceDir,
+    );
     if (!synced && testCaseRow.status === 'generating') {
       logWorkspaceContents(workspaceDir, `test-case no-output (testCaseId=${testCaseRow.id})`);
       if (agentText) {
@@ -3248,6 +3184,119 @@ export async function reevaluateThreadGroundingForRecovery(
   return true;
 }
 
+/**
+ * FEAT-007 / TBI-012 — env-gated actor-host dispatch URL. The interactive live
+ * chat path only offloads to the warm Dapr actor lane when this is set (cloud,
+ * operator-enabled). Absent (all environments today) → the seam is inert and
+ * the in-process path is byte-for-byte unchanged; no interactive run rows are
+ * created, so nothing can be orphaned.
+ */
+const INTERACTIVE_DISPATCH_URL_ENV = 'AI_RUNS_INTERACTIVE_DISPATCH_URL';
+
+function resolveInteractiveWorkflowClass(
+  state: ThreadState,
+): InteractiveWorkflowClass {
+  if (state.isInterviewThread) return 'interview';
+  const skillPath = (state.thread.kickoff.skillPath ?? '').toLowerCase();
+  if (skillPath.includes('adr')) return 'adr';
+  if (state.isDevSession) return 'assistant';
+  return 'home-chat';
+}
+
+async function postInteractiveActorDispatch(dispatch: {
+  threadId: string;
+  runId: string;
+  dispatchMessageId: string;
+}): Promise<void> {
+  const base = process.env[INTERACTIVE_DISPATCH_URL_ENV]?.trim();
+  if (!base) throw new Error('Interactive actor dispatch URL is not configured');
+  const response = await fetch(`${base.replace(/\/+$/, '')}/dispatch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(dispatch),
+  });
+  if (!response.ok) {
+    throw new Error(`Interactive actor dispatch failed (${response.status})`);
+  }
+}
+
+/**
+ * Fail-closed interactive routing seam (BR-017). Returns true only when the turn
+ * was admitted and dispatched to the warm actor lane (the actor then streams
+ * events back through the durable ingest + gateway). Any other outcome — no
+ * dispatch URL, flag disabled/eval-error, over-capacity shed, lost race, or any
+ * preparation/dispatch failure — returns false so the caller runs in-process.
+ * On a non-actor decision the transient queued interactive row is discarded so
+ * admission counts stay accurate and nothing is left dispatched without a runner.
+ */
+async function tryDispatchInteractiveTurn(
+  threadId: string,
+  text: string,
+): Promise<boolean> {
+  // Inert unless the actor host dispatch URL is configured (cloud only).
+  if (!process.env[INTERACTIVE_DISPATCH_URL_ENV]?.trim()) return false;
+
+  let queuedRunId: string | undefined;
+  try {
+    const state = await ensureThreadState(threadId);
+    if (!state) return false;
+    const userId = state.thread.userId;
+    const project = state.thread.kickoff.project;
+    if (!userId || !project) return false;
+
+    const workflowClass = resolveInteractiveWorkflowClass(state);
+    const prepared = await prepareBackgroundWorkflowTurn(threadId, text);
+    const snapshot: ExecutionSnapshot = {
+      prompt: prepared.prompt,
+      model: prepared.model,
+      workspaceRef: prepared.threadWorkspacePath,
+      workflowClass,
+      skillPath: prepared.skillPath,
+      projectId: prepared.projectId,
+      threadId,
+    };
+    const timeoutAt = new Date(
+      Date.now() + resolveAgentRunHardLimitMs(),
+    ).toISOString();
+    const enqueued = await enqueue({
+      threadId,
+      projectId: prepared.projectId,
+      snapshot,
+      timeoutAt,
+      lane: INTERACTIVE_LANE,
+    });
+    queuedRunId = enqueued.runId;
+
+    const decision = await interactiveWorkflowRouter.route({
+      userId,
+      project,
+      workflowClass,
+      threadId,
+      runId: enqueued.runId,
+      dispatchToActor: (d) =>
+        postInteractiveActorDispatch({
+          threadId,
+          runId: d.runId,
+          dispatchMessageId: d.dispatchMessageId,
+        }),
+      // The caller (sendMessage) owns the in-process fallback; the router's own
+      // in-process branch is a no-op here so we never double-execute a turn.
+      runInProcess: () => {},
+    });
+
+    if (decision.route === 'actor') return true;
+
+    // Shed / race-lost / eval-error: discard the transient queued row.
+    await db.delete(agentRuns).where(eq(agentRuns.id, enqueued.runId)).catch(() => {});
+    return false;
+  } catch {
+    if (queuedRunId) {
+      await db.delete(agentRuns).where(eq(agentRuns.id, queuedRunId)).catch(() => {});
+    }
+    return false;
+  }
+}
+
 export async function sendMessage(
   threadId: string,
   text: string,
@@ -3255,6 +3304,14 @@ export async function sendMessage(
   attachments: ChatAttachment[] = [],
   options?: { hidden?: boolean },
 ): Promise<void> {
+  // @feature-flag:ai-runs-interactive start winner=disabled
+  // FEAT-007: offload the turn to the warm Dapr actor lane when enabled + admitted.
+  // Fail-closed: any other outcome falls through to the in-process path below.
+  if (await tryDispatchInteractiveTurn(threadId, text)) {
+    return;
+  }
+  // @feature-flag:ai-runs-interactive end
+
   const state = await ensureThreadState(threadId);
   if (!state) throw new Error(`Thread ${threadId} not found`);
   const myWorkContext = state.isDevSession
@@ -3729,12 +3786,8 @@ export async function sendMessage(
     const thinkingPhase = new ThinkingPhaseCoalescer();
     // Keep progress metadata separately from authoritative per-tool timers.
     const inFlightToolCalls = new Map<string, InFlightToolCall>();
+    const pendingToolMessages = new Map<string, ChatMessage>();
     const mcpToolTimeoutMs = resolveAgentMcpToolTimeoutMs();
-    const flushThinkingPhase = async (): Promise<void> => {
-      const phaseEvent = thinkingPhase.flush();
-      if (!phaseEvent) return;
-      await publishRunEvent(state, agentRunId!, phaseEvent);
-    };
 
     // Shared heartbeat helper — call from any event handler that can run > 90s
     // without emitting text tokens (thinking phases, tool_use, long tool_call waits).
@@ -3920,13 +3973,12 @@ export async function sendMessage(
       agentTextBuffer = '';
       throwIfAborted();
 
-      // Stream tokens and tool calls — wrapped in try/catch for stream-level failures
-      if (currentRun.supports('stream')) {
-        // Arm the first-event deadline for event-driven runs only. On expiry we
-        // dispose the (silent) agent so the blocked async iterator unblocks and
-        // throws into the catch below, which recreates + retries once.
-        let firstEventSeen = false;
-        const firstEventDeadline = eventDrivenTerminationEnabled
+      // Arm the first-event deadline for event-driven runs only. On expiry we
+      // dispose the (silent) agent so the blocked async iterator unblocks and
+      // throws into the catch below, which recreates + retries once.
+      let firstEventSeen = false;
+      const firstEventDeadline =
+        eventDrivenTerminationEnabled && currentRun.supports('stream')
           ? createFirstEventDeadline(firstEventTimeoutMs, () => {
               if (firstEventSeen || streamAbortError) return;
               streamAbortError = makeStartupDeadlineError(
@@ -3942,285 +3994,239 @@ export async function sendMessage(
               })();
             })
           : null;
-        try {
-          for await (const event of currentRun.stream()) {
-            if (!firstEventSeen) {
+      let executionResult:
+        Awaited<ReturnType<typeof executeCursorExecutionCore>> | undefined;
+      try {
+        const executionSnapshot: Readonly<ExecutionSnapshot> = Object.freeze({
+          prompt,
+          model: resolvedModel,
+          workspaceRef: agentWorkspaceDir,
+          workflowClass:
+            state.thread.kickoff.assistantType
+            ?? state.thread.kickoff.mode
+            ?? 'chat',
+          skillPath: state.thread.kickoff.skillPath ?? '',
+          projectId: state.thread.kickoff.project,
+          threadId,
+        });
+        executionResult = await executeCursorExecutionCore({
+          snapshot: executionSnapshot,
+          run: currentRun as unknown as CursorExecutionRun,
+          context: {
+            runId: agentRunId!,
+            sourceInstance: RUN_EVENT_SOURCE_INSTANCE,
+          },
+          sink: {
+            publish: (_event, envelope) => publishRunEventEnvelope(state, envelope),
+          },
+          thinkingPhase,
+          nextSequence: () => nextRunEventSequence(agentRunId!),
+          hooks: {
+            beforeStreamEvent: throwIfAborted,
+            onFirstStreamEvent: () => {
               firstEventSeen = true;
               firstEventDeadline?.clear();
-            }
-            throwIfAborted();
-            if (event.type === 'assistant') {
-              for (const block of event.message.content) {
-                if (block.type === 'text') {
-                  await flushThinkingPhase();
-                  agentTextBuffer += block.text;
-                  for (const textChunk of block.text.match(/[\s\S]{1,3000}/g) ?? []) {
-                    void publishRunEvent(state, agentRunId!, { type: 'token', text: textChunk });
-                  }
-                  await bumpHeartbeat();
-                }
-                if (block.type === 'tool_use') {
-                  await flushThinkingPhase();
-                  // Snapshot reasoning text accumulated before this tool call
-                  if (agentTextBuffer.trim()) {
-                    const reasoningMsg: ChatMessage = {
-                      id: uuidv4(),
-                      role: 'agent',
-                      text: agentTextBuffer.trim(),
-                      ts: new Date().toISOString(),
-                      toolName: '_reasoning',
-                    };
-                    state.thread.messages.push(reasoningMsg);
-                    broadcast(state, { type: 'message', message: reasoningMsg });
-                    pgInsertMessage(threadId, reasoningMsg).catch(() => {});
-                    agentTextBuffer = '';
-                  }
-
-                  const toolUseId =
-                    typeof (block as { id?: unknown }).id === 'string'
-                      ? (block as { id: string }).id
-                      : `tool_use:${block.name}:${inFlightToolCalls.size}`;
-                  markToolInFlight(
-                    inFlightToolCalls,
-                    toolUseId,
-                    block.name,
-                    block.input,
-                  );
-                  mcpDeadlineController?.arm(
-                    toolUseId,
-                    block.name,
-                    block.input,
-                  );
-
-                  const toolMsg: ChatMessage = {
-                    id: uuidv4(),
-                    role: 'tool',
-                    text: `→ ${block.name}`,
-                    toolName: block.name,
-                    toolInput: block.input as Record<string, unknown>,
-                    ts: new Date().toISOString(),
-                  };
-                  state.thread.messages.push(toolMsg);
-                  logMyWork('run.tool_started', {
-                    runId: agentRunId,
-                    toolName: block.name,
-                    phase: inferToolPhase(block.name, block.input),
-                  });
-                  await publishRunEvent(state, agentRunId!, {
-                    type: 'tool_call',
-                    toolName: block.name,
-                    input: summarizeToolInput(block.input),
-                  }, { phase: inferToolPhase(block.name, block.input) });
-                  broadcast(state, { type: 'message', message: toolMsg });
-                  pgInsertMessage(threadId, toolMsg).catch(() => {});
-                  await bumpHeartbeat();
-                }
-              }
-            } else if (event.type === 'thinking') {
-              const thinkingEvent = event as { type: 'thinking'; thinking_duration_ms?: number };
-              const firstFragment = thinkingPhase.observe({
-                durationMs: thinkingEvent.thinking_duration_ms,
-              });
-              if (firstFragment) {
-                void publishRunEvent(state, agentRunId!, {
-                  type: 'thinking',
-                  text: 'Analyzing',
-                });
-              } else {
-                // Extended model thinking can run for many minutes without tokens or
-                // tools. Keep progressAt fresh so the reaper's progress_timeout does
-                // not kill a healthy interview/ADR turn (heartbeat alone is not enough).
-                // sequence is unused for progress-only writes — do not burn run-event ids.
-                void persistMeaningfulProgress(agentRunId!, createRunEventEnvelope({
-                  threadId,
-                  runId: agentRunId!,
-                  sequence: 0,
-                  event: { type: 'thinking', text: 'Analyzing' },
-                  phase: 'analysis',
-                }));
-              }
-              await bumpHeartbeat();
-            } else if (event.type === 'tool_call') {
-              await flushThinkingPhase();
-              const tc = event as {
-                type: 'tool_call';
-                name?: string;
-                call_id?: string;
-                status?: 'running' | 'completed' | 'error' | string;
-                args?: unknown;
-                result?: unknown;
+            },
+            onStreamComplete: () => firstEventDeadline?.clear(),
+            onReasoningSegment: (reasoningText) => {
+              const reasoningMsg: ChatMessage = {
+                id: uuidv4(),
+                role: 'agent',
+                text: reasoningText,
+                ts: new Date().toISOString(),
+                toolName: '_reasoning',
               };
-              const toolStatus: 'running' | 'completed' | 'error' =
-                tc.status === 'completed' || tc.status === 'error' ? tc.status : 'running';
-              const toolCallKey = tc.call_id || tc.name || 'unknown';
-              if (toolStatus === 'running') {
-                markToolInFlight(
-                  inFlightToolCalls,
-                  toolCallKey,
-                  tc.name ?? 'unknown',
-                  tc.args,
-                );
-                mcpDeadlineController?.arm(
-                  toolCallKey,
-                  tc.name ?? 'unknown',
-                  tc.args,
-                );
+              state.thread.messages.push(reasoningMsg);
+              broadcast(state, { type: 'message', message: reasoningMsg });
+              pgInsertMessage(threadId, reasoningMsg).catch(() => {});
+            },
+            onToolUse: ({ key, name, args, phase }) => {
+              markToolInFlight(inFlightToolCalls, key, name, args);
+              mcpDeadlineController?.arm(key, name, args);
+              const toolMsg: ChatMessage = {
+                id: uuidv4(),
+                role: 'tool',
+                text: `→ ${name}`,
+                toolName: name,
+                toolInput: args as Record<string, unknown>,
+                ts: new Date().toISOString(),
+              };
+              state.thread.messages.push(toolMsg);
+              pendingToolMessages.set(key, toolMsg);
+              logMyWork('run.tool_started', {
+                runId: agentRunId,
+                toolName: name,
+                phase,
+              });
+            },
+            onToolUsePublished: ({ key }) => {
+              const toolMsg = pendingToolMessages.get(key);
+              if (!toolMsg) return;
+              pendingToolMessages.delete(key);
+              broadcast(state, { type: 'message', message: toolMsg });
+              pgInsertMessage(threadId, toolMsg).catch(() => {});
+            },
+            onThinkingProgress: ({ firstFragment }) => {
+              if (firstFragment) return;
+              // Extended model thinking can run for many minutes without tokens or
+              // tools. Keep progressAt fresh so the reaper's progress_timeout does
+              // not kill a healthy interview/ADR turn (heartbeat alone is not enough).
+              // sequence is unused for progress-only writes — do not burn run-event ids.
+              void persistMeaningfulProgress(agentRunId!, createRunEventEnvelope({
+                threadId,
+                runId: agentRunId!,
+                sequence: 0,
+                event: { type: 'thinking', text: 'Analyzing' },
+                phase: 'analysis',
+              }));
+            },
+            onToolStatus: ({ key, callId, name, status, args, phase }) => {
+              const trackerName = name || 'unknown';
+              if (status === 'running') {
+                markToolInFlight(inFlightToolCalls, key, trackerName, args);
+                mcpDeadlineController?.arm(key, trackerName, args);
               } else {
-                clearToolInFlight(
-                  inFlightToolCalls,
-                  toolCallKey,
-                  tc.name ?? 'unknown',
-                  tc.args,
-                );
-                mcpDeadlineController?.complete(
-                  toolCallKey,
-                  tc.name ?? 'unknown',
-                  tc.args,
-                );
+                clearToolInFlight(inFlightToolCalls, key, trackerName, args);
+                mcpDeadlineController?.complete(key, trackerName, args);
               }
               logMyWork('run.tool_status', {
                 runId: agentRunId,
-                toolName: tc.name ?? 'unknown',
-                toolCallId: tc.call_id ?? null,
-                toolStatus,
-                phase: inferToolPhase(tc.name ?? '', tc.args),
-              }, toolStatus === 'error' ? 'warn' : 'info');
-              await publishRunEvent(state, agentRunId!, {
-                type: 'tool_status',
-                toolName: tc.name ?? '',
-                callId: tc.call_id ?? '',
-                status: toolStatus,
-                args: summarizeToolInput(tc.args),
-                result: summarizeToolResult(tc.result),
-              }, { phase: inferToolPhase(tc.name ?? '', tc.args) });
-              await bumpHeartbeat();
-            }
-          }
-          firstEventDeadline?.clear();
-        } catch (streamErr) {
-          firstEventDeadline?.clear();
+                toolName: trackerName,
+                toolCallId: callId ?? null,
+                toolStatus: status,
+                phase,
+              }, status === 'error' ? 'warn' : 'info');
+            },
+            onHeartbeat: bumpHeartbeat,
+          },
+        });
+      } catch (streamErr) {
+        firstEventDeadline?.clear();
+        if (streamErr instanceof CursorExecutionWaitError) {
+          throw streamErr.cause;
+        }
 
-          // First-event startup deadline: the resumed agent emitted nothing.
-          const startupDeadline =
-            !!streamAbortError
-            && Boolean((streamAbortError as { _startupDeadline?: unknown })._startupDeadline);
-          if (startupDeadline) {
-            if (attempt < MAX_RUN_RETRIES && !startupRetryConsumed) {
-              // Transparently recreate a fresh agent (with history) and retry once.
-              startupRetryConsumed = true;
-              trackEvent('agent.run.startup_deadline', {
-                threadId,
-                mode: 'enforce',
-                attempt: String(attempt + 1),
-                recovered: 'true',
-              }, { firstEventTimeoutMs });
-              console.warn(
-                `[chat] First-event deadline on attempt ${attempt + 1}/${MAX_RUN_RETRIES + 1} for thread ${threadId}; recreating agent and retrying`,
-              );
-              await publishRunEvent(state, agentRunId!, {
-                type: 'retrying',
-                attempt: attempt + 1,
-                maxAttempts: MAX_RUN_RETRIES + 1,
-                reason: 'reconnecting',
-              });
-              // Clear the abort so the loop-top throwIfAborted() does not refire.
-              streamAbortError = null;
-              if (state.agent) {
-                await state.agent[Symbol.asyncDispose]().catch(() => {});
-                state.agent = null;
-              }
-              // Recreate (not resume) with PostgreSQL history so the fresh
-              // session continues the conversation instead of restarting it.
-              state.thread.cursorAgentId = undefined;
-              prompt = await buildNewAgentTurnPrompt(
-                state.thread.kickoff,
-                promptText,
-                maxviewEnabled,
-                recoveryContext,
-                {
-                  preloadRepositoryContext:
-                    state.isInterviewThread && grounding.mode === 'remote',
-                  repoSearchEnabled: !state.isInterviewThread,
-                  nativeReads: repositoryRuntime.nativeReads,
-                  repoReader: repositoryRuntime.repoReader,
-                },
-              );
-              state.agent = await retryWithBackoff(
-                () => Agent.create({
-                  apiKey,
-                  model: { id: resolvedModel },
-                  local: localAgentOptions,
-                  mcpServers,
-                  agents: { 'code-reviewer': codeReviewerAgent },
-                }),
-                sdkRetryOpts,
-              );
-              currentRun = await state.agent.send(prompt);
-              state.thread.cursorAgentId = state.agent.agentId ?? state.thread.cursorAgentId;
-              state.thread.activeRunId = getRunId(currentRun);
-              continue;
-            }
-
-            // Final attempt still produced nothing — finalize a terminal failure
-            // through the owner path so the user gets an actionable message and
-            // can resend, instead of a silent spinner up to the hard limit.
-            const detail = 'The agent did not start responding. Please resend your last message.';
+        // First-event startup deadline: the resumed agent emitted nothing.
+        const startupDeadline =
+          !!streamAbortError
+          && Boolean((streamAbortError as { _startupDeadline?: unknown })._startupDeadline);
+        if (startupDeadline) {
+          if (attempt < MAX_RUN_RETRIES && !startupRetryConsumed) {
+            // Transparently recreate a fresh agent (with history) and retry once.
+            startupRetryConsumed = true;
             trackEvent('agent.run.startup_deadline', {
               threadId,
               mode: 'enforce',
               attempt: String(attempt + 1),
-              recovered: 'false',
+              recovered: 'true',
             }, { firstEventTimeoutMs });
-            terminalFinalized = await finalizeOwnerTerminal(
-              state,
-              agentRunId!,
-              'failed',
-              detail,
-              [{ type: 'error', error: detail }, { type: 'done', runId: agentRunId }],
+            console.warn(
+              `[chat] First-event deadline on attempt ${attempt + 1}/${MAX_RUN_RETRIES + 1} for thread ${threadId}; recreating agent and retrying`,
             );
-            state.thread.lastError = detail;
-            state.thread.status = 'idle';
-            state.thread.activeRunId = undefined;
-            if (state.agent) {
-              await state.agent[Symbol.asyncDispose]().catch(() => {});
-              state.agent = null;
-            }
+            await publishRunEvent(state, agentRunId!, {
+              type: 'retrying',
+              attempt: attempt + 1,
+              maxAttempts: MAX_RUN_RETRIES + 1,
+              reason: 'reconnecting',
+            });
+            // Clear the abort so the loop-top throwIfAborted() does not refire.
             streamAbortError = null;
-            break;
-          }
-
-          if (streamAbortError) throw streamAbortError;
-          if (attempt < MAX_RUN_RETRIES && isTransientSdkError(streamErr)) {
-            console.warn(`[chat] Stream error on attempt ${attempt + 1}/${MAX_RUN_RETRIES + 1} for thread ${threadId}, retrying…`, describeError(streamErr));
-            await publishRunEvent(state, agentRunId!, { type: 'retrying', attempt: attempt + 1, maxAttempts: MAX_RUN_RETRIES + 1 });
-
             if (state.agent) {
               await state.agent[Symbol.asyncDispose]().catch(() => {});
               state.agent = null;
             }
-            if (state.thread.cursorAgentId) {
-              state.agent = await retryWithBackoff(
-                () => resumePinnedTurnAgent(
-                  () => Agent.resume(state.thread.cursorAgentId!, {
-                    apiKey,
-                    model: { id: resolvedModel },
-                    local: localAgentOptions,
-                    mcpServers,
-                  }),
-                ),
-                sdkRetryOpts,
-              );
-              currentRun = await state.agent.send(prompt);
-              state.thread.activeRunId = getRunId(currentRun);
-              continue;
-            }
+            // Recreate (not resume) with PostgreSQL history so the fresh
+            // session continues the conversation instead of restarting it.
+            state.thread.cursorAgentId = undefined;
+            prompt = await buildNewAgentTurnPrompt(
+              state.thread.kickoff,
+              promptText,
+              maxviewEnabled,
+              recoveryContext,
+              {
+                preloadRepositoryContext:
+                  state.isInterviewThread && grounding.mode === 'remote',
+                repoSearchEnabled: !state.isInterviewThread,
+                nativeReads: repositoryRuntime.nativeReads,
+                repoReader: repositoryRuntime.repoReader,
+              },
+            );
+            state.agent = await retryWithBackoff(
+              () => Agent.create({
+                apiKey,
+                model: { id: resolvedModel },
+                local: localAgentOptions,
+                mcpServers,
+                agents: { 'code-reviewer': codeReviewerAgent },
+              }),
+              sdkRetryOpts,
+            );
+            currentRun = await state.agent.send(prompt);
+            state.thread.cursorAgentId = state.agent.agentId ?? state.thread.cursorAgentId;
+            state.thread.activeRunId = getRunId(currentRun);
+            continue;
           }
-          throw streamErr;
+
+          // Final attempt still produced nothing — finalize a terminal failure
+          // through the owner path so the user gets an actionable message and
+          // can resend, instead of a silent spinner up to the hard limit.
+          const detail = 'The agent did not start responding. Please resend your last message.';
+          trackEvent('agent.run.startup_deadline', {
+            threadId,
+            mode: 'enforce',
+            attempt: String(attempt + 1),
+            recovered: 'false',
+          }, { firstEventTimeoutMs });
+          terminalFinalized = await finalizeOwnerTerminal(
+            state,
+            agentRunId!,
+            'failed',
+            detail,
+            [{ type: 'error', error: detail }, { type: 'done', runId: agentRunId }],
+          );
+          state.thread.lastError = detail;
+          state.thread.status = 'idle';
+          state.thread.activeRunId = undefined;
+          if (state.agent) {
+            await state.agent[Symbol.asyncDispose]().catch(() => {});
+            state.agent = null;
+          }
+          streamAbortError = null;
+          break;
         }
+
+        if (streamAbortError) throw streamAbortError;
+        if (attempt < MAX_RUN_RETRIES && isTransientSdkError(streamErr)) {
+          console.warn(`[chat] Stream error on attempt ${attempt + 1}/${MAX_RUN_RETRIES + 1} for thread ${threadId}, retrying…`, describeError(streamErr));
+          await publishRunEvent(state, agentRunId!, { type: 'retrying', attempt: attempt + 1, maxAttempts: MAX_RUN_RETRIES + 1 });
+
+          if (state.agent) {
+            await state.agent[Symbol.asyncDispose]().catch(() => {});
+            state.agent = null;
+          }
+          if (state.thread.cursorAgentId) {
+            state.agent = await retryWithBackoff(
+              () => resumePinnedTurnAgent(
+                () => Agent.resume(state.thread.cursorAgentId!, {
+                  apiKey,
+                  model: { id: resolvedModel },
+                  local: localAgentOptions,
+                  mcpServers,
+                }),
+              ),
+              sdkRetryOpts,
+            );
+            currentRun = await state.agent.send(prompt);
+            state.thread.activeRunId = getRunId(currentRun);
+            continue;
+          }
+        }
+        throw streamErr;
       }
 
-      await flushThinkingPhase();
-      const result = await currentRun.wait();
+      if (!executionResult) continue;
+      agentTextBuffer = executionResult.text;
+      const result = executionResult.waitResult;
 
       if (result.status === 'error') {
         const reason = sanitizeTerminalDetail(
@@ -4883,6 +4889,10 @@ export async function permanentlyDeleteThread(threadId: string): Promise<void> {
 }
 
 function resolveOutputDir(threadId: string): string | null {
+  const override = outputWorkspaceContext.getStore();
+  if (override?.threadId === threadId) {
+    return path.join(override.workspaceDir, '.ai-pilot', 'output');
+  }
   const state = threads.get(threadId);
   if (state) return path.join(runtimeWorkspaceDir(state), '.ai-pilot', 'output');
   return null;

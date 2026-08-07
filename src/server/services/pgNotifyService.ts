@@ -16,6 +16,7 @@ import type { PoolClient } from 'pg';
 import os from 'os';
 import { randomUUID } from 'crypto';
 import type { AgentRunEventEnvelope } from '../../shared/types/chat';
+import type { AgentRunTerminalReason } from '../../shared/types/agentRunLifecycle';
 
 const CHANNEL = 'agent_run_events';
 const RECONNECT_DELAY_MS = 3_000;
@@ -236,6 +237,8 @@ export interface FinalizeOwnedAgentRunInput {
   status: 'completed' | 'failed' | 'cancelled';
   detail: string;
   events: AgentRunEventEnvelope[];
+  dispatchMessageId?: string;
+  terminalReason?: AgentRunTerminalReason;
 }
 
 export interface FinalizeReconciledAgentRunInput {
@@ -244,6 +247,8 @@ export interface FinalizeReconciledAgentRunInput {
   status: 'completed' | 'failed' | 'cancelled';
   detail: string;
   events: AgentRunEventEnvelope[];
+  dispatchMessageId?: string;
+  terminalReason?: AgentRunTerminalReason;
 }
 
 /**
@@ -257,16 +262,33 @@ async function finalizeAgentRun(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const ownerClause = ownerInstance ? '\n          AND owner_instance = $4' : '';
-    const params = ownerInstance
-      ? [input.status, input.status === 'failed' ? input.detail : null, input.runId, ownerInstance]
-      : [input.status, input.status === 'failed' ? input.detail : null, input.runId];
+    const params: unknown[] = [
+      input.status,
+      input.status === 'failed' ? input.detail : null,
+      input.runId,
+    ];
+    let ownerClause = '';
+    let dispatchClause = '';
+    let terminalReasonSet = '';
+    if (ownerInstance) {
+      params.push(ownerInstance);
+      ownerClause = `\n          AND owner_instance = $${params.length}`;
+    }
+    if (input.dispatchMessageId) {
+      params.push(input.dispatchMessageId);
+      dispatchClause = `\n          AND dispatch_message_id = $${params.length}`;
+    }
+    if (input.terminalReason) {
+      params.push(input.terminalReason);
+      terminalReasonSet = `, terminal_reason = $${params.length}`;
+    }
     const result = await client.query(
       `UPDATE agent_runs
-          SET status = $1, last_error = $2, updated_at = CURRENT_TIMESTAMP
+          SET status = $1, last_error = $2${terminalReasonSet}, updated_at = CURRENT_TIMESTAMP
         WHERE id = $3
           ${ownerClause}
-          AND status IN ('queued', 'running')
+          ${dispatchClause}
+          AND status IN ('queued', 'dispatched', 'running')
       RETURNING id`,
       params,
     );

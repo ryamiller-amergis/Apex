@@ -229,3 +229,148 @@ output "lt_ingest_app_role_id" {
   description = "LoadTest.Runner app role ID (null when Entra ingest app disabled)"
   value       = try(random_uuid.lt_ingest_app_role[0].result, null)
 }
+
+# ---------------------------------------------------------------------------
+# AI Runs background worker outputs (FEAT-003)
+# Wire AI_RUNS_* app settings so the governor/publisher and KEDA share one cap.
+# ---------------------------------------------------------------------------
+
+output "ai_runs_servicebus_namespace_name" {
+  description = "Shared AI-runs Service Bus namespace name (e.g. sbns-apex-ai-dev)"
+  value       = azurerm_servicebus_namespace.ai_runs.name
+}
+
+output "ai_runs_servicebus_namespace_fqdn" {
+  description = "AI-runs Service Bus FQDN (e.g. sbns-apex-ai-dev.servicebus.windows.net)"
+  value       = "${azurerm_servicebus_namespace.ai_runs.name}.servicebus.windows.net"
+}
+
+output "ai_runs_background_queue_name" {
+  description = "Background dispatch queue name (ai-runs-background)"
+  value       = azurerm_servicebus_queue.ai_runs_background.name
+}
+
+output "ai_runs_background_dlq_name" {
+  description = "Background dead-letter queue name"
+  value       = "${azurerm_servicebus_queue.ai_runs_background.name}/$DeadLetterQueue"
+}
+
+output "ai_runs_max_in_flight" {
+  description = "Global background in-flight cap (KEDA max_executions and AI_RUNS_BACKGROUND_INFLIGHT_LIMIT)"
+  value       = var.ai_runs_max_in_flight
+}
+
+output "ai_runs_container_app_environment_name" {
+  description = "Container Apps Environment for the AI-runs background Job"
+  value       = azurerm_container_app_environment.ai_runs.name
+}
+
+output "ai_runs_container_app_job_name" {
+  description = "Container Apps Job name for the AI-runs background runner"
+  value       = azurerm_container_app_job.ai_runs_runner.name
+}
+
+output "ai_runs_container_app_job_id" {
+  description = "Container Apps Job resource ID"
+  value       = azurerm_container_app_job.ai_runs_runner.id
+}
+
+output "ai_runs_file_share_name" {
+  description = "Azure Files share for pinned worker workspaces"
+  value       = azurerm_storage_share.ai_runs_workspace.name
+}
+
+output "ai_runs_key_vault_name" {
+  description = "Key Vault holding the AI-runs CURSOR_API_KEY"
+  value       = var.ai_runs_key_vault_id == null ? azurerm_key_vault.ai_runs[0].name : split("/", var.ai_runs_key_vault_id)[8]
+}
+
+output "ai_runs_key_vault_id" {
+  description = "Key Vault resource ID holding the AI-runs CURSOR_API_KEY"
+  value       = local.ai_runs_key_vault_id
+}
+
+output "ai_runs_cursor_api_key_secret_name" {
+  description = "Key Vault secret name consumed by the AI-runs Job"
+  value       = "cursor-api-key"
+}
+
+output "ai_runs_workspace_mount_path" {
+  description = "Mount path inside the Job (AI_PILOT_DATA_DIR)"
+  value       = var.ai_runs_workspace_mount_path
+}
+
+output "ai_runs_runner_image_repository" {
+  description = "ACR repository name for the AI-runs runner image (on load-test ACR)"
+  value       = local.ai_runs_image_repository
+}
+
+output "ai_runs_runner_identity_client_id" {
+  description = "Runner user-assigned MI client ID"
+  value       = azurerm_user_assigned_identity.ai_runs_runner.client_id
+}
+
+output "ai_runs_runner_identity_principal_id" {
+  description = "Runner user-assigned MI principal ID"
+  value       = azurerm_user_assigned_identity.ai_runs_runner.principal_id
+}
+
+output "ai_runs_runner_identity_id" {
+  description = "Runner user-assigned MI resource ID"
+  value       = azurerm_user_assigned_identity.ai_runs_runner.id
+}
+
+output "ai_runs_api_app_setting_names" {
+  description = "App setting key contract for Apex API AI-runs dispatch (FEAT-002 publisher + governor)"
+  value = {
+    servicebus_namespace    = "AI_RUNS_SERVICEBUS_NAMESPACE"
+    background_queue        = "AI_RUNS_BACKGROUND_QUEUE_NAME"
+    inflight_limit          = "AI_RUNS_BACKGROUND_INFLIGHT_LIMIT"
+    data_dir                = "AI_PILOT_DATA_DIR"
+    runner_callback_token   = "AI_RUNS_RUNNER_CALLBACK_TOKEN"
+    callback_token_audience = "AI_RUNS_CALLBACK_TOKEN_AUDIENCE"
+  }
+}
+
+output "ai_runs_callback_token_audience" {
+  description = "AAD App ID URI for MI ingest JWTs when enable_ai_runs_entra_app is true"
+  value       = var.enable_ai_runs_entra_app || var.ai_runs_callback_token_audience != null ? local.ai_runs_ingest_identifier_uri : null
+}
+
+output "ai_runs_ingest_application_client_id" {
+  description = "Client ID of the dedicated AI-runs ingest Entra application (null when disabled)"
+  value       = try(azuread_application.ai_runs_ingest[0].client_id, null)
+}
+
+output "ai_runs_ingest_app_role_id" {
+  description = "AiRun.Runner app role ID (null when Entra ingest app disabled)"
+  value       = try(random_uuid.ai_runs_ingest_app_role[0].result, null)
+}
+
+# ---------------------------------------------------------------------------
+# FEAT-007 — interactive lane (null while enable_ai_runs_interactive is false)
+# ---------------------------------------------------------------------------
+
+output "ai_runs_interactive_app_fqdn" {
+  description = "WebSocket gateway ingress FQDN for the interactive Container App"
+  value       = try(azurerm_container_app.ai_runs_interactive[0].ingress[0].fqdn, null)
+}
+
+output "ai_runs_interactive_dapr_app_id" {
+  description = "Dapr app id addressed for in-cluster gateway→actor service invocation"
+  value       = var.enable_ai_runs_interactive ? local.ai_runs_interactive_dapr_app_id : null
+}
+
+output "ai_runs_interactive_redis_hostname" {
+  description = "Azure Cache for Redis hostname backing the Dapr pub/sub + actor state store"
+  value       = try(azurerm_redis_cache.ai_runs_interactive[0].hostname, null)
+}
+
+output "ai_runs_interactive_capacity" {
+  description = "Reserved warm floor + burst ceiling; App Service must mirror these as AI_RUNS_INTERACTIVE_RESERVED / _BURST_MAX"
+  value = {
+    reserved     = var.ai_runs_interactive_reserved
+    burst_max    = var.ai_runs_interactive_burst_max
+    max_replicas = var.enable_ai_runs_interactive ? local.ai_runs_interactive_max_replicas : null
+  }
+}

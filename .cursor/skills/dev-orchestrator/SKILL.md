@@ -55,8 +55,8 @@ Supporting contracts (Coordinator only, when emitting the plan):
 | F2 | Prefer tech-spec task DAG + conflict-safe parallel bundles; fall back to item DAG |
 | F3 | Requirements → Test Matrix; author E2E specs; enforce data-testid per `scripts/check-data-testid.mjs` (defer E2E execution only if env unavailable) |
 | F4 | Dispatch task bundles with TDD prompts from [tdd-prompts.md](tdd-prompts.md) |
-| F5 | Wave gate: `tsc` + tests + AC/DoD coverage + data-testid/eslint on touched files |
-| F6 | Completion synopsis; no commit/push |
+| F5 | Lean intermediate gate: aggregate focused tests + AC/DoD coverage; type-check only contracts consumed by a later wave |
+| F6 | Final gate once: applicable `tsc` + impacted tests + data-testid/eslint; completion synopsis; no commit/push |
 
 Full procedures: [feature-executor.md](feature-executor.md).
 

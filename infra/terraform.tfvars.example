@@ -129,3 +129,73 @@ pdf_blob_container_name = "pdf-artifacts"
 # App Service sticky callback host (via deploy pipeline):
 #   LT_APEX_CALLBACK_BASE_URL = staging host vs prod host per slot
 
+# ---------------------------------------------------------------------------
+# AI Runs background worker — FEAT-003
+# Shared Service Bus namespace (not the load-test sbns-apex-lt-* namespace).
+# KEDA max_executions and AI_RUNS_BACKGROUND_INFLIGHT_LIMIT share one value.
+# ---------------------------------------------------------------------------
+
+# ai_runs_servicebus_namespace_name = null  # derives "sbns-apex-ai-dev"
+# ai_runs_background_queue_name     = null  # derives "ai-runs-background"
+# ai_runs_container_app_env_name    = null  # derives "cae-apex-ai-dev"
+# ai_runs_container_app_job_name    = null  # derives "caj-apex-ai-runs-dev"
+# ai_runs_runner_identity_name      = null  # derives "mi-apex-ai-runs-runner-dev"
+# ai_runs_max_in_flight             = 10    # must match App Service AI_RUNS_BACKGROUND_INFLIGHT_LIMIT
+# ai_runs_file_share_name           = null  # derives "ai-pilot-data"
+# ai_runs_workspace_mount_path      = "/home/data/ai-pilot"
+# ai_runs_vnet_subnet_id            = null
+# ai_runs_key_vault_name            = null  # derives "kv-apex-ai-{environment}" and seeds cursor-api-key
+# To use an existing vault instead, set both:
+# ai_runs_key_vault_id              = "/subscriptions/.../vaults/kv-apex-dev"
+# ai_runs_cursor_api_key_secret_id  = "https://kv-apex-dev.vault.azure.net/secrets/cursor-api-key/<version>"
+# ai_runs_runner_image              = "<acr>.azurecr.io/apex-ai-runs:<tag>"  # CI publishes; TF ignores image drift
+# enable_ai_runs_entra_app          = false
+# ai_runs_runner_callback_token     = null  # short-term ingest fallback
+# ai_runs_apex_callback_base_url    = "https://app-scrum-dev.azurewebsites.net"
+
+# ---------------------------------------------------------------------------
+# AI Runs interactive lane — FEAT-007 (WebSocket gateway + Dapr virtual actors)
+# Additive/inert while disabled. Reuses the FEAT-003 ai-runs Container Apps
+# Environment, runner managed identity, Azure Files workspace, LT ACR, and the
+# Cursor API key secret. Provisions ONLY a warm ACA app (Dapr actor host + WS
+# gateway) + an Azure Cache for Redis backplane — NO Service Bus queue.
+#
+# Reserved/burst/SLO here MUST match the App Service env vars of the same name
+# (AI_RUNS_INTERACTIVE_RESERVED / _BURST_MAX / _FIRST_TOKEN_SLO_MS) so the actor
+# tier and the in-process admission governor agree on capacity (BR-014).
+# ---------------------------------------------------------------------------
+
+# Master switch. Keep false until the `ai-runs-interactive` DB feature flag and
+# the App Service AI_RUNS_INTERACTIVE_GATEWAY flag are ready to roll out.
+# enable_ai_runs_interactive = false
+
+# Names — null derives the standard {type}-apex-ai-{environment} convention:
+#   ca-apex-ai-interactive-dev / -prd   Container App (actor host + WS gateway)
+#   redis-apex-ai-dev / -prd             Azure Cache for Redis backplane
+# ai_runs_interactive_container_app_name = null
+# ai_runs_interactive_redis_name         = null
+
+# Redis backplane SKU. Default Basic C0 (smallest tier meeting first-token
+# latency). Use Standard (C-family, replicated) for prod HA; Premium for VNet
+# injection. capacity is the C/P size index (0 = smallest).
+# ai_runs_interactive_redis_sku      = "Basic"     # prod: "Standard"
+# ai_runs_interactive_redis_family   = "C"
+# ai_runs_interactive_redis_capacity = 0            # prod: 1+
+
+# Interactive host image — placeholder until CI publishes the Dapr actor-host
+# image; Terraform ignores image drift (lifecycle ignore_changes). Point at the
+# LT ACR repo once the host Dockerfile + publish step land.
+# ai_runs_interactive_image  = "<acr>.azurecr.io/apex-ai-interactive:<tag>"
+# ai_runs_interactive_cpu    = 2.0
+# ai_runs_interactive_memory = "4Gi"
+# ai_runs_interactive_target_port = 8080
+
+# Warm capacity. reserved = ACA min_replicas (no scale-to-zero); max_replicas =
+# reserved + burst_max. Shed to in-process above burst (never queues).
+# ai_runs_interactive_reserved  = 4     # prod: size to steady-state concurrency
+# ai_runs_interactive_burst_max = 12
+
+# First-token P95 SLO (ms) gating the interactive latency alert. Confirm with
+# product before enforcing.
+# ai_runs_interactive_first_token_slo_ms = 1500
+

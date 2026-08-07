@@ -209,6 +209,8 @@ export interface SseThinkingEvent {
 }
 
 export type AgentRunPhase =
+  | 'queued'
+  | 'dispatched'
   | 'setup'
   | 'planning'
   | 'approval'

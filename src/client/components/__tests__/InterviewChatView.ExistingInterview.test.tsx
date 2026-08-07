@@ -343,6 +343,47 @@ describe('ExistingInterviewView — input locked when not in_progress', () => {
     expect(screen.queryByText(/complete and the chat is closed/i)).not.toBeInTheDocument();
   });
 
+  it('TBI-008 DoD-0 / Accessibility NFR renders queued text in the polite status region', () => {
+    mockUseAgentChatSession.mockReturnValue({
+      ...idleStream,
+      status: 'running',
+      isRunning: true,
+      isPreparing: true,
+      isInteractionBusy: true,
+      progressPhase: 'queued',
+      progressLabel: 'Queued — waiting for available worker',
+    });
+
+    renderExistingInterview();
+
+    const labelRegion = screen.getByTestId('agent-run-status-label');
+    expect(labelRegion).toHaveAttribute('role', 'status');
+    expect(labelRegion).toHaveAttribute('aria-live', 'polite');
+    expect(labelRegion).toHaveTextContent('Queued — waiting for available worker');
+    expect(screen.getByTestId('agent-run-status-queued')).toHaveTextContent(
+      'Queued — waiting for available worker',
+    );
+    expect(screen.queryByTestId('agent-run-status-dispatched')).not.toBeInTheDocument();
+  });
+
+  it('PBI-006 AC-0 / VT-02 renders dispatched as textual Starting… without an error state', () => {
+    mockUseAgentChatSession.mockReturnValue({
+      ...idleStream,
+      status: 'running',
+      isRunning: true,
+      isPreparing: true,
+      isInteractionBusy: true,
+      progressPhase: 'dispatched',
+      progressLabel: 'Starting…',
+    });
+
+    renderExistingInterview();
+
+    expect(screen.getByTestId('agent-run-status-label')).toHaveTextContent('Starting…');
+    expect(screen.getByTestId('agent-run-status-dispatched')).toHaveTextContent('Starting…');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('shows a recoverable error when repository preparation fails', () => {
     (useChatThread as jest.Mock).mockReturnValue({
       data: {

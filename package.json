@@ -71,6 +71,7 @@
     "@azure/msal-node": "^5.2.5",
     "@azure/storage-blob": "12.32.0",
     "@cursor/sdk": "^1.0.24",
+    "@dapr/dapr": "^3.18.0",
     "@floating-ui/react": "^0.27.20",
     "@hookform/resolvers": "^5.2.2",
     "@matbee/libreoffice-converter": "^2.7.0",
@@ -116,6 +117,7 @@
     "sharp": "^0.34.5",
     "sqlite3": "^5.1.7",
     "uuid": "^9.0.0",
+    "ws": "^8.21.2",
     "zod": "^4.3.6"
   },
   "devDependencies": {
@@ -139,6 +141,7 @@
     "@types/session-file-store": "^1.2.6",
     "@types/supertest": "^6.0.2",
     "@types/uuid": "^9.0.0",
+    "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^8.56.0",
     "@typescript-eslint/parser": "^8.56.0",
     "@vitejs/plugin-react": "^4.2.1",

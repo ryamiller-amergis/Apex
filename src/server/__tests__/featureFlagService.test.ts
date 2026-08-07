@@ -285,6 +285,40 @@ describe('updateFlag', () => {
       actorEmail: actor.email,
     });
   });
+
+  it('TBI-007 DoD-3 / VT-08 audits lifecycle changes with actor and before/after state', async () => {
+    let auditValues: any;
+
+    mockDb.transaction.mockImplementation(async (fn: any) => {
+      const tx = {
+        query: { featureFlags: { findFirst: jest.fn().mockResolvedValue(baseFlag) } },
+        update: jest.fn().mockReturnValue({
+          set: jest.fn().mockReturnThis(),
+          where: jest.fn().mockReturnThis(),
+          returning: jest.fn().mockResolvedValue([{ ...baseFlag, lifecycle: 'stale' }]),
+        }),
+        insert: jest.fn().mockReturnValue({
+          values: jest.fn().mockImplementation((value: any) => {
+            auditValues = value;
+            return { returning: jest.fn().mockResolvedValue([]) };
+          }),
+        }),
+      };
+      return fn(tx);
+    });
+
+    await updateFlag('flag-1', { lifecycle: 'stale' }, actor);
+
+    expect(auditValues).toMatchObject({
+      action: 'lifecycle_changed',
+      actorId: actor.id,
+      actorEmail: actor.email,
+      details: {
+        previousValue: 'active',
+        newValue: 'stale',
+      },
+    });
+  });
 });
 
 // ── addRule ─────────────────────────────────────────────────────────────────────
@@ -609,6 +643,39 @@ describe('evaluateFlags', () => {
       'disabled-flag': false,
       'no-rules-flag': false,
     });
+  });
+
+  it('TBI-007 DoD-0 / DoD-1 / VT-07 ANDs project audience with workflow caller targeting', async () => {
+    mockDb.query.featureFlags.findMany.mockResolvedValue([
+      {
+        ...baseFlag,
+        key: 'ai-runs-background',
+        rules: [
+          { type: 'project', value: 'internal-project' },
+          { type: 'caller', value: 'validation' },
+        ],
+      },
+    ]);
+
+    const matching = await evaluateFlags({
+      ...ctx,
+      project: 'internal-project',
+      caller: 'validation',
+    });
+    const wrongProject = await evaluateFlags({
+      ...ctx,
+      project: 'other-project',
+      caller: 'validation',
+    });
+    const wrongWorkflow = await evaluateFlags({
+      ...ctx,
+      project: 'internal-project',
+      caller: 'prd',
+    });
+
+    expect(matching['ai-runs-background']).toBe(true);
+    expect(wrongProject['ai-runs-background']).toBe(false);
+    expect(wrongWorkflow['ai-runs-background']).toBe(false);
   });
 
   it('AC-0 selects local only when caller, project, and environment dimensions match', async () => {

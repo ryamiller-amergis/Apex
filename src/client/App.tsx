@@ -261,6 +261,16 @@ function App() {
   const showBetaAnnouncement = useFeatureFlag('beta-to-prod-announcement', selectedProject);
   const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
   const agentHomeFlag = homeFlags['agent-home'] ?? false;
+  const interactiveWsEnabled = homeFlags['ai-runs-interactive'] === true;
+
+  // @feature-flag:ai-runs-interactive start winner=disabled
+  // FEAT-007: flip the chat stream transport to the WebSocket agent gateway when
+  // ai-runs-interactive is enabled for this project; falls back to SSE otherwise.
+  useEffect(() => {
+    (globalThis as { __APEX_INTERACTIVE_WS__?: boolean }).__APEX_INTERACTIVE_WS__ =
+      interactiveWsEnabled;
+  }, [interactiveWsEnabled]);
+  // @feature-flag:ai-runs-interactive end
 
   const canAccessHome =
     !homeFlagsLoading && permissionsLoaded && agentHomeFlag && (isSuperAdmin || can('home:view'));

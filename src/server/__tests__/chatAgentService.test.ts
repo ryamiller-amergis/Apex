@@ -104,6 +104,10 @@ jest.mock('../services/teamsBotService', () => ({
   handleIncoming: jest.fn(),
 }));
 
+jest.mock('../services/skillCatalogFacade', () => ({
+  getSkillFile: jest.fn().mockResolvedValue('# Frozen skill content'),
+}));
+
 const mockCallerGroundingStart = jest.fn();
 const mockCallerGroundingSelectionToBinding = jest.fn();
 const mockEvaluateBindingContinuity = jest.fn();
@@ -144,6 +148,7 @@ import {
   classifyGroundingContinuity,
   persistCreatedAgentBinding,
   resolveDocumentAssistantType,
+  buildBackgroundWorkflowPrompt,
   buildInitialPrompt,
   prepareRepositoryReadRuntime,
 } from '../services/chatAgentService';
@@ -638,6 +643,24 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
     expect(prompt).toContain('Never use the GitHub or ADO provider MCP servers for repository reads');
     expect(prompt).not.toContain('must be fetched via');
     expect(prompt).not.toContain('current working directory IS a git clone');
+  });
+
+  it('AC-0 / DoD-4: freezes skill content for local-only worker reads with broad search disabled', async () => {
+    const prompt = await buildBackgroundWorkflowPrompt(
+      baseKickoff({
+        skillPath: '.cursor/skills/to-prd/SKILL.md',
+        skillProvider: 'github',
+      }),
+      'Begin.',
+    );
+
+    expect(prompt).toContain('local checkout-backed read-only tools');
+    expect(prompt).toContain('Never use the GitHub or ADO provider MCP servers');
+    expect(prompt).toContain('Broad search is restricted');
+    expect(prompt).toContain('# Pre-loaded skill content');
+    expect(prompt).toContain('# Frozen skill content');
+    expect(prompt).toContain('Begin.');
+    expect(prompt).not.toContain('# MCP tools (github-repo server)');
   });
 
   it('AC-1 / VT-06 fallback prompt remains sandbox and provider-MCP directed', () => {

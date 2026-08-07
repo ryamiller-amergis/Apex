@@ -10,9 +10,49 @@ jest.mock('../services/chatAgentService', () => ({
   readOutputValidationScorecard: jest.fn(),
   readOutputValidationScorecardMd: jest.fn(),
   isThreadIdle: jest.fn(),
-  createThread: jest.fn(),
+  createThread: jest.fn().mockResolvedValue({ id: 'thread-validation', workspaceDir: '/tmp/validation' }),
   cancelRun: jest.fn(),
   sendMessage: jest.fn(),
+  prepareBackgroundWorkflowTurn: jest.fn().mockResolvedValue({
+    prompt: 'complete frozen document validation prompt',
+    model: 'validation-model',
+    skillPath: '/skills/validate.md',
+    projectId: 'proj-alpha',
+    threadWorkspacePath: '/tmp/validation',
+  }),
+}));
+
+jest.mock('../services/backgroundWorkflowRouter', () => ({
+  routeBackgroundWorkflow: jest.fn().mockImplementation(async (input: { runInProcess(): void }) => {
+    await input.runInProcess();
+    return { route: 'in-process', reason: 'flag-disabled' };
+  }),
+}));
+
+jest.mock('../services/runGroundingService', () => ({
+  propagatePipelineGrounding: jest.fn().mockResolvedValue({ state: 'propagated' }),
+  runGroundingService: {
+    getGroundings: jest.fn().mockImplementation(async (run: {
+      runType: string;
+      runId: string;
+      project: string;
+    }) => [{
+      ...run,
+      id: 'grounding-validation',
+      repoRole: 'target',
+      provider: 'github',
+      repository: 'org/repo',
+      branch: 'main',
+      groundedSha: 'abc123',
+      groundedAt: '2026-08-06T00:00:00.000Z',
+      isActive: true,
+      createdAt: '2026-08-06T00:00:00.000Z',
+      updatedAt: '2026-08-06T00:00:00.000Z',
+    }]),
+    persistThenMarkTerminalInactive: jest.fn().mockImplementation(
+      async (_run: unknown, persist: () => Promise<unknown>) => persist(),
+    ),
+  },
 }));
 
 jest.mock('../services/projectSettingsService', () => {
@@ -28,8 +68,34 @@ jest.mock('../services/appSettingsService', () => ({
   getDefaultModel: jest.fn(),
 }));
 
-import { generateFallbackReport } from '../services/documentValidationService';
+import {
+  autoStartDocumentValidation,
+  generateFallbackReport,
+  stopDocumentValidationWatcher,
+} from '../services/documentValidationService';
 import type { ValidationScorecard } from '../../shared/types/interview';
+
+const agentSvc = jest.requireMock('../services/chatAgentService') as Record<string, jest.Mock>;
+const { routeBackgroundWorkflow: mockRouteBackgroundWorkflow } = jest.requireMock(
+  '../services/backgroundWorkflowRouter',
+) as { routeBackgroundWorkflow: jest.Mock };
+const { getSkillConfig: mockGetSkillConfig } = jest.requireMock(
+  '../services/projectSettingsService',
+) as { getSkillConfig: jest.Mock };
+const { getDefaultModel: mockGetDefaultModel } = jest.requireMock(
+  '../services/appSettingsService',
+) as { getDefaultModel: jest.Mock };
+const { propagatePipelineGrounding: mockPropagatePipelineGrounding } = jest.requireMock(
+  '../services/runGroundingService',
+) as { propagatePipelineGrounding: jest.Mock };
+const { runGroundingService: mockRunGroundingService } = jest.requireMock(
+  '../services/runGroundingService',
+) as {
+  runGroundingService: {
+    getGroundings: jest.Mock;
+    persistThenMarkTerminalInactive: jest.Mock;
+  };
+};
 
 function makeScorecard(overrides: Partial<ValidationScorecard> = {}): ValidationScorecard {
   return {
@@ -113,5 +179,122 @@ describe('generateFallbackReport', () => {
     expect(report).toContain('# Validation Report');
     expect(report).toContain('**PRD Content** passed at 93%');
     expect(report).not.toContain('## Feature Scores');
+  });
+});
+
+describe('autoStartDocumentValidation background routing', () => {
+  const makeAdapter = () => ({
+    getDocumentId: () => 'prd-1',
+    getProject: () => 'proj-alpha',
+    getAuthorId: () => 'user-1',
+    getSourceThreadId: () => 'thread-prd',
+    getValidationThreadId: () => null,
+    getStatus: () => 'draft',
+    buildValidationContext: () => '# PRD validation context',
+    getSkillPath: () => '/skills/validate.md',
+    getModel: () => 'validation-model',
+    updateDbForValidationStart: jest.fn().mockResolvedValue(undefined),
+    updateDbForValidationResult: jest.fn().mockResolvedValue(undefined),
+    updateDbForValidationTimeout: jest.fn().mockResolvedValue(undefined),
+    updateDbForValidationError: jest.fn().mockResolvedValue(undefined),
+    isCurrentValidationThread: jest.fn().mockResolvedValue(true),
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetSkillConfig.mockResolvedValue({
+      skillRepo: 'org/skills',
+      skillBranch: 'main',
+    });
+    mockGetDefaultModel.mockResolvedValue('default-model');
+    mockRouteBackgroundWorkflow.mockImplementation(
+      async (input: { runInProcess(): void }) => {
+        await input.runInProcess();
+        return { route: 'in-process', reason: 'flag-disabled' };
+      },
+    );
+  });
+
+  afterEach(() => stopDocumentValidationWatcher('prd-1'));
+
+  it('AC-3 / DoD-1 routes disabled validation without worker preparation or propagation', async () => {
+    const adapter = makeAdapter();
+
+    await autoStartDocumentValidation(adapter);
+
+    expect(mockRouteBackgroundWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflowClass: 'validation',
+        userId: 'user-1',
+        threadId: 'thread-validation',
+        prepareWorker: expect.any(Function),
+      }),
+    );
+    expect(agentSvc.prepareBackgroundWorkflowTurn).not.toHaveBeenCalled();
+    expect(mockRunGroundingService.getGroundings).not.toHaveBeenCalled();
+    expect(mockPropagatePipelineGrounding).not.toHaveBeenCalled();
+    expect(agentSvc.sendMessage).toHaveBeenCalledWith(
+      'thread-validation',
+      expect.stringContaining('review-scorecard.json'),
+      undefined,
+      [],
+      { hidden: true },
+    );
+  });
+
+  it('AC-0: worker validation decision does not call sendMessage', async () => {
+    mockRouteBackgroundWorkflow.mockImplementationOnce(async (input) => {
+      const prepared = await input.prepareWorker();
+      expect(prepared).toEqual(expect.objectContaining({
+        prompt: 'complete frozen document validation prompt',
+        targetGrounding: expect.objectContaining({
+          runId: 'thread-validation',
+          repoRole: 'target',
+          isActive: true,
+        }),
+      }));
+      return {
+        route: 'worker',
+        workspacePath: '/pinned',
+        runId: 'thread-validation',
+      };
+    });
+
+    await autoStartDocumentValidation(makeAdapter());
+
+    expect(agentSvc.sendMessage).not.toHaveBeenCalled();
+    expect(mockPropagatePipelineGrounding).toHaveBeenCalledWith(
+      { runType: 'chat', runId: 'thread-prd', project: 'proj-alpha' },
+      { runType: 'chat', runId: 'thread-validation', project: 'proj-alpha' },
+      'user-1',
+    );
+  });
+
+  it('BR-008 / DoD-3: validation preparation failure persists reset before deactivation', async () => {
+    const adapter = makeAdapter();
+    const deactivated = jest.fn();
+    mockRunGroundingService.persistThenMarkTerminalInactive.mockImplementationOnce(
+      async (_run, persist) => {
+        await persist();
+        deactivated();
+      },
+    );
+    mockRouteBackgroundWorkflow.mockImplementationOnce(
+      async (input: { reportRecoverablePreparationFailure(): Promise<void> }) => {
+        await input.reportRecoverablePreparationFailure();
+        return {
+          route: 'in-process',
+          reason: 'materialization-unavailable',
+          recoverable: true,
+        };
+      },
+    );
+
+    await autoStartDocumentValidation(adapter);
+
+    expect(adapter.updateDbForValidationError).toHaveBeenCalledTimes(1);
+    expect(adapter.updateDbForValidationError.mock.invocationCallOrder[0])
+      .toBeLessThan(deactivated.mock.invocationCallOrder[0]);
+    expect(agentSvc.sendMessage).not.toHaveBeenCalled();
   });
 });
