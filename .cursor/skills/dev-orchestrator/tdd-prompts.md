@@ -44,7 +44,7 @@ From {feature-slug}-assumptions.md:
 - Do NOT modify protected files without user approval
 - Do NOT run `git commit` or `git push`
 - If feature-flag gating applies: load `feature-flags`; use a top-level split at the entry route/component with the agreed key; keep the disabled branch functional; add its exact balanced `@feature-flag:<key>` start/end and enabled/disabled branch markers so `feature-flag-cleanup` can retire it deterministically
-- UI: every interactive element in a staged client TSX file MUST have data-testid via spread `{...{ 'data-testid': 'kebab-id' }}` (not `data-testid="…"`; match design.md; whole-file scan). Source of truth: `scripts/check-data-testid.mjs` (includes `form`, `*Panel`, and the full PascalCase suffix list — do not use a shortened list). After GREEN, run `node scripts/check-data-testid.mjs` (stage touched client TSX first) and fix until exit 0. Also clear ESLint **errors** on touched files (`cross-env ESLINT_USE_FLAT_CONFIG=false npx eslint <files>`). Hook failures → /resolve-pre-commit-data-testid or /resolve-pre-commit-eslint.
+- UI: every interactive element in a staged client TSX file MUST have data-testid via spread `{...{ 'data-testid': 'kebab-id' }}` (not `data-testid="…"`; match design.md; whole-file scan). Source of truth: `scripts/check-data-testid.mjs` (includes `form`, `*Panel`, and the full PascalCase suffix list — do not use a shortened list). The parent executor runs data-testid and ESLint once in the final F6 gate. Hook failures → /resolve-pre-commit-data-testid or /resolve-pre-commit-eslint.
 
 ### TDD Instructions (see below)
 <paste the TDD block for every layer touched by this bundle>
@@ -89,9 +89,9 @@ TDD — Red to Green:
 2. GREEN: Write the implementation (minimum code to pass every matrix row).
    - Run: npm test -- <testfile> — confirm all tests PASS
 
-3. REFACTOR: Clean up; re-run tests to confirm still green.
+3. REFACTOR: Clean up. Re-run the focused test only if source or test code changes after the passing GREEN run.
 
-4. TYPE-CHECK: npx tsc -p tsconfig.server.json --noEmit — fix all errors.
+4. HANDOFF: Report RED and GREEN evidence plus changed files. Do not run `tsc`; the parent executor owns boundary and final type-checks.
 ```
 
 ## Client task TDD block
@@ -125,16 +125,10 @@ TDD — Red to Green:
    - Do not rely on CSS class or text selectors for new E2E/unit queries when a test id exists.
    - Img alt: do not use redundant words like "image"/"photo"/"picture" in alt (jsx-a11y/img-redundant-alt is an ESLint error).
    - Run: npm test -- <testfile> — confirm all tests PASS
-   - Verify pre-commit gates before claiming done:
-       git add -- <touched-client-tsx>
-       node scripts/check-data-testid.mjs
-       cross-env ESLINT_USE_FLAT_CONFIG=false npx eslint --max-warnings=-1 <touched-ts-tsx>
-     Fix data-testid violations and ESLint **errors**; do not boil the ocean on unrelated pre-existing warnings.
-     Hook recovery: /resolve-pre-commit-data-testid or /resolve-pre-commit-eslint.
 
-3. REFACTOR: Clean up; re-run tests to confirm still green.
+3. REFACTOR: Clean up. Re-run the focused test only if source or test code changes after the passing GREEN run.
 
-4. TYPE-CHECK: npx tsc -p tsconfig.client.json --noEmit — fix all errors.
+4. HANDOFF: Report RED and GREEN evidence plus changed files. Do not run `tsc`, data-testid, or ESLint checks; the parent executor owns boundary and final gates.
 ```
 
 ## Shared-types task TDD block
@@ -150,7 +144,7 @@ TDD — Red to Green:
 2. GREEN: Implement the types and utilities.
    - Run: npm test -- <testfile> — confirm PASS
 
-3. TYPE-CHECK (both configs):
-   npx tsc -p tsconfig.server.json --noEmit
-   npx tsc -p tsconfig.client.json --noEmit
+3. REFACTOR: Re-run the focused test only if source or test code changes after the passing GREEN run.
+
+4. HANDOFF: Report RED and GREEN evidence plus changed files. Do not run `tsc`; the parent executor owns boundary and final type-checks.
 ```

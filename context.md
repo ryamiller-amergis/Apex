@@ -6,6 +6,10 @@ Apex (formerly AI-Pilot) is an internal product-building and project-management 
 
 **Core value proposition:** Apex eliminates context-switching between disconnected tools by bringing work item management, document generation, review workflows, team ceremonies, and analytics into one platform — with AI agents that automate repetitive tasks, enforce consistency, and surface insights that would otherwise require manual effort.
 
+## Key Terminology
+
+- **Diagram** — a freeform, human-drawn, saveable and shareable whiteboard canvas used for ideation. Use Diagram for artifacts managed through the `/diagrams` module and `diagram:*` permissions. A Diagram is not a Design Prototype (approved-feature interactive HTML), a Mermaid diagram generated inside documentation, or a UI Lab mock generated from a prompt. The v1 term does not imply real-time collaboration or embedding in ADRs, PRDs, or design documents.
+
 ## Key Features
 
 ### 0. Agent Home

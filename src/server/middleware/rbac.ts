@@ -21,6 +21,11 @@ export function resolveRequestProject(req: Request): string | undefined {
   const fromParams = req.params?.project;
   if (typeof fromParams === 'string' && fromParams) return fromParams;
 
+  const fromProjectIdParam = req.params?.projectId;
+  if (typeof fromProjectIdParam === 'string' && fromProjectIdParam) {
+    return fromProjectIdParam;
+  }
+
   const fromBody = (req.body as Record<string, unknown> | undefined)?.project;
   if (typeof fromBody === 'string' && fromBody) return fromBody;
 

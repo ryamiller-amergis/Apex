@@ -8,6 +8,7 @@ import {
   isWalkthroughPublishNotificationLink,
   WALKTHROUGH_LIST_DEEP_LINK,
 } from '../../shared/types/walkthroughNotification';
+import { isDiagramShareNotificationLink } from '../../shared/types/diagram';
 import styles from './NotificationCenter.module.css';
 
 interface NotificationCenterProps {
@@ -167,6 +168,7 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({ onClose 
               <div className={styles['center-group-label']}>{group.label}</div>
               {group.items.map((item) => {
                 const walkthroughItem = isWalkthroughPublishNotificationLink(item.link);
+                const diagramShareItem = isDiagramShareNotificationLink(item.link);
                 return (
                   <button
                     key={item.id}
@@ -176,7 +178,9 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({ onClose 
                     {...{
                       'data-testid': walkthroughItem
                         ? 'walkthrough-publish-notification'
-                        : `notification-item-${item.id}`,
+                        : diagramShareItem
+                          ? 'notification-diagram-share'
+                          : `notification-item-${item.id}`,
                     }}
                   >
                     <span className={styles['center-item-icon']}>{getTypeIcon(item.type as NotificationType)}</span>

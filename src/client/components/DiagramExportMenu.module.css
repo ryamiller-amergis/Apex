@@ -1,0 +1,44 @@
+.menu {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.exportBtn {
+  height: 36px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  border-radius: 7px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.exportBtn:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
+.exportBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.error {
+  flex-basis: 100%;
+  padding: 8px 12px;
+  border-radius: 7px;
+  border: 1px solid var(--error-color);
+  background: color-mix(in srgb, var(--error-color) 12%, transparent);
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+}
