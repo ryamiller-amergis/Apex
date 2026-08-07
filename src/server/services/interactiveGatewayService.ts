@@ -18,13 +18,21 @@
  * this core is socket-agnostic and never inspects prompt/snapshot content
  * (BR-019).
  */
-import type { AgentRunEventEnvelope, SseEvent } from '../../shared/types/chat';
+import type {
+  AgentRunEventEnvelope,
+  ChatMessage,
+  ChatThreadStatus,
+  SseEvent,
+} from '../../shared/types/chat';
 import {
   replayRunEvents as defaultReplayRunEvents,
   subscribeRunEvents as defaultSubscribeRunEvents,
   RUN_EVENT_SOURCE_INSTANCE,
 } from './pgNotifyService';
-import { subscribeToThread as defaultSubscribeToThread } from './chatAgentService';
+import {
+  getThread as defaultGetThread,
+  subscribeToThread as defaultSubscribeToThread,
+} from './chatAgentService';
 import {
   eventForRunEnvelope as defaultEventForRunEnvelope,
   shouldForwardPgRunEvent as defaultShouldForwardPgRunEvent,
@@ -36,11 +44,19 @@ export interface InteractiveGatewaySocket {
   onClose(handler: () => void): void;
 }
 
-/** Framed gateway message. `id` is the durable ordinal used for resume. */
+/**
+ * Framed gateway message. `id` is the durable ordinal used for resume, or an
+ * empty string for transient thread events such as persisted chat messages.
+ */
 export interface InteractiveGatewayFrame {
   type: 'event';
   id: string;
   data: SseEvent;
+}
+
+export interface InteractiveThreadSnapshot {
+  messages: ChatMessage[];
+  status: ChatThreadStatus;
 }
 
 export interface AttachInteractiveThreadOptions {
@@ -51,6 +67,9 @@ export interface AttachInteractiveThreadOptions {
 }
 
 export interface InteractiveGatewayDependencies {
+  loadThreadSnapshot: (
+    threadId: string,
+  ) => Promise<InteractiveThreadSnapshot | null>;
   replayRunEvents: (
     threadId: string,
     lastEventId?: string,
@@ -71,6 +90,12 @@ export interface InteractiveGatewayDependencies {
 }
 
 const defaultDependencies: InteractiveGatewayDependencies = {
+  loadThreadSnapshot: async (threadId) => {
+    const thread = await defaultGetThread(threadId);
+    return thread
+      ? { messages: thread.messages, status: thread.status }
+      : null;
+  },
   replayRunEvents: defaultReplayRunEvents,
   subscribeToThread: defaultSubscribeToThread,
   subscribeRunEvents: defaultSubscribeRunEvents,
@@ -91,35 +116,66 @@ export async function attachInteractiveThreadStream(
 ): Promise<() => void> {
   const localInstance = options.localInstance ?? RUN_EVENT_SOURCE_INSTANCE;
   const sentEventIds = new Set<string>();
+  const sentMessageIds = new Set<string>();
   let replaying = true;
   let detached = false;
-  const pendingLiveEvents: AgentRunEventEnvelope[] = [];
+  let arrivalOrder = 0;
+  const pendingLiveEvents: Array<{
+    event: SseEvent;
+    envelope?: AgentRunEventEnvelope;
+    arrival: number;
+  }> = [];
+
+  const sendEvent = (
+    event: SseEvent,
+    eventId = '',
+  ): void => {
+    if (detached) return;
+    if (event.type === 'message') {
+      if (sentMessageIds.has(event.message.id)) return;
+      sentMessageIds.add(event.message.id);
+    }
+    const frame: InteractiveGatewayFrame = {
+      type: 'event',
+      id: eventId,
+      data: event,
+    };
+    socket.send(JSON.stringify(frame));
+  };
 
   const sendEnvelope = (envelope: AgentRunEventEnvelope): void => {
     if (detached) return;
     // De-dupe by durable ordinal across replay + both live sources (VT-04).
     if (sentEventIds.has(envelope.eventId)) return;
     sentEventIds.add(envelope.eventId);
-    const frame: InteractiveGatewayFrame = {
-      type: 'event',
-      id: envelope.eventId,
-      data: dependencies.eventForRunEnvelope(envelope),
-    };
-    socket.send(JSON.stringify(frame));
+    sendEvent(
+      dependencies.eventForRunEnvelope(envelope),
+      envelope.eventId,
+    );
   };
 
-  const queueOrSend = (envelope: AgentRunEventEnvelope): void => {
-    if (replaying) pendingLiveEvents.push(envelope);
-    else sendEnvelope(envelope);
+  const queueOrSend = (
+    event: SseEvent,
+    envelope?: AgentRunEventEnvelope,
+  ): void => {
+    if (replaying) {
+      pendingLiveEvents.push({
+        event,
+        envelope,
+        arrival: arrivalOrder++,
+      });
+    } else if (envelope) {
+      sendEnvelope(envelope);
+    } else {
+      sendEvent(event);
+    }
   };
 
   // Subscribe BEFORE replay so no live event is missed during the async
   // replay window (mirrors the SSE route ordering).
   const unsubscribeThread = dependencies.subscribeToThread(
     threadId,
-    (_event, envelope) => {
-      if (envelope) queueOrSend(envelope);
-    },
+    (event, envelope) => queueOrSend(event, envelope),
   );
   const unsubscribeNotify = dependencies.subscribeRunEvents(
     threadId,
@@ -127,7 +183,7 @@ export async function attachInteractiveThreadStream(
       // The owner already delivered this via the in-memory subscriber; the
       // Postgres echo is only for OTHER workers.
       if (!dependencies.shouldForwardPgRunEvent(envelope, localInstance)) return;
-      queueOrSend(envelope);
+      queueOrSend(dependencies.eventForRunEnvelope(envelope), envelope);
     },
   );
 
@@ -138,6 +194,22 @@ export async function attachInteractiveThreadStream(
     unsubscribeNotify();
   };
   socket.onClose(detach);
+
+  // Mirror the SSE route's initial snapshot so a socket that attaches after a
+  // send still receives the persisted user message and current running state.
+  // Subscriptions are already active, so the snapshot/live overlap is closed
+  // by message-id and durable-event-id de-duplication.
+  try {
+    const snapshot = await dependencies.loadThreadSnapshot(threadId);
+    if (snapshot) {
+      for (const message of snapshot.messages) {
+        sendEvent({ type: 'message', message });
+      }
+      sendEvent({ type: 'status', status: snapshot.status });
+    }
+  } catch {
+    // A failed snapshot does not prevent durable/live streaming.
+  }
 
   let replayEvents: AgentRunEventEnvelope[] = [];
   try {
@@ -152,10 +224,15 @@ export async function attachInteractiveThreadStream(
   pendingLiveEvents
     .sort(
       (left, right) =>
-        left.timestamp.localeCompare(right.timestamp) ||
-        left.sequence - right.sequence,
+        left.envelope && right.envelope
+          ? left.envelope.timestamp.localeCompare(right.envelope.timestamp)
+            || left.envelope.sequence - right.envelope.sequence
+          : left.arrival - right.arrival,
     )
-    .forEach(sendEnvelope);
+    .forEach(({ event, envelope }) => {
+      if (envelope) sendEnvelope(envelope);
+      else sendEvent(event);
+    });
 
   return detach;
 }
