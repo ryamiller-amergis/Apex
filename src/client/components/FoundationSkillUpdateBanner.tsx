@@ -14,9 +14,18 @@ interface FoundationSkillUpdateBannerProps {
   branch?: string;
 }
 
+interface StepCmd {
+  /** Shell label shown above the copyable command (e.g. PowerShell, Git Bash). */
+  shell: string;
+  cmd: string;
+}
+
 interface Step {
+  /** Primary command — used when `cmds` is omitted. */
   cmd: string;
   label: string;
+  /** Optional side-by-side shell variants (PowerShell + Git Bash). */
+  cmds?: StepCmd[];
 }
 
 interface TroubleshootRow {
@@ -44,22 +53,24 @@ function apexUrl(): string {
 
 /**
  * The CLI verifies your project is entitled to these skills before installing,
- * so it needs to know where APEX lives. PowerShell is the default here because
- * that is what most teams on Windows will paste into.
+ * so it needs to know where APEX lives. Show PowerShell and Git Bash side by
+ * side so Windows teams can copy the form that matches their terminal.
  */
 function apexUrlStep(): Step {
   const origin = apexUrl();
-  const cmd = origin
-    ? `$env:APEX_URL="${origin}"`
-    : '$env:APEX_URL="<this-apex-site-origin>"';
-  const bashHint = origin
-    ? `export APEX_URL="${origin}"`
-    : 'export APEX_URL="<this-apex-site-origin>"';
+  const placeholder = '<this-apex-site-origin>';
+  const host = origin || placeholder;
+  const psCmd = `$env:APEX_URL="${host}"`;
+  const bashCmd = `export APEX_URL="${host}"`;
   return {
-    cmd,
+    cmd: psCmd,
+    cmds: [
+      { shell: 'PowerShell', cmd: psCmd },
+      { shell: 'Git Bash', cmd: bashCmd },
+    ],
     label:
       'Point the CLI at this APEX site (the page you are on now) so it can confirm ' +
-      `your project is entitled to these skills. On bash/zsh use: ${bashHint}`,
+      'your project is entitled to these skills. Copy the command for your shell.',
   };
 }
 
@@ -204,16 +215,36 @@ function StepList({
         <div key={s.cmd} className={styles.stepRow}>
           <span className={styles.stepNum}>{i + 1}</span>
           <span className={styles.stepBody}>
-            <button
-              className={styles.codeBtn}
-              title="Copy command"
-              onClick={() => onCopy(s.cmd)}
-              type="button"
-              {...{ 'data-testid': `${idPrefix}-copy-cmd-btn-${i}` }}
-            >
-              <code>{s.cmd}</code>
-              <span className={styles.copyHint}>Copy</span>
-            </button>
+            {s.cmds && s.cmds.length > 0 ? (
+              <div className={styles.cmdVariants}>
+                {s.cmds.map((variant, vi) => (
+                  <div key={variant.shell} className={styles.cmdVariant}>
+                    <span className={styles.shellLabel}>{variant.shell}</span>
+                    <button
+                      className={styles.codeBtn}
+                      title={`Copy ${variant.shell} command`}
+                      onClick={() => onCopy(variant.cmd)}
+                      type="button"
+                      {...{ 'data-testid': `${idPrefix}-copy-cmd-btn-${i}-${vi}` }}
+                    >
+                      <code>{variant.cmd}</code>
+                      <span className={styles.copyHint}>Copy</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <button
+                className={styles.codeBtn}
+                title="Copy command"
+                onClick={() => onCopy(s.cmd)}
+                type="button"
+                {...{ 'data-testid': `${idPrefix}-copy-cmd-btn-${i}` }}
+              >
+                <code>{s.cmd}</code>
+                <span className={styles.copyHint}>Copy</span>
+              </button>
+            )}
             <span className={styles.stepDesc}>{s.label}</span>
           </span>
         </div>
