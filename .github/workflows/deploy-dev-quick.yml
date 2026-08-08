@@ -1,0 +1,323 @@
+# Manual-only shortcut to ship a branch/SHA to Azure Dev without waiting on the
+# full PR Tests & Dev Deploy gate (unit/integration/e2e/smoke).
+#
+# Use from Actions → "Deploy Dev (Quick)" → Run workflow.
+# Leave "Use workflow from" on main, and set git_ref to the branch/SHA to ship
+# (e.g. tbi/refactor-ai-driven-execution). Empty git_ref deploys the selected branch.
+name: Deploy Dev (Quick)
+
+on:
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: 'Branch, tag, or SHA to deploy (empty = the branch selected for this run)'
+        required: false
+        type: string
+        default: ''
+      run_migrations:
+        description: 'Run pending DB migrations against the Dev DATABASE_URL'
+        required: true
+        type: boolean
+        default: true
+
+env:
+  NODE_VERSION: '24.x'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        env:
+          VITE_TEAMS: ${{ vars.VITE_TEAMS }}
+          VITE_NUTRIENT_LICENSE_KEY: ${{ secrets.VITE_NUTRIENT_LICENSE_KEY }}
+          VITE_APRYSE_WEBVIEWER_LICENSE_KEY: ${{ secrets.VITE_APRYSE_WEBVIEWER_LICENSE_KEY }}
+        run: npm run build
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: quick-dev-build-${{ github.run_id }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  detect-runner-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      load_test_runner: ${{ steps.load_test_runner.outputs.changed }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Detect load-test runner changes vs origin/main
+        id: load_test_runner
+        run: |
+          git fetch origin main --depth=1
+          if git diff --quiet origin/main HEAD -- \
+            runners/load-test-k6/ \
+            scripts/ci/publish-lt-k6-runner.sh \
+            src/server/services/loadTestRunner/ \
+            src/shared/types/loadTest.ts \
+            package.json \
+            package-lock.json \
+            tsconfig.server.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy-dev:
+    needs: [build, detect-runner-changes]
+    runs-on: ubuntu-latest
+    environment: dev
+    concurrency:
+      group: quick-dev-deploy
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Resolve deployed SHA
+        id: deployed
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        # Native production dependencies (including sqlite3) require lifecycle
+        # scripts to install their Linux bindings. prepare tolerates omitted Husky.
+        run: npm ci --omit=dev
+
+      - name: Download build output
+        uses: actions/download-artifact@v4
+        with:
+          name: quick-dev-build-${{ github.run_id }}
+          path: dist/
+
+      - name: Detect migration changes
+        id: migration_changes
+        if: ${{ inputs.run_migrations }}
+        env:
+          MIGRATION_DETECT_STRATEGY: db
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: node scripts/ci/has-migration-changes.mjs
+
+      - name: Run database migrations
+        if: ${{ inputs.run_migrations && steps.migration_changes.outputs.has_migration_changes == 'true' }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: npm run migrate:up
+
+      - name: Create deployment package
+        run: |
+          mkdir -p deploy/dist
+          cp -r dist/* deploy/dist/
+          cp package*.json deploy/
+          cp server.js deploy/ 2>/dev/null || true
+          cp -r scripts deploy/
+          # Platform Admin APEX Skills reads this at runtime for the skill picker /
+          # Skills matrix. Without it the UI shows 0 skills after deploy.
+          mkdir -p deploy/foundation-skills deploy/dist/foundation-skills
+          cp foundation-skills/catalog.json deploy/foundation-skills/catalog.json
+          cp foundation-skills/catalog.json deploy/dist/foundation-skills/catalog.json
+          mv node_modules deploy/
+          (cd deploy && zip -r ../deploy.zip .)
+
+      - name: Verify packaged native dependencies
+        run: node -e "require('./deploy/node_modules/sqlite3'); console.log('sqlite3 binding loaded')"
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Extract Azure credentials
+        run: |
+          echo "AZURE_TENANT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.tenantId')" >> $GITHUB_ENV
+          echo "AZURE_CLIENT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientId')" >> $GITHUB_ENV
+          echo "AZURE_CLIENT_SECRET=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientSecret')" >> $GITHUB_ENV
+
+      - name: Set App Service Configuration
+        env:
+          APP_NAME: app-scrum-dev
+          RG_NAME: rg-scrum-dev
+        run: |
+          # Resolve the interactive live-bus (Redis) connection at deploy time so
+          # the WS gateway subscribes to the same pub/sub the actor host publishes
+          # to. Terraform provisions the cache; App Service app settings are not
+          # Terraform-managed (ignore_changes), so we mirror them here. When the
+          # interactive lane is not provisioned in this environment the query
+          # returns empty and the live bus stays a no-op (durable replay only).
+          REDIS_HOST=""
+          REDIS_SSL_PORT="6380"
+          REDIS_KEY=""
+          REDIS_NAME=$(az redis list --resource-group $RG_NAME \
+            --query "[?starts_with(name, 'redis-apex-ai')].name | [0]" -o tsv 2>/dev/null || true)
+          if [ -n "$REDIS_NAME" ]; then
+            REDIS_HOST=$(az redis show --name "$REDIS_NAME" --resource-group $RG_NAME --query hostName -o tsv)
+            REDIS_SSL_PORT=$(az redis show --name "$REDIS_NAME" --resource-group $RG_NAME --query sslPort -o tsv)
+            REDIS_KEY=$(az redis list-keys --name "$REDIS_NAME" --resource-group $RG_NAME --query primaryKey -o tsv)
+            echo "::add-mask::$REDIS_KEY"
+            echo "Interactive live bus: resolved Redis '$REDIS_NAME' (${REDIS_HOST}:${REDIS_SSL_PORT})."
+          else
+            echo "Interactive live bus: no redis-apex-ai* cache in $RG_NAME — live bus stays disabled (durable replay only)."
+          fi
+
+          az webapp config appsettings set \
+            --name $APP_NAME \
+            --resource-group $RG_NAME \
+            --settings \
+              SCM_DO_BUILD_DURING_DEPLOYMENT=false \
+              ENABLE_ORYX_BUILD=false \
+              WEBSITE_RUN_FROM_PACKAGE=1 \
+              NODE_ENV=production \
+              ADO_ORG="${{ secrets.ADO_ORG }}" \
+              ADO_PAT="${{ secrets.ADO_PAT }}" \
+              ADO_PROJECT="${{ secrets.ADO_PROJECT }}" \
+              ADO_AREA_PATH="${{ secrets.ADO_PROJECT }}" \
+              ADO_ALLOWED_PROJECTS="${{ vars.ADO_ALLOWED_PROJECTS }}" \
+              VITE_ADO_ORG="amergis" \
+              VITE_ADO_PROJECT="${{ secrets.ADO_PROJECT }}" \
+              VITE_TEAMS="${{ vars.VITE_TEAMS }}" \
+              APRYSE_LICENSE_KEY="${{ secrets.APRYSE_LICENSE_KEY }}" \
+              AZURE_TENANT_ID="${{ env.AZURE_TENANT_ID }}" \
+              AZURE_CLIENT_ID="${{ env.AZURE_CLIENT_ID }}" \
+              AZURE_CLIENT_SECRET="${{ env.AZURE_CLIENT_SECRET }}" \
+              AZURE_REDIRECT_URL="${{ secrets.AZURE_REDIRECT_URL }}" \
+              AZURE_COST_TENANT_ID="${{ secrets.AZURE_COST_TENANT_ID }}" \
+              AZURE_COST_CLIENT_ID="${{ secrets.AZURE_COST_CLIENT_ID }}" \
+              AZURE_COST_CLIENT_SECRET="${{ secrets.AZURE_COST_CLIENT_SECRET }}" \
+              SESSION_SECRET="${{ secrets.SESSION_SECRET }}" \
+              CURSOR_API_KEY="${{ secrets.CURSOR_API_KEY }}" \
+              CURSOR_TEAM_API_KEY="${{ secrets.CURSOR_TEAM_API_KEY }}" \
+              AGENT_RUN_HARD_LIMIT_MS="${{ secrets.AGENT_RUN_HARD_LIMIT_MS }}" \
+              PORT=8080 \
+              POLL_INTERVAL=30 \
+              WEBSITES_ENABLE_APP_SERVICE_STORAGE=true \
+              AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
+              AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
+              AWS_REGION="${{ secrets.AWS_REGION }}" \
+              BEDROCK_MODEL_ID="${{ secrets.BEDROCK_MODEL_ID }}" \
+              BEDROCK_UI_MOCK_MODEL_ID="${{ secrets.BEDROCK_UI_MOCK_MODEL_ID }}" \
+              BEDROCK_UI_MOCK_MAX_TOKENS="32000" \
+              MAXVIEW_DS_PROJECT="MaxView" \
+              MAXVIEW_DS_REPO="MaxView" \
+              MAXVIEW_CLIENTAPP_ROOT="/src/Maxim.TimeClock.Web/ClientApp/js" \
+              DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+              APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}" \
+              PDF_BLOB_ACCOUNT_NAME="${{ vars.PDF_BLOB_ACCOUNT_NAME }}" \
+              PDF_BLOB_CONTAINER_NAME="${{ vars.PDF_BLOB_CONTAINER_NAME }}" \
+              GROUNDING_BLOB_ACCOUNT_NAME="${{ vars.GROUNDING_BLOB_ACCOUNT_NAME }}" \
+              GROUNDING_BLOB_CONTAINER_NAME="${{ vars.GROUNDING_BLOB_CONTAINER_NAME }}" \
+              LT_SERVICEBUS_NAMESPACE="${{ vars.LT_SERVICEBUS_NAMESPACE }}" \
+              LT_SERVICEBUS_QUEUE_NAME="${{ vars.LT_SERVICEBUS_QUEUE_NAME }}" \
+              LT_BLOB_ACCOUNT_NAME="${{ vars.LT_BLOB_ACCOUNT_NAME }}" \
+              LT_BLOB_CONTAINER_NAME="${{ vars.LT_BLOB_CONTAINER_NAME }}" \
+              LT_APEX_CALLBACK_BASE_URL="${{ vars.LT_APEX_CALLBACK_BASE_URL || 'https://app-scrum-dev.azurewebsites.net' }}" \
+              LT_RUNNER_CALLBACK_TOKEN="${{ secrets.LT_RUNNER_CALLBACK_TOKEN }}" \
+              AI_RUNS_SERVICEBUS_NAMESPACE="${{ vars.AI_RUNS_SERVICEBUS_NAMESPACE }}" \
+              AI_RUNS_BACKGROUND_QUEUE_NAME="${{ vars.AI_RUNS_BACKGROUND_QUEUE_NAME }}" \
+              AI_RUNS_BACKGROUND_INFLIGHT_LIMIT="${{ vars.AI_RUNS_BACKGROUND_INFLIGHT_LIMIT }}" \
+              AI_RUNS_CALLBACK_TOKEN_AUDIENCE="${{ vars.AI_RUNS_CALLBACK_TOKEN_AUDIENCE }}" \
+              AI_RUNS_RUNNER_CALLBACK_TOKEN="${{ secrets.AI_RUNS_RUNNER_CALLBACK_TOKEN }}" \
+              AI_RUNS_INTERACTIVE_GATEWAY="${{ vars.AI_RUNS_INTERACTIVE_GATEWAY }}" \
+              AI_RUNS_INTERACTIVE_RESERVED="${{ vars.AI_RUNS_INTERACTIVE_RESERVED }}" \
+              AI_RUNS_INTERACTIVE_BURST_MAX="${{ vars.AI_RUNS_INTERACTIVE_BURST_MAX }}" \
+              AI_RUNS_INTERACTIVE_FIRST_TOKEN_SLO_MS="${{ vars.AI_RUNS_INTERACTIVE_FIRST_TOKEN_SLO_MS }}" \
+              AI_RUNS_INTERACTIVE_DISPATCH_URL="${{ vars.AI_RUNS_INTERACTIVE_DISPATCH_URL }}" \
+              REDIS_HOST="$REDIS_HOST" \
+              REDIS_SSL_PORT="$REDIS_SSL_PORT" \
+              REDIS_KEY="$REDIS_KEY" \
+              SENDGRID_API_KEY="${{ secrets.SENDGRID_API_KEY }}" \
+              GITHUB_TOKEN="${{ secrets.GH_SKILL_TOKEN }}" \
+              GITHUB_ORG="${{ secrets.GH_SKILL_ORG }}" \
+              TAVILY_AUTH="${{ secrets.TAVILY_AUTH }}" \
+              AZURE_ARTIFACTS_ORG="${{ secrets.AZURE_ARTIFACTS_ORG }}" \
+              AZURE_ARTIFACTS_FEED="${{ secrets.AZURE_ARTIFACTS_FEED }}" \
+              AZURE_ARTIFACTS_PAT="${{ secrets.AZURE_ARTIFACTS_PAT }}" \
+              APEX_URL="https://app-scrum-dev.azurewebsites.net"
+
+          # The Azure Node/Linux image ships without git, and the Dev Workbench
+          # feature shells out to git at runtime. Install it on boot before
+          # starting the app. safe.directory is handled in application code
+          # (repoCheckoutService.ts), so it is intentionally not set here.
+          az webapp config set \
+            --name $APP_NAME \
+            --resource-group $RG_NAME \
+            --linux-fx-version "NODE|24-lts" \
+            --startup-file 'bash -c "(command -v git >/dev/null 2>&1 || (apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git || true) &) && exec node /home/site/wwwroot/dist/server/index.js"'
+
+          az webapp update \
+            --name $APP_NAME \
+            --resource-group $RG_NAME \
+            --set clientAffinityEnabled=true
+
+      - name: Deploy to Dev App Service
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: app-scrum-dev
+          package: ./deploy.zip
+
+      - name: Publish load-test k6 runner image
+        if: needs.detect-runner-changes.outputs.load_test_runner == 'true'
+        env:
+          LT_ACR_NAME: ${{ vars.LT_ACR_NAME }}
+          LT_CONTAINER_APP_JOB_NAME: ${{ vars.LT_CONTAINER_APP_JOB_NAME }}
+          LT_RESOURCE_GROUP: ${{ vars.LT_RESOURCE_GROUP || 'rg-scrum-dev' }}
+          IMAGE_TAG: ${{ steps.deployed.outputs.sha }}
+        run: bash scripts/ci/publish-lt-k6-runner.sh
+
+      # FEAT-003 provisions the Job now. FEAT-004 adds the worker host image;
+      # until its Dockerfile exists this step is intentionally skipped.
+      - name: Publish AI-runs worker image
+        if: ${{ hashFiles('runners/ai-runs/Dockerfile') != '' }}
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          AI_RUNS_CONTAINER_APP_JOB_NAME: ${{ vars.AI_RUNS_CONTAINER_APP_JOB_NAME }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || 'rg-scrum-dev' }}
+          AI_RUNS_RUNNER_IMAGE_REPO: ${{ vars.AI_RUNS_RUNNER_IMAGE_REPO }}
+          IMAGE_TAG: ${{ steps.deployed.outputs.sha }}
+        run: bash scripts/ci/publish-ai-runs-runner.sh
+
+      # FEAT-007 interactive Dapr actor-host image. Skipped until its Dockerfile
+      # exists; Terraform ignores image drift while the placeholder is in place.
+      - name: Publish AI-runs interactive host image
+        if: ${{ hashFiles('runners/ai-runs-interactive/Dockerfile') != '' }}
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          AI_RUNS_INTERACTIVE_CONTAINER_APP_NAME: ${{ vars.AI_RUNS_INTERACTIVE_CONTAINER_APP_NAME }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || 'rg-scrum-dev' }}
+          AI_RUNS_INTERACTIVE_IMAGE_REPO: ${{ vars.AI_RUNS_INTERACTIVE_IMAGE_REPO }}
+          IMAGE_TAG: ${{ steps.deployed.outputs.sha }}
+        run: bash scripts/ci/publish-ai-runs-interactive.sh
+
+      - name: Azure logout
+        run: az logout
+        if: always()
