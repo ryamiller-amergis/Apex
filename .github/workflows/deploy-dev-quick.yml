@@ -5,12 +5,15 @@
 # Leave "Use workflow from" on main, and set git_ref to the branch/SHA to ship
 # (e.g. tbi/refactor-ai-driven-execution). Empty git_ref deploys the selected branch.
 name: Deploy Dev (Quick)
+# Actions always loads this workflow file from main, so the run banner says
+# "main". The run-name + git_ref input are what actually identify the deploy target.
+run-name: 'Deploy Dev (Quick) → ${{ inputs.git_ref || github.ref_name }}'
 
 on:
   workflow_dispatch:
     inputs:
       git_ref:
-        description: 'Branch, tag, or SHA to deploy (empty = the branch selected for this run)'
+        description: 'REQUIRED for feature work: branch/tag/SHA to deploy (e.g. tbi/refactor-ai-driven-execution). Leave empty only to deploy main.'
         required: false
         type: string
         default: ''
@@ -32,6 +35,12 @@ jobs:
         with:
           ref: ${{ inputs.git_ref || github.ref }}
           fetch-depth: 0
+
+      - name: Announce deploy target
+        run: |
+          echo "Deploy target ref input: '${{ inputs.git_ref }}'"
+          echo "Checked out: $(git rev-parse --abbrev-ref HEAD) @ $(git rev-parse HEAD)"
+          git log -1 --oneline
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -102,7 +111,13 @@ jobs:
 
       - name: Resolve deployed SHA
         id: deployed
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        run: |
+          SHA=$(git rev-parse HEAD)
+          REF=$(git rev-parse --abbrev-ref HEAD)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Deploying $REF @ $SHA"
+          git log -1 --oneline
+          echo "::notice title=Deploy target::$REF @ $SHA"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
