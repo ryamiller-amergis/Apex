@@ -143,13 +143,13 @@ describe('FEAT-003 Secure Ephemeral Background Worker Infrastructure', () => {
   });
 
   describe('S5 Azure Files mount / DoD-2', () => {
-    it('DoD-2 mounts shared Azure Files at /home/data/ai-pilot', () => {
+    it('DoD-2 mounts shared Azure Files at /home/data/ai-pilot/workspaces', () => {
       expect(workerTf).toMatch(/azurerm_storage_share"\s+"ai_runs_workspace"/);
       expect(workerTf).toMatch(
         /azurerm_container_app_environment_storage"\s+"ai_runs_workspace"/,
       );
       expect(variablesTf).toMatch(
-        /variable\s+"ai_runs_workspace_mount_path"[\s\S]*?default\s*=\s*"\/home\/data\/ai-pilot"/,
+        /variable\s+"ai_runs_workspace_mount_path"[\s\S]*?default\s*=\s*"\/home\/data\/ai-pilot\/workspaces"/,
       );
       expect(workerTf).toMatch(/path\s*=\s*var\.ai_runs_workspace_mount_path/);
       expect(workerTf).toMatch(/AI_PILOT_DATA_DIR/);
