@@ -11,12 +11,14 @@
  * agent lifecycle (created here, disposed by the caller after each turn).
  */
 import { Agent } from '@cursor/sdk';
+import type { LocalAgentOptions } from '@cursor/sdk/dist/cjs/options.js';
 import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle';
 import type {
   WorkerCursorExecution,
   WorkerCursorExecutionRun,
 } from '../aiRunsWorker/cursorExecution';
 import type { LocalCheckoutReader } from '../localCheckoutReader';
+import { createNativeReadTools } from '../nativeReadToolAdapter';
 
 export async function createInteractiveCursorExecution(
   snapshot: Readonly<ExecutionSnapshot>,
@@ -29,20 +31,24 @@ export async function createInteractiveCursorExecution(
   if (!apiKey) throw new Error('CURSOR_API_KEY is required');
 
   const resumeAgentId = options.resumeAgentId?.trim() || undefined;
-  // Inlined per call so `settingSources` narrows to the SDK's SettingSource[]
-  // (a hoisted const would widen the literal to string[]). The interactive host
-  // never resolves live repository MCP servers.
+  const local = {
+    cwd: snapshot.workspaceRef,
+    settingSources: ['project'],
+    customTools: createNativeReadTools(checkout),
+  } satisfies LocalAgentOptions;
+  // The interactive host uses only checkout-backed read tools and never
+  // resolves live repository MCP servers.
   const agent = resumeAgentId
     ? await Agent.resume(resumeAgentId, {
         apiKey,
         model: { id: snapshot.model },
-        local: { cwd: snapshot.workspaceRef, settingSources: ['project'] },
+        local,
         mcpServers: {},
       })
     : await Agent.create({
         apiKey,
         model: { id: snapshot.model },
-        local: { cwd: snapshot.workspaceRef, settingSources: ['project'] },
+        local,
         mcpServers: {},
       });
 

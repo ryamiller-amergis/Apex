@@ -45,7 +45,6 @@ import {
 import { enqueue } from './agentRunLifecycleService';
 import {
   INTERACTIVE_LANE,
-  INTERACTIVE_WORKFLOW_FLAG,
   type InteractiveWorkflowClass,
 } from '../../shared/types/interactiveWorkflow';
 import { interactiveWorkflowRouter } from './interactiveWorkflowRouter';
@@ -3232,32 +3231,77 @@ async function postInteractiveActorDispatch(dispatch: {
  * On a non-actor decision the transient queued interactive row is discarded so
  * admission counts stay accurate and nothing is left dispatched without a runner.
  */
+interface InteractiveDispatchAttempt {
+  dispatched: boolean;
+  persistedUserMessage?: ChatMessage;
+}
+
 async function tryDispatchInteractiveTurn(
   threadId: string,
   text: string,
-): Promise<boolean> {
+  modelOverride?: string,
+  attachments: ChatAttachment[] = [],
+  options?: { hidden?: boolean },
+): Promise<InteractiveDispatchAttempt> {
   // Inert unless the actor host dispatch URL is configured (cloud only).
-  if (!process.env[INTERACTIVE_DISPATCH_URL_ENV]?.trim()) return false;
+  if (!process.env[INTERACTIVE_DISPATCH_URL_ENV]?.trim()) {
+    return { dispatched: false };
+  }
+  // Attachment files currently belong to the in-process workspace lifecycle.
+  // Keep those turns on the established path until actor materialization owns
+  // the same attachment contract.
+  if (attachments.length > 0) return { dispatched: false };
 
   let queuedRunId: string | undefined;
+  let persistedUserMessage: ChatMessage | undefined;
   let dispatchStage = 'load-thread';
   try {
     const state = await ensureThreadState(threadId);
-    if (!state) return false;
+    if (!state || state.thread.status === 'running') {
+      return { dispatched: false };
+    }
     const userId = state.thread.userId;
     const project = state.thread.kickoff.project;
-    if (!userId || !project) return false;
+    if (!userId || !project) return { dispatched: false };
 
     const workflowClass = resolveInteractiveWorkflowClass(state);
+    dispatchStage = 'ground-turn';
+    const grounding = await ensureThreadGrounding(state);
+    if (grounding.mode !== 'local' || !grounding.nativeReads) {
+      return { dispatched: false };
+    }
+    const repoReader = await groundingProfileResolver.resolveConnectionProfile(
+      grounding.profileId,
+    );
+    if (!isExactGroundingReader(repoReader, grounding, state.thread.kickoff)) {
+      return { dispatched: false };
+    }
+    state.groundingWorkspaceDir = grounding.cwd;
+
     dispatchStage = 'prepare-turn';
-    const prepared = await prepareBackgroundWorkflowTurn(threadId, text);
+    const recoveryContext = state.isInterviewThread
+      ? buildAgentRecoveryContext(state.thread.messages)
+      : null;
+    const prompt = await buildNewAgentTurnPrompt(
+      state.thread.kickoff,
+      text,
+      false,
+      recoveryContext,
+      {
+        preloadRepositoryContext: state.isInterviewThread,
+        repoSearchEnabled: !state.isInterviewThread,
+        nativeReads: true,
+        repoReader,
+      },
+    );
+    const skillPath = state.thread.kickoff.skillPath ?? '';
     const snapshot: ExecutionSnapshot = {
-      prompt: prepared.prompt,
-      model: prepared.model,
-      workspaceRef: prepared.threadWorkspacePath,
+      prompt,
+      model: resolveModelId(modelOverride ?? state.thread.kickoff.model),
+      workspaceRef: grounding.cwd,
       workflowClass,
-      skillPath: prepared.skillPath,
-      projectId: prepared.projectId,
+      skillPath,
+      projectId: project,
       threadId,
     };
     const timeoutAt = new Date(
@@ -3266,7 +3310,7 @@ async function tryDispatchInteractiveTurn(
     dispatchStage = 'enqueue';
     const enqueued = await enqueue({
       threadId,
-      projectId: prepared.projectId,
+      projectId: project,
       snapshot,
       timeoutAt,
       lane: INTERACTIVE_LANE,
@@ -3280,22 +3324,54 @@ async function tryDispatchInteractiveTurn(
       workflowClass,
       threadId,
       runId: enqueued.runId,
-      dispatchToActor: (d) =>
-        postInteractiveActorDispatch({
-          threadId,
-          runId: d.runId,
-          dispatchMessageId: d.dispatchMessageId,
-        }),
+      dispatchToActor: async (d) => {
+        // Actor turns return before the in-process persistence block below.
+        // Persist and fan out the user message at this dispatch boundary so
+        // refresh/replay contains both sides of the conversation.
+        const userMessage: ChatMessage = {
+          id: uuidv4(),
+          role: 'user',
+          text: text.trim() || 'Uploaded files for context.',
+          ts: new Date().toISOString(),
+          ...(options?.hidden ? { hidden: true } : {}),
+        };
+        state.thread.messages.push(userMessage);
+        state.thread.lastActivityAt = userMessage.ts;
+        broadcast(state, { type: 'message', message: userMessage });
+        await pgInsertMessage(threadId, userMessage);
+        persistedUserMessage = userMessage;
+
+        state.thread.status = 'running';
+        state.thread.activeRunId = d.runId;
+        await pgUpsertThread(state.thread);
+        broadcast(state, { type: 'status', status: 'running' });
+
+        try {
+          await postInteractiveActorDispatch({
+            threadId,
+            runId: d.runId,
+            dispatchMessageId: d.dispatchMessageId,
+          });
+        } catch (error) {
+          state.thread.status = 'idle';
+          state.thread.activeRunId = undefined;
+          await pgUpsertThread(state.thread).catch(() => undefined);
+          broadcast(state, { type: 'status', status: 'idle' });
+          throw error;
+        }
+      },
       // The caller (sendMessage) owns the in-process fallback; the router's own
       // in-process branch is a no-op here so we never double-execute a turn.
       runInProcess: () => {},
     });
 
-    if (decision.route === 'actor') return true;
+    if (decision.route === 'actor') {
+      return { dispatched: true, persistedUserMessage };
+    }
 
     // Shed / race-lost / eval-error: discard the transient queued row.
     await db.delete(agentRuns).where(eq(agentRuns.id, enqueued.runId)).catch(() => {});
-    return false;
+    return { dispatched: false, persistedUserMessage };
   } catch (error) {
     const errorType = error instanceof Error ? error.name : 'UnknownError';
     console.warn('[chat] Interactive dispatch failed; using in-process fallback', {
@@ -3312,7 +3388,7 @@ async function tryDispatchInteractiveTurn(
     if (queuedRunId) {
       await db.delete(agentRuns).where(eq(agentRuns.id, queuedRunId)).catch(() => {});
     }
-    return false;
+    return { dispatched: false, persistedUserMessage };
   }
 }
 
@@ -3326,7 +3402,14 @@ export async function sendMessage(
   // @feature-flag:ai-runs-interactive start winner=disabled
   // FEAT-007: offload the turn to the warm Dapr actor lane when enabled + admitted.
   // Fail-closed: any other outcome falls through to the in-process path below.
-  if (await tryDispatchInteractiveTurn(threadId, text)) {
+  const interactiveAttempt = await tryDispatchInteractiveTurn(
+    threadId,
+    text,
+    modelOverride,
+    attachments,
+    options,
+  );
+  if (interactiveAttempt.dispatched) {
     return;
   }
   // @feature-flag:ai-runs-interactive end
@@ -3444,26 +3527,32 @@ export async function sendMessage(
 
   // Persist + broadcast the user message immediately so the UI reflects it
   // before the (potentially slow) grounding / agent acquisition below.
-  const turnId = uuidv4();
+  const turnId = interactiveAttempt.persistedUserMessage?.id ?? uuidv4();
   const attachmentMeta = await writeMessageAttachments(state.thread.workspaceDir, turnId, attachments);
   const promptText = buildPromptWithAttachments(text, attachmentMeta);
-  const priorMessages = [...state.thread.messages];
+  const priorMessages = interactiveAttempt.persistedUserMessage
+    ? state.thread.messages.filter(
+        (message) => message.id !== interactiveAttempt.persistedUserMessage?.id,
+      )
+    : [...state.thread.messages];
   const recoveryContext = state.isInterviewThread
     ? buildAgentRecoveryContext(priorMessages)
     : null;
 
-  const userMsg: ChatMessage = {
+  const userMsg = interactiveAttempt.persistedUserMessage ?? {
     id: turnId,
-    role: 'user',
+    role: 'user' as const,
     text: text.trim() || 'Uploaded files for context.',
     ts: new Date().toISOString(),
     attachments: attachmentMeta.length > 0 ? attachmentMeta : undefined,
     ...(options?.hidden ? { hidden: true } : {}),
   };
-  state.thread.messages.push(userMsg);
-  state.thread.lastActivityAt = userMsg.ts;
-  broadcast(state, { type: 'message', message: userMsg });
-  await pgInsertMessage(threadId, userMsg);
+  if (!interactiveAttempt.persistedUserMessage) {
+    state.thread.messages.push(userMsg);
+    state.thread.lastActivityAt = userMsg.ts;
+    broadcast(state, { type: 'message', message: userMsg });
+    await pgInsertMessage(threadId, userMsg);
+  }
   logMyWork('message.persisted', {
     turnId,
     messageLength: userMsg.text.length,
