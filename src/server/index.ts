@@ -70,6 +70,7 @@ import loadTestsRoutes from './routes/loadTests';
 import loadTestTargetsRoutes from './routes/loadTestTargets';
 import loadTestRunsInternalRoutes from './routes/loadTestRunsInternal';
 import aiRunsInternalRoutes from './routes/aiRunsInternal';
+import foundationSkillsAuthorizeRoutes from './routes/foundationSkillsAuthorize';
 import profileRoutes from './routes/profile';
 import walkthroughsRoutes from './routes/walkthroughs';
 import { startPdfProcessingPoller } from './services/pdfAssemblyService';
@@ -162,6 +163,11 @@ const loadTestRunnerCallbackPaths = ['/internal/load-test-runs'];
 // AI runner ingest — session-free; requireAiRunnerAuth validates callback identity.
 const aiRunnerCallbackPaths = ['/internal/ai-runs'];
 
+// @apex/skills CLI entitlement lookup — session-free because the CLI runs on
+// developer machines and in CI with no Apex session. Read-only and returns no
+// secrets; reading the package itself still requires an Azure Artifacts token.
+const foundationSkillCliPaths = ['/internal/foundation-skills'];
+
 app.use('/api', (req, res, next) => {
   const isLocalhost = req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1';
   const isInternalPath = internalOnlyPaths.some(p => req.path.startsWith(p));
@@ -172,8 +178,16 @@ app.use('/api', (req, res, next) => {
   const isAiRunnerCallback = aiRunnerCallbackPaths.some((p) =>
     req.path.startsWith(p),
   );
+  const isFoundationSkillCli = foundationSkillCliPaths.some((p) =>
+    req.path.startsWith(p),
+  );
 
-  if (isHealthPath || isLoadTestRunnerCallback || isAiRunnerCallback) return next();
+  if (
+    isHealthPath
+    || isLoadTestRunnerCallback
+    || isAiRunnerCallback
+    || isFoundationSkillCli
+  ) return next();
 
   if (isInternalPath) {
     if (isLocalhost) return next();
@@ -221,6 +235,8 @@ app.use('/api/projects/:projectId/walkthroughs', ensureAuthenticated, walkthroug
 app.use('/api/internal/load-test-runs', loadTestRunsInternalRoutes);
 // AI runner ingest — session-free; auth is runner MI + AiRun.Runner (or local test token).
 app.use('/api/internal/ai-runs', aiRunsInternalRoutes);
+// @apex/skills CLI entitlement lookup — session-free, read-only, no secrets returned.
+app.use('/api/internal/foundation-skills', foundationSkillsAuthorizeRoutes);
 app.use('/api/admin', adminRouter);
 mountAdoMcp(app);
 mountGitHubMcp(app);

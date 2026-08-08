@@ -1347,6 +1347,7 @@ export const featureRequests = pgTable('feature_requests', {
   statusCreatedIdx: index('idx_feature_requests_status_created').on(t.status, t.createdAt),
   typeStatusCreatedIdx: index('idx_feature_requests_type_status_created').on(t.type, t.status, t.createdAt),
   submittedByIdx: index('idx_feature_requests_submitted_by').on(t.submittedBy),
+  sourceProjectIdx: index('idx_feature_requests_source_project').on(t.sourceProject),
 }));
 
 export const featureRequestAdrs = pgTable('feature_request_adrs', {
@@ -2078,6 +2079,7 @@ import type {
   FoundationSkillReleaseStatus,
   FoundationSkillAuditAction,
   FoundationSkillCompatibilityStatus,
+  FoundationSkillArtifactManifest,
 } from '../../shared/types/foundationSkills';
 
 export const foundationSkillReleases = pgTable('foundation_skill_releases', {
@@ -2092,7 +2094,7 @@ export const foundationSkillReleases = pgTable('foundation_skill_releases', {
   selectedSkills:      jsonb('selected_skills').$type<string[]>().notNull().default([]),
   targetProjects:      jsonb('target_projects').$type<string[]>().notNull().default([]),
   skillTargets:        jsonb('skill_targets').$type<Record<string, string[]>>().notNull().default({}),
-  manifestSnapshot:    jsonb('manifest_snapshot').$type<Record<string, unknown>>(),
+  manifestSnapshot:    jsonb('manifest_snapshot').$type<FoundationSkillArtifactManifest>(),
   releaseNotes:        text('release_notes'),
   breakingChanges:     text('breaking_changes'),
   publishedBy:         text('published_by'),

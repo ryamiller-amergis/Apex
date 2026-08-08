@@ -5,7 +5,6 @@ description: Project adapter for app-knowledge. Customize for your project.
 
 # app-knowledge — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/app-knowledge/SKILL.md -->
 
 **Invocation:** `/app-knowledge [optional question]`
 

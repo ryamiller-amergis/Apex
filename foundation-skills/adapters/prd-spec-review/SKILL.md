@@ -5,7 +5,6 @@ description: Project adapter for prd-spec-review. Customize for your project.
 
 # prd-spec-review — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/prd-spec-review/SKILL.md -->
 
 **Invocation:** `/prd-spec-review {slug}`
 

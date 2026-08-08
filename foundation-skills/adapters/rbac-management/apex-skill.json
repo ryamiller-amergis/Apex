@@ -1,8 +1,17 @@
 {
   "apiVersion": 1,
   "skill": "rbac-management",
-  "foundation": { "package": "@apex/skills", "range": ">=0.1.0" },
-  "managedFoundationFiles": [".apex/foundation/rbac-management/SKILL.md"],
-  "extensionFiles": ["SKILL.md"],
-  "capabilities": ["rbac-implementation"]
+  "foundation": {
+    "package": "@apex/skills",
+    "range": ">=0.1.0"
+  },
+  "extensionFiles": [
+    "SKILL.md"
+  ],
+  "capabilities": [
+    "rbac-implementation"
+  ],
+  "managedFiles": [
+    "SKILL.md"
+  ]
 }

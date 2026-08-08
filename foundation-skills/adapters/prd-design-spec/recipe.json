@@ -1,7 +1,7 @@
 {
   "skill": "prd-design-spec",
   "scanScope": "targeted",
-  "targetedGlobs": ["package.json", "**/context.md", "**/CONTEXT.md", "**/AGENTS.md"],
+  "targetedGlobs": ["package.json", "AGENTS.md", "agents.md", "CONTEXT.md", "context.md", "CONTEXT-MAP.md", "context-map.md", "README.md", "readme.md", "**/context.md", "**/CONTEXT.md", "**/AGENTS.md", "**/agents.md", "**/CONTEXT-MAP.md", "**/context-map.md"],
   "detectors": ["stack", "glossary", "routes", "repo-docs"],
   "capFiles": 800,
   "capMs": 45000,

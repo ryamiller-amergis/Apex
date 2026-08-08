@@ -277,7 +277,7 @@ export function formatDoctor(result, { showNextSteps = true } = {}) {
   if (!result.ok) {
     lines.push('\nHard prerequisites missing — fix the FAIL items above, then re-run:');
     lines.push('  npx @apex/skills doctor');
-    lines.push('  npx @apex/skills install');
+    lines.push('  npx @apex/skills install <skill…>   (copy from APEX Getting started banner)');
     return lines.join('\n');
   }
 
@@ -288,17 +288,30 @@ export function formatDoctor(result, { showNextSteps = true } = {}) {
       lines.push(`
 Next steps — first-time setup:
   1. Commit .npmrc (@apex:registry) if you just added it — never commit auth tokens
-  2. npx @apex/skills install        Install foundation skill files + scaffold adapters
-  3. npx @apex/skills bootstrap      Teach the skills your repo (fills adapter templates)
-  4. Review .cursor/skills/<skill>/  Verify adapter content, then commit
+  2. npx @apex/skills install <skill…>   Copy command from APEX Getting started (names your project's selected skills)
+                                          Or: npx @apex/skills install --all  (installs every skill in the package)
+  3. npx @apex/skills bootstrap <skill…> Scoped to the same list; defaults to locked skills if no names given
+                                          Re-fills adapters from repo evidence — install already scaffolds them
+  4. In Cursor: /post-skill-bootstrap     Fill unfilled markers in adapter slots (markers removed when addressed)
+  5. Review .cursor/skills/<skill>/       Verify adapter content + project notes, then commit
 
-Note: skills are plain Markdown — they work in any language repo. Only this CLI requires Node.`);
+File layout per skill:
+  .cursor/skills/<skill>/SKILL.md   Three zones: APEX foundation fence | APEX adapter (merged on bootstrap) | Project notes
+  .cursor/skills/<skill>/*          Companion files (schemas/templates; fully managed)
+  .apex/config.json                 Records the APEX release that authorized this install (commit this)
+  .apex/backups/<skill>/            Backups of foundation-fence edits before overwrite
+  apex-skills.lock.json             Records installed skills and file hashes (commit this)
+
+Note: skills are plain Markdown — they work in any language repo. Only this CLI requires Node.
+      post-skill-bootstrap is always installed with any entitled release.
+      Filled APEX:slot values survive later install/bootstrap; only new gaps get new markers.`);
     } else {
       lines.push(`
 Next steps — apply the update:
-  1. npx @apex/skills update         Pull latest foundation files (existing adapters preserved)
-  2. npx @apex/skills bootstrap      Refresh adapters with updated repo knowledge
-  3. Review and commit changes`);
+  1. npx @apex/skills update [<skill…>]   Pull latest managed content (project notes + filled slots preserved)
+  2. npx @apex/skills bootstrap [<skill…>] Merge adapter from repo evidence; filled slots kept; new gaps marked
+  3. In Cursor: /post-skill-bootstrap     Address any new unfilled markers (skip if none)
+  4. Review and commit changes`);
     }
   }
 

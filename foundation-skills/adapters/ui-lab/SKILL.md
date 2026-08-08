@@ -5,7 +5,6 @@ description: Project design-system adapter for UI Lab. Customize for your projec
 
 # UI Lab — Project Design System Adapter
 
-<!-- Managed loader: this adapter loads its foundation from .apex/foundation/ui-lab/SKILL.md -->
 This adapter extends the project-agnostic `ui-lab` foundation with this project's
 own design system. The values below were auto-drafted from the repository at
 install time and are safe to edit.

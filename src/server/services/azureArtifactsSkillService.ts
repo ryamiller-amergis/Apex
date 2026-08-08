@@ -20,7 +20,13 @@
 
 import https from 'https';
 import crypto from 'crypto';
-import type { ArtifactCandidate } from '../../shared/types/foundationSkills';
+import type {
+  ArtifactCandidate,
+  FoundationSkillArtifactManifest,
+} from '../../shared/types/foundationSkills';
+import { extractCatalogFromNpmTarball } from './foundationSkillArtifactManifest';
+
+const MAX_ARTIFACT_BYTES = 100 * 1024 * 1024;
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -34,6 +40,39 @@ function feedBaseUrl(): string | null {
     ? `https://pkgs.dev.azure.com/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/packaging/feeds/${encodeURIComponent(feed)}`
     : `https://pkgs.dev.azure.com/${encodeURIComponent(org)}/_apis/packaging/feeds/${encodeURIComponent(feed)}`;
   return base;
+}
+
+function feedMetadataBaseUrl(): string | null {
+  const org   = process.env.AZURE_ARTIFACTS_ORG;
+  const feed  = process.env.AZURE_ARTIFACTS_FEED;
+  if (!org || !feed) return null;
+
+  const project = process.env.AZURE_ARTIFACTS_PROJECT;
+  return project
+    ? `https://feeds.dev.azure.com/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/packaging/feeds/${encodeURIComponent(feed)}`
+    : `https://feeds.dev.azure.com/${encodeURIComponent(org)}/_apis/packaging/feeds/${encodeURIComponent(feed)}`;
+}
+
+export function artifactRegistryUrl(): string | null {
+  const org = process.env.AZURE_ARTIFACTS_ORG;
+  const feed = process.env.AZURE_ARTIFACTS_FEED;
+  if (!org || !feed) return null;
+  const project = process.env.AZURE_ARTIFACTS_PROJECT;
+  return project
+    ? `https://pkgs.dev.azure.com/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_packaging/${encodeURIComponent(feed)}/npm/registry/`
+    : `https://pkgs.dev.azure.com/${encodeURIComponent(org)}/_packaging/${encodeURIComponent(feed)}/npm/registry/`;
+}
+
+function packageDownloadUrl(version: string): string | null {
+  const base = feedBaseUrl();
+  if (!base) return null;
+  return `${base}/npm/packages/@apex/skills/versions/${encodeURIComponent(version)}/content?api-version=7.1`;
+}
+
+export function isTrustedArtifactUrl(url: string): boolean {
+  const base = feedBaseUrl();
+  if (!base) return false;
+  return new URL(url).origin === new URL(base).origin;
 }
 
 function authHeader(): string | null {
@@ -113,7 +152,7 @@ function post<T>(url: string, body: unknown): Promise<T> {
  * Returns an empty array when the feed is not configured (non-fatal).
  */
 export async function listCandidates(): Promise<ArtifactCandidate[]> {
-  const base = feedBaseUrl();
+  const base = feedMetadataBaseUrl();
   if (!base) {
     console.warn('[azureArtifactsSkillService] Feed not configured — listCandidates returning []');
     return [];
@@ -156,8 +195,7 @@ export async function verifyPackageIntegrity(
 ): Promise<boolean | null> {
   if (!isAzureArtifactsConfigured()) return null;
 
-  const base = feedBaseUrl()!;
-  const downloadUrl = `${base}/npm/packages/@apex%2Fskills/${encodeURIComponent(version)}/content`;
+  const downloadUrl = packageDownloadUrl(version)!;
 
   return new Promise((resolve) => {
     const auth = authHeader()!;
@@ -194,8 +232,7 @@ export async function verifyPackageIntegrity(
 export async function computePackageIntegrity(version: string): Promise<string | null> {
   if (!isAzureArtifactsConfigured()) return null;
 
-  const base = feedBaseUrl()!;
-  const downloadUrl = `${base}/npm/packages/@apex%2Fskills/${encodeURIComponent(version)}/content`;
+  const downloadUrl = packageDownloadUrl(version)!;
 
   return new Promise((resolve) => {
     const auth = authHeader()!;
@@ -214,6 +251,103 @@ export async function computePackageIntegrity(version: string): Promise<string |
     });
     req.on('error', () => resolve(null));
     req.setTimeout(30_000, () => { req.destroy(); resolve(null); });
+    req.end();
+  });
+}
+
+/**
+ * Download one immutable npm artifact, hash its exact bytes, and extract its
+ * catalog manifest. Throws on every verification failure.
+ */
+export async function verifyPackageArtifact(
+  version: string,
+): Promise<{
+  integritySha256: string;
+  manifest: FoundationSkillArtifactManifest;
+  artifactFeed: string;
+}> {
+  const { tarball: _tarball, ...verification } =
+    await downloadPackageArtifact(version);
+  return verification;
+}
+
+export async function downloadPackageArtifact(
+  version: string,
+): Promise<{
+  tarball: Buffer;
+  integritySha256: string;
+  manifest: FoundationSkillArtifactManifest;
+  artifactFeed: string;
+}> {
+  if (!isAzureArtifactsConfigured()) {
+    throw new Error(
+      'Azure Artifacts feed not configured — release publication is blocked',
+    );
+  }
+  const downloadUrl = packageDownloadUrl(version)!;
+  const tarball = await downloadBuffer(downloadUrl);
+  const artifactFeed = artifactRegistryUrl();
+  if (!artifactFeed) {
+    throw new Error('Azure Artifacts registry URL could not be derived');
+  }
+  return {
+    tarball,
+    integritySha256: crypto.createHash('sha256').update(tarball).digest('hex'),
+    manifest: extractCatalogFromNpmTarball(tarball),
+    artifactFeed,
+  };
+}
+
+function downloadBuffer(url: string, redirects = 0): Promise<Buffer> {
+  if (redirects > 3) {
+    return Promise.reject(new Error('Azure Artifacts download redirected too many times'));
+  }
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const headers: Record<string, string> = {};
+    if (isTrustedArtifactUrl(target.toString())) {
+      const auth = authHeader();
+      if (!auth) {
+        reject(new Error('AZURE_ARTIFACTS_PAT not set'));
+        return;
+      }
+      headers.Authorization = auth;
+    }
+
+    const req = https.request(target, { method: 'GET', headers }, (res) => {
+      if (
+        res.statusCode &&
+        res.statusCode >= 300 &&
+        res.statusCode < 400 &&
+        res.headers.location
+      ) {
+        res.resume();
+        const next = new URL(res.headers.location, target).toString();
+        downloadBuffer(next, redirects + 1).then(resolve, reject);
+        return;
+      }
+      if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
+        res.resume();
+        reject(new Error(`Azure Artifacts download failed: HTTP ${res.statusCode}`));
+        return;
+      }
+
+      const chunks: Buffer[] = [];
+      let total = 0;
+      res.on('data', (chunk: Buffer) => {
+        total += chunk.length;
+        if (total > MAX_ARTIFACT_BYTES) {
+          req.destroy(new Error('Azure Artifacts package exceeds 100 MB limit'));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+    });
+    req.on('error', reject);
+    req.setTimeout(30_000, () => {
+      req.destroy(new Error('Azure Artifacts package download timed out'));
+    });
     req.end();
   });
 }

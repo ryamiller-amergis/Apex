@@ -18,7 +18,7 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
 
 export function useFeatureRequests(project: string | null | undefined) {
   return useQuery<FeatureRequest[]>({
-    queryKey: ['feature-requests'],
+    queryKey: ['feature-requests', project],
     queryFn: () =>
       apiFetch(`/api/feature-requests?project=${encodeURIComponent(project!)}`),
     enabled: !!project,

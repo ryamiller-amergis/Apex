@@ -1,8 +1,17 @@
 {
   "apiVersion": 1,
   "skill": "create-pull-request",
-  "foundation": { "package": "@apex/skills", "range": ">=0.1.0" },
-  "managedFoundationFiles": [".apex/foundation/create-pull-request/SKILL.md"],
-  "extensionFiles": ["SKILL.md"],
-  "capabilities": ["vcs-pr"]
+  "foundation": {
+    "package": "@apex/skills",
+    "range": ">=0.1.0"
+  },
+  "extensionFiles": [
+    "SKILL.md"
+  ],
+  "capabilities": [
+    "vcs-pr"
+  ],
+  "managedFiles": [
+    "SKILL.md"
+  ]
 }

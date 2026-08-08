@@ -1,4 +1,4 @@
-# design-spec-review — APEX rubric (adapter-owned)
+# design-spec-review rubric (adapter-owned)
 
 ## Design doc sections (weight sum = 100)
 
@@ -12,7 +12,7 @@
 | UI/UX | 12 |
 | Tech spec link | 5 |
 | Assumptions link | 5 |
-| Apex terminology compliance | 12 |
+| Project terminology consistency | 12 |
 | No residual template tokens | 6 |
 
 ## Tech spec sections (weight sum = 100)
@@ -43,13 +43,13 @@
 
 ## Cross-cutting checks
 
-| Check | Signal | Feeds into |
-|-------|--------|-----------|
-| Template token scan | `\{[A-Za-z][^}]*\}` | No residual template tokens |
-| `[TBD]` / `TODO` scan | Any match | No residual template tokens |
-| PBI/TBI coverage | ID absent from all 3 files | Architecture; Feature Summary |
-| AC scenario coverage | PBI missing (a)-(d) rows | Acceptance Criteria |
-| Terminology compliance | Non-canonical Apex platform term | Terminology compliance |
-| Mermaid keyword presence | `sequenceDiagram` in diagram 1, `flowchart TD` in diagram 2 | Mermaid diagrams |
-| `⚠` consolidation | `⚠` in design/tech-spec without assumptions entry | Cross-file consistency |
-| Missing files | Feature without all 3 files — score 0 on all sections | All sections |
+| ID | Check | Signal | Feeds into |
+|----|-------|--------|-----------|
+| `template_tokens` | Template token scan | `\{[A-Za-z][^}]*\}` remains in any generated artifact | No residual template tokens |
+| `tbd_markers` | `[TBD]` / `TODO` scan | Any unresolved placeholder marker appears in prose or structured fields | No residual template tokens |
+| `work_item_coverage` | Work-item coverage | Referenced backlog item ID is absent from all three files | Feature Summary; Architecture and Approach |
+| `ac_scenario_coverage` | Acceptance-criteria scenario coverage | Covered backlog item is missing required scenario rows such as happy path, validation, authorization, or failure handling | Acceptance Criteria |
+| `terminology_consistency` | Project terminology consistency | A non-canonical project or domain term is used where a glossary-defined term exists | Project terminology consistency |
+| `mermaid_keyword_presence` | Mermaid keyword presence | Diagram 1 lacks `sequenceDiagram`, or diagram 2 lacks `flowchart TD` | Mermaid Diagram 1 - Code Execution Flow; Mermaid Diagram 2 - Implementation Dependency Map |
+| `warning_consolidation` | Warning consolidation | Design or tech spec records a warning without a matching assumptions entry | Cross-file consistency |
+| `missing_files` | Missing files | Feature is missing one or more required artifacts, so section scores must fall to zero | All sections |

@@ -5,7 +5,6 @@ description: Project adapter for design-doc-validation. Customize for your proje
 
 # design-doc-validation — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/design-doc-validation/SKILL.md -->
 Binds the generic scoring engine to this project. Runs automatically — the
 `documentValidationService` (or equivalent) launches it as an AI agent thread when
 a design doc transitions to `validating`. No user interaction.

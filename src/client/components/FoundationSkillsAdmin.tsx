@@ -17,6 +17,7 @@ import {
   useFoundationSkillRollbackTargets,
   useRollbackFoundationSkillRepo,
   useShippableFoundationSkills,
+  FoundationSkillReleaseValidationClientError,
   type UpdateReleasePayload,
 } from '../hooks/useFoundationSkillAdmin';
 import { useProjects } from '../hooks/useProjects';
@@ -25,7 +26,16 @@ import type {
   FoundationSkillRepoStatus,
   FoundationSkillCatalogEntry,
   FoundationSkillTeamRepo,
+  FoundationSkillReleaseValidationIssue,
 } from '../../shared/types/foundationSkills';
+import {
+  collectFoundationSkillValidationIssues,
+  resolveFoundationSkillSelection,
+} from '../../shared/foundationSkillDependencies';
+import {
+  resolveProjectAssignment,
+  seedProjectPicksFromRelease,
+} from '../../shared/foundationSkillProjectAssignment';
 import styles from './FoundationSkillsAdmin.module.css';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -107,6 +117,7 @@ const ConfirmActionModal: React.FC<ConfirmActionModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="fs-confirm-title"
+      {...{ 'data-testid': 'fs-confirm-modal' }}
     >
       <div className={styles.confirmCard}>
         <div
@@ -145,6 +156,7 @@ const ConfirmActionModal: React.FC<ConfirmActionModalProps> = ({
               onChange={(e) => setReason(e.target.value)}
               placeholder={reasonPlaceholder}
               disabled={isPending}
+              {...{ 'data-testid': 'fs-confirm-reason' }}
             />
           </div>
         )}
@@ -156,6 +168,7 @@ const ConfirmActionModal: React.FC<ConfirmActionModalProps> = ({
             className={styles.btnGhost}
             onClick={onCancel}
             disabled={isPending}
+            {...{ 'data-testid': 'fs-confirm-cancel' }}
           >
             Cancel
           </button>
@@ -164,6 +177,7 @@ const ConfirmActionModal: React.FC<ConfirmActionModalProps> = ({
             className={tone === 'danger' ? styles.confirmBtnDanger : styles.confirmBtnAccent}
             onClick={() => onConfirm(reason.trim() || undefined)}
             disabled={isPending}
+            {...{ 'data-testid': 'fs-confirm-submit' }}
           >
             {isPending ? (pendingLabel ?? `${confirmLabel}…`) : confirmLabel}
           </button>
@@ -178,6 +192,11 @@ function summarizeProjects(projects: string[]): string {
   if (projects.length === 0) return 'All projects';
   if (projects.length <= 2)  return projects.join(', ');
   return `${projects.length} projects`;
+}
+
+function formatDependencyLabel(skills: string[]): string {
+  if (skills.length === 1) return skills[0];
+  return skills.join(', ');
 }
 
 // ── ProjectPicker — reusable multi-select ────────────────────────────────────
@@ -254,7 +273,8 @@ const ProjectPicker: React.FC<{
             <span key={p} className={styles.chip}>
               {p}
               <button type="button" className={styles.chipRemove}
-                onClick={() => onChange(selected.filter(x => x !== p))} aria-label={`Remove ${p}`}>×</button>
+                onClick={() => onChange(selected.filter(x => x !== p))} aria-label={`Remove ${p}`}
+                {...{ 'data-testid': `fs-project-chip-remove-${p}` }}>×</button>
             </span>
           ))}
         </div>
@@ -272,6 +292,7 @@ const ProjectPicker: React.FC<{
         aria-controls={listId}
         aria-haspopup="listbox"
         aria-label="Projects"
+        {...{ 'data-testid': 'fs-project-picker-input' }}
       />
 
       {open && (
@@ -297,6 +318,7 @@ const ProjectPicker: React.FC<{
                       className={`${styles.dropdownItem} ${isSelected ? styles.dropdownItemSelected : ''}`}
                       aria-pressed={isSelected}
                       onClick={() => toggle(name)}
+                      {...{ 'data-testid': `fs-project-picker-option-${name}` }}
                     >
                       <span className={styles.dropdownCheck} aria-hidden="true">✓</span>
                       {name}
@@ -328,17 +350,19 @@ const AudienceField: React.FC<{
     <div className={styles.formRow}>
       <span className={styles.label} id={`${idPrefix}-audience-label`}>Default audience</span>
       <p className={styles.fieldHint}>
-        Controls which Apex projects can see and install this release. Individual skills can override this later.
+        Controls which Apex projects can see and install this release. Under Specific projects, the next step assigns skills per project.
       </p>
       <div className={styles.segmented} role="radiogroup" aria-labelledby={`${idPrefix}-audience-label`}>
         <button type="button" role="radio" aria-checked={mode === 'all'}
           className={`${styles.segmentedBtn} ${mode === 'all' ? styles.segmentedBtnActive : ''}`}
-          onClick={() => onModeChange('all')}>
+          onClick={() => onModeChange('all')}
+          {...{ 'data-testid': `fs-audience-all-${idPrefix}` }}>
           All projects
         </button>
         <button type="button" role="radio" aria-checked={mode === 'specific'}
           className={`${styles.segmentedBtn} ${mode === 'specific' ? styles.segmentedBtnActive : ''}`}
-          onClick={() => onModeChange('specific')}>
+          onClick={() => onModeChange('specific')}
+          {...{ 'data-testid': `fs-audience-specific-${idPrefix}` }}>
           Specific projects
         </button>
       </div>
@@ -346,59 +370,126 @@ const AudienceField: React.FC<{
     {mode === 'specific' && (
       <div className={styles.formRow}>
         <span className={styles.label}>Projects</span>
-        <ProjectPicker selected={projects} onChange={onProjectsChange} />
+        <ProjectPicker selected={projects} onChange={onProjectsChange}
+          {...{ 'data-testid': `fs-audience-project-picker-${idPrefix}` }} />
       </div>
     )}
   </>
 );
 
-// ── SkillPicker — checklist with per-skill audience override ─────────────────
+// ── Skill checklist rows (shared by All-projects picker + per-project cards) ──
 
-interface SkillAudiencePick {
-  mode: 'inherit' | 'specific';
-  projects: string[];
+interface ReviewValidationIssue {
+  key: string;
+  message: string;
+  remediation: string;
 }
 
-/** Derive skillTargets map from picked audiences (only include explicit overrides). */
-function buildSkillTargets(picked: Record<string, SkillAudiencePick>): Record<string, string[]> {
-  const out: Record<string, string[]> = {};
-  for (const [name, pick] of Object.entries(picked)) {
-    if (pick.mode === 'specific') {
-      out[name] = pick.projects;
-    }
-  }
-  return out;
-}
-
-const SkillPicker: React.FC<{
+const SkillChecklistRows: React.FC<{
   catalog: FoundationSkillCatalogEntry[];
   isCatalogLoading?: boolean;
-  selectedSkills: string[];
-  skillAudiences: Record<string, SkillAudiencePick>;
-  releaseAudienceLabel: string;
+  search: string;
+  explicitSelectedSkills: string[];
+  effectiveSelectedSkills: string[];
+  requiredBy: Record<string, string[]>;
   onSkillToggle: (name: string) => void;
-  onAudienceChange: (name: string, pick: SkillAudiencePick) => void;
-  onSelectAll: () => void;
-  onClearAll: () => void;
+  idPrefix: string;
+  testIdPrefix: string;
 }> = ({
-  catalog, isCatalogLoading = false,
-  selectedSkills, skillAudiences, releaseAudienceLabel,
-  onSkillToggle, onAudienceChange, onSelectAll, onClearAll,
+  catalog, isCatalogLoading = false, search,
+  explicitSelectedSkills, effectiveSelectedSkills, requiredBy,
+  onSkillToggle, idPrefix, testIdPrefix,
 }) => {
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const [search, setSearch]     = useState('');
-
-  const term    = search.trim().toLowerCase();
+  const term = search.trim().toLowerCase();
   const visible = term
     ? catalog.filter(s =>
         s.name.toLowerCase().includes(term) || s.summary.toLowerCase().includes(term))
     : catalog;
 
+  if (isCatalogLoading) {
+    return <p className={`${styles.muted} ${styles.skillEmpty}`}>Loading skill catalog…</p>;
+  }
+  if (catalog.length === 0) {
+    return (
+      <p className={`${styles.muted} ${styles.skillEmpty}`}>
+        No releasable skills found in the catalog.
+      </p>
+    );
+  }
+  if (visible.length === 0) {
+    return <p className={`${styles.muted} ${styles.skillEmpty}`}>No skills match “{search}”.</p>;
+  }
+
+  return (
+    <>
+      {visible.map(skill => {
+        const checked = effectiveSelectedSkills.includes(skill.name);
+        const isExplicit = explicitSelectedSkills.includes(skill.name);
+        const requiredBySkills = requiredBy[skill.name] ?? [];
+        const isAutoRequired = checked && !isExplicit && requiredBySkills.length > 0;
+        const requiredById = isAutoRequired
+          ? `${idPrefix}-required-by-${skill.name}`
+          : undefined;
+        const inputId = `${idPrefix}-${skill.name}`;
+
+        return (
+          <div
+            key={skill.name}
+            className={`${styles.skillRow} ${checked ? styles.skillRowChecked : ''}`}
+          >
+            <div className={styles.skillRowMain}>
+              <input
+                type="checkbox"
+                className={styles.checkbox}
+                id={inputId}
+                checked={checked}
+                onChange={() => onSkillToggle(skill.name)}
+                disabled={isAutoRequired}
+                aria-describedby={requiredById}
+                {...{ 'data-testid': `${testIdPrefix}-${skill.name}` }}
+              />
+              <label htmlFor={inputId} className={styles.skillRowText}>
+                <span className={styles.skillName}>
+                  {skill.name}
+                  {isAutoRequired && (
+                    <span className={styles.skillDependencyTag} id={requiredById}>
+                      Required by {formatDependencyLabel(requiredBySkills)}
+                    </span>
+                  )}
+                </span>
+                <span className={styles.skillSummary}>{skill.summary}</span>
+              </label>
+            </div>
+          </div>
+        );
+      })}
+    </>
+  );
+};
+
+// ── SkillPicker — plain checklist for All-projects audience ──────────────────
+
+const SkillPicker: React.FC<{
+  catalog: FoundationSkillCatalogEntry[];
+  isCatalogLoading?: boolean;
+  explicitSelectedSkills: string[];
+  effectiveSelectedSkills: string[];
+  requiredBy: Record<string, string[]>;
+  onSkillToggle: (name: string) => void;
+  onSelectAll: () => void;
+  onClearAll: () => void;
+}> = ({
+  catalog, isCatalogLoading = false,
+  explicitSelectedSkills, effectiveSelectedSkills, requiredBy,
+  onSkillToggle, onSelectAll, onClearAll,
+}) => {
+  const [search, setSearch] = useState('');
+
   return (
     <div className={styles.skillPickerBox}>
       <div className={styles.skillPickerHeader}>
         <span className={styles.skillPickerCount}>
-          {selectedSkills.length} of {catalog.length} selected
+          {effectiveSelectedSkills.length} of {catalog.length} selected
         </span>
         <input
           className={styles.skillSearch}
@@ -406,92 +497,223 @@ const SkillPicker: React.FC<{
           onChange={e => setSearch(e.target.value)}
           placeholder="Filter skills…"
           aria-label="Filter skills"
+          {...{ 'data-testid': 'fs-skill-search' }}
         />
         <div className={`${styles.btnRow} ${styles.pushRight}`}>
-          <button type="button" className={`${styles.btnGhost} ${styles.btnSm}`} onClick={onSelectAll}>
+          <button type="button" className={`${styles.btnGhost} ${styles.btnSm}`} onClick={onSelectAll}
+            {...{ 'data-testid': 'fs-skill-select-all' }}>
             Select all
           </button>
-          <button type="button" className={`${styles.btnGhost} ${styles.btnSm}`} onClick={onClearAll}>
+          <button type="button" className={`${styles.btnGhost} ${styles.btnSm}`} onClick={onClearAll}
+            {...{ 'data-testid': 'fs-skill-clear-all' }}>
             Clear
           </button>
         </div>
       </div>
 
       <div className={styles.skillList}>
-        {isCatalogLoading ? (
-          <p className={`${styles.muted} ${styles.skillEmpty}`}>Loading skill catalog…</p>
-        ) : catalog.length === 0 ? (
-          <p className={`${styles.muted} ${styles.skillEmpty}`}>
-            No releasable skills found in the catalog.
-          </p>
-        ) : visible.length === 0 ? (
-          <p className={`${styles.muted} ${styles.skillEmpty}`}>No skills match “{search}”.</p>
-        ) : visible.map(skill => {
-          const checked     = selectedSkills.includes(skill.name);
-          const audience    = skillAudiences[skill.name];
-          const isExpanded  = expanded === skill.name;
-          const hasOverride = audience?.mode === 'specific';
-
-          return (
-            <div key={skill.name} className={`${styles.skillRow} ${checked ? styles.skillRowChecked : ''}`}>
-              <div className={styles.skillRowMain}>
-                <input
-                  type="checkbox"
-                  className={styles.checkbox}
-                  id={`skill-${skill.name}`}
-                  checked={checked}
-                  onChange={() => onSkillToggle(skill.name)}
-                />
-                <label htmlFor={`skill-${skill.name}`} className={styles.skillRowText}>
-                  <span className={styles.skillName}>{skill.name}</span>
-                  <span className={styles.skillSummary}>{skill.summary}</span>
-                </label>
-                {checked && (
-                  <button
-                    type="button"
-                    className={`${styles.skillAudienceBtn} ${hasOverride ? styles.skillAudienceBtnActive : ''}`}
-                    aria-expanded={isExpanded}
-                    onClick={() => setExpanded(isExpanded ? null : skill.name)}
-                    title={hasOverride
-                      ? `Only: ${audience.projects.join(', ') || 'none set'}`
-                      : `Inherits release audience (${releaseAudienceLabel})`}
-                  >
-                    {hasOverride
-                      ? `Only ${summarizeProjects(audience.projects)}`
-                      : 'Audience'}
-                  </button>
-                )}
-              </div>
-
-              {checked && isExpanded && (
-                <div className={styles.skillAudiencePanel}>
-                  <span className={styles.skillAudiencePanelLabel}>Who can install {skill.name}?</span>
-                  <div className={`${styles.segmented} ${styles.segmentedSm}`} role="radiogroup"
-                    aria-label={`Audience for ${skill.name}`}>
-                    <button type="button" role="radio" aria-checked={!hasOverride}
-                      className={`${styles.segmentedBtn} ${!hasOverride ? styles.segmentedBtnActive : ''}`}
-                      onClick={() => onAudienceChange(skill.name, { mode: 'inherit', projects: [] })}>
-                      Inherit ({releaseAudienceLabel})
-                    </button>
-                    <button type="button" role="radio" aria-checked={hasOverride}
-                      className={`${styles.segmentedBtn} ${hasOverride ? styles.segmentedBtnActive : ''}`}
-                      onClick={() => onAudienceChange(skill.name, { mode: 'specific', projects: audience?.projects ?? [] })}>
-                      Specific projects
-                    </button>
-                  </div>
-                  {hasOverride && (
-                    <ProjectPicker
-                      selected={audience.projects}
-                      onChange={projects => onAudienceChange(skill.name, { mode: 'specific', projects })}
-                      placeholder="Add project override…"
-                    />
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
+        <SkillChecklistRows
+          catalog={catalog}
+          isCatalogLoading={isCatalogLoading}
+          search={search}
+          explicitSelectedSkills={explicitSelectedSkills}
+          effectiveSelectedSkills={effectiveSelectedSkills}
+          requiredBy={requiredBy}
+          onSkillToggle={onSkillToggle}
+          idPrefix="skill"
+          testIdPrefix="fs-skill-checkbox"
+        />
       </div>
+    </div>
+  );
+};
+
+// ── ProjectSkillAssignment — per-project accordion checklists ────────────────
+
+const ProjectSkillCard: React.FC<{
+  project: string;
+  catalog: FoundationSkillCatalogEntry[];
+  isCatalogLoading?: boolean;
+  explicit: string[];
+  effective: string[];
+  requiredBy: Record<string, string[]>;
+  otherProjects: string[];
+  expanded: boolean;
+  onToggleExpanded: () => void;
+  onPicksChange: (picks: string[]) => void;
+  onCopyFrom: (sourceProject: string) => void;
+}> = ({
+  project, catalog, isCatalogLoading = false,
+  explicit, effective, requiredBy, otherProjects,
+  expanded, onToggleExpanded, onPicksChange, onCopyFrom,
+}) => {
+  const [search, setSearch] = useState('');
+  const safeId = project.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+  return (
+    <div
+      className={`${styles.projectSkillCard} ${expanded ? styles.projectSkillCardOpen : ''}`}
+      {...{ 'data-testid': `fs-project-skill-card-${project}` }}
+    >
+      <button
+        type="button"
+        className={styles.projectSkillCardHeader}
+        aria-expanded={expanded}
+        onClick={onToggleExpanded}
+        {...{ 'data-testid': `fs-project-skill-toggle-${project}` }}
+      >
+        <span className={styles.projectSkillCardChevron} aria-hidden="true">
+          {expanded ? '▾' : '▸'}
+        </span>
+        <span className={styles.projectSkillCardTitle}>{project}</span>
+        <span className={styles.projectSkillCardCount}>
+          {effective.length} of {catalog.length} selected
+        </span>
+      </button>
+
+      {expanded && (
+        <div className={styles.projectSkillCardBody}>
+          <div className={styles.projectSkillCardToolbar}>
+            <input
+              className={styles.skillSearch}
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Filter skills…"
+              aria-label={`Filter skills for ${project}`}
+              {...{ 'data-testid': `fs-project-skill-search-${project}` }}
+            />
+            <div className={`${styles.btnRow} ${styles.pushRight}`}>
+              {otherProjects.length > 0 && (
+                <label className={styles.copyFromLabel}>
+                  <span className={styles.srOnly}>Copy skills from</span>
+                  <select
+                    className={styles.copyFromSelect}
+                    value=""
+                    onChange={e => {
+                      if (e.target.value) onCopyFrom(e.target.value);
+                      e.target.value = '';
+                    }}
+                    aria-label={`Copy skills into ${project} from another project`}
+                    {...{ 'data-testid': `fs-project-skill-copy-from-${project}` }}
+                  >
+                    <option value="">Copy from…</option>
+                    {otherProjects.map(p => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <button
+                type="button"
+                className={`${styles.btnGhost} ${styles.btnSm}`}
+                onClick={() => onPicksChange(catalog.map(s => s.name))}
+                {...{ 'data-testid': `fs-project-skill-select-all-${project}` }}
+              >
+                Select all
+              </button>
+              <button
+                type="button"
+                className={`${styles.btnGhost} ${styles.btnSm}`}
+                onClick={() => onPicksChange([])}
+                {...{ 'data-testid': `fs-project-skill-clear-${project}` }}
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+
+          <div className={`${styles.skillList} ${styles.projectSkillList}`}>
+            <SkillChecklistRows
+              catalog={catalog}
+              isCatalogLoading={isCatalogLoading}
+              search={search}
+              explicitSelectedSkills={explicit}
+              effectiveSelectedSkills={effective}
+              requiredBy={requiredBy}
+              onSkillToggle={name =>
+                onPicksChange(
+                  explicit.includes(name)
+                    ? explicit.filter(s => s !== name)
+                    : [...explicit, name],
+                )
+              }
+              idPrefix={`skill-${safeId}`}
+              testIdPrefix={`fs-project-skill-checkbox-${project}`}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const ProjectSkillAssignment: React.FC<{
+  catalog: FoundationSkillCatalogEntry[];
+  isCatalogLoading?: boolean;
+  projects: string[];
+  projectSkillPicks: Record<string, string[]>;
+  onProjectPicksChange: (project: string, picks: string[]) => void;
+  onCopyProjectPicks: (from: string, to: string) => void;
+}> = ({
+  catalog, isCatalogLoading = false, projects,
+  projectSkillPicks, onProjectPicksChange, onCopyProjectPicks,
+}) => {
+  const [expandedProject, setExpandedProject] = useState<string | null>(
+    () => projects[0] ?? null,
+  );
+
+  useEffect(() => {
+    if (projects.length === 0) {
+      setExpandedProject(null);
+      return;
+    }
+    setExpandedProject(prev =>
+      prev && projects.includes(prev) ? prev : projects[0],
+    );
+  }, [projects]);
+
+  const assignment = resolveProjectAssignment(catalog, projects, projectSkillPicks);
+
+  if (projects.length === 0) {
+    return (
+      <p className={`${styles.muted} ${styles.skillEmpty}`} {...{ 'data-testid': 'fs-project-skill-empty' }}>
+        Select at least one project in the Audience step, then assign skills here.
+      </p>
+    );
+  }
+
+  return (
+    <div className={styles.projectSkillAssignment} {...{ 'data-testid': 'fs-project-skill-assignment' }}>
+      <p className={styles.fieldHint}>
+        Choose which skills each project can install. Required dependencies are added
+        automatically for that project.
+      </p>
+      {projects.map(project => {
+        const per = assignment.perProject[project] ?? {
+          explicit: projectSkillPicks[project] ?? [],
+          effective: [],
+          requiredBy: {},
+        };
+        return (
+          // data-testid-exempt — ProjectSkillCard root already emits fs-project-skill-card-${project}
+          <ProjectSkillCard
+            key={project}
+            project={project}
+            catalog={catalog}
+            isCatalogLoading={isCatalogLoading}
+            explicit={per.explicit}
+            effective={per.effective}
+            requiredBy={per.requiredBy}
+            otherProjects={projects.filter(p => p !== project)}
+            expanded={expandedProject === project}
+            onToggleExpanded={() =>
+              setExpandedProject(current => (current === project ? null : project))
+            }
+            onPicksChange={picks => onProjectPicksChange(project, picks)}
+            onCopyFrom={source => onCopyProjectPicks(source, project)}
+          />
+        );
+      })}
     </div>
   );
 };
@@ -507,17 +729,22 @@ const WIZARD_STEPS: Array<{ id: WizardStep; label: string; title: string; hint: 
   },
   {
     id: 'audience', label: 'Audience', title: 'Default audience',
-    hint: 'Choose which Apex projects this release is offered to. This is the default — you can narrow individual skills in the next step.',
+    hint: 'Choose which Apex projects this release is offered to. Under Specific projects, the next step assigns skills per project.',
   },
   {
     id: 'skills', label: 'Skills', title: 'Select skills',
-    hint: 'Pick the foundation skills bundled in this release. Hover a row to give a single skill a narrower audience than the release default.',
+    hint: 'Pick the foundation skills bundled in this release. Required dependencies are selected automatically.',
   },
   {
     id: 'review', label: 'Review', title: 'Review and create',
     hint: 'Confirm everything below. The release is created as a draft — nothing reaches teams until you publish it.',
   },
 ];
+
+const SKILLS_STEP_SPECIFIC = {
+  title: 'Assign skills to projects',
+  hint: 'For each project, choose which skills it can install. Required dependencies are added automatically for that project.',
+};
 
 const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({ onCreated }) => {
   const [step, setStep]                     = useState<WizardStep>('details');
@@ -527,31 +754,97 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({ onCreated })
   const [breakingChanges, setBreaking]      = useState('');
   const [audienceMode, setAudienceMode]     = useState<'all' | 'specific'>('all');
   const [selectedProjects, setSelected]     = useState<string[]>([]);
-  const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
-  const [skillAudiences, setSkillAudiences] = useState<Record<string, SkillAudiencePick>>({});
+  const [explicitSelectedSkills, setExplicitSelectedSkills] = useState<string[]>([]);
+  const [projectSkillPicks, setProjectSkillPicks] = useState<Record<string, string[]>>({});
   const [error, setError]                   = useState<string | null>(null);
 
   const seededRef = useRef(false);
+  const versionSeededRef = useRef(false);
 
   const { skills: catalog, isLoading: catalogLoading } = useShippableFoundationSkills();
+  const { data: candidates = [], isLoading: candidatesLoading } = useFoundationSkillCandidates();
   const create = useCreateFoundationSkillRelease();
 
   // A new release includes everything by default; seed once the catalog arrives.
   useEffect(() => {
     if (seededRef.current || catalog.length === 0) return;
     seededRef.current = true;
-    setSelectedSkills(catalog.map(s => s.name));
+    setExplicitSelectedSkills(catalog.map(s => s.name));
   }, [catalog]);
 
+  // Keep per-project pick maps aligned with the selected project list.
+  // Wait for the catalog so a late-loading catalog does not leave empty defaults.
+  useEffect(() => {
+    if (audienceMode !== 'specific' || catalog.length === 0) return;
+    const allNames = catalog.map(s => s.name);
+    setProjectSkillPicks(prev => {
+      const next: Record<string, string[]> = {};
+      let changed = Object.keys(prev).some(key => !selectedProjects.includes(key));
+      for (const project of selectedProjects) {
+        if (project in prev) {
+          next[project] = prev[project];
+        } else {
+          next[project] = allNames;
+          changed = true;
+        }
+      }
+      return changed || Object.keys(next).length !== Object.keys(prev).length ? next : prev;
+    });
+  }, [audienceMode, selectedProjects, catalog]);
+
+  // Prefill suite + artifact from the newest Azure Artifacts candidate so Publish
+  // cannot target a version that was never published to the feed.
+  useEffect(() => {
+    if (versionSeededRef.current || candidatesLoading || candidates.length === 0) return;
+    versionSeededRef.current = true;
+    const latestCandidate = candidates[0].version;
+    setVersion(latestCandidate);
+    setArtifact(latestCandidate);
+  }, [candidates, candidatesLoading]);
+
+  const applyCandidateVersion = (next: string) => {
+    setArtifact(next);
+    // Keep suite in lockstep when the admin hasn't customized it away from the artifact.
+    setVersion((current) => (!current.trim() || current.trim() === artifactVersion.trim() ? next : current));
+  };
+
   const stepIndex   = WIZARD_STEPS.findIndex(s => s.id === step);
-  const currentMeta = WIZARD_STEPS[stepIndex];
+  const currentMeta = step === 'skills' && audienceMode === 'specific'
+    ? { ...WIZARD_STEPS[stepIndex], ...SKILLS_STEP_SPECIFIC }
+    : WIZARD_STEPS[stepIndex];
   const isLastStep  = step === 'review';
 
   const releaseAudienceLabel = audienceMode === 'all'
     ? 'All projects'
     : selectedProjects.length > 0 ? summarizeProjects(selectedProjects) : 'none selected';
 
-  const overrideCount = Object.values(skillAudiences).filter(a => a.mode === 'specific').length;
+  const allModeSelection = resolveFoundationSkillSelection(catalog, explicitSelectedSkills);
+  const projectAssignment = resolveProjectAssignment(
+    catalog,
+    selectedProjects,
+    projectSkillPicks,
+  );
+  const selectionState = audienceMode === 'specific'
+    ? {
+        explicitSelectedSkills: [...new Set(selectedProjects.flatMap(p => projectSkillPicks[p] ?? []))],
+        effectiveSelectedSkills: projectAssignment.effectiveSelectedSkills,
+        dependencyOrder: projectAssignment.dependencyOrder,
+        requiredBy: {},
+      }
+    : allModeSelection;
+  const selectedSkillTargets = audienceMode === 'specific' ? projectAssignment.skillTargets : {};
+  const reviewIssues: ReviewValidationIssue[] = collectFoundationSkillValidationIssues({
+    skills: catalog,
+    selectedSkills: selectionState.effectiveSelectedSkills,
+    targetProjects: audienceMode === 'specific' ? selectedProjects : [],
+    skillTargets: selectedSkillTargets,
+  }).map((issue) => ({
+    key: `${issue.type}-${issue.dependentSkill}-${issue.dependency}`,
+    message: issue.message,
+    remediation: issue.remediation,
+  }));
+
+  const overrideCount = Object.keys(selectedSkillTargets).length;
 
   /** Returns an error message when the given step is incomplete, else null. */
   const validateStep = (target: WizardStep): string | null => {
@@ -561,8 +854,11 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({ onCreated })
     if (target === 'audience' && audienceMode === 'specific' && selectedProjects.length === 0) {
       return 'Select at least one project or switch to "All projects".';
     }
-    if (target === 'skills' && selectedSkills.length === 0) {
+    if (target === 'skills' && selectionState.effectiveSelectedSkills.length === 0) {
       return 'Select at least one skill to include in this release.';
+    }
+    if (target === 'review' && reviewIssues.length > 0) {
+      return 'Resolve dependency coverage issues before creating the draft.';
     }
     return null;
   };
@@ -596,16 +892,20 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({ onCreated })
       await create.mutateAsync({
         version:         version.trim(),
         artifactVersion: artifactVersion.trim() || version.trim(),
-        selectedSkills,
+        selectedSkills:  selectionState.dependencyOrder,
         targetProjects:  audienceMode === 'specific' ? selectedProjects : [],
-        skillTargets:    buildSkillTargets(skillAudiences),
+        skillTargets:    selectedSkillTargets,
         releaseNotes:    releaseNotes.trim()    || null,
         breakingChanges: breakingChanges.trim() || null,
       });
-      setVersion(''); setArtifact(''); setNotes(''); setBreaking('');
+      const nextCandidate = candidates[0]?.version ?? '';
+      setVersion(nextCandidate);
+      setArtifact(nextCandidate);
+      versionSeededRef.current = candidates.length > 0;
+      setNotes(''); setBreaking('');
       setAudienceMode('all'); setSelected([]);
-      setSelectedSkills(catalog.map(s => s.name));
-      setSkillAudiences({});
+      setExplicitSelectedSkills(catalog.map(s => s.name));
+      setProjectSkillPicks({});
       setStep('details');
       onCreated();
     } catch (err: unknown) {
@@ -626,7 +926,8 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({ onCreated })
   return (
     // noValidate: native constraint validation can't see fields on inactive
     // steps, so validateStep is the single source of truth for the whole wizard.
-    <form className={styles.wizard} onSubmit={handleSubmit} noValidate>
+    <form className={styles.wizard} onSubmit={handleSubmit} noValidate
+      {...{ 'data-testid': 'fs-create-wizard-form' }}>
       {/* ── Stepper ── */}
       <div className={styles.wizardSteps}>
         {WIZARD_STEPS.map((s, i) => {
@@ -642,6 +943,7 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({ onCreated })
                 className={`${styles.wizardStep} ${state}`}
                 onClick={() => goTo(s.id)}
                 aria-current={i === stepIndex ? 'step' : undefined}
+                {...{ 'data-testid': `fs-wizard-step-${s.id}` }}
               >
                 <span className={styles.wizardStepNum}>{i < stepIndex ? '✓' : i + 1}</span>
                 <span className={styles.wizardStepLabel}>{s.label}</span>
@@ -658,31 +960,89 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({ onCreated })
 
         {step === 'details' && (
           <div className={styles.stepNarrow}>
+            {!candidatesLoading && candidates.length === 0 && (
+              <div
+                className={styles.feedWarning}
+                role="status"
+                {...{ 'data-testid': 'fs-wizard-feed-unreachable' }}
+              >
+                <span className={styles.feedWarningIcon} aria-hidden="true">⚠</span>
+                <div>
+                  <p className={styles.feedWarningTitle}>Azure Artifacts feed unreachable</p>
+                  <p>
+                    The artifact version below is free text and will not be checked against
+                    the feed — on publish or afterwards. A version that was never published
+                    will be accepted here, and installs are pinned to whatever you enter.
+                  </p>
+                  <p>
+                    Set <code>AZURE_ARTIFACTS_ORG</code>, <code>AZURE_ARTIFACTS_FEED</code> and{' '}
+                    <code>AZURE_ARTIFACTS_PAT</code> on the APEX App Service to restore the
+                    version picker and publish-time verification.
+                  </p>
+                </div>
+              </div>
+            )}
             <div className={styles.fieldGrid}>
               <div className={styles.formRow}>
                 <label className={styles.label} htmlFor="fs-version">Suite version</label>
                 <input id="fs-version" className={`${styles.input} ${styles.inputMono}`} value={version}
-                  onChange={e => setVersion(e.target.value)} placeholder="0.3.0" aria-required="true" />
-                <p className={styles.fieldHint}>Semver identifier teams will see, e.g. 0.3.0</p>
+                  onChange={e => setVersion(e.target.value)} placeholder="1.0.0" aria-required="true"
+                  {...{ 'data-testid': 'fs-wizard-version' }} />
+                <p className={styles.fieldHint}>
+                  Label teams see in APEX. Defaults to the newest feed candidate; you can rename it.
+                </p>
               </div>
               <div className={styles.formRow}>
                 <label className={styles.label} htmlFor="fs-artifact">Artifact version</label>
-                <input id="fs-artifact" className={`${styles.input} ${styles.inputMono}`} value={artifactVersion}
-                  onChange={e => setArtifact(e.target.value)} placeholder="same as suite version" />
-                <p className={styles.fieldHint}>Azure Artifacts package version. Leave blank to match the suite version.</p>
+                {candidates.length > 0 ? (
+                  <select
+                    id="fs-artifact"
+                    className={`${styles.select} ${styles.inputMono}`}
+                    value={artifactVersion}
+                    onChange={e => applyCandidateVersion(e.target.value)}
+                    aria-required="true"
+                    {...{ 'data-testid': 'fs-wizard-artifact-select' }}
+                  >
+                    {candidates.map(c => (
+                      <option key={c.version} value={c.version}>
+                        {c.version}
+                        {c === candidates[0] ? ' (latest in feed)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    id="fs-artifact"
+                    className={`${styles.input} ${styles.inputMono}`}
+                    value={artifactVersion}
+                    onChange={e => setArtifact(e.target.value)}
+                    placeholder={candidatesLoading ? 'Loading feed…' : 'e.g. 1.0.0'}
+                    disabled={candidatesLoading}
+                    {...{ 'data-testid': 'fs-wizard-artifact-input' }}
+                  />
+                )}
+                <p className={styles.fieldHint}>
+                  {candidates.length > 0
+                    ? 'Must be a version already published to Azure Artifacts (auto-filled from the feed).'
+                    : candidatesLoading
+                      ? 'Loading candidates from Azure Artifacts…'
+                      : 'No feed candidates found yet. Run the publish-apex-skills workflow, then refresh.'}
+                </p>
               </div>
             </div>
             <div className={styles.formRow}>
               <label className={styles.label} htmlFor="fs-notes">Release notes</label>
               <textarea id="fs-notes" className={styles.textarea} value={releaseNotes}
                 onChange={e => setNotes(e.target.value)} rows={4}
-                placeholder="What changed in this release?" />
+                placeholder="What changed in this release?"
+                {...{ 'data-testid': 'fs-wizard-notes' }} />
             </div>
             <div className={styles.formRow}>
               <label className={styles.label} htmlFor="fs-breaking">Breaking changes</label>
               <textarea id="fs-breaking" className={styles.textarea} value={breakingChanges}
                 onChange={e => setBreaking(e.target.value)} rows={2}
-                placeholder="Anything that requires manual work from consuming teams" />
+                placeholder="Anything that requires manual work from consuming teams"
+                {...{ 'data-testid': 'fs-wizard-breaking' }} />
               <p className={styles.fieldHint}>
                 Filling this in flags the release as breaking in every team&apos;s update banner.
               </p>
@@ -695,27 +1055,51 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({ onCreated })
             <AudienceField
               mode={audienceMode}
               projects={selectedProjects}
-              onModeChange={mode => { setAudienceMode(mode); setSelected([]); }}
+              onModeChange={mode => {
+                setAudienceMode(mode);
+                setSelected([]);
+                if (mode === 'all') setProjectSkillPicks({});
+              }}
               onProjectsChange={setSelected}
               idPrefix="fs"
+              {...{ 'data-testid': 'fs-wizard-audience-field' }}
             />
           </div>
         )}
 
         {step === 'skills' && (
-          <SkillPicker
-            catalog={catalog}
-            isCatalogLoading={catalogLoading}
-            selectedSkills={selectedSkills}
-            skillAudiences={skillAudiences}
-            releaseAudienceLabel={releaseAudienceLabel}
-            onSkillToggle={name =>
-              setSelectedSkills(prev => prev.includes(name) ? prev.filter(s => s !== name) : [...prev, name])
-            }
-            onAudienceChange={(name, pick) => setSkillAudiences(prev => ({ ...prev, [name]: pick }))}
-            onSelectAll={() => setSelectedSkills(catalog.map(s => s.name))}
-            onClearAll={() => { setSelectedSkills([]); setSkillAudiences({}); }}
-          />
+          audienceMode === 'specific' ? (
+            <ProjectSkillAssignment
+              catalog={catalog}
+              isCatalogLoading={catalogLoading}
+              projects={selectedProjects}
+              projectSkillPicks={projectSkillPicks}
+              onProjectPicksChange={(project, picks) =>
+                setProjectSkillPicks(prev => ({ ...prev, [project]: picks }))
+              }
+              onCopyProjectPicks={(from, to) =>
+                setProjectSkillPicks(prev => ({
+                  ...prev,
+                  [to]: [...(prev[from] ?? [])],
+                }))
+              }
+            />
+          ) : (
+            <SkillPicker
+              catalog={catalog}
+              isCatalogLoading={catalogLoading}
+              explicitSelectedSkills={allModeSelection.explicitSelectedSkills}
+              effectiveSelectedSkills={allModeSelection.effectiveSelectedSkills}
+              requiredBy={allModeSelection.requiredBy}
+              onSkillToggle={name =>
+                setExplicitSelectedSkills(prev =>
+                  prev.includes(name) ? prev.filter(s => s !== name) : [...prev, name],
+                )
+              }
+              onSelectAll={() => setExplicitSelectedSkills(catalog.map(s => s.name))}
+              onClearAll={() => setExplicitSelectedSkills([])}
+            />
+          )
         )}
 
         {step === 'review' && (
@@ -742,33 +1126,47 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({ onCreated })
                 </span>
               </div>
               <div className={styles.reviewItem}>
-                <span className={styles.reviewKey}>Skills ({selectedSkills.length})</span>
+                <span className={styles.reviewKey}>Skills ({selectionState.effectiveSelectedSkills.length})</span>
                 <span className={styles.reviewVal}>
                   <span className={styles.skillPillsRow}>
-                    {selectedSkills.slice(0, 12).map(name => {
-                      const ov = skillAudiences[name];
-                      const isOv = ov?.mode === 'specific';
+                    {selectionState.effectiveSelectedSkills.slice(0, 12).map(name => {
+                      const isOv = Boolean(selectedSkillTargets[name]);
                       return (
                         <span key={name} className={`${styles.skillPill} ${isOv ? styles.skillPillOverride : ''}`}>
                           {name}
                         </span>
                       );
                     })}
-                    {selectedSkills.length > 12 && (
-                      <span className={styles.skillPill}>+{selectedSkills.length - 12} more</span>
+                    {selectionState.effectiveSelectedSkills.length > 12 && (
+                      <span className={styles.skillPill}>
+                        +{selectionState.effectiveSelectedSkills.length - 12} more
+                      </span>
                     )}
                   </span>
                 </span>
               </div>
+              {audienceMode === 'specific' && selectedProjects.length > 0 && (
+                <div className={styles.reviewItem}>
+                  <span className={styles.reviewKey}>Per-project skills</span>
+                  <span className={styles.reviewVal}>
+                    {selectedProjects.map(project => {
+                      const count = projectAssignment.perProject[project]?.effective.length ?? 0;
+                      return (
+                        <div key={project} {...{ 'data-testid': `fs-review-project-${project}` }}>
+                          <strong>{project}</strong> — {count} skill{count === 1 ? '' : 's'}
+                        </div>
+                      );
+                    })}
+                  </span>
+                </div>
+              )}
               {overrideCount > 0 && (
                 <div className={styles.reviewItem}>
-                  <span className={styles.reviewKey}>Audience overrides</span>
+                  <span className={styles.reviewKey}>Skill audience overrides</span>
                   <span className={styles.reviewVal}>
-                    {Object.entries(skillAudiences)
-                      .filter(([, a]) => a.mode === 'specific')
-                      .map(([name, a]) => (
+                    {Object.entries(selectedSkillTargets).map(([name, projects]) => (
                         <div key={name}>
-                          <code>{name}</code> → {a.projects.length > 0 ? a.projects.join(', ') : 'all projects'}
+                          <code>{name}</code> → {projects.length > 0 ? projects.join(', ') : 'all projects'}
                         </div>
                       ))}
                   </span>
@@ -790,6 +1188,24 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({ onCreated })
             <p className={styles.inlineNote}>
               Creating this release saves it as a <strong>draft</strong>. Teams only see it once you publish.
             </p>
+            {reviewIssues.length > 0 && (
+              <div
+                className={styles.reviewValidationBox}
+                role="alert"
+                aria-live="assertive"
+                aria-label="Review validation issues"
+              >
+                <h4 className={styles.reviewValidationTitle}>Resolve dependency coverage</h4>
+                <ul className={styles.reviewValidationList}>
+                  {reviewIssues.map((issue) => (
+                    <li key={issue.key}>
+                      <strong>{issue.message}</strong>
+                      <span>{issue.remediation}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </>
         )}
 
@@ -799,7 +1215,9 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({ onCreated })
       {/* ── Footer ── */}
       <div className={styles.wizardFooter}>
         <span className={styles.wizardSummary}>
-          <span className={styles.wizardSummaryStrong}>{selectedSkills.length} skills</span>
+          <span className={styles.wizardSummaryStrong}>
+            {selectionState.effectiveSelectedSkills.length} skills
+          </span>
           <span className={styles.wizardSep}>·</span>
           <span className={styles.wizardSummaryStrong}>{releaseAudienceLabel}</span>
           {overrideCount > 0 && (
@@ -810,14 +1228,20 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({ onCreated })
           )}
         </span>
         {stepIndex > 0 && (
-          <button type="button" className={styles.btnGhost} onClick={handleBack}>Back</button>
+          <button type="button" className={styles.btnGhost} onClick={handleBack}
+            {...{ 'data-testid': 'fs-wizard-back' }}>Back</button>
         )}
         {isLastStep ? (
-          <button type="submit" className={styles.btnPrimary} disabled={create.isPending}>
+          <button
+            type="submit"
+            className={styles.btnPrimary}
+            disabled={create.isPending || reviewIssues.length > 0}
+            {...{ 'data-testid': 'fs-wizard-create-draft' }}>
             {create.isPending ? 'Creating…' : 'Create draft'}
           </button>
         ) : (
-          <button type="submit" className={styles.btnPrimary}>Continue</button>
+          <button type="submit" className={styles.btnPrimary}
+            {...{ 'data-testid': 'fs-wizard-continue' }}>Continue</button>
         )}
       </div>
     </form>
@@ -852,7 +1276,8 @@ const CompatCheckForm: React.FC = () => {
   };
 
   return (
-    <form className={styles.card} onSubmit={handleCheck}>
+    <form className={styles.card} onSubmit={handleCheck}
+      {...{ 'data-testid': 'fs-compat-check-form' }}>
       <div className={styles.cardHeader}>
         <h3 className={styles.cardTitle}>Run compatibility check</h3>
         <p className={styles.cardHint}>
@@ -864,13 +1289,15 @@ const CompatCheckForm: React.FC = () => {
           <div className={styles.formRow}>
             <label className={styles.label} htmlFor="cc-apex">Apex project name</label>
             <input id="cc-apex" className={styles.input} value={apexProj}
-              onChange={e => setApexProj(e.target.value)} placeholder="e.g. MaxView" />
+              onChange={e => setApexProj(e.target.value)} placeholder="e.g. MaxView"
+              {...{ 'data-testid': 'fs-compat-apex-project' }} />
             <p className={styles.fieldHint}>Used to resolve which release this repo is entitled to.</p>
           </div>
           <div className={styles.formRow}>
             <label className={styles.label} htmlFor="cc-provider">Provider</label>
             <select id="cc-provider" className={styles.select} value={provider}
-              onChange={e => setProvider(e.target.value as 'ado' | 'github')}>
+              onChange={e => setProvider(e.target.value as 'ado' | 'github')}
+              {...{ 'data-testid': 'fs-compat-provider' }}>
               <option value="ado">Azure DevOps</option>
               <option value="github">GitHub</option>
             </select>
@@ -878,23 +1305,27 @@ const CompatCheckForm: React.FC = () => {
           <div className={styles.formRow}>
             <label className={styles.label} htmlFor="cc-project">ADO project / GitHub org</label>
             <input id="cc-project" className={styles.input} value={project}
-              onChange={e => setProject(e.target.value)} placeholder="e.g. MaxView" required />
+              onChange={e => setProject(e.target.value)} placeholder="e.g. MaxView" required
+              {...{ 'data-testid': 'fs-compat-project' }} />
           </div>
           <div className={styles.formRow}>
             <label className={styles.label} htmlFor="cc-repo">Skill repo name</label>
             <input id="cc-repo" className={styles.input} value={repo}
-              onChange={e => setRepo(e.target.value)} placeholder="e.g. MaxView" required />
+              onChange={e => setRepo(e.target.value)} placeholder="e.g. MaxView" required
+              {...{ 'data-testid': 'fs-compat-repo' }} />
           </div>
           <div className={styles.formRow}>
             <label className={styles.label} htmlFor="cc-branch">Skill branch</label>
             <input id="cc-branch" className={`${styles.input} ${styles.inputMono}`} value={branch}
-              onChange={e => setBranch(e.target.value)} placeholder="main" />
+              onChange={e => setBranch(e.target.value)} placeholder="main"
+              {...{ 'data-testid': 'fs-compat-branch' }} />
           </div>
         </div>
         {err    && <p className={styles.error} role="alert">{err}</p>}
         {result && <p className={styles.inlineNote}>{result}</p>}
         <div className={styles.btnRow}>
-          <button type="submit" className={styles.btnSecondary} disabled={checkCompat.isPending}>
+          <button type="submit" className={styles.btnSecondary} disabled={checkCompat.isPending}
+            {...{ 'data-testid': 'fs-compat-check-submit' }}>
             {checkCompat.isPending ? 'Checking…' : 'Check compatibility'}
           </button>
         </div>
@@ -923,14 +1354,10 @@ const EditReleasePanel: React.FC<{
   const [selectedProjects, setSelected]   = useState<string[]>(release.targetProjects ?? []);
   const [localErr,         setLocalErr]   = useState<string | null>(null);
 
-  const [selectedSkills,  setSelectedSkills]  = useState<string[]>(release.selectedSkills ?? []);
-  const [skillAudiences, setSkillAudiences] = useState<Record<string, SkillAudiencePick>>(() => {
-    const init: Record<string, SkillAudiencePick> = {};
-    for (const [name, projects] of Object.entries(release.skillTargets ?? {})) {
-      init[name] = { mode: 'specific', projects: projects as string[] };
-    }
-    return init;
-  });
+  const [explicitSelectedSkills,  setExplicitSelectedSkills]  = useState<string[]>(release.selectedSkills ?? []);
+  const [projectSkillPicks, setProjectSkillPicks] = useState<Record<string, string[]>>(() =>
+    seedProjectPicksFromRelease(release),
+  );
 
   const seededRef = useRef(false);
 
@@ -940,35 +1367,69 @@ const EditReleasePanel: React.FC<{
   useEffect(() => {
     if (seededRef.current || catalog.length === 0) return;
     seededRef.current = true;
-    if (!release.selectedSkills?.length) setSelectedSkills(catalog.map(s => s.name));
+    if (!release.selectedSkills?.length) setExplicitSelectedSkills(catalog.map(s => s.name));
   }, [catalog, release.selectedSkills]);
 
-  const releaseAudienceLabel = audienceMode === 'all'
-    ? 'All projects'
-    : selectedProjects.length > 0 ? summarizeProjects(selectedProjects) : 'none selected';
+  // Keep per-project pick maps aligned when the project list changes while editing.
+  useEffect(() => {
+    if (audienceMode !== 'specific' || catalog.length === 0) return;
+    const allNames = catalog.map(s => s.name);
+    setProjectSkillPicks(prev => {
+      const next: Record<string, string[]> = {};
+      let changed = Object.keys(prev).some(key => !selectedProjects.includes(key));
+      for (const project of selectedProjects) {
+        if (project in prev) {
+          next[project] = prev[project];
+        } else {
+          next[project] = allNames;
+          changed = true;
+        }
+      }
+      return changed || Object.keys(next).length !== Object.keys(prev).length ? next : prev;
+    });
+  }, [audienceMode, selectedProjects, catalog]);
+
+  const allModeSelection = resolveFoundationSkillSelection(catalog, explicitSelectedSkills);
+  const projectAssignment = resolveProjectAssignment(
+    catalog,
+    selectedProjects,
+    projectSkillPicks,
+  );
+  const selectionState = audienceMode === 'specific'
+    ? {
+        explicitSelectedSkills: [...new Set(selectedProjects.flatMap(p => projectSkillPicks[p] ?? []))],
+        effectiveSelectedSkills: projectAssignment.effectiveSelectedSkills,
+        dependencyOrder: projectAssignment.dependencyOrder,
+        requiredBy: {},
+      }
+    : allModeSelection;
+  const selectedSkillTargets = audienceMode === 'specific' ? projectAssignment.skillTargets : {};
 
   const handleSave = async () => {
     setLocalErr(null);
-    if (audienceMode === 'specific' && selectedProjects.length === 0) {
+    if (isDraft && audienceMode === 'specific' && selectedProjects.length === 0) {
       setLocalErr('Select at least one project or switch to "All projects".');
       return;
     }
-    if (selectedSkills.length === 0) {
+    if (isDraft && selectionState.effectiveSelectedSkills.length === 0) {
       setLocalErr('At least one skill must be selected.');
       return;
     }
     await onSave({
-      ...(isDraft && { version: version.trim(), artifactVersion: artifactVersion.trim() || version.trim() }),
+      ...(isDraft && {
+        version: version.trim(),
+        artifactVersion: artifactVersion.trim() || version.trim(),
+        targetProjects: audienceMode === 'specific' ? selectedProjects : [],
+        selectedSkills: selectionState.dependencyOrder,
+        skillTargets: selectedSkillTargets,
+      }),
       releaseNotes:    notes.trim()    || null,
       breakingChanges: breaking.trim() || null,
-      targetProjects:  audienceMode === 'specific' ? selectedProjects : [],
-      selectedSkills,
-      skillTargets:    buildSkillTargets(skillAudiences),
     });
   };
 
   return (
-    <div className={styles.editNotesPanel}>
+    <div className={styles.editNotesPanel} {...{ 'data-testid': `fs-edit-release-panel-${release.id}` }}>
       <h4 className={styles.editPanelTitle}>Edit release</h4>
 
       {isDraft && (
@@ -976,60 +1437,96 @@ const EditReleasePanel: React.FC<{
           <div className={styles.formRow}>
             <label className={styles.label} htmlFor={`er-version-${release.id}`}>Suite version</label>
             <input id={`er-version-${release.id}`} className={`${styles.input} ${styles.inputMono}`}
-              value={version} onChange={e => setVersion(e.target.value)} />
+              value={version} onChange={e => setVersion(e.target.value)}
+              {...{ 'data-testid': `fs-edit-version-${release.id}` }} />
           </div>
           <div className={styles.formRow}>
             <label className={styles.label} htmlFor={`er-artifact-${release.id}`}>Artifact version</label>
             <input id={`er-artifact-${release.id}`} className={`${styles.input} ${styles.inputMono}`}
-              value={artifactVersion} onChange={e => setArtifact(e.target.value)} />
+              value={artifactVersion} onChange={e => setArtifact(e.target.value)}
+              {...{ 'data-testid': `fs-edit-artifact-${release.id}` }} />
           </div>
         </div>
       )}
 
-      <AudienceField
-        mode={audienceMode}
-        projects={selectedProjects}
-        onModeChange={mode => { setAudienceMode(mode); setSelected([]); }}
-        onProjectsChange={setSelected}
-        idPrefix={`er-${release.id}`}
-      />
+      {isDraft && (
+        <>
+          <AudienceField
+            mode={audienceMode}
+            projects={selectedProjects}
+            onModeChange={mode => {
+              setAudienceMode(mode);
+              setSelected([]);
+              if (mode === 'all') setProjectSkillPicks({});
+            }}
+            onProjectsChange={setSelected}
+            idPrefix={`er-${release.id}`}
+            {...{ 'data-testid': `fs-edit-audience-field-${release.id}` }}
+          />
 
-      <div className={styles.formRow}>
-        <span className={styles.label}>Skills</span>
-        <SkillPicker
-          catalog={catalog}
-          isCatalogLoading={catalogLoading}
-          selectedSkills={selectedSkills}
-          skillAudiences={skillAudiences}
-          releaseAudienceLabel={releaseAudienceLabel}
-          onSkillToggle={name =>
-            setSelectedSkills(prev => prev.includes(name) ? prev.filter(s => s !== name) : [...prev, name])
-          }
-          onAudienceChange={(name, pick) => setSkillAudiences(prev => ({ ...prev, [name]: pick }))}
-          onSelectAll={() => setSelectedSkills(catalog.map(s => s.name))}
-          onClearAll={() => { setSelectedSkills([]); setSkillAudiences({}); }}
-        />
-      </div>
+          <div className={styles.formRow}>
+            <span className={styles.label}>
+              {audienceMode === 'specific' ? 'Assign skills to projects' : 'Skills'}
+            </span>
+            {audienceMode === 'specific' ? (
+              <ProjectSkillAssignment
+                catalog={catalog}
+                isCatalogLoading={catalogLoading}
+                projects={selectedProjects}
+                projectSkillPicks={projectSkillPicks}
+                onProjectPicksChange={(project, picks) =>
+                  setProjectSkillPicks(prev => ({ ...prev, [project]: picks }))
+                }
+                onCopyProjectPicks={(from, to) =>
+                  setProjectSkillPicks(prev => ({
+                    ...prev,
+                    [to]: [...(prev[from] ?? [])],
+                  }))
+                }
+              />
+            ) : (
+              <SkillPicker
+                catalog={catalog}
+                isCatalogLoading={catalogLoading}
+                explicitSelectedSkills={allModeSelection.explicitSelectedSkills}
+                effectiveSelectedSkills={allModeSelection.effectiveSelectedSkills}
+                requiredBy={allModeSelection.requiredBy}
+                onSkillToggle={name =>
+                  setExplicitSelectedSkills(prev =>
+                    prev.includes(name) ? prev.filter(s => s !== name) : [...prev, name],
+                  )
+                }
+                onSelectAll={() => setExplicitSelectedSkills(catalog.map(s => s.name))}
+                onClearAll={() => setExplicitSelectedSkills([])}
+              />
+            )}
+          </div>
+        </>
+      )}
 
       <div className={styles.formRow}>
         <label className={styles.label} htmlFor={`er-notes-${release.id}`}>Release notes</label>
         <textarea id={`er-notes-${release.id}`} className={styles.textarea} value={notes}
           onChange={e => setNotes(e.target.value)} rows={5}
-          placeholder="What changed in this release?" />
+          placeholder="What changed in this release?"
+          {...{ 'data-testid': `fs-edit-notes-${release.id}` }} />
       </div>
       <div className={styles.formRow}>
         <label className={styles.label} htmlFor={`er-breaking-${release.id}`}>Breaking changes</label>
         <textarea id={`er-breaking-${release.id}`} className={styles.textarea} value={breaking}
-          onChange={e => setBreaking(e.target.value)} rows={2} />
+          onChange={e => setBreaking(e.target.value)} rows={2}
+          {...{ 'data-testid': `fs-edit-breaking-${release.id}` }} />
       </div>
 
       {localErr && <p className={styles.error} role="alert">{localErr}</p>}
       <div className={styles.editNotesBtns}>
         <button className={styles.btnPrimary} type="button" disabled={isSaving}
-          onClick={() => void handleSave()}>
+          onClick={() => void handleSave()}
+          {...{ 'data-testid': `fs-edit-save-${release.id}` }}>
           {isSaving ? 'Saving…' : 'Save changes'}
         </button>
-        <button className={styles.btnGhost} type="button" onClick={onCancel}>Cancel</button>
+        <button className={styles.btnGhost} type="button" onClick={onCancel}
+          {...{ 'data-testid': `fs-edit-cancel-${release.id}` }}>Cancel</button>
       </div>
     </div>
   );
@@ -1040,10 +1537,11 @@ const EditReleasePanel: React.FC<{
 const AuditDrawer: React.FC<{ releaseId: string; onClose: () => void }> = ({ releaseId, onClose }) => {
   const { data: entries = [], isLoading } = useFoundationSkillReleaseAudit(releaseId);
   return (
-    <div className={styles.drawer}>
+    <div className={styles.drawer} {...{ 'data-testid': `fs-audit-drawer-${releaseId}` }}>
       <div className={styles.drawerHeader}>
         <h3 className={styles.drawerTitle}>Audit log</h3>
-        <button className={styles.closeBtn} onClick={onClose} type="button" aria-label="Close">✕</button>
+        <button className={styles.closeBtn} onClick={onClose} type="button" aria-label="Close"
+          {...{ 'data-testid': 'fs-audit-close' }}>✕</button>
       </div>
       {isLoading ? <p className={styles.muted}>Loading…</p> : entries.length === 0 ? (
         <p className={styles.muted}>No audit entries.</p>
@@ -1083,11 +1581,12 @@ const SkillsMatrixTab: React.FC = () => {
   if (isLoading) return <p className={styles.muted}>Loading skills matrix…</p>;
 
   return (
-    <div>
+    <div {...{ 'data-testid': 'fs-skills-matrix-tab' }}>
       <div className={styles.matrixToolbar}>
         <input className={`${styles.input} ${styles.matrixSearch}`} value={search}
           onChange={e => setSearch(e.target.value)} placeholder="Search skills…"
-          aria-label="Search skills" />
+          aria-label="Search skills"
+          {...{ 'data-testid': 'fs-matrix-search' }} />
         <span className={`${styles.muted} ${styles.pushRight}`}>
           {filtered.length} of {skills.length} skills
         </span>
@@ -1124,6 +1623,7 @@ const SkillsMatrixTab: React.FC = () => {
                     <tr
                       className={styles.matrixRow}
                       onClick={() => setExpandedSkill(isExpanded ? null : skill.name)}
+                      {...{ 'data-testid': `fs-matrix-row-${skill.name}` }}
                     >
                       <td>
                         <div className={styles.matrixSkillName}>
@@ -1262,13 +1762,15 @@ const TeamsTab: React.FC = () => {
   }
 
   return (
-    <div>
+    <div {...{ 'data-testid': 'fs-teams-tab' }}>
       <div className={styles.matrixToolbar}>
         <input className={`${styles.input} ${styles.matrixSearch}`} value={search}
           onChange={e => setSearch(e.target.value)} placeholder="Search team, repo, or version…"
-          aria-label="Search teams" />
+          aria-label="Search teams"
+          {...{ 'data-testid': 'fs-teams-search' }} />
         <button className={styles.btnSecondary} type="button"
-          disabled={scanAll.isPending} onClick={handleScanAll}>
+          disabled={scanAll.isPending} onClick={handleScanAll}
+          {...{ 'data-testid': 'fs-teams-scan-all' }}>
           {scanAll.isPending ? 'Scanning…' : 'Refresh all'}
         </button>
         <span className={`${styles.muted} ${styles.pushRight}`}>
@@ -1313,7 +1815,8 @@ const TeamsTab: React.FC = () => {
                     return (
                       <React.Fragment key={key}>
                         <tr className={styles.matrixRow}
-                          onClick={() => setExpandedRepo(isExpanded ? null : key)}>
+                          onClick={() => setExpandedRepo(isExpanded ? null : key)}
+                          {...{ 'data-testid': `fs-teams-row-${key}` }}>
                           <td>
                             <div className={styles.matrixSkillName}>
                               <span className={`${styles.matrixCaret} ${isExpanded ? styles.matrixCaretOpen : ''}`}>▶</span>
@@ -1437,7 +1940,9 @@ const TeamRepoDetail: React.FC<{ apexProject: string; repo: FoundationSkillTeamR
   };
 
   return (
-    <div onClick={e => e.stopPropagation()}>
+    <>
+      {/* data-testid-exempt */}
+      <div onClick={e => e.stopPropagation()}>
       <h4 className={styles.subHeading}>Released to this team (v{repo.installedVersion ?? '—'})</h4>
       {repo.releasedSkills.length === 0 ? (
         <p className={styles.muted}>
@@ -1481,6 +1986,7 @@ const TeamRepoDetail: React.FC<{ apexProject: string; repo: FoundationSkillTeamR
             value={targetId}
             onChange={e => setTargetId(e.target.value)}
             disabled={rollback.isPending}
+            {...{ 'data-testid': `fs-rollback-target-${repo.repo}` }}
           >
             <option value="">Select older published version…</option>
             {targets.map(t => (
@@ -1494,6 +2000,7 @@ const TeamRepoDetail: React.FC<{ apexProject: string; repo: FoundationSkillTeamR
             type="button"
             disabled={!targetId || rollback.isPending}
             onClick={requestRollback}
+            {...{ 'data-testid': `fs-rollback-open-pr-${repo.repo}` }}
           >
             Open rollback PR
           </button>
@@ -1511,16 +2018,18 @@ const TeamRepoDetail: React.FC<{ apexProject: string; repo: FoundationSkillTeamR
               <strong>v{pendingTarget.version}</strong>.
             </>
           }
-          hint="Only .apex/foundation/ and apex-skills.lock.json change. Team adapters in .cursor/skills/ are never overwritten."
+          hint="Only the fenced managed region inside .cursor/skills/ and apex-skills.lock.json change. Project notes below the APEX:END managed fence are preserved."
           confirmLabel="Open rollback PR"
           pendingLabel="Opening PR…"
           tone="warning"
           isPending={rollback.isPending}
           onConfirm={() => { void executeRollback(); }}
           onCancel={() => setConfirmRollback(false)}
+          {...{ 'data-testid': `fs-rollback-confirm-modal-${repo.repo}` }}
         />
       )}
-    </div>
+      </div>
+    </>
   );
 };
 
@@ -1546,6 +2055,7 @@ export const FoundationSkillsAdmin: React.FC = () => {
   const [auditReleaseId, setAuditReleaseId] = useState<string | null>(null);
   const [editReleaseId,  setEditReleaseId]  = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionValidationIssues, setActionValidationIssues] = useState<FoundationSkillReleaseValidationIssue[]>([]);
   const [actionMsg,   setActionMsg]   = useState<string | null>(null);
   /** Which consumer-repo row is running Check / Open PR (provider|project|repo|branch). */
   const [busyRepoKey, setBusyRepoKey] = useState<string | null>(null);
@@ -1563,7 +2073,11 @@ export const FoundationSkillsAdmin: React.FC = () => {
   const checkCompat = useCheckFoundationSkillCompatibility();
   const scanAllRepos = useScanAllFoundationSkillRepos();
 
-  const clearMessages = () => { setActionError(null); setActionMsg(null); };
+  const clearMessages = () => {
+    setActionError(null);
+    setActionValidationIssues([]);
+    setActionMsg(null);
+  };
 
   const handleScanAllRepos = async () => {
     clearMessages();
@@ -1582,7 +2096,14 @@ export const FoundationSkillsAdmin: React.FC = () => {
     try {
       await publish.mutateAsync(release.id);
       setActionMsg(`v${release.version} published.`);
-    } catch (err: unknown) { setActionError((err as Error).message); }
+    } catch (err: unknown) {
+      if (err instanceof FoundationSkillReleaseValidationClientError) {
+        setActionError(err.message);
+        setActionValidationIssues(err.issues);
+        return;
+      }
+      setActionError((err as Error).message);
+    }
   };
 
   const handleDeprecate = (release: FoundationSkillRelease) => {
@@ -1616,6 +2137,12 @@ export const FoundationSkillsAdmin: React.FC = () => {
 
   const handleUpdateRepo = async (s: FoundationSkillRepoStatus) => {
     clearMessages();
+    if (!s.apexProject) {
+      setActionError(
+        'This repo has no Apex project identity. Run compatibility refresh before opening an update PR.',
+      );
+      return;
+    }
     setBusyRepoKey(repoRowKey(s));
     try {
       const result = await updateRepo.mutateAsync({
@@ -1625,7 +2152,7 @@ export const FoundationSkillsAdmin: React.FC = () => {
         // Must match the observed row — defaulting to main creates a wrong-branch PR
         // (and MaxView / similar teams use development).
         defaultBranch: s.branch || 'main',
-        apexProject: s.apexProject ?? s.project,
+        apexProject: s.apexProject,
       });
       if (result.prUrl) {
         setActionMsg(`PR opened: ${result.prUrl}`);
@@ -1643,6 +2170,12 @@ export const FoundationSkillsAdmin: React.FC = () => {
 
   const handleCheckCompat = async (s: FoundationSkillRepoStatus) => {
     clearMessages();
+    if (!s.apexProject) {
+      setActionError(
+        'This repo has no Apex project identity. Re-register it before checking compatibility.',
+      );
+      return;
+    }
     setBusyRepoKey(repoRowKey(s));
     try {
       const result = await checkCompat.mutateAsync({
@@ -1651,7 +2184,7 @@ export const FoundationSkillsAdmin: React.FC = () => {
         provider: s.provider,
         // Upsert key includes branch — omitting it defaults to main and inserts a duplicate row.
         branch: s.branch || 'main',
-        apexProject: s.apexProject ?? s.project,
+        apexProject: s.apexProject,
       });
       setActionMsg(
         `Compatibility (${s.repo}@${s.branch}): ${result.report.status}. ` +
@@ -1680,7 +2213,21 @@ export const FoundationSkillsAdmin: React.FC = () => {
 
       {/* Repos tab renders these inline next to the table so they stay in view. */}
       {actionError && activeSection !== 'repos' && (
-        <p className={styles.errorMsg} role="alert">{actionError}</p>
+        <div className={styles.errorMsg} role="alert">
+          <div>
+            <div>{actionError}</div>
+            {actionValidationIssues.length > 0 && (
+              <ul className={styles.validationIssueList}>
+                {actionValidationIssues.map((issue, index) => (
+                  <li key={`${issue.type}-${issue.dependentSkill}-${issue.dependency}-${index}`}>
+                    <strong>{issue.message}</strong>
+                    <span>{issue.remediation}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
       )}
       {actionMsg && activeSection !== 'repos' && (
         <p className={styles.successMsg} role="status">{actionMsg}</p>
@@ -1692,7 +2239,8 @@ export const FoundationSkillsAdmin: React.FC = () => {
           <button key={s} type="button" role="tab"
             aria-selected={activeSection === s}
             className={`${styles.subNavBtn} ${activeSection === s ? styles.subNavBtnActive : ''}`}
-            onClick={() => { clearMessages(); setActiveSection(s); }}>
+            onClick={() => { clearMessages(); setActiveSection(s); }}
+            {...{ 'data-testid': `fs-tab-${s}` }}>
             {SECTION_LABELS[s]}
           </button>
         ))}
@@ -1708,7 +2256,8 @@ export const FoundationSkillsAdmin: React.FC = () => {
                 Create your first draft release to bundle foundation skills and target them at specific projects.
               </p>
               <button type="button" className={styles.btnPrimary}
-                onClick={() => { clearMessages(); setActiveSection('create'); }}>
+                onClick={() => { clearMessages(); setActiveSection('create'); }}
+                {...{ 'data-testid': 'fs-empty-create-draft' }}>
                 Create draft release
               </button>
             </div>
@@ -1721,6 +2270,19 @@ export const FoundationSkillsAdmin: React.FC = () => {
                     <div className={styles.releaseCardHeader}>
                       <span className={styles.releaseVersion}>v{r.version}</span>
                       <span className={`${styles.badge} ${statusBadgeClass(r.status)}`}>{r.status}</span>
+                      {r.status !== 'draft' && !r.integritySha256 && (
+                        <span
+                          className={`${styles.badge} ${styles.badgeUnverified}`}
+                          title={
+                            `Published without Azure Artifacts configured, so @apex/skills@${r.artifactVersion} ` +
+                            'was never confirmed to exist on the feed. The CLI warns on a version ' +
+                            'mismatch for this release instead of blocking.'
+                          }
+                          {...{ 'data-testid': `fs-release-unverified-${r.id}` }}
+                        >
+                          unverified
+                        </span>
+                      )}
                       {r.targetProjects && r.targetProjects.length > 0 ? (
                         <span className={styles.audienceChips} title={r.targetProjects.join(', ')}>
                           {r.targetProjects.slice(0, 3).map(p => (
@@ -1770,21 +2332,28 @@ export const FoundationSkillsAdmin: React.FC = () => {
                       {r.status === 'draft' && (
                         <>
                           <button className={styles.btnSuccess} type="button" disabled={publish.isPending}
-                            onClick={() => handlePublish(r)}>Publish</button>
+                            onClick={() => handlePublish(r)}
+                            {...{ 'data-testid': `fs-release-publish-${r.id}` }}>Publish</button>
                           <button className={styles.btnDanger} type="button" disabled={deleteDraft.isPending}
-                            onClick={() => handleDelete(r)}>Delete draft</button>
+                            onClick={() => handleDelete(r)}
+                            {...{ 'data-testid': `fs-release-delete-${r.id}` }}>Delete draft</button>
                         </>
                       )}
                       {r.status === 'published' && (
                         <button className={styles.btnSecondary} type="button" disabled={deprecate.isPending}
-                          onClick={() => handleDeprecate(r)}>Deprecate</button>
+                          onClick={() => handleDeprecate(r)}
+                          {...{ 'data-testid': `fs-release-deprecate-${r.id}` }}>Deprecate</button>
+                      )}
+                      {r.status !== 'publishing' && (
+                        <button className={styles.btnGhost} type="button"
+                          onClick={() => { setEditReleaseId(editReleaseId === r.id ? null : r.id); setAuditReleaseId(null); }}
+                          {...{ 'data-testid': `fs-release-edit-${r.id}` }}>
+                          {editReleaseId === r.id ? 'Cancel' : 'Edit'}
+                        </button>
                       )}
                       <button className={styles.btnGhost} type="button"
-                        onClick={() => { setEditReleaseId(editReleaseId === r.id ? null : r.id); setAuditReleaseId(null); }}>
-                        {editReleaseId === r.id ? 'Cancel' : 'Edit'}
-                      </button>
-                      <button className={styles.btnGhost} type="button"
-                        onClick={() => { setAuditReleaseId(auditReleaseId === r.id ? null : r.id); setEditReleaseId(null); }}>
+                        onClick={() => { setAuditReleaseId(auditReleaseId === r.id ? null : r.id); setEditReleaseId(null); }}
+                        {...{ 'data-testid': `fs-release-audit-${r.id}` }}>
                         {auditReleaseId === r.id ? 'Hide audit' : 'Audit log'}
                       </button>
                     </div>
@@ -1801,10 +2370,12 @@ export const FoundationSkillsAdmin: React.FC = () => {
                         }}
                         onCancel={() => setEditReleaseId(null)}
                         isSaving={updateRelease.isPending}
+                        {...{ 'data-testid': `fs-edit-release-panel-mount-${r.id}` }}
                       />
                     )}
                     {auditReleaseId === r.id && (
-                      <AuditDrawer releaseId={r.id} onClose={() => setAuditReleaseId(null)} />
+                      <AuditDrawer releaseId={r.id} onClose={() => setAuditReleaseId(null)}
+                        {...{ 'data-testid': `fs-audit-drawer-mount-${r.id}` }} />
                     )}
                   </div>
                 );
@@ -1832,15 +2403,15 @@ export const FoundationSkillsAdmin: React.FC = () => {
       )}
 
       {/* ── Skills matrix ── */}
-      {activeSection === 'skills' && <SkillsMatrixTab />}
+      {activeSection === 'skills' && <SkillsMatrixTab {...{ 'data-testid': 'fs-skills-matrix-tab-mount' }} />}
 
       {/* ── Active teams ── */}
-      {activeSection === 'teams' && <TeamsTab />}
+      {activeSection === 'teams' && <TeamsTab {...{ 'data-testid': 'fs-teams-tab-mount' }} />}
 
       {/* ── Consumer repos ── */}
       {activeSection === 'repos' && (
         <>
-          <CompatCheckForm />
+          <CompatCheckForm {...{ 'data-testid': 'fs-compat-check-form-mount' }} />
           <div className={styles.candidatesBox}>
             <div className={styles.matrixToolbar}>
               <h3 className={`${styles.subHeading} ${styles.toolbarHeading}`}>Observed consumer repos</h3>
@@ -1849,6 +2420,7 @@ export const FoundationSkillsAdmin: React.FC = () => {
                 type="button"
                 disabled={scanAllRepos.isPending}
                 onClick={() => { void handleScanAllRepos(); }}
+                {...{ 'data-testid': 'fs-repos-scan-all' }}
               >
                 {scanAllRepos.isPending ? 'Scanning…' : 'Refresh all'}
               </button>
@@ -1903,6 +2475,7 @@ export const FoundationSkillsAdmin: React.FC = () => {
                               type="button"
                               disabled={checkCompat.isPending || updateRepo.isPending}
                               onClick={() => { void handleCheckCompat(s); }}
+                              {...{ 'data-testid': `fs-repo-check-${s.id}` }}
                             >
                               {isBusy && checkCompat.isPending ? 'Checking…' : 'Check'}
                             </button>
@@ -1912,6 +2485,7 @@ export const FoundationSkillsAdmin: React.FC = () => {
                                 type="button"
                                 disabled={checkCompat.isPending || updateRepo.isPending}
                                 onClick={() => { void handleUpdateRepo(s); }}
+                                {...{ 'data-testid': `fs-repo-open-pr-${s.id}` }}
                               >
                                 {isBusy && updateRepo.isPending ? 'Opening…' : 'Open PR'}
                               </button>
@@ -1953,6 +2527,7 @@ export const FoundationSkillsAdmin: React.FC = () => {
           reasonPlaceholder="e.g. superseded by v1.1.0 — broken bootstrap for MaxView"
           onConfirm={(reason) => { void executePendingConfirm(reason); }}
           onCancel={() => setPendingConfirm(null)}
+          {...{ 'data-testid': 'fs-deprecate-modal' }}
         />
       )}
 
@@ -1972,6 +2547,7 @@ export const FoundationSkillsAdmin: React.FC = () => {
           isPending={deleteDraft.isPending}
           onConfirm={() => { void executePendingConfirm(); }}
           onCancel={() => setPendingConfirm(null)}
+          {...{ 'data-testid': 'fs-delete-draft-modal' }}
         />
       )}
     </section>

@@ -5,7 +5,6 @@ description: Project adapter for feature-flags. Customize for your project.
 
 # feature-flags — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/feature-flags/SKILL.md -->
 
 - Project: {{slot:projectName}}
 - Service: project's feature flag service (see {{slot:agentsFile}} Feature Map)

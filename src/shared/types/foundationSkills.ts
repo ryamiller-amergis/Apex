@@ -11,12 +11,17 @@
 
 // ── Release lifecycle ─────────────────────────────────────────────────────────
 
-export type FoundationSkillReleaseStatus = 'draft' | 'published' | 'deprecated';
+export type FoundationSkillReleaseStatus =
+  | 'draft'
+  | 'publishing'
+  | 'published'
+  | 'deprecated';
 
 export type FoundationSkillAuditAction =
   | 'created'
   | 'validated'
   | 'validation_failed'
+  | 'edited'
   | 'published'
   | 'deprecated'
   | 'rollback';
@@ -44,7 +49,7 @@ export interface FoundationSkillRelease {
   /** Per-skill project overrides. skill → string[].
    *  Empty array means "all projects". Absent key inherits targetProjects. */
   skillTargets: Record<string, string[]>;
-  manifestSnapshot: Record<string, unknown> | null; // catalog.json at publish time
+  manifestSnapshot: FoundationSkillArtifactManifest | null;
   releaseNotes: string | null;
   breakingChanges: string | null;
   publishedBy: string | null;
@@ -54,6 +59,26 @@ export interface FoundationSkillRelease {
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface FoundationSkillArtifactManifestSkill {
+  name: string;
+  summary: string;
+  tier: FoundationSkillTier;
+  alwaysInstall: boolean;
+  dependsOn: string[];
+  scanScope?: 'targeted' | 'full-repo';
+  foundationFiles?: string[];
+  adapterFiles?: string[];
+  supportingOwners?: Record<string, 'foundation' | 'adapter'>;
+}
+
+/** Immutable catalog.json snapshot extracted from the published npm tarball. */
+export interface FoundationSkillArtifactManifest {
+  suiteVersion: string;
+  package: string;
+  contractApiVersion: number;
+  skills: FoundationSkillArtifactManifestSkill[];
 }
 
 // ── Audit log ─────────────────────────────────────────────────────────────────
@@ -99,13 +124,10 @@ export interface FoundationSkillRepoStatus {
 export interface CreateFoundationSkillReleaseRequest {
   version: string;
   artifactVersion: string;
-  artifactFeed?: string | null;
-  integritySha256?: string | null;
   selectedSkills: string[];
   targetProjects?: string[];    // [] or omit = all projects; non-empty = Apex project allowlist
   /** Per-skill project overrides. Absent key inherits targetProjects. */
   skillTargets?: Record<string, string[]>;
-  manifestSnapshot?: Record<string, unknown> | null;
   releaseNotes?: string | null;
   breakingChanges?: string | null;
 }
@@ -177,11 +199,32 @@ export interface FoundationSkillCatalogEntry {
   name: string;
   summary: string;
   tier: FoundationSkillTier;
+  dependsOn?: string[];
 }
 
 export interface FoundationSkillCatalogResponse {
   suiteVersion: string;
   skills: FoundationSkillCatalogEntry[];
+}
+
+export type FoundationSkillReleaseValidationIssueType =
+  | 'missing_dependency'
+  | 'audience_gap';
+
+export interface FoundationSkillReleaseValidationIssue {
+  type: FoundationSkillReleaseValidationIssueType;
+  dependentSkill: string;
+  dependency: string;
+  message: string;
+  remediation: string;
+  dependentProjects: string[];
+  dependencyProjects: string[];
+}
+
+export interface FoundationSkillReleaseValidationErrorResponse {
+  error: string;
+  code: 'release_validation_failed';
+  issues: FoundationSkillReleaseValidationIssue[];
 }
 
 // ── Skills matrix ─────────────────────────────────────────────────────────────
@@ -292,4 +335,69 @@ export interface ArtifactCandidate {
   feedUrl: string;
   integrity: string | null;
   manifestUrl: string | null;
+}
+
+// ── Pure release-targeting helpers (shared client + server) ──────────────────
+
+/**
+ * Returns true if the release is visible to the given Apex project.
+ * An empty targetProjects array means the release is visible to all projects.
+ */
+export function isReleaseVisibleToProject(
+  release: Pick<FoundationSkillRelease, 'targetProjects'>,
+  apexProject: string | null | undefined,
+): boolean {
+  if (!release.targetProjects || release.targetProjects.length === 0) return true;
+  if (!apexProject) return false;
+  return release.targetProjects.includes(apexProject);
+}
+
+/**
+ * Returns the effective project allowlist for a specific skill in a release.
+ * Resolution rule: skillTargets[skill] ?? release.targetProjects.
+ * An empty array means "all projects".
+ */
+export function getEffectiveTargetProjects(
+  release: Pick<FoundationSkillRelease, 'targetProjects' | 'skillTargets'>,
+  skillName: string,
+): string[] {
+  const override = release.skillTargets?.[skillName];
+  if (override !== undefined) return override;
+  return release.targetProjects ?? [];
+}
+
+/**
+ * Skills every entitled project receives with install/update, even when omitted
+ * from a release's selectedSkills. Keep in sync with
+ * foundation-skills/lib/alwaysInstall.mjs.
+ */
+export const ALWAYS_INSTALL_SKILLS = ['post-skill-bootstrap'] as const;
+
+/** Append always-install skills (deduped) after the release-visible list. */
+export function withAlwaysInstallSkills(skills: string[]): string[] {
+  const out = [...skills];
+  const seen = new Set(out);
+  for (const name of ALWAYS_INSTALL_SKILLS) {
+    if (!seen.has(name)) {
+      out.push(name);
+      seen.add(name);
+    }
+  }
+  return out;
+}
+
+/**
+ * Returns the skill names from this release that are visible to the given project.
+ * Applies per-skill overrides via getEffectiveTargetProjects.
+ */
+export function getVisibleSkillsForProject(
+  release: Pick<FoundationSkillRelease, 'selectedSkills' | 'targetProjects' | 'skillTargets'>,
+  apexProject: string | null | undefined,
+): string[] {
+  return (release.selectedSkills ?? []).filter((skill) => {
+    const effective = getEffectiveTargetProjects(release, skill);
+    if (effective.length === 0) return true;
+    if (!apexProject) return false;
+    return effective.includes(apexProject);
+  });
 }

@@ -4,6 +4,15 @@ on:
   pull_request:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
 
 env:
   NODE_VERSION: '24.x'
@@ -24,23 +33,23 @@ jobs:
       - name: Detect migration file changes
         id: detect
         env:
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
-          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_EVENT_NAME: ${{ github.event_name == 'workflow_dispatch' && 'pull_request' || github.event_name }}
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha || format('origin/{0}', github.event.repository.default_branch) }}
           GITHUB_SHA: ${{ github.sha }}
         run: node scripts/ci/has-migration-changes.mjs
 
       - name: Detect markdown-only changes
         id: markdown_only
         env:
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
-          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_EVENT_NAME: ${{ github.event_name == 'workflow_dispatch' && 'pull_request' || github.event_name }}
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha || format('origin/{0}', github.event.repository.default_branch) }}
           GITHUB_SHA: ${{ github.sha }}
         run: node scripts/ci/is-markdown-only-changes.mjs
 
       - name: Detect load-test runner changes
         id: load_test_runner
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || format('origin/{0}', github.event.repository.default_branch) }}
           HEAD_SHA: ${{ github.sha }}
         run: |
           if git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- \
@@ -422,7 +431,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: dev
     concurrency:
-      group: pr-dev-${{ github.head_ref }}
+      group: pr-dev-${{ github.head_ref || github.ref_name }}
       cancel-in-progress: true
 
     steps:
@@ -468,6 +477,11 @@ jobs:
           cp package*.json deploy/
           cp server.js deploy/ 2>/dev/null || true
           cp -r scripts deploy/
+          # Platform Admin APEX Skills reads this at runtime for the skill picker /
+          # Skills matrix. Without it the UI shows 0 skills after deploy.
+          mkdir -p deploy/foundation-skills deploy/dist/foundation-skills
+          cp foundation-skills/catalog.json deploy/foundation-skills/catalog.json
+          cp foundation-skills/catalog.json deploy/dist/foundation-skills/catalog.json
           mv node_modules deploy/
           (cd deploy && zip -r ../deploy.zip .)
 
@@ -555,7 +569,11 @@ jobs:
               SENDGRID_API_KEY="${{ secrets.SENDGRID_API_KEY }}" \
               GITHUB_TOKEN="${{ secrets.GH_SKILL_TOKEN }}" \
               GITHUB_ORG="${{ secrets.GH_SKILL_ORG }}" \
-              TAVILY_AUTH="${{ secrets.TAVILY_AUTH }}"
+              TAVILY_AUTH="${{ secrets.TAVILY_AUTH }}" \
+              AZURE_ARTIFACTS_ORG="${{ secrets.AZURE_ARTIFACTS_ORG }}" \
+              AZURE_ARTIFACTS_FEED="${{ secrets.AZURE_ARTIFACTS_FEED }}" \
+              AZURE_ARTIFACTS_PAT="${{ secrets.AZURE_ARTIFACTS_PAT }}" \
+              APEX_URL="https://app-scrum-dev.azurewebsites.net"
 
           # The Azure Node/Linux image ships without git, and the Dev Workbench
           # feature shells out to git at runtime. Install it on boot before

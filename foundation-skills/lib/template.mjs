@@ -5,8 +5,9 @@
  *   {{slot:slotName}}
  *
  * The recipe maps each slotName to a rendering directive resolved ONLY from the
- * evidence index. A slot with no backing evidence renders a labeled TODO. This
- * makes "no invented facts" and "only references paths that exist" structural.
+ * evidence index. A slot with no backing evidence renders a labeled unfilled
+ * marker. Every rendered slot is wrapped in APEX:slot anchors so bootstrap can
+ * merge without wiping human- or slash-filled values.
  *
  * Slot directive shapes (recipe.slots[slotName]):
  *   { type: "list",  detector: "components", limit?, format?: "- {value}" }
@@ -14,6 +15,7 @@
  *   { type: "value", detector: "stack", key: "projectName" }
  *   { type: "count", detector: "routes" }
  */
+import { wrapSlot } from './adapterMerge.mjs';
 
 const SLOT_RE = /\{\{slot:([a-zA-Z0-9_-]+)\}\}/g;
 
@@ -25,10 +27,10 @@ export function renderTemplate(templateText, recipe, evidenceIndex) {
     const directive = slots[slotName];
     if (!directive) {
       explain[slotName] = { filled: false, todo: true, reason: 'no directive' };
-      return todo(slotName, 'no recipe directive');
+      return wrapSlot(slotName, unfilledMarker(slotName, 'no recipe directive'));
     }
     const rendered = renderSlot(slotName, directive, evidenceIndex, explain);
-    return rendered;
+    return wrapSlot(slotName, rendered);
   });
 
   return { text: output, explain };
@@ -47,7 +49,7 @@ function renderSlot(slotName, directive, idx, explain) {
       const e = bucket[directive.key];
       if (!e) {
         record(false, []);
-        return todo(slotName, `no ${directive.detector}.${directive.key} found`);
+        return unfilledMarker(slotName, `no ${directive.detector}.${directive.key} found`);
       }
       record(true, [ev(e)]);
       return String(e.value);
@@ -68,7 +70,7 @@ function renderSlot(slotName, directive, idx, explain) {
       const items = limitList(filtered, directive.limit);
       if (items.length === 0) {
         record(false, []);
-        return todo(slotName, `no ${directive.detector} evidence`);
+        return unfilledMarker(slotName, `no ${directive.detector} evidence`);
       }
       const fmt = directive.format ?? '- {value}';
       record(true, items.map(ev));
@@ -78,7 +80,7 @@ function renderSlot(slotName, directive, idx, explain) {
       const items = limitList(all, directive.limit);
       if (items.length === 0) {
         record(false, []);
-        return todo(slotName, `no ${directive.detector} evidence`);
+        return unfilledMarker(slotName, `no ${directive.detector} evidence`);
       }
       const cols = directive.columns ?? ['key', 'value'];
       const header = `| ${cols.join(' | ')} |\n| ${cols.map(() => '---').join(' | ')} |`;
@@ -88,7 +90,7 @@ function renderSlot(slotName, directive, idx, explain) {
     }
     default:
       explain[slotName] = { filled: false, todo: true, reason: `unknown type ${directive.type}` };
-      return todo(slotName, `unknown directive type "${directive.type}"`);
+      return unfilledMarker(slotName, `unknown directive type "${directive.type}"`);
   }
 }
 
@@ -101,8 +103,10 @@ function ev(e) {
   return { value: e.value, key: e.key, source: e.source };
 }
 
-function todo(slotName, reason) {
-  return `<!-- TODO(${slotName}): ${reason} — fill in manually -->`;
+function unfilledMarker(slotName, reason) {
+  // Nested inside APEX:slot anchors. Cleared by /post-skill-bootstrap or a later
+  // bootstrap that finds evidence. Do not hand-edit around these markers.
+  return `<!-- APEX:unfilled(${slotName}): ${reason} — retry on bootstrap or run /post-skill-bootstrap -->`;
 }
 
 /** True if any slot in the render is an unfilled TODO. */
