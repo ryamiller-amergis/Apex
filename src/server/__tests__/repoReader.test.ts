@@ -436,7 +436,7 @@ describe('TBI-001 DoD-2 preserves remote catalog fallback shapes', () => {
       // Assert
       expect(results).toEqual([adoList, githubList, adoSearch, githubSearch]);
       expect(adoListSpy).toHaveBeenCalledWith('project', 'repo', '/src', 'main');
-      expect(githubListSpy).toHaveBeenCalledWith('repo', '/src', 'main');
+      expect(githubListSpy).toHaveBeenCalledWith('repo', '/src', 'main', undefined);
       expect(adoSearchSpy).toHaveBeenCalledWith('project', 'repo', 'needle', 'main', 30);
       expect(githubSearchSpy).toHaveBeenCalledWith(
         'repo',
