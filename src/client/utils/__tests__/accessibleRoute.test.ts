@@ -107,6 +107,24 @@ describe('resolveAccessibleRoute', () => {
       });
       expect(result).toBe('/');
     });
+
+    it('PBI-001 AC-0: returns /diagrams when menu-enabled and diagram:view is granted', () => {
+      const result = resolveAccessibleRoute({
+        ...base,
+        can: (k) => k === 'diagram:view',
+        enabledViews: ['diagrams'],
+      });
+      expect(result).toBe('/diagrams');
+    });
+
+    it('PBI-001 AC-3: skips /diagrams when menu-enabled but diagram:view is absent', () => {
+      const result = resolveAccessibleRoute({
+        ...base,
+        can: () => false,
+        enabledViews: ['diagrams'],
+      });
+      expect(result).toBe('/');
+    });
   });
 
   describe('Super admin', () => {

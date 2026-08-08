@@ -379,6 +379,7 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
               aria-controls="platform-admin-panel-skills"
               className={`${styles.tabButton} ${activeTab === 'skills' ? styles.tabButtonActive : ''}`}
               onClick={() => setActiveTab('skills')}
+              {...{ 'data-testid': 'platform-admin-tab-skills' }}
             >
               APEX Skills
             </button>
@@ -988,7 +989,12 @@ const MenuVisibilitySection: React.FC<MenuVisibilitySectionProps> = ({
                     className={styles.checkbox}
                     disabled={pending}
                     {...register('enabledViews')}
-                    {...{ 'data-testid': `platform-admin-menu-view-${item.key}` }}
+                    {...{
+                      'data-testid':
+                        item.key === 'diagrams'
+                          ? 'menu-visibility-toggle-diagrams'
+                          : `platform-admin-menu-view-${item.key}`,
+                    }}
                   />
                   <span>{item.label}</span>
                 </label>

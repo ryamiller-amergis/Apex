@@ -229,6 +229,15 @@ const PAGE_MODULE_BY_MENU_KEY: Record<
       },
     ],
   },
+  diagrams: {
+    pageEntries: [
+      {
+        component: 'src/client/components/DiagramsPlaceholder.tsx',
+        routePattern: '/diagrams',
+        suggestedRoute: '/diagrams',
+      },
+    ],
+  },
 };
 
 const FIXED_PAGE_MODULES: readonly WalkthroughPageModuleContext[] = [
