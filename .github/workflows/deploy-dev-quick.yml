@@ -1,19 +1,23 @@
-# Manual-only shortcut to ship a branch/SHA to Azure Dev without waiting on the
-# full PR Tests & Dev Deploy gate (unit/integration/e2e/smoke).
+# Fast path to ship a PR (or manual ref) to Azure Dev without the full PR test gate.
 #
-# Use from Actions → "Deploy Dev (Quick)" → Run workflow.
-# Leave "Use workflow from" on main, and set git_ref to the branch/SHA to ship
-# (e.g. tbi/refactor-ai-driven-execution). Empty git_ref deploys the selected branch.
+# Auto: add/keep the `quick-dev-deploy` label on a PR → deploys that PR's head SHA
+#       (also re-runs on every push while the label stays applied).
+# Manual: Actions → "Deploy Dev (Quick)" → set git_ref to a branch/SHA.
 name: Deploy Dev (Quick)
-# Actions always loads this workflow file from main, so the run banner says
-# "main". The run-name + git_ref input are what actually identify the deploy target.
-run-name: 'Deploy Dev (Quick) → ${{ inputs.git_ref || github.ref_name }}'
+run-name: >-
+  Deploy Dev (Quick) → ${{
+    github.event_name == 'pull_request'
+      && format('{0} (#{1})', github.event.pull_request.head.ref, github.event.pull_request.number)
+      || (inputs.git_ref != '' && inputs.git_ref || github.ref_name)
+  }}
 
 on:
+  pull_request:
+    types: [labeled, synchronize, reopened]
   workflow_dispatch:
     inputs:
       git_ref:
-        description: 'REQUIRED for feature work: branch/tag/SHA to deploy (e.g. tbi/refactor-ai-driven-execution). Leave empty only to deploy main.'
+        description: 'Branch/tag/SHA to deploy (empty = the branch selected for this run)'
         required: false
         type: string
         default: ''
@@ -27,20 +31,73 @@ env:
   NODE_VERSION: '24.x'
 
 jobs:
+  # Resolve the exact commit to ship. Labeled PRs always use the PR head SHA —
+  # never main — so the Actions "Branch" column saying main (workflow file home)
+  # cannot accidentally deploy main.
+  resolve:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'pull_request' &&
+        (
+          (github.event.action == 'labeled' && github.event.label.name == 'quick-dev-deploy') ||
+          (
+            github.event.action != 'labeled' &&
+            contains(github.event.pull_request.labels.*.name, 'quick-dev-deploy')
+          )
+        )
+      )
+    outputs:
+      deploy_ref: ${{ steps.out.outputs.deploy_ref }}
+      deploy_label: ${{ steps.out.outputs.deploy_label }}
+      run_migrations: ${{ steps.out.outputs.run_migrations }}
+    steps:
+      - id: out
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            REF='${{ github.event.pull_request.head.sha }}'
+            LABEL='${{ github.event.pull_request.head.ref }} (PR #${{ github.event.pull_request.number }})'
+            MIGRATE=true
+          else
+            REF='${{ inputs.git_ref }}'
+            if [ -z "$REF" ]; then
+              REF='${{ github.sha }}'
+            fi
+            LABEL="$REF"
+            MIGRATE='${{ inputs.run_migrations }}'
+          fi
+          {
+            echo "deploy_ref=$REF"
+            echo "deploy_label=$LABEL"
+            echo "run_migrations=$MIGRATE"
+          } >> "$GITHUB_OUTPUT"
+          echo "Will deploy: $LABEL @ $REF"
+          echo "::notice title=Deploy target::$LABEL @ $REF"
+
   build:
+    needs: resolve
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.git_ref || github.ref }}
+          ref: ${{ needs.resolve.outputs.deploy_ref }}
           fetch-depth: 0
 
       - name: Announce deploy target
         run: |
-          echo "Deploy target ref input: '${{ inputs.git_ref }}'"
+          echo "Resolved deploy target: ${{ needs.resolve.outputs.deploy_label }}"
+          echo "Resolved SHA/ref: ${{ needs.resolve.outputs.deploy_ref }}"
           echo "Checked out: $(git rev-parse --abbrev-ref HEAD) @ $(git rev-parse HEAD)"
           git log -1 --oneline
+          EXPECTED='${{ needs.resolve.outputs.deploy_ref }}'
+          ACTUAL="$(git rev-parse HEAD)"
+          # When resolve passed a full SHA (PR path), require an exact match.
+          if [[ "$EXPECTED" =~ ^[0-9a-f]{40}$ ]] && [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "ERROR: checked out $ACTUAL but expected $EXPECTED" >&2
+            exit 1
+          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -67,6 +124,7 @@ jobs:
           retention-days: 1
 
   detect-runner-changes:
+    needs: resolve
     runs-on: ubuntu-latest
     outputs:
       load_test_runner: ${{ steps.load_test_runner.outputs.changed }}
@@ -74,7 +132,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.git_ref || github.ref }}
+          ref: ${{ needs.resolve.outputs.deploy_ref }}
           fetch-depth: 0
 
       - name: Detect load-test runner changes vs origin/main
@@ -95,10 +153,11 @@ jobs:
           fi
 
   deploy-dev:
-    needs: [build, detect-runner-changes]
+    needs: [resolve, build, detect-runner-changes]
     runs-on: ubuntu-latest
     environment: dev
     concurrency:
+      # Shared app-scrum-dev: only one quick deploy at a time.
       group: quick-dev-deploy
       cancel-in-progress: true
 
@@ -106,7 +165,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.git_ref || github.ref }}
+          ref: ${{ needs.resolve.outputs.deploy_ref }}
           fetch-depth: 0
 
       - name: Resolve deployed SHA
@@ -115,9 +174,9 @@ jobs:
           SHA=$(git rev-parse HEAD)
           REF=$(git rev-parse --abbrev-ref HEAD)
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          echo "Deploying $REF @ $SHA"
+          echo "Deploying ${{ needs.resolve.outputs.deploy_label }} ($REF @ $SHA)"
           git log -1 --oneline
-          echo "::notice title=Deploy target::$REF @ $SHA"
+          echo "::notice title=Deploy target::${{ needs.resolve.outputs.deploy_label }} @ $SHA"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -138,14 +197,14 @@ jobs:
 
       - name: Detect migration changes
         id: migration_changes
-        if: ${{ inputs.run_migrations }}
+        if: needs.resolve.outputs.run_migrations == 'true'
         env:
           MIGRATION_DETECT_STRATEGY: db
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: node scripts/ci/has-migration-changes.mjs
 
       - name: Run database migrations
-        if: ${{ inputs.run_migrations && steps.migration_changes.outputs.has_migration_changes == 'true' }}
+        if: needs.resolve.outputs.run_migrations == 'true' && steps.migration_changes.outputs.has_migration_changes == 'true'
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: npm run migrate:up
