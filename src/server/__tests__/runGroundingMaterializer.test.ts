@@ -83,7 +83,7 @@ describe('TBI-004 default independent grounding materializer', () => {
     expect(secondIdentity.sha).toBe(sha);
     expect(firstDestination).not.toBe(secondDestination);
     expect(firstDestination).toMatch(
-      new RegExp(`grounding-workspaces[\\\\/]\\w+$`)
+      new RegExp(`workspaces[\\\\/]grounding[\\\\/]\\w+$`)
     );
     expect(firstDestination).not.toContain('prd-thread');
     expect(secondDestination).not.toContain('design-doc-thread');
@@ -158,7 +158,7 @@ describe('TBI-004 default independent grounding materializer', () => {
     });
     expect(materializeWorkspaceFromCache).toHaveBeenCalledWith(
       'C:\\cache\\repo.git',
-      expect.stringMatching(/grounding-workspaces/),
+      expect.stringMatching(/[\\/]workspaces[\\/]grounding[\\/]/),
       'main',
       'https://example.invalid/repo.git'
     );

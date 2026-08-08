@@ -38,7 +38,7 @@ describe('TBI-007 groundingEvictionService', () => {
 
   it('DoD-2 removes only inactive worktrees idle beyond 30 minutes and protects active paths and bundles', async () => {
     // Arrange
-    const workspaces = path.join(dataRoot, 'grounding-workspaces');
+    const workspaces = path.join(dataRoot, 'workspaces', 'grounding');
     const activePath = resolveRunGroundingWorkspacePath(
       activeGrounding,
       activeGrounding,
