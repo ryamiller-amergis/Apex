@@ -184,6 +184,60 @@ describe('useDiagramEditor — PBI-002 / PBI-003', () => {
     expect(queryClient.getQueryData(['diagram', 'project-a', 'diagram-1'])).toBeTruthy();
   });
 
+  it('stays clean when route flips new → existing after create save', async () => {
+    const drawnScene = {
+      elements: [{ id: 'e1', type: 'rectangle', x: 1, y: 2, version: 1, versionNonce: 11, updated: 100 }],
+      appState: { viewBackgroundColor: '#ffffff' },
+      files: {},
+    };
+    const created = detail({ version: 1, scene: drawnScene });
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => created,
+    }) as jest.Mock;
+
+    const { wrapper } = createWrapper();
+    const { result, rerender } = renderHook(
+      ({ mode, diagramId }: { mode: 'new' | 'existing'; diagramId: string | null }) =>
+        useDiagramEditor({
+          projectId: 'project-a',
+          diagramId,
+          mode,
+          canCreate: true,
+          canEdit: true,
+        }),
+      {
+        wrapper,
+        initialProps: { mode: 'new' as const, diagramId: null as string | null },
+      },
+    );
+
+    act(() => {
+      result.current.onSceneChange(drawnScene);
+    });
+    expect(result.current.isDirty).toBe(true);
+
+    await act(async () => {
+      await result.current.save();
+    });
+    expect(result.current.isDirty).toBe(false);
+
+    // Mimic App.tsx route replace /diagrams/new → /diagrams/:id without remounting the hook.
+    rerender({ mode: 'existing', diagramId: 'diagram-1' });
+    await waitFor(() => expect(result.current.version).toBe(1));
+    expect(result.current.isDirty).toBe(false);
+
+    act(() => {
+      result.current.onSceneChange({
+        elements: [{ id: 'e1', type: 'rectangle', x: 1, y: 2, version: 9, versionNonce: 999, updated: 2000 }],
+        appState: { viewBackgroundColor: '#ffffff', scrollX: -40 },
+        files: {},
+      });
+    });
+    expect(result.current.isDirty).toBe(false);
+  });
+
   it('PBI-002 AC-1 / VT-02: failed save keeps dirty state and surfaces error', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: false,
