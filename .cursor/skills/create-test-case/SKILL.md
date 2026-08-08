@@ -261,3 +261,4 @@ Ensure `.ai-pilot/output/` exists. Write **in this order**:
 - Output schema: [`test-case-schema.json`](test-case-schema.json)
 - Worked example: [`test-case-example.json`](test-case-example.json)
 - Backlog input schema: [`../to-prd/backlog-schema.json`](../to-prd/backlog-schema.json)
+- QA sandbox skill (editable fixtures + local run, no `.ai-pilot/output`): [`../create-test-case-sandbox/`](../create-test-case-sandbox/) — invoke `/create-test-case-sandbox`

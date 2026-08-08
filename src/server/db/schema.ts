@@ -59,6 +59,10 @@ import type {
   ArtifactRef,
 } from '../../shared/types/loadTest';
 import type {
+  DiagramShareAccess,
+  ExcalidrawScene,
+} from '../../shared/types/diagram';
+import type {
   WalkthroughAnchorPlacement,
   WalkthroughGenerationProvenance,
   WalkthroughLifecycle,
@@ -1784,6 +1788,59 @@ export const loadTestRunsRelations = relations(loadTestRuns, ({ one }) => ({
   loadTest: one(loadTests, {
     fields: [loadTestRuns.loadTestId],
     references: [loadTests.id],
+  }),
+}));
+
+// ── Diagrams Module ───────────────────────────────────────────────────────────
+
+export const diagrams = pgTable('diagrams', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: text('project_id').notNull(),
+  ownerId: text('owner_id').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  title: text('title').notNull(),
+  scene: jsonb('scene').$type<ExcalidrawScene>().notNull(),
+  thumbnail: text('thumbnail').notNull(),
+  version: integer('version').notNull().default(1),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectOwnerIdx: index('idx_diagrams_project_owner').on(t.projectId, t.ownerId),
+  projectUpdatedIdx: index('idx_diagrams_project_updated').on(t.projectId, t.updatedAt),
+  titleNotBlankCheck: check('diagrams_title_not_blank', sql`length(btrim(${t.title})) > 0`),
+  versionPositiveCheck: check('diagrams_version_positive', sql`${t.version} > 0`),
+}));
+
+export const diagramShares = pgTable('diagram_shares', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  diagramId: uuid('diagram_id').notNull().references(() => diagrams.id, { onDelete: 'cascade' }),
+  granteeId: text('grantee_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  access: text('access').$type<DiagramShareAccess>().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  diagramGranteeUq: unique('diagram_shares_diagram_id_grantee_id_key').on(
+    t.diagramId,
+    t.granteeId,
+  ),
+  granteeIdx: index('idx_diagram_shares_grantee').on(t.granteeId, t.diagramId),
+  accessCheck: check('diagram_shares_access_check', sql`${t.access} IN ('view', 'edit')`),
+}));
+
+export const diagramsRelations = relations(diagrams, ({ one, many }) => ({
+  owner: one(appUsers, {
+    fields: [diagrams.ownerId],
+    references: [appUsers.oid],
+  }),
+  shares: many(diagramShares),
+}));
+
+export const diagramSharesRelations = relations(diagramShares, ({ one }) => ({
+  diagram: one(diagrams, {
+    fields: [diagramShares.diagramId],
+    references: [diagrams.id],
+  }),
+  grantee: one(appUsers, {
+    fields: [diagramShares.granteeId],
+    references: [appUsers.oid],
   }),
 }));
 

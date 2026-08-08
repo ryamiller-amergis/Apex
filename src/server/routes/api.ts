@@ -63,9 +63,11 @@ import {
 } from '../../shared/types/calendarWorkItemAssistant';
 
 import runGroundingsRouter from './runGroundings';
+import diagramsRouter from './diagrams';
 const router = express.Router();
 
 router.use('/run-groundings', runGroundingsRouter);
+router.use('/projects/:projectId/diagrams', diagramsRouter);
 // GET /api/available-models — accessible to all authenticated users so that
 // non-admin roles (e.g. interviews:manage) can populate model dropdowns.
 router.get('/available-models', async (_req: Request, res: Response) => {
@@ -4023,7 +4025,7 @@ import { attachPermissions } from '../middleware/rbac';
 import { getUserPermissions, getUserRoleNames, getChangelogPrefs, updateChangelogPrefs } from '../services/rbacService';
 import { getUserGroupNames } from '../services/groupService';
 import { getMenuConfig } from '../services/menuSettingsService';
-import { ALL_MENU_VIEWS } from '../../shared/types/menuSettings';
+import { DEFAULT_ENABLED_MENU_VIEWS } from '../../shared/types/menuSettings';
 import {
   ChangelogContentError,
   getChangelogPayload,
@@ -4226,7 +4228,7 @@ router.get('/menu-config', async (req: Request, res: Response): Promise<void> =>
       return;
     }
     const config = await getMenuConfig(project);
-    res.json({ enabledViews: config?.enabledViews ?? ALL_MENU_VIEWS });
+    res.json({ enabledViews: config?.enabledViews ?? DEFAULT_ENABLED_MENU_VIEWS });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }

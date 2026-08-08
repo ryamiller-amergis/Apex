@@ -108,6 +108,12 @@ const MODULE_ORDER: ReadonlyArray<{
     isAccessible: ({ can, isSuperAdmin, enabledViews }) =>
       isSuperAdmin || (enabledViews.includes('design-module') && can('design-module:view')),
   },
+  {
+    view: 'diagrams',
+    route: '/diagrams',
+    isAccessible: ({ can, isSuperAdmin, enabledViews }) =>
+      isSuperAdmin || (enabledViews.includes('diagrams') && can('diagram:view')),
+  },
 ];
 
 /**

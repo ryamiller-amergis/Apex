@@ -79,6 +79,12 @@ const LoadTestsListPage = lazy(() => import('./components/LoadTestsListPage').th
 const LoadTestDefinitionBuilderView = lazy(() =>
   import('./components/LoadTestDefinitionBuilderView').then((m) => ({ default: m.LoadTestDefinitionBuilderView })),
 );
+const DiagramsView = lazy(() =>
+  import('./components/DiagramsView').then((m) => ({ default: m.DiagramsView })),
+);
+const DiagramEditorView = lazy(() =>
+  import('./components/DiagramEditorView').then((m) => ({ default: m.DiagramEditorView })),
+);
 const LoadTestRunDetailView = lazy(() =>
   import('./components/LoadTestRunDetailView').then((m) => ({ default: m.LoadTestRunDetailView })),
 );
@@ -142,7 +148,7 @@ function App() {
   }, []);
   const { data: activeThread = null } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests' | 'not-found';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests' | 'diagrams' | 'not-found';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -186,6 +192,8 @@ function App() {
                     ? 'design-module'
                     : location.pathname.startsWith('/load-tests')
                     ? 'load-tests'
+                    : location.pathname.startsWith('/diagrams')
+                    ? 'diagrams'
                     : 'not-found';
 
   const planningTabSegment = location.pathname.startsWith('/planning')
@@ -353,6 +361,7 @@ function App() {
     if (currentView === 'pdf-tools'     && !isSuperAdmin && (!enabledViews.includes('pdf-tools') || !can('pdf-assembly:use'))) navigate(fallback);
     if (currentView === 'design-module' && !isSuperAdmin && (!enabledViews.includes('design-module') || !can('design-module:view'))) navigate(fallback);
     if (currentView === 'load-tests'    && !isSuperAdmin && (!enabledViews.includes('load-tests')    || !can('load-test:view')))    navigate(fallback);
+    if (currentView === 'diagrams'      && !isSuperAdmin && (!enabledViews.includes('diagrams')      || !can('diagram:view')))      navigate(fallback);
     if (currentView === 'planning') {
       if (!isSuperAdmin && (!enabledViews.includes('planning') || !can('planning:view'))) {
         navigate(fallback);
@@ -548,6 +557,7 @@ function App() {
             onNavigateAiCost={() => navigate('/ai-cost')}
             onNavigateDesignModule={() => navigate('/design-module')}
             onNavigateLoadTests={() => navigate('/load-tests')}
+            onNavigateDiagrams={() => navigate('/diagrams')}
             onNavigateAdmin={() => navigate('/admin/roles')}
           />
           <div className={`app-main ${sidebarCollapsed ? 'sidebar-collapsed' : 'sidebar-expanded'}`}>
@@ -597,6 +607,7 @@ function App() {
             onNavigateAiCost={() => navigate('/ai-cost')}
             onNavigateDesignModule={() => navigate('/design-module')}
             onNavigateLoadTests={() => navigate('/load-tests')}
+            onNavigateDiagrams={() => navigate('/diagrams')}
             onOpenChangelog={() => setShowChangelog(true)}
             onThemeChange={setThemeMode}
             onLogout={handleLogout}
@@ -952,6 +963,33 @@ function App() {
                     );
                   })()}
                 </LoadTestsRouteGuard>
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'diagrams' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<div {...{ 'data-testid': 'diagrams-loading' }}><ViewSkeleton /></div>}>
+                {(() => {
+                  const segments = location.pathname.split('/').filter(Boolean);
+                  if (segments[0] === 'diagrams' && segments[1] === 'new') {
+                    return (
+                      <DiagramEditorView
+                        projectId={selectedProject}
+                        diagramId={null}
+                        mode="new"
+                      />
+                    );
+                  }
+                  if (segments[0] === 'diagrams' && segments[1]) {
+                    return (
+                      <DiagramEditorView
+                        projectId={selectedProject}
+                        diagramId={segments[1]}
+                        mode="existing"
+                      />
+                    );
+                  }
+                  return <DiagramsView projectId={selectedProject} />;
+                })()}
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'planning' ? (

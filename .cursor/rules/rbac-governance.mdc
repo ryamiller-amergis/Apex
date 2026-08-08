@@ -44,6 +44,11 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `chat:view_all` | chat | admin |
 | `home:view` | chat | admin, member, viewer |
 | `cost:view` | cost | admin, viewer |
+| `diagram:view` | diagram | admin, member, viewer |
+| `diagram:create` | diagram | admin, member |
+| `diagram:edit` | diagram | admin, member |
+| `diagram:delete` | diagram | admin, member |
+| `diagram:share` | diagram | admin, member |
 | `load-test:view` | load-test | admin, member, viewer |
 | `load-test:run` | load-test | admin, member |
 | `load-test:manage` | load-test | admin, member |
