@@ -44,8 +44,10 @@ npx @apex/skills validate
 
 | Location | Owner | Description |
 |----------|-------|-------------|
-| `.apex/foundation/<skill>/` | Managed (do not edit) | Immutable foundation from package |
-| `.cursor/skills/<skill>/` | Team editable | Project adapter — customize freely |
+| `.cursor/skills/<skill>/SKILL.md` | Mixed | Fenced managed region (APEX) + project notes below `APEX:END managed` (team) |
+| `.cursor/skills/<skill>/*` companions | Managed | Schemas/templates — always replaced on update |
+| `.apex/config.json` | Repo | Authorizing release cache |
+| `.apex/backups/<skill>/` | Managed | Backups of in-fence edits before overwrite |
 | `apex-skills.lock.json` | Managed | Version, selected skills, file hashes |
 
 ## Cursor slash command invocation

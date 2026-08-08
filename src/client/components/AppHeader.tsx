@@ -19,7 +19,7 @@ interface NavItem {
 }
 
 interface AppHeaderProps {
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests' | 'work-board';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests' | 'diagrams' | 'work-board';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -49,6 +49,7 @@ interface AppHeaderProps {
   onNavigateAiCost?: () => void;
   onNavigateDesignModule?: () => void;
   onNavigateLoadTests?: () => void;
+  onNavigateDiagrams?: () => void;
   onNavigateWorkBoard?: () => void;
   onNavigateAdmin: () => void;
   onOpenChangelog: () => void;
@@ -85,6 +86,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigateAiCost,
   onNavigateDesignModule,
   onNavigateLoadTests,
+  onNavigateDiagrams,
   onNavigateWorkBoard,
   onNavigateAdmin,
   onOpenChangelog,
@@ -127,6 +129,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'UI Lab', view: 'ui-lab', permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
     { label: 'Apex Backlog', view: 'feature-requests', permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
     { label: 'Design Module', view: 'design-module', permission: 'design-module:view', onNavigate: onNavigateDesignModule ?? (() => {}) },
+    { label: 'Diagrams', view: 'diagrams', permission: 'diagram:view', onNavigate: onNavigateDiagrams ?? (() => {}) },
     { label: 'Load Tests', view: 'load-tests', permission: 'load-test:view', onNavigate: onNavigateLoadTests ?? (() => {}) },
     { label: 'Work Board', view: 'work-board', permission: null, onNavigate: onNavigateWorkBoard ?? (() => {}) },
     { label: 'Admin', view: 'admin', permission: 'admin:roles', onNavigate: onNavigateAdmin },
@@ -145,7 +148,6 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       return true;
     }
     if (item.view === 'feature-requests') {
-      if (selectedProject !== 'Apex') return false;
       if (!isSuperAdmin && !menuEnabledViews.includes('feature-requests')) return false;
       if (!isSuperAdmin && !can('feature-requests:view')) return false;
       return true;
@@ -299,9 +301,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       )}
 
       {workItemType && selectedProject && (
-        // data-testid-exempt — pre-existing modal mount; FEAT-006 only extends Fab Help seam
+        // data-testid-exempt — FAB submissions always target the Apex project (platform triage queue)
         <FeatureRequestModal
-          selectedProject={selectedProject}
+          selectedProject="Apex"
           type={workItemType}
           onClose={() => setWorkItemType(null)}
         />

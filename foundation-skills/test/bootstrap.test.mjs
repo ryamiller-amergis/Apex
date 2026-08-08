@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { bootstrapSkill } from '../lib/bootstrap.mjs';
 import { collectEvidence, gatherFiles, globToRegExp } from '../lib/evidence.mjs';
+import { checkRepo } from '../lib/check.mjs';
 import { cmdBootstrap } from '../lib/commands.mjs';
 import { executeInstall } from '../lib/install.mjs';
 import { PKG_ROOT, makeRepo, cleanup, SAMPLE_REPO } from './helpers.mjs';
@@ -37,13 +38,13 @@ test('bootstrap fills slots from real evidence with sources', () => {
   }
 });
 
-test('missing signals render TODO placeholders, not blanks', () => {
+test('missing signals render APEX:unfilled placeholders, not blanks', () => {
   const repo = makeRepo({ 'package.json': JSON.stringify({ name: 'bare' }) });
   try {
     const boot = bootstrapSkill(PKG_ROOT, repo, 'ui-lab');
     const skill = boot.files['SKILL.md'];
-    assert.match(skill, /TODO\(designTokens\)/);
-    assert.match(skill, /TODO\(components\)/);
+    assert.match(skill, /APEX:unfilled\(designTokens\)/);
+    assert.match(skill, /APEX:unfilled\(components\)/);
     // projectName is present though.
     assert.match(skill, /bare/);
   } finally {
@@ -103,7 +104,7 @@ test('bootstrap command writes filled adapter content to disk', () => {
   try {
     executeInstall(PKG_ROOT, repo, ['ui-lab']);
     const adapterPath = path.join(repo, '.cursor/skills/ui-lab/SKILL.md');
-    assert.match(fs.readFileSync(adapterPath, 'utf8'), /TODO\(designTokens\)/);
+    assert.match(fs.readFileSync(adapterPath, 'utf8'), /APEX:unfilled\(designTokens\)/);
 
     fs.mkdirSync(path.join(repo, 'src/client/components'), { recursive: true });
     fs.writeFileSync(
@@ -121,9 +122,112 @@ test('bootstrap command writes filled adapter content to disk', () => {
     const after = fs.readFileSync(adapterPath, 'utf8');
     assert.match(after, /--color-primary/);
     assert.match(after, /Button/);
-    assert.doesNotMatch(after, /TODO\(designTokens\)/);
-    assert.doesNotMatch(after, /TODO\(components\)/);
+    assert.doesNotMatch(after, /APEX:unfilled\(designTokens\)/);
+    assert.doesNotMatch(after, /APEX:unfilled\(components\)/);
     assert.ok(logs.some((l) => /wrote \d+ file/.test(l)));
+  } finally {
+    cleanup(repo);
+  }
+});
+
+test('bootstrap merges adapter — foundation fence + project notes + filled slots survive', () => {
+  const repo = makeRepo(SAMPLE_REPO);
+  const logs = [];
+  try {
+    executeInstall(PKG_ROOT, repo, ['ui-lab']);
+    const adapterPath = path.join(repo, '.cursor/skills/ui-lab/SKILL.md');
+    let text = fs.readFileSync(adapterPath, 'utf8');
+
+    // Edit project notes (must survive)
+    text = text.replace(
+      '<!-- Yours. APEX never writes below this line. -->\n',
+      '<!-- Yours. APEX never writes below this line. -->\n\nPROJECT_TAIL_MARKER\n',
+    );
+    // Edit foundation fence (must survive bootstrap — only install/update rewrites it)
+    text = text.replace('<!-- APEX:END managed -->', 'FOUNDATION_EDIT\n<!-- APEX:END managed -->');
+    // Simulate /post-skill-bootstrap filling a slot that detectors leave empty
+    text = text.replace(
+      /<!--\s*APEX:slot\(designTokens\)\s*-->[\s\S]*?<!--\s*APEX:\/slot\(designTokens\)\s*-->/,
+      '<!-- APEX:slot(designTokens) -->\nHUMAN_FILLED_TOKENS\n<!-- APEX:/slot(designTokens) -->',
+    );
+    // Freeform project content outside slots must survive.
+    text = text.replace('<!-- APEX:END adapter -->', 'ADAPTER_EDIT\n<!-- APEX:END adapter -->');
+    fs.writeFileSync(adapterPath, text, 'utf8');
+
+    const code = cmdBootstrap({ _: ['ui-lab'], package: PKG_ROOT, cwd: repo }, (m) => logs.push(m));
+    assert.equal(code, 0);
+
+    const after = fs.readFileSync(adapterPath, 'utf8');
+    assert.ok(after.includes('PROJECT_TAIL_MARKER'), 'project notes must survive bootstrap');
+    assert.ok(after.includes('FOUNDATION_EDIT'), 'foundation fence must survive bootstrap');
+    assert.ok(after.includes('HUMAN_FILLED_TOKENS'), 'filled APEX:slot values must survive merge');
+    assert.ok(after.includes('ADAPTER_EDIT'), 'unanchored adapter freeform edits must survive');
+  } finally {
+    cleanup(repo);
+  }
+});
+
+test('bootstrap --all scopes to lockfile skills, not the full catalog', () => {
+  const repo = makeRepo(SAMPLE_REPO);
+  const logs = [];
+  try {
+    executeInstall(PKG_ROOT, repo, ['ui-lab']);
+    const code = cmdBootstrap({ all: true, package: PKG_ROOT, cwd: repo }, (m) => logs.push(m));
+    assert.equal(code, 0);
+    assert.ok(logs.some((l) => /scopes to 1 installed skill/.test(l)));
+    // Only ui-lab should exist under .cursor/skills
+    const skills = fs.readdirSync(path.join(repo, '.cursor/skills'));
+    assert.deepEqual(skills.sort(), ['ui-lab']);
+  } finally {
+    cleanup(repo);
+  }
+});
+
+test('bootstrap restores adapter-owned runtime companions and refreshes drift tracking', () => {
+  const repo = makeRepo(SAMPLE_REPO);
+  const logs = [];
+  const skills = ['prd-spec-review', 'design-spec-review', 'adr-finalize'];
+  const expectedFiles = [
+    '.cursor/skills/prd-spec-review/rubric.md',
+    '.cursor/skills/prd-spec-review/scorecard-template.md',
+    '.cursor/skills/design-spec-review/rubric.md',
+    '.cursor/skills/design-spec-review/scorecard-template.md',
+    '.cursor/skills/adr-finalize/adr-template.md',
+  ];
+  try {
+    executeInstall(PKG_ROOT, repo, skills);
+
+    for (const rel of expectedFiles) {
+      fs.rmSync(path.join(repo, rel), { force: true });
+    }
+
+    const before = checkRepo(PKG_ROOT, repo);
+    for (const skill of skills) {
+      assert.equal(
+        before.skills.find((entry) => entry.name === skill)?.companionDrift,
+        true,
+        `expected companion drift before bootstrap for ${skill}`,
+      );
+    }
+
+    const code = cmdBootstrap({ _: skills, package: PKG_ROOT, cwd: repo }, (message) => logs.push(message));
+    assert.equal(code, 0);
+
+    for (const rel of expectedFiles) {
+      assert.ok(fs.existsSync(path.join(repo, rel)), `missing restored runtime companion ${rel}`);
+    }
+    assert.equal(fs.existsSync(path.join(repo, '.cursor/skills/prd-spec-review/recipe.json')), false);
+    assert.equal(fs.existsSync(path.join(repo, '.cursor/skills/design-spec-review/recipe.json')), false);
+    assert.equal(fs.existsSync(path.join(repo, '.cursor/skills/adr-finalize/recipe.json')), false);
+
+    const after = checkRepo(PKG_ROOT, repo);
+    for (const skill of skills) {
+      const result = after.skills.find((entry) => entry.name === skill);
+      assert.equal(result?.drift, false, `expected clean check after bootstrap for ${skill}`);
+      assert.equal(result?.companionDrift, false, `expected companion drift cleared for ${skill}`);
+    }
+
+    assert.ok(logs.some((message) => /wrote \d+ file/.test(message)));
   } finally {
     cleanup(repo);
   }

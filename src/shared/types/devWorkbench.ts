@@ -40,6 +40,19 @@ export function canStartDevelopment(state: string | null | undefined): boolean {
  */
 export const APEX_ORIGIN_TAG = 'apex';
 
+/**
+ * Projects whose development requirements live in Apex PRDs instead of Azure
+ * DevOps work items. My Work renders the in-app PRD → Epic → Feature backlog
+ * for these projects and must not query ADO for assigned requirements.
+ */
+export const APP_NATIVE_REQUIREMENTS_PROJECTS = ['Apex', 'Amego'] as const;
+
+export function isAppNativeRequirementsProject(
+  project: string | null | undefined,
+): boolean {
+  return APP_NATIVE_REQUIREMENTS_PROJECTS.some((candidate) => candidate === project);
+}
+
 /** True when the semicolon-separated System.Tags value contains the APEX origin tag. */
 export function hasApexOriginTag(tags: string | null | undefined): boolean {
   if (!tags) return false;

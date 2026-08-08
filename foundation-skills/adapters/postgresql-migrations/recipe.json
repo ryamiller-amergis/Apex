@@ -1,7 +1,7 @@
 {
   "skill": "postgresql-migrations",
   "scanScope": "targeted",
-  "targetedGlobs": ["package.json"],
+  "targetedGlobs": ["package.json", "AGENTS.md", "agents.md", "CONTEXT.md", "context.md", "CONTEXT-MAP.md", "context-map.md", "README.md", "readme.md"],
   "detectors": ["stack", "repo-docs"],
   "capFiles": 100,
   "capMs": 45000,

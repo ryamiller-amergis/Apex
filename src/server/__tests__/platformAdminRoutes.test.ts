@@ -425,5 +425,36 @@ describe('platformAdminRouter', () => {
         'Platform Admin',
       );
     });
+
+    it('PBI-001 AC-0 / VT-06: accepts diagrams as a valid menu item key', async () => {
+      mockMenuSettings.upsertMenuConfig.mockResolvedValue({
+        project: 'MaxView',
+        enabledViews: ['calendar', 'diagrams'],
+        updatedBy: 'Platform Admin',
+      });
+
+      const res = await request(buildApp({ oid: 'admin-oid', displayName: 'Platform Admin' }))
+        .put('/api/platform-admin/menu-settings/MaxView')
+        .send({ enabledViews: ['calendar', 'diagrams'] });
+
+      expect(res.status).toBe(200);
+      expect(mockMenuSettings.upsertMenuConfig).toHaveBeenCalledWith(
+        'MaxView',
+        ['calendar', 'diagrams'],
+        'Platform Admin',
+      );
+      expect(res.body.enabledViews).toContain('diagrams');
+    });
+
+    it('PBI-001 AC-1 / VT-07: persistence failure leaves prior enabledViews unchanged', async () => {
+      mockMenuSettings.upsertMenuConfig.mockRejectedValue(new Error('db down'));
+
+      const res = await request(buildApp({ oid: 'admin-oid', displayName: 'Platform Admin' }))
+        .put('/api/platform-admin/menu-settings/MaxView')
+        .send({ enabledViews: ['calendar', 'diagrams'] });
+
+      expect(res.status).toBeGreaterThanOrEqual(400);
+      expect(mockMenuSettings.getMenuConfig).not.toHaveBeenCalled();
+    });
   });
 });

@@ -52,6 +52,10 @@ import type {
   ArtifactRef,
 } from '../../shared/types/loadTest';
 import type {
+  DiagramShareAccess,
+  ExcalidrawScene,
+} from '../../shared/types/diagram';
+import type {
   WalkthroughAnchorPlacement,
   WalkthroughGenerationProvenance,
   WalkthroughLifecycle,
@@ -540,7 +544,11 @@ export const designDocs = pgTable('design_docs', {
   reviewedAt: timestamp('reviewed_at', { withTimezone: true, mode: 'string' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
-});
+}, (t) => ({
+  directFeatureUq: uniqueIndex('uq_design_docs_prd_direct_feature')
+    .on(t.prdId, t.featureIndex)
+    .where(sql`${t.designPrototypeId} IS NULL AND ${t.featureIndex} IS NOT NULL`),
+}));
 
 // ── Interview Relations ────────────────────────────────────────────────────────
 
@@ -1336,6 +1344,7 @@ export const featureRequests = pgTable('feature_requests', {
   statusCreatedIdx: index('idx_feature_requests_status_created').on(t.status, t.createdAt),
   typeStatusCreatedIdx: index('idx_feature_requests_type_status_created').on(t.type, t.status, t.createdAt),
   submittedByIdx: index('idx_feature_requests_submitted_by').on(t.submittedBy),
+  sourceProjectIdx: index('idx_feature_requests_source_project').on(t.sourceProject),
 }));
 
 export const featureRequestAdrs = pgTable('feature_request_adrs', {
@@ -1452,11 +1461,19 @@ export const agentRuns = pgTable('agent_runs', {
   progressPhase: text('progress_phase').$type<AgentRunPhase>(),
   startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   timeoutAt: timestamp('timeout_at', { withTimezone: true, mode: 'string' }),
+  // True when the run was claimed under event-driven-run-termination. Lets the
+  // reaper classify deterministically from the row (event-driven runs never
+  // write a heartbeat by design) instead of re-evaluating the flag per sweep.
+  eventDriven: boolean('event_driven').notNull().default(false),
   lastError: text('last_error'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
   statusHeartbeatIdx: index('idx_agent_runs_status_heartbeat').on(t.status, t.heartbeatAt),
+  nonTerminalTimeoutCheck: check(
+    'agent_runs_non_terminal_timeout_at_check',
+    sql`${t.status} NOT IN ('queued', 'running') OR ${t.timeoutAt} IS NOT NULL`,
+  ),
 }));
 
 export const agentRunEvents = pgTable('agent_run_events', {
@@ -1805,6 +1822,59 @@ export const loadTestRunsRelations = relations(loadTestRuns, ({ one }) => ({
   }),
 }));
 
+// ── Diagrams Module ───────────────────────────────────────────────────────────
+
+export const diagrams = pgTable('diagrams', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: text('project_id').notNull(),
+  ownerId: text('owner_id').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  title: text('title').notNull(),
+  scene: jsonb('scene').$type<ExcalidrawScene>().notNull(),
+  thumbnail: text('thumbnail').notNull(),
+  version: integer('version').notNull().default(1),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectOwnerIdx: index('idx_diagrams_project_owner').on(t.projectId, t.ownerId),
+  projectUpdatedIdx: index('idx_diagrams_project_updated').on(t.projectId, t.updatedAt),
+  titleNotBlankCheck: check('diagrams_title_not_blank', sql`length(btrim(${t.title})) > 0`),
+  versionPositiveCheck: check('diagrams_version_positive', sql`${t.version} > 0`),
+}));
+
+export const diagramShares = pgTable('diagram_shares', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  diagramId: uuid('diagram_id').notNull().references(() => diagrams.id, { onDelete: 'cascade' }),
+  granteeId: text('grantee_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  access: text('access').$type<DiagramShareAccess>().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  diagramGranteeUq: unique('diagram_shares_diagram_id_grantee_id_key').on(
+    t.diagramId,
+    t.granteeId,
+  ),
+  granteeIdx: index('idx_diagram_shares_grantee').on(t.granteeId, t.diagramId),
+  accessCheck: check('diagram_shares_access_check', sql`${t.access} IN ('view', 'edit')`),
+}));
+
+export const diagramsRelations = relations(diagrams, ({ one, many }) => ({
+  owner: one(appUsers, {
+    fields: [diagrams.ownerId],
+    references: [appUsers.oid],
+  }),
+  shares: many(diagramShares),
+}));
+
+export const diagramSharesRelations = relations(diagramShares, ({ one }) => ({
+  diagram: one(diagrams, {
+    fields: [diagramShares.diagramId],
+    references: [diagrams.id],
+  }),
+  grantee: one(appUsers, {
+    fields: [diagramShares.granteeId],
+    references: [appUsers.oid],
+  }),
+}));
+
 // ── Walkthrough Tables (FEAT-001) ─────────────────────────────────────────────
 
 export const walkthroughs = pgTable('walkthroughs', {
@@ -2097,6 +2167,7 @@ import type {
   FoundationSkillReleaseStatus,
   FoundationSkillAuditAction,
   FoundationSkillCompatibilityStatus,
+  FoundationSkillArtifactManifest,
 } from '../../shared/types/foundationSkills';
 
 export const foundationSkillReleases = pgTable('foundation_skill_releases', {
@@ -2111,7 +2182,7 @@ export const foundationSkillReleases = pgTable('foundation_skill_releases', {
   selectedSkills:      jsonb('selected_skills').$type<string[]>().notNull().default([]),
   targetProjects:      jsonb('target_projects').$type<string[]>().notNull().default([]),
   skillTargets:        jsonb('skill_targets').$type<Record<string, string[]>>().notNull().default({}),
-  manifestSnapshot:    jsonb('manifest_snapshot').$type<Record<string, unknown>>(),
+  manifestSnapshot:    jsonb('manifest_snapshot').$type<FoundationSkillArtifactManifest>(),
   releaseNotes:        text('release_notes'),
   breakingChanges:     text('breaking_changes'),
   publishedBy:         text('published_by'),

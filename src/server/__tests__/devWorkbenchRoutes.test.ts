@@ -213,6 +213,14 @@ describe('GET /api/dev-workbench/workitems', () => {
     );
   });
 
+  it('does not query ADO for Amego requirements', async () => {
+    const res = await request(buildApp()).get('/api/dev-workbench/workitems?project=Amego');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/app-native PRD requirements/i);
+    expect(MockAzureDevOpsService).not.toHaveBeenCalled();
+  });
+
   it('returns 400 when project is missing', async () => {
     const res = await request(buildApp()).get('/api/dev-workbench/workitems');
 
@@ -998,6 +1006,25 @@ describe('POST /api/dev-workbench/features/complete', () => {
     );
   });
 
+  it('creates a project-scoped completed session for an Amego feature', async () => {
+    mockFindFirst.mockResolvedValue(undefined);
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/features/complete')
+      .send({ prdId: 'prd-amego', featureId: 'FEAT-001', project: 'Amego' });
+
+    expect(res.status).toBe(200);
+    expect(mockInsertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project: 'Amego',
+        authorId: 'user-1',
+        prdId: 'prd-amego',
+        featureId: 'FEAT-001',
+        status: 'completed',
+      }),
+    );
+  });
+
   it('promotes an active session to completed instead of inserting', async () => {
     mockFindFirst
       .mockResolvedValueOnce(undefined) // no completed
@@ -1036,6 +1063,17 @@ describe('POST /api/dev-workbench/features/complete', () => {
     expect(res.body.error).toMatch(/required/i);
   });
 
+  it('rejects feature completion for an ADO-backed project', async () => {
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/features/complete')
+      .send({ prdId: 'prd-1', featureId: 'FEAT-001', project: 'MaxView' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/app-native requirements project/i);
+    expect(mockFindFirst).not.toHaveBeenCalled();
+    expect(mockInsertValues).not.toHaveBeenCalled();
+  });
+
   it('returns 500 when the insert fails', async () => {
     mockFindFirst.mockResolvedValue(undefined);
     mockInsertValues.mockRejectedValueOnce(new Error('DB insert failed'));
@@ -1065,12 +1103,12 @@ describe('GET /api/dev-workbench/features/:prdId/:featureId/context', () => {
     expect(mockGetApexFeatureContext).not.toHaveBeenCalled();
   });
 
-  it('returns 400 for a non-Apex project', async () => {
+  it('returns 400 for an ADO-backed project', async () => {
     const res = await request(buildApp()).get(
       '/api/dev-workbench/features/prd-1/FEAT-001/context?project=MaxView',
     );
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/Apex/i);
+    expect(res.body.error).toMatch(/app-native requirements project/i);
     expect(mockGetApexFeatureContext).not.toHaveBeenCalled();
   });
 
@@ -1106,6 +1144,24 @@ describe('GET /api/dev-workbench/features/:prdId/:featureId/context', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual(payload);
+  });
+
+  it('returns Amego feature context from the app-native PRD service', async () => {
+    mockGetApexFeatureContext.mockResolvedValue({
+      prdId: 'prd-amego',
+      featureId: 'FEAT-001',
+    });
+
+    const res = await request(buildApp()).get(
+      '/api/dev-workbench/features/prd-amego/FEAT-001/context?project=Amego',
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockGetApexFeatureContext).toHaveBeenCalledWith(
+      'Amego',
+      'prd-amego',
+      'FEAT-001',
+    );
   });
 
   it('inherits the Developer group membership gate', async () => {
@@ -1159,6 +1215,24 @@ describe('POST /api/dev-workbench/features/start-local', () => {
     );
   });
 
+  it('creates a synthetic in_progress session for Amego local development', async () => {
+    mockFindFirst.mockResolvedValue(undefined);
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/features/start-local')
+      .send({ prdId: 'prd-amego', featureId: 'FEAT-001', project: 'Amego' });
+
+    expect(res.status).toBe(200);
+    expect(mockInsertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project: 'Amego',
+        prdId: 'prd-amego',
+        featureId: 'FEAT-001',
+        status: 'in_progress',
+      }),
+    );
+  });
+
   it('returns the existing active session without inserting', async () => {
     mockFindFirst
       .mockResolvedValueOnce(undefined) // not completed
@@ -1180,6 +1254,16 @@ describe('POST /api/dev-workbench/features/start-local', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/required/i);
+  });
+
+  it('rejects PRD feature development for an ADO-backed project', async () => {
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/features/start-local')
+      .send({ prdId: 'prd-1', featureId: 'FEAT-001', project: 'MaxView' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/app-native requirements project/i);
+    expect(mockInsertValues).not.toHaveBeenCalled();
   });
 });
 

@@ -16,10 +16,12 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
-export function useFeatureRequests() {
+export function useFeatureRequests(project: string | null | undefined) {
   return useQuery<FeatureRequest[]>({
-    queryKey: ['feature-requests'],
-    queryFn: () => apiFetch('/api/feature-requests?project=Apex'),
+    queryKey: ['feature-requests', project],
+    queryFn: () =>
+      apiFetch(`/api/feature-requests?project=${encodeURIComponent(project!)}`),
+    enabled: !!project,
     staleTime: 15_000,
     refetchInterval: (query) =>
       query.state.data?.some((fr) => fr.aiStatus === 'analyzing' || fr.aiStatus === 'pending')

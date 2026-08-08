@@ -92,9 +92,9 @@ const MODULE_ORDER: ReadonlyArray<{
   {
     view: 'feature-requests',
     route: '/feature-requests',
-    isAccessible: ({ can, isSuperAdmin, enabledViews, selectedProject }) =>
-      selectedProject === 'Apex' &&
-      (isSuperAdmin || (enabledViews.includes('feature-requests') && can('feature-requests:view'))),
+    isAccessible: ({ can, isSuperAdmin, enabledViews }) =>
+      isSuperAdmin ||
+      (enabledViews.includes('feature-requests') && can('feature-requests:view')),
   },
   {
     view: 'pdf-tools',
@@ -107,6 +107,12 @@ const MODULE_ORDER: ReadonlyArray<{
     route: '/design-module',
     isAccessible: ({ can, isSuperAdmin, enabledViews }) =>
       isSuperAdmin || (enabledViews.includes('design-module') && can('design-module:view')),
+  },
+  {
+    view: 'diagrams',
+    route: '/diagrams',
+    isAccessible: ({ can, isSuperAdmin, enabledViews }) =>
+      isSuperAdmin || (enabledViews.includes('diagrams') && can('diagram:view')),
   },
 ];
 

@@ -1,0 +1,50 @@
+.titleField {
+  position: relative;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  min-width: 180px;
+}
+
+.titleLabelText {
+  flex-shrink: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.titleInput {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  line-height: 1.2;
+}
+
+.titleInput:focus {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+}
+
+.titleInput:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.fieldError {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 4px);
+  z-index: 1;
+  font-size: 0.75rem;
+  color: var(--error-color);
+  white-space: nowrap;
+}

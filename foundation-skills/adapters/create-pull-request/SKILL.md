@@ -5,7 +5,6 @@ description: Project adapter for create-pull-request. Customize for your project
 
 # create-pull-request — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/create-pull-request/SKILL.md -->
 
 - Project: {{slot:projectName}}
 - VCS: GitHub (`gh pr create`) or project's equivalent VCS tool

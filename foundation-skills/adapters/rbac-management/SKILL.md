@@ -5,7 +5,6 @@ description: Project adapter for rbac-management. Customize for your project.
 
 # rbac-management — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/rbac-management/SKILL.md -->
 
 - Project: {{slot:projectName}}
 - Service: project's RBAC service (see {{slot:agentsFile}} Feature Map)

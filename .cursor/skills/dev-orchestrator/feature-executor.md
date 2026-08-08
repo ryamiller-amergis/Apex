@@ -252,47 +252,62 @@ Each subagent prompt **must** include every task in its bundle, full owning-item
 2. AC/DoD binding rules
 3. The TDD block for every layer the bundle touches (server / client / shared-types)
 
-## Phase F5 — Wave verification gate
+## Phase F5 — Lean intermediate wave gate
 
-After all subagents in a wave complete, the executor (you, in the parent session) must:
+The parent executor owns type-check, data-testid, and ESLint commands. Execution-bundle subagents run only the focused RED and GREEN tests/checks assigned to them. Do not rerun a successful command unless subsequent edits could invalidate its result.
 
-1. Run type-check for all affected configs:
+After all subagents in a **non-final** wave complete:
+
+1. Run one aggregate focused Jest invocation covering the wave's new or changed test files:
    ```bash
+   npm test -- --testPathPattern="<pattern covering this wave's changed tests>"
+   ```
+   Do not separately rerun each already-green test file.
+2. **AC/DoD coverage check:** Confirm every matrix row owned by a task in this wave has a corresponding passing test/check (by criterion id in the test name/description or an explicit mapping in the synopsis). Enabling-only rows may become `enabled`, never `covered`. If any due row is uncovered, treat it as a gate failure.
+3. Determine whether a later wave consumes a TypeScript contract produced by this wave:
+   - Server-only contract → run `npx tsc -p tsconfig.server.json --noEmit`.
+   - Client-only contract → run `npx tsc -p tsconfig.client.json --noEmit`.
+   - Shared contract consumed by both → run both configs.
+   - Documentation, SQL-only migration, or terminal implementation with no downstream consumer → defer type-check to F6.
+4. If a check fails, diagnose and fix it, then rerun only the failed command and any focused test directly affected by the fix. Do not restart the entire gate.
+5. In multi-task mode, update the Task Context Ledger and verify that newly unlocked tasks consume only completed outputs.
+6. Dispatch the next wave only after its required aggregate tests, matrix coverage, and any downstream-contract type-check pass.
+
+For the final wave, skip this intermediate gate and run the F6 final gate instead; never run both gates for the same wave.
+
+Report after each intermediate gate:
+> "Execution wave N complete. Focused tests/checks: ✓. AC/DoD matrix: ✓. Boundary type-check: ✓ | deferred | n/a. Proceeding to wave N+1."
+
+## Phase F6 — Feature completion
+
+When the last execution wave completes, run one final verification gate:
+
+1. Run each applicable TypeScript config once based on all files touched by the Feature:
+   ```bash
+   # Server or shared-server changes
    npx tsc -p tsconfig.server.json --noEmit
+
+   # Client or shared-client changes
    npx tsc -p tsconfig.client.json --noEmit
    ```
-2. Run tests for the wave's new test files:
-   ```bash
-   npm test -- --testPathPattern="<pattern covering this wave's new files>"
-   ```
-3. **AC/DoD coverage check:** Confirm every matrix row owned by a task in this wave has a corresponding passing test/check (by criterion id in the test name/description or an explicit mapping in the synopsis). Enabling-only rows may become `enabled`, never `covered`. If any due row is uncovered, treat it as a gate failure — write the missing RED test/check and fix before continuing.
-4. **Pre-commit gates for touched client/shared/server TS|TSX (mandatory when those files changed):**
+   Run both only when both compilation domains are affected.
+2. Run one impacted-test command covering all new and directly related changed tests across the Feature. Do not run the full repository suite here; `build-test-push` owns the final build and full regression suite.
+3. Run pre-commit gates once for all touched client/shared/server TS|TSX:
    ```bash
    # data-testid — stage touched client TSX first (checker reads the index)
    git add -- <touched-src-client-tsx>
    node scripts/check-data-testid.mjs
 
-   # ESLint — blocking errors only (matches husky lint-staged; do not boil the ocean on pre-existing warnings)
+   # ESLint — blocking errors only
    cross-env ESLINT_USE_FLAT_CONFIG=false npx eslint --max-warnings=-1 <touched-ts-tsx-paths>
    ```
-   Fix any **errors** (and any data-testid violations) before continuing. Do not expand scope to clean unrelated warnings in large pre-existing files unless they become errors or the operator asks. Hook recovery: `/resolve-pre-commit-data-testid`, `/resolve-pre-commit-eslint`.
-5. If failures: diagnose, fix inline or dispatch a targeted fix subagent, then re-run.
-6. In multi-task mode, update the Task Context Ledger and verify that newly unlocked tasks consume only completed outputs.
-7. Only after type-check, tests, matrix coverage, and the pre-commit gates above pass: dispatch the next wave.
-
-Report after each execution-wave gate:
-> "Execution wave N complete. Type-check: ✓. Tests/checks: ✓. AC/DoD matrix: ✓. data-testid/eslint: ✓ (or n/a). Proceeding to wave N+1."
-
-## Phase F6 — Feature completion
-
-When the last execution wave passes its gate:
-
-1. Confirm every non-deferred verification target has a passing test.
-2. Confirm every PBI AC and every TBI DoD in the Requirements → Test Matrix is `covered` (or explicitly deferred e2e **with** a lower-tier substitute where required by F3.2).
-3. List deferred e2e cases (skipped by design).
-4. Run the **Quality-gate checklist** below.
-5. **Verify all tasks and items are implemented.** In multi-task mode, account for every tech-spec implementation step. Cross-reference every PBI and TBI in this Feature's `items[]` against the files you created or modified **and** against the matrix. If any task is incomplete, item has no corresponding implementation, or criterion is uncovered, **go back and implement it before proceeding**.
-6. **Stop.** Do **not** commit or push — Dev Workbench owns `finalisePush` (or the operator owns git in local mode).
+   Skip data-testid when no client TSX changed. Fix blocking errors without expanding scope to unrelated warnings. After a fix, rerun only the failed gate and directly affected focused tests.
+4. Confirm every non-deferred verification target has a passing test.
+5. Confirm every PBI AC and every TBI DoD in the Requirements → Test Matrix is `covered` (or explicitly deferred e2e **with** a lower-tier substitute where required by F3.2).
+6. List deferred e2e cases (skipped by design).
+7. Run the **Quality-gate checklist** below.
+8. **Verify all tasks and items are implemented.** In multi-task mode, account for every tech-spec implementation step. Cross-reference every PBI and TBI in this Feature's `items[]` against the files you created or modified **and** against the matrix. If any task is incomplete, item has no corresponding implementation, or criterion is uncovered, **go back and implement it before proceeding**.
+9. **Stop.** Do **not** commit or push — Dev Workbench owns `finalisePush` (or the operator owns git in local mode).
 
 **MANDATORY — post a completion synopsis.** You MUST end your run with a visible chat message (not just tool calls). The synopsis must include:
 
@@ -352,9 +367,10 @@ Copy and track per Feature Executor run:
 [ ] data-testid: new/touched interactive UI matches `scripts/check-data-testid.mjs` (incl. `form`, `*Panel`, full suffix list); spread syntax only; `node scripts/check-data-testid.mjs` exited 0 on staged client TSX
 [ ] eslint: touched staged TS/TSX have no ESLint **errors** (warnings optional unless operator requires; do not boil ocean on unrelated files)
 [ ] Every subagent prompt included its complete task bundle + verbatim owning-item contracts + design-spec anchors + matrix rows (from tdd-prompts.md)
-[ ] Every verification-owner task followed RED → GREEN → REFACTOR → tsc/checks with tests bound to AC-/DoD-/VT ids
+[ ] Every verification-owner task followed RED → GREEN with tests bound to AC-/DoD-/VT ids; post-GREEN tests reran only when later edits could invalidate them
 [ ] Verification targets from test-cases.json traceability satisfied (non-e2e)
-[ ] Execution-wave gate passed (tsc + tests/checks + AC/DoD matrix coverage + data-testid/eslint on touched files) before each subsequent wave
+[ ] Each non-final wave passed one aggregate focused-test + AC/DoD gate; `tsc` ran only when a later wave consumed that TypeScript contract
+[ ] Final gate ran once: applicable `tsc` config(s), one impacted-test command, and data-testid/eslint when applicable
 [ ] Every tech-spec implementation task is complete (multi-task mode)
 [ ] ALL PBIs AND TBIs in this Feature's items[] have corresponding implementation AND criterion coverage
 [ ] No protected files modified without explicit permission

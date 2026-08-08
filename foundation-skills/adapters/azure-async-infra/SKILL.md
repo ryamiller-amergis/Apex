@@ -5,7 +5,6 @@ description: Project adapter for azure-async-infra. Customize for your project.
 
 # azure-async-infra — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/azure-async-infra/SKILL.md -->
 
 Inspect this project's infrastructure definitions before proposing any change:
 - The shared async baseline (Blob containers and Service Bus queues/topics) —

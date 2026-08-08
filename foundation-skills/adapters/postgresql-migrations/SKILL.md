@@ -5,7 +5,6 @@ description: Project adapter for postgresql-migrations. Customize for your proje
 
 # postgresql-migrations — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/postgresql-migrations/SKILL.md -->
 
 - Project: {{slot:projectName}}
 - Migration tool: project's migration tool (e.g. `node-pg-migrate`, SQL files in project's migrations directory)

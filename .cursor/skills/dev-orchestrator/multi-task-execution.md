@@ -38,7 +38,7 @@ Mapping rules:
 1. Every step must map to at least one owning backlog item and one requirement, design decision, or verification target.
 2. Every AC and DoD in the Feature matrix must map to one or more steps.
 3. Every criterion and `VT-*` row has exactly one **verification owner** step. Earlier enabling steps may reference it but must not claim it as passing.
-4. A schema, migration, or shared-contract step with no direct behavioral test must own a deterministic check (migration shape, schema shape, type assertion, or type-check).
+4. A schema, migration, or shared-contract step with no direct behavioral test must own a deterministic check (migration shape, schema shape, type assertion, or parent-owned type-check).
 5. Never derive behavior from a step title alone. Paste the owning item contract and relevant design anchors into its execution bundle.
 6. If ownership is ambiguous, stop and ask the operator; do not invent a mapping.
 
@@ -53,7 +53,7 @@ Print the completed Task Context Ledger before dispatch.
    - A task from a dependent item may start early only when the tech spec explicitly identifies its concrete predecessor steps, all those steps passed, and the task consumes no unfinished prerequisite output.
    - If that proof is missing, add an edge from the prerequisite item's final task.
 4. Recompute topological waves; the written `Execution lanes` are hints to validate, not commands to trust blindly.
-5. Ensure each wave can leave the repository compiling. If a split would leave an incomplete contract that breaks type-check, combine the steps or add an edge.
+5. Ensure each wave leaves complete contracts. If a later wave consumes a TypeScript contract, the parent runs the applicable boundary type-check before dispatching it. If a split would leave an incomplete contract, combine the steps or add an edge.
 
 ## Prevent parallel write conflicts
 
@@ -98,6 +98,6 @@ Before Phase F3, print:
 - Dispatch one subagent per execution bundle, with different bundles in the same wave running concurrently.
 - Include every task in the bundle, full owning-item contracts, design anchors, matrix rows, file scope, and cross-task contracts.
 - A bundle follows RED → GREEN for its verification-owner rows and runs deterministic checks for enabling-only rows.
-- After every wave, run the parent Phase F5 gate. All checks due in that wave must pass, and the repository must compile before the next wave starts.
+- After each non-final wave, run the lean parent Phase F5 gate: one aggregate focused-test command, matrix coverage, and only the TypeScript config needed by a downstream consumer. Run F6 instead of F5 for the final wave.
 - Update matrix rows as `enabled` when only a prerequisite landed; use `covered` only after the verification-owner assertion passes.
 - At completion, account for every implementation step as well as every backlog item and criterion.

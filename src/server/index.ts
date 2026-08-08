@@ -62,6 +62,7 @@ import designModuleRoutes from './routes/designModule';
 import loadTestsRoutes from './routes/loadTests';
 import loadTestTargetsRoutes from './routes/loadTestTargets';
 import loadTestRunsInternalRoutes from './routes/loadTestRunsInternal';
+import foundationSkillsAuthorizeRoutes from './routes/foundationSkillsAuthorize';
 import profileRoutes from './routes/profile';
 import walkthroughsRoutes from './routes/walkthroughs';
 import { startPdfProcessingPoller } from './services/pdfAssemblyService';
@@ -147,6 +148,11 @@ const unauthenticatedPaths = ['/health', '/health/db', '/health/agents'];
 // on loadTestRunsInternalRoutes (LT_RUNNER_CALLBACK_TOKEN or runner MI JWT).
 const loadTestRunnerCallbackPaths = ['/internal/load-test-runs'];
 
+// @apex/skills CLI entitlement lookup — session-free because the CLI runs on
+// developer machines and in CI with no Apex session. Read-only and returns no
+// secrets; reading the package itself still requires an Azure Artifacts token.
+const foundationSkillCliPaths = ['/internal/foundation-skills'];
+
 app.use('/api', (req, res, next) => {
   const isLocalhost = req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1';
   const isInternalPath = internalOnlyPaths.some(p => req.path.startsWith(p));
@@ -154,8 +160,11 @@ app.use('/api', (req, res, next) => {
   const isLoadTestRunnerCallback = loadTestRunnerCallbackPaths.some((p) =>
     req.path.startsWith(p),
   );
+  const isFoundationSkillCli = foundationSkillCliPaths.some((p) =>
+    req.path.startsWith(p),
+  );
 
-  if (isHealthPath || isLoadTestRunnerCallback) return next();
+  if (isHealthPath || isLoadTestRunnerCallback || isFoundationSkillCli) return next();
 
   if (isInternalPath) {
     if (isLocalhost) return next();
@@ -202,6 +211,8 @@ app.use('/api/projects/:projectId/load-test-targets', ensureAuthenticated, loadT
 app.use('/api/projects/:projectId/walkthroughs', ensureAuthenticated, walkthroughsRoutes);
 // Runner ingest — session-free; auth is LT_RUNNER_CALLBACK_TOKEN (FEAT-007 / A-009).
 app.use('/api/internal/load-test-runs', loadTestRunsInternalRoutes);
+// @apex/skills CLI entitlement lookup — session-free, read-only, no secrets returned.
+app.use('/api/internal/foundation-skills', foundationSkillsAuthorizeRoutes);
 app.use('/api/admin', adminRouter);
 mountAdoMcp(app);
 mountGitHubMcp(app);

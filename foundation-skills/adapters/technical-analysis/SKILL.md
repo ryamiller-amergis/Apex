@@ -5,7 +5,6 @@ description: Project adapter for technical-analysis. Customize for your project.
 
 # Technical Analysis — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/technical-analysis/SKILL.md -->
 Applies the generic technical-analysis method to this project.
 
 - Project: {{slot:projectName}}

@@ -45,15 +45,28 @@ jobs:
       - name: Validate foundation package
         run: node scripts/validate-foundation-skills.mjs
 
-      # Run the foundation-skills package's own test suite.
+      # Build one immutable tarball. This exact file is tested, published, and
+      # retained for release integrity checks.
+      - name: Pack and verify release artifact
+        working-directory: foundation-skills
+        run: |
+          set -euo pipefail
+          rm -rf artifacts
+          mkdir -p artifacts
+          npm pack --json --pack-destination artifacts > artifacts/pack.json
+          TARBALL=$(node -e "const fs=require('fs'); const [result]=JSON.parse(fs.readFileSync('artifacts/pack.json','utf8')); if (!result?.filename) process.exit(1); process.stdout.write(result.filename)")
+          TARBALL_PATH="$PWD/artifacts/$TARBALL"
+          test -f "$TARBALL_PATH"
+          tar -tzf "$TARBALL_PATH" > artifacts/contents.txt
+          grep -q '^package/foundation/' artifacts/contents.txt
+          grep -q '^package/adapters/' artifacts/contents.txt
+          sha256sum "$TARBALL_PATH"
+          echo "APEX_SKILLS_TARBALL=$TARBALL_PATH" >> "$GITHUB_ENV"
+
+      # The packed-artifact tests consume APEX_SKILLS_TARBALL, so installer code
+      # and content are exercised from the exact file published below.
       - name: Run foundation-skills tests
         run: node --test foundation-skills/test/*.test.mjs
-
-      # Verify the package can be packed without errors (catches missing files,
-      # bad bin paths, or publish config issues).
-      - name: Dry-run pack
-        working-directory: foundation-skills
-        run: npm pack --dry-run
 
       # ── Publish ──────────────────────────────────────────────────────────────
       # All steps below are skipped on workflow_dispatch dry runs.
@@ -76,21 +89,31 @@ jobs:
           AZURE_ARTIFACTS_PROJECT: ${{ secrets.AZURE_ARTIFACTS_PROJECT }}
           AZURE_ARTIFACTS_PAT: ${{ secrets.AZURE_ARTIFACTS_PAT }}
         run: |
-          # Build the feed registry URL.  Project-scoped feeds include the
-          # project segment; org-scoped feeds omit it.
-          if [ -n "$AZURE_ARTIFACTS_PROJECT" ]; then
-            REGISTRY="https://pkgs.dev.azure.com/${AZURE_ARTIFACTS_ORG}/${AZURE_ARTIFACTS_PROJECT}/_packaging/${AZURE_ARTIFACTS_FEED}/npm/registry/"
-          else
-            REGISTRY="https://pkgs.dev.azure.com/${AZURE_ARTIFACTS_ORG}/_packaging/${AZURE_ARTIFACTS_FEED}/npm/registry/"
+          set -euo pipefail
+
+          if [ -z "${AZURE_ARTIFACTS_ORG:-}" ] || [ -z "${AZURE_ARTIFACTS_FEED:-}" ] || [ -z "${AZURE_ARTIFACTS_PAT:-}" ]; then
+            echo "::error::Missing required secrets. Set AZURE_ARTIFACTS_ORG, AZURE_ARTIFACTS_FEED, and AZURE_ARTIFACTS_PAT."
+            exit 1
           fi
 
-          # Write the scoped registry + auth token to the package's .npmrc so
-          # `npm publish` resolves to the correct feed without touching the root .npmrc.
-          TOKEN_B64=$(echo -n ":${AZURE_ARTIFACTS_PAT}" | base64)
-          cat >> foundation-skills/.npmrc <<EOF
-          @apex:registry=${REGISTRY}
-          ${REGISTRY}:_authToken=${TOKEN_B64}
-          EOF
+          # Build the feed registry URL. Project-scoped feeds include the
+          # project segment; org-scoped feeds omit it.
+          if [ -n "${AZURE_ARTIFACTS_PROJECT:-}" ]; then
+            REGISTRY="https://pkgs.dev.azure.com/${AZURE_ARTIFACTS_ORG}/${AZURE_ARTIFACTS_PROJECT}/_packaging/${AZURE_ARTIFACTS_FEED}/npm/registry/"
+            AUTH_HOST="//pkgs.dev.azure.com/${AZURE_ARTIFACTS_ORG}/${AZURE_ARTIFACTS_PROJECT}/_packaging/${AZURE_ARTIFACTS_FEED}/npm/registry/"
+          else
+            REGISTRY="https://pkgs.dev.azure.com/${AZURE_ARTIFACTS_ORG}/_packaging/${AZURE_ARTIFACTS_FEED}/npm/registry/"
+            AUTH_HOST="//pkgs.dev.azure.com/${AZURE_ARTIFACTS_ORG}/_packaging/${AZURE_ARTIFACTS_FEED}/npm/registry/"
+          fi
+
+          # Azure Artifacts auth keys must use the //host/path/ form (no https:).
+          # Use the raw PAT in _authToken (not base64). Keep lines unindented so
+          # npm does not misparse the token as a config key name.
+          {
+            echo "@apex:registry=${REGISTRY}"
+            echo "always-auth=true"
+            echo "${AUTH_HOST}:_authToken=${AZURE_ARTIFACTS_PAT}"
+          } > foundation-skills/.npmrc
 
           echo "APEX_SKILLS_REGISTRY=${REGISTRY}" >> "$GITHUB_ENV"
 
@@ -98,16 +121,31 @@ jobs:
         if: ${{ !inputs.dry_run }}
         working-directory: foundation-skills
         run: |
-          # The publishConfig.registry in package.json is a placeholder template;
-          # override it at publish time with the real feed URL resolved above.
-          npm publish \
-            --registry "$APEX_SKILLS_REGISTRY" \
-            --access restricted \
-            --tag candidate
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          LOCAL_INTEGRITY=$(node -e "const fs=require('fs'); const [result]=JSON.parse(fs.readFileSync('artifacts/pack.json','utf8')); if (!result?.integrity) process.exit(1); process.stdout.write(result.integrity)")
 
-          echo "Published @apex/skills to ${APEX_SKILLS_REGISTRY}"
-          echo "Next step: a Platform Admin promotes this candidate to the Release"
-          echo "view via APEX UI > Platform Admin > APEX Skills > Publish."
+          # Reruns are safe: a previous attempt may have published successfully
+          # and failed later while uploading the GitHub artifact.
+          if REMOTE_JSON=$(npm view "@apex/skills@${VERSION}" dist.integrity \
+            --json \
+            --registry "$APEX_SKILLS_REGISTRY" 2>/dev/null) && [ -n "$REMOTE_JSON" ]; then
+            REMOTE_INTEGRITY=$(node -e "const value=JSON.parse(process.argv[1]); if (typeof value !== 'string') process.exit(1); process.stdout.write(value)" "$REMOTE_JSON")
+            if [ "$REMOTE_INTEGRITY" != "$LOCAL_INTEGRITY" ]; then
+              echo "::error::@apex/skills@${VERSION} already exists with different integrity."
+              exit 1
+            fi
+            echo "@apex/skills@${VERSION} already exists with matching integrity; skipping publish."
+          else
+            # Publish the exact tarball that passed the packed-artifact tests.
+            npm publish "$APEX_SKILLS_TARBALL" \
+              --registry "$APEX_SKILLS_REGISTRY" \
+              --access restricted \
+              --tag candidate
+          fi
+
+          echo "@apex/skills@${VERSION} is available in Azure Artifacts."
+          echo "Next step: Platform Admin promotes via APEX UI > Platform Admin > APEX Skills > Publish."
 
       # Capture the tarball as a build artifact so the SHA-256 can be recorded
       # in the release record without re-downloading from the feed.
@@ -116,5 +154,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: apex-skills-tarball-${{ github.run_id }}
-          path: foundation-skills/*.tgz
+          path: foundation-skills/artifacts/*.tgz
+          if-no-files-found: error
           retention-days: 30

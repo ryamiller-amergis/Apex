@@ -11,6 +11,8 @@ jest.mock('../db', () => ({
 
 import type { AgentRunEventEnvelope } from '../../shared/types/chat';
 import {
+  finalizeReconciledAgentRun,
+  finalizeOwnedAgentRun,
   notifyRunEvent,
   replayRunEvents,
   subscribeRunEvents,
@@ -109,5 +111,109 @@ describe('pgNotifyService durable run events', () => {
     expect(callback).toHaveBeenCalledTimes(1);
     expect(callback).toHaveBeenCalledWith(envelope);
     unsubscribe();
+  });
+
+  it('PBI-001 AC-2 / BR-002 atomically finalizes only the owning non-terminal run', async () => {
+    const clientQuery = jest.fn()
+      .mockResolvedValueOnce({ rows: [] }) // BEGIN
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'run-1' }] }) // CAS
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] }) // event insert
+      .mockResolvedValueOnce({ rows: [] }); // COMMIT
+    const release = jest.fn();
+    mockPoolConnect.mockResolvedValue({ query: clientQuery, release });
+    mockPoolQuery.mockResolvedValue({ rowCount: 1, rows: [] });
+
+    await expect(finalizeOwnedAgentRun({
+      runId: envelope.runId,
+      threadId: envelope.threadId,
+      ownerInstance: envelope.sourceInstance,
+      status: 'failed',
+      detail: 'Tool exceeded owner deadline',
+      events: [envelope],
+    })).resolves.toBe(true);
+
+    expect(clientQuery.mock.calls.map(([sql]) => String(sql).trim().split(/\s+/)[0])).toEqual([
+      'BEGIN',
+      'UPDATE',
+      'INSERT',
+      'COMMIT',
+    ]);
+    expect(clientQuery.mock.calls[1][0]).toContain('owner_instance = $4');
+    expect(clientQuery.mock.calls[1][0]).toContain("status IN ('queued', 'running')");
+    expect(mockPoolQuery).toHaveBeenCalledWith(
+      expect.stringContaining('pg_notify'),
+      expect.any(Array),
+    );
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it('PBI-001 AC-2 emits no terminal when a competing terminal already won', async () => {
+    const clientQuery = jest.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    const release = jest.fn();
+    mockPoolConnect.mockResolvedValue({ query: clientQuery, release });
+
+    await expect(finalizeOwnedAgentRun({
+      runId: envelope.runId,
+      threadId: envelope.threadId,
+      ownerInstance: envelope.sourceInstance,
+      status: 'failed',
+      detail: 'Tool exceeded owner deadline',
+      events: [envelope],
+    })).resolves.toBe(false);
+
+    expect(clientQuery.mock.calls.map(([sql]) => String(sql).trim())).toEqual([
+      'BEGIN',
+      expect.stringContaining('UPDATE agent_runs'),
+      'ROLLBACK',
+    ]);
+    expect(mockPoolQuery).not.toHaveBeenCalled();
+  });
+
+  it('TBI-003 DoD-0 atomically reconciles a non-terminal run without owner identity', async () => {
+    const clientQuery = jest.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'run-1' }] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    const release = jest.fn();
+    mockPoolConnect.mockResolvedValue({ query: clientQuery, release });
+    mockPoolQuery.mockResolvedValue({ rowCount: 1, rows: [] });
+
+    await expect(finalizeReconciledAgentRun({
+      runId: envelope.runId,
+      threadId: envelope.threadId,
+      status: 'failed',
+      detail: 'Run exceeded configured hard limit',
+      events: [envelope],
+    })).resolves.toBe(true);
+
+    expect(clientQuery.mock.calls[1][0]).toContain("status IN ('queued', 'running')");
+    expect(clientQuery.mock.calls[1][0]).not.toContain('owner_instance');
+    expect(clientQuery.mock.calls.map(([sql]) => String(sql).trim().split(/\s+/)[0]))
+      .toEqual(['BEGIN', 'UPDATE', 'INSERT', 'COMMIT']);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it('TBI-003 three-instance safety emits nothing when reconciliation CAS loses', async () => {
+    const clientQuery = jest.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    const release = jest.fn();
+    mockPoolConnect.mockResolvedValue({ query: clientQuery, release });
+
+    await expect(finalizeReconciledAgentRun({
+      runId: envelope.runId,
+      threadId: envelope.threadId,
+      status: 'failed',
+      detail: 'Run exceeded configured hard limit',
+      events: [envelope],
+    })).resolves.toBe(false);
+
+    expect(mockPoolQuery).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
   });
 });

@@ -100,13 +100,32 @@ export function writeTextFile(absPath, text) {
   fs.writeFileSync(absPath, normalizeText(text), 'utf8');
 }
 
-/** Guard against path traversal: resolvedTarget must stay within root. */
+/**
+ * Guard against lexical traversal and symlink/junction escapes.
+ * Every existing path component from root to target must be a real directory
+ * or file owned by the repository tree.
+ */
 export function assertWithin(root, target) {
   const resolvedRoot = path.resolve(root);
   const resolved = path.resolve(root, target);
   const rel = path.relative(resolvedRoot, resolved);
   if (rel.startsWith('..') || path.isAbsolute(rel)) {
     throw new Error(`Path escapes root: ${target}`);
+  }
+
+  let current = resolvedRoot;
+  for (const segment of rel.split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment);
+    let stat;
+    try {
+      stat = fs.lstatSync(current);
+    } catch (error) {
+      if (error?.code === 'ENOENT') continue;
+      throw error;
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Path contains a symbolic link: ${target}`);
+    }
   }
   return resolved;
 }

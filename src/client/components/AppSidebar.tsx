@@ -45,6 +45,7 @@ interface AppSidebarProps {
   onNavigateDesignModule?: () => void;
   onNavigateWorkBoard?: () => void;
   onNavigateLoadTests?: () => void;
+  onNavigateDiagrams?: () => void;
   onNavigateAdmin: () => void;
 }
 
@@ -155,6 +156,13 @@ const IconLoadTests: React.FC = () => (
   </svg>
 );
 
+const IconDiagrams: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="4" width="14" height="12" rx="2" />
+    <path d="M6 13l3-4 2.5 3L14 9l2 4" />
+  </svg>
+);
+
 const IconAiCost: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="10" cy="10" r="7" />
@@ -189,7 +197,6 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   isInAnyGroup,
   menuEnabledViews = [],
   isSuperAdmin = false,
-  selectedProject,
   canAccessHome = true,
   onNavigateHome,
   onNavigateCalendar,
@@ -206,6 +213,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onNavigateDesignModule,
   onNavigateWorkBoard,
   onNavigateLoadTests,
+  onNavigateDiagrams,
   onNavigateAdmin,
 }) => {
   const { isMobile } = useBreakpoint();
@@ -221,6 +229,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         { label: 'ADR', view: 'adr', icon: <IconAdr />, permission: 'adr:view', onNavigate: onNavigateAdr },
         { label: 'Design Module', view: 'design-module', icon: <IconDesignModule />, permission: 'design-module:view', onNavigate: onNavigateDesignModule ?? (() => {}) },
         { label: 'My Work', view: 'my-work', icon: <IconMyWork />, permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
+        { label: 'Diagrams', view: 'diagrams', icon: <IconDiagrams />, permission: 'diagram:view', onNavigate: onNavigateDiagrams ?? (() => {}), testId: 'nav-diagrams' },
       ],
     },
     {
@@ -264,7 +273,6 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       return true;
     }
     if (item.view === 'feature-requests') {
-      if (selectedProject !== 'Apex') return false;
       if (!isSuperAdmin && !menuEnabledViews.includes('feature-requests')) return false;
       if (!isSuperAdmin && !can('feature-requests:view')) return false;
       return true;

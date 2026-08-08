@@ -94,10 +94,20 @@ describe('getApexFeatureContext', () => {
     mockProtoFindFirst.mockResolvedValue(undefined);
   });
 
-  it('returns null for non-Apex projects without querying the DB', async () => {
+  it('returns null for ADO-backed projects without querying the DB', async () => {
     const result = await getApexFeatureContext('MaxView', 'prd-1', 'FEAT-001');
     expect(result).toBeNull();
     expect(mockPrdFindFirst).not.toHaveBeenCalled();
+  });
+
+  it('loads approved app-native feature context for Amego', async () => {
+    mockPrdFindFirst.mockResolvedValue(APPROVED_PRD);
+
+    const result = await getApexFeatureContext('Amego', 'prd-1', 'FEAT-001');
+
+    expect(result).not.toBeNull();
+    expect(result!.featureId).toBe('FEAT-001');
+    expect(mockPrdFindFirst).toHaveBeenCalledTimes(1);
   });
 
   it('returns null when the approved PRD is not found', async () => {

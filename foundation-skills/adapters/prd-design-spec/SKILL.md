@@ -5,7 +5,6 @@ description: Project adapter for prd-design-spec. Customize for your project.
 
 # prd-design-spec — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/prd-design-spec/SKILL.md -->
 
 **Invocation:** `/prd-design-spec {slug}`
 

@@ -94,12 +94,12 @@ export function resolveGitRemote(
   repo: string,
 ): GitRemote {
   if (provider === 'github') {
-    const org = process.env.GITHUB_ORG || '';
+    const org = project.trim();
     const secret = process.env.GITHUB_TOKEN
       || process.env.GITHUB_PAT
       || process.env.GH_SKILL_TOKEN
       || '';
-    if (!org) throw new Error('GITHUB_ORG must be set for GitHub repo checkout');
+    if (!org) throw new Error('GitHub organization is required for repo checkout');
     if (!secret) {
       throw new Error('GITHUB_TOKEN, GITHUB_PAT, or GH_SKILL_TOKEN must be set for GitHub repo checkout');
     }
@@ -160,6 +160,33 @@ export async function readCachedOriginSha(
     return await readBaseSha(cacheDir, grounding.branch);
   } catch {
     return null;
+  }
+}
+
+/** Returns whether the exact pinned commit is present in the local bare cache. */
+export async function hasCachedCommit(
+  grounding: Pick<
+    RunGrounding,
+    'provider' | 'project' | 'repository' | 'branch' | 'groundedSha'
+  >,
+): Promise<boolean> {
+  const options: RepoCacheOptions = {
+    provider: grounding.provider === 'azure_devops' ? 'ado' : 'github',
+    project: grounding.project,
+    repo: grounding.repository,
+    branch: grounding.branch,
+  };
+  const cacheDir = getRepoCacheDir(options);
+  if (!cacheExists(cacheDir)) return false;
+
+  try {
+    await git(
+      safeArgs(cacheDir, ['cat-file', '-e', `${grounding.groundedSha}^{commit}`]),
+      { cwd: cacheDir },
+    );
+    return true;
+  } catch {
+    return false;
   }
 }
 

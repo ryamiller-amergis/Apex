@@ -37,6 +37,7 @@ import { ReviewCommentSidebar } from './ReviewCommentSidebar';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { useChatAttachments, formatAttachmentSize } from '../hooks/useChatAttachments';
 import { useSpeechInput } from '../hooks/useSpeechInput';
+import { parseAgentMessage, type ChoiceBlock } from '../utils/parseAgentMessage';
 import type { ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
 import styles from './InterviewChatView.module.css';
 
@@ -323,6 +324,8 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const fixWithAi = useFixAdrWithAi(id);
   const fixCommentWithAi = useFixAdrCommentWithAi(id);
   const isRunning = session.isRunning;
+  const isInteractionBusy = session.isInteractionBusy;
+  const isAgentProcessing = isRunning || session.isSending || session.isAwaitingAgentResponse;
   const isAuthor = adr?.authorId === userId;
   const chatLocked = !isAuthor || adr?.status !== 'in_progress';
 
@@ -373,12 +376,12 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   }, [adr?.status]);
 
   const send = useCallback(async (text: string) => {
-    if (!adr || !text.trim() || isRunning || chatLocked) return;
+    if (!adr || !text.trim() || isInteractionBusy || chatLocked) return;
     setInput('');
     setError(null);
     await session.send(text.trim(), { model: adr.model });
     if (session.sendError) setError(session.sendError);
-  }, [adr, isRunning, chatLocked, session]);
+  }, [adr, isInteractionBusy, chatLocked, session]);
 
   const cancelActiveRun = useCallback(async () => {
     setError(null);
@@ -420,6 +423,15 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   visibleMessages.forEach((message, index) => {
     if (message.role === 'user') lastUserIndex = index;
   });
+  let runningQCount = 0;
+  const messageQOffsets = new Map<string, number>();
+  for (const message of visibleMessages) {
+    if (message.role === 'agent') {
+      messageQOffsets.set(message.id, runningQCount);
+      const parts = parseAgentMessage(message.text);
+      runningQCount += parts.filter((part): part is ChoiceBlock => part.type === 'choices').length;
+    }
+  }
   const generationStartedAt = Date.parse(adr.updatedAt);
   const generationElapsed = Number.isFinite(generationStartedAt)
     ? formatElapsed(generationNow - generationStartedAt)
@@ -670,7 +682,8 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                     key={message.id}
                     text={message.text}
                     onSend={(text) => void send(text)}
-                    isRunning={isRunning}
+                    isRunning={isInteractionBusy}
+                    questionOffset={messageQOffsets.get(message.id) ?? 0}
                     interviewLocked={chatLocked}
                     alreadyAnswered={index < lastUserIndex}
                   />
@@ -684,6 +697,20 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
             {streamingText && (
               <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}>
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
+              </div>
+            )}
+            {isAgentProcessing && !streamingText && (
+              <div
+                className={styles.typingIndicator}
+                role="status"
+                aria-live="polite"
+                aria-label="Architect is processing your response"
+                {...{ 'data-testid': 'adr-agent-processing' }}
+              >
+                <span aria-hidden="true" {...{ 'data-testid': 'chat-run-spinner' }} />
+                <span className={styles.typingDot} />
+                <span className={styles.typingDot} />
+                <span className={styles.typingDot} />
               </div>
             )}
             <div ref={messagesEndRef} />
@@ -709,8 +736,8 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                   void send(input);
                 }
               }}
-              placeholder={isRunning ? 'Architect is thinking…' : 'Continue the ADR interview…'}
-              disabled={isRunning}
+              placeholder={isAgentProcessing ? 'Architect is thinking…' : 'Continue the ADR interview…'}
+              disabled={isInteractionBusy}
               {...{ 'data-testid': 'adr-message-input' }}
             />
             {isRunning ? (

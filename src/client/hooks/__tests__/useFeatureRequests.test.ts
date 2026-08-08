@@ -72,7 +72,7 @@ describe('useFeatureRequests', () => {
     mockFetchOk([featureRequest]);
     const { wrapper } = createWrapper();
 
-    const { result } = renderHook(() => useFeatureRequests(), { wrapper });
+    const { result } = renderHook(() => useFeatureRequests('Apex'), { wrapper });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
@@ -84,11 +84,34 @@ describe('useFeatureRequests', () => {
     );
   });
 
+  it('fetches the shared Apex backlog from another enabled project', async () => {
+    mockFetchOk([featureRequest]);
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useFeatureRequests('Amego'), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/feature-requests?project=Amego',
+      expect.any(Object),
+    );
+  });
+
+  it('does not fetch until a project is selected', () => {
+    mockFetchOk([]);
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useFeatureRequests(null), { wrapper });
+
+    expect(result.current.fetchStatus).toBe('idle');
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
   it('returns an empty list when no feature requests exist', async () => {
     mockFetchOk([]);
     const { wrapper } = createWrapper();
 
-    const { result } = renderHook(() => useFeatureRequests(), { wrapper });
+    const { result } = renderHook(() => useFeatureRequests('Apex'), { wrapper });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
@@ -99,7 +122,7 @@ describe('useFeatureRequests', () => {
     mockFetchError(500, { error: 'Server error' });
     const { wrapper } = createWrapper();
 
-    const { result } = renderHook(() => useFeatureRequests(), { wrapper });
+    const { result } = renderHook(() => useFeatureRequests('Apex'), { wrapper });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
   });

@@ -39,7 +39,11 @@ import {
 import { db } from '../db/drizzle';
 import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
 import { interviews, adrs, prds, designDocs, testCases, devSessions, agentRuns, chatThreads } from '../db/schema';
-import { isThreadRunAlive } from './agentRunReaperService';
+import {
+  isThreadRunAlive,
+  resolveAgentRunHardLimitMs,
+  resolveAgentFirstEventTimeoutMs,
+} from './agentRunReaperService';
 import { isExternalRunAbortEvent } from './agentRunAbort';
 import { syncPrdContent } from './prdService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
@@ -51,6 +55,8 @@ import { retryWithBackoff } from '../utils/retry';
 import { trackAgentError, trackEvent } from './telemetry';
 import {
   clearRunEventSequence,
+  finalizeOwnedAgentRun,
+  finalizeReconciledAgentRun,
   nextRunEventSequence,
   notifyRunEvent,
   RUN_EVENT_SOURCE_INSTANCE,
@@ -67,12 +73,18 @@ import {
   type MyWorkLogContext,
   type MyWorkLogLevel,
 } from './myWorkSessionLogger';
-import { resolveAgentMcpToolTimeoutMs } from '../mcp/mcpTimeout';
+import {
+  McpTimeoutError,
+  raceWithTimeout,
+  resolveAgentMcpToolTimeoutMs,
+} from '../mcp/mcpTimeout';
 import {
   clearToolInFlight,
-  findExpiredMcpTool,
+  createMcpToolDeadlineController,
+  createFirstEventDeadline,
   markToolInFlight,
   type InFlightToolCall,
+  type McpToolDeadlineController,
 } from './inFlightToolTracker';
 import { buildRepositoryContextPack } from './repositoryContextPack';
 import {
@@ -99,6 +111,13 @@ const WORKSPACE_BASE = process.env.AI_PILOT_WORKSPACE_DIR
     : path.join(os.tmpdir(), 'ai-pilot-workspaces');
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const INTERVIEW_IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours
+// After this much thread inactivity, a resumed SDK session is likely cold and
+// prone to emitting zero events. Proactively recreate the agent (with history)
+// instead of resuming a stale session. Overridable for tests/tuning.
+const AGENT_STALE_RESUME_MS = (() => {
+  const parsed = Number(process.env.AGENT_STALE_RESUME_MS);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 10 * 60 * 1000; // 10 minutes
+})();
 
 // ── In-memory state ───────────────────────────────────────────────────────────
 
@@ -125,6 +144,7 @@ interface ThreadState {
 
 const threads = new Map<string, ThreadState>();
 const lastTokenProgressWriteAt = new Map<string, number>();
+const eventDrivenRunIds = new Set<string>();
 
 function runtimeWorkspaceDir(state: ThreadState): string {
   return state.groundingWorkspaceDir ?? state.thread.workspaceDir;
@@ -507,6 +527,13 @@ export function buildMcpServers(
     restrictRepoSearch?: boolean;
     groundingProfileId?: GroundingProfileId;
     enableRepoBrowse?: boolean;
+    /**
+     * When native (in-process) repository reads are engaged, the provider
+     * repo-read MCP servers are redundant. In that case we DE-MOUNT any server
+     * whose sole purpose is repository reading (github-repo), and mount
+     * ado-skills only when it is still required for document write-back.
+     */
+    nativeReads?: boolean;
   },
 ): Record<string, McpServerConfig> {
   const servers: Record<string, McpServerConfig> = {};
@@ -526,7 +553,11 @@ export function buildMcpServers(
   // GitHub-backed projects pre-fetch skills server-side, but still need
   // github-repo MCP for search_repo_code / list_repo_dir / get_skill_file
   // (e.g. Design Module scoping against the connected skill repo).
-  if (kickoff.skillProvider === 'github') {
+  //
+  // github-repo is a purely read-only repository server. When native reads are
+  // engaged, in-process customTools cover every read, so we de-mount it entirely
+  // (no idle connection, no residual list_skills escape hatch back to GitHub).
+  if (kickoff.skillProvider === 'github' && !options?.nativeReads) {
     const profilePath = options?.groundingProfileId
       ? `/grounding/${options.groundingProfileId}`
       : '';
@@ -545,7 +576,17 @@ export function buildMcpServers(
   // which live on ado-skills. Mount it for ADO projects always, and ALSO for
   // GitHub-backed document assistants — those tools only touch Postgres and do
   // not require ADO credentials.
-  if (kickoff.skillProvider !== 'github' || resolveDocumentAssistantType(kickoff)) {
+  //
+  // Native reads: ado-skills also hosts repo-read tools, so under native reads
+  // we only keep it when it provides something native reads cannot — i.e. the
+  // document write-back tools. A plain ADO repo-reading chat drops it entirely
+  // (native customTools cover the reads); document assistants keep it, but with
+  // enableRepoBrowse=false so its repo-read tools are stripped.
+  const documentAssistant = Boolean(resolveDocumentAssistantType(kickoff));
+  if (
+    (!options?.nativeReads && kickoff.skillProvider !== 'github') ||
+    documentAssistant
+  ) {
     const profilePath = options?.groundingProfileId
       ? `/grounding/${options.groundingProfileId}`
       : '';
@@ -673,6 +714,7 @@ export async function prepareRepositoryReadRuntime(options: {
       restrictRepoSearch: options.restrictRepoSearch,
       groundingProfileId,
       enableRepoBrowse: !nativeReads,
+      nativeReads,
     },
   );
   const local: LocalAgentOptions = {
@@ -960,10 +1002,11 @@ function buildFreeChatPrompt(
 ): string {
   const branch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
   const isGitHub = kickoff.skillProvider === 'github';
+  const nativeReads = options?.nativeReads ?? false;
   const parts: string[] = [
     ...buildRepositoryReadPromptLines(
       kickoff,
-      options?.nativeReads ?? false,
+      nativeReads,
     ),
     `# Session context`,
     `  project: "${kickoff.project}"`,
@@ -978,6 +1021,15 @@ function buildFreeChatPrompt(
       `# Mode`,
       `You are the internal project assistant for the **${kickoff.project}** team.`,
       `Skills from this project's GitHub repo are pre-loaded into the conversation by the system when applicable.`,
+      ...buildScopePolicyLines(kickoff),
+    );
+  } else if (nativeReads) {
+    // Native reads are engaged: the ado-skills repo-read tools are not mounted,
+    // so read exclusively through the local checkout tools described above.
+    parts.push(
+      `# Mode`,
+      `You are the internal project assistant for the **${kickoff.project}** team.`,
+      `Skills from this project's repo are pre-loaded into the conversation by the system when applicable; read any other repository files with the local checkout tools above.`,
       ...buildScopePolicyLines(kickoff),
     );
   } else {
@@ -1906,6 +1958,65 @@ function makeCancelledError(reason: string): Error & { _cancelled: true } {
   return Object.assign(new Error(reason), { _cancelled: true as const });
 }
 
+function makeOwnerDeadlineError(reason: string): Error & { _ownerDeadline: true } {
+  return Object.assign(new Error(reason), { _ownerDeadline: true as const });
+}
+
+function makeStartupDeadlineError(
+  reason: string,
+): Error & { _startupDeadline: true } {
+  return Object.assign(new Error(reason), { _startupDeadline: true as const });
+}
+
+const TERMINAL_DETAIL_MAX_CHARS = 2_000;
+const AGENT_DISPOSAL_TIMEOUT_MS = 10_000;
+
+export function sanitizeTerminalDetail(detail: string): string {
+  const normalizedControls = [...detail]
+    .map((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint <= 31 || codePoint === 127 ? ' ' : character;
+    })
+    .join('');
+  return normalizedControls
+    .replace(
+      /\b(?:postgres(?:ql)?|mongodb(?:\+srv)?|mysql|redis):\/\/\S+/gi,
+      '[redacted-connection-string]',
+    )
+    .replace(
+      /\b(?:Server|Data Source|Host)=[^;\s]+;(?:[^;\r\n]+;){1,10}/gi,
+      '[redacted-connection-string]',
+    )
+    .replace(/\bBearer\s+\S+/gi, 'Bearer [redacted]')
+    .replace(
+      /\b(token|password|passwd|secret|credential|api[_-]?key|connection[_-]?string)\s*[=:]\s*[^\s;]+/gi,
+      '$1=[redacted]',
+    )
+    .replace(/:\/\/[^/\s@:]+:[^/\s@]+@/g, '://[redacted]@')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, TERMINAL_DETAIL_MAX_CHARS);
+}
+
+export async function disposeAgentWithinDeadline(
+  agent: { [Symbol.asyncDispose](): Promise<void> },
+  timeoutMs = AGENT_DISPOSAL_TIMEOUT_MS,
+): Promise<boolean> {
+  try {
+    await raceWithTimeout('Cursor SDK agent disposal', timeoutMs, () =>
+      agent[Symbol.asyncDispose](),
+    );
+    return true;
+  } catch (error) {
+    if (error instanceof McpTimeoutError) {
+      console.warn(`[chat] Cursor SDK disposal exceeded ${timeoutMs}ms; continuing process`);
+    } else {
+      console.warn('[chat] Cursor SDK disposal failed; continuing process');
+    }
+    return false;
+  }
+}
+
 /**
  * Dispose the in-memory Cursor SDK agent so the next send cannot hit
  * "already has active run". Optionally drop cursorAgentId to force Agent.create.
@@ -1915,12 +2026,13 @@ async function forceDisposeThreadAgent(
   options?: { clearCursorAgentId?: boolean; reason?: string },
 ): Promise<void> {
   if (state.agent) {
+    const agent = state.agent;
+    state.agent = null;
     console.log(
       `[chat] Force-disposing agent (threadId=${state.thread.id}` +
         `, reason=${options?.reason ?? 'unspecified'})`,
     );
-    await state.agent[Symbol.asyncDispose]().catch(() => {});
-    state.agent = null;
+    await disposeAgentWithinDeadline(agent);
   }
   if (options?.clearCursorAgentId) {
     state.thread.cursorAgentId = undefined;
@@ -1972,6 +2084,7 @@ function inferRunEventDetail(event: SseEvent): string | undefined {
   else if (event.type === 'retrying') detail = `Retrying (${event.attempt}/${event.maxAttempts})`;
   else if (event.type === 'done') detail = 'Run completed';
   if (!detail) return undefined;
+  if (event.type === 'error') return sanitizeTerminalDetail(detail);
   return detail.replace(/\s+/g, ' ').trim().slice(0, 500);
 }
 
@@ -2053,10 +2166,56 @@ function isMeaningfulProgressEvent(event: SseEvent): boolean {
     || event.type === 'tool_status';
 }
 
+export function shouldPersistAgentRunProgress(eventDrivenTerminationEnabled: boolean): boolean {
+  return !eventDrivenTerminationEnabled;
+}
+
+export function buildAgentRunClaimUpdate(
+  eventDrivenTerminationEnabled: boolean,
+  ownerInstance: string,
+  timestamp: string,
+): {
+  status: 'running';
+  ownerInstance: string;
+  updatedAt: string;
+  eventDriven: boolean;
+  heartbeatAt?: string;
+  progressAt?: string;
+  progressLabel?: string;
+  progressPhase?: AgentRunPhase;
+} {
+  const common = {
+    status: 'running' as const,
+    ownerInstance,
+    updatedAt: timestamp,
+    // Stamp the run so the reaper classifies it from the row rather than a
+    // live flag lookup. Event-driven runs are terminated only via owner-side
+    // deadlines / timeout_at — never the legacy heartbeat worker_lost rule.
+    eventDriven: eventDrivenTerminationEnabled,
+  };
+  // @feature-flag:event-driven-run-termination start winner=enabled
+  if (eventDrivenTerminationEnabled) {
+    // @feature-flag:event-driven-run-termination enabled-start
+    return common;
+    // @feature-flag:event-driven-run-termination enabled-end
+  }
+  // @feature-flag:event-driven-run-termination disabled-start
+  return {
+    ...common,
+    heartbeatAt: timestamp,
+    progressAt: timestamp,
+    progressLabel: 'Agent run started',
+    progressPhase: 'implementation',
+  };
+  // @feature-flag:event-driven-run-termination disabled-end
+  // @feature-flag:event-driven-run-termination end
+}
+
 async function persistMeaningfulProgress(
   runId: string,
   envelope: AgentRunEventEnvelope,
 ): Promise<void> {
+  if (!shouldPersistAgentRunProgress(eventDrivenRunIds.has(runId))) return;
   if (envelope.event.type === 'cancel' || !isMeaningfulProgressEvent(envelope.event)) return;
   // Tokens and extended thinking can fire continuously; throttle DB writes.
   if (envelope.event.type === 'token' || envelope.event.type === 'thinking') {
@@ -2108,6 +2267,39 @@ async function publishRunEvent(
   await persistMeaningfulProgress(runId, envelope);
   broadcast(state, event, envelope);
   return envelope;
+}
+
+async function finalizeOwnerTerminal(
+  state: ThreadState,
+  runId: string,
+  status: 'completed' | 'failed' | 'cancelled',
+  detail: string,
+  events: SseEvent[],
+): Promise<boolean> {
+  const finalizedEvents = events.map((event) => ({
+    event,
+    envelope: createRunEventEnvelope({
+      threadId: state.thread.id,
+      runId,
+      sequence: nextRunEventSequence(runId),
+      event,
+      phase: 'completion',
+    }),
+  }));
+  const won = await finalizeOwnedAgentRun({
+    runId,
+    threadId: state.thread.id,
+    ownerInstance: RUN_EVENT_SOURCE_INSTANCE,
+    status,
+    detail,
+    events: finalizedEvents.map(({ envelope }) => envelope),
+  });
+  if (won) {
+    for (const { event, envelope } of finalizedEvents) {
+      broadcast(state, event, envelope);
+    }
+  }
+  return won;
 }
 
 async function publishRunCancellation(threadId: string, runId: string): Promise<void> {
@@ -3122,31 +3314,87 @@ export async function sendMessage(
   }
 
   const provisionalRunId = `${threadId}:provisional`;
+  const eventDrivenTerminationEnabled = await isFeatureEnabled(
+    'event-driven-run-termination',
+    {
+      userId: state.thread.userId,
+      project: state.thread.kickoff.project,
+    },
+  ).catch(() => false);
 
   // Grounding may need a cold mirror refresh. Expose that work immediately so
   // a newly created interview does not look idle while its repository is being
   // prepared.
   state.thread.status = 'running';
-  broadcast(state, { type: 'status', status: 'running' });
+  broadcast(state, {
+    type: 'status',
+    status: 'running',
+    eventDrivenTermination: eventDrivenTerminationEnabled,
+  });
   await pgUpsertThread(state.thread);
   resetIdleTimer(state);
 
   // Register durable liveness before grounding begins. The row is replaced by
   // the real SDK run once agent.send() returns a definitive run ID.
-  const provisionalRunTimeoutMs = state.isDevSession ? INTERVIEW_IDLE_TIMEOUT_MS : IDLE_TIMEOUT_MS;
+  const provisionalRunTimeoutMs = resolveAgentRunHardLimitMs();
   const preparationStartedAt = new Date().toISOString();
   await db.insert(agentRuns).values({
     id: provisionalRunId,
     threadId,
     status: 'queued',
     timeoutAt: new Date(Date.now() + provisionalRunTimeoutMs).toISOString(),
-    progressAt: preparationStartedAt,
-    progressLabel: 'Preparing the latest repository requirements…',
-    progressPhase: 'analysis',
+    ...(eventDrivenTerminationEnabled
+      ? {}
+      : {
+          progressAt: preparationStartedAt,
+          progressLabel: 'Preparing the latest repository requirements…',
+          progressPhase: 'analysis' as const,
+        }),
   }).onConflictDoNothing().catch((e) =>
     console.warn('[chat] Failed to insert provisional agent_runs row:', e),
   );
 
+  // Compute idle gap BEFORE the user message overwrites lastActivityAt.
+  // The stale-idle agent dispose runs later (after grounding), but the
+  // calculation must use the pre-mutation timestamp.
+  const idleGapMs = state.thread.lastActivityAt
+    ? Date.now() - Date.parse(state.thread.lastActivityAt)
+    : 0;
+  const staleIdleResume =
+    eventDrivenTerminationEnabled
+    && Number.isFinite(idleGapMs)
+    && idleGapMs > AGENT_STALE_RESUME_MS
+    && Boolean(state.agent || state.thread.cursorAgentId);
+
+  // Persist + broadcast the user message immediately so the UI reflects it
+  // before the (potentially slow) grounding / agent acquisition below.
+  const turnId = uuidv4();
+  const attachmentMeta = await writeMessageAttachments(state.thread.workspaceDir, turnId, attachments);
+  const promptText = buildPromptWithAttachments(text, attachmentMeta);
+  const priorMessages = [...state.thread.messages];
+  const recoveryContext = state.isInterviewThread
+    ? buildAgentRecoveryContext(priorMessages)
+    : null;
+
+  const userMsg: ChatMessage = {
+    id: turnId,
+    role: 'user',
+    text: text.trim() || 'Uploaded files for context.',
+    ts: new Date().toISOString(),
+    attachments: attachmentMeta.length > 0 ? attachmentMeta : undefined,
+    ...(options?.hidden ? { hidden: true } : {}),
+  };
+  state.thread.messages.push(userMsg);
+  state.thread.lastActivityAt = userMsg.ts;
+  broadcast(state, { type: 'message', message: userMsg });
+  await pgInsertMessage(threadId, userMsg);
+  logMyWork('message.persisted', {
+    turnId,
+    messageLength: userMsg.text.length,
+    attachmentCount: attachmentMeta.length,
+  });
+
+  // ── Grounding + agent lifecycle (may be slow after idle) ────────────────
   const mcpServerUrl = `http://localhost:${process.env.PORT ?? 3001}/mcp/ado-skills`;
   let grounding: CallerGroundingSelection;
   try {
@@ -3215,6 +3463,18 @@ export async function sendMessage(
   }
   // @feature-flag:repo-grounding-lifecycle-binding end
 
+  // Apply the stale-idle agent dispose computed earlier.
+  if (staleIdleResume) {
+    if (state.agent) {
+      await state.agent[Symbol.asyncDispose]().catch(() => {});
+      state.agent = null;
+    }
+    trackEvent('agent.stale_idle_recreate', {
+      threadId,
+      idleGapMs: String(idleGapMs),
+    });
+  }
+
   const maxviewEnabled = await isMaxviewMcpEnabled(state.thread.userId, state.thread.kickoff.project);
   const calendarSessionId = state.thread.kickoff.assistantType === 'calendar-work-item'
     ? (state.thread.kickoff.calendarAssistantSessionId ?? undefined)
@@ -3235,33 +3495,6 @@ export async function sendMessage(
     maxviewEnabled,
     maxviewConfigured: isMaxviewConfigured(),
     nativeReads: repositoryRuntime.nativeReads,
-  });
-
-  const turnId = uuidv4();
-  const attachmentMeta = await writeMessageAttachments(agentWorkspaceDir, turnId, attachments);
-  const promptText = buildPromptWithAttachments(text, attachmentMeta);
-  const priorMessages = [...state.thread.messages];
-  const recoveryContext = state.isInterviewThread
-    ? buildAgentRecoveryContext(priorMessages)
-    : null;
-
-  // Record the user message
-  const userMsg: ChatMessage = {
-    id: turnId,
-    role: 'user',
-    text: text.trim() || 'Uploaded files for context.',
-    ts: new Date().toISOString(),
-    attachments: attachmentMeta.length > 0 ? attachmentMeta : undefined,
-    ...(options?.hidden ? { hidden: true } : {}),
-  };
-  state.thread.messages.push(userMsg);
-  state.thread.lastActivityAt = userMsg.ts;
-  broadcast(state, { type: 'message', message: userMsg });
-  await pgInsertMessage(threadId, userMsg);
-  logMyWork('message.persisted', {
-    turnId,
-    messageLength: userMsg.text.length,
-    attachmentCount: attachmentMeta.length,
   });
 
   // A missing cursorAgentId can mean either a brand-new conversation or a
@@ -3287,7 +3520,9 @@ export async function sendMessage(
     state.agent ? 'existing' : hadCursorAgentId ? 'resumed' : 'created';
 
   let agentRunId: string | undefined;
+  let terminalFinalized = false;
   let backgroundHeartbeatId: ReturnType<typeof setInterval> | null = null;
+  let mcpDeadlineController: McpToolDeadlineController | null = null;
   let unsubscribeAbort: (() => void) | null = null;
   let heldLocalAgentSlot = false;
 
@@ -3317,7 +3552,7 @@ export async function sendMessage(
       const priorCursorAgentId = state.thread.cursorAgentId;
       const acquisition = await resumeOrCreateAgent({
         cursorAgentId: priorCursorAgentId,
-        forceRecreate: boundaryRecreationReason !== null,
+        forceRecreate: boundaryRecreationReason !== null || staleIdleResume,
         resume: async () => {
           logMyWork('agent.resume_started', {
             cursorAgentId: priorCursorAgentId,
@@ -3433,9 +3668,10 @@ export async function sendMessage(
     persistThread(state.thread);
 
     // ── Insert agent_runs record as 'queued', then atomically claim it ──────
-    const runTimeoutMs = state.isDevSession ? INTERVIEW_IDLE_TIMEOUT_MS : IDLE_TIMEOUT_MS;
+    const runTimeoutMs = resolveAgentRunHardLimitMs();
     const runTimeoutAt = new Date(Date.now() + runTimeoutMs).toISOString();
     agentRunId = state.thread.activeRunId ?? threadId;
+    if (eventDrivenTerminationEnabled) eventDrivenRunIds.add(agentRunId);
     logMyWork('run.started', {
       runId: agentRunId,
       cursorAgentId: state.thread.cursorAgentId,
@@ -3461,16 +3697,13 @@ export async function sendMessage(
     }
 
     // Atomic lease claim: only one worker transitions queued → running
+    const claimedAt = new Date().toISOString();
     const [claimed] = await db.update(agentRuns)
-      .set({
-        status: 'running',
-        ownerInstance: RUN_EVENT_SOURCE_INSTANCE,
-        heartbeatAt: new Date().toISOString(),
-        progressAt: new Date().toISOString(),
-        progressLabel: 'Agent run started',
-        progressPhase: 'implementation',
-        updatedAt: new Date().toISOString(),
-      })
+      .set(buildAgentRunClaimUpdate(
+        eventDrivenTerminationEnabled,
+        RUN_EVENT_SOURCE_INSTANCE,
+        claimedAt,
+      ))
       .where(and(eq(agentRuns.id, agentRunId), eq(agentRuns.status, 'queued')))
       .returning({ id: agentRuns.id });
 
@@ -3494,9 +3727,7 @@ export async function sendMessage(
     let lastHeartbeatMs = Date.now();
     const HEARTBEAT_INTERVAL_MS = 10_000;
     const thinkingPhase = new ThinkingPhaseCoalescer();
-    // Keep one run-local registry of tool starts. The existing heartbeat loop
-    // checks MCP deadlines, avoiding another interval/timer per tool. progressAt
-    // remains the true tool-start age for the slower cross-instance reaper.
+    // Keep progress metadata separately from authoritative per-tool timers.
     const inFlightToolCalls = new Map<string, InFlightToolCall>();
     const mcpToolTimeoutMs = resolveAgentMcpToolTimeoutMs();
     const flushThinkingPhase = async (): Promise<void> => {
@@ -3508,8 +3739,10 @@ export async function sendMessage(
     // Shared heartbeat helper — call from any event handler that can run > 90s
     // without emitting text tokens (thinking phases, tool_use, long tool_call waits).
     // agentRunId is always assigned before this function is ever called.
-    let streamAbortError: (Error & { _cancelled?: true }) | null = null;
+    let streamAbortError:
+      (Error & { _cancelled?: true; _ownerDeadline?: true; _startupDeadline?: true }) | null = null;
     const bumpHeartbeat = async (): Promise<void> => {
+      if (eventDrivenTerminationEnabled) return;
       if (Date.now() - lastHeartbeatMs < HEARTBEAT_INTERVAL_MS) return;
       lastHeartbeatMs = Date.now();
       const runId = agentRunId!;
@@ -3539,6 +3772,107 @@ export async function sendMessage(
       })();
     };
 
+    mcpDeadlineController = createMcpToolDeadlineController(
+      mcpToolTimeoutMs,
+      (expiredMcpTool) => {
+        const detail = sanitizeTerminalDetail(
+          `${expiredMcpTool.mcpLabel ?? expiredMcpTool.toolName} exceeded owner deadline ` +
+          `after ${Math.round(expiredMcpTool.elapsedMs / 1000)} seconds. Retry the turn.`,
+        );
+        console.warn(`[chat] ${detail} (threadId=${threadId}, runId=${agentRunId})`);
+        logMyWork('run.mcp_tool_timeout', {
+          runId: agentRunId,
+          toolName: expiredMcpTool.mcpLabel ?? expiredMcpTool.toolName,
+          elapsedMs: expiredMcpTool.elapsedMs,
+          timeoutMs: mcpToolTimeoutMs,
+          mode: eventDrivenTerminationEnabled ? 'enforce' : 'shadow',
+        }, 'warn');
+        trackEvent('agent.run.tool_deadline', {
+          threadId,
+          mode: eventDrivenTerminationEnabled ? 'enforce' : 'shadow',
+          outcome: eventDrivenTerminationEnabled ? 'terminal' : 'legacy-authority',
+        }, {
+          elapsedMs: expiredMcpTool.elapsedMs,
+          timeoutMs: mcpToolTimeoutMs,
+        });
+
+        // @feature-flag:event-driven-run-termination start winner=enabled
+        if (!eventDrivenTerminationEnabled) {
+          // @feature-flag:event-driven-run-termination disabled-start
+          // Shadow records the comparison signal while legacy liveness remains authoritative.
+          // @feature-flag:event-driven-run-termination disabled-end
+          return;
+        }
+
+        // @feature-flag:event-driven-run-termination enabled-start
+        void (async () => {
+          const runId = agentRunId!;
+          const toolEvent = createRunEventEnvelope({
+            threadId,
+            runId,
+            sequence: nextRunEventSequence(runId),
+            event: {
+              type: 'tool_status',
+              toolName: expiredMcpTool.mcpLabel ?? expiredMcpTool.toolName,
+              callId: expiredMcpTool.key,
+              status: 'error',
+            },
+            phase: 'completion',
+          });
+          const errorEvent = createRunEventEnvelope({
+            threadId,
+            runId,
+            sequence: nextRunEventSequence(runId),
+            event: { type: 'error', error: detail, errorCode: 'transient' },
+            phase: 'completion',
+          });
+          const doneEvent = createRunEventEnvelope({
+            threadId,
+            runId,
+            sequence: nextRunEventSequence(runId),
+            event: { type: 'done', runId },
+            phase: 'completion',
+          });
+          const won = await finalizeOwnedAgentRun({
+            runId,
+            threadId,
+            ownerInstance: RUN_EVENT_SOURCE_INSTANCE,
+            status: 'failed',
+            detail,
+            events: [toolEvent, errorEvent, doneEvent],
+          });
+          if (!won) return;
+
+          state.thread.lastError = detail;
+          state.thread.status = 'idle';
+          state.thread.activeRunId = undefined;
+          broadcast(state, {
+            type: 'tool_status',
+            toolName: expiredMcpTool.mcpLabel ?? expiredMcpTool.toolName,
+            callId: expiredMcpTool.key,
+            status: 'error',
+          }, toolEvent);
+          broadcast(state, {
+            type: 'error',
+            error: detail,
+            errorCode: 'transient',
+          }, errorEvent);
+          broadcast(state, { type: 'done', runId }, doneEvent);
+          persistThread(state.thread);
+          streamAbortError = makeOwnerDeadlineError(detail);
+          await cancelSdkRunBestEffort(state, runId);
+          await forceDisposeThreadAgent(state, {
+            clearCursorAgentId: true,
+            reason: 'owner_tool_deadline',
+          });
+        })().catch((error) => {
+          console.error('[chat] Failed authoritative tool-deadline finalization:', error);
+        });
+        // @feature-flag:event-driven-run-termination enabled-end
+        // @feature-flag:event-driven-run-termination end
+      },
+    );
+
     const throwIfAborted = (): void => {
       if (streamAbortError) throw streamAbortError;
     };
@@ -3552,42 +3886,35 @@ export async function sendMessage(
       abortInFlightRun(`External abort: ${detail}`);
     });
 
-    // Background heartbeat — bumps every 30s unconditionally so long thinking
-    // phases that emit no stream events don't trigger the reaper's expiry threshold.
-    // It also enforces the owner-side MCP deadline without creating another timer.
-    // If the run was reaped/cancelled, do NOT swallow the error — abort the stream.
-    backgroundHeartbeatId = setInterval(() => {
-      const expiredMcpTool = findExpiredMcpTool(
-        inFlightToolCalls,
-        Date.now(),
-        mcpToolTimeoutMs,
-      );
-      if (expiredMcpTool) {
-        const detail =
-          `${expiredMcpTool.mcpLabel ?? expiredMcpTool.toolName} exceeded owner deadline ` +
-          `after ${Math.round(expiredMcpTool.elapsedMs / 1000)}s`;
-        console.warn(`[chat] ${detail} (threadId=${threadId}, runId=${agentRunId})`);
-        logMyWork('run.mcp_tool_timeout', {
-          runId: agentRunId,
-          toolName: expiredMcpTool.mcpLabel ?? expiredMcpTool.toolName,
-          elapsedMs: expiredMcpTool.elapsedMs,
-          timeoutMs: mcpToolTimeoutMs,
-        }, 'warn');
-        abortInFlightRun(detail);
-        return;
-      }
-      lastHeartbeatMs = 0; // force bumpHeartbeat to fire regardless of rate limit
-      bumpHeartbeat().catch((err: unknown) => {
-        const cancelled =
-          !!err &&
-          typeof err === 'object' &&
-          '_cancelled' in err &&
-          Boolean((err as { _cancelled?: unknown })._cancelled);
-        if (cancelled) {
-          abortInFlightRun('Heartbeat observed non-running agent_runs row');
-        }
-      });
-    }, 30_000);
+    // @feature-flag:event-driven-run-termination start winner=enabled
+    if (eventDrivenTerminationEnabled) {
+      // @feature-flag:event-driven-run-termination enabled-start
+      // Owner deadlines and durable terminal events are authoritative.
+      // @feature-flag:event-driven-run-termination enabled-end
+    } else {
+      // @feature-flag:event-driven-run-termination disabled-start
+      backgroundHeartbeatId = setInterval(() => {
+        lastHeartbeatMs = 0;
+        bumpHeartbeat().catch((err: unknown) => {
+          const cancelled =
+            !!err &&
+            typeof err === 'object' &&
+            '_cancelled' in err &&
+            Boolean((err as { _cancelled?: unknown })._cancelled);
+          if (cancelled) {
+            abortInFlightRun('Heartbeat observed non-running agent_runs row');
+          }
+        });
+      }, 30_000);
+      // @feature-flag:event-driven-run-termination disabled-end
+    }
+    // @feature-flag:event-driven-run-termination end
+
+    // Fast first-event backstop for event-driven runs: a resumed agent that
+    // emits nothing has no tool_call for the MCP deadline to bound, so bound the
+    // dead-on-arrival window here instead of the coarse ~2h timeout_at.
+    const firstEventTimeoutMs = resolveAgentFirstEventTimeoutMs();
+    let startupRetryConsumed = false;
 
     for (let attempt = 0; attempt <= MAX_RUN_RETRIES; attempt++) {
       agentTextBuffer = '';
@@ -3595,8 +3922,32 @@ export async function sendMessage(
 
       // Stream tokens and tool calls — wrapped in try/catch for stream-level failures
       if (currentRun.supports('stream')) {
+        // Arm the first-event deadline for event-driven runs only. On expiry we
+        // dispose the (silent) agent so the blocked async iterator unblocks and
+        // throws into the catch below, which recreates + retries once.
+        let firstEventSeen = false;
+        const firstEventDeadline = eventDrivenTerminationEnabled
+          ? createFirstEventDeadline(firstEventTimeoutMs, () => {
+              if (firstEventSeen || streamAbortError) return;
+              streamAbortError = makeStartupDeadlineError(
+                'The agent did not start responding.',
+              );
+              const runId = agentRunId!;
+              void (async () => {
+                await cancelSdkRunBestEffort(state, runId);
+                await forceDisposeThreadAgent(state, {
+                  clearCursorAgentId: false,
+                  reason: 'startup_deadline',
+                });
+              })();
+            })
+          : null;
         try {
           for await (const event of currentRun.stream()) {
+            if (!firstEventSeen) {
+              firstEventSeen = true;
+              firstEventDeadline?.clear();
+            }
             throwIfAborted();
             if (event.type === 'assistant') {
               for (const block of event.message.content) {
@@ -3631,6 +3982,11 @@ export async function sendMessage(
                       : `tool_use:${block.name}:${inFlightToolCalls.size}`;
                   markToolInFlight(
                     inFlightToolCalls,
+                    toolUseId,
+                    block.name,
+                    block.input,
+                  );
+                  mcpDeadlineController?.arm(
                     toolUseId,
                     block.name,
                     block.input,
@@ -3704,9 +4060,19 @@ export async function sendMessage(
                   tc.name ?? 'unknown',
                   tc.args,
                 );
+                mcpDeadlineController?.arm(
+                  toolCallKey,
+                  tc.name ?? 'unknown',
+                  tc.args,
+                );
               } else {
                 clearToolInFlight(
                   inFlightToolCalls,
+                  toolCallKey,
+                  tc.name ?? 'unknown',
+                  tc.args,
+                );
+                mcpDeadlineController?.complete(
                   toolCallKey,
                   tc.name ?? 'unknown',
                   tc.args,
@@ -3730,7 +4096,100 @@ export async function sendMessage(
               await bumpHeartbeat();
             }
           }
+          firstEventDeadline?.clear();
         } catch (streamErr) {
+          firstEventDeadline?.clear();
+
+          // First-event startup deadline: the resumed agent emitted nothing.
+          const startupDeadline =
+            !!streamAbortError
+            && Boolean((streamAbortError as { _startupDeadline?: unknown })._startupDeadline);
+          if (startupDeadline) {
+            if (attempt < MAX_RUN_RETRIES && !startupRetryConsumed) {
+              // Transparently recreate a fresh agent (with history) and retry once.
+              startupRetryConsumed = true;
+              trackEvent('agent.run.startup_deadline', {
+                threadId,
+                mode: 'enforce',
+                attempt: String(attempt + 1),
+                recovered: 'true',
+              }, { firstEventTimeoutMs });
+              console.warn(
+                `[chat] First-event deadline on attempt ${attempt + 1}/${MAX_RUN_RETRIES + 1} for thread ${threadId}; recreating agent and retrying`,
+              );
+              await publishRunEvent(state, agentRunId!, {
+                type: 'retrying',
+                attempt: attempt + 1,
+                maxAttempts: MAX_RUN_RETRIES + 1,
+                reason: 'reconnecting',
+              });
+              // Clear the abort so the loop-top throwIfAborted() does not refire.
+              streamAbortError = null;
+              if (state.agent) {
+                await state.agent[Symbol.asyncDispose]().catch(() => {});
+                state.agent = null;
+              }
+              // Recreate (not resume) with PostgreSQL history so the fresh
+              // session continues the conversation instead of restarting it.
+              state.thread.cursorAgentId = undefined;
+              prompt = await buildNewAgentTurnPrompt(
+                state.thread.kickoff,
+                promptText,
+                maxviewEnabled,
+                recoveryContext,
+                {
+                  preloadRepositoryContext:
+                    state.isInterviewThread && grounding.mode === 'remote',
+                  repoSearchEnabled: !state.isInterviewThread,
+                  nativeReads: repositoryRuntime.nativeReads,
+                  repoReader: repositoryRuntime.repoReader,
+                },
+              );
+              state.agent = await retryWithBackoff(
+                () => Agent.create({
+                  apiKey,
+                  model: { id: resolvedModel },
+                  local: localAgentOptions,
+                  mcpServers,
+                  agents: { 'code-reviewer': codeReviewerAgent },
+                }),
+                sdkRetryOpts,
+              );
+              currentRun = await state.agent.send(prompt);
+              state.thread.cursorAgentId = state.agent.agentId ?? state.thread.cursorAgentId;
+              state.thread.activeRunId = getRunId(currentRun);
+              continue;
+            }
+
+            // Final attempt still produced nothing — finalize a terminal failure
+            // through the owner path so the user gets an actionable message and
+            // can resend, instead of a silent spinner up to the hard limit.
+            const detail = 'The agent did not start responding. Please resend your last message.';
+            trackEvent('agent.run.startup_deadline', {
+              threadId,
+              mode: 'enforce',
+              attempt: String(attempt + 1),
+              recovered: 'false',
+            }, { firstEventTimeoutMs });
+            terminalFinalized = await finalizeOwnerTerminal(
+              state,
+              agentRunId!,
+              'failed',
+              detail,
+              [{ type: 'error', error: detail }, { type: 'done', runId: agentRunId }],
+            );
+            state.thread.lastError = detail;
+            state.thread.status = 'idle';
+            state.thread.activeRunId = undefined;
+            if (state.agent) {
+              await state.agent[Symbol.asyncDispose]().catch(() => {});
+              state.agent = null;
+            }
+            streamAbortError = null;
+            break;
+          }
+
+          if (streamAbortError) throw streamAbortError;
           if (attempt < MAX_RUN_RETRIES && isTransientSdkError(streamErr)) {
             console.warn(`[chat] Stream error on attempt ${attempt + 1}/${MAX_RUN_RETRIES + 1} for thread ${threadId}, retrying…`, describeError(streamErr));
             await publishRunEvent(state, agentRunId!, { type: 'retrying', attempt: attempt + 1, maxAttempts: MAX_RUN_RETRIES + 1 });
@@ -3764,7 +4223,9 @@ export async function sendMessage(
       const result = await currentRun.wait();
 
       if (result.status === 'error') {
-        const reason = result.result?.trim() || 'Agent run failed — you can retry your last message.';
+        const reason = sanitizeTerminalDetail(
+          result.result?.trim() || 'Agent run failed — you can retry your last message.',
+        );
 
         if (attempt < MAX_RUN_RETRIES && !isFatalRunError(reason)) {
           console.warn(`[chat] Run error on attempt ${attempt + 1}/${MAX_RUN_RETRIES + 1} for thread ${threadId}, retrying…`, reason);
@@ -3795,13 +4256,32 @@ export async function sendMessage(
         console.error(`[chat] Agent run returned error status for thread ${threadId}:`, result.result ?? '(no detail)', { model: state.thread.kickoff.model });
         trackAgentError(threadId, new Error(reason), { model: state.thread.kickoff?.model ?? 'unknown' });
         state.thread.lastError = reason;
-        // Mark agent run as failed in Postgres
-        await db.update(agentRuns)
-          .set({ status: 'failed', lastError: reason?.slice(0, 2000), updatedAt: new Date().toISOString() })
-          .where(eq(agentRuns.id, agentRunId))
-          .execute()
-          .catch((e) => console.error('[chat] Failed to mark agent run failed (in-loop):', e));
-        await publishRunEvent(state, agentRunId!, { type: 'error', error: reason });
+        // @feature-flag:event-driven-run-termination start winner=enabled
+        if (eventDrivenTerminationEnabled) {
+          // @feature-flag:event-driven-run-termination enabled-start
+          terminalFinalized = await finalizeOwnerTerminal(
+            state,
+            agentRunId!,
+            'failed',
+            reason,
+            [{ type: 'error', error: reason }, { type: 'done', runId: agentRunId }],
+          );
+          // @feature-flag:event-driven-run-termination enabled-end
+        } else {
+          // @feature-flag:event-driven-run-termination disabled-start
+          await db.update(agentRuns)
+            .set({ status: 'failed', lastError: reason, updatedAt: new Date().toISOString() })
+            .where(and(
+              eq(agentRuns.id, agentRunId),
+              eq(agentRuns.ownerInstance, RUN_EVENT_SOURCE_INSTANCE),
+              eq(agentRuns.status, 'running'),
+            ))
+            .execute()
+            .catch((e) => console.error('[chat] Failed to mark agent run failed (in-loop):', e));
+          await publishRunEvent(state, agentRunId!, { type: 'error', error: reason });
+          // @feature-flag:event-driven-run-termination disabled-end
+        }
+        // @feature-flag:event-driven-run-termination end
         if (state.agent) {
           await state.agent[Symbol.asyncDispose]().catch(() => {});
           state.agent = null;
@@ -3811,7 +4291,9 @@ export async function sendMessage(
         }
         state.thread.activeRunId = undefined;
         state.thread.status = 'idle';
-        await publishRunEvent(state, agentRunId!, { type: 'status', status: 'idle' });
+        if (!eventDrivenTerminationEnabled) {
+          await publishRunEvent(state, agentRunId!, { type: 'status', status: 'idle' });
+        }
         break;
       }
 
@@ -3839,7 +4321,9 @@ export async function sendMessage(
       }
 
       state.thread.status = 'idle';
-      await publishRunEvent(state, agentRunId!, { type: 'status', status: 'idle' });
+      if (!eventDrivenTerminationEnabled) {
+        await publishRunEvent(state, agentRunId!, { type: 'status', status: 'idle' });
+      }
       trackEvent('agent.run.completed', { threadId, model: resolvedModel });
 
       // Record usage event (fire-and-forget, never blocks)
@@ -3888,31 +4372,84 @@ export async function sendMessage(
       console.warn(`[chat] eager dev-session push failed (non-fatal) for thread ${threadId}:`, (err as Error).message);
     }
 
-    // Mark agent run as completed in Postgres BEFORE broadcasting done
-    await db.update(agentRuns)
-      .set({ status: 'completed', updatedAt: new Date().toISOString() })
-      .where(eq(agentRuns.id, agentRunId))
-      .execute()
-      .catch((e) => console.error('[chat] Failed to mark agent run completed:', e));
+    let completedRun = false;
+    // @feature-flag:event-driven-run-termination start winner=enabled
+    if (eventDrivenTerminationEnabled) {
+      // @feature-flag:event-driven-run-termination enabled-start
+      if (!terminalFinalized) {
+        completedRun = await finalizeOwnerTerminal(
+          state,
+          agentRunId!,
+          'completed',
+          'Run completed',
+          [{
+            type: 'done',
+            runId: state.thread.activeRunId,
+            prdReady,
+            backlogReady,
+          }],
+        );
+      }
+      // @feature-flag:event-driven-run-termination enabled-end
+    } else {
+      // @feature-flag:event-driven-run-termination disabled-start
+      const [legacyCompletedRun] = await db.update(agentRuns)
+        .set({ status: 'completed', updatedAt: new Date().toISOString() })
+        .where(and(
+          eq(agentRuns.id, agentRunId),
+          eq(agentRuns.ownerInstance, RUN_EVENT_SOURCE_INSTANCE),
+          eq(agentRuns.status, 'running'),
+        ))
+        .returning({ id: agentRuns.id })
+        .catch((e) => {
+          console.error('[chat] Failed to mark agent run completed:', e);
+          return [];
+        });
+      completedRun = Boolean(legacyCompletedRun);
+      // @feature-flag:event-driven-run-termination disabled-end
+    }
+    // @feature-flag:event-driven-run-termination end
 
-    logMyWork('run.completed', {
-      runId: agentRunId,
-      model: resolvedModel,
-      durationMs: Date.now() - runStartedAtMs,
-      responseLength: agentTextBuffer.length,
-      prdReady,
-      backlogReady,
-    });
-    await publishRunEvent(state, agentRunId!, {
-      type: 'done',
-      runId: state.thread.activeRunId,
-      prdReady,
-      backlogReady,
-    });
+    if (completedRun) {
+      logMyWork('run.completed', {
+        runId: agentRunId,
+        model: resolvedModel,
+        durationMs: Date.now() - runStartedAtMs,
+        responseLength: agentTextBuffer.length,
+        prdReady,
+        backlogReady,
+      });
+      if (!eventDrivenTerminationEnabled) {
+        await publishRunEvent(state, agentRunId!, {
+          type: 'done',
+          runId: state.thread.activeRunId,
+          prdReady,
+          backlogReady,
+        });
+      }
+    }
     clearRunEventSequence(agentRunId!);
     lastTokenProgressWriteAt.delete(agentRunId!);
+    eventDrivenRunIds.delete(agentRunId!);
     state.thread.activeRunId = undefined;
   } catch (err: unknown) {
+    const ownerDeadline =
+      !!err &&
+      typeof err === 'object' &&
+      '_ownerDeadline' in err &&
+      Boolean((err as { _ownerDeadline?: unknown })._ownerDeadline);
+    if (ownerDeadline) {
+      state.thread.status = 'idle';
+      state.thread.activeRunId = undefined;
+      if (agentRunId) {
+        clearRunEventSequence(agentRunId);
+        lastTokenProgressWriteAt.delete(agentRunId);
+        eventDrivenRunIds.delete(agentRunId);
+      }
+      persistThread(state.thread);
+      return;
+    }
+
     // Handle cross-worker cancellation without treating it as an error
     const cancelled =
       !!err &&
@@ -3927,10 +4464,13 @@ export async function sendMessage(
       state.thread.status = 'idle';
       state.thread.activeRunId = undefined;
       if (agentRunId) {
-        await publishRunEvent(state, agentRunId, { type: 'status', status: 'idle' });
-        await publishRunEvent(state, agentRunId, { type: 'done', runId: agentRunId });
+        if (!eventDrivenTerminationEnabled) {
+          await publishRunEvent(state, agentRunId, { type: 'status', status: 'idle' });
+          await publishRunEvent(state, agentRunId, { type: 'done', runId: agentRunId });
+        }
         clearRunEventSequence(agentRunId);
         lastTokenProgressWriteAt.delete(agentRunId);
+        eventDrivenRunIds.delete(agentRunId);
       } else {
         broadcast(state, { type: 'status', status: 'idle' });
         broadcast(state, { type: 'done' });
@@ -3947,7 +4487,7 @@ export async function sendMessage(
     logAgentError(threadId, err);
 
     const tier = classifyError(err);
-    const rawMsg = describeError(err);
+    const rawMsg = sanitizeTerminalDetail(describeError(err));
     console.error(`[chat] Error tier=${tier} for thread ${threadId}:`, rawMsg);
     logMyWork('run.failed', {
       runId: agentRunId,
@@ -3956,7 +4496,10 @@ export async function sendMessage(
       error: rawMsg,
       cursorAgentId: state.thread.cursorAgentId,
     }, 'error');
-    trackAgentError(threadId, err, { tier, model: state.thread.kickoff?.model ?? 'unknown' });
+    trackAgentError(threadId, new Error(rawMsg), {
+      tier,
+      model: state.thread.kickoff?.model ?? 'unknown',
+    });
 
     if (state.agent) {
       await forceDisposeThreadAgent(state, {
@@ -4021,24 +4564,48 @@ export async function sendMessage(
       });
     }
 
-    // Mark agent run as failed in Postgres BEFORE broadcasting error
     if (agentRunId) {
-      await db.update(agentRuns)
-        .set({ status: 'failed', lastError: rawMsg?.slice(0, 2000), updatedAt: new Date().toISOString() })
-        .where(eq(agentRuns.id, agentRunId))
-        .execute()
-        .catch((e) => console.error('[chat] Failed to mark agent run failed:', e));
-    }
-
-    if (agentRunId) {
-      await publishRunEvent(state, agentRunId, {
-        type: 'error',
-        error: state.thread.lastError ?? 'Unknown error',
-        errorCode,
-      });
-      await publishRunEvent(state, agentRunId, { type: 'done', runId: agentRunId });
+      // @feature-flag:event-driven-run-termination start winner=enabled
+      if (eventDrivenTerminationEnabled) {
+        // @feature-flag:event-driven-run-termination enabled-start
+        await finalizeOwnerTerminal(
+          state,
+          agentRunId,
+          'failed',
+          rawMsg,
+          [
+            {
+              type: 'error',
+              error: state.thread.lastError ?? 'Unknown error',
+              errorCode,
+            },
+            { type: 'done', runId: agentRunId },
+          ],
+        );
+        // @feature-flag:event-driven-run-termination enabled-end
+      } else {
+        // @feature-flag:event-driven-run-termination disabled-start
+        await db.update(agentRuns)
+          .set({ status: 'failed', lastError: rawMsg, updatedAt: new Date().toISOString() })
+          .where(and(
+            eq(agentRuns.id, agentRunId),
+            eq(agentRuns.ownerInstance, RUN_EVENT_SOURCE_INSTANCE),
+            eq(agentRuns.status, 'running'),
+          ))
+          .execute()
+          .catch((e) => console.error('[chat] Failed to mark agent run failed:', e));
+        await publishRunEvent(state, agentRunId, {
+          type: 'error',
+          error: state.thread.lastError ?? 'Unknown error',
+          errorCode,
+        });
+        await publishRunEvent(state, agentRunId, { type: 'done', runId: agentRunId });
+        // @feature-flag:event-driven-run-termination disabled-end
+      }
+      // @feature-flag:event-driven-run-termination end
       clearRunEventSequence(agentRunId);
       lastTokenProgressWriteAt.delete(agentRunId);
+      eventDrivenRunIds.delete(agentRunId);
     } else {
       broadcast(state, { type: 'error', error: state.thread.lastError ?? 'Unknown error', errorCode });
       broadcast(state, { type: 'done' });
@@ -4058,6 +4625,8 @@ export async function sendMessage(
       clearInterval(backgroundHeartbeatId);
       backgroundHeartbeatId = null;
     }
+    mcpDeadlineController?.clear();
+    mcpDeadlineController = null;
     // Clean up provisional liveness row if it was never replaced by the real one
     db.delete(agentRuns).where(eq(agentRuns.id, provisionalRunId))
       .catch(() => {});
@@ -4151,17 +4720,63 @@ export async function cancelRun(threadId: string): Promise<void> {
     });
   }
 
-  // Mark cancelled in Postgres — works from any worker
-  await db.update(agentRuns)
-    .set({ status: 'cancelled', updatedAt: new Date().toISOString() })
-    .where(eq(agentRuns.id, activeRunId))
-    .execute()
-    .catch((e) => console.error('[chat] Failed to mark agent run cancelled:', e));
+  const eventDrivenTerminationEnabled = await isFeatureEnabled(
+    'event-driven-run-termination',
+    {
+      userId: state.thread.userId,
+      project: state.thread.kickoff.project,
+    },
+  ).catch(() => false);
+  // @feature-flag:event-driven-run-termination start winner=enabled
+  if (eventDrivenTerminationEnabled) {
+    // @feature-flag:event-driven-run-termination enabled-start
+    const timestamp = new Date().toISOString();
+    const cancelEnvelope: AgentRunEventEnvelope = {
+      eventId: uuidv4(),
+      threadId,
+      runId: activeRunId,
+      sourceInstance: RUN_EVENT_SOURCE_INSTANCE,
+      sequence: nextRunEventSequence(activeRunId),
+      timestamp,
+      type: 'cancel',
+      phase: 'completion',
+      status: 'cancelled',
+      detail: 'Run cancelled by user',
+      event: { type: 'cancel' },
+    };
+    await finalizeReconciledAgentRun({
+      runId: activeRunId,
+      threadId,
+      status: 'cancelled',
+      detail: 'Run cancelled by user',
+      events: [cancelEnvelope],
+    }).catch((error) => {
+      console.error('[chat] Failed to finalize run cancellation:', (error as Error).message);
+      return false;
+    });
+    // @feature-flag:event-driven-run-termination enabled-end
+  } else {
+    // @feature-flag:event-driven-run-termination disabled-start
+    const [cancelledRun] = await db.update(agentRuns)
+      .set({ status: 'cancelled', updatedAt: new Date().toISOString() })
+      .where(and(
+        eq(agentRuns.id, activeRunId),
+        inArray(agentRuns.status, ['queued', 'running']),
+      ))
+      .returning({ id: agentRuns.id })
+      .catch((e) => {
+        console.error('[chat] Failed to mark agent run cancelled:', e);
+        return [];
+      });
 
-  // NOTIFY all workers (the owner will check for cancel and abort its loop)
-  await publishRunCancellation(threadId, activeRunId).catch((err) => {
-    console.error('[chat] Failed to fan out run cancellation:', (err as Error).message);
-  });
+    if (cancelledRun) {
+      await publishRunCancellation(threadId, activeRunId).catch((err) => {
+        console.error('[chat] Failed to fan out run cancellation:', (err as Error).message);
+      });
+    }
+    // @feature-flag:event-driven-run-termination disabled-end
+  }
+  // @feature-flag:event-driven-run-termination end
 
   // Cancel the SDK run and force-dispose the in-memory agent on this instance.
   // Dispose is required: cancel alone leaves Cursor holding an active run, and
@@ -4174,10 +4789,13 @@ export async function cancelRun(threadId: string): Promise<void> {
 
   state.thread.status = 'idle';
   state.thread.activeRunId = undefined;
-  broadcast(state, { type: 'status', status: 'idle' });
-  broadcast(state, { type: 'done' });
+  if (!eventDrivenTerminationEnabled) {
+    broadcast(state, { type: 'status', status: 'idle' });
+    broadcast(state, { type: 'done' });
+  }
   clearRunEventSequence(activeRunId);
   lastTokenProgressWriteAt.delete(activeRunId);
+  eventDrivenRunIds.delete(activeRunId);
   persistThread(state.thread);
   await clearStaleRun(threadId);
   if (myWorkContext) {

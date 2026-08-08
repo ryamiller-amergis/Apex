@@ -6,6 +6,7 @@ import {
   isWalkthroughPublishNotificationLink,
   WALKTHROUGH_LIST_DEEP_LINK,
 } from '../../shared/types/walkthroughNotification';
+import { isDiagramShareNotificationLink } from '../../shared/types/diagram';
 import styles from './ToastContainer.module.css';
 
 function getTypeLabel(type: NotificationType): string {
@@ -27,6 +28,7 @@ export const ToastContainer: React.FC = () => {
     <div className={styles['toast-container']} {...{ 'data-testid': 'toast-container' }}>
       {toasts.map((toast) => {
         const walkthroughToast = isWalkthroughPublishNotificationLink(toast.link);
+        const diagramShareToast = isDiagramShareNotificationLink(toast.link);
         return (
           <div
             key={toast.id}
@@ -44,7 +46,11 @@ export const ToastContainer: React.FC = () => {
             }}
             style={{ cursor: toast.link ? 'pointer' : 'default' }}
             {...{
-              'data-testid': walkthroughToast ? 'walkthrough-publish-toast' : `toast-${toast.id}`,
+              'data-testid': walkthroughToast
+                ? 'walkthrough-publish-toast'
+                : diagramShareToast
+                  ? 'notification-diagram-share'
+                  : `toast-${toast.id}`,
             }}
           >
             <div className={styles['toast-content']}>

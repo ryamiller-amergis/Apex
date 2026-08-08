@@ -9,6 +9,7 @@ import type {
   ApexFeatureContextPrototype,
   ApexFeatureContextResponse,
 } from '../../shared/types/devWorkbench';
+import { isAppNativeRequirementsProject } from '../../shared/types/devWorkbench';
 import type { DesignPrototypeHistoryEntry } from '../../shared/types/designPrototype';
 
 interface RawBacklogItem {
@@ -146,15 +147,15 @@ function mapPrototype(row: {
 }
 
 /**
- * Loads read-only reference context for one approved Apex PRD feature.
- * Returns null when the project is not Apex, or the PRD/feature is absent.
+ * Loads read-only reference context for one approved app-native PRD feature.
+ * Returns null when the project uses ADO requirements or the feature is absent.
  */
 export async function getApexFeatureContext(
   project: string,
   prdId: string,
   featureId: string,
 ): Promise<ApexFeatureContextResponse | null> {
-  if (project !== 'Apex') return null;
+  if (!isAppNativeRequirementsProject(project)) return null;
 
   const prdRow = await db.query.prds.findFirst({
     where: and(eq(prds.id, prdId), eq(prds.project, project), eq(prds.status, 'approved')),

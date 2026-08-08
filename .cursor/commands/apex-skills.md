@@ -44,7 +44,7 @@ npx @apex/skills install --dry-run
 
 ## Rules
 
-- Run from the repository root so `.apex/foundation/`, `.cursor/skills/`, and `apex-skills.lock.json` land in the right place.
-- Never edit vendored files under `.apex/foundation/**` by hand — they are managed and checksum-verified.
-- Adapters under `.cursor/skills/**` are team-owned; the CLI never overwrites an existing one.
+- Run from the repository root so `.cursor/skills/` and `apex-skills.lock.json` land in the right place.
+- Put project customization **below** `<!-- APEX:END managed -->` in each `SKILL.md`. Content above the fence is replaced on update/bootstrap.
+- Companion files (schemas/templates) under `.cursor/skills/<skill>/` are fully managed and overwritten on update.
 - Report the CLI's output verbatim; do not paraphrase compatibility results.
