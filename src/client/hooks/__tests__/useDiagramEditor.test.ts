@@ -198,8 +198,9 @@ describe('useDiagramEditor — PBI-002 / PBI-003', () => {
     }) as jest.Mock;
 
     const { wrapper } = createWrapper();
+    type EditorProps = { mode: 'new' | 'existing'; diagramId: string | null };
     const { result, rerender } = renderHook(
-      ({ mode, diagramId }: { mode: 'new' | 'existing'; diagramId: string | null }) =>
+      ({ mode, diagramId }: EditorProps) =>
         useDiagramEditor({
           projectId: 'project-a',
           diagramId,
@@ -209,7 +210,7 @@ describe('useDiagramEditor — PBI-002 / PBI-003', () => {
         }),
       {
         wrapper,
-        initialProps: { mode: 'new' as const, diagramId: null as string | null },
+        initialProps: { mode: 'new', diagramId: null } as EditorProps,
       },
     );
 
