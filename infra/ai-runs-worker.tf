@@ -26,6 +26,11 @@ locals {
   ai_runs_image_repository = "apex-ai-runs"
   ai_runs_key_vault_name   = coalesce(var.ai_runs_key_vault_name, "kv-apex-ai-${var.environment}")
 
+  # dirname() follows the Terraform host OS — on Windows it turns
+  # "/home/data/ai-pilot/workspaces" into "\\home\\data\\ai-pilot". Keep the
+  # Unix parent path intact for Container Apps / App Service mounts.
+  ai_runs_data_dir = regex("^(.*)/[^/]+/?$", var.ai_runs_workspace_mount_path)[0]
+
   ai_runs_runner_principal_id = azurerm_user_assigned_identity.ai_runs_runner.principal_id
   ai_runs_key_vault_id = var.ai_runs_key_vault_id != null ? (
     var.ai_runs_key_vault_id
@@ -326,7 +331,7 @@ resource "azurerm_container_app_job" "ai_runs_runner" {
 
       env {
         name  = "AI_PILOT_DATA_DIR"
-        value = dirname(var.ai_runs_workspace_mount_path)
+        value = local.ai_runs_data_dir
       }
 
       dynamic "env" {

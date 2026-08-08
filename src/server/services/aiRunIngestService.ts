@@ -25,6 +25,7 @@ import type {
   AgentRunEventStatus,
   AgentRunEventType,
   AgentRunPhase,
+  ChatMessage,
   SseEvent,
 } from '../../shared/types/chat';
 import {
@@ -88,6 +89,10 @@ export type CompletedArtifactConsumer = (
 
 export interface AiRunIngestDependencies {
   consumeCompletedArtifacts?: CompletedArtifactConsumer;
+  persistThreadMessage?: (
+    threadId: string,
+    message: ChatMessage,
+  ) => Promise<void>;
 }
 
 async function consumeCompletedArtifacts(
@@ -96,6 +101,19 @@ async function consumeCompletedArtifacts(
 ): Promise<void> {
   const { syncOutputToDb } = await import('./chatAgentService');
   await syncOutputToDb(threadId, workspaceDir);
+}
+
+/**
+ * Persist a durable chat message (idempotent by id via `onConflictDoNothing`).
+ * Used for the interactive lane's final assistant message so a full thread
+ * reload — not just event replay — always shows the answer.
+ */
+async function persistThreadMessage(
+  threadId: string,
+  message: ChatMessage,
+): Promise<void> {
+  const { insertMessage } = await import('./chatThreadRepository');
+  await insertMessage(threadId, message);
 }
 
 function sanitizeDetail(value: unknown): string | undefined {
@@ -519,6 +537,26 @@ export async function ingest(
     if (body.kind === 'progress' && meaningfulProgress) {
       const envelope = buildProgressEnvelope(updated, body, nowIso, detail);
       await notifyRunEvent(envelope, { persist: true });
+
+      // Durable FINAL assistant message: the interactive actor streams tokens
+      // ephemerally over Redis, so the answer is only durable once persisted
+      // here. The event copy above makes it replayable on reconnect; this makes
+      // it survive a full thread reload from chat_messages. Idempotent by id.
+      if (existing.lane === INTERACTIVE_LANE && body.event?.type === 'message') {
+        try {
+          await (dependencies.persistThreadMessage ?? persistThreadMessage)(
+            existing.threadId,
+            body.event.message,
+          );
+        } catch (error) {
+          // Already durable + replayable in agent_run_events; a chat_messages
+          // write failure must not reject an otherwise-accepted callback.
+          console.error(
+            '[aiRunIngest] final interactive message persist failed:',
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      }
     }
 
     if (existing.status === 'dispatched' && existing.dispatchedAt) {

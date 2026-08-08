@@ -5,10 +5,10 @@
  *  - persisted thread messages/status are replayed on socket attach
  *  - envelope-less live user/final-agent messages are forwarded
  *  - ordinal resume from lastEventId
- *  - de-dupe by eventId across replay + in-memory + Postgres sources
+ *  - de-dupe by eventId across replay + in-memory + Redis live sources
  *  - replay always precedes live; live buffered during replay is flushed
  *    ordered by (timestamp, sequence)
- *  - Postgres echoes of the local instance are dropped
+ *  - every Redis live envelope is forwarded (no same-instance drop — the hang fix)
  *  - close detaches both subscriptions
  */
 import {
@@ -71,32 +71,31 @@ function makeDeps(
 ): InteractiveGatewayDependencies & {
   emitThread: (env: AgentRunEventEnvelope) => void;
   emitTransient: (event: SseEvent) => void;
-  emitNotify: (env: AgentRunEventEnvelope) => void;
+  emitLive: (env: AgentRunEventEnvelope) => void;
   threadUnsub: jest.Mock;
-  notifyUnsub: jest.Mock;
+  liveUnsub: jest.Mock;
 } {
   let threadCb: (event: SseEvent, env?: AgentRunEventEnvelope) => void = () => {};
-  let notifyCb: (env: AgentRunEventEnvelope) => void = () => {};
+  let liveCb: (env: AgentRunEventEnvelope) => void = () => {};
   const threadUnsub = jest.fn();
-  const notifyUnsub = jest.fn();
+  const liveUnsub = jest.fn();
   return {
     emitThread: (env) => threadCb(env.event as SseEvent, env),
     emitTransient: (event) => threadCb(event),
-    emitNotify: (env) => notifyCb(env),
+    emitLive: (env) => liveCb(env),
     threadUnsub,
-    notifyUnsub,
+    liveUnsub,
     loadThreadSnapshot: jest.fn(async () => null),
     replayRunEvents: jest.fn(async () => []),
     subscribeToThread: (_threadId, cb) => {
       threadCb = cb;
       return threadUnsub;
     },
-    subscribeRunEvents: (_threadId, cb) => {
-      notifyCb = cb;
-      return notifyUnsub;
+    subscribeLiveEvents: (_threadId, cb) => {
+      liveCb = cb;
+      return liveUnsub;
     },
     eventForRunEnvelope: (env) => env.event as InteractiveGatewayFrame['data'],
-    shouldForwardPgRunEvent: (env, local) => env.sourceInstance !== local,
     ...overrides,
   };
 }
@@ -204,9 +203,9 @@ describe('attachInteractiveThreadStream', () => {
 
     await attachInteractiveThreadStream(socket, 't1', { lastEventId: 'e0' }, deps);
 
-    // A Postgres echo re-delivers e2 (dupe) then a fresh e3.
-    deps.emitNotify(envelope('e2', 2));
-    deps.emitNotify(envelope('e3', 3));
+    // A live re-delivery of e2 (dupe) then a fresh e3.
+    deps.emitLive(envelope('e2', 2));
+    deps.emitLive(envelope('e3', 3));
 
     expect(frames.map((f) => f.id)).toEqual(['e1', 'e2', 'e3']);
     expect(deps.replayRunEvents).toHaveBeenCalledWith('t1', 'e0');
@@ -221,7 +220,7 @@ describe('attachInteractiveThreadStream', () => {
 
     // Live events arrive (out of order) WHILE replay is still pending.
     deps.emitThread(envelope('live-b', 6));
-    deps.emitNotify(envelope('live-a', 5));
+    deps.emitLive(envelope('live-a', 5));
 
     // Nothing sent yet — still replaying.
     expect(frames).toHaveLength(0);
@@ -233,7 +232,7 @@ describe('attachInteractiveThreadStream', () => {
     expect(frames.map((f) => f.id)).toEqual(['r1', 'r2', 'live-a', 'live-b']);
   });
 
-  it('drops Postgres echoes originating from the local instance', async () => {
+  it('forwards every live envelope regardless of sourceInstance (hang fix)', async () => {
     const deps = makeDeps();
     const { socket, frames } = makeSocket();
 
@@ -244,10 +243,12 @@ describe('attachInteractiveThreadStream', () => {
       deps,
     );
 
-    deps.emitNotify(envelope('own', 1, { sourceInstance: 'this-node' }));
-    deps.emitNotify(envelope('other', 2, { sourceInstance: 'peer-node' }));
+    // Both a same-named instance and a peer are forwarded — the old
+    // shouldForwardPgRunEvent drop that hung the socket is gone.
+    deps.emitLive(envelope('a', 1, { sourceInstance: 'this-node' }));
+    deps.emitLive(envelope('b', 2, { sourceInstance: 'peer-node' }));
 
-    expect(frames.map((f) => f.id)).toEqual(['other']);
+    expect(frames.map((f) => f.id)).toEqual(['a', 'b']);
   });
 
   it('detaches both subscriptions when the socket closes', async () => {
@@ -258,7 +259,7 @@ describe('attachInteractiveThreadStream', () => {
     triggerClose();
 
     expect(deps.threadUnsub).toHaveBeenCalledTimes(1);
-    expect(deps.notifyUnsub).toHaveBeenCalledTimes(1);
+    expect(deps.liveUnsub).toHaveBeenCalledTimes(1);
 
     // Idempotent: calling the returned detach again does not double-unsubscribe.
     detach();

@@ -5,23 +5,36 @@
  * enforced by {@link PerThreadTurnQueue}: at most one in-flight turn per thread,
  * applied in order (BR-015). Each turn resumes the thread's Cursor session
  * (`Agent.resume` by `cursor_agent_id`) over a WARM grounded checkout reused
- * across turns, runs the shared execution core, and streams BATCHED token/tool/
- * progress events through the fenced runner ingest (reused Phase 1 spine).
+ * across turns and runs the shared execution core.
  *
- * Every callback carries the current dispatch fence; a stale fence aborts the
- * turn before further writes (BR-018). Cancellation is cooperative (ingest
- * response `cancelRequested` → stop the SDK run → post cancel_ack). Durability
- * stays in agent_run_events via ingest; this host never owns the client socket
- * and never logs prompt/snapshot/workspace/secret (BR-016, BR-019).
+ * TRANSPORT SPLIT (real-time refactor):
+ *  - LIVE (ephemeral): token / tool / thinking / phase frames are published to
+ *    the Redis live bus with incremental flushing (~60ms / ~256B) so the client
+ *    streams smoothly. These are NOT persisted.
+ *  - DURABLE (Postgres via fenced ingest): periodic progress heartbeats (refresh
+ *    the reaper clocks + carry `cancelRequested`), the FINAL assistant message
+ *    (so a refresh/replay always shows the full answer), and the `terminal` done.
+ *
+ * Every ingest carries the current dispatch fence; a stale fence aborts the turn
+ * before further writes (BR-018). Cancellation is cooperative (a heartbeat's
+ * ingest response `cancelRequested` → stop the SDK run → post cancel_ack). This
+ * host never owns the client socket and never logs prompt/snapshot/secret
+ * (BR-016, BR-019).
  */
+import { randomUUID } from 'crypto';
 import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle';
 import type {
   AiRunIngestBody,
   AiRunIngestResponse,
 } from '../../../shared/types/aiRunIngest';
-import type { SseEvent } from '../../../shared/types/chat';
+import type {
+  AgentRunEventEnvelope,
+  ChatMessage,
+  SseEvent,
+} from '../../../shared/types/chat';
 import { INTERACTIVE_LANE } from '../../../shared/types/interactiveWorkflow';
 import {
+  createCursorRunEventEnvelope,
   executeCursorExecutionCore,
   type CursorExecutionResult,
 } from '../cursorExecutionCore';
@@ -29,10 +42,19 @@ import type { WorkerCursorExecution } from '../aiRunsWorker/cursorExecution';
 import { AiRunFenceConflictError } from '../aiRunsWorker/callbackClient';
 import { workerTierTelemetry, type WorkerTierTelemetry } from '../workerTierTelemetry';
 import {
-  createInteractiveTokenBatcher,
+  createIncrementalTokenBatcher,
   INTERACTIVE_TOKEN_BATCH_MAX_BYTES,
 } from '../interactiveTokenBatcher';
 import { createPerThreadTurnQueue, type PerThreadTurnQueue } from './perThreadTurnQueue';
+
+/** Default cadence for durable progress heartbeats (clocks + cancel signal). */
+const DEFAULT_HEARTBEAT_MS = 4_000;
+
+/** Publish a live (ephemeral) run-event envelope to the Redis backplane. */
+export type LiveEnvelopePublisher = (
+  threadId: string,
+  envelope: AgentRunEventEnvelope,
+) => Promise<void>;
 
 class InteractiveCancellationObservedError extends Error {
   constructor() {
@@ -81,10 +103,18 @@ export interface InteractiveActorDependencies {
     runId: string,
     body: AiRunIngestBody,
   ): Promise<AiRunIngestResponse>;
+  /**
+   * Publish an ephemeral live envelope to the Redis backplane. Omitted (or a
+   * no-op) when Redis is unconfigured — the client then relies on the durable
+   * final message + `/run-status` safety net.
+   */
+  publishLive?: LiveEnvelopePublisher;
   turnQueue?: PerThreadTurnQueue;
   telemetry?: WorkerTierTelemetry;
   batchMaxBytes?: number;
   sourceInstance?: string;
+  /** Durable progress heartbeat cadence in ms (default 4000). */
+  heartbeatMs?: number;
   now?: () => number;
 }
 
@@ -109,6 +139,9 @@ export function createInteractiveSessionActor(
     dependencies.batchMaxBytes ?? INTERACTIVE_TOKEN_BATCH_MAX_BYTES;
   const sourceInstance =
     dependencies.sourceInstance ?? 'ai-runs-interactive-actor';
+  const heartbeatMs = dependencies.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
+  const publishLive: LiveEnvelopePublisher =
+    dependencies.publishLive ?? (async () => {});
   const now = dependencies.now ?? Date.now;
 
   // Warm session cache keyed by threadId — single activation reuses the
@@ -162,9 +195,30 @@ export function createInteractiveSessionActor(
       }
     };
 
-    const tokenBatcher = createInteractiveTokenBatcher(batchMaxBytes);
+    // Live path: incremental (time/size) flush to Redis for a real-time feel.
+    const liveBatcher = createIncrementalTokenBatcher({
+      maxBytes: batchMaxBytes,
+      now,
+    });
+    let liveSequence = 0;
+    let lastHeartbeatAt = turnStartedAt;
 
-    const postToken = async (text: string): Promise<void> => {
+    const liveEnvelopeFor = (event: SseEvent): AgentRunEventEnvelope =>
+      createCursorRunEventEnvelope({
+        threadId,
+        runId,
+        sourceInstance,
+        sequence: (liveSequence += 1),
+        timestamp: new Date(now()).toISOString(),
+        event,
+      });
+
+    // Ephemeral live fan-out; best effort — durability rides ingest/Postgres.
+    const publishLiveEvent = async (event: SseEvent): Promise<void> => {
+      await publishLive(threadId, liveEnvelopeFor(event)).catch(() => {});
+    };
+
+    const emitTokenBatch = async (text: string): Promise<void> => {
       if (firstTokenAt === null) {
         firstTokenAt = now();
         try {
@@ -176,13 +230,24 @@ export function createInteractiveSessionActor(
           // Telemetry must never affect the turn.
         }
       }
+      await publishLiveEvent({ type: 'token', text });
+    };
+
+    const publishTokenBatches = async (batches: string[]): Promise<void> => {
+      for (const batch of batches) await emitTokenBatch(batch);
+    };
+
+    // Durable progress heartbeat: refreshes the reaper clocks and surfaces
+    // `cancelRequested`. Throttled so token cadence stays on the Redis path.
+    const maybeHeartbeat = async (): Promise<void> => {
+      const at = now();
+      if (at - lastHeartbeatAt < heartbeatMs) return;
+      lastHeartbeatAt = at;
       await post({
         dispatchMessageId,
         kind: 'progress',
         phase: 'implementation',
         status: 'running',
-        detail: undefined,
-        event: { type: 'token', text },
       });
     };
 
@@ -214,19 +279,14 @@ export function createInteractiveSessionActor(
                 throw new InteractiveCancellationObservedError();
               }
               if (event.type === 'token') {
-                // Coalesce tokens to respect the NOTIFY payload limit (BR-016).
-                for (const batch of tokenBatcher.push(event.text)) {
-                  await postToken(batch);
-                }
-                return;
+                // Real-time: incremental flush to Redis (no NOTIFY cap).
+                await publishTokenBatches(liveBatcher.push(event.text, now()));
+              } else {
+                // tool / thinking / phase → ephemeral live fan-out.
+                await publishLiveEvent(event);
               }
-              await post({
-                dispatchMessageId,
-                kind: 'progress',
-                phase: 'implementation',
-                status: 'running',
-                event,
-              });
+              // Durable heartbeat keeps clocks fresh + carries cancellation.
+              await maybeHeartbeat();
             },
           },
           hooks: {
@@ -240,9 +300,9 @@ export function createInteractiveSessionActor(
           nextSequence: () => ++sequence,
         });
       } finally {
-        const tail = tokenBatcher.flush();
+        const tail = liveBatcher.flush();
         if (tail && !fenceConflict && !cancellationRequested) {
-          await postToken(tail).catch(() => {});
+          await emitTokenBatch(tail).catch(() => {});
         }
       }
 
@@ -251,12 +311,35 @@ export function createInteractiveSessionActor(
         throw new Error('Interactive turn did not finish successfully');
       }
 
+      // Durable FINAL assistant message so a refresh/replay always shows the
+      // full answer. Also delivered live with the SAME message.id, so the
+      // client de-dupes the live copy against the durable replay copy.
+      const finalText = result.text;
+      if (finalText && finalText.trim().length > 0) {
+        const finalMessage: ChatMessage = {
+          id: randomUUID(),
+          role: 'agent',
+          text: finalText,
+          ts: new Date(now()).toISOString(),
+        };
+        await publishLiveEvent({ type: 'message', message: finalMessage });
+        await post({
+          dispatchMessageId,
+          kind: 'progress',
+          event: { type: 'message', message: finalMessage },
+        });
+      }
+
       await post({
         dispatchMessageId,
         kind: 'terminal',
         status: 'completed',
         artifactsFlushed: true,
       });
+      // Live terminal so the socket clears the spinner immediately; the durable
+      // `done` (agent_run_events) covers reconnect replay, and the client's
+      // `/run-status` poll is the belt-and-suspenders safety net.
+      await publishLiveEvent({ type: 'done', runId });
 
       try {
         telemetry.interactiveTurn(telemetryContext, now() - turnStartedAt);
@@ -280,8 +363,18 @@ export function createInteractiveSessionActor(
             detail: 'Interactive turn stopped',
           })
           .catch(() => {});
+        // Clear the live spinner (durable cancel/done covers replay).
+        await publishLiveEvent({ type: 'done', runId }).catch(() => {});
         return { status: 'cancelled' };
       }
+      // Live failure so the socket surfaces the error and stops spinning; the
+      // durable failed terminal + `done` (below, via ingest) cover replay.
+      await publishLiveEvent({
+        type: 'error',
+        error: 'Interactive turn failed',
+        errorCode: 'fatal',
+      }).catch(() => {});
+      await publishLiveEvent({ type: 'done', runId }).catch(() => {});
       await post({
         dispatchMessageId,
         kind: 'terminal',

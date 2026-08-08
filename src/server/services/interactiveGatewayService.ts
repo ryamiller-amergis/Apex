@@ -8,11 +8,18 @@
  *
  *   1. Replay durable `agent_run_events` from the client's last acknowledged
  *      ordinal (`lastEventId`) — the client resumes with no gaps or dupes.
- *   2. Subscribe to the in-memory owner stream AND the cross-worker Postgres
- *      LISTEN/NOTIFY fan-out.
+ *   2. Subscribe to the in-memory owner stream (this instance's transient thread
+ *      events, e.g. the just-persisted user message) AND the Redis live bus,
+ *      onto which the ACA actor tier publishes ephemeral token/tool/progress
+ *      frames. Live push rides Redis; durability rides Postgres.
  *   3. Buffer live events during replay, then flush them ordered by
  *      (timestamp, sequence) so replay always precedes live (VT-04).
  *   4. De-duplicate by `eventId` across replay + both live sources.
+ *
+ * NOTE: the actor runs in a DIFFERENT process (ACA) than this gateway (App
+ * Service), so there is no same-instance echo to drop. The historical
+ * `shouldForwardPgRunEvent` same-instance filter — which silently dropped every
+ * co-located pg_notify frame and hung the socket — is intentionally gone.
  *
  * Transport specifics (ws handshake, auth, ping/pong) live in the host mount;
  * this core is socket-agnostic and never inspects prompt/snapshot content
@@ -24,19 +31,13 @@ import type {
   ChatThreadStatus,
   SseEvent,
 } from '../../shared/types/chat';
-import {
-  replayRunEvents as defaultReplayRunEvents,
-  subscribeRunEvents as defaultSubscribeRunEvents,
-  RUN_EVENT_SOURCE_INSTANCE,
-} from './pgNotifyService';
+import { replayRunEvents as defaultReplayRunEvents } from './pgNotifyService';
+import { interactiveLiveBus } from './interactiveLiveBus';
 import {
   getThread as defaultGetThread,
   subscribeToThread as defaultSubscribeToThread,
 } from './chatAgentService';
-import {
-  eventForRunEnvelope as defaultEventForRunEnvelope,
-  shouldForwardPgRunEvent as defaultShouldForwardPgRunEvent,
-} from '../routes/chat';
+import { eventForRunEnvelope as defaultEventForRunEnvelope } from '../routes/chat';
 
 /** Minimal socket contract satisfied by a `ws` WebSocket (and test fakes). */
 export interface InteractiveGatewaySocket {
@@ -62,7 +63,10 @@ export interface InteractiveThreadSnapshot {
 export interface AttachInteractiveThreadOptions {
   /** Last durable ordinal the client acknowledged (resume point). */
   lastEventId?: string;
-  /** Local source id used to drop Postgres echoes of our own events. */
+  /**
+   * Local source id. Retained for API compatibility; the live path no longer
+   * filters by instance (the actor is a different process), so this is unused.
+   */
   localInstance?: string;
 }
 
@@ -78,15 +82,17 @@ export interface InteractiveGatewayDependencies {
     threadId: string,
     callback: (event: SseEvent, envelope?: AgentRunEventEnvelope) => void,
   ) => () => void;
-  subscribeRunEvents: (
+  /**
+   * Subscribe to the thread's live run-event fan-out (Redis). The actor tier
+   * publishes ephemeral token/tool/progress envelopes here; durability rides
+   * Postgres `replayRunEvents`. When Redis is unconfigured this is a no-op and
+   * the socket relies on replay + the client's `/run-status` safety net.
+   */
+  subscribeLiveEvents: (
     threadId: string,
     callback: (envelope: AgentRunEventEnvelope) => void,
   ) => () => void;
   eventForRunEnvelope: (envelope: AgentRunEventEnvelope) => SseEvent;
-  shouldForwardPgRunEvent: (
-    envelope: AgentRunEventEnvelope,
-    localInstance?: string,
-  ) => boolean;
 }
 
 const defaultDependencies: InteractiveGatewayDependencies = {
@@ -98,9 +104,9 @@ const defaultDependencies: InteractiveGatewayDependencies = {
   },
   replayRunEvents: defaultReplayRunEvents,
   subscribeToThread: defaultSubscribeToThread,
-  subscribeRunEvents: defaultSubscribeRunEvents,
+  subscribeLiveEvents: (threadId, callback) =>
+    interactiveLiveBus.subscribe(threadId, callback),
   eventForRunEnvelope: defaultEventForRunEnvelope,
-  shouldForwardPgRunEvent: defaultShouldForwardPgRunEvent,
 };
 
 /**
@@ -114,7 +120,7 @@ export async function attachInteractiveThreadStream(
   options: AttachInteractiveThreadOptions = {},
   dependencies: InteractiveGatewayDependencies = defaultDependencies,
 ): Promise<() => void> {
-  const localInstance = options.localInstance ?? RUN_EVENT_SOURCE_INSTANCE;
+  void options.localInstance; // retained for API compatibility; unused live-path filter
   const sentEventIds = new Set<string>();
   const sentMessageIds = new Set<string>();
   let replaying = true;
@@ -177,12 +183,12 @@ export async function attachInteractiveThreadStream(
     threadId,
     (event, envelope) => queueOrSend(event, envelope),
   );
-  const unsubscribeNotify = dependencies.subscribeRunEvents(
+  // Live push from the ACA actor tier over Redis. No same-instance filter: the
+  // actor runs in a different process, so every live envelope is forwarded and
+  // de-duplicated by `eventId` against replay (root-cause fix for the hang).
+  const unsubscribeLive = dependencies.subscribeLiveEvents(
     threadId,
     (envelope) => {
-      // The owner already delivered this via the in-memory subscriber; the
-      // Postgres echo is only for OTHER workers.
-      if (!dependencies.shouldForwardPgRunEvent(envelope, localInstance)) return;
       queueOrSend(dependencies.eventForRunEnvelope(envelope), envelope);
     },
   );
@@ -191,7 +197,7 @@ export async function attachInteractiveThreadStream(
     if (detached) return;
     detached = true;
     unsubscribeThread();
-    unsubscribeNotify();
+    unsubscribeLive();
   };
   socket.onClose(detach);
 

@@ -26,6 +26,7 @@ import { DefaultAzureCredential } from '@azure/identity';
 import { createAiRunsCallbackClient } from '../aiRunsWorker/callbackClient';
 import { openLocalCheckout } from '../aiRunsWorker/workspace';
 import { resolveStaticAiRunnerCallbackToken } from '../aiRunnerCallbackAuthConfig';
+import { interactiveLiveBus } from '../interactiveLiveBus';
 import type { LocalCheckoutReader } from '../localCheckoutReader';
 import { createInteractiveCursorExecution } from './interactiveCursorExecution';
 import {
@@ -189,7 +190,13 @@ export async function main(): Promise<void> {
       ),
     postIngest: (projectId, runId, body) =>
       callback.postIngest(projectId, runId, body),
+    // Live token/tool/phase fan-out over Redis (ephemeral). No-op when Redis
+    // is unconfigured — durability then rides ingest + client safety-net poll.
+    publishLive: (threadId, envelope) =>
+      interactiveLiveBus.publish(threadId, envelope),
   });
+  // Eagerly connect the publisher so first-token latency isn't paid lazily.
+  await interactiveLiveBus.init();
   setInteractiveActorRuntime({ logic, callback });
 
   const server = new DaprServer({

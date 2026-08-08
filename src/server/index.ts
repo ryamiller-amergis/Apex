@@ -46,6 +46,10 @@ import {
   stopAdmissionGovernorScheduler,
 } from './services/admissionGovernorScheduler';
 import { initPgNotify, shutdownPgNotify } from './services/pgNotifyService';
+import {
+  initInteractiveLiveBus,
+  shutdownInteractiveLiveBus,
+} from './services/interactiveLiveBus';
 import platformAdminRouter from './routes/platformAdmin';
 import devWorkbenchRoutes from './routes/devWorkbench';
 import standupRouter from './routes/standup';
@@ -334,6 +338,14 @@ const server = app.listen(PORT, () => {
       sessionMiddleware,
       passportInitialize: passportInitializeMiddleware,
       passportSession: passportSessionMiddleware,
+    });
+    // FEAT-007: subscribe the gateway to the Redis live bus (ephemeral actor→
+    // client fan-out). No-op when REDIS_* is unset — replay + poll cover it.
+    initInteractiveLiveBus().catch((err) =>
+      console.error('[startup] initInteractiveLiveBus failed:', err.message),
+    );
+    server.once('close', () => {
+      void shutdownInteractiveLiveBus();
     });
     console.log('[FEAT-007] Interactive WebSocket gateway mounted');
   }

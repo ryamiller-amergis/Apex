@@ -580,3 +580,71 @@ describe('aiRunIngestService durable terminal completion', () => {
     expect(mockMarkTerminal).not.toHaveBeenCalled();
   });
 });
+
+describe('aiRunIngestService durable final interactive message', () => {
+  const finalMessage = {
+    id: 'msg-final',
+    role: 'agent' as const,
+    text: 'here is the full answer',
+    ts: '2026-08-08T00:00:00.000Z',
+  };
+
+  it('persists the interactive assistant message durably alongside the event', async () => {
+    mockFindFirst.mockResolvedValue(baseRow({ lane: 'ai-runs-interactive' }));
+    const persistThreadMessage = jest.fn().mockResolvedValue(undefined);
+
+    const result = await ingest(
+      'project-1',
+      'run-1',
+      {
+        dispatchMessageId: 'dispatch-current',
+        kind: 'progress',
+        event: { type: 'message', message: finalMessage },
+      },
+      { persistThreadMessage },
+    );
+
+    expect(result.run).toBeDefined();
+    expect(mockNotifyRunEvent).toHaveBeenCalled(); // replayable event copy
+    expect(persistThreadMessage).toHaveBeenCalledWith('thread-1', finalMessage);
+  });
+
+  it('does not persist chat messages for the background lane', async () => {
+    mockFindFirst.mockResolvedValue(baseRow({ lane: 'background' }));
+    const persistThreadMessage = jest.fn().mockResolvedValue(undefined);
+
+    await ingest(
+      'project-1',
+      'run-1',
+      {
+        dispatchMessageId: 'dispatch-current',
+        kind: 'progress',
+        event: { type: 'message', message: finalMessage },
+      },
+      { persistThreadMessage },
+    );
+
+    expect(persistThreadMessage).not.toHaveBeenCalled();
+  });
+
+  it('accepts the callback even when durable message persistence fails', async () => {
+    mockFindFirst.mockResolvedValue(baseRow({ lane: 'ai-runs-interactive' }));
+    const persistThreadMessage = jest
+      .fn()
+      .mockRejectedValue(new Error('db down'));
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(
+      ingest(
+        'project-1',
+        'run-1',
+        {
+          dispatchMessageId: 'dispatch-current',
+          kind: 'progress',
+          event: { type: 'message', message: finalMessage },
+        },
+        { persistThreadMessage },
+      ),
+    ).resolves.toBeDefined();
+  });
+});

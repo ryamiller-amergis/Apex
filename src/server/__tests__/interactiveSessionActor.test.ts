@@ -4,9 +4,11 @@
  * Verifies the host-level invariants that are unit-testable without Dapr/Redis:
  *  - per-thread single-activation turn serialization (BR-015, VT-03 substitute)
  *  - warm grounded checkout reuse + Agent.resume across turns
- *  - batched token progress + first-token/turn telemetry (TBI-011, TBI-012)
- *  - cooperative cancellation via ingest `cancelRequested` (BR-018)
+ *  - LIVE token fan-out to Redis (ephemeral) + first-token/turn telemetry
+ *  - DURABLE final assistant message via ingest, delivered live with same id
+ *  - cooperative cancellation via a heartbeat's ingest `cancelRequested` (BR-018)
  *  - stale-fence abort before further writes (BR-018)
+ *  - graceful completion when Redis (publishLive) is unconfigured
  */
 import { AiRunFenceConflictError } from '../services/aiRunsWorker/callbackClient';
 import type {
@@ -22,6 +24,7 @@ import {
 import type { WorkerTierTelemetry } from '../services/workerTierTelemetry';
 import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
 import type { AiRunIngestBody, AiRunIngestResponse } from '../../shared/types/aiRunIngest';
+import type { AgentRunEventEnvelope } from '../../shared/types/chat';
 
 function makeSnapshot(threadId = 't1'): ExecutionSnapshot {
   return {
@@ -98,10 +101,29 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve };
 }
 
+interface LiveCapture {
+  publishLive: (
+    threadId: string,
+    envelope: AgentRunEventEnvelope,
+  ) => Promise<void>;
+  live: AgentRunEventEnvelope[];
+}
+
+function captureLive(): LiveCapture {
+  const live: AgentRunEventEnvelope[] = [];
+  return {
+    live,
+    publishLive: async (_threadId, envelope) => {
+      live.push(envelope);
+    },
+  };
+}
+
 describe('interactiveSessionActor', () => {
-  it('streams a turn to completion with batched token + turn telemetry', async () => {
+  it('streams tokens live to Redis (ephemeral) and posts the durable final message + terminal', async () => {
     const posted: AiRunIngestBody[] = [];
     const telemetry = makeTelemetry();
+    const { publishLive, live } = captureLive();
     const deps: InteractiveActorDependencies = {
       openWarmCheckout: jest.fn(async () => ({ workspacePath: '/warm/checkout' })),
       createExecution: jest.fn(async () => makeExecution({ tokens: ['hi ', 'there'] })),
@@ -109,6 +131,7 @@ describe('interactiveSessionActor', () => {
         posted.push(body);
         return { ok: true, cancelRequested: false };
       }),
+      publishLive,
       telemetry,
     };
 
@@ -116,14 +139,30 @@ describe('interactiveSessionActor', () => {
     const outcome = await actor.handleTurn(makeRequest());
 
     expect(outcome.status).toBe('completed');
-    // Tokens are coalesced into one batched progress post (BR-016).
-    const tokenPosts = posted.filter(
-      (b) => b.kind === 'progress' && b.event?.type === 'token',
+
+    // Tokens ride Redis (ephemeral) — NOT durable ingest.
+    expect(posted.some((b) => b.kind === 'progress' && b.event?.type === 'token')).toBe(
+      false,
     );
-    expect(tokenPosts).toHaveLength(1);
-    expect(
-      (tokenPosts[0] as { event: { type: 'token'; text: string } }).event.text,
-    ).toBe('hi there');
+    const liveTokens = live.filter((e) => e.event.type === 'token');
+    expect(liveTokens.map((e) => (e.event as { text: string }).text).join('')).toBe(
+      'hi there',
+    );
+
+    // Final assistant message is durable (ingest) AND delivered live with the
+    // SAME message id so the client de-dupes the live copy vs replay.
+    const durableMessage = posted.find(
+      (b) => b.kind === 'progress' && b.event?.type === 'message',
+    );
+    const liveMessage = live.find((e) => e.event.type === 'message');
+    expect(durableMessage).toBeDefined();
+    expect(liveMessage).toBeDefined();
+    const durableId = (durableMessage as { event: { message: { id: string; text: string } } })
+      .event.message;
+    const liveId = (liveMessage!.event as { message: { id: string } }).message;
+    expect(durableId.text).toBe('hi there');
+    expect(liveId.id).toBe(durableId.id);
+
     expect(posted.some((b) => b.kind === 'terminal' && b.status === 'completed')).toBe(
       true,
     );
@@ -131,15 +170,42 @@ describe('interactiveSessionActor', () => {
     expect(telemetry.interactiveTurn).toHaveBeenCalledTimes(1);
   });
 
-  it('cooperatively cancels the turn when ingest reports cancelRequested', async () => {
+  it('completes durably when Redis (publishLive) is unconfigured', async () => {
+    const posted: AiRunIngestBody[] = [];
+    const deps: InteractiveActorDependencies = {
+      openWarmCheckout: jest.fn(async () => ({ workspacePath: '/warm/checkout' })),
+      createExecution: jest.fn(async () => makeExecution({ tokens: ['answer'] })),
+      postIngest: jest.fn(async (_p, _r, body): Promise<AiRunIngestResponse> => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      }),
+      // no publishLive → default no-op fan-out
+    };
+
+    const actor = createInteractiveSessionActor(deps);
+    const outcome = await actor.handleTurn(makeRequest());
+
+    expect(outcome.status).toBe('completed');
+    // The durable answer + terminal still land even with no live bus.
+    expect(
+      posted.some((b) => b.kind === 'progress' && b.event?.type === 'message'),
+    ).toBe(true);
+    expect(posted.some((b) => b.kind === 'terminal' && b.status === 'completed')).toBe(
+      true,
+    );
+  });
+
+  it('cooperatively cancels the turn when a heartbeat reports cancelRequested', async () => {
     const posted: AiRunIngestBody[] = [];
     const onCancel = jest.fn();
     const deps: InteractiveActorDependencies = {
       openWarmCheckout: jest.fn(async () => ({ workspacePath: '/warm/checkout' })),
       createExecution: jest.fn(async () => makeExecution({ toolCall: true, onCancel })),
+      // heartbeat on every sink event so cancellation is observed immediately.
+      heartbeatMs: 0,
       postIngest: jest.fn(async (_p, _r, body): Promise<AiRunIngestResponse> => {
         posted.push(body);
-        // First progress callback observes an operator/user stop.
+        // A progress heartbeat surfaces an operator/user stop.
         return { ok: true, cancelRequested: body.kind === 'progress' };
       }),
     };
@@ -161,6 +227,7 @@ describe('interactiveSessionActor', () => {
     const deps: InteractiveActorDependencies = {
       openWarmCheckout: jest.fn(async () => ({ workspacePath: '/warm/checkout' })),
       createExecution: jest.fn(async () => makeExecution({ toolCall: true, onCancel })),
+      heartbeatMs: 0,
       postIngest: jest.fn(async (_p, _r, body): Promise<AiRunIngestResponse> => {
         if (body.kind === 'progress') {
           throw new AiRunFenceConflictError('stale dispatch fence');

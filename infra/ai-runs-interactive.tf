@@ -145,6 +145,25 @@ resource "azurerm_container_app" "ai_runs_interactive" {
     }
   }
 
+  # Short-term static ingest bridge (same token as the background Job). Required
+  # while enable_ai_runs_entra_app is false; the actor host prefers this over MI.
+  dynamic "secret" {
+    for_each = var.ai_runs_runner_callback_token != null && var.ai_runs_runner_callback_token != "" ? [1] : []
+    content {
+      name  = "ai-runs-runner-callback-token"
+      value = var.ai_runs_runner_callback_token
+    }
+  }
+
+  # Raw Redis primary key for the ioredis live-bus publisher (ephemeral live
+  # fan-out). Distinct from the Dapr-managed redis-password above; the actor
+  # publishes token/tool frames directly to Redis so the socket-holding App
+  # Service gateway streams them in real time (durability stays in Postgres).
+  secret {
+    name  = "redis-key"
+    value = azurerm_redis_cache.ai_runs_interactive[0].primary_access_key
+  }
+
   # Managed Dapr — actor runtime + pub/sub backplane (in-cluster, mTLS).
   dapr {
     app_id       = local.ai_runs_interactive_dapr_app_id
@@ -201,7 +220,7 @@ resource "azurerm_container_app" "ai_runs_interactive" {
       }
       env {
         name  = "AI_PILOT_DATA_DIR"
-        value = dirname(var.ai_runs_workspace_mount_path)
+        value = local.ai_runs_data_dir
       }
       env {
         name  = "AI_RUNS_INTERACTIVE_RESERVED"
@@ -228,6 +247,22 @@ resource "azurerm_container_app" "ai_runs_interactive" {
         value = "interactive-actor-state"
       }
 
+      # Raw ioredis live-bus connection (TLS 6380). Consumed by
+      # interactiveLiveBus.resolveRedisConfig — REDIS_HOST + REDIS_SSL_PORT +
+      # REDIS_KEY imply a TLS connection. Ephemeral live fan-out only.
+      env {
+        name  = "REDIS_HOST"
+        value = azurerm_redis_cache.ai_runs_interactive[0].hostname
+      }
+      env {
+        name  = "REDIS_SSL_PORT"
+        value = tostring(azurerm_redis_cache.ai_runs_interactive[0].ssl_port)
+      }
+      env {
+        name        = "REDIS_KEY"
+        secret_name = "redis-key"
+      }
+
       dynamic "env" {
         for_each = var.enable_ai_runs_entra_app || var.ai_runs_callback_token_audience != null ? [1] : []
         content {
@@ -241,6 +276,25 @@ resource "azurerm_container_app" "ai_runs_interactive" {
         content {
           name        = "CURSOR_API_KEY"
           secret_name = "cursor-api-key"
+        }
+      }
+
+      # Opt the container (NODE_ENV=production) into the short-term static
+      # callback bridge — without this flag resolveStaticAiRunnerCallbackToken
+      # ignores AI_RUNS_RUNNER_CALLBACK_TOKEN in production runtimes.
+      dynamic "env" {
+        for_each = var.ai_runs_runner_callback_token != null && var.ai_runs_runner_callback_token != "" ? [1] : []
+        content {
+          name  = "AI_RUNS_ALLOW_STATIC_CALLBACK_TOKEN"
+          value = "true"
+        }
+      }
+
+      dynamic "env" {
+        for_each = var.ai_runs_runner_callback_token != null && var.ai_runs_runner_callback_token != "" ? [1] : []
+        content {
+          name        = "AI_RUNS_RUNNER_CALLBACK_TOKEN"
+          secret_name = "ai-runs-runner-callback-token"
         }
       }
     }

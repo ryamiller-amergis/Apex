@@ -62,6 +62,99 @@ export function batchTokensForNotify(
 }
 
 /**
+ * Redis live-path flush thresholds. The live fan-out has no ~8 KB `NOTIFY` cap,
+ * so tokens are flushed incrementally for a real-time feel: whichever of a small
+ * byte budget or a short time window comes first. The hard {@link
+ * INTERACTIVE_TOKEN_BATCH_MAX_BYTES} cap is still respected so a single batch
+ * never grows unbounded.
+ */
+export const INTERACTIVE_LIVE_FLUSH_BYTES = 256;
+export const INTERACTIVE_LIVE_FLUSH_MS = 60;
+
+export interface IncrementalTokenBatcher {
+  /** Buffer a token; returns any batch(es) ready to flush now (ordered). */
+  push(token: string, nowMs?: number): string[];
+  /** Drain the buffered tail (turn end / idle-timer flush). */
+  flush(): string | null;
+  /** True when a time-based flush is due — for an idle timer tick with no new token. */
+  dueForFlush(nowMs: number): boolean;
+}
+
+export interface IncrementalTokenBatcherOptions {
+  /** Emit once the buffer reaches this many bytes (default 256). */
+  flushBytes?: number;
+  /** Emit a trickle of small tokens after this many ms (default 60). */
+  flushIntervalMs?: number;
+  /** Hard per-batch byte cap (default {@link INTERACTIVE_TOKEN_BATCH_MAX_BYTES}). */
+  maxBytes?: number;
+  /** Injectable clock for deterministic tests. */
+  now?: () => number;
+}
+
+/**
+ * Stateful incremental batcher for the Redis live path. Flushes on the earlier
+ * of a small byte budget or a short time window so tokens stream smoothly, while
+ * never emitting a batch larger than `maxBytes` and never splitting a UTF-8
+ * sequence across a boundary.
+ */
+export function createIncrementalTokenBatcher(
+  options: IncrementalTokenBatcherOptions = {},
+): IncrementalTokenBatcher {
+  const flushBytes = options.flushBytes ?? INTERACTIVE_LIVE_FLUSH_BYTES;
+  const flushIntervalMs = options.flushIntervalMs ?? INTERACTIVE_LIVE_FLUSH_MS;
+  const maxBytes = options.maxBytes ?? INTERACTIVE_TOKEN_BATCH_MAX_BYTES;
+  const now = options.now ?? Date.now;
+
+  let current = '';
+  let lastEmitAt: number | null = null;
+
+  const emit = (batches: string[], at: number): void => {
+    if (!current) return;
+    batches.push(current);
+    current = '';
+    lastEmitAt = at;
+  };
+
+  return {
+    push(token: string, nowMs: number = now()): string[] {
+      if (!token) return [];
+      if (lastEmitAt === null) lastEmitAt = nowMs;
+      const batches: string[] = [];
+      for (const chunk of chunkByBytes(token, maxBytes)) {
+        // Respect the hard cap before appending the next chunk.
+        if (current && Buffer.byteLength(current + chunk) > maxBytes) {
+          emit(batches, nowMs);
+        }
+        current += chunk;
+        // Size-based incremental flush.
+        if (Buffer.byteLength(current) >= flushBytes) {
+          emit(batches, nowMs);
+        }
+      }
+      // Time-based flush for a trickle of small tokens.
+      if (current && lastEmitAt !== null && nowMs - lastEmitAt >= flushIntervalMs) {
+        emit(batches, nowMs);
+      }
+      return batches;
+    },
+    flush(): string | null {
+      if (!current) return null;
+      const tail = current;
+      current = '';
+      lastEmitAt = now();
+      return tail;
+    },
+    dueForFlush(nowMs: number): boolean {
+      return (
+        Boolean(current)
+        && lastEmitAt !== null
+        && nowMs - lastEmitAt >= flushIntervalMs
+      );
+    },
+  };
+}
+
+/**
  * Stateful batcher for a live stream: `push` returns any completed batches that
  * must be flushed before the new token; `flush` drains the tail at turn end.
  */
