@@ -6,13 +6,16 @@
 name: Deploy Dev (Quick)
 run-name: >-
   Deploy Dev (Quick) → ${{
-    github.event_name == 'pull_request'
+    startsWith(github.event_name, 'pull_request')
       && format('{0} (#{1})', github.event.pull_request.head.ref, github.event.pull_request.number)
       || (inputs.git_ref != '' && inputs.git_ref || github.ref_name)
   }}
 
 on:
-  pull_request:
+  # pull_request_target uses the workflow file from the PR base (main), so the
+  # labeled trigger works even when the feature branch does not contain this file.
+  # We still deploy github.event.pull_request.head.sha (never main's tree).
+  pull_request_target:
     types: [labeled, synchronize, reopened]
   workflow_dispatch:
     inputs:
@@ -39,7 +42,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (
-        github.event_name == 'pull_request' &&
+        startsWith(github.event_name, 'pull_request') &&
         (
           (github.event.action == 'labeled' && github.event.label.name == 'quick-dev-deploy') ||
           (
@@ -55,7 +58,7 @@ jobs:
     steps:
       - id: out
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
+          if [[ "${{ github.event_name }}" == pull_request* ]]; then
             REF='${{ github.event.pull_request.head.sha }}'
             LABEL='${{ github.event.pull_request.head.ref }} (PR #${{ github.event.pull_request.number }})'
             MIGRATE=true
@@ -82,6 +85,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ needs.resolve.outputs.deploy_ref }}
           fetch-depth: 0
 
@@ -132,6 +136,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ needs.resolve.outputs.deploy_ref }}
           fetch-depth: 0
 
@@ -165,6 +170,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ needs.resolve.outputs.deploy_ref }}
           fetch-depth: 0
 
