@@ -81,4 +81,73 @@ describe('TBI-007 groundingEvictionService', () => {
     await expect(fs.stat(inactiveRecentPath)).resolves.toBeDefined();
     await expect(fs.readFile(durableBundle, 'utf8')).resolves.toBe('durable');
   });
+
+  it('TBI-006 DoD-3 / PBI-005 BR-008 / VT-07 retains non-terminal and terminal-but-unconsumed active groundings and removes consumed inactive stale workspace', async () => {
+    // Arrange: active grounding is the durable protection signal for both
+    // non-terminal and terminal runs whose artifacts are not yet consumed.
+    const nonTerminalGrounding: RunGrounding = {
+      ...activeGrounding,
+      id: 'grounding-non-terminal',
+      runId: 'run-non-terminal',
+    };
+    const terminalUnconsumedGrounding: RunGrounding = {
+      ...activeGrounding,
+      id: 'grounding-terminal-unconsumed',
+      runId: 'run-terminal-unconsumed',
+    };
+    const consumedGrounding: RunGrounding = {
+      ...activeGrounding,
+      id: 'grounding-consumed',
+      runId: 'run-consumed',
+      isActive: false,
+    };
+    const nonTerminalPath = resolveRunGroundingWorkspacePath(
+      nonTerminalGrounding,
+      nonTerminalGrounding,
+      dataRoot,
+    );
+    const terminalUnconsumedPath = resolveRunGroundingWorkspacePath(
+      terminalUnconsumedGrounding,
+      terminalUnconsumedGrounding,
+      dataRoot,
+    );
+    const consumedPath = resolveRunGroundingWorkspacePath(
+      consumedGrounding,
+      consumedGrounding,
+      dataRoot,
+    );
+    await Promise.all([
+      fs.mkdir(nonTerminalPath, { recursive: true }),
+      fs.mkdir(terminalUnconsumedPath, { recursive: true }),
+      fs.mkdir(consumedPath, { recursive: true }),
+    ]);
+    const staleTime = new Date(NOW - 30 * 60 * 1000 - 1);
+    await Promise.all([
+      fs.utimes(nonTerminalPath, staleTime, staleTime),
+      fs.utimes(terminalUnconsumedPath, staleTime, staleTime),
+      fs.utimes(consumedPath, staleTime, staleTime),
+    ]);
+    const listActiveGroundings = jest.fn().mockResolvedValue([
+      nonTerminalGrounding,
+      terminalUnconsumedGrounding,
+    ]);
+    const service = createGroundingEvictionService({
+      dataRoot,
+      now: () => NOW,
+      listActiveGroundings,
+    });
+
+    // Act
+    const result = await service.evictIdle();
+
+    // Assert: persistThenMarkTerminalInactive makes the consumed workspace
+    // eligible by removing it from the active-grounding set.
+    expect(listActiveGroundings).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ scanned: 3, evicted: 1, protected: 2 });
+    await expect(fs.stat(nonTerminalPath)).resolves.toBeDefined();
+    await expect(fs.stat(terminalUnconsumedPath)).resolves.toBeDefined();
+    await expect(fs.stat(consumedPath)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
 });

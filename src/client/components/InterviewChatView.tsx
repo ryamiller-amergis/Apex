@@ -810,6 +810,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     isRetrying,
     retryReason,
     progressLabel,
+    progressPhase,
     isPreparing: isPreparingInterview,
     hasPreparationError,
     isInteractionBusy,
@@ -1245,19 +1246,32 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
           {isPreparingInterview && (
             <div
               className={styles.preparationState}
-              role="status"
-              aria-live="polite"
               {...{ 'data-testid': 'interview-preparation-state' }}
             >
               <div className={styles.preparationSpinner} />
               <h2 className={styles.preparationTitle}>Preparing your interview</h2>
-              <p className={styles.preparationDetail}>
-                {progressLabel
-                  ?? (isChatThreadError
-                    ? 'The interview service is reconnecting after a temporary interruption…'
-                    : isChatThreadLoading
-                      ? 'Connecting to the interview service…'
-                      : 'Getting the latest repository requirements so your interview starts with current context…')}
+              <p
+                className={styles.preparationDetail}
+                role="status"
+                aria-live="polite"
+                {...{ 'data-testid': 'agent-run-status-label' }}
+              >
+                {progressPhase === 'queued' ? (
+                  <span {...{ 'data-testid': 'agent-run-status-queued' }}>
+                    Queued — waiting for available worker
+                  </span>
+                ) : progressPhase === 'dispatched' ? (
+                  <span {...{ 'data-testid': 'agent-run-status-dispatched' }}>
+                    Starting…
+                  </span>
+                ) : (
+                  progressLabel
+                    ?? (isChatThreadError
+                      ? 'The interview service is reconnecting after a temporary interruption…'
+                      : isChatThreadLoading
+                        ? 'Connecting to the interview service…'
+                        : 'Getting the latest repository requirements so your interview starts with current context…')
+                )}
               </p>
             </div>
           )}

@@ -96,6 +96,27 @@ describe('repoCacheService', () => {
     );
   });
 
+  it('uses GITHUB_ORG instead of the Apex product project as GitHub owner', () => {
+    const remote = resolveGitRemote('github', 'Apex', 'Apex');
+
+    expect(remote.url).toBe('https://github.com/amergis/Apex.git');
+    expect(remote.url).not.toContain('github.com/Apex/Apex');
+    expect(remote.url).not.toContain('github-secret');
+    expect(remote.secret).toBe('github-secret');
+  });
+
+  it('honors an explicitly configured GitHub owner/repository value', () => {
+    const remote = resolveGitRemote(
+      'github',
+      'Apex',
+      'ryamiller-amergis/Apex',
+    );
+
+    expect(remote.url).toBe(
+      'https://github.com/ryamiller-amergis/Apex.git',
+    );
+  });
+
   it('populates a cold cache with the complete configured branch history', async () => {
     const result = await ensureRepoCache({
       provider: 'ado',

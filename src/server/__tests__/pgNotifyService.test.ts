@@ -139,7 +139,9 @@ describe('pgNotifyService durable run events', () => {
       'COMMIT',
     ]);
     expect(clientQuery.mock.calls[1][0]).toContain('owner_instance = $4');
-    expect(clientQuery.mock.calls[1][0]).toContain("status IN ('queued', 'running')");
+    expect(clientQuery.mock.calls[1][0]).toContain(
+      "status IN ('queued', 'dispatched', 'running')",
+    );
     expect(mockPoolQuery).toHaveBeenCalledWith(
       expect.stringContaining('pg_notify'),
       expect.any(Array),
@@ -190,11 +192,44 @@ describe('pgNotifyService durable run events', () => {
       events: [envelope],
     })).resolves.toBe(true);
 
-    expect(clientQuery.mock.calls[1][0]).toContain("status IN ('queued', 'running')");
+    expect(clientQuery.mock.calls[1][0]).toContain(
+      "status IN ('queued', 'dispatched', 'running')",
+    );
     expect(clientQuery.mock.calls[1][0]).not.toContain('owner_instance');
     expect(clientQuery.mock.calls.map(([sql]) => String(sql).trim().split(/\s+/)[0]))
       .toEqual(['BEGIN', 'UPDATE', 'INSERT', 'COMMIT']);
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it('FEAT-001 VT-05 atomically fences terminal completion and stores its reason', async () => {
+    const clientQuery = jest.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'run-1' }] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    const release = jest.fn();
+    mockPoolConnect.mockResolvedValue({ query: clientQuery, release });
+    mockPoolQuery.mockResolvedValue({ rowCount: 1, rows: [] });
+
+    await expect(finalizeReconciledAgentRun({
+      runId: envelope.runId,
+      threadId: envelope.threadId,
+      status: 'failed',
+      detail: 'Worker heartbeat expired',
+      events: [envelope],
+      dispatchMessageId: 'dispatch-1',
+      terminalReason: 'worker_lost',
+    })).resolves.toBe(true);
+
+    expect(clientQuery.mock.calls[1][0]).toContain('dispatch_message_id = $4');
+    expect(clientQuery.mock.calls[1][0]).toContain('terminal_reason = $5');
+    expect(clientQuery.mock.calls[1][1]).toEqual([
+      'failed',
+      'Worker heartbeat expired',
+      envelope.runId,
+      'dispatch-1',
+      'worker_lost',
+    ]);
   });
 
   it('TBI-003 three-instance safety emits nothing when reconciliation CAS loses', async () => {

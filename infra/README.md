@@ -18,6 +18,7 @@ This directory contains Terraform configuration for provisioning Azure resources
 - **Shared async Blob storage**: One private Storage Account per environment; modules isolate via private containers (`pdf-artifacts`, `repo-grounding`, and load-test `lt-artifacts`)
 - **Managed-identity access**: The cross-cutting Apex App Service identity is scoped to the shared Storage Account. PDF assembly stays in the Apex application; job delivery uses the Postgres queue (Service Bus deferred).
 - **Load Test infrastructure** (FEAT-002): Dedicated Service Bus namespace, Container Apps Job, and managed identities — see [Load Test module](#load-test-module-feat-002) below.
+- **AI Runs background worker** (FEAT-003): Shared AI-runs Service Bus namespace (`sbns-apex-ai-*`), `ai-runs-background` queue, KEDA Container Apps Job, runner MI, Azure Files workspace mount — see [AI Runs worker module](#ai-runs-background-worker-module-feat-003) below.
 
 ## Shared async platform conventions
 
@@ -27,9 +28,10 @@ Prefer extending the shared storage account over provisioning one-offs:
 |------|-----|--------|
 | Binary/session artifacts for a module | A private container in `blob_containers` | A second storage account (unless hard isolation is required) |
 | Background jobs at current PDF scale | Postgres job queue (app-owned) | Service Bus "because async" |
+| Bounded background AI execution (accepted ADR) | Shared `sbns-apex-ai-*` namespace + per-lane queue | Dedicated namespace per lane; mega-queue |
 | Worker compute | Prefer in-app on the Apex App Service unless isolation/scale requires a dedicated host | New App Service “because the feature is async” |
 
-RBAC defaults to least-privilege per container. The shared Apex App Service identity is the documented exception because it hosts multiple in-process workloads and receives Blob Data Contributor at the shared account scope. Service Bus remains an optional future platform (revised ADR scale-up path) — do not provision it by default.
+RBAC defaults to least-privilege per container (or queue). The shared Apex App Service identity is the documented exception because it hosts multiple in-process workloads and receives Blob Data Contributor at the shared account scope. Service Bus is provisioned only for accepted ADR scale-up paths (load-test dedicated namespace; AI-runs shared namespace).
 ## Setup
 
 1. **Authenticate with Azure**:
@@ -468,6 +470,118 @@ Smoke checks:
 4. Confirm `max_executions` is 1 or 2. Confirm system logs are free of `KEDAScalerFailed`.
 5. Confirm `lt-artifacts` container exists on the shared storage account with the 90-day lifecycle rule.
 6. **Negative check:** Attempt queue receive and blob write with a non-module identity; both must be denied by Azure RBAC (VT-04).
+
+---
+
+## AI Runs background worker module (FEAT-003)
+
+Provisions the bounded, least-privilege Container Apps Job tier for flagged
+background AI generation (`ai-runs-background` Feature Flag). Infrastructure is
+additive and inert while the flag is disabled.
+
+| Resource | Dev example | Prod example |
+|----------|-------------|--------------|
+| Service Bus namespace (shared AI lanes) | `sbns-apex-ai-dev` | `sbns-apex-ai-prd` |
+| Background queue | `ai-runs-background` | `ai-runs-background` |
+| Container Apps Environment | `cae-apex-ai-dev` | `cae-apex-ai-prd` |
+| Container Apps Job | `caj-apex-ai-runs-dev` | `caj-apex-ai-runs-prd` |
+| Runner MI | `mi-apex-ai-runs-runner-dev` | `mi-apex-ai-runs-runner-prd` |
+| Azure Files share | `ai-pilot-data` on shared storage | same |
+| Runner image ACR | Reuses `acrapexlt{env}` / repo `apex-ai-runs` | same |
+
+### Files
+
+| File | Owns |
+|------|------|
+| `ai-runs-worker.tf` | Namespace, queue, KEDA Job, MI, RBAC, Azure Files mount |
+| `ai-runs-worker-entra.tf` | Optional `AiRun.Runner` Entra app role (`enable_ai_runs_entra_app`) |
+
+### In-flight cap lockstep (BR-003)
+
+`var.ai_runs_max_in_flight` (default **10**) drives:
+
+1. KEDA `event_trigger_config.scale.max_executions`
+2. Job env `AI_RUNS_BACKGROUND_INFLIGHT_LIMIT`
+3. App Service setting `AI_RUNS_BACKGROUND_INFLIGHT_LIMIT` (wire via deploy pipeline from `terraform output ai_runs_max_in_flight`)
+
+The DB admission governor (`admissionGovernorService.ts`) reads the same env var.
+Do not change one without the other.
+
+### App setting contract (Apex API)
+
+| App setting | Terraform output |
+|-------------|------------------|
+| `AI_RUNS_SERVICEBUS_NAMESPACE` | `ai_runs_servicebus_namespace_name` |
+| `AI_RUNS_BACKGROUND_QUEUE_NAME` | `ai_runs_background_queue_name` |
+| `AI_RUNS_BACKGROUND_INFLIGHT_LIMIT` | `ai_runs_max_in_flight` |
+| Shared checkout mount | `ai_runs_workspace_mount_path` (`/home/data/ai-pilot/workspaces`) |
+
+Dispatch messages must contain only `{ runId, dispatchMessageId }` (BR-006) —
+enforced by `serviceBusPublisher.ts`, never by putting prompts on Service Bus.
+
+The `dev` and `prd` GitHub environments hold these values as non-secret
+`AI_RUNS_*` variables. Their deploy workflows write the queue/cap/audience
+settings to App Service. No worker secret is stored in GitHub: the Job resolves
+`CURSOR_API_KEY` from Key Vault using its managed identity.
+
+`scripts/ci/publish-ai-runs-runner.sh` publishes `apex-ai-runs:<git-sha>` and
+updates the Job after FEAT-004 adds `runners/ai-runs/Dockerfile` and the compiled
+worker host. Until then the workflow step is skipped and the provisioned Job
+remains inert behind the disabled feature flag.
+
+### RBAC (least privilege)
+
+| Principal | Role | Scope |
+|-----------|------|-------|
+| Runner MI | Azure Service Bus Data **Receiver** | `ai-runs-background` queue |
+| Runner MI | Key Vault Secrets **User** | Dedicated `kv-apex-ai-{environment}` vault, or `var.ai_runs_key_vault_id` override |
+| Runner MI | **AcrPull** | load-test ACR (`acrapexlt*`) |
+| Apex API (system identity) | Azure Service Bus Data **Sender** | `ai-runs-background` queue (no receive) |
+| Runner MI | `AiRun.Runner` app role | Entra app when `enable_ai_runs_entra_app=true` |
+
+By default Terraform provisions the dedicated Key Vault and seeds its
+`cursor-api-key` secret from the existing sensitive `cursor_api_key` variable.
+To reuse an existing vault, set both `ai_runs_key_vault_id` and the versioned
+`ai_runs_cursor_api_key_secret_id`; setting only one is rejected at plan time.
+
+KEDA polls queue length with a **queue-scoped** Manage SAS secret
+(`ai-runs-keda-sb-connection`). Message receive stays on the runner MI.
+Prefer scale-rule `identity_id` after upgrading `azurerm` ≥ 4.73.
+
+### Azure Files workspace
+
+The App Service, background Job, and interactive host mount share
+`ai-pilot-data` at `/home/data/ai-pilot/workspaces`. Mount only the workspace
+subdirectory: the rest of `resolveDataRoot()` remains App Service-owned. This
+gives each execution tier the same checkout tree without turning the complete
+Apex data directory into a shared mutable filesystem. Blob staging remains out
+of scope.
+
+### Smoke verification (after apply — S8 / VT-02, VT-04, VT-06)
+
+```bash
+terraform output ai_runs_servicebus_namespace_name
+terraform output ai_runs_background_queue_name
+terraform output ai_runs_max_in_flight
+terraform output ai_runs_container_app_job_name
+terraform output ai_runs_runner_identity_client_id
+```
+
+1. Confirm namespace is `sbns-apex-ai-*` (shared AI lanes) — **not** `sbns-apex-lt-*`.
+2. Confirm Job KEDA rule `ai-runs-servicebus-keda`: `messageCount=1`,
+   `parallelism=1`, `replica_completion_count=1`, `min_executions=0`,
+   `max_executions == ai_runs_max_in_flight`.
+3. Enqueue one admitted `{runId,dispatchMessageId}` message → exactly one Job
+   execution starts and exits (requires runner image published).
+4. Cap smoke: enqueue `N+3` messages with `ai_runs_max_in_flight=N` → active
+   executions never exceed `N`.
+5. Negative: identity without runner MI / `AiRun.Runner` must be denied receive
+   and ingest; no `agent_runs` state change.
+6. Cold-start failure: unpullable image → FEAT-001 reaper dispatched clock
+   recovers the run without exceeding the cap (VT-03).
+
+Infrastructure is safe to apply while `ai-runs-background` is disabled; the Job
+scales from zero until the governor publishes admitted work.
 
 ---
 

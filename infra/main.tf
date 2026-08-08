@@ -50,6 +50,17 @@ resource "azurerm_linux_web_app" "main" {
     type = "SystemAssigned"
   }
 
+  # AI-run materialization and Container Apps actors must see one checkout
+  # tree. Mount only the workspace subdirectory, not the complete Apex data root.
+  storage_account {
+    name         = "ai-runs-workspaces"
+    type         = "AzureFiles"
+    account_name = azurerm_storage_account.shared.name
+    share_name   = azurerm_storage_share.ai_runs_workspace.name
+    access_key   = azurerm_storage_account.shared.primary_access_key
+    mount_path   = var.ai_runs_workspace_mount_path
+  }
+
   site_config {
     always_on = true
 
@@ -179,6 +190,16 @@ resource "azurerm_linux_web_app_slot" "staging" {
   # identity access to the production shared Blob account.
   identity {
     type = "SystemAssigned"
+  }
+
+  # Staging uses the same durable checkout tree during pre-swap validation.
+  storage_account {
+    name         = "ai-runs-workspaces"
+    type         = "AzureFiles"
+    account_name = azurerm_storage_account.shared.name
+    share_name   = azurerm_storage_share.ai_runs_workspace.name
+    access_key   = azurerm_storage_account.shared.primary_access_key
+    mount_path   = var.ai_runs_workspace_mount_path
   }
 
   site_config {

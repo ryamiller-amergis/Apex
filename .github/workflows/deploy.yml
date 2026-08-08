@@ -123,6 +123,27 @@ jobs:
         env:
           STAGING_REDIRECT_URL: https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net/auth/callback
         run: |
+          # Resolve the interactive live-bus (Redis) connection at deploy time so
+          # the WS gateway subscribes to the same pub/sub the actor host publishes
+          # to. Terraform provisions the cache; App Service app settings are not
+          # Terraform-managed (ignore_changes), so we mirror them here. When the
+          # interactive lane is not provisioned in this environment the query
+          # returns empty and the live bus stays a no-op (durable replay only).
+          REDIS_HOST=""
+          REDIS_SSL_PORT="6380"
+          REDIS_KEY=""
+          REDIS_NAME=$(az redis list --resource-group "$RESOURCE_GROUP_NAME" \
+            --query "[?starts_with(name, 'redis-apex-ai')].name | [0]" -o tsv 2>/dev/null || true)
+          if [ -n "$REDIS_NAME" ]; then
+            REDIS_HOST=$(az redis show --name "$REDIS_NAME" --resource-group "$RESOURCE_GROUP_NAME" --query hostName -o tsv)
+            REDIS_SSL_PORT=$(az redis show --name "$REDIS_NAME" --resource-group "$RESOURCE_GROUP_NAME" --query sslPort -o tsv)
+            REDIS_KEY=$(az redis list-keys --name "$REDIS_NAME" --resource-group "$RESOURCE_GROUP_NAME" --query primaryKey -o tsv)
+            echo "::add-mask::$REDIS_KEY"
+            echo "Interactive live bus: resolved Redis '$REDIS_NAME' (${REDIS_HOST}:${REDIS_SSL_PORT})."
+          else
+            echo "Interactive live bus: no redis-apex-ai* cache in $RESOURCE_GROUP_NAME — live bus stays disabled (durable replay only)."
+          fi
+
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
@@ -176,6 +197,19 @@ jobs:
               LT_BLOB_CONTAINER_NAME="${{ vars.LT_BLOB_CONTAINER_NAME }}" \
               LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net" \
               LT_RUNNER_CALLBACK_TOKEN="${{ secrets.LT_RUNNER_CALLBACK_TOKEN }}" \
+              AI_RUNS_SERVICEBUS_NAMESPACE="${{ vars.AI_RUNS_SERVICEBUS_NAMESPACE }}" \
+              AI_RUNS_BACKGROUND_QUEUE_NAME="${{ vars.AI_RUNS_BACKGROUND_QUEUE_NAME }}" \
+              AI_RUNS_BACKGROUND_INFLIGHT_LIMIT="${{ vars.AI_RUNS_BACKGROUND_INFLIGHT_LIMIT }}" \
+              AI_RUNS_CALLBACK_TOKEN_AUDIENCE="${{ vars.AI_RUNS_CALLBACK_TOKEN_AUDIENCE }}" \
+              AI_RUNS_RUNNER_CALLBACK_TOKEN="${{ secrets.AI_RUNS_RUNNER_CALLBACK_TOKEN }}" \
+              AI_RUNS_INTERACTIVE_GATEWAY="${{ vars.AI_RUNS_INTERACTIVE_GATEWAY }}" \
+              AI_RUNS_INTERACTIVE_RESERVED="${{ vars.AI_RUNS_INTERACTIVE_RESERVED }}" \
+              AI_RUNS_INTERACTIVE_BURST_MAX="${{ vars.AI_RUNS_INTERACTIVE_BURST_MAX }}" \
+              AI_RUNS_INTERACTIVE_FIRST_TOKEN_SLO_MS="${{ vars.AI_RUNS_INTERACTIVE_FIRST_TOKEN_SLO_MS }}" \
+              AI_RUNS_INTERACTIVE_DISPATCH_URL="${{ vars.AI_RUNS_INTERACTIVE_DISPATCH_URL }}" \
+              REDIS_HOST="$REDIS_HOST" \
+              REDIS_SSL_PORT="$REDIS_SSL_PORT" \
+              REDIS_KEY="$REDIS_KEY" \
               SENDGRID_API_KEY="${{ secrets.SENDGRID_API_KEY }}" \
               GITHUB_TOKEN="${{ secrets.GH_SKILL_TOKEN }}" \
               GITHUB_ORG="${{ secrets.GH_SKILL_ORG }}" \
@@ -216,7 +250,20 @@ jobs:
               LT_SERVICEBUS_QUEUE_NAME="${{ vars.LT_SERVICEBUS_QUEUE_NAME }}" \
               LT_BLOB_ACCOUNT_NAME="${{ vars.LT_BLOB_ACCOUNT_NAME }}" \
               LT_BLOB_CONTAINER_NAME="${{ vars.LT_BLOB_CONTAINER_NAME }}" \
-              LT_RUNNER_CALLBACK_TOKEN="${{ secrets.LT_RUNNER_CALLBACK_TOKEN }}"
+              LT_RUNNER_CALLBACK_TOKEN="${{ secrets.LT_RUNNER_CALLBACK_TOKEN }}" \
+              AI_RUNS_SERVICEBUS_NAMESPACE="${{ vars.AI_RUNS_SERVICEBUS_NAMESPACE }}" \
+              AI_RUNS_BACKGROUND_QUEUE_NAME="${{ vars.AI_RUNS_BACKGROUND_QUEUE_NAME }}" \
+              AI_RUNS_BACKGROUND_INFLIGHT_LIMIT="${{ vars.AI_RUNS_BACKGROUND_INFLIGHT_LIMIT }}" \
+              AI_RUNS_CALLBACK_TOKEN_AUDIENCE="${{ vars.AI_RUNS_CALLBACK_TOKEN_AUDIENCE }}" \
+              AI_RUNS_RUNNER_CALLBACK_TOKEN="${{ secrets.AI_RUNS_RUNNER_CALLBACK_TOKEN }}" \
+              AI_RUNS_INTERACTIVE_GATEWAY="${{ vars.AI_RUNS_INTERACTIVE_GATEWAY }}" \
+              AI_RUNS_INTERACTIVE_RESERVED="${{ vars.AI_RUNS_INTERACTIVE_RESERVED }}" \
+              AI_RUNS_INTERACTIVE_BURST_MAX="${{ vars.AI_RUNS_INTERACTIVE_BURST_MAX }}" \
+              AI_RUNS_INTERACTIVE_FIRST_TOKEN_SLO_MS="${{ vars.AI_RUNS_INTERACTIVE_FIRST_TOKEN_SLO_MS }}" \
+              AI_RUNS_INTERACTIVE_DISPATCH_URL="${{ vars.AI_RUNS_INTERACTIVE_DISPATCH_URL }}" \
+              REDIS_HOST="$REDIS_HOST" \
+              REDIS_SSL_PORT="$REDIS_SSL_PORT" \
+              REDIS_KEY="$REDIS_KEY"
 
           # The Azure Node/Linux image ships without git, and Dev Workbench
           # shells out to git at runtime. Install git in the background so Node
@@ -251,6 +298,30 @@ jobs:
           LT_RESOURCE_GROUP: ${{ vars.LT_RESOURCE_GROUP || env.RESOURCE_GROUP_NAME }}
           IMAGE_TAG: ${{ github.sha }}
         run: bash scripts/ci/publish-lt-k6-runner.sh
+
+      # FEAT-003 provisions the Job now. FEAT-004 adds the worker host image;
+      # until its Dockerfile exists this step is intentionally skipped.
+      - name: Publish AI-runs worker image
+        if: ${{ hashFiles('runners/ai-runs/Dockerfile') != '' }}
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          AI_RUNS_CONTAINER_APP_JOB_NAME: ${{ vars.AI_RUNS_CONTAINER_APP_JOB_NAME }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || env.RESOURCE_GROUP_NAME }}
+          AI_RUNS_RUNNER_IMAGE_REPO: ${{ vars.AI_RUNS_RUNNER_IMAGE_REPO }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: bash scripts/ci/publish-ai-runs-runner.sh
+
+      # FEAT-007 interactive Dapr actor-host image. Skipped until its Dockerfile
+      # exists; Terraform ignores image drift while the placeholder is in place.
+      - name: Publish AI-runs interactive host image
+        if: ${{ hashFiles('runners/ai-runs-interactive/Dockerfile') != '' }}
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          AI_RUNS_INTERACTIVE_CONTAINER_APP_NAME: ${{ vars.AI_RUNS_INTERACTIVE_CONTAINER_APP_NAME }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || env.RESOURCE_GROUP_NAME }}
+          AI_RUNS_INTERACTIVE_IMAGE_REPO: ${{ vars.AI_RUNS_INTERACTIVE_IMAGE_REPO }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: bash scripts/ci/publish-ai-runs-interactive.sh
 
       - name: Health check staging slot
         run: |
