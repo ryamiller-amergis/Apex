@@ -4,6 +4,9 @@ on:
   pull_request:
     branches:
       - main
+    # labeled/unlabeled so adding `quick-dev-deploy` stops this gate and
+    # removing it re-runs the full PR policy suite.
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   workflow_dispatch:
     inputs:
       environment:
@@ -18,7 +21,23 @@ env:
   NODE_VERSION: '24.x'
 
 jobs:
+  # When a PR carries `quick-dev-deploy`, skip the full PR policy suite —
+  # Deploy Dev (Quick) owns that path. Removing the label re-arms these checks.
+  quick-deploy-bypass:
+    if: >-
+      github.event_name == 'pull_request' &&
+      contains(github.event.pull_request.labels.*.name, 'quick-dev-deploy')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip PR Tests & Dev Deploy
+        run: |
+          echo "PR #${{ github.event.pull_request.number }} has label quick-dev-deploy."
+          echo "Skipping PR Tests & Dev Deploy — Deploy Dev (Quick) handles this PR."
+
   detect-changes:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      !contains(github.event.pull_request.labels.*.name, 'quick-dev-deploy')
     runs-on: ubuntu-latest
     outputs:
       migrations: ${{ steps.detect.outputs.has_migration_changes }}
@@ -129,7 +148,10 @@ jobs:
   # client/server suites run in parallel matrix jobs.
   test:
     needs: [detect-changes, validate, unit-test]
-    if: always() && needs.detect-changes.outputs.markdown_only != 'true'
+    if: >-
+      always() && !cancelled() &&
+      needs.detect-changes.result == 'success' &&
+      needs.detect-changes.outputs.markdown_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Verify validation and unit tests passed
@@ -417,8 +439,11 @@ jobs:
     # always() is required: when the PR has no migration file changes, migrate-check
     # is skipped and GitHub would otherwise skip deploy-dev too — even though app-only
     # PRs should still deploy to dev.
+    # needs.detect-changes.result == 'success' also keeps this job off when the PR is
+    # labeled quick-dev-deploy (detect-changes is skipped for that path).
     if: >-
       always() && !cancelled() &&
+      needs.detect-changes.result == 'success' &&
       needs.detect-changes.outputs.markdown_only != 'true' &&
       needs.test.result == 'success' &&
       needs.validate.result == 'success' &&
