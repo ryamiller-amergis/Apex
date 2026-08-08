@@ -39,6 +39,16 @@ describe('diagramScene — TBI-005 DoD-3 / VT-09 scene conversion', () => {
     expect(result.appState).not.toHaveProperty('collaborators');
   });
 
+  it('strips Excalidraw UI theme from appState before persistence', () => {
+    const result = toDiagramScene(
+      [],
+      { viewBackgroundColor: '#fff', theme: 'dark' },
+      {},
+    );
+    expect(result.appState).toEqual({ viewBackgroundColor: '#fff' });
+    expect(result.appState).not.toHaveProperty('theme');
+  });
+
   it('DoD-3: restore injects collaborators Map required by Excalidraw', () => {
     const imported = fromDiagramScene({
       elements: [{ id: 'a' }],

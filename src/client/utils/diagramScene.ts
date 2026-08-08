@@ -56,6 +56,8 @@ export function toDiagramScene(
     newElement: _newElement,
     cursorButton: _cursorButton,
     scrolledOutside: _scrolledOutside,
+    // UI chrome theme follows Apex; do not persist into the diagram document.
+    theme: _theme,
     ...persistableAppState
   } = appState;
   return {

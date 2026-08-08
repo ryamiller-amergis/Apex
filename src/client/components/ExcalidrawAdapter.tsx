@@ -1,5 +1,7 @@
-import React, { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type { ExcalidrawScene } from '../../shared/types/diagram';
+import { isDarkFamilyTheme } from '../../shared/walkthroughAssets';
+import { useAppShell } from '../hooks/useAppShell';
 import { fromDiagramScene, toDiagramScene } from '../utils/diagramScene';
 import type { ThumbnailSource } from '../utils/diagramThumbnail';
 import styles from './ExcalidrawAdapter.module.css';
@@ -38,6 +40,8 @@ type ExcalidrawImperativeAPI = NonNullable<
 interface ExcalidrawHostProps {
   mod: ExcalidrawModule;
   editable: boolean;
+  /** Apex maps many themes; Excalidraw only supports light | dark. */
+  theme: 'light' | 'dark';
   initialScene: ExcalidrawScene;
   onApi: (api: ImperativeApi) => void;
   onSceneChange: (scene: ExcalidrawScene) => void;
@@ -50,6 +54,7 @@ interface ExcalidrawHostProps {
 function ExcalidrawHost({
   mod,
   editable,
+  theme,
   initialScene,
   onApi,
   onSceneChange,
@@ -100,9 +105,13 @@ function ExcalidrawHost({
       {/* data-testid-exempt — third-party Excalidraw canvas; Apex mount uses diagram-editor-canvas */}
       <Excalidraw
         excalidrawAPI={handleApi}
+        theme={theme}
         initialData={{
           elements: initial.elements as never[],
-          appState: initial.appState as never,
+          appState: {
+            ...(initial.appState as Record<string, unknown>),
+            theme,
+          } as never,
           files: initial.files as never,
         }}
         viewModeEnabled={!editable}
@@ -121,6 +130,11 @@ export const ExcalidrawAdapter = React.forwardRef(function ExcalidrawAdapter(
   { scene, editable, onSceneChange, onCanvasHydrated }: ExcalidrawAdapterProps,
   ref: React.ForwardedRef<ExcalidrawAdapterHandle>,
 ) {
+  const { theme: apexTheme } = useAppShell();
+  const excalidrawTheme = useMemo<'light' | 'dark'>(
+    () => (isDarkFamilyTheme(apexTheme) ? 'dark' : 'light'),
+    [apexTheme],
+  );
   const [mod, setMod] = useState<ExcalidrawModule | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
@@ -262,6 +276,7 @@ export const ExcalidrawAdapter = React.forwardRef(function ExcalidrawAdapter(
     <ExcalidrawHost
       mod={mod}
       editable={editable}
+      theme={excalidrawTheme}
       initialScene={initialSceneRef.current}
       onApi={handleApi}
       onSceneChange={onSceneChange}
