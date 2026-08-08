@@ -526,9 +526,9 @@ variable "ai_runs_file_share_quota_gb" {
 }
 
 variable "ai_runs_workspace_mount_path" {
-  description = "Absolute mount path inside the Job for the pinned workspace (must match resolveDataRoot Azure path)."
+  description = "Absolute shared checkout mount path used by App Service and AI-run compute."
   type        = string
-  default     = "/home/data/ai-pilot"
+  default     = "/home/data/ai-pilot/workspaces"
 }
 
 variable "ai_runs_vnet_subnet_id" {

@@ -170,7 +170,8 @@ resource "azurerm_role_assignment" "ai_runs_staging_sb_sender" {
 }
 
 # ---------------------------------------------------------------------------
-# Azure Files share for pinned workspaces (mount path = resolveDataRoot Azure)
+# Azure Files share for pinned workspaces (mounted at resolveDataRoot/workspaces
+# by App Service, the background Job, and the interactive actor host)
 # ---------------------------------------------------------------------------
 
 resource "azurerm_storage_share" "ai_runs_workspace" {
@@ -325,7 +326,7 @@ resource "azurerm_container_app_job" "ai_runs_runner" {
 
       env {
         name  = "AI_PILOT_DATA_DIR"
-        value = var.ai_runs_workspace_mount_path
+        value = dirname(var.ai_runs_workspace_mount_path)
       }
 
       dynamic "env" {

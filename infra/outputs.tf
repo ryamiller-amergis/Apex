@@ -296,7 +296,7 @@ output "ai_runs_cursor_api_key_secret_name" {
 }
 
 output "ai_runs_workspace_mount_path" {
-  description = "Mount path inside the Job (AI_PILOT_DATA_DIR)"
+  description = "Shared checkout mount path used by App Service and AI-run compute"
   value       = var.ai_runs_workspace_mount_path
 }
 

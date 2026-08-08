@@ -528,7 +528,7 @@ describe('aiRunIngestService durable terminal completion', () => {
     },
   );
 
-  it('FEAT-007: accepts an unflushed failed terminal from the warm interactive actor', async () => {
+  it('FEAT-007: accepts an unflushed actor failure and emits error plus done', async () => {
     mockFindFirst.mockResolvedValue(baseRow({
       lane: 'ai-runs-interactive',
       executionSnapshot,
@@ -548,10 +548,16 @@ describe('aiRunIngestService durable terminal completion', () => {
       'run-1',
       expect.objectContaining({
         status: 'failed',
-        events: [expect.objectContaining({
-          status: 'failed',
-          event: expect.objectContaining({ type: 'error' }),
-        })],
+        events: [
+          expect.objectContaining({
+            status: 'failed',
+            event: expect.objectContaining({ type: 'error' }),
+          }),
+          expect.objectContaining({
+            status: 'failed',
+            event: expect.objectContaining({ type: 'done', runId: 'run-1' }),
+          }),
+        ],
       }),
     );
   });

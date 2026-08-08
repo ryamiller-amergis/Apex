@@ -142,7 +142,7 @@ pdf_blob_container_name = "pdf-artifacts"
 # ai_runs_runner_identity_name      = null  # derives "mi-apex-ai-runs-runner-dev"
 # ai_runs_max_in_flight             = 10    # must match App Service AI_RUNS_BACKGROUND_INFLIGHT_LIMIT
 # ai_runs_file_share_name           = null  # derives "ai-pilot-data"
-# ai_runs_workspace_mount_path      = "/home/data/ai-pilot"
+# ai_runs_workspace_mount_path      = "/home/data/ai-pilot/workspaces"
 # ai_runs_vnet_subnet_id            = null
 # ai_runs_key_vault_name            = null  # derives "kv-apex-ai-{environment}" and seeds cursor-api-key
 # To use an existing vault instead, set both:

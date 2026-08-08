@@ -380,6 +380,27 @@ function buildTerminalEnvelope(
   };
 }
 
+function buildDoneEnvelope(
+  row: typeof agentRuns.$inferSelect,
+  timestamp: string,
+  status: 'completed' | 'failed' | 'cancelled',
+  detail: string | undefined,
+): AgentRunEventEnvelope {
+  return {
+    eventId: randomUUID(),
+    threadId: row.threadId,
+    runId: row.id,
+    sourceInstance: RUN_EVENT_SOURCE_INSTANCE,
+    sequence: nextRunEventSequence(row.id),
+    timestamp,
+    type: 'done',
+    phase: 'completion',
+    status,
+    detail,
+    event: { type: 'done', runId: row.id },
+  };
+}
+
 async function updateWorkerClocks(
   projectId: string,
   runId: string,
@@ -589,12 +610,15 @@ export async function ingest(
     body.status,
     detail,
   );
+  const terminalEvents = body.status === 'failed'
+    ? [envelope, buildDoneEnvelope(existing, nowIso, body.status, detail)]
+    : [envelope];
   const run = assertLifecycleSuccess(await markTerminal(runId, {
     status: body.status,
     terminalReason: body.terminalReason,
     dispatchMessageId: body.dispatchMessageId,
     detail: detail ?? body.status,
-    events: [envelope],
+    events: terminalEvents,
   }));
   return { run, cancelRequested: run.cancelRequested };
 }

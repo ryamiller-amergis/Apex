@@ -514,7 +514,7 @@ Do not change one without the other.
 | `AI_RUNS_SERVICEBUS_NAMESPACE` | `ai_runs_servicebus_namespace_name` |
 | `AI_RUNS_BACKGROUND_QUEUE_NAME` | `ai_runs_background_queue_name` |
 | `AI_RUNS_BACKGROUND_INFLIGHT_LIMIT` | `ai_runs_max_in_flight` |
-| `AI_PILOT_DATA_DIR` | `ai_runs_workspace_mount_path` (`/home/data/ai-pilot`) |
+| Shared checkout mount | `ai_runs_workspace_mount_path` (`/home/data/ai-pilot/workspaces`) |
 
 Dispatch messages must contain only `{ runId, dispatchMessageId }` (BR-006) —
 enforced by `serviceBusPublisher.ts`, never by putting prompts on Service Bus.
@@ -550,10 +550,12 @@ Prefer scale-rule `identity_id` after upgrading `azurerm` ≥ 4.73.
 
 ### Azure Files workspace
 
-The Job mounts share `ai-pilot-data` at `/home/data/ai-pilot` (same path as
-`resolveDataRoot()` on Azure App Service). Operators should mount the same
-share on App Service (or set `AI_PILOT_DATA_DIR`) so FEAT-005 materialization
-and the worker see one workspace tree. Blob staging remains out of scope.
+The App Service, background Job, and interactive host mount share
+`ai-pilot-data` at `/home/data/ai-pilot/workspaces`. Mount only the workspace
+subdirectory: the rest of `resolveDataRoot()` remains App Service-owned. This
+gives each execution tier the same checkout tree without turning the complete
+Apex data directory into a shared mutable filesystem. Blob staging remains out
+of scope.
 
 ### Smoke verification (after apply — S8 / VT-02, VT-04, VT-06)
 

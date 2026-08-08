@@ -201,7 +201,7 @@ resource "azurerm_container_app" "ai_runs_interactive" {
       }
       env {
         name  = "AI_PILOT_DATA_DIR"
-        value = var.ai_runs_workspace_mount_path
+        value = dirname(var.ai_runs_workspace_mount_path)
       }
       env {
         name  = "AI_RUNS_INTERACTIVE_RESERVED"
