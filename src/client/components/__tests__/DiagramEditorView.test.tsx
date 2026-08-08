@@ -364,4 +364,22 @@ describe('DiagramEditorView / DiagramsView — FEAT-003', () => {
     expect(screen.queryByTestId('diagram-unsaved-dialog')).not.toBeInTheDocument();
     expect(mockNavigate).toHaveBeenCalledWith('/diagrams');
   });
+
+  it('toggles fullscreen canvas mode from the toolbar', async () => {
+    const user = userEvent.setup();
+    renderEditor('new');
+
+    const fullscreenBtn = screen.getByTestId('diagram-fullscreen-btn');
+    expect(fullscreenBtn).toHaveAttribute('aria-pressed', 'false');
+    expect(fullscreenBtn).toHaveAttribute('aria-label', 'Fullscreen');
+
+    await user.click(fullscreenBtn);
+    expect(fullscreenBtn).toHaveAttribute('aria-pressed', 'true');
+    expect(fullscreenBtn).toHaveAttribute('aria-label', 'Exit fullscreen');
+    expect(screen.getByTestId('diagram-editor').className).toMatch(/pageFullscreen/);
+
+    await user.keyboard('{Escape}');
+    expect(fullscreenBtn).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByTestId('diagram-editor').className).not.toMatch(/pageFullscreen/);
+  });
 });

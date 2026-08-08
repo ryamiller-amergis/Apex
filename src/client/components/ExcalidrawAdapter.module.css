@@ -9,6 +9,12 @@
   background: var(--bg-secondary);
 }
 
+.canvasFullscreen {
+  min-height: 0;
+  border-radius: 0;
+  border-color: var(--border-color);
+}
+
 .loading,
 .error {
   display: flex;

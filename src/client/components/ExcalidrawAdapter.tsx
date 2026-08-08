@@ -24,6 +24,8 @@ interface ExcalidrawAdapterProps {
   onSceneChange: (scene: ExcalidrawScene) => void;
   /** Fired once when the Excalidraw imperative API is ready (post-initialData). */
   onCanvasHydrated?: (scene: ExcalidrawScene) => void;
+  /** When true, canvas fills the host without decorative frame chrome. */
+  fullscreen?: boolean;
 }
 
 type ExcalidrawModule = typeof import('@excalidraw/excalidraw');
@@ -42,6 +44,7 @@ interface ExcalidrawHostProps {
   editable: boolean;
   /** Apex maps many themes; Excalidraw only supports light | dark. */
   theme: 'light' | 'dark';
+  fullscreen?: boolean;
   initialScene: ExcalidrawScene;
   onApi: (api: ImperativeApi) => void;
   onSceneChange: (scene: ExcalidrawScene) => void;
@@ -55,6 +58,7 @@ function ExcalidrawHost({
   mod,
   editable,
   theme,
+  fullscreen = false,
   initialScene,
   onApi,
   onSceneChange,
@@ -99,7 +103,7 @@ function ExcalidrawHost({
 
   return (
     <div
-      className={styles.canvas}
+      className={[styles.canvas, fullscreen && styles.canvasFullscreen].filter(Boolean).join(' ')}
       {...{ 'data-testid': 'diagram-editor-canvas' }}
     >
       {/* data-testid-exempt — third-party Excalidraw canvas; Apex mount uses diagram-editor-canvas */}
@@ -127,7 +131,7 @@ function ExcalidrawHost({
  * component mounts (TBI-005 / initial-bundle NFR).
  */
 export const ExcalidrawAdapter = React.forwardRef(function ExcalidrawAdapter(
-  { scene, editable, onSceneChange, onCanvasHydrated }: ExcalidrawAdapterProps,
+  { scene, editable, onSceneChange, onCanvasHydrated, fullscreen = false }: ExcalidrawAdapterProps,
   ref: React.ForwardedRef<ExcalidrawAdapterHandle>,
 ) {
   const { theme: apexTheme } = useAppShell();
@@ -277,6 +281,7 @@ export const ExcalidrawAdapter = React.forwardRef(function ExcalidrawAdapter(
       mod={mod}
       editable={editable}
       theme={excalidrawTheme}
+      fullscreen={fullscreen}
       initialScene={initialSceneRef.current}
       onApi={handleApi}
       onSceneChange={onSceneChange}

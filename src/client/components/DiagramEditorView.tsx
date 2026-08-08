@@ -31,6 +31,7 @@ export const DiagramEditorView: React.FC<DiagramEditorViewProps> = ({
   const [isReloading, setIsReloading] = useState(false);
   const [showConflict, setShowConflict] = useState(false);
   const [showShare, setShowShare] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   /** Pending in-app leave path while dirty — Apex uses BrowserRouter, so useBlocker is unavailable. */
   const [pendingLeavePath, setPendingLeavePath] = useState<string | null>(null);
 
@@ -80,6 +81,17 @@ export const DiagramEditorView: React.FC<DiagramEditorViewProps> = ({
       setShowConflict(true);
     }
   }, [editor.saveErrorKind]);
+
+  useEffect(() => {
+    if (!isFullscreen) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsFullscreen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isFullscreen]);
 
   const handleSave = useCallback(async () => {
     const detail = await editor.save();
@@ -145,7 +157,7 @@ export const DiagramEditorView: React.FC<DiagramEditorViewProps> = ({
 
   return (
     <div
-      className={styles.page}
+      className={[styles.page, isFullscreen && styles.pageFullscreen].filter(Boolean).join(' ')}
       {...{
         'data-testid': viewOnly ? 'diagram-editor-readonly' : 'diagram-editor',
       }}
@@ -229,6 +241,26 @@ export const DiagramEditorView: React.FC<DiagramEditorViewProps> = ({
               {editor.isSaving ? 'Saving…' : 'Save'}
             </button>
           )}
+
+          <button
+            type="button"
+            className={[styles.fullscreenBtn, isFullscreen && styles.fullscreenBtnActive].filter(Boolean).join(' ')}
+            onClick={() => setIsFullscreen((value) => !value)}
+            title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+            aria-label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+            aria-pressed={isFullscreen}
+            {...{ 'data-testid': 'diagram-fullscreen-btn' }}
+          >
+            {isFullscreen ? (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
+              </svg>
+            )}
+          </button>
         </div>
       </header>
 
@@ -248,6 +280,7 @@ export const DiagramEditorView: React.FC<DiagramEditorViewProps> = ({
           ref={adapterRef}
           scene={editor.scene}
           editable={editable}
+          fullscreen={isFullscreen}
           onSceneChange={editor.onSceneChange}
           onCanvasHydrated={editor.onCanvasHydrated}
         />
