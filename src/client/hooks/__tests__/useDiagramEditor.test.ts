@@ -106,6 +106,84 @@ describe('useDiagramEditor — PBI-002 / PBI-003', () => {
     expect(body.thumbnail).toMatch(/^data:image\/png;base64,/);
   });
 
+  it('after create save, remount reshape / versionNonce churn does not stay dirty', async () => {
+    const drawnScene = {
+      elements: [{ id: 'e1', type: 'rectangle', x: 1, y: 2, version: 1, versionNonce: 11, updated: 100 }],
+      appState: { viewBackgroundColor: '#ffffff' },
+      files: {},
+    };
+    const created = detail({
+      version: 1,
+      scene: drawnScene,
+    });
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => created,
+    }) as jest.Mock;
+
+    const { wrapper, queryClient } = createWrapper();
+    const { result: createResult } = renderHook(
+      () =>
+        useDiagramEditor({
+          projectId: 'project-a',
+          diagramId: null,
+          mode: 'new',
+          canCreate: true,
+          canEdit: true,
+        }),
+      { wrapper },
+    );
+
+    act(() => {
+      createResult.current.onSceneChange(drawnScene);
+    });
+    await act(async () => {
+      await createResult.current.save();
+    });
+    expect(createResult.current.isDirty).toBe(false);
+
+    // Simulate /diagrams/new → /diagrams/:id remount (React Query cache already primed).
+    const { result: editResult } = renderHook(
+      () =>
+        useDiagramEditor({
+          projectId: 'project-a',
+          diagramId: 'diagram-1',
+          mode: 'existing',
+          canCreate: true,
+          canEdit: true,
+        }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(editResult.current.version).toBe(1));
+    expect(editResult.current.isDirty).toBe(false);
+
+    act(() => {
+      editResult.current.onCanvasHydrated({
+        elements: [{ id: 'e1', type: 'rectangle', x: 1, y: 2, version: 3, versionNonce: 88, updated: 999 }],
+        appState: {
+          viewBackgroundColor: '#ffffff',
+          currentItemStrokeColor: '#1e1e1e',
+          scrollX: -20,
+          zoom: { value: 1 },
+        },
+        files: {},
+      });
+    });
+    expect(editResult.current.isDirty).toBe(false);
+
+    act(() => {
+      editResult.current.onSceneChange({
+        elements: [{ id: 'e1', type: 'rectangle', x: 1, y: 2, version: 4, versionNonce: 101, updated: 1000 }],
+        appState: { viewBackgroundColor: '#ffffff', scrollX: -25 },
+        files: {},
+      });
+    });
+    expect(editResult.current.isDirty).toBe(false);
+    expect(queryClient.getQueryData(['diagram', 'project-a', 'diagram-1'])).toBeTruthy();
+  });
+
   it('PBI-002 AC-1 / VT-02: failed save keeps dirty state and surfaces error', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: false,

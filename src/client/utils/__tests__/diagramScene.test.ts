@@ -100,6 +100,27 @@ describe('diagramScene — TBI-005 DoD-3 / VT-09 scene conversion', () => {
     expect(persistableScenesEqual(baseline, edited)).toBe(false);
     expect(persistableScenesEqual(baseline, backgroundChanged)).toBe(false);
   });
+
+  it('dirty compare ignores Excalidraw element version bookkeeping after remount/save', () => {
+    const baseline: ExcalidrawScene = {
+      elements: [{ id: 'a', type: 'rectangle', x: 0, y: 0, version: 1, versionNonce: 10, updated: 100 }],
+      appState: { viewBackgroundColor: '#fff' },
+      files: {},
+    };
+    const remounted: ExcalidrawScene = {
+      elements: [{ id: 'a', type: 'rectangle', x: 0, y: 0, version: 4, versionNonce: 99, updated: 500 }],
+      appState: { viewBackgroundColor: '#fff' },
+      files: {},
+    };
+    const moved: ExcalidrawScene = {
+      elements: [{ id: 'a', type: 'rectangle', x: 8, y: 0, version: 4, versionNonce: 99, updated: 500 }],
+      appState: { viewBackgroundColor: '#fff' },
+      files: {},
+    };
+
+    expect(persistableScenesEqual(baseline, remounted)).toBe(true);
+    expect(persistableScenesEqual(baseline, moved)).toBe(false);
+  });
 });
 
 describe('diagramScene — PBI-002 AC-2 / VT-03 scene byte boundary', () => {

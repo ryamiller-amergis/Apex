@@ -203,6 +203,7 @@ export function useDiagramEditor(options: UseDiagramEditorOptions): UseDiagramEd
   const onSceneChange = useCallback((next: ExcalidrawScene) => {
     // Keep full persistable scene in React state (incl. size-relevant appState).
     // Dirty UX uses persistableScenesEqual (content-only) separately.
+    const adoptingBaseline = adoptNextSceneAsBaselineRef.current;
     setScene((prev) => {
       const normalizedPrev = toDiagramScene(
         prev.elements,
@@ -216,6 +217,14 @@ export function useDiagramEditor(options: UseDiagramEditorOptions): UseDiagramEd
       );
       return scenesEqual(normalizedPrev, normalizedNext) ? prev : cloneDiagramScene(next);
     });
+    // While waiting for Excalidraw's first live paint after load/create→edit
+    // navigation, absorb canvas reshape into the baseline so Back does not
+    // falsely prompt discard.
+    if (adoptingBaseline) {
+      const cloned = cloneDiagramScene(next);
+      setBaselineScene(cloned);
+      sceneRef.current = cloned;
+    }
   }, []);
 
   const onCanvasHydrated = useCallback((live: ExcalidrawScene) => {

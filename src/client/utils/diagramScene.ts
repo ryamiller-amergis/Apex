@@ -98,11 +98,23 @@ export function scenesEqual(a: ExcalidrawScene, b: ExcalidrawScene): boolean {
 
 /**
  * Compare scenes for unsaved-edit detection.
- * Only diagram content counts: elements, files, and canvas background.
- * Excalidraw injects dozens of default appState keys on mount (tools, UI, viewport);
- * those must not mark the editor dirty after a refresh with no real edits.
+ * Only diagram content counts: element geometry/style, files, and canvas background.
+ * Excalidraw injects dozens of default appState keys on mount (tools, UI, viewport)
+ * and rewrites volatile element bookkeeping (version / versionNonce / updated) on
+ * remount and internal ticks — those must not mark the editor dirty after save.
  */
 export function persistableScenesEqual(a: ExcalidrawScene, b: ExcalidrawScene): boolean {
+  const normalizeElement = (element: unknown): unknown => {
+    if (!element || typeof element !== 'object') return element;
+    const {
+      version: _version,
+      versionNonce: _versionNonce,
+      updated: _updated,
+      ...rest
+    } = element as Record<string, unknown>;
+    return rest;
+  };
+
   const normalize = (scene: ExcalidrawScene) => {
     const base = toDiagramScene(
       scene.elements,
@@ -111,7 +123,7 @@ export function persistableScenesEqual(a: ExcalidrawScene, b: ExcalidrawScene): 
     );
     const appState = base.appState as Record<string, unknown>;
     return {
-      elements: base.elements,
+      elements: base.elements.map(normalizeElement),
       appState: {
         viewBackgroundColor: appState.viewBackgroundColor ?? null,
       },
