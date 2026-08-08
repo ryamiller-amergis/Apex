@@ -29,7 +29,7 @@
 .newBtn {
   padding: 10px 18px;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 8px;
   font-size: 0.9rem;
