@@ -3161,6 +3161,10 @@ async function ensureThreadGrounding(
       return current?.userId === state.thread.userId &&
         current.status !== 'closed';
     },
+    // Chat callers read the grounding checkout only — every write in this path
+    // targets `thread.workspaceDir` — so they may share a read-only per-SHA
+    // checkout (gated by `shared-readonly-grounding-checkout`).
+    readOnlyShareable: true,
   });
 
   const continuity = classifyGroundingContinuity(

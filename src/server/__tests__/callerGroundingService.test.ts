@@ -34,10 +34,19 @@ function dependencies(
   return {
     isGroundingEnabledForCaller: jest.fn().mockResolvedValue(true),
     isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(false),
+    isSharedReadCheckoutEnabledForCaller: jest.fn().mockResolvedValue(false),
     evaluateNativeReadCapability: jest.fn().mockReturnValue({
       proven: false,
       reason: 'harness-not-run',
     }),
+    sharedReadCheckout: {
+      materialize: jest.fn().mockResolvedValue({
+        workspacePath: 'C:\\data\\workspaces\\grounding-shared\\digest',
+        outcome: 'materialized',
+      }),
+      retain: jest.fn(),
+      releaseRef: jest.fn(),
+    },
     ensureRepoCache: jest.fn().mockResolvedValue({
       baseSha: grounding.groundedSha,
     }),
@@ -1117,4 +1126,111 @@ describe('TBI-003 grounding binding continuity', () => {
       expect(second).toEqual(expected);
     }
   );
+});
+
+describe('shared read-only per-SHA grounding checkout', () => {
+  const SHARED_PATH = 'C:\\data\\workspaces\\grounding-shared\\digest';
+
+  function sharedDeps(
+    overrides: Partial<CallerGroundingDependencies> = {},
+  ): CallerGroundingDependencies {
+    return dependencies({
+      isSharedReadCheckoutEnabledForCaller: jest.fn().mockResolvedValue(true),
+      sharedReadCheckout: {
+        materialize: jest.fn().mockResolvedValue({
+          workspacePath: SHARED_PATH,
+          outcome: 'materialized',
+        }),
+        retain: jest.fn(),
+        releaseRef: jest.fn(),
+      },
+      ...overrides,
+    });
+  }
+
+  const startArgs = {
+    caller: 'chat-agent',
+    userId: 'developer-1',
+    run,
+    repository: { provider: 'github' as const, repo: 'AI-Pilot', branch: 'main' },
+    reauthorize: async () => true,
+    readOnlyShareable: true,
+  };
+
+  it('uses the shared checkout (not the per-run tree) when the flag is on', async () => {
+    const deps = sharedDeps();
+    const service = createCallerGroundingService(deps);
+
+    const selected = await service.start(startArgs);
+
+    expect(selected).toMatchObject({ mode: 'local', cwd: SHARED_PATH, profileId });
+    expect(deps.sharedReadCheckout.materialize).toHaveBeenCalledWith({
+      provider: 'github',
+      project: 'Apex',
+      repo: 'AI-Pilot',
+      branch: grounding.branch,
+      sha: grounding.groundedSha,
+    });
+    expect(deps.sharedReadCheckout.retain).toHaveBeenCalledTimes(1);
+    // Per-run materialization must be skipped on the shared path.
+    expect(deps.materialize).not.toHaveBeenCalled();
+    expect(deps.profiles.registerConnectionProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ checkoutPath: SHARED_PATH }),
+      expect.anything(),
+      expect.any(Function),
+    );
+
+    await selected.release();
+    expect(deps.sharedReadCheckout.releaseRef).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the per-run tree when the flag is off', async () => {
+    const deps = sharedDeps({
+      isSharedReadCheckoutEnabledForCaller: jest.fn().mockResolvedValue(false),
+    });
+    const service = createCallerGroundingService(deps);
+
+    const selected = await service.start(startArgs);
+
+    expect(selected).toMatchObject({
+      mode: 'local',
+      cwd: 'C:\\data\\grounding-workspaces\\opaque',
+    });
+    expect(deps.sharedReadCheckout.materialize).not.toHaveBeenCalled();
+    expect(deps.materialize).toHaveBeenCalledWith(grounding, run);
+  });
+
+  it('never shares when the caller is not read-only shareable', async () => {
+    const deps = sharedDeps();
+    const service = createCallerGroundingService(deps);
+
+    await service.start({ ...startArgs, readOnlyShareable: false });
+
+    expect(deps.isSharedReadCheckoutEnabledForCaller).not.toHaveBeenCalled();
+    expect(deps.sharedReadCheckout.materialize).not.toHaveBeenCalled();
+    expect(deps.materialize).toHaveBeenCalledWith(grounding, run);
+  });
+
+  it('falls back to the per-run tree when shared materialization fails', async () => {
+    const deps = sharedDeps({
+      sharedReadCheckout: {
+        materialize: jest.fn().mockRejectedValue(new Error('cold-materialize-failed')),
+        retain: jest.fn(),
+        releaseRef: jest.fn(),
+      },
+    });
+    const service = createCallerGroundingService(deps);
+
+    const selected = await service.start(startArgs);
+
+    expect(selected).toMatchObject({
+      mode: 'local',
+      cwd: 'C:\\data\\grounding-workspaces\\opaque',
+    });
+    expect(deps.materialize).toHaveBeenCalledWith(grounding, run);
+    expect(deps.sharedReadCheckout.retain).not.toHaveBeenCalled();
+
+    await selected.release();
+    expect(deps.sharedReadCheckout.releaseRef).not.toHaveBeenCalled();
+  });
 });

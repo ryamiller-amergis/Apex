@@ -24,12 +24,16 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
     const sweep = jest.fn().mockResolvedValue(undefined);
     const preWarm = jest.fn().mockResolvedValue(undefined);
     const evictIdle = jest.fn().mockResolvedValue(undefined);
+    const sharedEvictIdle = jest
+      .fn()
+      .mockResolvedValue({ scanned: 0, evicted: 0, protected: 0 });
     const evaluateActive = jest.fn().mockResolvedValue([]);
     let eventHandler: ((changed: PreWarmTarget) => void) | undefined;
     const unsubscribe = jest.fn();
     const scheduler = createGroundingMaintenanceScheduler({
       preWarmService: { sweep, preWarm },
       evictionService: { evictIdle },
+      sharedReadCheckoutService: { evictIdle: sharedEvictIdle },
       stalenessService: { evaluateActive },
       subscribe: (handler) => {
         eventHandler = handler;
@@ -50,6 +54,8 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
     // Assert
     expect(sweep).toHaveBeenCalledTimes(2);
     expect(evictIdle).toHaveBeenCalledTimes(2);
+    // The shared read-only checkout sweep runs as a second eviction pass.
+    expect(sharedEvictIdle).toHaveBeenCalledTimes(2);
     expect(preWarm).toHaveBeenCalledWith(target);
     expect(evaluateActive).toHaveBeenCalledWith(target);
     expect(evaluateActive).toHaveBeenCalledWith();
@@ -64,6 +70,9 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
     });
     const sweep = jest.fn(() => pendingSweep);
     const evictIdle = jest.fn().mockResolvedValue(undefined);
+    const sharedEvictIdle = jest
+      .fn()
+      .mockResolvedValue({ scanned: 0, evicted: 0, protected: 0 });
     const evaluateActive = jest.fn().mockResolvedValue([]);
     const scheduler = createGroundingMaintenanceScheduler({
       preWarmService: {
@@ -71,6 +80,7 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
         preWarm: jest.fn().mockResolvedValue(undefined),
       },
       evictionService: { evictIdle },
+      sharedReadCheckoutService: { evictIdle: sharedEvictIdle },
       stalenessService: { evaluateActive },
       subscribe: () => jest.fn(),
     });
@@ -84,6 +94,7 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
     // Assert
     expect(sweep).toHaveBeenCalledTimes(1);
     expect(evictIdle).toHaveBeenCalledTimes(1);
+    expect(sharedEvictIdle).toHaveBeenCalledTimes(1);
     expect(evaluateActive).toHaveBeenCalledTimes(1);
   });
 });

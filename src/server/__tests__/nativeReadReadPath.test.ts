@@ -151,10 +151,19 @@ function dependencies(
   return {
     isGroundingEnabledForCaller: jest.fn().mockResolvedValue(true),
     isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(false),
+    isSharedReadCheckoutEnabledForCaller: jest.fn().mockResolvedValue(false),
     evaluateNativeReadCapability: jest.fn().mockReturnValue({
       proven: false,
       reason: 'harness-not-run',
     }),
+    sharedReadCheckout: {
+      materialize: jest.fn().mockResolvedValue({
+        workspacePath: checkoutPath,
+        outcome: 'materialized',
+      }),
+      retain: jest.fn(),
+      releaseRef: jest.fn(),
+    },
     ensureRepoCache: jest.fn().mockResolvedValue({ baseSha: sha }),
     groundingService: {
       activateGroundings: jest.fn().mockResolvedValue({
