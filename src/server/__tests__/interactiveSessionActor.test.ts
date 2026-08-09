@@ -10,7 +10,7 @@
  *  - stale-fence abort before further writes (BR-018)
  *  - graceful completion when Redis (publishLive) is unconfigured
  */
-import { AiRunFenceConflictError } from '../services/aiRunsWorker/callbackClient';
+import { AiRunCallbackError, AiRunFenceConflictError } from '../services/aiRunsWorker/callbackClient';
 import type {
   WorkerCursorExecution,
   WorkerCursorExecutionRun,
@@ -219,6 +219,39 @@ describe('interactiveSessionActor', () => {
     expect(posted.some((b) => b.kind === 'terminal' && b.status === 'completed')).toBe(
       false,
     );
+  });
+
+  it('does not surface Interactive turn failed when Stop races ahead of the heartbeat', async () => {
+    const posted: AiRunIngestBody[] = [];
+    const { publishLive, live } = captureLive();
+    const onCancel = jest.fn();
+    const deps: InteractiveActorDependencies = {
+      openWarmCheckout: jest.fn(async () => ({ workspacePath: '/warm/checkout' })),
+      createExecution: jest.fn(async () => makeExecution({ toolCall: true, onCancel })),
+      heartbeatMs: 0,
+      publishLive,
+      postIngest: jest.fn(async (_p, _r, body): Promise<AiRunIngestResponse> => {
+        posted.push(body);
+        if (body.kind === 'progress') {
+          // Mimic cancelRun terminalizing before the actor observes cancelRequested.
+          throw new AiRunCallbackError(
+            'Cannot apply progress to cancelled run',
+            409,
+            'AI_RUN_ILLEGAL_TRANSITION',
+          );
+        }
+        return { ok: true, cancelRequested: false };
+      }),
+    };
+
+    const actor = createInteractiveSessionActor(deps);
+    const outcome = await actor.handleTurn(makeRequest());
+
+    expect(outcome.status).toBe('cancelled');
+    expect(onCancel).toHaveBeenCalled();
+    expect(posted.some((b) => b.kind === 'cancel_ack')).toBe(true);
+    expect(live.some((e) => e.event.type === 'error')).toBe(false);
+    expect(live.some((e) => e.event.type === 'done')).toBe(true);
   });
 
   it('aborts the turn on a stale dispatch fence before any further write', async () => {

@@ -39,7 +39,10 @@ import {
   type CursorExecutionResult,
 } from '../cursorExecutionCore';
 import type { WorkerCursorExecution } from '../aiRunsWorker/cursorExecution';
-import { AiRunFenceConflictError } from '../aiRunsWorker/callbackClient';
+import {
+  AiRunCallbackError,
+  AiRunFenceConflictError,
+} from '../aiRunsWorker/callbackClient';
 import { workerTierTelemetry, type WorkerTierTelemetry } from '../workerTierTelemetry';
 import {
   createIncrementalTokenBatcher,
@@ -61,6 +64,14 @@ class InteractiveCancellationObservedError extends Error {
     super('Interactive turn cancellation requested');
     this.name = 'InteractiveCancellationObservedError';
   }
+}
+
+/** Stop raced ahead and terminalized the run before a heartbeat observed it. */
+function isStopRaceIngestError(error: unknown): boolean {
+  return (
+    error instanceof AiRunCallbackError
+    && error.code === 'AI_RUN_ILLEGAL_TRANSITION'
+  );
 }
 
 /** Warm per-thread session reused across turns (single activation). */
@@ -184,6 +195,10 @@ export function createInteractiveSessionActor(
       } catch (error) {
         if (error instanceof AiRunFenceConflictError) {
           fenceConflict = error;
+          await stopRun();
+        } else if (isStopRaceIngestError(error)) {
+          // cancelRun already terminalized — stop the SDK and exit as cancelled.
+          cancellationRequested = true;
           await stopRun();
         }
         throw error;
@@ -354,7 +369,8 @@ export function createInteractiveSessionActor(
       }
       if (
         cancellationRequested ||
-        error instanceof InteractiveCancellationObservedError
+        error instanceof InteractiveCancellationObservedError ||
+        isStopRaceIngestError(error)
       ) {
         await dependencies
           .postIngest(projectId, runId, {
@@ -364,6 +380,8 @@ export function createInteractiveSessionActor(
           })
           .catch(() => {});
         // Clear the live spinner (durable cancel/done covers replay).
+        // Never publish a live `error` on user Stop — the client would show
+        // "Interactive turn failed" with Try again.
         await publishLiveEvent({ type: 'done', runId }).catch(() => {});
         return { status: 'cancelled' };
       }

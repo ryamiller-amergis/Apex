@@ -503,6 +503,13 @@ export async function ingest(
   }
 
   if (body.kind === 'heartbeat' || body.kind === 'progress') {
+    // User Stop (cancelRun) often terminalizes the run before the interactive
+    // actor / worker observes cancelRequested on its next heartbeat. Returning
+    // cancelRequested here lets the turn exit cooperatively instead of treating
+    // the race as a fatal "Interactive turn failed".
+    if (existing.status === 'cancelled') {
+      return { run: mapRow(existing), cancelRequested: true };
+    }
     if (isAgentRunTerminalStatus(existing.status) || existing.status === 'queued') {
       throw new AiRunIngestError(
         `Cannot apply ${body.kind} to ${existing.status} run`,

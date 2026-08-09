@@ -647,4 +647,41 @@ describe('aiRunIngestService durable final interactive message', () => {
       ),
     ).resolves.toBeDefined();
   });
+
+  it('Stop race: progress on an already-cancelled run returns cancelRequested (no throw)', async () => {
+    mockFindFirst.mockResolvedValue(baseRow({
+      status: 'cancelled',
+      cancelRequested: false,
+      lane: 'ai-runs-interactive',
+    }));
+
+    await expect(
+      ingest('project-1', 'run-1', {
+        dispatchMessageId: 'dispatch-current',
+        kind: 'progress',
+        phase: 'implementation',
+        status: 'running',
+      }),
+    ).resolves.toMatchObject({
+      cancelRequested: true,
+      run: { status: 'cancelled' },
+    });
+
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockNotifyRunEvent).not.toHaveBeenCalled();
+  });
+
+  it('Stop race: heartbeat on an already-cancelled run returns cancelRequested (no throw)', async () => {
+    mockFindFirst.mockResolvedValue(baseRow({
+      status: 'cancelled',
+      lane: 'ai-runs-interactive',
+    }));
+
+    await expect(
+      ingest('project-1', 'run-1', {
+        dispatchMessageId: 'dispatch-current',
+        kind: 'heartbeat',
+      }),
+    ).resolves.toMatchObject({ cancelRequested: true });
+  });
 });

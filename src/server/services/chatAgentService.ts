@@ -4872,7 +4872,12 @@ export async function cancelRun(threadId: string): Promise<void> {
   } else {
     // @feature-flag:event-driven-run-termination disabled-start
     const [cancelledRun] = await db.update(agentRuns)
-      .set({ status: 'cancelled', updatedAt: new Date().toISOString() })
+      .set({
+        status: 'cancelled',
+        cancelRequested: true,
+        cancelState: 'requested',
+        updatedAt: new Date().toISOString(),
+      })
       .where(and(
         eq(agentRuns.id, activeRunId),
         inArray(agentRuns.status, ['queued', 'running']),
