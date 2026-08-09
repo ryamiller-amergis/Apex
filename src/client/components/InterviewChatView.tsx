@@ -575,7 +575,7 @@ const NewInterviewCompose: React.FC = () => {
   }, []);
 
   const handleStagedLinkedContextKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDialogElement>) => {
+    (event: React.KeyboardEvent<HTMLDialogElement>) => {
       if (event.key === 'Escape') {
         event.preventDefault();
         closeStagedLinkedContext();
@@ -1058,7 +1058,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   }, []);
 
   const handleLinkedContextPanelKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDialogElement>) => {
+    (event: React.KeyboardEvent<HTMLDialogElement>) => {
       if (event.key === 'Escape') {
         event.preventDefault();
         closeLinkedContext();
