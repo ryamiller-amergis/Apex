@@ -16,7 +16,7 @@ export interface BundleRef {
 export type MaterializeResult =
   | {
       status: 'materialized';
-      source: 'bundle' | 'repair';
+      source: 'workspace' | 'bundle' | 'repair';
     }
   | {
       status: 'remote-fallback';

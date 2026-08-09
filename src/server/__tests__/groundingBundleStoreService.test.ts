@@ -124,6 +124,41 @@ describe('AC-0 rehydrates an isolated checkout at the exact pinned SHA', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('reuses an existing checkout at the exact pinned SHA without downloading it again', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'grounding-warm-reuse-'));
+    const destination = join(root, 'isolated-checkout');
+    const downloadToFile = jest.fn();
+
+    try {
+      await runRealGit(['init', destination]);
+      await runRealGit(
+        ['config', 'user.email', 'apex-tests@example.invalid'],
+        destination
+      );
+      await runRealGit(['config', 'user.name', 'Apex Tests'], destination);
+      await writeFile(join(destination, 'snapshot.txt'), 'pinned content');
+      await runRealGit(['add', 'snapshot.txt'], destination);
+      await runRealGit(['commit', '-m', 'pinned commit'], destination);
+      const pinnedSha = (
+        await runRealGit(['rev-parse', 'HEAD'], destination)
+      ).trim();
+      const store = createGroundingBundleStore({
+        getContainerClient: () => fakeContainer({ downloadToFile }),
+        repairAndMaterialize: jest.fn(),
+      });
+
+      await expect(
+        store.rehydrate({ ...identity, sha: pinnedSha }, destination)
+      ).resolves.toEqual({ status: 'materialized', source: 'workspace' });
+      expect(downloadToFile).not.toHaveBeenCalled();
+      await expect(
+        readFile(join(destination, 'snapshot.txt'), 'utf8')
+      ).resolves.toBe('pinned content');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('AC-1 missing or corrupt bundle repairs before controlled fallback', () => {
@@ -385,9 +420,15 @@ describe('performance/observability privacy-safe hit/miss and duration signals',
     const downloadToFile = jest.fn(async (bundlePath: string) => {
       await writeFile(bundlePath, `source ${secret}`);
     });
-    const runGit: GitRunner = jest.fn(async (args) =>
-      args.includes('rev-parse') ? `${SHA}\n` : ''
-    );
+    let cloned = false;
+    const runGit: GitRunner = jest.fn(async (args) => {
+      if (args.includes('clone')) cloned = true;
+      if (args.includes('rev-parse')) {
+        if (!cloned) throw new Error('not a git checkout');
+        return `${SHA}\n`;
+      }
+      return '';
+    });
     const store = createGroundingBundleStore({
       getContainerClient: () => fakeContainer({ downloadToFile }),
       repairAndMaterialize: jest.fn(),
