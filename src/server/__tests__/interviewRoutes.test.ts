@@ -862,6 +862,33 @@ describe('POST /api/interviews/:interviewId/prds', () => {
     });
   });
 
+  it('returns the PRD immediately while generation kickoff continues in the background', async () => {
+    let finishKickoff!: () => void;
+    mockInterviewService.getInterview.mockResolvedValue(interview);
+    mockPrdService.createPrd.mockResolvedValue({
+      prdId: 'prd-new',
+      threadId: 'thread-new',
+    });
+    mockPrdService.routePrdGenerationKickoff.mockImplementationOnce(
+      () => new Promise<void>((resolve) => {
+        finishKickoff = resolve;
+      }),
+    );
+
+    const res = await request(buildApp())
+      .post('/api/interviews/interview-1/prds')
+      .send({ chatThreadId: 'thread-new', kickoffGeneration: true });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({
+      prdId: 'prd-new',
+      threadId: 'thread-new',
+    });
+    expect(mockPrdService.routePrdGenerationKickoff).toHaveBeenCalledTimes(1);
+
+    finishKickoff();
+  });
+
   it('returns 404 when interview does not exist', async () => {
     mockInterviewService.getInterview.mockResolvedValue(null);
 

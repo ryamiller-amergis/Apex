@@ -22,6 +22,7 @@ jest.mock('../db/drizzle', () => {
     __mockUpdateChains: mockUpdateChains,
     db: {
       query: {
+        agentRuns: { findFirst: jest.fn().mockResolvedValue(null) },
         chatThreads: { findFirst: jest.fn() },
         interviews: { findFirst: jest.fn() },
         prds: { findFirst: jest.fn() },
@@ -99,6 +100,7 @@ jest.mock('../services/prdService', () => ({
 
 import {
   getTestCases,
+  isTestCaseWatcherActive,
   listLatestTestCaseSummariesForPrds,
   readOutputTestCases,
   readOutputTestCasesMd,
@@ -343,6 +345,7 @@ describe('testCaseService', () => {
         expect(mockPrepareBackgroundWorkflowTurn).not.toHaveBeenCalled();
         expect(mockRunGroundingService.getGroundings).not.toHaveBeenCalled();
         expect(mockPropagatePipelineGrounding).not.toHaveBeenCalled();
+        expect(isTestCaseWatcherActive('tc-new')).toBe(true);
 
         // Drain the watcher started by triggerTestCaseGeneration so it cannot
         // keep polling after this test file moves on to other mocks.
@@ -401,6 +404,68 @@ describe('testCaseService', () => {
           { runType: 'chat', runId: 'thread-tc', project: 'proj-alpha' },
           'user-1',
         );
+        expect(isTestCaseWatcherActive('tc-new')).toBe(true);
+
+        mockDb.query.testCases.findFirst.mockResolvedValue(null);
+        jest.advanceTimersByTime(5_000);
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+      } finally {
+        fs.rmSync(workspaceDir, { recursive: true, force: true });
+      }
+    });
+
+    it('does not start the output watcher when routing recovers as preparation failure', async () => {
+      jest.useFakeTimers();
+      const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-pilot-test-cases-recover-'));
+      mockCreateThread.mockResolvedValue({ id: 'thread-tc', workspaceDir });
+      mockDb.query.prds.findFirst.mockResolvedValue({
+        id: 'prd-1',
+        project: 'proj-alpha',
+        authorId: 'user-1',
+        title: 'Feature PRD',
+        content: '# PRD',
+        backlogJson: {},
+      });
+      mockDb.query.testCases.findFirst.mockResolvedValue(null);
+      mockGetSkillConfig.mockResolvedValue({
+        skillRepo: 'org/skills',
+        testCaseSkillPath: '.cursor/skills/test-cases/SKILL.md',
+      });
+      const deactivated = jest.fn();
+      mockRunGroundingService.persistThenMarkTerminalInactive.mockImplementationOnce(
+        async (_run, persist) => {
+          await persist();
+          deactivated();
+        },
+      );
+      mockRouteBackgroundWorkflow.mockImplementationOnce(
+        async (input: { reportRecoverablePreparationFailure(): Promise<void> }) => {
+          await input.reportRecoverablePreparationFailure();
+          return {
+            route: 'in-process',
+            reason: 'materialization-unavailable',
+            recoverable: true,
+          };
+        },
+      );
+
+      try {
+        await triggerTestCaseGeneration('prd-1', 'source-thread');
+
+        expect(mockUpdateChains.some(
+          (chain) => chain.set.mock.calls.some(
+            ([payload]) => payload.status === 'failed',
+          ),
+        )).toBe(true);
+        const failedUpdate = mockUpdateChains.find(
+          (chain) => chain.set.mock.calls.some(
+            ([payload]) => payload.status === 'failed',
+          ),
+        );
+        expect(failedUpdate?.where.mock.invocationCallOrder[0])
+          .toBeLessThan(deactivated.mock.invocationCallOrder[0]);
+        expect(mockSendMessage).not.toHaveBeenCalled();
+        expect(isTestCaseWatcherActive('tc-new')).toBe(false);
 
         mockDb.query.testCases.findFirst.mockResolvedValue(null);
         jest.advanceTimersByTime(5_000);

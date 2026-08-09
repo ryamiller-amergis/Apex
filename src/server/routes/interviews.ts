@@ -2508,12 +2508,19 @@ router.post('/:interviewId/prds', requirePermission('interviews:manage'), async 
     });
     startPrdWatcher(result.prdId, chatThreadId);
     if (kickoffGeneration) {
-      await routePrdGenerationKickoff({
-        prdId: result.prdId,
-        userId,
-        project: interview.project,
-        threadId: chatThreadId,
-        kickoffMessage: 'Begin.',
+      void Promise.resolve(
+        routePrdGenerationKickoff({
+          prdId: result.prdId,
+          userId,
+          project: interview.project,
+          threadId: chatThreadId,
+          kickoffMessage: 'Begin.',
+        }),
+      ).catch((err: unknown) => {
+        console.error(
+          `[interviews] Failed to start PRD generation (prdId=${result.prdId}, threadId=${chatThreadId}):`,
+          err,
+        );
       });
     }
     res.status(201).json(result);

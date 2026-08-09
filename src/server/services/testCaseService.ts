@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { chatThreads, interviews, prds, testCases } from '../db/schema';
+import { agentRuns, chatThreads, interviews, prds, testCases } from '../db/schema';
 import type {
   TestCaseCoverageSummary,
   TestCaseRecord,
@@ -803,8 +803,6 @@ export async function triggerTestCaseGeneration(
     })
     .returning({ id: testCases.id });
 
-  startTestCaseWatcher(testCaseRow.id, thread.id);
-
   const kickoffMessage =
     'Generate QA test cases for the provided PRD and backlog. Use the configured skill instructions and write the required output files.';
   const destinationRun = {
@@ -819,8 +817,13 @@ export async function triggerTestCaseGeneration(
     );
   };
 
+  // Do not start the output watcher until routing succeeds. Background
+  // materialization can take longer than WATCHER_INTERVAL_MS, and the thread
+  // stays idle until the worker begins — an early watcher would delete the
+  // scratch workspace mid-prep and force workspace-preparation-failed.
+  let routedSuccessfully = false;
   try {
-    await routeBackgroundWorkflow({
+    const decision = await routeBackgroundWorkflow({
       userId: actorUserId ?? prdRow.authorId,
       workflowClass: 'test-cases',
       destinationRun,
@@ -872,8 +875,17 @@ export async function triggerTestCaseGeneration(
       },
       reportRecoverablePreparationFailure: reportPreparationFailure,
     });
+    routedSuccessfully = !(
+      decision.route === 'in-process'
+      && 'recoverable' in decision
+      && decision.recoverable
+    );
   } catch {
     await reportPreparationFailure();
+  }
+
+  if (routedSuccessfully) {
+    startTestCaseWatcher(testCaseRow.id, thread.id);
   }
 
   console.log(
@@ -920,6 +932,20 @@ export function startTestCaseWatcher(
       clearInterval(interval);
       activeTestCaseWatchers.delete(testCaseId);
       await syncTestCaseOutput(testCaseId, row.prdId, chatThreadId);
+      return;
+    }
+
+    // Background lane keeps the App Service thread idle while the job is
+    // queued/dispatched/running. Only treat idle as "finished without output"
+    // once there is no in-flight agent run for this thread.
+    const inFlightRun = await db.query.agentRuns.findFirst({
+      where: and(
+        eq(agentRuns.threadId, chatThreadId),
+        inArray(agentRuns.status, ['queued', 'dispatched', 'running']),
+      ),
+      columns: { id: true },
+    });
+    if (inFlightRun) {
       return;
     }
 
