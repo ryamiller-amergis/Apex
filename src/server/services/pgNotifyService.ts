@@ -319,6 +319,27 @@ async function finalizeAgentRun(
         ],
       );
     }
+
+    // Reset the owning chat thread to idle in the SAME transaction as the run's
+    // terminal transition. This makes the finalizer the single authority for the
+    // thread's persisted status so it can never lag its terminal run (which would
+    // leave the client stuck showing "Agent is thinking…" until the reaper caught
+    // up). The active_run_id CAS makes this safe for non-chat runs and for the
+    // case where a newer run has already claimed the thread — we only ever clear
+    // our own claim (or a claim that was already cleared). This mirrors the
+    // reaper's end-state (idle + cleared claim + last_error on failure) so both
+    // paths converge on an identical thread state.
+    await client.query(
+      `UPDATE chat_threads
+          SET status = 'idle',
+              active_run_id = NULL,
+              last_error = $1,
+              last_activity_at = CURRENT_TIMESTAMP
+        WHERE id = $2
+          AND (active_run_id = $3 OR active_run_id IS NULL)`,
+      [input.status === 'failed' ? input.detail : null, input.threadId, input.runId],
+    );
+
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);

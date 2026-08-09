@@ -118,6 +118,7 @@ describe('pgNotifyService durable run events', () => {
       .mockResolvedValueOnce({ rows: [] }) // BEGIN
       .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'run-1' }] }) // CAS
       .mockResolvedValueOnce({ rowCount: 1, rows: [] }) // event insert
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] }) // chat_threads reset
       .mockResolvedValueOnce({ rows: [] }); // COMMIT
     const release = jest.fn();
     mockPoolConnect.mockResolvedValue({ query: clientQuery, release });
@@ -136,6 +137,7 @@ describe('pgNotifyService durable run events', () => {
       'BEGIN',
       'UPDATE',
       'INSERT',
+      'UPDATE',
       'COMMIT',
     ]);
     expect(clientQuery.mock.calls[1][0]).toContain('owner_instance = $4');
@@ -179,6 +181,7 @@ describe('pgNotifyService durable run events', () => {
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'run-1' }] })
       .mockResolvedValueOnce({ rowCount: 1, rows: [] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] })
       .mockResolvedValueOnce({ rows: [] });
     const release = jest.fn();
     mockPoolConnect.mockResolvedValue({ query: clientQuery, release });
@@ -197,14 +200,47 @@ describe('pgNotifyService durable run events', () => {
     );
     expect(clientQuery.mock.calls[1][0]).not.toContain('owner_instance');
     expect(clientQuery.mock.calls.map(([sql]) => String(sql).trim().split(/\s+/)[0]))
-      .toEqual(['BEGIN', 'UPDATE', 'INSERT', 'COMMIT']);
+      .toEqual(['BEGIN', 'UPDATE', 'INSERT', 'UPDATE', 'COMMIT']);
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it('resets chat_threads to idle in the finalizer transaction after an interactive terminal', async () => {
+    const clientQuery = jest.fn()
+      .mockResolvedValueOnce({ rows: [] }) // BEGIN
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'run-1' }] }) // CAS
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] }) // event insert
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] }) // chat_threads reset
+      .mockResolvedValueOnce({ rows: [] }); // COMMIT
+    const release = jest.fn();
+    mockPoolConnect.mockResolvedValue({ query: clientQuery, release });
+    mockPoolQuery.mockResolvedValue({ rowCount: 1, rows: [] });
+
+    await expect(finalizeReconciledAgentRun({
+      runId: envelope.runId,
+      threadId: envelope.threadId,
+      status: 'completed',
+      detail: 'Awaiting user input',
+      events: [envelope],
+    })).resolves.toBe(true);
+
+    // The chat_threads reset runs inside the transaction, immediately before COMMIT.
+    const threadReset = clientQuery.mock.calls[3];
+    expect(String(threadReset[0])).toContain('UPDATE chat_threads');
+    expect(String(threadReset[0])).toContain("status = 'idle'");
+    expect(String(threadReset[0])).toContain('active_run_id = NULL');
+    // CAS guard: only clear this run's own claim (or an already-cleared claim).
+    expect(String(threadReset[0])).toContain('active_run_id = $3 OR active_run_id IS NULL');
+    // A successful terminal clears last_error and targets the owning thread + run.
+    expect(threadReset[1]).toEqual([null, envelope.threadId, envelope.runId]);
+    // COMMIT follows the thread reset — the reset is durable, not a post-commit patch.
+    expect(String(clientQuery.mock.calls[4][0]).trim()).toBe('COMMIT');
   });
 
   it('FEAT-001 VT-05 atomically fences terminal completion and stores its reason', async () => {
     const clientQuery = jest.fn()
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'run-1' }] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] })
       .mockResolvedValueOnce({ rowCount: 1, rows: [] })
       .mockResolvedValueOnce({ rows: [] });
     const release = jest.fn();
