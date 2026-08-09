@@ -23,6 +23,11 @@ This skill is loaded when the `rbac-governance` rule determines that an add, rem
 | `chat:view_all` | chat | View all users' chat threads | ✓ | | |
 | `home:view` | chat | Access the Agent Home page | ✓ | ✓ | ✓ |
 | `cost:view` | cost | View cost and usage data | ✓ | | ✓ |
+| `diagram:view` | diagram | View owned and shared Diagrams | ✓ | ✓ | ✓ |
+| `diagram:create` | diagram | Create Diagrams | ✓ | ✓ | |
+| `diagram:edit` | diagram | Edit owned or editable shared Diagrams | ✓ | ✓ | |
+| `diagram:delete` | diagram | Delete owned Diagrams | ✓ | ✓ | |
+| `diagram:share` | diagram | Manage shares for owned Diagrams | ✓ | ✓ | |
 | `deployments:create` | deployments | Create deployments | ✓ | ✓ | |
 | `deployments:manage` | deployments | Manage existing deployments | ✓ | | |
 | `planning:view` | planning | View planning analytics pages | ✓ | ✓ | ✓ |

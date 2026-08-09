@@ -11,6 +11,7 @@ import { agentRuns, chatThreads } from '../db/schema';
 import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
 import { randomUUID } from 'crypto';
 import type {
+  AgentRunEventEnvelope,
   AgentRunEventStatus,
   AgentRunHealth,
   AgentRunPhase,
@@ -24,11 +25,21 @@ import {
 } from './pgNotifyService';
 import { getMyWorkSessionContext, logMyWorkSession } from './myWorkSessionLogger';
 import { isFeatureEnabled } from './featureFlagService';
+import {
+  markTerminal,
+  shouldApplyWorkerLifecycle,
+} from './agentRunLifecycleService';
+import { recoverStaleDispatchedRuns } from './admissionGovernorService';
+import { workerTierTelemetry } from './workerTierTelemetry';
 
 const REAP_INTERVAL_MS = 60_000;
 export const RETIRE_REAP_INTERVAL_MS = 5 * 60_000;
 const LONG_RUNNING_PREFIX = 'Long-running agent run';
 const WATCHDOG_SOURCE_INSTANCE = `${RUN_EVENT_SOURCE_INSTANCE}:watchdog`;
+const DEFAULT_WORKER_HEARTBEAT_TIMEOUT_MS = 90_000;
+const DEFAULT_DISPATCH_COLD_START_MS = 5 * 60_000;
+const DEFAULT_WORKER_PROGRESS_TIMEOUT_MS = 10 * 60_000;
+const DEFAULT_CANCEL_GRACE_MS = 60_000;
 
 let reaperTimer: ReturnType<typeof setInterval> | null = null;
 let lastRetireReapAt = 0;
@@ -36,6 +47,16 @@ let lastRetireReapAt = 0;
 export interface AgentRunHealthConfig {
   heartbeatTimeoutMs: number;
   queuedTimeoutMs: number;
+  /** Fail background worker runs that remain queued beyond this starvation backstop. */
+  backgroundQueueTtlMs?: number;
+  /** Background-worker heartbeat clock; never applied to legacy in-process rows. */
+  workerHeartbeatTimeoutMs?: number;
+  /** Admit-to-worker-start clock before the current fenced dispatch is republished. */
+  dispatchColdStartMs?: number;
+  /** Background-worker meaningful-progress clock. */
+  workerProgressTimeoutMs?: number;
+  /** Maximum cooperative-cancellation acknowledgement grace. */
+  cancelGraceMs?: number;
   progressStaleMs: number;
   /** Fail the run after this much time without meaningful progress (must be >= progressStaleMs). */
   progressAbortMs: number;
@@ -99,6 +120,26 @@ export function resolveAgentRunHealthConfig(): AgentRunHealthConfig {
   return {
     heartbeatTimeoutMs: positiveDuration(process.env.AGENT_HEARTBEAT_TIMEOUT_MS, 5 * 60_000),
     queuedTimeoutMs: positiveDuration(process.env.AGENT_QUEUE_TIMEOUT_MS, 90_000),
+    backgroundQueueTtlMs: positiveDuration(
+      process.env.AI_RUNS_BACKGROUND_QUEUE_TTL_MS,
+      30 * 60_000,
+    ),
+    workerHeartbeatTimeoutMs: positiveDuration(
+      process.env.AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS,
+      DEFAULT_WORKER_HEARTBEAT_TIMEOUT_MS,
+    ),
+    dispatchColdStartMs: positiveDuration(
+      process.env.AI_RUN_DISPATCH_COLDSTART_MS,
+      DEFAULT_DISPATCH_COLD_START_MS,
+    ),
+    workerProgressTimeoutMs: positiveDuration(
+      process.env.AI_RUN_PROGRESS_TIMEOUT_MS,
+      DEFAULT_WORKER_PROGRESS_TIMEOUT_MS,
+    ),
+    cancelGraceMs: positiveDuration(
+      process.env.AI_RUN_CANCEL_GRACE_MS,
+      DEFAULT_CANCEL_GRACE_MS,
+    ),
     progressStaleMs,
     progressAbortMs,
     inFlightToolMaxMs,
@@ -161,6 +202,35 @@ function ageMs(timestamp: string | null | undefined, nowMs: number): number {
   if (!timestamp) return Number.POSITIVE_INFINITY;
   const parsed = Date.parse(timestamp);
   return Number.isFinite(parsed) ? nowMs - parsed : Number.POSITIVE_INFINITY;
+}
+
+function workerTelemetryContext(row: {
+  id: string;
+  projectId?: string | null;
+  lane?: string | null;
+  dispatchMessageId?: string | null;
+}): {
+  runId: string;
+  project?: string;
+  lane?: string;
+  dispatchMessageId?: string;
+} {
+  return {
+    runId: row.id,
+    ...(row.projectId ? { project: row.projectId } : {}),
+    ...(row.lane ? { lane: row.lane } : {}),
+    ...(row.dispatchMessageId
+      ? { dispatchMessageId: row.dispatchMessageId }
+      : {}),
+  };
+}
+
+function emitWorkerTelemetry(emit: () => void): void {
+  try {
+    emit();
+  } catch {
+    // Telemetry must never alter watchdog lifecycle outcomes.
+  }
 }
 
 /**
@@ -239,11 +309,16 @@ export async function isThreadRunAlive(
   // @feature-flag:event-driven-run-termination start winner=enabled
   if (eventDrivenEnabled) {
     // @feature-flag:event-driven-run-termination enabled-start
-    return rows.some((row) => !row.timeoutAt || Date.parse(row.timeoutAt) > nowMs);
+    return rows.some(
+      (row) => shouldApplyWorkerLifecycle(row)
+        || !row.timeoutAt
+        || Date.parse(row.timeoutAt) > nowMs,
+    );
     // @feature-flag:event-driven-run-termination enabled-end
   }
   // @feature-flag:event-driven-run-termination disabled-start
   return rows.some((row) => {
+    if (shouldApplyWorkerLifecycle(row)) return true;
     const progressAt = (row as typeof row & { progressAt?: string | null }).progressAt;
     const progressLabel = (row as typeof row & { progressLabel?: string | null }).progressLabel;
     const health = assessAgentRunHealth({ ...row, progressAt, progressLabel }, nowMs, config);
@@ -397,22 +472,258 @@ async function publishCancelSignal(threadId: string, runId: string, timestamp: s
   }, { persist: true });
 }
 
+function workerHealthEvent(input: {
+  runId: string;
+  threadId: string;
+  health: Extract<AgentRunHealth, 'worker_lost' | 'progress_timeout'>;
+  detail: string;
+  timestamp: string;
+  phase?: AgentRunPhase | null;
+}): AgentRunEventEnvelope {
+  const event: SseHealthEvent = {
+    type: 'health',
+    health: input.health,
+    detail: input.detail,
+    runId: input.runId,
+    eventTimestamp: input.timestamp,
+  };
+  return {
+    eventId: randomUUID(),
+    threadId: input.threadId,
+    runId: input.runId,
+    sourceInstance: WATCHDOG_SOURCE_INSTANCE,
+    sequence: nextRunEventSequence(input.runId, WATCHDOG_SOURCE_INSTANCE),
+    timestamp: input.timestamp,
+    type: 'health',
+    phase: input.phase ?? 'completion',
+    status: 'failed',
+    detail: input.detail,
+    event,
+  };
+}
+
+function workerCancelEvent(input: {
+  runId: string;
+  threadId: string;
+  detail: string;
+  timestamp: string;
+}): AgentRunEventEnvelope {
+  return {
+    eventId: randomUUID(),
+    threadId: input.threadId,
+    runId: input.runId,
+    sourceInstance: WATCHDOG_SOURCE_INSTANCE,
+    sequence: nextRunEventSequence(input.runId, WATCHDOG_SOURCE_INSTANCE),
+    timestamp: input.timestamp,
+    type: 'cancel',
+    phase: 'completion',
+    status: 'cancelled',
+    detail: input.detail,
+    event: { type: 'cancel' },
+  };
+}
+
 /**
  * Reap failed runs and persist non-terminal progress warnings.
  */
 export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<void> {
   try {
     const config = options.config ?? resolveAgentRunHealthConfig();
+    const workerHeartbeatTimeoutMs =
+      config.workerHeartbeatTimeoutMs ?? DEFAULT_WORKER_HEARTBEAT_TIMEOUT_MS;
+    const dispatchColdStartMs =
+      config.dispatchColdStartMs ?? DEFAULT_DISPATCH_COLD_START_MS;
+    const workerProgressTimeoutMs =
+      config.workerProgressTimeoutMs ?? DEFAULT_WORKER_PROGRESS_TIMEOUT_MS;
+    const cancelGraceMs = config.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
     const nowMs = options.now?.() ?? Date.now();
     const updatedAt = new Date(nowMs).toISOString();
     const rows = await db.query.agentRuns.findMany({
-      where: inArray(agentRuns.status, ['queued', 'running']),
+      where: inArray(agentRuns.status, ['queued', 'running', 'dispatched']),
     });
     const eventDrivenTerminationEnabled =
       options.eventDrivenTerminationEnabled ??
       isEventDrivenTerminationEnabledForThread;
+    let recoverColdStarts = false;
 
     for (const row of rows) {
+      // Worker-lane rows are governed only by lifecycle/fence-aware clocks.
+      // They must never fall through to the legacy AGENT_* watchdog behavior.
+      if (shouldApplyWorkerLifecycle(row)) {
+        if (row.status === 'queued') {
+          const queuedAt = row.queuedAt ?? row.createdAt;
+          const backgroundQueueTtlMs = config.backgroundQueueTtlMs ?? 30 * 60_000;
+          if (ageMs(queuedAt, nowMs) >= backgroundQueueTtlMs) {
+            const detail = 'Background run exceeded the configured queue TTL';
+            const errorEvent = {
+              eventId: randomUUID(),
+              threadId: row.threadId,
+              runId: row.id,
+              sourceInstance: WATCHDOG_SOURCE_INSTANCE,
+              sequence: nextRunEventSequence(row.id, WATCHDOG_SOURCE_INSTANCE),
+              timestamp: updatedAt,
+              type: 'error' as const,
+              phase: 'completion' as const,
+              status: 'failed' as const,
+              detail,
+              event: { type: 'error' as const, error: detail },
+            };
+            const won = await finalizeReconciledAgentRun({
+              runId: row.id,
+              threadId: row.threadId,
+              status: 'failed',
+              terminalReason: 'queue_ttl',
+              detail,
+              events: [errorEvent],
+            });
+            if (won) {
+              await db
+                .update(chatThreads)
+                .set({
+                  status: 'idle',
+                  activeRunId: null,
+                  lastError: detail,
+                  lastActivityAt: updatedAt,
+                })
+                .where(and(
+                  eq(chatThreads.id, row.threadId),
+                  or(eq(chatThreads.activeRunId, row.id), isNull(chatThreads.activeRunId)),
+                ));
+              console.log(
+                `[reaper] Reaped queued background run (id=${row.id}, threadId=${row.threadId}) — queue TTL expired`,
+              );
+              emitWorkerTelemetry(() => {
+                workerTierTelemetry.reaperAction(
+                  workerTelemetryContext(row),
+                );
+              });
+              emitWorkerTelemetry(() => {
+                workerTierTelemetry.terminalReason(
+                  workerTelemetryContext(row),
+                  'queue_ttl',
+                );
+              });
+            }
+          }
+          continue;
+        }
+
+        // A current dispatch fence is required before the reaper can terminate
+        // or republish a dispatched/running worker row.
+        if (
+          (row.status !== 'dispatched' && row.status !== 'running')
+          || !row.dispatchMessageId
+        ) {
+          continue;
+        }
+
+        if (
+          row.cancelRequested
+          && row.cancelState === 'requested'
+          && ageMs(row.updatedAt, nowMs) >= cancelGraceMs
+        ) {
+          const detail = 'Background worker cancellation grace expired';
+          const terminal = await markTerminal(row.id, {
+            status: 'cancelled',
+            terminalReason: 'forced_cancel',
+            dispatchMessageId: row.dispatchMessageId,
+            detail,
+            events: [workerCancelEvent({
+              runId: row.id,
+              threadId: row.threadId,
+              detail,
+              timestamp: updatedAt,
+            })],
+          });
+          console.log(
+            `[reaper] Forced background cancellation (id=${row.id}, threadId=${row.threadId})`,
+          );
+          if (terminal.ok) {
+            emitWorkerTelemetry(() => {
+              workerTierTelemetry.reaperAction(
+                workerTelemetryContext(row),
+              );
+            });
+          }
+          continue;
+        }
+
+        if (row.status === 'dispatched') {
+          if (ageMs(row.dispatchedAt, nowMs) >= dispatchColdStartMs) {
+            recoverColdStarts = true;
+          }
+          continue;
+        }
+
+        if (ageMs(row.heartbeatAt, nowMs) >= workerHeartbeatTimeoutMs) {
+          const detail = 'Background worker heartbeat expired';
+          const terminal = await markTerminal(row.id, {
+            status: 'failed',
+            terminalReason: 'worker_lost',
+            dispatchMessageId: row.dispatchMessageId,
+            detail,
+            events: [workerHealthEvent({
+              runId: row.id,
+              threadId: row.threadId,
+              health: 'worker_lost',
+              detail,
+              timestamp: updatedAt,
+              phase: row.progressPhase,
+            })],
+          });
+          console.log(
+            `[reaper] Reaped background run (id=${row.id}, threadId=${row.threadId}) — heartbeat expired`,
+          );
+          if (terminal.ok) {
+            emitWorkerTelemetry(() => {
+              workerTierTelemetry.reaperAction(
+                workerTelemetryContext(row),
+              );
+            });
+          }
+          continue;
+        }
+
+        const meaningfulProgressAt =
+          row.progressAt ?? row.startedAt ?? row.dispatchedAt ?? row.createdAt;
+        if (
+          ageMs(meaningfulProgressAt, nowMs)
+          >= workerProgressTimeoutMs
+        ) {
+          const detail = 'Background worker progress expired';
+          const terminal = await markTerminal(row.id, {
+            status: 'failed',
+            terminalReason: 'progress_timeout',
+            dispatchMessageId: row.dispatchMessageId,
+            detail,
+            events: [workerHealthEvent({
+              runId: row.id,
+              threadId: row.threadId,
+              health: 'progress_timeout',
+              detail,
+              timestamp: updatedAt,
+              phase: row.progressPhase,
+            })],
+          });
+          console.log(
+            `[reaper] Reaped background run (id=${row.id}, threadId=${row.threadId}) — progress expired`,
+          );
+          if (terminal.ok) {
+            emitWorkerTelemetry(() => {
+              workerTierTelemetry.reaperAction(
+                workerTelemetryContext(row),
+              );
+            });
+          }
+        }
+        continue;
+      }
+
+      // Legacy in-process path never uses `dispatched`.
+      if (row.status === 'dispatched') {
+        continue;
+      }
+
       // The persisted marker is authoritative: an event-driven run intentionally
       // never writes a heartbeat, so classifying it via the legacy branch (on a
       // transient flag-eval miss) would mislabel it "Worker lost". Only fall back
@@ -598,6 +909,15 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
       }
       // @feature-flag:event-driven-run-termination disabled-end
       // @feature-flag:event-driven-run-termination end
+    }
+
+    if (recoverColdStarts) {
+      const recovery = await recoverStaleDispatchedRuns();
+      if (recovery.selected > 0) {
+        emitWorkerTelemetry(() => {
+          workerTierTelemetry.reaperAction({ lane: 'background' });
+        });
+      }
     }
   } catch (err) {
     console.error('[reaper] Failed to reap orphaned runs:', err);

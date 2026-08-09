@@ -6,10 +6,21 @@
  * doesn't need a native binary.
  *
  * Runs automatically via the "postinstall" npm script.
+ *
+ * Linux/macOS CI must keep native esbuild: swapping in a mismatched
+ * esbuild-wasm version corrupts the Vite transform IPC and panics mid-suite
+ * (`slice bounds out of range` → EPIPE → ECONNREFUSED on :3000).
+ * Override with FORCE_ESBUILD_WASM=1 if you need the patch off Windows.
  */
 
 const fs = require('fs');
 const path = require('path');
+
+const forceWasm = process.env.FORCE_ESBUILD_WASM === '1';
+if (process.platform !== 'win32' && !forceWasm) {
+  console.log('[patch-esbuild-wasm] Skipping on non-Windows (native esbuild).');
+  process.exit(0);
+}
 
 const root = path.join(__dirname, '..');
 const wasmSrc = path.join(root, 'node_modules', 'esbuild-wasm');

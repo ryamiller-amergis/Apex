@@ -41,7 +41,15 @@ import { getFeatureAutoCompleteService } from './services/featureAutoComplete';
 import { getUatAutoReleaseService } from './services/uatAutoReleaseService';
 import { startRecoveryLoop, registerGracefulShutdown } from './services/startupRecovery';
 import { startReaper, stopReaper } from './services/agentRunReaperService';
+import {
+  startAdmissionGovernorScheduler,
+  stopAdmissionGovernorScheduler,
+} from './services/admissionGovernorScheduler';
 import { initPgNotify, shutdownPgNotify } from './services/pgNotifyService';
+import {
+  initInteractiveLiveBus,
+  shutdownInteractiveLiveBus,
+} from './services/interactiveLiveBus';
 import platformAdminRouter from './routes/platformAdmin';
 import devWorkbenchRoutes from './routes/devWorkbench';
 import standupRouter from './routes/standup';
@@ -53,6 +61,10 @@ import { aiCostScheduler } from './services/aiCostScheduler';
 import { foundationSkillScanScheduler } from './services/foundationSkillScanScheduler';
 import { groundingMaintenanceScheduler } from './services/groundingMaintenanceScheduler';
 import { createSessionOptions, createSessionStore } from './sessionStore';
+import {
+  isInteractiveGatewayEnabled,
+  mountInteractiveGateway,
+} from './services/interactiveGatewayHost';
 import uiLabRoutes from './routes/uiLab';
 import pdfRoutes from './routes/pdf';
 import aiCostRoutes from './routes/aiCost';
@@ -61,6 +73,8 @@ import designModuleRoutes from './routes/designModule';
 import loadTestsRoutes from './routes/loadTests';
 import loadTestTargetsRoutes from './routes/loadTestTargets';
 import loadTestRunsInternalRoutes from './routes/loadTestRunsInternal';
+import aiRunsInternalRoutes from './routes/aiRunsInternal';
+import foundationSkillsAuthorizeRoutes from './routes/foundationSkillsAuthorize';
 import profileRoutes from './routes/profile';
 import walkthroughsRoutes from './routes/walkthroughs';
 import { startPdfProcessingPoller } from './services/pdfAssemblyService';
@@ -105,11 +119,16 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // sessions survive instance recycling. SESSION_STORE=file keeps the established
 // Azure Files-backed store available as an emergency fallback.
 const { store: sessionStore } = createSessionStore();
-app.use(session(createSessionOptions(sessionStore)));
+// FEAT-007: capture the session + passport handlers so the interactive
+// WebSocket gateway can replay the same auth chain on upgrade requests.
+const sessionMiddleware = session(createSessionOptions(sessionStore));
+const passportInitializeMiddleware = passport.initialize();
+const passportSessionMiddleware = passport.session();
+app.use(sessionMiddleware);
 
 // Initialize Passport
-app.use(passport.initialize());
-app.use(passport.session());
+app.use(passportInitializeMiddleware);
+app.use(passportSessionMiddleware);
 
 // Auth routes (no authentication required)
 app.use('/auth', authRoutes);
@@ -145,6 +164,13 @@ const unauthenticatedPaths = ['/health', '/health/db', '/health/agents'];
 // Load-test runner ingest/validate — session-free; auth is requireLoadTestRunnerAuth
 // on loadTestRunsInternalRoutes (LT_RUNNER_CALLBACK_TOKEN or runner MI JWT).
 const loadTestRunnerCallbackPaths = ['/internal/load-test-runs'];
+// AI runner ingest — session-free; requireAiRunnerAuth validates callback identity.
+const aiRunnerCallbackPaths = ['/internal/ai-runs'];
+
+// @apex/skills CLI entitlement lookup — session-free because the CLI runs on
+// developer machines and in CI with no Apex session. Read-only and returns no
+// secrets; reading the package itself still requires an Azure Artifacts token.
+const foundationSkillCliPaths = ['/internal/foundation-skills'];
 
 app.use('/api', (req, res, next) => {
   const isLocalhost = req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1';
@@ -153,8 +179,19 @@ app.use('/api', (req, res, next) => {
   const isLoadTestRunnerCallback = loadTestRunnerCallbackPaths.some((p) =>
     req.path.startsWith(p),
   );
+  const isAiRunnerCallback = aiRunnerCallbackPaths.some((p) =>
+    req.path.startsWith(p),
+  );
+  const isFoundationSkillCli = foundationSkillCliPaths.some((p) =>
+    req.path.startsWith(p),
+  );
 
-  if (isHealthPath || isLoadTestRunnerCallback) return next();
+  if (
+    isHealthPath
+    || isLoadTestRunnerCallback
+    || isAiRunnerCallback
+    || isFoundationSkillCli
+  ) return next();
 
   if (isInternalPath) {
     if (isLocalhost) return next();
@@ -200,6 +237,10 @@ app.use('/api/projects/:projectId/load-test-targets', ensureAuthenticated, loadT
 app.use('/api/projects/:projectId/walkthroughs', ensureAuthenticated, walkthroughsRoutes);
 // Runner ingest — session-free; auth is LT_RUNNER_CALLBACK_TOKEN (FEAT-007 / A-009).
 app.use('/api/internal/load-test-runs', loadTestRunsInternalRoutes);
+// AI runner ingest — session-free; auth is runner MI + AiRun.Runner (or local test token).
+app.use('/api/internal/ai-runs', aiRunsInternalRoutes);
+// @apex/skills CLI entitlement lookup — session-free, read-only, no secrets returned.
+app.use('/api/internal/foundation-skills', foundationSkillsAuthorizeRoutes);
 app.use('/api/admin', adminRouter);
 mountAdoMcp(app);
 mountGitHubMcp(app);
@@ -289,6 +330,26 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
 
+  // FEAT-007: interactive WebSocket agent gateway (Dapr actor tier). Off by
+  // default; when enabled it authenticates upgrades with the same session +
+  // passport chain and streams the thread's durable run events.
+  if (isInteractiveGatewayEnabled()) {
+    mountInteractiveGateway(server, {
+      sessionMiddleware,
+      passportInitialize: passportInitializeMiddleware,
+      passportSession: passportSessionMiddleware,
+    });
+    // FEAT-007: subscribe the gateway to the Redis live bus (ephemeral actor→
+    // client fan-out). No-op when REDIS_* is unset — replay + poll cover it.
+    initInteractiveLiveBus().catch((err) =>
+      console.error('[startup] initInteractiveLiveBus failed:', err.message),
+    );
+    server.once('close', () => {
+      void shutdownInteractiveLiveBus();
+    });
+    console.log('[FEAT-007] Interactive WebSocket gateway mounted');
+  }
+
   if (isE2EMode) {
     // E2E mode: skip all background services so tests run against a clean,
     // side-effect-free server. Graceful shutdown still registers so the process
@@ -331,6 +392,8 @@ const server = app.listen(PORT, () => {
   // and re-check every 60s for work orphaned by rolling deployments.
   startRecoveryLoop();
   startReaper();
+  startAdmissionGovernorScheduler();
+  server.once('close', stopAdmissionGovernorScheduler);
   startLoadTestRunReaper();
   initPgNotify().catch((err) => console.error('[startup] initPgNotify failed:', err.message));
 

@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { chatThreads, interviews, prds, testCases } from '../db/schema';
+import { agentRuns, chatThreads, interviews, prds, testCases } from '../db/schema';
 import type {
   TestCaseCoverageSummary,
   TestCaseRecord,
@@ -13,11 +13,17 @@ import { getDefaultModel } from './appSettingsService';
 import {
   createThread,
   isThreadIdle,
+  prepareBackgroundWorkflowTurn,
   sendMessage,
   updateThreadKickoffContext,
 } from './chatAgentService';
+import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
 import { resolveSkillConfig } from './projectSettingsService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
+import {
+  propagatePipelineGrounding,
+  runGroundingService,
+} from './runGroundingService';
 
 const WATCHER_INTERVAL_MS = 5_000;
 const WATCHER_MAX_ATTEMPTS = 360;
@@ -65,7 +71,11 @@ function findOutputFile(dir: string, pattern: RegExp): string | null {
   return all.length > 0 ? all[0] : null;
 }
 
-async function resolveWorkspaceDir(threadId: string): Promise<string | null> {
+async function resolveWorkspaceDir(
+  threadId: string,
+  workspaceDirOverride?: string,
+): Promise<string | null> {
+  if (workspaceDirOverride) return workspaceDirOverride;
   const row = await db.query.chatThreads.findFirst({
     where: eq(chatThreads.id, threadId),
     columns: { workspaceDir: true },
@@ -73,8 +83,11 @@ async function resolveWorkspaceDir(threadId: string): Promise<string | null> {
   return row?.workspaceDir ?? null;
 }
 
-async function resolveOutputDir(threadId: string): Promise<string | null> {
-  const ws = await resolveWorkspaceDir(threadId);
+async function resolveOutputDir(
+  threadId: string,
+  workspaceDirOverride?: string,
+): Promise<string | null> {
+  const ws = await resolveWorkspaceDir(threadId, workspaceDirOverride);
   return ws ? path.join(ws, '.ai-pilot', 'output') : null;
 }
 
@@ -98,8 +111,11 @@ async function cleanupWorkspace(
   }
 }
 
-async function readOutputBacklog(threadId: string): Promise<unknown | null> {
-  const outputDir = await resolveOutputDir(threadId);
+async function readOutputBacklog(
+  threadId: string,
+  workspaceDirOverride?: string,
+): Promise<unknown | null> {
+  const outputDir = await resolveOutputDir(threadId, workspaceDirOverride);
   if (!outputDir) return null;
   const file = findOutputFile(outputDir, /\.backlog\.json$/i);
   if (!file) return null;
@@ -622,9 +638,10 @@ export async function markTestCaseFailed(
 }
 
 export async function readOutputTestCases(
-  threadId: string
+  threadId: string,
+  workspaceDirOverride?: string,
 ): Promise<unknown | null> {
-  const outputDir = await resolveOutputDir(threadId);
+  const outputDir = await resolveOutputDir(threadId, workspaceDirOverride);
   if (!outputDir) return null;
 
   let file = findOutputFile(outputDir, /\.test-cases\.json$/i);
@@ -632,7 +649,7 @@ export async function readOutputTestCases(
   // Fallback: search the entire workspace in case the agent wrote the file
   // outside the expected .ai-pilot/output/ directory
   if (!file) {
-    const wsDir = await resolveWorkspaceDir(threadId);
+    const wsDir = await resolveWorkspaceDir(threadId, workspaceDirOverride);
     if (wsDir) {
       file = findOutputFile(wsDir, /\.test-cases\.json$/i);
       if (file) {
@@ -650,15 +667,16 @@ export async function readOutputTestCases(
 }
 
 export async function readOutputTestCasesMd(
-  threadId: string
+  threadId: string,
+  workspaceDirOverride?: string,
 ): Promise<string | null> {
-  const outputDir = await resolveOutputDir(threadId);
+  const outputDir = await resolveOutputDir(threadId, workspaceDirOverride);
   if (!outputDir) return null;
 
   let file = findOutputFile(outputDir, /\.test-cases\.md$/i);
 
   if (!file) {
-    const wsDir = await resolveWorkspaceDir(threadId);
+    const wsDir = await resolveWorkspaceDir(threadId, workspaceDirOverride);
     if (wsDir) {
       file = findOutputFile(wsDir, /\.test-cases\.md$/i);
       if (file) {
@@ -672,7 +690,8 @@ export async function readOutputTestCasesMd(
 
 export async function triggerTestCaseGeneration(
   prdId: string,
-  sourceThreadId: string
+  sourceThreadId: string,
+  actorUserId?: string,
 ): Promise<boolean> {
   const prdRow = await db.query.prds.findFirst({
     where: eq(prds.id, prdId),
@@ -784,26 +803,90 @@ export async function triggerTestCaseGeneration(
     })
     .returning({ id: testCases.id });
 
-  startTestCaseWatcher(testCaseRow.id, thread.id);
-
-  void sendMessage(
-    thread.id,
-    'Generate QA test cases for the provided PRD and backlog. Use the configured skill instructions and write the required output files.',
-    undefined,
-    [],
-    { hidden: true }
-  ).catch((err: Error) => {
-    console.error(
-      `[testCase] Failed to start generation (testCaseId=${testCaseRow.id}, threadId=${thread.id})`,
-      err
+  const kickoffMessage =
+    'Generate QA test cases for the provided PRD and backlog. Use the configured skill instructions and write the required output files.';
+  const destinationRun = {
+    runType: 'chat' as const,
+    runId: thread.id,
+    project: prdRow.project,
+  };
+  const reportPreparationFailure = async (): Promise<void> => {
+    await runGroundingService.persistThenMarkTerminalInactive(
+      destinationRun,
+      () => markTestCaseFailed(testCaseRow.id, prdId, thread.id),
     );
-    markTestCaseFailed(testCaseRow.id, prdId, thread.id).catch((markErr) => {
-      console.error(
-        `[testCase] Failed to mark generation failed (testCaseId=${testCaseRow.id})`,
-        markErr
-      );
+  };
+
+  // Do not start the output watcher until routing succeeds. Background
+  // materialization can take longer than WATCHER_INTERVAL_MS, and the thread
+  // stays idle until the worker begins — an early watcher would delete the
+  // scratch workspace mid-prep and force workspace-preparation-failed.
+  let routedSuccessfully = false;
+  try {
+    const decision = await routeBackgroundWorkflow({
+      userId: actorUserId ?? prdRow.authorId,
+      workflowClass: 'test-cases',
+      destinationRun,
+      threadId: thread.id,
+      prepareWorker: async () => {
+        try {
+          await propagatePipelineGrounding(
+            {
+              runType: 'chat',
+              runId: sourceThreadId,
+              project: prdRow.project,
+            },
+            destinationRun,
+            actorUserId ?? prdRow.authorId,
+          );
+        } catch {
+          console.warn(
+            `[run-grounding] Test-case propagation unavailable (testCaseId=${testCaseRow.id})`,
+          );
+        }
+        const prepared = await prepareBackgroundWorkflowTurn(
+          thread.id,
+          kickoffMessage,
+        );
+        const targetGrounding = (
+          await runGroundingService.getGroundings(destinationRun)
+        ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
+        return { ...prepared, targetGrounding };
+      },
+      runInProcess: () => {
+        void sendMessage(
+          thread.id,
+          kickoffMessage,
+          undefined,
+          [],
+          { hidden: true }
+        ).catch((err: Error) => {
+          console.error(
+            `[testCase] Failed to start generation (testCaseId=${testCaseRow.id}, threadId=${thread.id})`,
+            err
+          );
+          markTestCaseFailed(testCaseRow.id, prdId, thread.id).catch((markErr) => {
+            console.error(
+              `[testCase] Failed to mark generation failed (testCaseId=${testCaseRow.id})`,
+              markErr
+            );
+          });
+        });
+      },
+      reportRecoverablePreparationFailure: reportPreparationFailure,
     });
-  });
+    routedSuccessfully = !(
+      decision.route === 'in-process'
+      && 'recoverable' in decision
+      && decision.recoverable
+    );
+  } catch {
+    await reportPreparationFailure();
+  }
+
+  if (routedSuccessfully) {
+    startTestCaseWatcher(testCaseRow.id, thread.id);
+  }
 
   console.log(
     `[testCase] Started generation — testCaseId=${testCaseRow.id} prdId=${prdId} threadId=${thread.id}`
@@ -852,6 +935,20 @@ export function startTestCaseWatcher(
       return;
     }
 
+    // Background lane keeps the App Service thread idle while the job is
+    // queued/dispatched/running. Only treat idle as "finished without output"
+    // once there is no in-flight agent run for this thread.
+    const inFlightRun = await db.query.agentRuns.findFirst({
+      where: and(
+        eq(agentRuns.threadId, chatThreadId),
+        inArray(agentRuns.status, ['queued', 'dispatched', 'running']),
+      ),
+      columns: { id: true },
+    });
+    if (inFlightRun) {
+      return;
+    }
+
     if (attempts > WATCHER_MAX_ATTEMPTS || isThreadIdle(chatThreadId)) {
       clearInterval(interval);
       activeTestCaseWatchers.delete(testCaseId);
@@ -868,9 +965,13 @@ export function startTestCaseWatcher(
 export async function syncTestCaseOutput(
   testCaseId: string,
   prdId: string,
-  chatThreadId: string
+  chatThreadId: string,
+  workspaceDirOverride?: string,
 ): Promise<boolean> {
-  const testCasesJson = await readOutputTestCases(chatThreadId);
+  const testCasesJson = await readOutputTestCases(
+    chatThreadId,
+    workspaceDirOverride,
+  );
   if (testCasesJson === null) return false;
 
   const [currentRow, prdRow] = await Promise.all([
@@ -891,8 +992,14 @@ export async function syncTestCaseOutput(
     return false;
   }
 
-  const testCasesMd = await readOutputTestCasesMd(chatThreadId);
-  const patchedBacklog = await readOutputBacklog(chatThreadId);
+  const testCasesMd = await readOutputTestCasesMd(
+    chatThreadId,
+    workspaceDirOverride,
+  );
+  const patchedBacklog = await readOutputBacklog(
+    chatThreadId,
+    workspaceDirOverride,
+  );
   const backlogWithTestCaseCounts = applyTestCaseCountsToBacklog(
     patchedBacklog ?? prdRow?.backlogJson,
     testCasesJson

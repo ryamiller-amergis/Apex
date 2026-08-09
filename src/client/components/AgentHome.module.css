@@ -154,6 +154,12 @@
   width: 100%;
 }
 
+.composerEmbed {
+  padding: 0;
+  border-top: none;
+  background: transparent;
+}
+
 .skillPicker {
   position: absolute;
   bottom: 100%;

@@ -93,6 +93,7 @@ export interface AgentChatSession {
   status: ChatThreadStatus;
   isRunning: boolean;
   isSending: boolean;
+  isCancelling: boolean;
   isAwaitingAgentResponse: boolean;
   isPreparing: boolean;
   hasPreparationError: boolean;
@@ -160,8 +161,12 @@ export function useAgentChatSession(
 
   // --- Local state ---
   const [isSending, setIsSending] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
   const [isAwaitingAgentResponse, setIsAwaitingAgentResponse] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [optimisticUserMessage, setOptimisticUserMessage] =
+    useState<ChatMessage | null>(null);
+  const optimisticBaselineIdsRef = useRef<Set<string>>(new Set());
 
   // Refs for pending-message tracking (generalized from Interview)
   const pendingMessageIdsRef = useRef<Set<string>>(new Set());
@@ -169,7 +174,20 @@ export function useAgentChatSession(
 
   // Derived
   const isRunning = status === 'running';
-  const visibleMessages = messages.filter(visibleMessageFilter);
+  const hasPersistedOptimisticEcho = Boolean(
+    optimisticUserMessage &&
+    messages.some(
+      (message) =>
+        message.role === 'user' &&
+        message.text === optimisticUserMessage.text &&
+        !optimisticBaselineIdsRef.current.has(message.id),
+    ),
+  );
+  const displayedMessages =
+    optimisticUserMessage && !hasPersistedOptimisticEcho
+      ? [...messages, optimisticUserMessage]
+      : messages;
+  const visibleMessages = displayedMessages.filter(visibleMessageFilter);
 
   // Preparation state (opt-in)
   const isEmptyInProgress = enablePreparationState
@@ -221,7 +239,17 @@ export function useAgentChatSession(
   // Reset awaiting on thread change
   useEffect(() => {
     clearAwaitingAgentResponse();
+    setOptimisticUserMessage(null);
+    setIsCancelling(false);
   }, [threadId, clearAwaitingAgentResponse]);
+
+  useEffect(() => {
+    if (hasPersistedOptimisticEcho) setOptimisticUserMessage(null);
+  }, [hasPersistedOptimisticEcho]);
+
+  useEffect(() => {
+    if (isCancelling && !isRunning) setIsCancelling(false);
+  }, [isCancelling, isRunning]);
 
   // --- Send ---
   const send = useCallback(async (text: string, opts: SendOptions = {}) => {
@@ -237,6 +265,23 @@ export function useAgentChatSession(
 
     setSendError(null);
     setIsSending(true);
+    optimisticBaselineIdsRef.current = new Set(messages.map((message) => message.id));
+    setOptimisticUserMessage({
+      id: `optimistic-user-${Date.now()}`,
+      role: 'user',
+      text,
+      ts: new Date().toISOString(),
+      ...(opts.attachments?.length
+        ? {
+            attachments: opts.attachments.map(({ id, name, type, size }) => ({
+              id,
+              name,
+              type,
+              size,
+            })),
+          }
+        : {}),
+    });
     beginAwaitingAgentResponse();
 
     try {
@@ -259,6 +304,7 @@ export function useAgentChatSession(
           if (body?.error) msg = body.error;
         } catch { /* use default */ }
         setSendError(msg);
+        setOptimisticUserMessage(null);
         clearAwaitingAgentResponse();
         return;
       }
@@ -270,6 +316,7 @@ export function useAgentChatSession(
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to send message';
       setSendError(msg);
+      setOptimisticUserMessage(null);
       clearAwaitingAgentResponse();
     } finally {
       setIsSending(false);
@@ -280,6 +327,7 @@ export function useAgentChatSession(
     isInteractionBusy,
     beforeSend,
     beginAwaitingAgentResponse,
+    messages,
     sendEndpoint,
     afterSend,
     clearAwaitingAgentResponse,
@@ -295,22 +343,26 @@ export function useAgentChatSession(
 
   // --- Cancel ---
   const cancel = useCallback(async () => {
-    if (!threadId) return;
+    if (!threadId || isCancelling) return;
     const endpoint = cancelEndpoint ?? `/api/chat/threads/${threadId}/cancel`;
+    setIsCancelling(true);
     try {
-      await fetch(endpoint, {
+      const response = await fetch(endpoint, {
         method: 'POST',
         credentials: 'include',
       });
-    } catch { /* best-effort */ }
-  }, [threadId, cancelEndpoint]);
+      if (!response.ok) setIsCancelling(false);
+    } catch {
+      setIsCancelling(false);
+    }
+  }, [threadId, cancelEndpoint, isCancelling]);
 
   // --- Clear send error ---
   const clearSendError = useCallback(() => setSendError(null), []);
 
   return {
     // Messages & streaming
-    messages,
+    messages: displayedMessages,
     visibleMessages,
     streamingText,
     thinkingText,
@@ -330,6 +382,7 @@ export function useAgentChatSession(
     status,
     isRunning,
     isSending,
+    isCancelling,
     isAwaitingAgentResponse,
     isPreparing,
     hasPreparationError,

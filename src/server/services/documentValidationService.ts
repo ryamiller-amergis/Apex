@@ -4,10 +4,15 @@ import { db } from '../db/drizzle';
 import { chatThreads } from '../db/schema';
 import type { ValidationScorecard } from '../../shared/types/interview';
 import { buildPassingValidationReasonsMarkdown } from '../../shared/utils/validationReport';
-import { readOutputValidationScorecard, readOutputValidationScorecardMd, isThreadIdle, createThread as createChatThread, cancelRun, sendMessage } from './chatAgentService';
+import { readOutputValidationScorecard, readOutputValidationScorecardMd, isThreadIdle, createThread as createChatThread, cancelRun, sendMessage, prepareBackgroundWorkflowTurn } from './chatAgentService';
+import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
 import { isThreadRunAlive, canThisInstanceFailGeneration } from './agentRunReaperService';
 import { getSkillConfig, resolveSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
+import {
+  propagatePipelineGrounding,
+  runGroundingService,
+} from './runGroundingService';
 
 const VALIDATION_WATCHER_INTERVAL_MS = 5_000;
 const VALIDATION_WATCHER_MAX_ATTEMPTS = 720;
@@ -17,6 +22,7 @@ export interface DocumentValidationAdapter {
   getProject(): string;
   getSkillSettingsId?(): string | null;
   getAuthorId(): string;
+  getSourceThreadId?(): string | null;
   getValidationThreadId(): string | null;
   getStatus(): string;
   buildValidationContext(skillConfig: Awaited<ReturnType<typeof getSkillConfig>>): string;
@@ -94,12 +100,67 @@ export async function autoStartDocumentValidation(adapter: DocumentValidationAda
     'Score the document in `.ai-pilot/kickoff-context.md` using the validation skill. ' +
     'This is a non-interactive task — do not ask questions. Write `review-scorecard.json` and ' +
     '`review-scorecard.md` to `.ai-pilot/output/`.';
-  sendMessage(thread.id, kickoffMessage, undefined, [], { hidden: true }).catch((err: Error) => {
-    console.error(
-      `[autoStartDocumentValidation] Failed to kick off validation agent (documentId=${adapter.getDocumentId()}, threadId=${thread.id}):`,
-      err.message,
+  const destinationRun = {
+    runType: 'chat' as const,
+    runId: thread.id,
+    project,
+  };
+  const reportPreparationFailure = async (): Promise<void> => {
+    await runGroundingService.persistThenMarkTerminalInactive(
+      destinationRun,
+      () => adapter.updateDbForValidationError(),
     );
-  });
+  };
+
+  try {
+    await routeBackgroundWorkflow({
+      userId: adapter.getAuthorId(),
+      workflowClass: 'validation',
+      destinationRun,
+      threadId: thread.id,
+      prepareWorker: async () => {
+        const sourceThreadId = adapter.getSourceThreadId?.();
+        if (sourceThreadId) {
+          try {
+            await propagatePipelineGrounding(
+              { runType: 'chat', runId: sourceThreadId, project },
+              destinationRun,
+              adapter.getAuthorId(),
+            );
+          } catch {
+            console.warn(
+              `[run-grounding] Validation propagation unavailable (documentId=${adapter.getDocumentId()})`,
+            );
+          }
+        }
+        const prepared = await prepareBackgroundWorkflowTurn(
+          thread.id,
+          kickoffMessage,
+        );
+        const targetGrounding = (
+          await runGroundingService.getGroundings(destinationRun)
+        ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
+        return { ...prepared, targetGrounding };
+      },
+      runInProcess: () => {
+        void sendMessage(
+          thread.id,
+          kickoffMessage,
+          undefined,
+          [],
+          { hidden: true },
+        ).catch((err: Error) => {
+          console.error(
+            `[autoStartDocumentValidation] Failed to kick off validation agent (documentId=${adapter.getDocumentId()}, threadId=${thread.id}):`,
+            err.message,
+          );
+        });
+      },
+      reportRecoverablePreparationFailure: reportPreparationFailure,
+    });
+  } catch {
+    await reportPreparationFailure();
+  }
 }
 
 export function startDocumentValidationWatcher(

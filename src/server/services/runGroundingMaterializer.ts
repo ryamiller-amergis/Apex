@@ -71,12 +71,16 @@ function opaqueDestination(
     grounding.groundedSha,
   ]);
   const digest = crypto.createHash('sha256').update(identity).digest('hex');
-  return path.join(dataRoot, 'grounding-workspaces', digest);
+  // AI-run compute mounts <dataRoot>/workspaces from the shared Azure Files
+  // volume. Keep pinned grounding checkouts below that mount so App Service,
+  // background workers, and the interactive actor resolve the same path.
+  return path.join(dataRoot, 'workspaces', 'grounding', digest);
 }
 
 /**
- * Returns the opaque, server-local destination for a run grounding. The path
- * is never transported to clients; callers receive it only as Agent.local.cwd.
+ * Returns the opaque destination for a run grounding on the shared AI-run
+ * workspace mount. The path is never transported to clients; callers receive
+ * it only as Agent.local.cwd.
  */
 export function resolveRunGroundingWorkspacePath(
   grounding: RunGrounding,

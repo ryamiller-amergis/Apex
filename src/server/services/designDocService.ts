@@ -8,8 +8,10 @@ import { designDocs, appUsers, chatThreads, prds, interviews, designPrototypes, 
 const authorUser = alias(appUsers, 'author_user');
 const designDocOwnerUser = alias(appUsers, 'design_doc_owner_user');
 import type { ContentSnapshot, DesignDoc, DesignDocStatus, DesignDocSummary, DesignDocValidationOverride, ReviewDesignDocRequest, ValidationScorecard, ValidationScorecardGap } from '../../shared/types/interview';
+import type { RunRef } from '../../shared/types/runGrounding';
 import { buildOverrideHistory } from '../../shared/utils/validationOverride';
-import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, createThread as createChatThread, sendMessage, cancelRun } from './chatAgentService';
+import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, createThread as createChatThread, sendMessage, cancelRun, prepareBackgroundWorkflowTurn } from './chatAgentService';
+import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
 import { isThreadRunAlive, canThisInstanceFailGeneration } from './agentRunReaperService';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete, propagateDesignDocApprovers, notifyApproversDocumentReady } from './documentApprovalService';
@@ -218,6 +220,105 @@ export async function createDesignDoc(opts: {
   }
 
   return { designDocId: row.id };
+}
+
+export async function routeDesignDocGenerationKickoff(opts: {
+  designDocId: string;
+  prdId?: string;
+  sourceThreadId?: string | null;
+  userId: string;
+  project: string;
+  threadId: string;
+  kickoffMessage: string;
+}): Promise<void> {
+  const destinationRun = {
+    runType: 'chat' as const,
+    runId: opts.threadId,
+    project: opts.project,
+  };
+  const reportPreparationFailure = async (): Promise<void> => {
+    await runGroundingService.persistThenMarkTerminalInactive(
+      destinationRun,
+      async () => {
+        await db.update(designDocs)
+          .set({
+            status: 'generation_failed',
+            generationError: 'Generation could not be prepared. Retry to continue.',
+            updatedAt: new Date().toISOString(),
+          })
+          .where(and(
+            eq(designDocs.id, opts.designDocId),
+            eq(designDocs.status, 'generating'),
+          ));
+      },
+    );
+  };
+
+  try {
+    await routeBackgroundWorkflow({
+      userId: opts.userId,
+      workflowClass: 'design-doc',
+      destinationRun,
+      threadId: opts.threadId,
+      prepareWorker: async () => {
+        const prepared = await prepareBackgroundWorkflowTurn(
+          opts.threadId,
+          opts.kickoffMessage,
+        );
+        let targetGrounding = (
+          await runGroundingService.getGroundings(destinationRun)
+        ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
+
+        if (!targetGrounding) {
+          let sourceRun: RunRef | null = opts.sourceThreadId
+            ? {
+                runType: 'chat',
+                runId: opts.sourceThreadId,
+                project: opts.project,
+              }
+            : null;
+          if (!sourceRun && opts.prdId) {
+            sourceRun = (await resolveRunGroundingSurface('prd', opts.prdId))?.run ?? null;
+          }
+          if (sourceRun) {
+            try {
+              await propagatePipelineGrounding(
+                sourceRun,
+                destinationRun,
+                opts.userId,
+              );
+            } catch {
+              console.warn(
+                `[run-grounding] Design Doc retry propagation unavailable (designDocId=${opts.designDocId})`,
+              );
+            }
+            targetGrounding = (
+              await runGroundingService.getGroundings(destinationRun)
+            ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
+          }
+        }
+
+        return { ...prepared, targetGrounding };
+      },
+      runInProcess: () => {
+        void sendMessage(
+          opts.threadId,
+          opts.kickoffMessage,
+          undefined,
+          [],
+          { hidden: true },
+        ).catch((err: Error) => {
+          console.error(
+            `[designDoc] Failed to kick off generation (designDocId=${opts.designDocId}, threadId=${opts.threadId}):`,
+            err.message,
+          );
+        });
+      },
+      reportRecoverablePreparationFailure: reportPreparationFailure,
+    });
+  } catch {
+    await reportPreparationFailure();
+  }
 }
 
 export async function listDesignDocs(
@@ -1098,7 +1199,6 @@ export async function startSingleFeatureDesignDocWatcher(
   // Create the thread with auto-kickoff disabled so the DB row and watcher are
   // fully attached before the agent starts. This prevents the race where the
   // agent completes before the row exists and post-run sync cannot find it.
-  const { sendMessage } = await import('./chatAgentService');
   const thread = await createThread(
     prd.authorId,
     {
@@ -1136,8 +1236,12 @@ export async function startSingleFeatureDesignDocWatcher(
 
   // Now safe to start the agent — the row and watcher are in place.
   const kickoffMessage = `Generate the design doc for the single feature "${featureName}" using the PRD, interview transcript, and prototype provided in \`.ai-pilot/kickoff-context.md\`. This is a non-interactive generation task — do not ask questions. Write all three output files (\`design-doc-design.md\`, \`design-doc-tech-spec.md\`, \`design-doc-assumptions.md\`) to \`.ai-pilot/output/\`.`;
-  sendMessage(thread.id, kickoffMessage, undefined, [], { hidden: true }).catch((err: Error) => {
-    console.error(`[designDoc] Failed to kick off generation agent (designDocId=${designDocId}, threadId=${thread.id}):`, err.message);
+  await routeDesignDocGenerationKickoff({
+    designDocId,
+    userId: prd.authorId,
+    project: prd.project,
+    threadId: thread.id,
+    kickoffMessage,
   });
 
   const { propagateDesignDocApprovers } = await import('./documentApprovalService');
@@ -1281,12 +1385,78 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
     'Score the design doc in `.ai-pilot/kickoff-context.md` using the validation skill. ' +
     'This is a non-interactive task — do not ask questions. Write `review-scorecard.json` and ' +
     '`review-scorecard.md` to `.ai-pilot/output/`.';
-  sendMessage(thread.id, kickoffMessage, undefined, [], { hidden: true }).catch((err: Error) => {
-    console.error(
-      `[autoStartValidation] Failed to kick off validation agent (designDocId=${designDocId}, threadId=${thread.id}):`,
-      err.message,
+  const destinationRun = {
+    runType: 'chat' as const,
+    runId: thread.id,
+    project: doc.project,
+  };
+
+  const reportPreparationFailure = async (): Promise<void> => {
+    await runGroundingService.persistThenMarkTerminalInactive(
+      destinationRun,
+      async () => {
+        await db.update(designDocs)
+          .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
+          .where(and(
+            eq(designDocs.id, designDocId),
+            eq(designDocs.status, 'validating'),
+          ));
+      },
     );
-  });
+  };
+
+  try {
+    await routeBackgroundWorkflow({
+      userId: doc.authorId,
+      workflowClass: 'validation',
+      destinationRun,
+      threadId: thread.id,
+      prepareWorker: async () => {
+        if (doc.chatThreadId) {
+          try {
+            await propagatePipelineGrounding(
+              {
+                runType: 'chat',
+                runId: doc.chatThreadId,
+                project: doc.project,
+              },
+              destinationRun,
+              doc.authorId,
+            );
+          } catch {
+            console.warn(
+              `[run-grounding] Design validation propagation unavailable (designDocId=${designDocId})`,
+            );
+          }
+        }
+        const prepared = await prepareBackgroundWorkflowTurn(
+          thread.id,
+          kickoffMessage,
+        );
+        const targetGrounding = (
+          await runGroundingService.getGroundings(destinationRun)
+        ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
+        return { ...prepared, targetGrounding };
+      },
+      runInProcess: () => {
+        void sendMessage(
+          thread.id,
+          kickoffMessage,
+          undefined,
+          [],
+          { hidden: true },
+        ).catch((err: Error) => {
+          console.error(
+            `[autoStartValidation] Failed to kick off validation agent (designDocId=${designDocId}, threadId=${thread.id}):`,
+            err.message,
+          );
+        });
+      },
+      reportRecoverablePreparationFailure: reportPreparationFailure,
+    });
+  } catch {
+    await reportPreparationFailure();
+  }
 }
 
 const VALIDATION_WATCHER_INTERVAL_MS = 5_000;

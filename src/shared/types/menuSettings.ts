@@ -11,7 +11,8 @@ export type MenuItemKey =
   | 'pdf-tools'
   | 'ai-cost'
   | 'design-module'
-  | 'load-tests';
+  | 'load-tests'
+  | 'diagrams';
 
 export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'calendar', label: 'Calendar' },
@@ -27,10 +28,19 @@ export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'ai-cost', label: 'AI Cost Analytics' },
   { key: 'design-module', label: 'Design Module' },
   { key: 'load-tests', label: 'Load Tests' },
+  { key: 'diagrams', label: 'Diagrams' },
 ];
 
-/** Default enabled views when a project has no explicit menu config row. */
+/** All configurable menu keys (includes opt-in-only keys such as Diagrams). */
 export const ALL_MENU_VIEWS: MenuItemKey[] = CONFIGURABLE_MENU_ITEMS.map((item) => item.key);
+
+/**
+ * Default enabled views when a project has no explicit menu config row.
+ * Diagrams is opt-in (BR-011) and must not appear here.
+ */
+export const DEFAULT_ENABLED_MENU_VIEWS: MenuItemKey[] = ALL_MENU_VIEWS.filter(
+  (key) => key !== 'diagrams',
+);
 
 export interface ProjectMenuConfig {
   project: string;

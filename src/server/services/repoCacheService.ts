@@ -94,17 +94,25 @@ export function resolveGitRemote(
   repo: string,
 ): GitRemote {
   if (provider === 'github') {
-    const org = process.env.GITHUB_ORG || '';
+    const slash = repo.indexOf('/');
+    const configuredOrg = process.env.GITHUB_ORG?.trim() || '';
+    const org = slash > 0 ? repo.slice(0, slash).trim() : configuredOrg;
+    const repository = slash > 0 ? repo.slice(slash + 1).trim() : repo.trim();
     const secret = process.env.GITHUB_TOKEN
       || process.env.GITHUB_PAT
       || process.env.GH_SKILL_TOKEN
       || '';
-    if (!org) throw new Error('GITHUB_ORG must be set for GitHub repo checkout');
+    if (!org) {
+      throw new Error(
+        'GitHub organization is required for repo checkout (set GITHUB_ORG or configure owner/repo)',
+      );
+    }
+    if (!repository) throw new Error('GitHub repository is required for repo checkout');
     if (!secret) {
       throw new Error('GITHUB_TOKEN, GITHUB_PAT, or GH_SKILL_TOKEN must be set for GitHub repo checkout');
     }
     return {
-      url: `https://github.com/${encodeURIComponent(org)}/${encodeURIComponent(repo)}.git`,
+      url: `https://github.com/${encodeURIComponent(org)}/${encodeURIComponent(repository)}.git`,
       env: authEnvironment('x-access-token', secret),
       secret,
     };

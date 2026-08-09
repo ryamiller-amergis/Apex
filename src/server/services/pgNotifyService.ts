@@ -16,6 +16,7 @@ import type { PoolClient } from 'pg';
 import os from 'os';
 import { randomUUID } from 'crypto';
 import type { AgentRunEventEnvelope } from '../../shared/types/chat';
+import type { AgentRunTerminalReason } from '../../shared/types/agentRunLifecycle';
 
 const CHANNEL = 'agent_run_events';
 const RECONNECT_DELAY_MS = 3_000;
@@ -236,6 +237,8 @@ export interface FinalizeOwnedAgentRunInput {
   status: 'completed' | 'failed' | 'cancelled';
   detail: string;
   events: AgentRunEventEnvelope[];
+  dispatchMessageId?: string;
+  terminalReason?: AgentRunTerminalReason;
 }
 
 export interface FinalizeReconciledAgentRunInput {
@@ -244,6 +247,8 @@ export interface FinalizeReconciledAgentRunInput {
   status: 'completed' | 'failed' | 'cancelled';
   detail: string;
   events: AgentRunEventEnvelope[];
+  dispatchMessageId?: string;
+  terminalReason?: AgentRunTerminalReason;
 }
 
 /**
@@ -257,16 +262,33 @@ async function finalizeAgentRun(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const ownerClause = ownerInstance ? '\n          AND owner_instance = $4' : '';
-    const params = ownerInstance
-      ? [input.status, input.status === 'failed' ? input.detail : null, input.runId, ownerInstance]
-      : [input.status, input.status === 'failed' ? input.detail : null, input.runId];
+    const params: unknown[] = [
+      input.status,
+      input.status === 'failed' ? input.detail : null,
+      input.runId,
+    ];
+    let ownerClause = '';
+    let dispatchClause = '';
+    let terminalReasonSet = '';
+    if (ownerInstance) {
+      params.push(ownerInstance);
+      ownerClause = `\n          AND owner_instance = $${params.length}`;
+    }
+    if (input.dispatchMessageId) {
+      params.push(input.dispatchMessageId);
+      dispatchClause = `\n          AND dispatch_message_id = $${params.length}`;
+    }
+    if (input.terminalReason) {
+      params.push(input.terminalReason);
+      terminalReasonSet = `, terminal_reason = $${params.length}`;
+    }
     const result = await client.query(
       `UPDATE agent_runs
-          SET status = $1, last_error = $2, updated_at = CURRENT_TIMESTAMP
+          SET status = $1, last_error = $2${terminalReasonSet}, updated_at = CURRENT_TIMESTAMP
         WHERE id = $3
           ${ownerClause}
-          AND status IN ('queued', 'running')
+          ${dispatchClause}
+          AND status IN ('queued', 'dispatched', 'running')
       RETURNING id`,
       params,
     );
@@ -297,6 +319,27 @@ async function finalizeAgentRun(
         ],
       );
     }
+
+    // Reset the owning chat thread to idle in the SAME transaction as the run's
+    // terminal transition. This makes the finalizer the single authority for the
+    // thread's persisted status so it can never lag its terminal run (which would
+    // leave the client stuck showing "Agent is thinking…" until the reaper caught
+    // up). The active_run_id CAS makes this safe for non-chat runs and for the
+    // case where a newer run has already claimed the thread — we only ever clear
+    // our own claim (or a claim that was already cleared). This mirrors the
+    // reaper's end-state (idle + cleared claim + last_error on failure) so both
+    // paths converge on an identical thread state.
+    await client.query(
+      `UPDATE chat_threads
+          SET status = 'idle',
+              active_run_id = NULL,
+              last_error = $1,
+              last_activity_at = CURRENT_TIMESTAMP
+        WHERE id = $2
+          AND (active_run_id = $3 OR active_run_id IS NULL)`,
+      [input.status === 'failed' ? input.detail : null, input.threadId, input.runId],
+    );
+
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);

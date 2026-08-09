@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { requirePermission } from '../middleware/rbac';
+import { requirePermission, resolveRequestProject } from '../middleware/rbac';
 import { getUserId } from '../utils/requestUser';
 import {
   createFeatureRequest,
@@ -8,7 +8,7 @@ import {
   listAcceptedAdrsForProject,
   updateFeatureRequest,
   linkInterview,
-  resolveApexReviewers,
+  resolveFeatureRequestReviewers,
 } from '../services/featureRequestService';
 import {
   WORK_ITEM_TYPES,
@@ -54,8 +54,8 @@ router.post('/', requirePermission('feature-requests:submit'), async (req, res, 
       adrIds: adrIds as string[] | undefined,
     });
 
-    // Notify Apex reviewers
-    const reviewers = await resolveApexReviewers();
+    // Notify reviewers for the target project
+    const reviewers = await resolveFeatureRequestReviewers(project);
     for (const reviewerId of reviewers) {
       await createNotification(reviewerId, {
         type: 'user-action',
@@ -80,7 +80,7 @@ router.post('/', requirePermission('feature-requests:submit'), async (req, res, 
   }
 });
 
-// GET / — list the shared Apex backlog from any project where the module is visible
+// GET / — list feature requests scoped to the selected project
 router.get('/', requirePermission('feature-requests:view'), async (req, res, next) => {
   try {
     const project = (req.query.project as string | undefined)?.trim();
@@ -88,7 +88,7 @@ router.get('/', requirePermission('feature-requests:view'), async (req, res, nex
       return res.status(400).json({ error: 'project query parameter is required' });
     }
 
-    const requests = await listFeatureRequests();
+    const requests = await listFeatureRequests(project);
     return res.json(requests);
   } catch (err) {
     next(err);
@@ -107,11 +107,12 @@ router.get('/available-adrs', requirePermission('feature-requests:submit'), asyn
   }
 });
 
-// GET /:id — get a single feature request
+// GET /:id — get a single feature request (must belong to the active project)
 router.get('/:id', requirePermission('feature-requests:view'), async (req, res, next) => {
   try {
+    const project = resolveRequestProject(req);
     const featureRequest = await getFeatureRequest(req.params.id);
-    if (!featureRequest) {
+    if (!featureRequest || (project && featureRequest.sourceProject !== project)) {
       return res.status(404).json({ error: 'Feature request not found' });
     }
     return res.json(featureRequest);
@@ -124,6 +125,7 @@ router.get('/:id', requirePermission('feature-requests:view'), async (req, res, 
 router.patch('/:id', requirePermission('feature-requests:manage'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
+    const project = resolveRequestProject(req);
     const patch = req.body as UpdateFeatureRequestDTO;
 
     if (patch.status === undefined && patch.teamPriority === undefined && patch.teamRisk === undefined && patch.rank === undefined) {
@@ -131,7 +133,7 @@ router.patch('/:id', requirePermission('feature-requests:manage'), async (req, r
     }
 
     const existing = await getFeatureRequest(req.params.id);
-    if (!existing) {
+    if (!existing || (project && existing.sourceProject !== project)) {
       return res.status(404).json({ error: 'Feature request not found' });
     }
 
@@ -145,6 +147,7 @@ router.patch('/:id', requirePermission('feature-requests:manage'), async (req, r
 // POST /:id/link-interview — link a created interview to a feature request
 router.post('/:id/link-interview', requirePermission('feature-requests:manage'), async (req, res, next) => {
   try {
+    const project = resolveRequestProject(req);
     const { interviewId } = req.body as { interviewId?: string };
     const normalizedInterviewId = interviewId?.trim();
     if (!normalizedInterviewId) {
@@ -152,7 +155,7 @@ router.post('/:id/link-interview', requirePermission('feature-requests:manage'),
     }
 
     const existing = await getFeatureRequest(req.params.id);
-    if (!existing) {
+    if (!existing || (project && existing.sourceProject !== project)) {
       return res.status(404).json({ error: 'Feature request not found' });
     }
 
@@ -166,8 +169,9 @@ router.post('/:id/link-interview', requirePermission('feature-requests:manage'),
 // POST /:id/reanalyze — trigger re-analysis
 router.post('/:id/reanalyze', requirePermission('feature-requests:manage'), async (req, res, next) => {
   try {
+    const project = resolveRequestProject(req);
     const existing = await getFeatureRequest(req.params.id);
-    if (!existing) {
+    if (!existing || (project && existing.sourceProject !== project)) {
       return res.status(404).json({ error: 'Feature request not found' });
     }
 

@@ -19,6 +19,7 @@ import { getSkillConfig, getSkillConfigById, listSkillConfigsForProject, resolve
 import { fetchAvailableModels } from '../services/modelsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import { getAgentHealthStats, createThread } from '../services/chatAgentService';
+import { getWorkerTierHealthStats } from '../services/workerTierHealthService';
 import { isFeatureEnabled } from '../services/featureFlagService';
 import { getUserId } from '../utils/requestUser';
 import { ensureUserProjectAssignment, getAssignmentsForUser } from '../services/userProjectAssignmentService';
@@ -62,9 +63,11 @@ import {
 } from '../../shared/types/calendarWorkItemAssistant';
 
 import runGroundingsRouter from './runGroundings';
+import diagramsRouter from './diagrams';
 const router = express.Router();
 
 router.use('/run-groundings', runGroundingsRouter);
+router.use('/projects/:projectId/diagrams', diagramsRouter);
 // GET /api/available-models — accessible to all authenticated users so that
 // non-admin roles (e.g. interviews:manage) can populate model dropdowns.
 router.get('/available-models', async (_req: Request, res: Response) => {
@@ -411,8 +414,19 @@ router.get('/health/db', async (_req: Request, res: Response) => {
 });
 
 // GET /api/health/agents - Chat agent system health
-router.get('/health/agents', (_req: Request, res: Response) => {
-  res.json(getAgentHealthStats());
+router.get('/health/agents', async (_req: Request, res: Response) => {
+  const agentHealth = getAgentHealthStats();
+  try {
+    const workerHealth = await getWorkerTierHealthStats();
+    res.json({ ...agentHealth, ...workerHealth });
+  } catch {
+    console.error('[health/agents] Worker health query failed');
+    res.json({
+      ...agentHealth,
+      workerTierSaturation: 0,
+      oldestQueuedAgeMs: 0,
+    });
+  }
 });
 
 // GET /api/due-date-stats - Get due date change statistics by developer
@@ -4011,7 +4025,7 @@ import { attachPermissions } from '../middleware/rbac';
 import { getUserPermissions, getUserRoleNames, getChangelogPrefs, updateChangelogPrefs } from '../services/rbacService';
 import { getUserGroupNames } from '../services/groupService';
 import { getMenuConfig } from '../services/menuSettingsService';
-import { ALL_MENU_VIEWS } from '../../shared/types/menuSettings';
+import { DEFAULT_ENABLED_MENU_VIEWS } from '../../shared/types/menuSettings';
 import {
   ChangelogContentError,
   getChangelogPayload,
@@ -4214,7 +4228,7 @@ router.get('/menu-config', async (req: Request, res: Response): Promise<void> =>
       return;
     }
     const config = await getMenuConfig(project);
-    res.json({ enabledViews: config?.enabledViews ?? ALL_MENU_VIEWS });
+    res.json({ enabledViews: config?.enabledViews ?? DEFAULT_ENABLED_MENU_VIEWS });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }

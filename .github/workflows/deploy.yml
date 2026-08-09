@@ -93,6 +93,11 @@ jobs:
           cp package*.json deploy/
           cp server.js deploy/ 2>/dev/null || true
           cp -r scripts deploy/
+          # Platform Admin APEX Skills reads this at runtime for the skill picker /
+          # Skills matrix. Without it the UI shows 0 skills after deploy.
+          mkdir -p deploy/foundation-skills deploy/dist/foundation-skills
+          cp foundation-skills/catalog.json deploy/foundation-skills/catalog.json
+          cp foundation-skills/catalog.json deploy/dist/foundation-skills/catalog.json
           cd deploy
           # Native production dependencies (including sqlite3) require lifecycle
           # scripts to install their Linux bindings. prepare tolerates omitted Husky.
@@ -118,6 +123,43 @@ jobs:
         env:
           STAGING_REDIRECT_URL: https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net/auth/callback
         run: |
+          # Resolve either Azure Managed Redis (new environments) or legacy
+          # Azure Cache for Redis (existing dev). Only write REDIS_* when all
+          # values resolve successfully so a transient lookup failure cannot
+          # blank a working App Service configuration.
+          REDIS_SETTINGS=()
+          MANAGED_REDIS_ID=$(az resource list --resource-group "$RESOURCE_GROUP_NAME" \
+            --resource-type "Microsoft.Cache/redisEnterprise" \
+            --query "[?starts_with(name, 'redis-apex-ai')].id | [0]" -o tsv 2>/dev/null || true)
+          if [ -n "$MANAGED_REDIS_ID" ]; then
+            REDIS_HOST=$(az resource show --ids "$MANAGED_REDIS_ID" --api-version "2025-04-01" \
+              --query properties.hostName -o tsv 2>/dev/null || true)
+            REDIS_SSL_PORT=$(az rest --method get \
+              --url "https://management.azure.com${MANAGED_REDIS_ID}/databases/default?api-version=2025-07-01" \
+              --query properties.port -o tsv 2>/dev/null || true)
+            REDIS_KEY=$(az rest --method post \
+              --url "https://management.azure.com${MANAGED_REDIS_ID}/databases/default/listKeys?api-version=2025-07-01" \
+              --query primaryKey -o tsv 2>/dev/null || true)
+            REDIS_NAME="${MANAGED_REDIS_ID##*/}"
+            REDIS_KIND="Azure Managed Redis"
+          else
+            REDIS_NAME=$(az redis list --resource-group "$RESOURCE_GROUP_NAME" \
+              --query "[?starts_with(name, 'redis-apex-ai')].name | [0]" -o tsv 2>/dev/null || true)
+            if [ -n "$REDIS_NAME" ]; then
+              REDIS_HOST=$(az redis show --name "$REDIS_NAME" --resource-group "$RESOURCE_GROUP_NAME" --query hostName -o tsv 2>/dev/null || true)
+              REDIS_SSL_PORT=$(az redis show --name "$REDIS_NAME" --resource-group "$RESOURCE_GROUP_NAME" --query sslPort -o tsv 2>/dev/null || true)
+              REDIS_KEY=$(az redis list-keys --name "$REDIS_NAME" --resource-group "$RESOURCE_GROUP_NAME" --query primaryKey -o tsv 2>/dev/null || true)
+              REDIS_KIND="Azure Cache for Redis"
+            fi
+          fi
+          if [ -n "${REDIS_HOST:-}" ] && [ -n "${REDIS_SSL_PORT:-}" ] && [ -n "${REDIS_KEY:-}" ]; then
+            echo "::add-mask::$REDIS_KEY"
+            REDIS_SETTINGS=("REDIS_HOST=$REDIS_HOST" "REDIS_SSL_PORT=$REDIS_SSL_PORT" "REDIS_KEY=$REDIS_KEY")
+            echo "Interactive live bus: resolved $REDIS_KIND '$REDIS_NAME' (${REDIS_HOST}:${REDIS_SSL_PORT})."
+          else
+            echo "Interactive live bus: Redis was not resolved; preserving existing REDIS_* settings."
+          fi
+
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
@@ -171,10 +213,26 @@ jobs:
               LT_BLOB_CONTAINER_NAME="${{ vars.LT_BLOB_CONTAINER_NAME }}" \
               LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net" \
               LT_RUNNER_CALLBACK_TOKEN="${{ secrets.LT_RUNNER_CALLBACK_TOKEN }}" \
+              AI_RUNS_SERVICEBUS_NAMESPACE="${{ vars.AI_RUNS_SERVICEBUS_NAMESPACE }}" \
+              AI_RUNS_BACKGROUND_QUEUE_NAME="${{ vars.AI_RUNS_BACKGROUND_QUEUE_NAME }}" \
+              AI_RUNS_BACKGROUND_INFLIGHT_LIMIT="${{ vars.AI_RUNS_BACKGROUND_INFLIGHT_LIMIT }}" \
+              AI_RUNS_CALLBACK_TOKEN_AUDIENCE="${{ vars.AI_RUNS_CALLBACK_TOKEN_AUDIENCE }}" \
+              AI_RUNS_RUNNER_ALLOWED_CLIENT_IDS="${{ vars.AI_RUNS_RUNNER_ALLOWED_CLIENT_IDS }}" \
+              AI_RUNS_RUNNER_CALLBACK_TOKEN="${{ secrets.AI_RUNS_RUNNER_CALLBACK_TOKEN }}" \
+              AI_RUNS_INTERACTIVE_GATEWAY="${{ vars.AI_RUNS_INTERACTIVE_GATEWAY }}" \
+              AI_RUNS_INTERACTIVE_RESERVED="${{ vars.AI_RUNS_INTERACTIVE_RESERVED }}" \
+              AI_RUNS_INTERACTIVE_BURST_MAX="${{ vars.AI_RUNS_INTERACTIVE_BURST_MAX }}" \
+              AI_RUNS_INTERACTIVE_FIRST_TOKEN_SLO_MS="${{ vars.AI_RUNS_INTERACTIVE_FIRST_TOKEN_SLO_MS }}" \
+              AI_RUNS_INTERACTIVE_DISPATCH_URL="${{ vars.AI_RUNS_INTERACTIVE_DISPATCH_URL }}" \
+              "${REDIS_SETTINGS[@]}" \
               SENDGRID_API_KEY="${{ secrets.SENDGRID_API_KEY }}" \
               GITHUB_TOKEN="${{ secrets.GH_SKILL_TOKEN }}" \
               GITHUB_ORG="${{ secrets.GH_SKILL_ORG }}" \
               TAVILY_AUTH="${{ secrets.TAVILY_AUTH }}" \
+              AZURE_ARTIFACTS_ORG="${{ secrets.AZURE_ARTIFACTS_ORG }}" \
+              AZURE_ARTIFACTS_FEED="${{ secrets.AZURE_ARTIFACTS_FEED }}" \
+              AZURE_ARTIFACTS_PAT="${{ secrets.AZURE_ARTIFACTS_PAT }}" \
+              APEX_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net" \
               WEBSITE_SWAP_WARMUP_PING_PATH="/api/health/db" \
               WEBSITE_SWAP_WARMUP_PING_STATUSES="200"
 
@@ -188,14 +246,16 @@ jobs:
             --slot-settings \
               AZURE_REDIRECT_URL="${STAGING_REDIRECT_URL}" \
               APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}" \
-              LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net"
+              LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net" \
+              APEX_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net"
 
           # Production slot sticky callback + shared MI runner auth (not swapped away).
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
             --slot-settings \
-              LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net"
+              LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net" \
+              APEX_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net"
 
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \
@@ -205,7 +265,19 @@ jobs:
               LT_SERVICEBUS_QUEUE_NAME="${{ vars.LT_SERVICEBUS_QUEUE_NAME }}" \
               LT_BLOB_ACCOUNT_NAME="${{ vars.LT_BLOB_ACCOUNT_NAME }}" \
               LT_BLOB_CONTAINER_NAME="${{ vars.LT_BLOB_CONTAINER_NAME }}" \
-              LT_RUNNER_CALLBACK_TOKEN="${{ secrets.LT_RUNNER_CALLBACK_TOKEN }}"
+              LT_RUNNER_CALLBACK_TOKEN="${{ secrets.LT_RUNNER_CALLBACK_TOKEN }}" \
+              AI_RUNS_SERVICEBUS_NAMESPACE="${{ vars.AI_RUNS_SERVICEBUS_NAMESPACE }}" \
+              AI_RUNS_BACKGROUND_QUEUE_NAME="${{ vars.AI_RUNS_BACKGROUND_QUEUE_NAME }}" \
+              AI_RUNS_BACKGROUND_INFLIGHT_LIMIT="${{ vars.AI_RUNS_BACKGROUND_INFLIGHT_LIMIT }}" \
+              AI_RUNS_CALLBACK_TOKEN_AUDIENCE="${{ vars.AI_RUNS_CALLBACK_TOKEN_AUDIENCE }}" \
+              AI_RUNS_RUNNER_ALLOWED_CLIENT_IDS="${{ vars.AI_RUNS_RUNNER_ALLOWED_CLIENT_IDS }}" \
+              AI_RUNS_RUNNER_CALLBACK_TOKEN="${{ secrets.AI_RUNS_RUNNER_CALLBACK_TOKEN }}" \
+              AI_RUNS_INTERACTIVE_GATEWAY="${{ vars.AI_RUNS_INTERACTIVE_GATEWAY }}" \
+              AI_RUNS_INTERACTIVE_RESERVED="${{ vars.AI_RUNS_INTERACTIVE_RESERVED }}" \
+              AI_RUNS_INTERACTIVE_BURST_MAX="${{ vars.AI_RUNS_INTERACTIVE_BURST_MAX }}" \
+              AI_RUNS_INTERACTIVE_FIRST_TOKEN_SLO_MS="${{ vars.AI_RUNS_INTERACTIVE_FIRST_TOKEN_SLO_MS }}" \
+              AI_RUNS_INTERACTIVE_DISPATCH_URL="${{ vars.AI_RUNS_INTERACTIVE_DISPATCH_URL }}" \
+              "${REDIS_SETTINGS[@]}"
 
           # The Azure Node/Linux image ships without git, and Dev Workbench
           # shells out to git at runtime. Install git in the background so Node
@@ -240,6 +312,30 @@ jobs:
           LT_RESOURCE_GROUP: ${{ vars.LT_RESOURCE_GROUP || env.RESOURCE_GROUP_NAME }}
           IMAGE_TAG: ${{ github.sha }}
         run: bash scripts/ci/publish-lt-k6-runner.sh
+
+      # FEAT-003 provisions the Job now. FEAT-004 adds the worker host image;
+      # until its Dockerfile exists this step is intentionally skipped.
+      - name: Publish AI-runs worker image
+        if: ${{ hashFiles('runners/ai-runs/Dockerfile') != '' }}
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          AI_RUNS_CONTAINER_APP_JOB_NAME: ${{ vars.AI_RUNS_CONTAINER_APP_JOB_NAME }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || env.RESOURCE_GROUP_NAME }}
+          AI_RUNS_RUNNER_IMAGE_REPO: ${{ vars.AI_RUNS_RUNNER_IMAGE_REPO }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: bash scripts/ci/publish-ai-runs-runner.sh
+
+      # FEAT-007 interactive Dapr actor-host image. Skipped until its Dockerfile
+      # exists; Terraform ignores image drift while the placeholder is in place.
+      - name: Publish AI-runs interactive host image
+        if: ${{ hashFiles('runners/ai-runs-interactive/Dockerfile') != '' }}
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          AI_RUNS_INTERACTIVE_CONTAINER_APP_NAME: ${{ vars.AI_RUNS_INTERACTIVE_CONTAINER_APP_NAME }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || env.RESOURCE_GROUP_NAME }}
+          AI_RUNS_INTERACTIVE_IMAGE_REPO: ${{ vars.AI_RUNS_INTERACTIVE_IMAGE_REPO }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: bash scripts/ci/publish-ai-runs-interactive.sh
 
       - name: Health check staging slot
         run: |

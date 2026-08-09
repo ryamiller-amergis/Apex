@@ -487,6 +487,47 @@ describe('ExistingInterviewView — input locked when not in_progress', () => {
     expect(screen.queryByText(/complete and the chat is closed/i)).not.toBeInTheDocument();
   });
 
+  it('TBI-008 DoD-0 / Accessibility NFR renders queued text in the polite status region', () => {
+    mockUseAgentChatSession.mockReturnValue({
+      ...idleStream,
+      status: 'running',
+      isRunning: true,
+      isPreparing: true,
+      isInteractionBusy: true,
+      progressPhase: 'queued',
+      progressLabel: 'Queued — waiting for available worker',
+    });
+
+    renderExistingInterview();
+
+    const labelRegion = screen.getByTestId('agent-run-status-label');
+    expect(labelRegion).toHaveAttribute('role', 'status');
+    expect(labelRegion).toHaveAttribute('aria-live', 'polite');
+    expect(labelRegion).toHaveTextContent('Queued — waiting for available worker');
+    expect(screen.getByTestId('agent-run-status-queued')).toHaveTextContent(
+      'Queued — waiting for available worker',
+    );
+    expect(screen.queryByTestId('agent-run-status-dispatched')).not.toBeInTheDocument();
+  });
+
+  it('PBI-006 AC-0 / VT-02 renders dispatched as textual Starting… without an error state', () => {
+    mockUseAgentChatSession.mockReturnValue({
+      ...idleStream,
+      status: 'running',
+      isRunning: true,
+      isPreparing: true,
+      isInteractionBusy: true,
+      progressPhase: 'dispatched',
+      progressLabel: 'Starting…',
+    });
+
+    renderExistingInterview();
+
+    expect(screen.getByTestId('agent-run-status-label')).toHaveTextContent('Starting…');
+    expect(screen.getByTestId('agent-run-status-dispatched')).toHaveTextContent('Starting…');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('shows a recoverable error when repository preparation fails', () => {
     (useChatThread as jest.Mock).mockReturnValue({
       data: {
@@ -833,6 +874,50 @@ describe('ExistingInterviewView — processing state after send', () => {
       expect(screen.getByTestId('interview-message-input')).toBeEnabled();
       expect(screen.queryByTestId('interview-agent-processing')).not.toBeInTheDocument();
     });
+  });
+
+  it('renders the submitted user message before the thinking indicator', () => {
+    mockUseAgentChatSession.mockReturnValue({
+      ...idleStream,
+      messages: [
+        initialAgentMessage,
+        {
+          id: 'optimistic-user-1',
+          role: 'user' as const,
+          text: 'My answer',
+          ts: '2026-01-01T00:00:01Z',
+        },
+      ],
+      isAwaitingAgentResponse: true,
+      isInteractionBusy: true,
+    });
+
+    renderExistingInterview();
+
+    const userMessage = screen.getByText('My answer');
+    const thinkingIndicator = screen.getByTestId('interview-agent-processing');
+    expect(
+      userMessage.compareDocumentPosition(thinkingIndicator)
+      & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('shows a clear stopping state after the stop action is requested', () => {
+    mockUseAgentChatSession.mockReturnValue({
+      ...idleStream,
+      messages: [initialAgentMessage],
+      status: 'running',
+      isRunning: true,
+      isCancelling: true,
+      isInteractionBusy: true,
+    });
+
+    renderExistingInterview();
+
+    const stopButton = screen.getByTestId('interview-stop-agent');
+    expect(stopButton).toBeDisabled();
+    expect(stopButton).toHaveAccessibleName('Stopping agent');
+    expect(stopButton).toHaveTextContent('Stopping…');
   });
 
   it('shows error and re-enables input when the session has a send error', () => {

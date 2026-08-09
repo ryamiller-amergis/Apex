@@ -84,6 +84,7 @@ export interface ProjectSkillConfig {
   friendlyName: string;
   isDefault: boolean;
   skillProvider?: SkillProvider;
+  /** ADO: repo or project/repo. GitHub: organization/repo (required). */
   skillRepo: string;
   skillBranch: string;
   updatedBy?: string | null;
@@ -189,6 +190,7 @@ export interface UpsertProjectSkillConfigRequest {
   friendlyName: string;
   isDefault?: boolean;
   skillProvider?: SkillProvider;
+  /** ADO: repo or project/repo. GitHub: organization/repo (required). */
   skillRepo: string;
   skillBranch: string;
   interviewSkillPath?: string | null;

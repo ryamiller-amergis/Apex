@@ -16,7 +16,13 @@ import type { RunGrounding, RunRef } from '../../shared/types/runGrounding';
 import {
   isGroundingEnabledForCaller as evaluateGroundingFlag,
   isNativeReadEnabledForCaller as evaluateNativeReadFlag,
+  isSharedReadCheckoutEnabledForCaller as evaluateSharedReadCheckoutFlag,
 } from './featureFlagService';
+import {
+  sharedReadCheckoutService,
+  type SharedReadCheckoutIdentity,
+  type SharedReadCheckoutService,
+} from './grounding/sharedReadCheckoutService';
 import { evaluateNativeReadCapability as evaluateNativeReadCapabilityCheck } from './nativeReadCapabilityService';
 import {
   groundingProfileResolver,
@@ -49,6 +55,13 @@ export interface StartCallerGroundingInput {
   run: RunRef;
   repository: CallerRepository;
   reauthorize: GroundingProfileReauthorization;
+  /**
+   * When true, the caller uses the grounding checkout strictly read-only (all
+   * writes target a separate per-thread scratch dir). Such callers may share
+   * one read-only per-SHA checkout instead of cloning a per-run working tree,
+   * gated by the `shared-readonly-grounding-checkout` flag.
+   */
+  readOnlyShareable?: boolean;
 }
 
 export interface LocalCallerGrounding {
@@ -119,7 +132,12 @@ type GroundingServiceDependency = Pick<
 export interface CallerGroundingDependencies {
   isGroundingEnabledForCaller: typeof evaluateGroundingFlag;
   isNativeReadEnabledForCaller: typeof evaluateNativeReadFlag;
+  isSharedReadCheckoutEnabledForCaller: typeof evaluateSharedReadCheckoutFlag;
   evaluateNativeReadCapability: typeof evaluateNativeReadCapabilityCheck;
+  sharedReadCheckout: Pick<
+    SharedReadCheckoutService,
+    'materialize' | 'retain' | 'releaseRef'
+  >;
   ensureRepoCache: (options: {
     provider: SkillProvider;
     project: string;
@@ -267,12 +285,59 @@ export function createCallerGroundingService(
         return fallback(input, 'activation-unavailable');
       }
 
-      const materialized = await dependencies.materialize(grounding, input.run);
-      if (
-        materialized.state !== 'materialized' ||
-        !materialized.workspacePath
-      ) {
-        return fallback(input, 'materialization-unavailable');
+      // @feature-flag:shared-readonly-grounding-checkout start winner=enabled
+      // Read-only chat callers share ONE per-SHA checkout instead of cloning a
+      // fresh per-run working tree — removing the "preparing" pause when the
+      // target branch has not advanced. Writers keep per-run isolation because
+      // they never set `readOnlyShareable`.
+      let workspacePath: string | undefined;
+      let sharedIdentity: SharedReadCheckoutIdentity | undefined;
+      if (input.readOnlyShareable) {
+        let sharedEnabled = false;
+        try {
+          sharedEnabled = await dependencies.isSharedReadCheckoutEnabledForCaller({
+            userId: input.userId,
+            project: input.run.project,
+            caller: input.caller,
+          });
+        } catch {
+          sharedEnabled = false;
+        }
+        if (sharedEnabled) {
+          // @feature-flag:shared-readonly-grounding-checkout enabled-start
+          try {
+            const identity: SharedReadCheckoutIdentity = {
+              provider: profileProvider(grounding.provider),
+              project: grounding.project,
+              repo,
+              branch: grounding.branch,
+              sha: grounding.groundedSha,
+            };
+            const shared =
+              await dependencies.sharedReadCheckout.materialize(identity);
+            dependencies.sharedReadCheckout.retain(identity);
+            sharedIdentity = identity;
+            workspacePath = shared.workspacePath;
+            if (shared.outcome === 'hit') setMaterializationMode('warm');
+          } catch {
+            // Any failure falls through to the per-run materialization path.
+            sharedIdentity = undefined;
+            workspacePath = undefined;
+          }
+          // @feature-flag:shared-readonly-grounding-checkout enabled-end
+        }
+      }
+      // @feature-flag:shared-readonly-grounding-checkout end
+
+      if (!workspacePath) {
+        const materialized = await dependencies.materialize(grounding, input.run);
+        if (
+          materialized.state !== 'materialized' ||
+          !materialized.workspacePath
+        ) {
+          return fallback(input, 'materialization-unavailable');
+        }
+        workspacePath = materialized.workspacePath;
       }
 
       const callerContext: GroundingCallerContext = {
@@ -287,7 +352,7 @@ export function createCallerGroundingService(
           project: grounding.project,
           repo,
           sha: grounding.groundedSha,
-          checkoutPath: materialized.workspacePath,
+          checkoutPath: workspacePath,
           caller: input.caller,
         },
         callerContext,
@@ -303,7 +368,7 @@ export function createCallerGroundingService(
       let released = false;
       return {
         mode: 'local',
-        cwd: materialized.workspacePath,
+        cwd: workspacePath,
         profileId: profile.id,
         resolvedSha: grounding.groundedSha,
         nativeReads: false,
@@ -315,6 +380,10 @@ export function createCallerGroundingService(
           } finally {
             dependencies.impactContexts.unregister(input.run);
             dependencies.profiles.revokeProfile(profile.id);
+            // Drop our shared-checkout hold; eviction reclaims it by idle TTL.
+            if (sharedIdentity) {
+              dependencies.sharedReadCheckout.releaseRef(sharedIdentity);
+            }
           }
         },
       };
@@ -481,7 +550,9 @@ export function createCallerGroundingService(
 export const callerGroundingService = createCallerGroundingService({
   isGroundingEnabledForCaller: evaluateGroundingFlag,
   isNativeReadEnabledForCaller: evaluateNativeReadFlag,
+  isSharedReadCheckoutEnabledForCaller: evaluateSharedReadCheckoutFlag,
   evaluateNativeReadCapability: evaluateNativeReadCapabilityCheck,
+  sharedReadCheckout: sharedReadCheckoutService,
   ensureRepoCache: ensureRepositoryCache,
   groundingService: runGroundingService,
   materialize: materializeRunGroundingWithPath,

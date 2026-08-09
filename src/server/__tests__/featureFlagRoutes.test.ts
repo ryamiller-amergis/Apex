@@ -99,9 +99,13 @@ describe('PBI-006 rollout mutation authorization', () => {
     const killSwitchResponse = await request(app)
       .patch('/api/platform-admin/feature-flags/flag-1')
       .send({ enabled: false });
+    const lifecycleResponse = await request(app)
+      .patch('/api/platform-admin/feature-flags/flag-1')
+      .send({ lifecycle: 'stale' });
 
     expect(addRuleResponse.status).toBe(403);
     expect(killSwitchResponse.status).toBe(403);
+    expect(lifecycleResponse.status).toBe(403);
     expect(mockService.addRule).not.toHaveBeenCalled();
     expect(mockService.updateFlag).not.toHaveBeenCalled();
   });

@@ -35,7 +35,7 @@ export function createGroundingEvictionService(
     dependencies.listActiveGroundings ??
     (() => runGroundingRepository.listActiveGroundings());
   const telemetry = dependencies.telemetry ?? trackEvent;
-  const workspacesRoot = path.join(dataRoot, 'grounding-workspaces');
+  const workspacesRoot = path.join(dataRoot, 'workspaces', 'grounding');
 
   return {
     async evictIdle() {

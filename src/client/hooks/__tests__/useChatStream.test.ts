@@ -328,6 +328,67 @@ describe('useChatStream', () => {
     }
   });
 
+  it('TBI-008 DoD-0 / DoD-1 accepts queued as a non-error running phase with fixed copy', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+
+    act(() => {
+      lastES!.emit('message', {
+        type: 'phase',
+        phase: 'queued',
+        status: 'pending',
+        runId: 'run-background-1',
+      }, 'phase-queued-1');
+    });
+
+    expect(result.current.phaseEvents).toEqual([
+      expect.objectContaining({
+        id: 'phase-queued-1',
+        phase: 'queued',
+        status: 'pending',
+      }),
+    ]);
+    expect(result.current.progressPhase).toBe('queued');
+    expect(result.current.progressLabel).toBe('Queued — waiting for available worker');
+    expect(result.current.status).toBe('running');
+  });
+
+  it('PBI-006 AC-0 / VT-02 maps dispatched to Starting… before later running and terminal behavior', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+
+    act(() => {
+      lastES!.emit('message', {
+        type: 'phase',
+        phase: 'queued',
+        status: 'pending',
+        detail: 'Untrusted queue detail',
+      }, 'phase-queued-2');
+      lastES!.emit('message', {
+        type: 'phase',
+        phase: 'dispatched',
+        status: 'running',
+      }, 'phase-dispatched-1');
+    });
+
+    expect(result.current.progressPhase).toBe('dispatched');
+    expect(result.current.progressLabel).toBe('Starting…');
+    expect(result.current.status).toBe('running');
+
+    act(() => {
+      lastES!.emit('message', {
+        type: 'phase',
+        phase: 'implementation',
+        status: 'running',
+        detail: 'Implementing change',
+      }, 'phase-running-1');
+    });
+    expect(result.current.progressLabel).toBe('Implementing change');
+
+    act(() => {
+      lastES!.emit('message', { type: 'done' }, 'phase-done-1');
+    });
+    expect(result.current.status).toBe('idle');
+  });
+
   it('consumes semantic envelope metadata from durable tool events without inference', () => {
     const { result } = renderHook(() => useChatStream('t1'));
 
@@ -772,5 +833,17 @@ describe('useChatStream', () => {
     rerender({ messages: seed });
     expect(result.current.messages).toEqual(seed);
     expect(lastES!.close).not.toHaveBeenCalled();
+  });
+
+  it('promotes idle stream status when initialStatus later reports running', () => {
+    const { result, rerender } = renderHook(
+      ({ status }) => useChatStream('t1', { initialStatus: status }),
+      { initialProps: { status: undefined as 'running' | undefined } },
+    );
+
+    expect(result.current.status).toBe('idle');
+
+    rerender({ status: 'running' });
+    expect(result.current.status).toBe('running');
   });
 });

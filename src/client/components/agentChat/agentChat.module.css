@@ -353,91 +353,271 @@
   color: var(--text-secondary, #555);
 }
 
-/* ─── Composer ───────────────────────────────────────────────────────────── */
+/* ─── Composer (interview look & feel) ───────────────────────────────────── */
 
-.composer {
+.composerArea {
+  flex-shrink: 0;
+  padding: 12px 24px 16px;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.inputBox {
+  width: 100%;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 12px 12px 10px;
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
   gap: 8px;
-  padding: 12px 16px;
-  border-top: 1px solid var(--border-color, #e5e7eb);
-  background: var(--bg-secondary, #f3f4f6);
+  box-shadow: 0 2px 8px var(--shadow-sm);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-.composerFocused {
-  border-top-color: var(--accent-color, #2563eb);
+.inputBox:focus-within {
+  border-color: var(--accent-color);
+  box-shadow: 0 2px 12px var(--shadow-md);
 }
 
-.composerLeft {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+.inputBoxBusy {
+  background: var(--bg-tertiary);
+  border-color: var(--border-color-light);
+  box-shadow: none;
 }
 
-.composerTextarea {
-  flex: 1;
-  min-height: 36px;
-  max-height: 120px;
-  padding: 8px 10px;
-  border: 1px solid var(--border-color, #e5e7eb);
-  border-radius: 8px;
-  background: var(--bg-primary, #fff);
-  color: var(--text-primary, #111);
-  font-size: 0.875rem;
-  line-height: 1.4;
-  resize: none;
+.inputBoxDisabled {
+  opacity: 0.72;
+  pointer-events: none;
+}
+
+.inputField {
+  width: 100%;
+  background: transparent;
+  border: none;
   outline: none;
-  transition: border-color 0.15s;
+  resize: none;
+  font-family: inherit;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+  line-height: 1.5;
+  min-height: 24px;
+  max-height: 120px;
 }
 
-.composerTextarea:focus {
-  border-color: var(--accent-color, #2563eb);
+.inputField::placeholder {
+  color: var(--text-muted);
 }
 
-.composerTextarea:disabled {
-  opacity: 0.6;
+.inputField:disabled {
+  color: var(--text-muted);
   cursor: not-allowed;
+  opacity: 0.8;
 }
 
-.composerRight {
+.attachmentList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.attachmentChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 6px 4px 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.attachmentName {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.attachmentSize {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.attachmentRemove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.attachmentRemove:hover:not(:disabled) {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.attachmentError,
+.speechError {
+  font-size: 0.75rem;
+  color: var(--error-color);
+}
+
+.inputActions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
-.composerSendBtn {
-  width: 32px;
-  height: 32px;
+.attachBtn,
+.micBtn,
+.sendBtn {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: none;
-  border-radius: 50%;
-  background: var(--accent-color, #2563eb);
-  color: #fff;
-  font-size: 1rem;
-  font-weight: 600;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
   cursor: pointer;
-  transition: opacity 0.15s;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
 }
 
-.composerSendBtn:disabled {
+.attachBtn,
+.micBtn {
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.attachBtn:hover:not(:disabled),
+.micBtn:hover:not(:disabled) {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border-color: var(--accent-color);
+}
+
+.attachBtn:disabled,
+.micBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.attachBtn svg,
+.micBtn svg,
+.sendBtn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.micBtnActive {
+  background: color-mix(in srgb, var(--accent-color) 18%, var(--bg-tertiary));
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.micBtnActive:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-color) 26%, var(--bg-tertiary));
+}
+
+.modelSelect {
+  height: 34px;
+  max-width: 180px;
+  padding: 0 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.modelSelect:hover:not(:disabled),
+.modelSelect:focus {
+  border-color: var(--accent-color);
+  background: var(--bg-primary);
+}
+
+.modelSelect:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.modelSelect option {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.sendBtn {
+  border: none;
+  background: var(--accent-color);
+  color: var(--on-accent);
+}
+
+.sendBtn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.sendBtn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
 
-.composerStopBtn {
-  padding: 6px 12px;
-  border: 1px solid var(--error-color, #dc2626);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--error-color, #dc2626);
-  font-size: 0.8rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s;
+.stopBtn {
+  background: var(--error-color);
+  width: auto;
+  min-width: 78px;
+  padding: 0 12px;
+  gap: 7px;
+  font-size: 0.78rem;
+  font-weight: 650;
 }
 
-.composerStopBtn:hover {
-  background: color-mix(in srgb, var(--error-color, #dc2626) 8%, transparent);
+.stopBtn:hover:not(:disabled) {
+  background: var(--error-color);
+  opacity: 0.85;
+}
+
+.stopBtnStopping,
+.stopBtnStopping:disabled {
+  opacity: 0.8;
+  cursor: wait;
+}
+
+.stopSpinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+}
+
+.speechStatus {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+@media (max-width: 640px) {
+  .composerArea {
+    padding: 10px 12px 12px;
+  }
+
+  .modelSelect {
+    max-width: 120px;
+  }
 }

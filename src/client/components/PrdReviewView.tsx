@@ -585,6 +585,8 @@ export const PrdReviewView: React.FC = () => {
 
   const [prdFixFlow, prdFixFlowDispatch] = useReducer(prdFixFlowReducer, { phase: 'idle' });
   const [fixIdleNotice, setFixIdleNotice] = useState<string | null>(null);
+  /** Sync lock so double-clicks can't start two Fix-with-Apex runs before isPending re-renders. */
+  const [apexFixStartLocked, setApexFixStartLocked] = useState(false);
   const fixCompletionInFlightRef = useRef(false);
   const [fixReviewModalOpen, setFixReviewModalOpen] = useState(false);
   const [fixReviewProgress, setFixReviewProgress] = useState<PrdFixActionStripProgress>({
@@ -1031,8 +1033,13 @@ export const PrdReviewView: React.FC = () => {
 
   const handleStartFixValidation = useCallback(async () => {
     if (!id || !prd) return;
+    if (prdFixFlow.phase !== 'idle' || apexFixStartLocked) return;
+    if (readApexFixInProgress('prd-validation', id) || readApexFixInProgress('prd-coverage', id)) {
+      return;
+    }
     setFixIdleNotice(null);
     fixCompletionInFlightRef.current = false;
+    setApexFixStartLocked(true);
     const baseline: PrdValidationBaseline = {
       content: prd.content || '',
       backlogJson: prd.backlogJson,
@@ -1045,14 +1052,20 @@ export const PrdReviewView: React.FC = () => {
       prdFixFlowDispatch({ type: 'START_FIX', kind: 'validation', baseline, threadId: result.threadId });
     } catch {
       clearApexFixInProgress('prd-validation', id);
+      setApexFixStartLocked(false);
       prdFixFlowDispatch({ type: 'RESET' });
     }
-  }, [id, prd, fixPrdValidation]);
+  }, [id, prd, fixPrdValidation, prdFixFlow.phase, apexFixStartLocked]);
 
   const handleStartFixCoverage = useCallback(async () => {
     if (!id || !prd) return;
+    if (prdFixFlow.phase !== 'idle' || apexFixStartLocked) return;
+    if (readApexFixInProgress('prd-validation', id) || readApexFixInProgress('prd-coverage', id)) {
+      return;
+    }
     setFixIdleNotice(null);
     fixCompletionInFlightRef.current = false;
+    setApexFixStartLocked(true);
     const baseline: PrdValidationBaseline = {
       content: prd.content || '',
       backlogJson: prd.backlogJson,
@@ -1065,9 +1078,10 @@ export const PrdReviewView: React.FC = () => {
       prdFixFlowDispatch({ type: 'START_FIX', kind: 'coverage', baseline, threadId: result.threadId });
     } catch {
       clearApexFixInProgress('prd-coverage', id);
+      setApexFixStartLocked(false);
       prdFixFlowDispatch({ type: 'RESET' });
     }
-  }, [id, prd, fixPrdCoverage]);
+  }, [id, prd, fixPrdCoverage, prdFixFlow.phase, apexFixStartLocked]);
 
   const clearPrdFixSessions = useCallback(() => {
     if (!id) return;
@@ -1102,6 +1116,7 @@ export const PrdReviewView: React.FC = () => {
         }
         fixCompletionInFlightRef.current = false;
         prdFixFlowDispatch({ type: 'RESET' });
+        setApexFixStartLocked(false);
         setFixIdleNotice(
           agentError
             ? `${agentError} No changes were applied.`
@@ -1122,6 +1137,7 @@ export const PrdReviewView: React.FC = () => {
         : (prd?.prdAssistantThreadId ?? undefined);
     if (threadId) void cancelChatThread(threadId);
     clearPrdFixSessions();
+    setApexFixStartLocked(false);
     prdFixFlowDispatch({ type: 'RESET' });
   }, [clearPrdFixSessions, prd?.prdAssistantThreadId, prdFixFlow]);
 
@@ -1135,6 +1151,7 @@ export const PrdReviewView: React.FC = () => {
       await acceptFixPrdValidation.mutateAsync(id);
     }
     clearPrdFixSessions();
+    setApexFixStartLocked(false);
     prdFixFlowDispatch({ type: 'RESET' });
   }, [id, prdFixFlow, acceptFixPrdValidation, acceptFixPrdCoverage, clearPrdFixSessions]);
 
@@ -1144,6 +1161,7 @@ export const PrdReviewView: React.FC = () => {
     fixCompletionInFlightRef.current = false;
     await revertPrdSection.mutateAsync(id);
     clearPrdFixSessions();
+    setApexFixStartLocked(false);
     prdFixFlowDispatch({ type: 'RESET' });
   }, [id, revertPrdSection, clearPrdFixSessions]);
 
@@ -1152,6 +1170,7 @@ export const PrdReviewView: React.FC = () => {
     fixCompletionInFlightRef.current = false;
     await dismissPrdFixSession.mutateAsync(id);
     clearPrdFixSessions();
+    setApexFixStartLocked(false);
     prdFixFlowDispatch({ type: 'RESET' });
     setFixIdleNotice('Fix review dismissed. Current content was kept; Fix with Apex is available again.');
   }, [id, dismissPrdFixSession, clearPrdFixSessions]);
@@ -1303,6 +1322,7 @@ export const PrdReviewView: React.FC = () => {
     }
     fixCompletionInFlightRef.current = false;
     clearPrdFixSessions();
+    setApexFixStartLocked(false);
     prdFixFlowDispatch({ type: 'RESET' });
   }, [
     prd,
@@ -1319,6 +1339,20 @@ export const PrdReviewView: React.FC = () => {
       fixCompletionInFlightRef.current = false;
     }
   }, [prdFixFlow.phase]);
+
+  // Once Accept kicks off re-validation, drop leftover Fix-with-Apex UI so the
+  // "fixing validation gaps" spinner cannot sit on top of VALIDATING.
+  useEffect(() => {
+    if (!id || !prd) return;
+    if (prd.status !== 'validating') return;
+    // Mid-fix accidental validation still has fixBaseline — leave that to the cancel guard.
+    if (prd.fixBaseline) return;
+    clearPrdFixSessions();
+    setApexFixStartLocked(false);
+    if (prdFixFlow.phase === 'fixing' || prdFixFlow.phase === 'reviewing') {
+      prdFixFlowDispatch({ type: 'RESET' });
+    }
+  }, [id, prd, prdFixFlow.phase, clearPrdFixSessions]);
 
   // If validation was incorrectly auto-started mid Fix-with-Apex, cancel it so the
   // fix session owns the UI until the user Accepts & Re-validates.
@@ -1555,9 +1589,23 @@ export const PrdReviewView: React.FC = () => {
   const validationFixSession = id
     ? (readApexFixInProgress('prd-validation', id) ?? readApexFixInProgress('prd-coverage', id))
     : null;
+  const isFixWithApexBusy =
+    apexFixStartLocked
+    || prdFixFlow.phase !== 'idle'
+    || fixPrdValidation.isPending
+    || fixPrdCoverage.isPending
+    || !!validationFixSession
+    || prd.status === 'validating';
   const apexFixRunningBanner = (() => {
-    if (prdFixFlow.phase === 'fixing' || (validationFixSession && prdFixFlow.phase === 'idle')) {
-      const isCoverage = !!id && !!readApexFixInProgress('prd-coverage', id);
+    // After Accept, re-validation owns the page — never keep the Fix spinner over it.
+    if (prd.status === 'validating' && !prd.fixBaseline) {
+      return null;
+    }
+    if (prdFixFlow.phase === 'fixing' || apexFixStartLocked) {
+      const isCoverage =
+        prdFixFlow.phase === 'fixing'
+          ? prdFixFlow.kind === 'coverage'
+          : !!id && !!readApexFixInProgress('prd-coverage', id);
       return {
         title: isCoverage
           ? 'Apex is fixing coverage gaps…'
@@ -1565,6 +1613,18 @@ export const PrdReviewView: React.FC = () => {
         subtitle: 'You can leave this page — progress will resume when you return.',
         hint: 'Typically 1–3 min',
         showCancel: prdFixFlow.phase === 'fixing',
+      };
+    }
+    // Sticky resume only while a real fix session is still open on the server.
+    if (validationFixSession && prdFixFlow.phase === 'idle' && prd.fixBaseline) {
+      const isCoverage = !!id && !!readApexFixInProgress('prd-coverage', id);
+      return {
+        title: isCoverage
+          ? 'Apex is fixing coverage gaps…'
+          : 'Apex is fixing validation gaps…',
+        subtitle: 'You can leave this page — progress will resume when you return.',
+        hint: 'Typically 1–3 min',
+        showCancel: false,
       };
     }
     if (bulkCommentFixRunning || fixWithAi.isPending) {
@@ -2247,14 +2307,14 @@ export const PrdReviewView: React.FC = () => {
                       <button
                         className={prd.validationScore! < 70 ? styles.fixBtnRed : styles.fixBtnAmber}
                         onClick={() => void handleStartFixValidation()}
-                        disabled={fixPrdValidation.isPending}
+                        disabled={isFixWithApexBusy}
                         type="button"
                       {...{ 'data-testid': 'prd-start-fix-btn' }}>
                         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                           <path d="M8 2l1.09 3.26L12.36 6l-3.27 1.09L8 10.36 6.91 7.09 3.64 6l3.27-1.09z" />
                           <path d="M13 1l.54 1.63L15.18 3.18 13.54 3.72 13 5.35l-.54-1.63L10.82 3.18l1.64-.55z" />
                         </svg>
-                        {fixPrdValidation.isPending ? 'Starting…' : 'Fix with Apex'}
+                        {apexFixStartLocked || fixPrdValidation.isPending ? 'Starting…' : 'Fix with Apex'}
                       </button>
                     )}
                     {prdFixFlow.phase === 'idle' && (
@@ -2284,10 +2344,17 @@ export const PrdReviewView: React.FC = () => {
                 }
                 actions={(() => {
                   if (!canManage || !readiness || prdFixFlow.phase === 'fixing') return undefined;
-                  const showCoverageFix = readiness.state === 'coverage_gaps' && prdFixFlow.phase === 'idle';
+                  const showCoverageFix =
+                    readiness.state === 'coverage_gaps'
+                    && prdFixFlow.phase === 'idle'
+                    && !apexFixStartLocked
+                    && !validationFixSession;
                   const showValidationFixInPanel =
                     readiness.state === 'validation_failed' &&
                     prdFixFlow.phase === 'idle' &&
+                    !apexFixStartLocked &&
+                    !validationFixSession &&
+                    prd.status !== 'validating' &&
                     !(
                       prd.validationScore !== null &&
                       prd.validationScore !== undefined &&
@@ -2313,20 +2380,20 @@ export const PrdReviewView: React.FC = () => {
                         <button
                           className={styles.fixBtnAmber}
                           onClick={() => void handleStartFixCoverage()}
-                          disabled={fixPrdCoverage.isPending}
+                          disabled={isFixWithApexBusy}
                           type="button"
                         >
-                          {fixPrdCoverage.isPending ? 'Starting…' : 'Fix with Apex'}
+                          {apexFixStartLocked || fixPrdCoverage.isPending ? 'Starting…' : 'Fix with Apex'}
                         </button>
                       )}
                       {showValidationFixInPanel && (
                         <button
                           className={styles.fixBtnAmber}
                           onClick={() => void handleStartFixValidation()}
-                          disabled={fixPrdValidation.isPending}
+                          disabled={isFixWithApexBusy}
                           type="button"
                         >
-                          {fixPrdValidation.isPending ? 'Starting…' : 'Fix with Apex'}
+                          {apexFixStartLocked || fixPrdValidation.isPending ? 'Starting…' : 'Fix with Apex'}
                         </button>
                       )}
                       {showCoverageReview && (

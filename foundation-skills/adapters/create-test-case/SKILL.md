@@ -5,7 +5,6 @@ description: Project adapter for create-test-case. Customize for your project.
 
 # create-test-case — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/create-test-case/SKILL.md -->
 
 **Invocation:** `/create-test-case {slug}`
 

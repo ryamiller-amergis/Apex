@@ -1,14 +1,16 @@
 import { describe, it, expect } from '@jest/globals';
 import {
+  ALL_MENU_VIEWS,
   CONFIGURABLE_MENU_ITEMS,
+  DEFAULT_ENABLED_MENU_VIEWS,
   type MenuItemKey,
   type ProjectMenuConfig,
   type UpsertProjectMenuConfigRequest,
 } from '../../shared/types/menuSettings';
 
 describe('menuSettings shared types', () => {
-  it('CONFIGURABLE_MENU_ITEMS has exactly 13 entries', () => {
-    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(13);
+  it('CONFIGURABLE_MENU_ITEMS has exactly 14 entries', () => {
+    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(14);
   });
 
   it('contains the expected keys in order', () => {
@@ -27,6 +29,7 @@ describe('menuSettings shared types', () => {
       'ai-cost',
       'design-module',
       'load-tests',
+      'diagrams',
     ]);
   });
 
@@ -46,6 +49,7 @@ describe('menuSettings shared types', () => {
       'AI Cost Analytics',
       'Design Module',
       'Load Tests',
+      'Diagrams',
     ]);
   });
 
@@ -59,6 +63,13 @@ describe('menuSettings shared types', () => {
     expect(keys).toContain('ui-lab');
     expect(keys).toContain('feature-requests');
     expect(keys).toContain('load-tests');
+    expect(keys).toContain('diagrams');
+  });
+
+  it('VT-04 / BR-011: diagrams is configurable but excluded from DEFAULT_ENABLED_MENU_VIEWS', () => {
+    expect(ALL_MENU_VIEWS).toContain('diagrams');
+    expect(DEFAULT_ENABLED_MENU_VIEWS).not.toContain('diagrams');
+    expect(DEFAULT_ENABLED_MENU_VIEWS).toHaveLength(ALL_MENU_VIEWS.length - 1);
   });
 
   it('ProjectMenuConfig shape is correctly typed', () => {

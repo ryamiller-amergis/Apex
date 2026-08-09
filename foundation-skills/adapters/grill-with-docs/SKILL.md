@@ -5,7 +5,6 @@ description: Project adapter for grill-with-docs. Customize for your project.
 
 # grill-with-docs — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/grill-with-docs/SKILL.md -->
 
 **Invocation:** `/grill-with-docs`
 

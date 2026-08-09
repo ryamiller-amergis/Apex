@@ -7,6 +7,8 @@
  */
 import request from 'supertest';
 import express from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
 import interviewRouter from '../routes/interviews';
 import * as interviewService from '../services/interviewService';
 import * as prdService from '../services/prdService';
@@ -127,14 +129,41 @@ jest.mock('../utils/requestUser', () => ({
 const mockInterviewService = interviewService as jest.Mocked<typeof interviewService>;
 const mockPrdService = prdService as jest.Mocked<typeof prdService>;
 
+describe('BR-012 generation route authorization', () => {
+  it('keeps interviews:manage on every production kickoff route', () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), 'src/server/routes/interviews.ts'),
+      'utf8',
+    );
+
+    expect(source).toContain(
+      "router.post('/:interviewId/prds', requirePermission('interviews:manage')",
+    );
+    expect(source).toContain(
+      "router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage')",
+    );
+    expect(source).toContain(
+      "router.post('/prds/:prdId/test-cases/generate', requirePermission('interviews:manage')",
+    );
+    expect(source).toContain(
+      "router.post('/prds/:prdId/validation-thread', requirePermission('interviews:manage')",
+    );
+    expect(source).toContain(
+      "router.post('/design-docs/:id/validation-thread', requirePermission('interviews:manage')",
+    );
+  });
+});
+
 const {
   readOutputPrd: mockReadOutputPrd,
   readOutputBacklog: mockReadOutputBacklog,
   createThread: mockCreateThread,
+  sendMessage: mockSendMessage,
 } = jest.requireMock('../services/chatAgentService') as {
   readOutputPrd: jest.Mock;
   readOutputBacklog: jest.Mock;
   createThread: jest.Mock;
+  sendMessage: jest.Mock;
 };
 
 const { getSkillConfig: mockGetSkillConfig } = jest.requireMock(
@@ -155,6 +184,7 @@ const {
   startSingleFeatureDocWatcher: mockStartSingleFeatureDocWatcher,
   getDesignDoc: mockGetDesignDoc,
   listDesignDocs: mockListDesignDocs,
+  routeDesignDocGenerationKickoff: mockRouteDesignDocGenerationKickoff,
   updateDesignDocContent: mockUpdateDesignDocContent,
   submitForReview: mockSubmitDesignDocForReview,
   withdrawFromReview: mockWithdrawDesignDocFromReview,
@@ -171,6 +201,7 @@ const {
   startSingleFeatureDocWatcher: jest.Mock;
   getDesignDoc: jest.Mock;
   listDesignDocs: jest.Mock;
+  routeDesignDocGenerationKickoff: jest.Mock;
   updateDesignDocContent: jest.Mock;
   submitForReview: jest.Mock;
   withdrawFromReview: jest.Mock;
@@ -813,6 +844,51 @@ describe('POST /api/interviews/:interviewId/prds', () => {
     expect(mockPrdService.startPrdWatcher).toHaveBeenCalledWith('prd-new', 'thread-new');
   });
 
+  it('BR-012 / AC-0 routes authorized PRD kickoff through the service seam', async () => {
+    mockInterviewService.getInterview.mockResolvedValue(interview);
+    mockPrdService.createPrd.mockResolvedValue({ prdId: 'prd-new', threadId: 'thread-new' });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/interview-1/prds')
+      .send({ chatThreadId: 'thread-new', kickoffGeneration: true });
+
+    expect(res.status).toBe(201);
+    expect(mockPrdService.routePrdGenerationKickoff).toHaveBeenCalledWith({
+      prdId: 'prd-new',
+      userId: 'user-test',
+      project: 'proj-alpha',
+      threadId: 'thread-new',
+      kickoffMessage: 'Begin.',
+    });
+  });
+
+  it('returns the PRD immediately while generation kickoff continues in the background', async () => {
+    let finishKickoff!: () => void;
+    mockInterviewService.getInterview.mockResolvedValue(interview);
+    mockPrdService.createPrd.mockResolvedValue({
+      prdId: 'prd-new',
+      threadId: 'thread-new',
+    });
+    mockPrdService.routePrdGenerationKickoff.mockImplementationOnce(
+      () => new Promise<void>((resolve) => {
+        finishKickoff = resolve;
+      }),
+    );
+
+    const res = await request(buildApp())
+      .post('/api/interviews/interview-1/prds')
+      .send({ chatThreadId: 'thread-new', kickoffGeneration: true });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({
+      prdId: 'prd-new',
+      threadId: 'thread-new',
+    });
+    expect(mockPrdService.routePrdGenerationKickoff).toHaveBeenCalledTimes(1);
+
+    finishKickoff();
+  });
+
   it('returns 404 when interview does not exist', async () => {
     mockInterviewService.getInterview.mockResolvedValue(null);
 
@@ -940,6 +1016,14 @@ describe('POST /api/interviews/prds/:prdId/design-docs — design doc model reso
 
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({ designDocIds: ['design-doc-1'], count: 1 });
+    expect(mockRouteDesignDocGenerationKickoff).toHaveBeenCalledWith(
+      expect.objectContaining({
+        designDocId: 'design-doc-1',
+        userId: 'user-test',
+        project: 'proj-alpha',
+        threadId: 'thread-mock',
+      }),
+    );
   });
 
   it('reuses an existing direct design doc instead of starting a duplicate agent', async () => {
@@ -977,6 +1061,64 @@ describe('POST /api/interviews/prds/:prdId/design-docs — design doc model reso
 
     expect(res.status).toBe(409);
     expect(res.body).toMatchObject({ error: 'Design docs can only be created from approved PRDs' });
+  });
+});
+
+describe('POST /api/interviews/design-docs/:id/retry-generate', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetDesignDoc.mockResolvedValue({
+      id: 'dd-retry',
+      prdId: 'prd-1',
+      project: 'proj-alpha',
+      chatThreadId: 'thread-failed',
+      authorId: 'user-owner',
+      title: 'Retry Feature',
+      status: 'generation_failed',
+      skillSettingsId: null,
+    });
+    mockPrdService.getPrd.mockResolvedValue({
+      ...prd,
+      id: 'prd-1',
+      chatThreadId: 'thread-prd',
+    });
+    mockGetSkillConfig.mockResolvedValue({
+      skillRepo: 'org/skills',
+      skillBranch: 'main',
+      designDocSkillPath: '.cursor/skills/prd-design-spec/SKILL.md',
+      designDocModel: 'design-model',
+    });
+    mockDb.query.designPlans.findFirst.mockResolvedValue({ features: [] });
+    mockCreateThread.mockResolvedValue({
+      id: 'thread-retry',
+      workspaceDir: '/tmp/thread-retry',
+    });
+    mockRouteDesignDocGenerationKickoff.mockResolvedValue(undefined);
+  });
+
+  it('AC-2 / VT-03 uses routed re-promotion with source grounding and retains the guarded fallback', async () => {
+    const routeSource = fs.readFileSync(
+      path.join(process.cwd(), 'src/server/routes/interviews.ts'),
+      'utf8',
+    );
+    const res = await request(buildApp())
+      .post('/api/interviews/design-docs/dd-retry/retry-generate');
+
+    expect(res.status).toBe(200);
+    expect(routeSource).toContain(
+      "router.post('/design-docs/:id/retry-generate', requirePermission('interviews:manage')",
+    );
+    expect(mockRouteDesignDocGenerationKickoff).toHaveBeenCalledWith({
+      designDocId: 'dd-retry',
+      prdId: 'prd-1',
+      sourceThreadId: 'thread-prd',
+      userId: 'user-test',
+      project: 'proj-alpha',
+      threadId: 'thread-retry',
+      kickoffMessage:
+        'Generate the design doc for the single feature "Retry Feature" using the PRD and context provided. This is a non-interactive generation task — do not ask questions. Write all three output files to `.ai-pilot/output/`.',
+    });
+    expect(mockSendMessage).not.toHaveBeenCalled();
   });
 });
 
@@ -1755,7 +1897,11 @@ describe('POST /api/interviews/prds/:prdId/test-cases/generate', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ started: true });
-    expect(mockTriggerTestCaseGeneration).toHaveBeenCalledWith('prd-1', 'thread-2');
+    expect(mockTriggerTestCaseGeneration).toHaveBeenCalledWith(
+      'prd-1',
+      'thread-2',
+      'user-test',
+    );
   });
 
   it('returns 200 with started:false when skill is not configured', async () => {
@@ -1803,7 +1949,11 @@ describe('POST /api/interviews/prds/:prdId/test-cases/generate', () => {
       .post('/api/interviews/prds/prd-1/test-cases/generate');
 
     expect(res.status).toBe(200);
-    expect(mockTriggerTestCaseGeneration).toHaveBeenCalledWith('prd-1', 'thread-2');
+    expect(mockTriggerTestCaseGeneration).toHaveBeenCalledWith(
+      'prd-1',
+      'thread-2',
+      'user-test',
+    );
   });
 
   it('passes empty string as sourceThreadId when PRD has no chatThreadId', async () => {
@@ -1817,7 +1967,11 @@ describe('POST /api/interviews/prds/:prdId/test-cases/generate', () => {
       .post('/api/interviews/prds/prd-1/test-cases/generate');
 
     expect(res.status).toBe(200);
-    expect(mockTriggerTestCaseGeneration).toHaveBeenCalledWith('prd-1', '');
+    expect(mockTriggerTestCaseGeneration).toHaveBeenCalledWith(
+      'prd-1',
+      '',
+      'user-test',
+    );
   });
 
   it('returns 500 when the service throws', async () => {

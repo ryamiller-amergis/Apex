@@ -8,14 +8,8 @@ foundationVersion: ">=1.0.0"
 # UI Lab — APEX Design System Adapter
 
 This adapter extends the UI Lab foundation with APEX's own design system.
-
-Load the foundation first:
-
-```
-Read: .apex/foundation/ui-lab/SKILL.md
-```
-
-Then apply the APEX-specific context below.
+Foundation content is baked into the managed region of installed skill files;
+project-specific APEX context lives below.
 
 ---
 

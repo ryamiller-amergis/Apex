@@ -868,6 +868,10 @@
   flex-shrink: 0;
 }
 
+.composerEmbed {
+  padding: 12px 16px 10px;
+}
+
 .fileInput {
   display: none;
 }

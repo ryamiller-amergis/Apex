@@ -136,8 +136,12 @@ export async function autoStartFeatureRequestAnalysis(requestId: string): Promis
     return;
   }
 
-  const project = 'Apex';
-  const skillConfig = await resolveSkillConfig({ project });
+  const project = (request as any).sourceProject as string || 'Apex';
+  let skillConfig = await resolveSkillConfig({ project });
+  // Fall back to Apex skill config if the item's project has none configured
+  if (!skillConfig && project !== 'Apex') {
+    skillConfig = await resolveSkillConfig({ project: 'Apex' });
+  }
   if (!skillConfig) {
     await updateAiFields(requestId, { aiStatus: 'failed' });
     console.warn(`[featureRequestAnalysis] No skill config for project=${project} — marking failed`);

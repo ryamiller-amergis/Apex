@@ -5,7 +5,6 @@ description: Project adapter for feature-request-analysis. Customize for your pr
 
 # Feature Request Analysis — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/feature-request-analysis/SKILL.md -->
 Applies the generic feature-request-analysis method to this project.
 
 - Project: {{slot:projectName}}
@@ -17,4 +16,4 @@ the project's own glossary/feature vocabulary where available:
 
 {{slot:glossary}}
 
-<!-- TODO(mission): summarize this product's mission in one sentence for alignment scoring -->
+{{slot:mission}}

@@ -1,0 +1,46 @@
+.canvas {
+  width: 100%;
+  height: 100%;
+  min-height: 420px;
+  position: relative;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-secondary);
+}
+
+.canvasFullscreen {
+  min-height: 0;
+  border-radius: 0;
+  border-color: var(--border-color);
+}
+
+.loading,
+.error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 420px;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.retry {
+  padding: 8px 16px;
+  background: var(--accent-color);
+  color: var(--on-accent);
+  border: none;
+  border-radius: 7px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.retry:hover {
+  background: var(--accent-hover);
+}

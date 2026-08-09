@@ -6,6 +6,7 @@ import { useChatThread } from '../hooks/useChatThreads';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useAppShell } from '../hooks/useAppShell';
 import { useSpeechInput } from '../hooks/useSpeechInput';
+import { AgentComposer } from './agentChat';
 import type { WorkItem } from '../types/workitem';
 import styles from './StandupCeremonyView.module.css';
 
@@ -246,13 +247,6 @@ export const StandupCeremonyView: React.FC = () => {
     setInput('');
   }, [input, threadId, chatSession, speech]);
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  }, [handleSend]);
-
   const handleSubmit = useCallback(async () => {
     if (!session) return;
     setSubmitting(true);
@@ -394,58 +388,35 @@ export const StandupCeremonyView: React.FC = () => {
           </div>
 
           {!isSubmitted && (
-            <div className={styles.inputArea}>
-              <textarea
-                className={styles.textarea}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Type your response… (Enter to send, Shift+Enter for new line)"
-                disabled={isRunning}
-                rows={2}
-              />
-              {speech.speechError && (
-                <div className={styles.speechError}>{speech.speechError}</div>
-              )}
-              <div className={styles.actions}>
-                <button
-                  className={`${styles.micBtn} ${speech.isListening ? styles.micBtnActive : ''}`}
-                  onClick={() => speech.toggle(input)}
-                  type="button"
-                  aria-label={speech.isListening ? 'Stop voice transcription' : 'Start voice transcription'}
-                  title={speech.isSpeechSupported
-                    ? (speech.isListening ? 'Stop listening' : 'Talk to transcribe into chat')
-                    : 'Speech recognition is not supported in this browser'}
-                  disabled={!speech.isSpeechSupported || isRunning}
-                >
-                  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="7" y="2.5" width="6" height="10" rx="3" />
-                    <path d="M4.5 9.5v0.5a5.5 5.5 0 0 0 11 0v-0.5" />
-                    <path d="M10 15.5v2.5" />
-                    <path d="M7.5 18h5" />
-                  </svg>
-                </button>
-                <button
-                  className={styles.sendBtn}
-                  onClick={handleSend}
-                  disabled={!input.trim() || isRunning}
-                >
-                  Send
-                </button>
+            <AgentComposer
+              className={styles.composerEmbed}
+              value={input}
+              onChange={setInput}
+              onSend={handleSend}
+              disabled={isRunning}
+              isRunning={isRunning}
+              placeholder="Type your response… (Enter to send, Shift+Enter for new line)"
+              testIdPrefix="standup"
+              {...{ 'data-testid': 'standup-composer' }}
+              rows={2}
+              speech={{
+                isListening: speech.isListening,
+                isSpeechSupported: speech.isSpeechSupported,
+                speechError: speech.speechError,
+                onToggle: () => speech.toggle(input),
+              }}
+              trailingActions={(
                 <button
                   className={styles.submitBtn}
                   onClick={handleSubmit}
                   disabled={submitting || isRunning}
+                  type="button"
+                  {...{ 'data-testid': 'standup-submit-btn' }}
                 >
                   {submitting ? 'Submitting…' : 'Submit Standup'}
                 </button>
-              </div>
-              {speech.isListening && (
-                <div className={styles.speechStatus}>
-                  Listening… your speech is being transcribed into the draft.
-                </div>
               )}
-            </div>
+            />
           )}
 
           {error && <div className={styles.error}>{error}</div>}

@@ -1,0 +1,250 @@
+.dialog {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 24px;
+  width: 100%;
+  max-width: 520px;
+  max-height: min(90vh, 720px);
+  overflow: auto;
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.subtitle {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.error {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--error-color);
+  color: var(--error-color);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.addForm {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+}
+
+.fieldLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.input,
+.select {
+  padding: 8px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+}
+
+.input:focus,
+.select:focus {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+}
+
+.targetList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.targetOption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 0.875rem;
+  transition: all 0.2s ease;
+}
+
+.targetOption:hover,
+.targetOptionSelected {
+  border-color: var(--accent-color);
+  background: var(--bg-tertiary);
+  box-shadow: var(--glow-accent);
+}
+
+.targetMeta {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.accessRow {
+  display: flex;
+  gap: 8px;
+}
+
+.accessOption {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.accessOptionActive {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+  box-shadow: var(--glow-accent);
+}
+
+.grantList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.grantRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+}
+
+.grantName {
+  flex: 1 1 140px;
+  min-width: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.grantBadge {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.empty {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.btnSecondary,
+.btnPrimary,
+.btnDanger {
+  padding: 8px 16px;
+  border-radius: 7px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btnSecondary {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.btnSecondary:hover:not(:disabled) {
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
+}
+
+.btnPrimary {
+  background: var(--accent-color);
+  color: var(--on-accent);
+  border: none;
+}
+
+.btnPrimary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.btnDanger {
+  background: transparent;
+  color: var(--error-color);
+  border: 1px solid var(--border-color);
+}
+
+.btnDanger:hover:not(:disabled) {
+  border-color: var(--error-color);
+  background: var(--bg-tertiary);
+}
+
+.btnSecondary:disabled,
+.btnPrimary:disabled,
+.btnDanger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.skeleton {
+  height: 44px;
+  border-radius: 10px;
+  background: var(--bg-tertiary);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}

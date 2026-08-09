@@ -5,7 +5,6 @@ description: Project adapter for design-spec-review. Customize for your project.
 
 # design-spec-review — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/prd-spec-review/SKILL.md -->
 
 **Invocation:** `/design-spec-review {slug}`
 

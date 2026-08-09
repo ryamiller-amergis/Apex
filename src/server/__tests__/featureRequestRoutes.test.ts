@@ -5,6 +5,7 @@ import featureRequestsRouter from '../routes/featureRequests';
 jest.mock('../middleware/rbac', () => ({
   requirePermission: () => (_req: unknown, _res: unknown, next: () => void) =>
     next(),
+  resolveRequestProject: (req: any) => (req.query?.project as string) || (req.body?.project as string) || req.get?.('x-apex-project') || undefined,
 }));
 
 jest.mock('../utils/requestUser', () => ({
@@ -18,7 +19,7 @@ jest.mock('../services/featureRequestService', () => ({
   listAcceptedAdrsForProject: jest.fn(),
   updateFeatureRequest: jest.fn(),
   linkInterview: jest.fn(),
-  resolveApexReviewers: jest.fn(),
+  resolveFeatureRequestReviewers: jest.fn(),
 }));
 
 jest.mock('../services/featureRequestAnalysisService', () => ({
@@ -35,7 +36,8 @@ const featureRequestService = jest.requireMock(
 ) as {
   createFeatureRequest: jest.Mock;
   listFeatureRequests: jest.Mock;
-  resolveApexReviewers: jest.Mock;
+  getFeatureRequest: jest.Mock;
+  resolveFeatureRequestReviewers: jest.Mock;
 };
 const analysisService = jest.requireMock(
   '../services/featureRequestAnalysisService'
@@ -58,7 +60,7 @@ function buildApp() {
 describe('feature request work item submission', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    featureRequestService.resolveApexReviewers.mockResolvedValue([
+    featureRequestService.resolveFeatureRequestReviewers.mockResolvedValue([
       'reviewer-1',
     ]);
   });
@@ -141,23 +143,31 @@ describe('feature request work item submission', () => {
   });
 });
 
-describe('shared Apex backlog listing', () => {
+describe('per-project backlog listing', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     featureRequestService.listFeatureRequests.mockResolvedValue([
-      { id: 'request-1', title: 'Shared request' },
+      { id: 'request-1', title: 'Some request' },
     ]);
   });
 
-  it('returns the backlog for a non-Apex project', async () => {
+  it('passes project to listFeatureRequests for filtering', async () => {
     const response = await request(buildApp())
       .get('/api/feature-requests?project=Amego');
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual([
-      { id: 'request-1', title: 'Shared request' },
+      { id: 'request-1', title: 'Some request' },
     ]);
-    expect(featureRequestService.listFeatureRequests).toHaveBeenCalledTimes(1);
+    expect(featureRequestService.listFeatureRequests).toHaveBeenCalledWith('Amego');
+  });
+
+  it('passes Apex project for Apex backlog', async () => {
+    const response = await request(buildApp())
+      .get('/api/feature-requests?project=Apex');
+
+    expect(response.status).toBe(200);
+    expect(featureRequestService.listFeatureRequests).toHaveBeenCalledWith('Apex');
   });
 
   it('requires the selected project query parameter', async () => {
@@ -166,5 +176,38 @@ describe('shared Apex backlog listing', () => {
     expect(response.status).toBe(400);
     expect(response.body.error).toMatch(/project query parameter is required/i);
     expect(featureRequestService.listFeatureRequests).not.toHaveBeenCalled();
+  });
+});
+
+describe('cross-project isolation on single-item endpoints', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('GET /:id returns 404 when sourceProject does not match active project', async () => {
+    featureRequestService.getFeatureRequest = jest.fn().mockResolvedValue({
+      id: 'req-1',
+      sourceProject: 'Apex',
+      title: 'Apex item',
+    });
+
+    const response = await request(buildApp())
+      .get('/api/feature-requests/req-1?project=Amego');
+
+    expect(response.status).toBe(404);
+  });
+
+  it('GET /:id succeeds when sourceProject matches active project', async () => {
+    featureRequestService.getFeatureRequest = jest.fn().mockResolvedValue({
+      id: 'req-1',
+      sourceProject: 'Amego',
+      title: 'Amego item',
+    });
+
+    const response = await request(buildApp())
+      .get('/api/feature-requests/req-1?project=Amego');
+
+    expect(response.status).toBe(200);
+    expect(response.body.title).toBe('Amego item');
   });
 });

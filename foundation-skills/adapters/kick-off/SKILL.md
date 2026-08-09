@@ -5,7 +5,6 @@ description: Project adapter for kick-off. Customize for your project.
 
 # kick-off — Project Adapter
 
-<!-- Managed loader: loads .apex/foundation/kick-off/SKILL.md -->
 Use model `claude-4.6-opus-high-thinking` for all reasoning.
 Switch to plan mode before Phase 3.
 

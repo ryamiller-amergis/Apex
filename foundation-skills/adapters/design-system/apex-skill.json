@@ -5,7 +5,15 @@
     "package": "@apex/skills",
     "range": ">=0.2.0"
   },
-  "managedFoundationFiles": [".apex/foundation/design-system/SKILL.md"],
-  "extensionFiles": ["SKILL.md"],
-  "capabilities": ["design-tokens", "component-index", "app-shell"]
+  "extensionFiles": [
+    "SKILL.md"
+  ],
+  "capabilities": [
+    "design-tokens",
+    "component-index",
+    "app-shell"
+  ],
+  "managedFiles": [
+    "SKILL.md"
+  ]
 }

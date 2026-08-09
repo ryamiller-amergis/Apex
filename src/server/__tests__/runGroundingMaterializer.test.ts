@@ -29,6 +29,29 @@ function run(runId: string): RunRef {
 }
 
 describe('TBI-004 default independent grounding materializer', () => {
+  it('AC-2 / VT-03 / BR-007 reconciles the same deterministic workspace on re-promotion', async () => {
+    const destinations: string[] = [];
+    const createBundleStore = jest.fn(() => ({
+      rehydrate: jest.fn().mockImplementation(
+        async (_identity: unknown, destination: string) => {
+          destinations.push(destination);
+          return { status: 'materialized', source: 'bundle' };
+        },
+      ),
+    }));
+    const materialize = createRunGroundingMaterializer({
+      dataRoot: 'C:\\persistent-data',
+      createBundleStore,
+    });
+    const destinationRun = run('re-promoted-thread');
+
+    await expect(materialize(grounding, destinationRun)).resolves.toBe('materialized');
+    await expect(materialize(grounding, destinationRun)).resolves.toBe('materialized');
+
+    expect(destinations).toHaveLength(2);
+    expect(destinations[1]).toBe(destinations[0]);
+  });
+
   it('DoD-0/DoD-1 uses distinct opaque destinations and passes the exact copied SHA', async () => {
     // Arrange
     const rehydrate = jest.fn().mockResolvedValue({
@@ -60,7 +83,7 @@ describe('TBI-004 default independent grounding materializer', () => {
     expect(secondIdentity.sha).toBe(sha);
     expect(firstDestination).not.toBe(secondDestination);
     expect(firstDestination).toMatch(
-      new RegExp(`grounding-workspaces[\\\\/]\\w+$`)
+      new RegExp(`workspaces[\\\\/]grounding[\\\\/]\\w+$`)
     );
     expect(firstDestination).not.toContain('prd-thread');
     expect(secondDestination).not.toContain('design-doc-thread');
@@ -135,7 +158,7 @@ describe('TBI-004 default independent grounding materializer', () => {
     });
     expect(materializeWorkspaceFromCache).toHaveBeenCalledWith(
       'C:\\cache\\repo.git',
-      expect.stringMatching(/grounding-workspaces/),
+      expect.stringMatching(/[\\/]workspaces[\\/]grounding[\\/]/),
       'main',
       'https://example.invalid/repo.git'
     );

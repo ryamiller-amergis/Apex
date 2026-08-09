@@ -26,6 +26,13 @@ import type {
   ChatThreadKickoff,
   SseEvent,
 } from '../../shared/types/chat';
+import type {
+  AgentRunCancelState,
+  AgentRunLane,
+  AgentRunStatus,
+  AgentRunTerminalReason,
+  ExecutionSnapshot,
+} from '../../shared/types/agentRunLifecycle';
 import type { ContentSnapshot, DesignDocValidationOverride, PrdReadinessOverride, PrdValidationBaseline, TestCaseCoverageSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { DesignPrototypeHistoryEntry } from '../../shared/types/designPrototype';
 import type { UiLabHistoryEntry } from '../../shared/types/uiLab';
@@ -51,6 +58,10 @@ import type {
   ThresholdResult,
   ArtifactRef,
 } from '../../shared/types/loadTest';
+import type {
+  DiagramShareAccess,
+  ExcalidrawScene,
+} from '../../shared/types/diagram';
 import type {
   WalkthroughAnchorPlacement,
   WalkthroughGenerationProvenance,
@@ -1393,6 +1404,7 @@ export const featureRequests = pgTable('feature_requests', {
   statusCreatedIdx: index('idx_feature_requests_status_created').on(t.status, t.createdAt),
   typeStatusCreatedIdx: index('idx_feature_requests_type_status_created').on(t.type, t.status, t.createdAt),
   submittedByIdx: index('idx_feature_requests_submitted_by').on(t.submittedBy),
+  sourceProjectIdx: index('idx_feature_requests_source_project').on(t.sourceProject),
 }));
 
 export const featureRequestAdrs = pgTable('feature_request_adrs', {
@@ -1501,7 +1513,7 @@ export const pdfConversionJobsRelations = relations(pdfConversionJobs, ({ one })
 export const agentRuns = pgTable('agent_runs', {
   id: text('id').primaryKey().default(sql`gen_random_uuid()::text`),
   threadId: text('thread_id').notNull(),
-  status: text('status').notNull().default('queued'),
+  status: text('status').$type<AgentRunStatus>().notNull().default('queued'),
   ownerInstance: text('owner_instance'),
   heartbeatAt: timestamp('heartbeat_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   progressAt: timestamp('progress_at', { withTimezone: true, mode: 'string' }),
@@ -1514,10 +1526,45 @@ export const agentRuns = pgTable('agent_runs', {
   // write a heartbeat by design) instead of re-evaluating the flag per sweep.
   eventDriven: boolean('event_driven').notNull().default(false),
   lastError: text('last_error'),
+  // FEAT-001 Formal Agent Run Lifecycle (additive; nullable for legacy rows).
+  projectId: text('project_id'),
+  lane: text('lane').$type<AgentRunLane>(),
+  queuedAt: timestamp('queued_at', { withTimezone: true, mode: 'string' }),
+  dispatchedAt: timestamp('dispatched_at', { withTimezone: true, mode: 'string' }),
+  dispatchMessageId: text('dispatch_message_id'),
+  executionSnapshot: jsonb('execution_snapshot').$type<ExecutionSnapshot>(),
+  cancelRequested: boolean('cancel_requested').notNull().default(false),
+  cancelState: text('cancel_state').$type<AgentRunCancelState>(),
+  terminalReason: text('terminal_reason').$type<AgentRunTerminalReason>(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
   statusHeartbeatIdx: index('idx_agent_runs_status_heartbeat').on(t.status, t.heartbeatAt),
+  statusLaneIdx: index('idx_agent_runs_status_lane').on(t.status, t.lane),
+  projectStatusIdx: index('idx_agent_runs_project_status').on(t.projectId, t.status),
+  queuedWorkerIdx: index('idx_agent_runs_queued_at_worker')
+    .on(t.queuedAt)
+    .where(sql`${t.lane} = 'background'`),
+  dispatchedWorkerIdx: index('idx_agent_runs_dispatched_at_worker')
+    .on(t.dispatchedAt)
+    .where(sql`${t.lane} = 'background' AND ${t.dispatchMessageId} IS NOT NULL`),
+  heartbeatWorkerIdx: index('idx_agent_runs_heartbeat_at_worker')
+    .on(t.heartbeatAt)
+    .where(sql`${t.lane} = 'background' AND ${t.dispatchMessageId} IS NOT NULL`),
+  backgroundInFlightIdx: index('idx_agent_runs_background_in_flight')
+    .on(t.lane, t.status)
+    .where(sql`${t.lane} = 'background' AND ${t.status} IN ('dispatched', 'running')`),
+  backgroundFairQueueIdx: index('idx_agent_runs_background_fair_queue')
+    .on(t.projectId, t.queuedAt, t.id)
+    .where(sql`${t.lane} = 'background' AND ${t.status} = 'queued'`),
+  laneCheck: check(
+    'agent_runs_lane_check',
+    sql`${t.lane} IS NULL OR ${t.lane} IN ('background', 'ai-runs-interactive')`,
+  ),
+  terminalReasonCheck: check(
+    'agent_runs_terminal_reason_check',
+    sql`${t.terminalReason} IS NULL OR ${t.terminalReason} IN ('worker_lost', 'progress_timeout', 'queue_ttl', 'forced_cancel')`,
+  ),
   nonTerminalTimeoutCheck: check(
     'agent_runs_non_terminal_timeout_at_check',
     sql`${t.status} NOT IN ('queued', 'running') OR ${t.timeoutAt} IS NOT NULL`,
@@ -1794,6 +1841,59 @@ export const loadTestRunsRelations = relations(loadTestRuns, ({ one }) => ({
   loadTest: one(loadTests, {
     fields: [loadTestRuns.loadTestId],
     references: [loadTests.id],
+  }),
+}));
+
+// ── Diagrams Module ───────────────────────────────────────────────────────────
+
+export const diagrams = pgTable('diagrams', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: text('project_id').notNull(),
+  ownerId: text('owner_id').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  title: text('title').notNull(),
+  scene: jsonb('scene').$type<ExcalidrawScene>().notNull(),
+  thumbnail: text('thumbnail').notNull(),
+  version: integer('version').notNull().default(1),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectOwnerIdx: index('idx_diagrams_project_owner').on(t.projectId, t.ownerId),
+  projectUpdatedIdx: index('idx_diagrams_project_updated').on(t.projectId, t.updatedAt),
+  titleNotBlankCheck: check('diagrams_title_not_blank', sql`length(btrim(${t.title})) > 0`),
+  versionPositiveCheck: check('diagrams_version_positive', sql`${t.version} > 0`),
+}));
+
+export const diagramShares = pgTable('diagram_shares', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  diagramId: uuid('diagram_id').notNull().references(() => diagrams.id, { onDelete: 'cascade' }),
+  granteeId: text('grantee_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  access: text('access').$type<DiagramShareAccess>().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  diagramGranteeUq: unique('diagram_shares_diagram_id_grantee_id_key').on(
+    t.diagramId,
+    t.granteeId,
+  ),
+  granteeIdx: index('idx_diagram_shares_grantee').on(t.granteeId, t.diagramId),
+  accessCheck: check('diagram_shares_access_check', sql`${t.access} IN ('view', 'edit')`),
+}));
+
+export const diagramsRelations = relations(diagrams, ({ one, many }) => ({
+  owner: one(appUsers, {
+    fields: [diagrams.ownerId],
+    references: [appUsers.oid],
+  }),
+  shares: many(diagramShares),
+}));
+
+export const diagramSharesRelations = relations(diagramShares, ({ one }) => ({
+  diagram: one(diagrams, {
+    fields: [diagramShares.diagramId],
+    references: [diagrams.id],
+  }),
+  grantee: one(appUsers, {
+    fields: [diagramShares.granteeId],
+    references: [appUsers.oid],
   }),
 }));
 
@@ -2089,6 +2189,7 @@ import type {
   FoundationSkillReleaseStatus,
   FoundationSkillAuditAction,
   FoundationSkillCompatibilityStatus,
+  FoundationSkillArtifactManifest,
 } from '../../shared/types/foundationSkills';
 
 export const foundationSkillReleases = pgTable('foundation_skill_releases', {
@@ -2103,7 +2204,7 @@ export const foundationSkillReleases = pgTable('foundation_skill_releases', {
   selectedSkills:      jsonb('selected_skills').$type<string[]>().notNull().default([]),
   targetProjects:      jsonb('target_projects').$type<string[]>().notNull().default([]),
   skillTargets:        jsonb('skill_targets').$type<Record<string, string[]>>().notNull().default({}),
-  manifestSnapshot:    jsonb('manifest_snapshot').$type<Record<string, unknown>>(),
+  manifestSnapshot:    jsonb('manifest_snapshot').$type<FoundationSkillArtifactManifest>(),
   releaseNotes:        text('release_notes'),
   breakingChanges:     text('breaking_changes'),
   publishedBy:         text('published_by'),
