@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { AdrChatView } from '../AdrChatView';
 
@@ -91,10 +92,16 @@ describe('NewAdrCompose', () => {
   });
 
   it('opens reviewer selection and sends reviewers plus attachments', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+
     render(
-      <MemoryRouter initialEntries={['/adr/new']}>
-        <AdrChatView />
-      </MemoryRouter>,
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/adr/new']}>
+          <AdrChatView />
+        </MemoryRouter>
+      </QueryClientProvider>,
     );
 
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Choose event transport' } });
