@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { InterviewAgentMessage } from './InterviewChatView';
+import { AgentComposer } from './agentChat';
 import styles from './PrdAssistantPanel.module.css';
 
 export interface AdrAssistantPanelProps {
@@ -199,27 +200,20 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
             <div ref={messagesEndRef} />
           </div>
         </div>
-        <div className={styles.inputArea}>
-          <div className={styles.inputBox}>
-            <textarea
-              ref={textareaRef}
-              className={styles.inputField}
-              value={input}
-              rows={1}
-              disabled={!threadId || isCreating || isRunning || isSending}
-              placeholder={isRunning ? 'Assistant is investigating…' : 'Ask about refinements or trade-offs…'}
-              onChange={(event) => setInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault();
-                  void send();
-                }
-              }}
-              {...{ 'data-testid': 'adr-assistant-input' }}
-            />
-            <button className={styles.sendBtn} type="button" aria-label="Send" disabled={!input.trim() || !threadId || isRunning || isSending} onClick={() => void send()} {...{ 'data-testid': 'adr-assistant-send-btn' }}>→</button>
-          </div>
-        </div>
+        <AgentComposer
+          className={styles.composerEmbed}
+          value={input}
+          onChange={setInput}
+          onSend={() => void send()}
+          onCancel={isRunning ? () => void session.cancel() : undefined}
+          disabled={!threadId || isCreating || isRunning || isSending}
+          isRunning={isRunning}
+          isSending={isSending}
+          placeholder={isRunning ? 'Assistant is investigating…' : 'Ask about refinements or trade-offs…'}
+          testIdPrefix="adr-assistant"
+          textareaRef={textareaRef}
+          {...{ 'data-testid': 'adr-assistant-composer' }}
+        />
       </div>
     </>
   );

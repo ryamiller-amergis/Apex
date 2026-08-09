@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, KeyboardEvent } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate, useLocation, Navigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -34,6 +34,7 @@ import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { trackEvent, trackException } from '../services/telemetry';
 import { ReadAloudButton } from './ReadAloudButton';
+import { AgentComposer } from './agentChat';
 import styles from './InterviewChatView.module.css';
 
 function badgeClass(status: InterviewStatus): string {
@@ -885,13 +886,6 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     await sendMessageToAgent(text, true);
   }, [attachments.length, input, sendMessageToAgent]);
 
-  const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      void handleSend();
-    }
-  }, [handleSend]);
-
   const handleRetryLast = useCallback(() => {
     session.retryLast();
   }, [session]);
@@ -1472,170 +1466,105 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             onChange={handleAttachmentChange}
             disabled={isInteractionBusy || isSending}
           />
-          <div
-            className={`${styles.inputBox} ${isInteractionBusy ? styles.inputBoxBusy : ''}`}
-            aria-busy={isInteractionBusy}
-          >
-            <textarea
-              ref={textareaRef}
-              className={styles.inputField}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={isPreparingInterview
-                ? 'Preparing the latest requirements…'
-                : isAgentProcessing
-                  ? 'Agent is thinking…'
-                  : 'Continue the interview… (Enter to send)'}
-              rows={1}
-              disabled={isInteractionBusy || isSending}
-              {...{ 'data-testid': 'interview-message-input' }}
-            />
-            {attachments.length > 0 && (
-              <div className={styles.attachmentList}>
-                {attachments.map((a) => (
-                  <span key={a.id} className={styles.attachmentChip}>
-                    <span className={styles.attachmentName}>{a.name}</span>
-                    <span className={styles.attachmentSize}>{formatAttachmentSize(a.size)}</span>
-                    <button
-                      type="button"
-                      className={styles.attachmentRemove}
-                      onClick={() => removeAttachment(a.id)}
-                      disabled={isInteractionBusy || isSending}
-                      aria-label={`Remove ${a.name}`}
-                    >×</button>
-                  </span>
-                ))}
+          <AgentComposer
+            className={styles.composerEmbed}
+            value={input}
+            onChange={setInput}
+            onSend={() => {
+              if (contextEstimate.isCritical) {
+                setShowSendConfirm(true);
+              } else {
+                void handleSend();
+              }
+            }}
+            onCancel={() => void session.cancel()}
+            disabled={isInteractionBusy || isSending}
+            isRunning={isRunning}
+            isSending={isSending}
+            isBusy={isInteractionBusy}
+            isCancelling={session.isCancelling}
+            placeholder={isPreparingInterview
+              ? 'Preparing the latest requirements…'
+              : isAgentProcessing
+                ? 'Agent is thinking…'
+                : 'Continue the interview… (Enter to send)'}
+            testIdPrefix="interview"
+            testIds={{
+              input: 'interview-message-input',
+              send: 'interview-send-message',
+              stop: 'interview-stop-agent',
+            }}
+            {...{ 'data-testid': 'interview-chat-composer' }}
+            allowEmptySend
+            textareaRef={textareaRef}
+            attachments={attachments}
+            attachmentError={attachmentError}
+            onRemoveAttachment={removeAttachment}
+            onAttachClick={() => fileInputRef.current?.click()}
+            speech={{
+              isListening: speech.isListening,
+              isSpeechSupported: speech.isSpeechSupported,
+              speechError: speech.speechError,
+              onToggle: () => speech.toggle(input),
+            }}
+            model={model}
+            models={availableModels}
+            modelsLoading={modelsLoading}
+            onModelChange={setModel}
+            sendButton={(
+              <div className={contextEstimate.isCritical ? styles.sendBtnCritical : undefined}>
+                {showSendConfirm && (
+                  <div className={styles.sendConfirmOverlay}>
+                    <div className={styles.sendConfirmText}>
+                      The context window is nearly full. Sending more messages may degrade the agent&apos;s ability to process the conversation. Continue anyway?
+                    </div>
+                    <div className={styles.sendConfirmActions}>
+                      <button
+                        className={styles.sendConfirmNo}
+                        onClick={() => setShowSendConfirm(false)}
+                        type="button"
+                        {...{ 'data-testid': 'interview-send-confirm-cancel' }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        className={styles.sendConfirmYes}
+                        onClick={() => {
+                          setShowSendConfirm(false);
+                          void handleSend();
+                        }}
+                        type="button"
+                        {...{ 'data-testid': 'interview-send-confirm-submit' }}
+                      >
+                        Send anyway
+                      </button>
+                    </div>
+                  </div>
+                )}
+                <button
+                  className={styles.sendBtn}
+                  onClick={() => {
+                    if (contextEstimate.isCritical) {
+                      setShowSendConfirm(true);
+                    } else {
+                      void handleSend();
+                    }
+                  }}
+                  disabled={
+                    (!input.trim() && attachments.length === 0)
+                    || isInteractionBusy
+                  }
+                  type="button"
+                  aria-label="Send"
+                  {...{ 'data-testid': 'interview-send-message' }}
+                >
+                  <svg viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
+                  </svg>
+                </button>
               </div>
             )}
-            {attachmentError && <div className={styles.attachmentError}>{attachmentError}</div>}
-            {speech.speechError && <div className={styles.speechError}>{speech.speechError}</div>}
-            <div className={styles.inputActions}>
-              <button
-                className={styles.attachBtn}
-                onClick={() => fileInputRef.current?.click()}
-                type="button"
-                aria-label="Attach files"
-                title="Attach files for context"
-                disabled={isInteractionBusy || isSending}
-              >
-                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M7 10.5l5.2-5.2a3 3 0 114.2 4.2l-6.7 6.7a5 5 0 01-7.1-7.1l6.4-6.4" />
-                </svg>
-              </button>
-              <button
-                className={`${styles.micBtn} ${speech.isListening ? styles.micBtnActive : ''}`}
-                onClick={() => speech.toggle(input)}
-                type="button"
-                aria-label={speech.isListening ? 'Stop voice transcription' : 'Start voice transcription'}
-                title={speech.isSpeechSupported
-                  ? (speech.isListening ? 'Stop listening' : 'Talk to transcribe into chat')
-                  : 'Speech recognition not supported in this browser'}
-                disabled={!speech.isSpeechSupported || isInteractionBusy || isSending}
-              >
-                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="7" y="2.5" width="6" height="10" rx="3" />
-                  <path d="M4.5 9.5v0.5a5.5 5.5 0 0 0 11 0v-0.5" />
-                  <path d="M10 15.5v2.5" />
-                  <path d="M7.5 18h5" />
-                </svg>
-              </button>
-              <select
-                className={styles.modelSelect}
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                disabled={isInteractionBusy}
-                aria-label="Model"
-              >
-                {modelsLoading || !availableModels?.length ? (
-                  <option value={model}>{model || 'Loading models…'}</option>
-                ) : (
-                  <>
-                    {!availableModels.some((m) => m.id === model) && model && (
-                      <option value={model}>{model}</option>
-                    )}
-                    {availableModels.map((m) => (
-                      <option key={m.id} value={m.id}>{m.displayName}</option>
-                    ))}
-                  </>
-                )}
-              </select>
-              {isRunning ? (
-                <button
-                  className={`${styles.sendBtn} ${styles.stopBtn} ${session.isCancelling ? styles.stopBtnStopping : ''}`}
-                  onClick={() => void session.cancel()}
-                  type="button"
-                  aria-label={session.isCancelling ? 'Stopping agent' : 'Stop agent'}
-                  disabled={session.isCancelling}
-                  {...{ 'data-testid': 'interview-stop-agent' }}
-                >
-                  {session.isCancelling ? (
-                    <span className={styles.stopSpinner} aria-hidden="true" />
-                  ) : (
-                    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                      <rect x="4" y="4" width="12" height="12" rx="2" />
-                    </svg>
-                  )}
-                  <span>{session.isCancelling ? 'Stopping…' : 'Stop'}</span>
-                </button>
-              ) : (
-                <div className={contextEstimate.isCritical ? styles.sendBtnCritical : undefined}>
-                  {showSendConfirm && (
-                    <div className={styles.sendConfirmOverlay}>
-                      <div className={styles.sendConfirmText}>
-                        The context window is nearly full. Sending more messages may degrade the agent's ability to process the conversation. Continue anyway?
-                      </div>
-                      <div className={styles.sendConfirmActions}>
-                        <button
-                          className={styles.sendConfirmNo}
-                          onClick={() => setShowSendConfirm(false)}
-                          type="button"
-                          {...{ 'data-testid': 'interview-send-confirm-cancel' }}
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          className={styles.sendConfirmYes}
-                          onClick={() => {
-                            setShowSendConfirm(false);
-                            void handleSend();
-                          }}
-                          type="button"
-                          {...{ 'data-testid': 'interview-send-confirm-submit' }}
-                        >
-                          Send anyway
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                  <button
-                    className={styles.sendBtn}
-                    onClick={() => {
-                      if (contextEstimate.isCritical) {
-                        setShowSendConfirm(true);
-                      } else {
-                        void handleSend();
-                      }
-                    }}
-                    disabled={
-                      (!input.trim() && attachments.length === 0)
-                      || isInteractionBusy
-                    }
-                    type="button"
-                    aria-label="Send"
-                    {...{ 'data-testid': 'interview-send-message' }}
-                  >
-                    <svg viewBox="0 0 20 20" fill="currentColor">
-                      <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
-                    </svg>
-                  </button>
-                </div>
-              )}
-            </div>
-            {speech.isListening && (
-              <div className={styles.speechStatus}>Listening… your speech is being transcribed.</div>
-            )}
-          </div>
+          />
         </div>
       )}
 

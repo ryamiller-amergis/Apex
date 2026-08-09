@@ -461,6 +461,12 @@
   background: var(--bg-secondary);
 }
 
+.composerEmbed {
+  padding: 0;
+  border-top: none;
+  background: transparent;
+}
+
 .fileInput {
   display: none;
 }

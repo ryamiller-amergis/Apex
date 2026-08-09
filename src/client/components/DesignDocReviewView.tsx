@@ -32,6 +32,7 @@ import {
 } from '../hooks/useInterviews';
 import { ProposedDesignDocChangesReview } from './ProposedDesignDocChangesReview';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
+import { AgentComposer } from './agentChat';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
 import { ReviewReasonModal } from './ReviewReasonModal';
@@ -471,26 +472,12 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages.length, streamingText]);
 
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
-  }, [input]);
-
   const handleSend = useCallback(async () => {
     const text = input.trim();
     if (!text) return;
     setInput('');
     await session.send(text);
   }, [input, session]);
-
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      void handleSend();
-    }
-  }, [handleSend]);
 
   const visibleMessages = messages.filter((m) => m.role !== 'tool' && m.toolName !== '_reasoning' && m.toolName !== '_thinking');
 
@@ -633,35 +620,24 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
       </div>
 
       {!readOnly ? (
-        <div className={styles.qaInputArea}>
-          <div className={styles.qaInputBox}>
-            <textarea
-              ref={textareaRef}
-              className={styles.qaInputField}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={
-                isCreating ? 'Starting assistant…' :
-                isRunning ? 'Agent is thinking…' :
-                'Ask about this design doc… (Enter to send)'
-              }
-              rows={1}
-              disabled={isRunning || isSending || isCreating || !threadId}
-            />
-            <button
-              className={styles.qaSendBtn}
-              onClick={() => void handleSend()}
-              disabled={!input.trim() || isRunning || isSending || isCreating || !threadId}
-              type="button"
-              aria-label="Send"
-            >
-              <svg viewBox="0 0 20 20" fill="currentColor">
-                <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
-              </svg>
-            </button>
-          </div>
-        </div>
+        <AgentComposer
+          className={styles.composerEmbed}
+          value={input}
+          onChange={setInput}
+          onSend={() => void handleSend()}
+          onCancel={isRunning ? () => void session.cancel() : undefined}
+          disabled={isRunning || isSending || isCreating || !threadId}
+          isRunning={isRunning}
+          isSending={isSending}
+          placeholder={
+            isCreating ? 'Starting assistant…' :
+            isRunning ? 'Agent is thinking…' :
+            'Ask about this design doc… (Enter to send)'
+          }
+          testIdPrefix="design-doc-assistant"
+          {...{ 'data-testid': 'design-doc-assistant-composer' }}
+          textareaRef={textareaRef}
+        />
       ) : (
         <div className={styles.qaMessageBubbleSystem} style={{ margin: '0 12px 12px' }}>
           Assistant is read-only — you can view the conversation but cannot send messages.

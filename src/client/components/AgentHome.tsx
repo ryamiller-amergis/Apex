@@ -10,7 +10,7 @@ import {
 } from '../hooks/useChatThreads';
 import { useProjectSkillConfig, useAvailableModels, useGlobalDefaultModel } from '../hooks/useProjectSkillConfig';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
-import { formatAttachmentSize, useChatAttachments } from '../hooks/useChatAttachments';
+import { useChatAttachments } from '../hooks/useChatAttachments';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { PRDPreviewDrawer } from './PRDPreviewDrawer';
@@ -23,6 +23,7 @@ import { useFocusChatMessage } from '../hooks/useFocusChatMessage';
 import { BrandLogo } from './BrandLogo';
 import { ReadAloudButton } from './ReadAloudButton';
 import { FoundationSkillUpdateBanner } from './FoundationSkillUpdateBanner';
+import { AgentComposer } from './agentChat';
 import styles from './AgentHome.module.css';
 
 interface AgentHomeProps {
@@ -746,19 +747,6 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
     setSkillPickerOpen(false);
   }, []);
 
-  const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const val = e.target.value;
-    setInput(val);
-    const skillStillActive = !!(selectedSkillPath && selectedSkillName && val.startsWith(`/${selectedSkillName}`));
-    if (selectedSkillPath && !skillStillActive) {
-      setSelectedSkillPath(null);
-      setSelectedSkillName(null);
-    }
-    const isSlash = /^\//.test(val);
-    setSkillPickerOpen(isSlash && !skillStillActive);
-    if (isSlash && !skillStillActive) setSkillPickerIdx(0);
-  }, [selectedSkillPath, selectedSkillName]);
-
   const handleAttachmentChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     await addFiles(e.currentTarget.files);
     e.currentTarget.value = '';
@@ -927,14 +915,9 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
       if (e.key === 'Escape') {
         e.preventDefault();
         setSkillPickerOpen(false);
-        return;
       }
     }
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  }, [skillPickerOpen, filteredSkills, skillPickerIdx, selectSkill, handleSend]);
+  }, [skillPickerOpen, filteredSkills, skillPickerIdx, selectSkill]);
 
   const handleStop = useCallback(async () => {
     await session.cancel();
@@ -987,7 +970,76 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
 
   const inputArea = (
     <div className={styles.inputWrapper}>
-      {skillPickerOpen && (
+      <AgentComposer
+        className={styles.composerEmbed}
+      value={input}
+      onChange={(val) => {
+        setInput(val);
+        const skillStillActive = !!(selectedSkillPath && selectedSkillName && val.startsWith(`/${selectedSkillName}`));
+        if (selectedSkillPath && !skillStillActive) {
+          setSelectedSkillPath(null);
+          setSelectedSkillName(null);
+        }
+        const isSlash = /^\//.test(val);
+        setSkillPickerOpen(isSlash && !skillStillActive);
+        if (isSlash && !skillStillActive) setSkillPickerIdx(0);
+      }}
+      onSend={() => void handleSend()}
+      onCancel={() => void handleStop()}
+      disabled={needsSkillSelection}
+      isRunning={isRunning}
+      isSending={isSending}
+      isBusy={isSending || needsSkillSelection}
+      shellDisabled={needsSkillSelection}
+      canSend={canSend}
+      allowEmptySend
+      autoFocus={isCompose && !needsSkillSelection}
+      rows={isCompose ? 3 : 1}
+      placeholder={
+        isCompose
+          ? (needsSkillSelection ? 'Select an option above to get started' : 'Let Apex know what you need…')
+          : isRunning
+            ? 'Type your follow-up…'
+            : 'Continue the conversation…'
+      }
+      testIdPrefix="agent-home"
+      testIds={{
+        input: 'agent-home-composer-input',
+        send: 'agent-home-send-btn',
+        stop: 'agent-home-stop-btn',
+        attach: 'agent-home-attach-btn',
+        microphone: 'agent-home-mic-btn',
+        model: 'agent-home-model-select',
+      }}
+      {...{ 'data-testid': 'agent-home-composer' }}
+      textareaRef={textareaRef}
+      attachments={attachments}
+      attachmentError={attachmentError}
+      onRemoveAttachment={removeAttachment}
+      onAttachClick={openFilePicker}
+      speech={{
+        isListening,
+        isSpeechSupported,
+        speechError,
+        onToggle: toggleSpeechRecognition,
+      }}
+      model={isCompose ? undefined : model}
+      models={isCompose ? undefined : availableModels}
+      modelsLoading={modelsLoading}
+      onModelChange={isCompose ? undefined : setModel}
+      onKeyDown={handleKeyDown}
+      fileInput={(
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className={styles.fileInput}
+          onChange={handleAttachmentChange}
+          disabled={isRunning || isSending || needsSkillSelection}
+          {...{ 'data-testid': 'agent-home-file-input' }}
+        />
+      )}
+      before={skillPickerOpen ? (
         <div className={styles.skillPicker} ref={skillPickerRef}>
           <div className={styles.skillPickerHeader}>
             {filteredSkills.length === 0
@@ -1011,144 +1063,8 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
             </button>
           ))}
         </div>
-      )}
-
-      <div className={`${styles.inputBox} ${needsSkillSelection ? styles.inputBoxDisabled : ''}`}>
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          className={styles.fileInput}
-          onChange={handleAttachmentChange}
-          disabled={isRunning || isSending || needsSkillSelection}
-          {...{ 'data-testid': 'agent-home-file-input' }}
-        />
-        <textarea
-          ref={textareaRef}
-          className={styles.textarea}
-          placeholder={
-            isCompose
-              ? (needsSkillSelection ? 'Select an option above to get started' : 'Let Apex know what you need…')
-              : isRunning
-                ? 'Type your follow-up…'
-                : 'Continue the conversation…'
-          }
-          value={input}
-          onChange={handleInputChange}
-          onKeyDown={handleKeyDown}
-          rows={isCompose ? 3 : 1}
-          disabled={isSending || needsSkillSelection}
-          // Compose mode focuses the prompt so users can type immediately after load.
-          // eslint-disable-next-line jsx-a11y/no-autofocus -- intentional compose UX
-          autoFocus={isCompose && !needsSkillSelection}
-          {...{ 'data-testid': 'agent-home-composer-input' }}
-        />
-        {attachments.length > 0 && (
-          <div className={styles.attachmentList}>
-            {attachments.map((attachment) => (
-              <span key={attachment.id} className={styles.attachmentChip}>
-                <span className={styles.attachmentName}>{attachment.name}</span>
-                <span className={styles.attachmentSize}>{formatAttachmentSize(attachment.size)}</span>
-                <button
-                  type="button"
-                  className={styles.attachmentRemove}
-                  onClick={() => removeAttachment(attachment.id)}
-                  aria-label={`Remove ${attachment.name}`}
-                  disabled={isRunning || isSending}
-                  {...{ 'data-testid': `agent-home-attachment-remove-${attachment.id}` }}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-        {attachmentError && (
-          <div className={styles.attachmentError}>{attachmentError}</div>
-        )}
-        {speechError && (
-          <div className={styles.speechError}>{speechError}</div>
-        )}
-        <div className={styles.inputActions}>
-          <button
-            className={styles.attachBtn}
-            onClick={openFilePicker}
-            type="button"
-            aria-label="Attach files"
-            title="Attach files for context"
-            disabled={isRunning || isSending || needsSkillSelection}
-            {...{ 'data-testid': 'agent-home-attach-btn' }}
-          >
-            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M7 10.5l5.2-5.2a3 3 0 114.2 4.2l-6.7 6.7a5 5 0 01-7.1-7.1l6.4-6.4" />
-            </svg>
-          </button>
-          <button
-            className={`${styles.micBtn} ${isListening ? styles.micBtnActive : ''}`}
-            onClick={toggleSpeechRecognition}
-            type="button"
-            aria-label={isListening ? 'Stop voice transcription' : 'Start voice transcription'}
-            title={isSpeechSupported
-              ? (isListening ? 'Stop listening' : 'Talk to transcribe into chat')
-              : 'Speech recognition is not supported in this browser'}
-            disabled={!isSpeechSupported || isRunning || isSending || needsSkillSelection}
-            {...{ 'data-testid': 'agent-home-mic-btn' }}
-          >
-            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="7" y="2.5" width="6" height="10" rx="3" />
-              <path d="M4.5 9.5v0.5a5.5 5.5 0 0 0 11 0v-0.5" />
-              <path d="M10 15.5v2.5" />
-              <path d="M7.5 18h5" />
-            </svg>
-          </button>
-          {!isCompose && (
-            <select
-              className={styles.modelSelect}
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              disabled={isRunning}
-              {...{ 'data-testid': 'agent-home-model-select' }}
-            >
-              {modelsLoading || !availableModels?.length ? (
-                <option value="">Loading models…</option>
-              ) : (
-                availableModels.map((m) => (
-                  <option key={m.id} value={m.id}>{m.displayName}</option>
-                ))
-              )}
-            </select>
-          )}
-          {isRunning ? (
-            <button
-              className={`${styles.sendBtn} ${styles.stopBtn}`}
-              onClick={handleStop}
-              type="button"
-              aria-label="Stop"
-              {...{ 'data-testid': 'agent-home-stop-btn' }}
-            >
-              <svg viewBox="0 0 20 20" fill="currentColor">
-                <rect x="4" y="4" width="12" height="12" rx="2" />
-              </svg>
-            </button>
-          ) : (
-            <button
-              className={styles.sendBtn}
-              onClick={handleSend}
-              disabled={!canSend}
-              type="button"
-              aria-label="Send"
-              {...{ 'data-testid': 'agent-home-send-btn' }}
-            >
-              <svg viewBox="0 0 20 20" fill="currentColor">
-                <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
-              </svg>
-            </button>
-          )}
-        </div>
-        {isListening && (
-          <div className={styles.speechStatus}>Listening... your speech is being transcribed into the draft.</div>
-        )}
-      </div>
+      ) : undefined}
+    />
     </div>
   );
 
@@ -1171,6 +1087,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
             repo={resolvedRepoName}
             provider={skillConfig?.skillProvider ?? 'ado'}
             branch={defaultBranch}
+            {...{ 'data-testid': 'agent-home-foundation-skill-banner' }}
           />
         )}
         {isCompose ? (

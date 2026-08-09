@@ -28,6 +28,7 @@ import {
 } from '../hooks/useAdrs';
 import { DEFAULT_MODEL_ID } from '../config/models';
 import { InterviewAgentMessage } from './InterviewChatView';
+import { AgentComposer } from './agentChat';
 import { AdrAssistantPanel } from './AdrAssistantPanel';
 import { ProposedAdrChangesReview } from './ProposedAdrChangesReview';
 import { AdrReviewerModal } from './AdrReviewerModal';
@@ -286,6 +287,7 @@ const NewAdrCompose: React.FC = () => {
 
 const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const [input, setInput] = useState('');
+  const [model, setModel] = useState(DEFAULT_MODEL_ID);
   const [error, setError] = useState<string | null>(null);
   const [generationNow, setGenerationNow] = useState(Date.now());
   const [assistantOpen, setAssistantOpen] = useState(false);
@@ -297,19 +299,41 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
   const { can, userId } = useAppShell();
   const { data: adr, isLoading, isError } = useAdr(id);
   const { data: reviewConfig } = useProjectSkillConfig(adr?.project);
+  const { data: models = [], isLoading: modelsLoading } = useAvailableModels();
   const { data: assignments = [] } = useAdrAssignments(id);
   const { data: reviewComments = [] } = useAdrComments(id);
   const { data: ownerApproval } = useAdrOwnerApproval(id);
-  const { data: thread } = useChatThread(adr?.chatThreadId ?? null);
+  const {
+    data: thread,
+    isLoading: isChatThreadLoading,
+    isError: isChatThreadError,
+  } = useChatThread(adr?.chatThreadId ?? null);
   const session = useAgentChatSession(adr?.chatThreadId ?? null, {
     initialMessages: thread?.messages,
     initialStatus: thread?.status,
+    enablePreparationState: adr?.status === 'in_progress',
   });
-  const { messages, streamingText } = session;
+  const {
+    messages,
+    streamingText,
+    progressLabel,
+    progressPhase,
+    isPreparing,
+    hasPreparationError,
+  } = session;
+  const {
+    attachments,
+    attachmentError,
+    addFiles,
+    removeAttachment,
+    clearAttachments,
+  } = useChatAttachments();
+  const speech = useSpeechInput(useCallback((text: string) => setInput(text), []));
   const generateAdr = useGenerateAdr();
   const updateAdr = useUpdateAdr();
   const deleteAdr = useDeleteAdr();
@@ -328,6 +352,10 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const isAgentProcessing = isRunning || session.isSending || session.isAwaitingAgentResponse;
   const isAuthor = adr?.authorId === userId;
   const chatLocked = !isAuthor || adr?.status !== 'in_progress';
+
+  useEffect(() => {
+    if (adr?.model) setModel(adr.model);
+  }, [adr?.id, adr?.model]);
 
   const handleAddComment = useCallback((sectionKey: ReviewSectionKey, selector: TextSelector) => {
     setPendingSelector({ sectionKey, selector });
@@ -376,17 +404,26 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   }, [adr?.status]);
 
   const send = useCallback(async (text: string) => {
-    if (!adr || !text.trim() || isInteractionBusy || chatLocked) return;
+    if (!adr || isInteractionBusy || chatLocked) return;
+    if (!text.trim() && attachments.length === 0) return;
+    const payload = text.trim();
+    const pendingAttachments = attachments;
     setInput('');
+    clearAttachments();
     setError(null);
-    await session.send(text.trim(), { model: adr.model });
+    await session.send(payload, { model, attachments: pendingAttachments });
     if (session.sendError) setError(session.sendError);
-  }, [adr, isInteractionBusy, chatLocked, session]);
+  }, [adr, attachments, chatLocked, clearAttachments, isInteractionBusy, model, session]);
 
   const cancelActiveRun = useCallback(async () => {
     setError(null);
     await session.cancel();
   }, [session]);
+
+  const handleAttachmentChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    void addFiles(event.target.files);
+    event.target.value = '';
+  }, [addFiles]);
 
   if (isLoading) return <div className={styles.loadingState}>Loading ADR…</div>;
   if (isError || !adr) return <div className={styles.errorState}>ADR not found.</div>;
@@ -675,6 +712,49 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
       {!adr.content && adr.status !== 'generating' && (
         <div className={styles.messages}>
           <div className={styles.messageList}>
+            {hasPreparationError && (
+              <div className={styles.preparationState} role="alert">
+                <div className={styles.preparationErrorIcon}>!</div>
+                <h2 className={styles.preparationTitle}>Unable to prepare this ADR interview</h2>
+                <p className={styles.preparationDetail}>
+                  {thread?.lastError ?? 'Repository preparation was interrupted. Try sending your message again.'}
+                </p>
+              </div>
+            )}
+
+            {isPreparing && (
+              <div
+                className={styles.preparationState}
+                {...{ 'data-testid': 'adr-preparation-state' }}
+              >
+                <div className={styles.preparationSpinner} />
+                <h2 className={styles.preparationTitle}>Preparing your ADR interview</h2>
+                <p
+                  className={styles.preparationDetail}
+                  role="status"
+                  aria-live="polite"
+                  {...{ 'data-testid': 'agent-run-status-label' }}
+                >
+                  {progressPhase === 'queued' ? (
+                    <span {...{ 'data-testid': 'agent-run-status-queued' }}>
+                      Queued — waiting for available worker
+                    </span>
+                  ) : progressPhase === 'dispatched' ? (
+                    <span {...{ 'data-testid': 'agent-run-status-dispatched' }}>
+                      Starting…
+                    </span>
+                  ) : (
+                    progressLabel
+                      ?? (isChatThreadError
+                        ? 'The ADR service is reconnecting after a temporary interruption…'
+                        : isChatThreadLoading
+                          ? 'Connecting to the ADR service…'
+                          : 'Setting up the workspace and repository context so your ADR interview starts grounded…')
+                  )}
+                </p>
+              </div>
+            )}
+
             {visibleMessages.map((message, index) => {
               if (message.role === 'agent') {
                 return (
@@ -699,7 +779,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
               </div>
             )}
-            {isAgentProcessing && !streamingText && (
+            {isAgentProcessing && !streamingText && !isPreparing && (
               <div
                 className={styles.typingIndicator}
                 role="status"
@@ -724,48 +804,50 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
       ) : !adr.content && (chatLocked ? (
         <div className={styles.lockedNotice}>This ADR conversation is read-only.</div>
       ) : (
-        <div className={styles.inputArea}>
-          <div className={styles.inputBox}>
-            <textarea
-              className={styles.inputField}
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault();
-                  void send(input);
-                }
-              }}
-              placeholder={isAgentProcessing ? 'Architect is thinking…' : 'Continue the ADR interview…'}
+        <AgentComposer
+          value={input}
+          onChange={setInput}
+          onSend={() => void send(input)}
+          onCancel={() => void cancelActiveRun()}
+          disabled={isInteractionBusy}
+          isRunning={isRunning}
+          isSending={session.isSending}
+          isBusy={isInteractionBusy}
+          isCancelling={session.isCancelling}
+          placeholder={isPreparing
+            ? 'Preparing the workspace…'
+            : isAgentProcessing
+              ? 'Architect is thinking…'
+              : 'Continue the ADR interview… (Enter to send)'}
+          testIdPrefix="adr"
+          allowEmptySend
+          attachments={attachments}
+          attachmentError={attachmentError}
+          onRemoveAttachment={removeAttachment}
+          onAttachClick={() => fileInputRef.current?.click()}
+          speech={{
+            isListening: speech.isListening,
+            isSpeechSupported: speech.isSpeechSupported,
+            speechError: speech.speechError,
+            onToggle: () => speech.toggle(input),
+          }}
+          model={model}
+          models={models}
+          modelsLoading={modelsLoading}
+          onModelChange={setModel}
+          {...{ 'data-testid': 'adr-chat-composer' }}
+          fileInput={(
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".txt,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*"
+              className={styles.fileInput}
+              onChange={handleAttachmentChange}
               disabled={isInteractionBusy}
-              {...{ 'data-testid': 'adr-message-input' }}
             />
-            {isRunning ? (
-              <button
-                className={`${styles.sendBtn} ${styles.stopBtn}`}
-                type="button"
-                onClick={() => void cancelActiveRun()}
-                aria-label="Stop"
-                title="Stop"
-                {...{ 'data-testid': 'adr-stop-btn' }}
-              >
-                <svg viewBox="0 0 20 20" fill="currentColor">
-                  <rect x="4" y="4" width="12" height="12" rx="2" />
-                </svg>
-              </button>
-            ) : (
-              <button
-                className={styles.sendBtn}
-                type="button"
-                disabled={!input.trim()}
-                onClick={() => void send(input)}
-                {...{ 'data-testid': 'adr-send-btn' }}
-              >
-                →
-              </button>
-            )}
-          </div>
-        </div>
+          )}
+        />
       ))}
       {pendingSelector && (
         <div
