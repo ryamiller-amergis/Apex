@@ -970,21 +970,15 @@ function App() {
               <Suspense fallback={<div {...{ 'data-testid': 'diagrams-loading' }}><ViewSkeleton /></div>}>
                 {(() => {
                   const segments = location.pathname.split('/').filter(Boolean);
-                  if (segments[0] === 'diagrams' && segments[1] === 'new') {
-                    return (
-                      <DiagramEditorView
-                        projectId={selectedProject}
-                        diagramId={null}
-                        mode="new"
-                      />
-                    );
-                  }
                   if (segments[0] === 'diagrams' && segments[1]) {
+                    const isNew = segments[1] === 'new';
+                    // Single element type at this tree position so create→save
+                    // (/new → /:id) reuses the editor instance instead of remounting.
                     return (
                       <DiagramEditorView
                         projectId={selectedProject}
-                        diagramId={segments[1]}
-                        mode="existing"
+                        diagramId={isNew ? null : segments[1]}
+                        mode={isNew ? 'new' : 'existing'}
                       />
                     );
                   }

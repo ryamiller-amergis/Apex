@@ -28,6 +28,26 @@ export const DiagramEditorView: React.FC<DiagramEditorViewProps> = ({
   const canEdit = can('diagram:edit');
   const canShare = can('diagram:share');
   const adapterRef = useRef<ExcalidrawAdapterHandle | null>(null);
+  /**
+   * Keep the Excalidraw mount stable for this editor session. After create→save the
+   * route flips /new → /:id; changing the React key remounts the canvas, reshapes
+   * elements, and falsely re-dirties the editor (discard prompt on Back).
+   * Draft keys are preserved across that flip; switching between two existing
+   * diagrams still remounts so initialData loads the other scene.
+   */
+  const [canvasInstanceKey, setCanvasInstanceKey] = useState(() => (
+    mode === 'existing' && diagramId
+      ? `diagram-${diagramId}`
+      : `diagram-draft-${Date.now()}`
+  ));
+  useEffect(() => {
+    if (mode !== 'existing' || !diagramId) return;
+    if (canvasInstanceKey.startsWith('diagram-draft-')) return;
+    const nextKey = `diagram-${diagramId}`;
+    if (nextKey !== canvasInstanceKey) {
+      setCanvasInstanceKey(nextKey);
+    }
+  }, [mode, diagramId, canvasInstanceKey]);
   const [isReloading, setIsReloading] = useState(false);
   const [showConflict, setShowConflict] = useState(false);
   const [showShare, setShowShare] = useState(false);
@@ -276,7 +296,7 @@ export const DiagramEditorView: React.FC<DiagramEditorViewProps> = ({
 
       <div className={styles.canvasWrap}>
         <ExcalidrawAdapter
-          key={mode === 'existing' ? `diagram-${editor.diagramId ?? 'pending'}` : 'diagram-new'}
+          key={canvasInstanceKey}
           ref={adapterRef}
           scene={editor.scene}
           editable={editable}

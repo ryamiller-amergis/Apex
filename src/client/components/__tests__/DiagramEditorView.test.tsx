@@ -139,6 +139,71 @@ describe('DiagramEditorView / DiagramsView — FEAT-003', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/diagrams/diagram-created', { replace: true });
   });
 
+  it('create → save → route flip stays clean on Back (no discard prompt)', async () => {
+    const user = userEvent.setup();
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({
+        id: 'diagram-created',
+        projectId: 'project-a',
+        ownerId: 'owner-1',
+        ownerName: 'Owner One',
+        title: DIAGRAM_DEFAULT_TITLE,
+        scene: { elements: [{ id: 'drawn', type: 'rectangle', x: 1, y: 2 }], appState: {}, files: {} },
+        thumbnail: 'data:image/png;base64,aaa',
+        version: 1,
+        effectiveAccess: 'owner',
+        createdAt: '2026-08-06T00:00:00.000Z',
+        updatedAt: '2026-08-06T00:00:00.000Z',
+      }),
+    }) as jest.Mock;
+
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+
+    function Harness() {
+      const [mode, setMode] = React.useState<'new' | 'existing'>('new');
+      const [diagramId, setDiagramId] = React.useState<string | null>(null);
+      // Simulate App navigate(/diagrams/:id) without remounting the editor shell.
+      React.useEffect(() => {
+        mockNavigate.mockImplementation((path: string) => {
+          const match = /^\/diagrams\/([^/]+)$/.exec(path);
+          if (match && match[1] !== 'new') {
+            setDiagramId(match[1]);
+            setMode('existing');
+          }
+        });
+      }, []);
+      return (
+        <DiagramEditorView projectId="project-a" diagramId={diagramId} mode={mode} />
+      );
+    }
+
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/diagrams/new']}>
+          <Harness />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await user.click(screen.getByTestId('diagram-mock-draw'));
+    expect(screen.getByTestId('diagram-unsaved-indicator')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('diagram-save-button'));
+    await waitFor(() =>
+      expect(screen.queryByTestId('diagram-unsaved-indicator')).not.toBeInTheDocument(),
+    );
+    expect(mockNavigate).toHaveBeenCalledWith('/diagrams/diagram-created', { replace: true });
+
+    // After /new → /:id prop flip, Back must not prompt discard.
+    await user.click(screen.getByTestId('diagram-editor-back'));
+    expect(screen.queryByTestId('diagram-unsaved-dialog')).not.toBeInTheDocument();
+    expect(mockNavigate).toHaveBeenCalledWith('/diagrams');
+  });
+
   it('PBI-002 AC-1 / VT-02: save failure shows error and keeps unsaved indicator', async () => {
     const user = userEvent.setup();
     global.fetch = jest.fn().mockResolvedValue({
