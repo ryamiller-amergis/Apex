@@ -834,4 +834,16 @@ describe('useChatStream', () => {
     expect(result.current.messages).toEqual(seed);
     expect(lastES!.close).not.toHaveBeenCalled();
   });
+
+  it('promotes idle stream status when initialStatus later reports running', () => {
+    const { result, rerender } = renderHook(
+      ({ status }) => useChatStream('t1', { initialStatus: status }),
+      { initialProps: { status: undefined as 'running' | undefined } },
+    );
+
+    expect(result.current.status).toBe('idle');
+
+    rerender({ status: 'running' });
+    expect(result.current.status).toBe('running');
+  });
 });

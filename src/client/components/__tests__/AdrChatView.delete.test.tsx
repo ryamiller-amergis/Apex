@@ -245,6 +245,30 @@ describe('AdrChatView — delete', () => {
     expect(screen.queryByTestId('adr-agent-processing')).not.toBeInTheDocument();
   });
 
+  it('shows the kickoff prompt immediately while waiting for the first agent reply', () => {
+    mockStreamState = {
+      messages: [],
+      streamingText: '',
+      status: 'idle',
+    };
+
+    render(
+      <MemoryRouter
+        initialEntries={[{
+          pathname: '/adr/adr-1',
+          state: { kickoffPrompt: 'Should we use Service Bus or Event Hub?' },
+        }]}
+      >
+        <AdrChatView />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText('Should we use Service Bus or Event Hub?')).toBeInTheDocument();
+    expect(screen.getByTestId('adr-preparation-state')).toHaveTextContent(
+      'Architect is preparing a response',
+    );
+  });
+
   it('renders queued status text while the ADR run waits for a worker', () => {
     mockStreamState = {
       messages: [],

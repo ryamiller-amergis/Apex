@@ -2,8 +2,10 @@
  * FEAT-007 / TBI-009 — client interactive stream transport (VT-04).
  */
 import {
+  INTERACTIVE_WS_CHANGED_EVENT,
   isInteractiveWsEnabled,
   openThreadEventStream,
+  setInteractiveWsEnabled,
 } from '../threadEventStream';
 
 class FakeEventSource {
@@ -37,6 +39,19 @@ describe('isInteractiveWsEnabled', () => {
     expect(isInteractiveWsEnabled()).toBe(false);
     (globalThis as { __APEX_INTERACTIVE_WS__?: unknown }).__APEX_INTERACTIVE_WS__ = true;
     expect(isInteractiveWsEnabled()).toBe(true);
+  });
+});
+
+describe('setInteractiveWsEnabled', () => {
+  it('writes the global and notifies listeners', () => {
+    const listener = jest.fn();
+    globalThis.addEventListener(INTERACTIVE_WS_CHANGED_EVENT, listener);
+    setInteractiveWsEnabled(true);
+    expect(isInteractiveWsEnabled()).toBe(true);
+    expect(listener).toHaveBeenCalledTimes(1);
+    setInteractiveWsEnabled(false);
+    expect(isInteractiveWsEnabled()).toBe(false);
+    globalThis.removeEventListener(INTERACTIVE_WS_CHANGED_EVENT, listener);
   });
 });
 

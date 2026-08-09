@@ -59,11 +59,14 @@ interface GatewayFrame {
  * global set at bootstrap (`window.__APEX_INTERACTIVE_WS__ = true`) or a
  * `localStorage` override, so the SSE→WS cutover is a single runtime flip.
  */
+export const INTERACTIVE_WS_CHANGED_EVENT = 'apex-interactive-ws-changed';
+
 export function isInteractiveWsEnabled(): boolean {
   try {
     const globalFlag = (globalThis as { __APEX_INTERACTIVE_WS__?: unknown })
       .__APEX_INTERACTIVE_WS__;
     if (globalFlag === true) return true;
+    if (globalFlag === false) return false;
     if (typeof localStorage !== 'undefined') {
       return localStorage.getItem('apex.interactiveWs') === 'true';
     }
@@ -71,6 +74,17 @@ export function isInteractiveWsEnabled(): boolean {
     // Sandboxed/SSR — fall back to SSE.
   }
   return false;
+}
+
+/** Publish the interactive transport preference and notify open chat streams. */
+export function setInteractiveWsEnabled(enabled: boolean): void {
+  (globalThis as { __APEX_INTERACTIVE_WS__?: boolean }).__APEX_INTERACTIVE_WS__ =
+    enabled;
+  try {
+    globalThis.dispatchEvent?.(new Event(INTERACTIVE_WS_CHANGED_EVENT));
+  } catch {
+    // Non-DOM runtimes (tests/SSR) — global write is enough.
+  }
 }
 
 function sseStreamUrl(threadId: string): string {

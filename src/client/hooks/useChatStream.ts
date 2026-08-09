@@ -17,6 +17,8 @@ import type {
 } from '../../shared/types/chat';
 import { v4 as uuidv4 } from 'uuid';
 import {
+  INTERACTIVE_WS_CHANGED_EVENT,
+  isInteractiveWsEnabled,
   openThreadEventStream,
   type ThreadStreamHandle,
 } from '../utils/threadEventStream';
@@ -201,6 +203,11 @@ export function useChatStream(
   const [isRetrying, setIsRetrying] = useState(false);
   const [retryReason, setRetryReason] = useState<string | null>(null);
   const [eventDrivenTermination, setEventDrivenTermination] = useState(false);
+  // Re-open the stream when ai-runs-interactive flips — otherwise a chat that
+  // connected as SSE while flags were still loading stays on SSE forever.
+  const [interactiveWsEnabled, setInteractiveWsEnabledState] = useState(
+    isInteractiveWsEnabled,
+  );
 
   const streamRef = useRef<ThreadStreamHandle | null>(null);
   // Buffer tokens into the in-progress message
@@ -218,6 +225,15 @@ export function useChatStream(
   initialMessagesRef.current = options.initialMessages;
   initialStatusRef.current = options.initialStatus;
   initialPrdReadyRef.current = options.initialPrdReady;
+
+  useEffect(() => {
+    const sync = () => setInteractiveWsEnabledState(isInteractiveWsEnabled());
+    sync();
+    globalThis.addEventListener?.(INTERACTIVE_WS_CHANGED_EVENT, sync);
+    return () => {
+      globalThis.removeEventListener?.(INTERACTIVE_WS_CHANGED_EVENT, sync);
+    };
+  }, []);
 
   const rememberEventId = useCallback((eventId: string): boolean => {
     if (!eventId) return true;
@@ -285,6 +301,15 @@ export function useChatStream(
       return [...prev, ...missing].sort((a, b) => a.ts.localeCompare(b.ts));
     });
   }, [options.initialMessages]);
+
+  // Promote stream status when REST catches up after mount. Without this, a
+  // thread that is already running can stay client-idle until the first SSE
+  // event — often minutes during workspace bootstrap — so the UI shows nothing.
+  useEffect(() => {
+    const snapshotStatus = options.initialStatus;
+    if (!snapshotStatus || snapshotStatus === 'idle') return;
+    setStatus((prev) => (prev === 'idle' ? snapshotStatus : prev));
+  }, [options.initialStatus]);
 
   useEffect(() => {
     // Always reset derived state (streaming buffer, prdReady, backlogReady) when
@@ -541,7 +566,7 @@ export function useChatStream(
       clearRetryTimeout();
       clearPollTimer();
     };
-  }, [threadId, reset, rememberEventId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [threadId, reset, rememberEventId, interactiveWsEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Polling fallback: when status is 'running' and SSE is disconnected, poll
   // the server every 5 seconds to detect terminal status from Postgres.
