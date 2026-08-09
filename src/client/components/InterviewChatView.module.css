@@ -461,6 +461,12 @@
   background: var(--bg-secondary);
 }
 
+.composerEmbed {
+  padding: 0;
+  border-top: none;
+  background: transparent;
+}
+
 .fileInput {
   display: none;
 }
@@ -743,11 +749,32 @@
 
 .stopBtn {
   background: var(--error-color);
+  width: auto;
+  min-width: 78px;
+  padding: 0 12px;
+  gap: 7px;
+  font-size: 0.78rem;
+  font-weight: 650;
 }
 
 .stopBtn:hover:not(:disabled) {
   background: var(--error-color);
   opacity: 0.85;
+}
+
+.stopBtnStopping,
+.stopBtnStopping:disabled {
+  opacity: 0.8;
+  cursor: wait;
+}
+
+.stopSpinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
 }
 
 .speechStatus {

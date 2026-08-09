@@ -279,7 +279,7 @@ describe('PBI-007 grounding maintenance acceptance', () => {
       active,
       dataRoot
     );
-    const workspacesRoot = path.join(dataRoot, 'grounding-workspaces');
+    const workspacesRoot = path.join(dataRoot, 'workspaces', 'grounding');
     const idleInactive = path.join(workspacesRoot, 'idle-inactive');
     const recentInactive = path.join(workspacesRoot, 'recent-inactive');
     const durableBundle = path.join(

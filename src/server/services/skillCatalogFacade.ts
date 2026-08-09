@@ -19,6 +19,18 @@ export interface RepoInfo {
   defaultBranch: string;
 }
 
+function githubRepositoryTarget(repo: string): {
+  repo: string;
+  org?: string;
+} {
+  const slash = repo.indexOf('/');
+  if (slash <= 0 || slash === repo.length - 1) return { repo };
+  return {
+    org: repo.slice(0, slash),
+    repo: repo.slice(slash + 1),
+  };
+}
+
 export async function listRepos(
   project: string,
   provider: SkillProvider = 'ado',
@@ -47,7 +59,8 @@ export async function listBranches(
   provider: SkillProvider = 'ado',
 ): Promise<string[]> {
   if (provider === 'github') {
-    return githubCatalog.listBranches(repo);
+    const target = githubRepositoryTarget(repo);
+    return githubCatalog.listBranches(target.repo, target.org);
   }
   return adoCatalog.listBranches(project, repo);
 }
@@ -59,7 +72,8 @@ export async function listSkills(
   provider: SkillProvider = 'ado',
 ): Promise<SkillEntry[]> {
   if (provider === 'github') {
-    return githubCatalog.listSkills(repo, branch);
+    const target = githubRepositoryTarget(repo);
+    return githubCatalog.listSkills(target.repo, branch, target.org);
   }
   return adoCatalog.listSkills(project, repo, branch);
 }
@@ -72,7 +86,8 @@ export async function getSkill(
   provider: SkillProvider = 'ado',
 ): Promise<SkillDetail> {
   if (provider === 'github') {
-    return githubCatalog.getSkill(repo, path, branch);
+    const target = githubRepositoryTarget(repo);
+    return githubCatalog.getSkill(target.repo, path, branch, target.org);
   }
   return adoCatalog.getSkill(project, repo, path, branch);
 }
@@ -85,7 +100,8 @@ export async function getSkillFile(
   provider: SkillProvider = 'ado',
 ): Promise<string> {
   if (provider === 'github') {
-    return githubCatalog.getSkillFile(repo, path, branch);
+    const target = githubRepositoryTarget(repo);
+    return githubCatalog.getSkillFile(target.repo, path, branch, target.org);
   }
   return adoCatalog.getSkillFile(project, repo, path, branch);
 }
@@ -98,7 +114,13 @@ export async function listRepoDir(
   provider: SkillProvider = 'ado',
 ): Promise<RepoDirEntry[]> {
   if (provider === 'github') {
-    return githubCatalog.listRepoDir(repo, dirPath, branch);
+    const target = githubRepositoryTarget(repo);
+    return githubCatalog.listRepoDir(
+      target.repo,
+      dirPath,
+      branch,
+      target.org,
+    );
   }
   return adoCatalog.listRepoDir(project, repo, dirPath, branch);
 }
@@ -113,7 +135,14 @@ export async function searchRepoCode(
 ): Promise<RepoSearchResult[]> {
   const boundedLimit = Math.min(Math.max(Math.floor(limit), 1), 30);
   if (provider === 'github') {
-    return githubCatalog.searchRepoCode(repo, query, branch, undefined, boundedLimit);
+    const target = githubRepositoryTarget(repo);
+    return githubCatalog.searchRepoCode(
+      target.repo,
+      query,
+      branch,
+      target.org,
+      boundedLimit,
+    );
   }
   return adoCatalog.searchRepoCode(project, repo, query, branch, boundedLimit);
 }
@@ -124,7 +153,12 @@ export function invalidateCache(
   provider: SkillProvider = 'ado',
 ): void {
   if (provider === 'github') {
-    githubCatalog.invalidateCache(undefined, repo);
+    if (repo) {
+      const target = githubRepositoryTarget(repo);
+      githubCatalog.invalidateCache(target.org, target.repo);
+    } else {
+      githubCatalog.invalidateCache();
+    }
   } else {
     adoCatalog.invalidateCache(project, repo);
   }

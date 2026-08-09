@@ -87,6 +87,60 @@ describe('useAgentChatSession', () => {
     );
   });
 
+  it('shows the user message optimistically before the agent processing state', async () => {
+    let resolveSend!: (value: { ok: boolean }) => void;
+    (global.fetch as jest.Mock).mockImplementation(
+      () => new Promise((resolve) => {
+        resolveSend = resolve;
+      }),
+    );
+    const { result } = renderHook(() => useAgentChatSession('thread-1'));
+
+    act(() => {
+      void result.current.send('User answer');
+    });
+
+    expect(
+      result.current.visibleMessages[result.current.visibleMessages.length - 1],
+    ).toMatchObject({
+      role: 'user',
+      text: 'User answer',
+    });
+    expect(result.current.isAwaitingAgentResponse).toBe(true);
+
+    await act(async () => {
+      resolveSend({ ok: true });
+      await Promise.resolve();
+    });
+  });
+
+  it('reconciles the optimistic user message with the persisted stream echo', async () => {
+    const { result, rerender } = renderHook(() =>
+      useAgentChatSession('thread-1'),
+    );
+
+    await act(async () => {
+      await result.current.send('User answer');
+    });
+    expect(result.current.visibleMessages).toHaveLength(1);
+
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'running',
+      messages: [{
+        id: 'persisted-user',
+        role: 'user',
+        text: 'User answer',
+        ts: '2026-01-01T00:00:00Z',
+      }],
+    };
+    rerender();
+
+    expect(result.current.visibleMessages).toEqual([
+      expect.objectContaining({ id: 'persisted-user', text: 'User answer' }),
+    ]);
+  });
+
   it('send includes model and attachments when provided', async () => {
     const { result } = renderHook(() => useAgentChatSession('thread-1'));
 
@@ -136,6 +190,22 @@ describe('useAgentChatSession', () => {
       '/api/chat/threads/thread-1/cancel',
       expect.objectContaining({ method: 'POST' }),
     );
+  });
+
+  it('exposes a stopping state until the running stream becomes idle', async () => {
+    currentStreamReturn = { ...mockStreamReturn, status: 'running' };
+    const { result, rerender } = renderHook(() =>
+      useAgentChatSession('thread-1'),
+    );
+
+    await act(async () => {
+      await result.current.cancel();
+    });
+    expect(result.current.isCancelling).toBe(true);
+
+    currentStreamReturn = { ...mockStreamReturn, status: 'idle' };
+    rerender();
+    await waitFor(() => expect(result.current.isCancelling).toBe(false));
   });
 
   it('sets sendError when fetch fails', async () => {

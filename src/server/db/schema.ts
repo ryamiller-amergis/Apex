@@ -26,6 +26,13 @@ import type {
   ChatThreadKickoff,
   SseEvent,
 } from '../../shared/types/chat';
+import type {
+  AgentRunCancelState,
+  AgentRunLane,
+  AgentRunStatus,
+  AgentRunTerminalReason,
+  ExecutionSnapshot,
+} from '../../shared/types/agentRunLifecycle';
 import type { ContentSnapshot, DesignDocValidationOverride, PrdReadinessOverride, PrdValidationBaseline, TestCaseCoverageSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { DesignPrototypeHistoryEntry } from '../../shared/types/designPrototype';
 import type { UiLabHistoryEntry } from '../../shared/types/uiLab';
@@ -1453,7 +1460,7 @@ export const pdfConversionJobsRelations = relations(pdfConversionJobs, ({ one })
 export const agentRuns = pgTable('agent_runs', {
   id: text('id').primaryKey().default(sql`gen_random_uuid()::text`),
   threadId: text('thread_id').notNull(),
-  status: text('status').notNull().default('queued'),
+  status: text('status').$type<AgentRunStatus>().notNull().default('queued'),
   ownerInstance: text('owner_instance'),
   heartbeatAt: timestamp('heartbeat_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   progressAt: timestamp('progress_at', { withTimezone: true, mode: 'string' }),
@@ -1466,10 +1473,45 @@ export const agentRuns = pgTable('agent_runs', {
   // write a heartbeat by design) instead of re-evaluating the flag per sweep.
   eventDriven: boolean('event_driven').notNull().default(false),
   lastError: text('last_error'),
+  // FEAT-001 Formal Agent Run Lifecycle (additive; nullable for legacy rows).
+  projectId: text('project_id'),
+  lane: text('lane').$type<AgentRunLane>(),
+  queuedAt: timestamp('queued_at', { withTimezone: true, mode: 'string' }),
+  dispatchedAt: timestamp('dispatched_at', { withTimezone: true, mode: 'string' }),
+  dispatchMessageId: text('dispatch_message_id'),
+  executionSnapshot: jsonb('execution_snapshot').$type<ExecutionSnapshot>(),
+  cancelRequested: boolean('cancel_requested').notNull().default(false),
+  cancelState: text('cancel_state').$type<AgentRunCancelState>(),
+  terminalReason: text('terminal_reason').$type<AgentRunTerminalReason>(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
   statusHeartbeatIdx: index('idx_agent_runs_status_heartbeat').on(t.status, t.heartbeatAt),
+  statusLaneIdx: index('idx_agent_runs_status_lane').on(t.status, t.lane),
+  projectStatusIdx: index('idx_agent_runs_project_status').on(t.projectId, t.status),
+  queuedWorkerIdx: index('idx_agent_runs_queued_at_worker')
+    .on(t.queuedAt)
+    .where(sql`${t.lane} = 'background'`),
+  dispatchedWorkerIdx: index('idx_agent_runs_dispatched_at_worker')
+    .on(t.dispatchedAt)
+    .where(sql`${t.lane} = 'background' AND ${t.dispatchMessageId} IS NOT NULL`),
+  heartbeatWorkerIdx: index('idx_agent_runs_heartbeat_at_worker')
+    .on(t.heartbeatAt)
+    .where(sql`${t.lane} = 'background' AND ${t.dispatchMessageId} IS NOT NULL`),
+  backgroundInFlightIdx: index('idx_agent_runs_background_in_flight')
+    .on(t.lane, t.status)
+    .where(sql`${t.lane} = 'background' AND ${t.status} IN ('dispatched', 'running')`),
+  backgroundFairQueueIdx: index('idx_agent_runs_background_fair_queue')
+    .on(t.projectId, t.queuedAt, t.id)
+    .where(sql`${t.lane} = 'background' AND ${t.status} = 'queued'`),
+  laneCheck: check(
+    'agent_runs_lane_check',
+    sql`${t.lane} IS NULL OR ${t.lane} IN ('background', 'ai-runs-interactive')`,
+  ),
+  terminalReasonCheck: check(
+    'agent_runs_terminal_reason_check',
+    sql`${t.terminalReason} IS NULL OR ${t.terminalReason} IN ('worker_lost', 'progress_timeout', 'queue_ttl', 'forced_cancel')`,
+  ),
   nonTerminalTimeoutCheck: check(
     'agent_runs_non_terminal_timeout_at_check',
     sql`${t.status} NOT IN ('queued', 'running') OR ${t.timeoutAt} IS NOT NULL`,

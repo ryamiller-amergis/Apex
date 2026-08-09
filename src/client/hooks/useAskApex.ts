@@ -1,4 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  openInteractiveStream,
+  type ThreadStreamHandle,
+} from '../utils/threadEventStream';
 
 export interface AskApexMessage {
   id: string;
@@ -33,27 +37,32 @@ export function useAskApex() {
   const [status, setStatus] = useState<SessionStatus>('idle');
   const [isConnected, setIsConnected] = useState(false);
 
-  const esRef = useRef<EventSource | null>(null);
+  const streamRef = useRef<ThreadStreamHandle | null>(null);
   const streamBufferRef = useRef('');
 
+  // FEAT-007: route through the shared interactive stream transport. Ask Apex
+  // is not thread-actor backed, so it stays on SSE (no `wsUrlFor`) until a
+  // session-actor backing exists; the transport centralizes the future cutover.
   const connectSse = useCallback((sid: string) => {
-    if (esRef.current) {
-      esRef.current.close();
+    if (streamRef.current) {
+      streamRef.current.close();
     }
 
-    const es = new EventSource(`/api/ask-apex/sessions/${sid}/stream`, {
-      withCredentials: true,
-    } as EventSourceInit);
+    const stream = openInteractiveStream(
+      {
+        onOpen: () => setIsConnected(true),
+        onError: () => setIsConnected(false),
+        onMessage: (data: string) => handleAskApexEvent(data),
+      },
+      { sseUrl: `/api/ask-apex/sessions/${sid}/stream`, transport: 'sse' },
+    );
 
-    esRef.current = es;
+    streamRef.current = stream;
 
-    es.addEventListener('open', () => setIsConnected(true));
-    es.addEventListener('error', () => setIsConnected(false));
-
-    es.addEventListener('message', (e: MessageEvent) => {
+    function handleAskApexEvent(data: string) {
       let event: AskApexSseEvent;
       try {
-        event = JSON.parse(e.data) as AskApexSseEvent;
+        event = JSON.parse(data) as AskApexSseEvent;
       } catch {
         return;
       }
@@ -89,9 +98,9 @@ export function useAskApex() {
           break;
         }
       }
-    });
+    }
 
-    return es;
+    return stream;
   }, []);
 
   const startSession = useCallback(async () => {
@@ -129,9 +138,9 @@ export function useAskApex() {
   }, [sessionId]);
 
   const closeSession = useCallback(() => {
-    if (esRef.current) {
-      esRef.current.close();
-      esRef.current = null;
+    if (streamRef.current) {
+      streamRef.current.close();
+      streamRef.current = null;
     }
     if (sessionId) {
       fetch(`/api/ask-apex/sessions/${sessionId}`, {
@@ -149,9 +158,9 @@ export function useAskApex() {
 
   useEffect(() => {
     return () => {
-      if (esRef.current) {
-        esRef.current.close();
-        esRef.current = null;
+      if (streamRef.current) {
+        streamRef.current.close();
+        streamRef.current = null;
       }
     };
   }, []);

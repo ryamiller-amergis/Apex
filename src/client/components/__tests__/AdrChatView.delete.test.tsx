@@ -11,7 +11,10 @@ let mockUserId = 'owner-1';
 let mockStreamState: {
   messages: Array<{ id: string; role: 'agent' | 'user'; text: string }>;
   streamingText: string;
-  status: 'idle' | 'running';
+  status: 'idle' | 'running' | 'error';
+  progressLabel?: string | null;
+  progressPhase?: string | null;
+  lastError?: string | null;
 } = { messages: [], streamingText: '', status: 'idle' };
 
 jest.mock('react-markdown', () => ({
@@ -222,5 +225,63 @@ describe('AdrChatView — delete', () => {
 
     expect(screen.getByText('Q1')).toBeInTheDocument();
     expect(screen.getByText('Q2')).toBeInTheDocument();
+  });
+
+  it('shows a preparation spinner while the ADR workspace is setting up', () => {
+    mockStreamState = {
+      messages: [{ id: 'begin-1', role: 'user', text: 'Begin.' }],
+      streamingText: '',
+      status: 'running',
+      progressLabel: 'Refreshing the repository mirror…',
+      progressPhase: 'analysis',
+    };
+
+    renderAdrView();
+
+    expect(screen.getByTestId('adr-preparation-state')).toHaveTextContent(
+      'Refreshing the repository mirror…',
+    );
+    expect(screen.getByPlaceholderText(/Preparing the workspace/i)).toBeDisabled();
+    expect(screen.queryByTestId('adr-agent-processing')).not.toBeInTheDocument();
+  });
+
+  it('shows the kickoff prompt immediately while waiting for the first agent reply', () => {
+    mockStreamState = {
+      messages: [],
+      streamingText: '',
+      status: 'idle',
+    };
+
+    render(
+      <MemoryRouter
+        initialEntries={[{
+          pathname: '/adr/adr-1',
+          state: { kickoffPrompt: 'Should we use Service Bus or Event Hub?' },
+        }]}
+      >
+        <AdrChatView />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText('Should we use Service Bus or Event Hub?')).toBeInTheDocument();
+    expect(screen.getByTestId('adr-preparation-state')).toHaveTextContent(
+      'Architect is preparing a response',
+    );
+  });
+
+  it('renders queued status text while the ADR run waits for a worker', () => {
+    mockStreamState = {
+      messages: [],
+      streamingText: '',
+      status: 'running',
+      progressPhase: 'queued',
+      progressLabel: 'Queued — waiting for available worker',
+    };
+
+    renderAdrView();
+
+    expect(screen.getByTestId('agent-run-status-queued')).toHaveTextContent(
+      'Queued — waiting for available worker',
+    );
   });
 });

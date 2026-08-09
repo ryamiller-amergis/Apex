@@ -1,10 +1,12 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAppShell } from '../hooks/useAppShell';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useChatThread, useSkillRepos, useStartChat } from '../hooks/useChatThreads';
+import type { ChatMessage } from '../../shared/types/chat';
 import { useAvailableModels, useGlobalDefaultModel, useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
 import {
   useAdr,
@@ -28,6 +30,7 @@ import {
 } from '../hooks/useAdrs';
 import { DEFAULT_MODEL_ID } from '../config/models';
 import { InterviewAgentMessage } from './InterviewChatView';
+import { AgentComposer } from './agentChat';
 import { AdrAssistantPanel } from './AdrAssistantPanel';
 import { ProposedAdrChangesReview } from './ProposedAdrChangesReview';
 import { AdrReviewerModal } from './AdrReviewerModal';
@@ -47,6 +50,10 @@ function formatElapsed(milliseconds: number): string {
   const seconds = totalSeconds % 60;
   return minutes > 0 ? `${minutes}m ${seconds.toString().padStart(2, '0')}s` : `${seconds}s`;
 }
+
+type AdrKickoffLocationState = {
+  kickoffPrompt?: string;
+};
 
 const NewAdrCompose: React.FC = () => {
   const [title, setTitle] = useState('');
@@ -80,6 +87,7 @@ const NewAdrCompose: React.FC = () => {
     ?? repos.find((candidate) => candidate.name === repo)?.defaultBranch
     ?? 'main';
   const pending = startChat.isPending || createAdr.isPending;
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     titleInputRef.current?.focus();
@@ -99,6 +107,7 @@ const NewAdrCompose: React.FC = () => {
   const handleCreateAdr = useCallback(async (reviewerIds: string[]) => {
     if (!title.trim() || (!input.trim() && attachments.length === 0) || !repo || pending) return;
     setError(null);
+    const kickoffPrompt = input.trim() || 'Please use the attached files as context.';
     try {
       const thread = await startChat.mutateAsync({
         kickoff: {
@@ -126,19 +135,22 @@ const NewAdrCompose: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          text: input.trim() || 'Please use the attached files as context.',
+          text: kickoffPrompt,
           attachments,
           model,
         }),
       });
       if (!response.ok) throw new Error('Failed to start the ADR interview');
       clearAttachments();
-      navigate(`/adr/${adr.adrId}`);
+      await queryClient.invalidateQueries({ queryKey: ['chat-thread', thread.threadId] });
+      navigate(`/adr/${adr.adrId}`, {
+        state: { kickoffPrompt } satisfies AdrKickoffLocationState,
+      });
     } catch (caught) {
       setShowReviewerModal(false);
       setError(caught instanceof Error ? caught.message : 'Failed to start ADR');
     }
-  }, [title, input, attachments, repo, pending, startChat, selectedProject, branch, skillConfig, model, createAdr, clearAttachments, navigate]);
+  }, [title, input, attachments, repo, pending, startChat, selectedProject, branch, skillConfig, model, createAdr, clearAttachments, navigate, queryClient]);
 
   const handleAttachmentChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files) void addFiles(event.target.files);
@@ -286,6 +298,7 @@ const NewAdrCompose: React.FC = () => {
 
 const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const [input, setInput] = useState('');
+  const [model, setModel] = useState(DEFAULT_MODEL_ID);
   const [error, setError] = useState<string | null>(null);
   const [generationNow, setGenerationNow] = useState(Date.now());
   const [assistantOpen, setAssistantOpen] = useState(false);
@@ -297,19 +310,45 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
+  const location = useLocation();
+  const kickoffFromNav = (location.state as AdrKickoffLocationState | null)?.kickoffPrompt?.trim() || null;
+  const [seededKickoffPrompt, setSeededKickoffPrompt] = useState<string | null>(kickoffFromNav);
   const { can, userId } = useAppShell();
   const { data: adr, isLoading, isError } = useAdr(id);
   const { data: reviewConfig } = useProjectSkillConfig(adr?.project);
+  const { data: models = [], isLoading: modelsLoading } = useAvailableModels();
   const { data: assignments = [] } = useAdrAssignments(id);
   const { data: reviewComments = [] } = useAdrComments(id);
   const { data: ownerApproval } = useAdrOwnerApproval(id);
-  const { data: thread } = useChatThread(adr?.chatThreadId ?? null);
+  const {
+    data: thread,
+    isLoading: isChatThreadLoading,
+    isError: isChatThreadError,
+  } = useChatThread(adr?.chatThreadId ?? null);
   const session = useAgentChatSession(adr?.chatThreadId ?? null, {
     initialMessages: thread?.messages,
     initialStatus: thread?.status,
+    enablePreparationState: adr?.status === 'in_progress',
   });
-  const { messages, streamingText } = session;
+  const {
+    messages,
+    visibleMessages: sessionVisibleMessages,
+    streamingText,
+    progressLabel,
+    progressPhase,
+    isPreparing,
+    hasPreparationError,
+  } = session;
+  const {
+    attachments,
+    attachmentError,
+    addFiles,
+    removeAttachment,
+    clearAttachments,
+  } = useChatAttachments();
+  const speech = useSpeechInput(useCallback((text: string) => setInput(text), []));
   const generateAdr = useGenerateAdr();
   const updateAdr = useUpdateAdr();
   const deleteAdr = useDeleteAdr();
@@ -323,11 +362,20 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const assignReviewers = useAssignAdrReviewers(id);
   const fixWithAi = useFixAdrWithAi(id);
   const fixCommentWithAi = useFixAdrCommentWithAi(id);
-  const isRunning = session.isRunning;
-  const isInteractionBusy = session.isInteractionBusy;
+  const isRunning = session.isRunning || thread?.status === 'running';
+  const isInteractionBusy = session.isInteractionBusy || isRunning;
   const isAgentProcessing = isRunning || session.isSending || session.isAwaitingAgentResponse;
   const isAuthor = adr?.authorId === userId;
   const chatLocked = !isAuthor || adr?.status !== 'in_progress';
+
+  useEffect(() => {
+    if (!kickoffFromNav) return;
+    navigate(location.pathname, { replace: true, state: {} });
+  }, [kickoffFromNav, location.pathname, navigate]);
+
+  useEffect(() => {
+    if (adr?.model) setModel(adr.model);
+  }, [adr?.id, adr?.model]);
 
   const handleAddComment = useCallback((sectionKey: ReviewSectionKey, selector: TextSelector) => {
     setPendingSelector({ sectionKey, selector });
@@ -376,17 +424,52 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   }, [adr?.status]);
 
   const send = useCallback(async (text: string) => {
-    if (!adr || !text.trim() || isInteractionBusy || chatLocked) return;
+    if (!adr || isInteractionBusy || chatLocked) return;
+    if (!text.trim() && attachments.length === 0) return;
+    const payload = text.trim();
+    const pendingAttachments = attachments;
     setInput('');
+    clearAttachments();
     setError(null);
-    await session.send(text.trim(), { model: adr.model });
+    await session.send(payload, { model, attachments: pendingAttachments });
     if (session.sendError) setError(session.sendError);
-  }, [adr, isInteractionBusy, chatLocked, session]);
+  }, [adr, attachments, chatLocked, clearAttachments, isInteractionBusy, model, session]);
 
   const cancelActiveRun = useCallback(async () => {
     setError(null);
     await session.cancel();
   }, [session]);
+
+  const handleAttachmentChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    void addFiles(event.target.files);
+    event.target.value = '';
+  }, [addFiles]);
+
+  const visibleMessages = useMemo(() => {
+    const filtered = sessionVisibleMessages.filter(
+      (message) => message.toolName !== '_reasoning' && message.toolName !== '_thinking',
+    );
+    if (!seededKickoffPrompt) return filtered;
+    const hasKickoffEcho = filtered.some(
+      (message) => message.role === 'user' && message.text === seededKickoffPrompt,
+    );
+    if (hasKickoffEcho) return filtered;
+    const seed: ChatMessage = {
+      id: 'adr-seeded-kickoff',
+      role: 'user',
+      text: seededKickoffPrompt,
+      ts: new Date().toISOString(),
+    };
+    return [...filtered, seed];
+  }, [sessionVisibleMessages, seededKickoffPrompt]);
+
+  useEffect(() => {
+    if (!seededKickoffPrompt) return;
+    const hasKickoffEcho = sessionVisibleMessages.some(
+      (message) => message.role === 'user' && message.text === seededKickoffPrompt,
+    );
+    if (hasKickoffEcho) setSeededKickoffPrompt(null);
+  }, [seededKickoffPrompt, sessionVisibleMessages]);
 
   if (isLoading) return <div className={styles.loadingState}>Loading ADR…</div>;
   if (isError || !adr) return <div className={styles.errorState}>ADR not found.</div>;
@@ -415,10 +498,21 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     ? 'No reviewer approval required'
     : `${assignments.filter((assignment) => assignment.status === 'approved').length}/${assignments.length} reviewer approvals`;
 
-  const visibleMessages = messages.filter((message) =>
-    !(message.role === 'user' && message.text === 'Begin.')
-    && message.toolName !== '_reasoning'
-    && message.toolName !== '_thinking');
+  const awaitingFirstAgentReply = Boolean(
+    adr.status === 'in_progress'
+    && !streamingText
+    && !visibleMessages.some((message) => message.role === 'agent')
+    && (
+      isPreparing
+      || isAgentProcessing
+      || isChatThreadLoading
+      || thread?.status === 'running'
+      || Boolean(seededKickoffPrompt)
+      || visibleMessages.some((message) => message.role === 'user')
+    ),
+  );
+  const showPreparationState = awaitingFirstAgentReply;
+
   let lastUserIndex = -1;
   visibleMessages.forEach((message, index) => {
     if (message.role === 'user') lastUserIndex = index;
@@ -675,6 +769,16 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
       {!adr.content && adr.status !== 'generating' && (
         <div className={styles.messages}>
           <div className={styles.messageList}>
+            {hasPreparationError && (
+              <div className={styles.preparationState} role="alert">
+                <div className={styles.preparationErrorIcon}>!</div>
+                <h2 className={styles.preparationTitle}>Unable to prepare this ADR interview</h2>
+                <p className={styles.preparationDetail}>
+                  {thread?.lastError ?? 'Repository preparation was interrupted. Try sending your message again.'}
+                </p>
+              </div>
+            )}
+
             {visibleMessages.map((message, index) => {
               if (message.role === 'agent') {
                 return (
@@ -694,12 +798,50 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
               }
               return <div key={message.id} className={styles.messageBubbleSystem}>{message.text}</div>;
             })}
+
+            {showPreparationState && (
+              <div
+                className={styles.preparationState}
+                {...{ 'data-testid': 'adr-preparation-state' }}
+              >
+                <div className={styles.preparationSpinner} />
+                <h2 className={styles.preparationTitle}>
+                  {visibleMessages.some((message) => message.role === 'user')
+                    ? 'Architect is preparing a response'
+                    : 'Preparing your ADR interview'}
+                </h2>
+                <p
+                  className={styles.preparationDetail}
+                  role="status"
+                  aria-live="polite"
+                  {...{ 'data-testid': 'agent-run-status-label' }}
+                >
+                  {progressPhase === 'queued' ? (
+                    <span {...{ 'data-testid': 'agent-run-status-queued' }}>
+                      Queued — waiting for available worker
+                    </span>
+                  ) : progressPhase === 'dispatched' ? (
+                    <span {...{ 'data-testid': 'agent-run-status-dispatched' }}>
+                      Starting…
+                    </span>
+                  ) : (
+                    progressLabel
+                      ?? (isChatThreadError
+                        ? 'The ADR service is reconnecting after a temporary interruption…'
+                        : isChatThreadLoading
+                          ? 'Connecting to the ADR service…'
+                          : 'Setting up the workspace and repository context so your ADR interview starts grounded…')
+                  )}
+                </p>
+              </div>
+            )}
+
             {streamingText && (
               <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}>
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
               </div>
             )}
-            {isAgentProcessing && !streamingText && (
+            {isAgentProcessing && !streamingText && !showPreparationState && (
               <div
                 className={styles.typingIndicator}
                 role="status"
@@ -724,48 +866,50 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
       ) : !adr.content && (chatLocked ? (
         <div className={styles.lockedNotice}>This ADR conversation is read-only.</div>
       ) : (
-        <div className={styles.inputArea}>
-          <div className={styles.inputBox}>
-            <textarea
-              className={styles.inputField}
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault();
-                  void send(input);
-                }
-              }}
-              placeholder={isAgentProcessing ? 'Architect is thinking…' : 'Continue the ADR interview…'}
+        <AgentComposer
+          value={input}
+          onChange={setInput}
+          onSend={() => void send(input)}
+          onCancel={() => void cancelActiveRun()}
+          disabled={isInteractionBusy}
+          isRunning={isRunning}
+          isSending={session.isSending}
+          isBusy={isInteractionBusy}
+          isCancelling={session.isCancelling}
+          placeholder={showPreparationState
+            ? 'Preparing the workspace…'
+            : isAgentProcessing
+              ? 'Architect is thinking…'
+              : 'Continue the ADR interview… (Enter to send)'}
+          testIdPrefix="adr"
+          allowEmptySend
+          attachments={attachments}
+          attachmentError={attachmentError}
+          onRemoveAttachment={removeAttachment}
+          onAttachClick={() => fileInputRef.current?.click()}
+          speech={{
+            isListening: speech.isListening,
+            isSpeechSupported: speech.isSpeechSupported,
+            speechError: speech.speechError,
+            onToggle: () => speech.toggle(input),
+          }}
+          model={model}
+          models={models}
+          modelsLoading={modelsLoading}
+          onModelChange={setModel}
+          {...{ 'data-testid': 'adr-chat-composer' }}
+          fileInput={(
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".txt,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*"
+              className={styles.fileInput}
+              onChange={handleAttachmentChange}
               disabled={isInteractionBusy}
-              {...{ 'data-testid': 'adr-message-input' }}
             />
-            {isRunning ? (
-              <button
-                className={`${styles.sendBtn} ${styles.stopBtn}`}
-                type="button"
-                onClick={() => void cancelActiveRun()}
-                aria-label="Stop"
-                title="Stop"
-                {...{ 'data-testid': 'adr-stop-btn' }}
-              >
-                <svg viewBox="0 0 20 20" fill="currentColor">
-                  <rect x="4" y="4" width="12" height="12" rx="2" />
-                </svg>
-              </button>
-            ) : (
-              <button
-                className={styles.sendBtn}
-                type="button"
-                disabled={!input.trim()}
-                onClick={() => void send(input)}
-                {...{ 'data-testid': 'adr-send-btn' }}
-              >
-                →
-              </button>
-            )}
-          </div>
-        </div>
+          )}
+        />
       ))}
       {pendingSelector && (
         <div

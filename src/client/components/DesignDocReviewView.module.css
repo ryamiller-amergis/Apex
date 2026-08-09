@@ -1409,6 +1409,10 @@
   flex-shrink: 0;
 }
 
+.composerEmbed {
+  padding: 12px 16px 14px;
+}
+
 .qaInputBox {
   display: flex;
   align-items: flex-end;

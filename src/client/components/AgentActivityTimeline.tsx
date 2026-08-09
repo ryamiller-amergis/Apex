@@ -189,6 +189,8 @@ function phaseForMessage(message: ChatMessage): PhaseId | null {
 
 function semanticPhaseId(phase: AgentRunPhase): PhaseId {
   switch (phase) {
+    case 'queued':
+    case 'dispatched':
     case 'setup':
       return 'workspace';
     case 'planning':
@@ -553,6 +555,7 @@ export const AgentActivityTimeline: React.FC<AgentActivityTimelineProps> = ({
             className={styles.technicalToggle}
             aria-expanded={expanded}
             onClick={() => setExpanded((value) => !value)}
+            {...{ 'data-testid': 'agent-activity-technical-toggle' }}
           >
             <span aria-hidden="true">{expanded ? '▼' : '▶'}</span>
             {expanded ? 'Hide' : 'Show'} {facts.length} technical event

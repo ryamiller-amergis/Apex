@@ -32,6 +32,7 @@ import { PdfToolsRouteGuard } from './components/PdfToolsRouteGuard';
 import { DesktopOnlyGate } from './components/DesktopOnlyGate';
 import { useFeatureFlag, useFeatureFlags } from './hooks/useFeatureFlags';
 import { resolveAccessibleRoute } from './utils/accessibleRoute';
+import { setInteractiveWsEnabled } from './utils/threadEventStream';
 import { IS_BETA_RELEASE } from './config/release';
 import './App.css';
 
@@ -269,6 +270,18 @@ function App() {
   const showBetaAnnouncement = useFeatureFlag('beta-to-prod-announcement', selectedProject);
   const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
   const agentHomeFlag = homeFlags['agent-home'] ?? false;
+  const interactiveWsEnabled = homeFlags['ai-runs-interactive'] === true;
+
+  // @feature-flag:ai-runs-interactive start winner=disabled
+  // FEAT-007: flip the chat stream transport to the WebSocket agent gateway when
+  // ai-runs-interactive is enabled for this project; falls back to SSE otherwise.
+  // Wait until flags resolve so we do not open SSE first, then leave it stuck
+  // after the flag loads as true (useChatStream reopens on the change event).
+  useEffect(() => {
+    if (homeFlagsLoading) return;
+    setInteractiveWsEnabled(interactiveWsEnabled);
+  }, [homeFlagsLoading, interactiveWsEnabled]);
+  // @feature-flag:ai-runs-interactive end
 
   const canAccessHome =
     !homeFlagsLoading && permissionsLoaded && agentHomeFlag && (isSuperAdmin || can('home:view'));

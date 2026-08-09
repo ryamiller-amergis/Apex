@@ -8,7 +8,8 @@ const authorUser = alias(appUsers, 'author_user');
 const prdOwnerUser = alias(appUsers, 'prd_owner_user');
 import type { Prd, PrdStatus, PrdSummary, PrdValidationBaseline, PrdReadinessOverride, ReviewPrdRequest, TestCaseSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { CreatePrdAdoItemsRequest, CreatePrdAdoItemsResponse, SelectedBacklogEpic, SelectedBacklogFeature, SelectedBacklogPBI, GlobalBusinessRule, DependencyGraphNode } from '../../shared/types/interview';
-import { readOutputPrd, readOutputBacklog, sendMessage, createThread as createChatThread, cancelRun } from './chatAgentService';
+import { readOutputPrd, readOutputBacklog, sendMessage, createThread as createChatThread, cancelRun, prepareBackgroundWorkflowTurn } from './chatAgentService';
+import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import { createNotification } from './notificationService';
 import { isAdminUser } from '../utils/rbacHelpers';
@@ -215,6 +216,67 @@ export async function createPrd(opts: {
   }
 
   return { prdId: row.id, threadId: opts.chatThreadId };
+}
+
+export async function routePrdGenerationKickoff(opts: {
+  prdId: string;
+  userId: string;
+  project: string;
+  threadId: string;
+  kickoffMessage?: string;
+}): Promise<void> {
+  const kickoffMessage = opts.kickoffMessage ?? 'Begin.';
+  const destinationRun = {
+    runType: 'chat' as const,
+    runId: opts.threadId,
+    project: opts.project,
+  };
+  const reportPreparationFailure = async (): Promise<void> => {
+    await runGroundingService.persistThenMarkTerminalInactive(
+      destinationRun,
+      async () => {
+        await db.update(prds)
+          .set({ status: 'draft', updatedAt: new Date().toISOString() })
+          .where(and(eq(prds.id, opts.prdId), eq(prds.status, 'generating')));
+      },
+    );
+  };
+
+  try {
+    await routeBackgroundWorkflow({
+      userId: opts.userId,
+      workflowClass: 'prd',
+      destinationRun,
+      threadId: opts.threadId,
+      prepareWorker: async () => {
+        const prepared = await prepareBackgroundWorkflowTurn(
+          opts.threadId,
+          kickoffMessage,
+        );
+        const targetGrounding = (
+          await runGroundingService.getGroundings(destinationRun)
+        ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
+        return { ...prepared, targetGrounding };
+      },
+      runInProcess: () => {
+        void sendMessage(
+          opts.threadId,
+          kickoffMessage,
+          undefined,
+          [],
+          { hidden: true },
+        ).catch((err: Error) => {
+          console.error(
+            `[prd] Failed to kick off generation (prdId=${opts.prdId}, threadId=${opts.threadId}):`,
+            err.message,
+          );
+        });
+      },
+      reportRecoverablePreparationFailure: reportPreparationFailure,
+    });
+  } catch {
+    await reportPreparationFailure();
+  }
 }
 
 export async function listPrds(
@@ -1670,6 +1732,7 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
     getProject: () => prd.project,
     getSkillSettingsId: () => prd.skillSettingsId ?? null,
     getAuthorId: () => prd.authorId,
+    getSourceThreadId: () => prd.chatThreadId,
     getValidationThreadId: () => prd.validationThreadId ?? null,
     getStatus: () => prd.status,
     getSkillPath: (skillConfig) => skillConfig.prdValidationSkillPath,

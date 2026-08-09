@@ -32,6 +32,7 @@ import {
 } from '../hooks/useInterviews';
 import { ProposedDesignDocChangesReview } from './ProposedDesignDocChangesReview';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
+import { AgentComposer } from './agentChat';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
 import { ReviewReasonModal } from './ReviewReasonModal';
@@ -471,26 +472,12 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages.length, streamingText]);
 
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
-  }, [input]);
-
   const handleSend = useCallback(async () => {
     const text = input.trim();
     if (!text) return;
     setInput('');
     await session.send(text);
   }, [input, session]);
-
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      void handleSend();
-    }
-  }, [handleSend]);
 
   const visibleMessages = messages.filter((m) => m.role !== 'tool' && m.toolName !== '_reasoning' && m.toolName !== '_thinking');
 
@@ -633,35 +620,24 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
       </div>
 
       {!readOnly ? (
-        <div className={styles.qaInputArea}>
-          <div className={styles.qaInputBox}>
-            <textarea
-              ref={textareaRef}
-              className={styles.qaInputField}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={
-                isCreating ? 'Starting assistant…' :
-                isRunning ? 'Agent is thinking…' :
-                'Ask about this design doc… (Enter to send)'
-              }
-              rows={1}
-              disabled={isRunning || isSending || isCreating || !threadId}
-            />
-            <button
-              className={styles.qaSendBtn}
-              onClick={() => void handleSend()}
-              disabled={!input.trim() || isRunning || isSending || isCreating || !threadId}
-              type="button"
-              aria-label="Send"
-            >
-              <svg viewBox="0 0 20 20" fill="currentColor">
-                <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
-              </svg>
-            </button>
-          </div>
-        </div>
+        <AgentComposer
+          className={styles.composerEmbed}
+          value={input}
+          onChange={setInput}
+          onSend={() => void handleSend()}
+          onCancel={isRunning ? () => void session.cancel() : undefined}
+          disabled={isRunning || isSending || isCreating || !threadId}
+          isRunning={isRunning}
+          isSending={isSending}
+          placeholder={
+            isCreating ? 'Starting assistant…' :
+            isRunning ? 'Agent is thinking…' :
+            'Ask about this design doc… (Enter to send)'
+          }
+          testIdPrefix="design-doc-assistant"
+          {...{ 'data-testid': 'design-doc-assistant-composer' }}
+          textareaRef={textareaRef}
+        />
       ) : (
         <div className={styles.qaMessageBubbleSystem} style={{ margin: '0 12px 12px' }}>
           Assistant is read-only — you can view the conversation but cannot send messages.
@@ -1004,6 +980,8 @@ export const DesignDocReviewView: React.FC = () => {
   const fixDesignDocCommentWithAi = useFixDesignDocCommentWithAi(id ?? '');
 
   const [fixFlow, fixFlowDispatch] = useReducer(fixFlowReducer, { phase: 'idle' });
+  /** Sync lock so double-clicks can't start two Fix-with-Apex runs before isPending re-renders. */
+  const [apexFixStartLocked, setApexFixStartLocked] = useState(false);
   const [fixingCommentId, setFixingCommentId] = useState<string | null>(null);
   const [bulkCommentFixRunning, setBulkCommentFixRunning] = useState(false);
 
@@ -1316,12 +1294,15 @@ export const DesignDocReviewView: React.FC = () => {
 
   const handleStartFixWithAI = useCallback(async () => {
     if (!id || !doc) return;
+    if (fixFlow.phase !== 'idle' || apexFixStartLocked) return;
+    if (readApexFixInProgress('design-doc-validation', id)) return;
     const baseline: ContentSnapshot = {
       design: doc.designContent,
       techSpec: doc.techSpecContent,
       assumptions: doc.assumptionsContent,
       capturedAt: new Date().toISOString(),
     };
+    setApexFixStartLocked(true);
     markApexFixInProgress('design-doc-validation', id);
     try {
       const result = await fixValidation.mutateAsync(id);
@@ -1329,9 +1310,10 @@ export const DesignDocReviewView: React.FC = () => {
       fixFlowDispatch({ type: 'START_FIX', baseline, threadId: result.threadId });
     } catch {
       if (id) clearApexFixInProgress('design-doc-validation', id);
+      setApexFixStartLocked(false);
       fixFlowDispatch({ type: 'RESET' });
     }
-  }, [id, doc, fixValidation]);
+  }, [id, doc, fixValidation, fixFlow.phase, apexFixStartLocked]);
 
   // Poll the assistant thread status during the fixing phase.
   // Only transition to reviewing once the agent is terminal (done with all MCP calls).
@@ -1446,6 +1428,7 @@ export const DesignDocReviewView: React.FC = () => {
       await acceptFixValidation.mutateAsync(id);
     } finally {
       if (id) clearApexFixInProgress('design-doc-validation', id);
+      setApexFixStartLocked(false);
       fixFlowDispatch({ type: 'RESET' });
     }
   }, [id, acceptFixValidation]);
@@ -1460,6 +1443,7 @@ export const DesignDocReviewView: React.FC = () => {
       assumptionsContent: bl.assumptions,
     });
     clearApexFixInProgress('design-doc-validation', id);
+    setApexFixStartLocked(false);
     fixFlowDispatch({ type: 'RESET' });
   }, [id, fixFlow, revertSection]);
 
@@ -1470,8 +1454,22 @@ export const DesignDocReviewView: React.FC = () => {
         : (doc?.docAssistantThreadId ?? undefined);
     if (threadId) void cancelChatThread(threadId);
     if (id) clearApexFixInProgress('design-doc-validation', id);
+    setApexFixStartLocked(false);
     fixFlowDispatch({ type: 'RESET' });
   }, [id, fixFlow, doc?.docAssistantThreadId]);
+
+  // Once Accept kicks off re-validation, drop leftover Fix-with-Apex UI so the
+  // "fixing validation gaps" spinner cannot sit on top of VALIDATING.
+  useEffect(() => {
+    if (!id || !doc) return;
+    if (doc.status !== 'validating') return;
+    if (doc.fixBaseline) return;
+    clearApexFixInProgress('design-doc-validation', id);
+    setApexFixStartLocked(false);
+    if (fixFlow.phase === 'fixing' || fixFlow.phase === 'reviewing') {
+      fixFlowDispatch({ type: 'RESET' });
+    }
+  }, [id, doc, fixFlow.phase]);
 
   // When the assistant panel closes during discuss phase, return to reviewing
   const handleAssistantClose = useCallback(() => {
@@ -1810,13 +1808,32 @@ export const DesignDocReviewView: React.FC = () => {
     (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'reviewer_approved' || doc.status === 'revision_requested');
 
   const validationFixSession = id ? readApexFixInProgress('design-doc-validation', id) : null;
+  const isFixWithApexBusy =
+    apexFixStartLocked
+    || fixFlow.phase !== 'idle'
+    || fixValidation.isPending
+    || !!validationFixSession
+    || doc.status === 'validating';
   const apexFixRunningBanner = (() => {
-    if (fixFlow.phase === 'fixing' || (validationFixSession && fixFlow.phase === 'idle')) {
+    // After Accept, re-validation owns the page — never keep the Fix spinner over it.
+    if (doc.status === 'validating' && !doc.fixBaseline) {
+      return null;
+    }
+    if (fixFlow.phase === 'fixing' || apexFixStartLocked) {
       return {
         title: 'Apex is fixing validation gaps…',
         subtitle: 'You can leave this page — progress will resume when you return.',
         hint: 'Typically 1–3 min',
         showCancel: fixFlow.phase === 'fixing',
+      };
+    }
+    // Sticky resume only while a real fix session is still open on the server.
+    if (validationFixSession && fixFlow.phase === 'idle' && doc.fixBaseline) {
+      return {
+        title: 'Apex is fixing validation gaps…',
+        subtitle: 'You can leave this page — progress will resume when you return.',
+        hint: 'Typically 1–3 min',
+        showCancel: false,
       };
     }
     if (bulkCommentFixRunning || fixDesignDocWithAi.isPending) {
@@ -1874,7 +1891,8 @@ export const DesignDocReviewView: React.FC = () => {
   const showFixBanner =
     scoreBelowThreshold &&
     (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'revision_requested') &&
-    fixFlow.phase === 'idle';
+    fixFlow.phase === 'idle' &&
+    !isFixWithApexBusy;
 
   const pendingGapCount = (() => {
     if (!doc.validationScorecard?.features) return 0;
@@ -2492,14 +2510,14 @@ export const DesignDocReviewView: React.FC = () => {
                   <button
                     className={bannerSeverity === 'red' ? styles.failureBannerBtnPrimaryRed : styles.failureBannerBtnPrimaryAmber}
                     onClick={() => void handleStartFixWithAI()}
-                    disabled={fixValidation.isPending}
+                    disabled={isFixWithApexBusy}
                     type="button"
                   >
                     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                       <path d="M8 2l1.09 3.26L12.36 6l-3.27 1.09L8 10.36 6.91 7.09 3.64 6l3.27-1.09z" />
                       <path d="M13 1l.54 1.63L15.18 3.18 13.54 3.72 13 5.35l-.54-1.63L10.82 3.18l1.64-.55z" />
                     </svg>
-                    {fixValidation.isPending ? 'Starting…' : 'Fix with Apex'}
+                    {apexFixStartLocked || fixValidation.isPending ? 'Starting…' : 'Fix with Apex'}
                   </button>
                   <button
                     className={styles.failureBannerBtnSecondary}

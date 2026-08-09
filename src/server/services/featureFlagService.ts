@@ -26,6 +26,7 @@ const GROUNDING_FLAG = 'repo-grounding-workspace-profile';
 const LIFECYCLE_BINDING_FLAG = 'repo-grounding-lifecycle-binding';
 const REMOTE_SEARCH_CONVERGENCE_FLAG = 'repo-grounding-remote-search-convergence';
 const NATIVE_READ_FLAG = 'native-read';
+const SHARED_READ_CHECKOUT_FLAG = 'shared-readonly-grounding-checkout';
 
 // ── listFlags ────────────────────────────────────────────────────────────────
 
@@ -366,4 +367,11 @@ export async function isNativeReadEnabledForCaller(
   onEvaluationError?: FlagEvaluationErrorHandler,
 ): Promise<boolean> {
   return evaluateGroundingFlag(NATIVE_READ_FLAG, ctx, onEvaluationError);
+}
+
+export async function isSharedReadCheckoutEnabledForCaller(
+  ctx: GroundingFlagContext,
+  onEvaluationError?: FlagEvaluationErrorHandler,
+): Promise<boolean> {
+  return evaluateGroundingFlag(SHARED_READ_CHECKOUT_FLAG, ctx, onEvaluationError);
 }

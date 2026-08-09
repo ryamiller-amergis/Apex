@@ -104,6 +104,22 @@ jest.mock('../services/teamsBotService', () => ({
   handleIncoming: jest.fn(),
 }));
 
+jest.mock('../services/skillCatalogFacade', () => ({
+  getSkillFile: jest.fn().mockResolvedValue('# Frozen skill content'),
+}));
+
+const mockEnqueueAgentRun = jest.fn();
+jest.mock('../services/agentRunLifecycleService', () => ({
+  enqueue: mockEnqueueAgentRun,
+}));
+
+const mockInteractiveWorkflowRoute = jest.fn();
+jest.mock('../services/interactiveWorkflowRouter', () => ({
+  interactiveWorkflowRouter: {
+    route: mockInteractiveWorkflowRoute,
+  },
+}));
+
 const mockCallerGroundingStart = jest.fn();
 const mockCallerGroundingSelectionToBinding = jest.fn();
 const mockEvaluateBindingContinuity = jest.fn();
@@ -144,6 +160,7 @@ import {
   classifyGroundingContinuity,
   persistCreatedAgentBinding,
   resolveDocumentAssistantType,
+  buildBackgroundWorkflowPrompt,
   buildInitialPrompt,
   prepareRepositoryReadRuntime,
 } from '../services/chatAgentService';
@@ -638,6 +655,24 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
     expect(prompt).toContain('Never use the GitHub or ADO provider MCP servers for repository reads');
     expect(prompt).not.toContain('must be fetched via');
     expect(prompt).not.toContain('current working directory IS a git clone');
+  });
+
+  it('AC-0 / DoD-4: freezes skill content for local-only worker reads with broad search disabled', async () => {
+    const prompt = await buildBackgroundWorkflowPrompt(
+      baseKickoff({
+        skillPath: '.cursor/skills/to-prd/SKILL.md',
+        skillProvider: 'github',
+      }),
+      'Begin.',
+    );
+
+    expect(prompt).toContain('local checkout-backed read-only tools');
+    expect(prompt).toContain('Never use the GitHub or ADO provider MCP servers');
+    expect(prompt).toContain('Broad search is restricted');
+    expect(prompt).toContain('# Pre-loaded skill content');
+    expect(prompt).toContain('# Frozen skill content');
+    expect(prompt).toContain('Begin.');
+    expect(prompt).not.toContain('# MCP tools (github-repo server)');
   });
 
   it('AC-1 / VT-06 fallback prompt remains sandbox and provider-MCP directed', () => {
@@ -1197,6 +1232,108 @@ describe('document assistant MCP wiring', () => {
     } finally {
       delete process.env.CURSOR_API_KEY;
       await closeThread(thread.id);
+    }
+  });
+
+  it('persists the user message before dispatching an interactive actor turn', async () => {
+    const {
+      insertMessage: mockPgInsertMessage,
+    } = jest.requireMock('../services/chatThreadRepository') as {
+      insertMessage: jest.Mock;
+    };
+    const originalFetch = global.fetch;
+    process.env.AI_RUNS_INTERACTIVE_DISPATCH_URL = 'https://interactive.test';
+    mockPgInsertMessage.mockClear();
+    mockPgUpsertThread.mockClear();
+    mockEnqueueAgentRun.mockResolvedValue({ runId: 'interactive-run-1' });
+    mockInteractiveWorkflowRoute.mockImplementation(async (input: {
+      dispatchToActor(dispatch: {
+        runId: string;
+        dispatchMessageId: string;
+      }): Promise<void>;
+    }) => {
+      await input.dispatchToActor({
+        runId: 'interactive-run-1',
+        dispatchMessageId: 'dispatch-1',
+      });
+      return {
+        route: 'actor',
+        runId: 'interactive-run-1',
+        dispatchMessageId: 'dispatch-1',
+        slot: 'reserved',
+      };
+    });
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ accepted: true }),
+    }) as unknown as typeof fetch;
+    const repoReader: RepoReader = {
+      identity: {
+        provider: 'github',
+        project: 'Apex',
+        repo: 'AI-Pilot',
+        sha: 'interactive-sha',
+      },
+      readFile: jest.fn().mockResolvedValue('# repository context'),
+      listDir: jest.fn().mockResolvedValue([]),
+      searchCode: jest.fn().mockResolvedValue([]),
+    };
+    mockCallerGroundingStart.mockResolvedValue({
+      mode: 'local',
+      cwd: '/tmp/interactive-checkout',
+      profileId: 'interactive-profile' as GroundingProfileId,
+      resolvedSha: 'interactive-sha',
+      nativeReads: true,
+      release: jest.fn().mockResolvedValue(undefined),
+    });
+    mockResolveConnectionProfile.mockResolvedValue(repoReader);
+    mockCallerGroundingSelectionToBinding.mockReturnValue({
+      mode: 'local',
+      sha: 'interactive-sha',
+    });
+    mockEvaluateBindingContinuity.mockReturnValue({
+      decision: 'recreate',
+      reason: 'legacy-binding-missing',
+    });
+
+    const thread = await createThread(
+      'developer-1',
+      baseKickoff(),
+      { skipAutoKickoff: true },
+    );
+
+    try {
+      await sendMessage(thread.id, 'A simple UI counter');
+
+      expect(mockPgInsertMessage).toHaveBeenCalledTimes(1);
+      expect(mockPgInsertMessage).toHaveBeenCalledWith(
+        thread.id,
+        expect.objectContaining({
+          role: 'user',
+          text: 'A simple UI counter',
+        }),
+      );
+      expect(mockPgUpsertThread).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          id: thread.id,
+          status: 'running',
+          activeRunId: 'interactive-run-1',
+        }),
+      );
+      expect(global.fetch).toHaveBeenCalledWith(
+        'https://interactive.test/dispatch',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    } finally {
+      global.fetch = originalFetch;
+      delete process.env.AI_RUNS_INTERACTIVE_DISPATCH_URL;
+      mockInteractiveWorkflowRoute.mockReset();
+      mockEnqueueAgentRun.mockReset();
+      await closeThread(thread.id);
+      mockCallerGroundingStart.mockReset();
+      mockResolveConnectionProfile.mockReset();
+      mockCallerGroundingSelectionToBinding.mockReset();
+      mockEvaluateBindingContinuity.mockReset();
     }
   });
 

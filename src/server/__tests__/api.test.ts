@@ -5,6 +5,7 @@ import { AzureDevOpsService } from '../services/azureDevOps';
 import * as userProjectAssignmentService from '../services/userProjectAssignmentService';
 import * as projectCatalogService from '../services/projectCatalogService';
 import * as projectAccessRequestService from '../services/projectAccessRequestService';
+import * as workerTierHealthService from '../services/workerTierHealthService';
 
 // Mock the AzureDevOpsService
 jest.mock('../services/azureDevOps');
@@ -37,9 +38,14 @@ jest.mock('../services/projectAccessRequestService', () => ({
   listRequestableProjectsForUser: jest.fn(),
 }));
 
+jest.mock('../services/workerTierHealthService', () => ({
+  getWorkerTierHealthStats: jest.fn(),
+}));
+
 const mockAssignmentService = userProjectAssignmentService as jest.Mocked<typeof userProjectAssignmentService>;
 const mockProjectCatalogService = projectCatalogService as jest.Mocked<typeof projectCatalogService>;
 const mockProjectAccessRequestService = projectAccessRequestService as jest.Mocked<typeof projectAccessRequestService>;
+const mockWorkerTierHealthService = workerTierHealthService as jest.Mocked<typeof workerTierHealthService>;
 
 describe('API Routes', () => {
   let app: express.Application;
@@ -47,6 +53,10 @@ describe('API Routes', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockWorkerTierHealthService.getWorkerTierHealthStats.mockResolvedValue({
+      workerTierSaturation: 0.5,
+      oldestQueuedAgeMs: 90_000,
+    });
     
     // Create Express app with the API router
     app = express();
@@ -77,6 +87,41 @@ describe('API Routes', () => {
     userApp.use('/api', apiRouter);
     return userApp;
   }
+
+  describe('GET /api/health/agents (TBI-008 DoD-4 / VT-10)', () => {
+    it('preserves existing health fields and adds worker saturation and queue age', async () => {
+      const response = await request(app)
+        .get('/api/health/agents')
+        .expect(200);
+
+      expect(response.body).toEqual(expect.objectContaining({
+        status: 'ok',
+        threads: expect.any(Object),
+        uptime: expect.any(Number),
+        workerTierSaturation: 0.5,
+        oldestQueuedAgeMs: 90_000,
+      }));
+    });
+
+    it('returns safe worker defaults without leaking database failure details', async () => {
+      mockWorkerTierHealthService.getWorkerTierHealthStats.mockRejectedValue(
+        new Error('password=secret host=private-db'),
+      );
+
+      const response = await request(app)
+        .get('/api/health/agents')
+        .expect(200);
+
+      expect(response.body).toEqual(expect.objectContaining({
+        status: 'ok',
+        workerTierSaturation: 0,
+        oldestQueuedAgeMs: 0,
+      }));
+      expect(JSON.stringify(response.body)).not.toMatch(
+        /password=secret|private-db/i,
+      );
+    });
+  });
 
   describe('GET /api/projects', () => {
     const fullCatalog = [
