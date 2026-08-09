@@ -362,13 +362,13 @@ output "ai_runs_interactive_dapr_app_id" {
 }
 
 output "ai_runs_interactive_redis_hostname" {
-  description = "Azure Cache for Redis hostname backing the Dapr pub/sub + actor state store"
-  value       = try(azurerm_redis_cache.ai_runs_interactive[0].hostname, null)
+  description = "Redis hostname backing the Dapr pub/sub + actor state store"
+  value       = try(local.ai_runs_interactive_redis_hostname, null)
 }
 
 output "ai_runs_interactive_redis_ssl_port" {
   description = "Redis TLS port. App Service must mirror REDIS_HOST/REDIS_SSL_PORT (+ REDIS_KEY) so the WS gateway subscribes to the live bus."
-  value       = try(azurerm_redis_cache.ai_runs_interactive[0].ssl_port, null)
+  value       = try(local.ai_runs_interactive_redis_port, null)
 }
 
 output "ai_runs_interactive_capacity" {

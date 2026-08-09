@@ -123,25 +123,41 @@ jobs:
         env:
           STAGING_REDIRECT_URL: https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net/auth/callback
         run: |
-          # Resolve the interactive live-bus (Redis) connection at deploy time so
-          # the WS gateway subscribes to the same pub/sub the actor host publishes
-          # to. Terraform provisions the cache; App Service app settings are not
-          # Terraform-managed (ignore_changes), so we mirror them here. When the
-          # interactive lane is not provisioned in this environment the query
-          # returns empty and the live bus stays a no-op (durable replay only).
-          REDIS_HOST=""
-          REDIS_SSL_PORT="6380"
-          REDIS_KEY=""
-          REDIS_NAME=$(az redis list --resource-group "$RESOURCE_GROUP_NAME" \
-            --query "[?starts_with(name, 'redis-apex-ai')].name | [0]" -o tsv 2>/dev/null || true)
-          if [ -n "$REDIS_NAME" ]; then
-            REDIS_HOST=$(az redis show --name "$REDIS_NAME" --resource-group "$RESOURCE_GROUP_NAME" --query hostName -o tsv)
-            REDIS_SSL_PORT=$(az redis show --name "$REDIS_NAME" --resource-group "$RESOURCE_GROUP_NAME" --query sslPort -o tsv)
-            REDIS_KEY=$(az redis list-keys --name "$REDIS_NAME" --resource-group "$RESOURCE_GROUP_NAME" --query primaryKey -o tsv)
-            echo "::add-mask::$REDIS_KEY"
-            echo "Interactive live bus: resolved Redis '$REDIS_NAME' (${REDIS_HOST}:${REDIS_SSL_PORT})."
+          # Resolve either Azure Managed Redis (new environments) or legacy
+          # Azure Cache for Redis (existing dev). Only write REDIS_* when all
+          # values resolve successfully so a transient lookup failure cannot
+          # blank a working App Service configuration.
+          REDIS_SETTINGS=()
+          MANAGED_REDIS_ID=$(az resource list --resource-group "$RESOURCE_GROUP_NAME" \
+            --resource-type "Microsoft.Cache/redisEnterprise" \
+            --query "[?starts_with(name, 'redis-apex-ai')].id | [0]" -o tsv 2>/dev/null || true)
+          if [ -n "$MANAGED_REDIS_ID" ]; then
+            REDIS_HOST=$(az resource show --ids "$MANAGED_REDIS_ID" --api-version "2025-04-01" \
+              --query properties.hostName -o tsv 2>/dev/null || true)
+            REDIS_SSL_PORT=$(az rest --method get \
+              --url "https://management.azure.com${MANAGED_REDIS_ID}/databases/default?api-version=2025-07-01" \
+              --query properties.port -o tsv 2>/dev/null || true)
+            REDIS_KEY=$(az rest --method post \
+              --url "https://management.azure.com${MANAGED_REDIS_ID}/databases/default/listKeys?api-version=2025-07-01" \
+              --query primaryKey -o tsv 2>/dev/null || true)
+            REDIS_NAME="${MANAGED_REDIS_ID##*/}"
+            REDIS_KIND="Azure Managed Redis"
           else
-            echo "Interactive live bus: no redis-apex-ai* cache in $RESOURCE_GROUP_NAME — live bus stays disabled (durable replay only)."
+            REDIS_NAME=$(az redis list --resource-group "$RESOURCE_GROUP_NAME" \
+              --query "[?starts_with(name, 'redis-apex-ai')].name | [0]" -o tsv 2>/dev/null || true)
+            if [ -n "$REDIS_NAME" ]; then
+              REDIS_HOST=$(az redis show --name "$REDIS_NAME" --resource-group "$RESOURCE_GROUP_NAME" --query hostName -o tsv 2>/dev/null || true)
+              REDIS_SSL_PORT=$(az redis show --name "$REDIS_NAME" --resource-group "$RESOURCE_GROUP_NAME" --query sslPort -o tsv 2>/dev/null || true)
+              REDIS_KEY=$(az redis list-keys --name "$REDIS_NAME" --resource-group "$RESOURCE_GROUP_NAME" --query primaryKey -o tsv 2>/dev/null || true)
+              REDIS_KIND="Azure Cache for Redis"
+            fi
+          fi
+          if [ -n "${REDIS_HOST:-}" ] && [ -n "${REDIS_SSL_PORT:-}" ] && [ -n "${REDIS_KEY:-}" ]; then
+            echo "::add-mask::$REDIS_KEY"
+            REDIS_SETTINGS=("REDIS_HOST=$REDIS_HOST" "REDIS_SSL_PORT=$REDIS_SSL_PORT" "REDIS_KEY=$REDIS_KEY")
+            echo "Interactive live bus: resolved $REDIS_KIND '$REDIS_NAME' (${REDIS_HOST}:${REDIS_SSL_PORT})."
+          else
+            echo "Interactive live bus: Redis was not resolved; preserving existing REDIS_* settings."
           fi
 
           az webapp config appsettings set \
@@ -201,15 +217,14 @@ jobs:
               AI_RUNS_BACKGROUND_QUEUE_NAME="${{ vars.AI_RUNS_BACKGROUND_QUEUE_NAME }}" \
               AI_RUNS_BACKGROUND_INFLIGHT_LIMIT="${{ vars.AI_RUNS_BACKGROUND_INFLIGHT_LIMIT }}" \
               AI_RUNS_CALLBACK_TOKEN_AUDIENCE="${{ vars.AI_RUNS_CALLBACK_TOKEN_AUDIENCE }}" \
+              AI_RUNS_RUNNER_ALLOWED_CLIENT_IDS="${{ vars.AI_RUNS_RUNNER_ALLOWED_CLIENT_IDS }}" \
               AI_RUNS_RUNNER_CALLBACK_TOKEN="${{ secrets.AI_RUNS_RUNNER_CALLBACK_TOKEN }}" \
               AI_RUNS_INTERACTIVE_GATEWAY="${{ vars.AI_RUNS_INTERACTIVE_GATEWAY }}" \
               AI_RUNS_INTERACTIVE_RESERVED="${{ vars.AI_RUNS_INTERACTIVE_RESERVED }}" \
               AI_RUNS_INTERACTIVE_BURST_MAX="${{ vars.AI_RUNS_INTERACTIVE_BURST_MAX }}" \
               AI_RUNS_INTERACTIVE_FIRST_TOKEN_SLO_MS="${{ vars.AI_RUNS_INTERACTIVE_FIRST_TOKEN_SLO_MS }}" \
               AI_RUNS_INTERACTIVE_DISPATCH_URL="${{ vars.AI_RUNS_INTERACTIVE_DISPATCH_URL }}" \
-              REDIS_HOST="$REDIS_HOST" \
-              REDIS_SSL_PORT="$REDIS_SSL_PORT" \
-              REDIS_KEY="$REDIS_KEY" \
+              "${REDIS_SETTINGS[@]}" \
               SENDGRID_API_KEY="${{ secrets.SENDGRID_API_KEY }}" \
               GITHUB_TOKEN="${{ secrets.GH_SKILL_TOKEN }}" \
               GITHUB_ORG="${{ secrets.GH_SKILL_ORG }}" \
@@ -255,15 +270,14 @@ jobs:
               AI_RUNS_BACKGROUND_QUEUE_NAME="${{ vars.AI_RUNS_BACKGROUND_QUEUE_NAME }}" \
               AI_RUNS_BACKGROUND_INFLIGHT_LIMIT="${{ vars.AI_RUNS_BACKGROUND_INFLIGHT_LIMIT }}" \
               AI_RUNS_CALLBACK_TOKEN_AUDIENCE="${{ vars.AI_RUNS_CALLBACK_TOKEN_AUDIENCE }}" \
+              AI_RUNS_RUNNER_ALLOWED_CLIENT_IDS="${{ vars.AI_RUNS_RUNNER_ALLOWED_CLIENT_IDS }}" \
               AI_RUNS_RUNNER_CALLBACK_TOKEN="${{ secrets.AI_RUNS_RUNNER_CALLBACK_TOKEN }}" \
               AI_RUNS_INTERACTIVE_GATEWAY="${{ vars.AI_RUNS_INTERACTIVE_GATEWAY }}" \
               AI_RUNS_INTERACTIVE_RESERVED="${{ vars.AI_RUNS_INTERACTIVE_RESERVED }}" \
               AI_RUNS_INTERACTIVE_BURST_MAX="${{ vars.AI_RUNS_INTERACTIVE_BURST_MAX }}" \
               AI_RUNS_INTERACTIVE_FIRST_TOKEN_SLO_MS="${{ vars.AI_RUNS_INTERACTIVE_FIRST_TOKEN_SLO_MS }}" \
               AI_RUNS_INTERACTIVE_DISPATCH_URL="${{ vars.AI_RUNS_INTERACTIVE_DISPATCH_URL }}" \
-              REDIS_HOST="$REDIS_HOST" \
-              REDIS_SSL_PORT="$REDIS_SSL_PORT" \
-              REDIS_KEY="$REDIS_KEY"
+              "${REDIS_SETTINGS[@]}"
 
           # The Azure Node/Linux image ships without git, and Dev Workbench
           # shells out to git at runtime. Install git in the background so Node

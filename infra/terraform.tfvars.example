@@ -174,13 +174,17 @@ pdf_blob_container_name = "pdf-artifacts"
 #   redis-apex-ai-dev / -prd             Azure Cache for Redis backplane
 # ai_runs_interactive_container_app_name = null
 # ai_runs_interactive_redis_name         = null
+# ai_runs_interactive_redis_location     = null # defaults to App Service region
 
-# Redis backplane SKU. Default Basic C0 (smallest tier meeting first-token
-# latency). Use Standard (C-family, replicated) for prod HA; Premium for VNet
-# injection. capacity is the C/P size index (0 = smallest).
+# Preserve existing dev caches with "cache". Use "managed" for new environments;
+# Azure no longer accepts new Azure Cache for Redis instances. Balanced_B0 is
+# the smallest Azure Managed Redis tier; enable HA for production.
+# ai_runs_interactive_redis_backend = "cache"
 # ai_runs_interactive_redis_sku      = "Basic"     # prod: "Standard"
 # ai_runs_interactive_redis_family   = "C"
 # ai_runs_interactive_redis_capacity = 0            # prod: 1+
+# ai_runs_interactive_managed_redis_sku               = "Balanced_B0"
+# ai_runs_interactive_managed_redis_high_availability = false # prod: true
 
 # Interactive host image — placeholder until CI publishes the Dapr actor-host
 # image; Terraform ignores image drift (lifecycle ignore_changes). Point at the

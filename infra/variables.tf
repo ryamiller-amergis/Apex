@@ -638,13 +638,30 @@ variable "ai_runs_interactive_container_app_name" {
 }
 
 variable "ai_runs_interactive_redis_name" {
-  description = "Azure Cache for Redis name (Dapr pub/sub + actor state store). Null derives 'redis-apex-ai-{environment}'."
+  description = "Redis backplane name (Dapr pub/sub + actor state store). Null derives 'redis-apex-ai-{environment}'."
   type        = string
   default     = null
 }
 
+variable "ai_runs_interactive_redis_location" {
+  description = "Redis backplane region. Null colocates it with the App Service; set only when regional service capacity requires a fallback."
+  type        = string
+  default     = null
+}
+
+variable "ai_runs_interactive_redis_backend" {
+  description = "Redis resource implementation: cache preserves an existing Azure Cache for Redis; managed provisions Azure Managed Redis for new environments."
+  type        = string
+  default     = "cache"
+
+  validation {
+    condition     = contains(["cache", "managed"], var.ai_runs_interactive_redis_backend)
+    error_message = "ai_runs_interactive_redis_backend must be cache or managed."
+  }
+}
+
 variable "ai_runs_interactive_redis_sku" {
-  description = "Redis SKU for the interactive backplane. Smallest tier meeting first-token latency; default Basic."
+  description = "Legacy Azure Cache for Redis SKU. Ignored when ai_runs_interactive_redis_backend is managed."
   type        = string
   default     = "Basic"
 
@@ -655,15 +672,27 @@ variable "ai_runs_interactive_redis_sku" {
 }
 
 variable "ai_runs_interactive_redis_family" {
-  description = "Redis family: C (Basic/Standard) or P (Premium)."
+  description = "Legacy Azure Cache for Redis family. Ignored for Azure Managed Redis."
   type        = string
   default     = "C"
 }
 
 variable "ai_runs_interactive_redis_capacity" {
-  description = "Redis capacity within the family. Basic/Standard C0 (smallest) = 0."
+  description = "Legacy Azure Cache for Redis capacity. Ignored for Azure Managed Redis."
   type        = number
   default     = 0
+}
+
+variable "ai_runs_interactive_managed_redis_sku" {
+  description = "Azure Managed Redis SKU used when the managed backend is selected."
+  type        = string
+  default     = "Balanced_B0"
+}
+
+variable "ai_runs_interactive_managed_redis_high_availability" {
+  description = "Enable Azure Managed Redis high availability. Recommended for production."
+  type        = bool
+  default     = false
 }
 
 variable "ai_runs_interactive_image" {

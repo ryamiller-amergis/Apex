@@ -20,21 +20,28 @@ locals {
   ai_runs_interactive_enabled      = var.enable_ai_runs_interactive
   ai_runs_interactive_app_name     = coalesce(var.ai_runs_interactive_container_app_name, "ca-apex-ai-interactive-${var.environment}")
   ai_runs_interactive_redis_name   = coalesce(var.ai_runs_interactive_redis_name, "redis-apex-ai-${var.environment}")
+  ai_runs_interactive_redis_region = coalesce(var.ai_runs_interactive_redis_location, local.app_service_location)
+  ai_runs_interactive_legacy_redis = local.ai_runs_interactive_enabled && var.ai_runs_interactive_redis_backend == "cache"
+  ai_runs_interactive_managed_redis = (
+    local.ai_runs_interactive_enabled
+    && var.ai_runs_interactive_redis_backend == "managed"
+  )
   ai_runs_interactive_dapr_app_id  = "apex-ai-interactive"
   ai_runs_interactive_max_replicas = var.ai_runs_interactive_reserved + var.ai_runs_interactive_burst_max
 }
 
 # ---------------------------------------------------------------------------
-# Azure Cache for Redis — Dapr pub/sub (live fan-out) + actor state store.
-# The backplane carries only sanitized live run-event envelopes (BR-016/BR-019);
-# durability stays in Postgres agent_run_events. Smallest tier by default.
+# Redis backplane — Dapr pub/sub (live fan-out) + actor state store.
+# Existing environments can retain Azure Cache for Redis. New production
+# environments use Azure Managed Redis because Azure blocks new legacy caches.
+# Durability stays in Postgres agent_run_events.
 # ---------------------------------------------------------------------------
 
 resource "azurerm_redis_cache" "ai_runs_interactive" {
-  count = local.ai_runs_interactive_enabled ? 1 : 0
+  count = local.ai_runs_interactive_legacy_redis ? 1 : 0
 
   name                 = local.ai_runs_interactive_redis_name
-  location             = local.app_service_location
+  location             = local.ai_runs_interactive_redis_region
   resource_group_name  = local.app_resource_group_name
   capacity             = var.ai_runs_interactive_redis_capacity
   family               = var.ai_runs_interactive_redis_family
@@ -43,6 +50,76 @@ resource "azurerm_redis_cache" "ai_runs_interactive" {
   minimum_tls_version  = "1.2"
 
   tags = merge(var.tags, { Environment = var.environment, Workload = "ai-runs-interactive" })
+}
+
+resource "azapi_resource" "ai_runs_interactive_redis" {
+  count = local.ai_runs_interactive_managed_redis ? 1 : 0
+
+  type      = "Microsoft.Cache/redisEnterprise@2025-04-01"
+  name      = local.ai_runs_interactive_redis_name
+  location  = local.ai_runs_interactive_redis_region
+  parent_id = local.use_dedicated_app_rg ? azurerm_resource_group.app[0].id : azurerm_resource_group.main.id
+
+  body = {
+    properties = {
+      encryption        = {}
+      highAvailability  = var.ai_runs_interactive_managed_redis_high_availability ? "Enabled" : "Disabled"
+      minimumTlsVersion = "1.2"
+    }
+    sku = {
+      name = var.ai_runs_interactive_managed_redis_sku
+    }
+  }
+
+  response_export_values = ["properties.hostName"]
+  tags                   = merge(var.tags, { Environment = var.environment, Workload = "ai-runs-interactive" })
+}
+
+resource "azapi_resource" "ai_runs_interactive_redis_database" {
+  count = local.ai_runs_interactive_managed_redis ? 1 : 0
+
+  type      = "Microsoft.Cache/redisEnterprise/databases@2025-07-01"
+  name      = "default"
+  parent_id = azapi_resource.ai_runs_interactive_redis[0].id
+
+  body = {
+    properties = {
+      accessKeysAuthentication = "Enabled"
+      clientProtocol           = "Encrypted"
+      clusteringPolicy         = "OSSCluster"
+      evictionPolicy           = "VolatileLRU"
+      modules                  = []
+      port                     = 10000
+    }
+  }
+}
+
+data "azapi_resource_action" "ai_runs_interactive_redis_keys" {
+  count = local.ai_runs_interactive_managed_redis ? 1 : 0
+
+  type                   = "Microsoft.Cache/redisEnterprise/databases@2025-07-01"
+  resource_id            = azapi_resource.ai_runs_interactive_redis_database[0].id
+  action                 = "listKeys"
+  method                 = "POST"
+  response_export_values = ["primaryKey"]
+}
+
+locals {
+  ai_runs_interactive_redis_hostname = local.ai_runs_interactive_managed_redis ? (
+    azapi_resource.ai_runs_interactive_redis[0].output.properties.hostName
+    ) : (
+    azurerm_redis_cache.ai_runs_interactive[0].hostname
+  )
+  ai_runs_interactive_redis_port = local.ai_runs_interactive_managed_redis ? (
+    10000
+    ) : (
+    azurerm_redis_cache.ai_runs_interactive[0].ssl_port
+  )
+  ai_runs_interactive_redis_key = local.ai_runs_interactive_managed_redis ? (
+    data.azapi_resource_action.ai_runs_interactive_redis_keys[0].output.primaryKey
+    ) : (
+    azurerm_redis_cache.ai_runs_interactive[0].primary_access_key
+  )
 }
 
 # ---------------------------------------------------------------------------
@@ -62,12 +139,12 @@ resource "azurerm_container_app_environment_dapr_component" "ai_runs_interactive
 
   secret {
     name  = "redis-password"
-    value = azurerm_redis_cache.ai_runs_interactive[0].primary_access_key
+    value = local.ai_runs_interactive_redis_key
   }
 
   metadata {
     name  = "redisHost"
-    value = "${azurerm_redis_cache.ai_runs_interactive[0].hostname}:${azurerm_redis_cache.ai_runs_interactive[0].ssl_port}"
+    value = "${local.ai_runs_interactive_redis_hostname}:${local.ai_runs_interactive_redis_port}"
   }
   metadata {
     name        = "redisPassword"
@@ -90,12 +167,12 @@ resource "azurerm_container_app_environment_dapr_component" "ai_runs_interactive
 
   secret {
     name  = "redis-password"
-    value = azurerm_redis_cache.ai_runs_interactive[0].primary_access_key
+    value = local.ai_runs_interactive_redis_key
   }
 
   metadata {
     name  = "redisHost"
-    value = "${azurerm_redis_cache.ai_runs_interactive[0].hostname}:${azurerm_redis_cache.ai_runs_interactive[0].ssl_port}"
+    value = "${local.ai_runs_interactive_redis_hostname}:${local.ai_runs_interactive_redis_port}"
   }
   metadata {
     name        = "redisPassword"
@@ -161,7 +238,7 @@ resource "azurerm_container_app" "ai_runs_interactive" {
   # Service gateway streams them in real time (durability stays in Postgres).
   secret {
     name  = "redis-key"
-    value = azurerm_redis_cache.ai_runs_interactive[0].primary_access_key
+    value = local.ai_runs_interactive_redis_key
   }
 
   # Managed Dapr — actor runtime + pub/sub backplane (in-cluster, mTLS).
@@ -253,11 +330,11 @@ resource "azurerm_container_app" "ai_runs_interactive" {
       # REDIS_KEY imply a TLS connection. Ephemeral live fan-out only.
       env {
         name  = "REDIS_HOST"
-        value = azurerm_redis_cache.ai_runs_interactive[0].hostname
+        value = local.ai_runs_interactive_redis_hostname
       }
       env {
         name  = "REDIS_SSL_PORT"
-        value = tostring(azurerm_redis_cache.ai_runs_interactive[0].ssl_port)
+        value = tostring(local.ai_runs_interactive_redis_port)
       }
       env {
         name        = "REDIS_KEY"

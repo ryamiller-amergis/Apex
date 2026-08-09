@@ -592,6 +592,28 @@ scales from zero until the governor publishes admitted work.
 
 ---
 
+## AI Runs interactive transport (FEAT-007)
+
+The optional interactive lane adds a warm Dapr-enabled Container App and a
+Redis backplane for actor state and live WebSocket fan-out. Existing
+environments can retain the legacy Azure Cache for Redis backend by setting
+`ai_runs_interactive_redis_backend = "cache"`. New environments must use
+`"managed"` because Azure no longer accepts new legacy cache instances.
+
+Production uses Azure Managed Redis `Balanced_B1` with high availability
+enabled in North Central US (Central US had no B0 or B1 allocation capacity
+during initial provisioning). It is provisioned through AzAPI so the root
+module can retain AzureRM 3.x without a major provider migration. The default
+encrypted database listens on port `10000`; its access key is passed only to
+the Dapr components and Container App secrets.
+
+After apply, mirror `ai_runs_interactive_redis_hostname`,
+`ai_runs_interactive_redis_ssl_port`, and the Redis access key into the App
+Service live-bus settings, and set `AI_RUNS_INTERACTIVE_DISPATCH_URL` to the
+`ai_runs_interactive_app_fqdn` HTTPS endpoint.
+
+---
+
 ## Deployment
 
 After infrastructure is provisioned, deploy the application:
