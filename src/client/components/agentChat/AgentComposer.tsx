@@ -311,7 +311,7 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
                 className={`${styles.sendBtn} ${styles.stopBtn} ${isCancelling ? styles.stopBtnStopping : ''}`}
                 onClick={onCancel}
                 type="button"
-                aria-label={isCancelling ? 'Stopping' : 'Stop'}
+                aria-label={isCancelling ? 'Stopping agent' : 'Stop'}
                 title="Stop"
                 disabled={isCancelling}
                 {...(stopTestId ? { 'data-testid': stopTestId } : {})}
