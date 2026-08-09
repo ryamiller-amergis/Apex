@@ -294,6 +294,12 @@ resource "azurerm_container_app_job" "ai_runs_runner" {
       cpu    = var.ai_runs_runner_cpu
       memory = var.ai_runs_runner_memory
 
+      # MUST match App Service + interactive host mount path
+      # (var.ai_runs_workspace_mount_path → /home/data/ai-pilot/workspaces).
+      # Do NOT mount the Azure Files share at local.ai_runs_data_dir
+      # (/home/data/ai-pilot): workspaceRef values are
+      # <dataRoot>/workspaces/grounding/<digest>, and a parent-dir mount makes
+      # those paths resolve to a missing share subdirectory.
       volume_mounts {
         name = "ai-pilot-data"
         path = var.ai_runs_workspace_mount_path
@@ -329,6 +335,7 @@ resource "azurerm_container_app_job" "ai_runs_runner" {
         value = tostring(var.ai_runs_max_in_flight)
       }
 
+      # Data root parent of the mount (resolveDataRoot). Not the mount path.
       env {
         name  = "AI_PILOT_DATA_DIR"
         value = local.ai_runs_data_dir

@@ -526,9 +526,20 @@ variable "ai_runs_file_share_quota_gb" {
 }
 
 variable "ai_runs_workspace_mount_path" {
-  description = "Absolute shared checkout mount path used by App Service and AI-run compute."
+  description = <<-EOT
+    Absolute Azure Files mount path for pinned checkouts on App Service, the
+    background Job, and the interactive host. Must end with /workspaces so
+    workspaceRef values (<dataRoot>/workspaces/grounding/<digest>) resolve to
+    the same share paths on every compute tier. Do not set this to the data
+    root parent (/home/data/ai-pilot).
+  EOT
   type        = string
   default     = "/home/data/ai-pilot/workspaces"
+
+  validation {
+    condition     = endswith(var.ai_runs_workspace_mount_path, "/workspaces")
+    error_message = "ai_runs_workspace_mount_path must end with /workspaces (shared checkout mount, not the data-root parent)."
+  }
 }
 
 variable "ai_runs_vnet_subnet_id" {

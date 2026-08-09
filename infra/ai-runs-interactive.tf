@@ -202,6 +202,7 @@ resource "azurerm_container_app" "ai_runs_interactive" {
       memory = var.ai_runs_interactive_memory
 
       volume_mounts {
+        # Same shared checkout path as App Service + background Job.
         name = "ai-pilot-data"
         path = var.ai_runs_workspace_mount_path
       }

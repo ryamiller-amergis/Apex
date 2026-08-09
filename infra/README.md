@@ -557,6 +557,13 @@ gives each execution tier the same checkout tree without turning the complete
 Apex data directory into a shared mutable filesystem. Blob staging remains out
 of scope.
 
+`AI_PILOT_DATA_DIR` stays at the parent (`/home/data/ai-pilot`) so
+`resolveDataRoot()` → `…/workspaces/grounding/<digest>` matches the mount.
+Never mount the Azure Files share at the data-root parent — that makes
+`workspaceRef` paths resolve to a missing `workspaces/` folder on the share
+and background runs fail immediately after bootstrap with
+`Worker execution failed`.
+
 ### Smoke verification (after apply — S8 / VT-02, VT-04, VT-06)
 
 ```bash

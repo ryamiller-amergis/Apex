@@ -151,8 +151,16 @@ describe('FEAT-003 Secure Ephemeral Background Worker Infrastructure', () => {
       expect(variablesTf).toMatch(
         /variable\s+"ai_runs_workspace_mount_path"[\s\S]*?default\s*=\s*"\/home\/data\/ai-pilot\/workspaces"/,
       );
+      expect(variablesTf).toMatch(
+        /endswith\(\s*var\.ai_runs_workspace_mount_path\s*,\s*"\/workspaces"\s*\)/,
+      );
       expect(workerTf).toMatch(/path\s*=\s*var\.ai_runs_workspace_mount_path/);
+      // Mount must be the workspaces path, not the data-root parent used for AI_PILOT_DATA_DIR.
+      expect(workerTf).not.toMatch(
+        /volume_mounts\s*\{[^}]*path\s*=\s*local\.ai_runs_data_dir/s,
+      );
       expect(workerTf).toMatch(/AI_PILOT_DATA_DIR/);
+      expect(workerTf).toMatch(/value\s*=\s*local\.ai_runs_data_dir/);
     });
   });
 

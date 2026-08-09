@@ -63,10 +63,60 @@ if [[ "$SKIP_JOB_UPDATE" == "true" ]]; then
   exit 0
 fi
 
+# Keep the shared checkout mount aligned with App Service + interactive host.
+# Image-only updates have drifted this path to the data-root parent before,
+# which breaks workspaceRef resolution (/workspaces/grounding/<digest>).
+MOUNT_PATH="${AI_RUNS_WORKSPACE_MOUNT_PATH:-/home/data/ai-pilot/workspaces}"
+
 echo "Updating Container Apps Job ${AI_RUNS_CONTAINER_APP_JOB_NAME} → ${IMAGE}..."
 az containerapp job update \
   --name "$AI_RUNS_CONTAINER_APP_JOB_NAME" \
   --resource-group "$AI_RUNS_RESOURCE_GROUP" \
   --image "$IMAGE"
 
-echo "OK: AI-runs worker image published and Job updated."
+echo "Re-asserting Azure Files mount path ${MOUNT_PATH}..."
+JOB_YAML="$(mktemp)"
+trap 'rm -f "$JOB_YAML"' EXIT
+az containerapp job show \
+  --name "$AI_RUNS_CONTAINER_APP_JOB_NAME" \
+  --resource-group "$AI_RUNS_RESOURCE_GROUP" \
+  -o yaml > "$JOB_YAML"
+
+python - "$JOB_YAML" "$MOUNT_PATH" <<'PY'
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+mount = sys.argv[2]
+text = path.read_text(encoding="utf-8")
+# Force every ai-pilot-data volumeMount back to the shared workspaces path.
+# A prior drift mounted the share at the data-root parent (/home/data/ai-pilot),
+# which breaks workspaceRef resolution.
+updated, count = re.subn(
+    r"(volumeMounts:\n(?:[^\n]*\n)*?\s*- mountPath: )(/home/data/ai-pilot(?:/workspaces)?)",
+    rf"\g<1>{mount}",
+    text,
+    count=1,
+)
+if count == 0:
+    updated, count = re.subn(
+        r"(- mountPath: )(/home/data/ai-pilot(?:/workspaces)?)",
+        rf"\g<1>{mount}",
+        text,
+        count=1,
+    )
+if count == 0 or f"mountPath: {mount}" not in updated:
+    raise SystemExit(
+        f"FAIL: could not find/set volume mountPath to {mount} in job YAML"
+    )
+path.write_text(updated, encoding="utf-8")
+print(f"Set job volume mountPath → {mount}")
+PY
+
+az containerapp job update \
+  --name "$AI_RUNS_CONTAINER_APP_JOB_NAME" \
+  --resource-group "$AI_RUNS_RESOURCE_GROUP" \
+  --yaml "$JOB_YAML"
+
+echo "OK: AI-runs worker image published; Job mount is ${MOUNT_PATH}."
