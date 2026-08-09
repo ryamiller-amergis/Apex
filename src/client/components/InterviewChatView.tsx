@@ -1562,14 +1562,21 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               </select>
               {isRunning ? (
                 <button
-                  className={`${styles.sendBtn} ${styles.stopBtn}`}
+                  className={`${styles.sendBtn} ${styles.stopBtn} ${session.isCancelling ? styles.stopBtnStopping : ''}`}
                   onClick={() => void session.cancel()}
                   type="button"
-                  aria-label="Stop"
+                  aria-label={session.isCancelling ? 'Stopping agent' : 'Stop agent'}
+                  disabled={session.isCancelling}
+                  {...{ 'data-testid': 'interview-stop-agent' }}
                 >
-                  <svg viewBox="0 0 20 20" fill="currentColor">
-                    <rect x="4" y="4" width="12" height="12" rx="2" />
-                  </svg>
+                  {session.isCancelling ? (
+                    <span className={styles.stopSpinner} aria-hidden="true" />
+                  ) : (
+                    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                      <rect x="4" y="4" width="12" height="12" rx="2" />
+                    </svg>
+                  )}
+                  <span>{session.isCancelling ? 'Stopping…' : 'Stop'}</span>
                 </button>
               ) : (
                 <div className={contextEstimate.isCritical ? styles.sendBtnCritical : undefined}>

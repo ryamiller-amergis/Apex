@@ -732,6 +732,50 @@ describe('ExistingInterviewView — processing state after send', () => {
     });
   });
 
+  it('renders the submitted user message before the thinking indicator', () => {
+    mockUseAgentChatSession.mockReturnValue({
+      ...idleStream,
+      messages: [
+        initialAgentMessage,
+        {
+          id: 'optimistic-user-1',
+          role: 'user' as const,
+          text: 'My answer',
+          ts: '2026-01-01T00:00:01Z',
+        },
+      ],
+      isAwaitingAgentResponse: true,
+      isInteractionBusy: true,
+    });
+
+    renderExistingInterview();
+
+    const userMessage = screen.getByText('My answer');
+    const thinkingIndicator = screen.getByTestId('interview-agent-processing');
+    expect(
+      userMessage.compareDocumentPosition(thinkingIndicator)
+      & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('shows a clear stopping state after the stop action is requested', () => {
+    mockUseAgentChatSession.mockReturnValue({
+      ...idleStream,
+      messages: [initialAgentMessage],
+      status: 'running',
+      isRunning: true,
+      isCancelling: true,
+      isInteractionBusy: true,
+    });
+
+    renderExistingInterview();
+
+    const stopButton = screen.getByTestId('interview-stop-agent');
+    expect(stopButton).toBeDisabled();
+    expect(stopButton).toHaveAccessibleName('Stopping agent');
+    expect(stopButton).toHaveTextContent('Stopping…');
+  });
+
   it('shows error and re-enables input when the session has a send error', () => {
     mockUseAgentChatSession.mockReturnValue({
       ...idleStream,
