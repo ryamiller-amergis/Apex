@@ -66,7 +66,7 @@ describe('Phase 6 runtime DB catalog cutover', () => {
 
   it('DOM markers remain available for scanners but are not the authoring allow-list API', () => {
     const markers = listWalkthroughAnchors();
-    expect(markers).toHaveLength(7);
+    expect(markers).toHaveLength(10);
     const authoring = listRuntimeCatalogAnchors(baselineFixtures()).map(toAuthoringAnchorEntry);
     expect(authoring.map((a) => a.key).sort()).toEqual(markers.map((m) => m.key).sort());
   });

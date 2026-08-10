@@ -98,8 +98,8 @@ describe('walkthroughAnchorCatalogResolution (Wave 2 Track D)', () => {
       ];
 
       const index = buildRuntimeCatalogIndex(fixtures);
-      expect(index.runtimeByKey.size).toBe(7);
-      expect(index.runtimeByTestId.size).toBe(7);
+      expect(index.runtimeByKey.size).toBe(10);
+      expect(index.runtimeByTestId.size).toBe(10);
       expect(index.runtimeByKey.has('notification-bell')).toBe(false);
       expect(index.runtimeByKey.has('legacy-rejected')).toBe(false);
       expect(index.runtimeByKey.has('profile-identity-inactive-copy')).toBe(false);
@@ -109,7 +109,7 @@ describe('walkthroughAnchorCatalogResolution (Wave 2 Track D)', () => {
       );
 
       const listed = listRuntimeCatalogAnchors(fixtures);
-      expect(listed).toHaveLength(7);
+      expect(listed).toHaveLength(10);
       expect(listed.map((a) => a.anchorKey)).toEqual([
         'profile-bio',
         'profile-identity',
@@ -118,6 +118,9 @@ describe('walkthroughAnchorCatalogResolution (Wave 2 Track D)', () => {
         'user-menu-profile',
         'user-menu-trigger',
         'whats-new-modal',
+        'work-board-backlog-toggle',
+        'work-board-lens-toggle',
+        'work-board-view',
       ]);
       expect(listed.find((a) => a.anchorKey === 'profile-bio')?.testId).toBe(
         'profile-bio-section',

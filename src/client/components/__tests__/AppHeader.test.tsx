@@ -177,7 +177,7 @@ describe('AppHeader — UI Lab admin-gated behavior', () => {
   });
 });
 
-// ── Work Board is super-admin + Apex-project only ─────────────────────────────
+// ── Work Board: super admin always; otherwise menu-enabled + work-board:view ──
 
 describe('AppHeader — Work Board visibility', () => {
   const can = (_key: string) => false;
@@ -187,14 +187,27 @@ describe('AppHeader — Work Board visibility', () => {
     expect(screen.getByRole('button', { name: 'Work Board' })).toBeInTheDocument();
   });
 
-  it('does NOT render Work Board for a non-super-admin on the Apex project', () => {
-    render(<AppHeader {...baseProps} can={can} selectedProject="Apex" />);
+  it('does NOT render Work Board for a non-super-admin without the view enabled', () => {
+    render(<AppHeader {...baseProps} can={can} selectedProject="Apex" menuEnabledViews={[]} />);
     expect(screen.queryByRole('button', { name: 'Work Board' })).not.toBeInTheDocument();
   });
 
-  it('does NOT render Work Board for a super admin on a non-Apex project', () => {
+  it('renders Work Board for a super admin on a non-Apex project', () => {
     render(<AppHeader {...baseProps} can={can} isSuperAdmin selectedProject="MaxView" />);
-    expect(screen.queryByRole('button', { name: 'Work Board' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Work Board' })).toBeInTheDocument();
+  });
+
+  it('renders Work Board for a non-super-admin when menu-enabled and permitted', () => {
+    const canWorkBoard = (key: string) => key === 'work-board:view';
+    render(
+      <AppHeader
+        {...baseProps}
+        can={canWorkBoard}
+        selectedProject="MaxView"
+        menuEnabledViews={['work-board']}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Work Board' })).toBeInTheDocument();
   });
 
   it('navigates to the work board when the Work Board item is clicked', () => {

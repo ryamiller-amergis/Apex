@@ -17,12 +17,23 @@ const MIGRATION_PATH = path.resolve(
   __dirname,
   '../../../migrations/20260730030000_create-walkthrough-anchor-registry.sql',
 );
+const WORK_BOARD_SEED_MIGRATION_PATH = path.resolve(
+  __dirname,
+  '../../../migrations/1786384024693_work-board-walkthrough-anchor-seed.sql',
+);
+
+/** Anchors seeded by the follow-up Work Board migration rather than the create migration. */
+const WORK_BOARD_ANCHOR_KEYS = new Set([
+  'work-board-view',
+  'work-board-lens-toggle',
+  'work-board-backlog-toggle',
+]);
 
 describe('WalkthroughAnchorRegistry contracts (Phase 1)', () => {
-  it('baseline seed covers all seven REGISTRY_ENTRIES as approved/active', () => {
+  it('baseline seed covers all curated REGISTRY_ENTRIES as approved/active', () => {
     const registry = listWalkthroughAnchors();
-    expect(registry).toHaveLength(7);
-    expect(WALKTHROUGH_ANCHOR_REGISTRY_BASELINE_SEEDS).toHaveLength(7);
+    expect(registry).toHaveLength(10);
+    expect(WALKTHROUGH_ANCHOR_REGISTRY_BASELINE_SEEDS).toHaveLength(10);
 
     const byKey = new Map(
       WALKTHROUGH_ANCHOR_REGISTRY_BASELINE_SEEDS.map((s) => [s.anchorKey, s]),
@@ -53,31 +64,44 @@ describe('WalkthroughAnchorRegistry contracts (Phase 1)', () => {
     }
   });
 
-  it('migration seeds all baseline anchor keys with constraints and indexes', () => {
+  it('migrations seed all baseline anchor keys with constraints and indexes', () => {
     expect(fs.existsSync(MIGRATION_PATH)).toBe(true);
-    const sql = fs.readFileSync(MIGRATION_PATH, 'utf8');
+    expect(fs.existsSync(WORK_BOARD_SEED_MIGRATION_PATH)).toBe(true);
+    const createSql = fs.readFileSync(MIGRATION_PATH, 'utf8');
+    const workBoardSql = fs.readFileSync(WORK_BOARD_SEED_MIGRATION_PATH, 'utf8');
 
-    expect(sql).toMatch(/CREATE TABLE walkthrough_anchor_registry/i);
-    expect(sql).toMatch(/review_status.*pending.*approved.*rejected/is);
-    expect(sql).toMatch(/source_kind.*explicit.*data_testid.*manual/is);
-    expect(sql).toMatch(/jsonb_typeof\(allowed_placements\)\s*=\s*'array'/i);
-    expect(sql).toMatch(/jsonb_typeof\(smart_tags\)\s*=\s*'array'/i);
-    expect(sql).toMatch(/jsonb_typeof\(source_locations\)\s*=\s*'array'/i);
-    expect(sql).toMatch(/NOT is_active OR review_status = 'approved'/i);
-    expect(sql).toMatch(/USING GIN \(smart_tags\)/i);
-    expect(sql).toMatch(/idx_walkthrough_anchor_registry_active_route_status/i);
+    // Schema, constraints, and indexes live in the create migration.
+    expect(createSql).toMatch(/CREATE TABLE walkthrough_anchor_registry/i);
+    expect(createSql).toMatch(/review_status.*pending.*approved.*rejected/is);
+    expect(createSql).toMatch(/source_kind.*explicit.*data_testid.*manual/is);
+    expect(createSql).toMatch(/jsonb_typeof\(allowed_placements\)\s*=\s*'array'/i);
+    expect(createSql).toMatch(/jsonb_typeof\(smart_tags\)\s*=\s*'array'/i);
+    expect(createSql).toMatch(/jsonb_typeof\(source_locations\)\s*=\s*'array'/i);
+    expect(createSql).toMatch(/NOT is_active OR review_status = 'approved'/i);
+    expect(createSql).toMatch(/USING GIN \(smart_tags\)/i);
+    expect(createSql).toMatch(/idx_walkthrough_anchor_registry_active_route_status/i);
 
+    // Every baseline seed is seeded by exactly one migration: the create
+    // migration for the original curated entries, the follow-up seed migration
+    // for the Work Board anchors (so already-migrated databases stay current).
     for (const seed of WALKTHROUGH_ANCHOR_REGISTRY_BASELINE_SEEDS) {
+      const sql = WORK_BOARD_ANCHOR_KEYS.has(seed.anchorKey) ? workBoardSql : createSql;
       expect(sql).toContain(`'${seed.anchorKey}'`);
       expect(sql).toContain(`'${seed.testId}'`);
       expect(sql).toContain(`'${seed.sourceHash}'`);
     }
 
-    const insertBlock = sql.split(/-- Down Migration/i)[0];
-    const seededKeys = WALKTHROUGH_ANCHOR_REGISTRY_BASELINE_SEEDS.filter((s) =>
-      insertBlock.includes(`'${s.anchorKey}'`),
+    const createInsert = createSql.split(/-- Down Migration/i)[0];
+    const createdSeeds = WALKTHROUGH_ANCHOR_REGISTRY_BASELINE_SEEDS.filter((s) =>
+      createInsert.includes(`'${s.anchorKey}'`),
     );
-    expect(seededKeys).toHaveLength(7);
+    expect(createdSeeds).toHaveLength(7);
+
+    const workBoardInsert = workBoardSql.split(/-- Down Migration/i)[0];
+    const workBoardSeeds = WALKTHROUGH_ANCHOR_REGISTRY_BASELINE_SEEDS.filter((s) =>
+      workBoardInsert.includes(`'${s.anchorKey}'`),
+    );
+    expect(workBoardSeeds).toHaveLength(3);
   });
 
   it('normalizes smart tags and enforces active=>approved invariant', () => {
