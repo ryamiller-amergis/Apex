@@ -627,7 +627,7 @@ function maybeNotifyDueSoon(): void {
 }
 
 /**
- * Notify owners of work items due within the next 2 days (status â‰  done).
+ * Notify owners of work items due within the next 2 days (status != done).
  * Dedupes via notification dedupeKey per item per calendar day.
  * @returns number of new notifications created
  */
