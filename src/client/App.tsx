@@ -556,7 +556,7 @@ function App() {
             onNavigateStandup={() => navigate('/standup')}
             onNavigateUiLab={() => navigate('/ui-lab')}
             onNavigateFeatureRequests={() => navigate('/feature-requests')}
-            onNavigatePdfTools={() => navigate('/pdf-tools')}
+            onNavigatePdfTools={() => navigate('/pdf-tools/nutrient-poc')}
             onNavigateAiCost={() => navigate('/ai-cost')}
             onNavigateDesignModule={() => navigate('/design-module')}
             onNavigateLoadTests={() => navigate('/load-tests')}
