@@ -42,7 +42,9 @@ jobs:
     outputs:
       migrations: ${{ steps.detect.outputs.has_migration_changes }}
       markdown_only: ${{ steps.markdown_only.outputs.markdown_only }}
-      load_test_runner: ${{ steps.load_test_runner.outputs.changed }}
+      load_test_runner: ${{ steps.image_publish.outputs.load_test_runner }}
+      ai_runs_worker: ${{ steps.image_publish.outputs.ai_runs_worker }}
+      ai_runs_interactive: ${{ steps.image_publish.outputs.ai_runs_interactive }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -65,24 +67,12 @@ jobs:
           GITHUB_SHA: ${{ github.sha }}
         run: node scripts/ci/is-markdown-only-changes.mjs
 
-      - name: Detect load-test runner changes
-        id: load_test_runner
+      - name: Detect runner image source changes
+        id: image_publish
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || format('origin/{0}', github.event.repository.default_branch) }}
           HEAD_SHA: ${{ github.sha }}
-        run: |
-          if git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- \
-            runners/load-test-k6/ \
-            scripts/ci/publish-lt-k6-runner.sh \
-            src/server/services/loadTestRunner/ \
-            src/shared/types/loadTest.ts \
-            package.json \
-            package-lock.json \
-            tsconfig.server.json; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
+        run: bash scripts/ci/detect-image-publish-changes.sh
 
   docs-only:
     needs: detect-changes
@@ -533,8 +523,11 @@ jobs:
 
       # FEAT-003 provisions the Job now. FEAT-004 adds the worker host image;
       # until its Dockerfile exists this step is intentionally skipped.
+      # Also skip when the PR does not touch worker image sources.
       - name: Publish AI-runs worker image
-        if: ${{ hashFiles('runners/ai-runs/Dockerfile') != '' }}
+        if: >-
+          needs.detect-changes.outputs.ai_runs_worker == 'true' &&
+          hashFiles('runners/ai-runs/Dockerfile') != ''
         env:
           AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
           AI_RUNS_CONTAINER_APP_JOB_NAME: ${{ vars.AI_RUNS_CONTAINER_APP_JOB_NAME }}
@@ -545,8 +538,11 @@ jobs:
 
       # FEAT-007 interactive Dapr actor-host image. Skipped until its Dockerfile
       # exists; Terraform ignores image drift while the placeholder is in place.
+      # Also skip when the PR does not touch interactive host image sources.
       - name: Publish AI-runs interactive host image
-        if: ${{ hashFiles('runners/ai-runs-interactive/Dockerfile') != '' }}
+        if: >-
+          needs.detect-changes.outputs.ai_runs_interactive == 'true' &&
+          hashFiles('runners/ai-runs-interactive/Dockerfile') != ''
         env:
           AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
           AI_RUNS_INTERACTIVE_CONTAINER_APP_NAME: ${{ vars.AI_RUNS_INTERACTIVE_CONTAINER_APP_NAME }}
