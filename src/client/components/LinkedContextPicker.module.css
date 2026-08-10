@@ -121,7 +121,7 @@
 
 .filter-button-active,
 .primary-button {
-  color: var(--bg-primary);
+  color: var(--on-accent);
   background: var(--accent-color);
   border-color: var(--accent-color);
 }

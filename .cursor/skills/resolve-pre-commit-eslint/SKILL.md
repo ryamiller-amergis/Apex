@@ -207,5 +207,6 @@ Ready to retry commit | Awaiting confirmation on N items | Needs operator decisi
 ## Related
 
 - Data-testid hook failures → [`resolve-pre-commit-data-testid`](../resolve-pre-commit-data-testid/SKILL.md)
+- Theme contrast CI failures → [`resolve-theme-contrast`](../resolve-theme-contrast/SKILL.md)
 - Hook definition: `.husky/pre-commit` → `npx lint-staged`
 - Config: `.eslintrc.json` (do not edit without permission)

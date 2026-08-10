@@ -201,6 +201,7 @@ Ready to retry commit | Needs operator decision on …
 ## Related
 
 - ESLint / lint-staged failures → [`resolve-pre-commit-eslint`](../resolve-pre-commit-eslint/SKILL.md)
+- Theme contrast CI failures → [`resolve-theme-contrast`](../resolve-theme-contrast/SKILL.md)
 - Hook: `.husky/pre-commit` → `node scripts/check-data-testid.mjs`
 - Policy script: `scripts/check-data-testid.mjs`
 - Dev guidance: `.cursor/skills/dev-orchestrator/feature-executor.md` (F3.3)
