@@ -65,6 +65,43 @@ function parseDispatchBody(body: string | undefined): unknown {
   }
 }
 
+/**
+ * Serialize an unknown thrown value into structured, log-safe fields. The
+ * dispatch and fatal handlers previously logged only error.name, which reduced
+ * every actor failure to the opaque errorType "Error" - impossible to
+ * diagnose without a redeploy. We now surface message, stack, and any nested
+ * `cause` so the failing stage (grounding, checkout, Cursor SDK) is visible in
+ * Container Apps logs. These frames never contain prompt/snapshot/secret data.
+ */
+function describeError(error: unknown): {
+  errorType: string;
+  errorMessage?: string;
+  errorStack?: string;
+  errorCause?: string;
+} {
+  if (error instanceof Error) {
+    const cause = (error as { cause?: unknown }).cause;
+    return {
+      errorType: error.name || 'Error',
+      errorMessage: error.message,
+      errorStack: error.stack,
+      errorCause:
+        cause instanceof Error
+          ? `${cause.name}: ${cause.message}`
+          : cause != null
+            ? String(cause)
+            : undefined,
+    };
+  }
+  let errorMessage: string;
+  try {
+    errorMessage = typeof error === 'string' ? error : JSON.stringify(error);
+  } catch {
+    errorMessage = String(error);
+  }
+  return { errorType: 'UnknownError', errorMessage };
+}
+
 export function parseInteractiveDispatchRequest(
   content: DaprInvokerCallbackContent,
 ): InteractiveDispatchRequest {
@@ -97,7 +134,7 @@ export async function registerInteractiveDispatchHandler(
       } catch (error) {
         console.warn(JSON.stringify({
           event: 'InteractiveDispatchRejected',
-          errorType: error instanceof Error ? error.name : 'UnknownError',
+          ...describeError(error),
         }));
         return { accepted: false };
       }
@@ -125,7 +162,7 @@ export async function registerInteractiveDispatchHandler(
           threadId: payload.threadId,
           runId: payload.runId,
           dispatchMessageId: payload.dispatchMessageId,
-          errorType: error instanceof Error ? error.name : 'UnknownError',
+          ...describeError(error),
         }));
       });
       return { accepted: true };
@@ -136,22 +173,37 @@ export async function registerInteractiveDispatchHandler(
 
 async function getCallbackToken(): Promise<string> {
   const staticToken = resolveStaticAiRunnerCallbackToken();
+  const audience = process.env.AI_RUNS_CALLBACK_TOKEN_AUDIENCE?.trim();
+
+  // Prefer managed identity whenever an audience is configured. The Apex App
+  // Service rejects static callback tokens in production (unless explicitly
+  // opted in via AI_RUNS_ALLOW_STATIC_CALLBACK_TOKEN), so a stale or
+  // re-provisioned AI_RUNS_RUNNER_CALLBACK_TOKEN must never take precedence
+  // over MI — otherwise the actor's first callback (getBootstrap) 401s and the
+  // turn silently fails. The static token remains a dev/local fallback (no
+  // audience configured, or MI unavailable in this environment).
+  if (audience) {
+    const scope = audience.endsWith('/.default')
+      ? audience
+      : `${audience}/.default`;
+    try {
+      const token = await new DefaultAzureCredential().getToken(scope);
+      if (token?.token) return token.token;
+      if (!staticToken) {
+        throw new Error('Failed to acquire AI runner callback token');
+      }
+      // Empty MI token but a static token exists — fall through to it.
+    } catch (error) {
+      if (!staticToken) throw error;
+      // MI unavailable but a static token exists — fall back to it (dev/local).
+    }
+  }
+
   if (staticToken) return staticToken;
 
-  const audience = process.env.AI_RUNS_CALLBACK_TOKEN_AUDIENCE?.trim();
-  if (!audience) {
-    throw new Error(
-      'AI_RUNS_CALLBACK_TOKEN_AUDIENCE is required for managed-identity callbacks',
-    );
-  }
-  const scope = audience.endsWith('/.default')
-    ? audience
-    : `${audience}/.default`;
-  const token = await new DefaultAzureCredential().getToken(scope);
-  if (!token?.token) {
-    throw new Error('Failed to acquire AI runner callback token');
-  }
-  return token.token;
+  throw new Error(
+    'AI_RUNS_CALLBACK_TOKEN_AUDIENCE is required for managed-identity callbacks',
+  );
 }
 
 export async function main(): Promise<void> {
@@ -233,7 +285,7 @@ if (require.main === module) {
     console.error(
       JSON.stringify({
         event: 'InteractiveActorHostFatal',
-        errorType: error instanceof Error ? error.name : 'UnknownError',
+        ...describeError(error),
       }),
     );
     process.exitCode = 1;

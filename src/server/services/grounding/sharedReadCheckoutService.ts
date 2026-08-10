@@ -228,6 +228,41 @@ export function createSharedReadCheckoutService(
     }
   };
 
+  // Promote a fully-staged tree (marker already inside it) into its final
+  // SHA-keyed destination with a single atomic rename. `destination` therefore
+  // only ever appears as a COMPLETE, marker-bearing tree — it is never observed
+  // half-written and never partially wiped by a racing (or SMB-cache-blinded)
+  // re-materialize. Must be called under the materialize lease.
+  const promoteStaged = async (
+    stagingDir: string,
+    destination: string,
+  ): Promise<'materialized' | 'wait'> => {
+    try {
+      await fsp.rename(stagingDir, destination);
+      return 'materialized';
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // A non-empty destination means a peer already promoted a tree here
+      // (ENOTEMPTY/EEXIST on POSIX + Azure Files SMB, EPERM/EACCES on Windows).
+      if (
+        code === 'ENOTEMPTY'
+        || code === 'EEXIST'
+        || code === 'EPERM'
+        || code === 'EACCES'
+      ) {
+        // A complete peer tree already exists — adopt it, discard our staging.
+        if (fs.existsSync(markerPath(destination))) return 'wait';
+        // Legacy/partial squatter with no marker (pre-atomic code or crash):
+        // safe to replace under the lease we hold, since a marker-less tree is
+        // never handed to a reader.
+        await fsp.rm(destination, { recursive: true, force: true });
+        await fsp.rename(stagingDir, destination);
+        return 'materialized';
+      }
+      throw error;
+    }
+  };
+
   const materialize = async (
     identity: SharedReadCheckoutIdentity,
   ): Promise<SharedReadCheckoutResult> => {
@@ -251,14 +286,30 @@ export function createSharedReadCheckoutService(
       if (fs.existsSync(markerPath(destination))) return 'wait' as const;
       await lease.assertOwned();
       fs.mkdirSync(path.dirname(destination), { recursive: true });
-      await materializeToPath(identity, destination);
-      // Marker last: its presence is the durable "ready" signal.
-      await fsp.writeFile(
-        markerPath(destination),
-        JSON.stringify({ sha: identity.sha, readyAt: new Date(now()).toISOString() }),
-        'utf-8',
-      );
-      return 'materialized' as const;
+
+      // Build into a private temp sibling on the SAME share, drop the marker
+      // INSIDE it, then atomically rename it into place. Staging + rename makes
+      // materialization crash-safe and idempotent across instances: we never
+      // rm/re-clone an existing ready tree (the old destructive loop that wiped
+      // the marker), so a warm tree survives even when this instance's SMB
+      // directory cache transiently hides the marker.
+      const stagingDir = `${destination}.tmp-${process.pid}-${crypto
+        .randomBytes(6)
+        .toString('hex')}`;
+      try {
+        await materializeToPath(identity, stagingDir);
+        // Marker travels atomically with the tree via the rename below.
+        await fsp.writeFile(
+          path.join(stagingDir, SHARED_READ_MARKER),
+          JSON.stringify({ sha: identity.sha, readyAt: new Date(now()).toISOString() }),
+          'utf-8',
+        );
+        return await promoteStaged(stagingDir, destination);
+      } finally {
+        // If we didn't promote (peer won, or error) drop the staged tree.
+        // After a successful rename this is a no-op (ENOENT swallowed by force).
+        await fsp.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+      }
     });
 
     touchLastUsed(destination);

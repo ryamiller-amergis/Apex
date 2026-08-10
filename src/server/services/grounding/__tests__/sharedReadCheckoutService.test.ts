@@ -103,6 +103,41 @@ describe('sharedReadCheckoutService', () => {
     expect(materializeToPath).not.toHaveBeenCalled();
   });
 
+  it('adopts a concurrently-created ready tree instead of clobbering it', async () => {
+    // Simulate the multi-instance / SMB-cache race: the warm-path marker check
+    // misses, so we enter the lease and stage our own tree — but a peer promotes
+    // the real destination (with marker + content) before our rename. The staged
+    // rename must NOT wipe the peer's ready tree; we adopt it and return 'wait'.
+    // Deterministic destination path (resolvePath is pure given dataRoot+identity).
+    const finalDest = makeService(dataRoot).service.resolvePath(IDENTITY);
+    const materializeToPath = jest.fn(async (_id: SharedReadCheckoutIdentity, dest: string) => {
+      await fsp.mkdir(dest, { recursive: true });
+      await fsp.writeFile(path.join(dest, 'README.md'), '# ours', 'utf-8');
+      // Peer finishes the real destination while we were staging.
+      await fsp.mkdir(finalDest, { recursive: true });
+      await fsp.writeFile(path.join(finalDest, 'PEER.md'), '# peer', 'utf-8');
+      await fsp.writeFile(path.join(finalDest, SHARED_READ_MARKER), '{"peer":true}', 'utf-8');
+    });
+    const service = createSharedReadCheckoutService({
+      dataRoot,
+      materializeToPath,
+      withLease: makeLease() as SharedReadCheckoutDependencies['withLease'],
+      listActiveGroundings: async () => [],
+      telemetry: () => undefined,
+    });
+
+    const result = await service.materialize(IDENTITY);
+
+    expect(result.outcome).toBe('wait');
+    expect(result.workspacePath).toBe(finalDest);
+    // The peer's tree is preserved intact — never clobbered by our staged rename.
+    expect(fs.existsSync(path.join(result.workspacePath, 'PEER.md'))).toBe(true);
+    expect(fs.existsSync(path.join(result.workspacePath, SHARED_READ_MARKER))).toBe(true);
+    // Our staging dir is cleaned up (no `.tmp-` siblings left behind).
+    const siblings = fs.readdirSync(path.dirname(result.workspacePath));
+    expect(siblings.some((name) => name.includes('.tmp-'))).toBe(false);
+  });
+
   it('tracks ref counts for retain/releaseRef', () => {
     const { service } = makeService(dataRoot);
     expect(service.getRefCount(IDENTITY)).toBe(0);
