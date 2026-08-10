@@ -37,6 +37,7 @@ const SAFE_PROPERTY_KEYS = new Set([
   'flag',
   'mode',
   'outcome',
+  'phase',
   'project',
   'provider',
   'reason',
@@ -119,6 +120,8 @@ export interface GroundingTelemetry {
     outcome: OperationOutcome
   ): void;
   mirror(context: GroundingTelemetryContext, hit: boolean): void;
+  /** Narrow post-mirror progress markers (activate / shared / per-run). */
+  phase(context: GroundingTelemetryContext, phase: string): void;
   bundle(context: GroundingTelemetryContext, hit: boolean): void;
   localRead(context: GroundingTelemetryContext, durationMs: number): void;
   fallback(context: GroundingTelemetryContext, reason: string): void;
@@ -179,6 +182,9 @@ export function createGroundingTelemetry(
         properties(context, { result: hit ? 'hit' : 'miss' }),
         { hit: hit ? 1 : 0 }
       );
+    },
+    phase(context, phase) {
+      emit('grounding.phase', properties(context, { phase }), { phaseCount: 1 });
     },
     bundle(context, hit) {
       emit(

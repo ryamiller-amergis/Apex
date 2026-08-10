@@ -268,6 +268,7 @@ export function createCallerGroundingService(
         if (cache.mirrorHit !== undefined) {
           telemetry.mirror(telemetryContext(input), cache.mirrorHit);
         }
+        telemetry.phase(telemetryContext(input), 'activate');
         grounding = activatedTarget(
           await dependencies.groundingService.activateGroundings({
             run: input.run,
@@ -279,6 +280,7 @@ export function createCallerGroundingService(
             },
           })
         );
+        telemetry.phase(telemetryContext(input), 'activate-done');
       }
 
       if (!grounding || grounding.groundedSha.trim().length === 0) {
@@ -313,16 +315,24 @@ export function createCallerGroundingService(
               branch: grounding.branch,
               sha: grounding.groundedSha,
             };
+            telemetry.phase(telemetryContext(input), 'shared-materialize');
             const shared =
               await dependencies.sharedReadCheckout.materialize(identity);
             dependencies.sharedReadCheckout.retain(identity);
             sharedIdentity = identity;
             workspacePath = shared.workspacePath;
             if (shared.outcome === 'hit') setMaterializationMode('warm');
+            telemetry.phase(
+              telemetryContext(input),
+              shared.outcome === 'hit'
+                ? 'shared-materialize-hit'
+                : 'shared-materialize-done',
+            );
           } catch {
             // Any failure falls through to the per-run materialization path.
             sharedIdentity = undefined;
             workspacePath = undefined;
+            telemetry.phase(telemetryContext(input), 'shared-materialize-fallback');
           }
           // @feature-flag:shared-readonly-grounding-checkout enabled-end
         }
@@ -330,6 +340,7 @@ export function createCallerGroundingService(
       // @feature-flag:shared-readonly-grounding-checkout end
 
       if (!workspacePath) {
+        telemetry.phase(telemetryContext(input), 'per-run-materialize');
         const materialized = await dependencies.materialize(grounding, input.run);
         if (
           materialized.state !== 'materialized' ||
@@ -338,6 +349,7 @@ export function createCallerGroundingService(
           return fallback(input, 'materialization-unavailable');
         }
         workspacePath = materialized.workspacePath;
+        telemetry.phase(telemetryContext(input), 'per-run-materialize-done');
       }
 
       const callerContext: GroundingCallerContext = {

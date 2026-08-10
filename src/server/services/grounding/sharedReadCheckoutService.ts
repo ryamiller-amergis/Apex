@@ -86,7 +86,10 @@ export interface SharedReadCheckoutDependencies {
   withLease?: <T>(
     cacheKey: string,
     operation: (lease: RepoCacheLeaseContext) => Promise<T>,
+    options?: { waitMs?: number },
   ) => Promise<T>;
+  /** Max time to wait for a peer's shared-checkout lease (default 90s). */
+  leaseWaitMs?: number;
   listActiveGroundings?: () => Promise<RunGrounding[]>;
   telemetry?: typeof trackEvent;
   now?: () => number;
@@ -281,7 +284,13 @@ export function createSharedReadCheckoutService(
     }
 
     const leaseKey = `grounding-shared:${identityDigest(identity)}`;
-    const outcome = await withLease(leaseKey, async (lease) => {
+    // Chat turns fail closed after ~45s on the interactive prep path; waiting
+    // up to 65 minutes for a peer lease just freezes the UI. Prefer a bounded
+    // wait then fall through to per-run materialize (or remote fallback).
+    const leaseWaitMs = dependencies.leaseWaitMs ?? 90_000;
+    const outcome = await withLease(
+      leaseKey,
+      async (lease) => {
       // Someone may have materialized it while we waited for the lease.
       if (fs.existsSync(markerPath(destination))) return 'wait' as const;
       await lease.assertOwned();
@@ -310,7 +319,9 @@ export function createSharedReadCheckoutService(
         // After a successful rename this is a no-op (ENOENT swallowed by force).
         await fsp.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
       }
-    });
+    },
+      { waitMs: leaseWaitMs },
+    );
 
     touchLastUsed(destination);
     safeTelemetry(

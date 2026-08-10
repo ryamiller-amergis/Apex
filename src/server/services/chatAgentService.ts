@@ -45,6 +45,7 @@ import {
 import { enqueue } from './agentRunLifecycleService';
 import {
   INTERACTIVE_LANE,
+  INTERACTIVE_WORKFLOW_FLAG,
   type InteractiveWorkflowClass,
 } from '../../shared/types/interactiveWorkflow';
 import { interactiveWorkflowRouter } from './interactiveWorkflowRouter';
@@ -150,6 +151,13 @@ interface ThreadState {
   isDevSession: boolean;
   /** One reader/profile selection, fixed for the lifetime of the caller. */
   grounding: CallerGroundingSelection | null;
+  /**
+   * In-flight `ensureThreadGrounding` promise. Interactive dispatch may time out
+   * and fall through to in-process while materialize is still running; sharing
+   * this promise prevents a second checkout from blocking behind the first
+   * lease holder.
+   */
+  groundingInFlight: Promise<CallerGroundingSelection> | null;
   /** Binding derived from the exact acquired selection. */
   resolvedGroundingBinding: GroundingBinding | null;
   /** Authoritative continuity classification retained for FEAT-003 routing. */
@@ -2404,6 +2412,7 @@ async function ensureThreadState(threadId: string): Promise<ThreadState | null> 
     isInterviewThread: isInterview,
     isDevSession: thread.kickoff?.mode === 'development',
     grounding: null,
+    groundingInFlight: null,
     resolvedGroundingBinding: null,
     bindingContinuity: null,
     groundingWorkspaceDir: null,
@@ -2525,6 +2534,7 @@ export async function createThread(
     isInterviewThread: false,
     isDevSession: thread.kickoff?.mode === 'development',
     grounding: null,
+    groundingInFlight: null,
     resolvedGroundingBinding: null,
     bindingContinuity: null,
     groundingWorkspaceDir: null,
@@ -3141,6 +3151,7 @@ async function eagerPushDevSession(
 
 export interface StaleRecoveryGroundingState {
   grounding: CallerGroundingSelection | null;
+  groundingInFlight?: Promise<CallerGroundingSelection> | null;
   resolvedGroundingBinding: GroundingBinding | null;
   bindingContinuity: BindingContinuityDecision | null;
   groundingWorkspaceDir: string | null;
@@ -3151,6 +3162,7 @@ export async function releaseGroundingForStaleRecovery(
 ): Promise<void> {
   const grounding = state.grounding;
   state.grounding = null;
+  if ('groundingInFlight' in state) state.groundingInFlight = null;
   state.resolvedGroundingBinding = null;
   state.bindingContinuity = null;
   state.groundingWorkspaceDir = null;
@@ -3161,6 +3173,7 @@ async function ensureThreadGrounding(
   state: ThreadState,
 ): Promise<CallerGroundingSelection> {
   if (state.grounding) return state.grounding;
+  if (state.groundingInFlight) return state.groundingInFlight;
 
   // Development workspaces own their checkout lifecycle, and calendar
   // assistants expose only the restricted calendar MCP. Neither browses repos.
@@ -3172,41 +3185,49 @@ async function ensureThreadGrounding(
     return state.grounding;
   }
 
-  state.grounding = await callerGroundingService.start({
-    caller: resolveGroundingCallerKey(state.thread.kickoff),
-    userId: state.thread.userId,
-    run: {
-      runType: 'chat',
-      runId: state.thread.id,
-      project: state.thread.kickoff.project,
-    },
-    repository: {
-      provider: state.thread.kickoff.skillProvider ?? 'ado',
-      repo: state.thread.kickoff.repo,
-      branch:
-        state.thread.kickoff.skillBranch ??
-        state.thread.kickoff.branch ??
-        'main',
-    },
-    reauthorize: async () => {
-      const current = await getThread(state.thread.id);
-      return current?.userId === state.thread.userId &&
-        current.status !== 'closed';
-    },
-    // Chat callers read the grounding checkout only — every write in this path
-    // targets `thread.workspaceDir` — so they may share a read-only per-SHA
-    // checkout (gated by `shared-readonly-grounding-checkout`).
-    readOnlyShareable: true,
-  });
+  const inFlight = (async (): Promise<CallerGroundingSelection> => {
+    const grounding = await callerGroundingService.start({
+      caller: resolveGroundingCallerKey(state.thread.kickoff),
+      userId: state.thread.userId,
+      run: {
+        runType: 'chat',
+        runId: state.thread.id,
+        project: state.thread.kickoff.project,
+      },
+      repository: {
+        provider: state.thread.kickoff.skillProvider ?? 'ado',
+        repo: state.thread.kickoff.repo,
+        branch:
+          state.thread.kickoff.skillBranch ??
+          state.thread.kickoff.branch ??
+          'main',
+      },
+      reauthorize: async () => {
+        const current = await getThread(state.thread.id);
+        return current?.userId === state.thread.userId &&
+          current.status !== 'closed';
+      },
+      // Chat callers read the grounding checkout only — every write in this path
+      // targets `thread.workspaceDir` — so they may share a read-only per-SHA
+      // checkout (gated by `shared-readonly-grounding-checkout`).
+      readOnlyShareable: true,
+    });
 
-  const continuity = classifyGroundingContinuity(
-    state.thread,
-    state.grounding,
-  );
-  state.resolvedGroundingBinding = continuity.resolvedBinding;
-  state.bindingContinuity = continuity.decision;
+    const continuity = classifyGroundingContinuity(state.thread, grounding);
+    state.grounding = grounding;
+    state.resolvedGroundingBinding = continuity.resolvedBinding;
+    state.bindingContinuity = continuity.decision;
+    return grounding;
+  })();
 
-  return state.grounding;
+  state.groundingInFlight = inFlight;
+  try {
+    return await inFlight;
+  } finally {
+    if (state.groundingInFlight === inFlight) {
+      state.groundingInFlight = null;
+    }
+  }
 }
 
 export async function reevaluateThreadGroundingForRecovery(
@@ -3380,6 +3401,25 @@ async function tryDispatchInteractiveTurn(
       if (!userId || !project) return bypass('missing-user-or-project');
 
       const workflowClass = resolveInteractiveWorkflowClass(state);
+      // Evaluate the flag before grounding. Cold shared-checkout materialize can
+      // exceed the dispatch attempt timeout; paying that cost when the flag is
+      // off (or evaluation fails) only delays the inevitable in-process path.
+      markStage('flag');
+      let interactiveEnabled = false;
+      try {
+        interactiveEnabled = await isFeatureEnabled(INTERACTIVE_WORKFLOW_FLAG, {
+          userId,
+          project,
+          caller: workflowClass,
+        });
+      } catch {
+        return bypass('flag-evaluation-error');
+      }
+      if (timedOut) return bypass('timeout-abort');
+      if (!interactiveEnabled) {
+        return bypass('flag-disabled');
+      }
+
       markStage('ground-turn');
       const grounding = await ensureThreadGrounding(state);
       if (timedOut) return bypass('timeout-abort');
@@ -5143,6 +5183,7 @@ export async function closeThread(threadId: string): Promise<void> {
   }
   const grounding = state.grounding;
   state.grounding = null;
+  state.groundingInFlight = null;
   state.groundingWorkspaceDir = null;
   await grounding?.release().catch(() => undefined);
 
@@ -5193,6 +5234,7 @@ export async function permanentlyDeleteThread(threadId: string): Promise<void> {
     }
     const grounding = state.grounding;
     state.grounding = null;
+    state.groundingInFlight = null;
     state.groundingWorkspaceDir = null;
     await grounding?.release().catch(() => undefined);
 
