@@ -120,6 +120,12 @@ jest.mock('../services/interactiveWorkflowRouter', () => ({
   },
 }));
 
+const mockIsFeatureEnabled = jest.fn().mockResolvedValue(false);
+jest.mock('../services/featureFlagService', () => ({
+  isFeatureEnabled: (...args: unknown[]) => mockIsFeatureEnabled(...args),
+  isLifecycleBindingEnabledForCaller: jest.fn().mockResolvedValue(false),
+}));
+
 const mockCallerGroundingStart = jest.fn();
 const mockCallerGroundingSelectionToBinding = jest.fn();
 const mockEvaluateBindingContinuity = jest.fn();
@@ -1243,6 +1249,7 @@ describe('document assistant MCP wiring', () => {
     };
     const originalFetch = global.fetch;
     process.env.AI_RUNS_INTERACTIVE_DISPATCH_URL = 'https://interactive.test';
+    mockIsFeatureEnabled.mockImplementation(async (key: string) => key === 'ai-runs-interactive');
     mockPgInsertMessage.mockClear();
     mockPgUpsertThread.mockClear();
     mockEnqueueAgentRun.mockResolvedValue({ runId: 'interactive-run-1' });
@@ -1327,6 +1334,8 @@ describe('document assistant MCP wiring', () => {
     } finally {
       global.fetch = originalFetch;
       delete process.env.AI_RUNS_INTERACTIVE_DISPATCH_URL;
+      mockIsFeatureEnabled.mockReset();
+      mockIsFeatureEnabled.mockResolvedValue(false);
       mockInteractiveWorkflowRoute.mockReset();
       mockEnqueueAgentRun.mockReset();
       await closeThread(thread.id);
