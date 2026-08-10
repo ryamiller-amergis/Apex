@@ -73,6 +73,14 @@ resource "azapi_resource" "ai_runs_interactive_redis" {
 
   response_export_values = ["properties.hostName"]
   tags                   = merge(var.tags, { Environment = var.environment, Workload = "ai-runs-interactive" })
+
+  # The backplane holds no durable data (durability rides Postgres
+  # agent_run_events), but the clustering policy is immutable — switching it
+  # replaces the database. Provision the replacement BEFORE destroying the old
+  # instance so the cutover has no downtime (requires a distinct redis name).
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "azapi_resource" "ai_runs_interactive_redis_database" {
@@ -86,11 +94,15 @@ resource "azapi_resource" "ai_runs_interactive_redis_database" {
     properties = {
       accessKeysAuthentication = "Enabled"
       clientProtocol           = "Encrypted"
-      clusteringPolicy         = "OSSCluster"
+      clusteringPolicy         = var.ai_runs_interactive_managed_redis_clustering_policy
       evictionPolicy           = "VolatileLRU"
       modules                  = []
       port                     = 10000
     }
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 }
 

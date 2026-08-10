@@ -689,6 +689,17 @@ variable "ai_runs_interactive_managed_redis_sku" {
   default     = "Balanced_B0"
 }
 
+variable "ai_runs_interactive_managed_redis_clustering_policy" {
+  description = "Azure Managed Redis clustering policy. Defaults to EnterpriseCluster: a single logical endpoint compatible with standalone Redis clients — required so the ioredis live-bus pub/sub fans out and Dapr's non-cluster clients (actor state store) avoid MOVED/CROSSSLOT. OSSCluster requires cluster-aware clients and silently breaks classic pub/sub fan-out across shards (do not use unless every consumer speaks the OSS Cluster protocol). NoCluster is single-shard only. Immutable on an existing database, so switching it replaces the Managed Redis (create_before_destroy avoids downtime; the backplane holds no durable data — durability is in Postgres agent_run_events)."
+  type        = string
+  default     = "EnterpriseCluster"
+
+  validation {
+    condition     = contains(["OSSCluster", "EnterpriseCluster", "NoCluster"], var.ai_runs_interactive_managed_redis_clustering_policy)
+    error_message = "ai_runs_interactive_managed_redis_clustering_policy must be OSSCluster, EnterpriseCluster, or NoCluster."
+  }
+}
+
 variable "ai_runs_interactive_managed_redis_high_availability" {
   description = "Enable Azure Managed Redis high availability. Recommended for production."
   type        = bool

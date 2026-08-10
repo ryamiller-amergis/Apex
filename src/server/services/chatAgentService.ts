@@ -48,6 +48,7 @@ import {
   type InteractiveWorkflowClass,
 } from '../../shared/types/interactiveWorkflow';
 import { interactiveWorkflowRouter } from './interactiveWorkflowRouter';
+import { interactiveLiveBus } from './interactiveLiveBus';
 import { isExternalRunAbortEvent } from './agentRunAbort';
 import { syncPrdContent } from './prdService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
@@ -2171,6 +2172,33 @@ async function persistMeaningfulProgress(
     .catch(() => {});
 }
 
+/**
+ * FEAT-007 bridge — mirror an in-process run-event envelope onto the interactive
+ * live bus (Redis) so a WebSocket gateway on ANY App Service instance relays
+ * turns that execute in-process (not just turns dispatched to the ACA actor).
+ *
+ * Why this is needed: the gateway's live fan-out subscribes to the in-memory
+ * owner stream (same-instance only) and the Redis live bus (actor tier only).
+ * In-process turns already fan out over in-memory + Postgres `pg_notify`
+ * (which the SSE route consumes cross-instance) but never over Redis, so a WS
+ * client whose socket lands on a different instance than the turn never sees
+ * live tokens. Publishing the same envelope here closes that gap.
+ *
+ * Safe by construction: `interactiveLiveBus.publish` is a no-op when Redis is
+ * unconfigured (dev/local), so in-process behavior is byte-for-byte unchanged
+ * there. The gateway de-dupes by `eventId` across its in-memory, Redis, and
+ * replay sources, so a same-instance socket never receives a duplicate. Fan-out
+ * is best effort; durability continues to ride Postgres notify + replay.
+ */
+function publishInteractiveLive(
+  threadId: string,
+  envelope: AgentRunEventEnvelope,
+): void {
+  void interactiveLiveBus.publish(threadId, envelope).catch(() => {
+    // Ephemeral fan-out is best effort; durability rides Postgres notify + replay.
+  });
+}
+
 async function publishRunEvent(
   state: ThreadState,
   runId: string,
@@ -2198,6 +2226,7 @@ async function publishRunEventEnvelope(
   const persist = shouldPersistRunEvent(event);
   if (!persist) {
     broadcast(state, event, envelope);
+    publishInteractiveLive(state.thread.id, envelope);
     void notifyRunEvent(envelope, { persist: false }).catch((err) => {
       console.error(`[chat] Failed to fan out run event ${envelope.eventId}:`, (err as Error).message);
     });
@@ -2211,6 +2240,7 @@ async function publishRunEventEnvelope(
   }
   await persistMeaningfulProgress(runId, envelope);
   broadcast(state, event, envelope);
+  publishInteractiveLive(state.thread.id, envelope);
 }
 
 async function finalizeOwnerTerminal(
@@ -2241,6 +2271,7 @@ async function finalizeOwnerTerminal(
   if (won) {
     for (const { event, envelope } of finalizedEvents) {
       broadcast(state, event, envelope);
+      publishInteractiveLive(state.thread.id, envelope);
     }
   }
   return won;
@@ -2261,6 +2292,7 @@ async function publishRunCancellation(threadId: string, runId: string): Promise<
     event: { type: 'cancel' },
   };
   await notifyRunEvent(envelope, { persist: true });
+  publishInteractiveLive(threadId, envelope);
 }
 
 // ── Idle cleanup ──────────────────────────────────────────────────────────────

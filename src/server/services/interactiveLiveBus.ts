@@ -14,6 +14,15 @@
  * resolves and `subscribe` returns a no-op unsubscribe, so callers fall back to
  * Postgres replay only. This module never logs prompt/snapshot/secret (BR-019);
  * only sanitized run-event envelopes cross the backplane.
+ *
+ * Transport: a standalone `ioredis` client. This depends on the Managed Redis
+ * database using a single-logical-endpoint clustering policy (EnterpriseCluster
+ * / NoCluster — see infra `ai_runs_interactive_managed_redis_clustering_policy`),
+ * NOT OSS Cluster: an OSS-Cluster endpoint would not fan out pub/sub across the
+ * proxy/shards for a standalone client, silently degrading the live token stream
+ * to the durable replay/poll path. Emits sanitized connection-lifecycle logs
+ * (`InteractiveLiveBus{Publisher,Subscriber}{Ready,Reconnecting,Error}` and
+ * `InteractiveLiveBusSubscribed`) so cutovers can be validated from logs.
  */
 import Redis from 'ioredis';
 import type { AgentRunEventEnvelope } from '../../shared/types/chat';
@@ -136,6 +145,12 @@ export function createInteractiveLiveBus(
       publisher.on('error', (err: unknown) =>
         log({ event: 'InteractiveLiveBusPublisherError', errorType: errName(err) }),
       );
+      publisher.on('ready', () =>
+        log({ event: 'InteractiveLiveBusPublisherReady' }),
+      );
+      publisher.on('reconnecting', () =>
+        log({ event: 'InteractiveLiveBusPublisherReconnecting' }),
+      );
     }
     return publisher;
   };
@@ -146,6 +161,12 @@ export function createInteractiveLiveBus(
       subscriber = createClient('sub', config);
       subscriber.on('error', (err: unknown) =>
         log({ event: 'InteractiveLiveBusSubscriberError', errorType: errName(err) }),
+      );
+      subscriber.on('ready', () =>
+        log({ event: 'InteractiveLiveBusSubscriberReady' }),
+      );
+      subscriber.on('reconnecting', () =>
+        log({ event: 'InteractiveLiveBusSubscriberReconnecting' }),
       );
       subscriber.on('message', (channel: string, message: string) => {
         const subs = subscribers.get(channel);
@@ -190,9 +211,12 @@ export function createInteractiveLiveBus(
         subs = new Set();
         subscribers.set(channel, subs);
         const client = ensureSubscriber();
-        client?.subscribe(channel).catch((err: unknown) =>
-          log({ event: 'InteractiveLiveBusSubscribeFailed', errorType: errName(err) }),
-        );
+        client
+          ?.subscribe(channel)
+          .then(() => log({ event: 'InteractiveLiveBusSubscribed', channel }))
+          .catch((err: unknown) =>
+            log({ event: 'InteractiveLiveBusSubscribeFailed', errorType: errName(err) }),
+          );
       }
       subs.add(callback);
 
