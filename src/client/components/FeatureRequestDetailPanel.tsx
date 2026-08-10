@@ -115,7 +115,7 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
   isReanalyzing,
 }) => {
   const navigate = useNavigate();
-  const { can, isSuperAdmin, isInAnyGroup, permissionsLoaded } = useAppShell();
+  const { can, isSuperAdmin, isInAnyGroup, permissionsLoaded, selectedProject } = useAppShell();
   const canKickOff = permissionsLoaded
     && can('interviews:manage')
     && isInAnyGroup(['BA', 'Manager', 'Product-Owner']);
@@ -338,6 +338,7 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
       {showGenerateWizard && (
         <ApexGenerateWorkItemsWizard
           featureRequest={fr}
+          project={selectedProject || fr.sourceProject || 'Apex'}
           onClose={() => setShowGenerateWizard(false)}
         />
       )}

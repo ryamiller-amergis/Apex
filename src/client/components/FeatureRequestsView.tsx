@@ -153,6 +153,7 @@ export const FeatureRequestsView: React.FC = () => {
   const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
   const dragIndexRef = useRef<number | null>(null);
   const tabParam = searchParams.get('tab');
+  const deepLinkId = searchParams.get('id');
   const activeType: WorkItemType = WORK_ITEM_TYPES.includes(
     tabParam as WorkItemType,
   )
@@ -174,6 +175,23 @@ export const FeatureRequestsView: React.FC = () => {
   useEffect(() => {
     setSelectedId(null);
   }, [activeType]);
+
+  // Deep link from Work Board Source: /feature-requests?id=<frId>
+  useEffect(() => {
+    if (!deepLinkId || !requests?.length) return;
+    const match = requests.find((r) => r.id === deepLinkId);
+    if (!match) return;
+    if (match.type !== activeType) {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.set('tab', match.type);
+        next.set('id', match.id);
+        return next;
+      }, { replace: true });
+      return;
+    }
+    setSelectedId(match.id);
+  }, [deepLinkId, requests, activeType, setSearchParams]);
 
   const counts = useMemo(
     () =>

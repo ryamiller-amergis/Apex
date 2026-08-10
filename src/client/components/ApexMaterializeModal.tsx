@@ -1,14 +1,22 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { ApexWorkItemType } from '../../shared/types/apexWorkItem';
-import { useApexWorkItemOwners, useMaterializeFromPrd, useMaterializedItemIds } from '../hooks/useApexWorkItems';
+import type {
+  ApexWorkItemType,
+  MaterializePlanLeaf,
+  MaterializePreviewResult,
+} from '../../shared/types/apexWorkItem';
+import {
+  useApexWorkItemOwners,
+  useMaterializeFromPrd,
+  usePreviewMaterializeFromPrd,
+} from '../hooks/useApexWorkItems';
 import styles from './ApexMaterializeModal.module.css';
 
 interface BacklogLeafItem {
   id: string;
   title: string;
   description?: string;
-  type: 'PBI' | 'TBI';
+  type: 'PBI' | 'TBI' | 'Bug';
   acceptanceCriteria?: string[];
 }
 
@@ -25,6 +33,7 @@ interface BacklogEpic {
 }
 
 export interface ApexMaterializeModalProps {
+  project: string;
   prdId: string;
   prdTitle: string;
   backlog: { epics: BacklogEpic[] };
@@ -32,42 +41,105 @@ export interface ApexMaterializeModalProps {
 }
 
 type Phase = 'select' | 'creating' | 'success';
+type LinkChoice = string | 'create' | 'skip';
+
+function actionLabel(action: MaterializePlanLeaf['action']): string {
+  switch (action) {
+    case 'skip':
+      return 'On board';
+    case 'link':
+      return 'Will link';
+    case 'choose':
+      return 'Choose';
+    case 'create':
+      return 'Will create';
+    default: {
+      const _exhaustive: never = action;
+      return _exhaustive;
+    }
+  }
+}
 
 export const ApexMaterializeModal: React.FC<ApexMaterializeModalProps> = ({
+  project,
   prdId,
   prdTitle,
   backlog,
   onClose,
 }) => {
   const navigate = useNavigate();
-  const { data: owners = [] } = useApexWorkItemOwners();
-  const { data: materializedData } = useMaterializedItemIds(prdId);
-  const materializeMutation = useMaterializeFromPrd();
+  const { data: owners = [] } = useApexWorkItemOwners(project);
+  const previewMutation = usePreviewMaterializeFromPrd(project);
+  const materializeMutation = useMaterializeFromPrd(project);
 
-  const alreadyMaterialized = useMemo(
-    () => new Set(materializedData?.backlogItemIds ?? []),
-    [materializedData],
+  const allLeaves = useMemo(
+    () =>
+      backlog.epics.flatMap((e) =>
+        e.features.flatMap((f) =>
+          f.items.map((i) => ({
+            ...i,
+            epicId: e.id,
+            epicTitle: e.title,
+            featureId: f.id,
+            featureTitle: f.title,
+          })),
+        ),
+      ),
+    [backlog],
   );
 
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(allLeaves.map((i) => i.id)));
   const [ownerId, setOwnerId] = useState<string>('');
   const [phase, setPhase] = useState<Phase>('select');
-  const [createdCount, setCreatedCount] = useState(0);
+  const [preview, setPreview] = useState<MaterializePreviewResult | null>(null);
+  const [linkChoices, setLinkChoices] = useState<Record<string, LinkChoice>>({});
+  const [resultSummary, setResultSummary] = useState({ created: 0, linked: 0, skipped: 0 });
+  const [error, setError] = useState<string | null>(null);
 
-  // Default to first owner
   useEffect(() => {
     if (owners.length > 0 && !ownerId) setOwnerId(owners[0].oid);
   }, [owners, ownerId]);
 
-  // Pre-select all non-materialized leaves
   useEffect(() => {
-    const allNew = backlog.epics
-      .flatMap((e) => e.features)
-      .flatMap((f) => f.items)
-      .filter((i) => !alreadyMaterialized.has(i.id))
-      .map((i) => i.id);
-    setSelected(new Set(allNew));
-  }, [backlog, alreadyMaterialized]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const plan = await previewMutation.mutateAsync({
+          prdId,
+          items: allLeaves.map((i) => ({
+            id: i.id,
+            title: i.title,
+            description: i.description ?? '',
+            type: i.type,
+            acceptanceCriteria: i.acceptanceCriteria ?? [],
+            epicId: i.epicId,
+            epicTitle: i.epicTitle,
+            featureId: i.featureId,
+            featureTitle: i.featureTitle,
+          })),
+        });
+        if (cancelled) return;
+        setPreview(plan);
+        const defaults: Record<string, LinkChoice> = {};
+        for (const leaf of plan.leaves) {
+          if (leaf.action === 'skip') defaults[leaf.backlogItemId] = 'skip';
+          else if (leaf.action === 'link' && leaf.suggestedWorkItemId) {
+            defaults[leaf.backlogItemId] = leaf.suggestedWorkItemId;
+          } else if (leaf.action === 'create') defaults[leaf.backlogItemId] = 'create';
+          else if (leaf.action === 'choose' && leaf.suggestedWorkItemId) {
+            defaults[leaf.backlogItemId] = leaf.suggestedWorkItemId;
+          } else defaults[leaf.backlogItemId] = 'create';
+        }
+        setLinkChoices(defaults);
+        setSelected(new Set(plan.leaves.filter((l) => l.action !== 'skip').map((l) => l.backlogItemId)));
+      } catch (e) {
+        if (!cancelled) setError((e as Error).message);
+      }
+    })();
+    return () => { cancelled = true; };
+    // Preview once when modal opens with this backlog.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prdId, project]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); },
@@ -78,57 +150,42 @@ export const ApexMaterializeModal: React.FC<ApexMaterializeModalProps> = ({
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [handleKeyDown]);
 
+  const planById = useMemo(() => {
+    const map = new Map<string, MaterializePlanLeaf>();
+    preview?.leaves.forEach((l) => map.set(l.backlogItemId, l));
+    return map;
+  }, [preview]);
+
   const toggleItem = (id: string) => {
+    const plan = planById.get(id);
+    if (plan?.action === 'skip') return;
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  };
-
-  const toggleEpic = (epic: BacklogEpic) => {
-    const leafIds = epic.features.flatMap((f) => f.items).filter((i) => !alreadyMaterialized.has(i.id)).map((i) => i.id);
-    const allSelected = leafIds.every((id) => selected.has(id));
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (allSelected) leafIds.forEach((id) => next.delete(id));
-      else leafIds.forEach((id) => next.add(id));
-      return next;
-    });
-  };
-
-  const toggleFeature = (feature: BacklogFeature) => {
-    const leafIds = feature.items.filter((i) => !alreadyMaterialized.has(i.id)).map((i) => i.id);
-    const allSelected = leafIds.every((id) => selected.has(id));
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (allSelected) leafIds.forEach((id) => next.delete(id));
-      else leafIds.forEach((id) => next.add(id));
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
 
   const selectedItems = useMemo(
+    () => allLeaves.filter((i) => selected.has(i.id)),
+    [allLeaves, selected],
+  );
+
+  const unresolvedChoose = useMemo(
     () =>
-      backlog.epics
-        .flatMap((e) =>
-          e.features.flatMap((f) =>
-            f.items.map((i) => ({
-              ...i,
-              epicId: e.id,
-              epicTitle: e.title,
-              featureId: f.id,
-              featureTitle: f.title,
-            })),
-          ),
-        )
-        .filter((i) => selected.has(i.id)),
-    [backlog, selected],
+      selectedItems.some((i) => {
+        const plan = planById.get(i.id);
+        const choice = linkChoices[i.id];
+        return plan?.action === 'choose' && (choice == null || choice === '');
+      }),
+    [selectedItems, planById, linkChoices],
   );
 
   const handleCreate = async () => {
-    if (!selectedItems.length || !ownerId) return;
+    if (!selectedItems.length || !ownerId || unresolvedChoose) return;
     setPhase('creating');
+    setError(null);
     try {
       const items = selectedItems.map((i) => ({
         id: i.id,
@@ -141,24 +198,39 @@ export const ApexMaterializeModal: React.FC<ApexMaterializeModalProps> = ({
         featureId: i.featureId,
         featureTitle: i.featureTitle,
       }));
-      await materializeMutation.mutateAsync({ prdId, ownerId, items } as Parameters<typeof materializeMutation.mutateAsync>[0]);
-      setCreatedCount(items.length);
+      const choices: Record<string, LinkChoice> = {};
+      for (const i of selectedItems) {
+        choices[i.id] = linkChoices[i.id] ?? 'create';
+      }
+      const result = await materializeMutation.mutateAsync({
+        prdId,
+        ownerId,
+        items,
+        linkChoices: choices,
+      });
+      setResultSummary({
+        created: result.created.length,
+        linked: result.linked.length,
+        skipped: result.skipped,
+      });
       setPhase('success');
-    } catch {
+    } catch (e) {
+      setError((e as Error).message);
       setPhase('select');
     }
   };
 
   return (
     <div className={styles.overlay} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className={styles.modal} role="dialog" aria-modal aria-label="Create Work Items">
-
-        {/* Header */}
+      <div className={styles.modal} role="dialog" aria-modal aria-label="Create Work Items" style={{ maxWidth: 820 }}>
         <div className={styles.header}>
           <div className={styles.headerText}>
             <h2 className={styles.title}>Create Work Items</h2>
             <p className={styles.subtitle}>
-              Select backlog items from <em>{prdTitle}</em> to materialize as Apex Work Board cards.
+              Sync <em>{prdTitle}</em> with the Work Board — link existing Feature Request cards or create new ones.
+              {preview?.featureRequestId
+                ? ' Linked Feature Request detected.'
+                : ' No Feature Request linked to this PRD interview.'}
             </p>
           </div>
           <button className={styles.closeBtn} onClick={onClose} aria-label="Close">
@@ -168,9 +240,15 @@ export const ApexMaterializeModal: React.FC<ApexMaterializeModalProps> = ({
           </button>
         </div>
 
+        {error && (
+          <div style={{ padding: '8px 24px', color: 'var(--danger, #b91c1c)', fontSize: '0.8rem' }}>
+            {error}
+          </div>
+        )}
+
         {phase === 'creating' && (
           <div className={styles.progressState}>
-            <span>Creating {selectedItems.length} work items…</span>
+            <span>Syncing {selectedItems.length} work items…</span>
             <div className={styles.progressBar}><div className={styles.progressBarFill} /></div>
           </div>
         )}
@@ -182,115 +260,138 @@ export const ApexMaterializeModal: React.FC<ApexMaterializeModalProps> = ({
                 <path d="M4 11l5 5 9-9" />
               </svg>
             </div>
-            <div className={styles.successCount}>{createdCount}</div>
-            <div className={styles.successText}>work items created on the board</div>
+            <div className={styles.successText}>
+              {resultSummary.created} created · {resultSummary.linked} linked · {resultSummary.skipped} skipped
+            </div>
           </div>
         )}
 
         {phase === 'select' && (
           <>
-            {/* Checklist + preview */}
             <div className={styles.body}>
-              {/* Left: tree */}
               <div className={styles.left}>
-                {backlog.epics.map((epic) => {
-                  const epicLeaves = epic.features.flatMap((f) => f.items).filter((i) => !alreadyMaterialized.has(i.id));
-                  const epicAllChecked = epicLeaves.length > 0 && epicLeaves.every((i) => selected.has(i.id));
-                  const epicIndeterminate = epicLeaves.some((i) => selected.has(i.id)) && !epicAllChecked;
-                  return (
-                    <div key={epic.id} className={styles.epicGroup}>
-                      <div className={styles.epicHeading}>
-                        <input
-                          type="checkbox"
-                          className={styles.epicCheckbox}
-                          checked={epicAllChecked}
-                          ref={(el) => { if (el) el.indeterminate = epicIndeterminate; }}
-                          onChange={() => toggleEpic(epic)}
-                          aria-label={`Select all items in ${epic.title}`}
-                        />
-                        {epic.title}
-                      </div>
-                      {epic.features.map((feature) => {
-                        const fLeaves = feature.items.filter((i) => !alreadyMaterialized.has(i.id));
-                        const fAllChecked = fLeaves.length > 0 && fLeaves.every((i) => selected.has(i.id));
-                        const fIndeterminate = fLeaves.some((i) => selected.has(i.id)) && !fAllChecked;
-                        return (
-                          <div key={feature.id} className={styles.featureGroup}>
-                            <div className={styles.featureHeading}>
-                              <input
-                                type="checkbox"
-                                className={styles.epicCheckbox}
-                                checked={fAllChecked}
-                                ref={(el) => { if (el) el.indeterminate = fIndeterminate; }}
-                                onChange={() => toggleFeature(feature)}
-                                aria-label={`Select all items in ${feature.title}`}
-                              />
-                              {feature.title}
-                            </div>
-                            <div className={styles.itemsList}>
-                              {feature.items.map((item) => {
-                                const done = alreadyMaterialized.has(item.id);
-                                return (
-                                  <div
-                                    key={item.id}
-                                    className={styles.itemRow}
-                                    onClick={() => !done && toggleItem(item.id)}
+                {backlog.epics.map((epic) => (
+                  <div key={epic.id} className={styles.epicGroup}>
+                    <div className={styles.epicHeading}>{epic.title}</div>
+                    {epic.features.map((feature) => (
+                      <div key={feature.id} className={styles.featureGroup}>
+                        <div className={styles.featureHeading}>{feature.title}</div>
+                        <div className={styles.itemsList}>
+                          {feature.items.map((item) => {
+                            const plan = planById.get(item.id);
+                            const done = plan?.action === 'skip';
+                            const choice = linkChoices[item.id];
+                            return (
+                              <div
+                                key={item.id}
+                                className={styles.itemRow}
+                                style={{ flexWrap: 'wrap', gap: 6 }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  className={styles.itemCheckbox}
+                                  checked={done || selected.has(item.id)}
+                                  disabled={done}
+                                  onChange={() => toggleItem(item.id)}
+                                  aria-label={item.title}
+                                />
+                                <span
+                                  className={`${styles.itemType} ${
+                                    item.type === 'PBI' ? styles.itemTypePBI
+                                      : item.type === 'TBI' ? styles.itemTypeTBI
+                                        : styles.itemTypeBug
+                                  }`}
+                                >
+                                  {item.type}
+                                </span>
+                                <span className={styles.itemTitle} style={{ opacity: done ? 0.5 : 1, flex: 1 }}>
+                                  {item.title}
+                                </span>
+                                {plan && (
+                                  <span className={styles.itemDoneBadge}>{actionLabel(plan.action)}</span>
+                                )}
+                                {!done && selected.has(item.id) && plan && (plan.action === 'choose' || plan.action === 'link' || plan.candidates.length > 0) && (
+                                  <select
+                                    className={styles.ownerSelect}
+                                    style={{ width: '100%', marginLeft: 28 }}
+                                    value={typeof choice === 'string' ? choice : 'create'}
+                                    onChange={(e) =>
+                                      setLinkChoices((prev) => ({
+                                        ...prev,
+                                        [item.id]: e.target.value as LinkChoice,
+                                      }))
+                                    }
+                                    aria-label={`Reconcile action for ${item.title}`}
                                   >
-                                    <input
-                                      type="checkbox"
-                                      className={styles.itemCheckbox}
-                                      checked={done || selected.has(item.id)}
-                                      disabled={done}
-                                      onChange={() => !done && toggleItem(item.id)}
-                                      aria-label={item.title}
-                                    />
-                                    <span
-                                      className={`${styles.itemType} ${
-                                        item.type === 'PBI' ? styles.itemTypePBI
-                                          : item.type === 'TBI' ? styles.itemTypeTBI
-                                          : styles.itemTypeBug
-                                      }`}
-                                    >
-                                      {item.type}
-                                    </span>
-                                    <span className={styles.itemTitle} style={{ opacity: done ? 0.5 : 1 }}>
-                                      {item.title}
-                                    </span>
-                                    {done && <span className={styles.itemDoneBadge}>On board</span>}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })}
+                                    <option value="create">Create new card</option>
+                                    <option value="skip">Skip</option>
+                                    {plan.candidates.map((c) => (
+                                      <option key={c.id} value={c.id}>
+                                        Link APX-{c.itemNumber}: {c.title} ({c.status})
+                                      </option>
+                                    ))}
+                                  </select>
+                                )}
+                                {!done && selected.has(item.id) && plan?.action === 'create' && (
+                                  <select
+                                    className={styles.ownerSelect}
+                                    style={{ width: '100%', marginLeft: 28 }}
+                                    value={choice ?? 'create'}
+                                    onChange={(e) =>
+                                      setLinkChoices((prev) => ({
+                                        ...prev,
+                                        [item.id]: e.target.value as LinkChoice,
+                                      }))
+                                    }
+                                    aria-label={`Action for ${item.title}`}
+                                  >
+                                    <option value="create">Create new card</option>
+                                    <option value="skip">Skip</option>
+                                  </select>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ))}
               </div>
 
-              {/* Right: preview */}
               <div className={styles.right}>
-                <div className={styles.previewLabel}>Preview ({selectedItems.length})</div>
+                <div className={styles.previewLabel}>
+                  Plan
+                  {preview && (
+                    <> · {preview.counts.link} link · {preview.counts.create} create · {preview.counts.choose} choose · {preview.counts.skip} on board</>
+                  )}
+                </div>
                 {selectedItems.length === 0 ? (
-                  <div className={styles.previewEmpty}>Select items to preview</div>
+                  <div className={styles.previewEmpty}>Select items to sync</div>
                 ) : (
-                  selectedItems.slice(0, 20).map((i) => (
-                    <div key={i.id} className={styles.previewCard}>
-                      <div className={styles.previewCardType}>{i.type}</div>
-                      <div className={styles.previewCardTitle}>{i.title}</div>
-                    </div>
-                  ))
-                )}
-                {selectedItems.length > 20 && (
-                  <div className={styles.previewEmpty}>…and {selectedItems.length - 20} more</div>
+                  selectedItems.slice(0, 24).map((i) => {
+                    const plan = planById.get(i.id);
+                    const choice = linkChoices[i.id];
+                    let label = 'Create';
+                    if (choice === 'skip') label = 'Skip';
+                    else if (choice && choice !== 'create') {
+                      const c = plan?.candidates.find((x) => x.id === choice);
+                      label = c ? `Link APX-${c.itemNumber}` : 'Link';
+                    }
+                    return (
+                      <div key={i.id} className={styles.previewCard}>
+                        <div className={styles.previewCardType}>{i.type}</div>
+                        <div className={styles.previewCardTitle}>{i.title}</div>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 4 }}>{label}</div>
+                      </div>
+                    );
+                  })
                 )}
               </div>
             </div>
 
-            {/* Owner row */}
             <div className={styles.ownerRow}>
-              <span className={styles.ownerLabel}>Assign to</span>
+              <span className={styles.ownerLabel}>Assign new cards to</span>
               <select
                 className={styles.ownerSelect}
                 value={ownerId}
@@ -302,18 +403,18 @@ export const ApexMaterializeModal: React.FC<ApexMaterializeModalProps> = ({
               </select>
             </div>
 
-            {/* Footer */}
             <div className={styles.footer}>
               <span className={styles.footerCount}>
-                {selected.size} items selected
+                {selected.size} selected
+                {unresolvedChoose ? ' · resolve Choose rows' : ''}
               </span>
               <button className={styles.btnSecondary} onClick={onClose}>Cancel</button>
               <button
                 className={styles.btnPrimary}
-                disabled={selected.size === 0 || !ownerId}
+                disabled={selected.size === 0 || !ownerId || unresolvedChoose || previewMutation.isPending}
                 onClick={handleCreate}
               >
-                Create {selected.size > 0 ? selected.size : ''} Work Items
+                Sync to Work Board
               </button>
             </div>
           </>
@@ -328,7 +429,6 @@ export const ApexMaterializeModal: React.FC<ApexMaterializeModalProps> = ({
             </button>
           </div>
         )}
-
       </div>
     </div>
   );

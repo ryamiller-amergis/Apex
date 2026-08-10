@@ -21,6 +21,15 @@ jest.mock('../../hooks/useApexWorkItems', () => ({
   useApexWorkItemOwners: jest.fn(),
   useApexWorkItemFacets: jest.fn(),
   useMoveApexWorkItem: jest.fn(),
+  useCreateApexRelease: jest.fn(),
+  useBulkUpdateApexWorkItems: jest.fn(),
+  useApexWorkBoardStream: jest.fn(),
+  useImportApexWorkItemsFromAdo: jest.fn(),
+  usePreviewMaterializeFromPrd: jest.fn(),
+}));
+
+jest.mock('../../hooks/useAppShell', () => ({
+  useAppShell: () => ({ can: () => false }),
 }));
 
 jest.mock('../ApexWorkItemDetailPanel', () => ({
@@ -30,17 +39,29 @@ jest.mock('../ApexWorkItemDetailPanel', () => ({
     ),
 }));
 
+jest.mock('../WorkBoardHelpCallout', () => ({
+  WorkBoardHelpCallout: () => null,
+}));
+
 import {
   useApexWorkItems,
   useApexWorkItemOwners,
   useApexWorkItemFacets,
   useMoveApexWorkItem,
+  useCreateApexRelease,
+  useBulkUpdateApexWorkItems,
+  useApexWorkBoardStream,
+  useImportApexWorkItemsFromAdo,
 } from '../../hooks/useApexWorkItems';
 
 const mockUseItems = useApexWorkItems as jest.Mock;
 const mockUseOwners = useApexWorkItemOwners as jest.Mock;
 const mockUseFacets = useApexWorkItemFacets as jest.Mock;
 const mockUseMove = useMoveApexWorkItem as jest.Mock;
+const mockUseCreateRelease = useCreateApexRelease as jest.Mock;
+const mockUseBulk = useBulkUpdateApexWorkItems as jest.Mock;
+const mockUseStream = useApexWorkBoardStream as jest.Mock;
+const mockUseImport = useImportApexWorkItemsFromAdo as jest.Mock;
 
 const MOCK_ITEMS = [
   {
@@ -49,8 +70,9 @@ const MOCK_ITEMS = [
     owner: { oid: 'u1', displayName: 'Aneesh', email: 'a@a.com' },
     collaborators: [], acceptanceCriteria: [],
     branch: null, prUrl: null, position: 0, sourceType: 'standalone',
-    prdId: null, backlogItemId: null, featureRequestId: null,
+    prdId: null, backlogItemId: null, featureRequestId: null, adoWorkItemId: null,
     epicId: null, epicTitle: null, featureId: null, featureTitle: null,
+    designDocId: null, designPrototypeId: null,
     createdBy: 'u1', updatedBy: 'u1', createdAt: '2026-07-28T00:00:00Z', updatedAt: '2026-07-28T00:00:00Z',
   },
   {
@@ -59,8 +81,9 @@ const MOCK_ITEMS = [
     owner: { oid: 'u1', displayName: 'Aneesh', email: 'a@a.com' },
     collaborators: [], acceptanceCriteria: [{ id: 'ac1', text: 'Works', done: true }],
     branch: 'feature/thing', prUrl: null, position: 0, sourceType: 'prd',
-    prdId: 'prd-1', backlogItemId: 'bi-1', featureRequestId: null,
+    prdId: 'prd-1', backlogItemId: 'bi-1', featureRequestId: null, adoWorkItemId: null,
     epicId: 'e1', epicTitle: 'Epic One', featureId: 'f1', featureTitle: 'Feature One',
+    designDocId: 'dd-1', designPrototypeId: null,
     createdBy: 'u1', updatedBy: 'u1', createdAt: '2026-07-28T00:00:00Z', updatedAt: '2026-07-28T00:00:00Z',
   },
 ];
@@ -70,17 +93,32 @@ const MOCK_OWNERS = [
   { oid: 'u2', displayName: 'Ryan', email: 'r@r.com' },
 ];
 
-function setup() {
+function stubBoardHooks() {
   mockUseItems.mockReturnValue({ data: MOCK_ITEMS, isLoading: false, isError: false });
   mockUseOwners.mockReturnValue({ data: MOCK_OWNERS });
-  mockUseFacets.mockReturnValue({ data: { epicTitles: ['Epic One'], featureTitles: ['Feature One'], owners: MOCK_OWNERS } });
+  mockUseFacets.mockReturnValue({
+    data: {
+      epicTitles: ['Epic One'],
+      featureTitles: ['Feature One'],
+      owners: MOCK_OWNERS,
+      releases: [],
+    },
+  });
   mockUseMove.mockReturnValue({ mutate: jest.fn() });
+  mockUseCreateRelease.mockReturnValue({ mutate: jest.fn() });
+  mockUseBulk.mockReturnValue({ mutate: jest.fn() });
+  mockUseStream.mockReturnValue(undefined);
+  mockUseImport.mockReturnValue({ mutate: jest.fn(), isPending: false, isError: false, error: null });
+}
+
+function setup() {
+  stubBoardHooks();
 
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={['/work-board']}>
-        <ApexWorkBoardView currentUserId="u1" />
+        <ApexWorkBoardView currentUserId="u1" project="Apex" />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -114,16 +152,16 @@ describe('ApexWorkBoardView', () => {
   });
 
   it('shows loading skeletons when loading', () => {
+    stubBoardHooks();
     mockUseItems.mockReturnValue({ data: [], isLoading: true, isError: false });
     mockUseOwners.mockReturnValue({ data: [] });
     mockUseFacets.mockReturnValue({ data: undefined });
-    mockUseMove.mockReturnValue({ mutate: jest.fn() });
 
     const qc = new QueryClient();
     render(
       <QueryClientProvider client={qc}>
         <MemoryRouter>
-          <ApexWorkBoardView currentUserId="u1" />
+          <ApexWorkBoardView currentUserId="u1" project="Apex" />
         </MemoryRouter>
       </QueryClientProvider>,
     );
@@ -132,20 +170,37 @@ describe('ApexWorkBoardView', () => {
   });
 
   it('shows error state on failure', () => {
+    stubBoardHooks();
     mockUseItems.mockReturnValue({ data: [], isLoading: false, isError: true });
     mockUseOwners.mockReturnValue({ data: [] });
     mockUseFacets.mockReturnValue({ data: undefined });
-    mockUseMove.mockReturnValue({ mutate: jest.fn() });
 
     const qc = new QueryClient();
     render(
       <QueryClientProvider client={qc}>
         <MemoryRouter>
-          <ApexWorkBoardView currentUserId="u1" />
+          <ApexWorkBoardView currentUserId="u1" project="Apex" />
         </MemoryRouter>
       </QueryClientProvider>,
     );
     expect(screen.getByText(/Failed to load/)).toBeInTheDocument();
+  });
+
+  it('shows accessible empty state when there are no items', () => {
+    stubBoardHooks();
+    mockUseItems.mockReturnValue({ data: [], isLoading: false, isError: false });
+
+    const qc = new QueryClient();
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <ApexWorkBoardView currentUserId="u1" project="Apex" />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const empty = screen.getByTestId('work-board-empty');
+    expect(empty).toHaveAttribute('role', 'status');
+    expect(screen.getByTestId('work-board-empty-cta')).toBeInTheDocument();
   });
 
   it('defaults owner filter to My board (currentUserId)', () => {
@@ -169,12 +224,20 @@ describe('ApexWorkBoardView', () => {
     expect(screen.queryByTestId('detail-panel')).not.toBeInTheDocument();
   });
 
-  it('filters type via PBI chip', () => {
+  it('defaults to delivery types (PBI/TBI/Bug)', () => {
     setup();
-    const pbiChip = screen.getAllByText('PBI').find(el => el.tagName === 'BUTTON');
-    if (pbiChip) {
-      fireEvent.click(pbiChip);
-      expect(mockUseItems).toHaveBeenCalledWith(expect.objectContaining({ types: ['PBI'] }));
-    }
+    expect(mockUseItems).toHaveBeenCalledWith(
+      expect.objectContaining({ types: expect.arrayContaining(['PBI', 'TBI', 'Bug']) }),
+    );
+  });
+
+  it('can switch to all types including Epic/Feature', () => {
+    setup();
+    fireEvent.click(screen.getByTestId('work-board-type-all'));
+    expect(mockUseItems).toHaveBeenCalledWith(
+      expect.objectContaining({
+        types: expect.arrayContaining(['PBI', 'TBI', 'Bug', 'Epic', 'Feature']),
+      }),
+    );
   });
 });

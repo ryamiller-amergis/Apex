@@ -68,6 +68,9 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `prds:review` | prds | admin, member |
 | `skills:manage` | skills | admin |
 | `wiki:write` | wiki | admin, member |
+| `work-board:view` | work-board | admin, member, viewer |
+| `work-board:manage` | work-board | admin, member |
+| `work-board:admin` | work-board | admin, member |
 | `workitems:write` | workitems | admin, member |
 
 ## Client Gating Pattern

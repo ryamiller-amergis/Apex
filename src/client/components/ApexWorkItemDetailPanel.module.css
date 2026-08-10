@@ -2,9 +2,9 @@
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.35);
+  background: rgba(0, 0, 0, 0.28);
   z-index: 100;
-  animation: fadeIn 0.15s ease;
+  animation: fadeIn 0.18s ease;
 }
 
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
@@ -17,13 +17,35 @@
   bottom: 0;
   width: 440px;
   max-width: 96vw;
-  background: var(--bg-primary);
-  border-left: 1px solid var(--border-color);
+  /* Solid base so wide expand stays readable; light status wash on top */
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--status-bg, transparent) 35%, var(--bg-primary)) 0%,
+      var(--bg-primary) 140px
+    );
+  border-left: 1px solid color-mix(in srgb, var(--status-border, var(--border-color)) 70%, transparent);
   z-index: 101;
   display: flex;
   flex-direction: column;
-  animation: slideIn 0.25s ease;
-  box-shadow: -6px 0 30px var(--shadow-md);
+  animation: slideIn 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+  box-shadow:
+    -10px 0 40px var(--shadow-md),
+    0 0 0 1px var(--status-glow, transparent),
+    -4px 0 28px var(--status-glow, transparent);
+  overflow: hidden;
+}
+
+.drawer::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--status-color, var(--border-color));
+  z-index: 3;
+  box-shadow: 0 0 12px var(--status-glow, transparent);
 }
 
 .drawerResizing {
@@ -38,13 +60,13 @@
   bottom: 0;
   width: 6px;
   cursor: col-resize;
-  z-index: 2;
+  z-index: 4;
   touch-action: none;
 }
 
 .resizeHandle:hover,
 .resizeHandle:active {
-  background: color-mix(in srgb, var(--accent-color) 35%, transparent);
+  background: color-mix(in srgb, var(--status-color, var(--accent-color)) 35%, transparent);
 }
 
 @keyframes slideIn {
@@ -55,23 +77,111 @@
 /* ── Drawer header ────────────────────────────────────────────────────────── */
 .drawerHeader {
   display: flex;
-  align-items: flex-start;
+  flex-direction: column;
   gap: 10px;
-  padding: 18px 20px 14px;
-  border-bottom: 1px solid var(--border-color);
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--status-border, var(--border-color)) 45%, transparent);
+  background: color-mix(in srgb, var(--status-bg, transparent) 40%, var(--bg-primary));
   flex-shrink: 0;
 }
 
-.drawerHeaderMeta {
-  flex: 1;
-  min-width: 0;
+/* ── Section jump nav (no left pane) ──────────────────────────────────────── */
+.sectionNav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  flex-shrink: 0;
+  z-index: 2;
+}
+
+.sectionChip {
+  appearance: none;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+}
+
+.sectionChip:hover {
+  border-color: var(--status-color, var(--accent-color));
+  color: var(--status-color, var(--accent-color));
+}
+
+.sectionChipActive {
+  border-color: var(--status-color, var(--accent-color));
+  color: var(--status-color, var(--accent-color));
+  background: color-mix(in srgb, var(--status-color, var(--accent-color)) 12%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--status-color, var(--accent-color)) 18%, transparent);
+}
+
+.moreWrap {
+  position: relative;
+  margin-left: auto;
+}
+
+.moreMenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 140px;
+  padding: 4px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  box-shadow: 0 10px 28px var(--shadow-md);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.moreMenuItem {
+  appearance: none;
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 7px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.moreMenuItem:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.moreMenuItemActive {
+  color: var(--status-color, var(--accent-color));
+  background: color-mix(in srgb, var(--status-color, var(--accent-color)) 10%, transparent);
+}
+
+.drawerHeaderTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .drawerIdRow {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 4px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .itemId {
@@ -90,24 +200,167 @@
   text-transform: uppercase;
 }
 
-.typeChipPBI  { background: color-mix(in srgb, var(--accent-color) 10%, transparent); color: var(--accent-color); }
-.typeChipTBI  { background: color-mix(in srgb, var(--status-review) 10%, transparent); color: var(--status-review); }
-.typeChipBug  { background: color-mix(in srgb, var(--error-color) 10%, transparent); color: var(--error-color); }
+.typeChipPBI     { background: #06b6d420; color: #06b6d4; border: 1px solid #06b6d440; }
+.typeChipTBI     { background: #a855f720; color: #a855f7; border: 1px solid #a855f740; }
+.typeChipBug     { background: #f43f5e20; color: #f43f5e; border: 1px solid #f43f5e40; }
+.typeChipEpic    { background: #6366f120; color: #6366f1; border: 1px solid #6366f140; }
+.typeChipFeature { background: #0ea5e920; color: #0ea5e9; border: 1px solid #0ea5e940; }
+
+.sourceChip {
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--bg-tertiary) 70%, transparent);
+  border: 1px solid var(--border-color);
+}
 
 .drawerTitle {
-  font-size: 1rem;
+  font-size: 1.05rem;
   font-weight: 700;
   color: var(--text-primary);
   margin: 0;
-  line-height: 1.4;
+  line-height: 1.35;
+}
+
+.metaRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ownerChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 8px 3px 3px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--status-border, var(--border-color)) 65%, transparent);
+  background: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.ownerChip:hover {
+  border-color: var(--status-color, var(--accent-color));
+  background: color-mix(in srgb, var(--status-bg, var(--bg-secondary)) 70%, transparent);
+  box-shadow: 0 0 0 1px var(--status-glow, transparent);
+}
+
+.ownerChipName {
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+}
+
+.ownerWrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.ownerMenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 200px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 12px 32px var(--shadow-md);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ownerMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  appearance: none;
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--text-secondary);
+}
+
+.ownerMenuItem:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.ownerMenuItemActive {
+  background: color-mix(in srgb, var(--status-color, var(--accent-color)) 12%, transparent);
+  color: var(--text-primary);
+}
+
+.ownerSelectInline,
+.releaseSelect {
+  appearance: none;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--status-border, var(--border-color)) 65%, transparent);
+  background: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+  color: var(--text-primary);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  max-width: 160px;
+  transition: border-color 0.15s ease;
+}
+
+.ownerSelectInline:focus,
+.releaseSelect:focus {
+  outline: none;
+  border-color: var(--status-color, var(--accent-color));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--status-color, var(--accent-color)) 18%, transparent);
+}
+
+.avatarStack {
+  display: flex;
+  align-items: center;
+}
+
+.avatarStack .avatar {
+  margin-left: -6px;
+  width: 22px;
+  height: 22px;
+  font-size: 0.58rem;
+  border: 1.5px solid var(--bg-primary);
+}
+
+.avatarStack .avatar:first-child {
+  margin-left: 0;
+}
+
+.updatedMeta {
+  margin-left: auto;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  white-space: nowrap;
 }
 
 .closeBtn {
   width: 28px;
   height: 28px;
-  border-radius: 6px;
-  border: 1px solid var(--border-color);
-  background: var(--bg-secondary);
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--border-color) 80%, transparent);
+  background: color-mix(in srgb, var(--bg-secondary) 70%, transparent);
   color: var(--text-muted);
   cursor: pointer;
   display: flex;
@@ -115,6 +368,7 @@
   justify-content: center;
   flex-shrink: 0;
   transition: all 0.15s ease;
+  backdrop-filter: blur(6px);
 }
 
 .closeBtn:hover {
@@ -126,10 +380,10 @@
 .body {
   flex: 1;
   overflow-y: auto;
-  padding: 20px;
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 12px;
 }
 
 .body::-webkit-scrollbar { width: 4px; }
@@ -140,6 +394,22 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.sectionGlass {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  scroll-margin-top: 8px;
+  transition: box-shadow 0.35s ease, border-color 0.35s ease;
+}
+
+.sectionFlash {
+  border-color: var(--status-color, var(--accent-color));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--status-color, var(--accent-color)) 35%, transparent),
+    0 0 0 4px color-mix(in srgb, var(--status-color, var(--accent-color)) 14%, transparent);
 }
 
 .sectionHeader {
@@ -193,6 +463,30 @@
   color: var(--text-primary);
   line-height: 1.55;
   white-space: pre-wrap;
+  margin: 0;
+}
+
+.breadcrumbLine {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 1.4;
+}
+
+.hierarchyBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.childList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.childList .fieldLink {
+  text-align: left;
 }
 
 /* ── Status control ──────────────────────────────────────────────────────── */
@@ -207,14 +501,15 @@
   align-items: center;
   gap: 5px;
   padding: 5px 10px;
-  border-radius: 6px;
+  border-radius: 999px;
   border: 1px solid var(--border-color);
-  background: var(--bg-secondary);
-  font-size: 0.75rem;
+  background: color-mix(in srgb, var(--bg-secondary) 70%, transparent);
+  font-size: 0.72rem;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s ease;
   color: var(--text-secondary);
+  backdrop-filter: blur(6px);
 }
 
 .statusBtn:hover {
@@ -227,12 +522,12 @@
 .statusBtnActive {
   border-color: var(--status-color);
   color: var(--status-color);
-  background: color-mix(in srgb, var(--status-color) 12%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--status-color) 19%, transparent);
+  background: color-mix(in srgb, var(--status-color) 14%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--status-color) 22%, transparent);
   font-weight: 600;
 }
 
-/* ── Owner row ───────────────────────────────────────────────────────────── */
+/* ── Avatars / legacy owner helpers ──────────────────────────────────────── */
 .ownerRow {
   display: flex;
   align-items: center;
@@ -240,18 +535,18 @@
 }
 
 .avatar {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.68rem;
+  font-size: 0.62rem;
   font-weight: 700;
   color: var(--text-secondary);
   flex-shrink: 0;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--status-bg, var(--bg-tertiary)) 80%, var(--bg-tertiary));
+  border: 1px solid color-mix(in srgb, var(--status-border, var(--border-color)) 70%, transparent);
 }
 
 .ownerInfo {
@@ -286,7 +581,6 @@
   background: color-mix(in srgb, var(--accent-color) 8%, transparent);
 }
 
-/* ── Owner selector ──────────────────────────────────────────────────────── */
 .ownerSelect {
   appearance: none;
   padding: 6px 10px;
@@ -306,6 +600,26 @@
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color) 18%, transparent);
 }
 
+/* ── Development grid ────────────────────────────────────────────────────── */
+.devGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.devField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.devFieldLabel {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
 /* ── Acceptance criteria ─────────────────────────────────────────────────── */
 .acList {
   display: flex;
@@ -322,7 +636,7 @@
   transition: background 0.1s ease;
 }
 
-.acItem:hover { background: var(--bg-secondary); }
+.acItem:hover { background: color-mix(in srgb, var(--bg-primary) 45%, transparent); }
 
 .acCheckbox {
   width: 15px;
@@ -374,9 +688,9 @@
   width: 100%;
   box-sizing: border-box;
   padding: 7px 10px;
-  border-radius: 6px;
+  border-radius: 8px;
   border: 1px solid var(--border-color);
-  background: var(--bg-secondary);
+  background: color-mix(in srgb, var(--bg-primary) 65%, transparent);
   color: var(--text-primary);
   font-size: 0.78rem;
   font-family: inherit;
@@ -447,9 +761,9 @@
 /* ── Fields ──────────────────────────────────────────────────────────────── */
 .fieldInput {
   padding: 7px 10px;
-  border-radius: 6px;
+  border-radius: 8px;
   border: 1px solid var(--border-color);
-  background: var(--bg-secondary);
+  background: color-mix(in srgb, var(--bg-primary) 65%, transparent);
   color: var(--text-primary);
   font-size: 0.8rem;
   width: 100%;
@@ -471,43 +785,80 @@
   align-items: center;
   gap: 4px;
   word-break: break-all;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
 }
 
 .fieldLink:hover { text-decoration: underline; }
 
-/* ── Source journey ──────────────────────────────────────────────────────── */
-.journey {
+/* ── Source / document links ─────────────────────────────────────────────── */
+.docLinkGrid {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
-.journeyStep {
+.docLinkChip {
+  appearance: none;
   font-size: 0.72rem;
-  padding: 3px 8px;
-  border-radius: 5px;
-  background: var(--bg-secondary);
+  font-weight: 600;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: var(--bg-primary);
   color: var(--text-secondary);
   border: 1px solid var(--border-color);
   cursor: pointer;
   transition: all 0.15s ease;
+  font-family: inherit;
 }
 
-.journeyStep:hover {
-  border-color: var(--accent-color);
-  color: var(--accent-color);
+.docLinkChip:hover:not(:disabled) {
+  border-color: var(--status-color, var(--accent-color));
+  color: var(--status-color, var(--accent-color));
+  background: color-mix(in srgb, var(--status-color, var(--accent-color)) 10%, transparent);
 }
 
-.journeyArrow {
-  font-size: 0.7rem;
-  color: var(--text-muted);
+.docLinkChipUnavailable {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.docLinkChipCurrent {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--status-color, var(--accent-color)) 12%, transparent);
+  color: var(--status-color, var(--accent-color));
+  border: 1px solid color-mix(in srgb, var(--status-color, var(--accent-color)) 35%, transparent);
 }
 
 .noSource {
   font-size: 0.78rem;
   color: var(--text-muted);
   font-style: italic;
+}
+
+/* ── Attachments ─────────────────────────────────────────────────────────── */
+.attachmentRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-color) 55%, transparent);
+}
+
+.attachmentRow:last-child {
+  border-bottom: none;
+}
+
+.attachmentRow .acRemoveBtn {
+  flex-shrink: 0;
+  margin-top: 2px;
 }
 
 /* ── Activity ────────────────────────────────────────────────────────────── */
@@ -521,7 +872,7 @@
   display: flex;
   gap: 10px;
   padding: 8px 0;
-  border-left: 2px solid var(--border-color);
+  border-left: 2px solid color-mix(in srgb, var(--status-border, var(--border-color)) 70%, transparent);
   padding-left: 12px;
   position: relative;
 }
@@ -534,7 +885,7 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--border-color);
+  background: var(--status-color, var(--border-color));
   border: 2px solid var(--bg-primary);
 }
 
@@ -559,6 +910,7 @@
 .saveBar {
   padding: 12px 20px;
   border-top: 1px solid var(--border-color);
+  background: var(--bg-primary);
   display: flex;
   gap: 8px;
   flex-shrink: 0;
@@ -567,7 +919,7 @@
 .btnSave {
   flex: 1;
   padding: 8px 0;
-  border-radius: 7px;
+  border-radius: 8px;
   border: none;
   background: var(--accent-color);
   color: var(--on-accent);
@@ -582,9 +934,9 @@
 
 .btnCancel {
   padding: 8px 16px;
-  border-radius: 7px;
+  border-radius: 8px;
   border: 1px solid var(--border-color);
-  background: var(--bg-secondary);
+  background: color-mix(in srgb, var(--bg-secondary) 70%, transparent);
   color: var(--text-secondary);
   font-size: 0.8125rem;
   cursor: pointer;

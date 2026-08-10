@@ -78,6 +78,7 @@ const ROUTE_ENTRIES: readonly WalkthroughRouteCatalogEntry[] = Object.freeze([
   Object.freeze({ route: '/design-module', label: 'Design module' }),
   Object.freeze({ route: '/load-tests', label: 'Load tests' }),
   Object.freeze({ route: '/diagrams', label: 'Diagrams' }),
+  Object.freeze({ route: '/work-board', label: 'Work Board' }),
 ]);
 
 const BY_ROUTE = new Map(ROUTE_ENTRIES.map((entry) => [entry.route, entry]));

@@ -257,7 +257,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         { label: 'PDF Assembly Tool', view: 'pdf-tools', icon: <IconPdfTools />, permission: 'pdf-assembly:use', onNavigate: onNavigatePdfTools ?? (() => {}) },
         { label: 'Load Tests', view: 'load-tests', icon: <IconLoadTests />, permission: 'load-test:view', onNavigate: onNavigateLoadTests ?? (() => {}), testId: 'nav-load-tests' },
         { label: 'Apex Backlog', view: 'feature-requests', icon: <IconFeatureRequests />, permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
-        { label: 'Work Board', view: 'work-board', icon: <IconWorkBoard />, permission: null, onNavigate: onNavigateWorkBoard ?? (() => {}) },
+        { label: 'Work Board', view: 'work-board', icon: <IconWorkBoard />, permission: 'work-board:view', onNavigate: onNavigateWorkBoard ?? (() => {}) },
       ],
     },
   ];
@@ -278,9 +278,8 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       return true;
     }
     if (item.view === 'work-board') {
-      if (!isSuperAdmin) return false;
-      if (selectedProject !== 'Apex') return false;
-      return true;
+      if (!isSuperAdmin && !menuEnabledViews.includes('work-board')) return false;
+      return isSuperAdmin || can('work-board:view');
     }
     if (item.view === 'pdf-tools') {
       if (!isSuperAdmin && !menuEnabledViews.includes('pdf-tools')) return false;

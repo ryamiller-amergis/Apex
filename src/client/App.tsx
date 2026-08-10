@@ -43,6 +43,15 @@ const CycleTimeAnalytics = lazy(() => import('./components/CycleTimeAnalytics').
 const DevStats = lazy(() => import('./components/DevStats').then(m => ({ default: m.DevStats })));
 const QAMetrics = lazy(() => import('./components/QAMetrics').then(m => ({ default: m.QAMetrics })));
 const RoadmapView = lazy(() => import('./components/RoadmapView').then(m => ({ default: m.RoadmapView })));
+const BoardReleaseRoadmap = lazy(() =>
+  import('./components/BoardReleaseRoadmap').then((m) => ({ default: m.BoardReleaseRoadmap })),
+);
+const BoardReleaseView = lazy(() =>
+  import('./components/BoardReleaseView').then((m) => ({ default: m.BoardReleaseView })),
+);
+const BoardPlanningStats = lazy(() =>
+  import('./components/BoardPlanningStats').then((m) => ({ default: m.BoardPlanningStats })),
+);
 const ReleaseView = lazy(() => import('./components/ReleaseView'));
 const CloudCost = lazy(() => import('./components/CloudCost').then(m => ({ default: m.CloudCost })));
 const AIAnalysis = lazy(() => import('./components/AIAnalysis').then(m => ({ default: m.AIAnalysis })));
@@ -229,6 +238,7 @@ function App() {
     groups,
     permissionsLoaded,
     workItems,
+    usesBoardWorkItems,
     error,
     isFetchingWorkItems,
     refetchWorkItems,
@@ -355,7 +365,7 @@ function App() {
     if (currentView === 'design-module' && !isSuperAdmin && (!enabledViews.includes('design-module') || !can('design-module:view'))) navigate(fallback);
     if (currentView === 'load-tests'    && !isSuperAdmin && (!enabledViews.includes('load-tests')    || !can('load-test:view')))    navigate(fallback);
     if (currentView === 'diagrams'      && !isSuperAdmin && (!enabledViews.includes('diagrams')      || !can('diagram:view')))      navigate(fallback);
-    if (currentView === 'work-board'    && (!isSuperAdmin || selectedProject !== 'Apex')) navigate(fallback);
+    if (currentView === 'work-board'    && !isSuperAdmin && (!enabledViews.includes('work-board') || !can('work-board:view'))) navigate(fallback);
     if (currentView === 'planning') {
       if (!isSuperAdmin && (!enabledViews.includes('planning') || !can('planning:view'))) {
         navigate(fallback);
@@ -878,10 +888,10 @@ function App() {
                 <FeatureRequestsView />
               </Suspense>
             </ErrorBoundary>
-          ) : currentView === 'work-board' && isSuperAdmin && selectedProject === 'Apex' ? (
+          ) : currentView === 'work-board' && (isSuperAdmin || can('work-board:view')) ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
-                <ApexWorkBoardView currentUserId={userId ?? ''} />
+                <ApexWorkBoardView currentUserId={userId ?? ''} project={selectedProject} />
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'ui-lab' ? (
@@ -1017,37 +1027,61 @@ function App() {
                   {planningTab === 'cycle-time' ? (
                     <ErrorBoundary FallbackComponent={ViewErrorFallback}>
                       <Suspense fallback={<ViewSkeleton />}>
-                        <CycleTimeAnalytics workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} />
+                        {usesBoardWorkItems ? (
+                          <BoardPlanningStats project={selectedProject} mode="cycle-time" />
+                        ) : (
+                          <CycleTimeAnalytics workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} />
+                        )}
                       </Suspense>
                     </ErrorBoundary>
                   ) : planningTab === 'dev-stats' ? (
                     <ErrorBoundary FallbackComponent={ViewErrorFallback}>
                       <Suspense fallback={<ViewSkeleton />}>
-                        <DevStats workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
+                        {usesBoardWorkItems ? (
+                          <BoardPlanningStats project={selectedProject} mode="dev-stats" />
+                        ) : (
+                          <DevStats workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
+                        )}
                       </Suspense>
                     </ErrorBoundary>
                   ) : planningTab === 'qa' ? (
                     <ErrorBoundary FallbackComponent={ViewErrorFallback}>
                       <Suspense fallback={<ViewSkeleton />}>
-                        <QAMetrics workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
+                        {usesBoardWorkItems ? (
+                          <BoardPlanningStats project={selectedProject} mode="qa" />
+                        ) : (
+                          <QAMetrics workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
+                        )}
                       </Suspense>
                     </ErrorBoundary>
                   ) : planningTab === 'ai-analysis' ? (
                     <ErrorBoundary FallbackComponent={ViewErrorFallback}>
                       <Suspense fallback={<ViewSkeleton />}>
-                        <AIAnalysis workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
+                        {usesBoardWorkItems ? (
+                          <BoardPlanningStats project={selectedProject} mode="ai-analysis" />
+                        ) : (
+                          <AIAnalysis workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
+                        )}
                       </Suspense>
                     </ErrorBoundary>
                   ) : planningTab === 'roadmap' ? (
                     <ErrorBoundary FallbackComponent={ViewErrorFallback}>
                       <Suspense fallback={<ViewSkeleton />}>
-                        <RoadmapView workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
+                        {usesBoardWorkItems ? (
+                          <BoardReleaseRoadmap project={selectedProject} />
+                        ) : (
+                          <RoadmapView workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
+                        )}
                       </Suspense>
                     </ErrorBoundary>
                   ) : planningTab === 'releases' ? (
                     <ErrorBoundary FallbackComponent={ViewErrorFallback}>
                       <Suspense fallback={<ViewSkeleton />}>
-                        <ReleaseView workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
+                        {usesBoardWorkItems ? (
+                          <BoardReleaseView project={selectedProject} />
+                        ) : (
+                          <ReleaseView workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
+                        )}
                       </Suspense>
                     </ErrorBoundary>
                   ) : null}

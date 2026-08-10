@@ -517,10 +517,11 @@ const PrdReadinessPanel: React.FC<{
 // ── Apex Work Board: Create Work Items button for approved PRDs ───────────────
 
 const ApexMaterializeModalTrigger: React.FC<{
+  project: string;
   prdId: string;
   prdTitle: string;
   backlogJson: unknown;
-}> = ({ prdId, prdTitle, backlogJson }) => {
+}> = ({ project, prdId, prdTitle, backlogJson }) => {
   const [open, setOpen] = useState(false);
   const backlog = backlogJson as { epics?: { id: string; title: string; features?: { id: string; title: string; items?: { id: string; title: string; type: string; description?: string; acceptanceCriteria?: string[] }[] }[] }[] };
   if (!backlog?.epics?.length) return null;
@@ -553,6 +554,7 @@ const ApexMaterializeModalTrigger: React.FC<{
       </div>
       {open && (
         <ApexMaterializeModal
+          project={project}
           prdId={prdId}
           prdTitle={prdTitle}
           backlog={{
@@ -585,7 +587,7 @@ export const PrdReviewView: React.FC = () => {
   const location = useLocation();
   const id = location.pathname.split('/').pop() ?? null;
   const navigate = useNavigate();
-  const { can, userId, isAdmin, isSuperAdmin } = useAppShell();
+  const { can, userId, isAdmin, isSuperAdmin, selectedProject } = useAppShell();
 
   const queryClient = useQueryClient();
   const { data: prd, isLoading, isError } = usePrd(id);
@@ -2885,8 +2887,13 @@ export const PrdReviewView: React.FC = () => {
             {activeTab === 'backlog' && (
               <div className={styles.previewWithSidebar}>
                 <div className={styles.backlogView}>
-                  {isSuperAdmin && !!prd.backlogJson && prd.status === 'approved' && (
-                    <ApexMaterializeModalTrigger prdId={id!} prdTitle={prd.title} backlogJson={prd.backlogJson} />
+                  {(isSuperAdmin || can('work-board:manage')) && !!prd.backlogJson && prd.status === 'approved' && (
+                    <ApexMaterializeModalTrigger
+                      project={prd.project || selectedProject || 'Apex'}
+                      prdId={id!}
+                      prdTitle={prd.title}
+                      backlogJson={prd.backlogJson}
+                    />
                   )}
                   {prd.backlogJson ? (
                     showCommentLayer ? (

@@ -131,7 +131,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'Design Module', view: 'design-module', permission: 'design-module:view', onNavigate: onNavigateDesignModule ?? (() => {}) },
     { label: 'Diagrams', view: 'diagrams', permission: 'diagram:view', onNavigate: onNavigateDiagrams ?? (() => {}) },
     { label: 'Load Tests', view: 'load-tests', permission: 'load-test:view', onNavigate: onNavigateLoadTests ?? (() => {}) },
-    { label: 'Work Board', view: 'work-board', permission: null, onNavigate: onNavigateWorkBoard ?? (() => {}) },
+    { label: 'Work Board', view: 'work-board', permission: 'work-board:view', onNavigate: onNavigateWorkBoard ?? (() => {}) },
     { label: 'Admin', view: 'admin', permission: 'admin:roles', onNavigate: onNavigateAdmin },
   ];
 
@@ -153,9 +153,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       return true;
     }
     if (item.view === 'work-board') {
-      if (!isSuperAdmin) return false;
-      if (selectedProject !== 'Apex') return false;
-      return true;
+      if (!isSuperAdmin && !menuEnabledViews.includes('work-board')) return false;
+      return isSuperAdmin || can('work-board:view');
     }
     if (item.view === 'ui-lab') {
       if (!isSuperAdmin && !menuEnabledViews.includes('ui-lab')) return false;

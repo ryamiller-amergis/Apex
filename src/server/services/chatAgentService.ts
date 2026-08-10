@@ -1101,31 +1101,53 @@ function buildStandupParticipantPrompt(kickoff: ChatThreadKickoff): string {
     `- \`update_work_item\` — update work item fields (state, assignedTo, targetDate, tags, parent, etc.) AS the user`,
     `- \`add_work_item_comment\` — add a discussion comment to a work item AS the user (use to @-mention people, e.g. QA)`,
     `- \`create_work_items\` — create new work items (tasks/bugs/PBIs) AS the user`,
+    `- \`query_board_items\` / \`update_board_item\` / \`add_board_item_comment\` / \`list_board_releases\` — Apex Work Board tools (use these instead of ADO when the project uses Work Board, e.g. Apex)`,
     `- \`get_skill\` / \`get_skill_file\` — load skills/files from the repo`,
     ``,
     `# CRITICAL RULES`,
     `- NEVER delete work items. Only create, update, comment, tag, or re-parent.`,
-    `- Always CONFIRM with the user before making any write to ADO (state, assignee, target date, tag, parent).`,
-    `- All ADO writes are attributed to the logged-in user via their token.`,
+    `- Always CONFIRM with the user before making any write to ADO or the Work Board (state, assignee, target date, tag, parent).`,
+    `- All ADO writes are attributed to the logged-in user via their token. Board writes use the standup thread user.`,
     `- NEVER mention sprints or iterations — this team uses release target dates.`,
-    `- Use this team's REAL states when suggesting transitions (do NOT invent "Ready for QA"): New → Active → In PR → merged to test → Ready for Test → UIT → UAT → Ready for Release → Closed. Bugs that fail testing regress to Active (back to the developer). "committed" = accepted but not yet started.`,
+    `- For ADO projects, use this team's REAL states when suggesting transitions (do NOT invent "Ready for QA"): New → Active → In PR → merged to test → Ready for Test → UIT → UAT → Ready for Release → Closed. Bugs that fail testing regress to Active (back to the developer). "committed" = accepted but not yet started.`,
+    `- For Work Board projects, use board statuses: idea → ready → in-progress → review → done.`,
     ``,
     `# Formatting Rules`,
-    `- When referencing work items, ALWAYS include the ID with a # prefix (e.g. #12345) — this renders as a clickable link in the UI.`,
-    `- ALWAYS include the work item type after the ID: "#12345 · Bug — Some Title [Active]".`,
+    `- When referencing ADO work items, ALWAYS include the ID with a # prefix (e.g. #12345) — this renders as a clickable link in the UI.`,
+    `- When referencing Work Board items, use APX-# (e.g. APX-12) plus title and status.`,
+    `- ALWAYS include the work item type after the ID: "#12345 · Bug — Some Title [Active]" or "APX-12 · PBI — Some Title [in-progress]".`,
     `- ALWAYS include the current **State** for each work item when presenting them.`,
     `- When listing items, include: ID, work item type, title, state, and target date (if set).`,
     `- Mark a release-relevant item with NO target date using "⚠️ no target date".`,
-    `- Release-targeted items (work items with a Release:* tag matching an upcoming release epic) MUST be listed under a **Release-targeted:** heading first, and each line MUST end with "· Release: <version> 🎯" so the UI highlights them.`,
+    `- Release-targeted items (ADO Release:* tags, or board items with a release) MUST be listed under a **Release-targeted:** heading first.`,
     ``,
     `# Standup Procedure`,
   ];
+
+  const boardNative =
+    (kickoff.project ?? '').toLowerCase() === 'apex';
 
   if (kickoff.standupSkillPath) {
     parts.push(
       `A custom standup skill has been configured. Load it first:`,
       `  Call \`get_skill\` with path: "${kickoff.standupSkillPath}", project: "${kickoff.project}", repo: "${kickoff.repo}"`,
       `Follow that skill's standup procedure instead of the default below.`,
+    );
+  } else if (boardNative) {
+    parts.push(
+      `This project uses the **Apex Work Board**. Prefer board MCP tools over ADO WIQL.`,
+      ``,
+      `1. **Ground in their board items**: Call \`query_board_items\` for project "${kickoff.project}" (filter by owner when you know their OID; otherwise query all open statuses and match by owner email/name). Also call \`list_board_releases\` for upcoming releases.`,
+      `2. **Yesterday**: Present non-done items they own and verify status (idea/ready/in-progress/review/done). Offer \`update_board_item\` with status changes after confirmation.`,
+      `3. **Today**: Confirm plans, handoffs (ownerId changes), capacity/PTO, and release alignment via \`list_board_releases\`.`,
+      `4. **Blockers & risks**: Capture blockers; offer \`add_board_item_comment\` to leave notes.`,
+      `5. **Wrap up**: Summarize and confirm any final board updates.`,
+      ``,
+      `When the user is done, produce a structured summary in this JSON format (in a code block):`,
+      '```json',
+      `{ "yesterday": "...", "today": "...", "blockers": "...", "atRisk": "...", "handoffs": "...", "capacity": "..." }`,
+      '```',
+      `Leave a field as an empty string if it doesn't apply.`,
     );
   } else {
     parts.push(
@@ -1168,6 +1190,7 @@ function buildStandupFacilitatorPrompt(kickoff: ChatThreadKickoff): string {
     `- \`create_standup_followup\` — create a follow-up item for involved participants`,
     `- \`complete_standup_session\` — finalize the session (persist summary, create follow-up threads, notify members)`,
     `- \`query_work_items\` — check ADO work item details if needed`,
+    `- \`query_board_items\` / \`list_board_releases\` — Work Board alternatives when the project uses the board`,
     ``,
     `# Procedure`,
     `1. Call \`get_standup_session\` with the sessionId to load all participant data (each participant's structured update includes yesterday/today/blockers/atRisk/handoffs/capacity).`,

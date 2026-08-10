@@ -2,7 +2,13 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ApexWorkItemDraft } from '../../shared/types/apexWorkItem';
 import type { FeatureRequest } from '../../shared/types/featureRequest';
-import { useApexWorkItemOwners, useGenerateDrafts, useCreateFromDrafts } from '../hooks/useApexWorkItems';
+import {
+  useApexWorkItemOwners,
+  useGenerateDrafts,
+  useCreateFromDrafts,
+  usePreviewCreateFromDrafts,
+} from '../hooks/useApexWorkItems';
+import type { DraftReconcilePreviewResult } from '../../shared/types/apexWorkItem';
 import { formatGwtAcText } from '../utils/formatGwtAc';
 import styles from './ApexGenerateWorkItemsWizard.module.css';
 
@@ -17,24 +23,31 @@ const GENERATING_STEPS = [
 
 interface ApexGenerateWorkItemsWizardProps {
   featureRequest: FeatureRequest;
+  project: string;
   onClose: () => void;
 }
 
 export const ApexGenerateWorkItemsWizard: React.FC<ApexGenerateWorkItemsWizardProps> = ({
   featureRequest,
+  project,
   onClose,
 }) => {
   const navigate = useNavigate();
-  const { data: owners = [] } = useApexWorkItemOwners();
-  const generateMutation = useGenerateDrafts();
-  const createMutation = useCreateFromDrafts();
+  const { data: owners = [] } = useApexWorkItemOwners(project);
+  const generateMutation = useGenerateDrafts(project);
+  const createMutation = useCreateFromDrafts(project);
+  const previewDraftsMutation = usePreviewCreateFromDrafts(project);
 
   const [phase, setPhase] = useState<Phase>('intent');
   const [ownerId, setOwnerId] = useState<string>('');
   const [grain, setGrain] = useState<'single' | 'small-set'>('small-set');
   const [drafts, setDrafts] = useState<ApexWorkItemDraft[]>([]);
+  const [reconcile, setReconcile] = useState<DraftReconcilePreviewResult | null>(null);
+  const [draftChoices, setDraftChoices] = useState<Record<string, string | 'create' | 'skip'>>({});
   const [generatingStep, setGeneratingStep] = useState(0);
   const [createdCount, setCreatedCount] = useState(0);
+  const [linkedCount, setLinkedCount] = useState(0);
+  const [skippedCount, setSkippedCount] = useState(0);
   const stepIntervalRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -58,12 +71,43 @@ export const ApexGenerateWorkItemsWizard: React.FC<ApexGenerateWorkItemsWizardPr
     }, 900);
     try {
       const res = await generateMutation.mutateAsync({
+        project,
         featureRequestId: featureRequest.id,
         ownerId,
         grain,
       });
       clearInterval(stepIntervalRef.current!);
       setDrafts(res.drafts);
+      try {
+        const plan = await previewDraftsMutation.mutateAsync({
+          featureRequestId: featureRequest.id,
+          drafts: res.drafts.map((d) => ({
+            id: d.id,
+            project,
+            title: d.title,
+            outcome: d.outcome,
+            type: d.type,
+            status: 'ready' as const,
+            ownerId,
+            acceptanceCriteria: d.acceptanceCriteria,
+          })),
+        });
+        setReconcile(plan);
+        const defaults: Record<string, string | 'create' | 'skip'> = {};
+        for (const item of plan.items) {
+          if (item.action === 'skip' && item.suggestedWorkItemId) {
+            defaults[item.draftId] = 'skip';
+          } else if (item.action === 'choose' && item.suggestedWorkItemId) {
+            defaults[item.draftId] = item.suggestedWorkItemId;
+          } else {
+            defaults[item.draftId] = 'create';
+          }
+        }
+        setDraftChoices(defaults);
+      } catch {
+        setReconcile(null);
+        setDraftChoices({});
+      }
       setPhase('review');
     } catch {
       clearInterval(stepIntervalRef.current!);
@@ -80,19 +124,25 @@ export const ApexGenerateWorkItemsWizard: React.FC<ApexGenerateWorkItemsWizardPr
   const handleCreate = async () => {
     setPhase('creating');
     try {
-      const created = await createMutation.mutateAsync({
+      const result = await createMutation.mutateAsync({
+        project,
         featureRequestId: featureRequest.id,
         ownerId,
+        linkChoices: draftChoices,
         drafts: drafts.map((d) => ({
+          id: d.id,
+          project,
           title: d.title,
           outcome: d.outcome,
           type: d.type,
-          status: 'ready',
+          status: 'ready' as const,
           ownerId,
           acceptanceCriteria: d.acceptanceCriteria,
-        })) as Parameters<typeof createMutation.mutateAsync>[0]['drafts'],
+        })),
       });
-      setCreatedCount(created.length);
+      setCreatedCount(result.created.length);
+      setLinkedCount(result.linked.length);
+      setSkippedCount(result.skipped);
       setPhase('success');
     } catch {
       setPhase('review');
@@ -167,8 +217,10 @@ export const ApexGenerateWorkItemsWizard: React.FC<ApexGenerateWorkItemsWizardPr
                 <path d="M5 13l4 4L19 7" />
               </svg>
             </div>
-            <div className={styles.successCount}>{createdCount}</div>
-            <div className={styles.successText}>work items created on the board</div>
+            <div className={styles.successCount}>{createdCount + linkedCount}</div>
+            <div className={styles.successText}>
+              {createdCount} created · {linkedCount} linked · {skippedCount} skipped
+            </div>
           </div>
         )}
 
@@ -232,45 +284,74 @@ export const ApexGenerateWorkItemsWizard: React.FC<ApexGenerateWorkItemsWizardPr
                 Regenerate
               </button>
             </div>
+            {reconcile && (reconcile.counts.skip > 0 || reconcile.counts.choose > 0) && (
+              <p className={styles.subtitle} style={{ marginBottom: 12 }}>
+                Some drafts match existing board cards for this Feature Request — choose Skip, Link, or Create.
+              </p>
+            )}
             <div className={styles.draftList}>
-              {drafts.map((draft) => (
-                <div key={draft.id} className={styles.draftCard}>
-                  <div className={styles.draftCardHeader}>
-                    <span
-                      className={`${styles.draftTypeChip} ${
-                        draft.type === 'PBI' ? styles.draftTypePBI
-                          : draft.type === 'TBI' ? styles.draftTypeTBI
-                          : styles.draftTypeBug
-                      }`}
-                    >
-                      {draft.type}
-                    </span>
-                  </div>
-                  <input
-                    className={styles.draftTitleInput}
-                    value={draft.title}
-                    onChange={(e) => updateDraftTitle(draft.id, e.target.value)}
-                    placeholder="Work item title"
-                  />
-                  <textarea
-                    className={styles.draftOutcomeInput}
-                    value={draft.outcome}
-                    onChange={(e) => updateDraftOutcome(draft.id, e.target.value)}
-                    rows={2}
-                    placeholder={'As a <role>\nI want <capability>\nSo that <benefit>'}
-                  />
-                  {draft.acceptanceCriteria.length > 0 && (
-                    <div className={styles.draftAcList}>
-                      {draft.acceptanceCriteria.map((ac, i) => (
-                        <div key={i} className={styles.draftAcItem}>
-                          <span className={styles.draftAcBullet}>◦</span>
-                          <span>{formatGwtAcText(ac.text)}</span>
-                        </div>
-                      ))}
+              {drafts.map((draft) => {
+                const plan = reconcile?.items.find((i) => i.draftId === draft.id);
+                return (
+                  <div key={draft.id} className={styles.draftCard}>
+                    <div className={styles.draftCardHeader}>
+                      <span
+                        className={`${styles.draftTypeChip} ${
+                          draft.type === 'PBI' ? styles.draftTypePBI
+                            : draft.type === 'TBI' ? styles.draftTypeTBI
+                              : styles.draftTypeBug
+                        }`}
+                      >
+                        {draft.type}
+                      </span>
+                      {plan && plan.action !== 'create' && (
+                        <select
+                          className={styles.fieldSelect}
+                          value={draftChoices[draft.id] ?? 'create'}
+                          onChange={(e) =>
+                            setDraftChoices((prev) => ({
+                              ...prev,
+                              [draft.id]: e.target.value as string | 'create' | 'skip',
+                            }))
+                          }
+                          aria-label={`Reconcile ${draft.title}`}
+                        >
+                          <option value="create">Create new</option>
+                          <option value="skip">Skip (already on board)</option>
+                          {plan.candidates.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              Link APX-{c.itemNumber}: {c.title}
+                            </option>
+                          ))}
+                        </select>
+                      )}
                     </div>
-                  )}
-                </div>
-              ))}
+                    <input
+                      className={styles.draftTitleInput}
+                      value={draft.title}
+                      onChange={(e) => updateDraftTitle(draft.id, e.target.value)}
+                      placeholder="Work item title"
+                    />
+                    <textarea
+                      className={styles.draftOutcomeInput}
+                      value={draft.outcome}
+                      onChange={(e) => updateDraftOutcome(draft.id, e.target.value)}
+                      rows={2}
+                      placeholder={'As a <role>\nI want <capability>\nSo that <benefit>'}
+                    />
+                    {draft.acceptanceCriteria.length > 0 && (
+                      <div className={styles.draftAcList}>
+                        {draft.acceptanceCriteria.map((ac, i) => (
+                          <div key={i} className={styles.draftAcItem}>
+                            <span className={styles.draftAcBullet}>◦</span>
+                            <span>{formatGwtAcText(ac.text)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}

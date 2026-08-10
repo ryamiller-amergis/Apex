@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { startOfMonth, endOfMonth } from 'date-fns';
 import { useWorkItems } from './useWorkItems';
+import { useProjectMenuConfig } from './useProjectMenuConfig';
 import { useWhatsNewState } from './useWhatsNewState';
 import { env } from '../config/env';
 import type { WorkItem } from '../types/workitem';
@@ -100,6 +101,14 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
   const startDate = useMemo(() => startOfMonth(currentDate), [currentDate]);
   const endDate = useMemo(() => endOfMonth(currentDate), [currentDate]);
 
+  const { enabledViews, isLoading: menuConfigLoading } = useProjectMenuConfig(selectedProject);
+  // Board-backed when work-board is enabled, or always for Apex (even while menu is still loading).
+  const usesBoardWorkItems = useMemo(() => {
+    if (selectedProject.toLowerCase() === 'apex') return true;
+    if (menuConfigLoading) return false;
+    return enabledViews.includes('work-board');
+  }, [selectedProject, enabledViews, menuConfigLoading]);
+
   useEffect(() => {
     let cancelled = false;
     let retryTimer: number | null = null;
@@ -158,7 +167,8 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
     endDate,
     selectedProject,
     selectedAreaPath,
-    isAuthenticated === true && workItemsEnabled
+    isAuthenticated === true && workItemsEnabled,
+    usesBoardWorkItems
   );
 
   useEffect(() => { localStorage.setItem('selectedProject', selectedProject); }, [selectedProject]);
@@ -342,6 +352,7 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
     isSuperAdmin,
     isAdmin: isSuperAdmin || roles.includes('admin'),
     workItems,
+    usesBoardWorkItems,
     loading,
     error,
     isFetchingWorkItems: isFetching,

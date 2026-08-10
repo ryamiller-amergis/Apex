@@ -53,6 +53,7 @@ import { standupScheduler } from './services/standupScheduler';
 import { aiCostScheduler } from './services/aiCostScheduler';
 import { foundationSkillScanScheduler } from './services/foundationSkillScanScheduler';
 import { groundingMaintenanceScheduler } from './services/groundingMaintenanceScheduler';
+import { workBoardScheduler } from './services/workBoardScheduler';
 import { createSessionOptions, createSessionStore } from './sessionStore';
 import uiLabRoutes from './routes/uiLab';
 import pdfRoutes from './routes/pdf';
@@ -335,6 +336,9 @@ const server = app.listen(PORT, () => {
 
   groundingMaintenanceScheduler.start();
   console.log('Grounding maintenance scheduler started');
+
+  workBoardScheduler.start();
+  console.log('Work board due-soon scheduler started');
 
   startPdfProcessingPoller();
 

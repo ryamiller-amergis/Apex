@@ -39,9 +39,19 @@ interface ApexWorkItemCardProps {
   item: ApexWorkItem;
   onOpen: (id: string) => void;
   onMove: (id: string, targetStatus: ApexWorkItemStatus) => void;
+  selectMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (id: string) => void;
 }
 
-export const ApexWorkItemCard: React.FC<ApexWorkItemCardProps> = ({ item, onOpen, onMove }) => {
+export const ApexWorkItemCard: React.FC<ApexWorkItemCardProps> = ({
+  item,
+  onOpen,
+  onMove,
+  selectMode = false,
+  selected = false,
+  onToggleSelect,
+}) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -79,7 +89,24 @@ export const ApexWorkItemCard: React.FC<ApexWorkItemCardProps> = ({ item, onOpen
       tabIndex={0}
       role="button"
       aria-label={`${item.title}, ${item.type}, ${STATUS_META[item.status].label}`}
+      aria-pressed={selectMode ? selected : undefined}
     >
+      {selectMode && (
+        <div
+          style={{ marginBottom: 6 }}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={() => onToggleSelect?.(item.id)}
+            aria-label={`Select APX-${item.itemNumber}`}
+            data-testid={`work-board-select-${item.id}`}
+          />
+        </div>
+      )}
+
       {/* Breadcrumb */}
       {(item.epicTitle || item.featureTitle) && (
         <div className={styles.breadcrumb}>
@@ -104,6 +131,11 @@ export const ApexWorkItemCard: React.FC<ApexWorkItemCardProps> = ({ item, onOpen
         {item.sourceType !== 'standalone' && (
           <span className={styles.sourceChip} title={item.sourceType === 'prd' ? 'From PRD' : 'From FR'}>
             {item.sourceType === 'prd' ? 'PRD' : 'FR'}
+          </span>
+        )}
+        {item.release && (
+          <span className={styles.sourceChip} title={`Target release: ${item.release.name}`}>
+            {item.release.name}
           </span>
         )}
       </div>

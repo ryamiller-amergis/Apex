@@ -10,6 +10,10 @@ import {
   useStartLocalFeature,
 } from '../hooks/useDevWorkbench';
 import { useApexBacklogFeatures } from '../hooks/useApexBacklog';
+import { useAssignedBoardItems } from '../hooks/useApexWorkItems';
+import { useProjectMenuConfig } from '../hooks/useProjectMenuConfig';
+import type { ApexWorkItem } from '../../shared/types/apexWorkItem';
+import { STATUS_META } from '../../shared/types/apexWorkItem';
 import type { BacklogFeatureItem, ActiveDevSession, ApexBacklogGroup } from '../../shared/types/devWorkbench';
 import {
   evaluateDevStartEligibility,
@@ -24,6 +28,63 @@ import {
 import StartLocalDevModal, { type StartLocalDevTarget } from './StartLocalDevModal';
 import FeatureContextModal from './FeatureContextModal';
 import styles from './DevWorkbenchView.module.css';
+
+function usesBoardProject(project: string | null | undefined, enabledViews: string[]): boolean {
+  return enabledViews.includes('work-board') || (project?.toLowerCase() === 'apex');
+}
+
+const BoardAssignedSection: React.FC<{ project: string }> = ({ project }) => {
+  const navigate = useNavigate();
+  const { data: boardItems, isLoading, error } = useAssignedBoardItems(project);
+
+  return (
+    <section
+      className={styles.section}
+      aria-labelledby="board-assigned-heading"
+      data-testid="my-work-board-assigned-section"
+    >
+      <div className={styles['section-header']}>
+        <h2 id="board-assigned-heading">Work Board assignments</h2>
+        <p>Items you own on the Work Board</p>
+      </div>
+      {isLoading && <div className={styles.loading}>Loading board items…</div>}
+      {error && <div className={styles.error}>Failed to load board items: {error.message}</div>}
+      {!isLoading && !error && (!boardItems || boardItems.length === 0) && (
+        <div className={styles['section-empty']} data-testid="my-work-board-assigned-empty">
+          No Work Board items assigned to you.
+        </div>
+      )}
+      {!!boardItems?.length && (
+        <div className={styles.list} data-testid="my-work-board-assigned-list">
+          {boardItems.map((item: ApexWorkItem) => (
+            <div key={item.id} className={styles.item}>
+              <div className={styles['item-info']}>
+                <span className={styles['item-title']}>{item.title}</span>
+                <div className={styles['item-meta']}>
+                  <span className={styles['item-id']}>APX-{item.itemNumber}</span>
+                  <span className={styles.badge}>{item.type}</span>
+                  <span className={styles.badge}>
+                    {STATUS_META[item.status]?.label ?? item.status}
+                  </span>
+                </div>
+              </div>
+              <div className={styles['item-actions']}>
+                <button
+                  type="button"
+                  className={styles['view-context-btn']}
+                  onClick={() => navigate(`/work-board?item=${encodeURIComponent(item.id)}`)}
+                  data-testid={`my-work-board-item-link-${item.itemNumber}`}
+                >
+                  Open on board
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+};
 
 export type ApexStatusFilter = 'all' | MyWorkStatus;
 
@@ -517,10 +578,12 @@ const ApexBacklogView: React.FC<{
 export const DevWorkbenchView: React.FC = () => {
   const navigate = useNavigate();
   const { selectedProject, isSuperAdmin } = useAppShell();
+  const { enabledViews } = useProjectMenuConfig(selectedProject);
   const usesAppNativeRequirements = isAppNativeRequirementsProject(selectedProject);
+  const showBoardAssigned = usesBoardProject(selectedProject, enabledViews);
 
   const { data: workItems, isLoading, error } = useAssignedWorkItems(
-    usesAppNativeRequirements ? null : (selectedProject || null),
+    usesAppNativeRequirements || showBoardAssigned ? null : (selectedProject || null),
   );
   const { data: activeSessions } = useActiveSessions(selectedProject || null);
   const startSession = useStartDevSession();
@@ -574,24 +637,31 @@ export const DevWorkbenchView: React.FC = () => {
     }
   };
 
-  if (usesAppNativeRequirements && selectedProject) {
+  if ((usesAppNativeRequirements || showBoardAssigned) && selectedProject) {
     return (
       <div className={styles.container} {...{ 'data-testid': 'my-work-page' }}>
         <div className={styles.header} {...{ 'data-testid': 'my-work-header' }}>
           <h1 className={styles.title}>My Work</h1>
-          <p className={styles.subtitle}>Approved PRD features ready for development</p>
+          <p className={styles.subtitle}>
+            {usesAppNativeRequirements
+              ? 'Approved PRD features and Work Board assignments'
+              : 'Work Board items assigned to you'}
+          </p>
         </div>
-        <section
-          className={styles.section}
-          aria-labelledby="feature-backlog-heading"
-          {...{ 'data-testid': 'my-work-feature-backlog-section' }}
-        >
-          <div className={styles['section-header']}>
-            <h2 id="feature-backlog-heading">Feature Backlog</h2>
-            <p>Approved PRD features</p>
-          </div>
-          <ApexBacklogView project={selectedProject} activeSessions={activeSessions ?? []} />
-        </section>
+        {showBoardAssigned && <BoardAssignedSection project={selectedProject} />}
+        {usesAppNativeRequirements && (
+          <section
+            className={styles.section}
+            aria-labelledby="feature-backlog-heading"
+            {...{ 'data-testid': 'my-work-feature-backlog-section' }}
+          >
+            <div className={styles['section-header']}>
+              <h2 id="feature-backlog-heading">Feature Backlog</h2>
+              <p>Approved PRD features</p>
+            </div>
+            <ApexBacklogView project={selectedProject} activeSessions={activeSessions ?? []} />
+          </section>
+        )}
       </div>
     );
   }
