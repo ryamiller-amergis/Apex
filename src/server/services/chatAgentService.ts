@@ -3270,6 +3270,29 @@ async function postInteractiveActorDispatch(dispatch: {
 interface InteractiveDispatchAttempt {
   dispatched: boolean;
   persistedUserMessage?: ChatMessage;
+  /** Why actor dispatch was skipped / failed (for telemetry + troubleshooting). */
+  bypassReason?: string;
+}
+
+/** Bound interactive prep so a grounding hang cannot swallow the fire-and-forget turn. */
+function resolveInteractiveDispatchAttemptTimeoutMs(): number {
+  const raw = Number.parseInt(
+    process.env.AI_RUNS_INTERACTIVE_DISPATCH_ATTEMPT_TIMEOUT_MS ?? '',
+    10,
+  );
+  return Number.isFinite(raw) && raw > 0 ? raw : 45_000;
+}
+
+function trackInteractiveDispatch(
+  name: string,
+  props: Record<string, string>,
+  measurements?: Record<string, number>,
+): void {
+  try {
+    trackEvent(name, props, measurements);
+  } catch {
+    // Telemetry must never affect the turn.
+  }
 }
 
 async function tryDispatchInteractiveTurn(
@@ -3281,150 +3304,273 @@ async function tryDispatchInteractiveTurn(
 ): Promise<InteractiveDispatchAttempt> {
   // Inert unless the actor host dispatch URL is configured (cloud only).
   if (!process.env[INTERACTIVE_DISPATCH_URL_ENV]?.trim()) {
-    return { dispatched: false };
+    trackInteractiveDispatch('interactive.dispatch.bypass', {
+      threadId,
+      reason: 'dispatch-url-unset',
+    });
+    return { dispatched: false, bypassReason: 'dispatch-url-unset' };
   }
   // Attachment files currently belong to the in-process workspace lifecycle.
   // Keep those turns on the established path until actor materialization owns
   // the same attachment contract.
-  if (attachments.length > 0) return { dispatched: false };
+  if (attachments.length > 0) {
+    trackInteractiveDispatch('interactive.dispatch.bypass', {
+      threadId,
+      reason: 'attachments',
+    });
+    return { dispatched: false, bypassReason: 'attachments' };
+  }
+
+  const timeoutMs = resolveInteractiveDispatchAttemptTimeoutMs();
+  const startedAt = Date.now();
+  trackInteractiveDispatch('interactive.dispatch.attempt', {
+    threadId,
+    timeoutMs: String(timeoutMs),
+  });
+  console.log('[chat] Interactive dispatch attempt', { threadId, timeoutMs });
 
   let queuedRunId: string | undefined;
   let persistedUserMessage: ChatMessage | undefined;
   let dispatchStage = 'load-thread';
+
+  const markStage = (stage: string): void => {
+    const prev = dispatchStage;
+    dispatchStage = stage;
+    trackInteractiveDispatch('interactive.dispatch.stage', {
+      threadId,
+      stage,
+      previousStage: prev,
+    }, { elapsedMs: Date.now() - startedAt });
+    console.log('[chat] Interactive dispatch stage', {
+      threadId,
+      stage,
+      elapsedMs: Date.now() - startedAt,
+    });
+  };
+
+  const bypass = (
+    reason: string,
+  ): InteractiveDispatchAttempt => {
+    trackInteractiveDispatch('interactive.dispatch.bypass', {
+      threadId,
+      reason,
+      stage: dispatchStage,
+    }, { elapsedMs: Date.now() - startedAt });
+    console.log('[chat] Interactive dispatch bypass', {
+      threadId,
+      reason,
+      stage: dispatchStage,
+      elapsedMs: Date.now() - startedAt,
+    });
+    return { dispatched: false, persistedUserMessage, bypassReason: reason };
+  };
+
+  let timedOut = false;
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
+  const runAttempt = async (): Promise<InteractiveDispatchAttempt> => {
+    try {
+      const state = await ensureThreadState(threadId);
+      if (timedOut) return bypass('timeout-abort');
+      if (!state || state.thread.status === 'running') {
+        return bypass(!state ? 'thread-missing' : 'thread-already-running');
+      }
+      const userId = state.thread.userId;
+      const project = state.thread.kickoff.project;
+      if (!userId || !project) return bypass('missing-user-or-project');
+
+      const workflowClass = resolveInteractiveWorkflowClass(state);
+      markStage('ground-turn');
+      const grounding = await ensureThreadGrounding(state);
+      if (timedOut) return bypass('timeout-abort');
+      if (grounding.mode !== 'local' || !grounding.nativeReads) {
+        return bypass(
+          grounding.mode !== 'local'
+            ? `grounding-mode-${grounding.mode}`
+            : 'native-reads-false',
+        );
+      }
+      const repoReader = await groundingProfileResolver.resolveConnectionProfile(
+        grounding.profileId,
+      );
+      if (timedOut) return bypass('timeout-abort');
+      if (!isExactGroundingReader(repoReader, grounding, state.thread.kickoff)) {
+        return bypass('grounding-reader-mismatch');
+      }
+      state.groundingWorkspaceDir = grounding.cwd;
+
+      markStage('prepare-turn');
+      const recoveryContext = state.isInterviewThread
+        ? buildAgentRecoveryContext(state.thread.messages)
+        : null;
+      const prompt = await buildNewAgentTurnPrompt(
+        state.thread.kickoff,
+        text,
+        false,
+        recoveryContext,
+        {
+          preloadRepositoryContext: state.isInterviewThread,
+          repoSearchEnabled: !state.isInterviewThread,
+          nativeReads: true,
+          repoReader,
+        },
+      );
+      if (timedOut) return bypass('timeout-abort');
+      const skillPath = state.thread.kickoff.skillPath ?? '';
+      const snapshot: ExecutionSnapshot = {
+        prompt,
+        model: resolveModelId(modelOverride ?? state.thread.kickoff.model),
+        workspaceRef: grounding.cwd,
+        workflowClass,
+        skillPath,
+        projectId: project,
+        threadId,
+      };
+      const timeoutAt = new Date(
+        Date.now() + resolveAgentRunHardLimitMs(),
+      ).toISOString();
+      markStage('enqueue');
+      const enqueued = await enqueue({
+        threadId,
+        projectId: project,
+        snapshot,
+        timeoutAt,
+        lane: INTERACTIVE_LANE,
+      });
+      queuedRunId = enqueued.runId;
+      if (timedOut) {
+        await db.delete(agentRuns).where(eq(agentRuns.id, enqueued.runId)).catch(() => {});
+        queuedRunId = undefined;
+        return bypass('timeout-abort');
+      }
+
+      markStage('route');
+      const decision = await interactiveWorkflowRouter.route({
+        userId,
+        project,
+        workflowClass,
+        threadId,
+        runId: enqueued.runId,
+        dispatchToActor: async (d) => {
+          if (timedOut) {
+            throw new Error('Interactive dispatch timed out before actor post');
+          }
+          // Actor turns return before the in-process persistence block below.
+          // Persist and fan out the user message at this dispatch boundary so
+          // refresh/replay contains both sides of the conversation.
+          const userMessage: ChatMessage = {
+            id: uuidv4(),
+            role: 'user',
+            text: text.trim() || 'Uploaded files for context.',
+            ts: new Date().toISOString(),
+            ...(options?.hidden ? { hidden: true } : {}),
+          };
+          state.thread.messages.push(userMessage);
+          state.thread.lastActivityAt = userMessage.ts;
+          broadcast(state, { type: 'message', message: userMessage });
+          await pgInsertMessage(threadId, userMessage);
+          persistedUserMessage = userMessage;
+
+          state.thread.status = 'running';
+          state.thread.activeRunId = d.runId;
+          await pgUpsertThread(state.thread);
+          broadcast(state, { type: 'status', status: 'running' });
+
+          markStage('post-actor');
+          try {
+            await postInteractiveActorDispatch({
+              threadId,
+              runId: d.runId,
+              dispatchMessageId: d.dispatchMessageId,
+            });
+          } catch (error) {
+            state.thread.status = 'idle';
+            state.thread.activeRunId = undefined;
+            await pgUpsertThread(state.thread).catch(() => undefined);
+            broadcast(state, { type: 'status', status: 'idle' });
+            throw error;
+          }
+        },
+        // The caller (sendMessage) owns the in-process fallback; the router's own
+        // in-process branch is a no-op here so we never double-execute a turn.
+        runInProcess: () => {},
+      });
+
+      if (timedOut) {
+        await db.delete(agentRuns).where(eq(agentRuns.id, enqueued.runId)).catch(() => {});
+        return bypass('timeout-abort');
+      }
+
+      if (decision.route === 'actor') {
+        trackInteractiveDispatch('interactive.dispatch.actor', {
+          threadId,
+          runId: enqueued.runId,
+          workflowClass,
+        }, { elapsedMs: Date.now() - startedAt });
+        return { dispatched: true, persistedUserMessage };
+      }
+
+      // Shed / race-lost / eval-error: discard the transient queued row.
+      await db.delete(agentRuns).where(eq(agentRuns.id, enqueued.runId)).catch(() => {});
+      const routeReason =
+        decision.route === 'in-process' ? decision.reason : 'not-actor';
+      return bypass(`route-${routeReason}`);
+    } catch (error) {
+      if (timedOut) return bypass('timeout-abort');
+      const errorType = error instanceof Error ? error.name : 'UnknownError';
+      console.warn('[chat] Interactive dispatch failed; using in-process fallback', {
+        threadId,
+        runId: queuedRunId,
+        stage: dispatchStage,
+        errorType,
+        elapsedMs: Date.now() - startedAt,
+      });
+      trackInteractiveDispatch('interactive.dispatch.failed', {
+        threadId,
+        stage: dispatchStage,
+        errorType,
+        errorMessage:
+          error instanceof Error ? error.message.slice(0, 200) : 'unknown',
+      }, { elapsedMs: Date.now() - startedAt });
+      if (queuedRunId) {
+        await db.delete(agentRuns).where(eq(agentRuns.id, queuedRunId)).catch(() => {});
+      }
+      return {
+        dispatched: false,
+        persistedUserMessage,
+        bypassReason: `error-${dispatchStage}-${errorType}`,
+      };
+    }
+  };
+
   try {
-    const state = await ensureThreadState(threadId);
-    if (!state || state.thread.status === 'running') {
-      return { dispatched: false };
-    }
-    const userId = state.thread.userId;
-    const project = state.thread.kickoff.project;
-    if (!userId || !project) return { dispatched: false };
-
-    const workflowClass = resolveInteractiveWorkflowClass(state);
-    dispatchStage = 'ground-turn';
-    const grounding = await ensureThreadGrounding(state);
-    if (grounding.mode !== 'local' || !grounding.nativeReads) {
-      return { dispatched: false };
-    }
-    const repoReader = await groundingProfileResolver.resolveConnectionProfile(
-      grounding.profileId,
-    );
-    if (!isExactGroundingReader(repoReader, grounding, state.thread.kickoff)) {
-      return { dispatched: false };
-    }
-    state.groundingWorkspaceDir = grounding.cwd;
-
-    dispatchStage = 'prepare-turn';
-    const recoveryContext = state.isInterviewThread
-      ? buildAgentRecoveryContext(state.thread.messages)
-      : null;
-    const prompt = await buildNewAgentTurnPrompt(
-      state.thread.kickoff,
-      text,
-      false,
-      recoveryContext,
-      {
-        preloadRepositoryContext: state.isInterviewThread,
-        repoSearchEnabled: !state.isInterviewThread,
-        nativeReads: true,
-        repoReader,
-      },
-    );
-    const skillPath = state.thread.kickoff.skillPath ?? '';
-    const snapshot: ExecutionSnapshot = {
-      prompt,
-      model: resolveModelId(modelOverride ?? state.thread.kickoff.model),
-      workspaceRef: grounding.cwd,
-      workflowClass,
-      skillPath,
-      projectId: project,
-      threadId,
-    };
-    const timeoutAt = new Date(
-      Date.now() + resolveAgentRunHardLimitMs(),
-    ).toISOString();
-    dispatchStage = 'enqueue';
-    const enqueued = await enqueue({
-      threadId,
-      projectId: project,
-      snapshot,
-      timeoutAt,
-      lane: INTERACTIVE_LANE,
-    });
-    queuedRunId = enqueued.runId;
-
-    dispatchStage = 'route';
-    const decision = await interactiveWorkflowRouter.route({
-      userId,
-      project,
-      workflowClass,
-      threadId,
-      runId: enqueued.runId,
-      dispatchToActor: async (d) => {
-        // Actor turns return before the in-process persistence block below.
-        // Persist and fan out the user message at this dispatch boundary so
-        // refresh/replay contains both sides of the conversation.
-        const userMessage: ChatMessage = {
-          id: uuidv4(),
-          role: 'user',
-          text: text.trim() || 'Uploaded files for context.',
-          ts: new Date().toISOString(),
-          ...(options?.hidden ? { hidden: true } : {}),
-        };
-        state.thread.messages.push(userMessage);
-        state.thread.lastActivityAt = userMessage.ts;
-        broadcast(state, { type: 'message', message: userMessage });
-        await pgInsertMessage(threadId, userMessage);
-        persistedUserMessage = userMessage;
-
-        state.thread.status = 'running';
-        state.thread.activeRunId = d.runId;
-        await pgUpsertThread(state.thread);
-        broadcast(state, { type: 'status', status: 'running' });
-
-        try {
-          await postInteractiveActorDispatch({
+    const result = await Promise.race([
+      runAttempt(),
+      new Promise<InteractiveDispatchAttempt>((resolve) => {
+        timeoutHandle = setTimeout(() => {
+          timedOut = true;
+          trackInteractiveDispatch('interactive.dispatch.timeout', {
             threadId,
-            runId: d.runId,
-            dispatchMessageId: d.dispatchMessageId,
+            stage: dispatchStage,
+            timeoutMs: String(timeoutMs),
+          }, { elapsedMs: Date.now() - startedAt });
+          console.warn('[chat] Interactive dispatch attempt timed out; failing closed to in-process', {
+            threadId,
+            stage: dispatchStage,
+            timeoutMs,
+            elapsedMs: Date.now() - startedAt,
           });
-        } catch (error) {
-          state.thread.status = 'idle';
-          state.thread.activeRunId = undefined;
-          await pgUpsertThread(state.thread).catch(() => undefined);
-          broadcast(state, { type: 'status', status: 'idle' });
-          throw error;
-        }
-      },
-      // The caller (sendMessage) owns the in-process fallback; the router's own
-      // in-process branch is a no-op here so we never double-execute a turn.
-      runInProcess: () => {},
-    });
-
-    if (decision.route === 'actor') {
-      return { dispatched: true, persistedUserMessage };
-    }
-
-    // Shed / race-lost / eval-error: discard the transient queued row.
-    await db.delete(agentRuns).where(eq(agentRuns.id, enqueued.runId)).catch(() => {});
-    return { dispatched: false, persistedUserMessage };
-  } catch (error) {
-    const errorType = error instanceof Error ? error.name : 'UnknownError';
-    console.warn('[chat] Interactive dispatch failed; using in-process fallback', {
-      threadId,
-      runId: queuedRunId,
-      stage: dispatchStage,
-      errorType,
-    });
-    trackEvent('interactive.dispatch.failed', {
-      threadId,
-      stage: dispatchStage,
-      errorType,
-    });
-    if (queuedRunId) {
-      await db.delete(agentRuns).where(eq(agentRuns.id, queuedRunId)).catch(() => {});
-    }
-    return { dispatched: false, persistedUserMessage };
+          resolve({
+            dispatched: false,
+            persistedUserMessage,
+            bypassReason: `timeout-${dispatchStage}`,
+          });
+        }, timeoutMs);
+      }),
+    ]);
+    return result;
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
   }
 }
 
@@ -3435,6 +3581,18 @@ export async function sendMessage(
   attachments: ChatAttachment[] = [],
   options?: { hidden?: boolean },
 ): Promise<void> {
+  const sendStartedAt = Date.now();
+  console.log('[chat] sendMessage.start', {
+    threadId,
+    attachmentCount: attachments.length,
+    hidden: Boolean(options?.hidden),
+  });
+  trackEvent('chat.send.start', {
+    threadId,
+    attachmentCount: String(attachments.length),
+    hidden: String(Boolean(options?.hidden)),
+  });
+
   // @feature-flag:ai-runs-interactive start winner=disabled
   // FEAT-007: offload the turn to the warm Dapr actor lane when enabled + admitted.
   // Fail-closed: any other outcome falls through to the in-process path below.
@@ -3445,6 +3603,17 @@ export async function sendMessage(
     attachments,
     options,
   );
+  trackEvent('chat.send.interactive_result', {
+    threadId,
+    dispatched: String(interactiveAttempt.dispatched),
+    bypassReason: interactiveAttempt.bypassReason ?? '',
+  }, { elapsedMs: Date.now() - sendStartedAt });
+  console.log('[chat] sendMessage.interactive_result', {
+    threadId,
+    dispatched: interactiveAttempt.dispatched,
+    bypassReason: interactiveAttempt.bypassReason ?? null,
+    elapsedMs: Date.now() - sendStartedAt,
+  });
   if (interactiveAttempt.dispatched) {
     return;
   }
@@ -3463,7 +3632,7 @@ export async function sendMessage(
     if (myWorkContext) logMyWorkSession(event, { ...myWorkContext, ...context }, level);
   };
   const runStartedAtMs = Date.now();
-  console.log('[chat] sendMessage', { threadId, status: state.thread.status });
+  console.log('[chat] sendMessage.in_process', { threadId, status: state.thread.status });
   logMyWork('message.received', {
     threadStatus: state.thread.status,
     messageLength: text.length,

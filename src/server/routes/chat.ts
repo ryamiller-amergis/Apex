@@ -47,6 +47,7 @@ import {
 } from '../services/agentRunReaperService';
 import { getMyWorkSessionContext, logMyWorkSession } from '../services/myWorkSessionLogger';
 import { isFeatureEnabled } from '../services/featureFlagService';
+import { trackEvent } from '../services/telemetry';
 
 const router = Router();
 
@@ -512,10 +513,25 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
     // Dead run cleared — accept the message.
   }
 
-  // Fire-and-forget: response streams via SSE, this returns 202 immediately
+  // Fire-and-forget: response streams via SSE/WS; 202 returns immediately.
+  // Breadcrumb BEFORE the async turn so a hang inside sendMessage is still visible.
+  const threadId = req.params.id;
+  console.log('[chat] messages.accepted', {
+    threadId,
+    attachmentCount: attachments.length,
+  });
+  trackEvent('chat.messages.accepted', {
+    threadId,
+    attachmentCount: String(attachments.length),
+  });
   res.status(202).json({ ok: true });
-  sendMessage(req.params.id, body.text ?? '', body.model, attachments).catch((err: unknown) => {
-    console.error(`[chat] sendMessage error for thread ${req.params.id}:`, errorMessage(err));
+  sendMessage(threadId, body.text ?? '', body.model, attachments).catch((err: unknown) => {
+    console.error(`[chat] sendMessage error for thread ${threadId}:`, errorMessage(err));
+    trackEvent('chat.send.failed', {
+      threadId,
+      errorType: err instanceof Error ? err.name : 'UnknownError',
+      errorMessage: errorMessage(err).slice(0, 200),
+    });
   });
 });
 
