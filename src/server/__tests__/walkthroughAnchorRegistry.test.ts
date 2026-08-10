@@ -19,7 +19,7 @@ const MIGRATION_PATH = path.resolve(
 );
 const WORK_BOARD_SEED_MIGRATION_PATH = path.resolve(
   __dirname,
-  '../../../migrations/1786384024693_work-board-walkthrough-anchor-seed.sql',
+  '../../../migrations/20260810183000_work-board-walkthrough-anchor-seed.sql',
 );
 
 /** Anchors seeded by the follow-up Work Board migration rather than the create migration. */
