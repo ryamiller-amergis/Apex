@@ -109,9 +109,10 @@ export const NutrientWorkbenchHeader: React.FC<WorkbenchHeaderProps> = ({
       <div className={styles.group}>
         <a
           className={styles.iconBtn}
-          href="/pdf-tools"
+          href="/pdf-tools/nutrient-poc"
           onClick={onBack}
           aria-label="Back to PDF tools"
+          data-testid="nutrient-header-back"
         >
           <ArrowLeft size={16} strokeWidth={2} aria-hidden="true" />
         </a>

@@ -72,7 +72,6 @@ const StandupManageView = lazy(() => import('./components/StandupManageView'));
 const StandupSummaryView = lazy(() => import('./components/StandupSummaryView'));
 const FeatureRequestsView = lazy(() => import('./components/FeatureRequestsView'));
 const UiLabView = lazy(() => import('./components/UiLabView').then(m => ({ default: m.UiLabView })));
-const PdfAssemblyView = lazy(() => import('./components/PdfAssemblyView').then(m => ({ default: m.PdfAssemblyView })));
 const ApryseWebViewerPoc = lazy(() => import('./components/ApryseWebViewerPoc').then(m => ({ default: m.ApryseWebViewerPoc })));
 const NutrientWebSdkPoc = lazy(() => import('./components/NutrientWebSdkPoc').then(m => ({ default: m.NutrientWebSdkPoc })));
 const DesignModuleView = lazy(() => import('./components/DesignModuleView'));
@@ -556,7 +555,7 @@ function App() {
             onNavigateStandup={() => navigate('/standup')}
             onNavigateUiLab={() => navigate('/ui-lab')}
             onNavigateFeatureRequests={() => navigate('/feature-requests')}
-            onNavigatePdfTools={() => navigate('/pdf-tools')}
+            onNavigatePdfTools={() => navigate('/pdf-tools/nutrient-poc')}
             onNavigateAiCost={() => navigate('/ai-cost')}
             onNavigateDesignModule={() => navigate('/design-module')}
             onNavigateLoadTests={() => navigate('/load-tests')}
@@ -901,10 +900,8 @@ function App() {
                     <div className="pdf-tools-view" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                       {location.pathname === '/pdf-tools/webviewer-poc' ? (
                         <ApryseWebViewerPoc />
-                      ) : location.pathname === '/pdf-tools/nutrient-poc' ? (
-                        <NutrientWebSdkPoc />
                       ) : (
-                        <PdfAssemblyView key={userId} userId={userId} />
+                        <NutrientWebSdkPoc />
                       )}
                     </div>
                   </Suspense>
