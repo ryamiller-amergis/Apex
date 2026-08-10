@@ -12,6 +12,7 @@ interface FoundationSkillUpdateBannerProps {
   repo: string | null | undefined;
   provider?: 'ado' | 'github';
   branch?: string;
+  'data-testid'?: string;
 }
 
 interface StepCmd {
@@ -358,6 +359,7 @@ export const FoundationSkillUpdateBanner: React.FC<FoundationSkillUpdateBannerPr
   repo,
   provider = 'ado',
   branch = 'main',
+  'data-testid': dataTestId = 'foundation-skills-update-banner',
 }) => {
   const [dismissed, setDismissed] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
@@ -402,6 +404,7 @@ export const FoundationSkillUpdateBanner: React.FC<FoundationSkillUpdateBannerPr
       className={`${styles.strip} ${hasBreaking ? styles.stripWarning : ''}`}
       role="note"
       aria-label="Foundation skills update available"
+      {...{ 'data-testid': dataTestId }}
     >
       <div className={styles.mainRow}>
         <span className={styles.icon} aria-hidden="true">

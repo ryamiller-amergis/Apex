@@ -15,12 +15,17 @@ import {
   groundingStalenessService,
   type GroundingStalenessService,
 } from './groundingStalenessService';
+import {
+  sharedReadCheckoutService,
+  type SharedReadCheckoutService,
+} from './grounding/sharedReadCheckoutService';
 
 export const GROUNDING_MAINTENANCE_INTERVAL_MS = 5 * 60 * 1000;
 
 export interface GroundingMaintenanceSchedulerDependencies {
   preWarmService?: Pick<GroundingPreWarmService, 'preWarm' | 'sweep'>;
   evictionService?: Pick<GroundingEvictionService, 'evictIdle'>;
+  sharedReadCheckoutService?: Pick<SharedReadCheckoutService, 'evictIdle'>;
   stalenessService?: Pick<GroundingStalenessService, 'evaluateActive'>;
   subscribe?: (
     handler: GroundingActiveSetChangeHandler,
@@ -42,6 +47,10 @@ export class GroundingMaintenanceScheduler {
     GroundingEvictionService,
     'evictIdle'
   >;
+  private readonly sharedReadCheckoutService: Pick<
+    SharedReadCheckoutService,
+    'evictIdle'
+  >;
   private readonly stalenessService: Pick<
     GroundingStalenessService,
     'evaluateActive'
@@ -59,6 +68,8 @@ export class GroundingMaintenanceScheduler {
       dependencies.preWarmService ?? groundingPreWarmService;
     this.evictionService =
       dependencies.evictionService ?? groundingEvictionService;
+    this.sharedReadCheckoutService =
+      dependencies.sharedReadCheckoutService ?? sharedReadCheckoutService;
     this.stalenessService =
       dependencies.stalenessService ?? groundingStalenessService;
     this.subscribe =
@@ -110,6 +121,7 @@ export class GroundingMaintenanceScheduler {
       await this.preWarmService.sweep();
       await this.stalenessService.evaluateActive();
       await this.evictionService.evictIdle();
+      await this.sharedReadCheckoutService.evictIdle();
     } finally {
       this.isRunning = false;
     }

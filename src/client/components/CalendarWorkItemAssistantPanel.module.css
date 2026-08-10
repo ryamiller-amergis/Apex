@@ -647,6 +647,12 @@
   background: var(--bg-primary);
 }
 
+.composerEmbed {
+  padding: 0;
+  border-top: none;
+  background: transparent;
+}
+
 .input {
   width: 100%;
   resize: none;

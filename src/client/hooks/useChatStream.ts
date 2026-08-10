@@ -16,6 +16,12 @@ import type {
   SseToolStatusEvent,
 } from '../../shared/types/chat';
 import { v4 as uuidv4 } from 'uuid';
+import {
+  INTERACTIVE_WS_CHANGED_EVENT,
+  isInteractiveWsEnabled,
+  openThreadEventStream,
+  type ThreadStreamHandle,
+} from '../utils/threadEventStream';
 
 export interface ToolProgress {
   callId: string;
@@ -91,6 +97,8 @@ const DURABLE_SSE_EVENT_TYPES = new Set<SseEvent['type']>([
   'done',
 ]);
 const RUN_PHASES = new Set<AgentRunPhase>([
+  'queued',
+  'dispatched',
   'setup',
   'planning',
   'approval',
@@ -129,6 +137,15 @@ function safeTimestamp(value: unknown, fallback = Date.now()): number {
   if (typeof value !== 'string') return fallback;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function progressLabelForPhase(
+  phase: AgentRunPhase,
+  detail?: string,
+): string {
+  if (phase === 'queued') return 'Queued — waiting for available worker';
+  if (phase === 'dispatched') return 'Starting…';
+  return detail ?? phase;
 }
 
 function normalizePhaseEvent(
@@ -186,8 +203,13 @@ export function useChatStream(
   const [isRetrying, setIsRetrying] = useState(false);
   const [retryReason, setRetryReason] = useState<string | null>(null);
   const [eventDrivenTermination, setEventDrivenTermination] = useState(false);
+  // Re-open the stream when ai-runs-interactive flips — otherwise a chat that
+  // connected as SSE while flags were still loading stays on SSE forever.
+  const [interactiveWsEnabled, setInteractiveWsEnabledState] = useState(
+    isInteractiveWsEnabled,
+  );
 
-  const esRef = useRef<EventSource | null>(null);
+  const streamRef = useRef<ThreadStreamHandle | null>(null);
   // Buffer tokens into the in-progress message
   const streamBufferRef = useRef('');
   const retryTimeoutRef = useRef<number | null>(null);
@@ -203,6 +225,15 @@ export function useChatStream(
   initialMessagesRef.current = options.initialMessages;
   initialStatusRef.current = options.initialStatus;
   initialPrdReadyRef.current = options.initialPrdReady;
+
+  useEffect(() => {
+    const sync = () => setInteractiveWsEnabledState(isInteractiveWsEnabled());
+    sync();
+    globalThis.addEventListener?.(INTERACTIVE_WS_CHANGED_EVENT, sync);
+    return () => {
+      globalThis.removeEventListener?.(INTERACTIVE_WS_CHANGED_EVENT, sync);
+    };
+  }, []);
 
   const rememberEventId = useCallback((eventId: string): boolean => {
     if (!eventId) return true;
@@ -271,6 +302,15 @@ export function useChatStream(
     });
   }, [options.initialMessages]);
 
+  // Promote stream status when REST catches up after mount. Without this, a
+  // thread that is already running can stay client-idle until the first SSE
+  // event — often minutes during workspace bootstrap — so the UI shows nothing.
+  useEffect(() => {
+    const snapshotStatus = options.initialStatus;
+    if (!snapshotStatus || snapshotStatus === 'idle') return;
+    setStatus((prev) => (prev === 'idle' ? snapshotStatus : prev));
+  }, [options.initialStatus]);
+
   useEffect(() => {
     // Always reset derived state (streaming buffer, prdReady, backlogReady) when
     // the thread changes — including switching from one thread to another.
@@ -280,30 +320,21 @@ export function useChatStream(
       return;
     }
 
-    const es = new EventSource(`/api/chat/threads/${threadId}/stream`, {
-      withCredentials: true,
-    } as EventSourceInit);
-
-    esRef.current = es;
-
-    es.addEventListener('open', () => setIsConnected(true));
-
-    es.addEventListener('error', () => {
-      setIsConnected(false);
-      // EventSource will auto-reconnect; don't close it here
-    });
-
-    es.addEventListener('message', (e: MessageEvent) => {
+    // FEAT-007: route through the transport-agnostic interactive stream.
+    // Defaults to SSE (EventSource) so behavior is unchanged until the
+    // WebSocket gateway is enabled; both backends deliver the same
+    // (data, lastEventId) pair this handler expects.
+    const handleMessage = (data: string, lastEventId: string) => {
       let event: SseEvent;
       try {
-        event = JSON.parse(e.data) as SseEvent;
+        event = JSON.parse(data) as SseEvent;
       } catch {
         return;
       }
 
       if (
         DURABLE_SSE_EVENT_TYPES.has(event.type)
-        && !rememberEventId(e.lastEventId)
+        && !rememberEventId(lastEventId)
       ) {
         return;
       }
@@ -314,7 +345,7 @@ export function useChatStream(
         || event.type === 'error'
         || event.type === 'done';
       const semanticPhase = capturesSemanticPhase
-        ? normalizePhaseEvent(event, e.lastEventId)
+        ? normalizePhaseEvent(event, lastEventId)
         : null;
       if (semanticPhase) {
         setPhaseEvents((previous) => {
@@ -326,7 +357,7 @@ export function useChatStream(
           return [...base, semanticPhase].slice(-MAX_PHASE_EVENTS);
         });
         setProgressPhase(semanticPhase.phase);
-        setProgressLabel(semanticPhase.detail ?? semanticPhase.phase);
+        setProgressLabel(progressLabelForPhase(semanticPhase.phase, semanticPhase.detail));
         if (event.type === 'phase' || event.type === 'tool_call' || event.type === 'tool_status') {
           setLastProgressAt(semanticPhase.timestamp);
         }
@@ -372,7 +403,11 @@ export function useChatStream(
           break;
         }
         case 'phase': {
-          if (semanticPhase?.status === 'running') {
+          if (
+            semanticPhase?.status === 'running'
+            || semanticPhase?.phase === 'queued'
+            || semanticPhase?.phase === 'dispatched'
+          ) {
             setStatus((previous) => previous === 'idle' ? 'running' : previous);
           }
           break;
@@ -511,16 +546,27 @@ export function useChatStream(
           break;
         }
       }
+    };
+
+    const stream = openThreadEventStream(threadId, {
+      onOpen: () => setIsConnected(true),
+      onError: () => {
+        // SSE auto-reconnects; the WS backend reconnects with ordinal resume.
+        setIsConnected(false);
+      },
+      onMessage: handleMessage,
     });
 
+    streamRef.current = stream;
+
     return () => {
-      es.close();
-      esRef.current = null;
+      stream.close();
+      streamRef.current = null;
       setIsConnected(false);
       clearRetryTimeout();
       clearPollTimer();
     };
-  }, [threadId, reset, rememberEventId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [threadId, reset, rememberEventId, interactiveWsEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Polling fallback: when status is 'running' and SSE is disconnected, poll
   // the server every 5 seconds to detect terminal status from Postgres.
@@ -547,8 +593,15 @@ export function useChatStream(
         const data = (await res.json()) as AgentRunStatusResponse;
         const persistedProgressAt = data.progressAt ? Date.parse(data.progressAt) : Number.NaN;
         if (Number.isFinite(persistedProgressAt)) setLastProgressAt(persistedProgressAt);
-        setProgressLabel(safeDetail(data.progressLabel) ?? null);
-        setProgressPhase(RUN_PHASES.has(data.progressPhase as AgentRunPhase) ? data.progressPhase : null);
+        const polledProgressPhase = RUN_PHASES.has(data.progressPhase as AgentRunPhase)
+          ? data.progressPhase
+          : null;
+        setProgressLabel(
+          polledProgressPhase
+            ? progressLabelForPhase(polledProgressPhase, safeDetail(data.progressLabel))
+            : null,
+        );
+        setProgressPhase(polledProgressPhase);
         if (RUN_HEALTH_VALUES.has(data.health)) {
           setRunHealth({
             health: data.health,

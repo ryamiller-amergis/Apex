@@ -427,6 +427,12 @@
   flex-shrink: 0;
 }
 
+.composerEmbed {
+  padding: 12px 0 0;
+  border-top: none;
+  background: transparent;
+}
+
 .textarea {
   width: 100%;
   padding: 12px 14px;

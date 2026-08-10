@@ -8,7 +8,7 @@ import {
 } from '../hooks/useChatThreads';
 import { DEFAULT_MODEL_ID, modelBadge } from '../config/models';
 import { useAvailableModels, useGlobalDefaultModel } from '../hooks/useProjectSkillConfig';
-import { formatAttachmentSize, useChatAttachments } from '../hooks/useChatAttachments';
+import { useChatAttachments } from '../hooks/useChatAttachments';
 import type {
   ChatAttachment,
   ChatThread,
@@ -18,6 +18,7 @@ import type {
 } from '../../shared/types/chat';
 import { PRDPreviewDrawer } from './PRDPreviewDrawer';
 import { ThreadHistorySidebar } from './ThreadHistorySidebar';
+import { AgentComposer } from './agentChat';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { useFocusChatMessage } from '../hooks/useFocusChatMessage';
@@ -497,14 +498,6 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     setSkillPickerOpen(false);
   }, []);
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const val = e.target.value;
-    setInput(val);
-    const isSlash = /^\//.test(val);
-    setSkillPickerOpen(isSlash);
-    if (isSlash) setSkillPickerIdx(0);
-  };
-
   const handleAttachmentChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     await addFiles(e.currentTarget.files);
     e.currentTarget.value = '';
@@ -534,12 +527,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
       if (e.key === 'Escape') {
         e.preventDefault();
         setSkillPickerOpen(false);
-        return;
       }
-    }
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      doSend(input, attachments);
     }
   };
 
@@ -771,22 +759,57 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             <div className={styles.prdBanner}>
               <span className={styles.prdBannerText}>📄 PRD is ready for review</span>
               <div className={styles.prdActions}>
-                <button className={styles.btnSecondary} onClick={() => setShowPrdPreview(true)}>Preview</button>
+                <button
+                  className={styles.btnSecondary}
+                  onClick={() => setShowPrdPreview(true)}
+                  type="button"
+                  {...{ 'data-testid': 'chat-agent-prd-preview-btn' }}
+                >
+                  Preview
+                </button>
               </div>
             </div>
           )}
 
-          <div className={styles.inputArea}>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              className={styles.fileInput}
-              onChange={handleAttachmentChange}
-              disabled={isRunning || status === 'closed'}
-            />
-            {/* Skill picker popover — anchored above the input grid */}
-            {skillPickerOpen && (
+          <AgentComposer
+            className={styles.composerEmbed}
+            value={input}
+            onChange={(val) => {
+              setInput(val);
+              const isSlash = /^\//.test(val);
+              setSkillPickerOpen(isSlash);
+              if (isSlash) setSkillPickerIdx(0);
+            }}
+            onSend={() => void doSend(input, attachments)}
+            onCancel={() => void session.cancel()}
+            disabled={status === 'closed'}
+            isRunning={isRunning}
+            isBusy={isRunning || status === 'closed'}
+            placeholder={isRunning ? 'Agent is thinking…' : 'Message agent · type / to invoke a skill…'}
+            testIdPrefix="chat-agent"
+            {...{ 'data-testid': 'chat-agent-composer' }}
+            allowEmptySend
+            attachments={attachments}
+            attachmentError={attachmentError}
+            onRemoveAttachment={removeAttachment}
+            onAttachClick={openFilePicker}
+            model={selectedModel}
+            models={availableModels}
+            modelsLoading={modelsLoading}
+            onModelChange={setSelectedModel}
+            onKeyDown={handleKeyDown}
+            textareaRef={textareaRef}
+            fileInput={(
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className={styles.fileInput}
+                onChange={handleAttachmentChange}
+                disabled={isRunning || status === 'closed'}
+              />
+            )}
+            before={skillPickerOpen ? (
               <div className={styles.skillPicker} ref={skillPickerRef}>
                 <div className={styles.skillPickerHeader}>
                   {filteredSkills.length === 0
@@ -809,90 +832,14 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                   </button>
                 ))}
               </div>
-            )}
-
-            <div className={styles.inputGrid}>
-              {/* Model dropdown */}
-              <select
-                className={styles.modelSelect}
-                value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
-                disabled={isRunning}
-                title="Agent model"
-                aria-label="Select model"
-              >
-                {modelsLoading || !availableModels?.length ? (
-                  <option value="">Loading models…</option>
-                ) : (
-                  availableModels.map((m) => (
-                    <option key={m.id} value={m.id}>{m.displayName}</option>
-                  ))
-                )}
-              </select>
-
-              <button
-                className={styles.attachBtn}
-                onClick={openFilePicker}
-                type="button"
-                aria-label="Attach files"
-                title="Attach files for context"
-                disabled={isRunning || status === 'closed'}
-              >
-                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M7 10.5l5.2-5.2a3 3 0 114.2 4.2l-6.7 6.7a5 5 0 01-7.1-7.1l6.4-6.4" />
-                </svg>
-              </button>
-
-              {/* Message textarea */}
-              <textarea
-                ref={textareaRef}
-                className={styles.textarea}
-                placeholder={isRunning ? 'Agent is thinking…' : 'Message agent · type / to invoke a skill…'}
-                value={input}
-                onChange={handleInputChange}
-                onKeyDown={handleKeyDown}
-                disabled={isRunning || status === 'closed'}
-                rows={1}
-              />
-
-              {attachments.length > 0 && (
-                <div className={styles.attachmentList}>
-                  {attachments.map((attachment) => (
-                    <span key={attachment.id} className={styles.attachmentChip}>
-                      <span className={styles.attachmentName}>{attachment.name}</span>
-                      <span className={styles.attachmentSize}>{formatAttachmentSize(attachment.size)}</span>
-                      <button
-                        type="button"
-                        className={styles.attachmentRemove}
-                        onClick={() => removeAttachment(attachment.id)}
-                        aria-label={`Remove ${attachment.name}`}
-                        disabled={isRunning || status === 'closed'}
-                      >
-                        ×
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
-
-              {attachmentError && (
-                <div className={styles.attachmentError}>{attachmentError}</div>
-              )}
-
-              {/* Send / stop button */}
-              {isRunning ? (
-                <button className={styles.cancelBtn} onClick={() => void session.cancel()} title="Stop">■ Stop</button>
-              ) : (
-                <button className={styles.sendBtn} onClick={() => doSend(input, attachments)} disabled={(!input.trim() && attachments.length === 0) || status === 'closed'}>Send ↑</button>
-              )}
-
-              {/* Hint row spans textarea column */}
+            ) : undefined}
+            after={(
               <div className={styles.inputHint}>
                 <span className={styles.modelBadge}>{modelBadge(selectedModel)}</span>
                 Enter to send · Shift+Enter for newline · <kbd className={styles.kbdHint}>/</kbd> invoke skill
               </div>
-            </div>
-          </div>
+            )}
+          />
 
           {showPrdPreview && (
             <PRDPreviewDrawer

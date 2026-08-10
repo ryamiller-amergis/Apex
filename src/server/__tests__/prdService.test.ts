@@ -51,8 +51,47 @@ jest.mock('../services/chatAgentService', () => ({
   readOutputValidationScorecard: jest.fn().mockReturnValue(null),
   readOutputValidationScorecardMd: jest.fn().mockReturnValue(null),
   sendMessage: jest.fn().mockResolvedValue(undefined),
+  prepareBackgroundWorkflowTurn: jest.fn().mockResolvedValue({
+    prompt: 'complete frozen PRD prompt',
+    model: 'prd-model',
+    skillPath: '.cursor/skills/to-prd/SKILL.md',
+    projectId: 'proj-alpha',
+    threadWorkspacePath: '/tmp/thread-prd',
+  }),
   createThread: jest.fn().mockResolvedValue({ id: 'thread-new', workspaceDir: '/tmp/thread-new' }),
   cancelRun: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock('../services/backgroundWorkflowRouter', () => ({
+  routeBackgroundWorkflow: jest.fn().mockImplementation(async (input: { runInProcess(): void }) => {
+    await input.runInProcess();
+    return { route: 'in-process', reason: 'flag-disabled' };
+  }),
+}));
+
+jest.mock('../services/runGroundingService', () => ({
+  propagatePipelineGrounding: jest.fn().mockResolvedValue({ state: 'propagated' }),
+  resolveRunGroundingSurface: jest.fn().mockResolvedValue(null),
+  runGroundingService: {
+    getGroundings: jest.fn().mockResolvedValue([{
+      id: 'grounding-prd',
+      runType: 'chat',
+      runId: 'thread-prd',
+      project: 'proj-alpha',
+      repoRole: 'target',
+      provider: 'github',
+      repository: 'org/repo',
+      branch: 'main',
+      groundedSha: 'abc123',
+      groundedAt: '2026-08-06T00:00:00.000Z',
+      isActive: true,
+      createdAt: '2026-08-06T00:00:00.000Z',
+      updatedAt: '2026-08-06T00:00:00.000Z',
+    }]),
+    persistThenMarkTerminalInactive: jest.fn().mockImplementation(
+      async (_run: unknown, persist: () => Promise<unknown>) => persist(),
+    ),
+  },
 }));
 
 jest.mock('../utils/rbacHelpers', () => ({
@@ -170,6 +209,7 @@ import {
   reviewPrd,
   deletePrd,
   syncPrdContent,
+  routePrdGenerationKickoff,
   startPrdWatcher,
   isPrdWatcherActive,
   arePrdValidationArtifactsReady,
@@ -188,6 +228,21 @@ import {
 } from '../services/prdService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
+const { routeBackgroundWorkflow: mockRouteBackgroundWorkflow } = jest.requireMock(
+  '../services/backgroundWorkflowRouter',
+) as { routeBackgroundWorkflow: jest.Mock };
+const { prepareBackgroundWorkflowTurn: mockPrepareBackgroundWorkflowTurn } =
+  jest.requireMock('../services/chatAgentService') as {
+    prepareBackgroundWorkflowTurn: jest.Mock;
+  };
+const { runGroundingService: mockRunGroundingService } = jest.requireMock(
+  '../services/runGroundingService',
+) as {
+  runGroundingService: {
+    getGroundings: jest.Mock;
+    persistThenMarkTerminalInactive: jest.Mock;
+  };
+};
 
 const {
   readOutputPrd: mockReadOutputPrd,
@@ -381,6 +436,121 @@ describe('createPrd', () => {
     expect(valuesMock).toHaveBeenCalledWith(
       expect.objectContaining({ title: 'Untitled PRD' }),
     );
+  });
+});
+
+describe('routePrdGenerationKickoff', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockRouteBackgroundWorkflow.mockImplementation(
+      async (input: { runInProcess(): void }) => {
+        await input.runInProcess();
+        return { route: 'in-process', reason: 'flag-disabled' };
+      },
+    );
+  });
+
+  it('AC-3 / DoD-1 / VT-05 routes disabled PRD without worker preparation', async () => {
+    await routePrdGenerationKickoff({
+      prdId: 'prd-1',
+      userId: 'user-1',
+      project: 'proj-alpha',
+      threadId: 'thread-prd',
+      kickoffMessage: 'Begin.',
+    });
+
+    expect(mockRouteBackgroundWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        workflowClass: 'prd',
+        threadId: 'thread-prd',
+        destinationRun: {
+          runType: 'chat',
+          runId: 'thread-prd',
+          project: 'proj-alpha',
+        },
+        prepareWorker: expect.any(Function),
+      }),
+    );
+    expect(mockPrepareBackgroundWorkflowTurn).not.toHaveBeenCalled();
+    expect(mockRunGroundingService.getGroundings).not.toHaveBeenCalled();
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      'thread-prd',
+      'Begin.',
+      undefined,
+      [],
+      { hidden: true },
+    );
+  });
+
+  it('AC-0: worker routing does not start in-process PRD execution', async () => {
+    mockRouteBackgroundWorkflow.mockImplementationOnce(async (input) => {
+      const prepared = await input.prepareWorker();
+      expect(prepared).toEqual(expect.objectContaining({
+        prompt: 'complete frozen PRD prompt',
+        targetGrounding: expect.objectContaining({
+          repoRole: 'target',
+          isActive: true,
+        }),
+      }));
+      return {
+        route: 'worker',
+        workspacePath: '/pinned',
+        runId: 'thread-prd',
+      };
+    });
+
+    await routePrdGenerationKickoff({
+      prdId: 'prd-1',
+      userId: 'user-1',
+      project: 'proj-alpha',
+      threadId: 'thread-prd',
+    });
+
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(mockPrepareBackgroundWorkflowTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('BR-008 / DoD-3: PRD preparation failure persists domain state before deactivation', async () => {
+    const deactivated = jest.fn();
+    mockRunGroundingService.persistThenMarkTerminalInactive.mockImplementationOnce(
+      async (_run, persist) => {
+        await persist();
+        deactivated();
+      },
+    );
+    mockRouteBackgroundWorkflow.mockImplementationOnce(
+      async (input: { reportRecoverablePreparationFailure(): Promise<void> }) => {
+        await input.reportRecoverablePreparationFailure();
+        return {
+          route: 'in-process',
+          reason: 'materialization-unavailable',
+          recoverable: true,
+        };
+      },
+    );
+
+    await routePrdGenerationKickoff({
+      prdId: 'prd-1',
+      userId: 'user-1',
+      project: 'proj-alpha',
+      threadId: 'thread-prd',
+    });
+
+    const updateChain = mockDb.update.mock.results[
+      mockDb.update.mock.results.length - 1
+    ].value;
+    expect(updateChain.set).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'draft' }),
+    );
+    expect(updateChain.where.mock.invocationCallOrder[0])
+      .toBeLessThan(deactivated.mock.invocationCallOrder[0]);
+    expect(mockRunGroundingService.persistThenMarkTerminalInactive)
+      .toHaveBeenCalledWith(
+        { runType: 'chat', runId: 'thread-prd', project: 'proj-alpha' },
+        expect.any(Function),
+      );
+    expect(mockSendMessage).not.toHaveBeenCalled();
   });
 });
 

@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
+import { AgentComposer } from './agentChat';
 import styles from './PrdAssistantPanel.module.css';
 
 export interface PrdAssistantPanelProps {
@@ -113,27 +114,12 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages.length, streamingText]);
 
-  // Auto-resize the textarea as the user types.
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
-  }, [input]);
-
   const handleSend = useCallback(async () => {
     const text = input.trim();
     if (!text) return;
     setInput('');
     await session.send(text);
   }, [input, session]);
-
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      void handleSend();
-    }
-  }, [handleSend]);
 
   const visibleMessages = messages.filter((m) => m.role !== 'tool' && !m.hidden && m.toolName !== '_reasoning' && m.toolName !== '_thinking');
 
@@ -296,37 +282,24 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
           </div>
         </div>
 
-        <div className={styles.inputArea}>
-          <div className={styles.inputBox}>
-            <textarea
-              ref={textareaRef}
-              className={styles.inputField}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={
-                isCreating ? 'Starting assistant…' :
-                isRunning ? 'Agent is thinking…' :
-                'Ask about this PRD… (Enter to send)'
-              }
-              rows={1}
-              disabled={isRunning || isSending || isCreating || !threadId}
-              {...{ 'data-testid': 'prd-assistant-input' }}
-            />
-            <button
-              className={styles.sendBtn}
-              onClick={() => void handleSend()}
-              disabled={!input.trim() || isRunning || isSending || isCreating || !threadId}
-              type="button"
-              aria-label="Send"
-              {...{ 'data-testid': 'prd-assistant-send-btn' }}
-            >
-              <svg viewBox="0 0 20 20" fill="currentColor">
-                <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
-              </svg>
-            </button>
-          </div>
-        </div>
+        <AgentComposer
+          className={styles.composerEmbed}
+          value={input}
+          onChange={setInput}
+          onSend={() => void handleSend()}
+          onCancel={isRunning ? () => void session.cancel() : undefined}
+          disabled={isRunning || isSending || isCreating || !threadId}
+          isRunning={isRunning}
+          isSending={isSending}
+          placeholder={
+            isCreating ? 'Starting assistant…' :
+            isRunning ? 'Agent is thinking…' :
+            'Ask about this PRD… (Enter to send)'
+          }
+          testIdPrefix="prd-assistant"
+          textareaRef={textareaRef}
+          {...{ 'data-testid': 'prd-assistant-composer' }}
+        />
       </div>
     </>
   );

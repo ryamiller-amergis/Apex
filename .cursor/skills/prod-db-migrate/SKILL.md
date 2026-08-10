@@ -48,6 +48,10 @@ All under `.cursor/skills/prod-db-migrate/scripts/`:
 | `verify-query.js` | Read-only SQL check (`$1`… params) |
 | `apply-prod-migrations.ps1` | **Orchestrator**: open → fetch URL → list → migrate → optional verify → close |
 
+> ⚠️ **`apply-named-migration.js` executes the ENTIRE file** (it runs the raw file text as one query and does **not** split on the `-- Up Migration` / `-- Down Migration` markers the way `node-pg-migrate` does). This differs from `migrate:up`, which runs only the Up section. Consequences when using `-NamedMigration` (or calling the script directly):
+> 1. **Any statements under `-- Down Migration` will run immediately after the Up statements and can self-revert your change.** A file with a real destructive DOWN (e.g. `DELETE`/inverse `UPDATE`) will apply then undo itself, yet still record as applied in `pgmigrations`. For prod seeds/hotfixes applied this way, make the migration **forward-only**: put all effect under `-- Up Migration` and leave `-- Down Migration` as a **comment-only no-op** (author a separate reversal migration if you ever need to roll back).
+> 2. **`regexp_replace` strips must be line-ending–tolerant.** Existing prod text (from earlier seed migrations) is often stored with Windows `\r\n`. A pattern like `E'\\n\\n...'` will silently fail to match `\r\n` content — use a `\r`-tolerant class such as `E'[\\r\\n]+...'`. JSONB edits (`jsonb_set` + `jsonb_array_elements` filter-then-append) are unaffected. Validate strips against a **CRLF** fixture, not just `\n`.
+
 ## Standard workflow
 
 ### Preferred — full orchestrator
@@ -115,6 +119,7 @@ Remove-Item Env:DATABASE_URL, Env:PROD_DATABASE_URL -ErrorAction SilentlyContinu
 2. **Never** print, commit, or log `DATABASE_URL` / passwords.
 3. Before applying, run `list-pending-migrations.js`. If more than the requested file would apply via `migrate:up`, either confirm with the user or use `-NamedMigration <name>` / `-Count N`.
 4. Prefer the orchestrator script over ad-hoc `az` / `node -e` one-liners.
+   - When applying via `-NamedMigration` / `apply-named-migration.js`, the **whole file runs** (Up + Down). Ensure the migration is **forward-only** (no destructive `-- Down Migration` statements) and that any `regexp_replace` strips are `\r\n`-tolerant. See the ⚠️ note under **Scripts**.
 5. SSL: prod clients in these scripts use `rejectUnauthorized: false` (same as hung-interview diagnose). Do not change App Service SSL settings.
 6. Do not modify `package.json`, `vite.config.ts`, or other scope-restricted config for this workflow.
 7. Creating the SQL file itself still follows `.cursor/skills/postgresql-migrations/SKILL.md` (`next-migration-timestamp.mjs`, etc.).

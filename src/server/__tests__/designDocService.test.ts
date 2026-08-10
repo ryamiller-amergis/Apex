@@ -55,7 +55,48 @@ jest.mock('../services/chatAgentService', () => ({
   isThreadIdle: jest.fn().mockReturnValue(false),
   createThread: jest.fn(),
   sendMessage: jest.fn().mockResolvedValue(undefined),
+  prepareBackgroundWorkflowTurn: jest.fn().mockResolvedValue({
+    prompt: 'complete frozen design prompt',
+    model: 'design-model',
+    skillPath: '/skills/design.md',
+    projectId: 'proj-alpha',
+    threadWorkspacePath: '/tmp/ws',
+  }),
   cancelRun: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock('../services/backgroundWorkflowRouter', () => ({
+  routeBackgroundWorkflow: jest.fn().mockImplementation(async (input: { runInProcess(): void }) => {
+    await input.runInProcess();
+    return { route: 'in-process', reason: 'flag-disabled' };
+  }),
+}));
+
+jest.mock('../services/runGroundingService', () => ({
+  propagatePipelineGrounding: jest.fn().mockResolvedValue({ state: 'propagated' }),
+  resolveRunGroundingSurface: jest.fn().mockResolvedValue(null),
+  runGroundingService: {
+    getGroundings: jest.fn().mockImplementation(async (run: {
+      runType: string;
+      runId: string;
+      project: string;
+    }) => [{
+      ...run,
+      id: 'grounding-design',
+      repoRole: 'target',
+      provider: 'github',
+      repository: 'org/repo',
+      branch: 'main',
+      groundedSha: 'abc123',
+      groundedAt: '2026-08-06T00:00:00.000Z',
+      isActive: true,
+      createdAt: '2026-08-06T00:00:00.000Z',
+      updatedAt: '2026-08-06T00:00:00.000Z',
+    }]),
+    persistThenMarkTerminalInactive: jest.fn().mockImplementation(
+      async (_run: unknown, persist: () => Promise<unknown>) => persist(),
+    ),
+  },
 }));
 
 jest.mock('../services/agentRunReaperService', () => ({
@@ -103,6 +144,7 @@ import {
   submitForReview,
   withdrawFromReview,
   reviewDesignDoc,
+  routeDesignDocGenerationKickoff,
   deleteDesignDoc,
   syncDesignDocContent,
   syncValidationResult,
@@ -116,8 +158,27 @@ import {
 } from '../services/designDocService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
-const { cancelRun: mockCancelRun } = jest.requireMock('../services/chatAgentService') as {
+const {
+  cancelRun: mockCancelRun,
+  sendMessage: mockSendMessage,
+  prepareBackgroundWorkflowTurn: mockPrepareBackgroundWorkflowTurn,
+} = jest.requireMock('../services/chatAgentService') as {
   cancelRun: jest.Mock;
+  sendMessage: jest.Mock;
+  prepareBackgroundWorkflowTurn: jest.Mock;
+};
+const { routeBackgroundWorkflow: mockRouteBackgroundWorkflow } = jest.requireMock(
+  '../services/backgroundWorkflowRouter',
+) as { routeBackgroundWorkflow: jest.Mock };
+const {
+  propagatePipelineGrounding: mockPropagatePipelineGrounding,
+  runGroundingService: mockRunGroundingService,
+} = jest.requireMock('../services/runGroundingService') as {
+  propagatePipelineGrounding: jest.Mock;
+  runGroundingService: {
+    getGroundings: jest.Mock;
+    persistThenMarkTerminalInactive: jest.Mock;
+  };
 };
 
 // ── Select chain helper ────────────────────────────────────────────────────────
@@ -250,6 +311,170 @@ describe('createDesignDoc', () => {
     expect(valuesMock).toHaveBeenCalledWith(
       expect.objectContaining({ title: 'Untitled Design Doc' }),
     );
+  });
+});
+
+describe('routeDesignDocGenerationKickoff', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockRouteBackgroundWorkflow.mockImplementation(
+      async (input: { runInProcess(): void }) => {
+        await input.runInProcess();
+        return { route: 'in-process', reason: 'flag-disabled' };
+      },
+    );
+  });
+
+  it('AC-3 / DoD-1 routes disabled design-doc without worker preparation', async () => {
+    await routeDesignDocGenerationKickoff({
+      designDocId: 'doc-1',
+      userId: 'user-1',
+      project: 'proj-alpha',
+      threadId: 'thread-design',
+      kickoffMessage: 'Generate design.',
+    });
+
+    expect(mockRouteBackgroundWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflowClass: 'design-doc',
+        userId: 'user-1',
+        threadId: 'thread-design',
+        prepareWorker: expect.any(Function),
+      }),
+    );
+    expect(mockPrepareBackgroundWorkflowTurn).not.toHaveBeenCalled();
+    expect(mockRunGroundingService.getGroundings).not.toHaveBeenCalled();
+    expect(mockPropagatePipelineGrounding).not.toHaveBeenCalled();
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      'thread-design',
+      'Generate design.',
+      undefined,
+      [],
+      { hidden: true },
+    );
+  });
+
+  it('AC-0: worker design-doc decision does not call sendMessage', async () => {
+    mockRouteBackgroundWorkflow.mockImplementationOnce(async (input) => {
+      const prepared = await input.prepareWorker();
+      expect(prepared).toEqual(expect.objectContaining({
+        prompt: 'complete frozen design prompt',
+        targetGrounding: expect.objectContaining({
+          runId: 'thread-design',
+          repoRole: 'target',
+          isActive: true,
+        }),
+      }));
+      return {
+        route: 'worker',
+        workspacePath: '/pinned',
+        runId: 'thread-design',
+      };
+    });
+
+    await routeDesignDocGenerationKickoff({
+      designDocId: 'doc-1',
+      userId: 'user-1',
+      project: 'proj-alpha',
+      threadId: 'thread-design',
+      kickoffMessage: 'Generate design.',
+    });
+
+    expect(mockSendMessage).not.toHaveBeenCalled();
+  });
+
+  it('AC-2 / VT-03 copies source grounding before routing a retry destination', async () => {
+    const copiedGrounding = {
+      id: 'grounding-retry',
+      runType: 'chat',
+      runId: 'thread-design',
+      project: 'proj-alpha',
+      repoRole: 'target',
+      provider: 'github',
+      repository: 'org/repo',
+      branch: 'main',
+      groundedSha: 'abc123',
+      groundedAt: '2026-08-06T00:00:00.000Z',
+      isActive: true,
+      createdAt: '2026-08-06T00:00:00.000Z',
+      updatedAt: '2026-08-06T00:00:00.000Z',
+    };
+    mockRunGroundingService.getGroundings
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([copiedGrounding]);
+    mockRouteBackgroundWorkflow.mockImplementationOnce(async (input) => {
+      const prepared = await input.prepareWorker();
+      expect(prepared.targetGrounding).toEqual(copiedGrounding);
+      return {
+        route: 'worker',
+        workspacePath: '/pinned',
+        runId: 'thread-design',
+      };
+    });
+
+    await routeDesignDocGenerationKickoff({
+      designDocId: 'doc-1',
+      prdId: 'prd-1',
+      sourceThreadId: 'thread-prd',
+      userId: 'user-1',
+      project: 'proj-alpha',
+      threadId: 'thread-design',
+      kickoffMessage: 'Generate design.',
+    });
+
+    expect(mockPropagatePipelineGrounding).toHaveBeenCalledWith(
+      { runType: 'chat', runId: 'thread-prd', project: 'proj-alpha' },
+      { runType: 'chat', runId: 'thread-design', project: 'proj-alpha' },
+      'user-1',
+    );
+    expect(mockRouteBackgroundWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflowClass: 'design-doc',
+        prepareWorker: expect.any(Function),
+      }),
+    );
+    expect(mockSendMessage).not.toHaveBeenCalled();
+  });
+
+  it('BR-008 / DoD-3: design-doc preparation failure persists retryable state before deactivation', async () => {
+    const deactivated = jest.fn();
+    mockRunGroundingService.persistThenMarkTerminalInactive.mockImplementationOnce(
+      async (_run, persist) => {
+        await persist();
+        deactivated();
+      },
+    );
+    mockRouteBackgroundWorkflow.mockImplementationOnce(
+      async (input: { reportRecoverablePreparationFailure(): Promise<void> }) => {
+        await input.reportRecoverablePreparationFailure();
+        return {
+          route: 'in-process',
+          reason: 'materialization-unavailable',
+          recoverable: true,
+        };
+      },
+    );
+
+    await routeDesignDocGenerationKickoff({
+      designDocId: 'doc-1',
+      userId: 'user-1',
+      project: 'proj-alpha',
+      threadId: 'thread-design',
+      kickoffMessage: 'Generate design.',
+    });
+
+    const updateResult = mockDb.update.mock.results[
+      mockDb.update.mock.results.length - 1
+    ].value;
+    expect(updateResult.set).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'generation_failed',
+        generationError: 'Generation could not be prepared. Retry to continue.',
+      }),
+    );
+    expect(updateResult.where.mock.invocationCallOrder[0])
+      .toBeLessThan(deactivated.mock.invocationCallOrder[0]);
+    expect(mockSendMessage).not.toHaveBeenCalled();
   });
 });
 

@@ -29,6 +29,7 @@ import {
   listPrds,
   reviewPrd,
   reopenForReview,
+  routePrdGenerationKickoff,
   startPrdWatcher,
   submitForReview,
   syncPrdContent,
@@ -58,6 +59,7 @@ import {
   getDesignDoc,
   listDesignDocs,
   reviewDesignDoc,
+  routeDesignDocGenerationKickoff,
   startSingleFeatureDocWatcher,
   submitForReview as submitDesignDocForReview,
   syncDesignDocContent,
@@ -69,7 +71,7 @@ import {
   overrideDesignDocValidation,
   syncValidationResult,
 } from '../services/designDocService';
-import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, sendMessage, updateThreadKickoffContext } from '../services/chatAgentService';
+import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, updateThreadKickoffContext } from '../services/chatAgentService';
 import { getApproverPoolForProject, resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import { assignApprovers, getAssignments, getAvailableApprovers, isApprovalComplete, isAssignedApprover, reassignApprovers, recordApproverResponse } from '../services/documentApprovalService';
@@ -227,7 +229,11 @@ router.post('/prds/:prdId/test-cases/generate', requirePermission('interviews:ma
       return;
     }
     const sourceThreadId = prdRow.chatThreadId ?? '';
-    const started = await triggerTestCaseGeneration(prdId, sourceThreadId);
+    const started = await triggerTestCaseGeneration(
+      prdId,
+      sourceThreadId,
+      getUserId(req),
+    );
     res.json({ started });
   } catch (err) {
     next(err);
@@ -591,14 +597,13 @@ async function startDesignDocsForApprovedPrd(
       });
 
       startSingleFeatureDocWatcher(designDocId, thread.id, prdId, prd.project);
-      sendMessage(
-        thread.id,
-        `Generate the design doc for the single feature "${featureTitle}" using the PRD, backlog, and context provided in \`.ai-pilot/kickoff-context.md\`. This is a non-interactive generation task — do not ask questions. Write all three output files (\`design-doc-design.md\`, \`design-doc-tech-spec.md\`, \`design-doc-assumptions.md\`) to \`.ai-pilot/output/\`.`,
-        undefined,
-        [],
-        { hidden: true },
-      ).catch((err: Error) => {
-        console.error(`[interviews] Failed to kick off design doc generation (docId=${designDocId}, threadId=${thread.id}):`, err);
+      await routeDesignDocGenerationKickoff({
+        designDocId,
+        userId,
+        project: prd.project,
+        threadId: thread.id,
+        kickoffMessage:
+          `Generate the design doc for the single feature "${featureTitle}" using the PRD, backlog, and context provided in \`.ai-pilot/kickoff-context.md\`. This is a non-interactive generation task — do not ask questions. Write all three output files (\`design-doc-design.md\`, \`design-doc-tech-spec.md\`, \`design-doc-assumptions.md\`) to \`.ai-pilot/output/\`.`,
       });
 
       createdDocs.push({ designDocId, threadId: thread.id, featureTitle });
@@ -1552,10 +1557,16 @@ router.post('/design-docs/:id/retry-generate', requirePermission('interviews:man
 
     startSingleFeatureDocWatcher(req.params.id, thread.id, doc.prdId, doc.project);
 
-    // Start agent now that row and watcher are in place.
-    const { sendMessage: sendRetryMsg } = await import('../services/chatAgentService');
-    sendRetryMsg(thread.id, `Generate the design doc for the single feature "${doc.title}" using the PRD and context provided. This is a non-interactive generation task — do not ask questions. Write all three output files to \`.ai-pilot/output/\`.`, undefined, [], { hidden: true }).catch((err: Error) => {
-      console.error(`[interviews] retry-generate kickoff failed (designDocId=${req.params.id}):`, err.message);
+    const kickoffMessage =
+      `Generate the design doc for the single feature "${doc.title}" using the PRD and context provided. This is a non-interactive generation task — do not ask questions. Write all three output files to \`.ai-pilot/output/\`.`;
+    await routeDesignDocGenerationKickoff({
+      designDocId: req.params.id,
+      prdId: doc.prdId,
+      sourceThreadId: prd?.chatThreadId ?? null,
+      userId,
+      project: doc.project,
+      threadId: thread.id,
+      kickoffMessage,
     });
 
     res.json({ ok: true, threadId: thread.id });
@@ -2497,8 +2508,19 @@ router.post('/:interviewId/prds', requirePermission('interviews:manage'), async 
     });
     startPrdWatcher(result.prdId, chatThreadId);
     if (kickoffGeneration) {
-      sendMessage(chatThreadId, 'Begin.', undefined, [], { hidden: true }).catch((err: Error) => {
-        console.error(`[interviews] Failed to kick off PRD generation (prdId=${result.prdId}, threadId=${chatThreadId}):`, err);
+      void Promise.resolve(
+        routePrdGenerationKickoff({
+          prdId: result.prdId,
+          userId,
+          project: interview.project,
+          threadId: chatThreadId,
+          kickoffMessage: 'Begin.',
+        }),
+      ).catch((err: unknown) => {
+        console.error(
+          `[interviews] Failed to start PRD generation (prdId=${result.prdId}, threadId=${chatThreadId}):`,
+          err,
+        );
       });
     }
     res.status(201).json(result);

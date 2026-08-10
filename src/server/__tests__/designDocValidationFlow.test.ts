@@ -32,6 +32,13 @@ jest.mock('../db/drizzle', () => ({
 jest.mock('../services/chatAgentService', () => ({
   createThread: jest.fn(),
   sendMessage: jest.fn().mockResolvedValue(undefined),
+  prepareBackgroundWorkflowTurn: jest.fn().mockResolvedValue({
+    prompt: 'complete frozen validation prompt',
+    model: 'validation-model',
+    skillPath: '/skills/validate.md',
+    projectId: 'proj-alpha',
+    threadWorkspacePath: '/tmp/ws',
+  }),
   cancelRun: jest.fn().mockResolvedValue(undefined),
   isThreadIdle: jest.fn().mockReturnValue(false),
   readOutputValidationScorecard: jest.fn().mockReturnValue(null),
@@ -40,6 +47,40 @@ jest.mock('../services/chatAgentService', () => ({
   readOutputTechSpec: jest.fn().mockReturnValue(null),
   readOutputAssumptions: jest.fn().mockReturnValue(null),
   readAllOutputDesignDocFeatures: jest.fn().mockReturnValue([]),
+}));
+
+jest.mock('../services/backgroundWorkflowRouter', () => ({
+  routeBackgroundWorkflow: jest.fn().mockImplementation(async (input: { runInProcess(): void }) => {
+    await input.runInProcess();
+    return { route: 'in-process', reason: 'flag-disabled' };
+  }),
+}));
+
+jest.mock('../services/runGroundingService', () => ({
+  propagatePipelineGrounding: jest.fn().mockResolvedValue({ state: 'propagated' }),
+  resolveRunGroundingSurface: jest.fn().mockResolvedValue(null),
+  runGroundingService: {
+    getGroundings: jest.fn().mockImplementation(async (run: {
+      runType: string;
+      runId: string;
+      project: string;
+    }) => [{
+      ...run,
+      id: 'grounding-validation',
+      repoRole: 'target',
+      provider: 'github',
+      repository: 'org/repo',
+      branch: 'main',
+      groundedSha: 'abc123',
+      groundedAt: '2026-08-06T00:00:00.000Z',
+      isActive: true,
+      createdAt: '2026-08-06T00:00:00.000Z',
+      updatedAt: '2026-08-06T00:00:00.000Z',
+    }]),
+    persistThenMarkTerminalInactive: jest.fn().mockImplementation(
+      async (_run: unknown, persist: () => Promise<unknown>) => persist(),
+    ),
+  },
 }));
 
 jest.mock('../services/agentRunReaperService', () => ({
@@ -86,6 +127,9 @@ import {
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
 const agentSvc = jest.requireMock('../services/chatAgentService') as Record<string, jest.Mock>;
+const { routeBackgroundWorkflow: mockRouteBackgroundWorkflow } = jest.requireMock(
+  '../services/backgroundWorkflowRouter',
+) as { routeBackgroundWorkflow: jest.Mock };
 const { getSkillConfig: mockGetSkillConfig } = jest.requireMock(
   '../services/projectSettingsService',
 ) as { getSkillConfig: jest.Mock };
@@ -458,6 +502,45 @@ describe('autoStartValidation', () => {
       [],
       { hidden: true },
     );
+    const routeInput = mockRouteBackgroundWorkflow.mock.calls[0][0];
+    expect(routeInput).toEqual(expect.objectContaining({
+      workflowClass: 'validation',
+      userId: 'user-1',
+      threadId: 'thread-v1',
+      prepareWorker: expect.any(Function),
+    }));
+    await expect(routeInput.prepareWorker()).resolves.toEqual(
+      expect.objectContaining({
+        prompt: 'complete frozen validation prompt',
+        targetGrounding: expect.objectContaining({
+          runId: 'thread-v1',
+          repoRole: 'target',
+          isActive: true,
+        }),
+      }),
+    );
+  });
+
+  it('AC-0: worker design validation decision does not call sendMessage', async () => {
+    const docRow = makeDocRow({ status: 'draft', prdId: 'prd-1' });
+    mockDb.select.mockReturnValue(
+      makeSelectChain([{ designDoc: docRow, reviewerDisplayName: null }]),
+    );
+    mockGetSkillConfig.mockResolvedValue({
+      designDocValidationSkillPath: '/skills/validate.md',
+      skillRepo: 'my-repo',
+    });
+    agentSvc.createThread.mockResolvedValue({ id: 'thread-v1', workspaceDir: '/tmp/ws' });
+    mockDb.update.mockReturnValue(makeUpdateChain());
+    mockRouteBackgroundWorkflow.mockResolvedValueOnce({
+      route: 'worker',
+      workspacePath: '/pinned',
+      runId: 'thread-v1',
+    });
+
+    await autoStartValidation('doc-1');
+
+    expect(agentSvc.sendMessage).not.toHaveBeenCalled();
   });
 
   it('attaches the DB validationThreadId before kicking off the agent', async () => {

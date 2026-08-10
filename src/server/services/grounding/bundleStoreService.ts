@@ -258,6 +258,25 @@ export function createGroundingBundleStore(
       let destinationOwned = false;
 
       try {
+        try {
+          const existing = await stat(destination);
+          if (
+            existing.isDirectory() &&
+            (await readdir(destination)).length > 0 &&
+            (await verifyHead(runGit, destination, expectedSha))
+          ) {
+            telemetry('grounding.workspace.reuse', { outcome: 'success' });
+            telemetry(
+              'grounding.bundle.materialization.duration',
+              { source: 'workspace', outcome: 'success' },
+              { durationMs: now() - startedAt }
+            );
+            return { status: 'materialized', source: 'workspace' };
+          }
+        } catch (error) {
+          if (errorCode(error) !== 'ENOENT') throw error;
+        }
+
         await prepareEmptyDestination(destination);
         destinationOwned = true;
 

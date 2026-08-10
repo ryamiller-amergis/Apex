@@ -19,6 +19,7 @@ import { getSkillConfig, getSkillConfigById, listSkillConfigsForProject, resolve
 import { fetchAvailableModels } from '../services/modelsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import { getAgentHealthStats, createThread } from '../services/chatAgentService';
+import { getWorkerTierHealthStats } from '../services/workerTierHealthService';
 import { isFeatureEnabled } from '../services/featureFlagService';
 import { getUserId } from '../utils/requestUser';
 import { ensureUserProjectAssignment, getAssignmentsForUser } from '../services/userProjectAssignmentService';
@@ -413,8 +414,19 @@ router.get('/health/db', async (_req: Request, res: Response) => {
 });
 
 // GET /api/health/agents - Chat agent system health
-router.get('/health/agents', (_req: Request, res: Response) => {
-  res.json(getAgentHealthStats());
+router.get('/health/agents', async (_req: Request, res: Response) => {
+  const agentHealth = getAgentHealthStats();
+  try {
+    const workerHealth = await getWorkerTierHealthStats();
+    res.json({ ...agentHealth, ...workerHealth });
+  } catch {
+    console.error('[health/agents] Worker health query failed');
+    res.json({
+      ...agentHealth,
+      workerTierSaturation: 0,
+      oldestQueuedAgeMs: 0,
+    });
+  }
 });
 
 // GET /api/due-date-stats - Get due date change statistics by developer

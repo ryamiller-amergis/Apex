@@ -118,7 +118,6 @@ describe('resolveReleasedSkillsForProject', () => {
     ]);
   });
 });
-
 describe('buildArtifactCliArgs', () => {
   it('returns a shell-free argument array for the verified local CLI', () => {
     expect(buildArtifactCliArgs('2.0.0', ['ui-lab'])).toEqual([
@@ -130,21 +129,20 @@ describe('buildArtifactCliArgs', () => {
   });
 
   it('rejects command injection payloads', () => {
-    expect(() =>
-      buildArtifactCliArgs('2.0.0; whoami', ['ui-lab']),
-    ).toThrow(/artifact version/i);
-    expect(() =>
-      buildArtifactCliArgs('2.0.0', ['ui-lab && whoami']),
-    ).toThrow(/skill name/i);
-    expect(() =>
-      buildArtifactCliArgs('2.0.0-01', ['ui-lab']),
-    ).toThrow(/artifact version/i);
-    expect(() =>
-      buildArtifactCliArgs('2.0.0-alpha..1', ['ui-lab']),
-    ).toThrow(/artifact version/i);
+    expect(() => buildArtifactCliArgs('2.0.0; whoami', ['ui-lab'])).toThrow(
+      /artifact version/i
+    );
+    expect(() => buildArtifactCliArgs('2.0.0', ['ui-lab && whoami'])).toThrow(
+      /skill name/i
+    );
+    expect(() => buildArtifactCliArgs('2.0.0-01', ['ui-lab'])).toThrow(
+      /artifact version/i
+    );
+    expect(() => buildArtifactCliArgs('2.0.0-alpha..1', ['ui-lab'])).toThrow(
+      /artifact version/i
+    );
   });
 });
-
 describe('validateGeneratedDiff', () => {
   it('accepts only lock/config and managed skill paths', () => {
     expect(() =>
@@ -156,8 +154,8 @@ describe('validateGeneratedDiff', () => {
           '.apex/backups/ui-lab/SKILL.md.old',
         ],
         ['ui-lab'],
-        null,
-      ),
+        null
+      )
     ).not.toThrow();
   });
 
@@ -169,22 +167,18 @@ describe('validateGeneratedDiff', () => {
           '.apex/rollback-backups/2.0.0/newer-skill/SKILL.md',
         ],
         ['ui-lab', 'newer-skill'],
-        '2.0.0',
-      ),
+        '2.0.0'
+      )
     ).not.toThrow();
   });
 
   it('rejects npm credentials and unrelated source changes', () => {
     expect(() =>
       validateGeneratedDiff(
-        [
-          '.npmrc',
-          '.cursor/skills/ui-lab/.NPMRC',
-          'src/server/index.ts',
-        ],
+        ['.npmrc', '.cursor/skills/ui-lab/.NPMRC', 'src/server/index.ts'],
         ['ui-lab'],
-        null,
-      ),
+        null
+      )
     ).toThrow(/unexpected generated files/i);
   });
 });
@@ -209,33 +203,37 @@ describe('buildGeneratedCliEnv', () => {
   });
 
   it('rejects insecure or credential-bearing APEX URLs', () => {
+    expect(() => buildGeneratedCliEnv('http://apex.example.com')).toThrow(
+      /HTTPS/i
+    );
     expect(() =>
-      buildGeneratedCliEnv('http://apex.example.com'),
-    ).toThrow(/HTTPS/i);
-    expect(() =>
-      buildGeneratedCliEnv('https://user:pass@apex.example.com'),
+      buildGeneratedCliEnv('https://user:pass@apex.example.com')
     ).toThrow(/credentials/i);
   });
 });
 
 describe('reconcileRollbackWorkspace', () => {
   it('quarantines skills absent from the target release and removes the old lock', () => {
-    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-rollback-test-'));
+    const workspace = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'apex-rollback-test-')
+    );
     try {
-      fs.mkdirSync(path.join(workspace, '.cursor/skills/ui-lab'), { recursive: true });
+      fs.mkdirSync(path.join(workspace, '.cursor/skills/ui-lab'), {
+        recursive: true,
+      });
       fs.mkdirSync(path.join(workspace, '.cursor/skills/newer-skill'), {
         recursive: true,
       });
       fs.writeFileSync(
         path.join(workspace, '.cursor/skills/newer-skill/SKILL.md'),
-        'TEAM_CUSTOMIZATION\n',
+        'TEAM_CUSTOMIZATION\n'
       );
       fs.mkdirSync(
         path.join(
           workspace,
-          '.apex/rollback-backups/2.0.0/newer-skill/existing-attempt',
+          '.apex/rollback-backups/2.0.0/newer-skill/existing-attempt'
         ),
-        { recursive: true },
+        { recursive: true }
       );
       fs.writeFileSync(
         path.join(workspace, 'apex-skills.lock.json'),
@@ -250,7 +248,7 @@ describe('reconcileRollbackWorkspace', () => {
             .update(stableJson(lock))
             .digest('hex');
           return JSON.stringify({ ...lock, integrity }, null, 2);
-        })(),
+        })()
       );
 
       const result = reconcileRollbackWorkspace(
@@ -258,37 +256,41 @@ describe('reconcileRollbackWorkspace', () => {
         ['ui-lab'],
         '2.0.0',
         'rollback',
-        '2.1.0',
+        '2.1.0'
       );
 
       expect(result.removedSkills).toEqual(['newer-skill']);
       expect(
-        fs.existsSync(path.join(workspace, '.cursor/skills/newer-skill')),
+        fs.existsSync(path.join(workspace, '.cursor/skills/newer-skill'))
       ).toBe(false);
       const backupRoot = path.join(
         workspace,
-        '.apex/rollback-backups/2.0.0/newer-skill',
+        '.apex/rollback-backups/2.0.0/newer-skill'
       );
       const attempts = fs.readdirSync(backupRoot);
       expect(attempts).toContain('existing-attempt');
-      const generatedAttempt = attempts.find((name) => name !== 'existing-attempt');
+      const generatedAttempt = attempts.find(
+        (name) => name !== 'existing-attempt'
+      );
       expect(generatedAttempt).toBeDefined();
       expect(
         fs.readFileSync(
           path.join(backupRoot, generatedAttempt!, 'SKILL.md'),
-          'utf8',
-        ),
+          'utf8'
+        )
       ).toContain('TEAM_CUSTOMIZATION');
-      expect(
-        fs.existsSync(path.join(workspace, 'apex-skills.lock.json')),
-      ).toBe(false);
+      expect(fs.existsSync(path.join(workspace, 'apex-skills.lock.json'))).toBe(
+        false
+      );
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
     }
   });
 
   it('rejects a rollback when the source lock does not match the installed version', () => {
-    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-rollback-test-'));
+    const workspace = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'apex-rollback-test-')
+    );
     try {
       const lock = {
         lockfileVersion: 2,
@@ -301,7 +303,7 @@ describe('reconcileRollbackWorkspace', () => {
         .digest('hex');
       fs.writeFileSync(
         path.join(workspace, 'apex-skills.lock.json'),
-        JSON.stringify({ ...lock, integrity }, null, 2),
+        JSON.stringify({ ...lock, integrity }, null, 2)
       );
 
       expect(() =>
@@ -310,8 +312,8 @@ describe('reconcileRollbackWorkspace', () => {
           ['ui-lab'],
           '2.0.0',
           'rollback',
-          '9.9.9',
-        ),
+          '9.9.9'
+        )
       ).toThrow(/source lock version/i);
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
@@ -319,7 +321,9 @@ describe('reconcileRollbackWorkspace', () => {
   });
 
   it('rejects a forward update that does not move to a newer release', () => {
-    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-update-test-'));
+    const workspace = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'apex-update-test-')
+    );
     try {
       const lock = {
         lockfileVersion: 2,
@@ -332,16 +336,11 @@ describe('reconcileRollbackWorkspace', () => {
         .digest('hex');
       fs.writeFileSync(
         path.join(workspace, 'apex-skills.lock.json'),
-        JSON.stringify({ ...lock, integrity }, null, 2),
+        JSON.stringify({ ...lock, integrity }, null, 2)
       );
 
       expect(() =>
-        reconcileRollbackWorkspace(
-          workspace,
-          ['ui-lab'],
-          '2.0.0',
-          'update',
-        ),
+        reconcileRollbackWorkspace(workspace, ['ui-lab'], '2.0.0', 'update')
       ).toThrow(/newer than source/i);
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
@@ -349,7 +348,9 @@ describe('reconcileRollbackWorkspace', () => {
   });
 
   it('allows a stable release to replace its prerelease', () => {
-    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-update-test-'));
+    const workspace = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'apex-update-test-')
+    );
     try {
       const lock = {
         lockfileVersion: 2,
@@ -362,20 +363,14 @@ describe('reconcileRollbackWorkspace', () => {
         .digest('hex');
       fs.writeFileSync(
         path.join(workspace, 'apex-skills.lock.json'),
-        JSON.stringify({ ...lock, integrity }, null, 2),
+        JSON.stringify({ ...lock, integrity }, null, 2)
       );
 
       expect(() =>
-        reconcileRollbackWorkspace(
-          workspace,
-          ['ui-lab'],
-          '2.0.0',
-          'update',
-        ),
+        reconcileRollbackWorkspace(workspace, ['ui-lab'], '2.0.0', 'update')
       ).not.toThrow();
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
     }
   });
 });
-

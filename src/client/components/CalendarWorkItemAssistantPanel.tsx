@@ -10,6 +10,7 @@ import {
   useScopeSelection,
 } from '../hooks/useCalendarWorkItemAssistant';
 import { CalendarWorkItemChangesReview } from './CalendarWorkItemChangesReview';
+import { AgentComposer } from './agentChat';
 import type { WorkItemHierarchyNode } from '../../shared/types/calendarWorkItemAssistant';
 import styles from './CalendarWorkItemAssistantPanel.module.css';
 
@@ -247,13 +248,6 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
     }
   }, [input, isRunning, isSending, threadId, chat]);
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      void handleSend();
-    }
-  }, [handleSend]);
-
   const handleNewConversation = useCallback(async () => {
     setShowNewConvConfirm(false);
     try {
@@ -307,6 +301,7 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
           aria-modal="true"
           aria-labelledby="cal-new-conv-title"
           onClick={(e) => { if (e.target === e.currentTarget) setShowNewConvConfirm(false); }}
+          {...{ 'data-testid': 'calendar-assistant-new-confirm-dialog' }}
         >
           <div className={styles.confirmCard}>
             <h2 id="cal-new-conv-title" className={styles.confirmTitle}>Start new conversation?</h2>
@@ -314,10 +309,20 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
               The current thread and any staged proposals will be cleared.
             </p>
             <div className={styles.confirmActions}>
-              <button type="button" className={styles.btnSecondary} onClick={() => setShowNewConvConfirm(false)}>
+              <button
+                type="button"
+                className={styles.btnSecondary}
+                onClick={() => setShowNewConvConfirm(false)}
+                {...{ 'data-testid': 'calendar-assistant-new-confirm-cancel' }}
+              >
                 Cancel
               </button>
-              <button type="button" className={styles.btnPrimary} onClick={() => void handleNewConversation()}>
+              <button
+                type="button"
+                className={styles.btnPrimary}
+                onClick={() => void handleNewConversation()}
+                {...{ 'data-testid': 'calendar-assistant-new-confirm-start' }}
+              >
                 Start new
               </button>
             </div>
@@ -343,6 +348,7 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
         style={{ width: minimized ? 'auto' : panelWidth, height: minimized ? 'auto' : panelHeight, left: pos.x, top: pos.y }}
         role="dialog"
         aria-label="Calendar Work-Item Assistant"
+        {...{ 'data-testid': 'calendar-assistant-panel' }}
       >
         {/* Edge and corner resize handles */}
         <div className={`${styles.resizeHandle} ${styles.resizeLeft}  ${resizeDir === 'left'   ? styles.resizeActive : ''}`} onMouseDown={handleResizeMouseDown('left')}  />
@@ -371,6 +377,7 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
                 onClick={() => setShowNewConvConfirm(true)}
                 title="New conversation"
                 aria-label="New conversation"
+                {...{ 'data-testid': 'calendar-assistant-new-btn' }}
               >
                 <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                   <path d="M13 3v4H9" /><path d="M13 7A6 6 0 1 1 9.5 2.5" />
@@ -383,6 +390,7 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
                 className={styles.reviewBtn}
                 onClick={() => setShowReview(true)}
                 aria-label="Review proposed changes"
+                {...{ 'data-testid': 'calendar-assistant-review-header-btn' }}
               >
                 Review changes
               </button>
@@ -393,6 +401,7 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
               onClick={() => setMinimized(v => !v)}
               title={minimized ? 'Restore' : 'Minimise'}
               aria-label={minimized ? 'Restore assistant' : 'Minimise assistant'}
+              {...{ 'data-testid': 'calendar-assistant-minimize-btn' }}
             >
               <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
                 {minimized
@@ -406,6 +415,7 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
               className={styles.closeBtn}
               onClick={onClose}
               aria-label="Close assistant"
+              {...{ 'data-testid': 'calendar-assistant-close-btn' }}
             >
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
                 <path d="M1 1l12 12M13 1L1 13" />
@@ -445,10 +455,20 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
             {nodes.length > 0 && (
               <>
                 <div className={styles.scopeControls}>
-                  <button type="button" className={styles.btnLink} onClick={selectAll}>
+                  <button
+                    type="button"
+                    className={styles.btnLink}
+                    onClick={selectAll}
+                    {...{ 'data-testid': 'calendar-assistant-select-all' }}
+                  >
                     Select all ({Math.min(nodes.length, 50)})
                   </button>
-                  <button type="button" className={styles.btnLink} onClick={clearAll}>
+                  <button
+                    type="button"
+                    className={styles.btnLink}
+                    onClick={clearAll}
+                    {...{ 'data-testid': 'calendar-assistant-clear-all' }}
+                  >
                     Clear
                   </button>
                   <span className={styles.selectedCount}>
@@ -464,6 +484,7 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
                       checked={selected.has(node.id)}
                       disabled={node.id === anchorWorkItemId || (isAtLimit && !selected.has(node.id))}
                       onChange={() => toggle(node.id)}
+                      {...{ 'data-testid': `calendar-assistant-scope-node-${node.id}` }}
                     />
                   ))}
                 </ul>
@@ -483,6 +504,7 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
                 onClick={() => void handleStartSession()}
                 disabled={selected.size === 0 || createSession.isPending || contextLoading}
                 aria-busy={createSession.isPending}
+                {...{ 'data-testid': 'calendar-assistant-start-btn' }}
               >
                 {createSession.isPending ? 'Starting…' : 'Start assistant →'}
               </button>
@@ -500,6 +522,7 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
                 className={styles.btnLinkSmall}
                 onClick={() => setShowNewConvConfirm(true)}
                 title="Change scope (starts new session)"
+                {...{ 'data-testid': 'calendar-assistant-change-scope' }}
               >
                 change
               </button>
@@ -513,6 +536,7 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
                   className={styles.currentContentToggle}
                   onClick={() => setShowCurrentContent(v => !v)}
                   aria-expanded={showCurrentContent}
+                  {...{ 'data-testid': 'calendar-assistant-current-content-toggle' }}
                 >
                   <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"
                     style={{ transform: showCurrentContent ? 'rotate(180deg)' : undefined, transition: 'transform 0.2s', flexShrink: 0 }}
@@ -635,46 +659,27 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
                   type="button"
                   className={styles.btnReview}
                   onClick={() => setShowReview(true)}
+                  {...{ 'data-testid': 'calendar-assistant-review-banner-btn' }}
                 >
                   Review
                 </button>
               </div>
             )}
 
-            <div className={styles.inputArea}>
-              <textarea
-                ref={textareaRef}
-                className={styles.input}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Message the assistant…"
-                rows={1}
-                disabled={isRunning || isSending}
-                aria-label="Message"
-              />
-              <div className={styles.inputActions}>
-                {isRunning && (
-                  <button
-                    type="button"
-                    className={styles.btnCancel}
-                    onClick={() => void chat.cancelRun()}
-                    aria-label="Cancel"
-                  >
-                    Stop
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className={styles.btnSend}
-                  onClick={() => void handleSend()}
-                  disabled={!input.trim() || isRunning || isSending}
-                  aria-label="Send"
-                >
-                  Send
-                </button>
-              </div>
-            </div>
+            <AgentComposer
+              className={styles.composerEmbed}
+              value={input}
+              onChange={setInput}
+              onSend={() => void handleSend()}
+              onCancel={isRunning ? () => void chat.cancelRun() : undefined}
+              disabled={isRunning || isSending}
+              isRunning={isRunning}
+              isSending={isSending}
+              placeholder="Message the assistant… (Enter to send)"
+              testIdPrefix="calendar-assistant"
+              {...{ 'data-testid': 'calendar-assistant-composer' }}
+              textareaRef={textareaRef}
+            />
           </div>
         )}
       </div>
@@ -687,9 +692,16 @@ interface ScopeNodeRowProps {
   checked: boolean;
   disabled: boolean;
   onChange: () => void;
+  'data-testid'?: string;
 }
 
-const ScopeNodeRow: React.FC<ScopeNodeRowProps> = ({ node, checked, disabled, onChange }) => {
+const ScopeNodeRow: React.FC<ScopeNodeRowProps> = ({
+  node,
+  checked,
+  disabled,
+  onChange,
+  'data-testid': dataTestId,
+}) => {
   const indent = node.depth * 16;
   const isTerminal = ['Closed', 'Done', 'Removed', 'Resolved', 'Cancelled'].includes(node.state);
   const hasNoFields = node.supportedFields.length === 0;
@@ -698,6 +710,7 @@ const ScopeNodeRow: React.FC<ScopeNodeRowProps> = ({ node, checked, disabled, on
     <li
       className={`${styles.nodeRow} ${hasNoFields ? styles.nodeRowDisabled : ''}`}
       style={{ paddingLeft: indent }}
+      {...(dataTestId ? { 'data-testid': dataTestId } : {})}
     >
       <label className={styles.nodeLabel}>
         <input
@@ -706,6 +719,7 @@ const ScopeNodeRow: React.FC<ScopeNodeRowProps> = ({ node, checked, disabled, on
           disabled={disabled || hasNoFields}
           onChange={onChange}
           aria-label={`${node.workItemType} #${node.id}: ${node.title}`}
+          {...{ 'data-testid': `calendar-assistant-scope-checkbox-${node.id}` }}
         />
         <span className={styles.nodeType}>{node.workItemType}</span>
         <span className={styles.nodeId}>#{node.id}</span>
