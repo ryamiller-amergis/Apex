@@ -129,6 +129,14 @@ export function sharedReadCheckoutIdentityFromGrounding(
 
 export interface SharedReadCheckoutService {
   resolvePath(identity: SharedReadCheckoutIdentity): string;
+  /**
+   * Return an already-complete shared checkout without acquiring a lease or
+   * starting materialization. User-facing read paths use this ready-only probe
+   * so a cold Azure Files tree can never block a chat turn.
+   */
+  getReady(
+    identity: SharedReadCheckoutIdentity,
+  ): SharedReadCheckoutResult | null;
   materialize(
     identity: SharedReadCheckoutIdentity,
   ): Promise<SharedReadCheckoutResult>;
@@ -193,6 +201,10 @@ export function createSharedReadCheckoutService(
   // In-process ref-count keyed by identity digest. A tree with a live ref is
   // never evicted by this instance's sweep.
   const refCounts = new Map<string, number>();
+  const materializations = new Map<
+    string,
+    Promise<SharedReadCheckoutResult>
+  >();
 
   const safeTelemetry: typeof trackEvent = (name, properties, measurements) => {
     try {
@@ -266,70 +278,95 @@ export function createSharedReadCheckoutService(
     }
   };
 
-  const materialize = async (
+  const getReady = (
     identity: SharedReadCheckoutIdentity,
-  ): Promise<SharedReadCheckoutResult> => {
+  ): SharedReadCheckoutResult | null => {
     const destination = resolvePath(identity);
-    const startedAt = now();
-
-    // Warm fast-path: a completed materialization left a marker.
-    if (fs.existsSync(markerPath(destination))) {
-      touchLastUsed(destination);
-      safeTelemetry(
-        'grounding.shared.checkout',
-        { outcome: 'hit', provider: identity.provider, project: identity.project },
-        { durationMs: 0 },
-      );
-      return { workspacePath: destination, outcome: 'hit' };
-    }
-
-    const leaseKey = `grounding-shared:${identityDigest(identity)}`;
-    // Chat turns fail closed after ~45s on the interactive prep path; waiting
-    // up to 65 minutes for a peer lease just freezes the UI. Prefer a bounded
-    // wait then fall through to per-run materialize (or remote fallback).
-    const leaseWaitMs = dependencies.leaseWaitMs ?? 90_000;
-    const outcome = await withLease(
-      leaseKey,
-      async (lease) => {
-      // Someone may have materialized it while we waited for the lease.
-      if (fs.existsSync(markerPath(destination))) return 'wait' as const;
-      await lease.assertOwned();
-      fs.mkdirSync(path.dirname(destination), { recursive: true });
-
-      // Build into a private temp sibling on the SAME share, drop the marker
-      // INSIDE it, then atomically rename it into place. Staging + rename makes
-      // materialization crash-safe and idempotent across instances: we never
-      // rm/re-clone an existing ready tree (the old destructive loop that wiped
-      // the marker), so a warm tree survives even when this instance's SMB
-      // directory cache transiently hides the marker.
-      const stagingDir = `${destination}.tmp-${process.pid}-${crypto
-        .randomBytes(6)
-        .toString('hex')}`;
-      try {
-        await materializeToPath(identity, stagingDir);
-        // Marker travels atomically with the tree via the rename below.
-        await fsp.writeFile(
-          path.join(stagingDir, SHARED_READ_MARKER),
-          JSON.stringify({ sha: identity.sha, readyAt: new Date(now()).toISOString() }),
-          'utf-8',
-        );
-        return await promoteStaged(stagingDir, destination);
-      } finally {
-        // If we didn't promote (peer won, or error) drop the staged tree.
-        // After a successful rename this is a no-op (ENOENT swallowed by force).
-        await fsp.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
-      }
-    },
-      { waitMs: leaseWaitMs },
-    );
+    if (!fs.existsSync(markerPath(destination))) return null;
 
     touchLastUsed(destination);
     safeTelemetry(
       'grounding.shared.checkout',
-      { outcome, provider: identity.provider, project: identity.project },
-      { durationMs: Math.max(0, now() - startedAt) },
+      { outcome: 'hit', provider: identity.provider, project: identity.project },
+      { durationMs: 0 },
     );
-    return { workspacePath: destination, outcome };
+    return { workspacePath: destination, outcome: 'hit' };
+  };
+
+  const materialize = async (
+    identity: SharedReadCheckoutIdentity,
+  ): Promise<SharedReadCheckoutResult> => {
+    const destination = resolvePath(identity);
+
+    // Warm fast-path: a completed materialization left a marker.
+    const ready = getReady(identity);
+    if (ready) return ready;
+
+    const digest = identityDigest(identity);
+    const existing = materializations.get(digest);
+    if (existing) return existing;
+
+    const startedAt = now();
+    const leaseKey = `grounding-shared:${digest}`;
+    // Chat turns fail closed after ~45s on the interactive prep path; waiting
+    // up to 65 minutes for a peer lease would retain stale background work.
+    // Bound peer waiting; user-facing callers already returned remote.
+    const leaseWaitMs = dependencies.leaseWaitMs ?? 90_000;
+    const pending = (async (): Promise<SharedReadCheckoutResult> => {
+      const outcome = await withLease(
+        leaseKey,
+        async (lease) => {
+          // Someone may have materialized it while we waited for the lease.
+          if (fs.existsSync(markerPath(destination))) return 'wait' as const;
+          await lease.assertOwned();
+          fs.mkdirSync(path.dirname(destination), { recursive: true });
+
+          // Build into a private temp sibling on the SAME share, drop the marker
+          // INSIDE it, then atomically rename it into place. Staging + rename makes
+          // materialization crash-safe and idempotent across instances: we never
+          // rm/re-clone an existing ready tree (the old destructive loop that wiped
+          // the marker), so a warm tree survives even when this instance's SMB
+          // directory cache transiently hides the marker.
+          const stagingDir = `${destination}.tmp-${process.pid}-${crypto
+            .randomBytes(6)
+            .toString('hex')}`;
+          try {
+            await materializeToPath(identity, stagingDir);
+            // Marker travels atomically with the tree via the rename below.
+            await fsp.writeFile(
+              path.join(stagingDir, SHARED_READ_MARKER),
+              JSON.stringify({
+                sha: identity.sha,
+                readyAt: new Date(now()).toISOString(),
+              }),
+              'utf-8',
+            );
+            return await promoteStaged(stagingDir, destination);
+          } finally {
+            // If we didn't promote (peer won, or error) drop the staged tree.
+            // After a successful rename this is a no-op (ENOENT swallowed by force).
+            await fsp.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+          }
+        },
+        { waitMs: leaseWaitMs },
+      );
+
+      touchLastUsed(destination);
+      safeTelemetry(
+        'grounding.shared.checkout',
+        { outcome, provider: identity.provider, project: identity.project },
+        { durationMs: Math.max(0, now() - startedAt) },
+      );
+      return { workspacePath: destination, outcome };
+    })();
+    materializations.set(digest, pending);
+    try {
+      return await pending;
+    } finally {
+      if (materializations.get(digest) === pending) {
+        materializations.delete(digest);
+      }
+    }
   };
 
   const retain = (identity: SharedReadCheckoutIdentity): void => {
@@ -411,6 +448,7 @@ export function createSharedReadCheckoutService(
 
   return {
     resolvePath,
+    getReady,
     materialize,
     retain,
     releaseRef,

@@ -28,6 +28,9 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
       .fn()
       .mockResolvedValue({ scanned: 0, evicted: 0, protected: 0 });
     const evaluateActive = jest.fn().mockResolvedValue([]);
+    const runLeaderSweep = jest.fn(
+      async (operation: () => Promise<void>) => operation(),
+    );
     let eventHandler: ((changed: PreWarmTarget) => void) | undefined;
     const unsubscribe = jest.fn();
     const scheduler = createGroundingMaintenanceScheduler({
@@ -35,6 +38,7 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
       evictionService: { evictIdle },
       sharedReadCheckoutService: { evictIdle: sharedEvictIdle },
       stalenessService: { evaluateActive },
+      runLeaderSweep,
       subscribe: (handler) => {
         eventHandler = handler;
         return unsubscribe;
@@ -59,6 +63,7 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
     expect(preWarm).toHaveBeenCalledWith(target);
     expect(evaluateActive).toHaveBeenCalledWith(target);
     expect(evaluateActive).toHaveBeenCalledWith();
+    expect(runLeaderSweep).toHaveBeenCalledTimes(2);
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
@@ -82,6 +87,7 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
       evictionService: { evictIdle },
       sharedReadCheckoutService: { evictIdle: sharedEvictIdle },
       stalenessService: { evaluateActive },
+      runLeaderSweep: async (operation) => operation(),
       subscribe: () => jest.fn(),
     });
 
@@ -96,5 +102,38 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
     expect(evictIdle).toHaveBeenCalledTimes(1);
     expect(sharedEvictIdle).toHaveBeenCalledTimes(1);
     expect(evaluateActive).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows only the distributed claim owner to run a scheduled sweep', async () => {
+    const sweep = jest.fn().mockResolvedValue(undefined);
+    const evictIdle = jest.fn().mockResolvedValue(undefined);
+    const sharedEvictIdle = jest.fn().mockResolvedValue({
+      scanned: 0,
+      evicted: 0,
+      protected: 0,
+    });
+    const evaluateActive = jest.fn().mockResolvedValue([]);
+    const scheduler = createGroundingMaintenanceScheduler({
+      preWarmService: {
+        sweep,
+        preWarm: jest.fn().mockResolvedValue(undefined),
+      },
+      evictionService: { evictIdle },
+      sharedReadCheckoutService: { evictIdle: sharedEvictIdle },
+      stalenessService: { evaluateActive },
+      runLeaderSweep: jest.fn().mockRejectedValue(
+        new Error(
+          'Timed out waiting for repository cache lease: grounding-maintenance:sweep',
+        ),
+      ),
+      subscribe: () => jest.fn(),
+    });
+
+    await expect(scheduler.runNow()).resolves.toBeUndefined();
+
+    expect(sweep).not.toHaveBeenCalled();
+    expect(evaluateActive).not.toHaveBeenCalled();
+    expect(evictIdle).not.toHaveBeenCalled();
+    expect(sharedEvictIdle).not.toHaveBeenCalled();
   });
 });

@@ -19,8 +19,11 @@ import {
   sharedReadCheckoutService,
   type SharedReadCheckoutService,
 } from './grounding/sharedReadCheckoutService';
+import { withRepoCacheLease } from './repoCacheLeaseService';
 
 export const GROUNDING_MAINTENANCE_INTERVAL_MS = 5 * 60 * 1000;
+const GROUNDING_MAINTENANCE_CLAIM_KEY = 'grounding-maintenance:sweep';
+const CLAIM_EXPIRY_HEADROOM_MS = 5_000;
 
 export interface GroundingMaintenanceSchedulerDependencies {
   preWarmService?: Pick<GroundingPreWarmService, 'preWarm' | 'sweep'>;
@@ -30,6 +33,10 @@ export interface GroundingMaintenanceSchedulerDependencies {
   subscribe?: (
     handler: GroundingActiveSetChangeHandler,
   ) => () => void;
+  runLeaderSweep?: (
+    operation: () => Promise<void>,
+    leaseWindowMs: number,
+  ) => Promise<void>;
   startupDelayMs?: number;
   intervalMs?: number;
 }
@@ -58,6 +65,10 @@ export class GroundingMaintenanceScheduler {
   private readonly subscribe: (
     handler: GroundingActiveSetChangeHandler,
   ) => () => void;
+  private readonly runLeaderSweep: (
+    operation: () => Promise<void>,
+    leaseWindowMs: number,
+  ) => Promise<void>;
   private readonly startupDelayMs: number;
   private readonly intervalMs: number;
 
@@ -74,6 +85,20 @@ export class GroundingMaintenanceScheduler {
       dependencies.stalenessService ?? groundingStalenessService;
     this.subscribe =
       dependencies.subscribe ?? onGroundingActiveSetChanged;
+    this.runLeaderSweep =
+      dependencies.runLeaderSweep ??
+      ((operation, leaseWindowMs) =>
+        withRepoCacheLease(
+          GROUNDING_MAINTENANCE_CLAIM_KEY,
+          async () => operation(),
+          {
+            leaseMs: leaseWindowMs,
+            waitMs: 0,
+            // Preserve the claim after work completes. Releasing here would
+            // let every staggered instance run the same sweep sequentially.
+            releaseOnComplete: false,
+          },
+        ));
     this.startupDelayMs =
       dependencies.startupDelayMs ?? 5_000 + Math.floor(Math.random() * 10_000);
     this.intervalMs =
@@ -118,10 +143,28 @@ export class GroundingMaintenanceScheduler {
     if (this.isRunning) return;
     this.isRunning = true;
     try {
-      await this.preWarmService.sweep();
-      await this.stalenessService.evaluateActive();
-      await this.evictionService.evictIdle();
-      await this.sharedReadCheckoutService.evictIdle();
+      const leaseWindowMs = Math.max(
+        1_000,
+        this.intervalMs - CLAIM_EXPIRY_HEADROOM_MS,
+      );
+      try {
+        await this.runLeaderSweep(async () => {
+          await this.preWarmService.sweep();
+          await this.stalenessService.evaluateActive();
+          await this.evictionService.evictIdle();
+          await this.sharedReadCheckoutService.evictIdle();
+        }, leaseWindowMs);
+      } catch (error) {
+        if (
+          error instanceof Error
+          && error.message.startsWith(
+            'Timed out waiting for repository cache lease:',
+          )
+        ) {
+          return;
+        }
+        throw error;
+      }
     } finally {
       this.isRunning = false;
     }

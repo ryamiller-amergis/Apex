@@ -157,6 +157,7 @@ function dependencies(
       reason: 'harness-not-run',
     }),
     sharedReadCheckout: {
+      getReady: jest.fn().mockReturnValue(null),
       materialize: jest.fn().mockResolvedValue({
         workspacePath: checkoutPath,
         outcome: 'materialized',

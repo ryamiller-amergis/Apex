@@ -40,6 +40,7 @@ function dependencies(
       reason: 'harness-not-run',
     }),
     sharedReadCheckout: {
+      getReady: jest.fn().mockReturnValue(null),
       materialize: jest.fn().mockResolvedValue({
         workspacePath: 'C:\\data\\workspaces\\grounding-shared\\digest',
         outcome: 'materialized',
@@ -1137,6 +1138,10 @@ describe('shared read-only per-SHA grounding checkout', () => {
     return dependencies({
       isSharedReadCheckoutEnabledForCaller: jest.fn().mockResolvedValue(true),
       sharedReadCheckout: {
+        getReady: jest.fn().mockReturnValue({
+          workspacePath: SHARED_PATH,
+          outcome: 'hit',
+        }),
         materialize: jest.fn().mockResolvedValue({
           workspacePath: SHARED_PATH,
           outcome: 'materialized',
@@ -1157,20 +1162,21 @@ describe('shared read-only per-SHA grounding checkout', () => {
     readOnlyShareable: true,
   };
 
-  it('uses the shared checkout (not the per-run tree) when the flag is on', async () => {
+  it('uses an already-ready shared checkout without materializing on the request path', async () => {
     const deps = sharedDeps();
     const service = createCallerGroundingService(deps);
 
     const selected = await service.start(startArgs);
 
     expect(selected).toMatchObject({ mode: 'local', cwd: SHARED_PATH, profileId });
-    expect(deps.sharedReadCheckout.materialize).toHaveBeenCalledWith({
+    expect(deps.sharedReadCheckout.getReady).toHaveBeenCalledWith({
       provider: 'github',
       project: 'Apex',
       repo: 'AI-Pilot',
       branch: grounding.branch,
       sha: grounding.groundedSha,
     });
+    expect(deps.sharedReadCheckout.materialize).not.toHaveBeenCalled();
     expect(deps.sharedReadCheckout.retain).toHaveBeenCalledTimes(1);
     // Per-run materialization must be skipped on the shared path.
     expect(deps.materialize).not.toHaveBeenCalled();
@@ -1184,7 +1190,7 @@ describe('shared read-only per-SHA grounding checkout', () => {
     expect(deps.sharedReadCheckout.releaseRef).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the per-run tree when the flag is off', async () => {
+  it('preserves the existing per-run checkout when the flag is disabled', async () => {
     const deps = sharedDeps({
       isSharedReadCheckoutEnabledForCaller: jest.fn().mockResolvedValue(false),
     });
@@ -1196,6 +1202,7 @@ describe('shared read-only per-SHA grounding checkout', () => {
       mode: 'local',
       cwd: 'C:\\data\\grounding-workspaces\\opaque',
     });
+    expect(deps.sharedReadCheckout.getReady).not.toHaveBeenCalled();
     expect(deps.sharedReadCheckout.materialize).not.toHaveBeenCalled();
     expect(deps.materialize).toHaveBeenCalledWith(grounding, run);
   });
@@ -1211,10 +1218,14 @@ describe('shared read-only per-SHA grounding checkout', () => {
     expect(deps.materialize).toHaveBeenCalledWith(grounding, run);
   });
 
-  it('falls back to the per-run tree when shared materialization fails', async () => {
+  it('returns remote immediately and starts best-effort warming on a cold miss', async () => {
     const deps = sharedDeps({
       sharedReadCheckout: {
-        materialize: jest.fn().mockRejectedValue(new Error('cold-materialize-failed')),
+        getReady: jest.fn().mockReturnValue(null),
+        materialize: jest.fn().mockResolvedValue({
+          workspacePath: SHARED_PATH,
+          outcome: 'materialized',
+        }),
         retain: jest.fn(),
         releaseRef: jest.fn(),
       },
@@ -1223,11 +1234,15 @@ describe('shared read-only per-SHA grounding checkout', () => {
 
     const selected = await service.start(startArgs);
 
-    expect(selected).toMatchObject({
-      mode: 'local',
-      cwd: 'C:\\data\\grounding-workspaces\\opaque',
+    expect(selected).toMatchObject({ mode: 'remote' });
+    expect(deps.sharedReadCheckout.materialize).toHaveBeenCalledWith({
+      provider: 'github',
+      project: 'Apex',
+      repo: 'AI-Pilot',
+      branch: grounding.branch,
+      sha: grounding.groundedSha,
     });
-    expect(deps.materialize).toHaveBeenCalledWith(grounding, run);
+    expect(deps.materialize).not.toHaveBeenCalled();
     expect(deps.sharedReadCheckout.retain).not.toHaveBeenCalled();
 
     await selected.release();

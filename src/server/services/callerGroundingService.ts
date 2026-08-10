@@ -136,7 +136,7 @@ export interface CallerGroundingDependencies {
   evaluateNativeReadCapability: typeof evaluateNativeReadCapabilityCheck;
   sharedReadCheckout: Pick<
     SharedReadCheckoutService,
-    'materialize' | 'retain' | 'releaseRef'
+    'getReady' | 'materialize' | 'retain' | 'releaseRef'
   >;
   ensureRepoCache: (options: {
     provider: SkillProvider;
@@ -288,9 +288,10 @@ export function createCallerGroundingService(
       }
 
       // @feature-flag:shared-readonly-grounding-checkout start winner=enabled
-      // Read-only chat callers share ONE per-SHA checkout instead of cloning a
-      // fresh per-run working tree — removing the "preparing" pause when the
-      // target branch has not advanced. Writers keep per-run isolation because
+      // Read-only chat callers may use ONE ready per-SHA checkout. A user turn
+      // never creates or waits for that tree: a cold miss falls back to remote
+      // repository tools immediately while best-effort materialization warms
+      // the next turn in the background. Writers keep per-run isolation because
       // they never set `readOnlyShareable`.
       let workspacePath: string | undefined;
       let sharedIdentity: SharedReadCheckoutIdentity | undefined;
@@ -307,38 +308,44 @@ export function createCallerGroundingService(
         }
         if (sharedEnabled) {
           // @feature-flag:shared-readonly-grounding-checkout enabled-start
-          try {
-            const identity: SharedReadCheckoutIdentity = {
-              provider: profileProvider(grounding.provider),
-              project: grounding.project,
-              repo,
-              branch: grounding.branch,
-              sha: grounding.groundedSha,
-            };
-            telemetry.phase(telemetryContext(input), 'shared-materialize');
-            const shared =
-              await dependencies.sharedReadCheckout.materialize(identity);
-            dependencies.sharedReadCheckout.retain(identity);
-            sharedIdentity = identity;
-            workspacePath = shared.workspacePath;
-            if (shared.outcome === 'hit') setMaterializationMode('warm');
-            telemetry.phase(
-              telemetryContext(input),
-              shared.outcome === 'hit'
-                ? 'shared-materialize-hit'
-                : 'shared-materialize-done',
-            );
-          } catch {
-            // Any failure falls through to the per-run materialization path.
-            sharedIdentity = undefined;
-            workspacePath = undefined;
-            telemetry.phase(telemetryContext(input), 'shared-materialize-fallback');
+          const identity: SharedReadCheckoutIdentity = {
+            provider: profileProvider(grounding.provider),
+            project: grounding.project,
+            repo,
+            branch: grounding.branch,
+            sha: grounding.groundedSha,
+          };
+          const shared = dependencies.sharedReadCheckout.getReady(identity);
+          if (!shared) {
+            telemetry.phase(telemetryContext(input), 'shared-checkout-cold');
+            // Warm only as detached maintenance. It must never delay this turn.
+            void dependencies.sharedReadCheckout
+              .materialize(identity)
+              .then(() => {
+                telemetry.phase(
+                  telemetryContext(input),
+                  'shared-background-materialize-done',
+                );
+              })
+              .catch(() => {
+                telemetry.phase(
+                  telemetryContext(input),
+                  'shared-background-materialize-failed',
+                );
+              });
+            return fallback(input, 'shared-checkout-not-ready');
           }
+          dependencies.sharedReadCheckout.retain(identity);
+          sharedIdentity = identity;
+          workspacePath = shared.workspacePath;
+          setMaterializationMode('warm');
+          telemetry.phase(telemetryContext(input), 'shared-checkout-hit');
           // @feature-flag:shared-readonly-grounding-checkout enabled-end
         }
       }
       // @feature-flag:shared-readonly-grounding-checkout end
 
+      // Only write-capable/non-shareable callers materialize synchronously.
       if (!workspacePath) {
         telemetry.phase(telemetryContext(input), 'per-run-materialize');
         const materialized = await dependencies.materialize(grounding, input.run);
