@@ -19,51 +19,6 @@
       "supportingOwners": {}
     },
     {
-      "name": "issue-analysis",
-      "summary": "Evaluate a reported issue and produce a structured priority/risk analysis.",
-      "scanScope": "targeted",
-      "foundationFiles": [
-        "SKILL.md"
-      ],
-      "adapterFiles": [
-        "SKILL.md",
-        "apex-skill.json",
-        "recipe.json"
-      ],
-      "dependsOn": [],
-      "supportingOwners": {}
-    },
-    {
-      "name": "technical-analysis",
-      "summary": "Evaluate a technical backlog item and produce a structured priority/risk analysis.",
-      "scanScope": "targeted",
-      "foundationFiles": [
-        "SKILL.md"
-      ],
-      "adapterFiles": [
-        "SKILL.md",
-        "apex-skill.json",
-        "recipe.json"
-      ],
-      "dependsOn": [],
-      "supportingOwners": {}
-    },
-    {
-      "name": "feature-request-analysis",
-      "summary": "Evaluate a product feature request across clarity, feasibility, impact, and alignment.",
-      "scanScope": "targeted",
-      "foundationFiles": [
-        "SKILL.md"
-      ],
-      "adapterFiles": [
-        "SKILL.md",
-        "apex-skill.json",
-        "recipe.json"
-      ],
-      "dependsOn": [],
-      "supportingOwners": {}
-    },
-    {
       "name": "design-doc-validation",
       "summary": "Automated scoring engine that grades design docs against a weighted rubric and emits a ValidationScorecard.",
       "tier": "apex-only",
@@ -174,24 +129,6 @@
       }
     },
     {
-      "name": "kick-off",
-      "summary": "Orchestrate significant development work through classification, interview, design doc, and TDD decomposition.",
-      "scanScope": "targeted",
-      "foundationFiles": [
-        "SKILL.md",
-        "design-doc-template.md"
-      ],
-      "adapterFiles": [
-        "SKILL.md",
-        "apex-skill.json",
-        "recipe.json"
-      ],
-      "dependsOn": [],
-      "supportingOwners": {
-        "design-doc-template.md": "foundation"
-      }
-    },
-    {
       "name": "create-test-case",
       "summary": "Derive senior-QA test cases from a structured backlog JSON with full PBI traceability.",
       "scanScope": "targeted",
@@ -259,53 +196,9 @@
       "supportingOwners": {}
     },
     {
-      "name": "daily-standup",
-      "summary": "Facilitate a daily standup ceremony and produce a structured summary.",
-      "scanScope": "targeted",
-      "foundationFiles": [
-        "SKILL.md"
-      ],
-      "adapterFiles": [
-        "SKILL.md",
-        "apex-skill.json",
-        "recipe.json"
-      ],
-      "dependsOn": [],
-      "supportingOwners": {}
-    },
-    {
-      "name": "in-app-notifications",
-      "summary": "Implement and extend in-app notification features.",
-      "scanScope": "targeted",
-      "foundationFiles": [
-        "SKILL.md"
-      ],
-      "adapterFiles": [
-        "SKILL.md",
-        "apex-skill.json",
-        "recipe.json"
-      ],
-      "dependsOn": [],
-      "supportingOwners": {}
-    },
-    {
       "name": "update-changelog",
-      "summary": "Update the application changelog and bump the version from recent git changes.",
-      "scanScope": "targeted",
-      "foundationFiles": [
-        "SKILL.md"
-      ],
-      "adapterFiles": [
-        "SKILL.md",
-        "apex-skill.json",
-        "recipe.json"
-      ],
-      "dependsOn": [],
-      "supportingOwners": {}
-    },
-    {
-      "name": "feature-flags",
-      "summary": "Add feature flags to existing features using the top-level split pattern.",
+      "summary": "Update the application changelog and bump the version from recent git changes. Always installed with any release.",
+      "alwaysInstall": true,
       "scanScope": "targeted",
       "foundationFiles": [
         "SKILL.md"
@@ -321,73 +214,6 @@
     {
       "name": "rbac-management",
       "summary": "Add or modify role-based access control permissions and role assignments.",
-      "scanScope": "targeted",
-      "foundationFiles": [
-        "SKILL.md"
-      ],
-      "adapterFiles": [
-        "SKILL.md",
-        "apex-skill.json",
-        "recipe.json"
-      ],
-      "dependsOn": [],
-      "supportingOwners": {}
-    },
-    {
-      "name": "dev-orchestrator",
-      "summary": "Orchestrate multi-agent implementation from a structured dev plan.",
-      "scanScope": "targeted",
-      "foundationFiles": [
-        "SKILL.md",
-        "dev-plan-schema.json",
-        "dev-plan-example.json"
-      ],
-      "adapterFiles": [
-        "SKILL.md",
-        "apex-skill.json",
-        "recipe.json"
-      ],
-      "dependsOn": [
-        "to-prd"
-      ],
-      "supportingOwners": {
-        "dev-plan-schema.json": "foundation",
-        "dev-plan-example.json": "foundation"
-      }
-    },
-    {
-      "name": "build-test-push",
-      "summary": "Run build, lint, type-check, and test pipeline to confirm a branch is push-ready.",
-      "scanScope": "targeted",
-      "foundationFiles": [
-        "SKILL.md"
-      ],
-      "adapterFiles": [
-        "SKILL.md",
-        "apex-skill.json",
-        "recipe.json"
-      ],
-      "dependsOn": [],
-      "supportingOwners": {}
-    },
-    {
-      "name": "fullstack-node-bff",
-      "summary": "Coding standards for a fullstack Node.js BFF with Express API, React client, and shared types.",
-      "scanScope": "targeted",
-      "foundationFiles": [
-        "SKILL.md"
-      ],
-      "adapterFiles": [
-        "SKILL.md",
-        "apex-skill.json",
-        "recipe.json"
-      ],
-      "dependsOn": [],
-      "supportingOwners": {}
-    },
-    {
-      "name": "postgresql-migrations",
-      "summary": "Write and apply PostgreSQL schema migrations safely with ORM sync.",
       "scanScope": "targeted",
       "foundationFiles": [
         "SKILL.md"
@@ -466,21 +292,6 @@
         "adr-interview",
         "adr-finalize"
       ],
-      "supportingOwners": {}
-    },
-    {
-      "name": "create-pull-request",
-      "summary": "Create a pull request from the current branch with a structured description.",
-      "scanScope": "targeted",
-      "foundationFiles": [
-        "SKILL.md"
-      ],
-      "adapterFiles": [
-        "SKILL.md",
-        "apex-skill.json",
-        "recipe.json"
-      ],
-      "dependsOn": [],
       "supportingOwners": {}
     },
     {

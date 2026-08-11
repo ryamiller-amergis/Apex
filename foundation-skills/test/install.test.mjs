@@ -505,8 +505,8 @@ test('install iterates every shippable catalog skill in isolation, tracks manage
 test('MaxView-shaped install + bootstrap keeps scope exact and generates clean project-specific adapters', () => {
   const repo = makeRepo(makeMaxViewCleanInstallFixture());
   try {
-    const { lock } = installAndBootstrap(repo, ['ui-lab', 'issue-analysis', 'technical-analysis']);
-    const expectedScope = ['issue-analysis', 'post-skill-bootstrap', 'technical-analysis', 'ui-lab'];
+    const { lock } = installAndBootstrap(repo, ['ui-lab', 'to-prd', 'grill-with-docs']);
+    const expectedScope = ['grill-with-docs', 'post-skill-bootstrap', 'to-prd', 'ui-lab', 'update-changelog'];
     assert.deepEqual(Object.keys(lock.skills).sort(), expectedScope);
     assert.deepEqual(
       fs.readdirSync(path.join(repo, '.cursor/skills')).sort(),
@@ -519,10 +519,11 @@ test('MaxView-shaped install + bootstrap keeps scope exact and generates clean p
     }
 
     const uiLabText = fs.readFileSync(path.join(repo, '.cursor/skills/ui-lab/SKILL.md'), 'utf8');
-    const issueText = fs.readFileSync(path.join(repo, '.cursor/skills/issue-analysis/SKILL.md'), 'utf8');
-    const technicalText = fs.readFileSync(path.join(repo, '.cursor/skills/technical-analysis/SKILL.md'), 'utf8');
+    const toPrdText = fs.readFileSync(path.join(repo, '.cursor/skills/to-prd/SKILL.md'), 'utf8');
+    const grillText = fs.readFileSync(path.join(repo, '.cursor/skills/grill-with-docs/SKILL.md'), 'utf8');
     const bootstrapText = fs.readFileSync(path.join(repo, '.cursor/skills/post-skill-bootstrap/SKILL.md'), 'utf8');
-    const combined = [uiLabText, issueText, technicalText, bootstrapText].join('\n');
+    const changelogText = fs.readFileSync(path.join(repo, '.cursor/skills/update-changelog/SKILL.md'), 'utf8');
+    const combined = [uiLabText, toPrdText, grillText, bootstrapText, changelogText].join('\n');
 
     assert.match(combined, /MaxView/);
     assert.doesNotMatch(combined, /MatterWorx/);
@@ -534,10 +535,9 @@ test('MaxView-shaped install + bootstrap keeps scope exact and generates clean p
     assert.doesNotMatch(uiLabText, /--docs-token/);
     assert.doesNotMatch(uiLabText, /--wwwroot-token/);
 
-    assert.match(issueText, /PBI/);
-    assert.match(issueText, /TBI/);
-    assert.match(issueText, /RBAC/);
-    assert.match(technicalText, /projectName: MaxView/);
+    assert.match(toPrdText, /MaxView/);
+    assert.match(grillText, /PBI/);
+    assert.match(grillText, /TBI/);
     assert.match(bootstrapText, /CONTEXT-MAP\.md/);
     assert.match(bootstrapText, /AGENTS\.md/);
   } finally {
@@ -549,7 +549,6 @@ test('MatterWorx-shaped install + bootstrap keeps review dependencies clean and 
   const repo = makeRepo(makeMatterWorxCleanInstallFixture());
   try {
     const requested = [
-      'feature-request-analysis',
       'prd-spec-review',
       'design-spec-review',
       'to-prd',
@@ -585,10 +584,6 @@ test('MatterWorx-shaped install + bootstrap keeps review dependencies clean and 
       fs.readFileSync(path.join(repo, '.cursor/skills', skillName, 'SKILL.md'), 'utf8')
     );
     const combined = skillTexts.join('\n');
-    const featureRequestText = fs.readFileSync(
-      path.join(repo, '.cursor/skills/feature-request-analysis/SKILL.md'),
-      'utf8',
-    );
     const nonInstructionalUnfilledSlots = [...combined.matchAll(/APEX:unfilled\(([^)]+)\)/g)]
       .map((match) => match[1])
       .filter((slot) => slot !== 'slotName');
@@ -600,11 +595,7 @@ test('MatterWorx-shaped install + bootstrap keeps review dependencies clean and 
     assert.doesNotMatch(combined, /\b5432\b/);
     assert.doesNotMatch(combined, /infra\/shared-async\.tf/);
 
-    assert.match(featureRequestText, /APEX:slot\(mission\)/);
-    assert.match(featureRequestText, /APEX:unfilled\(mission\)/);
-    assert.doesNotMatch(featureRequestText, /TODO\(mission\)/);
-
-    assert.deepEqual(nonInstructionalUnfilledSlots, ['mission']);
+    assert.deepEqual(nonInstructionalUnfilledSlots.sort(), ['changelogFile']);
   } finally {
     cleanup(repo);
   }

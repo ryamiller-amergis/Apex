@@ -272,6 +272,59 @@ describe('FoundationSkillsAdmin', () => {
       expect(screen.getByLabelText('Artifact version')).toHaveValue('1.0.0');
     });
 
+    it('locks always-install skills so Clear cannot remove them', async () => {
+      const mutateAsync = jest.fn().mockResolvedValue({ ...draftRelease });
+      mockCreate.mockReturnValue({ mutateAsync, isPending: false });
+      mockCatalog.mockReturnValue({
+        skills: [
+          {
+            name: 'post-skill-bootstrap',
+            summary: 'Fill adapter slots.',
+            tier: 'shippable' as const,
+            alwaysInstall: true,
+            dependsOn: [],
+          },
+          {
+            name: 'update-changelog',
+            summary: 'Bump changelog.',
+            tier: 'shippable' as const,
+            alwaysInstall: true,
+            dependsOn: [],
+          },
+          {
+            name: 'to-prd',
+            summary: 'Generate a PRD.',
+            tier: 'shippable' as const,
+            dependsOn: [],
+          },
+        ],
+        isLoading: false,
+      });
+      renderComponent();
+      fireEvent.click(screen.getByRole('tab', { name: 'Create Draft' }));
+      fireEvent.change(screen.getByLabelText('Suite version'), { target: { value: '2.0.0' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' })); // Audience
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' })); // Skills
+
+      fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+
+      expect(screen.getByTestId('fs-skill-checkbox-post-skill-bootstrap')).toBeChecked();
+      expect(screen.getByTestId('fs-skill-checkbox-post-skill-bootstrap')).toBeDisabled();
+      expect(screen.getByTestId('fs-skill-checkbox-update-changelog')).toBeChecked();
+      expect(screen.getByTestId('fs-skill-checkbox-update-changelog')).toBeDisabled();
+      expect(screen.getByTestId('fs-skill-checkbox-to-prd')).not.toBeChecked();
+      expect(screen.getAllByText('Always included')).toHaveLength(2);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' })); // Review
+      fireEvent.submit(screen.getByText('Create draft').closest('form')!);
+
+      await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
+      expect(mutateAsync.mock.calls[0][0].selectedSkills).toEqual([
+        'post-skill-bootstrap',
+        'update-changelog',
+      ]);
+    });
+
     it('blocks submitting when every skill has been cleared', async () => {
       const mutateAsync = jest.fn();
       mockCreate.mockReturnValue({ mutateAsync, isPending: false });
