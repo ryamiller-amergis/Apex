@@ -23,6 +23,31 @@ describe('interactive lane telemetry (TBI-012)', () => {
     );
   });
 
+  it('emits allowlisted interactive.stage events with durationMs', () => {
+    const emit = jest.fn();
+    createWorkerTierTelemetry(emit).interactiveStage(
+      { lane: 'ai-runs-interactive', runId: 'run-1' },
+      'agent_cache_hit',
+      12,
+    );
+
+    expect(emit).toHaveBeenCalledWith(
+      WORKER_TIER_TELEMETRY_EVENT_NAMES.interactiveStage,
+      { lane: 'ai-runs-interactive', runId: 'run-1', stage: 'agent_cache_hit' },
+      { durationMs: 12 },
+    );
+  });
+
+  it('drops free-form stage names outside the allowlist', () => {
+    const emit = jest.fn();
+    createWorkerTierTelemetry(emit).interactiveStage(
+      { lane: 'ai-runs-interactive' },
+      'not_a_real_stage' as never,
+      5,
+    );
+    expect(emit).not.toHaveBeenCalled();
+  });
+
   it('reports interactive in-flight utilization against reserved+burst', () => {
     const emit = jest.fn();
     createWorkerTierTelemetry(emit).interactiveInflight(

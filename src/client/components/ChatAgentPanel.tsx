@@ -348,7 +348,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
       && m.toolName !== '_reasoning'
       && m.toolName !== '_thinking',
   });
-  const { messages, streamingText, isConnected, prdReady, isRunning, status } = session;
+  const { messages, streamingText, isConnected, prdReady, isRunning, status, progressLabel } = session;
 
   const closeThread = useCloseThread();
 
@@ -720,7 +720,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                 className={styles.message}
                 role="status"
                 aria-live="polite"
-                aria-label="Agent is processing"
+                aria-label={progressLabel ?? 'Agent is processing'}
                 {...{ 'data-testid': 'chat-run-spinner' }}
               >
                 <div className={styles.agentHeader}>
@@ -733,6 +733,14 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                     <span className={styles.typingDot} />
                     <span className={styles.typingDot} />
                   </div>
+                  {progressLabel && (
+                    <p
+                      className={styles.progressLabel}
+                      {...{ 'data-testid': 'chat-agent-progress-label' }}
+                    >
+                      {progressLabel}
+                    </p>
+                  )}
                 </div>
               </div>
             )}

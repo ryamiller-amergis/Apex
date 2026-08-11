@@ -3,7 +3,8 @@
  *
  * Verifies the host-level invariants that are unit-testable without Dapr/Redis:
  *  - per-thread single-activation turn serialization (BR-015, VT-03 substitute)
- *  - warm grounded checkout reuse + Agent.resume across turns
+ *  - warm grounded checkout reuse + live Agent cache across turns
+ *  - immediate live "Starting agent…" phase before checkout/SDK
  *  - LIVE token fan-out to Redis (ephemeral) + first-token/turn telemetry
  *  - DURABLE final assistant message via ingest, delivered live with same id
  *  - cooperative cancellation via a heartbeat's ingest `cancelRequested` (BR-018)
@@ -11,13 +12,12 @@
  *  - graceful completion when Redis (publishLive) is unconfigured
  */
 import { AiRunCallbackError, AiRunFenceConflictError } from '../services/aiRunsWorker/callbackClient';
-import type {
-  WorkerCursorExecution,
-  WorkerCursorExecutionRun,
-} from '../services/aiRunsWorker/cursorExecution';
+import type { WorkerCursorExecutionRun } from '../services/aiRunsWorker/cursorExecution';
 import type { CursorStreamEvent } from '../services/cursorExecutionCore';
+import type { InteractiveCursorAgentHandle } from '../services/interactiveActorHost/interactiveCursorExecution';
 import {
   createInteractiveSessionActor,
+  INTERACTIVE_STARTING_DETAIL,
   type InteractiveActorDependencies,
   type InteractiveTurnRequest,
 } from '../services/interactiveActorHost/interactiveSessionActor';
@@ -26,7 +26,10 @@ import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
 import type { AiRunIngestBody, AiRunIngestResponse } from '../../shared/types/aiRunIngest';
 import type { AgentRunEventEnvelope } from '../../shared/types/chat';
 
-function makeSnapshot(threadId = 't1'): ExecutionSnapshot {
+function makeSnapshot(
+  threadId = 't1',
+  overrides: Partial<ExecutionSnapshot> = {},
+): ExecutionSnapshot {
   return {
     prompt: 'hello',
     model: 'auto',
@@ -35,32 +38,35 @@ function makeSnapshot(threadId = 't1'): ExecutionSnapshot {
     skillPath: 'skills/app-knowledge',
     projectId: 'proj-1',
     threadId,
+    ...overrides,
   };
 }
 
 function makeRequest(overrides: Partial<InteractiveTurnRequest> = {}): InteractiveTurnRequest {
+  const threadId = overrides.threadId ?? 't1';
   return {
     runId: 'run-1',
-    threadId: 't1',
+    threadId,
     projectId: 'proj-1',
     dispatchMessageId: 'dispatch-1',
-    snapshot: makeSnapshot(overrides.threadId),
+    snapshot: makeSnapshot(threadId, overrides.snapshot),
     cursorAgentId: null,
     ...overrides,
   };
 }
 
-interface FakeExecutionOptions {
+interface FakeAgentOptions {
   tokens?: string[];
   toolCall?: boolean;
   agentId?: string | null;
   waitGate?: Promise<void>;
   onCancel?: () => void;
+  onSend?: () => void;
+  model?: string;
+  workspaceRef?: string;
 }
 
-function makeExecution(
-  options: FakeExecutionOptions = {},
-): WorkerCursorExecution & { agentId?: string | null } {
+function makeAgentHandle(options: FakeAgentOptions = {}): InteractiveCursorAgentHandle {
   const run: WorkerCursorExecutionRun = {
     supports: (capability: string) => capability === 'stream',
     async *stream(): AsyncIterable<CursorStreamEvent> {
@@ -79,7 +85,16 @@ function makeExecution(
       options.onCancel?.();
     },
   };
-  return { run, dispose: async () => {}, agentId: options.agentId ?? null };
+  return {
+    agentId: options.agentId ?? null,
+    model: options.model ?? 'auto',
+    workspaceRef: options.workspaceRef ?? '/warm/checkout',
+    send: async () => {
+      options.onSend?.();
+      return run;
+    },
+    dispose: async () => {},
+  };
 }
 
 function makeTelemetry(): WorkerTierTelemetry {
@@ -90,6 +105,7 @@ function makeTelemetry(): WorkerTierTelemetry {
     interactiveShed: jest.fn(),
     interactiveActorHealth: jest.fn(),
     interactiveReplay: jest.fn(),
+    interactiveStage: jest.fn(),
   } as unknown as WorkerTierTelemetry;
 }
 
@@ -120,13 +136,48 @@ function captureLive(): LiveCapture {
 }
 
 describe('interactiveSessionActor', () => {
+  it('publishes Starting agent… before checkout / agent acquisition', async () => {
+    const order: string[] = [];
+    const { publishLive, live } = captureLive();
+    const deps: InteractiveActorDependencies = {
+      openWarmCheckout: jest.fn(async () => {
+        order.push('checkout');
+        return { workspacePath: '/warm/checkout' };
+      }),
+      acquireAgent: jest.fn(async () => {
+        order.push('acquire');
+        return makeAgentHandle({ tokens: ['ok'] });
+      }),
+      postIngest: async (): Promise<AiRunIngestResponse> => ({
+        ok: true,
+        cancelRequested: false,
+      }),
+      publishLive: async (threadId, envelope) => {
+        if (envelope.event.type === 'phase') order.push('phase');
+        await publishLive(threadId, envelope);
+      },
+    };
+
+    await createInteractiveSessionActor(deps).handleTurn(makeRequest());
+
+    expect(order[0]).toBe('phase');
+    expect(order.indexOf('phase')).toBeLessThan(order.indexOf('checkout'));
+    expect(order.indexOf('checkout')).toBeLessThan(order.indexOf('acquire'));
+    const starting = live.find(
+      (e) =>
+        e.event.type === 'phase'
+        && e.event.detail === INTERACTIVE_STARTING_DETAIL,
+    );
+    expect(starting).toBeDefined();
+  });
+
   it('streams tokens live to Redis (ephemeral) and posts the durable final message + terminal', async () => {
     const posted: AiRunIngestBody[] = [];
     const telemetry = makeTelemetry();
     const { publishLive, live } = captureLive();
     const deps: InteractiveActorDependencies = {
       openWarmCheckout: jest.fn(async () => ({ workspacePath: '/warm/checkout' })),
-      createExecution: jest.fn(async () => makeExecution({ tokens: ['hi ', 'there'] })),
+      acquireAgent: jest.fn(async () => makeAgentHandle({ tokens: ['hi ', 'there'], agentId: 'agent-1' })),
       postIngest: jest.fn(async (_p, _r, body): Promise<AiRunIngestResponse> => {
         posted.push(body);
         return { ok: true, cancelRequested: false };
@@ -139,6 +190,9 @@ describe('interactiveSessionActor', () => {
     const outcome = await actor.handleTurn(makeRequest());
 
     expect(outcome.status).toBe('completed');
+    if (outcome.status === 'completed') {
+      expect(outcome.cursorAgentId).toBe('agent-1');
+    }
 
     // Tokens ride Redis (ephemeral) — NOT durable ingest.
     expect(posted.some((b) => b.kind === 'progress' && b.event?.type === 'token')).toBe(
@@ -163,18 +217,24 @@ describe('interactiveSessionActor', () => {
     expect(durableId.text).toBe('hi there');
     expect(liveId.id).toBe(durableId.id);
 
-    expect(posted.some((b) => b.kind === 'terminal' && b.status === 'completed')).toBe(
-      true,
+    const terminal = posted.find((b) => b.kind === 'terminal' && b.status === 'completed');
+    expect(terminal).toEqual(
+      expect.objectContaining({
+        kind: 'terminal',
+        status: 'completed',
+        cursorAgentId: 'agent-1',
+      }),
     );
     expect(telemetry.interactiveFirstToken).toHaveBeenCalledTimes(1);
     expect(telemetry.interactiveTurn).toHaveBeenCalledTimes(1);
+    expect(telemetry.interactiveStage).toHaveBeenCalled();
   });
 
   it('completes durably when Redis (publishLive) is unconfigured', async () => {
     const posted: AiRunIngestBody[] = [];
     const deps: InteractiveActorDependencies = {
       openWarmCheckout: jest.fn(async () => ({ workspacePath: '/warm/checkout' })),
-      createExecution: jest.fn(async () => makeExecution({ tokens: ['answer'] })),
+      acquireAgent: jest.fn(async () => makeAgentHandle({ tokens: ['answer'] })),
       postIngest: jest.fn(async (_p, _r, body): Promise<AiRunIngestResponse> => {
         posted.push(body);
         return { ok: true, cancelRequested: false };
@@ -200,7 +260,7 @@ describe('interactiveSessionActor', () => {
     const onCancel = jest.fn();
     const deps: InteractiveActorDependencies = {
       openWarmCheckout: jest.fn(async () => ({ workspacePath: '/warm/checkout' })),
-      createExecution: jest.fn(async () => makeExecution({ toolCall: true, onCancel })),
+      acquireAgent: jest.fn(async () => makeAgentHandle({ toolCall: true, onCancel })),
       // heartbeat on every sink event so cancellation is observed immediately.
       heartbeatMs: 0,
       postIngest: jest.fn(async (_p, _r, body): Promise<AiRunIngestResponse> => {
@@ -227,7 +287,7 @@ describe('interactiveSessionActor', () => {
     const onCancel = jest.fn();
     const deps: InteractiveActorDependencies = {
       openWarmCheckout: jest.fn(async () => ({ workspacePath: '/warm/checkout' })),
-      createExecution: jest.fn(async () => makeExecution({ toolCall: true, onCancel })),
+      acquireAgent: jest.fn(async () => makeAgentHandle({ toolCall: true, onCancel })),
       heartbeatMs: 0,
       publishLive,
       postIngest: jest.fn(async (_p, _r, body): Promise<AiRunIngestResponse> => {
@@ -259,7 +319,7 @@ describe('interactiveSessionActor', () => {
     const onCancel = jest.fn();
     const deps: InteractiveActorDependencies = {
       openWarmCheckout: jest.fn(async () => ({ workspacePath: '/warm/checkout' })),
-      createExecution: jest.fn(async () => makeExecution({ toolCall: true, onCancel })),
+      acquireAgent: jest.fn(async () => makeAgentHandle({ toolCall: true, onCancel })),
       heartbeatMs: 0,
       postIngest: jest.fn(async (_p, _r, body): Promise<AiRunIngestResponse> => {
         if (body.kind === 'progress') {
@@ -280,32 +340,39 @@ describe('interactiveSessionActor', () => {
     );
   });
 
-  it('serializes turns per thread, reuses the warm checkout, and resumes the agent', async () => {
+  it('serializes turns per thread, reuses checkout, and reuses the live Agent cache', async () => {
     const gate = deferred();
     const startOrder: string[] = [];
     const openWarmCheckout = jest.fn(async () => ({ workspacePath: '/warm/checkout' }));
-    const resumeAgentIds: Array<string | null | undefined> = [];
+    const sendCounts: number[] = [];
     let call = 0;
-    const createExecution = jest.fn(
-      async (
-        _snapshot: Readonly<ExecutionSnapshot>,
-        _checkout: { workspacePath: string },
-        options: { resumeAgentId?: string | null },
-      ) => {
+    const sharedHandle = makeAgentHandle({
+      tokens: ['ok'],
+      agentId: 'agent-1',
+      onSend: () => {
         call += 1;
-        resumeAgentIds.push(options.resumeAgentId);
         startOrder.push(`turn-${call}`);
-        // Only the first turn blocks on the gate so we can observe serialization.
-        return makeExecution({
-          tokens: ['ok'],
-          agentId: 'agent-1',
-          waitGate: call === 1 ? gate.promise : undefined,
-        });
+        sendCounts.push(call);
       },
-    );
+    });
+    // First send blocks until the gate resolves so we can observe serialization.
+    const originalSend = sharedHandle.send;
+    sharedHandle.send = async (prompt) => {
+      const run = await originalSend(prompt);
+      if (call === 1) {
+        const gatedWait = run.wait.bind(run);
+        run.wait = async () => {
+          await gate.promise;
+          return gatedWait();
+        };
+      }
+      return run;
+    };
+
+    const acquireAgent = jest.fn(async () => sharedHandle);
     const deps: InteractiveActorDependencies = {
       openWarmCheckout,
-      createExecution,
+      acquireAgent,
       postIngest: async (): Promise<AiRunIngestResponse> => ({
         ok: true,
         cancelRequested: false,
@@ -316,11 +383,13 @@ describe('interactiveSessionActor', () => {
     const first = actor.handleTurn(makeRequest({ runId: 'run-1' }));
     const second = actor.handleTurn(makeRequest({ runId: 'run-2' }));
 
-    // Give the event loop a tick; the second turn must NOT start until the
-    // first settles (single activation, BR-015).
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(createExecution).toHaveBeenCalledTimes(1);
+    // Wait until the first turn has acquired + sent (blocked on wait gate).
+    for (let i = 0; i < 50 && sendCounts.length === 0; i += 1) {
+      await Promise.resolve();
+    }
+    expect(acquireAgent).toHaveBeenCalledTimes(1);
+    // Second turn must still be queued behind the first (BR-015).
+    expect(sendCounts).toEqual([1]);
 
     gate.resolve();
     const [firstOutcome, secondOutcome] = await Promise.all([first, second]);
@@ -330,8 +399,66 @@ describe('interactiveSessionActor', () => {
     expect(startOrder).toEqual(['turn-1', 'turn-2']);
     // Warm checkout opened once and reused across both turns.
     expect(openWarmCheckout).toHaveBeenCalledTimes(1);
-    // First turn has no prior agent; second resumes the agent from the first.
-    expect(resumeAgentIds[0]).toBeNull();
-    expect(resumeAgentIds[1]).toBe('agent-1');
+    // Live Agent acquired once; second turn is a cache hit (send only).
+    expect(acquireAgent).toHaveBeenCalledTimes(1);
+    expect(sendCounts).toEqual([1, 2]);
+  });
+
+  it('invalidates the live Agent and checkout when workspaceRef changes', async () => {
+    const disposeCheckout = jest.fn(async () => {});
+    const disposeAgent = jest.fn(async () => {});
+    const openWarmCheckout = jest.fn(async (_threadId, snapshot) => ({
+      workspacePath: snapshot.workspaceRef,
+      dispose: disposeCheckout,
+    }));
+    const acquireAgent = jest.fn(
+      async (snapshot: Readonly<ExecutionSnapshot>) =>
+        makeAgentHandle({
+          tokens: ['ok'],
+          agentId: 'agent-1',
+          model: snapshot.model,
+          workspaceRef: snapshot.workspaceRef,
+          onSend: () => {},
+        }),
+    );
+    // Override dispose on returned handles.
+    acquireAgent.mockImplementation(async (snapshot: Readonly<ExecutionSnapshot>) => {
+      const handle = makeAgentHandle({
+        tokens: ['ok'],
+        agentId: 'agent-x',
+        model: snapshot.model,
+        workspaceRef: snapshot.workspaceRef,
+      });
+      handle.dispose = disposeAgent;
+      return handle;
+    });
+
+    const deps: InteractiveActorDependencies = {
+      openWarmCheckout,
+      acquireAgent,
+      postIngest: async (): Promise<AiRunIngestResponse> => ({
+        ok: true,
+        cancelRequested: false,
+      }),
+    };
+
+    const actor = createInteractiveSessionActor(deps);
+    await actor.handleTurn(
+      makeRequest({
+        runId: 'run-1',
+        snapshot: makeSnapshot('t1', { workspaceRef: '/warm/a' }),
+      }),
+    );
+    await actor.handleTurn(
+      makeRequest({
+        runId: 'run-2',
+        snapshot: makeSnapshot('t1', { workspaceRef: '/warm/b' }),
+      }),
+    );
+
+    expect(openWarmCheckout).toHaveBeenCalledTimes(2);
+    expect(acquireAgent).toHaveBeenCalledTimes(2);
+    expect(disposeAgent).toHaveBeenCalled();
+    expect(disposeCheckout).toHaveBeenCalled();
   });
 });

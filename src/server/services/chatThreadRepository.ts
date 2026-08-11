@@ -491,6 +491,29 @@ export async function clearStaleRun(threadId: string): Promise<void> {
     .where(eq(chatThreads.id, threadId));
 }
 
+/** Lightweight read of the thread's persisted Cursor agent id (interactive resume). */
+export async function getCursorAgentId(
+  threadId: string,
+): Promise<string | null> {
+  const rows = await db
+    .select({ cursorAgentId: chatThreads.cursorAgentId })
+    .from(chatThreads)
+    .where(eq(chatThreads.id, threadId))
+    .limit(1);
+  return rows[0]?.cursorAgentId ?? null;
+}
+
+/** Persist Cursor agent id for interactive restart recovery (null clears). */
+export async function setCursorAgentId(
+  threadId: string,
+  cursorAgentId: string | null,
+): Promise<void> {
+  await db
+    .update(chatThreads)
+    .set({ cursorAgentId })
+    .where(eq(chatThreads.id, threadId));
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 function deriveTitle(thread: ChatThread): string {

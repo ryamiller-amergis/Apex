@@ -300,6 +300,13 @@ resource "azurerm_container_app" "ai_runs_interactive" {
         name  = "APEX_CALLBACK_URL"
         value = var.ai_runs_apex_callback_base_url
       }
+      # Reuse the shared App Insights resource — same connection string as the
+      # Apex App Service. Enables interactive.stage / first-token telemetry from
+      # the actor host without a new secret or feature flag.
+      env {
+        name  = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+        value = azurerm_application_insights.main.connection_string
+      }
       env {
         name  = "AZURE_CLIENT_ID"
         value = azurerm_user_assigned_identity.ai_runs_runner.client_id

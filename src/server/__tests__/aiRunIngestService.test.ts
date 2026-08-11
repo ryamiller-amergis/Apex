@@ -58,6 +58,15 @@ jest.mock('../services/workerTierTelemetry', () => ({
   },
 }));
 
+const mockGetCursorAgentId = jest.fn();
+const mockSetCursorAgentId = jest.fn();
+
+jest.mock('../services/chatThreadRepository', () => ({
+  getCursorAgentId: (...args: unknown[]) => mockGetCursorAgentId(...args),
+  setCursorAgentId: (...args: unknown[]) => mockSetCursorAgentId(...args),
+  insertMessage: jest.fn(),
+}));
+
 import {
   AiRunIngestError,
   getBootstrap,
@@ -189,9 +198,11 @@ describe('GET bootstrap fenced snapshot seam', () => {
       lane: 'ai-runs-interactive',
       executionSnapshot,
     }));
+    mockGetCursorAgentId.mockResolvedValue('persisted-agent');
 
     await expect(getBootstrap('run-1', 'dispatch-current')).resolves.toEqual({
       projectId: 'project-1',
+      cursorAgentId: 'persisted-agent',
       run: expect.objectContaining({
         id: 'run-1',
         lane: 'ai-runs-interactive',
@@ -200,6 +211,7 @@ describe('GET bootstrap fenced snapshot seam', () => {
         executionSnapshot,
       }),
     });
+    expect(mockGetCursorAgentId).toHaveBeenCalledWith('thread-1');
   });
 
   it('TBI-004 DoD-2 / PBI-004 AC-3 / VT-06: rejects a stale bootstrap fence without mutation', async () => {
