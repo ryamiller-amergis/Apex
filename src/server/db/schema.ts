@@ -369,6 +369,26 @@ export const pendingProjectAssignments = pgTable('pending_project_assignments', 
   uniq: unique().on(t.email, t.project),
 }));
 
+// ── Restricted User Access ────────────────────────────────────────────────────
+
+export const restrictedUserAccess = pgTable('restricted_user_access', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  email: text('email').notNull().unique(),
+  roleId: uuid('role_id').notNull().references(() => appRoles.id, { onDelete: 'restrict' }),
+  modules: jsonb('modules').$type<MenuItemKey[]>().notNull().default([]),
+  enabled: boolean('enabled').notNull().default(true),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export const restrictedUserAccessRelations = relations(restrictedUserAccess, ({ one }) => ({
+  role: one(appRoles, {
+    fields: [restrictedUserAccess.roleId],
+    references: [appRoles.id],
+  }),
+}));
+
 export const projectAccessRequests = pgTable('project_access_requests', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),

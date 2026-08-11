@@ -6,21 +6,27 @@ interface LoadTestsRouteGuardProps {
   children: React.ReactNode;
   selectedProject: string;
   isSuperAdmin?: boolean;
+  /** When provided (e.g. restricted users), overrides project menu config. */
+  menuEnabledViews?: string[];
 }
 
 export const LoadTestsRouteGuard: React.FC<LoadTestsRouteGuardProps> = ({
   children,
   selectedProject,
   isSuperAdmin = false,
+  menuEnabledViews,
 }) => {
   const { can, isLoading: permLoading } = useMyPermissions(selectedProject);
-  const { enabledViews, isLoading: menuLoading } = useProjectMenuConfig(selectedProject);
+  const { enabledViews, isLoading: menuLoading } = useProjectMenuConfig(
+    menuEnabledViews ? null : selectedProject,
+  );
 
-  const isLoading = permLoading || menuLoading;
+  const isLoading = permLoading || (menuEnabledViews ? false : menuLoading);
   if (isLoading) return null;
 
+  const views = menuEnabledViews ?? enabledViews;
   const hasPermission = isSuperAdmin || can('load-test:view');
-  const isMenuVisible = isSuperAdmin || enabledViews.includes('load-tests');
+  const isMenuVisible = isSuperAdmin || views.includes('load-tests');
   const isAuthorized = hasPermission && isMenuVisible;
 
   if (!isAuthorized) return null;
