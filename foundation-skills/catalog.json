@@ -427,10 +427,7 @@
         "apex-skill.json",
         "recipe.json"
       ],
-      "dependsOn": [
-        "azure-async-infra",
-        "terraform-infra"
-      ],
+      "dependsOn": [],
       "supportingOwners": {}
     },
     {
@@ -447,8 +444,7 @@
         "recipe.json"
       ],
       "dependsOn": [
-        "adr-interview",
-        "azure-async-infra"
+        "adr-interview"
       ],
       "supportingOwners": {
         "adr-template.md": "foundation"
@@ -470,38 +466,6 @@
         "adr-interview",
         "adr-finalize"
       ],
-      "supportingOwners": {}
-    },
-    {
-      "name": "azure-async-infra",
-      "summary": "Azure async infrastructure patterns: Blob Storage, Service Bus, worker compute, and auth.",
-      "scanScope": "targeted",
-      "foundationFiles": [
-        "SKILL.md"
-      ],
-      "adapterFiles": [
-        "SKILL.md",
-        "apex-skill.json",
-        "recipe.json"
-      ],
-      "dependsOn": [
-        "terraform-infra"
-      ],
-      "supportingOwners": {}
-    },
-    {
-      "name": "terraform-infra",
-      "summary": "Terraform IaC coding standards for Azure infrastructure.",
-      "scanScope": "targeted",
-      "foundationFiles": [
-        "SKILL.md"
-      ],
-      "adapterFiles": [
-        "SKILL.md",
-        "apex-skill.json",
-        "recipe.json"
-      ],
-      "dependsOn": [],
       "supportingOwners": {}
     },
     {
