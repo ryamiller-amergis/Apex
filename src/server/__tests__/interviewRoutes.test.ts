@@ -858,6 +858,7 @@ describe('POST /api/interviews/:interviewId/prds', () => {
       userId: 'user-test',
       project: 'proj-alpha',
       threadId: 'thread-new',
+      interviewId: 'interview-1',
       kickoffMessage: 'Begin.',
     });
   });
@@ -1019,6 +1020,7 @@ describe('POST /api/interviews/prds/:prdId/design-docs — design doc model reso
     expect(mockRouteDesignDocGenerationKickoff).toHaveBeenCalledWith(
       expect.objectContaining({
         designDocId: 'design-doc-1',
+        prdId: 'prd-1',
         userId: 'user-test',
         project: 'proj-alpha',
         threadId: 'thread-mock',

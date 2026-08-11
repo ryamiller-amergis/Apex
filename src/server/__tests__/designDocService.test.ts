@@ -172,9 +172,11 @@ const { routeBackgroundWorkflow: mockRouteBackgroundWorkflow } = jest.requireMoc
 ) as { routeBackgroundWorkflow: jest.Mock };
 const {
   propagatePipelineGrounding: mockPropagatePipelineGrounding,
+  resolveRunGroundingSurface: mockResolveRunGroundingSurface,
   runGroundingService: mockRunGroundingService,
 } = jest.requireMock('../services/runGroundingService') as {
   propagatePipelineGrounding: jest.Mock;
+  resolveRunGroundingSurface: jest.Mock;
   runGroundingService: {
     getGroundings: jest.Mock;
     persistThenMarkTerminalInactive: jest.Mock;
@@ -311,6 +313,23 @@ describe('createDesignDoc', () => {
     expect(valuesMock).toHaveBeenCalledWith(
       expect.objectContaining({ title: 'Untitled Design Doc' }),
     );
+  });
+
+  it('does not await pipeline grounding on create (kickoff owns propagation)', async () => {
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'doc-fast' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await createDesignDoc({
+      prdId: 'prd-1',
+      project: 'proj-alpha',
+      userId: 'user-1',
+      chatThreadId: 'thread-abc',
+      title: 'Fast Create',
+    });
+
+    expect(mockPropagatePipelineGrounding).not.toHaveBeenCalled();
+    expect(mockResolveRunGroundingSurface).not.toHaveBeenCalled();
   });
 });
 
