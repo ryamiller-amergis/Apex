@@ -6,8 +6,10 @@ import type {
   AgentRunStatusResponse,
   ChatMessage,
   ChatThreadStatus,
+  GroundingPreparationStatus,
   SseErrorEvent,
   SseEvent,
+  SseGroundingEvent,
   SseHealthEvent,
   SseMessageEvent,
   SsePhaseEvent,
@@ -49,6 +51,12 @@ export interface RunHealthProgress {
   timestamp: number;
 }
 
+export interface GroundingPreparationProgress {
+  status: GroundingPreparationStatus;
+  message: string;
+  retryAfterMs?: number;
+}
+
 interface ChatStreamState {
   messages: ChatMessage[];
   streamingText: string;
@@ -68,6 +76,7 @@ interface ChatStreamState {
   isRetrying: boolean;
   /** Human-readable reason shown during retry (e.g. "Rate limited, retrying…") */
   retryReason: string | null;
+  groundingPreparation: GroundingPreparationProgress | null;
 }
 
 interface UseChatStreamOptions {
@@ -139,10 +148,7 @@ function safeTimestamp(value: unknown, fallback = Date.now()): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function progressLabelForPhase(
-  phase: AgentRunPhase,
-  detail?: string,
-): string {
+function progressLabelForPhase(phase: AgentRunPhase, detail?: string): string {
   if (phase === 'queued') return 'Queued — waiting for available worker';
   if (phase === 'dispatched') return 'Starting…';
   return detail ?? phase;
@@ -150,19 +156,29 @@ function progressLabelForPhase(
 
 function normalizePhaseEvent(
   event: SseEvent,
-  eventId: string,
+  eventId: string
 ): RunPhaseProgress | null {
   const phase = event.type === 'phase' ? event.phase : event.semanticPhase;
   const status = event.type === 'phase' ? event.status : event.semanticStatus;
-  if (!phase || !status || !RUN_PHASES.has(phase) || !RUN_EVENT_STATUSES.has(status)) return null;
-  const phaseEvent = event.type === 'phase' ? event as SsePhaseEvent : null;
-  const durationMs = typeof phaseEvent?.durationMs === 'number' && Number.isFinite(phaseEvent.durationMs)
-    ? Math.max(0, Math.min(phaseEvent.durationMs, 24 * 60 * 60_000))
-    : undefined;
+  if (
+    !phase ||
+    !status ||
+    !RUN_PHASES.has(phase) ||
+    !RUN_EVENT_STATUSES.has(status)
+  )
+    return null;
+  const phaseEvent = event.type === 'phase' ? (event as SsePhaseEvent) : null;
+  const durationMs =
+    typeof phaseEvent?.durationMs === 'number' &&
+    Number.isFinite(phaseEvent.durationMs)
+      ? Math.max(0, Math.min(phaseEvent.durationMs, 24 * 60 * 60_000))
+      : undefined;
   const detail = safeDetail(phaseEvent?.detail ?? event.semanticDetail);
   return {
     id: eventId || uuidv4(),
-    ...(typeof event.runId === 'string' && event.runId ? { runId: event.runId.slice(0, 200) } : {}),
+    ...(typeof event.runId === 'string' && event.runId
+      ? { runId: event.runId.slice(0, 200) }
+      : {}),
     phase,
     status,
     ...(detail ? { detail } : {}),
@@ -178,35 +194,45 @@ function normalizeHealthEvent(event: SseHealthEvent): RunHealthProgress | null {
   return {
     health: event.health,
     detail,
-    ...(typeof event.runId === 'string' && event.runId ? { runId: event.runId.slice(0, 200) } : {}),
+    ...(typeof event.runId === 'string' && event.runId
+      ? { runId: event.runId.slice(0, 200) }
+      : {}),
     timestamp: safeTimestamp(event.eventTimestamp),
   };
 }
 
 export function useChatStream(
   threadId: string | null,
-  options: UseChatStreamOptions = {},
+  options: UseChatStreamOptions = {}
 ): ChatStreamState {
-  const [messages, setMessages] = useState<ChatMessage[]>(options.initialMessages ?? []);
+  const [messages, setMessages] = useState<ChatMessage[]>(
+    options.initialMessages ?? []
+  );
   const [streamingText, setStreamingText] = useState('');
   const [thinkingText, setThinkingText] = useState('');
   const [toolProgress, setToolProgress] = useState<ToolProgress[]>([]);
-  const [status, setStatus] = useState<ChatThreadStatus>(options.initialStatus ?? 'idle');
+  const [status, setStatus] = useState<ChatThreadStatus>(
+    options.initialStatus ?? 'idle'
+  );
   const [isConnected, setIsConnected] = useState(false);
   const [lastProgressAt, setLastProgressAt] = useState<number | null>(null);
   const [phaseEvents, setPhaseEvents] = useState<RunPhaseProgress[]>([]);
   const [runHealth, setRunHealth] = useState<RunHealthProgress | null>(null);
   const [progressLabel, setProgressLabel] = useState<string | null>(null);
-  const [progressPhase, setProgressPhase] = useState<AgentRunPhase | null>(null);
+  const [progressPhase, setProgressPhase] = useState<AgentRunPhase | null>(
+    null
+  );
   const [prdReady, setPrdReady] = useState(options.initialPrdReady ?? false);
   const [backlogReady, setBacklogReady] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
   const [retryReason, setRetryReason] = useState<string | null>(null);
+  const [groundingPreparation, setGroundingPreparation] =
+    useState<GroundingPreparationProgress | null>(null);
   const [eventDrivenTermination, setEventDrivenTermination] = useState(false);
   // Re-open the stream when ai-runs-interactive flips — otherwise a chat that
   // connected as SSE while flags were still loading stays on SSE forever.
   const [interactiveWsEnabled, setInteractiveWsEnabledState] = useState(
-    isInteractiveWsEnabled,
+    isInteractiveWsEnabled
   );
 
   const streamRef = useRef<ThreadStreamHandle | null>(null);
@@ -278,6 +304,7 @@ export function useChatStream(
     setBacklogReady(false);
     setIsRetrying(false);
     setRetryReason(null);
+    setGroundingPreparation(null);
     setEventDrivenTermination(false);
     eventDrivenTerminationRef.current = false;
     streamBufferRef.current = '';
@@ -333,32 +360,42 @@ export function useChatStream(
       }
 
       if (
-        DURABLE_SSE_EVENT_TYPES.has(event.type)
-        && !rememberEventId(lastEventId)
+        DURABLE_SSE_EVENT_TYPES.has(event.type) &&
+        !rememberEventId(lastEventId)
       ) {
         return;
       }
 
-      const capturesSemanticPhase = event.type === 'phase'
-        || event.type === 'tool_call'
-        || event.type === 'tool_status'
-        || event.type === 'error'
-        || event.type === 'done';
+      const capturesSemanticPhase =
+        event.type === 'phase' ||
+        event.type === 'tool_call' ||
+        event.type === 'tool_status' ||
+        event.type === 'error' ||
+        event.type === 'done';
       const semanticPhase = capturesSemanticPhase
         ? normalizePhaseEvent(event, lastEventId)
         : null;
       if (semanticPhase) {
         setPhaseEvents((previous) => {
-          const previousRunId = [...previous].reverse().find((item) => item.runId)?.runId;
-          const sameRun = !semanticPhase.runId
-            || !previousRunId
-            || semanticPhase.runId === previousRunId;
+          const previousRunId = [...previous]
+            .reverse()
+            .find((item) => item.runId)?.runId;
+          const sameRun =
+            !semanticPhase.runId ||
+            !previousRunId ||
+            semanticPhase.runId === previousRunId;
           const base = sameRun ? previous : [];
           return [...base, semanticPhase].slice(-MAX_PHASE_EVENTS);
         });
         setProgressPhase(semanticPhase.phase);
-        setProgressLabel(progressLabelForPhase(semanticPhase.phase, semanticPhase.detail));
-        if (event.type === 'phase' || event.type === 'tool_call' || event.type === 'tool_status') {
+        setProgressLabel(
+          progressLabelForPhase(semanticPhase.phase, semanticPhase.detail)
+        );
+        if (
+          event.type === 'phase' ||
+          event.type === 'tool_call' ||
+          event.type === 'tool_status'
+        ) {
           setLastProgressAt(semanticPhase.timestamp);
         }
       }
@@ -371,7 +408,7 @@ export function useChatStream(
           setIsRetrying(false);
           setRetryReason(null);
           clearRetryTimeout();
-          setStatus((prev) => prev === 'idle' ? 'running' : prev);
+          setStatus((prev) => (prev === 'idle' ? 'running' : prev));
           break;
         }
         case 'message': {
@@ -393,22 +430,24 @@ export function useChatStream(
         case 'tool_call': {
           setLastProgressAt(Date.now());
           setThinkingText('');
-          setStatus((prev) => prev === 'idle' ? 'running' : prev);
+          setStatus((prev) => (prev === 'idle' ? 'running' : prev));
           break;
         }
         case 'thinking': {
           const thinkingEvent = event as SseThinkingEvent;
           setThinkingText(thinkingEvent.text);
-          setStatus((prev) => prev === 'idle' ? 'running' : prev);
+          setStatus((prev) => (prev === 'idle' ? 'running' : prev));
           break;
         }
         case 'phase': {
           if (
-            semanticPhase?.status === 'running'
-            || semanticPhase?.phase === 'queued'
-            || semanticPhase?.phase === 'dispatched'
+            semanticPhase?.status === 'running' ||
+            semanticPhase?.phase === 'queued' ||
+            semanticPhase?.phase === 'dispatched'
           ) {
-            setStatus((previous) => previous === 'idle' ? 'running' : previous);
+            setStatus((previous) =>
+              previous === 'idle' ? 'running' : previous
+            );
           }
           break;
         }
@@ -431,7 +470,9 @@ export function useChatStream(
           const toolStatusEvent = event as SseToolStatusEvent;
           setLastProgressAt(Date.now());
           setToolProgress((prev) => {
-            const existing = prev.findIndex((t) => t.callId === toolStatusEvent.callId);
+            const existing = prev.findIndex(
+              (t) => t.callId === toolStatusEvent.callId
+            );
             const entry: ToolProgress = {
               callId: toolStatusEvent.callId,
               toolName: toolStatusEvent.toolName,
@@ -461,6 +502,27 @@ export function useChatStream(
           setStatus(event.status);
           break;
         }
+        case 'grounding': {
+          const groundingEvent = event as SseGroundingEvent;
+          const message =
+            safeDetail(groundingEvent.message) ??
+            'Preparing project repository…';
+          setGroundingPreparation({
+            status: groundingEvent.status,
+            message,
+            ...(typeof groundingEvent.retryAfterMs === 'number' &&
+            Number.isFinite(groundingEvent.retryAfterMs)
+              ? {
+                  retryAfterMs: Math.max(
+                    0,
+                    Math.min(groundingEvent.retryAfterMs, 60_000)
+                  ),
+                }
+              : {}),
+          });
+          setProgressLabel(message);
+          break;
+        }
         case 'retrying': {
           const retryEvent = event as SseRetryingEvent;
           setLastProgressAt(Date.now());
@@ -468,7 +530,7 @@ export function useChatStream(
           setRetryReason(
             retryEvent.reason === 'reconnecting'
               ? 'Reconnecting to the agent…'
-              : `Retrying… (attempt ${retryEvent.attempt} of ${retryEvent.maxAttempts})`,
+              : `Retrying… (attempt ${retryEvent.attempt} of ${retryEvent.maxAttempts})`
           );
           clearRetryTimeout();
           break;
@@ -479,7 +541,8 @@ export function useChatStream(
           const code = errorEvent.errorCode;
 
           if (code === 'transient' || code === 'rate_limit') {
-            const reason = code === 'rate_limit' ? 'Rate limited, retrying…' : 'Retrying…';
+            const reason =
+              code === 'rate_limit' ? 'Rate limited, retrying…' : 'Retrying…';
             setIsRetrying(true);
             setRetryReason(reason);
             clearRetryTimeout();
@@ -529,6 +592,9 @@ export function useChatStream(
           setToolProgress([]);
           setIsRetrying(false);
           setRetryReason(null);
+          setGroundingPreparation(null);
+          setProgressLabel(null);
+          setProgressPhase(null);
           clearRetryTimeout();
           clearPollTimer();
           setStatus('idle');
@@ -591,52 +657,84 @@ export function useChatStream(
         });
         if (!res.ok) return;
         const data = (await res.json()) as AgentRunStatusResponse;
-        const persistedProgressAt = data.progressAt ? Date.parse(data.progressAt) : Number.NaN;
-        if (Number.isFinite(persistedProgressAt)) setLastProgressAt(persistedProgressAt);
-        const polledProgressPhase = RUN_PHASES.has(data.progressPhase as AgentRunPhase)
+        const persistedProgressAt = data.progressAt
+          ? Date.parse(data.progressAt)
+          : Number.NaN;
+        if (Number.isFinite(persistedProgressAt))
+          setLastProgressAt(persistedProgressAt);
+        const polledProgressPhase = RUN_PHASES.has(
+          data.progressPhase as AgentRunPhase
+        )
           ? data.progressPhase
           : null;
         setProgressLabel(
           polledProgressPhase
-            ? progressLabelForPhase(polledProgressPhase, safeDetail(data.progressLabel))
-            : null,
+            ? progressLabelForPhase(
+                polledProgressPhase,
+                safeDetail(data.progressLabel)
+              )
+            : null
         );
         setProgressPhase(polledProgressPhase);
         if (RUN_HEALTH_VALUES.has(data.health)) {
           setRunHealth({
             health: data.health,
-            detail: safeDetail(data.lastError)
-              ?? (data.health === 'healthy' ? 'Run is healthy' : data.health.replace(/_/g, ' ')),
+            detail:
+              safeDetail(data.lastError) ??
+              (data.health === 'healthy'
+                ? 'Run is healthy'
+                : data.health.replace(/_/g, ' ')),
             ...(data.runId ? { runId: data.runId.slice(0, 200) } : {}),
             timestamp: Date.now(),
           });
         }
         if (
-          data.runId
-          && data.progressPhase
-          && RUN_PHASES.has(data.progressPhase)
-          && Number.isFinite(persistedProgressAt)
+          data.runId &&
+          data.progressPhase &&
+          RUN_PHASES.has(data.progressPhase) &&
+          Number.isFinite(persistedProgressAt)
         ) {
           const polledPhase: RunPhaseProgress = {
             id: `poll-${data.runId}-${data.progressPhase}-${data.progressAt}`,
             runId: data.runId,
             phase: data.progressPhase,
-            status: data.status === 'running' ? 'running' : data.status === 'failed' ? 'failed' : 'completed',
-            ...(safeDetail(data.progressLabel) ? { detail: safeDetail(data.progressLabel) } : {}),
+            status:
+              data.status === 'running'
+                ? 'running'
+                : data.status === 'failed'
+                  ? 'failed'
+                  : 'completed',
+            ...(safeDetail(data.progressLabel)
+              ? { detail: safeDetail(data.progressLabel) }
+              : {}),
             timestamp: persistedProgressAt,
           };
           setPhaseEvents((previous) => {
-            if (previous.some((item) => item.id === polledPhase.id)) return previous;
-            const previousRunId = [...previous].reverse().find((item) => item.runId)?.runId;
-            const base = previousRunId && previousRunId !== data.runId ? [] : previous;
+            if (previous.some((item) => item.id === polledPhase.id))
+              return previous;
+            const previousRunId = [...previous]
+              .reverse()
+              .find((item) => item.runId)?.runId;
+            const base =
+              previousRunId && previousRunId !== data.runId ? [] : previous;
             return [...base, polledPhase].slice(-MAX_PHASE_EVENTS);
           });
         }
-        const isTerminal = ['idle', 'error', 'closed', 'completed', 'failed', 'cancelled'].includes(data.status);
+        const isTerminal = [
+          'idle',
+          'error',
+          'closed',
+          'completed',
+          'failed',
+          'cancelled',
+        ].includes(data.status);
         if (isTerminal) {
-          const mappedStatus: ChatThreadStatus = (data.status === 'completed' || data.status === 'cancelled') ? 'idle'
-            : data.status === 'failed' ? 'error'
-            : data.status as ChatThreadStatus;
+          const mappedStatus: ChatThreadStatus =
+            data.status === 'completed' || data.status === 'cancelled'
+              ? 'idle'
+              : data.status === 'failed'
+                ? 'error'
+                : (data.status as ChatThreadStatus);
           setStatus(mappedStatus);
           clearPollTimer();
           streamBufferRef.current = '';
@@ -645,7 +743,10 @@ export function useChatStream(
           setToolProgress([]);
           setIsRetrying(false);
           setRetryReason(null);
-          if ((data.status === 'error' || data.status === 'failed') && data.lastError) {
+          if (
+            (data.status === 'error' || data.status === 'failed') &&
+            data.lastError
+          ) {
             const errMsg: ChatMessage = {
               id: uuidv4(),
               role: 'system',
@@ -691,5 +792,6 @@ export function useChatStream(
     backlogReady,
     isRetrying,
     retryReason,
+    groundingPreparation,
   };
 }

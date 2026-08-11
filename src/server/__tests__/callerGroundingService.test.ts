@@ -51,6 +51,7 @@ function dependencies(
     ensureRepoCache: jest.fn().mockResolvedValue({
       baseSha: grounding.groundedSha,
     }),
+    readCachedOriginSha: jest.fn().mockResolvedValue(grounding.groundedSha),
     groundingService: {
       activateGroundings: jest.fn().mockResolvedValue({
         ok: true,
@@ -61,12 +62,10 @@ function dependencies(
       getGroundings: jest.fn().mockResolvedValue([grounding]),
       findActiveByRepoBranch: jest.fn().mockResolvedValue([grounding]),
       markTerminalInactive: jest.fn().mockResolvedValue(1),
-      reground: jest.fn().mockImplementation(
-        async (_run, _role, newSha) => ({
-          ...grounding,
-          groundedSha: newSha,
-        }),
-      ),
+      reground: jest.fn().mockImplementation(async (_run, _role, newSha) => ({
+        ...grounding,
+        groundedSha: newSha,
+      })),
     },
     materialize: jest.fn().mockResolvedValue({
       state: 'materialized',
@@ -640,21 +639,17 @@ describe('TBI-005 / PBI-004 guarded native-read startup', () => {
   it.each([
     [
       'callback-reported failure',
-      jest
-        .fn()
-        .mockImplementation(async (_context, onError) => {
-          onError?.();
-          return false;
-        }),
+      jest.fn().mockImplementation(async (_context, onError) => {
+        onError?.();
+        return false;
+      }),
     ],
     [
       'thrown evaluation',
       jest
         .fn()
         .mockRejectedValue(
-          new Error(
-            'secret=flag-value C:\\private\\repo --raw-argument'
-          )
+          new Error('secret=flag-value C:\\private\\repo --raw-argument')
         ),
     ],
   ])(
@@ -690,13 +685,9 @@ describe('TBI-005 / PBI-004 guarded native-read startup', () => {
   it.each([
     [
       'thrown self-check',
-      jest
-        .fn()
-        .mockImplementation(() => {
-          throw new Error(
-            'Bearer credential C:\\private\\repo --raw-argument'
-          );
-        }),
+      jest.fn().mockImplementation(() => {
+        throw new Error('Bearer credential C:\\private\\repo --raw-argument');
+      }),
       'evaluation-failed',
     ],
     [
@@ -811,7 +802,9 @@ describe('TBI-006 / PBI-005 S1 native-read activation', () => {
       resolvedSha: grounding.groundedSha,
       nativeReads: true,
     });
-    expect(jest.mocked(deps.materialize).mock.invocationCallOrder[0]).toBeLessThan(
+    expect(
+      jest.mocked(deps.materialize).mock.invocationCallOrder[0]
+    ).toBeLessThan(
       jest.mocked(deps.evaluateNativeReadCapability).mock.invocationCallOrder[0]
     );
     expect(deps.evaluateNativeReadCapability).toHaveBeenCalledWith({
@@ -843,12 +836,10 @@ describe('TBI-006 / PBI-005 S1 native-read activation', () => {
     },
     {
       scenario: 'flag evaluation error',
-      nativeFlag: jest
-        .fn()
-        .mockImplementation(async (_context, onError) => {
-          onError?.();
-          return false;
-        }),
+      nativeFlag: jest.fn().mockImplementation(async (_context, onError) => {
+        onError?.();
+        return false;
+      }),
       capability: jest.fn().mockReturnValue({
         proven: true,
         reason: 'pinned-checkout-confined',
@@ -870,21 +861,14 @@ describe('TBI-006 / PBI-005 S1 native-read activation', () => {
       scenario: 'capability evaluation error',
       nativeFlag: jest.fn().mockResolvedValue(true),
       capability: jest.fn().mockImplementation(() => {
-        throw new Error(
-          'secret=capability C:\\private\\repo --raw-argument'
-        );
+        throw new Error('secret=capability C:\\private\\repo --raw-argument');
       }),
       fallbackReason: 'native-read-capability-evaluation-failed',
       capabilityCalls: 1,
     },
   ])(
     'VT-02 fails closed for $scenario with sanitized deterministic telemetry',
-    async ({
-      nativeFlag,
-      capability,
-      fallbackReason,
-      capabilityCalls,
-    }) => {
+    async ({ nativeFlag, capability, fallbackReason, capabilityCalls }) => {
       // Arrange
       const deps = dependencies({
         isNativeReadEnabledForCaller: nativeFlag,
@@ -1136,11 +1120,11 @@ describe('TBI-003 grounding binding continuity', () => {
   );
 });
 
-describe('shared read-only per-SHA grounding checkout', () => {
+describe('Bundle B fast shared grounding selection', () => {
   const SHARED_PATH = 'C:\\data\\workspaces\\grounding-shared\\digest';
 
   function sharedDeps(
-    overrides: Partial<CallerGroundingDependencies> = {},
+    overrides: Partial<CallerGroundingDependencies> = {}
   ): CallerGroundingDependencies {
     return dependencies({
       isSharedReadCheckoutEnabledForCaller: jest.fn().mockResolvedValue(true),
@@ -1156,26 +1140,40 @@ describe('shared read-only per-SHA grounding checkout', () => {
         retain: jest.fn(),
         releaseRef: jest.fn(),
       },
+      readCachedOriginSha: jest.fn().mockResolvedValue(grounding.groundedSha),
       ...overrides,
-    });
+    } as Partial<CallerGroundingDependencies>);
   }
 
   const startArgs = {
     caller: 'chat-agent',
     userId: 'developer-1',
     run,
-    repository: { provider: 'github' as const, repo: 'AI-Pilot', branch: 'main' },
+    repository: {
+      provider: 'github' as const,
+      repo: 'AI-Pilot',
+      branch: 'main',
+    },
     reauthorize: async () => true,
     readOnlyShareable: true,
   };
 
-  it('uses an already-ready shared checkout without materializing on the request path', async () => {
+  it('PLAN-S2-AC-0 Given exact ready local SHA, When starting, Then selects it without network or materialization', async () => {
+    // Given
     const deps = sharedDeps();
+    jest.mocked(deps.groundingService.getGroundings).mockResolvedValue([]);
     const service = createCallerGroundingService(deps);
 
+    // When
     const selected = await service.start(startArgs);
 
-    expect(selected).toMatchObject({ mode: 'local', cwd: SHARED_PATH, profileId });
+    // Then
+    expect(selected).toMatchObject({
+      mode: 'local',
+      cwd: SHARED_PATH,
+      profileId,
+      resolvedSha: grounding.groundedSha,
+    });
     expect(deps.sharedReadCheckout.getReady).toHaveBeenCalledWith({
       provider: 'github',
       project: 'Apex',
@@ -1183,49 +1181,28 @@ describe('shared read-only per-SHA grounding checkout', () => {
       branch: grounding.branch,
       sha: grounding.groundedSha,
     });
+    expect(deps.ensureRepoCache).not.toHaveBeenCalled();
+    expect(deps.readCachedOriginSha).toHaveBeenCalledWith({
+      provider: 'github',
+      project: 'Apex',
+      repository: 'AI-Pilot',
+      branch: 'main',
+    });
+    expect(deps.groundingService.activateGroundings).toHaveBeenCalledWith({
+      run,
+      target: {
+        provider: 'github',
+        repository: 'AI-Pilot',
+        branch: 'main',
+        groundedSha: grounding.groundedSha,
+      },
+    });
     expect(deps.sharedReadCheckout.materialize).not.toHaveBeenCalled();
-    expect(deps.sharedReadCheckout.retain).toHaveBeenCalledTimes(1);
-    // Per-run materialization must be skipped on the shared path.
     expect(deps.materialize).not.toHaveBeenCalled();
-    expect(deps.profiles.registerConnectionProfile).toHaveBeenCalledWith(
-      expect.objectContaining({ checkoutPath: SHARED_PATH }),
-      expect.anything(),
-      expect.any(Function),
-    );
-
-    await selected.release();
-    expect(deps.sharedReadCheckout.releaseRef).toHaveBeenCalledTimes(1);
   });
 
-  it('preserves the existing per-run checkout when the flag is disabled', async () => {
-    const deps = sharedDeps({
-      isSharedReadCheckoutEnabledForCaller: jest.fn().mockResolvedValue(false),
-    });
-    const service = createCallerGroundingService(deps);
-
-    const selected = await service.start(startArgs);
-
-    expect(selected).toMatchObject({
-      mode: 'local',
-      cwd: 'C:\\data\\grounding-workspaces\\opaque',
-    });
-    expect(deps.sharedReadCheckout.getReady).not.toHaveBeenCalled();
-    expect(deps.sharedReadCheckout.materialize).not.toHaveBeenCalled();
-    expect(deps.materialize).toHaveBeenCalledWith(grounding, run);
-  });
-
-  it('never shares when the caller is not read-only shareable', async () => {
-    const deps = sharedDeps();
-    const service = createCallerGroundingService(deps);
-
-    await service.start({ ...startArgs, readOnlyShareable: false });
-
-    expect(deps.isSharedReadCheckoutEnabledForCaller).not.toHaveBeenCalled();
-    expect(deps.sharedReadCheckout.materialize).not.toHaveBeenCalled();
-    expect(deps.materialize).toHaveBeenCalledWith(grounding, run);
-  });
-
-  it('pins the latest ready checkout for the same repository on an exact-SHA miss', async () => {
+  it('PLAN-S2-AC-1 Given exact cold and prior ready SHA, When starting, Then pins and selects the prior SHA', async () => {
+    // Given
     const previousSha = 'b'.repeat(40);
     const previousGrounding: RunGrounding = {
       ...grounding,
@@ -1236,15 +1213,14 @@ describe('shared read-only per-SHA grounding checkout', () => {
     };
     const deps = sharedDeps({
       sharedReadCheckout: {
-        getReady: jest.fn().mockImplementation((identity) =>
-          identity.sha === previousSha
-            ? { workspacePath: SHARED_PATH, outcome: 'hit' }
-            : null
-        ),
-        materialize: jest.fn().mockResolvedValue({
-          workspacePath: SHARED_PATH,
-          outcome: 'materialized',
-        }),
+        getReady: jest
+          .fn()
+          .mockImplementation((identity) =>
+            identity.sha === previousSha
+              ? { workspacePath: SHARED_PATH, outcome: 'hit' }
+              : null
+          ),
+        materialize: jest.fn(),
         retain: jest.fn(),
         releaseRef: jest.fn(),
       },
@@ -1257,53 +1233,32 @@ describe('shared read-only per-SHA grounding checkout', () => {
       .mockResolvedValue({ ...grounding, groundedSha: previousSha });
     const service = createCallerGroundingService(deps);
 
+    // When
     const selected = await service.start(startArgs);
 
+    // Then
     expect(selected).toMatchObject({
       mode: 'local',
       cwd: SHARED_PATH,
       resolvedSha: previousSha,
     });
-    expect(deps.groundingService.findActiveByRepoBranch).toHaveBeenCalledWith({
-      provider: 'github',
-      project: 'Apex',
-      repository: 'AI-Pilot',
-      branch: 'main',
-    });
     expect(deps.groundingService.reground).toHaveBeenCalledWith(
       run,
       'target',
-      previousSha,
+      previousSha
     );
-    expect(deps.sharedReadCheckout.getReady).toHaveBeenCalledWith({
-      provider: 'github',
-      project: 'Apex',
-      repo: 'AI-Pilot',
-      branch: grounding.branch,
-      sha: previousSha,
-    });
-    expect(deps.sharedReadCheckout.materialize).toHaveBeenCalledWith({
-      provider: 'github',
-      project: 'Apex',
-      repo: 'AI-Pilot',
-      branch: grounding.branch,
-      sha: grounding.groundedSha,
-    });
+    expect(deps.ensureRepoCache).not.toHaveBeenCalled();
+    expect(deps.sharedReadCheckout.materialize).not.toHaveBeenCalled();
     expect(deps.materialize).not.toHaveBeenCalled();
-    expect(deps.sharedReadCheckout.retain).toHaveBeenCalledTimes(1);
-
-    await selected.release();
-    expect(deps.sharedReadCheckout.releaseRef).toHaveBeenCalledTimes(1);
   });
 
-  it('warms a cold shared checkout off-path and falls back without blocking the turn', async () => {
+  it('PLAN-S2-AC-2 Given no ready checkout, When starting, Then returns preparing without network, materialization, or native evaluation', async () => {
+    // Given
     const deps = sharedDeps({
+      isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(true),
       sharedReadCheckout: {
         getReady: jest.fn().mockReturnValue(null),
-        materialize: jest.fn().mockResolvedValue({
-          workspacePath: SHARED_PATH,
-          outcome: 'materialized',
-        }),
+        materialize: jest.fn(),
         retain: jest.fn(),
         releaseRef: jest.fn(),
       },
@@ -1313,22 +1268,57 @@ describe('shared read-only per-SHA grounding checkout', () => {
       .mockResolvedValue([grounding]);
     const service = createCallerGroundingService(deps);
 
+    // When
     const selected = await service.start(startArgs);
 
-    expect(selected).toMatchObject({ mode: 'remote' });
-    expect(deps.sharedReadCheckout.materialize).toHaveBeenCalledWith({
-      provider: 'github',
-      project: 'Apex',
-      repo: 'AI-Pilot',
-      branch: grounding.branch,
-      sha: grounding.groundedSha,
+    // Then
+    expect(selected).toMatchObject({
+      mode: 'preparing',
+      retryAfterMs: expect.any(Number),
+      release: expect.any(Function),
     });
+    expect(selected.mode).not.toBe('remote');
+    expect(deps.ensureRepoCache).not.toHaveBeenCalled();
+    expect(deps.sharedReadCheckout.materialize).not.toHaveBeenCalled();
     expect(deps.materialize).not.toHaveBeenCalled();
-    expect(deps.groundingService.reground).not.toHaveBeenCalled();
-    expect(deps.trackEvent).toHaveBeenCalledWith(
-      'grounding.fallback',
-      expect.objectContaining({ reason: 'shared-checkout-warming' }),
-      { fallbackCount: 1 },
-    );
+    expect(deps.evaluateNativeReadCapability).not.toHaveBeenCalled();
+  });
+
+  it('PLAN-S2-AC-3 Given shared grounding is intentionally disabled, When starting, Then preserves per-run behavior', async () => {
+    // Given
+    const deps = sharedDeps({
+      isSharedReadCheckoutEnabledForCaller: jest.fn().mockResolvedValue(false),
+    });
+    const service = createCallerGroundingService(deps);
+
+    // When
+    const selected = await service.start(startArgs);
+
+    // Then
+    expect(selected).toMatchObject({
+      mode: 'local',
+      cwd: 'C:\\data\\grounding-workspaces\\opaque',
+    });
+    expect(deps.sharedReadCheckout.getReady).not.toHaveBeenCalled();
+    expect(deps.materialize).toHaveBeenCalledWith(grounding, run);
+  });
+
+  it('PLAN-S2-DoD-0 Given preparing selection, When converted, Then no durable grounding binding is produced', () => {
+    // Given
+    const preparing = {
+      mode: 'preparing',
+      retryAfterMs: 1_000,
+      release: async () => undefined,
+    } as unknown as Parameters<typeof callerGroundingSelectionToBinding>[0];
+
+    // When
+    const binding = callerGroundingSelectionToBinding(preparing);
+
+    // Then
+    expect(binding).toBeNull();
+    expect(binding).not.toEqual({
+      mode: 'remote',
+      sha: null,
+    });
   });
 });

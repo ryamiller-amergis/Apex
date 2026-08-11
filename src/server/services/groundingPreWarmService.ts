@@ -21,6 +21,10 @@ import {
   groundingBundlePublisher,
   type GroundingBundlePublisher,
 } from './grounding/groundingBundlePublisherService';
+import {
+  sharedReadCheckoutService,
+  type SharedReadCheckoutService,
+} from './grounding/sharedReadCheckoutService';
 
 const MAX_CHANGED_PATHS = 200;
 const PRE_WARM_CONCURRENCY = 2;
@@ -48,6 +52,7 @@ export interface GroundingPreWarmDependencies {
     toSha: string
   ) => Promise<string[]>;
   publishBundle?: GroundingBundlePublisher['publish'];
+  materializeSharedCheckout?: SharedReadCheckoutService['materialize'];
   enqueueImpact?: typeof groundingImpactEvaluatorService.enqueue;
   telemetry?: typeof trackEvent;
   now?: () => number;
@@ -94,12 +99,14 @@ export function configuredPreWarmTargets(
         provider === 'github'
           ? repository.split('/').pop() || repository
           : repository;
-      return [{
-        provider,
-        project: config.project,
-        repository: normalizedRepository,
-        branch,
-      }];
+      return [
+        {
+          provider,
+          project: config.project,
+          repository: normalizedRepository,
+          branch,
+        },
+      ];
     })
   );
 }
@@ -110,8 +117,8 @@ async function listDefaultPreWarmTargets(): Promise<PreWarmTarget[]> {
     listSkillConfigs(),
   ]);
   if (
-    activeResult.status === 'rejected'
-    && configuredResult.status === 'rejected'
+    activeResult.status === 'rejected' &&
+    configuredResult.status === 'rejected'
   ) {
     throw activeResult.reason;
   }
@@ -172,8 +179,7 @@ export function createGroundingPreWarmService(
   dependencies: GroundingPreWarmDependencies = {}
 ): GroundingPreWarmService {
   const listActiveTargets =
-    dependencies.listActiveTargets ??
-    listDefaultPreWarmTargets;
+    dependencies.listActiveTargets ?? listDefaultPreWarmTargets;
   const withLease = dependencies.withLease ?? withRepoCacheLease;
   const refreshUnderLease =
     dependencies.refreshUnderLease ?? refreshRepoCacheUnderLease;
@@ -187,6 +193,9 @@ export function createGroundingPreWarmService(
   const publishBundle =
     dependencies.publishBundle ??
     ((input) => groundingBundlePublisher.publish(input));
+  const materializeSharedCheckout =
+    dependencies.materializeSharedCheckout ??
+    ((identity) => sharedReadCheckoutService.materialize(identity));
   const enqueueImpact =
     dependencies.enqueueImpact ??
     ((event) => groundingImpactEvaluatorService.enqueue(event));
@@ -204,7 +213,7 @@ export function createGroundingPreWarmService(
     );
     const operation = previousSha
       .then(async (fromSha) => {
-        let toSha: string | null = null;
+        const refreshed = { sha: null as string | null };
         await withLease(getRepoCacheLeaseKey(options), async (lease) => {
           lease.signal.throwIfAborted();
           const coalesced = wasRefreshedSince(options, requestedAt);
@@ -223,19 +232,21 @@ export function createGroundingPreWarmService(
             },
             { durationMs: Math.max(0, now() - requestedAt) }
           );
-          toSha = await Promise.resolve(readCachedSha(target)).catch(
+          refreshed.sha = await Promise.resolve(readCachedSha(target)).catch(
             () => null
           );
         });
 
-        if (toSha) {
+        const cachedSha = refreshed.sha?.trim();
+        const toSha = cachedSha || null;
+        if (cachedSha) {
           try {
             const outcome = await publishBundle({
               identity: {
                 provider: options.provider,
                 project: target.project,
                 repo: target.repository,
-                sha: toSha,
+                sha: cachedSha,
               },
               cacheDir: getRepoCacheDir(options),
               branch: target.branch,
@@ -255,6 +266,34 @@ export function createGroundingPreWarmService(
               branch: target.branch,
               outcome: 'failed',
             });
+          }
+
+          try {
+            const { outcome } = await materializeSharedCheckout({
+              provider: options.provider,
+              project: target.project,
+              repo: target.repository,
+              branch: target.branch,
+              sha: cachedSha,
+            });
+            telemetry('grounding.shared.prewarm', {
+              provider: target.provider,
+              project: target.project,
+              repository: target.repository,
+              branch: target.branch,
+              sha: cachedSha,
+              outcome,
+            });
+          } catch (error) {
+            telemetry('grounding.shared.prewarm', {
+              provider: target.provider,
+              project: target.project,
+              repository: target.repository,
+              branch: target.branch,
+              sha: cachedSha,
+              outcome: 'failed',
+            });
+            throw error;
           }
         }
 
@@ -289,7 +328,11 @@ export function createGroundingPreWarmService(
     async sweep() {
       const targets = await listActiveTargets();
       let firstError: unknown;
-      for (let index = 0; index < targets.length; index += PRE_WARM_CONCURRENCY) {
+      for (
+        let index = 0;
+        index < targets.length;
+        index += PRE_WARM_CONCURRENCY
+      ) {
         const results = await Promise.allSettled(
           targets
             .slice(index, index + PRE_WARM_CONCURRENCY)

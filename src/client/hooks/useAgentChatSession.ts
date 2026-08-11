@@ -97,6 +97,7 @@ export interface AgentChatSession {
   isAwaitingAgentResponse: boolean;
   isPreparing: boolean;
   hasPreparationError: boolean;
+  preparationMessage: string | null;
   isInteractionBusy: boolean;
 
   // --- Actions ---
@@ -119,7 +120,7 @@ const DEFAULT_VISIBLE_FILTER = (m: ChatMessage): boolean =>
 
 export function useAgentChatSession(
   threadId: string | null,
-  options: AgentChatSessionOptions = {},
+  options: AgentChatSessionOptions = {}
 ): AgentChatSession {
   const {
     initialMessages,
@@ -157,6 +158,7 @@ export function useAgentChatSession(
     backlogReady,
     isRetrying,
     retryReason,
+    groundingPreparation,
   } = stream;
 
   // --- Local state ---
@@ -180,8 +182,8 @@ export function useAgentChatSession(
       (message) =>
         message.role === 'user' &&
         message.text === optimisticUserMessage.text &&
-        !optimisticBaselineIdsRef.current.has(message.id),
-    ),
+        !optimisticBaselineIdsRef.current.has(message.id)
+    )
   );
   const displayedMessages =
     optimisticUserMessage && !hasPersistedOptimisticEcho
@@ -190,13 +192,22 @@ export function useAgentChatSession(
   const visibleMessages = displayedMessages.filter(visibleMessageFilter);
 
   // Preparation state (opt-in)
-  const isEmptyInProgress = enablePreparationState
-    && visibleMessages.length === 0
-    && !streamingText;
-  const isPreparing = Boolean(isEmptyInProgress && status !== 'error');
-  const hasPreparationError = Boolean(isEmptyInProgress && status === 'error');
+  const isEmptyInProgress =
+    enablePreparationState && visibleMessages.length === 0 && !streamingText;
+  const isPreparing = Boolean(
+    groundingPreparation?.status === 'preparing' ||
+    (enablePreparationState && isEmptyInProgress && status !== 'error')
+  );
+  const hasPreparationError = Boolean(
+    groundingPreparation?.status === 'failed' ||
+    (enablePreparationState && isEmptyInProgress && status === 'error')
+  );
+  const preparationMessage =
+    groundingPreparation?.message ??
+    (isPreparing ? 'Preparing project repository…' : null);
 
-  const isInteractionBusy = isRunning || isSending || isAwaitingAgentResponse || isPreparing;
+  const isInteractionBusy =
+    isRunning || isSending || isAwaitingAgentResponse || isPreparing;
 
   // --- Awaiting-agent-response tracking ---
   const beginAwaitingAgentResponse = useCallback(() => {
@@ -222,19 +233,25 @@ export function useAgentChatSession(
 
     const receivedAgentOutcome = messages.some(
       (m) =>
-        !pendingMessageIdsRef.current.has(m.id)
-        && (m.role === 'agent' || m.role === 'system'),
+        !pendingMessageIdsRef.current.has(m.id) &&
+        (m.role === 'agent' || m.role === 'system')
     );
 
     if (
-      receivedAgentOutcome
-      || pendingObservedRunningRef.current
-      || status === 'error'
-      || status === 'closed'
+      receivedAgentOutcome ||
+      pendingObservedRunningRef.current ||
+      status === 'error' ||
+      status === 'closed'
     ) {
       clearAwaitingAgentResponse();
     }
-  }, [clearAwaitingAgentResponse, isAwaitingAgentResponse, isRunning, messages, status]);
+  }, [
+    clearAwaitingAgentResponse,
+    isAwaitingAgentResponse,
+    isRunning,
+    messages,
+    status,
+  ]);
 
   // Reset awaiting on thread change
   useEffect(() => {
@@ -252,91 +269,104 @@ export function useAgentChatSession(
   }, [isCancelling, isRunning]);
 
   // --- Send ---
-  const send = useCallback(async (text: string, opts: SendOptions = {}) => {
-    if (locked || !threadId) return;
-    if (!text && !opts.attachments?.length) return;
-    if (isInteractionBusy) return;
+  const send = useCallback(
+    async (text: string, opts: SendOptions = {}) => {
+      if (locked || !threadId) return;
+      if (!text && !opts.attachments?.length) return;
+      if (isInteractionBusy) return;
 
-    // beforeSend hook (e.g. syncToken)
-    if (beforeSend) {
-      const result = await beforeSend(text);
-      if (result === false) return;
-    }
+      // beforeSend hook (e.g. syncToken)
+      if (beforeSend) {
+        const result = await beforeSend(text);
+        if (result === false) return;
+      }
 
-    setSendError(null);
-    setIsSending(true);
-    optimisticBaselineIdsRef.current = new Set(messages.map((message) => message.id));
-    setOptimisticUserMessage({
-      id: `optimistic-user-${Date.now()}`,
-      role: 'user',
-      text,
-      ts: new Date().toISOString(),
-      ...(opts.attachments?.length
-        ? {
-            attachments: opts.attachments.map(({ id, name, type, size }) => ({
-              id,
-              name,
-              type,
-              size,
-            })),
-          }
-        : {}),
-    });
-    beginAwaitingAgentResponse();
-
-    try {
-      const endpoint = sendEndpoint ?? `/api/chat/threads/${threadId}/messages`;
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          text,
-          ...(opts.model ? { model: opts.model } : {}),
-          ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
-        }),
+      setSendError(null);
+      setIsSending(true);
+      optimisticBaselineIdsRef.current = new Set(
+        messages.map((message) => message.id)
+      );
+      setOptimisticUserMessage({
+        id: `optimistic-user-${Date.now()}`,
+        role: 'user',
+        text,
+        ts: new Date().toISOString(),
+        ...(opts.attachments?.length
+          ? {
+              attachments: opts.attachments.map(({ id, name, type, size }) => ({
+                id,
+                name,
+                type,
+                size,
+              })),
+            }
+          : {}),
       });
+      beginAwaitingAgentResponse();
 
-      if (!res.ok) {
-        let msg = 'Failed to send message';
-        try {
-          const body = await res.json();
-          if (body?.error) msg = body.error;
-        } catch { /* use default */ }
+      try {
+        const endpoint =
+          sendEndpoint ?? `/api/chat/threads/${threadId}/messages`;
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            text,
+            ...(opts.model ? { model: opts.model } : {}),
+            ...(opts.attachments?.length
+              ? { attachments: opts.attachments }
+              : {}),
+          }),
+        });
+
+        if (!res.ok) {
+          let msg = 'Failed to send message';
+          try {
+            const body = await res.json();
+            if (body?.error) msg = body.error;
+          } catch {
+            /* use default */
+          }
+          setSendError(msg);
+          setOptimisticUserMessage(null);
+          clearAwaitingAgentResponse();
+          return;
+        }
+
+        // afterSend hook (e.g. refetchDiff)
+        if (afterSend) {
+          await afterSend();
+        }
+      } catch (err: unknown) {
+        const msg =
+          err instanceof Error ? err.message : 'Failed to send message';
         setSendError(msg);
         setOptimisticUserMessage(null);
         clearAwaitingAgentResponse();
-        return;
+      } finally {
+        setIsSending(false);
       }
-
-      // afterSend hook (e.g. refetchDiff)
-      if (afterSend) {
-        await afterSend();
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to send message';
-      setSendError(msg);
-      setOptimisticUserMessage(null);
-      clearAwaitingAgentResponse();
-    } finally {
-      setIsSending(false);
-    }
-  }, [
-    locked,
-    threadId,
-    isInteractionBusy,
-    beforeSend,
-    beginAwaitingAgentResponse,
-    messages,
-    sendEndpoint,
-    afterSend,
-    clearAwaitingAgentResponse,
-  ]);
+    },
+    [
+      locked,
+      threadId,
+      isInteractionBusy,
+      beforeSend,
+      beginAwaitingAgentResponse,
+      messages,
+      sendEndpoint,
+      afterSend,
+      clearAwaitingAgentResponse,
+    ]
+  );
 
   // --- Retry last user message ---
   const retryLast = useCallback(() => {
     if (locked || !threadId || isInteractionBusy) return;
-    const lastUserMsg = [...visibleMessages].reverse().find((m) => m.role === 'user');
+    const lastUserMsg = [...visibleMessages]
+      .reverse()
+      .find((m) => m.role === 'user');
     if (!lastUserMsg) return;
     void send(lastUserMsg.text);
   }, [locked, threadId, isInteractionBusy, visibleMessages, send]);
@@ -386,6 +416,7 @@ export function useAgentChatSession(
     isAwaitingAgentResponse,
     isPreparing,
     hasPreparationError,
+    preparationMessage,
     isInteractionBusy,
 
     // Actions

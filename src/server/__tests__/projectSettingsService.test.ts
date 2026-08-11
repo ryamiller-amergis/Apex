@@ -46,6 +46,9 @@ jest.mock('../db/drizzle', () => {
 jest.mock('../services/groupService', () => ({
   seedDefaultGroupsForProject: jest.fn().mockResolvedValue(undefined),
 }));
+jest.mock('../services/groundingMaintenanceEvents', () => ({
+  emitGroundingActiveSetChanged: jest.fn(),
+}));
 
 import {
   getSkillConfig,
@@ -57,6 +60,14 @@ import {
 } from '../services/projectSettingsService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
+const { seedDefaultGroupsForProject: mockSeedDefaultGroupsForProject } =
+  jest.requireMock('../services/groupService') as {
+    seedDefaultGroupsForProject: jest.Mock;
+  };
+const { emitGroundingActiveSetChanged: mockEmitGroundingActiveSetChanged } =
+  jest.requireMock('../services/groundingMaintenanceEvents') as {
+    emitGroundingActiveSetChanged: jest.Mock;
+  };
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
 
@@ -92,7 +103,10 @@ function makeUpsertInput(overrides: Record<string, unknown> = {}) {
 }
 
 /** A read-only select chain whose terminal resolves `rows`. */
-function selectResolving(rows: unknown[], terminal: 'where' | 'orderBy' | 'limit') {
+function selectResolving(
+  rows: unknown[],
+  terminal: 'where' | 'orderBy' | 'limit'
+) {
   const chain: Record<string, jest.Mock> = {
     from: jest.fn().mockReturnThis(),
     innerJoin: jest.fn().mockReturnThis(),
@@ -146,7 +160,9 @@ describe('listSkillConfigsForProject', () => {
   beforeEach(() => jest.clearAllMocks());
 
   it('returns every config for the project (default first)', async () => {
-    mockDb.select.mockReturnValue(selectResolving([defaultRow, secondRow], 'orderBy'));
+    mockDb.select.mockReturnValue(
+      selectResolving([defaultRow, secondRow], 'orderBy')
+    );
     const result = await listSkillConfigsForProject('proj-alpha');
     expect(result).toHaveLength(2);
     expect(result.map((c) => c.id)).toEqual(['cfg-default', 'cfg-second']);
@@ -160,7 +176,10 @@ describe('resolveSkillConfig', () => {
 
   it('resolves the specific config when a settingsId is provided', async () => {
     mockDb.select.mockReturnValue(selectResolving([secondRow], 'limit'));
-    const result = await resolveSkillConfig({ project: 'proj-alpha', settingsId: 'cfg-second' });
+    const result = await resolveSkillConfig({
+      project: 'proj-alpha',
+      settingsId: 'cfg-second',
+    });
     expect(result).toMatchObject({ id: 'cfg-second' });
   });
 
@@ -176,11 +195,79 @@ describe('resolveSkillConfig', () => {
 describe('upsertSkillConfig', () => {
   beforeEach(() => jest.clearAllMocks());
 
+  it.each([
+    {
+      label: 'GitHub org/repo',
+      skillProvider: 'github' as const,
+      skillRepo: 'amergis/AI-Pilot',
+      expected: {
+        provider: 'github',
+        project: 'proj-alpha',
+        repository: 'AI-Pilot',
+        branch: 'main',
+      },
+    },
+    {
+      label: 'ADO slash-containing repo',
+      skillProvider: 'ado' as const,
+      skillRepo: 'Platform/AI-Pilot',
+      expected: {
+        provider: 'azure_devops',
+        project: 'proj-alpha',
+        repository: 'Platform/AI-Pilot',
+        branch: 'main',
+      },
+    },
+  ])(
+    'PLAN-S1-AC-0 successful settings upsert emits normalized $label target after group seeding',
+    async ({ skillProvider, skillRepo, expected }) => {
+      // Arrange
+      mockDb.transaction.mockResolvedValue({
+        ...defaultRow,
+        skillProvider,
+        skillRepo,
+      });
+
+      // Act
+      await upsertSkillConfig(makeUpsertInput({ skillProvider, skillRepo }));
+
+      // Assert
+      expect(mockSeedDefaultGroupsForProject).toHaveBeenCalledWith(
+        'proj-alpha',
+        'alice'
+      );
+      expect(mockEmitGroundingActiveSetChanged).toHaveBeenCalledTimes(1);
+      expect(mockEmitGroundingActiveSetChanged).toHaveBeenCalledWith(expected);
+      expect(
+        mockSeedDefaultGroupsForProject.mock.invocationCallOrder[0]
+      ).toBeLessThan(
+        mockEmitGroundingActiveSetChanged.mock.invocationCallOrder[0]
+      );
+    }
+  );
+
+  it('PLAN-S1-AC-1 failed settings save emits no active-set event', async () => {
+    // Arrange
+    mockDb.transaction.mockRejectedValue(new Error('settings save failed'));
+
+    // Act / Assert
+    await expect(upsertSkillConfig(makeUpsertInput())).rejects.toThrow(
+      'settings save failed'
+    );
+    expect(mockSeedDefaultGroupsForProject).not.toHaveBeenCalled();
+    expect(mockEmitGroundingActiveSetChanged).not.toHaveBeenCalled();
+  });
+
   it('forces the first config of a project to be the default', async () => {
     const insertedRow = { ...defaultRow, isDefault: true };
-    const valuesMock = jest.fn().mockReturnValue({ returning: jest.fn().mockResolvedValue([insertedRow]) });
+    const valuesMock = jest.fn().mockReturnValue({
+      returning: jest.fn().mockResolvedValue([insertedRow]),
+    });
     const insertMock = jest.fn().mockReturnValue({ values: valuesMock });
-    const updateMock = jest.fn().mockReturnValue({ set: jest.fn().mockReturnThis(), where: jest.fn().mockResolvedValue(undefined) });
+    const updateMock = jest.fn().mockReturnValue({
+      set: jest.fn().mockReturnThis(),
+      where: jest.fn().mockResolvedValue(undefined),
+    });
 
     mockDb.transaction.mockImplementation(async (fn: any) => {
       const tx = {
@@ -196,22 +283,30 @@ describe('upsertSkillConfig', () => {
       return fn(tx);
     });
 
-    const result = await upsertSkillConfig(makeUpsertInput({ isDefault: false }));
+    const result = await upsertSkillConfig(
+      makeUpsertInput({ isDefault: false })
+    );
 
     expect(result).toMatchObject({ id: 'cfg-default', isDefault: true });
     // even though isDefault:false was requested, the first config is forced default
-    expect(valuesMock).toHaveBeenCalledWith(expect.objectContaining({ isDefault: true, project: 'proj-alpha' }));
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ isDefault: true, project: 'proj-alpha' })
+    );
     // nothing to clear when it's the first config
     expect(updateMock).not.toHaveBeenCalled();
   });
 
   it('clears other defaults when creating a new default config', async () => {
     const insertedRow = { ...secondRow, isDefault: true };
-    const valuesMock = jest.fn().mockReturnValue({ returning: jest.fn().mockResolvedValue([insertedRow]) });
+    const valuesMock = jest.fn().mockReturnValue({
+      returning: jest.fn().mockResolvedValue([insertedRow]),
+    });
     const insertMock = jest.fn().mockReturnValue({ values: valuesMock });
     const clearSet = jest.fn().mockReturnThis();
     const clearWhere = jest.fn().mockResolvedValue(undefined);
-    const updateMock = jest.fn().mockReturnValue({ set: clearSet, where: clearWhere });
+    const updateMock = jest
+      .fn()
+      .mockReturnValue({ set: clearSet, where: clearWhere });
 
     mockDb.transaction.mockImplementation(async (fn: any) => {
       const tx = {
@@ -226,19 +321,30 @@ describe('upsertSkillConfig', () => {
       return fn(tx);
     });
 
-    await upsertSkillConfig(makeUpsertInput({ friendlyName: 'Secondary repo', isDefault: true }));
+    await upsertSkillConfig(
+      makeUpsertInput({ friendlyName: 'Secondary repo', isDefault: true })
+    );
 
     // siblings' defaults are cleared, and the new row is written as default
     expect(updateMock).toHaveBeenCalled();
-    expect(clearSet).toHaveBeenCalledWith(expect.objectContaining({ isDefault: false }));
-    expect(valuesMock).toHaveBeenCalledWith(expect.objectContaining({ isDefault: true }));
+    expect(clearSet).toHaveBeenCalledWith(
+      expect.objectContaining({ isDefault: false })
+    );
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ isDefault: true })
+    );
   });
 
   it('does not clear defaults when adding a non-default config alongside an existing default', async () => {
     const insertedRow = { ...secondRow, isDefault: false };
-    const valuesMock = jest.fn().mockReturnValue({ returning: jest.fn().mockResolvedValue([insertedRow]) });
+    const valuesMock = jest.fn().mockReturnValue({
+      returning: jest.fn().mockResolvedValue([insertedRow]),
+    });
     const insertMock = jest.fn().mockReturnValue({ values: valuesMock });
-    const updateMock = jest.fn().mockReturnValue({ set: jest.fn().mockReturnThis(), where: jest.fn().mockResolvedValue(undefined) });
+    const updateMock = jest.fn().mockReturnValue({
+      set: jest.fn().mockReturnThis(),
+      where: jest.fn().mockResolvedValue(undefined),
+    });
 
     mockDb.transaction.mockImplementation(async (fn: any) => {
       const tx = {
@@ -253,10 +359,14 @@ describe('upsertSkillConfig', () => {
       return fn(tx);
     });
 
-    await upsertSkillConfig(makeUpsertInput({ friendlyName: 'Secondary repo', isDefault: false }));
+    await upsertSkillConfig(
+      makeUpsertInput({ friendlyName: 'Secondary repo', isDefault: false })
+    );
 
     expect(updateMock).not.toHaveBeenCalled();
-    expect(valuesMock).toHaveBeenCalledWith(expect.objectContaining({ isDefault: false }));
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ isDefault: false })
+    );
   });
 
   it('updates an existing config by id without inserting', async () => {
@@ -281,7 +391,13 @@ describe('upsertSkillConfig', () => {
       return fn(tx);
     });
 
-    const result = await upsertSkillConfig(makeUpsertInput({ id: 'cfg-second', friendlyName: 'Secondary repo', skillBranch: 'release' }));
+    const result = await upsertSkillConfig(
+      makeUpsertInput({
+        id: 'cfg-second',
+        friendlyName: 'Secondary repo',
+        skillBranch: 'release',
+      })
+    );
 
     expect(result).toMatchObject({ id: 'cfg-second', skillBranch: 'release' });
     expect(insertMock).not.toHaveBeenCalled();
@@ -296,25 +412,37 @@ describe('deleteSkillConfig', () => {
   it('blocks deleting the last remaining config for a project', async () => {
     mockDb.transaction.mockImplementation(async (fn: any) => {
       const tx = {
-        select: jest.fn()
+        select: jest
+          .fn()
           // target lookup (SELECT ... LIMIT 1)
           .mockReturnValueOnce({
             from: jest.fn().mockReturnThis(),
             where: jest.fn().mockReturnThis(),
-            limit: jest.fn().mockResolvedValue([{ id: 'cfg-default', project: 'proj-alpha', isDefault: true }]),
+            limit: jest
+              .fn()
+              .mockResolvedValue([
+                { id: 'cfg-default', project: 'proj-alpha', isDefault: true },
+              ]),
           })
           // siblings lookup → only the one row
           .mockReturnValueOnce({
             from: jest.fn().mockReturnThis(),
             where: jest.fn().mockResolvedValue([{ id: 'cfg-default' }]),
           }),
-        delete: jest.fn().mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) }),
-        update: jest.fn().mockReturnValue({ set: jest.fn().mockReturnThis(), where: jest.fn().mockResolvedValue(undefined) }),
+        delete: jest
+          .fn()
+          .mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) }),
+        update: jest.fn().mockReturnValue({
+          set: jest.fn().mockReturnThis(),
+          where: jest.fn().mockResolvedValue(undefined),
+        }),
       };
       return fn(tx);
     });
 
-    await expect(deleteSkillConfig('cfg-default')).rejects.toThrow(/only repo config/i);
+    await expect(deleteSkillConfig('cfg-default')).rejects.toThrow(
+      /only repo config/i
+    );
   });
 
   it('promotes another config to default when the deleted config was the default', async () => {
@@ -322,21 +450,30 @@ describe('deleteSkillConfig', () => {
     const deleteMock = jest.fn().mockReturnValue({ where: deleteWhere });
     const promoteSet = jest.fn().mockReturnThis();
     const promoteWhere = jest.fn().mockResolvedValue(undefined);
-    const updateMock = jest.fn().mockReturnValue({ set: promoteSet, where: promoteWhere });
+    const updateMock = jest
+      .fn()
+      .mockReturnValue({ set: promoteSet, where: promoteWhere });
 
     mockDb.transaction.mockImplementation(async (fn: any) => {
       const tx = {
-        select: jest.fn()
+        select: jest
+          .fn()
           // target lookup
           .mockReturnValueOnce({
             from: jest.fn().mockReturnThis(),
             where: jest.fn().mockReturnThis(),
-            limit: jest.fn().mockResolvedValue([{ id: 'cfg-default', project: 'proj-alpha', isDefault: true }]),
+            limit: jest
+              .fn()
+              .mockResolvedValue([
+                { id: 'cfg-default', project: 'proj-alpha', isDefault: true },
+              ]),
           })
           // siblings lookup → two rows so the guard passes
           .mockReturnValueOnce({
             from: jest.fn().mockReturnThis(),
-            where: jest.fn().mockResolvedValue([{ id: 'cfg-default' }, { id: 'cfg-second' }]),
+            where: jest
+              .fn()
+              .mockResolvedValue([{ id: 'cfg-default' }, { id: 'cfg-second' }]),
           })
           // promotion lookup (oldest surviving config)
           .mockReturnValueOnce({
@@ -355,25 +492,39 @@ describe('deleteSkillConfig', () => {
 
     expect(deleteMock).toHaveBeenCalledTimes(1);
     // a surviving sibling is promoted to default
-    expect(promoteSet).toHaveBeenCalledWith(expect.objectContaining({ isDefault: true }));
+    expect(promoteSet).toHaveBeenCalledWith(
+      expect.objectContaining({ isDefault: true })
+    );
   });
 
   it('does not promote when a non-default config is deleted', async () => {
-    const updateMock = jest.fn().mockReturnValue({ set: jest.fn().mockReturnThis(), where: jest.fn().mockResolvedValue(undefined) });
+    const updateMock = jest.fn().mockReturnValue({
+      set: jest.fn().mockReturnThis(),
+      where: jest.fn().mockResolvedValue(undefined),
+    });
 
     mockDb.transaction.mockImplementation(async (fn: any) => {
       const tx = {
-        select: jest.fn()
+        select: jest
+          .fn()
           .mockReturnValueOnce({
             from: jest.fn().mockReturnThis(),
             where: jest.fn().mockReturnThis(),
-            limit: jest.fn().mockResolvedValue([{ id: 'cfg-second', project: 'proj-alpha', isDefault: false }]),
+            limit: jest
+              .fn()
+              .mockResolvedValue([
+                { id: 'cfg-second', project: 'proj-alpha', isDefault: false },
+              ]),
           })
           .mockReturnValueOnce({
             from: jest.fn().mockReturnThis(),
-            where: jest.fn().mockResolvedValue([{ id: 'cfg-default' }, { id: 'cfg-second' }]),
+            where: jest
+              .fn()
+              .mockResolvedValue([{ id: 'cfg-default' }, { id: 'cfg-second' }]),
           }),
-        delete: jest.fn().mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) }),
+        delete: jest
+          .fn()
+          .mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) }),
         update: updateMock,
       };
       return fn(tx);

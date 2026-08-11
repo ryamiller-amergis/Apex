@@ -1,7 +1,12 @@
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useAgentChatSession } from '../useAgentChatSession';
 import type { ChatMessage, ChatThreadStatus } from '../../../shared/types/chat';
-import type { ToolProgress, RunPhaseProgress, RunHealthProgress } from '../useChatStream';
+import type {
+  GroundingPreparationProgress,
+  ToolProgress,
+  RunPhaseProgress,
+  RunHealthProgress,
+} from '../useChatStream';
 
 // Mock useChatStream
 interface MockStreamReturn {
@@ -20,6 +25,7 @@ interface MockStreamReturn {
   backlogReady: boolean;
   isRetrying: boolean;
   retryReason: string | null;
+  groundingPreparation: GroundingPreparationProgress | null;
 }
 
 const mockStreamReturn: MockStreamReturn = {
@@ -38,6 +44,7 @@ const mockStreamReturn: MockStreamReturn = {
   backlogReady: false,
   isRetrying: false,
   retryReason: null,
+  groundingPreparation: null,
 };
 
 let currentStreamReturn: MockStreamReturn = { ...mockStreamReturn };
@@ -83,16 +90,17 @@ describe('useAgentChatSession', () => {
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({ text: 'Hello' }),
-      }),
+      })
     );
   });
 
   it('shows the user message optimistically before the agent processing state', async () => {
     let resolveSend!: (value: { ok: boolean }) => void;
     (global.fetch as jest.Mock).mockImplementation(
-      () => new Promise((resolve) => {
-        resolveSend = resolve;
-      }),
+      () =>
+        new Promise((resolve) => {
+          resolveSend = resolve;
+        })
     );
     const { result } = renderHook(() => useAgentChatSession('thread-1'));
 
@@ -101,7 +109,7 @@ describe('useAgentChatSession', () => {
     });
 
     expect(
-      result.current.visibleMessages[result.current.visibleMessages.length - 1],
+      result.current.visibleMessages[result.current.visibleMessages.length - 1]
     ).toMatchObject({
       role: 'user',
       text: 'User answer',
@@ -116,7 +124,7 @@ describe('useAgentChatSession', () => {
 
   it('reconciles the optimistic user message with the persisted stream echo', async () => {
     const { result, rerender } = renderHook(() =>
-      useAgentChatSession('thread-1'),
+      useAgentChatSession('thread-1')
     );
 
     await act(async () => {
@@ -127,12 +135,14 @@ describe('useAgentChatSession', () => {
     currentStreamReturn = {
       ...mockStreamReturn,
       status: 'running',
-      messages: [{
-        id: 'persisted-user',
-        role: 'user',
-        text: 'User answer',
-        ts: '2026-01-01T00:00:00Z',
-      }],
+      messages: [
+        {
+          id: 'persisted-user',
+          role: 'user',
+          text: 'User answer',
+          ts: '2026-01-01T00:00:00Z',
+        },
+      ],
     };
     rerender();
 
@@ -147,7 +157,15 @@ describe('useAgentChatSession', () => {
     await act(async () => {
       await result.current.send('Hello', {
         model: 'claude-opus-4-6',
-        attachments: [{ id: 'a1', name: 'file.txt', type: 'text/plain', size: 10, content: 'test' }],
+        attachments: [
+          {
+            id: 'a1',
+            name: 'file.txt',
+            type: 'text/plain',
+            size: 10,
+            content: 'test',
+          },
+        ],
       });
     });
 
@@ -159,7 +177,7 @@ describe('useAgentChatSession', () => {
 
   it('does not send when locked', async () => {
     const { result } = renderHook(() =>
-      useAgentChatSession('thread-1', { locked: true }),
+      useAgentChatSession('thread-1', { locked: true })
     );
 
     await act(async () => {
@@ -188,14 +206,14 @@ describe('useAgentChatSession', () => {
 
     expect(global.fetch).toHaveBeenCalledWith(
       '/api/chat/threads/thread-1/cancel',
-      expect.objectContaining({ method: 'POST' }),
+      expect.objectContaining({ method: 'POST' })
     );
   });
 
   it('exposes a stopping state until the running stream becomes idle', async () => {
     currentStreamReturn = { ...mockStreamReturn, status: 'running' };
     const { result, rerender } = renderHook(() =>
-      useAgentChatSession('thread-1'),
+      useAgentChatSession('thread-1')
     );
 
     await act(async () => {
@@ -245,7 +263,7 @@ describe('useAgentChatSession', () => {
   it('calls beforeSend and aborts if it returns false', async () => {
     const beforeSend = jest.fn().mockReturnValue(false);
     const { result } = renderHook(() =>
-      useAgentChatSession('thread-1', { beforeSend }),
+      useAgentChatSession('thread-1', { beforeSend })
     );
 
     await act(async () => {
@@ -259,7 +277,7 @@ describe('useAgentChatSession', () => {
   it('calls afterSend after successful send', async () => {
     const afterSend = jest.fn();
     const { result } = renderHook(() =>
-      useAgentChatSession('thread-1', { afterSend }),
+      useAgentChatSession('thread-1', { afterSend })
     );
 
     await act(async () => {
@@ -271,7 +289,7 @@ describe('useAgentChatSession', () => {
 
   it('uses custom sendEndpoint when provided', async () => {
     const { result } = renderHook(() =>
-      useAgentChatSession('thread-1', { sendEndpoint: '/custom/send' }),
+      useAgentChatSession('thread-1', { sendEndpoint: '/custom/send' })
     );
 
     await act(async () => {
@@ -280,14 +298,14 @@ describe('useAgentChatSession', () => {
 
     expect(global.fetch).toHaveBeenCalledWith(
       '/custom/send',
-      expect.anything(),
+      expect.anything()
     );
   });
 
   it('computes isPreparing when enablePreparationState is true and no messages', () => {
     currentStreamReturn = { ...mockStreamReturn, status: 'idle' };
     const { result } = renderHook(() =>
-      useAgentChatSession('thread-1', { enablePreparationState: true }),
+      useAgentChatSession('thread-1', { enablePreparationState: true })
     );
     expect(result.current.isPreparing).toBe(true);
     expect(result.current.hasPreparationError).toBe(false);
@@ -296,10 +314,50 @@ describe('useAgentChatSession', () => {
   it('computes hasPreparationError on error status with no messages', () => {
     currentStreamReturn = { ...mockStreamReturn, status: 'error' };
     const { result } = renderHook(() =>
-      useAgentChatSession('thread-1', { enablePreparationState: true }),
+      useAgentChatSession('thread-1', { enablePreparationState: true })
     );
     expect(result.current.isPreparing).toBe(false);
     expect(result.current.hasPreparationError).toBe(true);
+  });
+
+  it('PLAN-S3-AC-2 uses the structured grounding status for preparation copy', () => {
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'running',
+      groundingPreparation: {
+        status: 'preparing',
+        message: 'Preparing project repository…',
+        retryAfterMs: 1_000,
+      },
+    };
+    const { result } = renderHook(() =>
+      useAgentChatSession('thread-1', { enablePreparationState: true })
+    );
+
+    expect(result.current.isPreparing).toBe(true);
+    expect(result.current.preparationMessage).toBe(
+      'Preparing project repository…'
+    );
+  });
+
+  it('PLAN-S3-AC-3 surfaces bounded grounding failure as an actionable retry error', () => {
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'error',
+      groundingPreparation: {
+        status: 'failed',
+        message: 'Repository preparation timed out. Please retry.',
+      },
+    };
+    const { result } = renderHook(() =>
+      useAgentChatSession('thread-1', { enablePreparationState: true })
+    );
+
+    expect(result.current.isPreparing).toBe(false);
+    expect(result.current.hasPreparationError).toBe(true);
+    expect(result.current.preparationMessage).toBe(
+      'Repository preparation timed out. Please retry.'
+    );
   });
 
   it('filters visible messages with default filter', () => {
@@ -319,7 +377,12 @@ describe('useAgentChatSession', () => {
     currentStreamReturn = {
       ...mockStreamReturn,
       messages: [
-        { id: '1', role: 'user', text: 'Hello world', ts: '2026-01-01T00:00:00Z' },
+        {
+          id: '1',
+          role: 'user',
+          text: 'Hello world',
+          ts: '2026-01-01T00:00:00Z',
+        },
         { id: '2', role: 'agent', text: 'Hi!', ts: '2026-01-01T00:00:01Z' },
       ] as ChatMessage[],
     };
@@ -335,7 +398,7 @@ describe('useAgentChatSession', () => {
         '/api/chat/threads/thread-1/messages',
         expect.objectContaining({
           body: expect.stringContaining('Hello world'),
-        }),
+        })
       );
     });
   });

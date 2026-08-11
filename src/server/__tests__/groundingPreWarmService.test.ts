@@ -1,4 +1,12 @@
 jest.mock('../db/drizzle', () => ({ db: {} }));
+jest.mock('../services/grounding/sharedReadCheckoutService', () => ({
+  sharedReadCheckoutService: {
+    materialize: jest.fn().mockResolvedValue({
+      workspacePath: 'shared-checkout',
+      outcome: 'materialized',
+    }),
+  },
+}));
 
 import type { PreWarmTarget } from '../../shared/types/runGrounding';
 import {
@@ -18,35 +26,37 @@ const flushAsyncWork = () =>
 
 describe('TBI-007 groundingPreWarmService', () => {
   it('prepares configured project repositories before their first active run', () => {
-    expect(configuredPreWarmTargets([
-      {
-        id: 'github-default',
-        project: 'Apex',
-        friendlyName: 'Apex',
-        isDefault: true,
-        skillProvider: 'github',
-        skillRepo: 'amergis/AI-Pilot',
-        skillBranch: 'main',
-      },
-      {
-        id: 'github-duplicate',
-        project: 'Apex',
-        friendlyName: 'Apex duplicate',
-        isDefault: false,
-        skillProvider: 'github',
-        skillRepo: 'AI-Pilot',
-        skillBranch: 'main',
-      },
-      {
-        id: 'ado-default',
-        project: 'MaxView',
-        friendlyName: 'MaxView',
-        isDefault: true,
-        skillProvider: 'ado',
-        skillRepo: 'Platform/MaxView',
-        skillBranch: 'develop',
-      },
-    ])).toEqual([
+    expect(
+      configuredPreWarmTargets([
+        {
+          id: 'github-default',
+          project: 'Apex',
+          friendlyName: 'Apex',
+          isDefault: true,
+          skillProvider: 'github',
+          skillRepo: 'amergis/AI-Pilot',
+          skillBranch: 'main',
+        },
+        {
+          id: 'github-duplicate',
+          project: 'Apex',
+          friendlyName: 'Apex duplicate',
+          isDefault: false,
+          skillProvider: 'github',
+          skillRepo: 'AI-Pilot',
+          skillBranch: 'main',
+        },
+        {
+          id: 'ado-default',
+          project: 'MaxView',
+          friendlyName: 'MaxView',
+          isDefault: true,
+          skillProvider: 'ado',
+          skillRepo: 'Platform/MaxView',
+          skillBranch: 'develop',
+        },
+      ])
+    ).toEqual([
       {
         provider: 'github',
         project: 'Apex',
@@ -62,47 +72,104 @@ describe('TBI-007 groundingPreWarmService', () => {
     ]);
   });
 
-  it('publishes the refreshed branch tip for fast bundle rehydration', async () => {
+  it.each([false, true])(
+    'PLAN-S1-DoD-0 preWarm publishes then materializes the exact SHA identity after coalesced=%s',
+    async (coalesced) => {
+      // Arrange
+      const sha = 'b'.repeat(40);
+      let leaseActive = false;
+      const publishBundle = jest.fn(async () => {
+        expect(leaseActive).toBe(false);
+        return 'published' as const;
+      });
+      const materializeSharedCheckout = jest.fn(async () => {
+        expect(leaseActive).toBe(false);
+        return {
+          workspacePath: 'shared-checkout',
+          outcome: 'materialized' as const,
+        };
+      });
+      const service = createGroundingPreWarmService({
+        withLease: jest.fn(async (_key, operation) => {
+          leaseActive = true;
+          await operation({
+            signal: new AbortController().signal,
+            assertOwned: jest.fn().mockResolvedValue(undefined),
+          });
+          leaseActive = false;
+        }),
+        refreshUnderLease: jest.fn().mockResolvedValue(undefined),
+        wasRefreshedSince: jest.fn().mockReturnValue(coalesced),
+        readCachedSha: jest
+          .fn()
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce(sha),
+        publishBundle,
+        materializeSharedCheckout,
+        telemetry: jest.fn(),
+      });
+
+      // Act
+      await service.preWarm(target);
+
+      // Assert
+      expect(publishBundle).toHaveBeenCalledWith({
+        identity: {
+          provider: 'github',
+          project: 'Apex',
+          repo: 'AI-Pilot',
+          sha,
+        },
+        cacheDir: expect.stringMatching(/repo-cache/),
+        branch: 'main',
+      });
+      expect(materializeSharedCheckout).toHaveBeenCalledTimes(1);
+      expect(materializeSharedCheckout).toHaveBeenCalledWith({
+        provider: 'github',
+        project: 'Apex',
+        repo: 'AI-Pilot',
+        branch: 'main',
+        sha,
+      });
+      expect(publishBundle.mock.invocationCallOrder[0]).toBeLessThan(
+        materializeSharedCheckout.mock.invocationCallOrder[0]
+      );
+    }
+  );
+
+  it('PLAN-S1-DoD-1 rejects shared materialization failure after preserving mirror and bundle behavior', async () => {
     // Arrange
     const sha = 'b'.repeat(40);
-    let leaseActive = false;
-    const publishBundle = jest.fn(async () => {
-      expect(leaseActive).toBe(false);
-      return 'published' as const;
-    });
+    const refreshUnderLease = jest.fn().mockResolvedValue(undefined);
+    const publishBundle = jest.fn().mockResolvedValue('published');
+    const materializeSharedCheckout = jest
+      .fn()
+      .mockRejectedValue(new Error('shared checkout unavailable'));
     const service = createGroundingPreWarmService({
-      withLease: jest.fn(async (_key, operation) => {
-        leaseActive = true;
-        await operation({
+      withLease: jest.fn(async (_key, operation) =>
+        operation({
           signal: new AbortController().signal,
           assertOwned: jest.fn().mockResolvedValue(undefined),
-        });
-        leaseActive = false;
-      }),
-      refreshUnderLease: jest.fn().mockResolvedValue(undefined),
+        })
+      ),
+      refreshUnderLease,
       wasRefreshedSince: jest.fn().mockReturnValue(false),
       readCachedSha: jest
         .fn()
         .mockResolvedValueOnce(null)
         .mockResolvedValueOnce(sha),
       publishBundle,
+      materializeSharedCheckout,
       telemetry: jest.fn(),
     });
 
-    // Act
-    await service.preWarm(target);
-
-    // Assert
-    expect(publishBundle).toHaveBeenCalledWith({
-      identity: {
-        provider: 'github',
-        project: 'Apex',
-        repo: 'AI-Pilot',
-        sha,
-      },
-      cacheDir: expect.stringMatching(/repo-cache/),
-      branch: 'main',
-    });
+    // Act / Assert
+    await expect(service.preWarm(target)).rejects.toThrow(
+      'shared checkout unavailable'
+    );
+    expect(refreshUnderLease).toHaveBeenCalledTimes(1);
+    expect(publishBundle).toHaveBeenCalledTimes(1);
+    expect(materializeSharedCheckout).toHaveBeenCalledTimes(1);
   });
 
   it('keeps a usable mirror warm when bundle publication fails', async () => {
