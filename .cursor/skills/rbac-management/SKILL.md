@@ -16,6 +16,7 @@ This skill is loaded when the `rbac-governance` rule determines that an add, rem
 |-----|----------|-------------|-------|--------|--------|
 | `admin:roles` | admin | Manage roles and permissions | ✓ | | |
 | `admin:users` | admin | Manage user role assignments | ✓ | | |
+| `api-keys:manage` | api-keys | Create, view, update, regenerate, and delete project API keys | ✓ | | |
 | `backlog:view` | backlog | View backlog page | ✓ | ✓ | |
 | `calendar:view` | calendar | View calendar page | ✓ | ✓ | |
 | `chat:create` | chat | Create new chat threads | ✓ | ✓ | |

@@ -62,6 +62,7 @@ const AdminProjectSettings = lazy(() => import('./components/AdminProjectSetting
 const AdminGroups = lazy(() => import('./components/AdminGroups').then(m => ({ default: m.AdminGroups })));
 const AdminNotifications = lazy(() => import('./components/AdminNotifications').then(m => ({ default: m.AdminNotifications })));
 const LoadTestAllowlistSettings = lazy(() => import('./components/LoadTestAllowlistSettings').then(m => ({ default: m.LoadTestAllowlistSettings })));
+const ApiKeysAdminView = lazy(() => import('./components/ApiKeysAdminView').then(m => ({ default: m.ApiKeysAdminView })));
 const PlatformAdmin = lazy(() => import('./components/PlatformAdmin').then(m => ({ default: m.PlatformAdmin })));
 const NotificationsPage = lazy(() => import('./components/NotificationsPage').then(m => ({ default: m.NotificationsPage })));
 const ProfilePage = lazy(() => import('./components/ProfilePage').then(m => ({ default: m.ProfilePage })));
@@ -265,6 +266,15 @@ function App() {
     betaAnnouncementDismissed,
     handleDismissBetaAnnouncement,
   } = useAppShell({ workItemsEnabled: needsWorkItems });
+
+  // Deep-link from API key expiry notifications: /admin/api-keys?project=…
+  useEffect(() => {
+    if (location.pathname !== '/admin/api-keys') return;
+    const project = new URLSearchParams(location.search).get('project');
+    if (!project || project === selectedProject) return;
+    if (!availableProjects.includes(project)) return;
+    changeProject(project);
+  }, [location.pathname, location.search, selectedProject, availableProjects, changeProject]);
 
   const showBetaAnnouncement = useFeatureFlag('beta-to-prod-announcement', selectedProject);
   const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
@@ -825,6 +835,16 @@ function App() {
                     >
                       Load Test Targets
                     </button>
+                    {can('api-keys:manage') && (
+                      <button
+                        className={`admin-tab${location.pathname === '/admin/api-keys' ? ' admin-tab-active' : ''}`}
+                        onClick={() => navigate('/admin/api-keys')}
+                        type="button"
+                        {...{ 'data-testid': 'admin-tab-api-keys' }}
+                      >
+                        API Keys
+                      </button>
+                    )}
                   </div>
                   {location.pathname === '/admin/users' ? (
                     <AdminUsers selectedProject={selectedProject} />
@@ -836,6 +856,8 @@ function App() {
                     <AdminNotifications />
                   ) : location.pathname === '/admin/load-test-targets' ? (
                     <LoadTestAllowlistSettings selectedProject={selectedProject} />
+                  ) : location.pathname === '/admin/api-keys' ? (
+                    <ApiKeysAdminView selectedProject={selectedProject} />
                   ) : (
                     <AdminRoles selectedProject={selectedProject} />
                   )}
