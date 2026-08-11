@@ -37,6 +37,8 @@ interface AppHeaderProps {
   canAccessHome?: boolean;
   onNavigateHome: () => void;
   onNavigateProjects?: () => void;
+  /** When true, hide project name, project picker, and repo switcher (restricted users). */
+  hideProjectChrome?: boolean;
   onNavigateCalendar: () => void;
   onNavigatePlanning: () => void;
   onNavigateCloudCost: () => void;
@@ -73,6 +75,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   canAccessHome = true,
   onNavigateHome,
   onNavigateProjects,
+  hideProjectChrome = false,
   onNavigateCalendar,
   onNavigatePlanning,
   onNavigateCloudCost,
@@ -169,20 +172,22 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       <div className="header-main">
         <button
           className="app-brand"
-          onClick={onNavigateProjects ?? onNavigateHome}
+          onClick={hideProjectChrome ? onNavigateHome : (onNavigateProjects ?? onNavigateHome)}
           type="button"
           aria-label={
-            selectedProject
-              ? `Select an Apex project (current: ${selectedProject})`
-              : 'Select an Apex project'
+            hideProjectChrome
+              ? 'Apex home'
+              : selectedProject
+                ? `Select an Apex project (current: ${selectedProject})`
+                : 'Select an Apex project'
           }
-          title="Select project"
+          title={hideProjectChrome ? 'Apex' : 'Select project'}
           {...{ 'data-testid': 'app-header-brand' }}
         >
           <BrandLogo variant="mark" className="app-brand-mark" beta={IS_BETA_RELEASE} />
           <span className="app-brand-text">
             <span>Apex</span>
-            {selectedProject && (
+            {!hideProjectChrome && selectedProject && (
               <>
                 <span className="app-brand-separator" aria-hidden="true">
                   ·
@@ -213,7 +218,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       </div>
 
       <div className="header-controls">
-        {repoConfigs.length > 1 && onChangeSkillSettings && (
+        {!hideProjectChrome && repoConfigs.length > 1 && onChangeSkillSettings && (
           <div className={styles['repo-switcher-group']}>
             <span className={styles['repo-switcher-label']}>Repo Project -</span>
             <select
