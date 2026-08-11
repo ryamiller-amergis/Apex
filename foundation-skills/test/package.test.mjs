@@ -33,18 +33,24 @@ test('catalog and duplicated contracts reflect corrected skill dependencies', ()
 
   assert.deepEqual(byName['prd-spec-review'].dependsOn, ['to-prd']);
   assert.deepEqual(byName['design-spec-review'].dependsOn, ['prd-design-spec', 'to-prd']);
-  assert.deepEqual(byName['dev-orchestrator'].dependsOn, ['to-prd']);
-  assert.deepEqual(byName['azure-async-infra'].dependsOn, ['terraform-infra']);
+  assert.deepEqual(byName['adr-interview'].dependsOn, []);
+  assert.deepEqual(byName['adr-finalize'].dependsOn, ['adr-interview']);
 
   assert.deepEqual(byName['prd-design-spec'].dependsOn, ['to-prd']);
   assert.deepEqual(byName['create-test-case'].dependsOn, ['to-prd']);
 
   assert.deepEqual(readContract('prd-spec-review').dependsOn, ['to-prd']);
   assert.deepEqual(readContract('design-spec-review').dependsOn, ['prd-design-spec', 'to-prd']);
-  assert.deepEqual(readContract('dev-orchestrator').dependsOn, ['to-prd']);
-  assert.deepEqual(readContract('azure-async-infra').dependsOn, ['terraform-infra']);
+  assert.equal(readContract('adr-interview').dependsOn, undefined);
+  assert.deepEqual(readContract('adr-finalize').dependsOn, ['adr-interview']);
   assert.deepEqual(readContract('prd-design-spec').dependsOn, ['to-prd']);
   assert.deepEqual(readContract('create-test-case').dependsOn, ['to-prd']);
+
+  assert.equal(byName['dev-orchestrator'], undefined);
+  assert.equal(byName['issue-analysis'], undefined);
+  assert.equal(byName['kick-off'], undefined);
+  assert.equal(byName['azure-async-infra'], undefined);
+  assert.equal(byName['terraform-infra'], undefined);
 });
 
 test('adr-finalize metadata marks adr-template foundation-owned and managed by contract', () => {

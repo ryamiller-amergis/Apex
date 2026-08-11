@@ -3,6 +3,7 @@ import type {
   FoundationSkillReleaseValidationIssue,
   FoundationSkillReleaseValidationIssueType,
 } from './types/foundationSkills';
+import { isAlwaysInstallCatalogSkill } from './types/foundationSkills';
 
 type DependencySkill = Pick<FoundationSkillCatalogEntry, 'name'> & {
   dependsOn?: string[];
@@ -92,6 +93,14 @@ export function resolveFoundationSkillSelection(
 
   for (const name of explicit) {
     visit(name, []);
+  }
+
+  // Always-install skills are part of every release selection, even when omitted
+  // from the explicit checklist (draft UI / API cannot drop them).
+  for (const skill of skills) {
+    if (isAlwaysInstallCatalogSkill(skill)) {
+      visit(skill.name, []);
+    }
   }
 
   const effectiveSelectedSkills = skills

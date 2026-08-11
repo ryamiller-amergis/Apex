@@ -92,7 +92,7 @@ test('cmdInstall expands prd-spec-review to its full dependency closure', () => 
     const lock = readLockfile(repo);
     assert.deepEqual(
       Object.keys(lock.skills).sort(),
-      ['post-skill-bootstrap', 'prd-spec-review', 'to-prd'],
+      ['post-skill-bootstrap', 'prd-spec-review', 'to-prd', 'update-changelog'],
     );
   } finally {
     cleanup(repo);
@@ -127,7 +127,7 @@ test('cmdInstall expands design-spec-review transitively and keeps dependencies 
 
     assert.deepEqual(
       [...orderedSkills].sort(),
-      ['design-spec-review', 'post-skill-bootstrap', 'prd-design-spec', 'to-prd'],
+      ['design-spec-review', 'post-skill-bootstrap', 'prd-design-spec', 'to-prd', 'update-changelog'],
     );
   } finally {
     cleanup(repo);
@@ -181,7 +181,7 @@ test('scoped reinstall updates the lockfile to a newer suite only after adding n
     assert.equal(lock.suiteVersion, '2.0.1');
     assert.deepEqual(
       Object.keys(lock.skills).sort(),
-      ['post-skill-bootstrap', 'prd-spec-review'],
+      ['post-skill-bootstrap', 'prd-spec-review', 'update-changelog'],
     );
 
     code = cmdInstall(
@@ -194,7 +194,7 @@ test('scoped reinstall updates the lockfile to a newer suite only after adding n
     assert.equal(lock.suiteVersion, '2.0.2');
     assert.deepEqual(
       Object.keys(lock.skills).sort(),
-      ['post-skill-bootstrap', 'prd-spec-review', 'to-prd'],
+      ['post-skill-bootstrap', 'prd-spec-review', 'to-prd', 'update-changelog'],
     );
   } finally {
     cleanup(repo);

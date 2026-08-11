@@ -238,7 +238,7 @@ describe('Foundation Skills Admin Routes', () => {
       expect(res.status).toBe(200);
       expect(typeof res.body.suiteVersion).toBe('string');
       expect(Array.isArray(res.body.skills)).toBe(true);
-      expect(res.body.skills.length).toBeGreaterThanOrEqual(30);
+      expect(res.body.skills.length).toBe(18);
       // Every entry carries a resolved tier, defaulting to shippable.
       for (const skill of res.body.skills) {
         expect(['shippable', 'apex-only']).toContain(skill.tier);
