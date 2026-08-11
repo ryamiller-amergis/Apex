@@ -29,6 +29,32 @@ function run(runId: string): RunRef {
 }
 
 describe('TBI-004 default independent grounding materializer', () => {
+  it('coalesces concurrent requests for the same writable destination', async () => {
+    let finish!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const rehydrate = jest.fn(async () => {
+      await blocked;
+      return { status: 'materialized' as const, source: 'bundle' as const };
+    });
+    const materialize = createRunGroundingMaterializer({
+      dataRoot: 'C:\\persistent-data',
+      createBundleStore: jest.fn(() => ({ rehydrate })),
+    });
+    const destinationRun = run('coalesced-thread');
+
+    const first = materialize(grounding, destinationRun);
+    const second = materialize(grounding, destinationRun);
+    finish();
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      'materialized',
+      'materialized',
+    ]);
+    expect(rehydrate).toHaveBeenCalledTimes(1);
+  });
+
   it('AC-2 / VT-03 / BR-007 reconciles the same deterministic workspace on re-promotion', async () => {
     const destinations: string[] = [];
     const createBundleStore = jest.fn(() => ({
