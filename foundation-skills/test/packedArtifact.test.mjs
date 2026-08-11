@@ -61,7 +61,7 @@ after(() => {
   if (workDir) fs.rmSync(workDir, { recursive: true, force: true });
 });
 
-test('production package and suite versions are both 2.0.2', () => {
+test('production package and suite versions are both 2.0.3', () => {
   const manifest = JSON.parse(
     fs.readFileSync(path.join(extractedPackageRoot, 'package.json'), 'utf8')
   );
@@ -69,7 +69,7 @@ test('production package and suite versions are both 2.0.2', () => {
     fs.readFileSync(path.join(extractedPackageRoot, 'catalog.json'), 'utf8')
   );
 
-  assert.equal(manifest.version, '2.0.2');
+  assert.equal(manifest.version, '2.0.3');
   assert.equal(catalog.suiteVersion, manifest.version);
 });
 
