@@ -16,11 +16,13 @@ import {
   isPrdWatcherActive,
   isPrdValidationWatcherActive,
   rehydratePrdValidationWatcher,
+  routePrdGenerationKickoff,
 } from './prdService';
 import {
   startSingleFeatureDocWatcher,
   startValidationWatcher,
   isValidationWatcherActive,
+  routeDesignDocGenerationKickoff,
 } from './designDocService';
 import { startTestCaseWatcher, isTestCaseWatcherActive } from './testCaseService';
 import { failStalePrototypes } from './designPrototypeService';
@@ -166,7 +168,13 @@ export async function recoverInFlightWork(): Promise<void> {
 
   const generatingPrds = await db.query.prds.findMany({
     where: eq(prds.status, 'generating'),
-    columns: { id: true, chatThreadId: true },
+    columns: {
+      id: true,
+      chatThreadId: true,
+      interviewId: true,
+      project: true,
+      authorId: true,
+    },
   });
   for (const prd of generatingPrds) {
     if (!prd.chatThreadId) continue;
@@ -176,6 +184,36 @@ export async function recoverInFlightWork(): Promise<void> {
       startPrdWatcher(prd.id, prd.chatThreadId);
       recovered++;
       console.log(`[recovery] Restarted PRD watcher (prdId=${prd.id})`);
+
+      // Orphaned create: PRD row exists but kickoff never ran (e.g. request hung
+      // on grounding before the fire-and-forget kickoff). Re-kick when there is
+      // no agent_runs row and the thread is idle.
+      const existingRun = await db.query.agentRuns.findFirst({
+        where: eq(agentRuns.threadId, prd.chatThreadId),
+        columns: { id: true },
+      });
+      if (
+        !existingRun
+        && isThreadIdle(prd.chatThreadId)
+        && prd.interviewId
+        && prd.authorId
+        && prd.project
+      ) {
+        void routePrdGenerationKickoff({
+          prdId: prd.id,
+          userId: prd.authorId,
+          project: prd.project,
+          threadId: prd.chatThreadId,
+          interviewId: prd.interviewId,
+          kickoffMessage: 'Begin.',
+        }).catch((err: unknown) => {
+          console.error(
+            `[recovery] Failed to re-kick PRD generation (prdId=${prd.id}):`,
+            err,
+          );
+        });
+        console.log(`[recovery] Re-kicked PRD generation (prdId=${prd.id})`);
+      }
     } else {
       console.warn(
         `[recovery] Could not hydrate thread for PRD (prdId=${prd.id}, threadId=${prd.chatThreadId})`
@@ -191,6 +229,7 @@ export async function recoverInFlightWork(): Promise<void> {
       prdId: true,
       project: true,
       designPrototypeId: true,
+      authorId: true,
     },
   });
   for (const doc of generatingDocs) {
@@ -202,6 +241,39 @@ export async function recoverInFlightWork(): Promise<void> {
       console.log(
         `[recovery] Restarted design doc watcher (designDocId=${doc.id})`
       );
+
+      // Orphaned create: doc row exists but kickoff never ran (e.g. request hung
+      // on grounding before fire-and-forget kickoff). Re-kick when there is no
+      // agent_runs row and the thread is idle.
+      const existingRun = await db.query.agentRuns.findFirst({
+        where: eq(agentRuns.threadId, doc.chatThreadId),
+        columns: { id: true },
+      });
+      if (
+        !existingRun
+        && isThreadIdle(doc.chatThreadId)
+        && doc.prdId
+        && doc.authorId
+        && doc.project
+      ) {
+        void Promise.resolve(
+          routeDesignDocGenerationKickoff({
+            designDocId: doc.id,
+            prdId: doc.prdId,
+            userId: doc.authorId,
+            project: doc.project,
+            threadId: doc.chatThreadId,
+            kickoffMessage:
+              `Generate the design doc. This is a non-interactive generation task — do not ask questions. Write all three output files (\`design-doc-design.md\`, \`design-doc-tech-spec.md\`, \`design-doc-assumptions.md\`) to \`.ai-pilot/output/\`.`,
+          }),
+        ).catch((err: unknown) => {
+          console.error(
+            `[recovery] Failed to re-kick design doc generation (designDocId=${doc.id}):`,
+            err,
+          );
+        });
+        console.log(`[recovery] Re-kicked design doc generation (designDocId=${doc.id})`);
+      }
     } else {
       console.warn(
         `[recovery] Could not hydrate thread for design doc (designDocId=${doc.id}, threadId=${doc.chatThreadId})`

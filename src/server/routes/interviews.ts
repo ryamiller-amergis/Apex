@@ -613,13 +613,23 @@ async function startDesignDocsForApprovedPrd(
       });
 
       startSingleFeatureDocWatcher(designDocId, thread.id, prdId, prd.project);
-      await routeDesignDocGenerationKickoff({
-        designDocId,
-        userId,
-        project: prd.project,
-        threadId: thread.id,
-        kickoffMessage:
-          `Generate the design doc for the single feature "${featureTitle}" using the PRD, backlog, and context provided in \`.ai-pilot/kickoff-context.md\`. This is a non-interactive generation task — do not ask questions. Write all three output files (\`design-doc-design.md\`, \`design-doc-tech-spec.md\`, \`design-doc-assumptions.md\`) to \`.ai-pilot/output/\`.`,
+      // Fire-and-forget — grounding/materialization happens inside kickoff.
+      void Promise.resolve(
+        routeDesignDocGenerationKickoff({
+          designDocId,
+          prdId,
+          sourceThreadId: prd.chatThreadId ?? null,
+          userId,
+          project: prd.project,
+          threadId: thread.id,
+          kickoffMessage:
+            `Generate the design doc for the single feature "${featureTitle}" using the PRD, backlog, and context provided in \`.ai-pilot/kickoff-context.md\`. This is a non-interactive generation task — do not ask questions. Write all three output files (\`design-doc-design.md\`, \`design-doc-tech-spec.md\`, \`design-doc-assumptions.md\`) to \`.ai-pilot/output/\`.`,
+        }),
+      ).catch((err: unknown) => {
+        console.error(
+          `[interviews] Design doc kickoff failed (docId=${designDocId}, feature="${featureTitle}"):`,
+          err,
+        );
       });
 
       createdDocs.push({ designDocId, threadId: thread.id, featureTitle });
@@ -1575,14 +1585,22 @@ router.post('/design-docs/:id/retry-generate', requirePermission('interviews:man
 
     const kickoffMessage =
       `Generate the design doc for the single feature "${doc.title}" using the PRD and context provided. This is a non-interactive generation task — do not ask questions. Write all three output files to \`.ai-pilot/output/\`.`;
-    await routeDesignDocGenerationKickoff({
-      designDocId: req.params.id,
-      prdId: doc.prdId,
-      sourceThreadId: prd?.chatThreadId ?? null,
-      userId,
-      project: doc.project,
-      threadId: thread.id,
-      kickoffMessage,
+    // Respond immediately — grounding/materialization runs inside kickoff.
+    void Promise.resolve(
+      routeDesignDocGenerationKickoff({
+        designDocId: req.params.id,
+        prdId: doc.prdId ?? undefined,
+        sourceThreadId: prd?.chatThreadId ?? null,
+        userId,
+        project: doc.project,
+        threadId: thread.id,
+        kickoffMessage,
+      }),
+    ).catch((err: unknown) => {
+      console.error(
+        `[interviews] Design doc retry kickoff failed (docId=${req.params.id}):`,
+        err,
+      );
     });
 
     res.json({ ok: true, threadId: thread.id });
@@ -2715,6 +2733,9 @@ router.post('/:interviewId/prds', requirePermission('interviews:manage'), async 
       model,
       skillSettingsId: interview.skillSettingsId ?? null,
     });
+    // Return immediately so the client can navigate to the generating skeleton.
+    // Grounding + agent kickoff run after the response (may take minutes on cold
+    // checkout) — they must not block the Create PRD HTTP request.
     startPrdWatcher(result.prdId, chatThreadId);
     if (kickoffGeneration) {
       void Promise.resolve(
@@ -2723,6 +2744,7 @@ router.post('/:interviewId/prds', requirePermission('interviews:manage'), async 
           userId,
           project: interview.project,
           threadId: chatThreadId,
+          interviewId: req.params.interviewId,
           kickoffMessage: 'Begin.',
         }),
       ).catch((err: unknown) => {

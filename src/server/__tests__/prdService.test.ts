@@ -437,6 +437,42 @@ describe('createPrd', () => {
       expect.objectContaining({ title: 'Untitled PRD' }),
     );
   });
+
+  it('returns immediately without awaiting grounding materialization', async () => {
+    const {
+      propagatePipelineGrounding,
+      resolveRunGroundingSurface,
+    } = jest.requireMock('../services/runGroundingService') as {
+      propagatePipelineGrounding: jest.Mock;
+      resolveRunGroundingSurface: jest.Mock;
+    };
+    resolveRunGroundingSurface.mockResolvedValue({
+      run: { runType: 'chat', runId: 'interview-thread', project: 'proj-1' },
+    });
+    // Would hang createPrd if still awaited on the request path.
+    propagatePipelineGrounding.mockReturnValue(new Promise(() => undefined));
+
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'prd-fast' }]);
+    mockDb.insert.mockReturnValue({
+      values: jest.fn().mockReturnValue({ returning: returningMock }),
+    });
+
+    try {
+      await expect(
+        createPrd({
+          interviewId: 'interview-1',
+          project: 'proj-1',
+          userId: 'u1',
+          chatThreadId: 'thread-1',
+        }),
+      ).resolves.toEqual({ prdId: 'prd-fast', threadId: 'thread-1' });
+
+      expect(propagatePipelineGrounding).not.toHaveBeenCalled();
+    } finally {
+      propagatePipelineGrounding.mockResolvedValue({ state: 'propagated' });
+      resolveRunGroundingSurface.mockResolvedValue(null);
+    }
+  });
 });
 
 describe('routePrdGenerationKickoff', () => {
@@ -481,6 +517,39 @@ describe('routePrdGenerationKickoff', () => {
       [],
       { hidden: true },
     );
+  });
+
+  it('propagates interview grounding before routing when interviewId is provided', async () => {
+    const {
+      propagatePipelineGrounding,
+      resolveRunGroundingSurface,
+    } = jest.requireMock('../services/runGroundingService') as {
+      propagatePipelineGrounding: jest.Mock;
+      resolveRunGroundingSurface: jest.Mock;
+    };
+    resolveRunGroundingSurface.mockResolvedValue({
+      run: { runType: 'chat', runId: 'interview-thread', project: 'proj-alpha' },
+    });
+
+    await routePrdGenerationKickoff({
+      prdId: 'prd-1',
+      userId: 'user-1',
+      project: 'proj-alpha',
+      threadId: 'thread-prd',
+      interviewId: 'interview-1',
+      kickoffMessage: 'Begin.',
+    });
+
+    expect(resolveRunGroundingSurface).toHaveBeenCalledWith(
+      'interview',
+      'interview-1',
+    );
+    expect(propagatePipelineGrounding).toHaveBeenCalledWith(
+      { runType: 'chat', runId: 'interview-thread', project: 'proj-alpha' },
+      { runType: 'chat', runId: 'thread-prd', project: 'proj-alpha' },
+      'user-1',
+    );
+    expect(mockRouteBackgroundWorkflow).toHaveBeenCalled();
   });
 
   it('AC-0: worker routing does not start in-process PRD execution', async () => {

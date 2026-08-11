@@ -198,26 +198,11 @@ export async function createDesignDoc(opts: {
     );
   }
 
-  if (opts.chatThreadId) {
-    try {
-      const upstream = await resolveRunGroundingSurface('prd', opts.prdId);
-      if (upstream) {
-        await propagatePipelineGrounding(
-          upstream.run,
-          {
-            runType: 'chat',
-            runId: opts.chatThreadId,
-            project: opts.project,
-          },
-          opts.userId,
-        );
-      }
-    } catch {
-      console.warn(
-        `[run-grounding] Design Doc propagation unavailable (designDocId=${row.id})`,
-      );
-    }
-  }
+  // Insert only — never await grounding/materialization here. Callers start the
+  // watcher and fire routeDesignDocGenerationKickoff after this returns; blocking
+  // on cold checkout left design docs stuck in "generating" with no agent_runs.
+  // Grounding lives in routeDesignDocGenerationKickoff.prepareWorker (prdId /
+  // sourceThreadId).
 
   return { designDocId: row.id };
 }
@@ -1235,13 +1220,24 @@ export async function startSingleFeatureDesignDocWatcher(
   startSingleFeatureDocWatcher(designDocId, thread.id, prdId, prd.project);
 
   // Now safe to start the agent — the row and watcher are in place.
+  // Fire-and-forget kickoff so prototype approval / auto-start isn't blocked on
+  // grounding materialization (same pattern as PRD create).
   const kickoffMessage = `Generate the design doc for the single feature "${featureName}" using the PRD, interview transcript, and prototype provided in \`.ai-pilot/kickoff-context.md\`. This is a non-interactive generation task — do not ask questions. Write all three output files (\`design-doc-design.md\`, \`design-doc-tech-spec.md\`, \`design-doc-assumptions.md\`) to \`.ai-pilot/output/\`.`;
-  await routeDesignDocGenerationKickoff({
-    designDocId,
-    userId: prd.authorId,
-    project: prd.project,
-    threadId: thread.id,
-    kickoffMessage,
+  void Promise.resolve(
+    routeDesignDocGenerationKickoff({
+      designDocId,
+      prdId,
+      sourceThreadId: prd.chatThreadId ?? null,
+      userId: prd.authorId,
+      project: prd.project,
+      threadId: thread.id,
+      kickoffMessage,
+    }),
+  ).catch((err: unknown) => {
+    console.error(
+      `[designDoc] Kickoff failed (docId=${designDocId}, prototypeId=${prototypeId}):`,
+      err,
+    );
   });
 
   const { propagateDesignDocApprovers } = await import('./documentApprovalService');

@@ -178,6 +178,10 @@ export async function createPrd(opts: {
   model?: string;
   skillSettingsId?: string | null;
 }): Promise<{ prdId: string; threadId: string }> {
+  // Insert only — never await grounding/materialization here. Interview "Generate
+  // PRD" navigates on this response; blocking on cold checkout left users stuck
+  // on Creating… for minutes while the PRD row already existed and kickoff never
+  // started (watcher/kickoff run after createPrd returns).
   const [row] = await db
     .insert(prds)
     .values({
@@ -193,29 +197,41 @@ export async function createPrd(opts: {
     })
     .returning({ id: prds.id });
 
+  return { prdId: row.id, threadId: opts.chatThreadId };
+}
+
+/**
+ * Copy interview-run grounding onto the PRD generation thread. Safe to call
+ * from the fire-and-forget kickoff path; failures are logged and non-fatal so
+ * in-process generation can still proceed.
+ */
+export async function propagatePrdGenerationGrounding(opts: {
+  prdId: string;
+  interviewId: string;
+  project: string;
+  userId: string;
+  threadId: string;
+}): Promise<void> {
   try {
     const upstream = await resolveRunGroundingSurface(
       'interview',
       opts.interviewId,
     );
-    if (upstream) {
-      await propagatePipelineGrounding(
-        upstream.run,
-        {
-          runType: 'chat',
-          runId: opts.chatThreadId,
-          project: opts.project,
-        },
-        opts.userId,
-      );
-    }
+    if (!upstream) return;
+    await propagatePipelineGrounding(
+      upstream.run,
+      {
+        runType: 'chat',
+        runId: opts.threadId,
+        project: opts.project,
+      },
+      opts.userId,
+    );
   } catch {
     console.warn(
-      `[run-grounding] PRD propagation unavailable (prdId=${row.id})`,
+      `[run-grounding] PRD propagation unavailable (prdId=${opts.prdId})`,
     );
   }
-
-  return { prdId: row.id, threadId: opts.chatThreadId };
 }
 
 export async function routePrdGenerationKickoff(opts: {
@@ -223,6 +239,7 @@ export async function routePrdGenerationKickoff(opts: {
   userId: string;
   project: string;
   threadId: string;
+  interviewId?: string;
   kickoffMessage?: string;
 }): Promise<void> {
   const kickoffMessage = opts.kickoffMessage ?? 'Begin.';
@@ -241,6 +258,16 @@ export async function routePrdGenerationKickoff(opts: {
       },
     );
   };
+
+  if (opts.interviewId) {
+    await propagatePrdGenerationGrounding({
+      prdId: opts.prdId,
+      interviewId: opts.interviewId,
+      project: opts.project,
+      userId: opts.userId,
+      threadId: opts.threadId,
+    });
+  }
 
   try {
     await routeBackgroundWorkflow({
