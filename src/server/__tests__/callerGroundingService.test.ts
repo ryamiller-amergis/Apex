@@ -1282,7 +1282,13 @@ describe('shared read-only per-SHA grounding checkout', () => {
       branch: grounding.branch,
       sha: previousSha,
     });
-    expect(deps.sharedReadCheckout.materialize).not.toHaveBeenCalled();
+    expect(deps.sharedReadCheckout.materialize).toHaveBeenCalledWith({
+      provider: 'github',
+      project: 'Apex',
+      repo: 'AI-Pilot',
+      branch: grounding.branch,
+      sha: grounding.groundedSha,
+    });
     expect(deps.materialize).not.toHaveBeenCalled();
     expect(deps.sharedReadCheckout.retain).toHaveBeenCalledTimes(1);
 
@@ -1290,11 +1296,14 @@ describe('shared read-only per-SHA grounding checkout', () => {
     expect(deps.sharedReadCheckout.releaseRef).toHaveBeenCalledTimes(1);
   });
 
-  it('uses per-run bundle rehydration when no shared checkout is ready', async () => {
+  it('warms a cold shared checkout off-path and falls back without blocking the turn', async () => {
     const deps = sharedDeps({
       sharedReadCheckout: {
         getReady: jest.fn().mockReturnValue(null),
-        materialize: jest.fn(),
+        materialize: jest.fn().mockResolvedValue({
+          workspacePath: SHARED_PATH,
+          outcome: 'materialized',
+        }),
         retain: jest.fn(),
         releaseRef: jest.fn(),
       },
@@ -1306,13 +1315,20 @@ describe('shared read-only per-SHA grounding checkout', () => {
 
     const selected = await service.start(startArgs);
 
-    expect(selected).toMatchObject({
-      mode: 'local',
-      cwd: 'C:\\data\\grounding-workspaces\\opaque',
-      resolvedSha: grounding.groundedSha,
+    expect(selected).toMatchObject({ mode: 'remote' });
+    expect(deps.sharedReadCheckout.materialize).toHaveBeenCalledWith({
+      provider: 'github',
+      project: 'Apex',
+      repo: 'AI-Pilot',
+      branch: grounding.branch,
+      sha: grounding.groundedSha,
     });
-    expect(deps.sharedReadCheckout.materialize).not.toHaveBeenCalled();
-    expect(deps.materialize).toHaveBeenCalledWith(grounding, run);
+    expect(deps.materialize).not.toHaveBeenCalled();
     expect(deps.groundingService.reground).not.toHaveBeenCalled();
+    expect(deps.trackEvent).toHaveBeenCalledWith(
+      'grounding.fallback',
+      expect.objectContaining({ reason: 'shared-checkout-warming' }),
+      { fallbackCount: 1 },
+    );
   });
 });

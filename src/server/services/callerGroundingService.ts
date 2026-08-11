@@ -299,6 +299,7 @@ export function createCallerGroundingService(
       // they never set `readOnlyShareable`.
       let workspacePath: string | undefined;
       let sharedIdentity: SharedReadCheckoutIdentity | undefined;
+      let sharedCheckoutWarming = false;
       if (input.readOnlyShareable) {
         let sharedEnabled = false;
         try {
@@ -328,6 +329,28 @@ export function createCallerGroundingService(
             telemetry.phase(telemetryContext(input), 'shared-checkout-hit');
           } else {
             telemetry.phase(telemetryContext(input), 'shared-checkout-cold');
+            sharedCheckoutWarming = true;
+            try {
+              void dependencies.sharedReadCheckout
+                .materialize(identity)
+                .then(() => {
+                  telemetry.phase(
+                    telemetryContext(input),
+                    'shared-checkout-warm-done',
+                  );
+                })
+                .catch(() => {
+                  telemetry.phase(
+                    telemetryContext(input),
+                    'shared-checkout-warm-failed',
+                  );
+                });
+            } catch {
+              telemetry.phase(
+                telemetryContext(input),
+                'shared-checkout-warm-failed',
+              );
+            }
             // New runs pin the newest READY checkout, not merely the newest
             // observed branch SHA. This keeps repository reads local while a
             // newer snapshot is still preparing off the request path.
@@ -393,6 +416,13 @@ export function createCallerGroundingService(
         }
       }
       // @feature-flag:shared-readonly-grounding-checkout end
+
+      // A read-only cold miss must not clone a large repository synchronously
+      // on the request path. The shared checkout is warming above; use remote
+      // tools for this turn unless a last-known-good shared tree was selected.
+      if (!workspacePath && sharedCheckoutWarming) {
+        return fallback(input, 'shared-checkout-warming');
+      }
 
       // Only write-capable/non-shareable callers materialize synchronously.
       if (!workspacePath) {
