@@ -42,7 +42,7 @@ function updateCatalogDependsOn(pkgRoot, skillName, dependsOn, suiteVersion = nu
 
 test('resolveSkillDependencyClosure fails deterministically with an actionable cycle path', () => {
   const cyclicCatalog = {
-    suiteVersion: '2.0.2',
+    suiteVersion: '2.0.3',
     skills: [
       {
         name: 'skill-a',
@@ -191,7 +191,7 @@ test('scoped reinstall updates the lockfile to a newer suite only after adding n
     assert.equal(code, 0, `updated install failed:\n${logs.join('\n')}`);
 
     lock = readLockfile(repo);
-    assert.equal(lock.suiteVersion, '2.0.2');
+    assert.equal(lock.suiteVersion, '2.0.3');
     assert.deepEqual(
       Object.keys(lock.skills).sort(),
       ['post-skill-bootstrap', 'prd-spec-review', 'to-prd', 'update-changelog'],
