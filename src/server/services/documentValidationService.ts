@@ -126,6 +126,7 @@ export async function autoStartDocumentValidation(adapter: DocumentValidationAda
               { runType: 'chat', runId: sourceThreadId, project },
               destinationRun,
               adapter.getAuthorId(),
+              { deferMaterialization: true },
             );
           } catch {
             console.warn(

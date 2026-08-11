@@ -17,6 +17,7 @@ import {
   cancelRun as cancelChatRun,
   isThreadIdle,
   isThreadLoaded,
+  sendMessage,
 } from './chatAgentService';
 import { resolveSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
@@ -63,6 +64,21 @@ const OUTPUT_RELATIVE_PATH = ['.ai-pilot', 'output', 'walkthrough-generation.jso
 const SKILL_PATH_PATTERN = /^\.cursor\/skills\/[^/]+\/SKILL\.md$/;
 const CATALOG_PAGE_LIMIT = 200;
 
+/**
+ * Explicit kickoff — do not use bare "Begin.". Prod failures showed agents
+ * spending the entire MCP owner deadline on hung `search_repo_code` and never
+ * writing the proposal. Kickoff already contains routes, ranked anchors, and
+ * assets; steer the agent toward those + local Read of known paths.
+ */
+export const WALKTHROUGH_GENERATION_KICKOFF_MESSAGE = [
+  'Execute the Walkthrough Generation skill.',
+  'Read `.ai-pilot/kickoff-context.md` for intent, curated routes, ranked catalog anchors, authoring catalog metadata, and allow-listed image assets.',
+  'Prefer those allow-lists and local Read/Glob of known paths (for example `src/shared/walkthroughRoutes.ts`, catalog `sourceLocations`, and `public/`).',
+  'Avoid broad `search_repo_code` calls — they frequently time out and abort the run before any proposal is written.',
+  `Write \`${OUTPUT_RELATIVE_PATH.join('/')}\` with the Write tool.`,
+  'Do not ask questions.',
+].join(' ');
+
 // ── Types ────────────────────────────────────────────────────────────────────────
 
 export interface WalkthroughGenerationAnchorRanking {
@@ -107,6 +123,14 @@ export function _resetForTests(): void {
   provenanceByThread.clear();
   policyByThread.clear();
   rankingByThread.clear();
+}
+
+/** Keep pending until kickoff sendMessage settles (mirrors design-module scoping). */
+function trackGenerationSend(threadId: string, send: Promise<unknown>): void {
+  generationInFlight.add(threadId);
+  void send.finally(() => {
+    generationInFlight.delete(threadId);
+  });
 }
 
 /**
@@ -484,15 +508,19 @@ export async function startGeneration(
     loadAuthoringCatalogForGeneration(),
   ]);
 
-  const thread = await createChatThread(userId, {
-    project: APEX_REPOSITORY_PROJECT,
-    repo: repositoryConnection.repo,
-    branch: repositoryConnection.branch,
-    skillProvider: repositoryConnection.skillProvider,
-    skillPath,
-    freeformContext: buildKickoffContext(request, anchorRanking, authoringAnchors),
-    model,
-  });
+  const thread = await createChatThread(
+    userId,
+    {
+      project: APEX_REPOSITORY_PROJECT,
+      repo: repositoryConnection.repo,
+      branch: repositoryConnection.branch,
+      skillProvider: repositoryConnection.skillProvider,
+      skillPath,
+      freeformContext: buildKickoffContext(request, anchorRanking, authoringAnchors),
+      model,
+    },
+    { skipAutoKickoff: true },
+  );
 
   const provenance: WalkthroughGenerationProvenance = {
     provider: 'cursor',
@@ -503,7 +531,6 @@ export async function startGeneration(
   };
 
   cancelledThreads.delete(thread.id);
-  generationInFlight.add(thread.id);
   provenanceByThread.set(thread.id, provenance);
   rankingByThread.set(thread.id, anchorRanking);
   policyByThread.set(
@@ -511,12 +538,17 @@ export async function startGeneration(
     request.policyPreset ?? DEFAULT_WALKTHROUGH_AI_POLICY_PRESET,
   );
 
-  // Mark in-flight complete once thread starts processing
-  void (async () => {
-    // Wait briefly for thread creation to propagate; SDK kickoff is async.
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    generationInFlight.delete(thread.id);
-  })();
+  trackGenerationSend(
+    thread.id,
+    sendMessage(thread.id, WALKTHROUGH_GENERATION_KICKOFF_MESSAGE, undefined, [], {
+      hidden: true,
+    }).catch((err: Error) => {
+      console.error(
+        `[walkthroughGeneration] kickoff sendMessage failed for ${thread.id}:`,
+        err.message,
+      );
+    }),
+  );
 
   return { threadId: thread.id, provenance, anchorRanking };
 }
@@ -540,10 +572,15 @@ function readOutput(workspaceDir: string): string | null {
 async function loadThreadForUser(
   threadId: string,
   userId: string,
-): Promise<{ userId: string; workspaceDir: string | null; status: string }> {
+): Promise<{
+  userId: string;
+  workspaceDir: string | null;
+  status: string;
+  lastError: string | null;
+}> {
   const row = await db.query.chatThreads.findFirst({
     where: eq(chatThreads.id, threadId),
-    columns: { userId: true, workspaceDir: true, status: true },
+    columns: { userId: true, workspaceDir: true, status: true, lastError: true },
   });
   if (!row || row.userId !== userId) {
     throw new WalkthroughAiError('AI_GENERATION_FAILED', 'Walkthrough generation thread not found.');
@@ -572,10 +609,17 @@ export async function getGenerationResult(
 
   const raw = readOutput(row.workspaceDir);
   if (!raw) {
+    // Kickoff sendMessage is async; keep pending until it settles or the agent runs.
+    if (generationInFlight.has(threadId)) {
+      return { status: 'pending', provenance };
+    }
     if (isThreadIdle(threadId)) {
+      const detail = row.lastError?.trim();
       return {
         status: 'failed',
-        error: 'Agent completed without generating a walkthrough proposal.',
+        error: detail
+          ? `Walkthrough generation failed: ${detail}`
+          : 'Agent completed without generating a walkthrough proposal.',
         provenance,
       };
     }

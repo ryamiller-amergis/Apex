@@ -267,6 +267,7 @@ describe('autoStartDocumentValidation background routing', () => {
       { runType: 'chat', runId: 'thread-prd', project: 'proj-alpha' },
       { runType: 'chat', runId: 'thread-validation', project: 'proj-alpha' },
       'user-1',
+      { deferMaterialization: true },
     );
   });
 

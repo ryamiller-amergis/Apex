@@ -21,8 +21,9 @@ Invoked programmatically by `walkthroughGenerationService.ts` via the Cursor SDK
 2. **Inspect the Apex repository** to verify:
    - Available routes: read `src/shared/walkthroughRoutes.ts` and extract the `ROUTE_ENTRIES` array.
    - Available anchors: use **only** `anchorKey` values from the kickoff section `## Ranked Catalog Anchor Candidates` (`rankedCandidates` / `autoSelectedAnchor`). Do **not** invent keys and do **not** pull keys from `walkthroughAnchors.ts` when the ranked catalog list is non-empty.
-   - Available image assets: list image files under `public/` (svg, png, jpg, webp, gif).
+   - Available image assets: list image files under `public/` (svg, png, jpg, webp, gif). Prefer the kickoff `## Allow-listed Image Assets` section when present.
    - Relevant components/pages: browse `src/client/components/` and `src/client/App.tsx` route definitions to understand what each page shows.
+   - Prefer local Read/Glob of known paths and kickoff allow-lists. Avoid broad `search_repo_code` — hung searches abort the run before any proposal is written.
 3. **Plan the Walkthrough** steps based on the intent, ensuring every route, anchor key, CTA route, and image path is verified against the repository source files and kickoff allow-lists discovered above.
    - For each likely anchor, search the repository for its exact catalog `testId` and inspect the surrounding component. Look for conditional rendering and accessibility/UI signals such as dialogs, modals, menus, tabs, disclosures, `open` state, and click handlers that reveal the target.
    - Treat `openerAnchorKeys` as catalog-owned reveal metadata for targets hidden inside modals, menus, tabs, or other conditional UI. The runtime clicks those approved+active anchors in order before locating the target.

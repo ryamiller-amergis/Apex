@@ -548,6 +548,7 @@ describe('routePrdGenerationKickoff', () => {
       { runType: 'chat', runId: 'interview-thread', project: 'proj-alpha' },
       { runType: 'chat', runId: 'thread-prd', project: 'proj-alpha' },
       'user-1',
+      { deferMaterialization: true },
     );
     expect(mockRouteBackgroundWorkflow).toHaveBeenCalled();
   });

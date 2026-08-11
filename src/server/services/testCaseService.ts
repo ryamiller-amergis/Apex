@@ -838,6 +838,7 @@ export async function triggerTestCaseGeneration(
             },
             destinationRun,
             actorUserId ?? prdRow.authorId,
+            { deferMaterialization: true },
           );
         } catch {
           console.warn(

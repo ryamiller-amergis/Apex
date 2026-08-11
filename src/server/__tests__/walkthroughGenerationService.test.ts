@@ -31,6 +31,8 @@ jest.mock('../services/chatAgentService', () => ({
   createThread: jest.fn(),
   cancelRun: jest.fn(),
   isThreadIdle: jest.fn(),
+  isThreadLoaded: jest.fn(),
+  sendMessage: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('../services/projectSettingsService', () => ({
@@ -86,7 +88,7 @@ jest.mock('../services/walkthroughAnchorRegistryService', () => ({
 }));
 
 import { db } from '../db/drizzle';
-import { createThread, cancelRun, isThreadIdle } from '../services/chatAgentService';
+import { createThread, cancelRun, isThreadIdle, isThreadLoaded, sendMessage } from '../services/chatAgentService';
 import { resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import {
@@ -105,11 +107,13 @@ import {
   cancelGeneration,
   DEFAULT_WALKTHROUGH_GENERATION_SKILL_PATH,
   DEFAULT_GENERATION_ANCHOR_RANK_LIMIT,
+  WALKTHROUGH_GENERATION_KICKOFF_MESSAGE,
   buildGenerationAnchorRankingQuery,
   buildWalkthroughGenerationAnchorRanking,
   formatAnchorRankingForKickoff,
   annotateProposalStepsWithAnchorMatch,
   _resetForTests,
+  _getGenerationInFlightForTests,
 } from '../services/walkthroughGenerationService';
 import { DEFAULT_ANCHOR_AUTO_SELECT_SCORE_THRESHOLD } from '../services/walkthroughAnchorTagRanking';
 import { WalkthroughAiError } from '../../shared/types/walkthroughAiDraft';
@@ -123,6 +127,8 @@ const mockedDb = db as unknown as {
 const mockedCreateThread = createThread as jest.MockedFunction<typeof createThread>;
 const mockedCancelRun = cancelRun as jest.MockedFunction<typeof cancelRun>;
 const mockedIsThreadIdle = isThreadIdle as jest.MockedFunction<typeof isThreadIdle>;
+const mockedIsThreadLoaded = isThreadLoaded as jest.MockedFunction<typeof isThreadLoaded>;
+const mockedSendMessage = sendMessage as jest.MockedFunction<typeof sendMessage>;
 const mockedResolveSkillConfig = resolveSkillConfig as jest.MockedFunction<typeof resolveSkillConfig>;
 const mockedGetDefaultModel = getDefaultModel as jest.MockedFunction<typeof getDefaultModel>;
 const mockedListAnchors = listAnchors as jest.MockedFunction<typeof listAnchors>;
@@ -255,6 +261,8 @@ beforeEach(() => {
   mockedGetDefaultModel.mockResolvedValue('claude-sonnet-4');
   mockedResolveSkillConfig.mockResolvedValue(FAKE_SKILL_CONFIG as ProjectSkillConfig);
   mockedCreateThread.mockResolvedValue({ id: THREAD_ID } as ChatThread);
+  mockedSendMessage.mockResolvedValue(undefined as never);
+  mockedIsThreadLoaded.mockReturnValue(true);
   mockCatalogPage(baselineCatalog());
   mockedListAuthoringAnchorEntries.mockResolvedValue(authoringCatalogFromBaseline() as WalkthroughAnchorRegistryEntry[]);
   // Re-assert factory default after clearAllMocks so parallel workers cannot drop it.
@@ -303,7 +311,16 @@ describe('walkthroughGenerationService', () => {
           skillPath: DEFAULT_WALKTHROUGH_GENERATION_SKILL_PATH,
           model: 'claude-sonnet-4',
         }),
+        { skipAutoKickoff: true },
       );
+      expect(mockedSendMessage).toHaveBeenCalledWith(
+        THREAD_ID,
+        WALKTHROUGH_GENERATION_KICKOFF_MESSAGE,
+        undefined,
+        [],
+        { hidden: true },
+      );
+      expect(_getGenerationInFlightForTests().has(THREAD_ID)).toBe(true);
     });
 
     it('uses the Apex repository connection when the walkthrough targets another project', async () => {
@@ -322,6 +339,7 @@ describe('walkthroughGenerationService', () => {
             '**Walkthrough target project:** Customer Portal',
           ),
         }),
+        { skipAutoKickoff: true },
       );
     });
 
@@ -360,6 +378,7 @@ describe('walkthroughGenerationService', () => {
           branch: 'feature/walkthroughs',
           skillProvider: 'github',
         }),
+        { skipAutoKickoff: true },
       );
     });
 
@@ -371,6 +390,7 @@ describe('walkthroughGenerationService', () => {
       expect(mockedCreateThread).toHaveBeenCalledWith(
         USER_ID,
         expect.objectContaining({ model: 'gpt-4o' }),
+        { skipAutoKickoff: true },
       );
     });
 
@@ -388,6 +408,7 @@ describe('walkthroughGenerationService', () => {
         expect.objectContaining({
           skillPath: '.cursor/skills/custom-gen/SKILL.md',
         }),
+        { skipAutoKickoff: true },
       );
     });
 
@@ -727,6 +748,7 @@ describe('walkthroughGenerationService', () => {
         userId: USER_ID,
         workspaceDir: '/tmp/ws',
         status: 'idle',
+        lastError: null,
       });
       mockFs.existsSync.mockReturnValue(false);
       mockedIsThreadIdle.mockReturnValue(true);
@@ -734,6 +756,56 @@ describe('walkthroughGenerationService', () => {
       const result = await getGenerationResult(THREAD_ID, USER_ID);
       expect(result.status).toBe('failed');
       expect(result.error).toContain('without generating');
+    });
+
+    it('surfaces thread lastError when idle with no output', async () => {
+      mockedDb.query.chatThreads.findFirst.mockResolvedValue({
+        userId: USER_ID,
+        workspaceDir: '/tmp/ws',
+        status: 'idle',
+        lastError:
+          'mcp:search_repo_code exceeded owner deadline after 60 seconds. Retry the turn.',
+      });
+      mockFs.existsSync.mockReturnValue(false);
+      mockedIsThreadIdle.mockReturnValue(true);
+
+      const result = await getGenerationResult(THREAD_ID, USER_ID);
+      expect(result.status).toBe('failed');
+      expect(result.error).toContain('mcp:search_repo_code exceeded owner deadline');
+    });
+
+    it('stays pending while kickoff sendMessage is still in flight', async () => {
+      let resolveSend!: () => void;
+      mockedSendMessage.mockReturnValue(
+        new Promise<void>((resolve) => {
+          resolveSend = resolve;
+        }) as never,
+      );
+
+      await startGeneration(
+        { projectId: PROJECT_ID, intent: 'Create a tour of the profile page' },
+        USER_ID,
+      );
+
+      mockedDb.query.chatThreads.findFirst.mockResolvedValue({
+        userId: USER_ID,
+        workspaceDir: '/tmp/ws',
+        status: 'idle',
+        lastError: null,
+      });
+      mockFs.existsSync.mockReturnValue(false);
+      mockedIsThreadIdle.mockReturnValue(true);
+
+      const pending = await getGenerationResult(THREAD_ID, USER_ID);
+      expect(pending.status).toBe('pending');
+
+      resolveSend();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const failed = await getGenerationResult(THREAD_ID, USER_ID);
+      expect(failed.status).toBe('failed');
+      expect(failed.error).toContain('without generating');
     });
 
     it('returns failed when output has invalid JSON', async () => {
