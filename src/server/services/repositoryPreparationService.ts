@@ -6,10 +6,7 @@ import {
   type SharedReadCheckoutResult,
   type SharedReadCheckoutService,
 } from './grounding/sharedReadCheckoutService';
-import {
-  ensureRepoCache,
-  readCachedOriginSha,
-} from './repoCacheService';
+import { ensureRepoCache, readCachedOriginSha } from './repoCacheService';
 import {
   materializeRunGroundingWithPath,
   type RunGroundingMaterializationResult,
@@ -59,15 +56,12 @@ export interface PrepareWritableRepositoryInput {
   repository?: RepositoryPreparationTarget | null;
 }
 
-type GroundingDependency = Pick<
-  RunGroundingService,
-  'activateGroundings'
->;
+type GroundingDependency = Pick<RunGroundingService, 'activateGroundings'>;
 
 export interface RepositoryPreparationDependencies {
   readCachedOriginSha?: typeof readCachedOriginSha;
   ensureRepoCache?: (
-    repository: RepositoryPreparationTarget,
+    repository: RepositoryPreparationTarget
   ) => Promise<{ baseSha: string }>;
   sharedReadCheckout?: Pick<
     SharedReadCheckoutService,
@@ -76,7 +70,7 @@ export interface RepositoryPreparationDependencies {
   groundingService?: GroundingDependency;
   materializeWritable?: (
     grounding: RunGrounding,
-    destination: RunRef,
+    destination: RunRef
   ) => Promise<RunGroundingMaterializationResult>;
   telemetry?: typeof trackEvent;
   now?: () => number;
@@ -85,13 +79,13 @@ export interface RepositoryPreparationDependencies {
 export interface RepositoryPreparationService {
   resolveCurrentSha(repository: RepositoryPreparationTarget): Promise<string>;
   getReadyReadOnly(
-    input: PrepareReadOnlyRepositoryInput,
+    input: PrepareReadOnlyRepositoryInput
   ): ReadyReadOnlyRepository | null;
   prepareReadOnly(
-    input: PrepareReadOnlyRepositoryInput,
+    input: PrepareReadOnlyRepositoryInput
   ): Promise<ReadyReadOnlyRepository>;
   prepareWritable(
-    input: PrepareWritableRepositoryInput,
+    input: PrepareWritableRepositoryInput
   ): Promise<RunGroundingMaterializationResult & { grounding?: RunGrounding }>;
 }
 
@@ -100,44 +94,49 @@ function groundingProvider(provider: SkillProvider): RunGrounding['provider'] {
 }
 
 function activatedTarget(
-  activation: ActivateRunGroundingsResult,
+  activation: ActivateRunGroundingsResult
 ): RunGrounding | null {
   if (!activation.ok) return null;
-  return activation.groundings.find(
-    (grounding) => grounding.repoRole === 'target' && grounding.isActive,
-  ) ?? null;
+  return (
+    activation.groundings.find(
+      (grounding) => grounding.repoRole === 'target' && grounding.isActive
+    ) ?? null
+  );
 }
 
 function isUsableTarget(
   grounding: RunGrounding | null | undefined,
-  destination: RunRef,
+  destination: RunRef
 ): grounding is RunGrounding {
   return Boolean(
-    grounding
-      && grounding.repoRole === 'target'
-      && grounding.isActive
-      && grounding.project === destination.project
-      && grounding.groundedSha.trim().length > 0,
+    grounding &&
+    grounding.repoRole === 'target' &&
+    grounding.isActive &&
+    grounding.project === destination.project &&
+    grounding.groundedSha.trim().length > 0
   );
 }
 
 export function normalizePreparationRepository(
-  repository: RepositoryPreparationTarget,
+  repository: RepositoryPreparationTarget
 ): RepositoryPreparationTarget {
   if (repository.provider !== 'github') return repository;
-  const repo = repository.repo.split('/').pop()?.trim() || repository.repo.trim();
+  const repo =
+    repository.repo.split('/').pop()?.trim() || repository.repo.trim();
   return { ...repository, repo };
 }
 
 export function createRepositoryPreparationService(
-  dependencies: RepositoryPreparationDependencies = {},
+  dependencies: RepositoryPreparationDependencies = {}
 ): RepositoryPreparationService {
   const readCached = dependencies.readCachedOriginSha ?? readCachedOriginSha;
   const ensureCache = dependencies.ensureRepoCache ?? ensureRepoCache;
   const shared = dependencies.sharedReadCheckout ?? sharedReadCheckoutService;
   const activateGroundings =
     dependencies.groundingService?.activateGroundings ??
-    (async (input: Parameters<GroundingDependency['activateGroundings']>[0]) => {
+    (async (
+      input: Parameters<GroundingDependency['activateGroundings']>[0]
+    ) => {
       const { runGroundingService } = await import('./runGroundingService');
       return runGroundingService.activateGroundings(input);
     });
@@ -154,7 +153,7 @@ export function createRepositoryPreparationService(
       phase: 'on-demand-start' | 'ready' | 'failure';
       reason?: string;
     },
-    durationMs: number,
+    durationMs: number
   ): void => {
     try {
       emit(
@@ -166,7 +165,7 @@ export function createRepositoryPreparationService(
           phase: input.phase,
           reason: input.reason,
         }),
-        { durationMs: Math.max(0, durationMs) },
+        { durationMs: Math.max(0, durationMs) }
       );
     } catch {
       // Preparation must not depend on telemetry availability.
@@ -175,7 +174,7 @@ export function createRepositoryPreparationService(
 
   const identityFor = (
     repository: RepositoryPreparationTarget,
-    sha: string,
+    sha: string
   ): SharedReadCheckoutIdentity => ({
     provider: repository.provider,
     project: repository.project,
@@ -185,7 +184,7 @@ export function createRepositoryPreparationService(
   });
 
   const resolveCurrentSha = async (
-    rawRepository: RepositoryPreparationTarget,
+    rawRepository: RepositoryPreparationTarget
   ): Promise<string> => {
     const repository = normalizePreparationRepository(rawRepository);
     const cached = (
@@ -205,7 +204,7 @@ export function createRepositoryPreparationService(
   };
 
   const getReadyReadOnly = (
-    input: PrepareReadOnlyRepositoryInput,
+    input: PrepareReadOnlyRepositoryInput
   ): ReadyReadOnlyRepository | null => {
     const repository = normalizePreparationRepository(input.repository);
     const sha = input.sha?.trim();
@@ -216,49 +215,63 @@ export function createRepositoryPreparationService(
   };
 
   const prepareReadOnly = async (
-    input: PrepareReadOnlyRepositoryInput,
+    input: PrepareReadOnlyRepositoryInput
   ): Promise<ReadyReadOnlyRepository> => {
     const repository = normalizePreparationRepository(input.repository);
     const startedAt = now();
-    safeTrack({
-      workflowClass: input.workflowClass,
-      project: repository.project,
-      mode: 'shared-read',
-      phase: 'on-demand-start',
-    }, 0);
+    safeTrack(
+      {
+        workflowClass: input.workflowClass,
+        project: repository.project,
+        mode: 'shared-read',
+        phase: 'on-demand-start',
+      },
+      0
+    );
     try {
-      const sha = input.sha?.trim() || await resolveCurrentSha(repository);
+      const sha = input.sha?.trim() || (await resolveCurrentSha(repository));
       const identity = identityFor(repository, sha);
       const checkout = await shared.materialize(identity);
-      safeTrack({
-        workflowClass: input.workflowClass,
-        project: repository.project,
-        mode: 'shared-read',
-        phase: 'ready',
-      }, now() - startedAt);
+      safeTrack(
+        {
+          workflowClass: input.workflowClass,
+          project: repository.project,
+          mode: 'shared-read',
+          phase: 'ready',
+        },
+        now() - startedAt
+      );
       return { identity, checkout };
     } catch (error) {
-      safeTrack({
-        workflowClass: input.workflowClass,
-        project: repository.project,
-        mode: 'shared-read',
-        phase: 'failure',
-        reason: 'preparation-failed',
-      }, now() - startedAt);
+      safeTrack(
+        {
+          workflowClass: input.workflowClass,
+          project: repository.project,
+          mode: 'shared-read',
+          phase: 'failure',
+          reason: 'preparation-failed',
+        },
+        now() - startedAt
+      );
       throw error;
     }
   };
 
   const prepareWritable = async (
-    input: PrepareWritableRepositoryInput,
-  ): Promise<RunGroundingMaterializationResult & { grounding?: RunGrounding }> => {
+    input: PrepareWritableRepositoryInput
+  ): Promise<
+    RunGroundingMaterializationResult & { grounding?: RunGrounding }
+  > => {
     const startedAt = now();
-    safeTrack({
-      workflowClass: input.workflowClass,
-      project: input.destinationRun.project,
-      mode: 'writable-run',
-      phase: 'on-demand-start',
-    }, 0);
+    safeTrack(
+      {
+        workflowClass: input.workflowClass,
+        project: input.destinationRun.project,
+        mode: 'writable-run',
+        phase: 'on-demand-start',
+      },
+      0
+    );
 
     try {
       let grounding = input.targetGrounding;
@@ -277,42 +290,48 @@ export function createRepositoryPreparationService(
               branch: repository.branch,
               groundedSha: sha,
             },
-          }),
+          })
         );
       }
       if (!isUsableTarget(grounding, input.destinationRun)) {
         throw new Error('Repository target could not be activated');
       }
 
-      const result = await materializeWritable(
-        grounding,
-        input.destinationRun,
-      );
+      const result = await materializeWritable(grounding, input.destinationRun);
       if (result.state !== 'materialized' || !result.workspacePath) {
-        safeTrack({
+        safeTrack(
+          {
+            workflowClass: input.workflowClass,
+            project: input.destinationRun.project,
+            mode: 'writable-run',
+            phase: 'failure',
+            reason: 'materialization-unavailable',
+          },
+          now() - startedAt
+        );
+        return { ...result, grounding };
+      }
+      safeTrack(
+        {
+          workflowClass: input.workflowClass,
+          project: input.destinationRun.project,
+          mode: 'writable-run',
+          phase: 'ready',
+        },
+        now() - startedAt
+      );
+      return { ...result, grounding };
+    } catch (error) {
+      safeTrack(
+        {
           workflowClass: input.workflowClass,
           project: input.destinationRun.project,
           mode: 'writable-run',
           phase: 'failure',
-          reason: 'materialization-unavailable',
-        }, now() - startedAt);
-        return { ...result, grounding };
-      }
-      safeTrack({
-        workflowClass: input.workflowClass,
-        project: input.destinationRun.project,
-        mode: 'writable-run',
-        phase: 'ready',
-      }, now() - startedAt);
-      return { ...result, grounding };
-    } catch (error) {
-      safeTrack({
-        workflowClass: input.workflowClass,
-        project: input.destinationRun.project,
-        mode: 'writable-run',
-        phase: 'failure',
-        reason: 'preparation-failed',
-      }, now() - startedAt);
+          reason: 'preparation-failed',
+        },
+        now() - startedAt
+      );
       throw error;
     }
   };

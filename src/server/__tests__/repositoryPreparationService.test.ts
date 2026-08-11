@@ -32,10 +32,7 @@ describe('cold external-project repository preparation contract', () => {
     branch: 'main',
   };
 
-  const git = async (
-    args: string[],
-    cwd?: string,
-  ): Promise<string> => {
+  const git = async (args: string[], cwd?: string): Promise<string> => {
     const result = await exec('git', args, {
       cwd,
       env: {
@@ -62,7 +59,7 @@ describe('cold external-project repository preparation contract', () => {
     await fs.writeFile(
       path.join(sourceRepository, 'PROJECT.md'),
       '# External project\n',
-      'utf8',
+      'utf8'
     );
     await git(['add', 'PROJECT.md'], sourceRepository);
     await git(['commit', '-m', 'initial external project'], sourceRepository);
@@ -130,10 +127,7 @@ describe('cold external-project repository preparation contract', () => {
       sharedReadCheckout: shared,
       groundingService: {
         activateGroundings: async (input) => {
-          const grounding = groundingFor(
-            input.run,
-            input.target.groundedSha,
-          );
+          const grounding = groundingFor(input.run, input.target.groundedSha);
           activatedGroundings.push(grounding);
           return {
             ok: true,
@@ -148,13 +142,10 @@ describe('cold external-project repository preparation contract', () => {
           dataRoot,
           'workspaces',
           'grounding',
-          destinationRun.runId,
+          destinationRun.runId
         );
         await git(['clone', mirrorRepository, destination]);
-        await git(
-          ['checkout', '--detach', grounding.groundedSha],
-          destination,
-        );
+        await git(['checkout', '--detach', grounding.groundedSha], destination);
         return { state: 'materialized', workspacePath: destination };
       },
       telemetry: jest.fn(),
@@ -170,11 +161,13 @@ describe('cold external-project repository preparation contract', () => {
     async (workflowClass) => {
       const service = createService();
       expect(await readCachedSha()).toBeNull();
-      expect(service.getReadyReadOnly({
-        repository,
-        workflowClass,
-        sha,
-      })).toBeNull();
+      expect(
+        service.getReadyReadOnly({
+          repository,
+          workflowClass,
+          sha,
+        })
+      ).toBeNull();
 
       const prepared = await service.prepareReadOnly({
         repository,
@@ -182,9 +175,13 @@ describe('cold external-project repository preparation contract', () => {
       });
       const repositoryContent = await fs.readFile(
         path.join(prepared.checkout.workspacePath, 'PROJECT.md'),
-        'utf8',
+        'utf8'
       );
-      const statusPath = path.join(dataRoot, 'domain', `${workflowClass}.status`);
+      const statusPath = path.join(
+        dataRoot,
+        'domain',
+        `${workflowClass}.status`
+      );
       await fs.mkdir(path.dirname(statusPath), { recursive: true });
       await fs.writeFile(statusPath, 'completed', 'utf8');
 
@@ -193,11 +190,11 @@ describe('cold external-project repository preparation contract', () => {
       expect(repositoryContent).toBe('# External project\n');
       await expect(fs.readFile(statusPath, 'utf8')).resolves.toBe('completed');
       expect(
-        service.getReadyReadOnly({ repository, workflowClass, sha }),
+        service.getReadyReadOnly({ repository, workflowClass, sha })
       ).toMatchObject({
         checkout: { workspacePath: prepared.checkout.workspacePath },
       });
-    },
+    }
   );
 
   it.each<RepositoryPreparationWorkflowClass>([
@@ -226,11 +223,15 @@ describe('cold external-project repository preparation contract', () => {
         prepared.workspacePath!,
         '.ai-pilot',
         'output',
-        'result.md',
+        'result.md'
       );
       await fs.mkdir(path.dirname(output), { recursive: true });
       await fs.writeFile(output, `${workflowClass}: complete\n`, 'utf8');
-      const statusPath = path.join(dataRoot, 'domain', `${workflowClass}.status`);
+      const statusPath = path.join(
+        dataRoot,
+        'domain',
+        `${workflowClass}.status`
+      );
       await fs.mkdir(path.dirname(statusPath), { recursive: true });
       await fs.writeFile(statusPath, 'ready', 'utf8');
 
@@ -241,12 +242,12 @@ describe('cold external-project repository preparation contract', () => {
         isActive: true,
       });
       expect(prepared.workspacePath).toContain(
-        path.join('workspaces', 'grounding'),
+        path.join('workspaces', 'grounding')
       );
       await expect(fs.readFile(output, 'utf8')).resolves.toBe(
-        `${workflowClass}: complete\n`,
+        `${workflowClass}: complete\n`
       );
       await expect(fs.readFile(statusPath, 'utf8')).resolves.toBe('ready');
-    },
+    }
   );
 });
