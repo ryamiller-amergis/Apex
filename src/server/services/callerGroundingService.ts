@@ -126,7 +126,11 @@ export function evaluateBindingContinuity(
 
 type GroundingServiceDependency = Pick<
   RunGroundingService,
-  'activateGroundings' | 'getGroundings' | 'markTerminalInactive'
+  | 'activateGroundings'
+  | 'findActiveByRepoBranch'
+  | 'getGroundings'
+  | 'markTerminalInactive'
+  | 'reground'
 >;
 
 export interface CallerGroundingDependencies {
@@ -316,30 +320,75 @@ export function createCallerGroundingService(
             sha: grounding.groundedSha,
           };
           const shared = dependencies.sharedReadCheckout.getReady(identity);
-          if (!shared) {
+          if (shared) {
+            dependencies.sharedReadCheckout.retain(identity);
+            sharedIdentity = identity;
+            workspacePath = shared.workspacePath;
+            setMaterializationMode('warm');
+            telemetry.phase(telemetryContext(input), 'shared-checkout-hit');
+          } else {
             telemetry.phase(telemetryContext(input), 'shared-checkout-cold');
-            // Warm only as detached maintenance. It must never delay this turn.
-            void dependencies.sharedReadCheckout
-              .materialize(identity)
-              .then(() => {
+            // New runs pin the newest READY checkout, not merely the newest
+            // observed branch SHA. This keeps repository reads local while a
+            // newer snapshot is still preparing off the request path.
+            try {
+              const candidates = (
+                await dependencies.groundingService.findActiveByRepoBranch({
+                  provider: grounding.provider,
+                  project: grounding.project,
+                  repository: grounding.repository,
+                  branch: grounding.branch,
+                })
+              )
+                .filter(
+                  (candidate) =>
+                    candidate.repoRole === 'target'
+                    && candidate.groundedSha !== identity.sha,
+                )
+                .sort(
+                  (left, right) =>
+                    Date.parse(right.groundedAt) - Date.parse(left.groundedAt),
+                );
+
+              for (const candidate of candidates) {
+                const candidateIdentity: SharedReadCheckoutIdentity = {
+                  provider: profileProvider(candidate.provider),
+                  project: candidate.project,
+                  repo: candidate.repository,
+                  branch: candidate.branch,
+                  sha: candidate.groundedSha,
+                };
+                const ready =
+                  dependencies.sharedReadCheckout.getReady(candidateIdentity);
+                if (!ready) continue;
+
+                const pinned = await dependencies.groundingService.reground(
+                  input.run,
+                  'target',
+                  candidate.groundedSha,
+                );
+                if (!pinned) break;
+
+                grounding = pinned;
+                dependencies.sharedReadCheckout.retain(candidateIdentity);
+                sharedIdentity = candidateIdentity;
+                workspacePath = ready.workspacePath;
+                setMaterializationMode('warm');
                 telemetry.phase(
                   telemetryContext(input),
-                  'shared-background-materialize-done',
+                  'shared-checkout-last-known-good',
                 );
-              })
-              .catch(() => {
-                telemetry.phase(
-                  telemetryContext(input),
-                  'shared-background-materialize-failed',
-                );
-              });
-            return fallback(input, 'shared-checkout-not-ready');
+                break;
+              }
+            } catch {
+              // Lookup failure is not a remote-read decision. Continue to the
+              // established per-run bundle rehydration path below.
+              telemetry.phase(
+                telemetryContext(input),
+                'shared-checkout-last-known-good-unavailable',
+              );
+            }
           }
-          dependencies.sharedReadCheckout.retain(identity);
-          sharedIdentity = identity;
-          workspacePath = shared.workspacePath;
-          setMaterializationMode('warm');
-          telemetry.phase(telemetryContext(input), 'shared-checkout-hit');
           // @feature-flag:shared-readonly-grounding-checkout enabled-end
         }
       }

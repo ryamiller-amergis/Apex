@@ -174,7 +174,14 @@ function dependencies(
         groundings: [grounding],
       }),
       getGroundings: jest.fn().mockResolvedValue([grounding]),
+      findActiveByRepoBranch: jest.fn().mockResolvedValue([grounding]),
       markTerminalInactive: jest.fn().mockResolvedValue(1),
+      reground: jest.fn().mockImplementation(
+        async (_run, _role, newSha) => ({
+          ...grounding,
+          groundedSha: newSha,
+        }),
+      ),
     },
     materialize: jest.fn().mockResolvedValue({
       state: 'materialized',

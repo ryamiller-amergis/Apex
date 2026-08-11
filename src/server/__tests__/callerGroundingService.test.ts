@@ -59,7 +59,14 @@ function dependencies(
         groundings: [grounding],
       }),
       getGroundings: jest.fn().mockResolvedValue([grounding]),
+      findActiveByRepoBranch: jest.fn().mockResolvedValue([grounding]),
       markTerminalInactive: jest.fn().mockResolvedValue(1),
+      reground: jest.fn().mockImplementation(
+        async (_run, _role, newSha) => ({
+          ...grounding,
+          groundedSha: newSha,
+        }),
+      ),
     },
     materialize: jest.fn().mockResolvedValue({
       state: 'materialized',
@@ -1218,10 +1225,22 @@ describe('shared read-only per-SHA grounding checkout', () => {
     expect(deps.materialize).toHaveBeenCalledWith(grounding, run);
   });
 
-  it('returns remote immediately and starts best-effort warming on a cold miss', async () => {
+  it('pins the latest ready checkout for the same repository on an exact-SHA miss', async () => {
+    const previousSha = 'b'.repeat(40);
+    const previousGrounding: RunGrounding = {
+      ...grounding,
+      id: 'grounding-previous',
+      runId: 'another-thread',
+      groundedSha: previousSha,
+      groundedAt: '2026-08-02T11:00:00.000Z',
+    };
     const deps = sharedDeps({
       sharedReadCheckout: {
-        getReady: jest.fn().mockReturnValue(null),
+        getReady: jest.fn().mockImplementation((identity) =>
+          identity.sha === previousSha
+            ? { workspacePath: SHARED_PATH, outcome: 'hit' }
+            : null
+        ),
         materialize: jest.fn().mockResolvedValue({
           workspacePath: SHARED_PATH,
           outcome: 'materialized',
@@ -1230,22 +1249,70 @@ describe('shared read-only per-SHA grounding checkout', () => {
         releaseRef: jest.fn(),
       },
     });
+    jest
+      .mocked(deps.groundingService.findActiveByRepoBranch)
+      .mockResolvedValue([grounding, previousGrounding]);
+    jest
+      .mocked(deps.groundingService.reground)
+      .mockResolvedValue({ ...grounding, groundedSha: previousSha });
     const service = createCallerGroundingService(deps);
 
     const selected = await service.start(startArgs);
 
-    expect(selected).toMatchObject({ mode: 'remote' });
-    expect(deps.sharedReadCheckout.materialize).toHaveBeenCalledWith({
+    expect(selected).toMatchObject({
+      mode: 'local',
+      cwd: SHARED_PATH,
+      resolvedSha: previousSha,
+    });
+    expect(deps.groundingService.findActiveByRepoBranch).toHaveBeenCalledWith({
+      provider: 'github',
+      project: 'Apex',
+      repository: 'AI-Pilot',
+      branch: 'main',
+    });
+    expect(deps.groundingService.reground).toHaveBeenCalledWith(
+      run,
+      'target',
+      previousSha,
+    );
+    expect(deps.sharedReadCheckout.getReady).toHaveBeenCalledWith({
       provider: 'github',
       project: 'Apex',
       repo: 'AI-Pilot',
       branch: grounding.branch,
-      sha: grounding.groundedSha,
+      sha: previousSha,
     });
+    expect(deps.sharedReadCheckout.materialize).not.toHaveBeenCalled();
     expect(deps.materialize).not.toHaveBeenCalled();
-    expect(deps.sharedReadCheckout.retain).not.toHaveBeenCalled();
+    expect(deps.sharedReadCheckout.retain).toHaveBeenCalledTimes(1);
 
     await selected.release();
-    expect(deps.sharedReadCheckout.releaseRef).not.toHaveBeenCalled();
+    expect(deps.sharedReadCheckout.releaseRef).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses per-run bundle rehydration when no shared checkout is ready', async () => {
+    const deps = sharedDeps({
+      sharedReadCheckout: {
+        getReady: jest.fn().mockReturnValue(null),
+        materialize: jest.fn(),
+        retain: jest.fn(),
+        releaseRef: jest.fn(),
+      },
+    });
+    jest
+      .mocked(deps.groundingService.findActiveByRepoBranch)
+      .mockResolvedValue([grounding]);
+    const service = createCallerGroundingService(deps);
+
+    const selected = await service.start(startArgs);
+
+    expect(selected).toMatchObject({
+      mode: 'local',
+      cwd: 'C:\\data\\grounding-workspaces\\opaque',
+      resolvedSha: grounding.groundedSha,
+    });
+    expect(deps.sharedReadCheckout.materialize).not.toHaveBeenCalled();
+    expect(deps.materialize).toHaveBeenCalledWith(grounding, run);
+    expect(deps.groundingService.reground).not.toHaveBeenCalled();
   });
 });
