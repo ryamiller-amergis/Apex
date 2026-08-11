@@ -226,6 +226,7 @@ export async function propagatePrdGenerationGrounding(opts: {
         project: opts.project,
       },
       opts.userId,
+      { deferMaterialization: true },
     );
   } catch {
     console.warn(

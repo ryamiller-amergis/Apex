@@ -445,6 +445,7 @@ describe('routeDesignDocGenerationKickoff', () => {
       { runType: 'chat', runId: 'thread-prd', project: 'proj-alpha' },
       { runType: 'chat', runId: 'thread-design', project: 'proj-alpha' },
       'user-1',
+      { deferMaterialization: true },
     );
     expect(mockRouteBackgroundWorkflow).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -271,6 +271,7 @@ export async function routeDesignDocGenerationKickoff(opts: {
                 sourceRun,
                 destinationRun,
                 opts.userId,
+                { deferMaterialization: true },
               );
             } catch {
               console.warn(
@@ -1418,6 +1419,7 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
               },
               destinationRun,
               doc.authorId,
+              { deferMaterialization: true },
             );
           } catch {
             console.warn(

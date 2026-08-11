@@ -62,7 +62,7 @@ export type GroundingMaterializationState = 'materialized' | 'unavailable';
 
 export interface CopyGroundingByValueResult {
   grounding: RunGrounding | null;
-  materialization: GroundingMaterializationState;
+  materialization: GroundingMaterializationState | 'deferred';
 }
 
 export interface ResolvedRunGroundingSurface {
@@ -301,6 +301,7 @@ export async function propagatePipelineGrounding(
     service?: RunGroundingService;
     isFeatureEnabled?: typeof evaluateFeatureFlag;
     propagateLinkedContext?: typeof materializeLinkedContextForPipelineHandoff;
+    deferMaterialization?: boolean;
   } = {}
 ): Promise<CopyGroundingByValueResult | null> {
   try {
@@ -330,9 +331,15 @@ export async function propagatePipelineGrounding(
   }
 
   // @feature-flag:repo-grounding-workspace-profile enabled-start
-  const result = await (
-    options.service ?? runGroundingService
-  ).copyGroundingByValue(from, to, 'target');
+  const service = options.service ?? runGroundingService;
+  if (options.deferMaterialization) {
+    const grounding = await service.copyGrounding(from, to, 'target');
+    return {
+      grounding,
+      materialization: grounding ? 'deferred' : 'unavailable',
+    };
+  }
+  const result = await service.copyGroundingByValue(from, to, 'target');
   if (result.grounding && result.materialization === 'unavailable') {
     console.warn(
       `[run-grounding] downstream materialization unavailable ` +

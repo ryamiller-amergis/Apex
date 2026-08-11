@@ -403,6 +403,7 @@ describe('testCaseService', () => {
           { runType: 'chat', runId: 'source-thread', project: 'proj-alpha' },
           { runType: 'chat', runId: 'thread-tc', project: 'proj-alpha' },
           'user-1',
+          { deferMaterialization: true },
         );
         expect(isTestCaseWatcherActive('tc-new')).toBe(true);
 
