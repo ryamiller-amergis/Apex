@@ -286,20 +286,14 @@ export async function routePrdGenerationKickoff(opts: {
         ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
         return { ...prepared, targetGrounding };
       },
-      runInProcess: () => {
-        void sendMessage(
+      runInProcess: () =>
+        sendMessage(
           opts.threadId,
           kickoffMessage,
           undefined,
           [],
           { hidden: true },
-        ).catch((err: Error) => {
-          console.error(
-            `[prd] Failed to kick off generation (prdId=${opts.prdId}, threadId=${opts.threadId}):`,
-            err.message,
-          );
-        });
-      },
+        ),
       reportRecoverablePreparationFailure: reportPreparationFailure,
     });
   } catch {

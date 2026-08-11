@@ -14,6 +14,12 @@ import {
   type RunGroundingMaterializationResult,
 } from './runGroundingMaterializer';
 import { trackEvent } from './telemetry';
+import {
+  createRepositoryPreparationService,
+  repositoryPreparationService,
+  type RepositoryPreparationService,
+  type RepositoryPreparationTarget,
+} from './repositoryPreparationService';
 
 const BACKGROUND_WORKFLOW_FLAG = 'ai-runs-background';
 
@@ -26,6 +32,7 @@ export interface RecoverableBackgroundWorkflowFailure {
 
 export interface PreparedBackgroundWorkflowWorker {
   targetGrounding?: RunGrounding | null;
+  repository?: RepositoryPreparationTarget;
   threadWorkspacePath: string;
   prompt: string;
   model: string;
@@ -71,6 +78,7 @@ export interface BackgroundWorkflowRouterDependencies {
   resolveHardLimitMs?: () => number;
   trackEvent?: typeof trackEvent;
   now?: () => number;
+  repositoryPreparation?: Pick<RepositoryPreparationService, 'prepareWritable'>;
 }
 
 export interface BackgroundWorkflowRouter {
@@ -141,6 +149,15 @@ export function createBackgroundWorkflowRouter(
   const hardLimitMs = dependencies.resolveHardLimitMs ?? resolveAgentRunHardLimitMs;
   const emitEvent = dependencies.trackEvent ?? trackEvent;
   const now = dependencies.now ?? Date.now;
+  const repositoryPreparation =
+    dependencies.repositoryPreparation ??
+    (dependencies.materializeRunGroundingWithPath
+      ? createRepositoryPreparationService({
+          materializeWritable: materialize,
+          telemetry: emitEvent,
+          now,
+        })
+      : repositoryPreparationService);
 
   const safeTrack = (
     name: string,
@@ -187,16 +204,40 @@ export function createBackgroundWorkflowRouter(
       'in-process',
       'materialization-unavailable',
     );
-    await input.reportRecoverablePreparationFailure({
-      reason: 'materialization-unavailable',
+    safeTrack('background.route.fallback', {
       workflowClass: input.workflowClass,
       project: input.destinationRun.project,
-      runId: input.destinationRun.runId,
+      route: 'in-process',
+      reason,
+      outcome: 'started',
+    });
+    let execution: Promise<void>;
+    try {
+      execution = Promise.resolve(input.runInProcess());
+    } catch {
+      execution = Promise.reject(new Error('In-process fallback failed'));
+    }
+    void execution.catch(async () => {
+      safeTrack('background.route.fallback', {
+        workflowClass: input.workflowClass,
+        project: input.destinationRun.project,
+        route: 'in-process',
+        reason,
+        outcome: 'failed',
+      });
+      await Promise.resolve(
+        input.reportRecoverablePreparationFailure({
+          reason: 'materialization-unavailable',
+          workflowClass: input.workflowClass,
+          project: input.destinationRun.project,
+          runId: input.destinationRun.runId,
+        }),
+      ).catch(() => undefined);
     });
     return {
       route: 'in-process',
       reason: 'materialization-unavailable',
-      recoverable: true,
+      fallbackStarted: true,
     };
   };
 
@@ -225,10 +266,12 @@ export function createBackgroundWorkflowRouter(
 
     let materialized: RunGroundingMaterializationResult;
     try {
-      materialized = await materialize(
-        prepared.targetGrounding,
-        input.destinationRun,
-      );
+      materialized = await repositoryPreparation.prepareWritable({
+        destinationRun: input.destinationRun,
+        workflowClass: input.workflowClass,
+        targetGrounding: prepared.targetGrounding,
+        repository: prepared.repository,
+      });
     } catch {
       return recoverPreparation(
         input,
@@ -282,13 +325,22 @@ export function createBackgroundWorkflowRouter(
       threadId: input.threadId,
     };
     const timeoutAt = new Date(now() + hardLimitMs()).toISOString();
-    const enqueued = await enqueueRun({
-      threadId: input.threadId,
-      projectId: prepared.projectId,
-      snapshot,
-      timeoutAt,
-      runId: input.destinationRun.runId,
-    });
+    let enqueued: Awaited<ReturnType<EnqueueRun>>;
+    try {
+      enqueued = await enqueueRun({
+        threadId: input.threadId,
+        projectId: prepared.projectId,
+        snapshot,
+        timeoutAt,
+        runId: input.destinationRun.runId,
+      });
+    } catch {
+      return recoverPreparation(
+        input,
+        'worker-enqueue-failed',
+        preparationStartedAt,
+      );
+    }
     routeDecision(input, 'worker', 'materialized');
     return {
       route: 'worker',
@@ -316,7 +368,22 @@ export function createBackgroundWorkflowRouter(
       if (!enabled) {
         // @feature-flag:ai-runs-background disabled-start
         routeDecision(input, 'in-process', evaluationReason);
-        await input.runInProcess();
+        let execution: Promise<void>;
+        try {
+          execution = Promise.resolve(input.runInProcess());
+        } catch {
+          execution = Promise.reject(new Error('In-process workflow failed'));
+        }
+        void execution.catch(async () => {
+          await Promise.resolve(
+            input.reportRecoverablePreparationFailure({
+              reason: 'materialization-unavailable',
+              workflowClass: input.workflowClass,
+              project: input.destinationRun.project,
+              runId: input.destinationRun.runId,
+            }),
+          ).catch(() => undefined);
+        });
         const decision: WorkflowRouteDecision = {
           route: 'in-process',
           reason: 'flag-disabled',

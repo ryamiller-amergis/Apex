@@ -139,6 +139,7 @@ import {
   type CursorExecutionRun,
 } from './cursorExecutionCore';
 import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
+import type { RepositoryPreparationTarget } from './repositoryPreparationService';
 
 export { ThinkingPhaseCoalescer } from './cursorExecutionCore';
 
@@ -1973,6 +1974,7 @@ export interface PreparedBackgroundWorkflowTurn {
   skillPath: string;
   projectId: string;
   threadWorkspacePath: string;
+  repository: RepositoryPreparationTarget;
 }
 
 export function buildBackgroundWorkflowPrompt(
@@ -2006,6 +2008,12 @@ export async function prepareBackgroundWorkflowTurn(
     skillPath: kickoff.skillPath ?? '',
     projectId: kickoff.project,
     threadWorkspacePath: state.thread.workspaceDir,
+    repository: {
+      provider: kickoff.skillProvider ?? 'ado',
+      project: kickoff.project,
+      repo: kickoff.repo,
+      branch: kickoff.skillBranch ?? kickoff.branch ?? 'main',
+    },
   };
 }
 

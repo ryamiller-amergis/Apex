@@ -286,20 +286,14 @@ export async function routeDesignDocGenerationKickoff(opts: {
 
         return { ...prepared, targetGrounding };
       },
-      runInProcess: () => {
-        void sendMessage(
+      runInProcess: () =>
+        sendMessage(
           opts.threadId,
           opts.kickoffMessage,
           undefined,
           [],
           { hidden: true },
-        ).catch((err: Error) => {
-          console.error(
-            `[designDoc] Failed to kick off generation (designDocId=${opts.designDocId}, threadId=${opts.threadId}):`,
-            err.message,
-          );
-        });
-      },
+        ),
       reportRecoverablePreparationFailure: reportPreparationFailure,
     });
   } catch {

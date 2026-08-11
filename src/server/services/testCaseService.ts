@@ -823,7 +823,7 @@ export async function triggerTestCaseGeneration(
   // scratch workspace mid-prep and force workspace-preparation-failed.
   let routedSuccessfully = false;
   try {
-    const decision = await routeBackgroundWorkflow({
+    await routeBackgroundWorkflow({
       userId: actorUserId ?? prdRow.authorId,
       workflowClass: 'test-cases',
       destinationRun,
@@ -854,33 +854,17 @@ export async function triggerTestCaseGeneration(
         ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
         return { ...prepared, targetGrounding };
       },
-      runInProcess: () => {
-        void sendMessage(
+      runInProcess: () =>
+        sendMessage(
           thread.id,
           kickoffMessage,
           undefined,
           [],
           { hidden: true }
-        ).catch((err: Error) => {
-          console.error(
-            `[testCase] Failed to start generation (testCaseId=${testCaseRow.id}, threadId=${thread.id})`,
-            err
-          );
-          markTestCaseFailed(testCaseRow.id, prdId, thread.id).catch((markErr) => {
-            console.error(
-              `[testCase] Failed to mark generation failed (testCaseId=${testCaseRow.id})`,
-              markErr
-            );
-          });
-        });
-      },
+        ),
       reportRecoverablePreparationFailure: reportPreparationFailure,
     });
-    routedSuccessfully = !(
-      decision.route === 'in-process'
-      && 'recoverable' in decision
-      && decision.recoverable
-    );
+    routedSuccessfully = true;
   } catch {
     await reportPreparationFailure();
   }

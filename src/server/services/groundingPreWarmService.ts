@@ -284,7 +284,7 @@ export function createGroundingPreWarmService(
               sha: cachedSha,
               outcome,
             });
-          } catch (error) {
+          } catch {
             telemetry('grounding.shared.prewarm', {
               provider: target.provider,
               project: target.project,
@@ -293,7 +293,8 @@ export function createGroundingPreWarmService(
               sha: cachedSha,
               outcome: 'failed',
             });
-            throw error;
+            // Shared checkout prewarming is only an acceleration. The
+            // user-facing preparation path owns on-demand materialization.
           }
         }
 

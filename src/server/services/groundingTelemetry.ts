@@ -48,6 +48,7 @@ const SAFE_PROPERTY_KEYS = new Set([
   'runId',
   'runType',
   'selfCheckReason',
+  'workflowClass',
 ]);
 
 function isLocalPath(value: string): boolean {

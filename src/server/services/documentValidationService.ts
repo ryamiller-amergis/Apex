@@ -143,20 +143,14 @@ export async function autoStartDocumentValidation(adapter: DocumentValidationAda
         ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
         return { ...prepared, targetGrounding };
       },
-      runInProcess: () => {
-        void sendMessage(
+      runInProcess: () =>
+        sendMessage(
           thread.id,
           kickoffMessage,
           undefined,
           [],
           { hidden: true },
-        ).catch((err: Error) => {
-          console.error(
-            `[autoStartDocumentValidation] Failed to kick off validation agent (documentId=${adapter.getDocumentId()}, threadId=${thread.id}):`,
-            err.message,
-          );
-        });
-      },
+        ),
       reportRecoverablePreparationFailure: reportPreparationFailure,
     });
   } catch {

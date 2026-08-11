@@ -133,6 +133,7 @@ export function createRunGroundingMaterializer(
       );
     });
   const branchesByDestination = new Map<string, string>();
+  const materializations = new Map<string, Promise<MaterializationState>>();
   const createBundleStore =
     dependencies.createBundleStore ?? createGroundingBundleStore;
   const publishBundle =
@@ -245,23 +246,36 @@ export function createRunGroundingMaterializer(
 
   return async (grounding, destinationRun) => {
     const destination = opaqueDestination(dataRoot, grounding, destinationRun);
-    fs.mkdirSync(path.dirname(destination), { recursive: true });
-    branchesByDestination.set(destination, grounding.branch);
+    const existing = materializations.get(destination);
+    if (existing) return existing;
+
+    const pending = (async (): Promise<MaterializationState> => {
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      branchesByDestination.set(destination, grounding.branch);
+      try {
+        const result = await store.rehydrate(
+          {
+            provider: cacheProvider(grounding.provider),
+            project: grounding.project,
+            repo: grounding.repository,
+            sha: grounding.groundedSha,
+          },
+          destination
+        );
+        return result.status === 'materialized' ? 'materialized' : 'unavailable';
+      } catch {
+        return 'unavailable';
+      } finally {
+        branchesByDestination.delete(destination);
+      }
+    })();
+    materializations.set(destination, pending);
     try {
-      const result = await store.rehydrate(
-        {
-          provider: cacheProvider(grounding.provider),
-          project: grounding.project,
-          repo: grounding.repository,
-          sha: grounding.groundedSha,
-        },
-        destination
-      );
-      return result.status === 'materialized' ? 'materialized' : 'unavailable';
-    } catch {
-      return 'unavailable';
+      return await pending;
     } finally {
-      branchesByDestination.delete(destination);
+      if (materializations.get(destination) === pending) {
+        materializations.delete(destination);
+      }
     }
   };
 }
