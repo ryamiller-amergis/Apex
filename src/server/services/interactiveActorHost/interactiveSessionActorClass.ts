@@ -8,22 +8,24 @@
  * snapshot (never carried on the dispatch wire — same fence model as the
  * background worker), verifies the dispatch fence, then delegates to the shared
  * {@link InteractiveSessionActor} logic core. The logic core keeps the warm
- * grounded checkout and Cursor agent id keyed by `threadId`, so a single shared
- * instance correctly serves every actor in the process.
+ * grounded checkout and live Cursor Agent keyed by `threadId`, so a single
+ * shared instance correctly serves every actor in the process.
  *
  * Dependencies are injected via a module-level runtime because the Dapr SDK
  * constructs actors reflectively (`new Actor(daprClient, id)`); the host
  * entrypoint calls {@link setInteractiveActorRuntime} before `server.start()`.
  */
 import { AbstractActor } from '@dapr/dapr';
+import { INTERACTIVE_LANE } from '../../../shared/types/interactiveWorkflow';
 import type { AiRunsCallbackClient } from '../aiRunsWorker/callbackClient';
+import { workerTierTelemetry } from '../workerTierTelemetry';
 import type {
   InteractiveSessionActor,
   InteractiveTurnOutcome,
 } from './interactiveSessionActor';
 
 export interface InteractiveActorRuntime {
-  /** Shared logic core (thread-keyed warm checkout + agent-id cache). */
+  /** Shared logic core (thread-keyed warm checkout + agent cache). */
   logic: InteractiveSessionActor;
   /** Authenticated fenced callback client for bootstrap + ingest. */
   callback: AiRunsCallbackClient;
@@ -58,11 +60,42 @@ export class InteractiveSessionActorImpl
       throw new Error('Interactive actor runtime is not initialized');
     }
 
+    const receiptAt = Date.now();
+    const telemetryContext = {
+      runId: payload.runId,
+      dispatchMessageId: payload.dispatchMessageId,
+      lane: INTERACTIVE_LANE,
+    };
+
     // Bootstrap precedes any project-scoped work (auth + exact dispatch fence).
+    const bootstrapStartedAt = Date.now();
+    try {
+      workerTierTelemetry.interactiveStage(
+        telemetryContext,
+        'actor_receipt',
+        Math.max(0, bootstrapStartedAt - receiptAt),
+      );
+    } catch {
+      // ignore
+    }
+
     const bootstrap = await active.callback.getBootstrap({
       runId: payload.runId,
       dispatchMessageId: payload.dispatchMessageId,
     });
+    try {
+      workerTierTelemetry.interactiveStage(
+        {
+          ...telemetryContext,
+          project: bootstrap.projectId,
+        },
+        'bootstrap',
+        Date.now() - bootstrapStartedAt,
+      );
+    } catch {
+      // ignore
+    }
+
     const snapshot = Object.freeze({ ...bootstrap.run.executionSnapshot });
 
     // A stale fence aborts before any warm-checkout access or ingest (BR-018).
@@ -83,6 +116,7 @@ export class InteractiveSessionActorImpl
       projectId: bootstrap.projectId,
       dispatchMessageId: payload.dispatchMessageId,
       snapshot,
+      cursorAgentId: bootstrap.cursorAgentId ?? null,
     });
   }
 }

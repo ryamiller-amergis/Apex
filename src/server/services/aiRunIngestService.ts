@@ -122,6 +122,20 @@ function sanitizeDetail(value: unknown): string | undefined {
   return sanitized || undefined;
 }
 
+/** Cursor agent ids are opaque SDK tokens — keep short and non-secret-looking. */
+const MAX_CURSOR_AGENT_ID_LENGTH = 128;
+
+function sanitizeCursorAgentId(value: unknown): string | null | undefined {
+  if (value === null) return null;
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > MAX_CURSOR_AGENT_ID_LENGTH) return undefined;
+  // Reject values that look like secrets / paths.
+  if (/[/\\]|[\s]/.test(trimmed)) return undefined;
+  return trimmed;
+}
+
 function emitWorkerTelemetry(emit: () => void): void {
   try {
     emit();
@@ -182,6 +196,16 @@ function validateBody(body: AiRunIngestBody): void {
     ) {
       throw new AiRunIngestError(
         'artifactsFlushed must be a boolean',
+        'AI_RUN_VALIDATION',
+      );
+    }
+    if (
+      body.cursorAgentId !== undefined
+      && body.cursorAgentId !== null
+      && sanitizeCursorAgentId(body.cursorAgentId) === undefined
+    ) {
+      throw new AiRunIngestError(
+        'Invalid cursorAgentId',
         'AI_RUN_VALIDATION',
       );
     }
@@ -268,12 +292,19 @@ export async function getBootstrap(
     );
   }
 
+  let cursorAgentId: string | null | undefined;
+  if (existing.lane === INTERACTIVE_LANE) {
+    const { getCursorAgentId } = await import('./chatThreadRepository');
+    cursorAgentId = await getCursorAgentId(existing.threadId);
+  }
+
   return {
     projectId: existing.projectId,
     run: {
       ...mapRow(existing),
       executionSnapshot: existing.executionSnapshot,
     },
+    ...(cursorAgentId != null ? { cursorAgentId } : {}),
   };
 }
 
@@ -646,6 +677,15 @@ export async function ingest(
     await (
       dependencies.consumeCompletedArtifacts ?? consumeCompletedArtifacts
     )(existing.threadId, workspaceDir);
+
+    // Persist Cursor agent id for interactive restart recovery (best effort).
+    if (existing.lane === INTERACTIVE_LANE) {
+      const cursorAgentId = sanitizeCursorAgentId(body.cursorAgentId);
+      if (cursorAgentId !== undefined) {
+        const { setCursorAgentId } = await import('./chatThreadRepository');
+        await setCursorAgentId(existing.threadId, cursorAgentId).catch(() => {});
+      }
+    }
   }
 
   const envelope = buildTerminalEnvelope(

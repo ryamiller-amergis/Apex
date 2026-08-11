@@ -504,6 +504,7 @@ describe('post-commit publish and safe telemetry (TBI-002 DoD-0/DoD-4/S7)', () =
       interactiveShed: jest.fn(),
       interactiveActorHealth: jest.fn(),
       interactiveReplay: jest.fn(),
+      interactiveStage: jest.fn(),
     };
     const governor = createAdmissionGovernorService({
       store,
@@ -584,6 +585,7 @@ describe('post-commit publish and safe telemetry (TBI-002 DoD-0/DoD-4/S7)', () =
         interactiveShed: throwing,
         interactiveActorHealth: throwing,
         interactiveReplay: throwing,
+        interactiveStage: throwing,
       },
       notifyRunEvent: jest.fn().mockResolvedValue(undefined),
     });

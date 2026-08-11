@@ -3,6 +3,7 @@ import type {
   InteractiveInflightMeasurements,
   InteractiveReplayMeasurements,
   InteractiveShedMeasurements,
+  InteractiveStageName,
   WorkerCancellationMeasurements,
   WorkerDurationMeasurements,
   WorkerInflightMeasurements,
@@ -14,7 +15,10 @@ import type {
   WorkerTierSafePropertyKey,
   WorkerTierTelemetryContext,
 } from '../../shared/types/workerTierOperations';
-import { WORKER_TIER_TELEMETRY_EVENT_NAMES } from '../../shared/types/workerTierOperations';
+import {
+  isInteractiveStageName,
+  WORKER_TIER_TELEMETRY_EVENT_NAMES,
+} from '../../shared/types/workerTierOperations';
 import { trackEvent } from './telemetry';
 
 type EventEmitter = typeof trackEvent;
@@ -26,6 +30,7 @@ export const SAFE_PROPERTY_KEYS: ReadonlySet<WorkerTierSafePropertyKey> =
     'project',
     'lane',
     'terminalReason',
+    'stage',
   ]);
 
 const MAX_PROPERTY_LENGTH = 256;
@@ -75,6 +80,12 @@ export function sanitizeWorkerTierTelemetryProperties(
   const safe: Record<string, string> = {};
   for (const [key, value] of Object.entries(properties)) {
     if (!SAFE_PROPERTY_KEYS.has(key as WorkerTierSafePropertyKey)) continue;
+    if (key === 'stage') {
+      // Stage is allowlisted by name — drop anything outside INTERACTIVE_STAGE_NAMES.
+      if (!isInteractiveStageName(value)) continue;
+      safe.stage = value;
+      continue;
+    }
     const sanitized = sanitizeValue(value);
     if (sanitized !== null) safe[key] = sanitized;
   }
@@ -134,6 +145,11 @@ export interface WorkerTierTelemetry {
   interactiveReplay(
     context: WorkerTierTelemetryContext,
     replayedEvents: number,
+  ): void;
+  interactiveStage(
+    context: WorkerTierTelemetryContext,
+    stage: InteractiveStageName,
+    durationMs: number,
   ): void;
 }
 
@@ -274,6 +290,15 @@ export function createWorkerTierTelemetry(
       emit(
         WORKER_TIER_TELEMETRY_EVENT_NAMES.interactiveReplay,
         properties(context),
+        measurements,
+      );
+    },
+    interactiveStage(context, stage, durationMs) {
+      if (!isInteractiveStageName(stage)) return;
+      const measurements: WorkerDurationMeasurements = { durationMs };
+      emit(
+        WORKER_TIER_TELEMETRY_EVENT_NAMES.interactiveStage,
+        properties(context, { stage }),
         measurements,
       );
     },

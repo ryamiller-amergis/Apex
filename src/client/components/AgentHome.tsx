@@ -556,7 +556,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
       && m.toolName !== '_reasoning'
       && m.toolName !== '_thinking',
   });
-  const { streamingText, prdReady, isRunning, visibleMessages } = session;
+  const { streamingText, prdReady, isRunning, visibleMessages, progressLabel } = session;
 
   const visibleMessageIds = visibleMessages.map((m) => m.id);
   const highlightedMessageId = useFocusChatMessage(focusMessageId, visibleMessageIds);
@@ -1239,10 +1239,24 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
             })()}
 
             {isRunning && !streamingText && (
-              <div className={styles.agentRow}>
+              <div
+                className={styles.agentRow}
+                role="status"
+                aria-live="polite"
+                aria-label={progressLabel ?? 'Agent is processing'}
+                {...{ 'data-testid': 'agent-home-typing' }}
+              >
                 <div className={styles.agentAvatar}>AI</div>
                 <div className={`${styles.agentBubble} ${styles.typing}`}>
                   <span /><span /><span />
+                  {progressLabel && (
+                    <p
+                      className={styles.progressLabel}
+                      {...{ 'data-testid': 'agent-home-progress-label' }}
+                    >
+                      {progressLabel}
+                    </p>
+                  )}
                 </div>
               </div>
             )}

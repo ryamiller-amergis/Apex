@@ -55,6 +55,11 @@ export type AiRunTerminalIngest = AiRunIngestBase & {
   terminalReason?: AgentRunTerminalReason;
   artifactsFlushed?: boolean;
   event?: SseEvent;
+  /**
+   * Cursor SDK agent id to persist on the chat thread for restart recovery.
+   * Only applied on successful `completed` terminals for the interactive lane.
+   */
+  cursorAgentId?: string | null;
 };
 
 export type AiRunIngestBody =
@@ -95,6 +100,8 @@ export type AiRunBootstrapRun = Readonly<{
 export type AiRunBootstrapResponse = Readonly<{
   projectId: string;
   run: AiRunBootstrapRun;
+  /** Thread-persisted Cursor agent id for interactive resume after actor restart. */
+  cursorAgentId?: string | null;
 }>;
 
 export type AiRunIngestResponse = Readonly<{

@@ -1,0 +1,62 @@
+{
+  "$schema_comment": "Pre-baked Azure resource map for interactive chat troubleshooting. No secrets. Update when infra names change.",
+  "envs": {
+    "dev": {
+      "label": "Cloud DEV",
+      "subscriptionHint": "MSS-DevTest",
+      "publicHost": "https://app-scrum-dev.azurewebsites.net",
+      "appResourceGroup": "rg-scrum-dev",
+      "dataResourceGroup": "rg-scrum-dev",
+      "appName": "app-scrum-dev",
+      "slot": null,
+      "appInsightsName": "appi-app-scrum-dev",
+      "appInsightsResourceGroup": "rg-scrum-dev",
+      "postgresServer": null,
+      "postgresResourceGroup": "rg-scrum-dev",
+      "redisNameHint": "redis-apex-ai-dev",
+      "redisResourceGroup": "rg-scrum-dev",
+      "interactiveContainerApp": "ca-apex-ai-interactive-dev",
+      "interactiveResourceGroup": "rg-scrum-dev",
+      "needsPostgresFirewall": false,
+      "notes": "Cloud lower environment (deploy-dev-quick / pr-tests). Classic Redis is common here."
+    },
+    "stg": {
+      "label": "Staging slot (pre-prod)",
+      "subscriptionHint": "MSS-Production",
+      "publicHost": "https://app-apex-prd-staging.azurewebsites.net",
+      "appResourceGroup": "rg-apex-prd-app",
+      "dataResourceGroup": "rg-apex-prd-data",
+      "appName": "app-apex-prd",
+      "slot": "staging",
+      "appInsightsName": "appi-app-apex-prd",
+      "appInsightsResourceGroup": "rg-apex-prd-data",
+      "postgresServer": "psql-apex-eus2",
+      "postgresResourceGroup": "rg-apex-prd-data",
+      "redisNameHint": "redis-apex-ai-prd-v2",
+      "redisResourceGroup": "rg-apex-prd-app",
+      "interactiveContainerApp": "ca-apex-ai-interactive-prd",
+      "interactiveResourceGroup": "rg-apex-prd-app",
+      "needsPostgresFirewall": true,
+      "notes": "Staging deployment slot on the prod App Service. Shares prod Postgres + Redis v2. Prefer validating here before swap."
+    },
+    "prd": {
+      "label": "Production",
+      "subscriptionHint": "MSS-Production",
+      "publicHost": "https://apex.amergis.com",
+      "appResourceGroup": "rg-apex-prd-app",
+      "dataResourceGroup": "rg-apex-prd-data",
+      "appName": "app-apex-prd",
+      "slot": null,
+      "appInsightsName": "appi-app-apex-prd",
+      "appInsightsResourceGroup": "rg-apex-prd-data",
+      "postgresServer": "psql-apex-eus2",
+      "postgresResourceGroup": "rg-apex-prd-data",
+      "redisNameHint": "redis-apex-ai-prd-v2",
+      "redisResourceGroup": "rg-apex-prd-app",
+      "interactiveContainerApp": "ca-apex-ai-interactive-prd",
+      "interactiveResourceGroup": "rg-apex-prd-app",
+      "needsPostgresFirewall": true,
+      "notes": "Production slot. Custom domain apex.amergis.com. Managed Redis EnterpriseCluster (v2)."
+    }
+  }
+}

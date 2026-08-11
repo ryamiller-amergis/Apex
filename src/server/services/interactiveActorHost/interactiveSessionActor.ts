@@ -3,9 +3,9 @@
  *
  * One actor per `threadId` (single activation). Turn-based concurrency is
  * enforced by {@link PerThreadTurnQueue}: at most one in-flight turn per thread,
- * applied in order (BR-015). Each turn resumes the thread's Cursor session
- * (`Agent.resume` by `cursor_agent_id`) over a WARM grounded checkout reused
- * across turns and runs the shared execution core.
+ * applied in order (BR-015). Each turn reuses a live Cursor Agent when the
+ * bounded per-thread cache hits, otherwise creates/resumes by `cursor_agent_id`
+ * over a WARM grounded checkout reused across turns.
  *
  * TRANSPORT SPLIT (real-time refactor):
  *  - LIVE (ephemeral): token / tool / thinking / phase frames are published to
@@ -33,12 +33,13 @@ import type {
   SseEvent,
 } from '../../../shared/types/chat';
 import { INTERACTIVE_LANE } from '../../../shared/types/interactiveWorkflow';
+import type { InteractiveStageName } from '../../../shared/types/workerTierOperations';
 import {
   createCursorRunEventEnvelope,
   executeCursorExecutionCore,
   type CursorExecutionResult,
 } from '../cursorExecutionCore';
-import type { WorkerCursorExecution } from '../aiRunsWorker/cursorExecution';
+import type { WorkerCursorExecutionRun } from '../aiRunsWorker/cursorExecution';
 import {
   AiRunCallbackError,
   AiRunFenceConflictError,
@@ -48,10 +49,20 @@ import {
   createIncrementalTokenBatcher,
   INTERACTIVE_TOKEN_BATCH_MAX_BYTES,
 } from '../interactiveTokenBatcher';
+import type { InteractiveCursorAgentHandle } from './interactiveCursorExecution';
 import { createPerThreadTurnQueue, type PerThreadTurnQueue } from './perThreadTurnQueue';
 
 /** Default cadence for durable progress heartbeats (clocks + cancel signal). */
 const DEFAULT_HEARTBEAT_MS = 4_000;
+
+/** Idle TTL for the live per-thread Agent cache. */
+export const INTERACTIVE_AGENT_CACHE_IDLE_MS = 10 * 60_000;
+
+/** Hard cap on live Agent handles retained in this process. */
+export const INTERACTIVE_AGENT_CACHE_MAX = 32;
+
+/** Home-facing live phase detail before checkout / SDK work. */
+export const INTERACTIVE_STARTING_DETAIL = 'Starting agent…';
 
 /** Publish a live (ephemeral) run-event envelope to the Redis backplane. */
 export type LiveEnvelopePublisher = (
@@ -102,12 +113,15 @@ export interface InteractiveActorDependencies {
     threadId: string,
     snapshot: Readonly<ExecutionSnapshot>,
   ): Promise<WarmThreadCheckout>;
-  /** Create (first turn) or resume (subsequent turns) the Cursor execution. */
-  createExecution(
+  /**
+   * Acquire (create/resume) a live Cursor Agent without sending yet — allows
+   * the actor to retain the same Agent across serialized turns.
+   */
+  acquireAgent(
     snapshot: Readonly<ExecutionSnapshot>,
     checkout: WarmThreadCheckout,
     options: { resumeAgentId?: string | null },
-  ): Promise<WorkerCursorExecution & { agentId?: string | null }>;
+  ): Promise<InteractiveCursorAgentHandle>;
   /** Fenced runner ingest (reuses /api/internal/ai-runs/.../ingest). */
   postIngest(
     projectId: string,
@@ -127,10 +141,21 @@ export interface InteractiveActorDependencies {
   /** Durable progress heartbeat cadence in ms (default 4000). */
   heartbeatMs?: number;
   now?: () => number;
+  /** Idle TTL for cached Agents (default 10 minutes). */
+  agentCacheIdleMs?: number;
+  /** Max cached Agents in this process (default 32). */
+  agentCacheMax?: number;
 }
 
 export interface InteractiveSessionActor {
   handleTurn(request: InteractiveTurnRequest): Promise<InteractiveTurnOutcome>;
+  /** Dispose every warm checkout + cached Agent (process shutdown / deactivation). */
+  disposeAll(): Promise<void>;
+}
+
+interface CachedAgentEntry {
+  handle: InteractiveCursorAgentHandle;
+  lastUsedAt: number;
 }
 
 function isSuccessfulWait(result: CursorExecutionResult): boolean {
@@ -154,11 +179,77 @@ export function createInteractiveSessionActor(
   const publishLive: LiveEnvelopePublisher =
     dependencies.publishLive ?? (async () => {});
   const now = dependencies.now ?? Date.now;
+  const agentCacheIdleMs =
+    dependencies.agentCacheIdleMs ?? INTERACTIVE_AGENT_CACHE_IDLE_MS;
+  const agentCacheMax =
+    dependencies.agentCacheMax ?? INTERACTIVE_AGENT_CACHE_MAX;
 
   // Warm session cache keyed by threadId — single activation reuses the
-  // grounded checkout and Cursor agent id across turns.
+  // grounded checkout and live Cursor Agent across turns.
   const warmCheckouts = new Map<string, WarmThreadCheckout>();
+  const agentCache = new Map<string, CachedAgentEntry>();
   const agentIdByThread = new Map<string, string | null>();
+
+  const emitStage = (
+    context: {
+      runId: string;
+      dispatchMessageId: string;
+      project: string;
+      lane: string;
+    },
+    stage: InteractiveStageName,
+    startedAt: number,
+  ): void => {
+    try {
+      telemetry.interactiveStage(context, stage, Math.max(0, now() - startedAt));
+    } catch {
+      // Telemetry must never affect the turn.
+    }
+  };
+
+  const disposeAgentEntry = async (threadId: string): Promise<void> => {
+    const entry = agentCache.get(threadId);
+    if (!entry) return;
+    agentCache.delete(threadId);
+    await entry.handle.dispose().catch(() => {});
+  };
+
+  const disposeCheckout = async (threadId: string): Promise<void> => {
+    const checkout = warmCheckouts.get(threadId);
+    if (!checkout) return;
+    warmCheckouts.delete(threadId);
+    await checkout.dispose?.().catch(() => {});
+  };
+
+  const invalidateThread = async (threadId: string): Promise<void> => {
+    await disposeAgentEntry(threadId);
+    await disposeCheckout(threadId);
+  };
+
+  const evictExpiredAgents = async (): Promise<void> => {
+    const cutoff = now() - agentCacheIdleMs;
+    for (const [threadId, entry] of agentCache) {
+      if (entry.lastUsedAt < cutoff) {
+        await disposeAgentEntry(threadId);
+      }
+    }
+  };
+
+  const evictOverflowAgents = async (retainThreadId: string): Promise<void> => {
+    while (agentCache.size > agentCacheMax) {
+      let oldestThreadId: string | null = null;
+      let oldestAt = Number.POSITIVE_INFINITY;
+      for (const [threadId, entry] of agentCache) {
+        if (threadId === retainThreadId) continue;
+        if (entry.lastUsedAt < oldestAt) {
+          oldestAt = entry.lastUsedAt;
+          oldestThreadId = threadId;
+        }
+      }
+      if (!oldestThreadId) break;
+      await disposeAgentEntry(oldestThreadId);
+    }
+  };
 
   const runTurn = async (
     request: InteractiveTurnRequest,
@@ -174,12 +265,15 @@ export function createInteractiveSessionActor(
     let fenceConflict: AiRunFenceConflictError | undefined;
     let cancellationRequested = false;
     let firstTokenAt: number | null = null;
+    let firstSdkEventAt: number | null = null;
     const turnStartedAt = now();
     let sequence = 0;
-    let execution: (WorkerCursorExecution & { agentId?: string | null }) | undefined;
+    let agentHandle: InteractiveCursorAgentHandle | undefined;
+    let retainAgent = false;
+    let activeRun: WorkerCursorExecutionRun | undefined;
 
     const stopRun = async (): Promise<void> => {
-      if (execution?.run.cancel) await execution.run.cancel().catch(() => {});
+      if (activeRun?.cancel) await activeRun.cancel().catch(() => {});
     };
 
     // Serialized fenced ingest post; a 409 latches the fence conflict so no
@@ -236,6 +330,7 @@ export function createInteractiveSessionActor(
     const emitTokenBatch = async (text: string): Promise<void> => {
       if (firstTokenAt === null) {
         firstTokenAt = now();
+        emitStage(telemetryContext, 'first_token', turnStartedAt);
         try {
           telemetry.interactiveFirstToken(
             telemetryContext,
@@ -267,31 +362,83 @@ export function createInteractiveSessionActor(
     };
 
     try {
-      // Reuse or open the warm grounded checkout (no per-turn re-grounding).
+      // Immediate Home feedback before checkout / Cursor SDK work.
+      await publishLiveEvent({
+        type: 'phase',
+        phase: 'setup',
+        status: 'running',
+        detail: INTERACTIVE_STARTING_DETAIL,
+      });
+
+      await evictExpiredAgents();
+
+      // Invalidate warm checkout + Agent when the grounded workspace changes so
+      // tools never stay bound to a stale repository snapshot.
+      const existingCheckout = warmCheckouts.get(threadId);
+      if (
+        existingCheckout
+        && existingCheckout.workspacePath !== snapshot.workspaceRef
+      ) {
+        await invalidateThread(threadId);
+      }
+
       let checkout = warmCheckouts.get(threadId);
+      const checkoutStartedAt = now();
       if (!checkout) {
         checkout = await dependencies.openWarmCheckout(threadId, snapshot);
         warmCheckouts.set(threadId, checkout);
+        emitStage(telemetryContext, 'checkout_open', checkoutStartedAt);
+      } else {
+        emitStage(telemetryContext, 'checkout_hit', checkoutStartedAt);
       }
 
-      const resumeAgentId =
-        request.cursorAgentId ?? agentIdByThread.get(threadId) ?? null;
-      execution = await dependencies.createExecution(snapshot, checkout, {
-        resumeAgentId,
-      });
-      if (execution.agentId) agentIdByThread.set(threadId, execution.agentId);
+      const cached = agentCache.get(threadId);
+      const cacheCompatible =
+        cached
+        && cached.handle.model === snapshot.model
+        && cached.handle.workspaceRef === snapshot.workspaceRef;
+
+      const agentStartedAt = now();
+      if (cacheCompatible && cached) {
+        agentHandle = cached.handle;
+        emitStage(telemetryContext, 'agent_cache_hit', agentStartedAt);
+      } else {
+        if (cached) await disposeAgentEntry(threadId);
+        const resumeAgentId =
+          request.cursorAgentId ?? agentIdByThread.get(threadId) ?? null;
+        agentHandle = await dependencies.acquireAgent(snapshot, checkout, {
+          resumeAgentId,
+        });
+        emitStage(
+          telemetryContext,
+          resumeAgentId ? 'agent_resume' : 'agent_create',
+          agentStartedAt,
+        );
+      }
+
+      if (agentHandle.agentId) {
+        agentIdByThread.set(threadId, agentHandle.agentId);
+      }
+
+      const sendStartedAt = now();
+      activeRun = await agentHandle.send(snapshot.prompt);
+      emitStage(telemetryContext, 'send', sendStartedAt);
 
       let result: CursorExecutionResult;
       try {
         result = await executeCursorExecutionCore({
           snapshot,
-          run: execution.run,
+          run: activeRun,
           context: { runId, sourceInstance },
           sink: {
             publish: async (event: SseEvent) => {
               if (fenceConflict) throw fenceConflict;
               if (cancellationRequested) {
                 throw new InteractiveCancellationObservedError();
+              }
+              if (firstSdkEventAt === null) {
+                firstSdkEventAt = now();
+                emitStage(telemetryContext, 'first_sdk_event', turnStartedAt);
               }
               if (event.type === 'token') {
                 // Real-time: incremental flush to Redis (no NOTIFY cap).
@@ -345,25 +492,35 @@ export function createInteractiveSessionActor(
         });
       }
 
+      const cursorAgentId = agentHandle.agentId ?? agentIdByThread.get(threadId) ?? null;
       await post({
         dispatchMessageId,
         kind: 'terminal',
         status: 'completed',
         artifactsFlushed: true,
+        cursorAgentId,
       });
       // Live terminal so the socket clears the spinner immediately; the durable
       // `done` (agent_run_events) covers reconnect replay, and the client's
       // `/run-status` poll is the belt-and-suspenders safety net.
       await publishLiveEvent({ type: 'done', runId });
 
+      // Retain the live Agent for the next serialized turn on this thread.
+      agentCache.set(threadId, { handle: agentHandle, lastUsedAt: now() });
+      retainAgent = true;
+      await evictOverflowAgents(threadId);
+
       try {
         telemetry.interactiveTurn(telemetryContext, now() - turnStartedAt);
       } catch {
         // ignore
       }
-      return { status: 'completed', cursorAgentId: agentIdByThread.get(threadId) };
+      emitStage(telemetryContext, 'completion', turnStartedAt);
+      return { status: 'completed', cursorAgentId };
     } catch (error) {
+      retainAgent = false;
       if (fenceConflict || error instanceof AiRunFenceConflictError) {
+        await disposeAgentEntry(threadId);
         // A stale fence aborts before any further write (BR-018).
         return { status: 'fence-conflict' };
       }
@@ -372,6 +529,7 @@ export function createInteractiveSessionActor(
         error instanceof InteractiveCancellationObservedError ||
         isStopRaceIngestError(error)
       ) {
+        await disposeAgentEntry(threadId);
         await dependencies
           .postIngest(projectId, runId, {
             dispatchMessageId,
@@ -385,6 +543,7 @@ export function createInteractiveSessionActor(
         await publishLiveEvent({ type: 'done', runId }).catch(() => {});
         return { status: 'cancelled' };
       }
+      await disposeAgentEntry(threadId);
       // Live failure so the socket surfaces the error and stops spinning; the
       // durable failed terminal + `done` (below, via ingest) cover replay.
       await publishLiveEvent({
@@ -402,9 +561,10 @@ export function createInteractiveSessionActor(
       }).catch(() => {});
       throw error;
     } finally {
-      // Dispose the per-turn Cursor agent; the grounded checkout stays warm and
-      // is reused by the next turn on this thread (single activation).
-      await execution?.dispose().catch(() => {});
+      // Dispose only when we are not retaining a warm Agent for the next turn.
+      if (!retainAgent && agentHandle && !agentCache.has(threadId)) {
+        await agentHandle.dispose().catch(() => {});
+      }
     }
   };
 
@@ -412,6 +572,16 @@ export function createInteractiveSessionActor(
     handleTurn(request: InteractiveTurnRequest): Promise<InteractiveTurnOutcome> {
       // BR-015: serialize per thread — one in-flight turn, applied in order.
       return turnQueue.submit(request.threadId, () => runTurn(request));
+    },
+    async disposeAll(): Promise<void> {
+      const threadIds = new Set([
+        ...warmCheckouts.keys(),
+        ...agentCache.keys(),
+      ]);
+      for (const threadId of threadIds) {
+        await invalidateThread(threadId);
+      }
+      agentIdByThread.clear();
     },
   };
 }

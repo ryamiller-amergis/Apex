@@ -1,3 +1,27 @@
+/** Allowlisted interactive actor latency stages (never free-form). */
+export const INTERACTIVE_STAGE_NAMES = [
+  'actor_receipt',
+  'bootstrap',
+  'checkout_hit',
+  'checkout_open',
+  'agent_cache_hit',
+  'agent_create',
+  'agent_resume',
+  'send',
+  'first_sdk_event',
+  'first_token',
+  'completion',
+] as const;
+
+export type InteractiveStageName = (typeof INTERACTIVE_STAGE_NAMES)[number];
+
+export function isInteractiveStageName(value: unknown): value is InteractiveStageName {
+  return (
+    typeof value === 'string'
+    && (INTERACTIVE_STAGE_NAMES as readonly string[]).includes(value)
+  );
+}
+
 export const WORKER_TIER_TELEMETRY_EVENT_NAMES = {
   inflight: 'worker.inflight',
   queueDepth: 'worker.queue.depth',
@@ -15,6 +39,7 @@ export const WORKER_TIER_TELEMETRY_EVENT_NAMES = {
   interactiveShed: 'interactive.shed',
   interactiveActorHealth: 'interactive.actor.health',
   interactiveReplay: 'interactive.replay',
+  interactiveStage: 'interactive.stage',
 } as const;
 
 export type WorkerTierTelemetryEventName =
@@ -25,7 +50,8 @@ export type WorkerTierSafePropertyKey =
   | 'dispatchMessageId'
   | 'project'
   | 'lane'
-  | 'terminalReason';
+  | 'terminalReason'
+  | 'stage';
 
 export interface WorkerTierTelemetryEventProperties {
   runId?: string;
@@ -33,6 +59,8 @@ export interface WorkerTierTelemetryEventProperties {
   project?: string;
   lane?: string;
   terminalReason?: string;
+  /** Allowlisted InteractiveStageName only — sanitized at emit time. */
+  stage?: InteractiveStageName;
 }
 
 /**
