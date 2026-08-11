@@ -415,7 +415,7 @@ describe('testCaseService', () => {
       }
     });
 
-    it('does not start the output watcher when routing recovers as preparation failure', async () => {
+    it('cold external project: preparation failure starts in-process fallback and watcher', async () => {
       jest.useFakeTimers();
       const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-pilot-test-cases-recover-'));
       mockCreateThread.mockResolvedValue({ id: 'thread-tc', workspaceDir });
@@ -432,20 +432,13 @@ describe('testCaseService', () => {
         skillRepo: 'org/skills',
         testCaseSkillPath: '.cursor/skills/test-cases/SKILL.md',
       });
-      const deactivated = jest.fn();
-      mockRunGroundingService.persistThenMarkTerminalInactive.mockImplementationOnce(
-        async (_run, persist) => {
-          await persist();
-          deactivated();
-        },
-      );
       mockRouteBackgroundWorkflow.mockImplementationOnce(
-        async (input: { reportRecoverablePreparationFailure(): Promise<void> }) => {
-          await input.reportRecoverablePreparationFailure();
+        async (input: { runInProcess(): Promise<void> }) => {
+          await input.runInProcess();
           return {
             route: 'in-process',
             reason: 'materialization-unavailable',
-            recoverable: true,
+            fallbackStarted: true,
           };
         },
       );
@@ -457,16 +450,9 @@ describe('testCaseService', () => {
           (chain) => chain.set.mock.calls.some(
             ([payload]) => payload.status === 'failed',
           ),
-        )).toBe(true);
-        const failedUpdate = mockUpdateChains.find(
-          (chain) => chain.set.mock.calls.some(
-            ([payload]) => payload.status === 'failed',
-          ),
-        );
-        expect(failedUpdate?.where.mock.invocationCallOrder[0])
-          .toBeLessThan(deactivated.mock.invocationCallOrder[0]);
-        expect(mockSendMessage).not.toHaveBeenCalled();
-        expect(isTestCaseWatcherActive('tc-new')).toBe(false);
+        )).toBe(false);
+        expect(mockSendMessage).toHaveBeenCalledTimes(1);
+        expect(isTestCaseWatcherActive('tc-new')).toBe(true);
 
         mockDb.query.testCases.findFirst.mockResolvedValue(null);
         jest.advanceTimersByTime(5_000);
@@ -476,7 +462,7 @@ describe('testCaseService', () => {
       }
     });
 
-    it('BR-008 / DoD-3: test-case preparation failure persists failure before deactivation', async () => {
+    it('marks test-case failed only after preparation and in-process fallback both fail', async () => {
       jest.useFakeTimers();
       const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-pilot-test-cases-recover-'));
       mockCreateThread.mockResolvedValue({ id: 'thread-tc', workspaceDir });
@@ -500,13 +486,21 @@ describe('testCaseService', () => {
           deactivated();
         },
       );
+      mockSendMessage.mockRejectedValueOnce(new Error('in-process unavailable'));
       mockRouteBackgroundWorkflow.mockImplementationOnce(
-        async (input: { reportRecoverablePreparationFailure(): Promise<void> }) => {
-          await input.reportRecoverablePreparationFailure();
+        async (input: {
+          runInProcess(): Promise<void>;
+          reportRecoverablePreparationFailure(): Promise<void>;
+        }) => {
+          try {
+            await input.runInProcess();
+          } catch {
+            await input.reportRecoverablePreparationFailure();
+          }
           return {
             route: 'in-process',
             reason: 'materialization-unavailable',
-            recoverable: true,
+            fallbackStarted: true,
           };
         },
       );
@@ -526,7 +520,7 @@ describe('testCaseService', () => {
         );
         expect(failedUpdate?.where.mock.invocationCallOrder[0])
           .toBeLessThan(deactivated.mock.invocationCallOrder[0]);
-        expect(mockSendMessage).not.toHaveBeenCalled();
+        expect(mockSendMessage).toHaveBeenCalledTimes(1);
 
         mockDb.query.testCases.findFirst.mockResolvedValue(null);
         jest.advanceTimersByTime(5_000);

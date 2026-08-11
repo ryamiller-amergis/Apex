@@ -15,7 +15,6 @@ import {
   type RunGroundingMaterializationResult,
 } from './runGroundingMaterializer';
 import {
-  runGroundingService,
   type ActivateRunGroundingsResult,
   type RunGroundingService,
 } from './runGroundingService';
@@ -136,7 +135,12 @@ export function createRepositoryPreparationService(
   const readCached = dependencies.readCachedOriginSha ?? readCachedOriginSha;
   const ensureCache = dependencies.ensureRepoCache ?? ensureRepoCache;
   const shared = dependencies.sharedReadCheckout ?? sharedReadCheckoutService;
-  const groundings = dependencies.groundingService ?? runGroundingService;
+  const activateGroundings =
+    dependencies.groundingService?.activateGroundings ??
+    (async (input: Parameters<GroundingDependency['activateGroundings']>[0]) => {
+      const { runGroundingService } = await import('./runGroundingService');
+      return runGroundingService.activateGroundings(input);
+    });
   const materializeWritable =
     dependencies.materializeWritable ?? materializeRunGroundingWithPath;
   const emit = dependencies.telemetry ?? trackEvent;
@@ -265,7 +269,7 @@ export function createRepositoryPreparationService(
         const repository = normalizePreparationRepository(input.repository);
         const sha = await resolveCurrentSha(repository);
         grounding = activatedTarget(
-          await groundings.activateGroundings({
+          await activateGroundings({
             run: input.destinationRun,
             target: {
               provider: groundingProvider(repository.provider),
@@ -285,7 +289,14 @@ export function createRepositoryPreparationService(
         input.destinationRun,
       );
       if (result.state !== 'materialized' || !result.workspacePath) {
-        throw new Error('Writable repository checkout is unavailable');
+        safeTrack({
+          workflowClass: input.workflowClass,
+          project: input.destinationRun.project,
+          mode: 'writable-run',
+          phase: 'failure',
+          reason: 'materialization-unavailable',
+        }, now() - startedAt);
+        return { ...result, grounding };
       }
       safeTrack({
         workflowClass: input.workflowClass,

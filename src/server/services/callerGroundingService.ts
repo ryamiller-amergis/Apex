@@ -263,7 +263,6 @@ export function createCallerGroundingService(
       groundingService: dependencies.groundingService,
       materializeWritable: dependencies.materialize,
       telemetry: dependencies.trackEvent,
-      now,
     });
   const telemetryContext = (input: StartCallerGroundingInput) => ({
     caller: input.caller,

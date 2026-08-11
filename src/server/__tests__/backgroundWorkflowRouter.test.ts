@@ -302,7 +302,7 @@ describe('background workflow routing', () => {
     ['missing grounding', null],
     ['inactive grounding', { ...targetGrounding, isActive: false }],
     ['wrong grounding role', { ...targetGrounding, repoRole: 'skill' as const }],
-  ])('AC-1 / VT-02 / DoD-2: %s is recoverable and never enqueues', async (_case, grounding) => {
+  ])('cold external project: %s falls back in-process and never enqueues', async (_case, grounding) => {
     const dependencies = makeDependencies();
     const input = makeInput({
       prepareWorker: jest.fn().mockResolvedValue({
@@ -320,20 +320,15 @@ describe('background workflow routing', () => {
     expect(decision).toEqual<WorkflowRouteDecision>({
       route: 'in-process',
       reason: 'materialization-unavailable',
-      recoverable: true,
+      fallbackStarted: true,
     });
-    expect(input.reportRecoverablePreparationFailure).toHaveBeenCalledWith({
-      reason: 'materialization-unavailable',
-      workflowClass: 'prd',
-      project: 'Apex',
-      runId: 'run-1',
-    });
-    expect(input.runInProcess).not.toHaveBeenCalled();
+    expect(input.runInProcess).toHaveBeenCalledTimes(1);
+    expect(input.reportRecoverablePreparationFailure).not.toHaveBeenCalled();
     expect(dependencies.materializeRunGroundingWithPath).not.toHaveBeenCalled();
     expect(dependencies.enqueue).not.toHaveBeenCalled();
   });
 
-  it('AC-1 / DoD-2: worker preparation throw is recoverable without enqueue or in-process execution', async () => {
+  it('cold external project: worker preparation throw starts in-process fallback', async () => {
     const dependencies = makeDependencies();
     const input = makeInput({
       prepareWorker: jest.fn().mockRejectedValue(
@@ -346,10 +341,10 @@ describe('background workflow routing', () => {
     expect(decision).toEqual<WorkflowRouteDecision>({
       route: 'in-process',
       reason: 'materialization-unavailable',
-      recoverable: true,
+      fallbackStarted: true,
     });
-    expect(input.reportRecoverablePreparationFailure).toHaveBeenCalledTimes(1);
-    expect(input.runInProcess).not.toHaveBeenCalled();
+    expect(input.reportRecoverablePreparationFailure).not.toHaveBeenCalled();
+    expect(input.runInProcess).toHaveBeenCalledTimes(1);
     expect(dependencies.materializeRunGroundingWithPath).not.toHaveBeenCalled();
     expect(dependencies.enqueue).not.toHaveBeenCalled();
   });
@@ -357,7 +352,7 @@ describe('background workflow routing', () => {
   it.each([
     ['returns unavailable', jest.fn().mockResolvedValue({ state: 'unavailable' })],
     ['throws', jest.fn().mockRejectedValue(new Error('checkout unavailable'))],
-  ])('AC-1 / VT-02 / DoD-2: materialization %s reports recoverable failure without enqueue', async (_case, materialize) => {
+  ])('cold external project: materialization %s starts fallback without enqueue', async (_case, materialize) => {
     const dependencies = makeDependencies({
       materializeRunGroundingWithPath: materialize,
     });
@@ -368,10 +363,10 @@ describe('background workflow routing', () => {
     expect(decision).toEqual<WorkflowRouteDecision>({
       route: 'in-process',
       reason: 'materialization-unavailable',
-      recoverable: true,
+      fallbackStarted: true,
     });
-    expect(input.reportRecoverablePreparationFailure).toHaveBeenCalledTimes(1);
-    expect(input.runInProcess).not.toHaveBeenCalled();
+    expect(input.reportRecoverablePreparationFailure).not.toHaveBeenCalled();
+    expect(input.runInProcess).toHaveBeenCalledTimes(1);
     expect(dependencies.prepareWorkspace).not.toHaveBeenCalled();
     expect(dependencies.enqueue).not.toHaveBeenCalled();
   });
@@ -387,11 +382,43 @@ describe('background workflow routing', () => {
     expect(decision).toEqual<WorkflowRouteDecision>({
       route: 'in-process',
       reason: 'materialization-unavailable',
-      recoverable: true,
+      fallbackStarted: true,
     });
-    expect(input.reportRecoverablePreparationFailure).toHaveBeenCalledTimes(1);
-    expect(input.runInProcess).not.toHaveBeenCalled();
+    expect(input.reportRecoverablePreparationFailure).not.toHaveBeenCalled();
+    expect(input.runInProcess).toHaveBeenCalledTimes(1);
     expect(dependencies.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('routes in-process when worker enqueue is unavailable', async () => {
+    const dependencies = makeDependencies({
+      enqueue: jest.fn().mockRejectedValue(new Error('worker unavailable')),
+    });
+    const input = makeInput();
+
+    const decision = await createBackgroundWorkflowRouter(dependencies).route(input);
+
+    expect(decision).toEqual<WorkflowRouteDecision>({
+      route: 'in-process',
+      reason: 'materialization-unavailable',
+      fallbackStarted: true,
+    });
+    expect(input.runInProcess).toHaveBeenCalledTimes(1);
+    expect(input.reportRecoverablePreparationFailure).not.toHaveBeenCalled();
+  });
+
+  it('marks terminal failure only after worker preparation and in-process fallback both fail', async () => {
+    const dependencies = makeDependencies();
+    const input = makeInput({
+      prepareWorker: jest.fn().mockRejectedValue(new Error('worker unavailable')),
+      runInProcess: jest.fn().mockRejectedValue(new Error('in-process unavailable')),
+    });
+
+    await createBackgroundWorkflowRouter(dependencies).route(input);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(input.runInProcess).toHaveBeenCalledTimes(1);
+    expect(input.reportRecoverablePreparationFailure).toHaveBeenCalledTimes(1);
   });
 
   it('VT-01 / VT-08: freezes the complete confidential snapshot only inside lifecycle enqueue', async () => {

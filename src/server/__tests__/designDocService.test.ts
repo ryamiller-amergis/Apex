@@ -456,21 +456,14 @@ describe('routeDesignDocGenerationKickoff', () => {
     expect(mockSendMessage).not.toHaveBeenCalled();
   });
 
-  it('BR-008 / DoD-3: design-doc preparation failure persists retryable state before deactivation', async () => {
-    const deactivated = jest.fn();
-    mockRunGroundingService.persistThenMarkTerminalInactive.mockImplementationOnce(
-      async (_run, persist) => {
-        await persist();
-        deactivated();
-      },
-    );
+  it('cold external project: design-doc preparation failure runs in-process and stays generating', async () => {
     mockRouteBackgroundWorkflow.mockImplementationOnce(
-      async (input: { reportRecoverablePreparationFailure(): Promise<void> }) => {
-        await input.reportRecoverablePreparationFailure();
+      async (input: { runInProcess(): Promise<void> }) => {
+        await input.runInProcess();
         return {
           route: 'in-process',
           reason: 'materialization-unavailable',
-          recoverable: true,
+          fallbackStarted: true,
         };
       },
     );
@@ -483,18 +476,15 @@ describe('routeDesignDocGenerationKickoff', () => {
       kickoffMessage: 'Generate design.',
     });
 
-    const updateResult = mockDb.update.mock.results[
-      mockDb.update.mock.results.length - 1
-    ].value;
-    expect(updateResult.set).toHaveBeenCalledWith(
-      expect.objectContaining({
-        status: 'generation_failed',
-        generationError: 'Generation could not be prepared. Retry to continue.',
-      }),
+    expect(mockRunGroundingService.persistThenMarkTerminalInactive)
+      .not.toHaveBeenCalled();
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      'thread-design',
+      'Generate design.',
+      undefined,
+      [],
+      { hidden: true },
     );
-    expect(updateResult.where.mock.invocationCallOrder[0])
-      .toBeLessThan(deactivated.mock.invocationCallOrder[0]);
-    expect(mockSendMessage).not.toHaveBeenCalled();
   });
 });
 

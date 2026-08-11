@@ -581,21 +581,14 @@ describe('routePrdGenerationKickoff', () => {
     expect(mockPrepareBackgroundWorkflowTurn).toHaveBeenCalledTimes(1);
   });
 
-  it('BR-008 / DoD-3: PRD preparation failure persists domain state before deactivation', async () => {
-    const deactivated = jest.fn();
-    mockRunGroundingService.persistThenMarkTerminalInactive.mockImplementationOnce(
-      async (_run, persist) => {
-        await persist();
-        deactivated();
-      },
-    );
+  it('cold external project: PRD worker preparation failure runs in-process and stays generating', async () => {
     mockRouteBackgroundWorkflow.mockImplementationOnce(
-      async (input: { reportRecoverablePreparationFailure(): Promise<void> }) => {
-        await input.reportRecoverablePreparationFailure();
+      async (input: { runInProcess(): Promise<void> }) => {
+        await input.runInProcess();
         return {
           route: 'in-process',
           reason: 'materialization-unavailable',
-          recoverable: true,
+          fallbackStarted: true,
         };
       },
     );
@@ -607,20 +600,15 @@ describe('routePrdGenerationKickoff', () => {
       threadId: 'thread-prd',
     });
 
-    const updateChain = mockDb.update.mock.results[
-      mockDb.update.mock.results.length - 1
-    ].value;
-    expect(updateChain.set).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'draft' }),
-    );
-    expect(updateChain.where.mock.invocationCallOrder[0])
-      .toBeLessThan(deactivated.mock.invocationCallOrder[0]);
     expect(mockRunGroundingService.persistThenMarkTerminalInactive)
-      .toHaveBeenCalledWith(
-        { runType: 'chat', runId: 'thread-prd', project: 'proj-alpha' },
-        expect.any(Function),
-      );
-    expect(mockSendMessage).not.toHaveBeenCalled();
+      .not.toHaveBeenCalled();
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      'thread-prd',
+      'Begin.',
+      undefined,
+      [],
+      { hidden: true },
+    );
   });
 });
 

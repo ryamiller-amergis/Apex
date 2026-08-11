@@ -137,7 +137,7 @@ describe('TBI-007 groundingPreWarmService', () => {
     }
   );
 
-  it('PLAN-S1-DoD-1 rejects shared materialization failure after preserving mirror and bundle behavior', async () => {
+  it('treats shared checkout prewarm failure as optional after mirror and bundle succeed', async () => {
     // Arrange
     const sha = 'b'.repeat(40);
     const refreshUnderLease = jest.fn().mockResolvedValue(undefined);
@@ -145,6 +145,7 @@ describe('TBI-007 groundingPreWarmService', () => {
     const materializeSharedCheckout = jest
       .fn()
       .mockRejectedValue(new Error('shared checkout unavailable'));
+    const telemetry = jest.fn();
     const service = createGroundingPreWarmService({
       withLease: jest.fn(async (_key, operation) =>
         operation({
@@ -160,16 +161,18 @@ describe('TBI-007 groundingPreWarmService', () => {
         .mockResolvedValueOnce(sha),
       publishBundle,
       materializeSharedCheckout,
-      telemetry: jest.fn(),
+      telemetry,
     });
 
     // Act / Assert
-    await expect(service.preWarm(target)).rejects.toThrow(
-      'shared checkout unavailable'
-    );
+    await expect(service.preWarm(target)).resolves.toBeUndefined();
     expect(refreshUnderLease).toHaveBeenCalledTimes(1);
     expect(publishBundle).toHaveBeenCalledTimes(1);
     expect(materializeSharedCheckout).toHaveBeenCalledTimes(1);
+    expect(telemetry).toHaveBeenCalledWith(
+      'grounding.shared.prewarm',
+      expect.objectContaining({ outcome: 'failed' }),
+    );
   });
 
   it('keeps a usable mirror warm when bundle publication fails', async () => {

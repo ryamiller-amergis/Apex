@@ -271,31 +271,24 @@ describe('autoStartDocumentValidation background routing', () => {
     );
   });
 
-  it('BR-008 / DoD-3: validation preparation failure persists reset before deactivation', async () => {
+  it('cold external project: validation preparation failure runs in-process and stays validating', async () => {
     const adapter = makeAdapter();
-    const deactivated = jest.fn();
-    mockRunGroundingService.persistThenMarkTerminalInactive.mockImplementationOnce(
-      async (_run, persist) => {
-        await persist();
-        deactivated();
-      },
-    );
     mockRouteBackgroundWorkflow.mockImplementationOnce(
-      async (input: { reportRecoverablePreparationFailure(): Promise<void> }) => {
-        await input.reportRecoverablePreparationFailure();
+      async (input: { runInProcess(): Promise<void> }) => {
+        await input.runInProcess();
         return {
           route: 'in-process',
           reason: 'materialization-unavailable',
-          recoverable: true,
+          fallbackStarted: true,
         };
       },
     );
 
     await autoStartDocumentValidation(adapter);
 
-    expect(adapter.updateDbForValidationError).toHaveBeenCalledTimes(1);
-    expect(adapter.updateDbForValidationError.mock.invocationCallOrder[0])
-      .toBeLessThan(deactivated.mock.invocationCallOrder[0]);
-    expect(agentSvc.sendMessage).not.toHaveBeenCalled();
+    expect(adapter.updateDbForValidationError).not.toHaveBeenCalled();
+    expect(mockRunGroundingService.persistThenMarkTerminalInactive)
+      .not.toHaveBeenCalled();
+    expect(agentSvc.sendMessage).toHaveBeenCalledTimes(1);
   });
 });
