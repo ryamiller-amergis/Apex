@@ -1307,10 +1307,16 @@ describe('document assistant MCP wiring', () => {
     };
     mockPgInsertMessage.mockClear();
     mockCallerGroundingStart.mockReset();
+    let markCheckoutReady!: () => void;
+    const checkoutReady = new Promise<void>((resolve) => {
+      markCheckoutReady = resolve;
+    });
+    const waitUntilReady = jest.fn(() => checkoutReady);
     mockCallerGroundingStart
       .mockResolvedValueOnce({
         mode: 'preparing',
         retryAfterMs: 1_000,
+        waitUntilReady,
         release: jest.fn().mockResolvedValue(undefined),
       })
       .mockResolvedValueOnce({
@@ -1339,7 +1345,10 @@ describe('document assistant MCP wiring', () => {
       const expectedRejection =
         expect(sending).rejects.toBe(stopAfterPromotion);
       await Promise.resolve();
-      await jest.advanceTimersByTimeAsync(1_000);
+      await jest.advanceTimersByTimeAsync(0);
+      expect(waitUntilReady).toHaveBeenCalledTimes(1);
+      markCheckoutReady();
+      await jest.advanceTimersByTimeAsync(0);
       await expectedRejection;
 
       expect(mockCallerGroundingStart).toHaveBeenCalledTimes(2);

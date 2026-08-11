@@ -152,6 +152,7 @@ const WORKSPACE_BASE = process.env.AI_PILOT_WORKSPACE_DIR
     : path.join(os.tmpdir(), 'ai-pilot-workspaces');
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const INTERVIEW_IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours
+const GROUNDING_PREPARATION_TIMEOUT_MS = 2 * 60 * 1000;
 // After this much thread inactivity, a resumed SDK session is likely cold and
 // prone to emitting zero events. Proactively recreate the agent (with history)
 // instead of resuming a stale session. Overridable for tests/tuning.
@@ -3606,7 +3607,7 @@ async function ensureThreadGrounding(
 async function waitForReadyThreadGrounding(
   state: ThreadState
 ): Promise<Exclude<CallerGroundingSelection, { mode: 'preparing' }>> {
-  const deadline = Date.now() + resolveInteractiveDispatchAttemptTimeoutMs();
+  const deadline = Date.now() + GROUNDING_PREPARATION_TIMEOUT_MS;
   let announcedPreparing = false;
 
   while (true) {
@@ -3635,9 +3636,12 @@ async function waitForReadyThreadGrounding(
         'Repository preparation timed out. Please retry this message.'
       );
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, Math.min(grounding.retryAfterMs, remainingMs));
+    const waitMs = Math.min(grounding.retryAfterMs, remainingMs);
+    const readiness = grounding.waitUntilReady?.();
+    const retryDelay = new Promise<void>((resolve) => {
+      setTimeout(resolve, waitMs);
     });
+    await (readiness ? Promise.race([readiness, retryDelay]) : retryDelay);
   }
 }
 

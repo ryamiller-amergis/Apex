@@ -84,6 +84,8 @@ export interface RemoteCallerGrounding {
 export interface PreparingCallerGrounding {
   mode: 'preparing';
   retryAfterMs: number;
+  /** Real checkout work started for this selection, if this instance owns it. */
+  waitUntilReady?(): Promise<void>;
   release(): Promise<void>;
 }
 
@@ -252,11 +254,28 @@ export function createCallerGroundingService(
     mode: 'remote',
     release: async () => undefined,
   });
-  const preparing = (): PreparingCallerGrounding => ({
-    mode: 'preparing',
-    retryAfterMs: 1_000,
-    release: async () => undefined,
-  });
+  const preparing = (
+    readiness?: Promise<unknown>
+  ): PreparingCallerGrounding => {
+    if (readiness) {
+      // A dispatch eligibility probe may not await this promise before the
+      // in-process turn takes over. Attach a rejection observer immediately so
+      // an early checkout failure never becomes an unhandled rejection.
+      void readiness.catch(() => undefined);
+    }
+    return {
+      mode: 'preparing',
+      retryAfterMs: 1_000,
+      ...(readiness
+        ? {
+            waitUntilReady: async () => {
+              await readiness;
+            },
+          }
+        : {}),
+      release: async () => undefined,
+    };
+  };
 
   const fallback = (
     input: StartCallerGroundingInput,
@@ -294,24 +313,34 @@ export function createCallerGroundingService(
       setMaterializationMode(existing ? 'warm' : 'cold');
 
       // @feature-flag:shared-readonly-grounding-checkout start winner=enabled
-      // Enabled read-only callers only consume already-ready shared snapshots.
-      // All probes are local; checkout creation is owned by the background
-      // pre-warmer so a request never fetches, clones, or materializes.
+      // Enabled read-only callers prefer already-ready shared snapshots. The
+      // background pre-warmer is the fast path; a cache miss starts real
+      // on-demand materialization so Home never waits on work nobody owns.
       let workspacePath: string | undefined;
       let sharedIdentity: SharedReadCheckoutIdentity | undefined;
       if (sharedReadOnlyEnabled) {
         // @feature-flag:shared-readonly-grounding-checkout enabled-start
-        let exactSha =
+        const exactSha =
           grounding && grounding.groundedSha.trim().length > 0
             ? grounding.groundedSha
             : null;
-        if (!grounding) {
-          exactSha = await dependencies.readCachedOriginSha({
-            provider: groundingProvider(input.repository.provider),
-            project: input.run.project,
-            repository: repo,
-            branch: input.repository.branch,
-          });
+        const latestSha =
+          (
+            await dependencies
+              .readCachedOriginSha({
+                provider: groundingProvider(input.repository.provider),
+                project: input.run.project,
+                repository: repo,
+                branch: input.repository.branch,
+              })
+              .catch(() => null)
+          )?.trim() || null;
+
+        if (!grounding && !latestSha) {
+          telemetry.phase(
+            telemetryContext(input),
+            'shared-checkout-cache-miss'
+          );
         }
 
         const identityFor = (sha: string): SharedReadCheckoutIdentity => ({
@@ -346,6 +375,35 @@ export function createCallerGroundingService(
             })
           );
         };
+        const prepareOnDemand = (
+          identity:
+            | SharedReadCheckoutIdentity
+            | Promise<SharedReadCheckoutIdentity>
+        ): PreparingCallerGrounding => {
+          setMaterializationMode('cold');
+          telemetry.phase(
+            telemetryContext(input),
+            'shared-checkout-on-demand-start'
+          );
+          const readiness = Promise.resolve(identity)
+            .then((resolvedIdentity) =>
+              dependencies.sharedReadCheckout.materialize(resolvedIdentity)
+            )
+            .then(() => {
+              telemetry.phase(
+                telemetryContext(input),
+                'shared-checkout-on-demand-ready'
+              );
+            })
+            .catch((error) => {
+              telemetry.failure(
+                telemetryContext(input),
+                'shared-checkout-on-demand-failed'
+              );
+              throw error;
+            });
+          return preparing(readiness);
+        };
 
         if (exactSha) {
           const exactIdentity = identityFor(exactSha);
@@ -362,6 +420,26 @@ export function createCallerGroundingService(
           }
         }
 
+        // A thread can carry an older pin while the mirror has advanced. Prefer
+        // the current ready SHA before falling back to older active pins.
+        if (!workspacePath && latestSha && latestSha !== exactSha) {
+          const latestIdentity = identityFor(latestSha);
+          const latestReady =
+            dependencies.sharedReadCheckout.getReady(latestIdentity);
+          if (latestReady) {
+            grounding = await pinSelectedSha(latestSha);
+            if (!grounding) return preparing();
+            dependencies.sharedReadCheckout.retain(latestIdentity);
+            sharedIdentity = latestIdentity;
+            workspacePath = latestReady.workspacePath;
+            setMaterializationMode('warm');
+            telemetry.phase(
+              telemetryContext(input),
+              'shared-checkout-latest-ready'
+            );
+          }
+        }
+
         if (!workspacePath) {
           const candidates = (
             await dependencies.groundingService.findActiveByRepoBranch({
@@ -375,7 +453,8 @@ export function createCallerGroundingService(
               (candidate) =>
                 candidate.repoRole === 'target' &&
                 candidate.groundedSha.trim().length > 0 &&
-                candidate.groundedSha !== exactSha
+                candidate.groundedSha !== exactSha &&
+                candidate.groundedSha !== latestSha
             )
             .sort(
               (left, right) =>
@@ -403,11 +482,27 @@ export function createCallerGroundingService(
         }
 
         if (!workspacePath) {
-          if (!grounding && exactSha) {
-            grounding = await pinSelectedSha(exactSha);
+          const shaToPrepare = latestSha ?? exactSha;
+          if (shaToPrepare) {
+            return prepareOnDemand(identityFor(shaToPrepare));
           }
-          telemetry.phase(telemetryContext(input), 'shared-checkout-preparing');
-          return preparing();
+
+          // No mirror exists yet. Clone/refresh it now, then materialize the
+          // returned SHA directly into the shared Azure Files checkout root.
+          const identity = dependencies
+            .ensureRepoCache({
+              provider: input.repository.provider,
+              project: input.run.project,
+              repo,
+              branch: input.repository.branch,
+            })
+            .then((cache) => {
+              if (cache.mirrorHit !== undefined) {
+                telemetry.mirror(telemetryContext(input), cache.mirrorHit);
+              }
+              return identityFor(cache.baseSha);
+            });
+          return prepareOnDemand(identity);
         }
         // @feature-flag:shared-readonly-grounding-checkout enabled-end
       }

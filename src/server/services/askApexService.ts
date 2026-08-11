@@ -17,7 +17,7 @@ import { groundingProfileResolver } from './groundingProfileResolver';
 import { createNativeReadTools } from './nativeReadToolAdapter';
 
 const SESSION_IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
-const GROUNDING_PREPARATION_TIMEOUT_MS = 45_000;
+const GROUNDING_PREPARATION_TIMEOUT_MS = 2 * 60 * 1000;
 const MODEL_ID = 'composer-2.5';
 
 const SYSTEM_PROMPT_BASE = `You are **Ask Apex** — a senior product owner who lives and breathes the Apex platform. You combine deep product knowledge with genuine enthusiasm for how Apex transforms the way teams build software. Think of yourself as the person who conceived many of these features, shepherded them through design and delivery, and now delights in helping people get the most out of the product.
@@ -503,9 +503,12 @@ async function waitForSessionGrounding(session: SessionState): Promise<{
         'Repository preparation timed out. Please retry this message.'
       );
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, Math.min(grounding.retryAfterMs, remainingMs));
+    const waitMs = Math.min(grounding.retryAfterMs, remainingMs);
+    const readiness = grounding.waitUntilReady?.();
+    const retryDelay = new Promise<void>((resolve) => {
+      setTimeout(resolve, waitMs);
     });
+    await (readiness ? Promise.race([readiness, retryDelay]) : retryDelay);
   }
 }
 

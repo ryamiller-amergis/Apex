@@ -1252,13 +1252,16 @@ describe('Bundle B fast shared grounding selection', () => {
     expect(deps.materialize).not.toHaveBeenCalled();
   });
 
-  it('PLAN-S2-AC-2 Given no ready checkout, When starting, Then returns preparing without network, materialization, or native evaluation', async () => {
+  it('PLAN-S2-AC-2 Given no ready checkout, When starting, Then starts shared materialization without pinning early', async () => {
     // Given
     const deps = sharedDeps({
       isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(true),
       sharedReadCheckout: {
         getReady: jest.fn().mockReturnValue(null),
-        materialize: jest.fn(),
+        materialize: jest.fn().mockResolvedValue({
+          workspacePath: SHARED_PATH,
+          outcome: 'materialized',
+        }),
         retain: jest.fn(),
         releaseRef: jest.fn(),
       },
@@ -1275,13 +1278,67 @@ describe('Bundle B fast shared grounding selection', () => {
     expect(selected).toMatchObject({
       mode: 'preparing',
       retryAfterMs: expect.any(Number),
+      waitUntilReady: expect.any(Function),
       release: expect.any(Function),
     });
+    if (selected.mode === 'preparing') {
+      await selected.waitUntilReady?.();
+    }
     expect(selected.mode).not.toBe('remote');
     expect(deps.ensureRepoCache).not.toHaveBeenCalled();
-    expect(deps.sharedReadCheckout.materialize).not.toHaveBeenCalled();
+    expect(deps.sharedReadCheckout.materialize).toHaveBeenCalledWith({
+      provider: 'github',
+      project: 'Apex',
+      repo: 'AI-Pilot',
+      branch: 'main',
+      sha: grounding.groundedSha,
+    });
     expect(deps.materialize).not.toHaveBeenCalled();
     expect(deps.evaluateNativeReadCapability).not.toHaveBeenCalled();
+  });
+
+  it('Given no mirror or checkout, When Home starts, Then clones the mirror and materializes its SHA on demand', async () => {
+    // Given
+    const deps = sharedDeps({
+      readCachedOriginSha: jest.fn().mockResolvedValue(null),
+      sharedReadCheckout: {
+        getReady: jest.fn().mockReturnValue(null),
+        materialize: jest.fn().mockResolvedValue({
+          workspacePath: SHARED_PATH,
+          outcome: 'materialized',
+        }),
+        retain: jest.fn(),
+        releaseRef: jest.fn(),
+      },
+    });
+    jest.mocked(deps.groundingService.getGroundings).mockResolvedValue([]);
+    jest
+      .mocked(deps.groundingService.findActiveByRepoBranch)
+      .mockResolvedValue([]);
+    const service = createCallerGroundingService(deps);
+
+    // When
+    const selected = await service.start(startArgs);
+    expect(selected.mode).toBe('preparing');
+    if (selected.mode === 'preparing') {
+      await selected.waitUntilReady?.();
+    }
+
+    // Then
+    expect(deps.ensureRepoCache).toHaveBeenCalledWith({
+      provider: 'github',
+      project: 'Apex',
+      repo: 'AI-Pilot',
+      branch: 'main',
+    });
+    expect(deps.sharedReadCheckout.materialize).toHaveBeenCalledWith({
+      provider: 'github',
+      project: 'Apex',
+      repo: 'AI-Pilot',
+      branch: 'main',
+      sha: grounding.groundedSha,
+    });
+    expect(deps.groundingService.activateGroundings).not.toHaveBeenCalled();
   });
 
   it('PLAN-S2-AC-3 Given shared grounding is intentionally disabled, When starting, Then preserves per-run behavior', async () => {
