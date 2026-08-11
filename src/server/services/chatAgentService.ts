@@ -3898,6 +3898,19 @@ export async function sendMessage(
     calendarSessionId,
     restrictRepoSearch: state.isInterviewThread,
   });
+
+  // FEAT-003: live linked-context materialization (fail-open; never blocks the turn).
+  // Dynamic import avoids a circular dependency through designModuleService.
+  const { materializeLinkedContextForInterviewThread } = await import(
+    './linkedContextMaterializerService'
+  );
+  await materializeLinkedContextForInterviewThread({
+    threadId,
+    workspaceDir: state.thread.workspaceDir,
+    userId: state.thread.userId,
+    isInterviewThread: state.isInterviewThread,
+  });
+
   const agentWorkspaceDir = state.thread.workspaceDir;
   const localAgentOptions = repositoryRuntime.local;
   const mcpServers = repositoryRuntime.mcpServers;

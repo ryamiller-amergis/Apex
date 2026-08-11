@@ -263,6 +263,14 @@ export async function getModule(project: string, slug: string): Promise<DesignMo
   return row ? withStaleness(row) : null;
 }
 
+/** Load a Design Module by primary key (used by linked-context materialization). */
+export async function getModuleById(id: string): Promise<DesignModule | null> {
+  const row = await db.query.designModules.findFirst({
+    where: eq(designModules.id, id),
+  });
+  return row ? withStaleness(row) : null;
+}
+
 export async function createModule(
   input: CreateDesignModuleInput,
   actorId: string

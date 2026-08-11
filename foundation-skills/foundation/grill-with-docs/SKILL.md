@@ -7,6 +7,10 @@ description: Relentless interview that stress-tests a feature plan against the c
 
 Stress-test a feature plan against the project's documentation and codebase before PRD generation.
 
+## Linked context pre-read
+
+If `.ai-pilot/linked-context.md` is present in the workspace, read it before proceeding. Treat its provenance-labeled sections as authoritative project grounding. If it is absent, proceed normally.
+
 ## Pre-read (before the first question)
 
 Load the project adapter and read:

@@ -6,6 +6,13 @@ import { InterviewChatView } from '../InterviewChatView';
 // ── Module mocks ───────────────────────────────────────────────────────────────
 
 const mockLinkInterviewMutateAsync = jest.fn();
+const mockNavigate = jest.fn();
+const mockPersistStagedLinksMutateAsync = jest.fn();
+
+jest.mock('react-router-dom', () => ({
+  ...jest.requireActual('react-router-dom'),
+  useNavigate: () => mockNavigate,
+}));
 
 jest.mock('../../hooks/useAppShell', () => ({
   useAppShell: jest.fn(() => ({
@@ -20,6 +27,60 @@ jest.mock('../../hooks/useFeatureRequests', () => ({
   useLinkFeatureRequestInterview: () => ({
     mutateAsync: mockLinkInterviewMutateAsync,
   }),
+}));
+
+jest.mock('../../hooks/useLinkedContext', () => ({
+  usePersistStagedLinks: () => ({
+    mutateAsync: mockPersistStagedLinksMutateAsync,
+  }),
+}));
+
+jest.mock('../LinkedContextPicker', () => ({
+  LinkedContextPicker: ({
+    mode,
+    project,
+    stagedSelections = [],
+    onStagedSelectionsChange,
+    onClose,
+  }: {
+    mode: string;
+    project: string;
+    stagedSelections?: Array<{ type: 'adr' | 'design-module'; id: string; label: string }>;
+    onStagedSelectionsChange?: (
+      selections: Array<{ type: 'adr' | 'design-module'; id: string; label: string }>,
+    ) => void;
+    onClose?: () => void;
+  }) => (
+    <section
+      data-testid="mock-linked-context-picker"
+      data-mode={mode}
+      data-project={project}
+    >
+      <span>{stagedSelections.map((selection) => selection.label).join(', ')}</span>
+      <button
+        type="button"
+        onClick={() =>
+          onStagedSelectionsChange?.([
+            { type: 'adr', id: 'adr-invalid', label: 'Legacy ADR' },
+            {
+              type: 'design-module',
+              id: 'module-valid',
+              label: 'Payments Module',
+            },
+          ])
+        }
+      >
+        Stage linked context
+      </button>
+      <button
+        type="button"
+        onClick={onClose}
+        data-testid="linked-context-close"
+      >
+        Close
+      </button>
+    </section>
+  ),
 }));
 
 jest.mock('../../hooks/useChatThreads', () => ({
@@ -154,6 +215,10 @@ describe('NewInterviewCompose — title required', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockLinkInterviewMutateAsync.mockResolvedValue({ interviewId: 'iv-1' });
+    mockPersistStagedLinksMutateAsync.mockResolvedValue({
+      linkedContext: undefined,
+      failures: [],
+    });
 
     startChatMutateAsync = jest.fn().mockResolvedValue({ threadId: 'thread-abc' });
     (useStartChat as jest.Mock).mockReturnValue({
@@ -182,6 +247,35 @@ describe('NewInterviewCompose — title required', () => {
     renderCompose();
     expect(screen.getByLabelText(/title/i)).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/describe what you'd like/i)).toBeInTheDocument();
+  });
+
+  it('opens staged ADR and Design Module selection from a compact composer control', async () => {
+    renderCompose();
+
+    expect(screen.queryByTestId('mock-linked-context-picker')).not.toBeInTheDocument();
+    const trigger = screen.getByTestId('interview-compose-linked-context-trigger');
+    expect(trigger).toHaveAccessibleName('Select ADRs and Design Modules');
+
+    fireEvent.click(trigger);
+
+    const dialog = screen.getByTestId('interview-compose-linked-context-dialog');
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(screen.getByTestId('mock-linked-context-picker')).toHaveAttribute(
+      'data-mode',
+      'staged',
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('linked-context-close')).toHaveFocus(),
+    );
+
+    fireEvent.click(screen.getByTestId('linked-context-close'));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId('interview-compose-linked-context-dialog'),
+      ).not.toBeInTheDocument();
+      expect(trigger).toHaveFocus();
+    });
   });
 
   it('prefills the title and description from a feature request', () => {
@@ -396,6 +490,126 @@ describe('NewInterviewCompose — title required', () => {
     expect(messageCall).toBeDefined();
     const body = JSON.parse(messageCall![1].body);
     expect(body.text).toBe('Tell me about the architecture');
+  });
+
+  it('PBI-003 AC-0 / VT-05 Given staged links, When creation resolves, Then persistence finishes before the first message posts', async () => {
+    const operationOrder: string[] = [];
+    createInterviewMutateAsync.mockImplementation(async () => {
+      operationOrder.push('create');
+      return { interviewId: 'iv-1' };
+    });
+    mockPersistStagedLinksMutateAsync.mockImplementation(async () => {
+      operationOrder.push('persist');
+      return { linkedContext: undefined, failures: [] };
+    });
+    (global.fetch as jest.Mock).mockImplementation(async (url: string) => {
+      if (url.includes('/messages')) operationOrder.push('message');
+      return { ok: true, json: () => Promise.resolve({ ok: true }) };
+    });
+
+    renderCompose();
+    fireEvent.click(
+      screen.getByTestId('interview-compose-linked-context-trigger'),
+    );
+    expect(screen.getByTestId('mock-linked-context-picker')).toHaveAttribute(
+      'data-mode',
+      'staged',
+    );
+    expect(screen.getByTestId('mock-linked-context-picker')).toHaveAttribute(
+      'data-project',
+      'MaxView',
+    );
+    fireEvent.click(screen.getByText('Stage linked context'));
+    expect(
+      screen.getByTestId('interview-compose-linked-context-count'),
+    ).toHaveTextContent('2');
+    fireEvent.change(screen.getByLabelText(/title/i), {
+      target: { value: 'Grounded Interview' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/describe what you'd like/i), {
+      target: { value: 'Review the payment architecture' },
+    });
+    fireEvent.click(screen.getByLabelText('Start interview'));
+
+    await waitFor(() => expect(operationOrder).toEqual(['create', 'persist', 'message']));
+    expect(mockPersistStagedLinksMutateAsync).toHaveBeenCalledWith({
+      interviewId: 'iv-1',
+      selections: [
+        { type: 'adr', id: 'adr-invalid' },
+        { type: 'design-module', id: 'module-valid' },
+      ],
+    });
+  });
+
+  it('PBI-003 AC-0 / VT-05 Given no staged links, When creation resolves, Then no persistence request is made', async () => {
+    renderCompose();
+    fireEvent.change(screen.getByLabelText(/title/i), {
+      target: { value: 'Ungrounded Interview' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/describe what you'd like/i), {
+      target: { value: 'Review the architecture' },
+    });
+    fireEvent.click(screen.getByLabelText('Start interview'));
+
+    await waitFor(() =>
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/chat/threads/thread-abc/messages',
+        expect.any(Object),
+      ),
+    );
+    expect(mockPersistStagedLinksMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('PBI-003 AC-1 / VT-06 and AC-3 / VT-08 Given one staged link is rejected, When persistence completes, Then the created Interview opens with retry context and the first message still posts', async () => {
+    mockPersistStagedLinksMutateAsync.mockResolvedValue({
+      linkedContext: {
+        adrLinks: [],
+        designModuleLinks: [
+          {
+            designModuleId: 'module-valid',
+            name: 'Payments Module',
+          },
+        ],
+        count: 1,
+      },
+      failures: [
+        {
+          selection: { type: 'adr', id: 'adr-invalid' },
+          error: 'ADR is no longer accepted.',
+        },
+      ],
+    });
+
+    renderCompose();
+    fireEvent.click(
+      screen.getByTestId('interview-compose-linked-context-trigger'),
+    );
+    fireEvent.click(screen.getByText('Stage linked context'));
+    fireEvent.change(screen.getByLabelText(/title/i), {
+      target: { value: 'Partially Grounded Interview' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/describe what you'd like/i), {
+      target: { value: 'Review the payment architecture' },
+    });
+    fireEvent.click(screen.getByLabelText('Start interview'));
+
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalled());
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/chat/threads/thread-abc/messages',
+      expect.any(Object),
+    );
+    expect(mockNavigate).toHaveBeenCalledWith('/backlog/interview/iv-1', {
+      state: {
+        openLinkedContext: true,
+        linkedContextInitialErrorText: expect.stringMatching(
+          /Legacy ADR.*no longer accepted.*retry/i,
+        ),
+      },
+    });
+    const lastNavigationCall =
+      mockNavigate.mock.calls[mockNavigate.mock.calls.length - 1];
+    const navigationState = lastNavigationCall?.[1]?.state;
+    expect(navigationState).not.toHaveProperty('stagedSelections');
   });
 
   it('passes the selected model into the chat thread kickoff and first message', async () => {

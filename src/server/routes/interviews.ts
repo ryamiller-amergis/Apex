@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { requirePermission, requireGroupMembership } from '../middleware/rbac';
@@ -6,6 +6,7 @@ import { getDisplayName, getUserId } from '../utils/requestUser';
 import { getAdoTokenForUser } from '../services/adoUserToken';
 import { isAdoUserAuthError } from '../services/adoFactory';
 import { isAdminUser } from '../utils/rbacHelpers';
+import { isSuperAdminRequest } from '../utils/superAdmin';
 import { db } from '../db/drizzle';
 import { eq, and, isNull, sql } from 'drizzle-orm';
 import { designDocs as designDocsTable, chatThreads as chatThreadsTable, prds as prdsTable, reviewComments as reviewCommentsTable, designPrototypes as designPrototypesTable, interviews as interviewsTable, documentApproverAssignments } from '../db/schema';
@@ -19,6 +20,21 @@ import {
   updateInterviewStatus,
   updateInterviewTitle,
 } from '../services/interviewService';
+import {
+  addAdrLink,
+  addDesignModuleLink,
+  getLinkedContext,
+  listCandidates,
+  listProjectCandidates,
+  removeAdrLink,
+  removeDesignModuleLink,
+} from '../services/interviewLinkService';
+import { InterviewLinkError } from '../../shared/types/interviewLinks';
+import type {
+  AddAdrLinkRequest,
+  AddDesignModuleLinkRequest,
+  LinkCandidateType,
+} from '../../shared/types/interviewLinks';
 import { getActiveUsers } from '../services/rbacService';
 import {
   createPrd,
@@ -2440,6 +2456,199 @@ router.get('/approver-pool/:project/:documentType', requirePermission('interview
 });
 
 // ── Interview detail/update/delete ────────────────────────────────────────────
+
+function actorFromRequest(req: Request) {
+  return {
+    userId: getUserId(req),
+    isSuperAdmin: isSuperAdminRequest(req),
+  };
+}
+
+/** Map InterviewLinkError → stable HTTP status + human-readable message (no artifact bodies). */
+function sendInterviewLinkError(res: Response, err: InterviewLinkError): void {
+  const body = { error: err.message, code: err.code };
+  switch (err.code) {
+    case 'LINK_CAP_EXCEEDED':
+    case 'LINK_DUPLICATE':
+      res.status(409).json(body);
+      return;
+    case 'ADR_NOT_ACCEPTED':
+    case 'ARTIFACT_CROSS_PROJECT':
+    case 'INTERVIEW_NOT_IN_PROGRESS':
+      res.status(422).json(body);
+      return;
+    case 'PROJECT_FORBIDDEN':
+      res.status(403).json(body);
+      return;
+    case 'INTERVIEW_NOT_FOUND':
+    case 'ARTIFACT_NOT_FOUND':
+      res.status(404).json(body);
+      return;
+    default:
+      res.status(400).json(body);
+  }
+}
+
+// GET /link-candidates — kickoff candidates before an Interview id exists.
+router.get(
+  '/link-candidates',
+  requirePermission('interviews:manage'),
+  requireGroupMembership('BA', 'Manager', 'Product-Owner'),
+  async (req, res, next) => {
+    try {
+      const project = typeof req.query.project === 'string'
+        ? req.query.project.trim()
+        : '';
+      if (!project) {
+        res.status(400).json({ error: 'Query parameter project is required' });
+        return;
+      }
+
+      const typeRaw = String(req.query.type ?? '');
+      if (typeRaw !== 'adr' && typeRaw !== 'design-module') {
+        res.status(400).json({ error: 'Query parameter type must be "adr" or "design-module"' });
+        return;
+      }
+      const type = typeRaw as LinkCandidateType;
+      const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+      const offset = req.query.offset != null ? Number(req.query.offset) : undefined;
+      const limit = req.query.limit != null ? Number(req.query.limit) : undefined;
+      if (offset != null && (!Number.isFinite(offset) || offset < 0)) {
+        res.status(400).json({ error: 'offset must be a non-negative number' });
+        return;
+      }
+      if (limit != null && (!Number.isFinite(limit) || limit < 1)) {
+        res.status(400).json({ error: 'limit must be a positive number' });
+        return;
+      }
+
+      const page = await listProjectCandidates(
+        project,
+        actorFromRequest(req),
+        { type, search, offset, limit },
+      );
+      res.json(page);
+    } catch (err) {
+      if (err instanceof InterviewLinkError) {
+        sendInterviewLinkError(res, err);
+        return;
+      }
+      next(err);
+    }
+  },
+);
+
+// GET /:interviewId/links — current linked context (PBI-002)
+router.get('/:interviewId/links', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const model = await getLinkedContext(req.params.interviewId, actorFromRequest(req));
+    res.json(model);
+  } catch (err) {
+    if (err instanceof InterviewLinkError) {
+      sendInterviewLinkError(res, err);
+      return;
+    }
+    next(err);
+  }
+});
+
+// GET /:interviewId/link-candidates — paginated candidates (offset/limit, pageSize=50)
+router.get('/:interviewId/link-candidates', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const typeRaw = String(req.query.type ?? '');
+    if (typeRaw !== 'adr' && typeRaw !== 'design-module') {
+      res.status(400).json({ error: 'Query parameter type must be "adr" or "design-module"' });
+      return;
+    }
+    const type = typeRaw as LinkCandidateType;
+    const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+    const offset = req.query.offset != null ? Number(req.query.offset) : undefined;
+    const limit = req.query.limit != null ? Number(req.query.limit) : undefined;
+    if (offset != null && (!Number.isFinite(offset) || offset < 0)) {
+      res.status(400).json({ error: 'offset must be a non-negative number' });
+      return;
+    }
+    if (limit != null && (!Number.isFinite(limit) || limit < 1)) {
+      res.status(400).json({ error: 'limit must be a positive number' });
+      return;
+    }
+    const page = await listCandidates(req.params.interviewId, actorFromRequest(req), {
+      type,
+      search,
+      offset,
+      limit,
+    });
+    res.json(page);
+  } catch (err) {
+    if (err instanceof InterviewLinkError) {
+      sendInterviewLinkError(res, err);
+      return;
+    }
+    next(err);
+  }
+});
+
+router.post('/:interviewId/links/adr', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const body = req.body as AddAdrLinkRequest;
+    const result = await addAdrLink(req.params.interviewId, actorFromRequest(req), body);
+    res.json(result);
+  } catch (err) {
+    if (err instanceof InterviewLinkError) {
+      sendInterviewLinkError(res, err);
+      return;
+    }
+    next(err);
+  }
+});
+
+router.delete('/:interviewId/links/adr/:adrId', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const result = await removeAdrLink(req.params.interviewId, actorFromRequest(req), req.params.adrId);
+    res.json(result);
+  } catch (err) {
+    if (err instanceof InterviewLinkError) {
+      sendInterviewLinkError(res, err);
+      return;
+    }
+    next(err);
+  }
+});
+
+router.post('/:interviewId/links/design-module', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const body = req.body as AddDesignModuleLinkRequest;
+    const result = await addDesignModuleLink(req.params.interviewId, actorFromRequest(req), body);
+    res.json(result);
+  } catch (err) {
+    if (err instanceof InterviewLinkError) {
+      sendInterviewLinkError(res, err);
+      return;
+    }
+    next(err);
+  }
+});
+
+router.delete(
+  '/:interviewId/links/design-module/:designModuleId',
+  requirePermission('interviews:manage'),
+  async (req, res, next) => {
+    try {
+      const result = await removeDesignModuleLink(
+        req.params.interviewId,
+        actorFromRequest(req),
+        req.params.designModuleId,
+      );
+      res.json(result);
+    } catch (err) {
+      if (err instanceof InterviewLinkError) {
+        sendInterviewLinkError(res, err);
+        return;
+      }
+      next(err);
+    }
+  },
+);
 
 router.get('/:id', requirePermission('interviews:view'), async (req, res, next) => {
   try {

@@ -77,6 +77,20 @@ jest.mock('../services/pgNotifyService', () => ({
   RUN_EVENT_SOURCE_INSTANCE: 'worker-a',
   notifyRunEvent: jest.fn(),
 }));
+jest.mock('../services/teamsBotService', () => ({
+  sendTeamsNotification: jest.fn().mockResolvedValue(undefined),
+  handleIncoming: jest.fn(),
+}));
+jest.mock('../services/linkedContextMaterializerService', () => ({
+  LINKED_CONTEXT_DOCUMENT_RELATIVE_PATH: '.ai-pilot/linked-context.md',
+  materializeLinkedContext: jest.fn().mockResolvedValue({
+    outcome: 'omitted',
+    adrCount: 0,
+    designModuleCount: 0,
+    staleAdrExcluded: 0,
+    durationMs: 0,
+  }),
+}));
 
 import {
   ThinkingPhaseCoalescer,

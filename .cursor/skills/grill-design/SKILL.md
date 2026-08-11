@@ -26,6 +26,10 @@ Load immediately when any of the following are true:
 
 ---
 
+## Linked context pre-read
+
+If `.ai-pilot/linked-context.md` is present in the workspace, read it before proceeding. Treat its provenance-labeled sections as authoritative project grounding. If it is absent, proceed normally.
+
 ## Phase 0 — Load the feature request
 
 ### If a feature request ID is provided:

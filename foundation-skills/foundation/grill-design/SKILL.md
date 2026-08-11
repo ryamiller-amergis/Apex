@@ -7,6 +7,10 @@ description: Technical design interview that takes a feature request or free-for
 
 Technical design interview: explore architecture, make hard choices explicit, and produce a kickoff transcript suitable for PRD generation.
 
+## Linked context pre-read
+
+If `.ai-pilot/linked-context.md` is present in the workspace, read it before proceeding. Treat its provenance-labeled sections as authoritative project grounding. If it is absent, proceed normally.
+
 ## When to load
 
 - The user wants to discuss technical architecture before writing a PRD.
