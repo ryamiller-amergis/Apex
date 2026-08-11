@@ -3249,6 +3249,28 @@ export async function reevaluateThreadGroundingForRecovery(
  */
 const INTERACTIVE_DISPATCH_URL_ENV = 'AI_RUNS_INTERACTIVE_DISPATCH_URL';
 
+/**
+ * Skills that write/read `.ai-pilot` kickoff + output files in
+ * `thread.workspaceDir` (injectKickoffFiles → poll status). The interactive
+ * actor lane runs against the shared grounding checkout and never sees those
+ * files, so these must stay on the in-process path.
+ */
+export function isInteractiveWorkspaceBoundSkill(
+  skillPath: string | null | undefined,
+): boolean {
+  const normalized = (skillPath ?? '').replace(/\\/g, '/').toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized.includes('walkthrough-') ||
+    normalized.includes('k6-load-test') ||
+    normalized.includes('/ui-lab/') ||
+    normalized.includes('design-module-') ||
+    normalized.includes('feature-request-analysis') ||
+    normalized.includes('issue-analysis') ||
+    normalized.includes('technical-analysis')
+  );
+}
+
 function resolveInteractiveWorkflowClass(
   state: ThreadState,
 ): InteractiveWorkflowClass {
@@ -3395,6 +3417,14 @@ async function tryDispatchInteractiveTurn(
       if (timedOut) return bypass('timeout-abort');
       if (!state || state.thread.status === 'running') {
         return bypass(!state ? 'thread-missing' : 'thread-already-running');
+      }
+      // Walkthrough smart-tagging / generation / discovery (and similar
+      // file-output skills) inject kickoff context into thread.workspaceDir and
+      // poll that same tree for `.ai-pilot/output/*`. Actor dispatch uses the
+      // shared grounding checkout instead, so candidates never arrive and the
+      // status poller never finds the artifact (prod Sync review failure).
+      if (isInteractiveWorkspaceBoundSkill(state.thread.kickoff.skillPath)) {
+        return bypass('workspace-bound-skill');
       }
       const userId = state.thread.userId;
       const project = state.thread.kickoff.project;

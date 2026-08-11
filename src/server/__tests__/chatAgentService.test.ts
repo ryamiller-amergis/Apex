@@ -157,6 +157,7 @@ import {
   buildAgentRecoveryContext,
   isDocumentAssistant,
   isRepositoryReadingChatCaller,
+  isInteractiveWorkspaceBoundSkill,
   resolveGroundingCallerKey,
   resumeOrCreateAgent,
   selectGroundingBoundaryRecreation,
@@ -1346,6 +1347,52 @@ describe('document assistant MCP wiring', () => {
     }
   });
 
+  it('keeps workspace-bound file-output skills on the in-process path when interactive is enabled', async () => {
+    const originalFetch = global.fetch;
+    process.env.AI_RUNS_INTERACTIVE_DISPATCH_URL = 'https://interactive.test';
+    process.env.CURSOR_API_KEY = 'test-key';
+    mockIsFeatureEnabled.mockImplementation(async (key: string) => key === 'ai-runs-interactive');
+    mockInteractiveWorkflowRoute.mockClear();
+    global.fetch = jest.fn() as unknown as typeof fetch;
+
+    // Short-circuit the in-process path after interactive bypass is decided.
+    const stopAfterBinding = new Error('stop after binding');
+    mockCallerGroundingStart.mockResolvedValue({
+      mode: 'remote' as const,
+      release: jest.fn().mockResolvedValue(undefined),
+    });
+    mockCallerGroundingSelectionToBinding.mockReturnValue({ mode: 'remote', sha: null });
+    mockEvaluateBindingContinuity.mockImplementation(() => {
+      throw stopAfterBinding;
+    });
+
+    const thread = await createThread(
+      'developer-1',
+      baseKickoff({
+        skillPath: '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+        freeformContext: '## Candidates\n[]',
+      }),
+      { skipAutoKickoff: true },
+    );
+
+    try {
+      await expect(sendMessage(thread.id, 'Begin.')).rejects.toBe(stopAfterBinding);
+      expect(mockInteractiveWorkflowRoute).not.toHaveBeenCalled();
+      expect(global.fetch).not.toHaveBeenCalled();
+    } finally {
+      global.fetch = originalFetch;
+      delete process.env.AI_RUNS_INTERACTIVE_DISPATCH_URL;
+      delete process.env.CURSOR_API_KEY;
+      mockIsFeatureEnabled.mockReset();
+      mockIsFeatureEnabled.mockResolvedValue(false);
+      mockInteractiveWorkflowRoute.mockReset();
+      await closeThread(thread.id);
+      mockCallerGroundingStart.mockReset();
+      mockCallerGroundingSelectionToBinding.mockReset();
+      mockEvaluateBindingContinuity.mockReset();
+    }
+  });
+
   it('AC-0 skips shared repository grounding for calendar-only assistants', () => {
     // Given the calendar assistant builds only its restricted calendar MCP server.
     const kickoff = baseKickoff({
@@ -1381,6 +1428,34 @@ describe('document assistant MCP wiring', () => {
     expect(isDocumentAssistant('design-doc')).toBe(true);
     expect(isDocumentAssistant('calendar-work-item')).toBe(false);
     expect(isDocumentAssistant(undefined)).toBe(false);
+  });
+
+  it('flags walkthrough and other file-output skills as interactive-ineligible', () => {
+    expect(
+      isInteractiveWorkspaceBoundSkill(
+        '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+      ),
+    ).toBe(true);
+    expect(
+      isInteractiveWorkspaceBoundSkill(
+        '.cursor/skills/walkthrough-generation/SKILL.md',
+      ),
+    ).toBe(true);
+    expect(
+      isInteractiveWorkspaceBoundSkill(
+        '.cursor/skills/walkthrough-anchor-discovery/SKILL.md',
+      ),
+    ).toBe(true);
+    expect(
+      isInteractiveWorkspaceBoundSkill('.cursor/skills/k6-load-test-generation/SKILL.md'),
+    ).toBe(true);
+    expect(
+      isInteractiveWorkspaceBoundSkill('.cursor/skills/design-module-scoping/SKILL.md'),
+    ).toBe(true);
+    expect(
+      isInteractiveWorkspaceBoundSkill('.cursor/skills/grill-with-docs/SKILL.md'),
+    ).toBe(false);
+    expect(isInteractiveWorkspaceBoundSkill(undefined)).toBe(false);
   });
 
   it('infers document assistant type from freeform context markers', () => {
