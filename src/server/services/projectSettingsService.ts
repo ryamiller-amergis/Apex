@@ -18,17 +18,49 @@ import type {
   ApproverPoolResponse,
   SkillProvider,
   PrototypeEngine,
+  RepositoryCheckoutStatus,
 } from '../../shared/types/projectSettings';
 import type { GroupWithMembers } from '../../shared/types/groups';
 import type { ApprovalMode } from '../../shared/types/approvals';
 import { emitGroundingActiveSetChanged } from './groundingMaintenanceEvents';
+import { isProjectRepositoryCheckoutReadinessEnabled } from './featureFlagService';
 
 function toSkillConfig(row: Record<string, unknown>): ProjectSkillConfig {
   return {
     ...row,
     approvalMode: row.approvalMode as ApprovalMode | undefined,
+    repositoryCheckoutStatus:
+      (row.repositoryCheckoutStatus as RepositoryCheckoutStatus | undefined) ??
+      'not_cloned',
   } as ProjectSkillConfig;
 }
+
+function repositoryIdentityChanged(
+  previous: {
+    skillProvider: string;
+    skillRepo: string;
+    skillBranch: string;
+  },
+  next: {
+    skillProvider: string;
+    skillRepo: string;
+    skillBranch: string;
+  },
+): boolean {
+  return (
+    previous.skillProvider !== next.skillProvider ||
+    previous.skillRepo.trim() !== next.skillRepo.trim() ||
+    previous.skillBranch.trim() !== next.skillBranch.trim()
+  );
+}
+
+const CHECKOUT_RESET = {
+  repositoryCheckoutStatus: 'not_cloned' as const,
+  repositoryCheckoutSha: null,
+  repositoryCheckoutError: null,
+  repositoryCheckoutStartedAt: null,
+  repositoryCheckoutCompletedAt: null,
+};
 
 /** Returns the **default** config for a project (back-compat for existing callers). */
 export async function getSkillConfig(
@@ -284,15 +316,37 @@ export async function upsertSkillConfig(
     }
 
     if (opts.id) {
+      const existingRows = await tx
+        .select()
+        .from(projectSkillSettings)
+        .where(eq(projectSkillSettings.id, opts.id))
+        .limit(1);
+      const existing = existingRows[0];
+      const resetCheckout =
+        existing &&
+        repositoryIdentityChanged(
+          {
+            skillProvider: existing.skillProvider,
+            skillRepo: existing.skillRepo,
+            skillBranch: existing.skillBranch,
+          },
+          {
+            skillProvider: values.skillProvider,
+            skillRepo: values.skillRepo,
+            skillBranch: values.skillBranch,
+          },
+        );
+
       const rows = await tx
         .update(projectSkillSettings)
-        .set(values)
+        .set(resetCheckout ? { ...values, ...CHECKOUT_RESET } : values)
         .where(eq(projectSkillSettings.id, opts.id))
         .returning();
       return rows[0];
     }
 
     // INSERT — if it's the first config for the project, force isDefault = true
+    // New configs start not_cloned via column default / explicit reset fields.
     const existing = await tx
       .select({ id: projectSkillSettings.id })
       .from(projectSkillSettings)
@@ -304,7 +358,7 @@ export async function upsertSkillConfig(
 
     const rows = await tx
       .insert(projectSkillSettings)
-      .values(values)
+      .values({ ...values, ...CHECKOUT_RESET })
       .returning();
     return rows[0];
   });
@@ -313,16 +367,72 @@ export async function upsertSkillConfig(
   const repository = opts.skillRepo.trim();
   const provider =
     (opts.skillProvider ?? 'ado') === 'github' ? 'github' : 'azure_devops';
-  emitGroundingActiveSetChanged({
-    provider,
-    project: opts.project,
-    repository:
-      provider === 'github'
-        ? repository.split('/').pop() || repository
-        : repository,
-    branch: opts.skillBranch.trim(),
-  });
+  // Deployment B: admin-managed checkouts do not need settings→prewarm. Skip
+  // the active-set emit when checkout readiness is ON for this project.
+  // @feature-flag:project-repository-checkout-readiness start winner=enabled
+  let checkoutReadinessEnabled = false;
+  try {
+    checkoutReadinessEnabled =
+      await isProjectRepositoryCheckoutReadinessEnabled({
+        userId: opts.updatedBy ?? 'system',
+        project: opts.project,
+        caller: 'project-settings',
+      });
+  } catch {
+    checkoutReadinessEnabled = false;
+  }
+  if (!checkoutReadinessEnabled) {
+    // @feature-flag:project-repository-checkout-readiness disabled-start
+    emitGroundingActiveSetChanged({
+      provider,
+      project: opts.project,
+      repository:
+        provider === 'github'
+          ? repository.split('/').pop() || repository
+          : repository,
+      branch: opts.skillBranch.trim(),
+    });
+    // @feature-flag:project-repository-checkout-readiness disabled-end
+  }
+  // @feature-flag:project-repository-checkout-readiness end
   return toSkillConfig(result);
+}
+
+/**
+ * Persist admin clone/refresh lifecycle fields for a skill-settings row.
+ * Used by projectRepositoryCheckoutService — not a public admin CRUD API.
+ */
+export async function updateRepositoryCheckoutState(
+  skillSettingsId: string,
+  state: {
+    status: RepositoryCheckoutStatus;
+    sha?: string | null;
+    error?: string | null;
+    startedAt?: string | null;
+    completedAt?: string | null;
+  },
+): Promise<ProjectSkillConfig | null> {
+  const rows = await db
+    .update(projectSkillSettings)
+    .set({
+      repositoryCheckoutStatus: state.status,
+      ...(state.sha !== undefined
+        ? { repositoryCheckoutSha: state.sha }
+        : {}),
+      ...(state.error !== undefined
+        ? { repositoryCheckoutError: state.error }
+        : {}),
+      ...(state.startedAt !== undefined
+        ? { repositoryCheckoutStartedAt: state.startedAt }
+        : {}),
+      ...(state.completedAt !== undefined
+        ? { repositoryCheckoutCompletedAt: state.completedAt }
+        : {}),
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(projectSkillSettings.id, skillSettingsId))
+    .returning();
+  return rows[0] ? toSkillConfig(rows[0]) : null;
 }
 
 export async function deleteSkillConfig(id: string): Promise<void> {

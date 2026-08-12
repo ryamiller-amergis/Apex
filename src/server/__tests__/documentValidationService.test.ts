@@ -187,6 +187,7 @@ describe('autoStartDocumentValidation background routing', () => {
     getDocumentId: () => 'prd-1',
     getProject: () => 'proj-alpha',
     getAuthorId: () => 'user-1',
+    getSkillSettingsId: () => 'prd-skill-settings',
     getSourceThreadId: () => 'thread-prd',
     getValidationThreadId: () => null,
     getStatus: () => 'draft',
@@ -239,6 +240,25 @@ describe('autoStartDocumentValidation background routing', () => {
       undefined,
       [],
       { hidden: true },
+    );
+  });
+
+  it('inherits parent skillSettingsId onto the validation thread', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      id: 'config-from-resolve',
+      skillRepo: 'org/skills',
+      skillBranch: 'main',
+    });
+    const adapter = makeAdapter();
+
+    await autoStartDocumentValidation(adapter);
+
+    expect(agentSvc.createThread).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        skillSettingsId: 'prd-skill-settings',
+      }),
+      { skipAutoKickoff: true },
     );
   });
 

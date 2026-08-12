@@ -40,6 +40,10 @@ import { ReviewCommentSidebar } from './ReviewCommentSidebar';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { useChatAttachments, formatAttachmentSize } from '../hooks/useChatAttachments';
 import { useSpeechInput } from '../hooks/useSpeechInput';
+import {
+  PROJECT_REPOSITORY_NOT_READY_MESSAGE,
+  useProjectRepositoryReadiness,
+} from '../hooks/useProjectRepositoryReadiness';
 import { parseAgentMessage, type ChoiceBlock } from '../utils/parseAgentMessage';
 import type { ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
 import styles from './InterviewChatView.module.css';
@@ -71,6 +75,7 @@ const NewAdrCompose: React.FC = () => {
   const { data: models = [] } = useAvailableModels();
   const startChat = useStartChat();
   const createAdr = useCreateAdr();
+  const repoReadiness = useProjectRepositoryReadiness(skillConfig?.id, selectedProject || null);
   const {
     attachments,
     attachmentError,
@@ -99,13 +104,22 @@ const NewAdrCompose: React.FC = () => {
 
   const handleStart = useCallback(() => {
     if (!title.trim() || (!input.trim() && attachments.length === 0) || !repo || pending) return;
+    if (!repoReadiness.isReady) {
+      setError(repoReadiness.message ?? PROJECT_REPOSITORY_NOT_READY_MESSAGE);
+      return;
+    }
     if (speech.isListening) speech.stop();
     setError(null);
     setShowReviewerModal(true);
-  }, [title, input, attachments.length, repo, pending, speech]);
+  }, [title, input, attachments.length, repo, pending, speech, repoReadiness.isReady, repoReadiness.message]);
 
   const handleCreateAdr = useCallback(async (reviewerIds: string[]) => {
     if (!title.trim() || (!input.trim() && attachments.length === 0) || !repo || pending) return;
+    if (!repoReadiness.isReady) {
+      setShowReviewerModal(false);
+      setError(repoReadiness.message ?? PROJECT_REPOSITORY_NOT_READY_MESSAGE);
+      return;
+    }
     setError(null);
     const kickoffPrompt = input.trim() || 'Please use the attached files as context.';
     try {
@@ -150,7 +164,7 @@ const NewAdrCompose: React.FC = () => {
       setShowReviewerModal(false);
       setError(caught instanceof Error ? caught.message : 'Failed to start ADR');
     }
-  }, [title, input, attachments, repo, pending, startChat, selectedProject, branch, skillConfig, model, createAdr, clearAttachments, navigate, queryClient]);
+  }, [title, input, attachments, repo, pending, startChat, selectedProject, branch, skillConfig, model, createAdr, clearAttachments, navigate, queryClient, repoReadiness.isReady, repoReadiness.message]);
 
   const handleAttachmentChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files) void addFiles(event.target.files);
@@ -272,7 +286,7 @@ const NewAdrCompose: React.FC = () => {
               className={styles.sendBtn}
               type="button"
               aria-label="Start ADR"
-              disabled={!title.trim() || (!input.trim() && attachments.length === 0) || !repo || pending}
+              disabled={!title.trim() || (!input.trim() && attachments.length === 0) || !repo || pending || !repoReadiness.isReady}
               onClick={() => void handleStart()}
               {...{ 'data-testid': 'adr-compose-start' }}
             >
@@ -281,6 +295,11 @@ const NewAdrCompose: React.FC = () => {
           </div>
           {speech.isListening && <div className={styles.speechStatus}>Listening… your speech is being transcribed.</div>}
         </div>
+        {!repoReadiness.isReady && repoReadiness.message && (
+          <div className={styles.composeError} {...{ 'data-testid': 'adr-compose-repo-not-ready' }}>
+            {repoReadiness.message}
+          </div>
+        )}
       </div>
       {showReviewerModal && (
         <AdrReviewerModal

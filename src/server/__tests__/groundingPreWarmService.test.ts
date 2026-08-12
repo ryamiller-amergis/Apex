@@ -1,4 +1,9 @@
 jest.mock('../db/drizzle', () => ({ db: {} }));
+jest.mock('../services/groundingImpactEvaluatorService', () => ({
+  groundingImpactEvaluatorService: {
+    enqueue: jest.fn(),
+  },
+}));
 jest.mock('../services/grounding/sharedReadCheckoutService', () => ({
   sharedReadCheckoutService: {
     materialize: jest.fn().mockResolvedValue({
@@ -6,6 +11,11 @@ jest.mock('../services/grounding/sharedReadCheckoutService', () => ({
       outcome: 'materialized',
     }),
   },
+}));
+jest.mock('../services/featureFlagService', () => ({
+  isProjectRepositoryCheckoutReadinessEnabledForProject: jest
+    .fn()
+    .mockResolvedValue(false),
 }));
 
 import type { PreWarmTarget } from '../../shared/types/runGrounding';
@@ -483,5 +493,31 @@ describe('TBI-007 groundingPreWarmService', () => {
         '/absolute.ts',
       ])
     );
+  });
+
+  it('S13: checkout readiness ON makes preWarm a no-op (no publish / refresh)', async () => {
+    const publishBundle = jest.fn();
+    const refreshUnderLease = jest.fn();
+    const materializeSharedCheckout = jest.fn();
+    const service = createGroundingPreWarmService({
+      isCheckoutReadinessEnabled: jest.fn().mockResolvedValue(true),
+      publishBundle,
+      refreshUnderLease,
+      materializeSharedCheckout,
+      withLease: jest.fn(async (_key, operation) =>
+        operation({
+          signal: { throwIfAborted: () => undefined },
+        } as never),
+      ),
+      wasRefreshedSince: jest.fn(),
+      readCachedSha: jest.fn(),
+      telemetry: jest.fn(),
+    });
+
+    await expect(service.preWarm(target)).resolves.toBeUndefined();
+
+    expect(publishBundle).not.toHaveBeenCalled();
+    expect(refreshUnderLease).not.toHaveBeenCalled();
+    expect(materializeSharedCheckout).not.toHaveBeenCalled();
   });
 });

@@ -10,6 +10,11 @@ import { resolveAgentRunHardLimitMs } from './agentRunReaperService';
 import { enqueue } from './agentRunLifecycleService';
 import { isFeatureEnabled } from './featureFlagService';
 import {
+  sharedReadCheckoutIdentityFromGrounding,
+  sharedReadCheckoutService,
+  type SharedReadCheckoutService,
+} from './grounding/sharedReadCheckoutService';
+import {
   materializeRunGroundingWithPath,
   type RunGroundingMaterializationResult,
 } from './runGroundingMaterializer';
@@ -22,6 +27,21 @@ import {
 } from './repositoryPreparationService';
 
 const BACKGROUND_WORKFLOW_FLAG = 'ai-runs-background';
+
+/** Generation workflows that reuse the interview's shared SHA checkout (no full clone). */
+const SHARED_READ_WORKFLOW_CLASSES: ReadonlySet<BackgroundWorkflowClass> = new Set([
+  'prd',
+  'design-doc',
+  'test-cases',
+]);
+
+/**
+ * Content-only scoring workflows (PRD + design-doc validation).
+ * Inputs live in `.ai-pilot/kickoff-context.md` — no project-repo checkout.
+ */
+const SCRATCH_ONLY_WORKFLOW_CLASSES: ReadonlySet<BackgroundWorkflowClass> = new Set([
+  'validation',
+]);
 
 export interface RecoverableBackgroundWorkflowFailure {
   reason: 'materialization-unavailable';
@@ -79,6 +99,11 @@ export interface BackgroundWorkflowRouterDependencies {
   trackEvent?: typeof trackEvent;
   now?: () => number;
   repositoryPreparation?: Pick<RepositoryPreparationService, 'prepareWritable'>;
+  sharedReadCheckout?: Pick<
+    SharedReadCheckoutService,
+    'getReady' | 'retain'
+  >;
+  clearGenerationOutput?: (threadWorkspacePath: string) => Promise<void>;
 }
 
 export interface BackgroundWorkflowRouter {
@@ -110,8 +135,12 @@ async function copyDirectoryContentsSafely(
 }
 
 /**
- * Idempotently overlays generation scratch inputs and outputs onto the pinned
- * checkout. Existing destination-only files are preserved for safe retries.
+ * Overlays generation scratch inputs onto the pinned writable checkout.
+ *
+ * Destination `.ai-pilot/output` is cleared first so leftover PRD/design-doc
+ * artifacts from a prior generation on a reused tree cannot contaminate the
+ * current run. Source files (kickoff transcript, context, then any fresh
+ * outputs already on the thread workspace) win after the clear.
  */
 export async function prepareBackgroundWorkflowWorkspace(
   threadWorkspacePath: string,
@@ -120,7 +149,26 @@ export async function prepareBackgroundWorkflowWorkspace(
   const source = path.resolve(threadWorkspacePath, '.ai-pilot');
   const destination = path.resolve(pinnedWorkspacePath, '.ai-pilot');
   if (source === destination) return;
+  const destinationOutput = path.join(destination, 'output');
+  await fs.rm(destinationOutput, { recursive: true, force: true });
   await copyDirectoryContentsSafely(source, destination);
+}
+
+/**
+ * Clears prior generation outputs on the thin thread workspace used when
+ * PRD/design-doc reuse the shared read checkout, or when validation runs
+ * scratch-only (kickoff-context only; no project-repo checkout).
+ */
+export async function clearBackgroundGenerationOutput(
+  threadWorkspacePath: string,
+): Promise<void> {
+  const outputDirectory = path.resolve(
+    threadWorkspacePath,
+    '.ai-pilot',
+    'output',
+  );
+  await fs.rm(outputDirectory, { recursive: true, force: true });
+  await fs.mkdir(outputDirectory, { recursive: true });
 }
 
 function isUsableTargetGrounding(
@@ -136,6 +184,18 @@ function isUsableTargetGrounding(
   );
 }
 
+function resolveReadySharedCheckoutPath(
+  grounding: RunGrounding,
+  shared: Pick<SharedReadCheckoutService, 'getReady' | 'retain'>,
+): string | null {
+  const ready = shared.getReady(
+    sharedReadCheckoutIdentityFromGrounding(grounding),
+  );
+  if (!ready?.workspacePath) return null;
+  shared.retain(sharedReadCheckoutIdentityFromGrounding(grounding));
+  return ready.workspacePath;
+}
+
 export function createBackgroundWorkflowRouter(
   dependencies: BackgroundWorkflowRouterDependencies = {},
 ): BackgroundWorkflowRouter {
@@ -145,10 +205,14 @@ export function createBackgroundWorkflowRouter(
     ?? materializeRunGroundingWithPath;
   const prepareWorkspace =
     dependencies.prepareWorkspace ?? prepareBackgroundWorkflowWorkspace;
+  const clearGenerationOutput =
+    dependencies.clearGenerationOutput ?? clearBackgroundGenerationOutput;
   const enqueueRun = dependencies.enqueue ?? enqueue;
   const hardLimitMs = dependencies.resolveHardLimitMs ?? resolveAgentRunHardLimitMs;
   const emitEvent = dependencies.trackEvent ?? trackEvent;
   const now = dependencies.now ?? Date.now;
+  const sharedReadCheckout =
+    dependencies.sharedReadCheckout ?? sharedReadCheckoutService;
   const repositoryPreparation =
     dependencies.repositoryPreparation ??
     (dependencies.materializeRunGroundingWithPath
@@ -256,6 +320,66 @@ export function createBackgroundWorkflowRouter(
       );
     }
 
+    // PRD / design-doc validation: score content from kickoff-context only.
+    // No grounding, shared checkout, or MaxView clone.
+    if (SCRATCH_ONLY_WORKFLOW_CLASSES.has(input.workflowClass)) {
+      try {
+        await clearGenerationOutput(prepared.threadWorkspacePath);
+      } catch {
+        return recoverPreparation(
+          input,
+          'workspace-preparation-failed',
+          preparationStartedAt,
+        );
+      }
+
+      const workspaceRef = prepared.threadWorkspacePath;
+      const materializationReason = 'scratch-only';
+      safeTrack(
+        'background.materialization.outcome',
+        {
+          workflowClass: input.workflowClass,
+          project: input.destinationRun.project,
+          route: 'worker',
+          reason: materializationReason,
+        },
+        { durationMs: Math.max(0, now() - preparationStartedAt) },
+      );
+
+      const snapshot: ExecutionSnapshot = {
+        prompt: prepared.prompt,
+        model: prepared.model,
+        workspaceRef,
+        workflowClass: input.workflowClass,
+        skillPath: prepared.skillPath,
+        projectId: prepared.projectId,
+        threadId: input.threadId,
+      };
+      const timeoutAt = new Date(now() + hardLimitMs()).toISOString();
+      let enqueued: Awaited<ReturnType<EnqueueRun>>;
+      try {
+        enqueued = await enqueueRun({
+          threadId: input.threadId,
+          projectId: prepared.projectId,
+          snapshot,
+          timeoutAt,
+          runId: input.destinationRun.runId,
+        });
+      } catch {
+        return recoverPreparation(
+          input,
+          'worker-enqueue-failed',
+          preparationStartedAt,
+        );
+      }
+      routeDecision(input, 'worker', materializationReason);
+      return {
+        route: 'worker',
+        workspacePath: workspaceRef,
+        runId: enqueued.runId,
+      };
+    }
+
     if (!isUsableTargetGrounding(prepared.targetGrounding, input.destinationRun)) {
       return recoverPreparation(
         input,
@@ -264,44 +388,81 @@ export function createBackgroundWorkflowRouter(
       );
     }
 
-    let materialized: RunGroundingMaterializationResult;
-    try {
-      materialized = await repositoryPreparation.prepareWritable({
-        destinationRun: input.destinationRun,
-        workflowClass: input.workflowClass,
-        targetGrounding: prepared.targetGrounding,
-        repository: prepared.repository,
-      });
-    } catch {
-      return recoverPreparation(
-        input,
-        'materialization-failed',
-        preparationStartedAt,
-      );
+    // PRD / design-doc / test-cases: reuse the interview's warm shared SHA tree.
+    // Thin writable cwd = thread workspace (.ai-pilot only). No MaxView clone.
+    let workspaceRef: string | undefined;
+    let checkoutRef: string | undefined;
+    let materializationReason = 'materialized';
+
+    if (SHARED_READ_WORKFLOW_CLASSES.has(input.workflowClass)) {
+      try {
+        const sharedPath = resolveReadySharedCheckoutPath(
+          prepared.targetGrounding,
+          sharedReadCheckout,
+        );
+        if (sharedPath) {
+          await clearGenerationOutput(prepared.threadWorkspacePath);
+          workspaceRef = prepared.threadWorkspacePath;
+          checkoutRef = sharedPath;
+          materializationReason = 'shared-read-checkout';
+          safeTrack(
+            'grounding.materialization.local-reuse',
+            {
+              workflowClass: input.workflowClass,
+              project: input.destinationRun.project,
+              source: 'shared-read-checkout',
+              outcome: 'thin-workspace',
+            },
+            { durationMs: Math.max(0, now() - preparationStartedAt) },
+          );
+        }
+      } catch {
+        // Fall through to the legacy writable clone path.
+      }
     }
 
-    if (
-      materialized.state !== 'materialized'
-      || !materialized.workspacePath
-    ) {
-      return recoverPreparation(
-        input,
-        'materialization-unavailable',
-        preparationStartedAt,
-      );
-    }
+    if (!workspaceRef) {
+      let materialized: RunGroundingMaterializationResult;
+      try {
+        materialized = await repositoryPreparation.prepareWritable({
+          destinationRun: input.destinationRun,
+          workflowClass: input.workflowClass,
+          targetGrounding: prepared.targetGrounding,
+          repository: prepared.repository,
+        });
+      } catch {
+        return recoverPreparation(
+          input,
+          'materialization-failed',
+          preparationStartedAt,
+        );
+      }
 
-    try {
-      await prepareWorkspace(
-        prepared.threadWorkspacePath,
-        materialized.workspacePath,
-      );
-    } catch {
-      return recoverPreparation(
-        input,
-        'workspace-preparation-failed',
-        preparationStartedAt,
-      );
+      if (
+        materialized.state !== 'materialized'
+        || !materialized.workspacePath
+      ) {
+        return recoverPreparation(
+          input,
+          'materialization-unavailable',
+          preparationStartedAt,
+        );
+      }
+
+      try {
+        await prepareWorkspace(
+          prepared.threadWorkspacePath,
+          materialized.workspacePath,
+        );
+      } catch {
+        return recoverPreparation(
+          input,
+          'workspace-preparation-failed',
+          preparationStartedAt,
+        );
+      }
+
+      workspaceRef = materialized.workspacePath;
     }
 
     safeTrack(
@@ -310,7 +471,7 @@ export function createBackgroundWorkflowRouter(
         workflowClass: input.workflowClass,
         project: input.destinationRun.project,
         route: 'worker',
-        reason: 'materialized',
+        reason: materializationReason,
       },
       { durationMs: Math.max(0, now() - preparationStartedAt) },
     );
@@ -318,7 +479,8 @@ export function createBackgroundWorkflowRouter(
     const snapshot: ExecutionSnapshot = {
       prompt: prepared.prompt,
       model: prepared.model,
-      workspaceRef: materialized.workspacePath,
+      workspaceRef,
+      ...(checkoutRef ? { checkoutRef } : {}),
       workflowClass: input.workflowClass,
       skillPath: prepared.skillPath,
       projectId: prepared.projectId,
@@ -341,10 +503,10 @@ export function createBackgroundWorkflowRouter(
         preparationStartedAt,
       );
     }
-    routeDecision(input, 'worker', 'materialized');
+    routeDecision(input, 'worker', materializationReason);
     return {
       route: 'worker',
-      workspacePath: materialized.workspacePath,
+      workspacePath: workspaceRef,
       runId: enqueued.runId,
     };
   };

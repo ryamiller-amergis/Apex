@@ -1534,6 +1534,59 @@ describe('startSingleFeatureDocWatcher', () => {
       expect.objectContaining({ status: 'generation_failed' }),
     );
   });
+
+  it('does not finalize success while output files exist but the run is still alive', async () => {
+    mockDesign.mockReturnValue('# Design');
+    mockTech.mockReturnValue('# Tech');
+    mockAssumptions.mockReturnValue('# Assumptions');
+    mockIsThreadIdle.mockReturnValue(true);
+    mockIsThreadRunAlive.mockResolvedValue(true);
+
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    startSingleFeatureDocWatcher('doc-1', 'thread-1', 'prd-1', 'proj-alpha');
+
+    jest.advanceTimersByTime(5_000);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+
+    expect(mockIsThreadRunAlive).toHaveBeenCalledWith('thread-1');
+    expect(setMock).not.toHaveBeenCalled();
+  });
+
+  it('finalizes success when output files exist and the run is finished', async () => {
+    mockDesign.mockReturnValue('# Design');
+    mockTech.mockReturnValue('# Tech');
+    mockAssumptions.mockReturnValue('# Assumptions');
+    mockIsThreadIdle.mockReturnValue(true);
+    mockIsThreadRunAlive.mockResolvedValue(false);
+    mockDb.query.designDocs.findFirst.mockResolvedValue({
+      id: 'doc-1',
+      status: 'generating',
+      chatThreadId: 'thread-1',
+      skillSettingsId: null,
+    });
+    mockGetSkillConfig.mockResolvedValue(null);
+
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+    mockDb.query.chatThreads = { findFirst: jest.fn().mockResolvedValue(null) };
+
+    startSingleFeatureDocWatcher('doc-1', 'thread-1', 'prd-1', 'proj-alpha');
+
+    jest.advanceTimersByTime(5_000);
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        designContent: '# Design',
+        techSpecContent: '# Tech',
+        assumptionsContent: '# Assumptions',
+      }),
+    );
+  });
 });
 
 // ── Notification on pending_review transition ─────────────────────────────────

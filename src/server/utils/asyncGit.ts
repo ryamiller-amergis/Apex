@@ -47,8 +47,36 @@ export function git(args: string[], options: GitOptions = {}): Promise<string> {
     let settled = false;
     let idleTimer: NodeJS.Timeout | undefined;
     let terminationError: Error | undefined;
-    const knownCommands = new Set(['clone', 'fetch', 'push', 'pull', 'ls-remote']);
-    const commandName = args.find((arg) => knownCommands.has(arg)) ?? args[0];
+    // Skip `-c` / `key=value` overrides from safeArgs so timeouts name the real verb
+    // (otherwise errors look like `git -c timed out after 30000ms`).
+    const knownCommands = new Set([
+      'clone',
+      'fetch',
+      'push',
+      'pull',
+      'ls-remote',
+      'checkout',
+      'rev-parse',
+      'cat-file',
+      'fsck',
+      'config',
+      'remote',
+      'status',
+      'diff',
+      'add',
+      'commit',
+      'merge',
+      'reset',
+      'init',
+    ]);
+    const commandName =
+      args.find(
+        (arg, index) =>
+          knownCommands.has(arg) &&
+          args[index - 1] !== '-c' &&
+          !arg.includes('='),
+      ) ?? args.find((arg) => !arg.startsWith('-') && !arg.includes('=')) ??
+      args[0];
 
     const clearTimers = () => {
       clearTimeout(timer);

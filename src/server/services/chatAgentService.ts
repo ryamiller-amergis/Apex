@@ -367,7 +367,11 @@ function injectKickoffFiles(
 ): void {
   const aiPilotDir = path.join(workspaceDir, '.ai-pilot');
   fs.mkdirSync(aiPilotDir, { recursive: true });
-  fs.mkdirSync(path.join(aiPilotDir, 'output'), { recursive: true });
+  // Fresh kickoff must not inherit leftover generation artifacts from a
+  // previous run that reused this thread workspace (or a copied tree).
+  const outputDir = path.join(aiPilotDir, 'output');
+  fs.rmSync(outputDir, { recursive: true, force: true });
+  fs.mkdirSync(outputDir, { recursive: true });
 
   if (kickoff.transcript) {
     fs.writeFileSync(
@@ -1594,12 +1598,17 @@ export function buildInitialPrompt(
   );
 
   if (kickoff.transcript) {
+    const isToPrdSkill = (kickoff.skillPath ?? '')
+      .replace(/\\/g, '/')
+      .toLowerCase()
+      .includes('/to-prd/');
     parts.push(
       ``,
       `# Kickoff transcript`,
       `A prior conversation transcript has been written to \`.ai-pilot/kickoff-transcript.md\`.`,
-      `Read it as input context before executing the skill. Follow the skill's own instructions`,
-      `for how to use prior context.`
+      isToPrdSkill
+        ? `This file is the **sole requirements input** for \`/to-prd\`. Do not use any pre-existing files under \`.ai-pilot/output/\` as scope — overwrite with this run’s PRD and backlog. Do not invent scope from unrelated repo docs, ADO work items, or leftover PRD/backlog artifacts.`
+        : `Read it as input context before executing the skill. Follow the skill's own instructions for how to use prior context.`
     );
   }
 
@@ -3105,7 +3114,11 @@ async function syncOutputToDbFromWorkspace(
   if (prdRow) {
     const content = readOutputPrd(threadId);
     const backlog = readOutputBacklog(threadId);
-    if (content) {
+    const { isPrdGenerationOutputComplete } = await import(
+      '../../shared/utils/prdGenerationOutput'
+    );
+    const outputComplete = isPrdGenerationOutputComplete(content, backlog);
+    if (outputComplete && content) {
       await syncPrdContent(prdRow.id, content, backlog ?? undefined);
       console.log(
         `[chat] post-run: synced PRD output to DB (prdId=${prdRow.id})`
@@ -3118,15 +3131,15 @@ async function syncOutputToDbFromWorkspace(
           err
         )
       );
-      fullySynced = content !== null && backlog !== null;
+      fullySynced = true;
     } else if (prdRow.status === 'generating') {
-      logWorkspaceContents(workspaceDir, `PRD no-output (prdId=${prdRow.id})`);
+      logWorkspaceContents(workspaceDir, `PRD incomplete-output (prdId=${prdRow.id})`);
       await db
         .update(prds)
         .set({ status: 'draft', updatedAt: new Date().toISOString() })
         .where(and(eq(prds.id, prdRow.id), eq(prds.status, 'generating')));
       console.warn(
-        `[chat] post-run: agent produced no PRD output — reset to draft (prdId=${prdRow.id})`
+        `[chat] post-run: agent produced incomplete/stub PRD output — reset to draft (prdId=${prdRow.id})`
       );
     }
     if (fullySynced) {
@@ -3676,7 +3689,12 @@ const INTERACTIVE_DISPATCH_URL_ENV = 'AI_RUNS_INTERACTIVE_DISPATCH_URL';
  * Skills that write/read `.ai-pilot` kickoff + output files in
  * `thread.workspaceDir` (injectKickoffFiles → poll status). The interactive
  * actor lane runs against the shared grounding checkout and never sees those
- * files, so these must stay on the in-process path.
+ * files, so these must stay on the in-process path (or the background worker
+ * path that merges thread `.ai-pilot` into a per-run writable checkout).
+ *
+ * Generation skills (`/to-prd`, design-doc, test-case, …) are included so they
+ * cannot run on the shared SHA checkout where leftover `.ai-pilot/output` from
+ * unrelated work would contaminate requirements scope.
  */
 export function isInteractiveWorkspaceBoundSkill(
   skillPath: string | null | undefined
@@ -3690,7 +3708,12 @@ export function isInteractiveWorkspaceBoundSkill(
     normalized.includes('design-module-') ||
     normalized.includes('feature-request-analysis') ||
     normalized.includes('issue-analysis') ||
-    normalized.includes('technical-analysis')
+    normalized.includes('technical-analysis') ||
+    normalized.includes('/to-prd/') ||
+    normalized.includes('create-test-case') ||
+    normalized.includes('prd-design-spec') ||
+    normalized.includes('design-doc-validation') ||
+    normalized.includes('document-validation')
   );
 }
 

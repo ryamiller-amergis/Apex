@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import type { ValidationScorecard, ValidationScorecardGap } from '../../shared/types/interview';
+import { collectValidationGaps } from '../../shared/utils/validationReport';
 import { DiffView } from './DiffView';
 import styles from './FixValidationPanel.module.css';
 
@@ -62,7 +63,11 @@ interface FixValidationPanelProps {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function mapGapToSection(gap: ValidationScorecardGap): SectionId {
-  const s = gap.section.toLowerCase();
+  const file = (gap.file ?? '').toLowerCase();
+  if (file.includes('tech') || file === 'tech-spec' || file === 'tech_spec') return 'tech-spec';
+  if (file.includes('assumption')) return 'assumptions';
+  if (file.includes('design')) return 'design';
+  const s = (gap.section ?? '').toLowerCase();
   if (s.includes('tech') || s.includes('spec')) return 'tech-spec';
   if (s.includes('assumption')) return 'assumptions';
   return 'design';
@@ -209,6 +214,7 @@ const SectionReview: React.FC<{
                       className={`${styles.verdictBtn} ${verdict === 'addressed' ? styles.verdictBtnActiveGood : ''}`}
                       onClick={() => onGapVerdict(gap.id, verdict === 'addressed' ? 'pending' : 'addressed')}
                       type="button"
+                      {...{ 'data-testid': `fix-validation-gap-addressed-${gap.id}` }}
                     >
                       Yes
                     </button>
@@ -216,6 +222,7 @@ const SectionReview: React.FC<{
                       className={`${styles.verdictBtn} ${verdict === 'not-addressed' ? styles.verdictBtnActiveBad : ''}`}
                       onClick={() => onGapVerdict(gap.id, verdict === 'not-addressed' ? 'pending' : 'not-addressed')}
                       type="button"
+                      {...{ 'data-testid': `fix-validation-gap-not-addressed-${gap.id}` }}
                     >
                       No
                     </button>
@@ -236,6 +243,7 @@ const SectionReview: React.FC<{
               onClick={onAcceptSection}
               disabled={!group.hasChanges || isReverting}
               type="button"
+              {...{ 'data-testid': `fix-validation-accept-section-${group.sectionId}` }}
             >
               Accept Section Changes
             </button>
@@ -244,6 +252,7 @@ const SectionReview: React.FC<{
               onClick={onRevertSection}
               disabled={!group.hasChanges || isReverting}
               type="button"
+              {...{ 'data-testid': `fix-validation-revert-section-${group.sectionId}` }}
             >
               Revert Section
             </button>
@@ -252,6 +261,7 @@ const SectionReview: React.FC<{
               className={styles.sectionBtnDiscuss}
               onClick={onDiscuss}
               type="button"
+              {...{ 'data-testid': `fix-validation-discuss-section-${group.sectionId}` }}
             >
               Discuss with Apex
             </button>
@@ -348,7 +358,12 @@ const SummaryView: React.FC<{
       </div>
 
       <div className={styles.summaryActions}>
-        <button className={styles.footerBtnSecondary} onClick={onBack} type="button">
+        <button
+          className={styles.footerBtnSecondary}
+          onClick={onBack}
+          type="button"
+          {...{ 'data-testid': 'fix-validation-summary-back-btn' }}
+        >
           Back
         </button>
         <div className={styles.sectionActionSpacer} />
@@ -357,6 +372,7 @@ const SummaryView: React.FC<{
           onClick={onRevertAll}
           disabled={isApplying || isReverting}
           type="button"
+          {...{ 'data-testid': 'fix-validation-revert-all-btn' }}
         >
           Revert All
         </button>
@@ -365,6 +381,7 @@ const SummaryView: React.FC<{
           onClick={onApplyAndRevalidate}
           disabled={isApplying || isReverting}
           type="button"
+          {...{ 'data-testid': 'fix-validation-apply-revalidate-btn' }}
         >
           {isApplying ? 'Applying…' : 'Apply & Re-validate'}
         </button>
@@ -424,20 +441,34 @@ export const FixValidationPanel: React.FC<FixValidationPanelProps> = ({
       'assumptions': [],
     };
 
-    if (scorecard?.features) {
-      for (const f of scorecard.features) {
-        for (const g of f.gaps) {
-          if (g.resolution === 'pending') {
-            const sectionId = mapGapToSection(g);
-            gapsBySection[sectionId].push({
-              ...g,
-              featureTitle: f.feature_title,
-              featureSlug: f.feature_slug,
-              sectionId,
-            });
-          }
-        }
+    const featureByGapId = new Map<string, { title: string; slug: string }>();
+    for (const f of scorecard?.features ?? []) {
+      const title =
+        f.feature_title
+        || (f as { name?: string }).name
+        || 'Feature';
+      const slug = f.feature_slug || title;
+      for (const g of Array.isArray(f.gaps) ? f.gaps : []) {
+        if (g?.id) featureByGapId.set(g.id, { title, slug });
       }
+    }
+    const fallbackFeature = scorecard?.features?.[0];
+    const fallbackTitle =
+      fallbackFeature?.feature_title
+      || (fallbackFeature as { name?: string } | undefined)?.name
+      || 'Feature';
+    const fallbackSlug = fallbackFeature?.feature_slug || fallbackTitle;
+
+    for (const g of collectValidationGaps(scorecard)) {
+      if (g.resolution !== 'pending') continue;
+      const sectionId = mapGapToSection(g);
+      const meta = featureByGapId.get(g.id);
+      gapsBySection[sectionId].push({
+        ...g,
+        featureTitle: meta?.title ?? fallbackTitle,
+        featureSlug: meta?.slug ?? fallbackSlug,
+        sectionId,
+      });
     }
 
     const allSections: SectionId[] = ['design', 'tech-spec', 'assumptions'];
@@ -497,7 +528,14 @@ export const FixValidationPanel: React.FC<FixValidationPanelProps> = ({
             <span className={styles.panelTitle}>Review Apex Changes</span>
           </div>
           <div className={styles.panelHeaderRight}>
-            <button className={styles.fixingCancelBtn} onClick={onCancel} type="button">Close</button>
+            <button
+              className={styles.fixingCancelBtn}
+              onClick={onCancel}
+              type="button"
+              {...{ 'data-testid': 'fix-validation-close-btn' }}
+            >
+              Close
+            </button>
           </div>
         </div>
         <div className={styles.diffNoChanges}>
@@ -531,6 +569,7 @@ export const FixValidationPanel: React.FC<FixValidationPanelProps> = ({
               className={styles.fixingRetryBtn}
               onClick={onRetry}
               type="button"
+              {...{ 'data-testid': 'fix-validation-retry-btn' }}
             >
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 14, height: 14 }}>
                 <path d="M13 3v4H9" /><path d="M13 7A6 6 0 1 1 9.5 2.5" />
@@ -560,7 +599,14 @@ export const FixValidationPanel: React.FC<FixValidationPanelProps> = ({
           <span className={styles.progressText}>
             {reviewedGaps} of {totalGaps} gaps reviewed
           </span>
-          <button className={styles.fixingCancelBtn} onClick={onCancel} type="button">Cancel</button>
+          <button
+            className={styles.fixingCancelBtn}
+            onClick={onCancel}
+            type="button"
+            {...{ 'data-testid': 'fix-validation-cancel-btn' }}
+          >
+            Cancel
+          </button>
         </div>
       </div>
 
@@ -582,6 +628,7 @@ export const FixValidationPanel: React.FC<FixValidationPanelProps> = ({
                 }`}
                 onClick={() => { setShowSummary(false); setActiveSectionIdx(idx); }}
                 type="button"
+                {...{ 'data-testid': `fix-validation-stepper-${sg.sectionId}` }}
               >
                 <span className={styles.stepperTabLabel}>{sg.label}</span>
                 <span className={styles.stepperTabMeta}>
@@ -594,6 +641,7 @@ export const FixValidationPanel: React.FC<FixValidationPanelProps> = ({
             className={`${styles.stepperTab} ${showSummary ? styles.stepperTabActive : ''}`}
             onClick={() => setShowSummary(true)}
             type="button"
+            {...{ 'data-testid': 'fix-validation-stepper-summary' }}
           >
             <span className={styles.stepperTabLabel}>Summary</span>
           </button>
@@ -642,17 +690,28 @@ export const FixValidationPanel: React.FC<FixValidationPanelProps> = ({
                 onClick={goPrev}
                 disabled={activeSectionIdx === 0}
                 type="button"
+                {...{ 'data-testid': 'fix-validation-prev-section-btn' }}
               >
                 Previous Section
               </button>
             </div>
             <div className={styles.footerRight}>
               {activeSectionIdx < sectionGroups.length - 1 ? (
-                <button className={styles.footerBtnPrimary} onClick={goNext} type="button">
+                <button
+                  className={styles.footerBtnPrimary}
+                  onClick={goNext}
+                  type="button"
+                  {...{ 'data-testid': 'fix-validation-next-section-btn' }}
+                >
                   Next Section
                 </button>
               ) : (
-                <button className={styles.footerBtnPrimary} onClick={goNext} type="button">
+                <button
+                  className={styles.footerBtnPrimary}
+                  onClick={goNext}
+                  type="button"
+                  {...{ 'data-testid': 'fix-validation-review-summary-btn' }}
+                >
                   Review Summary
                 </button>
               )}
@@ -687,7 +746,12 @@ export const FixingProgressView: React.FC<FixingProgressViewProps> = ({
       <span className={styles.fixingTitle}>{title}</span>
       {hint && <span className={styles.fixingHint}>{hint}</span>}
     </div>
-    <button className={styles.fixingCancelBtn} onClick={onCancel} type="button">
+    <button
+      className={styles.fixingCancelBtn}
+      onClick={onCancel}
+      type="button"
+      {...{ 'data-testid': 'fix-validation-progress-cancel-btn' }}
+    >
       Cancel
     </button>
   </div>

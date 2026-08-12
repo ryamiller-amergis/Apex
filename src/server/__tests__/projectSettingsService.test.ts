@@ -49,6 +49,11 @@ jest.mock('../services/groupService', () => ({
 jest.mock('../services/groundingMaintenanceEvents', () => ({
   emitGroundingActiveSetChanged: jest.fn(),
 }));
+jest.mock('../services/featureFlagService', () => ({
+  isProjectRepositoryCheckoutReadinessEnabled: jest
+    .fn()
+    .mockResolvedValue(false),
+}));
 
 import {
   getSkillConfig,
@@ -68,6 +73,11 @@ const { emitGroundingActiveSetChanged: mockEmitGroundingActiveSetChanged } =
   jest.requireMock('../services/groundingMaintenanceEvents') as {
     emitGroundingActiveSetChanged: jest.Mock;
   };
+const {
+  isProjectRepositoryCheckoutReadinessEnabled: mockIsCheckoutReadinessEnabled,
+} = jest.requireMock('../services/featureFlagService') as {
+  isProjectRepositoryCheckoutReadinessEnabled: jest.Mock;
+};
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
 
@@ -193,7 +203,10 @@ describe('resolveSkillConfig', () => {
 // ── upsertSkillConfig — one-default enforcement ───────────────────────────────────
 
 describe('upsertSkillConfig', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsCheckoutReadinessEnabled.mockResolvedValue(false);
+  });
 
   it.each([
     {
@@ -245,6 +258,29 @@ describe('upsertSkillConfig', () => {
       );
     }
   );
+
+  it('S13: checkout readiness ON skips prewarm active-set emit on upsert', async () => {
+    mockIsCheckoutReadinessEnabled.mockResolvedValue(true);
+    mockDb.transaction.mockResolvedValue({
+      ...defaultRow,
+      skillProvider: 'github',
+      skillRepo: 'amergis/AI-Pilot',
+    });
+
+    await upsertSkillConfig(
+      makeUpsertInput({ skillProvider: 'github', skillRepo: 'amergis/AI-Pilot' }),
+    );
+
+    expect(mockIsCheckoutReadinessEnabled).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'alice',
+        project: 'proj-alpha',
+        caller: 'project-settings',
+      }),
+    );
+    expect(mockSeedDefaultGroupsForProject).toHaveBeenCalled();
+    expect(mockEmitGroundingActiveSetChanged).not.toHaveBeenCalled();
+  });
 
   it('PLAN-S1-AC-1 failed settings save emits no active-set event', async () => {
     // Arrange

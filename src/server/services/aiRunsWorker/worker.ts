@@ -55,6 +55,32 @@ function isSuccessfulWait(result: CursorExecutionResult): boolean {
     || result.waitResult.status === 'success';
 }
 
+/** Keep failure details short, single-line, and safe for ingest/UI. */
+const MAX_WORKER_FAILURE_DETAIL = 480;
+
+export function formatWorkerExecutionFailure(error: unknown): string {
+  const code =
+    error
+    && typeof error === 'object'
+    && 'code' in error
+    && typeof (error as { code?: unknown }).code === 'string'
+      ? (error as { code: string }).code.trim()
+      : '';
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : 'unknown error';
+  const compact = `${code ? `${code}: ` : ''}${message}`
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_WORKER_FAILURE_DETAIL);
+  return compact
+    ? `Worker execution failed: ${compact}`
+    : 'Worker execution failed';
+}
+
 /**
  * Thin fenced host. All callback traffic is serialized so the first observed
  * dispatch conflict closes the callback gate before any later callback starts.
@@ -246,11 +272,19 @@ export function createAiRunsWorker(
         }
 
         await dependencies.flushArtifacts(snapshot.workspaceRef);
+        const failureDetail = formatWorkerExecutionFailure(error);
+        console.error(JSON.stringify({
+          event: 'AiRunsWorkerExecutionFailed',
+          runId: dispatch.runId,
+          dispatchMessageId: dispatch.dispatchMessageId,
+          workspaceRef: snapshot.workspaceRef,
+          detail: failureDetail,
+        }));
         await post({
           dispatchMessageId: dispatch.dispatchMessageId,
           kind: 'terminal',
           status: 'failed',
-          detail: 'Worker execution failed',
+          detail: failureDetail,
           artifactsFlushed: true,
         });
       } finally {

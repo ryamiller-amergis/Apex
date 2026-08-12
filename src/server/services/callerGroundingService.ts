@@ -16,6 +16,7 @@ import type { RunGrounding, RunRef } from '../../shared/types/runGrounding';
 import {
   isGroundingEnabledForCaller as evaluateGroundingFlag,
   isNativeReadEnabledForCaller as evaluateNativeReadFlag,
+  isProjectRepositoryCheckoutReadinessEnabled as evaluateCheckoutReadinessFlag,
   isSharedReadCheckoutEnabledForCaller as evaluateSharedReadCheckoutFlag,
 } from './featureFlagService';
 import {
@@ -49,6 +50,12 @@ import {
   createRepositoryPreparationService,
   type RepositoryPreparationService,
 } from './repositoryPreparationService';
+import {
+  pinProjectRepositoryRoot,
+  ProjectRepositoryFetchError,
+  type PinProjectRepositoryRootResult,
+  type ProjectRepositoryRootPinDependencies,
+} from './projectRepositoryRootPinService';
 
 export interface CallerRepository {
   provider: SkillProvider;
@@ -154,6 +161,7 @@ export interface CallerGroundingDependencies {
   isGroundingEnabledForCaller: typeof evaluateGroundingFlag;
   isNativeReadEnabledForCaller: typeof evaluateNativeReadFlag;
   isSharedReadCheckoutEnabledForCaller: typeof evaluateSharedReadCheckoutFlag;
+  isProjectRepositoryCheckoutReadinessEnabled?: typeof evaluateCheckoutReadinessFlag;
   evaluateNativeReadCapability: typeof evaluateNativeReadCapabilityCheck;
   sharedReadCheckout: Pick<
     SharedReadCheckoutService,
@@ -188,6 +196,11 @@ export interface CallerGroundingDependencies {
     | 'prepareReadOnly'
     | 'prepareWritable'
   >;
+  /** Injectable root fetch-and-pin (admin-managed checkout path). */
+  pinProjectRepositoryRoot?: (
+    input: Parameters<typeof pinProjectRepositoryRoot>[0],
+    deps?: ProjectRepositoryRootPinDependencies
+  ) => Promise<PinProjectRepositoryRootResult>;
 }
 
 function runRefKey(run: RunRef): string {
@@ -319,6 +332,103 @@ export function createCallerGroundingService(
         repo,
         branch: input.repository.branch,
       };
+
+      let checkoutReadinessEnabled = false;
+      try {
+        checkoutReadinessEnabled = await (
+          dependencies.isProjectRepositoryCheckoutReadinessEnabled ??
+          evaluateCheckoutReadinessFlag
+        )({
+          userId: input.userId,
+          project: input.run.project,
+          caller: input.caller,
+        });
+      } catch {
+        checkoutReadinessEnabled = false;
+      }
+
+      // @feature-flag:project-repository-checkout-readiness start winner=enabled
+      if (checkoutReadinessEnabled) {
+        // @feature-flag:project-repository-checkout-readiness enabled-start
+        const existing = activeTarget(
+          await dependencies.groundingService.getGroundings(input.run)
+        );
+        setMaterializationMode(existing ? 'warm' : 'cold');
+        const pinRoot =
+          dependencies.pinProjectRepositoryRoot ?? pinProjectRepositoryRoot;
+        let pinned: PinProjectRepositoryRootResult;
+        try {
+          pinned = await pinRoot({
+            run: input.run,
+            repository: preparationRepository,
+            caller: input.caller,
+            existingGrounding: existing ?? null,
+          });
+        } catch (error) {
+          if (error instanceof ProjectRepositoryFetchError) {
+            throw error;
+          }
+          const message =
+            error instanceof Error ? error.message : String(error);
+          throw new ProjectRepositoryFetchError(
+            message ||
+              'Repository tip fetch failed. Ask a project administrator to Refresh the configured repository, then retry.',
+          );
+        }
+
+        const grounding = pinned.grounding;
+        const workspacePath = pinned.workspacePath;
+        const sharedIdentity = pinned.identity;
+        setMaterializationMode(pinned.fetched ? 'cold' : 'warm');
+
+        const callerContext: GroundingCallerContext = {
+          userId: input.userId,
+          runRef: runRefKey(input.run),
+          project: input.run.project,
+        };
+        const profile = dependencies.profiles.registerConnectionProfile(
+          {
+            runRef: callerContext.runRef,
+            provider: profileProvider(grounding.provider),
+            project: grounding.project,
+            repo,
+            sha: grounding.groundedSha,
+            checkoutPath: workspacePath,
+            caller: input.caller,
+          },
+          callerContext,
+          input.reauthorize
+        );
+        dependencies.impactContexts.register(input.run, {
+          authorId: input.userId,
+          title: callerRunTitle(input.caller),
+          link: '/home',
+          caller: input.caller,
+        });
+
+        let released = false;
+        return {
+          mode: 'local',
+          cwd: workspacePath,
+          profileId: profile.id,
+          resolvedSha: grounding.groundedSha,
+          nativeReads: false,
+          release: async () => {
+            if (released) return;
+            released = true;
+            try {
+              await dependencies.groundingService.markTerminalInactive(input.run);
+            } finally {
+              dependencies.impactContexts.unregister(input.run);
+              dependencies.profiles.revokeProfile(profile.id);
+              dependencies.sharedReadCheckout.releaseRef(sharedIdentity);
+            }
+          },
+        };
+        // @feature-flag:project-repository-checkout-readiness enabled-end
+      }
+      // @feature-flag:project-repository-checkout-readiness end
+
       if (input.readOnlyShareable) {
         try {
           sharedReadOnlyEnabled =
@@ -622,7 +732,10 @@ export function createCallerGroundingService(
           }
         },
       };
-    } catch {
+    } catch (error) {
+      if (error instanceof ProjectRepositoryFetchError) {
+        throw error;
+      }
       return sharedReadOnlyEnabled
         ? preparing()
         : fallback(input, 'startup-failed');
@@ -788,6 +901,7 @@ export const callerGroundingService = createCallerGroundingService({
   isGroundingEnabledForCaller: evaluateGroundingFlag,
   isNativeReadEnabledForCaller: evaluateNativeReadFlag,
   isSharedReadCheckoutEnabledForCaller: evaluateSharedReadCheckoutFlag,
+  isProjectRepositoryCheckoutReadinessEnabled: evaluateCheckoutReadinessFlag,
   evaluateNativeReadCapability: evaluateNativeReadCapabilityCheck,
   sharedReadCheckout: sharedReadCheckoutService,
   ensureRepoCache: ensureRepositoryCache,

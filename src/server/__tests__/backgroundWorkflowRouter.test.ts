@@ -89,6 +89,11 @@ function makeDependencies(
       workspacePath: 'C:\\grounding-workspaces\\opaque',
     }),
     prepareWorkspace: jest.fn().mockResolvedValue(undefined),
+    sharedReadCheckout: {
+      getReady: jest.fn().mockReturnValue(null),
+      retain: jest.fn(),
+    },
+    clearGenerationOutput: jest.fn().mockResolvedValue(undefined),
     enqueue: jest.fn().mockResolvedValue({ runId: 'run-1' }),
     resolveHardLimitMs: jest.fn().mockReturnValue(60_000),
     now: jest.fn().mockReturnValue(1_000),
@@ -154,6 +159,156 @@ describe('background workflow routing', () => {
       'C:\\threads\\thread-1',
       'C:\\grounding-workspaces\\opaque',
     );
+  });
+
+  it('reuses the interview shared SHA checkout for PRD without a full clone', async () => {
+    const retain = jest.fn();
+    const getReady = jest.fn().mockReturnValue({
+      workspacePath: 'C:\\shared\\grounding-shared\\sha-digest',
+    });
+    const clearGenerationOutput = jest.fn().mockResolvedValue(undefined);
+    const enqueue = jest.fn().mockResolvedValue({ runId: 'run-1' });
+    const dependencies = makeDependencies({
+      sharedReadCheckout: { getReady, retain },
+      clearGenerationOutput,
+      enqueue,
+    });
+
+    const decision = await createBackgroundWorkflowRouter(dependencies).route(
+      makeInput(),
+    );
+
+    expect(decision).toEqual<WorkflowRouteDecision>({
+      route: 'worker',
+      workspacePath: 'C:\\threads\\thread-1',
+      runId: 'run-1',
+    });
+    expect(getReady).toHaveBeenCalled();
+    expect(retain).toHaveBeenCalled();
+    expect(clearGenerationOutput).toHaveBeenCalledWith('C:\\threads\\thread-1');
+    expect(dependencies.materializeRunGroundingWithPath).not.toHaveBeenCalled();
+    expect(dependencies.prepareWorkspace).not.toHaveBeenCalled();
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        snapshot: expect.objectContaining({
+          workspaceRef: 'C:\\threads\\thread-1',
+          checkoutRef: 'C:\\shared\\grounding-shared\\sha-digest',
+          workflowClass: 'prd',
+        }),
+      }),
+    );
+  });
+
+  it('reuses shared SHA checkout for design-doc the same way as PRD', async () => {
+    const dependencies = makeDependencies({
+      sharedReadCheckout: {
+        getReady: jest.fn().mockReturnValue({
+          workspacePath: 'C:\\shared\\design-doc-sha',
+        }),
+        retain: jest.fn(),
+      },
+    });
+
+    const decision = await createBackgroundWorkflowRouter(dependencies).route(
+      makeInput({ workflowClass: 'design-doc' }),
+    );
+
+    expect(decision).toEqual(
+      expect.objectContaining({
+        route: 'worker',
+        workspacePath: 'C:\\threads\\thread-1',
+      }),
+    );
+    expect(dependencies.materializeRunGroundingWithPath).not.toHaveBeenCalled();
+  });
+
+  it('falls back to full writable clone when shared checkout is not ready', async () => {
+    const dependencies = makeDependencies({
+      sharedReadCheckout: {
+        getReady: jest.fn().mockReturnValue(null),
+        retain: jest.fn(),
+      },
+    });
+
+    const decision = await createBackgroundWorkflowRouter(dependencies).route(
+      makeInput(),
+    );
+
+    expect(decision).toEqual(
+      expect.objectContaining({
+        route: 'worker',
+        workspacePath: 'C:\\grounding-workspaces\\opaque',
+      }),
+    );
+    expect(dependencies.materializeRunGroundingWithPath).toHaveBeenCalled();
+    expect(dependencies.prepareWorkspace).toHaveBeenCalled();
+  });
+
+  it('routes validation as scratch-only (no repo checkout or shared SHA)', async () => {
+    const getReady = jest.fn().mockReturnValue({
+      workspacePath: 'C:\\shared\\should-not-use',
+    });
+    const clearGenerationOutput = jest.fn().mockResolvedValue(undefined);
+    const enqueue = jest.fn().mockResolvedValue({ runId: 'run-1' });
+    const dependencies = makeDependencies({
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+      sharedReadCheckout: { getReady, retain: jest.fn() },
+      clearGenerationOutput,
+      enqueue,
+    });
+
+    const decision = await createBackgroundWorkflowRouter(dependencies).route(
+      makeInput({ workflowClass: 'validation' }),
+    );
+
+    expect(decision).toEqual<WorkflowRouteDecision>({
+      route: 'worker',
+      workspacePath: 'C:\\threads\\thread-1',
+      runId: 'run-1',
+    });
+    expect(getReady).not.toHaveBeenCalled();
+    expect(dependencies.materializeRunGroundingWithPath).not.toHaveBeenCalled();
+    expect(dependencies.prepareWorkspace).not.toHaveBeenCalled();
+    expect(clearGenerationOutput).toHaveBeenCalledWith('C:\\threads\\thread-1');
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        snapshot: expect.objectContaining({
+          workspaceRef: 'C:\\threads\\thread-1',
+          workflowClass: 'validation',
+        }),
+      }),
+    );
+    const snapshot = (enqueue.mock.calls[0][0] as { snapshot: ExecutionSnapshot })
+      .snapshot;
+    expect(snapshot.checkoutRef).toBeUndefined();
+  });
+
+  it('routes validation without usable target grounding', async () => {
+    const enqueue = jest.fn().mockResolvedValue({ runId: 'run-1' });
+    const dependencies = makeDependencies({ enqueue });
+
+    const decision = await createBackgroundWorkflowRouter(dependencies).route(
+      makeInput({
+        workflowClass: 'validation',
+        prepareWorker: jest.fn().mockResolvedValue({
+          targetGrounding: null,
+          threadWorkspacePath: 'C:\\threads\\validation-1',
+          prompt: 'score the doc',
+          model: 'claude-4',
+          skillPath: '.cursor/skills/prd-spec-review/SKILL.md',
+          projectId: 'project-1',
+        }),
+      }),
+    );
+
+    expect(decision).toEqual(
+      expect.objectContaining({
+        route: 'worker',
+        workspacePath: 'C:\\threads\\validation-1',
+      }),
+    );
+    expect(dependencies.materializeRunGroundingWithPath).not.toHaveBeenCalled();
+    expect(enqueue).toHaveBeenCalled();
   });
 
   it('TBI-007 DoD-0 / DoD-1 / VT-07: targets every workflow vocabulary independently by project and caller', async () => {
@@ -464,7 +619,7 @@ describe('background workspace preparation', () => {
     await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
-  it('BR-007 / VT-01: safely merges complete .ai-pilot inputs and outputs idempotently', async () => {
+  it('BR-007 / VT-01: merges .ai-pilot inputs/outputs and drops destination-only leftovers', async () => {
     const source = path.join(tempRoot, 'thread');
     const destination = path.join(tempRoot, 'pinned');
     await fs.mkdir(path.join(source, '.ai-pilot', 'output'), { recursive: true });
@@ -492,8 +647,39 @@ describe('background workspace preparation', () => {
       fs.readFile(path.join(destination, '.ai-pilot', 'output', 'generated.json'), 'utf8'),
     ).resolves.toBe('{"version":2}');
     await expect(
-      fs.readFile(path.join(destination, '.ai-pilot', 'output', 'preserved.md'), 'utf8'),
-    ).resolves.toBe('preserve me');
+      fs.access(path.join(destination, '.ai-pilot', 'output', 'preserved.md')),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('clears destination-only leftover output before overlaying thread .ai-pilot', async () => {
+    const source = path.join(tempRoot, 'thread-fresh');
+    const destination = path.join(tempRoot, 'pinned-contaminated');
+    await fs.mkdir(path.join(source, '.ai-pilot'), { recursive: true });
+    await fs.mkdir(path.join(destination, '.ai-pilot', 'output'), { recursive: true });
+    await fs.writeFile(
+      path.join(source, '.ai-pilot', 'kickoff-transcript.md'),
+      '# Interview Transcript\n\n**User:** add a counter\n',
+    );
+    await fs.writeFile(
+      path.join(destination, '.ai-pilot', 'output', 'blackout-date.prd.md'),
+      '# Blackout Date Rule Administration\n',
+    );
+    await fs.writeFile(
+      path.join(destination, '.ai-pilot', 'output', 'blackout-date.backlog.json'),
+      '{}',
+    );
+
+    await prepareBackgroundWorkflowWorkspace(source, destination);
+
+    await expect(
+      fs.readFile(path.join(destination, '.ai-pilot', 'kickoff-transcript.md'), 'utf8'),
+    ).resolves.toContain('add a counter');
+    await expect(
+      fs.access(path.join(destination, '.ai-pilot', 'output', 'blackout-date.prd.md')),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(
+      fs.access(path.join(destination, '.ai-pilot', 'output', 'blackout-date.backlog.json')),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('AC-1 / DoD-2: rejects symlinks instead of copying content outside .ai-pilot', async () => {
