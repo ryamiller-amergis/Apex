@@ -11,7 +11,7 @@ test.describe('Admin-managed repository checkouts', () => {
   test.describe('VT-22 Admin Project Settings Clone / Refresh', () => {
     // DEFERRED: Playwright env unavailable in local Feature Executor — keep authored.
     test.skip(
-      'Clone → Ready at SHA; Failed state; Refresh controls visible',
+      'Clone → Ready at SHA; Failed state shows Refresh retry; Ready has no Refresh',
       async ({ page }) => {
         // DEFERRED: Playwright env unavailable
         await page.goto('/admin/project-settings');
@@ -26,7 +26,9 @@ test.describe('Admin-managed repository checkouts', () => {
         }
 
         const refreshBtn = page.getByTestId(/repo-checkout-refresh-/).first();
-        if (await refreshBtn.isVisible()) {
+        if (await page.getByText(/Ready at/i).first().isVisible()) {
+          await expect(refreshBtn).toHaveCount(0);
+        } else if (await refreshBtn.isVisible()) {
           await refreshBtn.click();
         }
       },
