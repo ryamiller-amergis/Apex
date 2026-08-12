@@ -163,6 +163,29 @@ describe('aiRunsWorker host', () => {
         kind: 'terminal',
         status: 'failed',
         artifactsFlushed: true,
+        detail: 'Worker execution failed: execution failed',
+      }),
+    );
+  });
+
+  it('surfaces checkout/open failures in the failed terminal detail', async () => {
+    const ctx = setup();
+    ctx.openCheckout.mockRejectedValueOnce(
+      Object.assign(new Error('ENOENT: no such file or directory'), {
+        code: 'LOCAL_READ_UNAVAILABLE',
+      }),
+    );
+
+    await ctx.worker.execute(dispatch);
+
+    expect(ctx.postIngest).toHaveBeenLastCalledWith(
+      'project-1',
+      'run-1',
+      expect.objectContaining({
+        kind: 'terminal',
+        status: 'failed',
+        detail:
+          'Worker execution failed: LOCAL_READ_UNAVAILABLE: ENOENT: no such file or directory',
       }),
     );
   });
