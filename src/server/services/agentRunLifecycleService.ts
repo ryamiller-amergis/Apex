@@ -310,6 +310,9 @@ export async function enqueue(input: EnqueueAgentRunInput): Promise<{ runId: str
     prompt: input.snapshot.prompt,
     model: input.snapshot.model,
     workspaceRef: input.snapshot.workspaceRef,
+    ...(input.snapshot.checkoutRef
+      ? { checkoutRef: input.snapshot.checkoutRef }
+      : {}),
     workflowClass: input.snapshot.workflowClass,
     skillPath: input.snapshot.skillPath,
     projectId: input.snapshot.projectId,

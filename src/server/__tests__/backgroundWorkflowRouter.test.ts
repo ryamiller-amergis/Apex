@@ -89,6 +89,11 @@ function makeDependencies(
       workspacePath: 'C:\\grounding-workspaces\\opaque',
     }),
     prepareWorkspace: jest.fn().mockResolvedValue(undefined),
+    sharedReadCheckout: {
+      getReady: jest.fn().mockReturnValue(null),
+      retain: jest.fn(),
+    },
+    clearGenerationOutput: jest.fn().mockResolvedValue(undefined),
     enqueue: jest.fn().mockResolvedValue({ runId: 'run-1' }),
     resolveHardLimitMs: jest.fn().mockReturnValue(60_000),
     now: jest.fn().mockReturnValue(1_000),
@@ -154,6 +159,112 @@ describe('background workflow routing', () => {
       'C:\\threads\\thread-1',
       'C:\\grounding-workspaces\\opaque',
     );
+  });
+
+  it('reuses the interview shared SHA checkout for PRD without a full clone', async () => {
+    const retain = jest.fn();
+    const getReady = jest.fn().mockReturnValue({
+      workspacePath: 'C:\\shared\\grounding-shared\\sha-digest',
+    });
+    const clearGenerationOutput = jest.fn().mockResolvedValue(undefined);
+    const enqueue = jest.fn().mockResolvedValue({ runId: 'run-1' });
+    const dependencies = makeDependencies({
+      sharedReadCheckout: { getReady, retain },
+      clearGenerationOutput,
+      enqueue,
+    });
+
+    const decision = await createBackgroundWorkflowRouter(dependencies).route(
+      makeInput(),
+    );
+
+    expect(decision).toEqual<WorkflowRouteDecision>({
+      route: 'worker',
+      workspacePath: 'C:\\threads\\thread-1',
+      runId: 'run-1',
+    });
+    expect(getReady).toHaveBeenCalled();
+    expect(retain).toHaveBeenCalled();
+    expect(clearGenerationOutput).toHaveBeenCalledWith('C:\\threads\\thread-1');
+    expect(dependencies.materializeRunGroundingWithPath).not.toHaveBeenCalled();
+    expect(dependencies.prepareWorkspace).not.toHaveBeenCalled();
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        snapshot: expect.objectContaining({
+          workspaceRef: 'C:\\threads\\thread-1',
+          checkoutRef: 'C:\\shared\\grounding-shared\\sha-digest',
+          workflowClass: 'prd',
+        }),
+      }),
+    );
+  });
+
+  it('reuses shared SHA checkout for design-doc the same way as PRD', async () => {
+    const dependencies = makeDependencies({
+      sharedReadCheckout: {
+        getReady: jest.fn().mockReturnValue({
+          workspacePath: 'C:\\shared\\design-doc-sha',
+        }),
+        retain: jest.fn(),
+      },
+    });
+
+    const decision = await createBackgroundWorkflowRouter(dependencies).route(
+      makeInput({ workflowClass: 'design-doc' }),
+    );
+
+    expect(decision).toEqual(
+      expect.objectContaining({
+        route: 'worker',
+        workspacePath: 'C:\\threads\\thread-1',
+      }),
+    );
+    expect(dependencies.materializeRunGroundingWithPath).not.toHaveBeenCalled();
+  });
+
+  it('falls back to full writable clone when shared checkout is not ready', async () => {
+    const dependencies = makeDependencies({
+      sharedReadCheckout: {
+        getReady: jest.fn().mockReturnValue(null),
+        retain: jest.fn(),
+      },
+    });
+
+    const decision = await createBackgroundWorkflowRouter(dependencies).route(
+      makeInput(),
+    );
+
+    expect(decision).toEqual(
+      expect.objectContaining({
+        route: 'worker',
+        workspacePath: 'C:\\grounding-workspaces\\opaque',
+      }),
+    );
+    expect(dependencies.materializeRunGroundingWithPath).toHaveBeenCalled();
+    expect(dependencies.prepareWorkspace).toHaveBeenCalled();
+  });
+
+  it('does not use the thin shared path for validation workflows', async () => {
+    const getReady = jest.fn().mockReturnValue({
+      workspacePath: 'C:\\shared\\should-not-use',
+    });
+    const dependencies = makeDependencies({
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+      sharedReadCheckout: { getReady, retain: jest.fn() },
+    });
+
+    const decision = await createBackgroundWorkflowRouter(dependencies).route(
+      makeInput({ workflowClass: 'validation' }),
+    );
+
+    expect(decision).toEqual(
+      expect.objectContaining({
+        route: 'worker',
+        workspacePath: 'C:\\grounding-workspaces\\opaque',
+      }),
+    );
+    expect(getReady).not.toHaveBeenCalled();
+    expect(dependencies.materializeRunGroundingWithPath).toHaveBeenCalled();
   });
 
   it('TBI-007 DoD-0 / DoD-1 / VT-07: targets every workflow vocabulary independently by project and caller', async () => {

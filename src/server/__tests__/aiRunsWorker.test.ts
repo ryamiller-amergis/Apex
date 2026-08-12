@@ -1,6 +1,7 @@
 /**
  * FEAT-004 / TBI-004 thin background worker host.
  */
+import fs from 'fs';
 import path from 'path';
 import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
 import type { AiRunIngestBody } from '../../shared/types/aiRunIngest';
@@ -263,6 +264,31 @@ describe('aiRunsWorker local checkout and heartbeat contracts', () => {
     await expect(openLocalCheckout(snapshot, unavailable)).rejects.toMatchObject({
       code: 'LOCAL_READ_UNAVAILABLE',
     });
+  });
+
+  it('prefers checkoutRef over workspaceRef when opening the local reader', async () => {
+    const thinWorkspace = path.join(
+      process.cwd(),
+      `.thin-ai-run-workspace-${Date.now()}`,
+    );
+    const sharedCheckout = path.join(
+      process.cwd(),
+      `.shared-ai-run-checkout-${Date.now()}`,
+    );
+    await fs.promises.mkdir(sharedCheckout, { recursive: true });
+    await fs.promises.writeFile(path.join(sharedCheckout, 'README.md'), 'ok');
+
+    try {
+      const reader = await openLocalCheckout({
+        ...snapshot,
+        workspaceRef: thinWorkspace,
+        checkoutRef: sharedCheckout,
+      });
+      const entries = await reader.listDir('');
+      expect(entries.some((entry) => entry.name === 'README.md')).toBe(true);
+    } finally {
+      await fs.promises.rm(sharedCheckout, { recursive: true, force: true });
+    }
   });
 
   it('TBI-004 performance NFR: defaults heartbeat interval to 15 seconds', () => {

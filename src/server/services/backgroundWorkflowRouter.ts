@@ -10,6 +10,11 @@ import { resolveAgentRunHardLimitMs } from './agentRunReaperService';
 import { enqueue } from './agentRunLifecycleService';
 import { isFeatureEnabled } from './featureFlagService';
 import {
+  sharedReadCheckoutIdentityFromGrounding,
+  sharedReadCheckoutService,
+  type SharedReadCheckoutService,
+} from './grounding/sharedReadCheckoutService';
+import {
   materializeRunGroundingWithPath,
   type RunGroundingMaterializationResult,
 } from './runGroundingMaterializer';
@@ -22,6 +27,13 @@ import {
 } from './repositoryPreparationService';
 
 const BACKGROUND_WORKFLOW_FLAG = 'ai-runs-background';
+
+/** Generation workflows that reuse the interview's shared SHA checkout (no full clone). */
+const SHARED_READ_WORKFLOW_CLASSES: ReadonlySet<BackgroundWorkflowClass> = new Set([
+  'prd',
+  'design-doc',
+  'test-cases',
+]);
 
 export interface RecoverableBackgroundWorkflowFailure {
   reason: 'materialization-unavailable';
@@ -79,6 +91,11 @@ export interface BackgroundWorkflowRouterDependencies {
   trackEvent?: typeof trackEvent;
   now?: () => number;
   repositoryPreparation?: Pick<RepositoryPreparationService, 'prepareWritable'>;
+  sharedReadCheckout?: Pick<
+    SharedReadCheckoutService,
+    'getReady' | 'retain'
+  >;
+  clearGenerationOutput?: (threadWorkspacePath: string) => Promise<void>;
 }
 
 export interface BackgroundWorkflowRouter {
@@ -129,6 +146,22 @@ export async function prepareBackgroundWorkflowWorkspace(
   await copyDirectoryContentsSafely(source, destination);
 }
 
+/**
+ * Clears prior generation outputs on the thin thread workspace used when
+ * PRD/design-doc reuse the shared read checkout (no full clone).
+ */
+export async function clearBackgroundGenerationOutput(
+  threadWorkspacePath: string,
+): Promise<void> {
+  const outputDirectory = path.resolve(
+    threadWorkspacePath,
+    '.ai-pilot',
+    'output',
+  );
+  await fs.rm(outputDirectory, { recursive: true, force: true });
+  await fs.mkdir(outputDirectory, { recursive: true });
+}
+
 function isUsableTargetGrounding(
   grounding: RunGrounding | null | undefined,
   destination: RunRef,
@@ -142,6 +175,18 @@ function isUsableTargetGrounding(
   );
 }
 
+function resolveReadySharedCheckoutPath(
+  grounding: RunGrounding,
+  shared: Pick<SharedReadCheckoutService, 'getReady' | 'retain'>,
+): string | null {
+  const ready = shared.getReady(
+    sharedReadCheckoutIdentityFromGrounding(grounding),
+  );
+  if (!ready?.workspacePath) return null;
+  shared.retain(sharedReadCheckoutIdentityFromGrounding(grounding));
+  return ready.workspacePath;
+}
+
 export function createBackgroundWorkflowRouter(
   dependencies: BackgroundWorkflowRouterDependencies = {},
 ): BackgroundWorkflowRouter {
@@ -151,10 +196,14 @@ export function createBackgroundWorkflowRouter(
     ?? materializeRunGroundingWithPath;
   const prepareWorkspace =
     dependencies.prepareWorkspace ?? prepareBackgroundWorkflowWorkspace;
+  const clearGenerationOutput =
+    dependencies.clearGenerationOutput ?? clearBackgroundGenerationOutput;
   const enqueueRun = dependencies.enqueue ?? enqueue;
   const hardLimitMs = dependencies.resolveHardLimitMs ?? resolveAgentRunHardLimitMs;
   const emitEvent = dependencies.trackEvent ?? trackEvent;
   const now = dependencies.now ?? Date.now;
+  const sharedReadCheckout =
+    dependencies.sharedReadCheckout ?? sharedReadCheckoutService;
   const repositoryPreparation =
     dependencies.repositoryPreparation ??
     (dependencies.materializeRunGroundingWithPath
@@ -270,44 +319,81 @@ export function createBackgroundWorkflowRouter(
       );
     }
 
-    let materialized: RunGroundingMaterializationResult;
-    try {
-      materialized = await repositoryPreparation.prepareWritable({
-        destinationRun: input.destinationRun,
-        workflowClass: input.workflowClass,
-        targetGrounding: prepared.targetGrounding,
-        repository: prepared.repository,
-      });
-    } catch {
-      return recoverPreparation(
-        input,
-        'materialization-failed',
-        preparationStartedAt,
-      );
+    // PRD / design-doc / test-cases: reuse the interview's warm shared SHA tree.
+    // Thin writable cwd = thread workspace (.ai-pilot only). No MaxView clone.
+    let workspaceRef: string | undefined;
+    let checkoutRef: string | undefined;
+    let materializationReason = 'materialized';
+
+    if (SHARED_READ_WORKFLOW_CLASSES.has(input.workflowClass)) {
+      try {
+        const sharedPath = resolveReadySharedCheckoutPath(
+          prepared.targetGrounding,
+          sharedReadCheckout,
+        );
+        if (sharedPath) {
+          await clearGenerationOutput(prepared.threadWorkspacePath);
+          workspaceRef = prepared.threadWorkspacePath;
+          checkoutRef = sharedPath;
+          materializationReason = 'shared-read-checkout';
+          safeTrack(
+            'grounding.materialization.local-reuse',
+            {
+              workflowClass: input.workflowClass,
+              project: input.destinationRun.project,
+              source: 'shared-read-checkout',
+              outcome: 'thin-workspace',
+            },
+            { durationMs: Math.max(0, now() - preparationStartedAt) },
+          );
+        }
+      } catch {
+        // Fall through to the legacy writable clone path.
+      }
     }
 
-    if (
-      materialized.state !== 'materialized'
-      || !materialized.workspacePath
-    ) {
-      return recoverPreparation(
-        input,
-        'materialization-unavailable',
-        preparationStartedAt,
-      );
-    }
+    if (!workspaceRef) {
+      let materialized: RunGroundingMaterializationResult;
+      try {
+        materialized = await repositoryPreparation.prepareWritable({
+          destinationRun: input.destinationRun,
+          workflowClass: input.workflowClass,
+          targetGrounding: prepared.targetGrounding,
+          repository: prepared.repository,
+        });
+      } catch {
+        return recoverPreparation(
+          input,
+          'materialization-failed',
+          preparationStartedAt,
+        );
+      }
 
-    try {
-      await prepareWorkspace(
-        prepared.threadWorkspacePath,
-        materialized.workspacePath,
-      );
-    } catch {
-      return recoverPreparation(
-        input,
-        'workspace-preparation-failed',
-        preparationStartedAt,
-      );
+      if (
+        materialized.state !== 'materialized'
+        || !materialized.workspacePath
+      ) {
+        return recoverPreparation(
+          input,
+          'materialization-unavailable',
+          preparationStartedAt,
+        );
+      }
+
+      try {
+        await prepareWorkspace(
+          prepared.threadWorkspacePath,
+          materialized.workspacePath,
+        );
+      } catch {
+        return recoverPreparation(
+          input,
+          'workspace-preparation-failed',
+          preparationStartedAt,
+        );
+      }
+
+      workspaceRef = materialized.workspacePath;
     }
 
     safeTrack(
@@ -316,7 +402,7 @@ export function createBackgroundWorkflowRouter(
         workflowClass: input.workflowClass,
         project: input.destinationRun.project,
         route: 'worker',
-        reason: 'materialized',
+        reason: materializationReason,
       },
       { durationMs: Math.max(0, now() - preparationStartedAt) },
     );
@@ -324,7 +410,8 @@ export function createBackgroundWorkflowRouter(
     const snapshot: ExecutionSnapshot = {
       prompt: prepared.prompt,
       model: prepared.model,
-      workspaceRef: materialized.workspacePath,
+      workspaceRef,
+      ...(checkoutRef ? { checkoutRef } : {}),
       workflowClass: input.workflowClass,
       skillPath: prepared.skillPath,
       projectId: prepared.projectId,
@@ -347,10 +434,10 @@ export function createBackgroundWorkflowRouter(
         preparationStartedAt,
       );
     }
-    routeDecision(input, 'worker', 'materialized');
+    routeDecision(input, 'worker', materializationReason);
     return {
       route: 'worker',
-      workspacePath: materialized.workspacePath,
+      workspacePath: workspaceRef,
       runId: enqueued.runId,
     };
   };
