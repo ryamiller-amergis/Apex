@@ -85,6 +85,69 @@ function isStopRaceIngestError(error: unknown): boolean {
   );
 }
 
+/** Max chars of a redacted failure reason surfaced durably + on the live bus. */
+const MAX_FAILURE_REASON_LENGTH = 200;
+
+/**
+ * Drop an error message that could carry prompt/snapshot/secret/path material
+ * (BR-016, BR-019). Returns a collapsed, length-capped message when it is safe
+ * to surface, or an empty string when it looks sensitive.
+ */
+function redactFailureMessage(message: string): string {
+  const collapsed = message.replace(/\s+/g, ' ').trim();
+  if (!collapsed) return '';
+  const looksSensitive =
+    /(?:^|[\s"'=])(?:[a-z]:[\\/]|\\\\)/i.test(collapsed) ||
+    /(?:^|[\s"'=])\/(?:home|users?|tmp|var|opt|mnt|root|private)\//i.test(
+      collapsed,
+    ) ||
+    /\bBearer\s+\S+/i.test(collapsed) ||
+    /(?:password|passwd|token|secret|credential|api[_-]?key)\s*[=:]/i.test(
+      collapsed,
+    ) ||
+    /(?:prompt|snapshot|workspace(?:Dir|Path|Content)?)\s*[=:]/i.test(
+      collapsed,
+    ) ||
+    /https?:\/\/[^/\s:@]+:[^/\s@]+@/i.test(collapsed);
+  if (looksSensitive) return '';
+  return collapsed.slice(0, MAX_FAILURE_REASON_LENGTH);
+}
+
+/**
+ * Build a short, secret-safe description of a fatal turn error so the durable
+ * terminal (`last_error`), the live error frame, and container logs carry the
+ * real cause instead of the opaque "Interactive turn failed". We surface the
+ * error class + code, plus a redacted message slice only when it is safe.
+ */
+function describeInteractiveFailure(error: unknown): {
+  reason: string;
+  errorName: string;
+  errorCode: string | null;
+} {
+  const err =
+    error && typeof error === 'object'
+      ? (error as { name?: unknown; message?: unknown; code?: unknown })
+      : null;
+  const errorName =
+    (typeof err?.name === 'string' && err.name.trim()) || 'Error';
+  const errorCode =
+    typeof err?.code === 'string' && err.code.trim()
+      ? err.code.trim().slice(0, 64)
+      : null;
+  const redactedMessage = redactFailureMessage(
+    typeof err?.message === 'string' ? err.message : '',
+  );
+  const head = errorCode ? `${errorName} (${errorCode})` : errorName;
+  const reason = redactedMessage
+    ? `Interactive turn failed: ${head}: ${redactedMessage}`
+    : `Interactive turn failed: ${head}`;
+  return {
+    reason: reason.slice(0, MAX_FAILURE_REASON_LENGTH),
+    errorName: errorName.slice(0, 64),
+    errorCode,
+  };
+}
+
 /** Warm per-thread session reused across turns (single activation). */
 export interface WarmThreadCheckout {
   workspacePath: string;
@@ -544,11 +607,22 @@ export function createInteractiveSessionActor(
         return { status: 'cancelled' };
       }
       await disposeAgentEntry(threadId);
+      // Unmask the real cause (redacted) so the durable terminal (`last_error`),
+      // the live error frame, and container logs are diagnosable instead of the
+      // opaque "Interactive turn failed". Redaction keeps prompt/snapshot/secret
+      // material out (BR-016, BR-019).
+      const failure = describeInteractiveFailure(error);
+      console.error('[interactive] turn failed', {
+        runId,
+        errorName: failure.errorName,
+        errorCode: failure.errorCode,
+        reason: failure.reason,
+      });
       // Live failure so the socket surfaces the error and stops spinning; the
       // durable failed terminal + `done` (below, via ingest) cover replay.
       await publishLiveEvent({
         type: 'error',
-        error: 'Interactive turn failed',
+        error: failure.reason,
         errorCode: 'fatal',
       }).catch(() => {});
       await publishLiveEvent({ type: 'done', runId }).catch(() => {});
@@ -556,7 +630,7 @@ export function createInteractiveSessionActor(
         dispatchMessageId,
         kind: 'terminal',
         status: 'failed',
-        detail: 'Interactive turn failed',
+        detail: failure.reason,
         artifactsFlushed: false,
       }).catch(() => {});
       throw error;

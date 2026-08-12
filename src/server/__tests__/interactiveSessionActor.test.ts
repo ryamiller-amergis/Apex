@@ -340,6 +340,72 @@ describe('interactiveSessionActor', () => {
     );
   });
 
+  it('surfaces a specific, redacted failure reason on a fatal turn error', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const posted: AiRunIngestBody[] = [];
+    const { publishLive, live } = captureLive();
+    const fatal = Object.assign(new Error('spawn bash ENOENT'), { code: 'ENOENT' });
+    const deps: InteractiveActorDependencies = {
+      openWarmCheckout: jest.fn(async () => ({ workspacePath: '/warm/checkout' })),
+      acquireAgent: jest.fn(async () => {
+        throw fatal;
+      }),
+      publishLive,
+      postIngest: jest.fn(async (_p, _r, body): Promise<AiRunIngestResponse> => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      }),
+    };
+
+    const actor = createInteractiveSessionActor(deps);
+    await expect(actor.handleTurn(makeRequest())).rejects.toThrow();
+
+    const liveError = live.find((e) => e.event.type === 'error');
+    expect(liveError?.event).toMatchObject({ type: 'error', errorCode: 'fatal' });
+    const surfaced = (liveError?.event as { error: string }).error;
+    expect(surfaced).toContain('Interactive turn failed');
+    expect(surfaced).toContain('ENOENT');
+
+    const terminal = posted.find(
+      (b) => b.kind === 'terminal' && b.status === 'failed',
+    );
+    expect(terminal).toBeDefined();
+    expect((terminal as { detail?: string }).detail).toContain('ENOENT');
+
+    errorSpy.mockRestore();
+  });
+
+  it('redacts secret-bearing fatal error messages to the error class only', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const posted: AiRunIngestBody[] = [];
+    const { publishLive } = captureLive();
+    const secret = new Error('Authorization: Bearer sk-supersecrettoken12345');
+    const deps: InteractiveActorDependencies = {
+      openWarmCheckout: jest.fn(async () => ({ workspacePath: '/warm/checkout' })),
+      acquireAgent: jest.fn(async () => {
+        throw secret;
+      }),
+      publishLive,
+      postIngest: jest.fn(async (_p, _r, body): Promise<AiRunIngestResponse> => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      }),
+    };
+
+    const actor = createInteractiveSessionActor(deps);
+    await expect(actor.handleTurn(makeRequest())).rejects.toThrow();
+
+    const terminal = posted.find(
+      (b) => b.kind === 'terminal' && b.status === 'failed',
+    );
+    const detail = (terminal as { detail?: string }).detail ?? '';
+    expect(detail).toContain('Interactive turn failed');
+    expect(detail).not.toContain('Bearer');
+    expect(detail).not.toContain('supersecrettoken');
+
+    errorSpy.mockRestore();
+  });
+
   it('serializes turns per thread, reuses checkout, and reuses the live Agent cache', async () => {
     const gate = deferred();
     const startOrder: string[] = [];

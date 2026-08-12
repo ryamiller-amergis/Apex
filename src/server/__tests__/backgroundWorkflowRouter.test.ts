@@ -464,7 +464,7 @@ describe('background workspace preparation', () => {
     await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
-  it('BR-007 / VT-01: safely merges complete .ai-pilot inputs and outputs idempotently', async () => {
+  it('BR-007 / VT-01: merges .ai-pilot inputs/outputs and drops destination-only leftovers', async () => {
     const source = path.join(tempRoot, 'thread');
     const destination = path.join(tempRoot, 'pinned');
     await fs.mkdir(path.join(source, '.ai-pilot', 'output'), { recursive: true });
@@ -492,8 +492,39 @@ describe('background workspace preparation', () => {
       fs.readFile(path.join(destination, '.ai-pilot', 'output', 'generated.json'), 'utf8'),
     ).resolves.toBe('{"version":2}');
     await expect(
-      fs.readFile(path.join(destination, '.ai-pilot', 'output', 'preserved.md'), 'utf8'),
-    ).resolves.toBe('preserve me');
+      fs.access(path.join(destination, '.ai-pilot', 'output', 'preserved.md')),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('clears destination-only leftover output before overlaying thread .ai-pilot', async () => {
+    const source = path.join(tempRoot, 'thread-fresh');
+    const destination = path.join(tempRoot, 'pinned-contaminated');
+    await fs.mkdir(path.join(source, '.ai-pilot'), { recursive: true });
+    await fs.mkdir(path.join(destination, '.ai-pilot', 'output'), { recursive: true });
+    await fs.writeFile(
+      path.join(source, '.ai-pilot', 'kickoff-transcript.md'),
+      '# Interview Transcript\n\n**User:** add a counter\n',
+    );
+    await fs.writeFile(
+      path.join(destination, '.ai-pilot', 'output', 'blackout-date.prd.md'),
+      '# Blackout Date Rule Administration\n',
+    );
+    await fs.writeFile(
+      path.join(destination, '.ai-pilot', 'output', 'blackout-date.backlog.json'),
+      '{}',
+    );
+
+    await prepareBackgroundWorkflowWorkspace(source, destination);
+
+    await expect(
+      fs.readFile(path.join(destination, '.ai-pilot', 'kickoff-transcript.md'), 'utf8'),
+    ).resolves.toContain('add a counter');
+    await expect(
+      fs.access(path.join(destination, '.ai-pilot', 'output', 'blackout-date.prd.md')),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(
+      fs.access(path.join(destination, '.ai-pilot', 'output', 'blackout-date.backlog.json')),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('AC-1 / DoD-2: rejects symlinks instead of copying content outside .ai-pilot', async () => {

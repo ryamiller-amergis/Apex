@@ -1598,6 +1598,19 @@ describe('document assistant MCP wiring', () => {
       )
     ).toBe(true);
     expect(
+      isInteractiveWorkspaceBoundSkill('.cursor/skills/to-prd/SKILL.md')
+    ).toBe(true);
+    expect(
+      isInteractiveWorkspaceBoundSkill(
+        '.cursor/skills/create-test-case/SKILL.md'
+      )
+    ).toBe(true);
+    expect(
+      isInteractiveWorkspaceBoundSkill(
+        '.cursor/skills/prd-design-spec/SKILL.md'
+      )
+    ).toBe(true);
+    expect(
       isInteractiveWorkspaceBoundSkill(
         '.cursor/skills/grill-with-docs/SKILL.md'
       )

@@ -110,8 +110,12 @@ async function copyDirectoryContentsSafely(
 }
 
 /**
- * Idempotently overlays generation scratch inputs and outputs onto the pinned
- * checkout. Existing destination-only files are preserved for safe retries.
+ * Overlays generation scratch inputs onto the pinned writable checkout.
+ *
+ * Destination `.ai-pilot/output` is cleared first so leftover PRD/design-doc
+ * artifacts from a prior generation on a reused tree cannot contaminate the
+ * current run. Source files (kickoff transcript, context, then any fresh
+ * outputs already on the thread workspace) win after the clear.
  */
 export async function prepareBackgroundWorkflowWorkspace(
   threadWorkspacePath: string,
@@ -120,6 +124,8 @@ export async function prepareBackgroundWorkflowWorkspace(
   const source = path.resolve(threadWorkspacePath, '.ai-pilot');
   const destination = path.resolve(pinnedWorkspacePath, '.ai-pilot');
   if (source === destination) return;
+  const destinationOutput = path.join(destination, 'output');
+  await fs.rm(destinationOutput, { recursive: true, force: true });
   await copyDirectoryContentsSafely(source, destination);
 }
 
