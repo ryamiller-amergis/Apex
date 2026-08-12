@@ -99,6 +99,11 @@ import {
   triggerTestCaseGeneration,
 } from '../services/testCaseService';
 import { generateFallbackReport as generateFallbackValidationReport } from '../services/documentValidationService';
+import { isProjectRepositoryCheckoutReadinessEnabled } from '../services/featureFlagService';
+import {
+  assertResolvedProjectRepositoryReady,
+  ProjectRepositoryNotReady,
+} from '../services/projectRepositoryReadinessService';
 import type { InterviewStatus, PrdStatus, ReviewPrdRequest, DesignDocStatus, ReviewDesignDocRequest } from '../../shared/types/interview';
 
 const router = Router();
@@ -144,6 +149,31 @@ router.post('/', requirePermission('interviews:manage'), requireGroupMembership(
       res.status(400).json({ error: 'project, repo, and chatThreadId are required' });
       return;
     }
+
+    const readinessEnabled = await isProjectRepositoryCheckoutReadinessEnabled({
+      userId,
+      project,
+      caller: 'interview',
+    });
+    // @feature-flag:project-repository-checkout-readiness start winner=enabled
+    if (readinessEnabled) {
+      // @feature-flag:project-repository-checkout-readiness enabled-start
+      try {
+        await assertResolvedProjectRepositoryReady({
+          project,
+          settingsId: skillSettingsId,
+          surface: 'interview',
+        });
+      } catch (e) {
+        if (e instanceof ProjectRepositoryNotReady) {
+          res.status(409).json(e.toJSON());
+          return;
+        }
+        throw e;
+      }
+      // @feature-flag:project-repository-checkout-readiness enabled-end
+    }
+    // @feature-flag:project-repository-checkout-readiness end
 
     const result = await createInterview({ userId, project, repo, title, chatThreadId, model, skillSettingsId, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds, prototypeStageEnabled, testCasesEnabled });
     res.status(201).json(result);
@@ -234,7 +264,7 @@ router.post('/prds/:prdId/test-cases/generate', requirePermission('interviews:ma
     const { prdId } = req.params;
     const prdRow = await db.query.prds.findFirst({
       where: eq(prdsTable.id, prdId),
-      columns: { id: true, chatThreadId: true, content: true, backlogJson: true },
+      columns: { id: true, chatThreadId: true, content: true, backlogJson: true, project: true, skillSettingsId: true },
     });
     if (!prdRow) {
       res.status(404).json({ error: 'PRD not found' });
@@ -244,11 +274,38 @@ router.post('/prds/:prdId/test-cases/generate', requirePermission('interviews:ma
       res.status(422).json({ error: 'PRD content must exist before generating test cases' });
       return;
     }
+
+    const userId = getUserId(req);
+    const readinessEnabled = await isProjectRepositoryCheckoutReadinessEnabled({
+      userId,
+      project: prdRow.project,
+      caller: 'test-case-generation',
+    });
+    // @feature-flag:project-repository-checkout-readiness start winner=enabled
+    if (readinessEnabled) {
+      // @feature-flag:project-repository-checkout-readiness enabled-start
+      try {
+        await assertResolvedProjectRepositoryReady({
+          project: prdRow.project,
+          settingsId: prdRow.skillSettingsId,
+          surface: 'test-case-generation',
+        });
+      } catch (e) {
+        if (e instanceof ProjectRepositoryNotReady) {
+          res.status(409).json(e.toJSON());
+          return;
+        }
+        throw e;
+      }
+      // @feature-flag:project-repository-checkout-readiness enabled-end
+    }
+    // @feature-flag:project-repository-checkout-readiness end
+
     const sourceThreadId = prdRow.chatThreadId ?? '';
     const started = await triggerTestCaseGeneration(
       prdId,
       sourceThreadId,
-      getUserId(req),
+      userId,
     );
     res.json({ started });
   } catch (err) {
@@ -594,6 +651,7 @@ async function startDesignDocsForApprovedPrd(
           skillPath: designDocSkillPath,
           freeformContext,
           model,
+          skillSettingsId: prd.skillSettingsId ?? null,
         },
         {
           kickoffMessage: `Generate the design doc for the single feature "${featureTitle}" using the PRD, backlog, and context provided in \`.ai-pilot/kickoff-context.md\`. This is a non-interactive generation task — do not ask questions. Write all three output files (\`design-doc-design.md\`, \`design-doc-tech-spec.md\`, \`design-doc-assumptions.md\`) to \`.ai-pilot/output/\`.`,
@@ -659,6 +717,31 @@ router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), 
       return;
     }
 
+    const readinessEnabled = await isProjectRepositoryCheckoutReadinessEnabled({
+      userId,
+      project: prd.project,
+      caller: 'design-doc-generation',
+    });
+    // @feature-flag:project-repository-checkout-readiness start winner=enabled
+    if (readinessEnabled) {
+      // @feature-flag:project-repository-checkout-readiness enabled-start
+      try {
+        await assertResolvedProjectRepositoryReady({
+          project: prd.project,
+          settingsId: prd.skillSettingsId,
+          surface: 'design-doc-generation',
+        });
+      } catch (e) {
+        if (e instanceof ProjectRepositoryNotReady) {
+          res.status(409).json(e.toJSON());
+          return;
+        }
+        throw e;
+      }
+      // @feature-flag:project-repository-checkout-readiness enabled-end
+    }
+    // @feature-flag:project-repository-checkout-readiness end
+
     const createdDocs = await startDesignDocsForApprovedPrd(req.params.prdId, userId, prd);
     res.status(201).json({
       designDocIds: createdDocs.map(d => d.designDocId),
@@ -708,6 +791,31 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
       res.status(404).json({ error: 'PRD not found' });
       return;
     }
+
+    const readinessEnabled = await isProjectRepositoryCheckoutReadinessEnabled({
+      userId,
+      project: prd.project,
+      caller: 'prd-assistant',
+    });
+    // @feature-flag:project-repository-checkout-readiness start winner=enabled
+    if (readinessEnabled) {
+      // @feature-flag:project-repository-checkout-readiness enabled-start
+      try {
+        await assertResolvedProjectRepositoryReady({
+          project: prd.project,
+          settingsId: prd.skillSettingsId,
+          surface: 'prd-assistant',
+        });
+      } catch (e) {
+        if (e instanceof ProjectRepositoryNotReady) {
+          res.status(409).json(e.toJSON());
+          return;
+        }
+        throw e;
+      }
+      // @feature-flag:project-repository-checkout-readiness enabled-end
+    }
+    // @feature-flag:project-repository-checkout-readiness end
 
     const skillConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
     const globalModel = await getDefaultModel();
@@ -788,6 +896,7 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
       freeformContext: buildPrdContext('__THREAD_ID__'),
       model,
       assistantType: 'prd',
+      skillSettingsId: prd.skillSettingsId ?? skillConfig?.id ?? null,
     }, {
       kickoffMessage:
         'Introduce yourself as Apex, the PRD assistant. ' +
@@ -1165,6 +1274,32 @@ router.post('/prds/:prdId/validation-thread', requirePermission('interviews:mana
     const prd = await getPrd(req.params.prdId);
     if (!prd) { res.status(404).json({ error: 'PRD not found' }); return; }
 
+    const userId = getUserId(req);
+    const readinessEnabled = await isProjectRepositoryCheckoutReadinessEnabled({
+      userId,
+      project: prd.project,
+      caller: 'prd-validation',
+    });
+    // @feature-flag:project-repository-checkout-readiness start winner=enabled
+    if (readinessEnabled) {
+      // @feature-flag:project-repository-checkout-readiness enabled-start
+      try {
+        await assertResolvedProjectRepositoryReady({
+          project: prd.project,
+          settingsId: prd.skillSettingsId,
+          surface: 'prd-validation',
+        });
+      } catch (e) {
+        if (e instanceof ProjectRepositoryNotReady) {
+          res.status(409).json(e.toJSON());
+          return;
+        }
+        throw e;
+      }
+      // @feature-flag:project-repository-checkout-readiness enabled-end
+    }
+    // @feature-flag:project-repository-checkout-readiness end
+
     await autoStartPrdValidation(req.params.prdId, { force: true });
     const updated = await getPrd(req.params.prdId);
     res.json({ threadId: updated?.validationThreadId ?? null });
@@ -1469,6 +1604,31 @@ router.post('/design-docs/:id/retry-generate', requirePermission('interviews:man
       return;
     }
 
+    const readinessEnabled = await isProjectRepositoryCheckoutReadinessEnabled({
+      userId,
+      project: doc.project,
+      caller: 'design-doc-generation',
+    });
+    // @feature-flag:project-repository-checkout-readiness start winner=enabled
+    if (readinessEnabled) {
+      // @feature-flag:project-repository-checkout-readiness enabled-start
+      try {
+        await assertResolvedProjectRepositoryReady({
+          project: doc.project,
+          settingsId: doc.skillSettingsId,
+          surface: 'design-doc-generation',
+        });
+      } catch (e) {
+        if (e instanceof ProjectRepositoryNotReady) {
+          res.status(409).json(e.toJSON());
+          return;
+        }
+        throw e;
+      }
+      // @feature-flag:project-repository-checkout-readiness enabled-end
+    }
+    // @feature-flag:project-repository-checkout-readiness end
+
     const skillConfig = await resolveSkillConfig({ project: doc.project, settingsId: doc.skillSettingsId ?? undefined });
     const prd = await getPrd(doc.prdId);
 
@@ -1573,6 +1733,7 @@ router.post('/design-docs/:id/retry-generate', requirePermission('interviews:man
       skillPath: skillConfig?.designDocSkillPath ?? undefined,
       freeformContext,
       model,
+      skillSettingsId: doc.skillSettingsId ?? skillConfig?.id ?? null,
     }, { skipAutoKickoff: true });
 
     // Reset the row: clear error, attach new thread, set back to generating.
@@ -1619,6 +1780,31 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
       res.status(404).json({ error: 'Design doc not found' });
       return;
     }
+
+    const readinessEnabled = await isProjectRepositoryCheckoutReadinessEnabled({
+      userId,
+      project: doc.project,
+      caller: 'design-doc-assistant',
+    });
+    // @feature-flag:project-repository-checkout-readiness start winner=enabled
+    if (readinessEnabled) {
+      // @feature-flag:project-repository-checkout-readiness enabled-start
+      try {
+        await assertResolvedProjectRepositoryReady({
+          project: doc.project,
+          settingsId: doc.skillSettingsId,
+          surface: 'design-doc-assistant',
+        });
+      } catch (e) {
+        if (e instanceof ProjectRepositoryNotReady) {
+          res.status(409).json(e.toJSON());
+          return;
+        }
+        throw e;
+      }
+      // @feature-flag:project-repository-checkout-readiness enabled-end
+    }
+    // @feature-flag:project-repository-checkout-readiness end
 
     const skillConfig = await resolveSkillConfig({ project: doc.project, settingsId: doc.skillSettingsId ?? undefined });
     const globalModel = await getDefaultModel();
@@ -1699,6 +1885,7 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
       freeformContext: buildDocContext('__THREAD_ID__'),
       model,
       assistantType: 'design-doc',
+      skillSettingsId: doc.skillSettingsId ?? skillConfig?.id ?? null,
     }, { skipAutoKickoff: true });
 
     // Rewrite the context file now that we have the real thread ID.
@@ -1725,6 +1912,32 @@ router.post('/design-docs/:id/validation-thread', requirePermission('interviews:
   try {
     const doc = await getDesignDoc(req.params.id);
     if (!doc) { res.status(404).json({ error: 'Design doc not found' }); return; }
+
+    const userId = getUserId(req);
+    const readinessEnabled = await isProjectRepositoryCheckoutReadinessEnabled({
+      userId,
+      project: doc.project,
+      caller: 'design-doc-validation',
+    });
+    // @feature-flag:project-repository-checkout-readiness start winner=enabled
+    if (readinessEnabled) {
+      // @feature-flag:project-repository-checkout-readiness enabled-start
+      try {
+        await assertResolvedProjectRepositoryReady({
+          project: doc.project,
+          settingsId: doc.skillSettingsId,
+          surface: 'design-doc-validation',
+        });
+      } catch (e) {
+        if (e instanceof ProjectRepositoryNotReady) {
+          res.status(409).json(e.toJSON());
+          return;
+        }
+        throw e;
+      }
+      // @feature-flag:project-repository-checkout-readiness enabled-end
+    }
+    // @feature-flag:project-repository-checkout-readiness end
 
     await autoStartValidation(req.params.id);
     const updated = await getDesignDoc(req.params.id);
@@ -2723,6 +2936,31 @@ router.post('/:interviewId/prds', requirePermission('interviews:manage'), async 
       res.status(404).json({ error: 'Interview not found' });
       return;
     }
+
+    const readinessEnabled = await isProjectRepositoryCheckoutReadinessEnabled({
+      userId,
+      project: interview.project,
+      caller: 'prd-generation',
+    });
+    // @feature-flag:project-repository-checkout-readiness start winner=enabled
+    if (readinessEnabled) {
+      // @feature-flag:project-repository-checkout-readiness enabled-start
+      try {
+        await assertResolvedProjectRepositoryReady({
+          project: interview.project,
+          settingsId: interview.skillSettingsId,
+          surface: 'prd-generation',
+        });
+      } catch (e) {
+        if (e instanceof ProjectRepositoryNotReady) {
+          res.status(409).json(e.toJSON());
+          return;
+        }
+        throw e;
+      }
+      // @feature-flag:project-repository-checkout-readiness enabled-end
+    }
+    // @feature-flag:project-repository-checkout-readiness end
 
     const result = await createPrd({
       interviewId: req.params.interviewId,

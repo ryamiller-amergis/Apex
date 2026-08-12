@@ -438,6 +438,26 @@ describe('createPrd', () => {
     );
   });
 
+  it('VT-12: persists Interview skillSettingsId onto the PRD row', async () => {
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'prd-settings' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await createPrd({
+      interviewId: 'interview-1',
+      project: 'proj-alpha',
+      userId: 'user-1',
+      chatThreadId: 'thread-prd',
+      skillSettingsId: 'interview-skill-settings',
+    });
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skillSettingsId: 'interview-skill-settings',
+      }),
+    );
+  });
+
   it('returns immediately without awaiting grounding materialization', async () => {
     const {
       propagatePipelineGrounding,
@@ -551,6 +571,41 @@ describe('routePrdGenerationKickoff', () => {
       { deferMaterialization: true },
     );
     expect(mockRouteBackgroundWorkflow).toHaveBeenCalled();
+  });
+
+  it('VT-12: Interview→PRD kickoff inherits grounding via propagatePipelineGrounding', async () => {
+    const {
+      propagatePipelineGrounding,
+      resolveRunGroundingSurface,
+    } = jest.requireMock('../services/runGroundingService') as {
+      propagatePipelineGrounding: jest.Mock;
+      resolveRunGroundingSurface: jest.Mock;
+    };
+    resolveRunGroundingSurface.mockResolvedValue({
+      run: { runType: 'chat', runId: 'interview-thread', project: 'proj-alpha' },
+    });
+    propagatePipelineGrounding.mockResolvedValue({
+      grounding: {
+        groundedSha: 'a'.repeat(40),
+        runId: 'thread-prd',
+      },
+      materialization: 'deferred',
+    });
+
+    await routePrdGenerationKickoff({
+      prdId: 'prd-1',
+      userId: 'user-1',
+      project: 'proj-alpha',
+      threadId: 'thread-prd',
+      interviewId: 'interview-1',
+    });
+
+    expect(propagatePipelineGrounding).toHaveBeenCalledTimes(1);
+    expect(propagatePipelineGrounding.mock.calls[0][0]).toEqual({
+      runType: 'chat',
+      runId: 'interview-thread',
+      project: 'proj-alpha',
+    });
   });
 
   it('AC-0: worker routing does not start in-process PRD execution', async () => {

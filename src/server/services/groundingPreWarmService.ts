@@ -56,6 +56,11 @@ export interface GroundingPreWarmDependencies {
   enqueueImpact?: typeof groundingImpactEvaluatorService.enqueue;
   telemetry?: typeof trackEvent;
   now?: () => number;
+  /**
+   * When true for the target project, preWarm is a no-op (Deployment B enabled
+   * path — admin clone owns mirrors; no Blob publish / shared prewarm).
+   */
+  isCheckoutReadinessEnabled?: (project: string) => Promise<boolean>;
 }
 
 function cacheOptions(target: PreWarmTarget): RepoCacheOptions {
@@ -199,6 +204,15 @@ export function createGroundingPreWarmService(
   const enqueueImpact =
     dependencies.enqueueImpact ??
     ((event) => groundingImpactEvaluatorService.enqueue(event));
+  const isCheckoutReadinessEnabled =
+    dependencies.isCheckoutReadinessEnabled ??
+    (async (project: string) => {
+      // Lazy import avoids pulling featureFlagService into every Jest graph that
+      // only exercises injected prewarm dependencies.
+      const { isProjectRepositoryCheckoutReadinessEnabledForProject } =
+        await import('./featureFlagService');
+      return isProjectRepositoryCheckoutReadinessEnabledForProject(project);
+    });
   const inFlight = new Map<string, Promise<void>>();
 
   const preWarm = (target: PreWarmTarget): Promise<void> => {
@@ -206,120 +220,135 @@ export function createGroundingPreWarmService(
     const existing = inFlight.get(identity);
     if (existing) return existing;
 
-    const options = cacheOptions(target);
-    const requestedAt = now();
-    const previousSha = Promise.resolve(readCachedSha(target)).catch(
-      () => null
-    );
-    const operation = previousSha
-      .then(async (fromSha) => {
-        const refreshed = { sha: null as string | null };
-        await withLease(getRepoCacheLeaseKey(options), async (lease) => {
-          lease.signal.throwIfAborted();
-          const coalesced = wasRefreshedSince(options, requestedAt);
-          if (!coalesced) {
-            await refreshUnderLease(options, lease);
-          }
-          lease.signal.throwIfAborted();
-          telemetry(
-            'grounding.mirror.prewarm',
-            {
-              provider: target.provider,
-              project: target.project,
-              repository: target.repository,
-              branch: target.branch,
-              outcome: coalesced ? 'coalesced' : 'refreshed',
-            },
-            { durationMs: Math.max(0, now() - requestedAt) }
-          );
-          refreshed.sha = await Promise.resolve(readCachedSha(target)).catch(
-            () => null
-          );
-        });
+    const operation = (async () => {
+      // @feature-flag:project-repository-checkout-readiness start winner=enabled
+      let checkoutReadinessEnabled = false;
+      try {
+        checkoutReadinessEnabled = await isCheckoutReadinessEnabled(
+          target.project,
+        );
+      } catch {
+        checkoutReadinessEnabled = false;
+      }
+      if (checkoutReadinessEnabled) {
+        // @feature-flag:project-repository-checkout-readiness enabled-start
+        // Admin-managed checkouts: no mirror refresh / Blob publish / shared prewarm.
+        return;
+        // @feature-flag:project-repository-checkout-readiness enabled-end
+      }
+      // @feature-flag:project-repository-checkout-readiness end
 
-        const cachedSha = refreshed.sha?.trim();
-        const toSha = cachedSha || null;
-        if (cachedSha) {
-          try {
-            const outcome = await publishBundle({
-              identity: {
-                provider: options.provider,
-                project: target.project,
-                repo: target.repository,
-                sha: cachedSha,
-              },
-              cacheDir: getRepoCacheDir(options),
-              branch: target.branch,
-            });
-            telemetry('grounding.bundle.publish', {
-              provider: target.provider,
-              project: target.project,
-              repository: target.repository,
-              branch: target.branch,
-              outcome,
-            });
-          } catch {
-            telemetry('grounding.bundle.publish', {
-              provider: target.provider,
-              project: target.project,
-              repository: target.repository,
-              branch: target.branch,
-              outcome: 'failed',
-            });
-          }
+      const options = cacheOptions(target);
+      const requestedAt = now();
+      const fromSha = await Promise.resolve(readCachedSha(target)).catch(
+        () => null,
+      );
+      const refreshed = { sha: null as string | null };
+      await withLease(getRepoCacheLeaseKey(options), async (lease) => {
+        lease.signal.throwIfAborted();
+        const coalesced = wasRefreshedSince(options, requestedAt);
+        if (!coalesced) {
+          await refreshUnderLease(options, lease);
+        }
+        lease.signal.throwIfAborted();
+        telemetry(
+          'grounding.mirror.prewarm',
+          {
+            provider: target.provider,
+            project: target.project,
+            repository: target.repository,
+            branch: target.branch,
+            outcome: coalesced ? 'coalesced' : 'refreshed',
+          },
+          { durationMs: Math.max(0, now() - requestedAt) }
+        );
+        refreshed.sha = await Promise.resolve(readCachedSha(target)).catch(
+          () => null
+        );
+      });
 
-          try {
-            const { outcome } = await materializeSharedCheckout({
+      const cachedSha = refreshed.sha?.trim();
+      const toSha = cachedSha || null;
+      if (cachedSha) {
+        try {
+          const outcome = await publishBundle({
+            identity: {
               provider: options.provider,
               project: target.project,
               repo: target.repository,
-              branch: target.branch,
               sha: cachedSha,
-            });
-            telemetry('grounding.shared.prewarm', {
-              provider: target.provider,
-              project: target.project,
-              repository: target.repository,
-              branch: target.branch,
-              sha: cachedSha,
-              outcome,
-            });
-          } catch {
-            telemetry('grounding.shared.prewarm', {
-              provider: target.provider,
-              project: target.project,
-              repository: target.repository,
-              branch: target.branch,
-              sha: cachedSha,
-              outcome: 'failed',
-            });
-            // Shared checkout prewarming is only an acceleration. The
-            // user-facing preparation path owns on-demand materialization.
-          }
+            },
+            cacheDir: getRepoCacheDir(options),
+            branch: target.branch,
+          });
+          telemetry('grounding.bundle.publish', {
+            provider: target.provider,
+            project: target.project,
+            repository: target.repository,
+            branch: target.branch,
+            outcome,
+          });
+        } catch {
+          telemetry('grounding.bundle.publish', {
+            provider: target.provider,
+            project: target.project,
+            repository: target.repository,
+            branch: target.branch,
+            outcome: 'failed',
+          });
         }
 
-        void Promise.resolve()
-          .then(async () => {
-            if (!fromSha || !toSha || toSha === fromSha) return;
-            const changedFiles = safeChangedPaths(
-              await listChangedPaths(options, fromSha, toSha)
-            );
-            if (changedFiles.length === 0) return;
-            enqueueImpact({
-              provider: target.provider,
-              project: target.project,
-              repository: target.repository,
-              branch: target.branch,
-              fromSha,
-              toSha,
-              changedFiles,
-            });
-          })
-          .catch(() => undefined);
-      })
-      .finally(() => {
-        inFlight.delete(identity);
-      });
+        try {
+          const { outcome } = await materializeSharedCheckout({
+            provider: options.provider,
+            project: target.project,
+            repo: target.repository,
+            branch: target.branch,
+            sha: cachedSha,
+          });
+          telemetry('grounding.shared.prewarm', {
+            provider: target.provider,
+            project: target.project,
+            repository: target.repository,
+            branch: target.branch,
+            sha: cachedSha,
+            outcome,
+          });
+        } catch {
+          telemetry('grounding.shared.prewarm', {
+            provider: target.provider,
+            project: target.project,
+            repository: target.repository,
+            branch: target.branch,
+            sha: cachedSha,
+            outcome: 'failed',
+          });
+          // Shared checkout prewarming is only an acceleration. The
+          // user-facing preparation path owns on-demand materialization.
+        }
+      }
+
+      void Promise.resolve()
+        .then(async () => {
+          if (!fromSha || !toSha || toSha === fromSha) return;
+          const changedFiles = safeChangedPaths(
+            await listChangedPaths(options, fromSha, toSha)
+          );
+          if (changedFiles.length === 0) return;
+          enqueueImpact({
+            provider: target.provider,
+            project: target.project,
+            repository: target.repository,
+            branch: target.branch,
+            fromSha,
+            toSha,
+            changedFiles,
+          });
+        })
+        .catch(() => undefined);
+    })().finally(() => {
+      inFlight.delete(identity);
+    });
     inFlight.set(identity, operation);
     return operation;
   };

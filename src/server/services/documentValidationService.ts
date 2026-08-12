@@ -90,6 +90,7 @@ export async function autoStartDocumentValidation(adapter: DocumentValidationAda
     skillPath,
     freeformContext: context,
     model,
+    skillSettingsId: settingsId ?? skillConfig.id ?? null,
   }, { skipAutoKickoff: true });
 
   stopDocumentValidationWatcher(adapter.getDocumentId());

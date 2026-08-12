@@ -4180,6 +4180,26 @@ router.get('/skill-configs', async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/skill-settings/:id/repository-readiness?project=<name>
+// Read-only readiness for client gating (authenticated project users).
+router.get('/skill-settings/:id/repository-readiness', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const project = req.query.project as string | undefined;
+    const { getProjectRepositoryReadiness } = await import(
+      '../services/projectRepositoryReadinessService'
+    );
+    const readiness = await getProjectRepositoryReadiness(id, { project });
+    if (!readiness) {
+      res.status(404).json({ error: 'Skill settings not found' });
+      return;
+    }
+    res.json(readiness);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // GET /api/skill-config?project=<name>&settingsId=<uuid> — resolve project skill settings
 router.get('/skill-config', async (req: Request, res: Response) => {
   try {

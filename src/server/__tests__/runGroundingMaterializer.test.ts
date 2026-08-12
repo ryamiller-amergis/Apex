@@ -478,4 +478,34 @@ describe('TBI-004 default independent grounding materializer', () => {
 
     await expect(materialize(grounding, run('telemetry-failure'))).resolves.toBe('unavailable');
   });
+
+  it('S13: checkout readiness ON skips Blob rehydrate and publish', async () => {
+    const rehydrate = jest.fn();
+    const publishBundle = jest.fn();
+    const ensureRepoCache = jest.fn().mockResolvedValue({
+      cacheDir: 'C:\\cache\\repo.git',
+      remote: { url: 'https://example.invalid/repo.git', env: {}, secret: '' },
+    });
+    const materializeWorkspaceFromCache = jest.fn().mockResolvedValue(undefined);
+    const runGit = jest.fn().mockResolvedValue('');
+    const materialize = createRunGroundingMaterializer({
+      dataRoot: 'C:\\persistent-data',
+      isCheckoutReadinessEnabled: jest.fn().mockResolvedValue(true),
+      createBundleStore: jest.fn(() => ({ rehydrate })),
+      publishBundle,
+      ensureRepoCache,
+      materializeWorkspaceFromCache,
+      runGit,
+      telemetry: jest.fn(),
+    });
+
+    await expect(materialize(grounding, run('s13-local-only'))).resolves.toBe(
+      'materialized',
+    );
+
+    expect(rehydrate).not.toHaveBeenCalled();
+    expect(publishBundle).not.toHaveBeenCalled();
+    expect(ensureRepoCache).toHaveBeenCalled();
+    expect(materializeWorkspaceFromCache).toHaveBeenCalled();
+  });
 });

@@ -2056,6 +2056,7 @@ export async function triggerFixPrdValidation(
       skillPath: skillConfig?.prdAssistantSkillPath ?? undefined,
       freeformContext: context,
       model,
+      skillSettingsId: prd.skillSettingsId ?? skillConfig?.id ?? null,
     }, { skipAutoKickoff: true });
 
     threadId = thread.id;
@@ -2275,6 +2276,7 @@ export async function triggerFixCoverageGaps(
       skillPath: skillConfig?.prdAssistantSkillPath ?? undefined,
       freeformContext: context,
       model,
+      skillSettingsId: prd.skillSettingsId ?? skillConfig?.id ?? null,
     }, { skipAutoKickoff: true });
 
     threadId = thread.id;

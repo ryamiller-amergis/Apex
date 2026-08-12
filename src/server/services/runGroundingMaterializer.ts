@@ -47,6 +47,11 @@ export interface GroundingMaterializerDependencies {
     timeoutMs: number,
   ) => Promise<void>;
   now?: () => number;
+  /**
+   * When true for the grounding project, skip Blob rehydrate/publish and
+   * materialize from the local mirror only (Deployment B enabled path).
+   */
+  isCheckoutReadinessEnabled?: (project: string) => Promise<boolean>;
 }
 
 export const EXACT_COMMIT_FETCH_TIMEOUT_MS = 45_000;
@@ -136,9 +141,34 @@ export function createRunGroundingMaterializer(
   const materializations = new Map<string, Promise<MaterializationState>>();
   const createBundleStore =
     dependencies.createBundleStore ?? createGroundingBundleStore;
-  const publishBundle =
+  const rawPublishBundle =
     dependencies.publishBundle ??
     ((input) => groundingBundlePublisher.publish(input));
+  const isCheckoutReadinessEnabled =
+    dependencies.isCheckoutReadinessEnabled ??
+    (async (project: string) => {
+      const { isProjectRepositoryCheckoutReadinessEnabledForProject } =
+        await import('./featureFlagService');
+      return isProjectRepositoryCheckoutReadinessEnabledForProject(project);
+    });
+  const publishBundle: GroundingBundlePublisher['publish'] = async (input) => {
+    // @feature-flag:project-repository-checkout-readiness start winner=enabled
+    let checkoutReadinessEnabled = false;
+    try {
+      checkoutReadinessEnabled = await isCheckoutReadinessEnabled(
+        input.identity.project,
+      );
+    } catch {
+      checkoutReadinessEnabled = false;
+    }
+    if (checkoutReadinessEnabled) {
+      // @feature-flag:project-repository-checkout-readiness enabled-start
+      return 'exists';
+      // @feature-flag:project-repository-checkout-readiness enabled-end
+    }
+    // @feature-flag:project-repository-checkout-readiness end
+    return rawPublishBundle(input);
+  };
   const store = createBundleStore({
     repairAndMaterialize: async ({ identity, destination }) => {
       const branch = branchesByDestination.get(destination);
@@ -244,6 +274,92 @@ export function createRunGroundingMaterializer(
     },
   });
 
+  const materializeLocalOnly = async (
+    grounding: RunGrounding,
+    destination: string,
+  ): Promise<MaterializationState> => {
+    const branch = grounding.branch;
+    const identity = {
+      provider: cacheProvider(grounding.provider),
+      project: grounding.project,
+      repo: grounding.repository,
+      sha: grounding.groundedSha,
+    };
+    const cacheOptions = {
+      provider: identity.provider,
+      project: identity.project,
+      repo: identity.repo,
+      branch,
+    } as const;
+    const materializePinnedSha = async (
+      cache: Pick<RepoCacheResult, 'cacheDir' | 'remote'>,
+    ): Promise<void> => {
+      await materializeFromCache(
+        cache.cacheDir,
+        destination,
+        branch,
+        cache.remote.url,
+      );
+      await runGit(
+        safeArgs(destination, ['checkout', '--detach', identity.sha]),
+        { cwd: destination },
+      );
+    };
+
+    const cache = await ensureCache(cacheOptions);
+    try {
+      await materializePinnedSha(cache);
+      return 'materialized';
+    } catch {
+      const exactFetchStartedAt = now();
+      try {
+        await exactCommitFetch(
+          cache,
+          identity.sha,
+          EXACT_COMMIT_FETCH_TIMEOUT_MS,
+        );
+        await materializePinnedSha(cache);
+        safeTelemetry(
+          'grounding.materialization.exact-fetch',
+          {
+            provider: String(identity.provider),
+            project: identity.project,
+            repository: redactSecrets(identity.repo),
+            branch,
+            reason: 'pinned-sha-miss',
+            outcome: 'materialized',
+          },
+          {
+            durationMs: Math.max(0, now() - exactFetchStartedAt),
+          },
+        );
+        return 'materialized';
+      } catch {
+        safeTelemetry(
+          'grounding.materialization.fallback',
+          {
+            provider: String(identity.provider),
+            project: identity.project,
+            repository: redactSecrets(identity.repo),
+            branch,
+            reason: 'pinned-sha-unavailable',
+            outcome: 'unavailable',
+          },
+          {
+            durationMs: Math.max(0, now() - exactFetchStartedAt),
+          },
+        );
+      }
+      try {
+        const repairedCache = await repairCache(cacheOptions);
+        await materializePinnedSha(repairedCache);
+        return 'materialized';
+      } catch {
+        return 'unavailable';
+      }
+    }
+  };
+
   return async (grounding, destinationRun) => {
     const destination = opaqueDestination(dataRoot, grounding, destinationRun);
     const existing = materializations.get(destination);
@@ -253,6 +369,23 @@ export function createRunGroundingMaterializer(
       fs.mkdirSync(path.dirname(destination), { recursive: true });
       branchesByDestination.set(destination, grounding.branch);
       try {
+        // @feature-flag:project-repository-checkout-readiness start winner=enabled
+        let checkoutReadinessEnabled = false;
+        try {
+          checkoutReadinessEnabled = await isCheckoutReadinessEnabled(
+            grounding.project,
+          );
+        } catch {
+          checkoutReadinessEnabled = false;
+        }
+        if (checkoutReadinessEnabled) {
+          // @feature-flag:project-repository-checkout-readiness enabled-start
+          // No Blob rehydrate / publish — materialize from local mirror only.
+          return materializeLocalOnly(grounding, destination);
+          // @feature-flag:project-repository-checkout-readiness enabled-end
+        }
+        // @feature-flag:project-repository-checkout-readiness end
+
         const result = await store.rehydrate(
           {
             provider: cacheProvider(grounding.provider),

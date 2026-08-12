@@ -35,6 +35,7 @@ function dependencies(
     isGroundingEnabledForCaller: jest.fn().mockResolvedValue(true),
     isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(false),
     isSharedReadCheckoutEnabledForCaller: jest.fn().mockResolvedValue(false),
+    isProjectRepositoryCheckoutReadinessEnabled: jest.fn().mockResolvedValue(false),
     evaluateNativeReadCapability: jest.fn().mockReturnValue({
       proven: false,
       reason: 'harness-not-run',

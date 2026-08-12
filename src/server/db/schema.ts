@@ -806,6 +806,18 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   designModuleModel: text('design_module_model'),
   designModuleScopingSkillPath: text('design_module_scoping_skill_path'),
   designModuleScopingModel: text('design_module_scoping_model'),
+  /** Admin-managed checkout readiness for this skill-settings repository identity. */
+  repositoryCheckoutStatus: text('repository_checkout_status').notNull().default('not_cloned'),
+  repositoryCheckoutSha: text('repository_checkout_sha'),
+  repositoryCheckoutError: text('repository_checkout_error'),
+  repositoryCheckoutStartedAt: timestamp('repository_checkout_started_at', {
+    withTimezone: true,
+    mode: 'string',
+  }),
+  repositoryCheckoutCompletedAt: timestamp('repository_checkout_completed_at', {
+    withTimezone: true,
+    mode: 'string',
+  }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (t) => ({

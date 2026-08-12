@@ -12,6 +12,8 @@ import {
   isPrdReady,
   getThread,
   recoverStaleRunningThread,
+  isRepositoryReadingChatCaller,
+  resolveGroundingCallerKey,
 } from '../services/chatAgentService';
 import { db } from '../db/drizzle';
 import { eq, desc } from 'drizzle-orm';
@@ -46,7 +48,14 @@ import {
   type AgentRunHealthSnapshot,
 } from '../services/agentRunReaperService';
 import { getMyWorkSessionContext, logMyWorkSession } from '../services/myWorkSessionLogger';
-import { isFeatureEnabled } from '../services/featureFlagService';
+import {
+  isFeatureEnabled,
+  isProjectRepositoryCheckoutReadinessEnabled,
+} from '../services/featureFlagService';
+import {
+  assertResolvedProjectRepositoryReady,
+  ProjectRepositoryNotReady,
+} from '../services/projectRepositoryReadinessService';
 import { trackEvent } from '../services/telemetry';
 
 const router = Router();
@@ -309,7 +318,39 @@ router.post('/threads', async (req: Request, res: Response) => {
   if (!body.kickoff?.repo) return res.status(400).json({ error: 'kickoff.repo is required' });
 
   try {
-    const thread = await createThread(getUserId(req), body.kickoff, {
+    const userId = getUserId(req);
+    const kickoff = body.kickoff;
+    const isDevSession = kickoff.mode === 'development';
+    if (isRepositoryReadingChatCaller(kickoff, isDevSession)) {
+      const project = kickoff.project;
+      const surface = resolveGroundingCallerKey(kickoff);
+      const enabled = await isProjectRepositoryCheckoutReadinessEnabled({
+        userId,
+        project,
+        caller: surface,
+      });
+      // @feature-flag:project-repository-checkout-readiness start winner=enabled
+      if (enabled) {
+        // @feature-flag:project-repository-checkout-readiness enabled-start
+        try {
+          await assertResolvedProjectRepositoryReady({
+            project,
+            settingsId: kickoff.skillSettingsId,
+            surface,
+          });
+        } catch (e) {
+          if (e instanceof ProjectRepositoryNotReady) {
+            res.status(409).json(e.toJSON());
+            return;
+          }
+          throw e;
+        }
+        // @feature-flag:project-repository-checkout-readiness enabled-end
+      }
+      // @feature-flag:project-repository-checkout-readiness end
+    }
+
+    const thread = await createThread(userId, kickoff, {
       skipAutoKickoff: Boolean(body.skipAutoKickoff),
     });
     res.status(201).json({ threadId: thread.id });
@@ -511,6 +552,37 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
       return res.status(409).json({ error: 'Agent is already running' });
     }
     // Dead run cleared — accept the message.
+  }
+
+  const isDevSession = thread.kickoff?.mode === 'development';
+  if (thread.kickoff && isRepositoryReadingChatCaller(thread.kickoff, isDevSession)) {
+    const userId = getUserId(req);
+    const project = thread.kickoff.project;
+    const surface = resolveGroundingCallerKey(thread.kickoff);
+    const enabled = await isProjectRepositoryCheckoutReadinessEnabled({
+      userId,
+      project,
+      caller: surface,
+    });
+    // @feature-flag:project-repository-checkout-readiness start winner=enabled
+    if (enabled) {
+      // @feature-flag:project-repository-checkout-readiness enabled-start
+      try {
+        await assertResolvedProjectRepositoryReady({
+          project,
+          settingsId: thread.kickoff.skillSettingsId,
+          surface,
+        });
+      } catch (e) {
+        if (e instanceof ProjectRepositoryNotReady) {
+          res.status(409).json(e.toJSON());
+          return;
+        }
+        throw e;
+      }
+      // @feature-flag:project-repository-checkout-readiness enabled-end
+    }
+    // @feature-flag:project-repository-checkout-readiness end
   }
 
   // Fire-and-forget: response streams via SSE/WS; 202 returns immediately.

@@ -1189,6 +1189,7 @@ export async function startSingleFeatureDesignDocWatcher(
       skillPath: skillConfig?.designDocSkillPath ?? undefined,
       freeformContext,
       model,
+      skillSettingsId: prd.skillSettingsId ?? null,
     },
     { skipAutoKickoff: true },
   );
@@ -1348,6 +1349,7 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
     skillPath: skillConfig.designDocValidationSkillPath,
     freeformContext: context,
     model,
+    skillSettingsId: doc.skillSettingsId ?? skillConfig.id ?? null,
   }, { skipAutoKickoff: true });
 
 
