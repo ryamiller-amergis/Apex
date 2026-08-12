@@ -7,7 +7,7 @@
  *   1. Clone the consumer repo at its default branch
  *   2. Create a unique `chore/apex-skills-<version>` update branch
  *   3. Run `npx @apex/skills install` inside the workspace to refresh the
- *      fenced managed region inside .cursor/skills/<skill>/SKILL.md + companions
+ *      fenced managed region inside <skillRoot>/<skill>/SKILL.md + companions
  *      (project notes below the fence are preserved; lockfile is refreshed)
  *   4. Validate the resulting diff — abort if:
  *        - no changes were written (nothing to PR)
@@ -59,6 +59,12 @@ import type {
   RollbackFoundationSkillRepoResult,
 } from '../../shared/types/foundationSkills';
 import { getVisibleSkillsForProject } from '../../shared/types/foundationSkills';
+import {
+  AGENT_SKILL_ROOT,
+  LEGACY_CURSOR_SKILL_ROOT,
+  normalizeSkillRoot,
+  skillRootFromLock,
+} from '../../shared/skillPaths';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -75,6 +81,8 @@ export interface UpdateRepoOptions {
   apexProject: string;
   /** Canonical APEX origin supplied to the CLI authorization check. */
   apexUrl: string;
+  /** Optional canonical repository-relative root for a fresh installation. */
+  skillRoot?: string | null;
   /**
    * `update` (default) installs the latest / chosen release forward.
    * `rollback` installs a lower published version and uses rollback PR copy.
@@ -144,10 +152,49 @@ export function resolveReleasedSkillsForProject(
   return out;
 }
 
+export function resolveWorkspaceSkillRoot(
+  workspaceDir: string,
+  requestedRoot?: string | null
+): string {
+  const lockPath = path.join(workspaceDir, 'apex-skills.lock.json');
+  if (fs.existsSync(lockPath)) {
+    const installedRoot = skillRootFromLock(readVerifiedConsumerLock(lockPath));
+    if (requestedRoot && normalizeSkillRoot(requestedRoot) !== installedRoot) {
+      throw new Error(
+        `Repository is installed at ${installedRoot}; migrate the canonical ` +
+          `root before requesting ${requestedRoot}.`
+      );
+    }
+    return installedRoot;
+  }
+  if (requestedRoot) return normalizeSkillRoot(requestedRoot);
+
+  const hasAgents = fs.existsSync(path.join(workspaceDir, AGENT_SKILL_ROOT));
+  const hasCursor = fs.existsSync(
+    path.join(workspaceDir, LEGACY_CURSOR_SKILL_ROOT)
+  );
+  if (hasAgents && hasCursor) {
+    const agentsPath = fs.realpathSync(
+      path.join(workspaceDir, AGENT_SKILL_ROOT)
+    );
+    const cursorPath = fs.realpathSync(
+      path.join(workspaceDir, LEGACY_CURSOR_SKILL_ROOT)
+    );
+    if (agentsPath === cursorPath) return AGENT_SKILL_ROOT;
+    throw new Error(
+      `Repository contains both ${AGENT_SKILL_ROOT} and ` +
+        `${LEGACY_CURSOR_SKILL_ROOT} without an apex-skills.lock.json; ` +
+        'choose a canonical root before installing.'
+    );
+  }
+  return hasAgents ? AGENT_SKILL_ROOT : LEGACY_CURSOR_SKILL_ROOT;
+}
+
 export function buildArtifactCliArgs(
   artifactVersion: string,
   skills: string[],
   cliPath = 'bin/apex-skills.mjs',
+  skillRoot?: string | null
 ): string[] {
   if (!parseSemver(artifactVersion)) {
     throw new Error(`Invalid artifact version: ${artifactVersion}`);
@@ -157,12 +204,11 @@ export function buildArtifactCliArgs(
       throw new Error(`Invalid skill name: ${skill}`);
     }
   }
-  return [
-    cliPath,
-    'install',
-    ...skills,
-    '--skip-feed',
-  ];
+  const args = [cliPath, 'install', ...skills, '--skip-feed'];
+  if (skillRoot) {
+    args.push('--skill-root', normalizeSkillRoot(skillRoot));
+  }
+  return args;
 }
 
 async function runCliInstall(
@@ -170,15 +216,19 @@ async function runCliInstall(
   skills: string[],
   release: FoundationSkillRelease,
   apexUrl: string,
+  requestedRoot?: string | null
 ): Promise<string> {
-  buildArtifactCliArgs(release.artifactVersion, skills);
+  const skillRoot = resolveWorkspaceSkillRoot(workspaceDir, requestedRoot);
+  buildArtifactCliArgs(release.artifactVersion, skills, undefined, skillRoot);
   const downloaded = await downloadPackageArtifact(release.artifactVersion);
   if (downloaded.integritySha256 !== release.integritySha256) {
     throw new Error(
-      `Downloaded artifact integrity mismatch for ${release.artifactVersion}`,
+      `Downloaded artifact integrity mismatch for ${release.artifactVersion}`
     );
   }
-  const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-skills-exec-'));
+  const artifactDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'apex-skills-exec-')
+  );
   try {
     const extractDir = path.join(artifactDir, 'extracted');
     fs.mkdirSync(extractDir);
@@ -191,6 +241,7 @@ async function runCliInstall(
       release.artifactVersion,
       skills,
       cliPath,
+      skillRoot
     );
     const installOutput = execFileSync(process.execPath, cliArgs, {
       cwd: workspaceDir,
@@ -280,8 +331,12 @@ export function validateGeneratedDiff(
   changed: string[],
   managedSkills: string[],
   reconciliationVersion: string | null,
+  skillRoot: string = LEGACY_CURSOR_SKILL_ROOT
 ): void {
-  const skillRoots = managedSkills.map((skill) => `.cursor/skills/${skill}/`);
+  const normalizedRoot = normalizeSkillRoot(skillRoot);
+  const skillRoots = managedSkills.map(
+    (skill) => `${normalizedRoot}/${skill}/`
+  );
   const backupRoots = managedSkills.map((skill) => `.apex/backups/${skill}/`);
   const unexpected = changed.filter((raw) => {
     const file = raw.replace(/\\/g, '/');
@@ -329,6 +384,7 @@ export function reconcileRollbackWorkspace(
     return { removedSkills: [], managedSkills: [...targetSkills] };
   }
   const lock = readVerifiedConsumerLock(lockPath);
+  const skillRoot = skillRootFromLock(lock);
   if (lock.package !== '@apex/skills') {
     throw new Error(`Source lock package is not @apex/skills`);
   }
@@ -363,7 +419,7 @@ export function reconcileRollbackWorkspace(
   const removedSkills = installed.filter((skill) => !target.has(skill)).sort();
 
   for (const skill of removedSkills) {
-    const source = path.join(workspaceDir, '.cursor', 'skills', skill);
+    const source = path.join(workspaceDir, skillRoot, skill);
     if (!fs.existsSync(source)) continue;
     const destination = path.join(
       workspaceDir,
@@ -446,15 +502,24 @@ function validateInstalledLock(
   workspaceDir: string,
   release: FoundationSkillRelease,
   expectedSkills: string[],
+  expectedSkillRoot: string
 ): void {
   const lockPath = path.join(workspaceDir, 'apex-skills.lock.json');
   if (!fs.existsSync(lockPath)) {
     throw new Error('Installer did not create apex-skills.lock.json');
   }
   const lock = readVerifiedConsumerLock(lockPath);
-  if (lock.package !== '@apex/skills' || lock.suiteVersion !== release.version) {
+  if (
+    lock.package !== '@apex/skills' ||
+    lock.suiteVersion !== release.version
+  ) {
+    throw new Error(`Installed lock does not match release ${release.version}`);
+  }
+  const installedRoot = skillRootFromLock(lock);
+  if (installedRoot !== normalizeSkillRoot(expectedSkillRoot)) {
     throw new Error(
-      `Installed lock does not match release ${release.version}`,
+      `Installed lock skill root mismatch: expected ${expectedSkillRoot}, ` +
+        `got ${installedRoot}`
     );
   }
   const actual = Object.keys(lock.skills ?? {}).sort();
@@ -462,7 +527,7 @@ function validateInstalledLock(
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error(
       `Installed lock skill set mismatch: expected ${expected.join(', ')}, ` +
-      `got ${actual.join(', ')}`,
+        `got ${actual.join(', ')}`
     );
   }
 }
@@ -471,6 +536,7 @@ function readVerifiedConsumerLock(lockPath: string): {
   lockfileVersion?: number;
   suiteVersion?: string;
   package?: string;
+  skillRoot?: string;
   integrity?: string;
   generatedAt?: string;
   skills?: Record<string, unknown>;
@@ -492,6 +558,11 @@ function readVerifiedConsumerLock(lockPath: string): {
     Array.isArray(lock.skills)
   ) {
     throw new Error('apex-skills.lock.json has an invalid v2 schema');
+  }
+  try {
+    skillRootFromLock(lock);
+  } catch {
+    throw new Error('apex-skills.lock.json has an invalid skillRoot');
   }
   const { generatedAt: _generatedAt, integrity, ...rest } = lock;
   const expected = createHash('sha256')
@@ -529,14 +600,19 @@ function detectDrift(workspaceDir: string): string[] {
   if (!fs.existsSync(lockPath)) return ['apex-skills.lock.json (missing)'];
   try {
     const lock = JSON.parse(fs.readFileSync(lockPath, 'utf-8'));
+    const skillRoot = skillRootFromLock(lock);
+    const managedPrefix = `${skillRoot}/`;
     const drifted: string[] = [];
-    for (const info of Object.values(lock.skills ?? {}) as Array<{ managedFiles?: Record<string, string>; vendored?: Record<string, string> }>) {
+    for (const info of Object.values(lock.skills ?? {}) as Array<{
+      managedFiles?: Record<string, string>;
+      vendored?: Record<string, string>;
+    }>) {
       const files = info?.managedFiles ?? info?.vendored ?? {};
       for (const [rel, expected] of Object.entries(files)) {
         const normalized = rel.replace(/\\/g, '/');
         if (
           normalized.includes('../') ||
-          !normalized.startsWith('.cursor/skills/')
+          !normalized.startsWith(managedPrefix)
         ) {
           drifted.push(`${rel} (invalid path)`);
           continue;
@@ -580,27 +656,29 @@ function buildPrDescription(
   release: FoundationSkillRelease,
   cliOutput: string,
   intent: 'update' | 'rollback' = 'update',
-  fromVersion?: string | null,
+  fromVersion?: string | null
 ): string {
   const sections: string[] = [];
 
   if (intent === 'rollback') {
-    sections.push(`## APEX Foundation Skills — Rollback to v${release.version}`);
+    sections.push(
+      `## APEX Foundation Skills — Rollback to v${release.version}`
+    );
     sections.push(
       `This PR was opened automatically by APEX to **roll back** foundation skills` +
-      (fromVersion ? ` from v${fromVersion}` : '') +
-      ` to v${release.version}.\n\n` +
-      `It refreshes the **fenced managed region** inside \`.cursor/skills/<skill>/SKILL.md\`, ` +
-      `overwrites managed companion files, and refreshes \`apex-skills.lock.json\`.\n` +
-      `Project notes below the \`<!-- APEX:END managed -->\` fence are **preserved**.`,
+        (fromVersion ? ` from v${fromVersion}` : '') +
+        ` to v${release.version}.\n\n` +
+        `It refreshes the **fenced managed region** inside \`<skillRoot>/<skill>/SKILL.md\`, ` +
+        `overwrites managed companion files, and refreshes \`apex-skills.lock.json\`.\n` +
+        `Project notes below the \`<!-- APEX:END managed -->\` fence are **preserved**.`
     );
   } else {
     sections.push(`## APEX Foundation Skills — Update to v${release.version}`);
     sections.push(
       `This PR was opened automatically by APEX. It updates the **fenced managed region** ` +
-      `inside \`.cursor/skills/<skill>/SKILL.md\`, overwrites managed companion files, ` +
-      `and refreshes \`apex-skills.lock.json\`.\n` +
-      `Project notes below the \`<!-- APEX:END managed -->\` fence are **preserved**.`,
+        `inside \`<skillRoot>/<skill>/SKILL.md\`, overwrites managed companion files, ` +
+        `and refreshes \`apex-skills.lock.json\`.\n` +
+        `Project notes below the \`<!-- APEX:END managed -->\` fence are **preserved**.`
     );
   }
 
@@ -616,13 +694,15 @@ function buildPrDescription(
     : '';
   if (installed) sections.push(`## Skills\n\n${installed}`);
 
-  sections.push(`## Install output\n\n\`\`\`\n${cliOutput.slice(0, 3000).trim()}\n\`\`\``);
+  sections.push(
+    `## Install output\n\n\`\`\`\n${cliOutput.slice(0, 3000).trim()}\n\`\`\``
+  );
 
   sections.push(
     `## Checklist\n` +
-    `- [ ] Review the managed region diff inside \`.cursor/skills/**/SKILL.md\`\n` +
-    `- [ ] Confirm project notes below \`<!-- APEX:END managed -->\` are unchanged\n` +
-    `- [ ] Run \`npx @apex/skills check\` locally to confirm clean state`,
+      `- [ ] Review the managed region diff inside \`<skillRoot>/**/SKILL.md\`\n` +
+      `- [ ] Confirm project notes below \`<!-- APEX:END managed -->\` are unchanged\n` +
+      `- [ ] Run \`npx @apex/skills check\` locally to confirm clean state`
   );
 
   return sections.join('\n\n');
@@ -711,7 +791,12 @@ export async function updateRepoWithFoundationSkills(
     let cliOutput = '';
     let managedSkills = [...skills];
     let reconciliationVersion: string | null = null;
+    let effectiveSkillRoot: string = LEGACY_CURSOR_SKILL_ROOT;
     try {
+      effectiveSkillRoot = resolveWorkspaceSkillRoot(
+        workspaceDir,
+        opts.skillRoot
+      );
       const reconciliation = reconcileRollbackWorkspace(
         workspaceDir,
         skills,
@@ -723,20 +808,52 @@ export async function updateRepoWithFoundationSkills(
       managedSkills = reconciliation.managedSkills;
       reconciliationVersion =
         reconciliation.removedSkills.length > 0 ? version : null;
-      cliOutput = await runCliInstall(workspaceDir, skills, release, apexUrl);
-      validateInstalledLock(workspaceDir, release, skills);
+      cliOutput = await runCliInstall(
+        workspaceDir,
+        skills,
+        release,
+        apexUrl,
+        effectiveSkillRoot
+      );
+      validateInstalledLock(workspaceDir, release, skills, effectiveSkillRoot);
+      effectiveSkillRoot = skillRootFromLock(
+        readVerifiedConsumerLock(
+          path.join(workspaceDir, 'apex-skills.lock.json')
+        )
+      );
       console.log(`[foundationSkillRepoUpdateService] CLI install complete`);
     } catch (e: unknown) {
       errors.push((e as Error).message);
-      return { status: 'error', prUrl: null, branchName, changedFiles: [], report: errors.join('\n'), releaseVersion: version, errors };
+      return {
+        status: 'error',
+        prUrl: null,
+        branchName,
+        changedFiles: [],
+        report: errors.join('\n'),
+        releaseVersion: version,
+        errors,
+      };
     }
 
     // 4a. Check for drift in existing managed files
     const drifted = detectDrift(workspaceDir);
     if (drifted.length > 0) {
-      errors.push(`Managed file integrity check failed after install: ${drifted.join(', ')}`);
-      errors.push('Re-run install locally, or restore drifted companion files under .cursor/skills/.');
-      return { status: 'drift', prUrl: null, branchName, changedFiles: drifted, report: errors.join('\n'), releaseVersion: version, errors };
+      errors.push(
+        `Managed file integrity check failed after install: ${drifted.join(', ')}`
+      );
+      errors.push(
+        `Re-run install locally, or restore drifted companion files under ` +
+          `${effectiveSkillRoot}/.`
+      );
+      return {
+        status: 'drift',
+        prUrl: null,
+        branchName,
+        changedFiles: drifted,
+        report: errors.join('\n'),
+        releaseVersion: version,
+        errors,
+      };
     }
 
     // 4b. Check for actual changes
@@ -746,38 +863,57 @@ export async function updateRepoWithFoundationSkills(
         changed,
         managedSkills,
         reconciliationVersion,
+        effectiveSkillRoot
       );
     } catch (error) {
       errors.push((error as Error).message);
-      return { status: 'error', prUrl: null, branchName, changedFiles: changed, report: errors.join('\n'), releaseVersion: version, errors };
+      return {
+        status: 'error',
+        prUrl: null,
+        branchName,
+        changedFiles: changed,
+        report: errors.join('\n'),
+        releaseVersion: version,
+        errors,
+      };
     }
     if (changed.length === 0) {
-      console.log(`[foundationSkillRepoUpdateService] No changes — repo already at v${version}`);
-      return { status: 'no_changes', prUrl: null, branchName, changedFiles: [], report: `Already up to date with v${version}`, releaseVersion: version, errors };
+      console.log(
+        `[foundationSkillRepoUpdateService] No changes — repo already at v${version}`
+      );
+      return {
+        status: 'no_changes',
+        prUrl: null,
+        branchName,
+        changedFiles: [],
+        report: `Already up to date with v${version}`,
+        releaseVersion: version,
+        errors,
+      };
     }
 
     // 5. Commit and push
-    const commitMsg = intent === 'rollback'
-      ? (
-        `chore(apex-skills): rollback foundation skills to v${version}\n\n` +
-        `Rollback via APEX foundation skills distribution` +
-        (fromVersion ? ` from v${fromVersion}` : '') + `.\n` +
-        `Selected skills: ${skills.join(', ') || '(all)'}\n` +
-        `Only the fenced managed region in .cursor/skills/ and apex-skills.lock.json are changed; project notes below the fence are preserved.`
-      )
-      : (
-        `chore(apex-skills): update foundation skills to v${version}\n\n` +
-        `Installed via APEX foundation skills distribution.\n` +
-        `Selected skills: ${skills.join(', ') || '(all)'}\n` +
-        (release.breakingChanges ? `\nBreaking changes: ${release.breakingChanges.slice(0, 200)}` : '')
-      );
+    const commitMsg =
+      intent === 'rollback'
+        ? `chore(apex-skills): rollback foundation skills to v${version}\n\n` +
+          `Rollback via APEX foundation skills distribution` +
+          (fromVersion ? ` from v${fromVersion}` : '') +
+          `.\n` +
+          `Selected skills: ${skills.join(', ') || '(all)'}\n` +
+          `Only the fenced managed region in ${effectiveSkillRoot}/ and apex-skills.lock.json are changed; project notes below the fence are preserved.`
+        : `chore(apex-skills): update foundation skills to v${version}\n\n` +
+          `Installed via APEX foundation skills distribution.\n` +
+          `Selected skills: ${skills.join(', ') || '(all)'}\n` +
+          (release.breakingChanges
+            ? `\nBreaking changes: ${release.breakingChanges.slice(0, 200)}`
+            : '');
 
     await git(safeArgs(workspaceDir, ['commit', '-m', commitMsg]), {
       cwd: workspaceDir,
       env: {
-        GIT_AUTHOR_NAME:     actor?.displayName ?? 'APEX',
-        GIT_AUTHOR_EMAIL:    actor?.email ?? 'apex@noreply',
-        GIT_COMMITTER_NAME:  actor?.displayName ?? 'APEX',
+        GIT_AUTHOR_NAME: actor?.displayName ?? 'APEX',
+        GIT_AUTHOR_EMAIL: actor?.email ?? 'apex@noreply',
+        GIT_COMMITTER_NAME: actor?.displayName ?? 'APEX',
         GIT_COMMITTER_EMAIL: actor?.email ?? 'apex@noreply',
       },
     });

@@ -180,7 +180,8 @@ export interface ProjectSkillConfig {
   prototypeEngine?: PrototypeEngine;
   /**
    * Path within the project's own repo to the design-system skill file used by Bedrock prototype
-   * generation. Defaults to `.cursor/skills/design-system/SKILL.md` when null.
+   * generation. Supports canonical `.agents/skills` and legacy
+   * `.cursor/skills` paths.
    */
   prototypeDesignSystemPath?: string | null;
   /**

@@ -553,6 +553,47 @@ describe('Foundation Skills Admin Routes', () => {
         .send({ project: 'MaxView' });
       expect(res.status).toBe(400);
     });
+
+    it('forwards a validated canonical skill root', async () => {
+      mockUpdate.updateRepoWithFoundationSkills.mockResolvedValue({
+        status: 'no_changes',
+        prUrl: null,
+        branchName: null,
+        changedFiles: [],
+        report: 'Already current',
+        releaseVersion: '1.0.1',
+        errors: [],
+      });
+
+      const res = await request(buildAdminApp())
+        .post('/api/platform-admin/foundation-skills/update-repo')
+        .send({
+          project: 'MatterWorx',
+          repo: 'MatterWorx',
+          apexProject: 'MatterWorx',
+          skillRoot: '.agents/skills',
+        });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdate.updateRepoWithFoundationSkills).toHaveBeenCalledWith(
+        expect.objectContaining({ skillRoot: '.agents/skills' }),
+        null
+      );
+    });
+
+    it('rejects an unsafe canonical skill root', async () => {
+      const res = await request(buildAdminApp())
+        .post('/api/platform-admin/foundation-skills/update-repo')
+        .send({
+          project: 'MatterWorx',
+          repo: 'MatterWorx',
+          apexProject: 'MatterWorx',
+          skillRoot: '../skills',
+        });
+
+      expect(res.status).toBe(400);
+      expect(mockUpdate.updateRepoWithFoundationSkills).not.toHaveBeenCalled();
+    });
   });
 });
 

@@ -2,8 +2,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { ADAPTER_DIR, BACKUP_DIR, LEGACY_VENDOR_DIR, APEX_DIR } from './layout.mjs';
+import { BACKUP_DIR, LEGACY_VENDOR_DIR, APEX_DIR } from './layout.mjs';
 import { assertWithin, ensureDir } from './util.mjs';
+import { LEGACY_SKILL_ROOT, normalizeSkillRoot } from './skillRoot.mjs';
 
 export const INSTALL_LOCK_REL = `${APEX_DIR}/install.lock`;
 
@@ -15,7 +16,7 @@ export function withInstallTransaction(
   repoRoot,
   skillNames,
   action,
-  { preflight = null } = {},
+  { preflight = null, skillRoots = [LEGACY_SKILL_ROOT] } = {},
 ) {
   const root = path.resolve(repoRoot);
   const apexDir = assertWithin(root, APEX_DIR);
@@ -60,7 +61,7 @@ export function withInstallTransaction(
     if (typeof preflight === 'function') preflight();
 
     snapshotRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-skills-transaction-'));
-    const targets = transactionTargets(skillNames);
+    const targets = transactionTargets(skillNames, skillRoots);
     snapshots = targets.map((rel, index) => snapshotTarget(root, rel, snapshotRoot, index));
     return action();
   } catch (error) {
@@ -96,12 +97,15 @@ export function withInstallTransaction(
   }
 }
 
-function transactionTargets(skillNames) {
+function transactionTargets(skillNames, skillRoots) {
   const names = [...new Set(skillNames ?? [])];
+  const roots = [
+    ...new Set(skillRoots.map((root) => normalizeSkillRoot(root))),
+  ];
   return [
     'apex-skills.lock.json',
     LEGACY_VENDOR_DIR,
-    ...names.map((name) => path.join(ADAPTER_DIR, name)),
+    ...roots.flatMap((root) => names.map((name) => path.join(root, name))),
     ...names.map((name) => path.join(BACKUP_DIR, name)),
   ];
 }

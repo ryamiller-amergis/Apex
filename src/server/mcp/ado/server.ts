@@ -285,7 +285,7 @@ export function createAdoMcpServer(
 
   server.tool(
     'list_skills',
-    'List all skills (SKILL.md files) available in a repository. Skills are discovered under skills/ and .cursor/skills/ directories.',
+    'List all skills (SKILL.md files) available in a repository. Skills are discovered under .agents/skills/, .cursor/skills/, and skills/ directories.',
     {
       project: z.string().describe('ADO project name'),
       repo: z.string().describe('Repository name'),
@@ -350,7 +350,7 @@ export function createAdoMcpServer(
       {
         project: z.string().describe('ADO project name'),
         repo: z.string().describe('Repository name'),
-        path: z.string().describe('Absolute path in the repo, starting with "/" (e.g. "/CONTEXT.md", "/.cursor/skills/foo/PRD-FORMAT.md", "/docs/adr/0001-foo.md")'),
+        path: z.string().describe('Absolute path in the repo, starting with "/" (e.g. "/CONTEXT.md", "/.agents/skills/foo/PRD-FORMAT.md", "/docs/adr/0001-foo.md")'),
         branch: z.string().optional().describe('Branch name'),
       },
       async ({ project, repo, path, branch }) => {

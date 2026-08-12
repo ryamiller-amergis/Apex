@@ -17,7 +17,7 @@ Load immediately when any of the following are true:
 
 ## Scope (hard constraints)
 
-1. **Only skills in `apex-skills.lock.json`** at the repo root. Do **not** scan the entire `.cursor/skills/` tree.
+1. **Only skills in `apex-skills.lock.json`** at the repo root. Read `lock.skillRoot` for the canonical root; treat a missing field as legacy `.cursor/skills`. Do **not** scan an entire skill tree.
 2. **Never edit** between the `APEX:BEGIN managed` and `APEX:END managed` structural markers (foundation fence).
 3. **Do edit** unfilled markers inside the **adapter** zone (`APEX:BEGIN/END adapter`) — replace them with confirmed values so the markers are gone.
 4. Do **not** invent file paths. Confirm paths exist before writing them.
@@ -25,7 +25,7 @@ Load immediately when any of the following are true:
 
 ## Markers to find
 
-In each lockfile skill's `.cursor/skills/<skill>/SKILL.md` **adapter zone**, search for:
+In each lockfile skill's `<lock.skillRoot>/<skill>/SKILL.md` **adapter zone**, search for:
 
 - `<!-- APEX:unfilled(slotName): … -->` (current)
 - Legacy `<!-- TODO(slotName): … -->`
@@ -70,7 +70,7 @@ confirmed value
 ## Procedure
 
 1. Read `apex-skills.lock.json`. If missing, tell the user to run install first and stop.
-2. For each skill key in `lock.skills`, read `.cursor/skills/<skill>/SKILL.md` if present.
+2. Resolve the canonical root from `lock.skillRoot` (legacy fallback: `.cursor/skills`), then read each `lock.skills` entry's `<skillRoot>/<skill>/SKILL.md` if present.
 3. Collect **remaining** unfilled markers only (adapter zone). Skip skills with zero markers.
 4. If none across all skills: report **Ready — no unfilled markers** and stop.
 5. Otherwise show a short summary, then resolve one skill at a time, one slot at a time.

@@ -665,7 +665,7 @@ export async function startAndPollAnchorSmartTagging(
     excludeIds?: ReadonlySet<string> | readonly string[];
     /** Override Cursor model (empty or omitted uses server default). */
     model?: string;
-    /** Override skill markdown path under .cursor/skills (omitted uses server default). */
+    /** Override SKILL.md under a supported Agent Skills root. */
     skillPath?: string;
     onProgress?: (info: {
       attempt: number;

@@ -1,5 +1,9 @@
 import * as azdev from 'azure-devops-node-api';
 import type { AdoProject, AdoRepo, SkillEntry, SkillDetail, SupportingFile, SkillFrontmatter } from '../../shared/types/skills';
+import {
+  SKILL_DISCOVERY_ROOTS,
+  selectSkillsByRootPrecedence,
+} from '../../shared/skillPaths';
 
 const ORG_URL = process.env.ADO_ORG || '';
 const PAT = process.env.ADO_PAT || '';
@@ -7,9 +11,6 @@ const PAT = process.env.ADO_PAT || '';
 const ADO_FETCH_TIMEOUT_MS = Number(process.env.ADO_FETCH_TIMEOUT_MS) > 0
   ? Number(process.env.ADO_FETCH_TIMEOUT_MS)
   : 30_000;
-
-/** Roots to search for SKILL.md files within a repo, in priority order */
-const SKILL_ROOTS = ['skills', '.cursor/skills'];
 
 /** In-memory cache with TTL */
 interface CacheEntry<T> {
@@ -177,7 +178,7 @@ export async function listSkills(
 
   const skillPaths: string[] = [];
 
-  for (const root of SKILL_ROOTS) {
+  for (const root of SKILL_DISCOVERY_ROOTS) {
     try {
       const items = await gitApi.getItems(
         repo,
@@ -223,8 +224,15 @@ export async function listSkills(
     }
   }
 
-  skillListCache.set(cacheKey, skills);
-  return skills;
+  const resolved = selectSkillsByRootPrecedence(skills);
+  for (const collision of resolved.collisions) {
+    console.warn(
+      `[skillCatalog] Duplicate skill "${collision.name}" in ${project}/${repo}: ` +
+        `${collision.paths.join(', ')}. Using ${collision.paths[0]}.`,
+    );
+  }
+  skillListCache.set(cacheKey, resolved.skills);
+  return resolved.skills;
 }
 
 export async function getSkill(

@@ -1,7 +1,8 @@
 ---
 name: design-module-doc
 description: Generates a source-grounded module architecture document with consistent Markdown and Mermaid sections. Use when generating an architecture document for a specific codebase module.
-disable-model-invocation: true
+metadata:
+  apex-disable-model-invocation: "true"
 ---
 
 # Design Module Documentation — Foundation

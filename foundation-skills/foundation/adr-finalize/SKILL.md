@@ -1,7 +1,8 @@
 ---
 name: adr-finalize
 description: Silently converts an ADR interview transcript into a consistent MADR-style Architecture Decision Record. Use when generating the final ADR artifact from a completed ADR conversation.
-disable-model-invocation: true
+metadata:
+  apex-disable-model-invocation: "true"
 ---
 
 # ADR Finalize — Foundation

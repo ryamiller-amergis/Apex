@@ -2047,7 +2047,7 @@ const TeamRepoDetail: React.FC<{ apexProject: string; repo: FoundationSkillTeamR
               <strong>v{pendingTarget.version}</strong>.
             </>
           }
-          hint="Only the fenced managed region inside .cursor/skills/ and apex-skills.lock.json change. Project notes below the APEX:END managed fence are preserved."
+          hint="Only the fenced managed region inside the configured skill root and apex-skills.lock.json change. Project notes below the APEX:END managed fence are preserved."
           confirmLabel="Open rollback PR"
           pendingLabel="Opening PR…"
           tone="warning"

@@ -10,6 +10,10 @@
 
 import type { SkillEntry, SkillDetail, SupportingFile, SkillFrontmatter } from '../../shared/types/skills';
 import { parseFrontmatter } from './skillCatalog';
+import {
+  SKILL_DISCOVERY_ROOTS,
+  selectSkillsByRootPrecedence,
+} from '../../shared/skillPaths';
 
 const GITHUB_API = 'https://api.github.com';
 /** Bound outbound GitHub HTTP calls so MCP tools cannot hang the agent stream forever. */
@@ -20,8 +24,6 @@ const CODE_SEARCH_MIN_INTERVAL_MS = Number(process.env.GITHUB_CODE_SEARCH_MIN_IN
   ? Number(process.env.GITHUB_CODE_SEARCH_MIN_INTERVAL_MS)
   : 6_000;
 const CODE_SEARCH_RATE_LIMIT_FALLBACK_MS = 60_000;
-const SKILL_ROOTS = ['skills', '.cursor/skills'];
-
 // ── Cache ────────────────────────────────────────────────────────────────────
 
 interface CacheEntry<T> {
@@ -288,7 +290,7 @@ export async function listSkills(
 
     for (const item of tree.tree) {
       if (item.type !== 'blob') continue;
-      for (const root of SKILL_ROOTS) {
+      for (const root of SKILL_DISCOVERY_ROOTS) {
         if (item.path.startsWith(`${root}/`) && item.path.endsWith('/SKILL.md')) {
           skillPaths.push(item.path);
         }
@@ -324,8 +326,16 @@ export async function listSkills(
     }
   }
 
-  skillListCache.set(cacheKey, skills);
-  return skills;
+  const resolved = selectSkillsByRootPrecedence(skills);
+  for (const collision of resolved.collisions) {
+    console.warn(
+      `[skillCatalogGitHub] Duplicate skill "${collision.name}" in ` +
+        `${resolvedOrg}/${repo}: ${collision.paths.join(', ')}. ` +
+        `Using ${collision.paths[0]}.`,
+    );
+  }
+  skillListCache.set(cacheKey, resolved.skills);
+  return resolved.skills;
 }
 
 export async function getSkill(

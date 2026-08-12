@@ -5,7 +5,7 @@
  * (disk reads only — not for agent sandbox/MCP sessions).
  *
  * Precedence (Option 3 layout):
- *   1. Project adapter   (.cursor/skills/<skill>/SKILL.md) — contains the
+ *   1. Project adapter   (<lock.skillRoot>/<skill>/SKILL.md) — contains the
  *      fenced managed foundation region plus any project notes
  *   2. Explicit bundled fallback (caller-provided fallback string)
  *
@@ -17,6 +17,12 @@ import fs from 'fs';
 import path from 'path';
 import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import * as facade from './skillCatalogFacade';
+import {
+  SKILL_DISCOVERY_ROOTS,
+  normalizeSkillRoot,
+  skillPathFor,
+  skillRootFromLock,
+} from '../../shared/skillPaths';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -47,8 +53,8 @@ export interface SkillBundle {
 
 const CWD = process.cwd();
 
-function repoPath(...parts: string[]): string {
-  return path.join(CWD, ...parts);
+function repoPath(repoRoot: string, ...parts: string[]): string {
+  return path.join(repoRoot, ...parts);
 }
 
 function readLocal(absPath: string): string | null {
@@ -59,20 +65,74 @@ function readLocal(absPath: string): string | null {
 }
 
 /** Read and parse apex-skills.lock.json from the repo root, non-fatal. */
-function readLockfile(): Record<string, unknown> | null {
+interface ConsumerSkillLock {
+  skillRoot?: unknown;
+  suiteVersion?: unknown;
+  foundation?: { version?: unknown };
+  skills?: Record<string, unknown>;
+}
+
+function readLockfile(repoRoot = CWD): ConsumerSkillLock | null {
   try {
-    const p = repoPath('apex-skills.lock.json');
+    const p = repoPath(repoRoot, 'apex-skills.lock.json');
     if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf-8'));
-  } catch { /* non-fatal */ }
+  } catch {
+    /* non-fatal */
+  }
   return null;
 }
 
 function foundationVersionFromLock(skillName: string): string | null {
   const lock = readLockfile();
   if (!lock) return null;
-  const version = (lock as any).suiteVersion ?? (lock as any).foundation?.version ?? null;
-  const skills  = (lock as any).skills ?? {};
+  const version = lock.suiteVersion ?? lock.foundation?.version ?? null;
+  const skills = lock.skills ?? {};
   return skills[skillName] ? String(version ?? '') || null : null;
+}
+
+export function resolveLocalSkillPath(
+  skillName: string,
+  repoRoot = CWD
+): string | null {
+  const lock = readLockfile(repoRoot);
+  const canonicalRoot = lock ? skillRootFromLock(lock) : null;
+  const roots = canonicalRoot
+    ? [
+        canonicalRoot,
+        ...SKILL_DISCOVERY_ROOTS.filter((root) => root !== canonicalRoot),
+      ]
+    : [...SKILL_DISCOVERY_ROOTS];
+  const candidates = [...new Set(roots)]
+    .map((root) => ({
+      root: normalizeSkillRoot(root),
+      relativePath: skillPathFor(root, skillName),
+    }))
+    .filter((candidate) =>
+      fs.existsSync(repoPath(repoRoot, candidate.relativePath))
+    )
+    .map((candidate) => ({
+      ...candidate,
+      physicalPath: fs.realpathSync(repoPath(repoRoot, candidate.relativePath)),
+    }));
+
+  if (new Set(candidates.map((candidate) => candidate.physicalPath)).size > 1) {
+    throw new Error(
+      `Skill "${skillName}" exists in multiple roots: ` +
+        `${candidates.map((candidate) => candidate.root).join(', ')}`
+    );
+  }
+  if (!candidates.length) return null;
+  const selected =
+    candidates.find((candidate) => candidate.root === canonicalRoot) ??
+    candidates[0];
+  if (canonicalRoot && selected.root !== canonicalRoot) {
+    console.warn(
+      `[foundationSkillResolver] "${skillName}" exists at ` +
+        `${selected.relativePath}, but lockfile canonical root is ${canonicalRoot}`
+    );
+    return null;
+  }
+  return repoPath(repoRoot, selected.relativePath);
 }
 
 // ── Remote (ADO / GitHub) skill fetch ─────────────────────────────────────
@@ -112,10 +172,10 @@ async function fetchRemoteSkillFile(
  */
 export function resolveLocalSkillBundle(
   skillName: string,
-  fallbackText?: string,
+  fallbackText?: string
 ): SkillBundle {
-  const adapterAbs = repoPath('.cursor', 'skills', skillName, 'SKILL.md');
-  const adapterContent = readLocal(adapterAbs);
+  const adapterAbs = resolveLocalSkillPath(skillName);
+  const adapterContent = adapterAbs ? readLocal(adapterAbs) : null;
   const version = foundationVersionFromLock(skillName);
 
   if (adapterContent) {

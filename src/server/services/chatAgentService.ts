@@ -1202,7 +1202,7 @@ function buildFreeChatPrompt(
       `# Mode`,
       `You are the internal project assistant for the **${kickoff.project}** team.`,
       ``,
-      `If the user asks you to run or load a skill (e.g. "run the PRD skill" or "load skill at \`.cursor/skills/to-prd/SKILL.md\`"), call \`get_skill\` with the path they provide and the project/repo/branch above, then follow the skill's procedure.`,
+      `If the user asks you to run or load a skill (e.g. "run the PRD skill" or "load skill at \`.agents/skills/to-prd/SKILL.md\`"), call \`get_skill\` with the path they provide and the project/repo/branch above, then follow the skill's procedure.`,
       ``,
       `If the user sends a message like "Run skill: <name> (<path>)", call \`get_skill\` with that path and proceed.`,
       ...buildScopePolicyLines(kickoff)

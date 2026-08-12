@@ -401,42 +401,66 @@ describe('walkthroughGenerationService', () => {
           intent: 'test',
           skillPath: '.cursor/skills/custom-gen/SKILL.md',
         },
-        USER_ID,
+        USER_ID
       );
       expect(mockedCreateThread).toHaveBeenCalledWith(
         USER_ID,
         expect.objectContaining({
           skillPath: '.cursor/skills/custom-gen/SKILL.md',
         }),
-        { skipAutoKickoff: true },
+        { skipAutoKickoff: true }
+      );
+    });
+
+    it('accepts a client-supplied .agents skillPath override', async () => {
+      await startGeneration(
+        {
+          projectId: PROJECT_ID,
+          intent: 'test',
+          skillPath: '.agents/skills/custom-gen/SKILL.md',
+        },
+        USER_ID
+      );
+      expect(mockedCreateThread).toHaveBeenCalledWith(
+        USER_ID,
+        expect.objectContaining({
+          skillPath: '.agents/skills/custom-gen/SKILL.md',
+        }),
+        { skipAutoKickoff: true }
       );
     });
 
     it('rejects missing projectId', async () => {
       await expect(
-        startGeneration({ projectId: '', intent: 'test' }, USER_ID),
+        startGeneration({ projectId: '', intent: 'test' }, USER_ID)
       ).rejects.toThrow(WalkthroughAiError);
     });
 
     it('rejects missing intent', async () => {
       await expect(
-        startGeneration({ projectId: PROJECT_ID, intent: '' }, USER_ID),
+        startGeneration({ projectId: PROJECT_ID, intent: '' }, USER_ID)
       ).rejects.toThrow(WalkthroughAiError);
     });
 
     it('rejects invalid skillPath', async () => {
       await expect(
         startGeneration(
-          { projectId: PROJECT_ID, intent: 'test', skillPath: '../../../etc/passwd' },
-          USER_ID,
-        ),
-      ).rejects.toThrow('skillPath must match .cursor/skills/*/SKILL.md');
+          {
+            projectId: PROJECT_ID,
+            intent: 'test',
+            skillPath: '../../../etc/passwd',
+          },
+          USER_ID
+        )
+      ).rejects.toThrow('skillPath must use a supported Agent Skills root');
     });
 
     it('throws when no skillRepo configured', async () => {
-      mockedResolveSkillConfig.mockResolvedValue({ skillRepo: '' } as ProjectSkillConfig);
+      mockedResolveSkillConfig.mockResolvedValue({
+        skillRepo: '',
+      } as ProjectSkillConfig);
       await expect(
-        startGeneration({ projectId: PROJECT_ID, intent: 'test' }, USER_ID),
+        startGeneration({ projectId: PROJECT_ID, intent: 'test' }, USER_ID)
       ).rejects.toThrow('Apex project has no connected repository');
     });
 

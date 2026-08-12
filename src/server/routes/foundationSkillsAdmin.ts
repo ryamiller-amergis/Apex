@@ -38,6 +38,7 @@ import {
 import { AzureDevOpsService } from '../services/azureDevOps';
 import type { CreateFoundationSkillReleaseRequest } from '../../shared/types/foundationSkills';
 import { ensureReleaseAlwaysInstallSkills } from '../../shared/types/foundationSkills';
+import { normalizeSkillRoot } from '../../shared/skillPaths';
 
 // ── Catalog helper ────────────────────────────────────────────────────────────
 
@@ -374,15 +375,35 @@ router.get('/repo-statuses', async (_req: Request, res: Response): Promise<void>
 /**
  * POST /api/platform-admin/foundation-skills/update-repo
  * Clone a consumer repo, install the selected release, and open a PR.
- * Body: { project, repo, apexProject, provider?, defaultBranch?, releaseId? }
+ * Body: { project, repo, apexProject, provider?, defaultBranch?, releaseId?, skillRoot? }
  */
 router.post('/update-repo', async (req: Request, res: Response): Promise<void> => {
-  const { project, repo, provider, defaultBranch, releaseId, apexProject } = req.body;
+  const {
+    project,
+    repo,
+    provider,
+    defaultBranch,
+    releaseId,
+    apexProject,
+    skillRoot,
+  } = req.body;
   if (!project?.trim()) { res.status(400).json({ error: 'project is required' }); return; }
   if (!repo?.trim())    { res.status(400).json({ error: 'repo is required' }); return; }
   if (!apexProject?.trim()) { res.status(400).json({ error: 'apexProject is required' }); return; }
   if (provider && provider !== 'ado' && provider !== 'github') {
     res.status(400).json({ error: 'provider must be ado or github' });
+    return;
+  }
+  let canonicalSkillRoot: string | undefined;
+  try {
+    canonicalSkillRoot =
+      typeof skillRoot === 'string' && skillRoot.trim()
+        ? normalizeSkillRoot(skillRoot)
+        : undefined;
+  } catch {
+    res.status(400).json({
+      error: 'skillRoot must be a safe repository-relative path',
+    });
     return;
   }
   const apexUrl = apexBaseUrl(req);
@@ -420,6 +441,7 @@ router.post('/update-repo', async (req: Request, res: Response): Promise<void> =
         releaseId,
         apexProject: apexProject.trim(),
         apexUrl,
+        skillRoot: canonicalSkillRoot,
         actor: { id: actorInfo.id, email: actorInfo.email },
       },
       adoService,
