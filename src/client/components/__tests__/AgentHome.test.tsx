@@ -77,6 +77,20 @@ jest.mock('../../hooks/useProjectSkillConfig', () => ({
   })),
 }));
 
+// Flag-off / ready stub — avoids feature-flag evaluate fetch + QueryClient coupling.
+jest.mock('../../hooks/useProjectRepositoryReadiness', () => ({
+  useProjectRepositoryReadiness: jest.fn(() => ({
+    isReady: true,
+    message: null,
+    readiness: null,
+    isLoading: false,
+    isFetching: false,
+    flagEnabled: false,
+  })),
+  PROJECT_REPOSITORY_NOT_READY_MESSAGE:
+    'A project administrator must clone this repository before repository-dependent AI work can run.',
+}));
+
 jest.mock('../../hooks/useSpeechOutput', () => ({
   useSpeechOutput: jest.fn(() => ({
     speak: jest.fn(),
