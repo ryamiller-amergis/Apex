@@ -514,6 +514,9 @@ describe('TBI-004 default independent grounding materializer', () => {
   it('readiness ON prefers the shared read checkout FIRST (never waits on mirror clone)', async () => {
     const repairRepoCache = jest.fn();
     const exactCommitFetch = jest.fn();
+    const ensureRepoCache = jest.fn(
+      () => new Promise<never>(() => undefined),
+    );
     // If the mirror path is reached, hang forever — proving we must not call it.
     const materializeWorkspaceFromCache = jest.fn(
       async (): Promise<void> => new Promise(() => undefined),
@@ -524,9 +527,11 @@ describe('TBI-004 default independent grounding materializer', () => {
       dataRoot: 'C:\\persistent-data',
       isCheckoutReadinessEnabled: jest.fn().mockResolvedValue(true),
       createBundleStore: jest.fn(() => ({ rehydrate: jest.fn() })),
-      ensureRepoCache: jest.fn().mockResolvedValue({
-        cacheDir: 'C:\\cache\\repo.git',
-        remote: { url: 'https://example.invalid/repo.git', env: {}, secret: '' },
+      ensureRepoCache,
+      resolveGitRemote: jest.fn().mockReturnValue({
+        url: 'https://example.invalid/repo.git',
+        env: {},
+        secret: '',
       }),
       repairRepoCache,
       exactCommitFetch,
@@ -542,8 +547,9 @@ describe('TBI-004 default independent grounding materializer', () => {
       materialize(grounding, run('shared-first')),
     ).resolves.toBe('materialized');
 
-    // Must finish immediately — not wait on the hung mirror clone.
+    // Must finish immediately — not wait on ensureRepoCache or mirror clone.
     expect(Date.now() - startedAt).toBeLessThan(5_000);
+    expect(ensureRepoCache).not.toHaveBeenCalled();
     expect(materializeWorkspaceFromCache).not.toHaveBeenCalled();
     expect(repairRepoCache).not.toHaveBeenCalled();
     expect(exactCommitFetch).not.toHaveBeenCalled();
@@ -570,6 +576,11 @@ describe('TBI-004 default independent grounding materializer', () => {
       ensureRepoCache: jest.fn().mockResolvedValue({
         cacheDir: 'C:\\cache\\repo.git',
         remote: { url: 'https://example.invalid/repo.git', env: {}, secret: '' },
+      }),
+      resolveGitRemote: jest.fn().mockReturnValue({
+        url: 'https://example.invalid/repo.git',
+        env: {},
+        secret: '',
       }),
       repairRepoCache,
       exactCommitFetch,
@@ -599,6 +610,11 @@ describe('TBI-004 default independent grounding materializer', () => {
       ensureRepoCache: jest.fn().mockResolvedValue({
         cacheDir: 'C:\\cache\\repo.git',
         remote: { url: 'https://example.invalid/repo.git', env: {}, secret: '' },
+      }),
+      resolveGitRemote: jest.fn().mockReturnValue({
+        url: 'https://example.invalid/repo.git',
+        env: {},
+        secret: '',
       }),
       repairRepoCache,
       exactCommitFetch,

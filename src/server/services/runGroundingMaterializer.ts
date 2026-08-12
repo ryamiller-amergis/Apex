@@ -17,6 +17,7 @@ import {
 import {
   ensureRepoCache,
   repairRepoCache,
+  resolveGitRemote,
   type RepoCacheResult,
 } from './repoCacheService';
 import { redactSecrets } from './repoCheckoutService';
@@ -45,6 +46,7 @@ export interface GroundingMaterializerDependencies {
   ) => Pick<GroundingBundleStore, 'rehydrate'>;
   ensureRepoCache?: typeof ensureRepoCache;
   repairRepoCache?: typeof repairRepoCache;
+  resolveGitRemote?: typeof resolveGitRemote;
   materializeWorkspaceFromCache?: typeof materializeWorkspaceFromCache;
   runGit?: typeof git;
   publishBundle?: GroundingBundlePublisher['publish'];
@@ -121,6 +123,7 @@ export function createRunGroundingMaterializer(
   const dataRoot = dependencies.dataRoot ?? resolveDataRoot();
   const ensureCache = dependencies.ensureRepoCache ?? ensureRepoCache;
   const repairCache = dependencies.repairRepoCache ?? repairRepoCache;
+  const resolveRemote = dependencies.resolveGitRemote ?? resolveGitRemote;
   const materializeFromCache =
     dependencies.materializeWorkspaceFromCache ?? materializeWorkspaceFromCache;
   const runGit = dependencies.runGit ?? git;
@@ -332,9 +335,10 @@ export function createRunGroundingMaterializer(
     };
 
     // FIRST: reuse the exact SHA the interview already materialized on the
-    // shared Azure Files volume. Generation must not wait on a mirror
-    // worktree clone (COLD_CACHE_TIMEOUT_MS up to 30 minutes) when the
-    // shared read checkout is already a warm hit for this pin.
+    // shared Azure Files volume. Do NOT call ensureRepoCache first — a MaxView
+    // mirror refresh can hang for minutes and would block this fast path.
+    // Generation must not wait on a mirror worktree clone (COLD_CACHE_TIMEOUT_MS
+    // up to 30 minutes) when the shared read checkout is already a warm hit.
     const seedFromLocalSharedCheckout = async (
       remoteUrl: string,
     ): Promise<boolean> => {
@@ -369,10 +373,14 @@ export function createRunGroundingMaterializer(
       return true;
     };
 
-    const cache = await ensureCache(cacheOptions);
     const reuseStartedAt = now();
     try {
-      if (await seedFromLocalSharedCheckout(cache.remote.url)) {
+      const remote = resolveRemote(
+        identity.provider,
+        identity.project,
+        identity.repo,
+      );
+      if (await seedFromLocalSharedCheckout(remote.url)) {
         safeTelemetry(
           'grounding.materialization.local-reuse',
           {
@@ -388,11 +396,12 @@ export function createRunGroundingMaterializer(
         return 'materialized';
       }
     } catch {
-      // Shared-tree seed failed; fall through to the warm-mirror path.
+      // Shared-tree seed failed (or remote resolve failed); fall through.
     }
 
     // SECOND: warm bare-mirror worktree. Still no cold repair/network fetch —
     // if this fails, return unavailable so the router falls back in-process.
+    const cache = await ensureCache(cacheOptions);
     try {
       await materializePinnedSha(cache);
       return 'materialized';
