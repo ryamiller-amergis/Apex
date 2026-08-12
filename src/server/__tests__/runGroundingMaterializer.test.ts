@@ -508,4 +508,89 @@ describe('TBI-004 default independent grounding materializer', () => {
     expect(ensureRepoCache).toHaveBeenCalled();
     expect(materializeWorkspaceFromCache).toHaveBeenCalled();
   });
+
+  it('readiness ON reuses the local shared read checkout on a pinned-SHA miss (no cold clone, no fetch)', async () => {
+    const repairRepoCache = jest.fn();
+    const exactCommitFetch = jest.fn();
+    // Warm-mirror materialize can't serve the pinned SHA from its branch tip.
+    const materializeWorkspaceFromCache = jest
+      .fn()
+      .mockRejectedValue(new Error('pinned commit not on branch tip'));
+    const runGit = jest.fn().mockResolvedValue('');
+    const telemetry = jest.fn();
+    const materialize = createRunGroundingMaterializer({
+      dataRoot: 'C:\\persistent-data',
+      isCheckoutReadinessEnabled: jest.fn().mockResolvedValue(true),
+      createBundleStore: jest.fn(() => ({ rehydrate: jest.fn() })),
+      ensureRepoCache: jest.fn().mockResolvedValue({
+        cacheDir: 'C:\\cache\\repo.git',
+        remote: { url: 'https://example.invalid/repo.git', env: {}, secret: '' },
+      }),
+      repairRepoCache,
+      exactCommitFetch,
+      materializeWorkspaceFromCache,
+      getReadySharedCheckoutPath: jest.fn().mockReturnValue('C:\\shared\\pinned'),
+      runGit,
+      telemetry,
+    });
+
+    await expect(
+      materialize(grounding, run('reuse-local-sha')),
+    ).resolves.toBe('materialized');
+
+    // Never cold-cloned or network-fetched during generation.
+    expect(repairRepoCache).not.toHaveBeenCalled();
+    expect(exactCommitFetch).not.toHaveBeenCalled();
+    // Seeded via a purely local clone of the already-materialized shared tree.
+    const cloneCall = runGit.mock.calls.find(([args]) => args.includes('clone'));
+    expect(cloneCall?.[0]).toEqual(
+      expect.arrayContaining(['clone', '--local', 'C:\\shared\\pinned']),
+    );
+    expect(runGit).toHaveBeenCalledWith(
+      expect.arrayContaining(['checkout', '--detach', sha]),
+      expect.objectContaining({ cwd: expect.any(String) }),
+    );
+    expect(telemetry).toHaveBeenCalledWith(
+      'grounding.materialization.local-reuse',
+      expect.objectContaining({ source: 'shared-read-checkout', outcome: 'materialized' }),
+      expect.objectContaining({ durationMs: expect.any(Number) }),
+    );
+  });
+
+  it('readiness ON fails fast to unavailable when no local SHA exists (still no cold clone)', async () => {
+    const repairRepoCache = jest.fn();
+    const exactCommitFetch = jest.fn();
+    const telemetry = jest.fn();
+    const materialize = createRunGroundingMaterializer({
+      dataRoot: 'C:\\persistent-data',
+      isCheckoutReadinessEnabled: jest.fn().mockResolvedValue(true),
+      createBundleStore: jest.fn(() => ({ rehydrate: jest.fn() })),
+      ensureRepoCache: jest.fn().mockResolvedValue({
+        cacheDir: 'C:\\cache\\repo.git',
+        remote: { url: 'https://example.invalid/repo.git', env: {}, secret: '' },
+      }),
+      repairRepoCache,
+      exactCommitFetch,
+      materializeWorkspaceFromCache: jest
+        .fn()
+        .mockRejectedValue(new Error('pinned commit missing')),
+      getReadySharedCheckoutPath: jest.fn().mockReturnValue(null),
+      runGit: jest.fn().mockResolvedValue(''),
+      telemetry,
+    });
+
+    await expect(
+      materialize(grounding, run('no-local-sha')),
+    ).resolves.toBe('unavailable');
+    expect(repairRepoCache).not.toHaveBeenCalled();
+    expect(exactCommitFetch).not.toHaveBeenCalled();
+    expect(telemetry).toHaveBeenCalledWith(
+      'grounding.materialization.fallback',
+      expect.objectContaining({
+        reason: 'pinned-sha-unavailable',
+        outcome: 'unavailable',
+      }),
+      expect.objectContaining({ durationMs: expect.any(Number) }),
+    );
+  });
 });

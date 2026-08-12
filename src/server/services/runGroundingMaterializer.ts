@@ -21,6 +21,11 @@ import {
 } from './repoCacheService';
 import { redactSecrets } from './repoCheckoutService';
 import { materializeWorkspaceFromCache } from './repoWorkspaceService';
+import { WORKTREE_GIT_TIMEOUT_MS } from './repoGitSettings';
+import {
+  sharedReadCheckoutService,
+  sharedReadCheckoutIdentityFromGrounding,
+} from './grounding/sharedReadCheckoutService';
 import { trackEvent } from './telemetry';
 
 type MaterializationState = 'materialized' | 'unavailable';
@@ -52,6 +57,13 @@ export interface GroundingMaterializerDependencies {
    * materialize from the local mirror only (Deployment B enabled path).
    */
   isCheckoutReadinessEnabled?: (project: string) => Promise<boolean>;
+  /**
+   * Absolute path to a completed, local shared read checkout already pinned at
+   * the grounding's exact SHA (materialized earlier by the interview turn), or
+   * null when none exists. The readiness path reuses this local tree instead of
+   * cold-cloning during generation.
+   */
+  getReadySharedCheckoutPath?: (grounding: RunGrounding) => string | null;
 }
 
 export const EXACT_COMMIT_FETCH_TIMEOUT_MS = 45_000;
@@ -151,6 +163,12 @@ export function createRunGroundingMaterializer(
         await import('./featureFlagService');
       return isProjectRepositoryCheckoutReadinessEnabledForProject(project);
     });
+  const getReadySharedCheckoutPath =
+    dependencies.getReadySharedCheckoutPath ??
+    ((grounding: RunGrounding) =>
+      sharedReadCheckoutService.getReady(
+        sharedReadCheckoutIdentityFromGrounding(grounding),
+      )?.workspacePath ?? null);
   const publishBundle: GroundingBundlePublisher['publish'] = async (input) => {
     // @feature-flag:project-repository-checkout-readiness start winner=enabled
     let checkoutReadinessEnabled = false;
@@ -306,57 +324,90 @@ export function createRunGroundingMaterializer(
       );
     };
 
+    // Reuse the exact SHA the interview already materialized locally on the
+    // shared Azure Files volume (the shared read checkout). This is a purely
+    // local clone — no network, no cold clone — so a warm mirror that cannot
+    // serve the pinned SHA from its branch tip never forces a re-fetch or a
+    // ~20-minute cache repair during generation. `materializePinnedSha` above
+    // already ran `ensureGitSafeDirectory` globally, so the local clone below
+    // clears the Azure Files dubious-ownership guard.
+    const seedFromLocalSharedCheckout = async (
+      remoteUrl: string,
+    ): Promise<boolean> => {
+      const sharedPath = getReadySharedCheckoutPath(grounding);
+      if (!sharedPath) return false;
+      fs.rmSync(destination, { recursive: true, force: true });
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      await runGit(
+        safeArgs(sharedPath, [
+          '-c',
+          'core.longpaths=true',
+          'clone',
+          '--no-hardlinks',
+          '--local',
+          sharedPath,
+          destination,
+        ]),
+        {
+          cwd: path.dirname(destination),
+          timeout: WORKTREE_GIT_TIMEOUT_MS,
+        },
+      );
+      await runGit(
+        safeArgs(destination, ['checkout', '--detach', identity.sha]),
+        { cwd: destination, timeout: WORKTREE_GIT_TIMEOUT_MS },
+      );
+      await runGit(
+        safeArgs(destination, ['remote', 'set-url', 'origin', remoteUrl]),
+        { cwd: destination },
+      );
+      return true;
+    };
+
     const cache = await ensureCache(cacheOptions);
     try {
       await materializePinnedSha(cache);
       return 'materialized';
     } catch {
-      const exactFetchStartedAt = now();
+      // The warm local mirror could not serve the pinned SHA. Per the
+      // checkout-readiness design, generation MUST NOT cold-clone or
+      // network-fetch here — it reuses the SHA the interview already
+      // materialized locally, or fails fast so the router falls back
+      // in-process (which still runs against the interview's transcript).
+      const reuseStartedAt = now();
       try {
-        await exactCommitFetch(
-          cache,
-          identity.sha,
-          EXACT_COMMIT_FETCH_TIMEOUT_MS,
-        );
-        await materializePinnedSha(cache);
-        safeTelemetry(
-          'grounding.materialization.exact-fetch',
-          {
-            provider: String(identity.provider),
-            project: identity.project,
-            repository: redactSecrets(identity.repo),
-            branch,
-            reason: 'pinned-sha-miss',
-            outcome: 'materialized',
-          },
-          {
-            durationMs: Math.max(0, now() - exactFetchStartedAt),
-          },
-        );
-        return 'materialized';
+        if (await seedFromLocalSharedCheckout(cache.remote.url)) {
+          safeTelemetry(
+            'grounding.materialization.local-reuse',
+            {
+              provider: String(identity.provider),
+              project: identity.project,
+              repository: redactSecrets(identity.repo),
+              branch,
+              source: 'shared-read-checkout',
+              outcome: 'materialized',
+            },
+            { durationMs: Math.max(0, now() - reuseStartedAt) },
+          );
+          return 'materialized';
+        }
       } catch {
-        safeTelemetry(
-          'grounding.materialization.fallback',
-          {
-            provider: String(identity.provider),
-            project: identity.project,
-            repository: redactSecrets(identity.repo),
-            branch,
-            reason: 'pinned-sha-unavailable',
-            outcome: 'unavailable',
-          },
-          {
-            durationMs: Math.max(0, now() - exactFetchStartedAt),
-          },
-        );
+        // Local reuse failed too; fall through to a fast unavailable. Still no
+        // cold clone — the router falls back to in-process generation.
       }
-      try {
-        const repairedCache = await repairCache(cacheOptions);
-        await materializePinnedSha(repairedCache);
-        return 'materialized';
-      } catch {
-        return 'unavailable';
-      }
+      safeTelemetry(
+        'grounding.materialization.fallback',
+        {
+          provider: String(identity.provider),
+          project: identity.project,
+          repository: redactSecrets(identity.repo),
+          branch,
+          reason: 'pinned-sha-unavailable',
+          outcome: 'unavailable',
+        },
+        { durationMs: Math.max(0, now() - reuseStartedAt) },
+      );
+      return 'unavailable';
     }
   };
 

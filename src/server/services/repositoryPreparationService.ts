@@ -297,7 +297,10 @@ export function createRepositoryPreparationService(
         throw new Error('Repository target could not be activated');
       }
 
-      const result = await materializeWritable(grounding, input.destinationRun);
+      const result = await materializeWritable(
+        grounding,
+        input.destinationRun,
+      );
       if (result.state !== 'materialized' || !result.workspacePath) {
         safeTrack(
           {
