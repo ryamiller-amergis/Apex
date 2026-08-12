@@ -72,7 +72,7 @@ describe('useChatStream', () => {
     renderHook(() => useChatStream('thread-42'));
     expect(global.EventSource).toHaveBeenCalledWith(
       '/api/chat/threads/thread-42/stream',
-      expect.objectContaining({ withCredentials: true }),
+      expect.objectContaining({ withCredentials: true })
     );
   });
 
@@ -100,7 +100,7 @@ describe('useChatStream', () => {
     global.fetch = fetchSpy;
     try {
       const { result } = renderHook(() =>
-        useChatStream('t1', { initialStatus: 'running' }),
+        useChatStream('t1', { initialStatus: 'running' })
       );
       act(() => {
         lastES!.emit('message', {
@@ -117,7 +117,7 @@ describe('useChatStream', () => {
       expect(result.current.isConnected).toBe(false);
       expect(fetchSpy).not.toHaveBeenCalledWith(
         expect.stringContaining('/run-status'),
-        expect.anything(),
+        expect.anything()
       );
     } finally {
       if (originalFetch) global.fetch = originalFetch;
@@ -142,7 +142,12 @@ describe('useChatStream', () => {
     });
     expect(result.current.streamingText).toBe('partial');
 
-    const msg = { id: 'msg-1', role: 'agent', text: 'full text', ts: '2026-01-01T00:00:00Z' };
+    const msg = {
+      id: 'msg-1',
+      role: 'agent',
+      text: 'full text',
+      ts: '2026-01-01T00:00:00Z',
+    };
     act(() => {
       lastES!.emit('message', { type: 'message', message: msg });
     });
@@ -153,7 +158,12 @@ describe('useChatStream', () => {
 
   it('deduplicates message events with the same id', () => {
     const { result } = renderHook(() => useChatStream('t1'));
-    const msg = { id: 'dup-1', role: 'agent', text: 'text', ts: '2026-01-01T00:00:00Z' };
+    const msg = {
+      id: 'dup-1',
+      role: 'agent',
+      text: 'text',
+      ts: '2026-01-01T00:00:00Z',
+    };
     act(() => {
       lastES!.emit('message', { type: 'message', message: msg });
       lastES!.emit('message', { type: 'message', message: msg });
@@ -165,18 +175,26 @@ describe('useChatStream', () => {
     const { result } = renderHook(() => useChatStream('t1'));
 
     act(() => {
-      lastES!.emit('message', {
-        type: 'tool_status',
-        callId: 'call-1',
-        toolName: 'read_file',
-        status: 'running',
-      }, 'event-1');
-      lastES!.emit('message', {
-        type: 'tool_status',
-        callId: 'call-1',
-        toolName: 'read_file',
-        status: 'running',
-      }, 'event-1');
+      lastES!.emit(
+        'message',
+        {
+          type: 'tool_status',
+          callId: 'call-1',
+          toolName: 'read_file',
+          status: 'running',
+        },
+        'event-1'
+      );
+      lastES!.emit(
+        'message',
+        {
+          type: 'tool_status',
+          callId: 'call-1',
+          toolName: 'read_file',
+          status: 'running',
+        },
+        'event-1'
+      );
     });
 
     expect(result.current.toolProgress).toHaveLength(1);
@@ -194,15 +212,23 @@ describe('useChatStream', () => {
     act(() => {
       // Durable events carry SSE ids. Token/message frames often do not, but the
       // browser still reports the previous id via MessageEvent.lastEventId.
-      lastES!.emit('message', {
-        type: 'tool_status',
-        callId: 'call-1',
-        toolName: 'shell',
-        status: 'completed',
-      }, 'tool-event-1');
+      lastES!.emit(
+        'message',
+        {
+          type: 'tool_status',
+          callId: 'call-1',
+          toolName: 'shell',
+          status: 'completed',
+        },
+        'tool-event-1'
+      );
       lastES!.emit('message', { type: 'token', text: 'Hel' }, 'tool-event-1');
       lastES!.emit('message', { type: 'token', text: 'lo' }, 'tool-event-1');
-      lastES!.emit('message', { type: 'message', message: msg }, 'tool-event-1');
+      lastES!.emit(
+        'message',
+        { type: 'message', message: msg },
+        'tool-event-1'
+      );
     });
 
     expect(result.current.streamingText).toBe('');
@@ -214,20 +240,32 @@ describe('useChatStream', () => {
 
     act(() => {
       lastES!.emitOpen();
-      lastES!.emit('message', {
-        type: 'status',
-        status: 'running',
-      }, 'event-7');
+      lastES!.emit(
+        'message',
+        {
+          type: 'status',
+          status: 'running',
+        },
+        'event-7'
+      );
       lastES!.emitError();
       lastES!.emitOpen();
-      lastES!.emit('message', {
-        type: 'status',
-        status: 'running',
-      }, 'event-7');
-      lastES!.emit('message', {
-        type: 'status',
-        status: 'idle',
-      }, 'event-8');
+      lastES!.emit(
+        'message',
+        {
+          type: 'status',
+          status: 'running',
+        },
+        'event-7'
+      );
+      lastES!.emit(
+        'message',
+        {
+          type: 'status',
+          status: 'idle',
+        },
+        'event-8'
+      );
     });
 
     expect(result.current.isConnected).toBe(true);
@@ -238,20 +276,32 @@ describe('useChatStream', () => {
     const { result } = renderHook(() => useChatStream('t1'));
 
     act(() => {
-      lastES!.emit('message', {
-        type: 'status',
-        status: 'running',
-      }, 'event-0');
-      for (let i = 1; i <= 512; i++) {
-        lastES!.emit('message', {
+      lastES!.emit(
+        'message',
+        {
           type: 'status',
           status: 'running',
-        }, `event-${i}`);
+        },
+        'event-0'
+      );
+      for (let i = 1; i <= 512; i++) {
+        lastES!.emit(
+          'message',
+          {
+            type: 'status',
+            status: 'running',
+          },
+          `event-${i}`
+        );
       }
-      lastES!.emit('message', {
-        type: 'status',
-        status: 'idle',
-      }, 'event-0');
+      lastES!.emit(
+        'message',
+        {
+          type: 'status',
+          status: 'idle',
+        },
+        'event-0'
+      );
     });
 
     expect(result.current.status).toBe('idle');
@@ -276,20 +326,30 @@ describe('useChatStream', () => {
       expect(result.current.lastProgressAt).toBeNull();
 
       act(() => {
-        lastES!.emit('message', { type: 'thinking', text: 'raw thought' }, 'thinking-1');
+        lastES!.emit(
+          'message',
+          { type: 'thinking', text: 'raw thought' },
+          'thinking-1'
+        );
       });
       expect(result.current.lastProgressAt).toBeNull();
 
       jest.setSystemTime(new Date('2026-01-01T00:00:05Z'));
       act(() => {
-        lastES!.emit('message', {
-          type: 'tool_status',
-          callId: 'call-1',
-          toolName: 'read_file',
-          status: 'running',
-        }, 'tool-1');
+        lastES!.emit(
+          'message',
+          {
+            type: 'tool_status',
+            callId: 'call-1',
+            toolName: 'read_file',
+            status: 'running',
+          },
+          'tool-1'
+        );
       });
-      expect(result.current.lastProgressAt).toBe(new Date('2026-01-01T00:00:05Z').getTime());
+      expect(result.current.lastProgressAt).toBe(
+        new Date('2026-01-01T00:00:05Z').getTime()
+      );
     } finally {
       jest.useRealTimers();
     }
@@ -302,27 +362,35 @@ describe('useChatStream', () => {
       const { result } = renderHook(() => useChatStream('t1'));
 
       act(() => {
-        lastES!.emit('message', {
-          type: 'phase',
-          phase: 'testing',
-          status: 'running',
-          detail: '  Running\n focused   tests  ',
-          durationMs: 1_250,
-          runId: 'run-1',
-          eventTimestamp: '2026-07-14T12:09:55.000Z',
-        }, 'phase-1');
+        lastES!.emit(
+          'message',
+          {
+            type: 'phase',
+            phase: 'testing',
+            status: 'running',
+            detail: '  Running\n focused   tests  ',
+            durationMs: 1_250,
+            runId: 'run-1',
+            eventTimestamp: '2026-07-14T12:09:55.000Z',
+          },
+          'phase-1'
+        );
       });
 
-      expect(result.current.phaseEvents).toEqual([{
-        id: 'phase-1',
-        runId: 'run-1',
-        phase: 'testing',
-        status: 'running',
-        detail: 'Running focused tests',
-        durationMs: 1_250,
-        timestamp: Date.parse('2026-07-14T12:09:55.000Z'),
-      }]);
-      expect(result.current.lastProgressAt).toBe(Date.parse('2026-07-14T12:09:55.000Z'));
+      expect(result.current.phaseEvents).toEqual([
+        {
+          id: 'phase-1',
+          runId: 'run-1',
+          phase: 'testing',
+          status: 'running',
+          detail: 'Running focused tests',
+          durationMs: 1_250,
+          timestamp: Date.parse('2026-07-14T12:09:55.000Z'),
+        },
+      ]);
+      expect(result.current.lastProgressAt).toBe(
+        Date.parse('2026-07-14T12:09:55.000Z')
+      );
     } finally {
       jest.useRealTimers();
     }
@@ -332,12 +400,16 @@ describe('useChatStream', () => {
     const { result } = renderHook(() => useChatStream('t1'));
 
     act(() => {
-      lastES!.emit('message', {
-        type: 'phase',
-        phase: 'queued',
-        status: 'pending',
-        runId: 'run-background-1',
-      }, 'phase-queued-1');
+      lastES!.emit(
+        'message',
+        {
+          type: 'phase',
+          phase: 'queued',
+          status: 'pending',
+          runId: 'run-background-1',
+        },
+        'phase-queued-1'
+      );
     });
 
     expect(result.current.phaseEvents).toEqual([
@@ -348,7 +420,9 @@ describe('useChatStream', () => {
       }),
     ]);
     expect(result.current.progressPhase).toBe('queued');
-    expect(result.current.progressLabel).toBe('Queued — waiting for available worker');
+    expect(result.current.progressLabel).toBe(
+      'Queued — waiting for available worker'
+    );
     expect(result.current.status).toBe('running');
   });
 
@@ -356,17 +430,25 @@ describe('useChatStream', () => {
     const { result } = renderHook(() => useChatStream('t1'));
 
     act(() => {
-      lastES!.emit('message', {
-        type: 'phase',
-        phase: 'queued',
-        status: 'pending',
-        detail: 'Untrusted queue detail',
-      }, 'phase-queued-2');
-      lastES!.emit('message', {
-        type: 'phase',
-        phase: 'dispatched',
-        status: 'running',
-      }, 'phase-dispatched-1');
+      lastES!.emit(
+        'message',
+        {
+          type: 'phase',
+          phase: 'queued',
+          status: 'pending',
+          detail: 'Untrusted queue detail',
+        },
+        'phase-queued-2'
+      );
+      lastES!.emit(
+        'message',
+        {
+          type: 'phase',
+          phase: 'dispatched',
+          status: 'running',
+        },
+        'phase-dispatched-1'
+      );
     });
 
     expect(result.current.progressPhase).toBe('dispatched');
@@ -374,12 +456,16 @@ describe('useChatStream', () => {
     expect(result.current.status).toBe('running');
 
     act(() => {
-      lastES!.emit('message', {
-        type: 'phase',
-        phase: 'implementation',
-        status: 'running',
-        detail: 'Implementing change',
-      }, 'phase-running-1');
+      lastES!.emit(
+        'message',
+        {
+          type: 'phase',
+          phase: 'implementation',
+          status: 'running',
+          detail: 'Implementing change',
+        },
+        'phase-running-1'
+      );
     });
     expect(result.current.progressLabel).toBe('Implementing change');
 
@@ -393,17 +479,21 @@ describe('useChatStream', () => {
     const { result } = renderHook(() => useChatStream('t1'));
 
     act(() => {
-      lastES!.emit('message', {
-        type: 'tool_status',
-        callId: 'call-1',
-        toolName: 'run_terminal_cmd',
-        status: 'running',
-        semanticPhase: 'typecheck',
-        semanticStatus: 'running',
-        semanticDetail: 'Checking server types',
-        runId: 'run-1',
-        eventTimestamp: '2026-07-14T12:09:55.000Z',
-      }, 'tool-phase-1');
+      lastES!.emit(
+        'message',
+        {
+          type: 'tool_status',
+          callId: 'call-1',
+          toolName: 'run_terminal_cmd',
+          status: 'running',
+          semanticPhase: 'typecheck',
+          semanticStatus: 'running',
+          semanticDetail: 'Checking server types',
+          runId: 'run-1',
+          eventTimestamp: '2026-07-14T12:09:55.000Z',
+        },
+        'tool-phase-1'
+      );
     });
 
     expect(result.current.phaseEvents).toEqual([
@@ -420,19 +510,27 @@ describe('useChatStream', () => {
     const { result } = renderHook(() => useChatStream('t1'));
 
     act(() => {
-      lastES!.emit('message', {
-        type: 'phase',
-        phase: '__proto__',
-        status: 'running',
-        detail: 'unsafe',
-      }, 'invalid-phase');
-      lastES!.emit('message', {
-        type: 'health',
-        health: 'progress_stale',
-        detail: 'No meaningful progress for more than 2 minutes',
-        runId: 'run-1',
-        eventTimestamp: '2026-07-14T12:10:00.000Z',
-      }, 'health-1');
+      lastES!.emit(
+        'message',
+        {
+          type: 'phase',
+          phase: '__proto__',
+          status: 'running',
+          detail: 'unsafe',
+        },
+        'invalid-phase'
+      );
+      lastES!.emit(
+        'message',
+        {
+          type: 'health',
+          health: 'progress_stale',
+          detail: 'No meaningful progress for more than 2 minutes',
+          runId: 'run-1',
+          eventTimestamp: '2026-07-14T12:10:00.000Z',
+        },
+        'health-1'
+      );
     });
 
     expect(result.current.phaseEvents).toEqual([]);
@@ -452,11 +550,15 @@ describe('useChatStream', () => {
         status: 'running',
         eventDrivenTermination: true,
       });
-      lastES!.emit('message', {
-        type: 'health',
-        health: 'worker_lost',
-        detail: 'legacy health must not control Retire mode',
-      }, 'health-retire');
+      lastES!.emit(
+        'message',
+        {
+          type: 'health',
+          health: 'worker_lost',
+          detail: 'legacy health must not control Retire mode',
+        },
+        'health-retire'
+      );
     });
 
     expect(result.current.runHealth).toBeNull();
@@ -466,7 +568,10 @@ describe('useChatStream', () => {
   it('clears thinkingText on tool_call without adding a message', () => {
     const { result } = renderHook(() => useChatStream('t1'));
     act(() => {
-      lastES!.emit('message', { type: 'thinking', text: 'Planning next step…' });
+      lastES!.emit('message', {
+        type: 'thinking',
+        text: 'Planning next step…',
+      });
     });
     expect(result.current.thinkingText).toBe('Planning next step…');
 
@@ -503,6 +608,51 @@ describe('useChatStream', () => {
     expect(result.current.status).toBe('running');
   });
 
+  it('PLAN-S3-AC-0 exposes structured repository preparation and ready states', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+
+    act(() => {
+      lastES!.emit('message', {
+        type: 'grounding',
+        status: 'preparing',
+        message: 'Preparing project repository…',
+        retryAfterMs: 1_000,
+      });
+    });
+    expect(result.current.groundingPreparation).toEqual({
+      status: 'preparing',
+      message: 'Preparing project repository…',
+      retryAfterMs: 1_000,
+    });
+
+    act(() => {
+      lastES!.emit('message', {
+        type: 'grounding',
+        status: 'ready',
+        message: 'Project repository ready',
+      });
+    });
+    expect(result.current.groundingPreparation).toEqual({
+      status: 'ready',
+      message: 'Project repository ready',
+    });
+  });
+
+  it('PLAN-S3-AC-1 clears repository preparation state when the turn completes', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+
+    act(() => {
+      lastES!.emit('message', {
+        type: 'grounding',
+        status: 'preparing',
+        message: 'Preparing project repository…',
+      });
+      lastES!.emit('message', { type: 'done' });
+    });
+
+    expect(result.current.groundingPreparation).toBeNull();
+  });
+
   it('adds system error message and sets status=error on error event', () => {
     const { result } = renderHook(() => useChatStream('t1'));
     act(() => {
@@ -517,8 +667,16 @@ describe('useChatStream', () => {
   it('PBI-002 AC-2 renders one terminal when live and replay share an event id', () => {
     const { result } = renderHook(() => useChatStream('t1'));
     act(() => {
-      lastES!.emit('message', { type: 'error', error: 'Owner deadline expired' }, 'terminal-1');
-      lastES!.emit('message', { type: 'error', error: 'Owner deadline expired' }, 'terminal-1');
+      lastES!.emit(
+        'message',
+        { type: 'error', error: 'Owner deadline expired' },
+        'terminal-1'
+      );
+      lastES!.emit(
+        'message',
+        { type: 'error', error: 'Owner deadline expired' },
+        'terminal-1'
+      );
     });
 
     expect(result.current.messages).toHaveLength(1);
@@ -560,21 +718,28 @@ describe('useChatStream', () => {
     expect(firstES.close).toHaveBeenCalledTimes(1);
     expect(global.EventSource).toHaveBeenLastCalledWith(
       '/api/chat/threads/thread-b/stream',
-      expect.anything(),
+      expect.anything()
     );
   });
 
   it('seeds messages from initialMessages option', () => {
-    const initial = [{ id: 'init-1', role: 'user' as const, text: 'hi', ts: '2026-01-01T00:00:00Z' }];
+    const initial = [
+      {
+        id: 'init-1',
+        role: 'user' as const,
+        text: 'hi',
+        ts: '2026-01-01T00:00:00Z',
+      },
+    ];
     const { result } = renderHook(() =>
-      useChatStream('t1', { initialMessages: initial }),
+      useChatStream('t1', { initialMessages: initial })
     );
     expect(result.current.messages).toEqual(initial);
   });
 
   it('uses initialStatus when provided', () => {
     const { result } = renderHook(() =>
-      useChatStream('t1', { initialStatus: 'running' }),
+      useChatStream('t1', { initialStatus: 'running' })
     );
     expect(result.current.status).toBe('running');
   });
@@ -621,7 +786,11 @@ describe('useChatStream', () => {
     });
 
     act(() => {
-      lastES!.emit('message', { type: 'done', prdReady: true, backlogReady: true });
+      lastES!.emit('message', {
+        type: 'done',
+        prdReady: true,
+        backlogReady: true,
+      });
     });
     expect(result.current.prdReady).toBe(true);
     expect(result.current.backlogReady).toBe(true);
@@ -698,7 +867,12 @@ describe('useChatStream', () => {
     });
     expect(result.current.isRetrying).toBe(true);
 
-    const msg = { id: 'msg-r', role: 'agent', text: 'Recovered', ts: '2026-01-01T00:00:00Z' };
+    const msg = {
+      id: 'msg-r',
+      role: 'agent',
+      text: 'Recovered',
+      ts: '2026-01-01T00:00:00Z',
+    };
     act(() => {
       lastES!.emit('message', { type: 'message', message: msg });
     });
@@ -723,7 +897,11 @@ describe('useChatStream', () => {
   it('sets isRetrying=true with "Retrying…" reason for a transient error', () => {
     const { result } = renderHook(() => useChatStream('t1'));
     act(() => {
-      lastES!.emit('message', { type: 'error', error: 'Connection timeout', errorCode: 'transient' });
+      lastES!.emit('message', {
+        type: 'error',
+        error: 'Connection timeout',
+        errorCode: 'transient',
+      });
     });
     expect(result.current.isRetrying).toBe(true);
     expect(result.current.retryReason).toBe('Retrying…');
@@ -733,7 +911,11 @@ describe('useChatStream', () => {
   it('sets isRetrying=true with rate-limit reason for a rate_limit error', () => {
     const { result } = renderHook(() => useChatStream('t1'));
     act(() => {
-      lastES!.emit('message', { type: 'error', error: 'Too many requests', errorCode: 'rate_limit' });
+      lastES!.emit('message', {
+        type: 'error',
+        error: 'Too many requests',
+        errorCode: 'rate_limit',
+      });
     });
     expect(result.current.isRetrying).toBe(true);
     expect(result.current.retryReason).toBe('Rate limited, retrying…');
@@ -743,7 +925,11 @@ describe('useChatStream', () => {
   it('adds a session-expired message and sets status=error for an auth error', () => {
     const { result } = renderHook(() => useChatStream('t1'));
     act(() => {
-      lastES!.emit('message', { type: 'error', error: 'Unauthorized', errorCode: 'auth' });
+      lastES!.emit('message', {
+        type: 'error',
+        error: 'Unauthorized',
+        errorCode: 'auth',
+      });
     });
     expect(result.current.status).toBe('error');
     expect(result.current.messages).toHaveLength(1);
@@ -757,7 +943,11 @@ describe('useChatStream', () => {
     try {
       const { result } = renderHook(() => useChatStream('t1'));
       act(() => {
-        lastES!.emit('message', { type: 'error', error: 'Upstream timeout', errorCode: 'transient' });
+        lastES!.emit('message', {
+          type: 'error',
+          error: 'Upstream timeout',
+          errorCode: 'transient',
+        });
       });
       expect(result.current.isRetrying).toBe(true);
 
@@ -790,24 +980,35 @@ describe('useChatStream', () => {
   });
 
   it('keeps the EventSource open when only initialMessages identity changes', () => {
-    const seed = [{ id: 'u1', role: 'user' as const, text: 'go', ts: '2026-01-01T00:00:00Z' }];
+    const seed = [
+      {
+        id: 'u1',
+        role: 'user' as const,
+        text: 'go',
+        ts: '2026-01-01T00:00:00Z',
+      },
+    ];
     const { result, rerender } = renderHook(
       ({ messages }) => useChatStream('t1', { initialMessages: messages }),
-      { initialProps: { messages: seed } },
+      { initialProps: { messages: seed } }
     );
     const openES = lastES!;
 
     act(() => {
-      openES.emit('message', {
-        type: 'tool_status',
-        callId: 'c1',
-        toolName: 'edit_file',
-        status: 'running',
-        semanticPhase: 'implementation',
-        semanticStatus: 'running',
-        runId: 'run-1',
-        eventTimestamp: '2026-01-01T00:01:00Z',
-      }, 'evt-tool-1');
+      openES.emit(
+        'message',
+        {
+          type: 'tool_status',
+          callId: 'c1',
+          toolName: 'edit_file',
+          status: 'running',
+          semanticPhase: 'implementation',
+          semanticStatus: 'running',
+          runId: 'run-1',
+          eventTimestamp: '2026-01-01T00:01:00Z',
+        },
+        'evt-tool-1'
+      );
     });
     expect(result.current.toolProgress).toHaveLength(1);
     expect(result.current.phaseEvents).toHaveLength(1);
@@ -822,10 +1023,17 @@ describe('useChatStream', () => {
   });
 
   it('merges newly loaded initialMessages into an empty live message list', () => {
-    const seed = [{ id: 'u1', role: 'user' as const, text: 'hi', ts: '2026-01-01T00:00:00Z' }];
+    const seed = [
+      {
+        id: 'u1',
+        role: 'user' as const,
+        text: 'hi',
+        ts: '2026-01-01T00:00:00Z',
+      },
+    ];
     const { result, rerender } = renderHook(
       ({ messages }) => useChatStream('t1', { initialMessages: messages }),
-      { initialProps: { messages: undefined as typeof seed | undefined } },
+      { initialProps: { messages: undefined as typeof seed | undefined } }
     );
 
     expect(result.current.messages).toEqual([]);
@@ -838,7 +1046,7 @@ describe('useChatStream', () => {
   it('promotes idle stream status when initialStatus later reports running', () => {
     const { result, rerender } = renderHook(
       ({ status }) => useChatStream('t1', { initialStatus: status }),
-      { initialProps: { status: undefined as 'running' | undefined } },
+      { initialProps: { status: undefined as 'running' | undefined } }
     );
 
     expect(result.current.status).toBe('idle');

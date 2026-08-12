@@ -1,5 +1,12 @@
 import { execFile } from 'child_process';
-import { mkdtemp, readdir, rm, stat } from 'fs/promises';
+import {
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { promisify } from 'util';
@@ -21,6 +28,8 @@ import { trackEvent } from '../telemetry';
 const execFileAsync = promisify(execFile);
 const FEATURE_FLAG = 'repo-grounding-workspace-profile';
 const DEFAULT_CONTAINER = 'repo-grounding';
+export const GROUNDING_BUNDLE_GIT_TIMEOUT_MS = 5 * 60 * 1000;
+export const GROUNDING_WORKSPACE_READY_MARKER = 'apex-grounding-ready';
 
 export type BundleStoreTelemetry = (
   name: string,
@@ -134,6 +143,8 @@ const defaultRunGit: GitRunner = async (args, options) => {
     cwd: options?.cwd,
     windowsHide: true,
     maxBuffer: 10 * 1024 * 1024,
+    timeout: GROUNDING_BUNDLE_GIT_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
   });
   return stdout;
 };
@@ -171,8 +182,8 @@ function isMissingBlob(error: unknown): boolean {
 async function prepareEmptyDestination(destination: string): Promise<void> {
   try {
     const existing = await stat(destination);
-    if (!existing.isDirectory() || (await readdir(destination)).length > 0) {
-      throw new Error('Grounding destination must be an empty directory');
+    if (!existing.isDirectory()) {
+      throw new Error('Grounding destination must be a directory');
     }
     await rm(destination, { recursive: true, force: true });
   } catch (error) {
@@ -189,6 +200,36 @@ async function verifyHead(
     .trim()
     .toLowerCase();
   return head === expectedSha;
+}
+
+function readyMarkerPath(destination: string): string {
+  return join(destination, '.git', GROUNDING_WORKSPACE_READY_MARKER);
+}
+
+async function isReadyWorkspace(
+  runGit: GitRunner,
+  destination: string,
+  expectedSha: string
+): Promise<boolean> {
+  try {
+    const markedSha = (await readFile(readyMarkerPath(destination), 'utf8'))
+      .trim()
+      .toLowerCase();
+    return markedSha === expectedSha && await verifyHead(
+      runGit,
+      destination,
+      expectedSha
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function markWorkspaceReady(
+  destination: string,
+  expectedSha: string
+): Promise<void> {
+  await writeFile(readyMarkerPath(destination), `${expectedSha}\n`, 'utf8');
 }
 
 export function createGroundingBundleStore(
@@ -263,7 +304,7 @@ export function createGroundingBundleStore(
           if (
             existing.isDirectory() &&
             (await readdir(destination)).length > 0 &&
-            (await verifyHead(runGit, destination, expectedSha))
+            (await isReadyWorkspace(runGit, destination, expectedSha))
           ) {
             telemetry('grounding.workspace.reuse', { outcome: 'success' });
             telemetry(
@@ -315,6 +356,7 @@ export function createGroundingBundleStore(
           if (!(await verifyHead(runGit, destination, expectedSha))) {
             throw new Error('Grounding bundle SHA verification failed');
           }
+          await markWorkspaceReady(destination, expectedSha);
 
           telemetry(
             'grounding.bundle.materialization.duration',
@@ -353,6 +395,7 @@ export function createGroundingBundleStore(
             repaired &&
             (await verifyHead(runGit, destination, expectedSha))
           ) {
+            await markWorkspaceReady(destination, expectedSha);
             telemetry('grounding.bundle.repair', { outcome: 'succeeded' });
             telemetry(
               'grounding.bundle.materialization.duration',

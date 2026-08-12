@@ -15,12 +15,12 @@ If `.ai-pilot/linked-context.md` is present in the workspace, read it before pro
 
 Read each of the following before writing anything:
 
-1. [`.ai-pilot/kickoff-transcript.md`](../../../.ai-pilot/kickoff-transcript.md) — **sole requirements input**; treat every statement here as the authoritative scope
+1. [`.ai-pilot/kickoff-transcript.md`](../../../.ai-pilot/kickoff-transcript.md) — **sole requirements input**; treat every statement here as the authoritative scope. **Do not** use any pre-existing files under `.ai-pilot/output/` as scope — overwrite with this run’s PRD and backlog. **Do not** invent scope from unrelated repo docs, ADO work items, or leftover PRD/backlog artifacts that contradict the transcript. Leave platform cleanup of leftover output to Apex; do not `rm` the output directory yourself.
 2. [`context.md`](../../../context.md) — product context guide and terminology; use Apex terms consistently (Interview, PRD, Design Doc, Design Prototype, PBI, TBI, Feature Flag, Skill, etc.)
 3. [`AGENTS.md`](../../../AGENTS.md) — feature map, directory structure, service boundaries
 4. [`.cursor/skills/to-prd/backlog-schema.json`](backlog-schema.json) — JSON Schema to self-validate the backlog output against
 
-Then explore the relevant parts of the codebase to understand current state. Sketch the major modules to build or modify. Identify which are deep modules (encapsulate significant logic behind a simple interface) vs. shallow modules. Prefer deep modules — they are easier to test in isolation.
+Then explore the relevant parts of the codebase to understand current state **for the transcript's feature only**. Sketch the major modules to build or modify. Identify which are deep modules (encapsulate significant logic behind a simple interface) vs. shallow modules. Prefer deep modules — they are easier to test in isolation.
 
 ## Phase 2 — Write artifacts (silent — no user interaction)
 
@@ -71,7 +71,7 @@ Follow [`prd-template.md`](prd-template.md) exactly. Key constraints:
 
 ## Quality gates (self-check before writing)
 
-- [ ] `.ai-pilot/kickoff-transcript.md` was the sole requirements source
+- [ ] `.ai-pilot/kickoff-transcript.md` was the sole requirements source (pre-existing `.ai-pilot/output/` ignored; this run’s artifacts overwrite)
 - [ ] No questions asked of the user at any point
 - [ ] Apex terminology from `context.md` used consistently
 - [ ] No invented personas without a flag in the PRD `## Assumptions Made`

@@ -79,6 +79,30 @@ jest.mock('../services/bedrockService', () => ({
   BedrockModelTruncatedError: class BedrockModelTruncatedError extends Error {},
 }));
 
+jest.mock('../services/featureFlagService', () => ({
+  isProjectRepositoryCheckoutReadinessEnabled: jest.fn().mockResolvedValue(false),
+}));
+
+jest.mock('../services/projectRepositoryReadinessService', () => ({
+  assertResolvedProjectRepositoryReady: jest.fn().mockResolvedValue(undefined),
+  ProjectRepositoryNotReady: class ProjectRepositoryNotReady extends Error {
+    toJSON() {
+      return {
+        code: 'PROJECT_REPOSITORY_NOT_READY',
+        message: this.message,
+        status: 'not_cloned',
+      };
+    }
+  },
+}));
+
+jest.mock('../services/runGroundingService', () => ({
+  propagatePipelineGrounding: jest.fn().mockResolvedValue({
+    grounding: { groundedSha: 'a'.repeat(40) },
+    materialization: 'deferred',
+  }),
+}));
+
 import { deleteAdr, getAdr, updateAdrStatus } from '../services/adrService';
 import {
   getAssignments,
@@ -267,5 +291,75 @@ describe('ADR delete route', () => {
 
     expect(response.status).toBe(204);
     expect(deleteAdr).toHaveBeenCalledWith('adr-1', 'reviewer-1');
+  });
+});
+
+describe('VT-15 — ADR finalize inherits interview grounding', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (getAdr as jest.Mock).mockResolvedValue({
+      ...adr,
+      authorId: 'reviewer-1',
+      skillSettingsId: 'adr-skill-settings',
+      status: 'interviewing',
+    });
+    const { getThread, createThread } = jest.requireMock('../services/chatAgentService') as {
+      getThread: jest.Mock;
+      createThread: jest.Mock;
+    };
+    const { resolveSkillConfig } = jest.requireMock('../services/projectSettingsService') as {
+      resolveSkillConfig: jest.Mock;
+    };
+    const { getDefaultModel } = jest.requireMock('../services/appSettingsService') as {
+      getDefaultModel: jest.Mock;
+    };
+    const { markAdrGenerating, startAdrWatcher } = jest.requireMock('../services/adrService') as {
+      markAdrGenerating: jest.Mock;
+      startAdrWatcher: jest.Mock;
+    };
+    getThread.mockResolvedValue({
+      id: 'thread-1',
+      messages: [
+        { role: 'user', text: 'We need durable events' },
+        { role: 'agent', text: 'Service Bus fits that constraint' },
+      ],
+    });
+    createThread.mockResolvedValue({ id: 'thread-finalize' });
+    resolveSkillConfig.mockResolvedValue({
+      id: 'adr-skill-settings',
+      skillRepo: 'Apex',
+      skillBranch: 'main',
+      adrFinalizeSkillPath: '.cursor/skills/adr-finalize/SKILL.md',
+      adrModel: 'claude-opus-4-6',
+    });
+    getDefaultModel.mockResolvedValue('claude-opus-4-6');
+    markAdrGenerating.mockResolvedValue(undefined);
+    startAdrWatcher.mockReturnValue(undefined);
+  });
+
+  it('copies ADR interview grounding onto the finalize thread', async () => {
+    const { createThread } = jest.requireMock('../services/chatAgentService') as {
+      createThread: jest.Mock;
+    };
+    const { propagatePipelineGrounding } = jest.requireMock('../services/runGroundingService') as {
+      propagatePipelineGrounding: jest.Mock;
+    };
+
+    const response = await request(buildApp()).post('/adr-1/generate');
+
+    expect(response.status).toBe(201);
+    expect(createThread).toHaveBeenCalledWith(
+      'reviewer-1',
+      expect.objectContaining({
+        skillSettingsId: 'adr-skill-settings',
+      }),
+      expect.any(Object),
+    );
+    expect(propagatePipelineGrounding).toHaveBeenCalledWith(
+      { runType: 'chat', runId: 'thread-1', project: 'Apex' },
+      { runType: 'chat', runId: 'thread-finalize', project: 'Apex' },
+      'reviewer-1',
+      { deferMaterialization: true },
+    );
   });
 });

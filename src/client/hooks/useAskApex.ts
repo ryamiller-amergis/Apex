@@ -11,7 +11,7 @@ export interface AskApexMessage {
   ts: string;
 }
 
-type SessionStatus = 'idle' | 'streaming' | 'error';
+type SessionStatus = 'idle' | 'preparing' | 'streaming' | 'error';
 
 interface AskApexSseEvent {
   type: 'token' | 'message' | 'status' | 'error' | 'done';
@@ -54,7 +54,7 @@ export function useAskApex() {
         onError: () => setIsConnected(false),
         onMessage: (data: string) => handleAskApexEvent(data),
       },
-      { sseUrl: `/api/ask-apex/sessions/${sid}/stream`, transport: 'sse' },
+      { sseUrl: `/api/ask-apex/sessions/${sid}/stream`, transport: 'sse' }
     );
 
     streamRef.current = stream;
@@ -107,7 +107,7 @@ export function useAskApex() {
     try {
       const { sessionId: sid } = await apiFetch<{ sessionId: string }>(
         '/api/ask-apex/sessions',
-        { method: 'POST', headers: { 'Content-Type': 'application/json' } },
+        { method: 'POST', headers: { 'Content-Type': 'application/json' } }
       );
       setSessionId(sid);
       setMessages([]);
@@ -122,20 +122,23 @@ export function useAskApex() {
     }
   }, [connectSse]);
 
-  const sendMessage = useCallback(async (text: string) => {
-    if (!sessionId || !text.trim()) return;
-    setStatus('streaming');
-    try {
-      await apiFetch(`/api/ask-apex/sessions/${sessionId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
-      });
-    } catch (err) {
-      console.error('[useAskApex] sendMessage error:', err);
-      setStatus('error');
-    }
-  }, [sessionId]);
+  const sendMessage = useCallback(
+    async (text: string) => {
+      if (!sessionId || !text.trim()) return;
+      setStatus('streaming');
+      try {
+        await apiFetch(`/api/ask-apex/sessions/${sessionId}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+      } catch (err) {
+        console.error('[useAskApex] sendMessage error:', err);
+        setStatus('error');
+      }
+    },
+    [sessionId]
+  );
 
   const closeSession = useCallback(() => {
     if (streamRef.current) {
@@ -170,6 +173,8 @@ export function useAskApex() {
     messages,
     streamingText,
     status,
+    preparationMessage:
+      status === 'preparing' ? 'Preparing project repository…' : null,
     isConnected,
     startSession,
     sendMessage,

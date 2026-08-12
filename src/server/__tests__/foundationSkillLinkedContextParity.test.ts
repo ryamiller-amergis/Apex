@@ -58,7 +58,7 @@ describe('foundation Skill linked-context parity (TBI-005 / VT-01)', () => {
     const unrelated = readSkill(
       'foundation-skills',
       'foundation',
-      'daily-standup',
+      'ui-lab',
     );
 
     expect(unrelated).not.toContain(LINKED_CONTEXT_INSTRUCTION);

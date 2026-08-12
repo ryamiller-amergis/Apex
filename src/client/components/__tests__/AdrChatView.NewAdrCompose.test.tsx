@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { AdrChatView } from '../AdrChatView';
+import { useProjectRepositoryReadiness } from '../../hooks/useProjectRepositoryReadiness';
 
 jest.mock('react-markdown', () => ({
   __esModule: true,
@@ -17,6 +18,9 @@ jest.mock('react-router-dom', () => ({
 const startChat = jest.fn();
 const createAdr = jest.fn();
 const clearAttachments = jest.fn();
+const mockUseProjectRepositoryReadiness = useProjectRepositoryReadiness as jest.MockedFunction<
+  typeof useProjectRepositoryReadiness
+>;
 
 jest.mock('../../hooks/useAppShell', () => ({
   useAppShell: () => ({
@@ -71,6 +75,19 @@ jest.mock('../../hooks/useSpeechInput', () => ({
   }),
 }));
 
+jest.mock('../../hooks/useProjectRepositoryReadiness', () => ({
+  useProjectRepositoryReadiness: jest.fn(() => ({
+    isReady: true,
+    message: null,
+    readiness: null,
+    isLoading: false,
+    isFetching: false,
+    flagEnabled: true,
+  })),
+  PROJECT_REPOSITORY_NOT_READY_MESSAGE:
+    'A project administrator must clone this repository before repository-dependent AI work can run.',
+}));
+
 jest.mock('../AdrReviewerModal', () => ({
   AdrReviewerModal: ({ onConfirm }: { onConfirm: (ids: string[]) => void }) => (
     <button type="button" onClick={() => onConfirm(['reviewer-1'])}>Confirm reviewers</button>
@@ -89,6 +106,14 @@ describe('NewAdrCompose', () => {
     startChat.mockResolvedValue({ threadId: 'thread-1' });
     createAdr.mockResolvedValue({ adrId: 'adr-1', threadId: 'thread-1' });
     global.fetch = jest.fn().mockResolvedValue({ ok: true }) as jest.Mock;
+    mockUseProjectRepositoryReadiness.mockReturnValue({
+      isReady: true,
+      message: null,
+      readiness: null,
+      isLoading: false,
+      isFetching: false,
+      flagEnabled: true,
+    });
   });
 
   it('opens reviewer selection and sends reviewers plus attachments', async () => {
@@ -122,5 +147,40 @@ describe('NewAdrCompose', () => {
       }),
     );
     expect(clearAttachments).toHaveBeenCalled();
+  });
+
+  it('disables start and shows an error when the project repository is not cloned', () => {
+    mockUseProjectRepositoryReadiness.mockReturnValue({
+      isReady: false,
+      message:
+        'A project administrator must clone this repository before repository-dependent AI work can run.',
+      readiness: null,
+      isLoading: false,
+      isFetching: false,
+      flagEnabled: true,
+    });
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/adr/new']}>
+          <AdrChatView />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Choose event transport' } });
+    fireEvent.change(screen.getByPlaceholderText(/describe what is being built/i), {
+      target: { value: 'Compare queue and event-stream options.' },
+    });
+
+    expect(screen.getByRole('button', { name: 'Start ADR' })).toBeDisabled();
+    expect(screen.getByTestId('adr-compose-repo-not-ready')).toHaveTextContent(
+      /project administrator must clone/i,
+    );
+    expect(createAdr).not.toHaveBeenCalled();
   });
 });

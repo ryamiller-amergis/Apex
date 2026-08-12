@@ -10,5 +10,5 @@ export type WorkflowRouteDecision =
   | {
       route: 'in-process';
       reason: 'materialization-unavailable';
-      recoverable: true;
+      fallbackStarted: true;
     };

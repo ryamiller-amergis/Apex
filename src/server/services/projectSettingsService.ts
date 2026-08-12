@@ -1,26 +1,87 @@
 import { db } from '../db/drizzle';
-import { projectSkillSettings, projectApprovers, projectApproverGroups, appGroupMembers, appGroups, appUsers } from '../db/schema';
+import {
+  projectSkillSettings,
+  projectApprovers,
+  projectApproverGroups,
+  appGroupMembers,
+  appGroups,
+  appUsers,
+} from '../db/schema';
 import { eq, and, asc, desc } from 'drizzle-orm';
 import * as groupService from './groupService';
-import type { ProjectSkillConfig, ProjectApprover, QuickSkillPill, QuickMcpPill, InterviewSkillOption, ApproverPoolResponse, SkillProvider, PrototypeEngine } from '../../shared/types/projectSettings';
+import type {
+  ProjectSkillConfig,
+  ProjectApprover,
+  QuickSkillPill,
+  QuickMcpPill,
+  InterviewSkillOption,
+  ApproverPoolResponse,
+  SkillProvider,
+  PrototypeEngine,
+  RepositoryCheckoutStatus,
+} from '../../shared/types/projectSettings';
 import type { GroupWithMembers } from '../../shared/types/groups';
 import type { ApprovalMode } from '../../shared/types/approvals';
+import { emitGroundingActiveSetChanged } from './groundingMaintenanceEvents';
+import { isProjectRepositoryCheckoutReadinessEnabled } from './featureFlagService';
 
 function toSkillConfig(row: Record<string, unknown>): ProjectSkillConfig {
-  return { ...row, approvalMode: row.approvalMode as ApprovalMode | undefined } as ProjectSkillConfig;
+  return {
+    ...row,
+    approvalMode: row.approvalMode as ApprovalMode | undefined,
+    repositoryCheckoutStatus:
+      (row.repositoryCheckoutStatus as RepositoryCheckoutStatus | undefined) ??
+      'not_cloned',
+  } as ProjectSkillConfig;
 }
 
+function repositoryIdentityChanged(
+  previous: {
+    skillProvider: string;
+    skillRepo: string;
+    skillBranch: string;
+  },
+  next: {
+    skillProvider: string;
+    skillRepo: string;
+    skillBranch: string;
+  },
+): boolean {
+  return (
+    previous.skillProvider !== next.skillProvider ||
+    previous.skillRepo.trim() !== next.skillRepo.trim() ||
+    previous.skillBranch.trim() !== next.skillBranch.trim()
+  );
+}
+
+const CHECKOUT_RESET = {
+  repositoryCheckoutStatus: 'not_cloned' as const,
+  repositoryCheckoutSha: null,
+  repositoryCheckoutError: null,
+  repositoryCheckoutStartedAt: null,
+  repositoryCheckoutCompletedAt: null,
+};
+
 /** Returns the **default** config for a project (back-compat for existing callers). */
-export async function getSkillConfig(project: string): Promise<ProjectSkillConfig | null> {
+export async function getSkillConfig(
+  project: string
+): Promise<ProjectSkillConfig | null> {
   const rows = await db
     .select()
     .from(projectSkillSettings)
-    .where(and(eq(projectSkillSettings.project, project), eq(projectSkillSettings.isDefault, true)))
+    .where(
+      and(
+        eq(projectSkillSettings.project, project),
+        eq(projectSkillSettings.isDefault, true)
+      )
+    )
     .limit(1);
   return rows[0] ? toSkillConfig(rows[0]) : null;
 }
 
-export async function getSkillConfigById(id: string): Promise<ProjectSkillConfig | null> {
+export async function getSkillConfigById(
+  id: string
+): Promise<ProjectSkillConfig | null> {
   const rows = await db
     .select()
     .from(projectSkillSettings)
@@ -29,26 +90,39 @@ export async function getSkillConfigById(id: string): Promise<ProjectSkillConfig
   return rows[0] ? toSkillConfig(rows[0]) : null;
 }
 
-export async function listSkillConfigsForProject(project: string): Promise<ProjectSkillConfig[]> {
+export async function listSkillConfigsForProject(
+  project: string
+): Promise<ProjectSkillConfig[]> {
   const rows = await db
     .select()
     .from(projectSkillSettings)
     .where(eq(projectSkillSettings.project, project))
-    .orderBy(desc(projectSkillSettings.isDefault), asc(projectSkillSettings.friendlyName));
+    .orderBy(
+      desc(projectSkillSettings.isDefault),
+      asc(projectSkillSettings.friendlyName)
+    );
   return rows.map(toSkillConfig);
 }
 
-export async function resolveSkillConfig(opts: { project: string; settingsId?: string }): Promise<ProjectSkillConfig | null> {
+export async function resolveSkillConfig(opts: {
+  project: string;
+  settingsId?: string;
+}): Promise<ProjectSkillConfig | null> {
   if (opts.settingsId) return getSkillConfigById(opts.settingsId);
   return getSkillConfig(opts.project);
 }
 
 export async function listSkillConfigs(): Promise<ProjectSkillConfig[]> {
-  const rows = await db.select().from(projectSkillSettings).orderBy(projectSkillSettings.project);
+  const rows = await db
+    .select()
+    .from(projectSkillSettings)
+    .orderBy(projectSkillSettings.project);
   return rows.map(toSkillConfig);
 }
 
-export async function getSkillSettingsName(settingsId: string | null | undefined): Promise<string | null> {
+export async function getSkillSettingsName(
+  settingsId: string | null | undefined
+): Promise<string | null> {
   if (!settingsId) return null;
   const row = await db.query.projectSkillSettings.findFirst({
     where: eq(projectSkillSettings.id, settingsId),
@@ -138,7 +212,9 @@ export interface UpsertSkillConfigOptions {
   approvalMode?: ApprovalMode;
 }
 
-export async function upsertSkillConfig(opts: UpsertSkillConfigOptions): Promise<ProjectSkillConfig> {
+export async function upsertSkillConfig(
+  opts: UpsertSkillConfigOptions
+): Promise<ProjectSkillConfig> {
   const now = new Date().toISOString();
   const approvalModeValue = opts.approvalMode ?? 'any_one';
 
@@ -175,10 +251,14 @@ export async function upsertSkillConfig(opts: UpsertSkillConfigOptions): Promise
     prdReviewBedrockModelId: opts.prdReviewBedrockModelId ?? null,
     prdReviewBedrockMaxTokens: opts.prdReviewBedrockMaxTokens ?? null,
     designPrototypeBedrockModelId: opts.designPrototypeBedrockModelId ?? null,
-    designPrototypeBedrockMaxTokens: opts.designPrototypeBedrockMaxTokens ?? null,
-    designPrototypeBedrockTimeoutMs: opts.designPrototypeBedrockTimeoutMs ?? null,
-    designPrototypeRegenBedrockModelId: opts.designPrototypeRegenBedrockModelId ?? null,
-    designPrototypeRegenBedrockMaxTokens: opts.designPrototypeRegenBedrockMaxTokens ?? null,
+    designPrototypeBedrockMaxTokens:
+      opts.designPrototypeBedrockMaxTokens ?? null,
+    designPrototypeBedrockTimeoutMs:
+      opts.designPrototypeBedrockTimeoutMs ?? null,
+    designPrototypeRegenBedrockModelId:
+      opts.designPrototypeRegenBedrockModelId ?? null,
+    designPrototypeRegenBedrockMaxTokens:
+      opts.designPrototypeRegenBedrockMaxTokens ?? null,
     designPlanBedrockModelId: opts.designPlanBedrockModelId ?? null,
     designPlanBedrockMaxTokens: opts.designPlanBedrockMaxTokens ?? null,
     developmentSkillPath: opts.developmentSkillPath ?? null,
@@ -190,7 +270,8 @@ export async function upsertSkillConfig(opts: UpsertSkillConfigOptions): Promise
     issueSkillPath: opts.issueSkillPath ?? null,
     issueModel: opts.issueModel ?? null,
     prdValidationScoreThreshold: opts.prdValidationScoreThreshold ?? null,
-    designDocValidationScoreThreshold: opts.designDocValidationScoreThreshold ?? null,
+    designDocValidationScoreThreshold:
+      opts.designDocValidationScoreThreshold ?? null,
     uiLabBedrockModelId: opts.uiLabBedrockModelId ?? null,
     uiLabBedrockMaxTokens: opts.uiLabBedrockMaxTokens ?? null,
     uiLabBedrockTimeoutMs: opts.uiLabBedrockTimeoutMs ?? null,
@@ -226,19 +307,46 @@ export async function upsertSkillConfig(opts: UpsertSkillConfigOptions): Promise
       await tx
         .update(projectSkillSettings)
         .set({ isDefault: false })
-        .where(and(eq(projectSkillSettings.project, opts.project), eq(projectSkillSettings.isDefault, true)));
+        .where(
+          and(
+            eq(projectSkillSettings.project, opts.project),
+            eq(projectSkillSettings.isDefault, true)
+          )
+        );
     }
 
     if (opts.id) {
+      const existingRows = await tx
+        .select()
+        .from(projectSkillSettings)
+        .where(eq(projectSkillSettings.id, opts.id))
+        .limit(1);
+      const existing = existingRows[0];
+      const resetCheckout =
+        existing &&
+        repositoryIdentityChanged(
+          {
+            skillProvider: existing.skillProvider,
+            skillRepo: existing.skillRepo,
+            skillBranch: existing.skillBranch,
+          },
+          {
+            skillProvider: values.skillProvider,
+            skillRepo: values.skillRepo,
+            skillBranch: values.skillBranch,
+          },
+        );
+
       const rows = await tx
         .update(projectSkillSettings)
-        .set(values)
+        .set(resetCheckout ? { ...values, ...CHECKOUT_RESET } : values)
         .where(eq(projectSkillSettings.id, opts.id))
         .returning();
       return rows[0];
     }
 
     // INSERT — if it's the first config for the project, force isDefault = true
+    // New configs start not_cloned via column default / explicit reset fields.
     const existing = await tx
       .select({ id: projectSkillSettings.id })
       .from(projectSkillSettings)
@@ -250,13 +358,81 @@ export async function upsertSkillConfig(opts: UpsertSkillConfigOptions): Promise
 
     const rows = await tx
       .insert(projectSkillSettings)
-      .values(values)
+      .values({ ...values, ...CHECKOUT_RESET })
       .returning();
     return rows[0];
   });
 
   await groupService.seedDefaultGroupsForProject(opts.project, opts.updatedBy);
+  const repository = opts.skillRepo.trim();
+  const provider =
+    (opts.skillProvider ?? 'ado') === 'github' ? 'github' : 'azure_devops';
+  // Deployment B: admin-managed checkouts do not need settings→prewarm. Skip
+  // the active-set emit when checkout readiness is ON for this project.
+  // @feature-flag:project-repository-checkout-readiness start winner=enabled
+  let checkoutReadinessEnabled = false;
+  try {
+    checkoutReadinessEnabled =
+      await isProjectRepositoryCheckoutReadinessEnabled({
+        userId: opts.updatedBy ?? 'system',
+        project: opts.project,
+        caller: 'project-settings',
+      });
+  } catch {
+    checkoutReadinessEnabled = false;
+  }
+  if (!checkoutReadinessEnabled) {
+    // @feature-flag:project-repository-checkout-readiness disabled-start
+    emitGroundingActiveSetChanged({
+      provider,
+      project: opts.project,
+      repository:
+        provider === 'github'
+          ? repository.split('/').pop() || repository
+          : repository,
+      branch: opts.skillBranch.trim(),
+    });
+    // @feature-flag:project-repository-checkout-readiness disabled-end
+  }
+  // @feature-flag:project-repository-checkout-readiness end
   return toSkillConfig(result);
+}
+
+/**
+ * Persist admin clone/refresh lifecycle fields for a skill-settings row.
+ * Used by projectRepositoryCheckoutService — not a public admin CRUD API.
+ */
+export async function updateRepositoryCheckoutState(
+  skillSettingsId: string,
+  state: {
+    status: RepositoryCheckoutStatus;
+    sha?: string | null;
+    error?: string | null;
+    startedAt?: string | null;
+    completedAt?: string | null;
+  },
+): Promise<ProjectSkillConfig | null> {
+  const rows = await db
+    .update(projectSkillSettings)
+    .set({
+      repositoryCheckoutStatus: state.status,
+      ...(state.sha !== undefined
+        ? { repositoryCheckoutSha: state.sha }
+        : {}),
+      ...(state.error !== undefined
+        ? { repositoryCheckoutError: state.error }
+        : {}),
+      ...(state.startedAt !== undefined
+        ? { repositoryCheckoutStartedAt: state.startedAt }
+        : {}),
+      ...(state.completedAt !== undefined
+        ? { repositoryCheckoutCompletedAt: state.completedAt }
+        : {}),
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(projectSkillSettings.id, skillSettingsId))
+    .returning();
+  return rows[0] ? toSkillConfig(rows[0]) : null;
 }
 
 export async function deleteSkillConfig(id: string): Promise<void> {
@@ -279,7 +455,9 @@ export async function deleteSkillConfig(id: string): Promise<void> {
       throw new Error('Cannot delete the only repo config for a project');
     }
 
-    await tx.delete(projectSkillSettings).where(eq(projectSkillSettings.id, id));
+    await tx
+      .delete(projectSkillSettings)
+      .where(eq(projectSkillSettings.id, id));
 
     if (row.isDefault) {
       const oldest = await tx
@@ -301,7 +479,9 @@ export async function deleteSkillConfig(id: string): Promise<void> {
 
 // ── Approver Management ──────────────────────────────────────────────────────
 
-export async function listApprovers(settingsId: string): Promise<ProjectApprover[]> {
+export async function listApprovers(
+  settingsId: string
+): Promise<ProjectApprover[]> {
   const rows = await db
     .select({
       id: projectApprovers.id,
@@ -319,14 +499,26 @@ export async function listApprovers(settingsId: string): Promise<ProjectApprover
 
   return rows.map((r) => ({
     ...r,
-    documentType: r.documentType as 'design_doc' | 'prd' | 'design_prototype' | 'test_case',
+    documentType: r.documentType as
+      | 'design_doc'
+      | 'prd'
+      | 'design_prototype'
+      | 'test_case',
   }));
 }
 
-export async function listApproversForAllProjects(): Promise<Record<string, ProjectApprover[]>> {
+export async function listApproversForAllProjects(): Promise<
+  Record<string, ProjectApprover[]>
+> {
   let rows: Array<{
-    id: string; settingsId: string; userId: string; displayName: string | null;
-    email: string | null; documentType: string; assignedBy: string | null; assignedAt: string;
+    id: string;
+    settingsId: string;
+    userId: string;
+    displayName: string | null;
+    email: string | null;
+    documentType: string;
+    assignedBy: string | null;
+    assignedAt: string;
   }>;
   try {
     rows = await db
@@ -351,7 +543,11 @@ export async function listApproversForAllProjects(): Promise<Record<string, Proj
   for (const r of rows) {
     const approver: ProjectApprover = {
       ...r,
-      documentType: r.documentType as 'design_doc' | 'prd' | 'design_prototype' | 'test_case',
+      documentType: r.documentType as
+        | 'design_doc'
+        | 'prd'
+        | 'design_prototype'
+        | 'test_case',
     };
     if (!grouped[r.settingsId]) grouped[r.settingsId] = [];
     grouped[r.settingsId].push(approver);
@@ -363,12 +559,17 @@ export async function setApprovers(
   settingsId: string,
   documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case',
   userIds: string[],
-  assignedBy?: string,
+  assignedBy?: string
 ): Promise<ProjectApprover[]> {
   await db.transaction(async (tx) => {
     await tx
       .delete(projectApprovers)
-      .where(and(eq(projectApprovers.settingsId, settingsId), eq(projectApprovers.documentType, documentType)));
+      .where(
+        and(
+          eq(projectApprovers.settingsId, settingsId),
+          eq(projectApprovers.documentType, documentType)
+        )
+      );
 
     if (userIds.length > 0) {
       await tx.insert(projectApprovers).values(
@@ -377,7 +578,7 @@ export async function setApprovers(
           userId,
           documentType,
           assignedBy: assignedBy ?? null,
-        })),
+        }))
       );
     }
   });
@@ -387,7 +588,7 @@ export async function setApprovers(
 
 export async function getApproversForDocument(
   settingsId: string,
-  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case',
+  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case'
 ): Promise<ProjectApprover[]> {
   const rows = await db
     .select({
@@ -402,11 +603,20 @@ export async function getApproversForDocument(
     })
     .from(projectApprovers)
     .innerJoin(appUsers, eq(projectApprovers.userId, appUsers.oid))
-    .where(and(eq(projectApprovers.settingsId, settingsId), eq(projectApprovers.documentType, documentType)));
+    .where(
+      and(
+        eq(projectApprovers.settingsId, settingsId),
+        eq(projectApprovers.documentType, documentType)
+      )
+    );
 
   return rows.map((r) => ({
     ...r,
-    documentType: r.documentType as 'design_doc' | 'prd' | 'design_prototype' | 'test_case',
+    documentType: r.documentType as
+      | 'design_doc'
+      | 'prd'
+      | 'design_prototype'
+      | 'test_case',
   }));
 }
 
@@ -414,12 +624,17 @@ export async function setApproverGroups(
   settingsId: string,
   documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case',
   groupIds: string[],
-  assignedBy?: string,
+  assignedBy?: string
 ): Promise<void> {
   await db.transaction(async (tx) => {
     await tx
       .delete(projectApproverGroups)
-      .where(and(eq(projectApproverGroups.settingsId, settingsId), eq(projectApproverGroups.documentType, documentType)));
+      .where(
+        and(
+          eq(projectApproverGroups.settingsId, settingsId),
+          eq(projectApproverGroups.documentType, documentType)
+        )
+      );
 
     if (groupIds.length > 0) {
       await tx.insert(projectApproverGroups).values(
@@ -428,7 +643,7 @@ export async function setApproverGroups(
           groupId,
           documentType,
           assignedBy: assignedBy ?? null,
-        })),
+        }))
       );
     }
   });
@@ -436,7 +651,7 @@ export async function setApproverGroups(
 
 export async function getApproverPool(
   settingsId: string,
-  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case',
+  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case'
 ): Promise<ApproverPoolResponse> {
   const individuals = await getApproversForDocument(settingsId, documentType);
 
@@ -457,9 +672,18 @@ export async function getApproverPool(
     })
     .from(projectApproverGroups)
     .innerJoin(appGroups, eq(projectApproverGroups.groupId, appGroups.id))
-    .where(and(eq(projectApproverGroups.settingsId, settingsId), eq(projectApproverGroups.documentType, documentType)));
+    .where(
+      and(
+        eq(projectApproverGroups.settingsId, settingsId),
+        eq(projectApproverGroups.documentType, documentType)
+      )
+    );
 
-  const groups: Array<GroupWithMembers & { documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case' }> = [];
+  const groups: Array<
+    GroupWithMembers & {
+      documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case';
+    }
+  > = [];
   for (const ref of groupRefs) {
     const memberRows = await db
       .select({
@@ -482,7 +706,11 @@ export async function getApproverPool(
       isDefault: ref.groupIsDefault,
       createdBy: ref.groupCreatedBy,
       createdAt: ref.groupCreatedAt,
-      documentType: ref.documentType as 'design_doc' | 'prd' | 'design_prototype' | 'test_case',
+      documentType: ref.documentType as
+        | 'design_doc'
+        | 'prd'
+        | 'design_prototype'
+        | 'test_case',
       members: memberRows,
     });
   }
@@ -492,7 +720,7 @@ export async function getApproverPool(
 
 export async function getApproverUserIds(
   settingsId: string,
-  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case',
+  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case'
 ): Promise<string[]> {
   const pool = await getApproverPool(settingsId, documentType);
   const userIds = new Set<string>();
@@ -510,7 +738,7 @@ export async function getApproverUserIds(
 /** Back-compat wrapper: resolves the default config for a project, then fetches approver user IDs. */
 export async function getApproverUserIdsForProject(
   project: string,
-  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case',
+  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case'
 ): Promise<string[]> {
   const config = await getSkillConfig(project);
   if (!config?.id) return [];
@@ -520,7 +748,7 @@ export async function getApproverUserIdsForProject(
 /** Back-compat wrapper: resolves the default config for a project, then fetches the approver pool. */
 export async function getApproverPoolForProject(
   project: string,
-  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case',
+  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case'
 ): Promise<ApproverPoolResponse> {
   const config = await getSkillConfig(project);
   if (!config?.id) return { individuals: [], groups: [] };
@@ -530,7 +758,7 @@ export async function getApproverPoolForProject(
 /** Back-compat wrapper: resolves the default config for a project, then fetches approvers for a document type. */
 export async function getApproversForDocumentByProject(
   project: string,
-  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case',
+  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case'
 ): Promise<ProjectApprover[]> {
   const config = await getSkillConfig(project);
   if (!config?.id) return [];
@@ -538,8 +766,10 @@ export async function getApproversForDocumentByProject(
 }
 
 export async function listApproverGroupsForProject(
-  settingsId: string,
-): Promise<Array<{ groupId: string; groupName: string; documentType: string }>> {
+  settingsId: string
+): Promise<
+  Array<{ groupId: string; groupName: string; documentType: string }>
+> {
   const rows = await db
     .select({
       groupId: projectApproverGroups.groupId,
@@ -553,9 +783,17 @@ export async function listApproverGroupsForProject(
 }
 
 export async function listApproverGroupsForAllProjects(): Promise<
-  Record<string, Array<{ groupId: string; groupName: string; documentType: string }>>
+  Record<
+    string,
+    Array<{ groupId: string; groupName: string; documentType: string }>
+  >
 > {
-  let rows: Array<{ settingsId: string; groupId: string; groupName: string; documentType: string }>;
+  let rows: Array<{
+    settingsId: string;
+    groupId: string;
+    groupName: string;
+    documentType: string;
+  }>;
   try {
     rows = await db
       .select({
@@ -571,7 +809,10 @@ export async function listApproverGroupsForAllProjects(): Promise<
     return {};
   }
 
-  const grouped: Record<string, Array<{ groupId: string; groupName: string; documentType: string }>> = {};
+  const grouped: Record<
+    string,
+    Array<{ groupId: string; groupName: string; documentType: string }>
+  > = {};
   for (const r of rows) {
     if (!grouped[r.settingsId]) grouped[r.settingsId] = [];
     grouped[r.settingsId].push({

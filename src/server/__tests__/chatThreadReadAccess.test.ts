@@ -28,10 +28,52 @@ jest.mock('../services/chatAgentService', () => ({
   subscribeToThread: jest.fn().mockReturnValue(() => {}),
   cancelRun: jest.fn(),
   closeThread: jest.fn(),
+  recoverStaleRunningThread: jest.fn().mockResolvedValue('idle'),
+  permanentlyDeleteThread: jest.fn(),
   readOutputPrd: jest.fn().mockReturnValue(null),
   writeOutputPrd: jest.fn(),
   readOutputBacklog: jest.fn().mockReturnValue(null),
   isPrdReady: jest.fn().mockReturnValue(false),
+  isRepositoryReadingChatCaller: jest.fn().mockReturnValue(false),
+  resolveGroundingCallerKey: jest.fn().mockReturnValue('agent-home'),
+}));
+
+jest.mock('../services/featureFlagService', () => ({
+  isFeatureEnabled: jest.fn().mockResolvedValue(false),
+  isProjectRepositoryCheckoutReadinessEnabled: jest.fn().mockResolvedValue(false),
+}));
+
+jest.mock('../services/projectRepositoryReadinessService', () => ({
+  assertResolvedProjectRepositoryReady: jest.fn().mockResolvedValue({
+    skillSettingsId: 'cfg-1',
+    status: 'ready',
+    sha: 'abc',
+    error: null,
+    startedAt: null,
+    completedAt: null,
+    filesystemReady: true,
+  }),
+  ProjectRepositoryNotReady: class ProjectRepositoryNotReady extends Error {
+    readonly code = 'PROJECT_REPOSITORY_NOT_READY';
+    readonly httpStatus = 409;
+    readonly readinessStatus: string;
+    constructor(readiness: { status: string }) {
+      super('A project administrator must clone this repository before repository-dependent AI work can run.');
+      this.name = 'ProjectRepositoryNotReady';
+      this.readinessStatus = readiness.status;
+    }
+    toJSON() {
+      return {
+        code: 'PROJECT_REPOSITORY_NOT_READY',
+        message: this.message,
+        status: this.readinessStatus,
+      };
+    }
+  },
+}));
+
+jest.mock('../services/telemetry', () => ({
+  trackEvent: jest.fn(),
 }));
 
 jest.mock('../services/wikiCatalog', () => ({

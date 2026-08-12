@@ -3,6 +3,43 @@ import type { GroupWithMembers } from './groups';
 
 export type SkillProvider = 'ado' | 'github';
 
+/** Persisted checkout lifecycle for a Project Skill Settings repository configuration. */
+export type RepositoryCheckoutStatus =
+  | 'not_cloned'
+  | 'cloning'
+  | 'ready'
+  | 'failed';
+
+/**
+ * Authoritative readiness reported to clients/gates. Extends checkout status with
+ * filesystem-authoritative `snapshot_unavailable` when DB says ready but the
+ * Azure Files `.apex-shared-ready` marker is missing.
+ */
+export type RepositoryReadinessStatus =
+  | RepositoryCheckoutStatus
+  | 'snapshot_unavailable';
+
+/** Stable public error when repository-dependent AI is blocked pending admin Clone. */
+export const PROJECT_REPOSITORY_NOT_READY = 'PROJECT_REPOSITORY_NOT_READY' as const;
+export type ProjectRepositoryNotReadyCode = typeof PROJECT_REPOSITORY_NOT_READY;
+
+export interface ProjectRepositoryReadiness {
+  skillSettingsId: string;
+  status: RepositoryReadinessStatus;
+  sha: string | null;
+  error: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  /** True only when DB ready AND filesystem `.apex-shared-ready` is present for the SHA. */
+  filesystemReady: boolean;
+}
+
+export interface ProjectRepositoryNotReadyError {
+  code: ProjectRepositoryNotReadyCode;
+  message: string;
+  status: RepositoryReadinessStatus;
+}
+
 /** Which prototype generator a project uses: the existing one-shot Bedrock path or a skill/agent flow. */
 export type PrototypeEngine = 'bedrock' | 'agent';
 
@@ -182,6 +219,12 @@ export interface ProjectSkillConfig {
   designModuleScopingSkillPath?: string | null;
   /** Model override for Design Module sourceGlob scoping. */
   designModuleScopingModel?: string | null;
+  /** Admin-managed repository checkout status for this configuration. */
+  repositoryCheckoutStatus?: RepositoryCheckoutStatus;
+  repositoryCheckoutSha?: string | null;
+  repositoryCheckoutError?: string | null;
+  repositoryCheckoutStartedAt?: string | null;
+  repositoryCheckoutCompletedAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -354,6 +397,11 @@ export interface ProjectSkillConfigResponse {
   designModuleModel?: string | null;
   designModuleScopingSkillPath?: string | null;
   designModuleScopingModel?: string | null;
+  repositoryCheckoutStatus?: RepositoryCheckoutStatus;
+  repositoryCheckoutSha?: string | null;
+  repositoryCheckoutError?: string | null;
+  repositoryCheckoutStartedAt?: string | null;
+  repositoryCheckoutCompletedAt?: string | null;
 }
 
 /** Lightweight per-repo config summary for the repo selector. Returned by GET /api/skill-configs. */

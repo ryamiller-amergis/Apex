@@ -71,7 +71,11 @@ export interface ChatThreadKickoff {
    */
   webResearchEnabled?: boolean;
   /** Thread mode — controls system prompt behavior */
-  mode?: 'development' | 'standup-participant' | 'standup-facilitator' | 'standup-followup';
+  mode?:
+    | 'development'
+    | 'standup-participant'
+    | 'standup-facilitator'
+    | 'standup-followup';
   /** Work item ID driving the development session */
   workItemId?: number;
   /** True only when server-side package-manager-aware dependency bootstrap completed */
@@ -140,17 +144,18 @@ export interface ChatThread {
 // ── SSE event shapes sent to the browser ──────────────────────────────────────
 
 export type SseEventType =
-  | 'token'       // partial text from the agent
-  | 'message'     // complete agent message (role + full text)
-  | 'tool_call'   // agent invoked a tool
-  | 'thinking'    // model thinking/reasoning text
-  | 'phase'       // durable semantic run progress
-  | 'health'      // durable watchdog/recovery state (not meaningful progress)
+  | 'token' // partial text from the agent
+  | 'message' // complete agent message (role + full text)
+  | 'tool_call' // agent invoked a tool
+  | 'thinking' // model thinking/reasoning text
+  | 'phase' // durable semantic run progress
+  | 'health' // durable watchdog/recovery state (not meaningful progress)
   | 'tool_status' // tool execution progress (running/completed/error)
-  | 'status'      // thread status changed
-  | 'error'       // run-level error
-  | 'retrying'    // server is transparently retrying a transient failure
-  | 'done';       // turn completed
+  | 'status' // thread status changed
+  | 'grounding' // repository checkout preparation progress
+  | 'error' // run-level error
+  | 'retrying' // server is transparently retrying a transient failure
+  | 'done'; // turn completed
 
 export interface SseTokenEvent {
   type: 'token';
@@ -175,7 +180,21 @@ export interface SseStatusEvent {
   eventDrivenTermination?: boolean;
 }
 
-export type SseErrorCode = 'transient' | 'rate_limit' | 'context_overflow' | 'auth' | 'fatal';
+export type GroundingPreparationStatus = 'preparing' | 'ready' | 'failed';
+
+export interface SseGroundingEvent {
+  type: 'grounding';
+  status: GroundingPreparationStatus;
+  message: string;
+  retryAfterMs?: number;
+}
+
+export type SseErrorCode =
+  | 'transient'
+  | 'rate_limit'
+  | 'context_overflow'
+  | 'auth'
+  | 'fatal';
 
 export interface SseErrorEvent {
   type: 'error';
@@ -222,7 +241,12 @@ export type AgentRunPhase =
   | 'push'
   | 'completion';
 
-export type AgentRunEventStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type AgentRunEventStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
 
 export interface SsePhaseEvent {
   type: 'phase';
@@ -279,6 +303,7 @@ type SseEventPayload =
   | SseHealthEvent
   | SseToolStatusEvent
   | SseStatusEvent
+  | SseGroundingEvent
   | SseErrorEvent
   | SseRetryingEvent
   | SseDoneEvent;
@@ -294,6 +319,7 @@ export type AgentRunEventType =
   | 'health'
   | 'tool'
   | 'status'
+  | 'grounding'
   | 'retrying'
   | 'error'
   | 'done'
@@ -341,7 +367,10 @@ export interface ChatThreadSummary {
   userId: string;
   title: string;
   status: ChatThreadStatus;
-  kickoff: Pick<ChatThreadKickoff, 'project' | 'repo' | 'skillPath' | 'pillLabel' | 'pillDescription'>;
+  kickoff: Pick<
+    ChatThreadKickoff,
+    'project' | 'repo' | 'skillPath' | 'pillLabel' | 'pillDescription'
+  >;
   /** First user prompt snippet for `{process} - {description}` history labels */
   messagePreview?: string;
   flagged: boolean;
@@ -381,7 +410,7 @@ export interface SelectChatThreadOptions {
  */
 export type SelectChatThreadHandler = (
   threadId: string,
-  options?: SelectChatThreadOptions,
+  options?: SelectChatThreadOptions
 ) => void;
 
 // ── REST request/response shapes ──────────────────────────────────────────────

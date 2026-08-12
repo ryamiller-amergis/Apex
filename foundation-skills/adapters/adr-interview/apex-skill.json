@@ -12,10 +12,6 @@
     "full-repo-context",
     "adr-interview"
   ],
-  "dependsOn": [
-    "azure-async-infra",
-    "terraform-infra"
-  ],
   "managedFiles": [
     "SKILL.md"
   ]

@@ -50,6 +50,7 @@ jest.mock('../services/chatAgentService', () => ({
   readOutputBacklog: jest.fn().mockReturnValue(null),
   readOutputValidationScorecard: jest.fn().mockReturnValue(null),
   readOutputValidationScorecardMd: jest.fn().mockReturnValue(null),
+  isThreadIdle: jest.fn().mockReturnValue(true),
   sendMessage: jest.fn().mockResolvedValue(undefined),
   prepareBackgroundWorkflowTurn: jest.fn().mockResolvedValue({
     prompt: 'complete frozen PRD prompt',
@@ -60,6 +61,10 @@ jest.mock('../services/chatAgentService', () => ({
   }),
   createThread: jest.fn().mockResolvedValue({ id: 'thread-new', workspaceDir: '/tmp/thread-new' }),
   cancelRun: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock('../services/agentRunReaperService', () => ({
+  isThreadRunAlive: jest.fn().mockResolvedValue(false),
 }));
 
 jest.mock('../services/backgroundWorkflowRouter', () => ({
@@ -251,6 +256,7 @@ const {
   readOutputValidationScorecardMd: mockReadOutputValidationScorecardMd,
   sendMessage: mockSendMessage,
   createThread: mockCreateThread,
+  isThreadIdle: mockIsThreadIdle,
 } = jest.requireMock('../services/chatAgentService') as {
   readOutputPrd: jest.Mock;
   readOutputBacklog: jest.Mock;
@@ -258,7 +264,12 @@ const {
   readOutputValidationScorecardMd: jest.Mock;
   sendMessage: jest.Mock;
   createThread: jest.Mock;
+  isThreadIdle: jest.Mock;
 };
+
+const { isThreadRunAlive: mockIsThreadRunAlive } = jest.requireMock(
+  '../services/agentRunReaperService',
+) as { isThreadRunAlive: jest.Mock };
 
 const { isAdminUser: mockIsAdminUser } = jest.requireMock('../utils/rbacHelpers') as {
   isAdminUser: jest.Mock;
@@ -438,6 +449,26 @@ describe('createPrd', () => {
     );
   });
 
+  it('VT-12: persists Interview skillSettingsId onto the PRD row', async () => {
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'prd-settings' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await createPrd({
+      interviewId: 'interview-1',
+      project: 'proj-alpha',
+      userId: 'user-1',
+      chatThreadId: 'thread-prd',
+      skillSettingsId: 'interview-skill-settings',
+    });
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skillSettingsId: 'interview-skill-settings',
+      }),
+    );
+  });
+
   it('returns immediately without awaiting grounding materialization', async () => {
     const {
       propagatePipelineGrounding,
@@ -553,6 +584,41 @@ describe('routePrdGenerationKickoff', () => {
     expect(mockRouteBackgroundWorkflow).toHaveBeenCalled();
   });
 
+  it('VT-12: Interview→PRD kickoff inherits grounding via propagatePipelineGrounding', async () => {
+    const {
+      propagatePipelineGrounding,
+      resolveRunGroundingSurface,
+    } = jest.requireMock('../services/runGroundingService') as {
+      propagatePipelineGrounding: jest.Mock;
+      resolveRunGroundingSurface: jest.Mock;
+    };
+    resolveRunGroundingSurface.mockResolvedValue({
+      run: { runType: 'chat', runId: 'interview-thread', project: 'proj-alpha' },
+    });
+    propagatePipelineGrounding.mockResolvedValue({
+      grounding: {
+        groundedSha: 'a'.repeat(40),
+        runId: 'thread-prd',
+      },
+      materialization: 'deferred',
+    });
+
+    await routePrdGenerationKickoff({
+      prdId: 'prd-1',
+      userId: 'user-1',
+      project: 'proj-alpha',
+      threadId: 'thread-prd',
+      interviewId: 'interview-1',
+    });
+
+    expect(propagatePipelineGrounding).toHaveBeenCalledTimes(1);
+    expect(propagatePipelineGrounding.mock.calls[0][0]).toEqual({
+      runType: 'chat',
+      runId: 'interview-thread',
+      project: 'proj-alpha',
+    });
+  });
+
   it('AC-0: worker routing does not start in-process PRD execution', async () => {
     mockRouteBackgroundWorkflow.mockImplementationOnce(async (input) => {
       const prepared = await input.prepareWorker();
@@ -581,21 +647,14 @@ describe('routePrdGenerationKickoff', () => {
     expect(mockPrepareBackgroundWorkflowTurn).toHaveBeenCalledTimes(1);
   });
 
-  it('BR-008 / DoD-3: PRD preparation failure persists domain state before deactivation', async () => {
-    const deactivated = jest.fn();
-    mockRunGroundingService.persistThenMarkTerminalInactive.mockImplementationOnce(
-      async (_run, persist) => {
-        await persist();
-        deactivated();
-      },
-    );
+  it('cold external project: PRD worker preparation failure runs in-process and stays generating', async () => {
     mockRouteBackgroundWorkflow.mockImplementationOnce(
-      async (input: { reportRecoverablePreparationFailure(): Promise<void> }) => {
-        await input.reportRecoverablePreparationFailure();
+      async (input: { runInProcess(): Promise<void> }) => {
+        await input.runInProcess();
         return {
           route: 'in-process',
           reason: 'materialization-unavailable',
-          recoverable: true,
+          fallbackStarted: true,
         };
       },
     );
@@ -607,20 +666,15 @@ describe('routePrdGenerationKickoff', () => {
       threadId: 'thread-prd',
     });
 
-    const updateChain = mockDb.update.mock.results[
-      mockDb.update.mock.results.length - 1
-    ].value;
-    expect(updateChain.set).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'draft' }),
-    );
-    expect(updateChain.where.mock.invocationCallOrder[0])
-      .toBeLessThan(deactivated.mock.invocationCallOrder[0]);
     expect(mockRunGroundingService.persistThenMarkTerminalInactive)
-      .toHaveBeenCalledWith(
-        { runType: 'chat', runId: 'thread-prd', project: 'proj-alpha' },
-        expect.any(Function),
-      );
-    expect(mockSendMessage).not.toHaveBeenCalled();
+      .not.toHaveBeenCalled();
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      'thread-prd',
+      'Begin.',
+      undefined,
+      [],
+      { hidden: true },
+    );
   });
 });
 
@@ -1520,19 +1574,34 @@ describe('reopenForReview', () => {
 // ── startPrdWatcher ───────────────────────────────────────────────────────────
 
 describe('startPrdWatcher', () => {
+  const completePrdContent = [
+    '# Feature PRD',
+    '',
+    '## Overview',
+    'This is a complete PRD body with enough content to pass the stub-length guard used by generation watchers.',
+    '',
+    '## Requirements',
+    'Users can manage rules with clear acceptance criteria and business rules documented here.',
+  ].join('\n');
+  const completeBacklog = {
+    epics: [{ id: 'E1', title: 'Epic 1', features: [] }],
+  };
+
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
     mockDb.query.prds.findFirst.mockResolvedValue({ id: 'prd-1', status: 'generating' });
+    mockIsThreadIdle.mockReturnValue(true);
+    mockIsThreadRunAlive.mockResolvedValue(false);
   });
 
   afterEach(() => {
     jest.useRealTimers();
   });
 
-  it('syncs content to DB when both files are found', async () => {
-    mockReadOutputPrd.mockReturnValue('# Generated PRD');
-    mockReadOutputBacklog.mockReturnValue({ epics: [] });
+  it('syncs content to DB when complete output is found and the run is finished', async () => {
+    mockReadOutputPrd.mockReturnValue(completePrdContent);
+    mockReadOutputBacklog.mockReturnValue(completeBacklog);
 
     const whereMock = jest.fn().mockResolvedValue(undefined);
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
@@ -1549,8 +1618,46 @@ describe('startPrdWatcher', () => {
     expect(mockReadOutputPrd).toHaveBeenCalledWith('thread-1');
     expect(mockReadOutputBacklog).toHaveBeenCalledWith('thread-1');
     expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ content: '# Generated PRD', status: 'draft' }),
+      expect.objectContaining({ content: completePrdContent, status: 'draft' }),
     );
+  });
+
+  it('does not sync while the generation run is still alive', async () => {
+    mockReadOutputPrd.mockReturnValue(completePrdContent);
+    mockReadOutputBacklog.mockReturnValue(completeBacklog);
+    mockIsThreadRunAlive.mockResolvedValue(true);
+
+    const setMock = jest.fn().mockReturnThis();
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    startPrdWatcher('prd-1', 'thread-1');
+
+    jest.advanceTimersByTime(5_000);
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+
+    expect(mockIsThreadRunAlive).toHaveBeenCalledWith('thread-1');
+    expect(setMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'draft', content: completePrdContent }),
+    );
+    expect(isPrdWatcherActive('prd-1')).toBe(true);
+  });
+
+  it('does not sync stub PRD content with an empty backlog object', async () => {
+    mockReadOutputPrd.mockReturnValue('# Blackout Date Rule Administration\n\n_Work item #50739_\n');
+    mockReadOutputBacklog.mockReturnValue({});
+
+    const setMock = jest.fn().mockReturnThis();
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    startPrdWatcher('prd-1', 'thread-1');
+
+    jest.advanceTimersByTime(5_000);
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+
+    expect(setMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'draft' }),
+    );
+    expect(isPrdWatcherActive('prd-1')).toBe(true);
   });
 
   it('tracks whether a generation watcher is already active', async () => {
@@ -1569,8 +1676,8 @@ describe('startPrdWatcher', () => {
   });
 
   it('stops when the PRD no longer exists (e.g. deleted on another instance)', async () => {
-    mockReadOutputPrd.mockReturnValue('# Generated PRD');
-    mockReadOutputBacklog.mockReturnValue({ epics: [] });
+    mockReadOutputPrd.mockReturnValue(completePrdContent);
+    mockReadOutputBacklog.mockReturnValue(completeBacklog);
     mockDb.query.prds.findFirst.mockResolvedValue(null);
 
     const setMock = jest.fn().mockReturnThis();
@@ -1592,8 +1699,8 @@ describe('startPrdWatcher', () => {
   });
 
   it('stops when the PRD is no longer generating', async () => {
-    mockReadOutputPrd.mockReturnValue('# Generated PRD');
-    mockReadOutputBacklog.mockReturnValue({ epics: [] });
+    mockReadOutputPrd.mockReturnValue(completePrdContent);
+    mockReadOutputBacklog.mockReturnValue(completeBacklog);
     mockDb.query.prds.findFirst.mockResolvedValue({ id: 'prd-1', status: 'draft' });
 
     const setMock = jest.fn().mockReturnThis();
@@ -1631,7 +1738,7 @@ describe('startPrdWatcher', () => {
   });
 
   it('does not sync when only PRD file is found without backlog', async () => {
-    mockReadOutputPrd.mockReturnValue('# PRD');
+    mockReadOutputPrd.mockReturnValue(completePrdContent);
     mockReadOutputBacklog.mockReturnValue(null);
 
     const setMock = jest.fn().mockReturnThis();

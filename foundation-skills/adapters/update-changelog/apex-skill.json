@@ -13,5 +13,6 @@
   ],
   "managedFiles": [
     "SKILL.md"
-  ]
+  ],
+  "alwaysInstall": true
 }

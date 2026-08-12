@@ -7,6 +7,7 @@ import { useStartChat, useChatThread, useSkillList, useSkillRepos } from '../hoo
 import { useProjectSkillConfig, useGlobalDefaultModel, useAvailableModels } from '../hooks/useProjectSkillConfig';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useChatAttachments, formatAttachmentSize } from '../hooks/useChatAttachments';
+import { useProjectRepositoryReadiness } from '../hooks/useProjectRepositoryReadiness';
 import {
   adrAttachmentFileName,
   buildFeatureRequestInterviewPrefillText,
@@ -322,6 +323,7 @@ const NewInterviewCompose: React.FC = () => {
 
   const { data: repos = [] } = useSkillRepos(selectedProject || null);
   const { data: skillConfig } = useProjectSkillConfig(selectedProject || null, selectedSkillSettingsId);
+  const repoReadiness = useProjectRepositoryReadiness(skillConfig?.id, selectedProject || null);
   const { data: globalDefaultModel } = useGlobalDefaultModel();
   const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
 
@@ -435,6 +437,10 @@ const NewInterviewCompose: React.FC = () => {
     const text = input.trim();
     const trimmedTitle = title.trim();
     if ((!text && attachments.length === 0) || isSending || !resolvedRepoName) return;
+    if (!repoReadiness.isReady) {
+      setSendError(repoReadiness.message);
+      return;
+    }
     if (!trimmedTitle) {
       setTitleTouched(true);
       titleInputRef.current?.focus();
@@ -443,12 +449,17 @@ const NewInterviewCompose: React.FC = () => {
     if (speech.isListening) speech.stop();
     setSendError(null);
     setShowOwnerModal(true);
-  }, [input, title, attachments, isSending, resolvedRepoName, speech]);
+  }, [input, title, attachments, isSending, resolvedRepoName, speech, repoReadiness.isReady, repoReadiness.message]);
 
   const handleCreateInterview = useCallback(async (selections: { prdOwnerId?: string; designDocOwnerId?: string; designPrototypeOwnerId?: string; testCaseOwnerId?: string; prdApproverIds?: string[]; designDocApproverIds?: string[]; designPrototypeApproverIds?: string[]; testCaseApproverIds?: string[] }) => {
     const text = input.trim();
     const trimmedTitle = title.trim();
     if (!resolvedRepoName || !trimmedTitle) return;
+    if (!repoReadiness.isReady) {
+      setSendError(repoReadiness.message);
+      setShowOwnerModal(false);
+      return;
+    }
     setIsSending(true);
     try {
       const threadResult = await startChat.mutateAsync({
@@ -552,7 +563,7 @@ const NewInterviewCompose: React.FC = () => {
       setSendError(msg);
       setIsSending(false);
     }
-  }, [input, title, attachments, resolvedRepoName, resolvedBranch, selectedProject, resolvedSkillPath, grillSkill, startChat, createInterview, persistStagedLinks, stagedLinkedContext, linkFeatureRequestInterview, navigate, clearAttachments, model, skillConfig, prototypeStageEnabled, testCasesEnabled]);
+  }, [input, title, attachments, resolvedRepoName, resolvedBranch, selectedProject, resolvedSkillPath, grillSkill, startChat, createInterview, persistStagedLinks, stagedLinkedContext, linkFeatureRequestInterview, navigate, clearAttachments, model, skillConfig, prototypeStageEnabled, testCasesEnabled, repoReadiness.isReady, repoReadiness.message]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -841,7 +852,7 @@ const NewInterviewCompose: React.FC = () => {
             <button
               className={styles.sendBtn}
               onClick={() => void handleSend()}
-              disabled={(!input.trim() && attachments.length === 0) || isSending || !resolvedRepoName || !title.trim() || (!resolvedSkillPath && !grillSkill)}
+              disabled={(!input.trim() && attachments.length === 0) || isSending || !resolvedRepoName || !title.trim() || (!resolvedSkillPath && !grillSkill) || !repoReadiness.isReady}
               type="button"
               aria-label="Start interview"
               {...{ 'data-testid': 'interview-compose-start' }}
@@ -865,6 +876,11 @@ const NewInterviewCompose: React.FC = () => {
         {!grillSkill && !resolvedSkillPath && skillConfig && interviewSkillOptions.length === 0 && (
           <div className={styles.composeError}>
             No interview skill is configured for this repo project. Please ask an admin to set the interview skill path in project settings.
+          </div>
+        )}
+        {!repoReadiness.isReady && repoReadiness.message && (
+          <div className={styles.composeError} {...{ 'data-testid': 'interview-compose-repo-not-ready' }}>
+            {repoReadiness.message}
           </div>
         )}
         {(grillSkill || resolvedSkillPath) && (
@@ -936,6 +952,10 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
   const { data: interview, isLoading, isError } = useInterview(id);
   const { data: skillConfig } = useProjectSkillConfig(interview?.project ?? null);
+  const repoReadiness = useProjectRepositoryReadiness(
+    skillConfig?.id ?? interview?.skillSettingsId,
+    interview?.project ?? null,
+  );
   const { data: globalDefaultModel } = useGlobalDefaultModel();
   const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
 
@@ -999,6 +1019,11 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     initialMessages: chatThread?.messages,
     initialStatus: chatThread?.status,
     enablePreparationState: interview?.status === 'in_progress',
+    beforeSend: () => {
+      if (!repoReadiness.isReady) {
+        throw new Error(repoReadiness.message ?? 'Repository is not ready');
+      }
+    },
   });
 
   const {
@@ -1200,7 +1225,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
           skillPath,
           transcript,
           model: prdModel,
-          skillSettingsId: skillConfig?.id ?? undefined,
+          skillSettingsId: interview.skillSettingsId ?? skillConfig?.id ?? undefined,
         },
         skipAutoKickoff: true,
       });
@@ -1475,16 +1500,18 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         </div>
       </div>
 
-      {(sendError || prdGenError) && (
-        <div className={styles.sendError}>
-          {sendError ?? prdGenError}
-          <button
-            type="button"
-            className={styles.sendErrorDismiss}
-            onClick={() => { clearSendError(); setPrdGenError(null); }}
-            aria-label="Dismiss error"
-            {...{ 'data-testid': 'interview-dismiss-error' }}
-          >×</button>
+      {(sendError || prdGenError || (!repoReadiness.isReady && repoReadiness.message)) && (
+        <div className={styles.sendError} {...{ 'data-testid': 'interview-repo-not-ready' }}>
+          {sendError ?? prdGenError ?? repoReadiness.message}
+          {(sendError || prdGenError) && (
+            <button
+              type="button"
+              className={styles.sendErrorDismiss}
+              onClick={() => { clearSendError(); setPrdGenError(null); }}
+              aria-label="Dismiss error"
+              {...{ 'data-testid': 'interview-dismiss-error' }}
+            >×</button>
+          )}
         </div>
       )}
 
@@ -1819,6 +1846,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   disabled={
                     (!input.trim() && attachments.length === 0)
                     || isInteractionBusy
+                    || !repoReadiness.isReady
                   }
                   type="button"
                   aria-label="Send"

@@ -41,7 +41,7 @@ jobs:
       - name: Install root dependencies
         run: npm ci
 
-      # Run the no-project-context lint and structural validation over all 30 foundations.
+      # Run structural validation over the foundation-skills catalog and skill dirs.
       - name: Validate foundation package
         run: node scripts/validate-foundation-skills.mjs
 

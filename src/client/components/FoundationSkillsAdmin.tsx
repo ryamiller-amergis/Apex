@@ -29,6 +29,10 @@ import type {
   FoundationSkillReleaseValidationIssue,
 } from '../../shared/types/foundationSkills';
 import {
+  alwaysInstallSkillsFromCatalog,
+  isAlwaysInstallCatalogSkill,
+} from '../../shared/types/foundationSkills';
+import {
   collectFoundationSkillValidationIssues,
   resolveFoundationSkillSelection,
 } from '../../shared/foundationSkillDependencies';
@@ -39,6 +43,27 @@ import {
 import styles from './FoundationSkillsAdmin.module.css';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+function lockedAlwaysInstallSkills(catalog: FoundationSkillCatalogEntry[]): string[] {
+  return alwaysInstallSkillsFromCatalog(catalog);
+}
+
+function withoutRemovableSkills(
+  catalog: FoundationSkillCatalogEntry[],
+  selected: string[],
+  name: string,
+): string[] {
+  if (selected.includes(name)) {
+    if (isAlwaysInstallCatalogSkill({
+      name,
+      alwaysInstall: catalog.find(s => s.name === name)?.alwaysInstall,
+    })) {
+      return selected;
+    }
+    return selected.filter(s => s !== name);
+  }
+  return [...selected, name];
+}
 
 function formatTs(ts: string | null | undefined): string {
   if (!ts) return '—';
@@ -426,16 +451,23 @@ const SkillChecklistRows: React.FC<{
         const checked = effectiveSelectedSkills.includes(skill.name);
         const isExplicit = explicitSelectedSkills.includes(skill.name);
         const requiredBySkills = requiredBy[skill.name] ?? [];
-        const isAutoRequired = checked && !isExplicit && requiredBySkills.length > 0;
+        const isAlwaysRequired = isAlwaysInstallCatalogSkill(skill);
+        const isAutoRequired = checked && !isExplicit && requiredBySkills.length > 0 && !isAlwaysRequired;
         const requiredById = isAutoRequired
           ? `${idPrefix}-required-by-${skill.name}`
-          : undefined;
+          : isAlwaysRequired
+            ? `${idPrefix}-always-${skill.name}`
+            : undefined;
         const inputId = `${idPrefix}-${skill.name}`;
 
         return (
           <div
             key={skill.name}
-            className={`${styles.skillRow} ${checked ? styles.skillRowChecked : ''}`}
+            className={[
+              styles.skillRow,
+              checked ? styles.skillRowChecked : '',
+              isAlwaysRequired || isAutoRequired ? styles.skillRowLocked : '',
+            ].filter(Boolean).join(' ')}
           >
             <div className={styles.skillRowMain}>
               <input
@@ -444,13 +476,18 @@ const SkillChecklistRows: React.FC<{
                 id={inputId}
                 checked={checked}
                 onChange={() => onSkillToggle(skill.name)}
-                disabled={isAutoRequired}
+                disabled={isAutoRequired || isAlwaysRequired}
                 aria-describedby={requiredById}
                 {...{ 'data-testid': `${testIdPrefix}-${skill.name}` }}
               />
               <label htmlFor={inputId} className={styles.skillRowText}>
                 <span className={styles.skillName}>
                   {skill.name}
+                  {isAlwaysRequired && (
+                    <span className={styles.skillDependencyTag} id={requiredById}>
+                      Always included
+                    </span>
+                  )}
                   {isAutoRequired && (
                     <span className={styles.skillDependencyTag} id={requiredById}>
                       Required by {formatDependencyLabel(requiredBySkills)}
@@ -614,7 +651,7 @@ const ProjectSkillCard: React.FC<{
               <button
                 type="button"
                 className={`${styles.btnGhost} ${styles.btnSm}`}
-                onClick={() => onPicksChange([])}
+                onClick={() => onPicksChange(lockedAlwaysInstallSkills(catalog))}
                 {...{ 'data-testid': `fs-project-skill-clear-${project}` }}
               >
                 Clear
@@ -631,11 +668,7 @@ const ProjectSkillCard: React.FC<{
               effectiveSelectedSkills={effective}
               requiredBy={requiredBy}
               onSkillToggle={name =>
-                onPicksChange(
-                  explicit.includes(name)
-                    ? explicit.filter(s => s !== name)
-                    : [...explicit, name],
-                )
+                onPicksChange(withoutRemovableSkills(catalog, explicit, name))
               }
               idPrefix={`skill-${safeId}`}
               testIdPrefix={`fs-project-skill-checkbox-${project}`}
@@ -1092,12 +1125,10 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({ onCreated })
               effectiveSelectedSkills={allModeSelection.effectiveSelectedSkills}
               requiredBy={allModeSelection.requiredBy}
               onSkillToggle={name =>
-                setExplicitSelectedSkills(prev =>
-                  prev.includes(name) ? prev.filter(s => s !== name) : [...prev, name],
-                )
+                setExplicitSelectedSkills(prev => withoutRemovableSkills(catalog, prev, name))
               }
               onSelectAll={() => setExplicitSelectedSkills(catalog.map(s => s.name))}
-              onClearAll={() => setExplicitSelectedSkills([])}
+              onClearAll={() => setExplicitSelectedSkills(lockedAlwaysInstallSkills(catalog))}
             />
           )
         )}
@@ -1492,12 +1523,10 @@ const EditReleasePanel: React.FC<{
                 effectiveSelectedSkills={allModeSelection.effectiveSelectedSkills}
                 requiredBy={allModeSelection.requiredBy}
                 onSkillToggle={name =>
-                  setExplicitSelectedSkills(prev =>
-                    prev.includes(name) ? prev.filter(s => s !== name) : [...prev, name],
-                  )
+                  setExplicitSelectedSkills(prev => withoutRemovableSkills(catalog, prev, name))
                 }
                 onSelectAll={() => setExplicitSelectedSkills(catalog.map(s => s.name))}
-                onClearAll={() => setExplicitSelectedSkills([])}
+                onClearAll={() => setExplicitSelectedSkills(lockedAlwaysInstallSkills(catalog))}
               />
             )}
           </div>

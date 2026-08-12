@@ -15,6 +15,14 @@ description: Project adapter for to-prd. Customize for your project.
 - Backlog example: `{{slot:skillsDir}}to-prd/backlog-example.json`
 - Output: `{{slot:aiPilotDir}}output/{kebab-slug}.prd.md` and `{{slot:aiPilotDir}}output/{kebab-slug}.backlog.json`
 
+## Input scope
+
+- `{{slot:aiPilotDir}}kickoff-transcript.md` is the sole requirements input — treat every statement as authoritative scope
+- Do **not** use pre-existing files under `{{slot:aiPilotDir}}output/` as scope — overwrite with this run's PRD and backlog
+- Do **not** invent scope from unrelated repo docs, external work items, or leftover PRD/backlog artifacts that contradict the transcript
+- Leave platform cleanup of leftover output to the host application; do not remove the output directory yourself
+- Explore the codebase for the transcript's feature only
+
 ## Personas and enums
 
 Use the project's own persona, priority, and target-surface vocabulary where defined
@@ -33,3 +41,7 @@ Terminology section for the authoritative glossary.
 - `schema additionalProperties: false` — include only schema-defined properties
 - Dependency-locality: item-level `dependsOn` must reference only items within the same Feature
 - `implementationPhases` express epic execution order (foundational epics first)
+
+## Quality gates
+
+- Transcript was the sole requirements source (pre-existing `{{slot:aiPilotDir}}output/` ignored; this run's artifacts overwrite)

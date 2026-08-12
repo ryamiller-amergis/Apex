@@ -80,8 +80,10 @@ jest.mock('../services/designDocService', () => ({
   syncPerFeatureDesignDocs: jest.fn(),
   finalizeSingleFeatureDoc: jest.fn(),
   isSingleFeatureDesignDocRow: jest.fn(
-    (row: { designPrototypeId?: string | null; featureIndex?: number | null }) =>
-      row.designPrototypeId != null || row.featureIndex != null,
+    (row: {
+      designPrototypeId?: string | null;
+      featureIndex?: number | null;
+    }) => row.designPrototypeId != null || row.featureIndex != null
   ),
 }));
 
@@ -170,6 +172,7 @@ import {
   buildBackgroundWorkflowPrompt,
   buildInitialPrompt,
   prepareRepositoryReadRuntime,
+  subscribeToThread,
 } from '../services/chatAgentService';
 import type {
   ChatMessage,
@@ -182,13 +185,11 @@ import type {
   RepoReader,
 } from '../../shared/types/repoReader';
 
-const {
-  deleteThread: mockPgDeleteThread,
-  upsertThread: mockPgUpsertThread,
-} = jest.requireMock('../services/chatThreadRepository') as {
-  deleteThread: jest.Mock;
-  upsertThread: jest.Mock;
-};
+const { deleteThread: mockPgDeleteThread, upsertThread: mockPgUpsertThread } =
+  jest.requireMock('../services/chatThreadRepository') as {
+    deleteThread: jest.Mock;
+    upsertThread: jest.Mock;
+  };
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as {
   db: {
@@ -204,7 +205,7 @@ function chatMessage(
   id: string,
   role: ChatMessage['role'],
   text: string,
-  overrides: Partial<ChatMessage> = {},
+  overrides: Partial<ChatMessage> = {}
 ): ChatMessage {
   return {
     id,
@@ -234,36 +235,51 @@ describe('PBI-001 shared chat lifecycle regression', () => {
   it('builds history from visible user and agent messages only', () => {
     const recovery = buildAgentRecoveryContext([
       chatMessage('1', 'user', 'We need guided feature walkthroughs.'),
-      chatMessage('2', 'tool', '→ search_repo_code', { toolName: 'search_repo_code' }),
-      chatMessage('3', 'agent', 'Internal planning snapshot', { toolName: '_reasoning' }),
+      chatMessage('2', 'tool', '→ search_repo_code', {
+        toolName: 'search_repo_code',
+      }),
+      chatMessage('3', 'agent', 'Internal planning snapshot', {
+        toolName: '_reasoning',
+      }),
       chatMessage('4', 'user', 'Begin.', { hidden: true }),
-      chatMessage('5', 'agent', 'Should walkthroughs remain separate from What’s New?'),
+      chatMessage(
+        '5',
+        'agent',
+        'Should walkthroughs remain separate from What’s New?'
+      ),
     ]);
 
     expect(recovery).not.toBeNull();
     expect(recovery?.totalMessageCount).toBe(2);
     expect(recovery?.truncated).toBe(false);
     expect(recovery?.content).toContain('We need guided feature walkthroughs.');
-    expect(recovery?.content).toContain('Should walkthroughs remain separate from What’s New?');
+    expect(recovery?.content).toContain(
+      'Should walkthroughs remain separate from What’s New?'
+    );
     expect(recovery?.content).not.toContain('search_repo_code');
     expect(recovery?.content).not.toContain('Internal planning snapshot');
     expect(recovery?.content).not.toContain('Begin.');
   });
 
   it('returns no recovery context when only execution noise exists', () => {
-    expect(buildAgentRecoveryContext([
-      chatMessage('1', 'tool', '→ shell', { toolName: 'shell' }),
-      chatMessage('2', 'agent', 'Analyzing', { toolName: '_reasoning' }),
-      chatMessage('3', 'user', 'Begin.', { hidden: true }),
-    ])).toBeNull();
+    expect(
+      buildAgentRecoveryContext([
+        chatMessage('1', 'tool', '→ shell', { toolName: 'shell' }),
+        chatMessage('2', 'agent', 'Analyzing', { toolName: '_reasoning' }),
+        chatMessage('3', 'user', 'Begin.', { hidden: true }),
+      ])
+    ).toBeNull();
   });
 
   it('bounds oversized history while preserving the beginning and latest turn', () => {
-    const recovery = buildAgentRecoveryContext([
-      chatMessage('1', 'user', `BEGINNING_DECISION ${'a'.repeat(700)}`),
-      chatMessage('2', 'agent', `MIDDLE_HISTORY ${'b'.repeat(2_000)}`),
-      chatMessage('3', 'user', `LATEST_TURN ${'c'.repeat(500)}`),
-    ], 1_200);
+    const recovery = buildAgentRecoveryContext(
+      [
+        chatMessage('1', 'user', `BEGINNING_DECISION ${'a'.repeat(700)}`),
+        chatMessage('2', 'agent', `MIDDLE_HISTORY ${'b'.repeat(2_000)}`),
+        chatMessage('3', 'user', `LATEST_TURN ${'c'.repeat(500)}`),
+      ],
+      1_200
+    );
 
     expect(recovery?.truncated).toBe(true);
     expect(recovery?.content).toContain('BEGINNING_DECISION');
@@ -295,7 +311,9 @@ describe('PBI-001 shared chat lifecycle regression', () => {
     // Given a stale Cursor agent id and visible history persisted by Apex.
     const resumeError = new Error('agent session no longer exists');
     const resume = jest.fn().mockRejectedValue(resumeError);
-    const create = jest.fn().mockResolvedValue({ agentId: 'replacement-agent' });
+    const create = jest
+      .fn()
+      .mockResolvedValue({ agentId: 'replacement-agent' });
     const recovery = buildAgentRecoveryContext([
       chatMessage('1', 'user', 'Keep the approved repository boundary.'),
       chatMessage('2', 'agent', 'The boundary remains MCP-only.'),
@@ -311,7 +329,9 @@ describe('PBI-001 shared chat lifecycle regression', () => {
     // Then the caller can inject the recovered PostgreSQL transcript and continue.
     expect(resume).toHaveBeenCalledTimes(1);
     expect(create).toHaveBeenCalledTimes(1);
-    expect(recovery?.content).toContain('Keep the approved repository boundary.');
+    expect(recovery?.content).toContain(
+      'Keep the approved repository boundary.'
+    );
     expect(recovery?.content).toContain('The boundary remains MCP-only.');
     expect(result).toEqual({
       agent: { agentId: 'replacement-agent' },
@@ -363,11 +383,13 @@ describe('PBI-002 grounding acquisition continuity', () => {
 
     // Then conversion and evaluation each happen once against the persisted shape.
     expect(mockCallerGroundingSelectionToBinding).toHaveBeenCalledTimes(1);
-    expect(mockCallerGroundingSelectionToBinding).toHaveBeenCalledWith(selection);
+    expect(mockCallerGroundingSelectionToBinding).toHaveBeenCalledWith(
+      selection
+    );
     expect(mockEvaluateBindingContinuity).toHaveBeenCalledTimes(1);
     expect(mockEvaluateBindingContinuity).toHaveBeenCalledWith(
       { mode: 'local', sha: 'sha-resolved' },
-      resolved,
+      resolved
     );
     expect(result).toEqual({
       resolvedBinding: resolved,
@@ -384,7 +406,7 @@ describe('PBI-002 grounding acquisition continuity', () => {
     const selection = {
       mode: 'remote',
       release: jest.fn(),
-    } as CallerGroundingSelection;
+    } satisfies CallerGroundingSelection;
     const resolved = { mode: 'remote' as const, sha: null };
     const recreate = {
       decision: 'recreate' as const,
@@ -399,14 +421,16 @@ describe('PBI-002 grounding acquisition continuity', () => {
     // Then the malformed stored pair reaches the evaluator unchanged and remains typed.
     expect(mockEvaluateBindingContinuity).toHaveBeenCalledWith(
       { mode: undefined, sha: 'orphan-sha' },
-      resolved,
+      resolved
     );
     expect(result.decision).toEqual(recreate);
   });
 
   it('AC-0 / acquisition integration wires sendMessage to one authoritative classification', async () => {
     // Given a repo-reading thread and one exact remote grounding selection.
-    const stopAfterClassification = new Error('stop after continuity classification');
+    const stopAfterClassification = new Error(
+      'stop after continuity classification'
+    );
     const selection = {
       mode: 'remote',
       release: jest.fn().mockResolvedValue(undefined),
@@ -418,28 +442,28 @@ describe('PBI-002 grounding acquisition continuity', () => {
       throw stopAfterClassification;
     });
     process.env.CURSOR_API_KEY = 'test-key';
-    const thread = await createThread(
-      'developer-1',
-      baseKickoff(),
-      { skipAutoKickoff: true },
-    );
+    const thread = await createThread('developer-1', baseKickoff(), {
+      skipAutoKickoff: true,
+    });
     thread.groundingMode = 'remote';
     thread.groundedSha = null;
 
     try {
       // When sendMessage acquires repository grounding for the turn.
       await expect(
-        sendMessage(thread.id, 'Continue from the grounded repository'),
+        sendMessage(thread.id, 'Continue from the grounded repository')
       ).rejects.toBe(stopAfterClassification);
 
       // Then that exact selection is converted and evaluated once against storage.
       expect(mockCallerGroundingStart).toHaveBeenCalledTimes(1);
       expect(mockCallerGroundingSelectionToBinding).toHaveBeenCalledTimes(1);
-      expect(mockCallerGroundingSelectionToBinding).toHaveBeenCalledWith(selection);
+      expect(mockCallerGroundingSelectionToBinding).toHaveBeenCalledWith(
+        selection
+      );
       expect(mockEvaluateBindingContinuity).toHaveBeenCalledTimes(1);
       expect(mockEvaluateBindingContinuity).toHaveBeenCalledWith(
         { mode: 'remote', sha: null },
-        resolved,
+        resolved
       );
     } finally {
       delete process.env.CURSOR_API_KEY;
@@ -465,7 +489,7 @@ describe('PBI-002 grounding acquisition continuity', () => {
         thread,
         { agentId },
         mode,
-        resolvedBinding,
+        resolvedBinding
       );
 
       // Then one upsert carries identity and both binding fields together.
@@ -475,9 +499,9 @@ describe('PBI-002 grounding acquisition continuity', () => {
           cursorAgentId: agentId,
           groundingMode: resolvedBinding.mode,
           groundedSha: resolvedBinding.sha,
-        }),
+        })
       );
-    },
+    }
   );
 
   it('BR-006 does not launder a mismatched stored binding on resumed acquisition', async () => {
@@ -493,16 +517,18 @@ describe('PBI-002 grounding acquisition continuity', () => {
       thread,
       { agentId: 'existing-agent' },
       'resumed',
-      { mode: 'local', sha: 'sha-resolved' },
+      { mode: 'local', sha: 'sha-resolved' }
     );
 
     // Then no write replaces the mismatched persisted binding.
     expect(mockPgUpsertThread).not.toHaveBeenCalled();
-    expect(thread).toEqual(expect.objectContaining({
-      cursorAgentId: 'existing-agent',
-      groundingMode: 'local',
-      groundedSha: 'sha-stored',
-    }));
+    expect(thread).toEqual(
+      expect.objectContaining({
+        cursorAgentId: 'existing-agent',
+        groundingMode: 'local',
+        groundedSha: 'sha-stored',
+      })
+    );
   });
 });
 
@@ -512,11 +538,13 @@ describe('FEAT-003 grounding-bound lifecycle', () => {
   });
 
   it('PBI-003 AC-0 / TBI-004 DoD-0 keeps matching bindings resume-safe', () => {
-    expect(selectGroundingBoundaryRecreation({
-      lifecycleEnabled: true,
-      hasAgentIdentity: true,
-      decision: { decision: 'resume' },
-    })).toBeNull();
+    expect(
+      selectGroundingBoundaryRecreation({
+        lifecycleEnabled: true,
+        hasAgentIdentity: true,
+        decision: { decision: 'resume' },
+      })
+    ).toBeNull();
   });
 
   it.each([
@@ -527,31 +555,37 @@ describe('FEAT-003 grounding-bound lifecycle', () => {
   ] as const)(
     'PBI-003 AC-1 / AC-2 / BR-003 selects recreation for %s',
     (reason) => {
-      expect(selectGroundingBoundaryRecreation({
-        lifecycleEnabled: true,
-        hasAgentIdentity: true,
-        decision: { decision: 'recreate', reason },
-      })).toBe(reason);
-    },
+      expect(
+        selectGroundingBoundaryRecreation({
+          lifecycleEnabled: true,
+          hasAgentIdentity: true,
+          decision: { decision: 'recreate', reason },
+        })
+      ).toBe(reason);
+    }
   );
 
   it('TBI-004 DoD-3 / VT-07 suppresses boundary recreation when the flag is OFF', () => {
-    expect(selectGroundingBoundaryRecreation({
-      lifecycleEnabled: false,
-      hasAgentIdentity: true,
-      decision: { decision: 'recreate', reason: 'mode-changed' },
-    })).toBeNull();
+    expect(
+      selectGroundingBoundaryRecreation({
+        lifecycleEnabled: false,
+        hasAgentIdentity: true,
+        decision: { decision: 'recreate', reason: 'mode-changed' },
+      })
+    ).toBeNull();
   });
 
   it('PBI-003 AC-2 treats a new unbound thread as creation, not recreation', () => {
-    expect(selectGroundingBoundaryRecreation({
-      lifecycleEnabled: true,
-      hasAgentIdentity: false,
-      decision: {
-        decision: 'recreate',
-        reason: 'legacy-binding-missing',
-      },
-    })).toBeNull();
+    expect(
+      selectGroundingBoundaryRecreation({
+        lifecycleEnabled: true,
+        hasAgentIdentity: false,
+        decision: {
+          decision: 'recreate',
+          reason: 'legacy-binding-missing',
+        },
+      })
+    ).toBeNull();
   });
 
   it('PBI-003 AC-2 / BR-002 settles a persisted legacy boundary for later resume', () => {
@@ -569,7 +603,9 @@ describe('FEAT-003 grounding-bound lifecycle', () => {
 
   it('PBI-003 AC-1 / TBI-004 DoD-1 force-creates without resuming the stale identity', async () => {
     const resume = jest.fn();
-    const create = jest.fn().mockResolvedValue({ agentId: 'replacement-agent' });
+    const create = jest
+      .fn()
+      .mockResolvedValue({ agentId: 'replacement-agent' });
 
     const result = await resumeOrCreateAgent({
       cursorAgentId: 'stale-agent',
@@ -659,7 +695,9 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
     expect(prompt).toContain('`get_skill_file`');
     expect(prompt).toContain('`list_repo_dir`');
     expect(prompt).toContain('`search_repo_code`');
-    expect(prompt).toContain('Never use the GitHub or ADO provider MCP servers for repository reads');
+    expect(prompt).toContain(
+      'Never use the GitHub or ADO provider MCP servers for repository reads'
+    );
     expect(prompt).not.toContain('must be fetched via');
     expect(prompt).not.toContain('current working directory IS a git clone');
   });
@@ -670,11 +708,13 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
         skillPath: '.cursor/skills/to-prd/SKILL.md',
         skillProvider: 'github',
       }),
-      'Begin.',
+      'Begin.'
     );
 
     expect(prompt).toContain('local checkout-backed read-only tools');
-    expect(prompt).toContain('Never use the GitHub or ADO provider MCP servers');
+    expect(prompt).toContain(
+      'Never use the GitHub or ADO provider MCP servers'
+    );
     expect(prompt).toContain('Broad search is restricted');
     expect(prompt).toContain('# Pre-loaded skill content');
     expect(prompt).toContain('# Frozen skill content');
@@ -706,7 +746,9 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
     // Then reads are directed at the local checkout tools and the de-mounted
     // ado-skills repo-read tools are neither advertised nor invoked via get_skill.
     expect(prompt).toContain('local checkout-backed read-only tools');
-    expect(prompt).not.toContain('# Available MCP tools (via `ado-skills` server)');
+    expect(prompt).not.toContain(
+      '# Available MCP tools (via `ado-skills` server)'
+    );
     expect(prompt).not.toContain('call `get_skill`');
   });
 
@@ -747,7 +789,7 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
     ]);
     await runtime.local.customTools?.get_skill_file.execute(
       { path: 'src/pinned.ts' },
-      {},
+      {}
     );
     expect(reader.readFile).toHaveBeenCalledWith('src/pinned.ts');
     // Native reads engaged → the read-only github-repo MCP is de-mounted, while
@@ -761,7 +803,7 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
   it('AC-1 / BR-009 / VT-08 fails closed to unchanged provider MCP when the checkout reader is unusable', async () => {
     // Given native activation was selected but the exact authorized reader cannot be resolved.
     mockResolveConnectionProfile.mockRejectedValue(
-      new Error('authorized checkout unavailable'),
+      new Error('authorized checkout unavailable')
     );
     const grounding = {
       mode: 'local',
@@ -833,10 +875,12 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
     expect(second.local.customTools).toBeUndefined();
     // ...and the remote recreation restores it.
     expect(second.mcpServers['github-repo']).toBeDefined();
-    expect(buildInitialPrompt(baseKickoff(), { nativeReads: first.nativeReads }))
-      .toContain('local checkout-backed read-only tools');
-    expect(buildInitialPrompt(baseKickoff(), { nativeReads: second.nativeReads }))
-      .toContain('must be fetched via MCP');
+    expect(
+      buildInitialPrompt(baseKickoff(), { nativeReads: first.nativeReads })
+    ).toContain('local checkout-backed read-only tools');
+    expect(
+      buildInitialPrompt(baseKickoff(), { nativeReads: second.nativeReads })
+    ).toContain('must be fetched via MCP');
     expect(acquisition).toEqual({ agent: second, mode: 'recreated' });
     expect(create).toHaveBeenCalledTimes(1);
   });
@@ -861,7 +905,7 @@ describe('closeThread — thread retention', () => {
     const thread = await createThread(
       'user-1',
       { project: 'proj', repo: 'org/repo', branch: 'main' },
-      { skipAutoKickoff: true },
+      { skipAutoKickoff: true }
     );
     markAsInterviewThread(thread.id);
 
@@ -876,7 +920,7 @@ describe('closeThread — thread retention', () => {
     const thread = await createThread(
       'user-1',
       { project: 'proj', repo: 'org/repo', branch: 'main' },
-      { skipAutoKickoff: true },
+      { skipAutoKickoff: true }
     );
 
     await closeThread(thread.id);
@@ -890,7 +934,7 @@ describe('closeThread — thread retention', () => {
     const thread = await createThread(
       'user-1',
       { project: 'proj', repo: 'org/repo', branch: 'main' },
-      { skipAutoKickoff: true },
+      { skipAutoKickoff: true }
     );
 
     await closeThread(thread.id);
@@ -902,14 +946,14 @@ describe('closeThread — thread retention', () => {
     const thread = await createThread(
       'user-1',
       { project: 'proj', repo: 'org/repo', branch: 'main' },
-      { skipAutoKickoff: true },
+      { skipAutoKickoff: true }
     );
 
     await closeThread(thread.id);
 
     expect(mockPgDeleteThread).not.toHaveBeenCalled();
     expect(mockPgUpsertThread).toHaveBeenCalledWith(
-      expect.objectContaining({ id: thread.id, status: 'closed' }),
+      expect.objectContaining({ id: thread.id, status: 'closed' })
     );
   });
 
@@ -922,7 +966,7 @@ describe('closeThread — thread retention', () => {
     const thread = await createThread(
       'user-1',
       { project: 'proj', repo: 'org/repo', branch: 'main' },
-      { skipAutoKickoff: true },
+      { skipAutoKickoff: true }
     );
     const scratchWorkspace = thread.workspaceDir;
     const profileCheckout = '/tmp/test-data/grounding-workspaces/opaque';
@@ -933,16 +977,16 @@ describe('closeThread — thread retention', () => {
     // Assert
     expect(thread.workspaceDir).toBe(scratchWorkspace);
     expect(mockPgUpsertThread).not.toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: profileCheckout }),
+      expect.objectContaining({ workspaceDir: profileCheckout })
     );
     expect(mockedFs.cpSync).not.toHaveBeenCalled();
-    expect(mockedFs.rmSync).toHaveBeenCalledWith(
-      scratchWorkspace,
-      { recursive: true, force: true },
-    );
+    expect(mockedFs.rmSync).toHaveBeenCalledWith(scratchWorkspace, {
+      recursive: true,
+      force: true,
+    });
     expect(mockedFs.rmSync).not.toHaveBeenCalledWith(
       profileCheckout,
-      expect.anything(),
+      expect.anything()
     );
   });
 
@@ -972,7 +1016,7 @@ describe('permanentlyDeleteThread', () => {
     const thread = await createThread(
       'user-1',
       { project: 'proj', repo: 'org/repo', branch: 'main' },
-      { skipAutoKickoff: true },
+      { skipAutoKickoff: true }
     );
 
     await permanentlyDeleteThread(thread.id);
@@ -1006,7 +1050,7 @@ describe('markAsInterviewThread', () => {
     const thread = await createThread(
       'user-1',
       { project: 'proj', repo: 'org/repo', branch: 'main' },
-      { skipAutoKickoff: true },
+      { skipAutoKickoff: true }
     );
 
     markAsInterviewThread(thread.id);
@@ -1019,7 +1063,7 @@ describe('markAsInterviewThread', () => {
     const thread = await createThread(
       'user-1',
       { project: 'proj', repo: 'org/repo', branch: 'main' },
-      { skipAutoKickoff: true },
+      { skipAutoKickoff: true }
     );
 
     expect(() => {
@@ -1036,7 +1080,9 @@ describe('markAsInterviewThread', () => {
   });
 });
 
-function baseKickoff(overrides: Partial<ChatThreadKickoff> = {}): ChatThreadKickoff {
+function baseKickoff(
+  overrides: Partial<ChatThreadKickoff> = {}
+): ChatThreadKickoff {
   return {
     project: 'Apex',
     repo: 'org/AI-Pilot',
@@ -1064,7 +1110,7 @@ describe('document assistant MCP wiring', () => {
           groundingProfileId: groundingProfileId as
             | import('../../shared/types/repoReader').GroundingProfileId
             | undefined,
-        },
+        }
       );
 
       // When its repository and document-staging transports are assembled.
@@ -1079,25 +1125,29 @@ describe('document assistant MCP wiring', () => {
           ? 'http://localhost:3001/mcp/ado-skills/grounding/opaque-profile'
           : 'http://localhost:3001/mcp/ado-skills',
       });
-      expect(buildDocumentAssistantEditGuidance(baseKickoff({
-        assistantType: 'prd',
-        freeformContext: 'prd_id: prd-1\nthread_id: thread-1',
-      })).join('\n')).toContain('update_prd');
-    },
+      expect(
+        buildDocumentAssistantEditGuidance(
+          baseKickoff({
+            assistantType: 'prd',
+            freeformContext: 'prd_id: prd-1\nthread_id: thread-1',
+          })
+        ).join('\n')
+      ).toContain('update_prd');
+    }
   );
 
   it('AC-3 / VT-07 adds no Apex native-read wiring for conversational or design agents', () => {
     // Given SDK 1.0.24 is installed without a completed native-read capability proof.
     const conversational = buildMcpServers(
       baseKickoff(),
-      'http://localhost:3001/mcp/ado-skills',
+      'http://localhost:3001/mcp/ado-skills'
     );
     const design = buildMcpServers(
       baseKickoff({
         assistantType: 'design-doc',
         freeformContext: 'doc_id: doc-1\nthread_id: thread-1',
       }),
-      'http://localhost:3001/mcp/ado-skills',
+      'http://localhost:3001/mcp/ado-skills'
     );
 
     // When the observable Apex repository transports are inspected.
@@ -1111,7 +1161,7 @@ describe('document assistant MCP wiring', () => {
       'ado-skills': { url: 'http://localhost:3001/mcp/ado-skills' },
     });
     expect(JSON.stringify({ conversational, design })).not.toMatch(
-      /native|shell|read_file|search_files/i,
+      /native|shell|read_file|search_files/i
     );
   });
 
@@ -1124,14 +1174,22 @@ describe('document assistant MCP wiring', () => {
     [{ skillPath: '.cursor/skills/to-prd/SKILL.md' }, 'prd'],
     [{ skillPath: '.cursor/skills/prd-spec-review/SKILL.md' }, 'prd'],
     [{ skillPath: '.cursor/skills/prd-design-spec/SKILL.md' }, 'design-doc'],
-    [{ skillPath: '.cursor/skills/walkthrough-generation/SKILL.md' }, 'walkthrough'],
-    [{ skillPath: '.cursor/skills/design-module-doc/SKILL.md' }, 'design-module'],
+    [
+      { skillPath: '.cursor/skills/walkthrough-generation/SKILL.md' },
+      'walkthrough',
+    ],
+    [
+      { skillPath: '.cursor/skills/design-module-doc/SKILL.md' },
+      'design-module',
+    ],
     [{}, 'agent-home'],
   ])(
     'AC-0 identifies centralized chat cohort %s as %s',
     (overrides, expectedCaller) => {
-      expect(resolveGroundingCallerKey(baseKickoff(overrides))).toBe(expectedCaller);
-    },
+      expect(resolveGroundingCallerKey(baseKickoff(overrides))).toBe(
+        expectedCaller
+      );
+    }
   );
 
   it('AC-0 pins chat caller grounding to skillBranch before branch', async () => {
@@ -1145,13 +1203,13 @@ describe('document assistant MCP wiring', () => {
         branch: 'runtime-branch',
         skillBranch: 'skills-snapshot',
       }),
-      { skipAutoKickoff: true },
+      { skipAutoKickoff: true }
     );
 
     try {
       // When the first chat turn selects its shared caller grounding.
       await expect(
-        sendMessage(thread.id, 'Read the selected skill snapshot'),
+        sendMessage(thread.id, 'Read the selected skill snapshot')
       ).rejects.toBe(stopAfterGrounding);
 
       // Then the pin uses the same skillBranch ?? branch contract as prompt/preload.
@@ -1163,7 +1221,7 @@ describe('document assistant MCP wiring', () => {
             repo: 'org/AI-Pilot',
             branch: 'skills-snapshot',
           },
-        }),
+        })
       );
       const provisionalInsert = mockDb.insert.mock.results[0].value as {
         values: jest.Mock;
@@ -1172,7 +1230,7 @@ describe('document assistant MCP wiring', () => {
         expect.objectContaining({
           progressLabel: 'Preparing the latest repository requirements…',
           status: 'queued',
-        }),
+        })
       );
     } finally {
       delete process.env.CURSOR_API_KEY;
@@ -1183,9 +1241,9 @@ describe('document assistant MCP wiring', () => {
   it('broadcasts user message before grounding completes', async () => {
     // Given a thread that has been idle and grounding is slow.
     const groundingStarted = { value: false };
-    const {
-      insertMessage: mockPgInsertMessage,
-    } = jest.requireMock('../services/chatThreadRepository') as {
+    const { insertMessage: mockPgInsertMessage } = jest.requireMock(
+      '../services/chatThreadRepository'
+    ) as {
       insertMessage: jest.Mock;
     };
     mockPgInsertMessage.mockClear();
@@ -1217,16 +1275,14 @@ describe('document assistant MCP wiring', () => {
     });
 
     process.env.CURSOR_API_KEY = 'test-key';
-    const thread = await createThread(
-      'developer-1',
-      baseKickoff(),
-      { skipAutoKickoff: true },
-    );
+    const thread = await createThread('developer-1', baseKickoff(), {
+      skipAutoKickoff: true,
+    });
 
     try {
-      await expect(
-        sendMessage(thread.id, 'Hello after idle'),
-      ).rejects.toBe(stopAfterBinding);
+      await expect(sendMessage(thread.id, 'Hello after idle')).rejects.toBe(
+        stopAfterBinding
+      );
 
       // Then the user message was persisted (via pgInsertMessage) before
       // ensureThreadGrounding ran.
@@ -1234,7 +1290,7 @@ describe('document assistant MCP wiring', () => {
       expect(messagePersistedBeforeGrounding).toBe(true);
       expect(mockPgInsertMessage).toHaveBeenCalledWith(
         thread.id,
-        expect.objectContaining({ role: 'user', text: 'Hello after idle' }),
+        expect.objectContaining({ role: 'user', text: 'Hello after idle' })
       );
     } finally {
       delete process.env.CURSOR_API_KEY;
@@ -1242,35 +1298,110 @@ describe('document assistant MCP wiring', () => {
     }
   });
 
+  it('PLAN-S3-AC-4 promotes the same persisted turn after preparing without duplicating the user message', async () => {
+    jest.useFakeTimers();
+    const { insertMessage: mockPgInsertMessage } = jest.requireMock(
+      '../services/chatThreadRepository'
+    ) as {
+      insertMessage: jest.Mock;
+    };
+    mockPgInsertMessage.mockClear();
+    mockCallerGroundingStart.mockReset();
+    let markCheckoutReady!: () => void;
+    const checkoutReady = new Promise<void>((resolve) => {
+      markCheckoutReady = resolve;
+    });
+    const waitUntilReady = jest.fn(() => checkoutReady);
+    mockCallerGroundingStart
+      .mockResolvedValueOnce({
+        mode: 'preparing',
+        retryAfterMs: 1_000,
+        waitUntilReady,
+        release: jest.fn().mockResolvedValue(undefined),
+      })
+      .mockResolvedValueOnce({
+        mode: 'remote',
+        release: jest.fn().mockResolvedValue(undefined),
+      });
+    mockCallerGroundingSelectionToBinding.mockReturnValue({
+      mode: 'remote',
+      sha: null,
+    });
+    const stopAfterPromotion = new Error('stop after promotion');
+    mockEvaluateBindingContinuity.mockImplementation(() => {
+      throw stopAfterPromotion;
+    });
+    process.env.CURSOR_API_KEY = 'test-key';
+    const thread = await createThread('developer-1', baseKickoff(), {
+      skipAutoKickoff: true,
+    });
+    const events: Array<{ type: string; status?: string }> = [];
+    const unsubscribe = subscribeToThread(thread.id, (event) => {
+      events.push(event);
+    });
+
+    try {
+      const sending = sendMessage(thread.id, 'Keep this turn pending');
+      const expectedRejection =
+        expect(sending).rejects.toBe(stopAfterPromotion);
+      await Promise.resolve();
+      await jest.advanceTimersByTimeAsync(0);
+      expect(waitUntilReady).toHaveBeenCalledTimes(1);
+      markCheckoutReady();
+      await jest.advanceTimersByTimeAsync(0);
+      await expectedRejection;
+
+      expect(mockCallerGroundingStart).toHaveBeenCalledTimes(2);
+      expect(mockPgInsertMessage).toHaveBeenCalledTimes(1);
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'grounding',
+            status: 'preparing',
+          }),
+        ])
+      );
+    } finally {
+      unsubscribe();
+      delete process.env.CURSOR_API_KEY;
+      await closeThread(thread.id);
+      jest.useRealTimers();
+    }
+  });
+
   it('persists the user message before dispatching an interactive actor turn', async () => {
-    const {
-      insertMessage: mockPgInsertMessage,
-    } = jest.requireMock('../services/chatThreadRepository') as {
+    const { insertMessage: mockPgInsertMessage } = jest.requireMock(
+      '../services/chatThreadRepository'
+    ) as {
       insertMessage: jest.Mock;
     };
     const originalFetch = global.fetch;
     process.env.AI_RUNS_INTERACTIVE_DISPATCH_URL = 'https://interactive.test';
-    mockIsFeatureEnabled.mockImplementation(async (key: string) => key === 'ai-runs-interactive');
+    mockIsFeatureEnabled.mockImplementation(
+      async (key: string) => key === 'ai-runs-interactive'
+    );
     mockPgInsertMessage.mockClear();
     mockPgUpsertThread.mockClear();
     mockEnqueueAgentRun.mockResolvedValue({ runId: 'interactive-run-1' });
-    mockInteractiveWorkflowRoute.mockImplementation(async (input: {
-      dispatchToActor(dispatch: {
-        runId: string;
-        dispatchMessageId: string;
-      }): Promise<void>;
-    }) => {
-      await input.dispatchToActor({
-        runId: 'interactive-run-1',
-        dispatchMessageId: 'dispatch-1',
-      });
-      return {
-        route: 'actor',
-        runId: 'interactive-run-1',
-        dispatchMessageId: 'dispatch-1',
-        slot: 'reserved',
-      };
-    });
+    mockInteractiveWorkflowRoute.mockImplementation(
+      async (input: {
+        dispatchToActor(dispatch: {
+          runId: string;
+          dispatchMessageId: string;
+        }): Promise<void>;
+      }) => {
+        await input.dispatchToActor({
+          runId: 'interactive-run-1',
+          dispatchMessageId: 'dispatch-1',
+        });
+        return {
+          route: 'actor',
+          runId: 'interactive-run-1',
+          dispatchMessageId: 'dispatch-1',
+          slot: 'reserved',
+        };
+      }
+    );
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ accepted: true }),
@@ -1304,11 +1435,9 @@ describe('document assistant MCP wiring', () => {
       reason: 'legacy-binding-missing',
     });
 
-    const thread = await createThread(
-      'developer-1',
-      baseKickoff(),
-      { skipAutoKickoff: true },
-    );
+    const thread = await createThread('developer-1', baseKickoff(), {
+      skipAutoKickoff: true,
+    });
 
     try {
       await sendMessage(thread.id, 'A simple UI counter');
@@ -1319,18 +1448,18 @@ describe('document assistant MCP wiring', () => {
         expect.objectContaining({
           role: 'user',
           text: 'A simple UI counter',
-        }),
+        })
       );
       expect(mockPgUpsertThread).toHaveBeenLastCalledWith(
         expect.objectContaining({
           id: thread.id,
           status: 'running',
           activeRunId: 'interactive-run-1',
-        }),
+        })
       );
       expect(global.fetch).toHaveBeenCalledWith(
         'https://interactive.test/dispatch',
-        expect.objectContaining({ method: 'POST' }),
+        expect.objectContaining({ method: 'POST' })
       );
     } finally {
       global.fetch = originalFetch;
@@ -1351,7 +1480,9 @@ describe('document assistant MCP wiring', () => {
     const originalFetch = global.fetch;
     process.env.AI_RUNS_INTERACTIVE_DISPATCH_URL = 'https://interactive.test';
     process.env.CURSOR_API_KEY = 'test-key';
-    mockIsFeatureEnabled.mockImplementation(async (key: string) => key === 'ai-runs-interactive');
+    mockIsFeatureEnabled.mockImplementation(
+      async (key: string) => key === 'ai-runs-interactive'
+    );
     mockInteractiveWorkflowRoute.mockClear();
     global.fetch = jest.fn() as unknown as typeof fetch;
 
@@ -1361,7 +1492,10 @@ describe('document assistant MCP wiring', () => {
       mode: 'remote' as const,
       release: jest.fn().mockResolvedValue(undefined),
     });
-    mockCallerGroundingSelectionToBinding.mockReturnValue({ mode: 'remote', sha: null });
+    mockCallerGroundingSelectionToBinding.mockReturnValue({
+      mode: 'remote',
+      sha: null,
+    });
     mockEvaluateBindingContinuity.mockImplementation(() => {
       throw stopAfterBinding;
     });
@@ -1372,11 +1506,13 @@ describe('document assistant MCP wiring', () => {
         skillPath: '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
         freeformContext: '## Candidates\n[]',
       }),
-      { skipAutoKickoff: true },
+      { skipAutoKickoff: true }
     );
 
     try {
-      await expect(sendMessage(thread.id, 'Begin.')).rejects.toBe(stopAfterBinding);
+      await expect(sendMessage(thread.id, 'Begin.')).rejects.toBe(
+        stopAfterBinding
+      );
       expect(mockInteractiveWorkflowRoute).not.toHaveBeenCalled();
       expect(global.fetch).not.toHaveBeenCalled();
     } finally {
@@ -1402,7 +1538,7 @@ describe('document assistant MCP wiring', () => {
     const servers = buildMcpServers(
       kickoff,
       'http://localhost:3001/mcp/ado-skills',
-      { calendarSessionId: 'calendar-session-1' },
+      { calendarSessionId: 'calendar-session-1' }
     );
 
     // When chat decides whether this caller needs shared repository grounding.
@@ -1415,10 +1551,15 @@ describe('document assistant MCP wiring', () => {
 
   it('AC-0 keeps normal GitHub and ADO chat callers repository-reading', () => {
     expect(isRepositoryReadingChatCaller(baseKickoff(), false)).toBe(true);
-    expect(isRepositoryReadingChatCaller(baseKickoff({
-      skillProvider: 'ado',
-      repo: 'Apex',
-    }), false)).toBe(true);
+    expect(
+      isRepositoryReadingChatCaller(
+        baseKickoff({
+          skillProvider: 'ado',
+          repo: 'Apex',
+        }),
+        false
+      )
+    ).toBe(true);
     expect(isRepositoryReadingChatCaller(baseKickoff(), true)).toBe(false);
   });
 
@@ -1433,41 +1574,73 @@ describe('document assistant MCP wiring', () => {
   it('flags walkthrough and other file-output skills as interactive-ineligible', () => {
     expect(
       isInteractiveWorkspaceBoundSkill(
-        '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
-      ),
+        '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md'
+      )
     ).toBe(true);
     expect(
       isInteractiveWorkspaceBoundSkill(
-        '.cursor/skills/walkthrough-generation/SKILL.md',
-      ),
+        '.cursor/skills/walkthrough-generation/SKILL.md'
+      )
     ).toBe(true);
     expect(
       isInteractiveWorkspaceBoundSkill(
-        '.cursor/skills/walkthrough-anchor-discovery/SKILL.md',
-      ),
+        '.cursor/skills/walkthrough-anchor-discovery/SKILL.md'
+      )
     ).toBe(true);
     expect(
-      isInteractiveWorkspaceBoundSkill('.cursor/skills/k6-load-test-generation/SKILL.md'),
+      isInteractiveWorkspaceBoundSkill(
+        '.cursor/skills/k6-load-test-generation/SKILL.md'
+      )
     ).toBe(true);
     expect(
-      isInteractiveWorkspaceBoundSkill('.cursor/skills/design-module-scoping/SKILL.md'),
+      isInteractiveWorkspaceBoundSkill(
+        '.cursor/skills/design-module-scoping/SKILL.md'
+      )
     ).toBe(true);
     expect(
-      isInteractiveWorkspaceBoundSkill('.cursor/skills/grill-with-docs/SKILL.md'),
+      isInteractiveWorkspaceBoundSkill('.cursor/skills/to-prd/SKILL.md')
+    ).toBe(true);
+    expect(
+      isInteractiveWorkspaceBoundSkill(
+        '.cursor/skills/create-test-case/SKILL.md'
+      )
+    ).toBe(true);
+    expect(
+      isInteractiveWorkspaceBoundSkill(
+        '.cursor/skills/prd-design-spec/SKILL.md'
+      )
+    ).toBe(true);
+    expect(
+      isInteractiveWorkspaceBoundSkill(
+        '.cursor/skills/grill-with-docs/SKILL.md'
+      )
     ).toBe(false);
     expect(isInteractiveWorkspaceBoundSkill(undefined)).toBe(false);
   });
 
   it('infers document assistant type from freeform context markers', () => {
-    expect(resolveDocumentAssistantType(baseKickoff({
-      freeformContext: '# ADR Assistant Context\nadr_id: adr-1\nthread_id: t-1',
-    }))).toBe('adr');
-    expect(resolveDocumentAssistantType(baseKickoff({
-      freeformContext: 'prd_id: prd-1\nthread_id: t-1',
-    }))).toBe('prd');
-    expect(resolveDocumentAssistantType(baseKickoff({
-      freeformContext: 'doc_id: doc-1\nthread_id: t-1',
-    }))).toBe('design-doc');
+    expect(
+      resolveDocumentAssistantType(
+        baseKickoff({
+          freeformContext:
+            '# ADR Assistant Context\nadr_id: adr-1\nthread_id: t-1',
+        })
+      )
+    ).toBe('adr');
+    expect(
+      resolveDocumentAssistantType(
+        baseKickoff({
+          freeformContext: 'prd_id: prd-1\nthread_id: t-1',
+        })
+      )
+    ).toBe('prd');
+    expect(
+      resolveDocumentAssistantType(
+        baseKickoff({
+          freeformContext: 'doc_id: doc-1\nthread_id: t-1',
+        })
+      )
+    ).toBe('design-doc');
   });
 
   it('does not classify validation threads as document assistants', () => {
@@ -1482,7 +1655,9 @@ describe('document assistant MCP wiring', () => {
     expect(resolveDocumentAssistantType(kickoff)).toBeUndefined();
     expect(buildDocumentAssistantEditGuidance(kickoff)).toEqual([]);
     expect(
-      buildMcpServers(kickoff, 'http://localhost:3001/mcp/ado-skills')['ado-skills'],
+      buildMcpServers(kickoff, 'http://localhost:3001/mcp/ado-skills')[
+        'ado-skills'
+      ]
     ).toBeUndefined();
   });
 
@@ -1492,7 +1667,7 @@ describe('document assistant MCP wiring', () => {
         assistantType: 'adr',
         freeformContext: 'adr_id: adr-1\nthread_id: t-1',
       }),
-      'http://localhost:3001/mcp/ado-skills',
+      'http://localhost:3001/mcp/ado-skills'
     );
 
     expect(servers['github-repo']).toEqual({
@@ -1508,7 +1683,7 @@ describe('document assistant MCP wiring', () => {
       baseKickoff({
         freeformContext: 'doc_id: doc-1\nthread_id: t-1',
       }),
-      'http://localhost:3001/mcp/ado-skills',
+      'http://localhost:3001/mcp/ado-skills'
     );
 
     expect(servers['github-repo']).toBeDefined();
@@ -1518,7 +1693,7 @@ describe('document assistant MCP wiring', () => {
   it('does not mount ado-skills for plain GitHub free-chat threads', () => {
     const servers = buildMcpServers(
       baseKickoff(),
-      'http://localhost:3001/mcp/ado-skills',
+      'http://localhost:3001/mcp/ado-skills'
     );
 
     expect(servers['github-repo']).toBeDefined();
@@ -1533,7 +1708,7 @@ describe('document assistant MCP wiring', () => {
         assistantType: 'prd',
         freeformContext: 'prd_id: prd-1\nthread_id: t-1',
       }),
-      'http://localhost:3001/mcp/ado-skills',
+      'http://localhost:3001/mcp/ado-skills'
     );
 
     expect(servers['github-repo']).toBeUndefined();
@@ -1544,7 +1719,7 @@ describe('document assistant MCP wiring', () => {
     const servers = buildMcpServers(
       baseKickoff(),
       'http://localhost:3001/mcp/ado-skills',
-      { nativeReads: true, enableRepoBrowse: false },
+      { nativeReads: true, enableRepoBrowse: false }
     );
 
     // GitHub free-chat + native reads → no provider repo-read MCP at all.
@@ -1552,16 +1727,37 @@ describe('document assistant MCP wiring', () => {
     expect(servers['ado-skills']).toBeUndefined();
   });
 
-  it('de-mounts ado-skills for a plain ADO chat when native reads are engaged', () => {
+  it('PLAN-S4-AC-0 retains ADO work-item/wiki tools while native reads strip repository browsing', () => {
     const servers = buildMcpServers(
       baseKickoff({ skillProvider: 'ado', repo: 'Apex' }),
       'http://localhost:3001/mcp/ado-skills',
-      { nativeReads: true, enableRepoBrowse: false },
+      { nativeReads: true, enableRepoBrowse: false }
     );
 
-    // ADO repo-reading chat: native customTools cover reads, so ado-skills drops.
     expect(servers['github-repo']).toBeUndefined();
-    expect(servers['ado-skills']).toBeUndefined();
+    expect(servers['ado-skills']).toEqual({
+      url: 'http://localhost:3001/mcp/ado-skills?enableRepoBrowse=false',
+    });
+  });
+
+  it('PLAN-S4-AC-1 gives native agents explicit checkout provenance', () => {
+    const prompt = buildInitialPrompt(
+      baseKickoff({ skillProvider: 'ado', repo: 'Platform/MaxView' }),
+      {
+        nativeReads: true,
+        groundingProvenance: {
+          storage: 'Azure Files checkout',
+          repository: 'Platform/MaxView',
+          branch: 'development',
+          sha: 'abc123',
+        },
+      }
+    );
+
+    expect(prompt).toContain('Azure Files checkout');
+    expect(prompt).toContain('repository: "Platform/MaxView"');
+    expect(prompt).toContain('branch: "development"');
+    expect(prompt).toContain('pinned SHA: "abc123"');
   });
 
   it('retains ado-skills for document write-back under native reads with repo browse stripped', () => {
@@ -1571,7 +1767,7 @@ describe('document assistant MCP wiring', () => {
         freeformContext: 'prd_id: prd-1\nthread_id: t-1',
       }),
       'http://localhost:3001/mcp/ado-skills',
-      { nativeReads: true, enableRepoBrowse: false },
+      { nativeReads: true, enableRepoBrowse: false }
     );
 
     // GitHub PRD assistant: reads go native, write-back stays on ado-skills.
@@ -1585,7 +1781,7 @@ describe('document assistant MCP wiring', () => {
     const githubServers = buildMcpServers(
       baseKickoff(),
       'http://localhost:3001/mcp/ado-skills',
-      { restrictRepoSearch: true },
+      { restrictRepoSearch: true }
     );
     expect(githubServers['github-repo']).toEqual({
       url: 'http://localhost:3001/mcp/github-repo?profile=interview',
@@ -1594,7 +1790,7 @@ describe('document assistant MCP wiring', () => {
     const adoServers = buildMcpServers(
       baseKickoff({ skillProvider: 'ado', repo: 'Apex' }),
       'http://localhost:3001/mcp/ado-skills',
-      { restrictRepoSearch: true },
+      { restrictRepoSearch: true }
     );
     expect(adoServers['ado-skills']).toEqual({
       url: 'http://localhost:3001/mcp/ado-skills?profile=interview',
@@ -1602,16 +1798,17 @@ describe('document assistant MCP wiring', () => {
   });
 
   it('DoD-2 transports the shared profile on chat-agent MCP URLs', () => {
-    const profileId = 'opaque-profile' as import('../../shared/types/repoReader').GroundingProfileId;
+    const profileId =
+      'opaque-profile' as import('../../shared/types/repoReader').GroundingProfileId;
     const githubServers = buildMcpServers(
       baseKickoff(),
       'http://localhost:3001/mcp/ado-skills',
-      { groundingProfileId: profileId, restrictRepoSearch: true },
+      { groundingProfileId: profileId, restrictRepoSearch: true }
     );
     const adoServers = buildMcpServers(
       baseKickoff({ skillProvider: 'ado', repo: 'Apex' }),
       'http://localhost:3001/mcp/ado-skills',
-      { groundingProfileId: profileId, restrictRepoSearch: true },
+      { groundingProfileId: profileId, restrictRepoSearch: true }
     );
 
     expect(githubServers['github-repo']).toEqual({
@@ -1625,35 +1822,47 @@ describe('document assistant MCP wiring', () => {
 
 describe('buildDocumentAssistantEditGuidance', () => {
   it('AC-0 / VT-06 keeps update_adr staging reachable for ADR assistants', () => {
-    const guidance = buildDocumentAssistantEditGuidance(baseKickoff({
-      assistantType: 'adr',
-      freeformContext: 'adr_id: adr-1\nthread_id: thread-1',
-    })).join('\n');
+    const guidance = buildDocumentAssistantEditGuidance(
+      baseKickoff({
+        assistantType: 'adr',
+        freeformContext: 'adr_id: adr-1\nthread_id: thread-1',
+      })
+    ).join('\n');
 
     expect(guidance).toContain('update_adr');
     expect(guidance).toContain('adr_id:    adr-1');
     expect(guidance).toContain('thread_id: thread-1');
-    expect(guidance).toContain('Do NOT write proposed ADR content to `.ai-pilot/output/`');
+    expect(guidance).toContain(
+      'Do NOT write proposed ADR content to `.ai-pilot/output/`'
+    );
     expect(guidance).toContain('staging tool is missing');
   });
 
   it('AC-0 / VT-06 keeps update_prd staging reachable for PRD assistants', () => {
-    const guidance = buildDocumentAssistantEditGuidance(baseKickoff({
-      assistantType: 'prd',
-      freeformContext: 'prd_id: prd-1\nthread_id: thread-1',
-    })).join('\n');
+    const guidance = buildDocumentAssistantEditGuidance(
+      baseKickoff({
+        assistantType: 'prd',
+        freeformContext: 'prd_id: prd-1\nthread_id: thread-1',
+      })
+    ).join('\n');
 
     expect(guidance).toContain('update_prd');
-    expect(guidance).toContain('Do NOT write proposed PRD/backlog content to `.ai-pilot/output/`');
+    expect(guidance).toContain(
+      'Do NOT write proposed PRD/backlog content to `.ai-pilot/output/`'
+    );
   });
 
   it('AC-0 / VT-06 keeps update_design_doc staging reachable for design-doc assistants', () => {
-    const guidance = buildDocumentAssistantEditGuidance(baseKickoff({
-      assistantType: 'design-doc',
-      freeformContext: 'doc_id: doc-1\nthread_id: thread-1',
-    })).join('\n');
+    const guidance = buildDocumentAssistantEditGuidance(
+      baseKickoff({
+        assistantType: 'design-doc',
+        freeformContext: 'doc_id: doc-1\nthread_id: thread-1',
+      })
+    ).join('\n');
 
     expect(guidance).toContain('update_design_doc');
-    expect(guidance).toContain('Do NOT write proposed design-doc content to `.ai-pilot/output/`');
+    expect(guidance).toContain(
+      'Do NOT write proposed design-doc content to `.ai-pilot/output/`'
+    );
   });
 });

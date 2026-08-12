@@ -31,6 +31,7 @@ import {
   withRepoCacheLease,
   type RepoCacheLeaseContext,
 } from '../repoCacheLeaseService';
+import { WORKTREE_GIT_TIMEOUT_MS } from '../repoGitSettings';
 import { runGroundingRepository } from '../runGroundingRepository';
 import { trackEvent } from '../telemetry';
 
@@ -72,7 +73,7 @@ export const SHARED_READ_LASTUSED_SUFFIX = '.lastused';
 export const SHARED_READ_IDLE_TTL_MS = 30 * 60 * 1000;
 
 /** Exact-commit fetch timeout when the pinned SHA is missing from the mirror. */
-export const SHARED_READ_EXACT_FETCH_TIMEOUT_MS = 45_000;
+export const SHARED_READ_EXACT_FETCH_TIMEOUT_MS = 5 * 60 * 1000;
 
 const SHARED_ROOT_SEGMENTS = ['workspaces', 'grounding-shared'] as const;
 
@@ -164,8 +165,11 @@ async function defaultMaterializeToPath(
       identity.branch,
       cache.remote.url,
     );
+    // Default asyncGit timeout (30s) is too short for large trees on Azure Files
+    // (surfaces as `git -c timed out after 30000ms` because of safeArgs).
     await git(safeArgs(destination, ['checkout', '--detach', identity.sha]), {
       cwd: destination,
+      timeout: WORKTREE_GIT_TIMEOUT_MS,
     });
   };
   try {

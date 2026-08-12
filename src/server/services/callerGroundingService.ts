@@ -16,6 +16,7 @@ import type { RunGrounding, RunRef } from '../../shared/types/runGrounding';
 import {
   isGroundingEnabledForCaller as evaluateGroundingFlag,
   isNativeReadEnabledForCaller as evaluateNativeReadFlag,
+  isProjectRepositoryCheckoutReadinessEnabled as evaluateCheckoutReadinessFlag,
   isSharedReadCheckoutEnabledForCaller as evaluateSharedReadCheckoutFlag,
 } from './featureFlagService';
 import {
@@ -30,7 +31,10 @@ import {
   type GroundingProfileReauthorization,
   type GroundingProfileRegistration,
 } from './groundingProfileResolver';
-import { ensureRepoCache as ensureRepositoryCache } from './repoCacheService';
+import {
+  ensureRepoCache as ensureRepositoryCache,
+  readCachedOriginSha as readCachedOriginShaFromRepoCache,
+} from './repoCacheService';
 import {
   materializeRunGroundingWithPath,
   type RunGroundingMaterializationResult,
@@ -42,6 +46,16 @@ import {
   runImpactContextRegistry,
   type RunImpactContextRegistry,
 } from './runImpactContextRegistry';
+import {
+  createRepositoryPreparationService,
+  type RepositoryPreparationService,
+} from './repositoryPreparationService';
+import {
+  pinProjectRepositoryRoot,
+  ProjectRepositoryFetchError,
+  type PinProjectRepositoryRootResult,
+  type ProjectRepositoryRootPinDependencies,
+} from './projectRepositoryRootPinService';
 
 export interface CallerRepository {
   provider: SkillProvider;
@@ -78,13 +92,23 @@ export interface RemoteCallerGrounding {
   release(): Promise<void>;
 }
 
+export interface PreparingCallerGrounding {
+  mode: 'preparing';
+  retryAfterMs: number;
+  /** Real checkout work started for this selection, if this instance owns it. */
+  waitUntilReady?(): Promise<void>;
+  release(): Promise<void>;
+}
+
 export type CallerGroundingSelection =
   | LocalCallerGrounding
-  | RemoteCallerGrounding;
+  | RemoteCallerGrounding
+  | PreparingCallerGrounding;
 
 export function callerGroundingSelectionToBinding(
   selection: CallerGroundingSelection
-): GroundingBinding {
+): GroundingBinding | null {
+  if (selection.mode === 'preparing') return null;
   return selection.mode === 'local'
     ? { mode: 'local', sha: selection.resolvedSha }
     : { mode: 'remote', sha: null };
@@ -137,6 +161,7 @@ export interface CallerGroundingDependencies {
   isGroundingEnabledForCaller: typeof evaluateGroundingFlag;
   isNativeReadEnabledForCaller: typeof evaluateNativeReadFlag;
   isSharedReadCheckoutEnabledForCaller: typeof evaluateSharedReadCheckoutFlag;
+  isProjectRepositoryCheckoutReadinessEnabled?: typeof evaluateCheckoutReadinessFlag;
   evaluateNativeReadCapability: typeof evaluateNativeReadCapabilityCheck;
   sharedReadCheckout: Pick<
     SharedReadCheckoutService,
@@ -148,6 +173,7 @@ export interface CallerGroundingDependencies {
     repo: string;
     branch: string;
   }) => Promise<{ baseSha: string; mirrorHit?: boolean }>;
+  readCachedOriginSha: typeof readCachedOriginShaFromRepoCache;
   groundingService: GroundingServiceDependency;
   materialize: (
     grounding: RunGrounding,
@@ -164,6 +190,17 @@ export interface CallerGroundingDependencies {
   impactContexts: Pick<RunImpactContextRegistry, 'register' | 'unregister'>;
   trackEvent: typeof emitTelemetryEvent;
   now?: () => number;
+  repositoryPreparation?: Pick<
+    RepositoryPreparationService,
+    | 'getReadyReadOnly'
+    | 'prepareReadOnly'
+    | 'prepareWritable'
+  >;
+  /** Injectable root fetch-and-pin (admin-managed checkout path). */
+  pinProjectRepositoryRoot?: (
+    input: Parameters<typeof pinProjectRepositoryRoot>[0],
+    deps?: ProjectRepositoryRootPinDependencies
+  ) => Promise<PinProjectRepositoryRootResult>;
 }
 
 function runRefKey(run: RunRef): string {
@@ -230,6 +267,16 @@ export function createCallerGroundingService(
 } {
   const telemetry = createGroundingTelemetry(dependencies.trackEvent);
   const now = dependencies.now ?? Date.now;
+  const repositoryPreparation =
+    dependencies.repositoryPreparation ??
+    createRepositoryPreparationService({
+      readCachedOriginSha: dependencies.readCachedOriginSha,
+      ensureRepoCache: dependencies.ensureRepoCache,
+      sharedReadCheckout: dependencies.sharedReadCheckout,
+      groundingService: dependencies.groundingService,
+      materializeWritable: dependencies.materialize,
+      telemetry: dependencies.trackEvent,
+    });
   const telemetryContext = (input: StartCallerGroundingInput) => ({
     caller: input.caller,
     project: input.run.project,
@@ -240,6 +287,28 @@ export function createCallerGroundingService(
     mode: 'remote',
     release: async () => undefined,
   });
+  const preparing = (
+    readiness?: Promise<unknown>
+  ): PreparingCallerGrounding => {
+    if (readiness) {
+      // A dispatch eligibility probe may not await this promise before the
+      // in-process turn takes over. Attach a rejection observer immediately so
+      // an early checkout failure never becomes an unhandled rejection.
+      void readiness.catch(() => undefined);
+    }
+    return {
+      mode: 'preparing',
+      retryAfterMs: 1_000,
+      ...(readiness
+        ? {
+            waitUntilReady: async () => {
+              await readiness;
+            },
+          }
+        : {}),
+      release: async () => undefined,
+    };
+  };
 
   const fallback = (
     input: StartCallerGroundingInput,
@@ -254,13 +323,319 @@ export function createCallerGroundingService(
     input: StartCallerGroundingInput,
     setMaterializationMode: (mode: 'cold' | 'warm') => void
   ): Promise<CallerGroundingSelection> => {
+    let sharedReadOnlyEnabled = false;
     try {
       const repo = repositoryName(input.repository);
+      const preparationRepository = {
+        provider: input.repository.provider,
+        project: input.run.project,
+        repo,
+        branch: input.repository.branch,
+      };
+
+      let checkoutReadinessEnabled = false;
+      try {
+        checkoutReadinessEnabled = await (
+          dependencies.isProjectRepositoryCheckoutReadinessEnabled ??
+          evaluateCheckoutReadinessFlag
+        )({
+          userId: input.userId,
+          project: input.run.project,
+          caller: input.caller,
+        });
+      } catch {
+        checkoutReadinessEnabled = false;
+      }
+
+      // @feature-flag:project-repository-checkout-readiness start winner=enabled
+      if (checkoutReadinessEnabled) {
+        // @feature-flag:project-repository-checkout-readiness enabled-start
+        const existing = activeTarget(
+          await dependencies.groundingService.getGroundings(input.run)
+        );
+        setMaterializationMode(existing ? 'warm' : 'cold');
+        const pinRoot =
+          dependencies.pinProjectRepositoryRoot ?? pinProjectRepositoryRoot;
+        let pinned: PinProjectRepositoryRootResult;
+        try {
+          pinned = await pinRoot({
+            run: input.run,
+            repository: preparationRepository,
+            caller: input.caller,
+            existingGrounding: existing ?? null,
+          });
+        } catch (error) {
+          if (error instanceof ProjectRepositoryFetchError) {
+            throw error;
+          }
+          const message =
+            error instanceof Error ? error.message : String(error);
+          throw new ProjectRepositoryFetchError(
+            message ||
+              'Repository tip fetch failed. Ask a project administrator to Refresh the configured repository, then retry.',
+          );
+        }
+
+        const grounding = pinned.grounding;
+        const workspacePath = pinned.workspacePath;
+        const sharedIdentity = pinned.identity;
+        setMaterializationMode(pinned.fetched ? 'cold' : 'warm');
+
+        const callerContext: GroundingCallerContext = {
+          userId: input.userId,
+          runRef: runRefKey(input.run),
+          project: input.run.project,
+        };
+        const profile = dependencies.profiles.registerConnectionProfile(
+          {
+            runRef: callerContext.runRef,
+            provider: profileProvider(grounding.provider),
+            project: grounding.project,
+            repo,
+            sha: grounding.groundedSha,
+            checkoutPath: workspacePath,
+            caller: input.caller,
+          },
+          callerContext,
+          input.reauthorize
+        );
+        dependencies.impactContexts.register(input.run, {
+          authorId: input.userId,
+          title: callerRunTitle(input.caller),
+          link: '/home',
+          caller: input.caller,
+        });
+
+        let released = false;
+        return {
+          mode: 'local',
+          cwd: workspacePath,
+          profileId: profile.id,
+          resolvedSha: grounding.groundedSha,
+          nativeReads: false,
+          release: async () => {
+            if (released) return;
+            released = true;
+            try {
+              await dependencies.groundingService.markTerminalInactive(input.run);
+            } finally {
+              dependencies.impactContexts.unregister(input.run);
+              dependencies.profiles.revokeProfile(profile.id);
+              dependencies.sharedReadCheckout.releaseRef(sharedIdentity);
+            }
+          },
+        };
+        // @feature-flag:project-repository-checkout-readiness enabled-end
+      }
+      // @feature-flag:project-repository-checkout-readiness end
+
+      if (input.readOnlyShareable) {
+        try {
+          sharedReadOnlyEnabled =
+            await dependencies.isSharedReadCheckoutEnabledForCaller({
+              userId: input.userId,
+              project: input.run.project,
+              caller: input.caller,
+            });
+        } catch {
+          sharedReadOnlyEnabled = false;
+        }
+      }
+
       const existing = activeTarget(
         await dependencies.groundingService.getGroundings(input.run)
       );
       let grounding = existing;
       setMaterializationMode(existing ? 'warm' : 'cold');
+
+      // @feature-flag:shared-readonly-grounding-checkout start winner=enabled
+      // Enabled read-only callers prefer already-ready shared snapshots. The
+      // background pre-warmer is the fast path; a cache miss starts real
+      // on-demand materialization so Home never waits on work nobody owns.
+      let workspacePath: string | undefined;
+      let sharedIdentity: SharedReadCheckoutIdentity | undefined;
+      if (sharedReadOnlyEnabled) {
+        // @feature-flag:shared-readonly-grounding-checkout enabled-start
+        const exactSha =
+          grounding && grounding.groundedSha.trim().length > 0
+            ? grounding.groundedSha
+            : null;
+        const latestSha =
+          (
+            await dependencies
+              .readCachedOriginSha({
+                provider: groundingProvider(input.repository.provider),
+                project: input.run.project,
+                repository: repo,
+                branch: input.repository.branch,
+              })
+              .catch(() => null)
+          )?.trim() || null;
+
+        if (!grounding && !latestSha) {
+          telemetry.phase(
+            telemetryContext(input),
+            'shared-checkout-cache-miss'
+          );
+        }
+
+        const identityFor = (sha: string): SharedReadCheckoutIdentity => ({
+          ...preparationRepository,
+          sha,
+        });
+        const pinSelectedSha = async (
+          sha: string
+        ): Promise<RunGrounding | undefined> => {
+          if (grounding) {
+            if (grounding.groundedSha === sha) return grounding;
+            return (
+              (await dependencies.groundingService.reground(
+                input.run,
+                'target',
+                sha
+              )) ?? undefined
+            );
+          }
+          return activatedTarget(
+            await dependencies.groundingService.activateGroundings({
+              run: input.run,
+              target: {
+                provider: groundingProvider(input.repository.provider),
+                repository: repo,
+                branch: input.repository.branch,
+                groundedSha: sha,
+              },
+            })
+          );
+        };
+        const prepareOnDemand = (
+          sha?: string | null,
+        ): PreparingCallerGrounding => {
+          setMaterializationMode('cold');
+          telemetry.phase(
+            telemetryContext(input),
+            'shared-checkout-on-demand-start'
+          );
+          const readiness = repositoryPreparation
+            .prepareReadOnly({
+              repository: preparationRepository,
+              workflowClass: input.caller,
+              sha,
+            })
+            .then(() => {
+              telemetry.phase(
+                telemetryContext(input),
+                'shared-checkout-on-demand-ready'
+              );
+            })
+            .catch((error) => {
+              telemetry.failure(
+                telemetryContext(input),
+                'shared-checkout-on-demand-failed'
+              );
+              throw error;
+            });
+          return preparing(readiness);
+        };
+
+        if (exactSha) {
+          const exactIdentity = identityFor(exactSha);
+          const exactReady = repositoryPreparation.getReadyReadOnly({
+            repository: preparationRepository,
+            workflowClass: input.caller,
+            sha: exactSha,
+          })?.checkout;
+          if (exactReady) {
+            grounding = await pinSelectedSha(exactSha);
+            if (!grounding) return preparing();
+            dependencies.sharedReadCheckout.retain(exactIdentity);
+            sharedIdentity = exactIdentity;
+            workspacePath = exactReady.workspacePath;
+            setMaterializationMode('warm');
+            telemetry.phase(telemetryContext(input), 'shared-checkout-hit');
+          }
+        }
+
+        // A thread can carry an older pin while the mirror has advanced. Prefer
+        // the current ready SHA before falling back to older active pins.
+        if (!workspacePath && latestSha && latestSha !== exactSha) {
+          const latestIdentity = identityFor(latestSha);
+          const latestReady = repositoryPreparation.getReadyReadOnly({
+            repository: preparationRepository,
+            workflowClass: input.caller,
+            sha: latestSha,
+          })?.checkout;
+          if (latestReady) {
+            grounding = await pinSelectedSha(latestSha);
+            if (!grounding) return preparing();
+            dependencies.sharedReadCheckout.retain(latestIdentity);
+            sharedIdentity = latestIdentity;
+            workspacePath = latestReady.workspacePath;
+            setMaterializationMode('warm');
+            telemetry.phase(
+              telemetryContext(input),
+              'shared-checkout-latest-ready'
+            );
+          }
+        }
+
+        if (!workspacePath) {
+          const candidates = (
+            await dependencies.groundingService.findActiveByRepoBranch({
+              provider: groundingProvider(input.repository.provider),
+              project: input.run.project,
+              repository: repo,
+              branch: input.repository.branch,
+            })
+          )
+            .filter(
+              (candidate) =>
+                candidate.repoRole === 'target' &&
+                candidate.groundedSha.trim().length > 0 &&
+                candidate.groundedSha !== exactSha &&
+                candidate.groundedSha !== latestSha
+            )
+            .sort(
+              (left, right) =>
+                Date.parse(right.groundedAt) - Date.parse(left.groundedAt)
+            );
+
+          for (const candidate of candidates) {
+            const candidateIdentity = identityFor(candidate.groundedSha);
+            const ready = repositoryPreparation.getReadyReadOnly({
+              repository: preparationRepository,
+              workflowClass: input.caller,
+              sha: candidate.groundedSha,
+            })?.checkout;
+            if (!ready) continue;
+
+            grounding = await pinSelectedSha(candidate.groundedSha);
+            if (!grounding) return preparing();
+            dependencies.sharedReadCheckout.retain(candidateIdentity);
+            sharedIdentity = candidateIdentity;
+            workspacePath = ready.workspacePath;
+            setMaterializationMode('warm');
+            telemetry.phase(
+              telemetryContext(input),
+              'shared-checkout-last-known-good'
+            );
+            break;
+          }
+        }
+
+        if (!workspacePath) {
+          const shaToPrepare = latestSha ?? exactSha;
+          if (shaToPrepare) {
+            return prepareOnDemand(shaToPrepare);
+          }
+
+          // No mirror exists yet. Clone/refresh it now, then materialize the
+          // returned SHA directly into the shared Azure Files checkout root.
+          return prepareOnDemand();
+        }
+        // @feature-flag:shared-readonly-grounding-checkout enabled-end
+      }
+      // @feature-flag:shared-readonly-grounding-checkout end
 
       if (!grounding) {
         const cache = await dependencies.ensureRepoCache({
@@ -291,113 +666,15 @@ export function createCallerGroundingService(
         return fallback(input, 'activation-unavailable');
       }
 
-      // @feature-flag:shared-readonly-grounding-checkout start winner=enabled
-      // Read-only chat callers may use ONE ready per-SHA checkout. A user turn
-      // never creates or waits for that tree: a cold miss falls back to remote
-      // repository tools immediately while best-effort materialization warms
-      // the next turn in the background. Writers keep per-run isolation because
-      // they never set `readOnlyShareable`.
-      let workspacePath: string | undefined;
-      let sharedIdentity: SharedReadCheckoutIdentity | undefined;
-      if (input.readOnlyShareable) {
-        let sharedEnabled = false;
-        try {
-          sharedEnabled = await dependencies.isSharedReadCheckoutEnabledForCaller({
-            userId: input.userId,
-            project: input.run.project,
-            caller: input.caller,
-          });
-        } catch {
-          sharedEnabled = false;
-        }
-        if (sharedEnabled) {
-          // @feature-flag:shared-readonly-grounding-checkout enabled-start
-          const identity: SharedReadCheckoutIdentity = {
-            provider: profileProvider(grounding.provider),
-            project: grounding.project,
-            repo,
-            branch: grounding.branch,
-            sha: grounding.groundedSha,
-          };
-          const shared = dependencies.sharedReadCheckout.getReady(identity);
-          if (shared) {
-            dependencies.sharedReadCheckout.retain(identity);
-            sharedIdentity = identity;
-            workspacePath = shared.workspacePath;
-            setMaterializationMode('warm');
-            telemetry.phase(telemetryContext(input), 'shared-checkout-hit');
-          } else {
-            telemetry.phase(telemetryContext(input), 'shared-checkout-cold');
-            // New runs pin the newest READY checkout, not merely the newest
-            // observed branch SHA. This keeps repository reads local while a
-            // newer snapshot is still preparing off the request path.
-            try {
-              const candidates = (
-                await dependencies.groundingService.findActiveByRepoBranch({
-                  provider: grounding.provider,
-                  project: grounding.project,
-                  repository: grounding.repository,
-                  branch: grounding.branch,
-                })
-              )
-                .filter(
-                  (candidate) =>
-                    candidate.repoRole === 'target'
-                    && candidate.groundedSha !== identity.sha,
-                )
-                .sort(
-                  (left, right) =>
-                    Date.parse(right.groundedAt) - Date.parse(left.groundedAt),
-                );
-
-              for (const candidate of candidates) {
-                const candidateIdentity: SharedReadCheckoutIdentity = {
-                  provider: profileProvider(candidate.provider),
-                  project: candidate.project,
-                  repo: candidate.repository,
-                  branch: candidate.branch,
-                  sha: candidate.groundedSha,
-                };
-                const ready =
-                  dependencies.sharedReadCheckout.getReady(candidateIdentity);
-                if (!ready) continue;
-
-                const pinned = await dependencies.groundingService.reground(
-                  input.run,
-                  'target',
-                  candidate.groundedSha,
-                );
-                if (!pinned) break;
-
-                grounding = pinned;
-                dependencies.sharedReadCheckout.retain(candidateIdentity);
-                sharedIdentity = candidateIdentity;
-                workspacePath = ready.workspacePath;
-                setMaterializationMode('warm');
-                telemetry.phase(
-                  telemetryContext(input),
-                  'shared-checkout-last-known-good',
-                );
-                break;
-              }
-            } catch {
-              // Lookup failure is not a remote-read decision. Continue to the
-              // established per-run bundle rehydration path below.
-              telemetry.phase(
-                telemetryContext(input),
-                'shared-checkout-last-known-good-unavailable',
-              );
-            }
-          }
-          // @feature-flag:shared-readonly-grounding-checkout enabled-end
-        }
-      }
-      // @feature-flag:shared-readonly-grounding-checkout end
-
       // Only write-capable/non-shareable callers materialize synchronously.
       if (!workspacePath) {
         telemetry.phase(telemetryContext(input), 'per-run-materialize');
-        const materialized = await dependencies.materialize(grounding, input.run);
+        const materialized = await repositoryPreparation.prepareWritable({
+          destinationRun: input.run,
+          workflowClass: input.caller,
+          targetGrounding: grounding,
+          repository: preparationRepository,
+        });
         if (
           materialized.state !== 'materialized' ||
           !materialized.workspacePath
@@ -455,8 +732,13 @@ export function createCallerGroundingService(
           }
         },
       };
-    } catch {
-      return fallback(input, 'startup-failed');
+    } catch (error) {
+      if (error instanceof ProjectRepositoryFetchError) {
+        throw error;
+      }
+      return sharedReadOnlyEnabled
+        ? preparing()
+        : fallback(input, 'startup-failed');
     }
   };
 
@@ -544,7 +826,7 @@ export function createCallerGroundingService(
       // @feature-flag:repo-grounding-workspace-profile enabled-end
       // @feature-flag:repo-grounding-workspace-profile end
 
-      if (local.mode === 'remote') {
+      if (local.mode !== 'local') {
         return local;
       }
 
@@ -619,9 +901,11 @@ export const callerGroundingService = createCallerGroundingService({
   isGroundingEnabledForCaller: evaluateGroundingFlag,
   isNativeReadEnabledForCaller: evaluateNativeReadFlag,
   isSharedReadCheckoutEnabledForCaller: evaluateSharedReadCheckoutFlag,
+  isProjectRepositoryCheckoutReadinessEnabled: evaluateCheckoutReadinessFlag,
   evaluateNativeReadCapability: evaluateNativeReadCapabilityCheck,
   sharedReadCheckout: sharedReadCheckoutService,
   ensureRepoCache: ensureRepositoryCache,
+  readCachedOriginSha: readCachedOriginShaFromRepoCache,
   groundingService: runGroundingService,
   materialize: materializeRunGroundingWithPath,
   profiles: groundingProfileResolver,

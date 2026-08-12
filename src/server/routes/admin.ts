@@ -451,6 +451,55 @@ router.get('/project-settings/:id/approver-pool/:documentType', async (req: Requ
   }
 });
 
+// ── Repository checkout readiness (admin-managed) ─────────────────────────────
+
+router.get(
+  '/project-settings/:id/repository-readiness',
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { id } = req.params;
+      const { getProjectRepositoryReadiness } = await import(
+        '../services/projectRepositoryReadinessService'
+      );
+      const readiness = await getProjectRepositoryReadiness(id);
+      if (!readiness) {
+        res.status(404).json({ error: 'Skill settings not found' });
+        return;
+      }
+      res.json(readiness);
+    } catch {
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+router.post(
+  '/project-settings/:id/repository-clone',
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { id } = req.params;
+      const refresh = Boolean((req.body as { refresh?: boolean } | undefined)?.refresh);
+      const config = await projectSettingsService.getSkillConfigById(id);
+      if (!config) {
+        res.status(404).json({ error: 'Skill settings not found' });
+        return;
+      }
+      const { cloneOrRefreshRepository } = await import(
+        '../services/projectRepositoryCheckoutService'
+      );
+      const readiness = await cloneOrRefreshRepository(id, { refresh });
+      res.json(readiness);
+    } catch (error) {
+      const statusCode = (error as { statusCode?: number })?.statusCode;
+      if (statusCode === 404) {
+        res.status(404).json({ error: 'Skill settings not found' });
+        return;
+      }
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
 // ── App Settings ──────────────────────────────────────────────────────────────
 
 router.get('/app-settings/defaultModel', async (_req: Request, res: Response): Promise<void> => {

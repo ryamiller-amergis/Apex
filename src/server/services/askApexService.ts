@@ -17,6 +17,7 @@ import { groundingProfileResolver } from './groundingProfileResolver';
 import { createNativeReadTools } from './nativeReadToolAdapter';
 
 const SESSION_IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const GROUNDING_PREPARATION_TIMEOUT_MS = 2 * 60 * 1000;
 const MODEL_ID = 'composer-2.5';
 
 const SYSTEM_PROMPT_BASE = `You are **Ask Apex** — a senior product owner who lives and breathes the Apex platform. You combine deep product knowledge with genuine enthusiasm for how Apex transforms the way teams build software. Think of yourself as the person who conceived many of these features, shepherded them through design and delivery, and now delights in helping people get the most out of the product.
@@ -63,11 +64,24 @@ Do NOT answer off-topic questions even if the user insists — always redirect b
 - You are a READ-ONLY assistant. Do NOT create, write, or modify any files.
 - Only use tools to READ repo content. Do not use any write/edit tools.`;
 
-function buildRepositoryReadGuidance(nativeReads: boolean): string {
+function buildRepositoryReadGuidance(
+  nativeReads: boolean,
+  repoInfo?: RepoInfo | null,
+  repoReader?: RepoReader
+): string {
   return nativeReads
     ? [
         '# Sandbox workspace and native repository reads',
         'The current working directory remains the Apex agent sandbox; it is NOT the repository checkout.',
+        ...(repoInfo && repoReader
+          ? [
+              'Repository grounding provenance:',
+              '  storage: "Azure Files checkout"',
+              `  repository: "${repoReader.identity.repo}"`,
+              `  branch: "${repoInfo.branch}"`,
+              `  pinned SHA: "${repoReader.identity.sha}"`,
+            ]
+          : []),
         'Read the authorized SHA-pinned checkout only through these local checkout-backed read-only tools:',
         '- `get_skill_file` — read a repository-relative file',
         '- `list_repo_dir` — list a repository-relative directory',
@@ -85,10 +99,14 @@ function buildRepositoryReadGuidance(nativeReads: boolean): string {
       ].join('\n');
 }
 
-function fallbackSystemPrompt(nativeReads: boolean): string {
+function fallbackSystemPrompt(
+  nativeReads: boolean,
+  repoInfo?: RepoInfo | null,
+  repoReader?: RepoReader
+): string {
   return `${SYSTEM_PROMPT_BASE}
 
-${buildRepositoryReadGuidance(nativeReads)}
+${buildRepositoryReadGuidance(nativeReads, repoInfo, repoReader)}
 
 Note: I was unable to load the latest documentation from the repository. I'll do my best to answer using my tools and general knowledge of the application.`;
 }
@@ -107,7 +125,9 @@ const contextPromptCache = new Map<
 async function resolveRepoInfo(): Promise<RepoInfo | null> {
   try {
     const configs = await listSkillConfigs();
-    const ghConfig = configs.find(c => c.skillProvider === 'github' && c.isDefault);
+    const ghConfig = configs.find(
+      (c) => c.skillProvider === 'github' && c.isDefault
+    );
     if (!ghConfig) return null;
 
     const repoStr = ghConfig.skillRepo;
@@ -126,13 +146,20 @@ async function resolveRepoInfo(): Promise<RepoInfo | null> {
 
 async function fetchRepoContext(
   repoInfo: RepoInfo | null,
-  runtime: AskApexRepositoryRuntime,
+  runtime: AskApexRepositoryRuntime
 ): Promise<string> {
-  if (!repoInfo) return fallbackSystemPrompt(runtime.nativeReads);
+  if (!repoInfo) {
+    return fallbackSystemPrompt(
+      runtime.nativeReads,
+      repoInfo,
+      runtime.repoReader
+    );
+  }
 
-  const sourceKey = runtime.nativeReads && runtime.repoReader
-    ? `local:${runtime.repoReader.identity.provider}:${runtime.repoReader.identity.project}:${runtime.repoReader.identity.repo}@${runtime.repoReader.identity.sha}`
-    : `remote:${repoInfo.org}/${repoInfo.repo}@${repoInfo.branch}`;
+  const sourceKey =
+    runtime.nativeReads && runtime.repoReader
+      ? `local:${runtime.repoReader.identity.provider}:${runtime.repoReader.identity.project}:${runtime.repoReader.identity.repo}@${runtime.repoReader.identity.sha}`
+      : `remote:${repoInfo.org}/${repoInfo.repo}@${repoInfo.branch}`;
   const cached = contextPromptCache.get(sourceKey);
   if (cached && Date.now() - cached.fetchedAt < CONTEXT_CACHE_TTL_MS) {
     return cached.prompt;
@@ -144,7 +171,11 @@ async function fetchRepoContext(
   const sections: string[] = [
     SYSTEM_PROMPT_BASE,
     '',
-    buildRepositoryReadGuidance(runtime.nativeReads),
+    buildRepositoryReadGuidance(
+      runtime.nativeReads,
+      repoInfo,
+      runtime.repoReader
+    ),
     '',
   ];
 
@@ -154,7 +185,7 @@ async function fetchRepoContext(
       `# Repo coordinates (use with MCP tools)`,
       `  org:    "${repoInfo.org}"`,
       `  repo:   "${repoInfo.repo}"`,
-      `  branch: "${repoInfo.branch}"`,
+      `  branch: "${repoInfo.branch}"`
     );
   }
 
@@ -163,7 +194,10 @@ async function fetchRepoContext(
     { path: 'AGENTS.md', label: 'Agent Quick Reference' },
     { path: 'README.md', label: 'Application Overview (README)' },
     { path: 'public/CHANGELOG.json', label: 'Recent Changes (Changelog)' },
-    { path: 'design-docs/feature-requests.md', label: 'Feature Requests & Roadmap' },
+    {
+      path: 'design-docs/feature-requests.md',
+      label: 'Feature Requests & Roadmap',
+    },
   ];
 
   for (const file of filesToFetch) {
@@ -174,7 +208,7 @@ async function fetchRepoContext(
             repoInfo.repo,
             file.path,
             repoInfo.branch,
-            repoInfo.org,
+            repoInfo.org
           );
       if (content) {
         sections.push(`## ${file.label}\n\n${content}`);
@@ -184,9 +218,10 @@ async function fetchRepoContext(
     }
   }
 
-  const prompt = sections.length > 6
-    ? sections.join('\n\n')
-    : fallbackSystemPrompt(runtime.nativeReads);
+  const prompt =
+    sections.length > 6
+      ? sections.join('\n\n')
+      : fallbackSystemPrompt(runtime.nativeReads, repoInfo, runtime.repoReader);
   contextPromptCache.set(sourceKey, {
     prompt,
     fetchedAt: Date.now(),
@@ -203,13 +238,13 @@ function buildAskApexMcpServers(
   options?: {
     nativeReads?: boolean;
     omitGroundingProfile?: boolean;
-  },
+  }
 ): Record<string, McpServerConfig> {
   const port = process.env.PORT ?? '3001';
   const profilePath =
     grounding.mode === 'local' && !options?.omitGroundingProfile
-    ? `/grounding/${grounding.profileId}`
-    : '';
+      ? `/grounding/${grounding.profileId}`
+      : '';
   const browseQuery = options?.nativeReads ? '?enableRepoBrowse=false' : '';
   return {
     'github-repo': {
@@ -228,32 +263,29 @@ interface AskApexRepositoryRuntime {
 function isExactAskApexReader(
   reader: RepoReader,
   grounding: Extract<CallerGroundingSelection, { mode: 'local' }>,
-  repoInfo: RepoInfo | null,
+  repoInfo: RepoInfo | null
 ): boolean {
   return Boolean(
-    repoInfo
-    && reader.identity.provider === 'github'
-    && reader.identity.project === 'Apex'
-    && reader.identity.repo === repoInfo.repo
-    && reader.identity.sha === grounding.resolvedSha,
+    repoInfo &&
+    reader.identity.provider === 'github' &&
+    reader.identity.project === 'Apex' &&
+    reader.identity.repo === repoInfo.repo &&
+    reader.identity.sha === grounding.resolvedSha
   );
 }
 
 async function prepareAskApexRepositoryRuntime(
   grounding: CallerGroundingSelection,
-  repoInfo: RepoInfo | null,
+  repoInfo: RepoInfo | null
 ): Promise<AskApexRepositoryRuntime> {
-  const requestedNative =
-    grounding.mode === 'local'
-    && grounding.nativeReads;
+  const requestedNative = grounding.mode === 'local' && grounding.nativeReads;
   let repoReader: RepoReader | undefined;
 
   if (requestedNative && grounding.mode === 'local') {
     try {
-      const resolved =
-        await groundingProfileResolver.resolveConnectionProfile(
-          grounding.profileId,
-        );
+      const resolved = await groundingProfileResolver.resolveConnectionProfile(
+        grounding.profileId
+      );
       if (isExactAskApexReader(resolved, grounding, repoInfo)) {
         repoReader = resolved;
       }
@@ -267,9 +299,7 @@ async function prepareAskApexRepositoryRuntime(
     nativeReads,
     local: {
       cwd: process.cwd(),
-      ...(repoReader
-        ? { customTools: createNativeReadTools(repoReader) }
-        : {}),
+      ...(repoReader ? { customTools: createNativeReadTools(repoReader) } : {}),
     },
     mcpServers: buildAskApexMcpServers(grounding, {
       nativeReads,
@@ -281,13 +311,20 @@ async function prepareAskApexRepositoryRuntime(
 
 async function buildSystemPrompt(
   repoInfo: RepoInfo | null,
-  runtime: AskApexRepositoryRuntime,
+  runtime: AskApexRepositoryRuntime
 ): Promise<string> {
   try {
     return await fetchRepoContext(repoInfo, runtime);
   } catch (err) {
-    console.error('[ask-apex] Failed to build context-aware prompt:', (err as Error).message);
-    return fallbackSystemPrompt(runtime.nativeReads);
+    console.error(
+      '[ask-apex] Failed to build context-aware prompt:',
+      (err as Error).message
+    );
+    return fallbackSystemPrompt(
+      runtime.nativeReads,
+      repoInfo,
+      runtime.repoReader
+    );
   }
 }
 
@@ -298,7 +335,7 @@ export interface AskApexMessage {
   ts: string;
 }
 
-export type AskApexSessionStatus = 'idle' | 'streaming' | 'error';
+export type AskApexSessionStatus = 'idle' | 'preparing' | 'streaming' | 'error';
 
 export interface AskApexSseEvent {
   type: 'token' | 'message' | 'status' | 'error' | 'done';
@@ -324,13 +361,20 @@ const sessions = new Map<string, SessionState>();
 
 function broadcast(session: SessionState, event: AskApexSseEvent): void {
   for (const cb of session.subscribers) {
-    try { cb(event); } catch { /* subscriber error */ }
+    try {
+      cb(event);
+    } catch {
+      /* subscriber error */
+    }
   }
 }
 
 function resetIdleTimer(session: SessionState): void {
   if (session.idleTimer) clearTimeout(session.idleTimer);
-  session.idleTimer = setTimeout(() => destroySession(session.id), SESSION_IDLE_TIMEOUT_MS);
+  session.idleTimer = setTimeout(
+    () => destroySession(session.id),
+    SESSION_IDLE_TIMEOUT_MS
+  );
 }
 
 function destroySession(sessionId: string): void {
@@ -342,7 +386,11 @@ function destroySession(sessionId: string): void {
   }
   if (session.idleTimer) clearTimeout(session.idleTimer);
   if (session.agent) {
-    try { session.agent[Symbol.asyncDispose]().catch(() => {}); } catch { /* ignore */ }
+    try {
+      session.agent[Symbol.asyncDispose]().catch(() => {});
+    } catch {
+      /* ignore */
+    }
   }
   sessions.delete(sessionId);
   void session.grounding?.release().catch(() => undefined);
@@ -368,7 +416,10 @@ export function createSession(userId: string): string {
   return sessionId;
 }
 
-export function getSession(sessionId: string, userId: string): SessionState | null {
+export function getSession(
+  sessionId: string,
+  userId: string
+): SessionState | null {
   const session = sessions.get(sessionId);
   if (!session || session.userId !== userId) return null;
   return session;
@@ -377,22 +428,27 @@ export function getSession(sessionId: string, userId: string): SessionState | nu
 export function subscribeToSession(
   sessionId: string,
   userId: string,
-  callback: (event: AskApexSseEvent) => void,
+  callback: (event: AskApexSseEvent) => void
 ): (() => void) | null {
   const session = getSession(sessionId, userId);
   if (!session) return null;
   session.subscribers.add(callback);
-  return () => { session.subscribers.delete(callback); };
+  return () => {
+    session.subscribers.delete(callback);
+  };
 }
 
-export function getSessionMessages(sessionId: string, userId: string): AskApexMessage[] | null {
+export function getSessionMessages(
+  sessionId: string,
+  userId: string
+): AskApexMessage[] | null {
   const session = getSession(sessionId, userId);
   if (!session) return null;
   return session.messages;
 }
 
 async function ensureSessionGrounding(
-  session: SessionState,
+  session: SessionState
 ): Promise<CallerGroundingSelection> {
   if (session.grounding) return session.grounding;
 
@@ -406,7 +462,7 @@ async function ensureSessionGrounding(
     return session.grounding;
   }
 
-  session.grounding = await callerGroundingService.start({
+  const grounding = await callerGroundingService.start({
     caller: 'ask-apex',
     userId: session.userId,
     run: {
@@ -419,19 +475,59 @@ async function ensureSessionGrounding(
       repo: repoInfo.repo,
       branch: repoInfo.branch,
     },
-    reauthorize: async () =>
-      getSession(session.id, session.userId) !== null,
+    reauthorize: async () => getSession(session.id, session.userId) !== null,
+    readOnlyShareable: true,
   });
-  return session.grounding;
+  if (grounding.mode !== 'preparing') {
+    session.grounding = grounding;
+  }
+  return grounding;
+}
+
+async function waitForSessionGrounding(session: SessionState): Promise<{
+  grounding: Exclude<CallerGroundingSelection, { mode: 'preparing' }>;
+  prepared: boolean;
+}> {
+  const deadline = Date.now() + GROUNDING_PREPARATION_TIMEOUT_MS;
+  let prepared = false;
+  while (true) {
+    const grounding = await ensureSessionGrounding(session);
+    if (grounding.mode !== 'preparing') return { grounding, prepared };
+
+    prepared = true;
+    session.status = 'preparing';
+    broadcast(session, { type: 'status', status: 'preparing' });
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw new Error(
+        'Repository preparation timed out. Please retry this message.'
+      );
+    }
+    const waitMs = Math.min(grounding.retryAfterMs, remainingMs);
+    const readiness = grounding.waitUntilReady?.();
+    const retryDelay = new Promise<void>((resolve) => {
+      setTimeout(resolve, waitMs);
+    });
+    await (readiness ? Promise.race([readiness, retryDelay]) : retryDelay);
+  }
 }
 
 function isTransientSdkError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const msg = err.message.toLowerCase();
-  return msg.includes('rate') || msg.includes('timeout') || msg.includes('econnreset') || msg.includes('503');
+  return (
+    msg.includes('rate') ||
+    msg.includes('timeout') ||
+    msg.includes('econnreset') ||
+    msg.includes('503')
+  );
 }
 
-export async function sendMessage(sessionId: string, userId: string, text: string): Promise<void> {
+export async function sendMessage(
+  sessionId: string,
+  userId: string,
+  text: string
+): Promise<void> {
   const session = getSession(sessionId, userId);
   if (!session) throw new Error('Session not found');
   if (session.status === 'streaming') throw new Error('Already streaming');
@@ -457,12 +553,22 @@ export async function sendMessage(sessionId: string, userId: string, text: strin
   }
 
   try {
-    const sdkRetryOpts = { maxRetries: 3, initialDelay: 1000, shouldRetry: isTransientSdkError, jitter: true } as const;
+    const sdkRetryOpts = {
+      maxRetries: 3,
+      initialDelay: 1000,
+      shouldRetry: isTransientSdkError,
+      jitter: true,
+    } as const;
     const isFirstTurn = !session.agent;
-    const grounding = isFirstTurn
-      ? await ensureSessionGrounding(session)
-      : session.grounding;
+    const groundingResult = isFirstTurn
+      ? await waitForSessionGrounding(session)
+      : null;
+    const grounding = groundingResult?.grounding ?? session.grounding;
     if (!grounding) throw new Error('Repository grounding is unavailable');
+    if (groundingResult?.prepared) {
+      session.status = 'streaming';
+      broadcast(session, { type: 'status', status: 'streaming' });
+    }
     const repositoryRuntime = isFirstTurn
       ? await prepareAskApexRepositoryRuntime(grounding, session.repoInfo)
       : null;
@@ -473,20 +579,21 @@ export async function sendMessage(sessionId: string, userId: string, text: strin
 
     if (!session.agent) {
       session.agent = await retryWithBackoff(
-        () => Agent.create({
-          apiKey,
-          model: { id: MODEL_ID },
-          local: repositoryRuntime!.local,
-          mcpServers: repositoryRuntime!.mcpServers,
-        }),
-        sdkRetryOpts,
+        () =>
+          Agent.create({
+            apiKey,
+            model: { id: MODEL_ID },
+            local: repositoryRuntime!.local,
+            mcpServers: repositoryRuntime!.mcpServers,
+          }),
+        sdkRetryOpts
       );
     }
 
-    const run = await retryWithBackoff(
-      () => session.agent!.send(prompt),
-      { ...sdkRetryOpts, maxRetries: 2 },
-    );
+    const run = await retryWithBackoff(() => session.agent!.send(prompt), {
+      ...sdkRetryOpts,
+      maxRetries: 2,
+    });
 
     let agentTextBuffer = '';
 
@@ -506,7 +613,9 @@ export async function sendMessage(sessionId: string, userId: string, text: strin
     const assistantMsg: AskApexMessage = {
       id: uuidv4(),
       role: 'assistant',
-      text: agentTextBuffer.trim() || 'I wasn\'t able to generate a response. Please try again.',
+      text:
+        agentTextBuffer.trim() ||
+        "I wasn't able to generate a response. Please try again.",
       ts: new Date().toISOString(),
     };
     session.messages.push(assistantMsg);
@@ -533,7 +642,10 @@ export async function sendMessage(sessionId: string, userId: string, text: strin
     });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-    console.error(`[ask-apex] sendMessage error for session ${sessionId}:`, errorMessage);
+    console.error(
+      `[ask-apex] sendMessage error for session ${sessionId}:`,
+      errorMessage
+    );
 
     const errorMsg: AskApexMessage = {
       id: uuidv4(),

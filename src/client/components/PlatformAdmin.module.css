@@ -660,6 +660,33 @@
   line-height: 1.5;
 }
 
+.userAccessFields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin: 12px 0 4px;
+}
+
+.userAccessFields .label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.userAccessList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.userAccessRowActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 /* Feature Flags */
 
 .flagCreateForm {

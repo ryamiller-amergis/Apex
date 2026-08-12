@@ -8,8 +8,10 @@ const authorUser = alias(appUsers, 'author_user');
 const prdOwnerUser = alias(appUsers, 'prd_owner_user');
 import type { Prd, PrdStatus, PrdSummary, PrdValidationBaseline, PrdReadinessOverride, ReviewPrdRequest, TestCaseSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { CreatePrdAdoItemsRequest, CreatePrdAdoItemsResponse, SelectedBacklogEpic, SelectedBacklogFeature, SelectedBacklogPBI, GlobalBusinessRule, DependencyGraphNode } from '../../shared/types/interview';
-import { readOutputPrd, readOutputBacklog, sendMessage, createThread as createChatThread, cancelRun, prepareBackgroundWorkflowTurn } from './chatAgentService';
+import { readOutputPrd, readOutputBacklog, sendMessage, createThread as createChatThread, cancelRun, prepareBackgroundWorkflowTurn, isThreadIdle } from './chatAgentService';
+import { isThreadRunAlive } from './agentRunReaperService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
+import { isPrdGenerationOutputComplete } from '../../shared/utils/prdGenerationOutput';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import { createNotification } from './notificationService';
 import { isAdminUser } from '../utils/rbacHelpers';
@@ -286,20 +288,14 @@ export async function routePrdGenerationKickoff(opts: {
         ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
         return { ...prepared, targetGrounding };
       },
-      runInProcess: () => {
-        void sendMessage(
+      runInProcess: () =>
+        sendMessage(
           opts.threadId,
           kickoffMessage,
           undefined,
           [],
           { hidden: true },
-        ).catch((err: Error) => {
-          console.error(
-            `[prd] Failed to kick off generation (prdId=${opts.prdId}, threadId=${opts.threadId}):`,
-            err.message,
-          );
-        });
-      },
+        ),
       reportRecoverablePreparationFailure: reportPreparationFailure,
     });
   } catch {
@@ -898,61 +894,75 @@ export function startPrdWatcher(prdId: string, chatThreadId: string): void {
 
     const content = readOutputPrd(chatThreadId);
     const backlog = readOutputBacklog(chatThreadId);
+    const filesPresent = content !== null && backlog !== null;
+    const outputComplete = isPrdGenerationOutputComplete(content, backlog);
+    // Do not promote while the generation run is still alive — leftover/stub
+    // workspace files from shared grounding must not win over an in-flight job.
+    const agentFinished = isThreadIdle(chatThreadId) && !(await isThreadRunAlive(chatThreadId));
 
     console.log(
-      `[prdWatcher] tick #${attempts} — prdFile=${content !== null ? `found (${String(content).length} chars)` : 'missing'} backlogFile=${backlog !== null ? 'found' : 'missing'} (prdId=${prdId})`,
+      `[prdWatcher] tick #${attempts} — prdFile=${content !== null ? `found (${String(content).length} chars)` : 'missing'} backlogFile=${backlog !== null ? 'found' : 'missing'} complete=${outputComplete} agentFinished=${agentFinished} (prdId=${prdId})`,
     );
 
-    if (content !== null && backlog !== null) {
-      clearInterval(interval);
-      activePrdWatchers.delete(prdId);
-      console.log(`[prdWatcher] Both files ready — syncing to DB (prdId=${prdId})`);
-      try {
-        await runGroundingService.persistThenMarkTerminalInactive(
-            {
-              runType: 'chat',
-              runId: chatThreadId,
-              project: prdRow.project,
-            },
-            () => syncPrdContent(prdId, content, backlog),
-          );
-        console.log(`[prdWatcher] Sync complete — PRD is now draft (prdId=${prdId})`);
-        try {
-          const prdRowAfterSync = await db.query.prds.findFirst({
-            where: eq(prds.id, prdId),
-            columns: { interviewId: true },
-          });
-          let testCasesEnabled = true;
-          if (prdRowAfterSync?.interviewId) {
-            const interview = await db.query.interviews.findFirst({
-              where: eq(interviews.id, prdRowAfterSync.interviewId),
-              columns: { testCasesEnabled: true },
-            });
-            testCasesEnabled = interview?.testCasesEnabled !== false;
-          }
+    if (!filesPresent || !outputComplete) {
+      return;
+    }
 
-          if (!testCasesEnabled) {
-            console.log(`[prdWatcher] Test cases disabled for interview — skipping generation (prdId=${prdId})`);
-            cleanupWorkspace(chatThreadId);
-            try {
-              await autoStartPrdValidation(prdId);
-            } catch (err) {
-              console.error(`[prdWatcher] Auto PRD validation failed (prdId=${prdId})`, err);
-            }
-          } else {
-            const { triggerTestCaseGeneration } = await import('./testCaseService');
-            const testCaseStarted = await triggerTestCaseGeneration(prdId, chatThreadId);
-            if (!testCaseStarted) {
-              cleanupWorkspace(chatThreadId);
-            }
-          }
-        } catch (err) {
-          console.error(`[prdWatcher] Auto test-case generation failed (prdId=${prdId})`, err);
+    if (!agentFinished) {
+      console.log(
+        `[prdWatcher] Output files present but run still alive — waiting for terminal completion (prdId=${prdId})`,
+      );
+      return;
+    }
+
+    clearInterval(interval);
+    activePrdWatchers.delete(prdId);
+    console.log(`[prdWatcher] Run finished with complete output — syncing to DB (prdId=${prdId})`);
+    try {
+      await runGroundingService.persistThenMarkTerminalInactive(
+          {
+            runType: 'chat',
+            runId: chatThreadId,
+            project: prdRow.project,
+          },
+          () => syncPrdContent(prdId, content, backlog),
+        );
+      console.log(`[prdWatcher] Sync complete — PRD is now draft (prdId=${prdId})`);
+      try {
+        const prdRowAfterSync = await db.query.prds.findFirst({
+          where: eq(prds.id, prdId),
+          columns: { interviewId: true },
+        });
+        let testCasesEnabled = true;
+        if (prdRowAfterSync?.interviewId) {
+          const interview = await db.query.interviews.findFirst({
+            where: eq(interviews.id, prdRowAfterSync.interviewId),
+            columns: { testCasesEnabled: true },
+          });
+          testCasesEnabled = interview?.testCasesEnabled !== false;
+        }
+
+        if (!testCasesEnabled) {
+          console.log(`[prdWatcher] Test cases disabled for interview — skipping generation (prdId=${prdId})`);
           cleanupWorkspace(chatThreadId);
+          try {
+            await autoStartPrdValidation(prdId);
+          } catch (err) {
+            console.error(`[prdWatcher] Auto PRD validation failed (prdId=${prdId})`, err);
+          }
+        } else {
+          const { triggerTestCaseGeneration } = await import('./testCaseService');
+          const testCaseStarted = await triggerTestCaseGeneration(prdId, chatThreadId);
+          if (!testCaseStarted) {
+            cleanupWorkspace(chatThreadId);
+          }
         }
       } catch (err) {
-        console.error(`[prdWatcher] Failed to sync PRD content (prdId=${prdId})`, err);
+        console.error(`[prdWatcher] Auto test-case generation failed (prdId=${prdId})`, err);
+        cleanupWorkspace(chatThreadId);
       }
+    } catch (err) {
+      console.error(`[prdWatcher] Failed to sync PRD content (prdId=${prdId})`, err);
     }
   }, WATCHER_INTERVAL_MS);
 
@@ -2062,6 +2072,7 @@ export async function triggerFixPrdValidation(
       skillPath: skillConfig?.prdAssistantSkillPath ?? undefined,
       freeformContext: context,
       model,
+      skillSettingsId: prd.skillSettingsId ?? skillConfig?.id ?? null,
     }, { skipAutoKickoff: true });
 
     threadId = thread.id;
@@ -2281,6 +2292,7 @@ export async function triggerFixCoverageGaps(
       skillPath: skillConfig?.prdAssistantSkillPath ?? undefined,
       freeformContext: context,
       model,
+      skillSettingsId: prd.skillSettingsId ?? skillConfig?.id ?? null,
     }, { skipAutoKickoff: true });
 
     threadId = thread.id;

@@ -50,6 +50,20 @@ jest.mock('../../hooks/useProjectSkillConfig', () => ({
   })),
 }));
 
+// Flag-off / ready stub — these suites render without QueryClientProvider.
+jest.mock('../../hooks/useProjectRepositoryReadiness', () => ({
+  useProjectRepositoryReadiness: jest.fn(() => ({
+    isReady: true,
+    message: null,
+    readiness: null,
+    isLoading: false,
+    isFetching: false,
+    flagEnabled: false,
+  })),
+  PROJECT_REPOSITORY_NOT_READY_MESSAGE:
+    'A project administrator must clone this repository before repository-dependent AI work can run.',
+}));
+
 const mockUpdateStatus = jest.fn();
 jest.mock('../../hooks/useInterviews', () => ({
   useCreateInterview: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
