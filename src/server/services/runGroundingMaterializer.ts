@@ -21,7 +21,10 @@ import {
 } from './repoCacheService';
 import { redactSecrets } from './repoCheckoutService';
 import { materializeWorkspaceFromCache } from './repoWorkspaceService';
-import { WORKTREE_GIT_TIMEOUT_MS } from './repoGitSettings';
+import {
+  ensureGitSafeDirectory,
+  WORKTREE_GIT_TIMEOUT_MS,
+} from './repoGitSettings';
 import {
   sharedReadCheckoutService,
   sharedReadCheckoutIdentityFromGrounding,
@@ -64,6 +67,8 @@ export interface GroundingMaterializerDependencies {
    * cold-cloning during generation.
    */
   getReadySharedCheckoutPath?: (grounding: RunGrounding) => string | null;
+  /** Azure Files dubious-ownership guard; injectable for unit tests. */
+  ensureGitSafeDirectory?: () => Promise<void>;
 }
 
 export const EXACT_COMMIT_FETCH_TIMEOUT_MS = 45_000;
@@ -169,6 +174,8 @@ export function createRunGroundingMaterializer(
       sharedReadCheckoutService.getReady(
         sharedReadCheckoutIdentityFromGrounding(grounding),
       )?.workspacePath ?? null);
+  const ensureSafeDirectory =
+    dependencies.ensureGitSafeDirectory ?? ensureGitSafeDirectory;
   const publishBundle: GroundingBundlePublisher['publish'] = async (input) => {
     // @feature-flag:project-repository-checkout-readiness start winner=enabled
     let checkoutReadinessEnabled = false;
@@ -324,18 +331,16 @@ export function createRunGroundingMaterializer(
       );
     };
 
-    // Reuse the exact SHA the interview already materialized locally on the
-    // shared Azure Files volume (the shared read checkout). This is a purely
-    // local clone — no network, no cold clone — so a warm mirror that cannot
-    // serve the pinned SHA from its branch tip never forces a re-fetch or a
-    // ~20-minute cache repair during generation. `materializePinnedSha` above
-    // already ran `ensureGitSafeDirectory` globally, so the local clone below
-    // clears the Azure Files dubious-ownership guard.
+    // FIRST: reuse the exact SHA the interview already materialized on the
+    // shared Azure Files volume. Generation must not wait on a mirror
+    // worktree clone (COLD_CACHE_TIMEOUT_MS up to 30 minutes) when the
+    // shared read checkout is already a warm hit for this pin.
     const seedFromLocalSharedCheckout = async (
       remoteUrl: string,
     ): Promise<boolean> => {
       const sharedPath = getReadySharedCheckoutPath(grounding);
       if (!sharedPath) return false;
+      await ensureSafeDirectory();
       fs.rmSync(destination, { recursive: true, force: true });
       fs.mkdirSync(path.dirname(destination), { recursive: true });
       await runGit(
@@ -365,36 +370,33 @@ export function createRunGroundingMaterializer(
     };
 
     const cache = await ensureCache(cacheOptions);
+    const reuseStartedAt = now();
+    try {
+      if (await seedFromLocalSharedCheckout(cache.remote.url)) {
+        safeTelemetry(
+          'grounding.materialization.local-reuse',
+          {
+            provider: String(identity.provider),
+            project: identity.project,
+            repository: redactSecrets(identity.repo),
+            branch,
+            source: 'shared-read-checkout',
+            outcome: 'materialized',
+          },
+          { durationMs: Math.max(0, now() - reuseStartedAt) },
+        );
+        return 'materialized';
+      }
+    } catch {
+      // Shared-tree seed failed; fall through to the warm-mirror path.
+    }
+
+    // SECOND: warm bare-mirror worktree. Still no cold repair/network fetch —
+    // if this fails, return unavailable so the router falls back in-process.
     try {
       await materializePinnedSha(cache);
       return 'materialized';
     } catch {
-      // The warm local mirror could not serve the pinned SHA. Per the
-      // checkout-readiness design, generation MUST NOT cold-clone or
-      // network-fetch here — it reuses the SHA the interview already
-      // materialized locally, or fails fast so the router falls back
-      // in-process (which still runs against the interview's transcript).
-      const reuseStartedAt = now();
-      try {
-        if (await seedFromLocalSharedCheckout(cache.remote.url)) {
-          safeTelemetry(
-            'grounding.materialization.local-reuse',
-            {
-              provider: String(identity.provider),
-              project: identity.project,
-              repository: redactSecrets(identity.repo),
-              branch,
-              source: 'shared-read-checkout',
-              outcome: 'materialized',
-            },
-            { durationMs: Math.max(0, now() - reuseStartedAt) },
-          );
-          return 'materialized';
-        }
-      } catch {
-        // Local reuse failed too; fall through to a fast unavailable. Still no
-        // cold clone — the router falls back to in-process generation.
-      }
       safeTelemetry(
         'grounding.materialization.fallback',
         {

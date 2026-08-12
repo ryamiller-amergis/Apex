@@ -495,6 +495,8 @@ describe('TBI-004 default independent grounding materializer', () => {
       publishBundle,
       ensureRepoCache,
       materializeWorkspaceFromCache,
+      // No shared checkout — falls through to warm-mirror worktree.
+      getReadySharedCheckoutPath: jest.fn().mockReturnValue(null),
       runGit,
       telemetry: jest.fn(),
     });
@@ -509,13 +511,13 @@ describe('TBI-004 default independent grounding materializer', () => {
     expect(materializeWorkspaceFromCache).toHaveBeenCalled();
   });
 
-  it('readiness ON reuses the local shared read checkout on a pinned-SHA miss (no cold clone, no fetch)', async () => {
+  it('readiness ON prefers the shared read checkout FIRST (never waits on mirror clone)', async () => {
     const repairRepoCache = jest.fn();
     const exactCommitFetch = jest.fn();
-    // Warm-mirror materialize can't serve the pinned SHA from its branch tip.
-    const materializeWorkspaceFromCache = jest
-      .fn()
-      .mockRejectedValue(new Error('pinned commit not on branch tip'));
+    // If the mirror path is reached, hang forever — proving we must not call it.
+    const materializeWorkspaceFromCache = jest.fn(
+      async (): Promise<void> => new Promise(() => undefined),
+    );
     const runGit = jest.fn().mockResolvedValue('');
     const telemetry = jest.fn();
     const materialize = createRunGroundingMaterializer({
@@ -530,25 +532,24 @@ describe('TBI-004 default independent grounding materializer', () => {
       exactCommitFetch,
       materializeWorkspaceFromCache,
       getReadySharedCheckoutPath: jest.fn().mockReturnValue('C:\\shared\\pinned'),
+      ensureGitSafeDirectory: jest.fn().mockResolvedValue(undefined),
       runGit,
       telemetry,
     });
 
+    const startedAt = Date.now();
     await expect(
-      materialize(grounding, run('reuse-local-sha')),
+      materialize(grounding, run('shared-first')),
     ).resolves.toBe('materialized');
 
-    // Never cold-cloned or network-fetched during generation.
+    // Must finish immediately — not wait on the hung mirror clone.
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    expect(materializeWorkspaceFromCache).not.toHaveBeenCalled();
     expect(repairRepoCache).not.toHaveBeenCalled();
     expect(exactCommitFetch).not.toHaveBeenCalled();
-    // Seeded via a purely local clone of the already-materialized shared tree.
     const cloneCall = runGit.mock.calls.find(([args]) => args.includes('clone'));
     expect(cloneCall?.[0]).toEqual(
       expect.arrayContaining(['clone', '--local', 'C:\\shared\\pinned']),
-    );
-    expect(runGit).toHaveBeenCalledWith(
-      expect.arrayContaining(['checkout', '--detach', sha]),
-      expect.objectContaining({ cwd: expect.any(String) }),
     );
     expect(telemetry).toHaveBeenCalledWith(
       'grounding.materialization.local-reuse',
@@ -557,7 +558,37 @@ describe('TBI-004 default independent grounding materializer', () => {
     );
   });
 
-  it('readiness ON fails fast to unavailable when no local SHA exists (still no cold clone)', async () => {
+  it('readiness ON falls back to warm mirror only when shared checkout is absent', async () => {
+    const repairRepoCache = jest.fn();
+    const exactCommitFetch = jest.fn();
+    const materializeWorkspaceFromCache = jest.fn().mockResolvedValue(undefined);
+    const runGit = jest.fn().mockResolvedValue('');
+    const materialize = createRunGroundingMaterializer({
+      dataRoot: 'C:\\persistent-data',
+      isCheckoutReadinessEnabled: jest.fn().mockResolvedValue(true),
+      createBundleStore: jest.fn(() => ({ rehydrate: jest.fn() })),
+      ensureRepoCache: jest.fn().mockResolvedValue({
+        cacheDir: 'C:\\cache\\repo.git',
+        remote: { url: 'https://example.invalid/repo.git', env: {}, secret: '' },
+      }),
+      repairRepoCache,
+      exactCommitFetch,
+      materializeWorkspaceFromCache,
+      getReadySharedCheckoutPath: jest.fn().mockReturnValue(null),
+      runGit,
+      telemetry: jest.fn(),
+    });
+
+    await expect(
+      materialize(grounding, run('mirror-fallback')),
+    ).resolves.toBe('materialized');
+
+    expect(materializeWorkspaceFromCache).toHaveBeenCalled();
+    expect(repairRepoCache).not.toHaveBeenCalled();
+    expect(exactCommitFetch).not.toHaveBeenCalled();
+  });
+
+  it('readiness ON fails fast to unavailable when neither shared nor mirror can serve the SHA', async () => {
     const repairRepoCache = jest.fn();
     const exactCommitFetch = jest.fn();
     const telemetry = jest.fn();
