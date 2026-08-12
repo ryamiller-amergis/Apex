@@ -1572,7 +1572,7 @@ export function generateFallbackReport(scorecard: ValidationScorecard): string {
     }
     lines.push('');
 
-    const allGaps = scorecard.features!.flatMap((f) => f.gaps.filter((g) => g.resolution === 'pending'));
+    const allGaps = scorecard.features!.flatMap((f) => (f.gaps ?? []).filter((g) => g.resolution === 'pending'));
     if (allGaps.length > 0) {
       lines.push('## Open Gaps', '');
       for (const gap of allGaps) {
