@@ -35,6 +35,14 @@ const SHARED_READ_WORKFLOW_CLASSES: ReadonlySet<BackgroundWorkflowClass> = new S
   'test-cases',
 ]);
 
+/**
+ * Content-only scoring workflows (PRD + design-doc validation).
+ * Inputs live in `.ai-pilot/kickoff-context.md` — no project-repo checkout.
+ */
+const SCRATCH_ONLY_WORKFLOW_CLASSES: ReadonlySet<BackgroundWorkflowClass> = new Set([
+  'validation',
+]);
+
 export interface RecoverableBackgroundWorkflowFailure {
   reason: 'materialization-unavailable';
   workflowClass: BackgroundWorkflowClass;
@@ -148,7 +156,8 @@ export async function prepareBackgroundWorkflowWorkspace(
 
 /**
  * Clears prior generation outputs on the thin thread workspace used when
- * PRD/design-doc reuse the shared read checkout (no full clone).
+ * PRD/design-doc reuse the shared read checkout, or when validation runs
+ * scratch-only (kickoff-context only; no project-repo checkout).
  */
 export async function clearBackgroundGenerationOutput(
   threadWorkspacePath: string,
@@ -309,6 +318,66 @@ export function createBackgroundWorkflowRouter(
         'worker-preparation-failed',
         preparationStartedAt,
       );
+    }
+
+    // PRD / design-doc validation: score content from kickoff-context only.
+    // No grounding, shared checkout, or MaxView clone.
+    if (SCRATCH_ONLY_WORKFLOW_CLASSES.has(input.workflowClass)) {
+      try {
+        await clearGenerationOutput(prepared.threadWorkspacePath);
+      } catch {
+        return recoverPreparation(
+          input,
+          'workspace-preparation-failed',
+          preparationStartedAt,
+        );
+      }
+
+      const workspaceRef = prepared.threadWorkspacePath;
+      const materializationReason = 'scratch-only';
+      safeTrack(
+        'background.materialization.outcome',
+        {
+          workflowClass: input.workflowClass,
+          project: input.destinationRun.project,
+          route: 'worker',
+          reason: materializationReason,
+        },
+        { durationMs: Math.max(0, now() - preparationStartedAt) },
+      );
+
+      const snapshot: ExecutionSnapshot = {
+        prompt: prepared.prompt,
+        model: prepared.model,
+        workspaceRef,
+        workflowClass: input.workflowClass,
+        skillPath: prepared.skillPath,
+        projectId: prepared.projectId,
+        threadId: input.threadId,
+      };
+      const timeoutAt = new Date(now() + hardLimitMs()).toISOString();
+      let enqueued: Awaited<ReturnType<EnqueueRun>>;
+      try {
+        enqueued = await enqueueRun({
+          threadId: input.threadId,
+          projectId: prepared.projectId,
+          snapshot,
+          timeoutAt,
+          runId: input.destinationRun.runId,
+        });
+      } catch {
+        return recoverPreparation(
+          input,
+          'worker-enqueue-failed',
+          preparationStartedAt,
+        );
+      }
+      routeDecision(input, 'worker', materializationReason);
+      return {
+        route: 'worker',
+        workspacePath: workspaceRef,
+        runId: enqueued.runId,
+      };
     }
 
     if (!isUsableTargetGrounding(prepared.targetGrounding, input.destinationRun)) {

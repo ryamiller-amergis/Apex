@@ -244,27 +244,71 @@ describe('background workflow routing', () => {
     expect(dependencies.prepareWorkspace).toHaveBeenCalled();
   });
 
-  it('does not use the thin shared path for validation workflows', async () => {
+  it('routes validation as scratch-only (no repo checkout or shared SHA)', async () => {
     const getReady = jest.fn().mockReturnValue({
       workspacePath: 'C:\\shared\\should-not-use',
     });
+    const clearGenerationOutput = jest.fn().mockResolvedValue(undefined);
+    const enqueue = jest.fn().mockResolvedValue({ runId: 'run-1' });
     const dependencies = makeDependencies({
       isFeatureEnabled: jest.fn().mockResolvedValue(true),
       sharedReadCheckout: { getReady, retain: jest.fn() },
+      clearGenerationOutput,
+      enqueue,
     });
 
     const decision = await createBackgroundWorkflowRouter(dependencies).route(
       makeInput({ workflowClass: 'validation' }),
     );
 
+    expect(decision).toEqual<WorkflowRouteDecision>({
+      route: 'worker',
+      workspacePath: 'C:\\threads\\thread-1',
+      runId: 'run-1',
+    });
+    expect(getReady).not.toHaveBeenCalled();
+    expect(dependencies.materializeRunGroundingWithPath).not.toHaveBeenCalled();
+    expect(dependencies.prepareWorkspace).not.toHaveBeenCalled();
+    expect(clearGenerationOutput).toHaveBeenCalledWith('C:\\threads\\thread-1');
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        snapshot: expect.objectContaining({
+          workspaceRef: 'C:\\threads\\thread-1',
+          workflowClass: 'validation',
+        }),
+      }),
+    );
+    const snapshot = (enqueue.mock.calls[0][0] as { snapshot: ExecutionSnapshot })
+      .snapshot;
+    expect(snapshot.checkoutRef).toBeUndefined();
+  });
+
+  it('routes validation without usable target grounding', async () => {
+    const enqueue = jest.fn().mockResolvedValue({ runId: 'run-1' });
+    const dependencies = makeDependencies({ enqueue });
+
+    const decision = await createBackgroundWorkflowRouter(dependencies).route(
+      makeInput({
+        workflowClass: 'validation',
+        prepareWorker: jest.fn().mockResolvedValue({
+          targetGrounding: null,
+          threadWorkspacePath: 'C:\\threads\\validation-1',
+          prompt: 'score the doc',
+          model: 'claude-4',
+          skillPath: '.cursor/skills/prd-spec-review/SKILL.md',
+          projectId: 'project-1',
+        }),
+      }),
+    );
+
     expect(decision).toEqual(
       expect.objectContaining({
         route: 'worker',
-        workspacePath: 'C:\\grounding-workspaces\\opaque',
+        workspacePath: 'C:\\threads\\validation-1',
       }),
     );
-    expect(getReady).not.toHaveBeenCalled();
-    expect(dependencies.materializeRunGroundingWithPath).toHaveBeenCalled();
+    expect(dependencies.materializeRunGroundingWithPath).not.toHaveBeenCalled();
+    expect(enqueue).toHaveBeenCalled();
   });
 
   it('TBI-007 DoD-0 / DoD-1 / VT-07: targets every workflow vocabulary independently by project and caller', async () => {
