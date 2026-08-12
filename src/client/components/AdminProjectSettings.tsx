@@ -1225,17 +1225,25 @@ const RepoCheckoutControlsEnabled: React.FC<RepoCheckoutControlsProps> = ({ conf
 
   return (
     <div className={styles.repoCheckout} {...{ 'data-testid': `repo-checkout-status-${config.id}` }}>
-      <span className={styles.repoCheckoutStatus} title={display.error ?? undefined}>
+      <span
+        className={`${styles.repoCheckoutStatus} ${status === 'failed' ? styles.repoCheckoutStatusFailed : ''}`}
+        title={display.error ?? undefined}
+      >
         {label}
         {isFetching && status === 'cloning' ? '…' : ''}
       </span>
+      {status === 'failed' && display.error && (
+        <span className={styles.repoCheckoutError} title={display.error}>
+          {display.error}
+        </span>
+      )}
       <div className={styles.repoCheckoutActions}>
         {showClone && (
           <button
             className={styles.btnAction}
             type="button"
             disabled={isCloning || clone.isPending}
-            onClick={() => void clone.mutateAsync({ id: config.id, refresh: false })}
+            onClick={() => void clone.mutateAsync({ id: config.id, refresh: false }).catch(() => undefined)}
             {...{ 'data-testid': `repo-checkout-clone-${config.id}` }}
           >
             {clone.isPending && !clone.variables?.refresh ? 'Cloning…' : 'Clone'}
@@ -1246,7 +1254,7 @@ const RepoCheckoutControlsEnabled: React.FC<RepoCheckoutControlsProps> = ({ conf
             className={styles.btnAction}
             type="button"
             disabled={isCloning || clone.isPending}
-            onClick={() => void clone.mutateAsync({ id: config.id, refresh: true })}
+            onClick={() => void clone.mutateAsync({ id: config.id, refresh: true }).catch(() => undefined)}
             {...{ 'data-testid': `repo-checkout-refresh-${config.id}` }}
           >
             {clone.isPending && clone.variables?.refresh ? 'Refreshing…' : 'Refresh'}
@@ -1614,17 +1622,28 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         testCaseApproverGroupIds.length > 0 ||
         (approversData && (approversData.approvers.length > 0 || approversData.approverGroups.length > 0));
       if (hasApprovers) {
-        await setApprovers.mutateAsync({
-          settingsId: configId,
-          designDocApprovers: designDocApproverIds,
-          prdApprovers: prdApproverIds,
-          designDocApproverGroups: designDocApproverGroupIds,
-          prdApproverGroups: prdApproverGroupIds,
-          designPrototypeApprovers: designPrototypeApproverIds,
-          designPrototypeApproverGroups: designPrototypeApproverGroupIds,
-          testCaseApprovers: testCaseApproverIds,
-          testCaseApproverGroups: testCaseApproverGroupIds,
-        });
+        try {
+          await setApprovers.mutateAsync({
+            settingsId: configId,
+            designDocApprovers: designDocApproverIds,
+            prdApprovers: prdApproverIds,
+            designDocApproverGroups: designDocApproverGroupIds,
+            prdApproverGroups: prdApproverGroupIds,
+            designPrototypeApprovers: designPrototypeApproverIds,
+            designPrototypeApproverGroups: designPrototypeApproverGroupIds,
+            testCaseApprovers: testCaseApproverIds,
+            testCaseApproverGroups: testCaseApproverGroupIds,
+          });
+        } catch (approverErr) {
+          // Repo config already saved — close the form and surface a follow-up warning.
+          setEdit(null);
+          setFormError(
+            approverErr instanceof Error
+              ? `Repo config saved, but reviewers failed to save: ${approverErr.message}`
+              : 'Repo config saved, but reviewers failed to save.',
+          );
+          return;
+        }
       }
 
       setEdit(null);

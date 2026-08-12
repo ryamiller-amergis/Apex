@@ -768,8 +768,18 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
       `[designDocWatcher] tick #${attempts} — found=${features.length} created=${createdSlugs.size} (seedDocId=${seedDocId})`,
     );
 
-    // Create rows for any newly complete features
-    const newFeatures = features.filter((f) => !createdSlugs.has(f.slug));
+    // Create rows only after the agent run is finished. Creating from filesystem
+    // while the run is still alive lets leftover shared-checkout triplets promote
+    // feature docs before the current generation completes.
+    const agentFinished = isThreadIdle(chatThreadId) && !(await isThreadRunAlive(chatThreadId));
+    const newFeatures = agentFinished
+      ? features.filter((f) => !createdSlugs.has(f.slug))
+      : [];
+    if (!agentFinished && features.length > 0) {
+      console.log(
+        `[designDocWatcher] Feature files present but run still alive — deferring row creation (seedDocId=${seedDocId})`,
+      );
+    }
     if (newFeatures.length > 0) {
       try {
         const skillConfig = await resolveSkillConfig({ project: seedDoc.project, settingsId: seedDoc.skillSettingsId ?? undefined });
@@ -827,7 +837,6 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
     // check, non-owner recovery watchers treat hydrated threads as idle and
     // clean up mid-generation. Without the idle check, slow agents that write
     // features one-by-one will trigger a premature "stable" detection.
-    const agentFinished = isThreadIdle(chatThreadId) && !(await isThreadRunAlive(chatThreadId));
     const allDone = agentFinished && createdSlugs.size > 0 && currentSlugsKey === prevFoundSlugsKey && currentSlugsKey !== '';
     prevFoundSlugsKey = currentSlugsKey;
 
@@ -1011,21 +1020,32 @@ export function startSingleFeatureDocWatcher(
     const design = readOutputDesignDoc(chatThreadId);
     const techSpec = readOutputTechSpec(chatThreadId);
     const assumptions = readOutputAssumptions(chatThreadId);
+    const filesReady = Boolean(design && techSpec && assumptions);
+    const agentFinished = isThreadIdle(chatThreadId) && !(await isThreadRunAlive(chatThreadId));
 
     console.log(
-      `[singleFeatureDocWatcher] tick #${attempts} — design=${!!design} techSpec=${!!techSpec} assumptions=${!!assumptions} (designDocId=${designDocId})`,
+      `[singleFeatureDocWatcher] tick #${attempts} — design=${!!design} techSpec=${!!techSpec} assumptions=${!!assumptions} agentFinished=${agentFinished} (designDocId=${designDocId})`,
     );
 
-    if (design && techSpec && assumptions) {
+    // Success finalize only after the run is terminal — leftover workspace files
+    // must not promote the doc while generation is still in flight.
+    if (filesReady && agentFinished) {
       clearInterval(interval);
       activeDocWatchers.delete(designDocId);
       await finalizeSingleFeatureDoc(designDocId, chatThreadId, project);
       return;
     }
 
+    if (filesReady && !agentFinished) {
+      console.log(
+        `[singleFeatureDocWatcher] Output files present but run still alive — waiting (designDocId=${designDocId})`,
+      );
+      return;
+    }
+
     // Fail only when the run is dead across instances — in-memory idle alone is
     // unreliable after hydrateThread resets status on non-owner workers.
-    if (isThreadIdle(chatThreadId) && !(await isThreadRunAlive(chatThreadId))) {
+    if (agentFinished) {
       if (!(await canThisInstanceFailGeneration(chatThreadId))) {
         // Keep polling — do NOT clear the interval. Clearing here permanently
         // abandoned docs in `generating` when a non-owner recovery watcher saw a

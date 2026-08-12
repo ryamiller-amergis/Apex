@@ -103,6 +103,7 @@ const UserCombobox: React.FC<UserComboboxProps> = ({
             className={styles.selectedClear}
             onClick={handleClear}
             aria-label="Clear selection"
+            {...{ 'data-testid': `${id}-clear-btn` }}
           >×</button>
         )}
       </div>
@@ -126,6 +127,7 @@ const UserCombobox: React.FC<UserComboboxProps> = ({
         aria-expanded={open}
         aria-controls={`${id}-listbox`}
         aria-autocomplete="list"
+        {...{ 'data-testid': `${id}-input` }}
       />
       {open && filtered.length > 0 && (
         <ul
@@ -133,6 +135,7 @@ const UserCombobox: React.FC<UserComboboxProps> = ({
           className={styles.comboDropdown}
           role="listbox"
           ref={listRef}
+          {...{ 'data-testid': `${id}-listbox` }}
         >
           {filtered.map((u, idx) => (
             <li
@@ -142,6 +145,7 @@ const UserCombobox: React.FC<UserComboboxProps> = ({
               className={`${styles.comboOption} ${idx === highlightIdx ? styles.comboOptionHighlight : ''}`}
               onMouseDown={() => handleSelect(u.oid)}
               onMouseEnter={() => setHighlightIdx(idx)}
+              {...{ 'data-testid': `${id}-option-${u.oid}` }}
             >
               <span className={styles.comboAvatar}>
                 {(u.displayName ?? '?')[0].toUpperCase()}
@@ -185,6 +189,7 @@ function renderPoolChips(
   pool: ApproverPoolResponse,
   selectedIds: string[],
   onToggle: (id: string) => void,
+  sectionKey: string,
 ) {
   return (
     <div className={styles.approverSection}>
@@ -204,6 +209,7 @@ function renderPoolChips(
                   memberIds.filter((id) => !selectedIds.includes(id)).forEach((id) => onToggle(id));
                 }
               }}
+              {...{ 'data-testid': `section-owner-${sectionKey}-group-${group.id}-select-all-btn` }}
             >
               {group.members.every((m) => selectedIds.includes(m.userId)) ? 'Deselect all' : 'Select all'}
             </button>
@@ -217,6 +223,7 @@ function renderPoolChips(
                   type="button"
                   className={`${styles.chip} ${selected ? styles.chipSelected : ''}`}
                   onClick={() => onToggle(m.userId)}
+                  {...{ 'data-testid': `section-owner-${sectionKey}-chip-${m.userId}` }}
                 >
                   {selected && <svg className={styles.chipCheck} viewBox="0 0 16 16" fill="currentColor"><path d="M6.5 12.5l-4-4 1.4-1.4 2.6 2.6 5.6-5.6 1.4 1.4z"/></svg>}
                   {m.displayName ?? m.email ?? m.userId}
@@ -242,6 +249,7 @@ function renderPoolChips(
                   type="button"
                   className={`${styles.chip} ${selected ? styles.chipSelected : ''}`}
                   onClick={() => onToggle(ind.userId)}
+                  {...{ 'data-testid': `section-owner-${sectionKey}-chip-${ind.userId}` }}
                 >
                   {selected && <svg className={styles.chipCheck} viewBox="0 0 16 16" fill="currentColor"><path d="M6.5 12.5l-4-4 1.4-1.4 2.6 2.6 5.6-5.6 1.4 1.4z"/></svg>}
                   {ind.displayName ?? ind.email ?? ind.userId}
@@ -382,6 +390,7 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="section-owner-title"
+      {...{ 'data-testid': 'section-owner-modal' }}
     >
       <div className={styles.card}>
         <div className={styles.header}>
@@ -400,6 +409,7 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
             onClick={onCancel}
             aria-label="Close"
             type="button"
+            {...{ 'data-testid': 'section-owner-close-btn' }}
           >
             ✕
           </button>
@@ -418,143 +428,145 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
           {step === 1 ? 'Step 1 of 2 — Select Owners' : 'Step 2 of 2 — Select Reviewers'}
         </div>
 
-        {step === 1 && (
-          <div className={styles.fields}>
-            <div className={styles.field}>
-              <label className={styles.label} htmlFor="so-prd-owner">
-                PRD Owner (BA) *
-              </label>
-              {isLoading || groupsLoading ? (
-                <span className={styles.loadingText}>Loading users…</span>
-              ) : (
-                <UserCombobox
-                  id="so-prd-owner"
-                  users={prdOwnerUsers}
-                  selectedId={prdOwnerId}
-                  onSelect={setPrdOwnerId}
-                  placeholder="Search by name or email…"
-                  disabled={isSubmitting}
-                />
-              )}
-            </div>
-
-            <div className={styles.field}>
-              <label className={styles.label} htmlFor="so-dd-owner">
-                Design Doc Owner (Developer) *
-              </label>
-              {isLoading || groupsLoading ? (
-                <span className={styles.loadingText}>Loading users…</span>
-              ) : (
-                <UserCombobox
-                  id="so-dd-owner"
-                  users={ddOwnerUsers}
-                  selectedId={designDocOwnerId}
-                  onSelect={setDesignDocOwnerId}
-                  placeholder="Search by name or email…"
-                  disabled={isSubmitting}
-                />
-              )}
-            </div>
-
-            {prototypeStageEnabled && (
+        <div className={styles.scrollBody}>
+          {step === 1 && (
+            <div className={styles.fields}>
               <div className={styles.field}>
-                <label className={styles.label} htmlFor="so-proto-owner">
-                  Design Prototype Owner (UI/UX) *
+                <label className={styles.label} htmlFor="so-prd-owner">
+                  PRD Owner (BA) *
                 </label>
                 {isLoading || groupsLoading ? (
                   <span className={styles.loadingText}>Loading users…</span>
                 ) : (
                   <UserCombobox
-                    id="so-proto-owner"
-                    users={protoOwnerUsers}
-                    selectedId={designPrototypeOwnerId}
-                    onSelect={setDesignPrototypeOwnerId}
+                    id="so-prd-owner"
+                    users={prdOwnerUsers}
+                    selectedId={prdOwnerId}
+                    onSelect={setPrdOwnerId}
                     placeholder="Search by name or email…"
                     disabled={isSubmitting}
                   />
                 )}
               </div>
-            )}
 
-            {testCasesEnabled && (
               <div className={styles.field}>
-                <label className={styles.label} htmlFor="so-qa-owner">
-                  Test Case Owner (QA) *
+                <label className={styles.label} htmlFor="so-dd-owner">
+                  Design Doc Owner (Developer) *
                 </label>
                 {isLoading || groupsLoading ? (
                   <span className={styles.loadingText}>Loading users…</span>
                 ) : (
                   <UserCombobox
-                    id="so-qa-owner"
-                    users={qaOwnerUsers}
-                    selectedId={testCaseOwnerId}
-                    onSelect={setTestCaseOwnerId}
+                    id="so-dd-owner"
+                    users={ddOwnerUsers}
+                    selectedId={designDocOwnerId}
+                    onSelect={setDesignDocOwnerId}
                     placeholder="Search by name or email…"
                     disabled={isSubmitting}
                   />
                 )}
               </div>
-            )}
-          </div>
-        )}
 
-        {step === 2 && (
-          <div className={styles.fields}>
-            <div className={styles.field}>
-              <label className={styles.label}>PRD Reviewers *</label>
-              {prdPoolLoading ? (
-                <span className={styles.loadingText}>Loading…</span>
-              ) : !prdPool || (prdPool.individuals.length === 0 && prdPool.groups.length === 0) ? (
-                <span className={styles.noApprovers}>No approvers configured</span>
-              ) : (
-                renderPoolChips(prdPool, prdApproverIds, togglePrdApprover)
+              {prototypeStageEnabled && (
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="so-proto-owner">
+                    Design Prototype Owner (UI/UX) *
+                  </label>
+                  {isLoading || groupsLoading ? (
+                    <span className={styles.loadingText}>Loading users…</span>
+                  ) : (
+                    <UserCombobox
+                      id="so-proto-owner"
+                      users={protoOwnerUsers}
+                      selectedId={designPrototypeOwnerId}
+                      onSelect={setDesignPrototypeOwnerId}
+                      placeholder="Search by name or email…"
+                      disabled={isSubmitting}
+                    />
+                  )}
+                </div>
+              )}
+
+              {testCasesEnabled && (
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="so-qa-owner">
+                    Test Case Owner (QA) *
+                  </label>
+                  {isLoading || groupsLoading ? (
+                    <span className={styles.loadingText}>Loading users…</span>
+                  ) : (
+                    <UserCombobox
+                      id="so-qa-owner"
+                      users={qaOwnerUsers}
+                      selectedId={testCaseOwnerId}
+                      onSelect={setTestCaseOwnerId}
+                      placeholder="Search by name or email…"
+                      disabled={isSubmitting}
+                    />
+                  )}
+                </div>
               )}
             </div>
+          )}
 
-            <div className={styles.field}>
-              <label className={styles.label}>Design Doc Reviewers *</label>
-              {ddPoolLoading ? (
-                <span className={styles.loadingText}>Loading…</span>
-              ) : !ddPool || (ddPool.individuals.length === 0 && ddPool.groups.length === 0) ? (
-                <span className={styles.noApprovers}>No approvers configured</span>
-              ) : (
-                renderPoolChips(ddPool, designDocApproverIds, toggleDdApprover)
+          {step === 2 && (
+            <div className={styles.fields}>
+              <div className={styles.field}>
+                <label className={styles.label}>PRD Reviewers *</label>
+                {prdPoolLoading ? (
+                  <span className={styles.loadingText}>Loading…</span>
+                ) : !prdPool || (prdPool.individuals.length === 0 && prdPool.groups.length === 0) ? (
+                  <span className={styles.noApprovers}>No approvers configured</span>
+                ) : (
+                  renderPoolChips(prdPool, prdApproverIds, togglePrdApprover, 'prd')
+                )}
+              </div>
+
+              <div className={styles.field}>
+                <label className={styles.label}>Design Doc Reviewers *</label>
+                {ddPoolLoading ? (
+                  <span className={styles.loadingText}>Loading…</span>
+                ) : !ddPool || (ddPool.individuals.length === 0 && ddPool.groups.length === 0) ? (
+                  <span className={styles.noApprovers}>No approvers configured</span>
+                ) : (
+                  renderPoolChips(ddPool, designDocApproverIds, toggleDdApprover, 'design-doc')
+                )}
+              </div>
+
+              {prototypeStageEnabled && (
+                <div className={styles.field}>
+                  <label className={styles.label}>Design Prototype Reviewers *</label>
+                  {protoPoolLoading ? (
+                    <span className={styles.loadingText}>Loading…</span>
+                  ) : !protoPool || (protoPool.individuals.length === 0 && protoPool.groups.length === 0) ? (
+                    <span className={styles.noApprovers}>No approvers configured</span>
+                  ) : (
+                    renderPoolChips(protoPool, designPrototypeApproverIds, toggleProtoApprover, 'design-prototype')
+                  )}
+                </div>
+              )}
+
+              {testCasesEnabled && (
+                <div className={styles.field}>
+                  <label className={styles.label}>QA Reviewers *</label>
+                  {qaPoolLoading ? (
+                    <span className={styles.loadingText}>Loading…</span>
+                  ) : !qaPool || (qaPool.individuals.length === 0 && qaPool.groups.length === 0) ? (
+                    <span className={styles.noApprovers}>No approvers configured</span>
+                  ) : (
+                    renderPoolChips(qaPool, testCaseApproverIds, toggleQaApprover, 'qa')
+                  )}
+                </div>
               )}
             </div>
+          )}
 
-            {prototypeStageEnabled && (
-              <div className={styles.field}>
-                <label className={styles.label}>Design Prototype Reviewers *</label>
-                {protoPoolLoading ? (
-                  <span className={styles.loadingText}>Loading…</span>
-                ) : !protoPool || (protoPool.individuals.length === 0 && protoPool.groups.length === 0) ? (
-                  <span className={styles.noApprovers}>No approvers configured</span>
-                ) : (
-                  renderPoolChips(protoPool, designPrototypeApproverIds, toggleProtoApprover)
-                )}
-              </div>
-            )}
-
-            {testCasesEnabled && (
-              <div className={styles.field}>
-                <label className={styles.label}>QA Reviewers *</label>
-                {qaPoolLoading ? (
-                  <span className={styles.loadingText}>Loading…</span>
-                ) : !qaPool || (qaPool.individuals.length === 0 && qaPool.groups.length === 0) ? (
-                  <span className={styles.noApprovers}>No approvers configured</span>
-                ) : (
-                  renderPoolChips(qaPool, testCaseApproverIds, toggleQaApprover)
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {step === 2 && !canConfirm && !isSubmitting && (
-          <p className={styles.validationHint}>
-            Select at least one reviewer in each section
-          </p>
-        )}
+          {step === 2 && !canConfirm && !isSubmitting && (
+            <p className={styles.validationHint}>
+              Select at least one reviewer in each section
+            </p>
+          )}
+        </div>
 
         <div className={styles.navRow}>
           {step === 1 ? (
@@ -564,6 +576,7 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
                 onClick={onCancel}
                 disabled={isSubmitting}
                 type="button"
+                {...{ 'data-testid': 'section-owner-cancel-btn' }}
               >
                 Cancel
               </button>
@@ -572,6 +585,7 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
                 onClick={() => setStep(2)}
                 disabled={!allOwnersSelected || isSubmitting}
                 type="button"
+                {...{ 'data-testid': 'section-owner-next-btn' }}
               >
                 Next →
               </button>
@@ -583,6 +597,7 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
                 onClick={() => setStep(1)}
                 disabled={isSubmitting}
                 type="button"
+                {...{ 'data-testid': 'section-owner-back-btn' }}
               >
                 ← Back
               </button>
@@ -591,6 +606,7 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
                 onClick={handleConfirm}
                 disabled={!canConfirm}
                 type="button"
+                {...{ 'data-testid': 'section-owner-confirm-btn' }}
               >
                 {isSubmitting ? 'Creating…' : 'Confirm & Start Interview'}
               </button>

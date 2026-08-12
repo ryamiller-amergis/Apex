@@ -142,7 +142,12 @@ export function useCloneProjectRepository() {
           (body as { error?: string }).error || 'Failed to clone repository',
         );
       }
-      return res.json() as Promise<ProjectRepositoryReadiness>;
+      const readiness = (await res.json()) as ProjectRepositoryReadiness;
+      // Clone route returns 200 with status "failed" when the checkout itself failed.
+      if (readiness.status === 'failed') {
+        throw new Error(readiness.error || 'Failed to clone repository');
+      }
+      return readiness;
     },
     onMutate: async ({ id }) => {
       const key = ['admin', 'repository-readiness', id] as const;
@@ -159,10 +164,18 @@ export function useCloneProjectRepository() {
       });
       return { previous };
     },
-    onError: (_err, { id }, context) => {
-      if (context?.previous !== undefined) {
-        queryClient.setQueryData(['admin', 'repository-readiness', id], context.previous);
-      }
+    onError: (err, { id }) => {
+      queryClient.setQueryData<ProjectRepositoryReadiness>(['admin', 'repository-readiness', id], {
+        skillSettingsId: id,
+        status: 'failed',
+        sha: null,
+        error: err instanceof Error ? err.message : 'Failed to clone repository',
+        startedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        filesystemReady: false,
+      });
+      queryClient.invalidateQueries({ queryKey: ['admin', 'repository-readiness', id] });
+      queryClient.invalidateQueries({ queryKey: ['admin', 'project-settings'] });
     },
     onSuccess: (data, { id }) => {
       queryClient.setQueryData(['admin', 'repository-readiness', id], data);
@@ -185,7 +198,8 @@ export function formatRepositoryCheckoutStatusLabel(
       return `Ready at ${short}`;
     }
     case 'failed':
-      return readiness.error ? `Failed: ${readiness.error}` : 'Failed';
+      // Keep the label short so Actions stay reachable; full detail is in the title tooltip.
+      return 'Failed';
     case 'snapshot_unavailable':
       return 'Snapshot unavailable';
     case 'not_cloned':

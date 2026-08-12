@@ -61,6 +61,7 @@ export const AdrReviewerModal: React.FC<AdrReviewerModalProps> = ({
       onClick={(event) => {
         if (event.target === event.currentTarget) onCancel();
       }}
+      {...{ 'data-testid': 'adr-reviewer-modal' }}
     >
       <div className={styles.card}>
         <div className={styles.header}>
@@ -74,78 +75,95 @@ export const AdrReviewerModal: React.FC<AdrReviewerModalProps> = ({
                 : 'You will own this ADR. Select reviewers from the project’s Developer group.'}
             </p>
           </div>
-          <button className={styles.closeBtn} type="button" onClick={onCancel} aria-label="Close">✕</button>
+          <button
+            className={styles.closeBtn}
+            type="button"
+            onClick={onCancel}
+            aria-label="Close"
+            {...{ 'data-testid': 'adr-reviewer-close-btn' }}
+          >✕</button>
         </div>
 
-        <div className={styles.fields}>
-          <div className={styles.field}>
-            <span className={styles.label}>Owner</span>
-            <div className={styles.selectedChip}>
-              <span className={styles.selectedAvatar}>{ownerName.slice(0, 1).toUpperCase()}</span>
-              <span className={styles.selectedInfo}>
-                <span className={styles.selectedName}>{ownerName}</span>
-                <span className={styles.selectedEmail}>Signed-in user</span>
-              </span>
+        <div className={styles.scrollBody}>
+          <div className={styles.fields}>
+            <div className={styles.field}>
+              <span className={styles.label}>Owner</span>
+              <div className={styles.selectedChip}>
+                <span className={styles.selectedAvatar}>{ownerName.slice(0, 1).toUpperCase()}</span>
+                <span className={styles.selectedInfo}>
+                  <span className={styles.selectedName}>{ownerName}</span>
+                  <span className={styles.selectedEmail}>Signed-in user</span>
+                </span>
+              </div>
             </div>
-          </div>
 
-          <div className={styles.field}>
-            <div className={styles.groupHeader}>
-              <span className={styles.label}>Developer Reviewers</span>
-              {candidates.length > 0 && (
-                <button
-                  className={styles.selectAllBtn}
-                  type="button"
-                  onClick={() => setSelectedIds(allSelected ? [] : candidates.map((candidate) => candidate.id))}
-                  disabled={isSubmitting}
-                >
-                  {allSelected ? 'Deselect all' : 'Select all'}
-                </button>
+            <div className={styles.field}>
+              <div className={styles.groupHeader}>
+                <span className={styles.label}>Developer Reviewers</span>
+                {candidates.length > 0 && (
+                  <button
+                    className={styles.selectAllBtn}
+                    type="button"
+                    onClick={() => setSelectedIds(allSelected ? [] : candidates.map((candidate) => candidate.id))}
+                    disabled={isSubmitting}
+                    {...{ 'data-testid': 'adr-reviewer-select-all-btn' }}
+                  >
+                    {allSelected ? 'Deselect all' : 'Select all'}
+                  </button>
+                )}
+              </div>
+              {isLoading ? (
+                <span className={styles.loadingText}>Loading Developer group…</span>
+              ) : error ? (
+                <span className={styles.noApprovers}>{error.message}</span>
+              ) : candidates.length === 0 ? (
+                <span className={styles.noApprovers}>No members are assigned to the Developer group.</span>
+              ) : (
+                <div className={styles.chipGrid}>
+                  {candidates.map((candidate) => {
+                    const selected = selectedIds.includes(candidate.id);
+                    return (
+                      <button
+                        key={candidate.id}
+                        type="button"
+                        className={`${styles.chip} ${selected ? styles.chipSelected : ''}`}
+                        onClick={() => toggleReviewer(candidate.id)}
+                        disabled={isSubmitting}
+                        aria-pressed={selected}
+                        {...{ 'data-testid': `adr-reviewer-chip-${candidate.id}` }}
+                      >
+                        {selected && (
+                          <svg className={styles.chipCheck} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                            <path d="M6.5 12.5l-4-4 1.4-1.4 2.6 2.6 5.6-5.6 1.4 1.4z" />
+                          </svg>
+                        )}
+                        {candidate.displayName}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {selectedNames.length > 0 && (
+                <p className={styles.validationHint}>{selectedNames.length} reviewer{selectedNames.length === 1 ? '' : 's'} selected</p>
               )}
             </div>
-            {isLoading ? (
-              <span className={styles.loadingText}>Loading Developer group…</span>
-            ) : error ? (
-              <span className={styles.noApprovers}>{error.message}</span>
-            ) : candidates.length === 0 ? (
-              <span className={styles.noApprovers}>No members are assigned to the Developer group.</span>
-            ) : (
-              <div className={styles.chipGrid}>
-                {candidates.map((candidate) => {
-                  const selected = selectedIds.includes(candidate.id);
-                  return (
-                    <button
-                      key={candidate.id}
-                      type="button"
-                      className={`${styles.chip} ${selected ? styles.chipSelected : ''}`}
-                      onClick={() => toggleReviewer(candidate.id)}
-                      disabled={isSubmitting}
-                      aria-pressed={selected}
-                    >
-                      {selected && (
-                        <svg className={styles.chipCheck} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                          <path d="M6.5 12.5l-4-4 1.4-1.4 2.6 2.6 5.6-5.6 1.4 1.4z" />
-                        </svg>
-                      )}
-                      {candidate.displayName}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-            {selectedNames.length > 0 && (
-              <p className={styles.validationHint}>{selectedNames.length} reviewer{selectedNames.length === 1 ? '' : 's'} selected</p>
-            )}
           </div>
         </div>
 
         <div className={styles.navRow}>
-          <button className={styles.btnSkip} type="button" onClick={onCancel} disabled={isSubmitting}>Cancel</button>
+          <button
+            className={styles.btnSkip}
+            type="button"
+            onClick={onCancel}
+            disabled={isSubmitting}
+            {...{ 'data-testid': 'adr-reviewer-cancel-btn' }}
+          >Cancel</button>
           <button
             className={styles.btnConfirm}
             type="button"
             onClick={() => onConfirm(selectedIds)}
             disabled={isSubmitting || isLoading || mode === 'create' && candidates.length > 0 && selectedIds.length === 0}
+            {...{ 'data-testid': 'adr-reviewer-confirm-btn' }}
           >
             {isSubmitting
               ? (mode === 'edit' ? 'Saving…' : 'Creating…')
