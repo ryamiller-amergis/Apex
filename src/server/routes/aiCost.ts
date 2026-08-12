@@ -194,7 +194,7 @@ router.get(
   },
 );
 
-// POST /api/ai-cost/sync — super admin only, triggers immediate billing sync + allocation
+// POST /api/ai-cost/sync — super admin only, awaits Cursor + Bedrock sync + allocation
 router.post(
   '/sync',
   async (req: Request, res: Response): Promise<void> => {
@@ -203,18 +203,52 @@ router.post(
       return;
     }
     try {
-      // Run async — respond immediately so UI can show loading state
-      (async () => {
-        const { runCursorBillingSync } = await import('../services/cursorBillingSyncService');
-        const { runCostAllocation } = await import('../services/aiCostAllocationService');
-        await runCursorBillingSync();
-        await runCostAllocation();
-        console.log('[aiCost] Manual sync complete');
-      })().catch((err) => console.error('[aiCost] Manual sync error:', err));
+      const { runCursorBillingSync } = await import('../services/cursorBillingSyncService');
+      const { runCostAllocation } = await import('../services/aiCostAllocationService');
+      const { runBedrockBillingSync } = await import('../services/bedrockBillingSyncService');
+      const { runBedrockCostAllocation } = await import('../services/bedrockCostAllocationService');
 
-      res.json({ message: 'Sync started — data will update within ~30 seconds' });
+      const cursor = await runCursorBillingSync();
+      const bedrock = await runBedrockBillingSync();
+
+      let allocated: { ok: boolean; error?: string } = { ok: true };
+      try {
+        await runCostAllocation();
+        await runBedrockCostAllocation();
+      } catch (err) {
+        allocated = { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+
+      const result = {
+        cursor: {
+          ok: cursor.ok,
+          skipped: cursor.skipped,
+          inserted: cursor.inserted,
+          error: cursor.error,
+        },
+        bedrock: {
+          ok: bedrock.ok,
+          skipped: bedrock.skipped,
+          days: bedrock.days,
+          inserted: bedrock.inserted,
+          error: bedrock.error,
+        },
+        allocated,
+      };
+
+      // Fail only when both providers hard-failed (not merely skipped for missing config)
+      const cursorHardFail = !cursor.ok && !cursor.skipped;
+      const bedrockHardFail = !bedrock.ok && !bedrock.skipped;
+      if (cursorHardFail && bedrockHardFail) {
+        res.status(502).json({ error: 'Sync failed for Cursor and Bedrock', ...result });
+        return;
+      }
+
+      console.log('[aiCost] Manual sync complete', JSON.stringify(result));
+      res.json(result);
     } catch (err) {
-      res.status(500).json({ error: 'Failed to start sync' });
+      console.error('[aiCost] Manual sync error:', err);
+      res.status(500).json({ error: 'Failed to run sync', detail: (err as Error).message });
     }
   },
 );

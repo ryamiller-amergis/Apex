@@ -143,7 +143,28 @@ export interface AiCostReconciliation {
   billedCursorCents: number;
   varianceCents: number;
   coveragePct: number;
+  /** @deprecated Use bedrockMode / bedrock coverage fields instead. */
   exactBedrock: boolean;
+  attributedBedrockCostUsd: number;
+  billedBedrockUsd: number;
+  bedrockVarianceUsd: number;
+  bedrockCoveragePct: number;
+  /** Allocated = invoice-backed; Computed = catalog-only (no CE rows in period). */
+  bedrockMode: 'allocated' | 'computed';
+}
+
+export interface AiCostSyncProviderResult {
+  ok: boolean;
+  skipped?: boolean;
+  inserted?: number;
+  days?: number;
+  error?: string;
+}
+
+export interface AiCostSyncResult {
+  cursor: AiCostSyncProviderResult;
+  bedrock: AiCostSyncProviderResult;
+  allocated: { ok: boolean; error?: string };
 }
 
 export interface AiPricingRow {

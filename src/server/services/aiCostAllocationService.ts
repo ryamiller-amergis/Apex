@@ -19,12 +19,19 @@ import { and, eq, gte, lte, sql } from 'drizzle-orm';
 const BUCKET_HOURS = 1;
 
 export async function runCostAllocation(): Promise<void> {
-  // Find cursor_usage_events ingested in the last 3 hours
-  const windowStart = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+  // Allocate across recently ingested billing buckets (48h) so Sync Now / catch-up
+  // can rewrite estimated $0 Cursor rows after a deploy gap.
+  const windowStart = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
 
-  // Get distinct hour buckets with Apex billing data
-  const useSaFilter = !!process.env.CURSOR_SERVICE_ACCOUNT_ID?.trim();
+  // Get distinct hour buckets with Apex billing data.
+  // Prefer service-account filter; fall back to is_headless for programmatic runs.
   const saId = process.env.CURSOR_SERVICE_ACCOUNT_ID?.trim();
+  const useSaFilter = !!saId;
+  if (!useSaFilter) {
+    console.warn(
+      '[aiCostAllocation] CURSOR_SERVICE_ACCOUNT_ID unset — allocating only is_headless=true Cursor billing rows',
+    );
+  }
 
   const buckets = await db.execute<{
     bucket: string;

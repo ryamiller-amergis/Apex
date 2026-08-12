@@ -3,13 +3,16 @@
  *
  * Hourly background job that:
  *  1. Syncs authoritative Cursor billing events from the Admin API
- *  2. Runs cost allocation to distribute Cursor chargedCents to ai_usage_events
- *  3. Generates daily AI cost briefs at 8am (morning) and 2pm (afternoon)
+ *  2. Syncs Apex-scoped Bedrock billed totals from AWS Cost Explorer
+ *  3. Runs cost allocation for Cursor and Bedrock onto ai_usage_events
+ *  4. Generates daily AI cost briefs at 8am (morning) and 2pm (afternoon)
  *
  * Mirrors the StandupSchedulerService singleton pattern.
  */
 import { runCursorBillingSync } from './cursorBillingSyncService';
 import { runCostAllocation } from './aiCostAllocationService';
+import { runBedrockBillingSync } from './bedrockBillingSyncService';
+import { runBedrockCostAllocation } from './bedrockCostAllocationService';
 import { generateBriefForAllProjects } from './aiCostDailyBriefService';
 
 export class AiCostSchedulerService {
@@ -44,15 +47,24 @@ export class AiCostSchedulerService {
     this.isRunning = true;
 
     try {
-      // Step 1: Sync Cursor billing events
-      if (process.env.CURSOR_TEAM_API_KEY) {
-        await runCursorBillingSync();
+      const cursor = await runCursorBillingSync();
+      if (!cursor.ok && !cursor.skipped) {
+        console.error('[AiCostScheduler] Cursor sync failed:', cursor.error);
       }
 
-      // Step 2: Allocate costs
-      await runCostAllocation();
+      const bedrock = await runBedrockBillingSync();
+      if (!bedrock.ok && !bedrock.skipped) {
+        console.error('[AiCostScheduler] Bedrock sync failed:', bedrock.error);
+      }
 
-      // Step 3: Generate briefs at 8am (morning — yesterday's recap) and 2pm (afternoon — today so far)
+      try {
+        await runCostAllocation();
+        await runBedrockCostAllocation();
+      } catch (err) {
+        console.error('[AiCostScheduler] Allocation failed:', (err as Error).message);
+      }
+
+      // Briefs at 8am (morning — yesterday's recap) and 2pm (afternoon — today so far)
       const now = new Date();
       const hour = now.getHours();
       const isMorning = hour === 8;

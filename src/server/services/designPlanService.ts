@@ -97,7 +97,12 @@ async function runPlanGeneration(prdId: string): Promise<void> {
       console.warn(`[designPlanService] resolvePrototypeContext failed for "${prd.project}": ${err.message} — using MaxView design plan context`);
     }
 
-    const features = await generateDesignPlanForPrd(input, modelId, maxTokens);
+    const features = await generateDesignPlanForPrd(input, modelId, maxTokens, {
+      feature: 'design-plan',
+      project: prd.project,
+      entityType: 'prd',
+      entityId: prdId,
+    });
 
     const now = new Date().toISOString();
     const historyEntry: DesignPlanHistoryEntry = { version: 1, features, editedBy: 'system', createdAt: now };

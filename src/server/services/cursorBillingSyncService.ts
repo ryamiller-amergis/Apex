@@ -169,24 +169,55 @@ async function syncFilteredUsageEvents(
   return { inserted, skipped };
 }
 
+export interface CursorBillingSyncResult {
+  ok: boolean;
+  skipped?: boolean;
+  inserted?: number;
+  error?: string;
+}
+
 /** Run the full hourly billing sync. */
-export async function runCursorBillingSync(): Promise<void> {
+export async function runCursorBillingSync(): Promise<CursorBillingSyncResult> {
+  const apiKey = process.env.CURSOR_TEAM_API_KEY?.trim();
+  if (!apiKey) {
+    console.warn(
+      '[cursorBillingSync] Skipped: CURSOR_TEAM_API_KEY is not configured — Cursor billed costs will stay at $0',
+    );
+    return { ok: false, skipped: true, error: 'CURSOR_TEAM_API_KEY is not configured' };
+  }
+
   const now = Date.now();
-  // Look back 2 hours to catch any Cursor aggregation lag
-  const startDate = now - 2 * 60 * 60 * 1000;
+  // Look back 48 hours so missed hourly runs (restarts, deploy gaps) still backfill.
+  // Cursor aggregates hourly; wider window is safe with dedupe keys.
+  const startDate = now - 48 * 60 * 60 * 1000;
   const endDate = now;
 
-  // If a dedicated service account ID is configured, filter to it for exact attribution.
-  // Otherwise, ingest all team events — the allocation step then filters to isHeadless=true
-  // rows which cleanly isolates Apex's programmatic agent runs from human IDE usage.
+  // Prefer a dedicated Apex service account for exact attribution. Without it,
+  // we ingest team events and allocation filters to isHeadless=true — which can
+  // still mix in non-Apex headless traffic if other tools use the same team.
   const sharedServiceAccountId = process.env.CURSOR_SERVICE_ACCOUNT_ID?.trim() || undefined;
+  if (!sharedServiceAccountId) {
+    console.warn(
+      '[cursorBillingSync] CURSOR_SERVICE_ACCOUNT_ID unset — using isHeadless=true filter only. ' +
+        'Set CURSOR_SERVICE_ACCOUNT_ID to the Apex agent service account for Apex-only Cursor billing.',
+    );
+  }
 
-  const { inserted, skipped } = await syncFilteredUsageEvents(
-    startDate,
-    endDate,
-    sharedServiceAccountId,
-    undefined, // project resolved at allocation time, not here
-  );
+  try {
+    const { inserted, skipped } = await syncFilteredUsageEvents(
+      startDate,
+      endDate,
+      sharedServiceAccountId,
+      undefined, // project resolved at allocation time, not here
+    );
 
-  console.log(`[cursorBillingSync] Synced: inserted=${inserted}, skipped=${skipped}, filterMode=${sharedServiceAccountId ? 'serviceAccount' : 'isHeadless'}`);
+    console.log(
+      `[cursorBillingSync] Synced: inserted=${inserted}, skipped=${skipped}, filterMode=${sharedServiceAccountId ? 'serviceAccount' : 'isHeadless'}`,
+    );
+    return { ok: true, inserted };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[cursorBillingSync] Failed: ${message}`);
+    return { ok: false, error: message };
+  }
 }

@@ -5386,24 +5386,34 @@ export async function sendMessage(
           ({} as import('../../shared/types/chat').ChatThreadKickoff);
         const inputEst = estimateTokens(text ?? '');
         const outputEst = estimateTokens(agentTextBuffer ?? '');
-        recordAiUsage({
-          provider: 'cursor',
-          modelId: resolvedModel,
-          feature: resolveFeatureFromKickoff(kickoff),
-          project: kickoff.project ?? 'unknown',
-          skillPath: kickoff.skillPath ?? undefined,
-          threadId,
-          runId: agentRunId ?? undefined,
-          workItemId:
-            kickoff.workItemId != null ? String(kickoff.workItemId) : undefined,
-          userId: state.thread.userId ?? undefined,
-          inputTokens: inputEst,
-          outputTokens: outputEst,
-          tokenSource: 'estimated',
-          costUsd: 0,
-          costSource: 'estimated',
-          status: 'success',
-        });
+        const usageProject =
+          kickoff.project?.trim() ||
+          state.thread.kickoff?.project?.trim() ||
+          '';
+        if (usageProject) {
+          recordAiUsage({
+            provider: 'cursor',
+            modelId: resolvedModel,
+            feature: resolveFeatureFromKickoff(kickoff),
+            project: usageProject,
+            skillPath: kickoff.skillPath ?? undefined,
+            threadId,
+            runId: agentRunId ?? undefined,
+            workItemId:
+              kickoff.workItemId != null ? String(kickoff.workItemId) : undefined,
+            userId: state.thread.userId ?? undefined,
+            inputTokens: inputEst,
+            outputTokens: outputEst,
+            tokenSource: 'estimated',
+            costUsd: 0,
+            costSource: 'estimated',
+            status: 'success',
+          });
+        } else {
+          console.warn(
+            `[chat] Skipping usage record for thread ${threadId} — kickoff.project missing`,
+          );
+        }
       }
 
       break;
@@ -5640,22 +5650,32 @@ export async function sendMessage(
       const kickoff =
         state.thread?.kickoff ??
         ({} as import('../../shared/types/chat').ChatThreadKickoff);
-      recordAiUsage({
-        provider: 'cursor',
-        modelId: resolvedModel,
-        feature: resolveFeatureFromKickoff(kickoff),
-        project: kickoff.project ?? 'unknown',
-        skillPath: kickoff.skillPath ?? undefined,
-        threadId,
-        runId: agentRunId ?? undefined,
-        userId: state.thread?.userId ?? undefined,
-        inputTokens: 0,
-        outputTokens: 0,
-        tokenSource: 'estimated',
-        costUsd: 0,
-        costSource: 'estimated',
-        status: 'error',
-      });
+      const usageProject =
+        kickoff.project?.trim() ||
+        state.thread?.kickoff?.project?.trim() ||
+        '';
+      if (usageProject) {
+        recordAiUsage({
+          provider: 'cursor',
+          modelId: resolvedModel,
+          feature: resolveFeatureFromKickoff(kickoff),
+          project: usageProject,
+          skillPath: kickoff.skillPath ?? undefined,
+          threadId,
+          runId: agentRunId ?? undefined,
+          userId: state.thread?.userId ?? undefined,
+          inputTokens: 0,
+          outputTokens: 0,
+          tokenSource: 'estimated',
+          costUsd: 0,
+          costSource: 'estimated',
+          status: 'error',
+        });
+      } else {
+        console.warn(
+          `[chat] Skipping error usage record for thread ${threadId} — kickoff.project missing`,
+        );
+      }
     }
 
     if (agentRunId) {

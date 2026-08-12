@@ -912,6 +912,7 @@ router.post('/prds/:prdId/regenerate-proposed-section', requirePermission('inter
         String(body.feedback).trim(),
         bedrockModelId,
         bedrockMaxTokens,
+        { feature: 'prd-review', project: prd.project, entityType: 'prd', entityId: prdId },
       );
       await db
         .update(prdsTable)
@@ -944,6 +945,7 @@ router.post('/prds/:prdId/regenerate-proposed-section', requirePermission('inter
       String(body.feedback).trim(),
       bedrockModelId,
       bedrockMaxTokens,
+      { feature: 'prd-review', project: prd.project, entityType: 'prd', entityId: prdId },
     );
     if (revisedBacklog == null) {
       res.status(422).json({ error: 'Model returned invalid backlog JSON' });
@@ -1037,6 +1039,7 @@ router.post('/prds/:prdId/fix-with-ai', requirePermission('interviews:manage'), 
         prdComments.map(mapComment),
         bedrockModelId,
         bedrockMaxTokens,
+        { feature: 'prd-review', project: prd.project, entityType: 'prd', entityId: req.params.prdId },
       );
       updates['proposedContent'] = fixedContent;
     }
@@ -1047,6 +1050,7 @@ router.post('/prds/:prdId/fix-with-ai', requirePermission('interviews:manage'), 
         backlogComments.map(mapComment),
         bedrockModelId,
         bedrockMaxTokens,
+        { feature: 'prd-review', project: prd.project, entityType: 'prd', entityId: req.params.prdId },
       );
       if (fixedBacklog != null) {
         updates['proposedBacklogJson'] = fixedBacklog;
@@ -1115,6 +1119,7 @@ router.post('/prds/:prdId/fix-comment-with-ai', requirePermission('interviews:ma
           [mapped],
           bedrockModelId,
           bedrockMaxTokens,
+          { feature: 'prd-review', project: prd.project, entityType: 'prd', entityId: req.params.prdId },
         );
       } else if (comment.sectionKey === 'backlog') {
         const fixedBacklog = await fixPrdBacklogWithBedrock(
@@ -1122,6 +1127,7 @@ router.post('/prds/:prdId/fix-comment-with-ai', requirePermission('interviews:ma
           [mapped],
           bedrockModelId,
           bedrockMaxTokens,
+          { feature: 'prd-review', project: prd.project, entityType: 'prd', entityId: req.params.prdId },
         );
         if (fixedBacklog != null) {
           updates['proposedBacklogJson'] = fixedBacklog;
@@ -2049,6 +2055,7 @@ router.post('/design-docs/:id/fix-with-ai', requirePermission('interviews:manage
         designComments.map(mapComment),
         bedrockModelId,
         bedrockMaxTokens,
+        { feature: 'design-doc', project: doc.project, entityType: 'design_doc', entityId: doc.id },
       );
       updates['proposedDesignContent'] = fixed;
     }
@@ -2060,6 +2067,7 @@ router.post('/design-docs/:id/fix-with-ai', requirePermission('interviews:manage
         techSpecComments.map(mapComment),
         bedrockModelId,
         bedrockMaxTokens,
+        { feature: 'design-doc', project: doc.project, entityType: 'design_doc', entityId: doc.id },
       );
       updates['proposedTechSpecContent'] = fixed;
     }
@@ -2071,6 +2079,7 @@ router.post('/design-docs/:id/fix-with-ai', requirePermission('interviews:manage
         assumptionsComments.map(mapComment),
         bedrockModelId,
         bedrockMaxTokens,
+        { feature: 'design-doc', project: doc.project, entityType: 'design_doc', entityId: doc.id },
       );
       updates['proposedAssumptionsContent'] = fixed;
     }
@@ -2139,6 +2148,7 @@ router.post('/design-docs/:id/fix-comment-with-ai', requirePermission('interview
           [mapped],
           bedrockModelId,
           bedrockMaxTokens,
+          { feature: 'design-doc', project: doc.project, entityType: 'design_doc', entityId: req.params.id },
         );
       } else if (sectionKey === 'tech_spec') {
         updates['proposedTechSpecContent'] = await fixDesignDocSectionWithBedrock(
@@ -2147,6 +2157,7 @@ router.post('/design-docs/:id/fix-comment-with-ai', requirePermission('interview
           [mapped],
           bedrockModelId,
           bedrockMaxTokens,
+          { feature: 'design-doc', project: doc.project, entityType: 'design_doc', entityId: req.params.id },
         );
       } else if (sectionKey === 'assumptions') {
         updates['proposedAssumptionsContent'] = await fixDesignDocSectionWithBedrock(
@@ -2155,6 +2166,7 @@ router.post('/design-docs/:id/fix-comment-with-ai', requirePermission('interview
           [mapped],
           bedrockModelId,
           bedrockMaxTokens,
+          { feature: 'design-doc', project: doc.project, entityType: 'design_doc', entityId: req.params.id },
         );
       } else {
         await db
@@ -2378,6 +2390,7 @@ router.post('/design-docs/:id/regenerate-proposed-section', requirePermission('i
       String(body.feedback).trim(),
       projectConfig?.prdReviewBedrockModelId ?? null,
       projectConfig?.prdReviewBedrockMaxTokens ?? null,
+      { feature: 'design-doc', project: doc.project, entityType: 'design_doc', entityId: docId },
     );
 
     const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };

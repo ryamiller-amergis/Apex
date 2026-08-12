@@ -12,6 +12,7 @@ import type {
   AiCostDailyBrief,
   AiPricingRow,
   ProjectComparison,
+  AiCostSyncResult,
 } from '../../shared/types/aiCostAnalytics';
 
 export interface AiCostFilters {
@@ -121,16 +122,21 @@ export function useAiCostForecast(project: string) {
 export function useSyncAiCost() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: () =>
-      fetch('/api/ai-cost/sync', {
+    mutationFn: async (): Promise<AiCostSyncResult> => {
+      const res = await fetch('/api/ai-cost/sync', {
         method: 'POST',
         credentials: 'include',
-      }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (body as { error?: string }).error || `Sync failed (${res.status})`,
+        );
+      }
+      return body as AiCostSyncResult;
+    },
     onSuccess: () => {
-      // Refetch all ai-cost queries after a short delay for the sync to complete
-      setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: ['ai-cost'] });
-      }, 35000);
+      queryClient.invalidateQueries({ queryKey: ['ai-cost'] });
     },
   });
 }

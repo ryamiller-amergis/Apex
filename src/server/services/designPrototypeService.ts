@@ -544,6 +544,11 @@ async function generateSinglePrototype(
       }
     }
 
+    const usageProject = project?.trim();
+    if (!usageProject) {
+      throw new Error('Cannot generate design prototype without a project for cost attribution');
+    }
+
     const rawHtml = await generateDesignPrototypeHtml({
       featureName: feature.title,
       featureDescription: feature.description,
@@ -553,7 +558,12 @@ async function generateSinglePrototype(
       plan: planFeatureToInput(planFeature),
       prototypeContext,
       webReferences,
-    }, modelId, maxTokens, timeoutMs);
+    }, modelId, maxTokens, timeoutMs, {
+      feature: 'design-prototype',
+      project: usageProject,
+      entityType: 'design_prototype',
+      entityId: prototypeId,
+    });
 
     const html = sanitizeMockHtml(rawHtml);
 
@@ -700,6 +710,11 @@ export async function regeneratePrototype(
       }
     }
 
+    const usageProject = prd?.project?.trim();
+    if (!usageProject) {
+      throw new Error('Cannot regenerate design prototype without a project for cost attribution');
+    }
+
     const rawHtml = await regenerateDesignPrototypeHtml(
       proto.mockHtml,
       feedback,
@@ -711,7 +726,12 @@ export async function regeneratePrototype(
       targetStates,
       prototypeTimeoutMs,
       regenScreenshot,
-      undefined,
+      {
+        feature: 'design-prototype',
+        project: usageProject,
+        entityType: 'design_prototype',
+        entityId: prototypeId,
+      },
       regenProtoContext,
       regenWebReferences,
     );

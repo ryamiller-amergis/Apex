@@ -167,10 +167,12 @@ const KpiCard: React.FC<KpiCardProps> = ({ label, value, sub, delta, accent = 'd
   const accentClass = accent === 'green' ? styles.kpiCardAccentGreen : accent === 'blue' ? styles.kpiCardAccentBlue : accent === 'orange' ? styles.kpiCardAccentOrange : styles.kpiCardAccent;
   const deltaClass = delta === undefined ? '' : delta > 0 ? styles.kpiDeltaUp : delta < 0 ? styles.kpiDeltaDown : styles.kpiDeltaFlat;
   const deltaIcon = delta === undefined ? '' : delta > 0 ? '↑' : delta < 0 ? '↓' : '→';
+  const testId = `ai-cost-kpi-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}`;
 
   return (
     <div
       className={styles.kpiCard}
+      data-testid={testId}
       onClick={onClick}
       style={onClick ? { cursor: 'pointer' } : undefined}
       title={onClick ? `Click to drill down into ${label}` : undefined}
@@ -247,6 +249,7 @@ const SpendChart: React.FC<SpendChartProps> = ({ timeseries, forecast, isLoading
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
         <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
         <YAxis tickFormatter={(v) => formatCost(v)} tick={{ fontSize: 11, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} />
+        {/* data-testid-exempt */}
         <Tooltip content={<CustomTooltip />} />
         <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12 }} />
         <ReferenceLine x={formatDate(today)} stroke="#64748b" strokeDasharray="4 2" label={{ value: 'Today', position: 'top', fontSize: 10, fill: 'var(--text-muted)' }} />
@@ -269,6 +272,7 @@ const FeatureBarChart: React.FC<{ data: Array<{ feature: string; costUsd: number
 
   return (
     <ResponsiveContainer width="100%" height={240}>
+      {/* data-testid-exempt */}
       <BarChart
         data={chartData}
         layout="vertical"
@@ -279,6 +283,7 @@ const FeatureBarChart: React.FC<{ data: Array<{ feature: string; costUsd: number
         <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="var(--border-color)" />
         <XAxis type="number" tickFormatter={(v) => formatCost(v)} tick={{ fontSize: 11, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} />
         <YAxis type="category" dataKey="label" tick={{ fontSize: 11, fill: 'var(--text-secondary)' }} tickLine={false} axisLine={false} width={105} />
+        {/* data-testid-exempt */}
         <Tooltip formatter={(v) => [formatCost(Number(v) || 0), 'Cost']} cursor={{ fill: 'rgba(99,102,241,0.05)' }} />
         <Bar dataKey="costUsd" radius={[0, 4, 4, 0]} name="Cost">
           {chartData.map((entry) => (
@@ -312,6 +317,7 @@ const ModelDonut: React.FC<{ data: Array<{ modelId: string; costUsd: number }>; 
           <Pie data={pieData} cx="50%" cy="50%" innerRadius={40} outerRadius={65} dataKey="value" strokeWidth={2} stroke="var(--bg-secondary)">
             {pieData.map((entry, i) => <Cell key={i} fill={entry.fill} />)}
           </Pie>
+          {/* data-testid-exempt */}
           <Tooltip formatter={(v) => [formatCost(Number(v) || 0), 'Cost']} />
         </PieChart>
       </ResponsiveContainer>
@@ -388,9 +394,9 @@ const EventsTable: React.FC<EventsTableProps> = ({ filters }) => {
       </table>
 
       <div className={styles.pagination}>
-        <button className={styles.pageBtn} disabled={page === 1} onClick={() => setPage(p => p - 1)}>← Prev</button>
+        <button className={styles.pageBtn} data-testid="ai-cost-events-prev-page-btn" disabled={page === 1} onClick={() => setPage(p => p - 1)}>← Prev</button>
         <span className={styles.pageInfo}>Page {page} of {Math.max(1, Math.ceil(data.total / PAGE_SIZE))}</span>
-        <button className={styles.pageBtn} disabled={page >= Math.ceil(data.total / PAGE_SIZE)} onClick={() => setPage(p => p + 1)}>Next →</button>
+        <button className={styles.pageBtn} data-testid="ai-cost-events-next-page-btn" disabled={page >= Math.ceil(data.total / PAGE_SIZE)} onClick={() => setPage(p => p + 1)}>Next →</button>
       </div>
     </>
   );
@@ -445,7 +451,7 @@ const ExecutiveBriefBanner: React.FC<ExecutiveBriefBannerProps> = ({ project, on
           )}
         </div>
         <div className={styles.briefBannerActions}>
-          <button className={styles.dismissBtn} onClick={onDismiss} title="Dismiss for this session">×</button>
+          <button className={styles.dismissBtn} data-testid="ai-cost-brief-dismiss-btn" onClick={onDismiss} title="Dismiss for this session">×</button>
         </div>
       </div>
 
@@ -575,14 +581,38 @@ export const AiCostAnalytics: React.FC<AiCostAnalyticsProps> = ({ project }) => 
               <button
                 className={styles.refreshBtn}
                 onClick={() => {
+                  setSyncMessage('Syncing Cursor + Bedrock…');
                   sync.mutate(undefined, {
-                    onSuccess: () => setSyncMessage('Syncing… data will refresh in ~35s'),
-                    onError: () => setSyncMessage('Sync failed'),
+                    onSuccess: (result) => {
+                      const parts: string[] = [];
+                      if (result.cursor.ok) {
+                        parts.push(`Cursor OK${result.cursor.inserted != null ? ` (+${result.cursor.inserted})` : ''}`);
+                      } else if (result.cursor.skipped) {
+                        parts.push('Cursor skipped (no API key)');
+                      } else {
+                        parts.push(`Cursor failed: ${result.cursor.error ?? 'error'}`);
+                      }
+                      if (result.bedrock.ok) {
+                        parts.push(`Bedrock OK${result.bedrock.days != null ? ` (${result.bedrock.days}d)` : ''}`);
+                      } else if (result.bedrock.skipped) {
+                        parts.push('Bedrock skipped (no AWS/CE access)');
+                      } else {
+                        parts.push(`Bedrock failed: ${result.bedrock.error ?? 'error'}`);
+                      }
+                      if (!result.allocated.ok) {
+                        parts.push(`Allocation failed: ${result.allocated.error ?? 'error'}`);
+                      }
+                      setSyncMessage(parts.join(' · '));
+                      setTimeout(() => setSyncMessage(null), 12000);
+                    },
+                    onError: (err) => {
+                      setSyncMessage(err instanceof Error ? err.message : 'Sync failed');
+                      setTimeout(() => setSyncMessage(null), 12000);
+                    },
                   });
-                  setTimeout(() => setSyncMessage(null), 40000);
                 }}
                 disabled={sync.isPending}
-                title="Pull latest billing data from Cursor and AWS now"
+                title="Pull Cursor Admin billing + Apex-tagged AWS Bedrock Cost Explorer totals, then allocate"
               >
                 {sync.isPending ? '↻ Syncing…' : '↻ Sync Now'}
               </button>
@@ -702,19 +732,38 @@ export const AiCostAnalytics: React.FC<AiCostAnalyticsProps> = ({ project }) => 
           <span className={styles.reconciliationLabel}>Billing Reconciliation</span>
           <span className={styles.reconciliationSep} />
           <span>
-            <span className={styles.reconciliationLabel}>Attributed: </span>
+            <span className={styles.reconciliationLabel}>
+              Cursor attributed{activeProject !== 'all' ? ` (${activeProject})` : ''}:{' '}
+            </span>
             <span className={styles.reconciliationValue}>{formatCost(reconciliation.attributedCursorCostUsd)}</span>
           </span>
           <span>
-            <span className={styles.reconciliationLabel}>Billed: </span>
+            <span className={styles.reconciliationLabel}>Cursor billed: </span>
             <span className={styles.reconciliationValue}>{formatCost(reconciliation.billedCursorCents / 100)}</span>
           </span>
           <span>
-            <span className={styles.reconciliationLabel}>Coverage: </span>
+            <span className={styles.reconciliationLabel}>Cursor coverage: </span>
             <span className={styles.reconciliationValue}>{reconciliation.coveragePct.toFixed(1)}%</span>
           </span>
           <span className={styles.reconciliationSep} />
-          <span className={styles.exactBadge}>Bedrock: Exact</span>
+          <span>
+            <span className={styles.reconciliationLabel}>
+              Bedrock attributed{activeProject !== 'all' ? ` (${activeProject})` : ''}:{' '}
+            </span>
+            <span className={styles.reconciliationValue}>{formatCost(reconciliation.attributedBedrockCostUsd ?? 0)}</span>
+          </span>
+          <span>
+            <span className={styles.reconciliationLabel}>Bedrock billed: </span>
+            <span className={styles.reconciliationValue}>{formatCost(reconciliation.billedBedrockUsd ?? 0)}</span>
+          </span>
+          <span>
+            <span className={styles.reconciliationLabel}>Bedrock coverage: </span>
+            <span className={styles.reconciliationValue}>{(reconciliation.bedrockCoveragePct ?? 0).toFixed(1)}%</span>
+          </span>
+          <span className={styles.reconciliationSep} />
+          <span className={reconciliation.bedrockMode === 'allocated' ? styles.exactBadge : styles.estimatedBadge}>
+            Bedrock: {reconciliation.bedrockMode === 'allocated' ? 'Allocated' : 'Computed'}
+          </span>
           <span className={styles.estimatedBadge}>Cursor: Allocated</span>
         </div>
       )}
@@ -784,6 +833,7 @@ export const AiCostAnalytics: React.FC<AiCostAnalyticsProps> = ({ project }) => 
                   {byUser.map((u) => (
                     <tr
                       key={u.userId}
+                      data-testid="ai-cost-user-row"
                       style={{ cursor: 'pointer', transition: 'background 0.1s' }}
                       onClick={() => setDrillDown({ type: 'total', label: u.displayName || u.email || u.userId })}
                       onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-secondary)')}

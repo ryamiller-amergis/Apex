@@ -1,9 +1,24 @@
-import { estimateTokens, resolveFeatureFromKickoff } from '../services/aiUsageService';
+import { estimateTokens, resolveFeatureFromKickoff, normalizeUsageProject } from '../services/aiUsageService';
 
 jest.mock('../db/drizzle', () => ({ db: { insert: jest.fn().mockReturnValue({ catch: jest.fn() }) } }));
 jest.mock('../db/schema', () => ({ aiUsageEvents: {}, aiPricing: {} }));
 
 describe('aiUsageService', () => {
+  describe('normalizeUsageProject', () => {
+    it('returns trimmed project names', () => {
+      expect(normalizeUsageProject('  Apex  ')).toBe('Apex');
+    });
+
+    it('rejects empty and unknown placeholders', () => {
+      expect(normalizeUsageProject('')).toBeNull();
+      expect(normalizeUsageProject('   ')).toBeNull();
+      expect(normalizeUsageProject('unknown')).toBeNull();
+      expect(normalizeUsageProject('Unknown')).toBeNull();
+      expect(normalizeUsageProject(null)).toBeNull();
+      expect(normalizeUsageProject(undefined)).toBeNull();
+    });
+  });
+
   describe('estimateTokens', () => {
     it('returns at least 1 for empty string', () => {
       expect(estimateTokens('')).toBeGreaterThanOrEqual(1);

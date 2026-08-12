@@ -102,14 +102,33 @@ export async function computeCost(opts: {
   );
 }
 
+/**
+ * Normalize a project name for usage attribution.
+ * Empty / whitespace / literal "unknown" are treated as missing so callers
+ * must pass the user's selected (or entity-owned) project.
+ */
+export function normalizeUsageProject(project?: string | null): string | null {
+  const trimmed = typeof project === 'string' ? project.trim() : '';
+  if (!trimmed || trimmed.toLowerCase() === 'unknown') return null;
+  return trimmed;
+}
+
 /** Fire-and-forget insert — never throws. */
 export function recordAiUsage(input: RecordUsageInput): void {
+  const project = normalizeUsageProject(input.project);
+  if (!project) {
+    console.warn(
+      `[aiUsageService] Skipping usage record — missing project (feature=${input.feature}, provider=${input.provider})`,
+    );
+    return;
+  }
+
   db.insert(aiUsageEvents)
     .values({
       provider: input.provider,
       modelId: input.modelId,
       feature: input.feature,
-      project: input.project,
+      project,
       skillPath: input.skillPath ?? null,
       threadId: input.threadId ?? null,
       runId: input.runId ?? null,

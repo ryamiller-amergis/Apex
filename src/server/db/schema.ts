@@ -1692,6 +1692,19 @@ export const cursorUsageEvents = pgTable('cursor_usage_events', {
   modelIdx: index('idx_cursor_usage_events_model').on(t.model),
 }));
 
+/** Daily Apex-scoped Bedrock billed totals from AWS Cost Explorer. */
+export const bedrockBillingDaily = pgTable('bedrock_billing_daily', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  usageDate: text('usage_date').notNull(),
+  amountUsd: text('amount_usd').notNull().default('0'),
+  currency: text('currency').notNull().default('USD'),
+  raw: jsonb('raw').$type<Record<string, unknown>>().notNull().default({}),
+  dedupeKey: text('dedupe_key').notNull().unique(),
+  ingestedAt: timestamp('ingested_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  usageDateIdx: index('idx_bedrock_billing_daily_usage_date').on(t.usageDate),
+}));
+
 export const aiCostInsights = pgTable('ai_cost_insights', {
   id: uuid('id').primaryKey().defaultRandom(),
   project: text('project').notNull(),

@@ -550,7 +550,7 @@ async function invokeStreaming(
       provider: 'bedrock',
       modelId,
       feature: 'ui-lab',
-      project: project ?? 'unknown',
+      project: project?.trim() || 'Apex',
       userId,
       inputTokens: recordInputTokens,
       outputTokens: recordOutputTokens,

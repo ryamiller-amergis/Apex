@@ -3123,7 +3123,7 @@ export async function fixDesignDocSectionWithBedrock(
   comments: PrdComment[],
   modelId?: string | null,
   maxTokens?: number | null,
-  _usageCtx?: BedrockUsageContext,
+  usageCtx?: BedrockUsageContext,
 ): Promise<string> {
   const commentLines = formatCommentsForPrompt(comments);
 
@@ -3148,7 +3148,14 @@ ${commentLines}
 
   const resolvedModel = modelId ?? MODEL_ID;
   const resolvedMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
-  const text = await invokeModel(prompt, undefined, resolvedModel, resolvedMaxTokens);
+  const text = await invokeModel(
+    prompt,
+    undefined,
+    resolvedModel,
+    resolvedMaxTokens,
+    undefined,
+    usageCtx ?? { feature: 'design-doc', project: 'unknown' },
+  );
 
   const fenced = text.match(/```(?:markdown)?\s*([\s\S]*?)\s*```/);
   return fenced ? fenced[1].trim() : text.trim();

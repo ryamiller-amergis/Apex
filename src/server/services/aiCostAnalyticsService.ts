@@ -268,11 +268,17 @@ export async function getEvents(
 }
 
 export async function getReconciliation(f: DateFilter): Promise<AiCostReconciliation> {
+  // Cursor Admin billing events are team/service-account scoped and are stored
+  // without an Apex project (project is null). Never filter billed by project —
+  // that incorrectly zeros the reconciliation strip for every selected project.
+  const useSaFilter = !!process.env.CURSOR_SERVICE_ACCOUNT_ID?.trim();
+  const saId = process.env.CURSOR_SERVICE_ACCOUNT_ID?.trim();
+
   const billedRows = await db.execute<{ total_charged: string }>(sql`
     SELECT COALESCE(SUM(charged_cents::numeric), 0) AS total_charged
     FROM cursor_usage_events
     WHERE ts >= ${f.from} AND ts <= ${f.to}
-    ${f.project && f.project !== 'all' ? sql`AND project = ${f.project}` : sql``}
+      ${useSaFilter ? sql`AND service_account_id = ${saId}` : sql`AND is_headless = true`}
   `);
 
   const attributedRows = await db.execute<{ total_attributed: string }>(sql`
@@ -289,6 +295,32 @@ export async function getReconciliation(f: DateFilter): Promise<AiCostReconcilia
   const varianceCents = billedCents - attributedCents;
   const coveragePct = billedCents > 0 ? Math.min(100, (attributedCents / billedCents) * 100) : 0;
 
+  const fromDay = f.from.slice(0, 10);
+  const toDay = f.to.slice(0, 10);
+
+  const bedrockBilledRows = await db.execute<{ total: string }>(sql`
+    SELECT COALESCE(SUM(amount_usd::numeric), 0) AS total
+    FROM bedrock_billing_daily
+    WHERE usage_date >= ${fromDay} AND usage_date <= ${toDay}
+  `);
+
+  const bedrockAttributedRows = await db.execute<{ total_attributed: string }>(sql`
+    SELECT COALESCE(SUM(cost_usd::numeric), 0) AS total_attributed
+    FROM ai_usage_events
+    WHERE provider = 'bedrock'
+      AND created_at >= ${f.from} AND created_at <= ${f.to}
+      ${f.project && f.project !== 'all' ? sql`AND project = ${f.project}` : sql``}
+  `);
+
+  const billedBedrockUsd = parseFloat(bedrockBilledRows.rows[0]?.total ?? '0');
+  const attributedBedrockCostUsd = parseFloat(bedrockAttributedRows.rows[0]?.total_attributed ?? '0');
+  const bedrockVarianceUsd = billedBedrockUsd - attributedBedrockCostUsd;
+  const bedrockCoveragePct =
+    billedBedrockUsd > 0
+      ? Math.min(100, (attributedBedrockCostUsd / billedBedrockUsd) * 100)
+      : 0;
+  const bedrockMode: 'allocated' | 'computed' = billedBedrockUsd > 0 ? 'allocated' : 'computed';
+
   return {
     project: f.project ?? 'all',
     periodFrom: f.from,
@@ -297,7 +329,12 @@ export async function getReconciliation(f: DateFilter): Promise<AiCostReconcilia
     billedCursorCents: billedCents,
     varianceCents,
     coveragePct,
-    exactBedrock: true,
+    exactBedrock: bedrockMode === 'allocated',
+    attributedBedrockCostUsd,
+    billedBedrockUsd,
+    bedrockVarianceUsd,
+    bedrockCoveragePct,
+    bedrockMode,
   };
 }
 
