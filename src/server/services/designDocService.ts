@@ -21,6 +21,7 @@ import { resolveSkillConfig, getSkillSettingsName } from './projectSettingsServi
 import { getDefaultModel } from './appSettingsService';
 import { getPrd } from './prdService';
 import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
+import { collectValidationGaps } from '../../shared/utils/validationReport';
 import {
   propagatePipelineGrounding,
   resolveRunGroundingSurface,
@@ -1892,15 +1893,18 @@ export async function triggerFixValidation(
 
   // Group pending gaps by section so the AI can address each section systematically
   const gapsBySection: Record<string, ValidationScorecardGap[]> = {};
-  for (const f of (scorecard.features ?? [])) {
-    for (const g of f.gaps) {
-      if (g.resolution !== 'pending') continue;
-      const sec = g.section.toLowerCase();
-      const key = sec.includes('tech') || sec.includes('spec') ? 'tech-spec'
-        : sec.includes('assumption') ? 'assumptions'
-        : 'design';
-      (gapsBySection[key] ??= []).push(g);
-    }
+  for (const g of collectValidationGaps(scorecard)) {
+    if (g.resolution !== 'pending') continue;
+    const file = (g.file ?? '').toLowerCase();
+    const sec = (g.section ?? '').toLowerCase();
+    const key =
+      file.includes('tech') || file === 'tech-spec' || file === 'tech_spec'
+      || sec.includes('tech') || sec.includes('spec')
+        ? 'tech-spec'
+        : file.includes('assumption') || sec.includes('assumption')
+          ? 'assumptions'
+          : 'design';
+    (gapsBySection[key] ??= []).push(g);
   }
 
   const sectionBlocks: string[] = [];

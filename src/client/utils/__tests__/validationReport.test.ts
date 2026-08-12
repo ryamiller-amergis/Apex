@@ -1,4 +1,9 @@
-import { buildPassingValidationReasonsMarkdown } from '../../../shared/utils/validationReport';
+import {
+  buildPassingValidationReasonsMarkdown,
+  collectValidationGaps,
+  designDocFeatureSectionScore,
+  normalizeValidationGap,
+} from '../../../shared/utils/validationReport';
 import type { ValidationScorecard } from '../../../shared/types/interview';
 
 function makeScorecard(overrides: Partial<ValidationScorecard> = {}): ValidationScorecard {
@@ -91,5 +96,193 @@ describe('buildPassingValidationReasonsMarkdown', () => {
     );
 
     expect(markdown).toBe('');
+  });
+});
+
+describe('collectValidationGaps', () => {
+  it('reads nested feature gaps (canonical design-doc shape)', () => {
+    const gaps = collectValidationGaps(
+      makeScorecard({
+        features: [
+          {
+            feature_slug: 'counter',
+            feature_title: 'Counter',
+            design_score: 90,
+            tech_spec_score: 90,
+            assumptions_score: 90,
+            overall_score: 90,
+            verdict: 'ready',
+            gaps: [
+              {
+                id: 'g1',
+                file: 'design',
+                section: 'UI/UX',
+                score: 2,
+                description: 'Missing empty state',
+                what_3_looks_like: 'Empty state described',
+                resolution: 'pending',
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0].id).toBe('g1');
+    expect(gaps[0].description).toBe('Missing empty state');
+  });
+
+  it('does not throw when features omit gaps (alternate scorecard crash case)', () => {
+    const gaps = collectValidationGaps(
+      makeScorecard({
+        features: [
+          {
+            feature_slug: 'counter',
+            feature_title: 'Counter',
+            design_score: 90,
+            tech_spec_score: 90,
+            assumptions_score: 90,
+            overall_score: 93,
+            verdict: 'ready',
+            // gaps intentionally omitted — previously crashed UI with "d.gaps is not iterable"
+          } as any,
+        ],
+        gaps: [
+          {
+            id: 'pending-tech-tbd',
+            file: 'tech-spec',
+            section: 'No residual template tokens',
+            score: 1,
+            description: '',
+            what_3_looks_like: '',
+            resolution: 'pending',
+          },
+        ],
+      }),
+    );
+
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0].id).toBe('pending-tech-tbd');
+    expect(gaps[0].file).toBe('tech-spec');
+  });
+
+  it('normalizes top-level design-spec-review gaps (detail + file_type)', () => {
+    const gaps = collectValidationGaps(
+      makeScorecard({
+        features: [
+          {
+            name: 'View Pending Timecards',
+            design: { score_pct: 96 },
+            tech_spec: { score_pct: 91 },
+            assumptions: { score_pct: 94 },
+          } as any,
+        ],
+        gaps: [
+          {
+            id: 'tbd-gap',
+            score: 1,
+            detail: '1 TBD match found in Data and Contracts',
+            feature: 'View Pending Timecards',
+            section: 'No residual template tokens',
+            file_type: 'tech-spec',
+            resolution: 'pending',
+            target_score: 3,
+          } as any,
+        ],
+      }),
+    );
+
+    expect(gaps).toEqual([
+      expect.objectContaining({
+        id: 'tbd-gap',
+        file: 'tech-spec',
+        description: '1 TBD match found in Data and Contracts',
+        resolution: 'pending',
+      }),
+    ]);
+  });
+
+  it('prefers nested feature gaps over root gaps when both exist', () => {
+    const gaps = collectValidationGaps(
+      makeScorecard({
+        features: [
+          {
+            feature_slug: 'a',
+            feature_title: 'A',
+            design_score: 90,
+            tech_spec_score: 90,
+            assumptions_score: 90,
+            overall_score: 90,
+            verdict: 'ready',
+            gaps: [
+              {
+                id: 'nested',
+                file: 'design',
+                section: 'Scope',
+                score: 2,
+                description: 'Nested gap',
+                what_3_looks_like: '',
+                resolution: 'pending',
+              },
+            ],
+          },
+        ],
+        gaps: [
+          {
+            id: 'root',
+            file: 'design',
+            section: 'Scope',
+            score: 1,
+            description: 'Root gap',
+            what_3_looks_like: '',
+            resolution: 'pending',
+          },
+        ],
+      }),
+    );
+
+    expect(gaps.map((g) => g.id)).toEqual(['nested']);
+  });
+
+  it('returns empty for null/undefined scorecards', () => {
+    expect(collectValidationGaps(null)).toEqual([]);
+    expect(collectValidationGaps(undefined)).toEqual([]);
+  });
+});
+
+describe('normalizeValidationGap', () => {
+  it('returns null for invalid input', () => {
+    expect(normalizeValidationGap(null)).toBeNull();
+    expect(normalizeValidationGap({})).toBeNull();
+    expect(normalizeValidationGap({ id: '' })).toBeNull();
+  });
+});
+
+describe('designDocFeatureSectionScore', () => {
+  it('reads canonical design_score fields', () => {
+    expect(
+      designDocFeatureSectionScore(
+        {
+          design_score: 88,
+          tech_spec_score: 91,
+          assumptions_score: 94,
+        },
+        'tech_spec_score',
+      ),
+    ).toBe(91);
+  });
+
+  it('reads alternate nested score_pct fields', () => {
+    expect(
+      designDocFeatureSectionScore(
+        {
+          design: { score_pct: 96.4 },
+          tech_spec: { score_pct: 91.2 },
+          assumptions: { score_pct: 94 },
+        },
+        'design_score',
+      ),
+    ).toBe(96);
   });
 });
