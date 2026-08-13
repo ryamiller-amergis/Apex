@@ -105,8 +105,13 @@ import {
   ProjectRepositoryNotReady,
 } from '../services/projectRepositoryReadinessService';
 import type { InterviewStatus, PrdStatus, ReviewPrdRequest, DesignDocStatus, ReviewDesignDocRequest } from '../../shared/types/interview';
+import type { PipelinePinPolicy } from '../../shared/types/runGrounding';
 
 const router = Router();
+
+function parsePinPolicy(value: unknown): PipelinePinPolicy {
+  return value === 'latest' ? 'latest' : 'inherit';
+}
 
 // ── Interviews ────────────────────────────────────────────────────────────────
 
@@ -503,6 +508,7 @@ async function startDesignDocsForApprovedPrd(
   prdId: string,
   userId: string,
   prd: PrdForDesignDocGeneration,
+  pinPolicy: PipelinePinPolicy = 'inherit',
 ): Promise<Array<{ designDocId: string; threadId: string; featureTitle: string }>> {
     const skillConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
     const designDocSkillPath = skillConfig?.designDocSkillPath ?? undefined;
@@ -682,6 +688,7 @@ async function startDesignDocsForApprovedPrd(
           threadId: thread.id,
           kickoffMessage:
             `Generate the design doc for the single feature "${featureTitle}" using the PRD, backlog, and context provided in \`.ai-pilot/kickoff-context.md\`. This is a non-interactive generation task — do not ask questions. Write all three output files (\`design-doc-design.md\`, \`design-doc-tech-spec.md\`, \`design-doc-assumptions.md\`) to \`.ai-pilot/output/\`.`,
+          pinPolicy,
         }),
       ).catch((err: unknown) => {
         console.error(
@@ -742,7 +749,12 @@ router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), 
     }
     // @feature-flag:project-repository-checkout-readiness end
 
-    const createdDocs = await startDesignDocsForApprovedPrd(req.params.prdId, userId, prd);
+    const createdDocs = await startDesignDocsForApprovedPrd(
+      req.params.prdId,
+      userId,
+      prd,
+      parsePinPolicy((req.body as { groundingPolicy?: unknown })?.groundingPolicy),
+    );
     res.status(201).json({
       designDocIds: createdDocs.map(d => d.designDocId),
       count: createdDocs.length,
@@ -2919,11 +2931,12 @@ router.delete('/:id', requirePermission('interviews:manage'), async (req, res, n
 router.post('/:interviewId/prds', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
-    const { chatThreadId, title, model, kickoffGeneration } = req.body as {
+    const { chatThreadId, title, model, kickoffGeneration, groundingPolicy } = req.body as {
       chatThreadId: string;
       title?: string;
       model?: string;
       kickoffGeneration?: boolean;
+      groundingPolicy?: PipelinePinPolicy;
     };
 
     if (!chatThreadId) {
@@ -2984,6 +2997,7 @@ router.post('/:interviewId/prds', requirePermission('interviews:manage'), async 
           threadId: chatThreadId,
           interviewId: req.params.interviewId,
           kickoffMessage: 'Begin.',
+          pinPolicy: parsePinPolicy(groundingPolicy),
         }),
       ).catch((err: unknown) => {
         console.error(

@@ -40,9 +40,12 @@ import {
 } from './documentValidationService';
 import {
   propagatePipelineGrounding,
+  readActiveTargetProvenance,
   resolveRunGroundingSurface,
   runGroundingService,
 } from './runGroundingService';
+import type { PipelinePinPolicy } from '../../shared/types/runGrounding';
+import { stampGroundingProvenance } from '../../shared/utils/groundingProvenance';
 
 const VALID_PRD_STATUSES: PrdStatus[] = ['generating', 'draft', 'validating', 'pending_review', 'reviewer_approved', 'approved', 'revision_requested'];
 
@@ -213,6 +216,7 @@ export async function propagatePrdGenerationGrounding(opts: {
   project: string;
   userId: string;
   threadId: string;
+  pinPolicy?: PipelinePinPolicy;
 }): Promise<void> {
   try {
     const upstream = await resolveRunGroundingSurface(
@@ -228,7 +232,7 @@ export async function propagatePrdGenerationGrounding(opts: {
         project: opts.project,
       },
       opts.userId,
-      { deferMaterialization: true },
+      { deferMaterialization: true, pinPolicy: opts.pinPolicy ?? 'inherit' },
     );
   } catch {
     console.warn(
@@ -244,6 +248,7 @@ export async function routePrdGenerationKickoff(opts: {
   threadId: string;
   interviewId?: string;
   kickoffMessage?: string;
+  pinPolicy?: PipelinePinPolicy;
 }): Promise<void> {
   const kickoffMessage = opts.kickoffMessage ?? 'Begin.';
   const destinationRun = {
@@ -269,6 +274,7 @@ export async function routePrdGenerationKickoff(opts: {
       project: opts.project,
       userId: opts.userId,
       threadId: opts.threadId,
+      pinPolicy: opts.pinPolicy,
     });
   }
 
@@ -822,10 +828,23 @@ export async function syncPrdContent(
     }
   }
 
+  let stampedContent = content;
+  try {
+    const surface = await resolveRunGroundingSurface('prd', id);
+    const provenance = surface
+      ? await readActiveTargetProvenance(surface.run)
+      : null;
+    if (provenance) {
+      stampedContent = stampGroundingProvenance(content, provenance);
+    }
+  } catch {
+    stampedContent = content;
+  }
+
   await db
     .update(prds)
     .set({
-      content,
+      content: stampedContent,
       status: finalStatus,
       ...(resolvedBacklog !== undefined ? { backlogJson: resolvedBacklog as any } : {}),
       updatedAt: new Date().toISOString(),

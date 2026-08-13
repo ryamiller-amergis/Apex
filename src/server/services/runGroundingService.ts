@@ -3,6 +3,7 @@ import type {
   CreateRunGroundingInput,
   GroundingSurface,
   GroundingStalenessState,
+  PipelinePinPolicy,
   ReGroundResponse,
   RepoRole,
   RunGrounding,
@@ -11,7 +12,12 @@ import type {
 } from '../../shared/types/runGrounding';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { designDocs, interviews, prds } from '../db/schema';
+import { adrs, chatThreads, designDocs, interviews, prds } from '../db/schema';
+import { git, safeArgs } from '../utils/asyncGit';
+import {
+  getRepoCacheDir,
+  type RepoCacheOptions,
+} from './repoCacheService';
 import {
   runGroundingRepository,
   RunGroundingRepositoryError,
@@ -135,6 +141,14 @@ export interface RunGroundingServiceOptions {
   evaluateStaleness?: (
     grounding: RunGrounding
   ) => Promise<GroundingStalenessState>;
+  countCommitsBehind?: (
+    grounding: RunGrounding,
+    originSha: string
+  ) => Promise<number>;
+  listChangedPaths?: (
+    grounding: RunGrounding,
+    originSha: string
+  ) => Promise<string[]>;
   telemetry?: Pick<GroundingTelemetry, 'drift'>;
 }
 
@@ -173,11 +187,78 @@ function uniqueParticipants(
   ];
 }
 
+export async function readActiveTargetProvenance(
+  ref: RunRef,
+): Promise<{
+  groundedSha: string;
+  repository: string;
+  branch: string;
+  groundedAt: string;
+} | null> {
+  const rows = await runGroundingService.getGroundings(ref);
+  const row =
+    rows.find((candidate) => candidate.repoRole === 'target' && candidate.isActive) ??
+    rows.find((candidate) => candidate.repoRole === 'target');
+  if (!row) return null;
+  return {
+    groundedSha: row.groundedSha,
+    repository: row.repository,
+    branch: row.branch,
+    groundedAt: row.groundedAt,
+  };
+}
+
+function cacheOptionsFromGrounding(grounding: RunGrounding): RepoCacheOptions {
+  return {
+    provider: grounding.provider === 'azure_devops' ? 'ado' : 'github',
+    project: grounding.project,
+    repo: grounding.repository,
+    branch: grounding.branch,
+  };
+}
+
+async function countCommitsBehindMirror(
+  grounding: RunGrounding,
+  originSha: string,
+): Promise<number> {
+  const cacheDir = getRepoCacheDir(cacheOptionsFromGrounding(grounding));
+  const output = await git(
+    safeArgs(cacheDir, [
+      'rev-list',
+      '--count',
+      `${grounding.groundedSha}..${originSha}`,
+    ]),
+    { cwd: cacheDir },
+  );
+  const count = Number.parseInt(output.trim(), 10);
+  return Number.isFinite(count) ? count : 0;
+}
+
+async function listChangedPathsMirror(
+  grounding: RunGrounding,
+  originSha: string,
+): Promise<string[]> {
+  const cacheDir = getRepoCacheDir(cacheOptionsFromGrounding(grounding));
+  const output = await git(
+    safeArgs(cacheDir, [
+      'diff',
+      '--name-only',
+      '--diff-filter=ACDMRTUXB',
+      grounding.groundedSha,
+      originSha,
+      '--',
+    ]),
+    { cwd: cacheDir, timeout: 10_000, maxBuffer: 512 * 1024 },
+  );
+  return output.split(/\r?\n/).filter(Boolean);
+}
+
 export async function resolveRunGroundingSurface(
   surface: GroundingSurface,
   domainRunId: string
 ): Promise<ResolvedRunGroundingSurface | null> {
-  if (surface === 'interview') {
+  switch (surface) {
+    case 'interview': {
     const row = await db.query.interviews.findFirst({
       where: eq(interviews.id, domainRunId),
       columns: {
@@ -216,9 +297,8 @@ export async function resolveRunGroundingSurface(
         row.testCaseApproverIds
       ),
     };
-  }
-
-  if (surface === 'prd') {
+    }
+    case 'prd': {
     const row = await db.query.prds.findFirst({
       where: eq(prds.id, domainRunId),
       columns: {
@@ -256,49 +336,97 @@ export async function resolveRunGroundingSurface(
         interview?.prdApproverIds
       ),
     };
-  }
-
-  const row = await db.query.designDocs.findFirst({
-    where: eq(designDocs.id, domainRunId),
-    columns: {
-      chatThreadId: true,
-      project: true,
-      authorId: true,
-      reviewerId: true,
-      prdId: true,
-    },
-  });
-  if (!row?.chatThreadId) return null;
-  const prd = await db.query.prds.findFirst({
-    where: eq(prds.id, row.prdId),
-    columns: { interviewId: true },
-  });
-  const interview = prd?.interviewId
-    ? await db.query.interviews.findFirst({
-        where: eq(interviews.id, prd.interviewId),
-        columns: {
-          designDocOwnerId: true,
-          designDocApproverIds: true,
-        },
-      })
-    : null;
-  const ownerId = interview?.designDocOwnerId ?? row.authorId;
-  return {
-    surface,
-    domainRunId,
-    run: {
-      runType: 'chat',
-      runId: row.chatThreadId,
-      project: row.project,
-    },
-    ownerId,
-    participantIds: uniqueParticipants(
-      row.authorId,
-      row.reviewerId,
+    }
+    case 'design_doc': {
+    const row = await db.query.designDocs.findFirst({
+      where: eq(designDocs.id, domainRunId),
+      columns: {
+        chatThreadId: true,
+        project: true,
+        authorId: true,
+        reviewerId: true,
+        prdId: true,
+      },
+    });
+    if (!row?.chatThreadId) return null;
+    const prd = await db.query.prds.findFirst({
+      where: eq(prds.id, row.prdId),
+      columns: { interviewId: true },
+    });
+    const interview = prd?.interviewId
+      ? await db.query.interviews.findFirst({
+          where: eq(interviews.id, prd.interviewId),
+          columns: {
+            designDocOwnerId: true,
+            designDocApproverIds: true,
+          },
+        })
+      : null;
+    const ownerId = interview?.designDocOwnerId ?? row.authorId;
+    return {
+      surface,
+      domainRunId,
+      run: {
+        runType: 'chat',
+        runId: row.chatThreadId,
+        project: row.project,
+      },
       ownerId,
-      interview?.designDocApproverIds
-    ),
-  };
+      participantIds: uniqueParticipants(
+        row.authorId,
+        row.reviewerId,
+        ownerId,
+        interview?.designDocApproverIds
+      ),
+    };
+    }
+    case 'chat': {
+      const row = await db.query.chatThreads.findFirst({
+        where: eq(chatThreads.id, domainRunId),
+        columns: { id: true, userId: true, kickoff: true },
+      });
+      const project = row?.kickoff?.project;
+      if (!row || !project) return null;
+      return {
+        surface,
+        domainRunId,
+        run: {
+          runType: 'chat',
+          runId: row.id,
+          project,
+        },
+        ownerId: row.userId,
+        participantIds: uniqueParticipants(row.userId),
+      };
+    }
+    case 'adr': {
+      const row = await db.query.adrs.findFirst({
+        where: eq(adrs.id, domainRunId),
+        columns: {
+          chatThreadId: true,
+          project: true,
+          authorId: true,
+          reviewerIds: true,
+        },
+      });
+      if (!row?.chatThreadId) return null;
+      return {
+        surface,
+        domainRunId,
+        run: {
+          runType: 'chat',
+          runId: row.chatThreadId,
+          project: row.project,
+        },
+        ownerId: row.authorId,
+        participantIds: uniqueParticipants(row.authorId, row.reviewerIds),
+      };
+    }
+    default: {
+      const _exhaustive: never = surface;
+      return _exhaustive;
+    }
+  }
 }
 
 export async function propagatePipelineGrounding(
@@ -311,6 +439,8 @@ export async function propagatePipelineGrounding(
     isCheckoutReadinessEnabled?: typeof isProjectRepositoryCheckoutReadinessEnabled;
     propagateLinkedContext?: typeof materializeLinkedContextForPipelineHandoff;
     deferMaterialization?: boolean;
+    pinPolicy?: PipelinePinPolicy;
+    readCachedOriginSha?: (grounding: RunGrounding) => Promise<string | null>;
     trackEvent?: typeof trackEvent;
   } = {}
 ): Promise<CopyGroundingByValueResult | null> {
@@ -378,6 +508,29 @@ export async function propagatePipelineGrounding(
     }
   }
 
+  if (options.pinPolicy === 'latest' && result.grounding) {
+    const readOrigin =
+      options.readCachedOriginSha ?? readCachedOriginShaFromRepoCache;
+    const originSha = (await readOrigin(result.grounding))?.trim() || null;
+    if (originSha && originSha !== result.grounding.groundedSha) {
+      if (options.deferMaterialization) {
+        const replacement = await service.reground(to, 'target', originSha);
+        if (replacement) {
+          result = { ...result, grounding: replacement };
+        }
+      } else {
+        const updated = await service.reGroundFromCache(to, 'target');
+        if (updated) {
+          const rows = await service.getGroundings(to);
+          const grounding =
+            rows.find((row) => row.repoRole === 'target' && row.isActive) ??
+            result.grounding;
+          result = { ...result, grounding };
+        }
+      }
+    }
+  }
+
   if (result.grounding) {
     try {
       emit(
@@ -408,7 +561,7 @@ async function unpinDeactivated(
   rows: RunGrounding[],
   repository: RunGroundingRepository,
 ): Promise<void> {
-  for (const row of rows.filter((grounding) => grounding.isActive)) {
+  for (const row of (rows ?? []).filter((grounding) => grounding.isActive)) {
     await unpinGroundingCommitIfUnused(row, () =>
       repository.listActiveGroundings(),
     ).catch((error: unknown) => {
@@ -434,6 +587,10 @@ export function createRunGroundingService(
     options.evaluateStaleness ??
     ((grounding: RunGrounding) =>
       groundingStalenessService.evaluate(grounding));
+  const countCommitsBehind =
+    options.countCommitsBehind ?? countCommitsBehindMirror;
+  const listChangedPaths =
+    options.listChangedPaths ?? listChangedPathsMirror;
   const telemetry = options.telemetry ?? groundingTelemetry;
   const materializationStates = new Map<
     string,
@@ -579,6 +736,28 @@ export function createRunGroundingService(
           : cachedOriginSha === null || cachedOriginSha === grounding.groundedSha
             ? 'grounded'
             : 'source-changed';
+      let commitsBehind = 0;
+      let changedFileCount = 0;
+      if (
+        cachedOriginSha &&
+        cachedOriginSha !== grounding.groundedSha
+      ) {
+        try {
+          commitsBehind = await countCommitsBehind(
+            grounding,
+            cachedOriginSha,
+          );
+        } catch {
+          commitsBehind = 0;
+        }
+        try {
+          changedFileCount = (
+            await listChangedPaths(grounding, cachedOriginSha)
+          ).length;
+        } catch {
+          changedFileCount = 0;
+        }
+      }
       if (driftState === 'source-changed') {
         telemetry.drift({
           caller: 'run-grounding-status',
@@ -599,6 +778,8 @@ export function createRunGroundingService(
         groundedAt: grounding.groundedAt,
         driftState,
         stalenessState,
+        commitsBehind,
+        changedFileCount,
         canReGround,
       };
     },

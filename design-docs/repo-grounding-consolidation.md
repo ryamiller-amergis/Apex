@@ -2,9 +2,9 @@
 
 Architectural plan to serve AI repository reads from a single bare object
 database at a pinned SHA, instead of materialized working trees. Status:
-Stages 0–4 are in tree (`repo-read-service` and `enable_repo_read_service`
-default off). Stage 4 probes with `ls-remote` and idle backoff (no webhook
-receiver yet). Stages 5–6 follow.
+Stages 0–5 are in tree (`repo-read-service` and `enable_repo_read_service`
+default off). Stage 5 asks at resume and generate-handoff, renders staleness,
+and stamps the SHA into generated PRDs and design docs. Stage 6 follows.
 
 ## Why
 

@@ -27,6 +27,8 @@ const status = {
   groundedAt: '2026-08-02T14:00:00.000Z',
   driftState: 'source-changed' as const,
   stalenessState: 'soft-stale' as const,
+  commitsBehind: 12,
+  changedFileCount: 4,
   canReGround: true,
 };
 
@@ -75,6 +77,19 @@ describe('PBI-004 reusable grounding status UI', () => {
       sha.slice(0, 12)
     );
     expect(screen.getByTestId('run-grounding-reground-button')).toBeEnabled();
+  });
+
+  it('renders the computed staleness notice when the pin is aging', () => {
+    render(
+      <RunGroundingStatus surface="prd" domainRunId="prd-1" project="Apex" />
+    );
+
+    expect(screen.getByTestId('run-grounding-staleness-notice')).toHaveTextContent(
+      /this pin is aging/i
+    );
+    expect(screen.getByTestId('run-grounding-staleness-notice')).toHaveTextContent(
+      /12 commits behind/i
+    );
   });
 
   it('Security VT-07 explains why a participant cannot use the owner-only action', () => {

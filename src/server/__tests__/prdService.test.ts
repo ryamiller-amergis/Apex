@@ -77,6 +77,7 @@ jest.mock('../services/backgroundWorkflowRouter', () => ({
 jest.mock('../services/runGroundingService', () => ({
   propagatePipelineGrounding: jest.fn().mockResolvedValue({ state: 'propagated' }),
   resolveRunGroundingSurface: jest.fn().mockResolvedValue(null),
+  readActiveTargetProvenance: jest.fn().mockResolvedValue(null),
   runGroundingService: {
     getGroundings: jest.fn().mockResolvedValue([{
       id: 'grounding-prd',
@@ -579,7 +580,7 @@ describe('routePrdGenerationKickoff', () => {
       { runType: 'chat', runId: 'interview-thread', project: 'proj-alpha' },
       { runType: 'chat', runId: 'thread-prd', project: 'proj-alpha' },
       'user-1',
-      { deferMaterialization: true },
+      { deferMaterialization: true, pinPolicy: 'inherit' },
     );
     expect(mockRouteBackgroundWorkflow).toHaveBeenCalled();
   });

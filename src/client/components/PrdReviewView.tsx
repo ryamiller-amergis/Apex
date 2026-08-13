@@ -70,6 +70,8 @@ import { BacklogViewer } from './BacklogViewer';
 import { CreateAdoItemsModal } from './CreateAdoItemsModal';
 import { ApexFixRunningBanner } from './ApexFixRunningBanner';
 import { RunGroundingStatus } from './RunGroundingStatus';
+import { GroundingHandoffDialog } from './GroundingHandoffDialog';
+import { useGroundingResumeGate } from '../hooks/useGroundingResumeGate';
 import type { PrdStatus, PrdValidationBaseline, TestCaseCoverageSummary, Prd } from '../../shared/types/interview';
 import {
   isPrdFixFlowOwningAccept,
@@ -527,6 +529,12 @@ export const PrdReviewView: React.FC = () => {
   );
   const generatePrototypes = useGeneratePrototypesForPrd();
   const createDesignDoc = useCreateDesignDoc();
+  const [designHandoffOpen, setDesignHandoffOpen] = useState(false);
+  const groundingGate = useGroundingResumeGate(
+    'prd',
+    id,
+    prd?.project ?? null,
+  );
   const { data: testCaseRecord } = usePrdTestCases(id);
   const prevTestCaseStatusRef = useRef<string | undefined>(undefined);
   const actionMenuRef = useRef<HTMLDivElement>(null);
@@ -2584,6 +2592,10 @@ export const PrdReviewView: React.FC = () => {
               className={styles.designDocBannerLink}
               onClick={() => {
                 if (!id) return;
+                if (groundingGate.status) {
+                  setDesignHandoffOpen(true);
+                  return;
+                }
                 createDesignDoc.mutate({ prdId: id });
               }}
               disabled={createDesignDoc.isPending}
@@ -2594,6 +2606,25 @@ export const PrdReviewView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {designHandoffOpen && groundingGate.status && id ? (
+        <GroundingHandoffDialog
+          parentLabel="the PRD"
+          status={groundingGate.status}
+          isPending={createDesignDoc.isPending}
+          error={createDesignDoc.error}
+          onInherit={() => {
+            setDesignHandoffOpen(false);
+            createDesignDoc.mutate({ prdId: id, groundingPolicy: 'inherit' });
+          }}
+          onUseLatest={() => {
+            setDesignHandoffOpen(false);
+            createDesignDoc.mutate({ prdId: id, groundingPolicy: 'latest' });
+          }}
+          onClose={() => setDesignHandoffOpen(false)}
+          {...{ 'data-testid': 'grounding-handoff-dialog' }}
+        />
+      ) : null}
 
       {/* Fix-with-Apex (validation/coverage): review baseline → live diffs section by section. */}
       {prdFixFlow.phase === 'reviewing'

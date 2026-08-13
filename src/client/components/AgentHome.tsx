@@ -12,6 +12,8 @@ import { useProjectSkillConfig, useAvailableModels, useGlobalDefaultModel } from
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useChatAttachments } from '../hooks/useChatAttachments';
 import { useProjectRepositoryReadiness } from '../hooks/useProjectRepositoryReadiness';
+import { useGroundingResumeGate } from '../hooks/useGroundingResumeGate';
+import { GroundingResumeCard } from './GroundingResumeCard';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { PRDPreviewDrawer } from './PRDPreviewDrawer';
@@ -564,6 +566,12 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
     },
   });
   const { streamingText, prdReady, isRunning, visibleMessages, progressLabel } = session;
+  const resumeGate = useGroundingResumeGate(
+    'chat',
+    threadId,
+    selectedProject || null,
+    isRunning,
+  );
 
   const visibleMessageIds = visibleMessages.map((m) => m.id);
   const highlightedMessageId = useFocusChatMessage(focusMessageId, visibleMessageIds);
@@ -782,15 +790,16 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
   // Used by AgentMessage choice block submissions (thread already exists)
   const doSend = useCallback(async (text: string) => {
     const trimmed = text.trim();
-    if (!trimmed || isRunning || isSending || !threadId) return;
+    if (!trimmed || isRunning || isSending || !threadId || resumeGate.composerBlocked) return;
     await session.send(trimmed, { model });
-  }, [threadId, isRunning, isSending, model, session]);
+  }, [threadId, isRunning, isSending, model, resumeGate.composerBlocked, session]);
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
     if ((!text && attachments.length === 0) || isRunning || isSending) return;
     if (!threadId && !resolvedRepoName) return;
     if (!repoReadiness.isReady) return;
+    if (resumeGate.composerBlocked) return;
 
     if (isListening) {
       speechRecognitionRef.current?.stop();
@@ -901,7 +910,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
     } finally {
       setIsSending(false);
     }
-  }, [input, attachments, isRunning, isSending, threadId, resolvedRepoName, startChat, selectedProject, defaultBranch, selectedSkillPath, selectedSkillName, selectedQuickSkill, selectedMcpPill, model, clearAttachments, isListening, queryClient, skillConfig?.id, skillConfig?.skillProvider, repoReadiness.isReady]);
+  }, [input, attachments, isRunning, isSending, threadId, resolvedRepoName, startChat, selectedProject, defaultBranch, selectedSkillPath, selectedSkillName, selectedQuickSkill, selectedMcpPill, model, clearAttachments, isListening, queryClient, skillConfig?.id, skillConfig?.skillProvider, repoReadiness.isReady, resumeGate.composerBlocked]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (skillPickerOpen && filteredSkills.length > 0) {
@@ -972,12 +981,22 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
   const isCompose = !threadId;
   const hasPills = quickSkillPills.length > 0 || quickMcpPills.length > 0;
   const needsSkillSelection = isCompose && hasPills && !selectedQuickSkill && !selectedMcpPill;
-  const canSend = (input.trim().length > 0 || attachments.length > 0) && !isRunning && !isSending && !needsSkillSelection && (!!threadId || !!resolvedRepoName) && repoReadiness.isReady;
+  const canSend = (input.trim().length > 0 || attachments.length > 0) && !isRunning && !isSending && !needsSkillSelection && (!!threadId || !!resolvedRepoName) && repoReadiness.isReady && !resumeGate.composerBlocked;
 
   // ── Shared input area ────────────────────────────────────────────────────────
 
   const inputArea = (
     <div className={styles.inputWrapper}>
+      {resumeGate.showCard && resumeGate.status ? (
+        <GroundingResumeCard
+          status={resumeGate.status}
+          isPending={resumeGate.isUpdating}
+          error={resumeGate.error}
+          onContinue={resumeGate.continueOnPin}
+          onUpdateToLatest={() => void resumeGate.updateToLatest()}
+          {...{ 'data-testid': 'grounding-resume-card' }}
+        />
+      ) : null}
       <AgentComposer
         className={styles.composerEmbed}
       value={input}
@@ -994,11 +1013,11 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
       }}
       onSend={() => void handleSend()}
       onCancel={() => void handleStop()}
-      disabled={needsSkillSelection || !repoReadiness.isReady}
+      disabled={needsSkillSelection || !repoReadiness.isReady || resumeGate.composerBlocked}
       isRunning={isRunning}
       isSending={isSending}
-      isBusy={isSending || needsSkillSelection || !repoReadiness.isReady}
-      shellDisabled={needsSkillSelection || !repoReadiness.isReady}
+      isBusy={isSending || needsSkillSelection || !repoReadiness.isReady || resumeGate.composerBlocked}
+      shellDisabled={needsSkillSelection || !repoReadiness.isReady || resumeGate.composerBlocked}
       canSend={canSend}
       allowEmptySend
       autoFocus={isCompose && !needsSkillSelection && repoReadiness.isReady}

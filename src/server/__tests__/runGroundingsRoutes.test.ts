@@ -85,6 +85,8 @@ describe('TBI-004 run grounding route authorization', () => {
       groundedAt,
       driftState: 'grounded',
       stalenessState: 'fresh',
+      commitsBehind: 0,
+      changedFileCount: 0,
       canReGround: false,
     });
 
@@ -121,6 +123,8 @@ describe('TBI-004 run grounding route authorization', () => {
       groundedAt,
       driftState: 'grounded',
       stalenessState: 'fresh',
+      commitsBehind: 0,
+      changedFileCount: 0,
       canReGround: false,
     });
 

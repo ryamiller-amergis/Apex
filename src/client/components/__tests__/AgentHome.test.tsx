@@ -90,6 +90,17 @@ jest.mock('../../hooks/useProjectRepositoryReadiness', () => ({
   PROJECT_REPOSITORY_NOT_READY_MESSAGE:
     'A project administrator must clone this repository before repository-dependent AI work can run.',
 }));
+jest.mock('../../hooks/useGroundingResumeGate', () => ({
+  useGroundingResumeGate: () => ({
+    composerBlocked: false,
+    showCard: false,
+    status: null,
+    continueOnPin: jest.fn(),
+    updateToLatest: jest.fn(),
+    isUpdating: false,
+    error: null,
+  }),
+}));
 
 jest.mock('../../hooks/useSpeechOutput', () => ({
   useSpeechOutput: jest.fn(() => ({

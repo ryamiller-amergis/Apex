@@ -467,4 +467,27 @@ describe('TBI-008 runtime drift telemetry', () => {
 
     expect(status?.driftState).toBe('grounded');
   });
+
+  it('includes commits behind and changed file counts when the origin tip moved', async () => {
+    const repository = repositoryMock();
+    repository.findByRun.mockResolvedValue([grounding('target')]);
+    const service = createRunGroundingService(repository, {
+      readCachedOriginSha: jest.fn().mockResolvedValue('new-origin-sha'),
+      hasCachedCommit: jest.fn().mockResolvedValue(true),
+      evaluateStaleness: jest.fn().mockResolvedValue('soft-stale'),
+      countCommitsBehind: jest.fn().mockResolvedValue(12),
+      listChangedPaths: jest.fn().mockResolvedValue(['src/a.ts', 'README.md']),
+    });
+
+    const status = await service.getStatus(run, 'target', true);
+
+    expect(status).toEqual(
+      expect.objectContaining({
+        driftState: 'source-changed',
+        stalenessState: 'soft-stale',
+        commitsBehind: 12,
+        changedFileCount: 2,
+      }),
+    );
+  });
 });

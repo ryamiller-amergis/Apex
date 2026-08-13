@@ -44,6 +44,8 @@ import {
   PROJECT_REPOSITORY_NOT_READY_MESSAGE,
   useProjectRepositoryReadiness,
 } from '../hooks/useProjectRepositoryReadiness';
+import { useGroundingResumeGate } from '../hooks/useGroundingResumeGate';
+import { GroundingResumeCard } from './GroundingResumeCard';
 import { parseAgentMessage, type ChoiceBlock } from '../utils/parseAgentMessage';
 import type { ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
 import styles from './InterviewChatView.module.css';
@@ -383,6 +385,12 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const fixCommentWithAi = useFixAdrCommentWithAi(id);
   const isRunning = session.isRunning || thread?.status === 'running';
   const isInteractionBusy = session.isInteractionBusy || isRunning;
+  const resumeGate = useGroundingResumeGate(
+    'adr',
+    id,
+    adr?.project ?? null,
+    isRunning,
+  );
   const isAgentProcessing = isRunning || session.isSending || session.isAwaitingAgentResponse;
   const isAuthor = adr?.authorId === userId;
   const chatLocked = !isAuthor || adr?.status !== 'in_progress';
@@ -443,7 +451,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   }, [adr?.status]);
 
   const send = useCallback(async (text: string) => {
-    if (!adr || isInteractionBusy || chatLocked) return;
+    if (!adr || isInteractionBusy || chatLocked || resumeGate.composerBlocked) return;
     if (!text.trim() && attachments.length === 0) return;
     const payload = text.trim();
     const pendingAttachments = attachments;
@@ -452,7 +460,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     setError(null);
     await session.send(payload, { model, attachments: pendingAttachments });
     if (session.sendError) setError(session.sendError);
-  }, [adr, attachments, chatLocked, clearAttachments, isInteractionBusy, model, session]);
+  }, [adr, attachments, chatLocked, clearAttachments, isInteractionBusy, model, resumeGate.composerBlocked, session]);
 
   const cancelActiveRun = useCallback(async () => {
     setError(null);
@@ -885,12 +893,23 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
       ) : !adr.content && (chatLocked ? (
         <div className={styles.lockedNotice}>This ADR conversation is read-only.</div>
       ) : (
+        <>
+        {resumeGate.showCard && resumeGate.status ? (
+          <GroundingResumeCard
+            status={resumeGate.status}
+            isPending={resumeGate.isUpdating}
+            error={resumeGate.error}
+            onContinue={resumeGate.continueOnPin}
+            onUpdateToLatest={() => void resumeGate.updateToLatest()}
+            {...{ 'data-testid': 'grounding-resume-card' }}
+          />
+        ) : null}
         <AgentComposer
           value={input}
           onChange={setInput}
           onSend={() => void send(input)}
           onCancel={() => void cancelActiveRun()}
-          disabled={isInteractionBusy}
+          disabled={isInteractionBusy || resumeGate.composerBlocked}
           isRunning={isRunning}
           isSending={session.isSending}
           isBusy={isInteractionBusy}
@@ -929,6 +948,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
             />
           )}
         />
+        </>
       ))}
       {pendingSelector && (
         <div

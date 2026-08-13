@@ -470,7 +470,7 @@ export function useCreatePrd() {
   return useMutation<
     CreatePrdResponse,
     Error,
-    { interviewId: string; chatThreadId: string; title?: string; model?: string; kickoffGeneration?: boolean }
+    { interviewId: string; chatThreadId: string; title?: string; model?: string; kickoffGeneration?: boolean; groundingPolicy?: 'inherit' | 'latest' }
   >({
     mutationFn: ({ interviewId, ...body }) =>
       apiFetch(`/api/interviews/${interviewId}/prds`, {
@@ -615,12 +615,12 @@ export function useSyncPrd() {
 
 export function useCreateDesignDoc() {
   const qc = useQueryClient();
-  return useMutation<CreateDesignDocResponse, Error, { prdId: string }>({
-    mutationFn: ({ prdId }) =>
+  return useMutation<CreateDesignDocResponse, Error, { prdId: string; groundingPolicy?: 'inherit' | 'latest' }>({
+    mutationFn: ({ prdId, groundingPolicy }) =>
       apiFetch(`/api/interviews/prds/${prdId}/design-docs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ groundingPolicy }),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['design-docs'] });
