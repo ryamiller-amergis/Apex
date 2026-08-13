@@ -23,6 +23,10 @@ export const SKILL_DISCOVERY_ROOTS = [
 
 const SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+function isStoredSkillSegment(name: string): boolean {
+  return name.length > 0 && name !== '.' && name !== '..';
+}
+
 export function normalizeRepoRelativePath(value: string): string {
   const raw = value
     .trim()
@@ -119,8 +123,12 @@ export function skillPathCandidates(
     out.push(normalized);
   };
   if (preferredPath?.trim()) add(preferredPath);
-  for (const root of SKILL_DISCOVERY_ROOTS) {
-    add(skillPathFor(root, skillName));
+  // Cross-root fallbacks are generated only for Agent Skills kebab names.
+  // Legacy stored paths (spaces, mixed case) stay as the explicit preferred path.
+  if (SKILL_NAME_RE.test(skillName)) {
+    for (const root of SKILL_DISCOVERY_ROOTS) {
+      add(skillPathFor(root, skillName));
+    }
   }
   return out;
 }
@@ -133,7 +141,7 @@ export function isSupportedAgentSkillPath(value: string): boolean {
     const parts = suffix.split('/');
     return (
       parts.length === 2 &&
-      SKILL_NAME_RE.test(parts[0]) &&
+      isStoredSkillSegment(parts[0]) &&
       parts[1] === 'SKILL.md'
     );
   });

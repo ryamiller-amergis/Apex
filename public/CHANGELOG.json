@@ -14,11 +14,11 @@
       },
       {
         "type": "improvement",
-        "description": "Skill discovery prefers .agents/skills, then skills/, then .cursor/skills, and collapses duplicate names to the highest-precedence root"
+        "description": "Skill discovery prefers .agents/skills, then .cursor/skills, then skills/, and collapses duplicate names to the highest-precedence root"
       },
       {
         "type": "bugfix",
-        "description": "Walkthrough AI skill-path migration normalizes legacy names before tightening the CHECK constraint, and rollback restores column defaults so it is reversible"
+        "description": "Walkthrough AI skill-path constraints accept .agents/skills, .cursor/skills, and skills/ without rewriting existing skill names, and rollback restores column defaults so it is reversible"
       },
       {
         "type": "bugfix",

@@ -3,6 +3,7 @@ import {
   normalizeSkillRoot,
   selectSkillsByRootPrecedence,
   SKILL_DISCOVERY_ROOTS,
+  skillPathCandidates,
   skillRootFromLock,
 } from '../../shared/skillPaths';
 
@@ -22,6 +23,9 @@ describe('skillPaths', () => {
       true
     );
     expect(isSupportedAgentSkillPath('skills/to-prd/SKILL.md')).toBe(true);
+    expect(
+      isSupportedAgentSkillPath('.cursor/skills/My Skill/SKILL.md')
+    ).toBe(true);
     expect(
       isSupportedAgentSkillPath('.agents/skills/to-prd/references/extra.md')
     ).toBe(false);
@@ -90,5 +94,11 @@ describe('skillPaths', () => {
 
   it('rejects skill roots outside the known set', () => {
     expect(() => normalizeSkillRoot('company/skills')).toThrow(/one of/i);
+  });
+
+  it('keeps a non-kebab preferred path without generating fallbacks', () => {
+    expect(
+      skillPathCandidates('My Skill', '.cursor/skills/My Skill/SKILL.md')
+    ).toEqual(['.cursor/skills/My Skill/SKILL.md']);
   });
 });

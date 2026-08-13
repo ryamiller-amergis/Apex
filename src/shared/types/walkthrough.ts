@@ -612,10 +612,14 @@ export function validateGenerationProvenance(
       'generationProvenance model is required',
     );
   }
-  if (
-    typeof p.skillPath !== 'string'
-    || !isSupportedAgentSkillPath(normalizeRepoRelativePath(p.skillPath))
-  ) {
+  if (typeof p.skillPath !== 'string') {
+    throw new WalkthroughDomainError(
+      'VALIDATION_ERROR',
+      'generationProvenance skillPath must use a supported Agent Skills root',
+    );
+  }
+  const skillPath = normalizeRepoRelativePath(p.skillPath);
+  if (!isSupportedAgentSkillPath(skillPath)) {
     throw new WalkthroughDomainError(
       'VALIDATION_ERROR',
       'generationProvenance skillPath must use a supported Agent Skills root',
@@ -658,7 +662,7 @@ export function validateGenerationProvenance(
   return {
     provider: p.provider,
     model: p.model.trim(),
-    skillPath: p.skillPath,
+    skillPath,
     generatedAt: new Date(p.generatedAt).toISOString(),
     runId,
     threadId,
