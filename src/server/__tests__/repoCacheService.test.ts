@@ -29,6 +29,7 @@ jest.mock('../services/repoCacheLeaseService', () => ({
 
 import {
   COLD_CACHE_TIMEOUT_MS,
+  USER_FACING_REPO_CACHE_LEASE_WAIT_MS,
   ensureRepoCache,
   fetchRepositoryTip,
   getRepoCacheDir,
@@ -61,7 +62,7 @@ describe('repoCacheService', () => {
     process.env = originalEnv;
   });
 
-  it('keys caches by provider, project, repository, and base branch', () => {
+  it('keys caches by provider, project, and repository — not branch', () => {
     const development = getRepoCacheDir({
       provider: 'ado',
       project: 'MaxView',
@@ -75,8 +76,24 @@ describe('repoCacheService', () => {
       branch: 'release',
     });
 
-    expect(development).toContain(path.join('repo-cache', 'ado-maxview-maxview-development-'));
-    expect(development).not.toBe(release);
+    expect(development).toContain(path.join('repo-cache', 'ado-maxview-maxview-'));
+    expect(development).not.toContain('development');
+    expect(development).toBe(release);
+  });
+
+  it('reuses a legacy per-branch mirror when the per-repo mirror is absent', () => {
+    mockFs.existsSync.mockImplementation((target) =>
+      String(target).includes('-development-') && String(target).endsWith(`${path.sep}HEAD`),
+    );
+
+    const dir = getRepoCacheDir({
+      provider: 'ado',
+      project: 'MaxView',
+      repo: 'MaxView',
+      branch: 'development',
+    });
+
+    expect(dir).toContain('development');
   });
 
   it('creates a credential-free remote with runtime-only authentication', () => {
@@ -118,7 +135,7 @@ describe('repoCacheService', () => {
     );
   });
 
-  it('populates a cold cache with the complete configured branch history', async () => {
+  it('populates a cold cache with the complete repository history', async () => {
     const result = await ensureRepoCache({
       provider: 'ado',
       project: 'MaxView',
@@ -130,11 +147,9 @@ describe('repoCacheService', () => {
     expect(cloneCall?.[0]).toEqual(expect.arrayContaining([
       'clone',
       '--bare',
-      '--single-branch',
-      '--branch',
-      'development',
       '--progress',
     ]));
+    expect(cloneCall?.[0]).not.toEqual(expect.arrayContaining(['--single-branch']));
     expect(JSON.stringify(cloneCall)).not.toContain('ado-secret');
     expect(cloneCall?.[1]).toEqual(expect.objectContaining({
       timeout: COLD_CACHE_TIMEOUT_MS,
@@ -166,7 +181,7 @@ describe('repoCacheService', () => {
         'fetch',
         '--prune',
         'origin',
-        '+refs/heads/development:refs/heads/development',
+        '+refs/heads/*:refs/heads/*',
       ]),
       expect.objectContaining({ env: expect.objectContaining({ GIT_CONFIG_COUNT: '1' }) }),
     );
@@ -398,5 +413,22 @@ describe('repoCacheService', () => {
 
     expect(mockGit.mock.calls.some(([args]) => (args as string[]).includes('clone'))).toBe(false);
     expect(mockWithLease).not.toHaveBeenCalled();
+  });
+
+  it('bounds user-facing tip-fetch lease waits below the chat preparation deadline', async () => {
+    mockFs.existsSync.mockReturnValue(true);
+
+    await fetchRepositoryTip({
+      provider: 'ado',
+      project: 'MaxView',
+      repo: 'MaxView',
+      branch: 'development',
+    });
+
+    expect(mockWithLease).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Function),
+      { waitMs: USER_FACING_REPO_CACHE_LEASE_WAIT_MS },
+    );
   });
 });

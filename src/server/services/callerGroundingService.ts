@@ -32,7 +32,9 @@ import {
   type GroundingProfileRegistration,
 } from './groundingProfileResolver';
 import {
+  USER_FACING_REPO_CACHE_LEASE_WAIT_MS,
   ensureRepoCache as ensureRepositoryCache,
+  getRepoCacheDir,
   readCachedOriginSha as readCachedOriginShaFromRepoCache,
 } from './repoCacheService';
 import {
@@ -84,12 +86,12 @@ export interface LocalCallerGrounding {
   profileId: GroundingProfileId;
   resolvedSha: string;
   nativeReads: boolean;
-  release(): Promise<void>;
+  release(options?: { persistPin?: boolean }): Promise<void>;
 }
 
 export interface RemoteCallerGrounding {
   mode: 'remote';
-  release(): Promise<void>;
+  release(options?: { persistPin?: boolean }): Promise<void>;
 }
 
 export interface PreparingCallerGrounding {
@@ -97,7 +99,7 @@ export interface PreparingCallerGrounding {
   retryAfterMs: number;
   /** Real checkout work started for this selection, if this instance owns it. */
   waitUntilReady?(): Promise<void>;
-  release(): Promise<void>;
+  release(options?: { persistPin?: boolean }): Promise<void>;
 }
 
 export type CallerGroundingSelection =
@@ -167,12 +169,15 @@ export interface CallerGroundingDependencies {
     SharedReadCheckoutService,
     'getReady' | 'materialize' | 'retain' | 'releaseRef'
   >;
-  ensureRepoCache: (options: {
-    provider: SkillProvider;
-    project: string;
-    repo: string;
-    branch: string;
-  }) => Promise<{ baseSha: string; mirrorHit?: boolean }>;
+  ensureRepoCache: (
+    options: {
+      provider: SkillProvider;
+      project: string;
+      repo: string;
+      branch: string;
+    },
+    leaseOptions?: { waitMs?: number },
+  ) => Promise<{ baseSha: string; mirrorHit?: boolean }>;
   readCachedOriginSha: typeof readCachedOriginShaFromRepoCache;
   groundingService: GroundingServiceDependency;
   materialize: (
@@ -394,6 +399,12 @@ export function createCallerGroundingService(
             repo,
             sha: grounding.groundedSha,
             checkoutPath: workspacePath,
+            mirrorPath: getRepoCacheDir({
+              provider: profileProvider(grounding.provider),
+              project: grounding.project,
+              repo,
+              branch: input.repository.branch,
+            }),
             caller: input.caller,
           },
           callerContext,
@@ -413,11 +424,13 @@ export function createCallerGroundingService(
           profileId: profile.id,
           resolvedSha: grounding.groundedSha,
           nativeReads: false,
-          release: async () => {
+          release: async (options) => {
             if (released) return;
             released = true;
             try {
-              await dependencies.groundingService.markTerminalInactive(input.run);
+              if (!options?.persistPin) {
+                await dependencies.groundingService.markTerminalInactive(input.run);
+              }
             } finally {
               dependencies.impactContexts.unregister(input.run);
               dependencies.profiles.revokeProfile(profile.id);
@@ -554,11 +567,10 @@ export function createCallerGroundingService(
             setMaterializationMode('warm');
             telemetry.phase(telemetryContext(input), 'shared-checkout-hit');
           }
-        }
-
-        // A thread can carry an older pin while the mirror has advanced. Prefer
-        // the current ready SHA before falling back to older active pins.
-        if (!workspacePath && latestSha && latestSha !== exactSha) {
+        } else if (latestSha) {
+          // New roots may use a ready latest snapshot. Existing pins stay
+          // sticky even when latest is already warm — Stage 2 removed
+          // between-turn auto-advance.
           const latestIdentity = identityFor(latestSha);
           const latestReady = repositoryPreparation.getReadyReadOnly({
             repository: preparationRepository,
@@ -572,10 +584,7 @@ export function createCallerGroundingService(
             sharedIdentity = latestIdentity;
             workspacePath = latestReady.workspacePath;
             setMaterializationMode('warm');
-            telemetry.phase(
-              telemetryContext(input),
-              'shared-checkout-latest-ready'
-            );
+            telemetry.phase(telemetryContext(input), 'shared-checkout-hit');
           }
         }
 
@@ -624,7 +633,7 @@ export function createCallerGroundingService(
         }
 
         if (!workspacePath) {
-          const shaToPrepare = latestSha ?? exactSha;
+          const shaToPrepare = exactSha ?? latestSha;
           if (shaToPrepare) {
             return prepareOnDemand(shaToPrepare);
           }
@@ -638,12 +647,15 @@ export function createCallerGroundingService(
       // @feature-flag:shared-readonly-grounding-checkout end
 
       if (!grounding) {
-        const cache = await dependencies.ensureRepoCache({
-          provider: input.repository.provider,
-          project: input.run.project,
-          repo,
-          branch: input.repository.branch,
-        });
+        const cache = await dependencies.ensureRepoCache(
+          {
+            provider: input.repository.provider,
+            project: input.run.project,
+            repo,
+            branch: input.repository.branch,
+          },
+          { waitMs: USER_FACING_REPO_CACHE_LEASE_WAIT_MS },
+        );
         if (cache.mirrorHit !== undefined) {
           telemetry.mirror(telemetryContext(input), cache.mirrorHit);
         }
@@ -698,6 +710,12 @@ export function createCallerGroundingService(
           repo,
           sha: grounding.groundedSha,
           checkoutPath: workspacePath,
+          mirrorPath: getRepoCacheDir({
+            provider: profileProvider(grounding.provider),
+            project: grounding.project,
+            repo,
+            branch: input.repository.branch,
+          }),
           caller: input.caller,
         },
         callerContext,
@@ -717,11 +735,13 @@ export function createCallerGroundingService(
         profileId: profile.id,
         resolvedSha: grounding.groundedSha,
         nativeReads: false,
-        release: async () => {
+        release: async (options) => {
           if (released) return;
           released = true;
           try {
-            await dependencies.groundingService.markTerminalInactive(input.run);
+            if (!options?.persistPin) {
+              await dependencies.groundingService.markTerminalInactive(input.run);
+            }
           } finally {
             dependencies.impactContexts.unregister(input.run);
             dependencies.profiles.revokeProfile(profile.id);

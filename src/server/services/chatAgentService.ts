@@ -3547,7 +3547,7 @@ export async function releaseGroundingForStaleRecovery(
   state.resolvedGroundingBinding = null;
   state.bindingContinuity = null;
   state.groundingWorkspaceDir = null;
-  await grounding?.release().catch(() => undefined);
+  await grounding?.release({ persistPin: true }).catch(() => undefined);
 }
 
 async function ensureThreadGrounding(
@@ -5974,7 +5974,7 @@ export async function closeThread(threadId: string): Promise<void> {
   state.grounding = null;
   state.groundingInFlight = null;
   state.groundingWorkspaceDir = null;
-  await grounding?.release().catch(() => undefined);
+  await grounding?.release({ persistPin: true }).catch(() => undefined);
 
   // For dev sessions with unpushed changes: evict from memory (free resources)
   // but leave the thread status as-is (idle) and preserve the workspace.

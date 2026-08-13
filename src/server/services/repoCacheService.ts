@@ -7,8 +7,10 @@ import type { RunGrounding } from '../../shared/types/runGrounding';
 import { git, safeArgs } from '../utils/asyncGit';
 import { resolveDataRoot } from '../utils/dataDir';
 import {
+  USER_FACING_REPO_CACHE_LEASE_WAIT_MS,
   withRepoCacheLease,
   type RepoCacheLeaseContext,
+  type RepoCacheLeaseOptions,
 } from './repoCacheLeaseService';
 import {
   CACHE_FETCH_IDLE_TIMEOUT_MS,
@@ -18,6 +20,7 @@ import {
 } from './repoGitSettings';
 
 export { COLD_CACHE_TIMEOUT_MS } from './repoGitSettings';
+export { USER_FACING_REPO_CACHE_LEASE_WAIT_MS } from './repoCacheLeaseService';
 
 const REPO_CACHE_BASE = path.join(resolveDataRoot(), 'repo-cache');
 const inFlightRefreshes = new Map<string, Promise<RepoCacheResult>>();
@@ -52,13 +55,34 @@ function safeSlug(value: string): string {
     .slice(0, 32) || 'repo';
 }
 
+const ALL_HEADS_REFSPEC = '+refs/heads/*:refs/heads/*';
+
 function cacheIdentity(options: RepoCacheOptions): string {
+  return [options.provider, options.project, options.repo].join('\0');
+}
+
+function legacyCacheIdentity(options: RepoCacheOptions): string {
   return [
     options.provider,
     options.project,
     options.repo,
     options.branch,
   ].join('\0');
+}
+
+function cacheDirForIdentity(
+  identity: string,
+  options: RepoCacheOptions,
+  includeBranch: boolean,
+): string {
+  const readable = [
+    options.provider,
+    safeSlug(options.project),
+    safeSlug(options.repo),
+    ...(includeBranch ? [safeSlug(options.branch)] : []),
+  ].join('-');
+  const hash = crypto.createHash('sha256').update(identity).digest('hex').slice(0, 12);
+  return path.join(REPO_CACHE_BASE, `${readable}-${hash}.git`);
 }
 
 export function getRepoCacheLeaseKey(options: RepoCacheOptions): string {
@@ -69,14 +93,11 @@ export function getRepoCacheLeaseKey(options: RepoCacheOptions): string {
 }
 
 export function getRepoCacheDir(options: RepoCacheOptions): string {
-  const readable = [
-    options.provider,
-    safeSlug(options.project),
-    safeSlug(options.repo),
-    safeSlug(options.branch),
-  ].join('-');
-  const hash = crypto.createHash('sha256').update(cacheIdentity(options)).digest('hex').slice(0, 12);
-  return path.join(REPO_CACHE_BASE, `${readable}-${hash}.git`);
+  const canonical = cacheDirForIdentity(cacheIdentity(options), options, false);
+  if (cacheExists(canonical)) return canonical;
+  const legacy = cacheDirForIdentity(legacyCacheIdentity(options), options, true);
+  if (cacheExists(legacy)) return legacy;
+  return canonical;
 }
 
 function authEnvironment(username: string, secret: string): Record<string, string> {
@@ -281,7 +302,7 @@ async function refetchAndVerifyCache(
       '--refetch',
       '--prune',
       'origin',
-      `+refs/heads/${options.branch}:refs/heads/${options.branch}`,
+      ALL_HEADS_REFSPEC,
     ]),
     {
       cwd: cacheDir,
@@ -328,9 +349,6 @@ async function populateColdCache(
     await git([
       'clone',
       '--bare',
-      '--single-branch',
-      '--branch',
-      options.branch,
       '--progress',
       remote.url,
       tempDir,
@@ -388,7 +406,7 @@ async function refreshWarmCache(
       'fetch',
       '--prune',
       'origin',
-      `+refs/heads/${options.branch}:refs/heads/${options.branch}`,
+      ALL_HEADS_REFSPEC,
     ]),
     {
       cwd: cacheDir,
@@ -532,6 +550,7 @@ export async function fetchRepositoryTip(
       }
       return refreshWarmMirrorUnderLease(options, lease);
     },
+    { waitMs: USER_FACING_REPO_CACHE_LEASE_WAIT_MS },
   ).finally(() => {
     inFlightRefreshes.delete(key);
   });
@@ -539,7 +558,10 @@ export async function fetchRepositoryTip(
   return refresh;
 }
 
-export function ensureRepoCache(options: RepoCacheOptions): Promise<RepoCacheResult> {
+export function ensureRepoCache(
+  options: RepoCacheOptions,
+  leaseOptions?: Pick<RepoCacheLeaseOptions, 'waitMs'>,
+): Promise<RepoCacheResult> {
   const key = cacheIdentity(options);
   const existing = inFlightRefreshes.get(key);
   if (existing) return existing;
@@ -547,6 +569,7 @@ export function ensureRepoCache(options: RepoCacheOptions): Promise<RepoCacheRes
   const refresh = withRepoCacheLease(
     getRepoCacheLeaseKey(options),
     (lease) => refreshRepoCacheUnderLease(options, lease),
+    leaseOptions,
   ).finally(() => {
     inFlightRefreshes.delete(key);
   });

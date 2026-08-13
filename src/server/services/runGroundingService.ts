@@ -35,6 +35,10 @@ import {
 import {
   materializeLinkedContextForPipelineHandoff,
 } from './linkedContextMaterializerService';
+import {
+  pinGroundingCommit,
+  unpinGroundingCommitIfUnused,
+} from './repoRead/pinRefs';
 import { trackEvent } from './telemetry';
 
 export type RepositoryGroundingPin = Pick<
@@ -400,6 +404,22 @@ export async function propagatePipelineGrounding(
   return result;
 }
 
+async function unpinDeactivated(
+  rows: RunGrounding[],
+  repository: RunGroundingRepository,
+): Promise<void> {
+  for (const row of rows.filter((grounding) => grounding.isActive)) {
+    await unpinGroundingCommitIfUnused(row, () =>
+      repository.listActiveGroundings(),
+    ).catch((error: unknown) => {
+      console.warn(
+        '[run-grounding] pin ref delete failed:',
+        error instanceof Error ? error.message : error,
+      );
+    });
+  }
+}
+
 export function createRunGroundingService(
   repository: RunGroundingRepository = runGroundingRepository,
   options: RunGroundingServiceOptions = {}
@@ -437,6 +457,12 @@ export function createRunGroundingService(
         const groundings = await repository.activateGroundings(groundingInputs);
         for (const grounding of groundings) {
           emitGroundingActiveSetChanged(grounding);
+          await pinGroundingCommit(grounding).catch((error: unknown) => {
+            console.warn(
+              '[run-grounding] pin ref write failed:',
+              error instanceof Error ? error.message : error,
+            );
+          });
         }
 
         return {
@@ -504,19 +530,27 @@ export function createRunGroundingService(
       return grounding;
     },
 
-    deactivate(ref) {
-      return repository.deactivateByRun(ref);
+    async deactivate(ref) {
+      const rows = await repository.findByRun(ref);
+      const count = await repository.deactivateByRun(ref);
+      await unpinDeactivated(rows, repository);
+      return count;
     },
 
-    markTerminalInactive(ref) {
-      return repository.deactivateByRun(ref);
+    async markTerminalInactive(ref) {
+      const rows = await repository.findByRun(ref);
+      const count = await repository.deactivateByRun(ref);
+      await unpinDeactivated(rows, repository);
+      return count;
     },
 
     async persistThenMarkTerminalInactive(ref, persist) {
+      const rows = await repository.findByRun(ref);
       const persisted = await persist();
       let deactivatedCount = 0;
       try {
         deactivatedCount = await repository.deactivateByRun(ref);
+        await unpinDeactivated(rows, repository);
       } catch {
         console.warn(
           '[run-grounding] terminal deactivation failed after durable persistence'

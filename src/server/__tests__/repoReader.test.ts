@@ -13,6 +13,7 @@ import {
 } from '../services/groundingProfileResolver';
 import { LocalCheckoutReader } from '../services/localCheckoutReader';
 import { RemoteCatalogReader } from '../services/remoteCatalogReader';
+import { BareRepoReader } from '../services/repoRead/bareRepoReader';
 import { RepoReaderError } from '../services/repoReader';
 import * as adoCatalog from '../services/skillCatalog';
 import * as skillCatalogFacade from '../services/skillCatalogFacade';
@@ -271,6 +272,72 @@ describe('TBI-001 DoD-1 rejects traversal, symlink escape, expiry, and cross-run
         runRef: 'interview:run-1',
         project: 'Apex',
       })).rejects.toMatchObject({ code: 'PROFILE_UNAVAILABLE' });
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('selects BareRepoReader when repo-read-service is enabled and a mirror path is registered', async () => {
+    const fixture = makeFixture();
+    const bare = path.join(fixture.root, 'mirror.git');
+    git(fixture.root, ['clone', '--bare', '.', bare]);
+    const caller = {
+      userId: 'user-1',
+      runRef: 'chat:thread-1',
+      project: 'Apex',
+    };
+    const resolver = new GroundingProfileResolver({
+      authorization: { authorize: async () => true },
+      isFeatureEnabled: async () => true,
+      isRepoReadServiceEnabledForCaller: async () => true,
+    });
+    const profile = resolver.registerConnectionProfile(
+      {
+        runRef: caller.runRef,
+        ...identity('ado', fixture.sha),
+        checkoutPath: fixture.root,
+        mirrorPath: bare,
+        caller: 'chat-agent',
+      },
+      caller,
+      async () => true,
+    );
+
+    try {
+      const reader = await resolver.resolveConnectionProfile(profile.id);
+      expect(reader).toBeInstanceOf(BareRepoReader);
+      await expect(reader.readFile('README.md')).resolves.toBe('fixture\n');
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps LocalCheckoutReader when repo-read-service is on but no mirror path is registered', async () => {
+    const fixture = makeFixture();
+    const caller = {
+      userId: 'user-1',
+      runRef: 'chat:thread-1',
+      project: 'Apex',
+    };
+    const resolver = new GroundingProfileResolver({
+      authorization: { authorize: async () => true },
+      isFeatureEnabled: async () => true,
+      isRepoReadServiceEnabledForCaller: async () => true,
+    });
+    const profile = resolver.registerConnectionProfile(
+      {
+        runRef: caller.runRef,
+        ...identity('ado', fixture.sha),
+        checkoutPath: fixture.root,
+        caller: 'chat-agent',
+      },
+      caller,
+      async () => true,
+    );
+
+    try {
+      const reader = await resolver.resolveConnectionProfile(profile.id);
+      expect(reader).toBeInstanceOf(LocalCheckoutReader);
     } finally {
       fs.rmSync(fixture.root, { recursive: true, force: true });
     }

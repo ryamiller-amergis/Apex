@@ -7,6 +7,7 @@ import {
   evaluateBindingContinuity,
   type CallerGroundingDependencies,
 } from '../services/callerGroundingService';
+import { USER_FACING_REPO_CACHE_LEASE_WAIT_MS } from '../services/repoCacheLeaseService';
 
 const run: RunRef = {
   runType: 'chat',
@@ -150,6 +151,25 @@ describe('PBI-005 shared caller grounding startup', () => {
     );
     expect(deps.profiles.revokeProfile).toHaveBeenCalledWith(profileId);
     expect(deps.impactContexts.unregister).toHaveBeenCalledWith(run);
+
+    const persistDeps = dependencies();
+    const persistService = createCallerGroundingService(persistDeps);
+    const persistSelected = await persistService.start({
+      caller: 'chat-agent',
+      userId: 'developer-1',
+      run,
+      repository: {
+        provider: 'github',
+        repo: 'AI-Pilot',
+        branch: 'main',
+      },
+      reauthorize: async () => true,
+    });
+    if (persistSelected.mode !== 'local') {
+      throw new Error(`expected local grounding, got ${persistSelected.mode}`);
+    }
+    await persistSelected.release({ persistPin: true });
+    expect(persistDeps.groundingService.markTerminalInactive).not.toHaveBeenCalled();
   });
 
   it('AC-0 creates a run grounding when the caller has no existing pin', async () => {
@@ -173,12 +193,15 @@ describe('PBI-005 shared caller grounding startup', () => {
 
     // Assert
     expect(selected.mode).toBe('local');
-    expect(deps.ensureRepoCache).toHaveBeenCalledWith({
-      provider: 'github',
-      project: 'Apex',
-      repo: 'AI-Pilot',
-      branch: 'main',
-    });
+    expect(deps.ensureRepoCache).toHaveBeenCalledWith(
+      {
+        provider: 'github',
+        project: 'Apex',
+        repo: 'AI-Pilot',
+        branch: 'main',
+      },
+      { waitMs: USER_FACING_REPO_CACHE_LEASE_WAIT_MS },
+    );
     expect(deps.groundingService.activateGroundings).toHaveBeenCalledWith({
       run,
       target: {
@@ -211,12 +234,15 @@ describe('PBI-005 shared caller grounding startup', () => {
 
     // Then the GitHub organization remains environment-owned and only the repo name flows downstream.
     expect(selected.mode).toBe('local');
-    expect(deps.ensureRepoCache).toHaveBeenCalledWith({
-      provider: 'github',
-      project: 'Apex',
-      repo: 'AI-Pilot',
-      branch: 'main',
-    });
+    expect(deps.ensureRepoCache).toHaveBeenCalledWith(
+      {
+        provider: 'github',
+        project: 'Apex',
+        repo: 'AI-Pilot',
+        branch: 'main',
+      },
+      { waitMs: USER_FACING_REPO_CACHE_LEASE_WAIT_MS },
+    );
     expect(deps.groundingService.activateGroundings).toHaveBeenCalledWith({
       run,
       target: {
@@ -272,7 +298,8 @@ describe('PBI-005 shared caller grounding startup', () => {
       expect.objectContaining({
         provider: 'ado',
         repo: 'Platform/AI-Pilot',
-      })
+      }),
+      { waitMs: USER_FACING_REPO_CACHE_LEASE_WAIT_MS },
     );
     expect(deps.groundingService.activateGroundings).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1202,6 +1229,38 @@ describe('Bundle B fast shared grounding selection', () => {
     expect(deps.materialize).not.toHaveBeenCalled();
   });
 
+  it('does not auto-advance an existing pin to a ready latest SHA', async () => {
+    const latestSha = 'c'.repeat(40);
+    const deps = sharedDeps({
+      readCachedOriginSha: jest.fn().mockResolvedValue(latestSha),
+      sharedReadCheckout: {
+        getReady: jest.fn().mockImplementation((identity) =>
+          identity.sha === latestSha
+            ? { workspacePath: SHARED_PATH, outcome: 'hit' }
+            : null
+        ),
+        materialize: jest.fn().mockResolvedValue({
+          workspacePath: SHARED_PATH,
+          outcome: 'materialized',
+        }),
+        retain: jest.fn(),
+        releaseRef: jest.fn(),
+      },
+    });
+    const service = createCallerGroundingService(deps);
+
+    const selected = await service.start(startArgs);
+
+    expect(selected.mode).toBe('preparing');
+    expect(deps.groundingService.reground).not.toHaveBeenCalled();
+    if (selected.mode === 'preparing') {
+      await selected.waitUntilReady?.();
+    }
+    expect(deps.sharedReadCheckout.materialize).toHaveBeenCalledWith(
+      expect.objectContaining({ sha: grounding.groundedSha }),
+    );
+  });
+
   it('PLAN-S2-AC-1 Given exact cold and prior ready SHA, When starting, Then pins and selects the prior SHA', async () => {
     // Given
     const previousSha = 'b'.repeat(40);
@@ -1326,12 +1385,15 @@ describe('Bundle B fast shared grounding selection', () => {
     }
 
     // Then
-    expect(deps.ensureRepoCache).toHaveBeenCalledWith({
-      provider: 'github',
-      project: 'Apex',
-      repo: 'AI-Pilot',
-      branch: 'main',
-    });
+    expect(deps.ensureRepoCache).toHaveBeenCalledWith(
+      {
+        provider: 'github',
+        project: 'Apex',
+        repo: 'AI-Pilot',
+        branch: 'main',
+      },
+      { waitMs: USER_FACING_REPO_CACHE_LEASE_WAIT_MS },
+    );
     expect(deps.sharedReadCheckout.materialize).toHaveBeenCalledWith({
       provider: 'github',
       project: 'Apex',

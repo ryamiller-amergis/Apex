@@ -8,9 +8,11 @@ import type {
 import {
   isFeatureEnabled as evaluateFeatureFlag,
   isRemoteSearchConvergenceEnabled as evaluateConvergence,
+  isRepoReadServiceEnabledForCaller as evaluateRepoReadService,
 } from './featureFlagService';
 import { LocalCheckoutReader } from './localCheckoutReader';
 import { RemoteCatalogReader } from './remoteCatalogReader';
+import { BareRepoReader } from './repoRead/bareRepoReader';
 import { createRepoReader, RepoReaderError } from './repoReader';
 
 const PROFILE_FLAG = 'repo-grounding-workspace-profile';
@@ -19,6 +21,8 @@ const DEFAULT_PROFILE_TTL_MS = 60 * 60 * 1_000;
 export interface GroundingProfileRegistration extends RepositoryIdentity {
   runRef: string;
   checkoutPath: string;
+  /** Bare-mirror path used when `repo-read-service` is on. */
+  mirrorPath?: string;
   caller?: string;
   ttlMs?: number;
 }
@@ -51,6 +55,7 @@ export interface GroundingProfileResolverOptions {
   authorization: RunProjectAuthorization;
   isFeatureEnabled?: typeof evaluateFeatureFlag;
   isRemoteSearchConvergenceEnabled?: typeof evaluateConvergence;
+  isRepoReadServiceEnabledForCaller?: typeof evaluateRepoReadService;
   now?: () => number;
 }
 
@@ -64,6 +69,7 @@ interface ConnectionProfileOwner {
 interface StoredGroundingProfile extends RepositoryIdentity {
   runRef: string;
   checkoutPath: string;
+  mirrorPath?: string;
   caller?: string;
   expiresAt: number;
 }
@@ -80,6 +86,7 @@ export class GroundingProfileResolver {
   private readonly authorization: RunProjectAuthorization;
   private readonly featureEnabled: typeof evaluateFeatureFlag;
   private readonly convergenceEnabled: typeof evaluateConvergence;
+  private readonly repoReadEnabled: typeof evaluateRepoReadService;
   private readonly now: () => number;
 
   constructor(options: GroundingProfileResolverOptions) {
@@ -87,6 +94,8 @@ export class GroundingProfileResolver {
     this.featureEnabled = options.isFeatureEnabled ?? evaluateFeatureFlag;
     this.convergenceEnabled =
       options.isRemoteSearchConvergenceEnabled ?? evaluateConvergence;
+    this.repoReadEnabled =
+      options.isRepoReadServiceEnabledForCaller ?? evaluateRepoReadService;
     this.now = options.now ?? Date.now;
   }
 
@@ -100,6 +109,7 @@ export class GroundingProfileResolver {
       repo: input.repo,
       sha: input.sha,
       checkoutPath: input.checkoutPath,
+      mirrorPath: input.mirrorPath,
       caller: input.caller,
       expiresAt,
     });
@@ -136,20 +146,48 @@ export class GroundingProfileResolver {
       );
     }
     const profile = await this.getAuthorizedProfile(profileId, owner.caller);
-    return new LocalCheckoutReader({
-      identity: {
-        provider: profile.provider,
-        project: profile.project,
-        repo: profile.repo,
-        sha: profile.sha,
-      },
-      checkoutPath: profile.checkoutPath,
-      telemetryContext: {
+    const identity: RepositoryIdentity = {
+      provider: profile.provider,
+      project: profile.project,
+      repo: profile.repo,
+      sha: profile.sha,
+    };
+    const telemetryContext = {
+      caller: profile.caller ?? 'repo-reader',
+      project: profile.project,
+      runId: profile.runRef.split(':').slice(1).join(':') || profile.runRef,
+    };
+
+    let repoReadEnabled = false;
+    try {
+      repoReadEnabled = await this.repoReadEnabled({
+        userId: owner.caller.userId,
+        project: owner.caller.project,
         caller: profile.caller ?? 'repo-reader',
-        project: profile.project,
-        runId: profile.runRef.split(':').slice(1).join(':') || profile.runRef,
-      },
+      });
+    } catch {
+      repoReadEnabled = false;
+    }
+
+    // Retain the enabled branch after two stable sprints at full rollout.
+    // @feature-flag:repo-read-service start winner=enabled
+    if (repoReadEnabled && profile.mirrorPath) {
+      // @feature-flag:repo-read-service enabled-start
+      return new BareRepoReader({
+        identity,
+        mirrorPath: profile.mirrorPath,
+        telemetryContext,
+      });
+      // @feature-flag:repo-read-service enabled-end
+    }
+    // @feature-flag:repo-read-service disabled-start
+    return new LocalCheckoutReader({
+      identity,
+      checkoutPath: profile.checkoutPath,
+      telemetryContext,
     });
+    // @feature-flag:repo-read-service disabled-end
+    // @feature-flag:repo-read-service end
   }
 
   private async getAuthorizedProfile(
@@ -232,6 +270,17 @@ export class GroundingProfileResolver {
             caller: profile.caller ?? 'repo-reader',
           },
           isConvergenceEnabled: this.convergenceEnabled,
+        }),
+      bare: () =>
+        new BareRepoReader({
+          identity,
+          mirrorPath: profile.mirrorPath ?? profile.checkoutPath,
+          telemetryContext: {
+            caller: profile.caller ?? 'repo-reader',
+            project: profile.project,
+            runId:
+              profile.runRef.split(':').slice(1).join(':') || profile.runRef,
+          },
         }),
     };
 

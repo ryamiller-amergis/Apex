@@ -34,6 +34,7 @@ export async function materializeWorkspaceFromCache(
         'clone',
         '--reference',
         cacheDir,
+        '--dissociate',
         '--no-local',
         '--no-hardlinks',
         '--single-branch',
