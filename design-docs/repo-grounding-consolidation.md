@@ -6,9 +6,10 @@ Stages 0–5 are in tree (`repo-read-service` and `enable_repo_read_service`
 default off). Stage 6 is in progress: native-read callers skip working trees
 once a bare mirror exists, including cold start (fetch the mirror, then skip
 the extra copy) and background PRD/design-doc/test-case jobs when the worker
-can open that mirror (same disk or HTTP). Interactive actor dispatch still
-bypasses when `workingTree` is false. Working-tree services and the six
-superseded flags are not retired yet.
+can open that mirror (same disk or HTTP). Interactive actor dispatch uses the
+same reader when the worker can open the mirror; it still bypasses on App
+Service when HTTP is unset. Working-tree services and the six superseded
+flags are not retired yet.
 
 ## Why
 

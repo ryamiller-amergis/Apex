@@ -18,7 +18,7 @@ import {
   createInteractiveCursorExecution,
 } from '../services/interactiveActorHost/interactiveCursorExecution';
 import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
-import type { LocalCheckoutReader } from '../services/localCheckoutReader';
+import type { RepoReader } from '../../shared/types/repoReader';
 
 describe('interactive Cursor execution repository tools', () => {
   it('mounts checkout-backed read tools for a new actor session', async () => {
@@ -32,7 +32,7 @@ describe('interactive Cursor execution repository tools', () => {
     });
     const customTools = { get_skill_file: { execute: jest.fn() } };
     mockCreateNativeReadTools.mockReturnValue(customTools);
-    const checkout = {} as LocalCheckoutReader;
+    const checkout = {} as RepoReader;
     const snapshot: ExecutionSnapshot = {
       prompt: 'Run the pre-loaded interview skill.',
       model: 'composer-2.5',
@@ -91,7 +91,7 @@ describe('interactive Cursor execution repository tools', () => {
     try {
       const handle = await acquireInteractiveCursorAgent(
         snapshot,
-        {} as LocalCheckoutReader,
+        {} as RepoReader,
       );
       expect(send).not.toHaveBeenCalled();
       await handle.send('turn-1');

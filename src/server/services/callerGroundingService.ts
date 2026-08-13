@@ -94,9 +94,12 @@ export interface LocalCallerGrounding {
   nativeReads: boolean;
   /**
    * False when reads are served from a bare mirror and `cwd` is only a
-   * sandbox. Interactive actors that open LocalCheckoutReader must bypass.
+   * sandbox. Interactive actors open BareRepoReader / HTTP when the worker
+   * can see that mirror; otherwise they bypass to in-process.
    */
   workingTree: boolean;
+  /** Bare-mirror path when `workingTree` is false. */
+  mirrorPath?: string;
   release(options?: { persistPin?: boolean }): Promise<void>;
 }
 
@@ -562,6 +565,7 @@ export function createCallerGroundingService(
           resolvedSha: grounding.groundedSha,
           nativeReads: false,
           workingTree: false,
+          mirrorPath,
           release: async (options) => {
             if (released) return;
             released = true;

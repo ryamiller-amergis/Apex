@@ -15,7 +15,7 @@ import type {
   WorkerCursorExecution,
   WorkerCursorExecutionRun,
 } from '../aiRunsWorker/cursorExecution';
-import type { LocalCheckoutReader } from '../localCheckoutReader';
+import type { RepoReader } from '../../../shared/types/repoReader';
 import { createNativeReadTools } from '../nativeReadToolAdapter';
 
 /** Live Cursor Agent handle that can serve multiple serialized `send` calls. */
@@ -29,7 +29,7 @@ export interface InteractiveCursorAgentHandle {
 
 export async function acquireInteractiveCursorAgent(
   snapshot: Readonly<ExecutionSnapshot>,
-  checkout: LocalCheckoutReader,
+  checkout: RepoReader,
   options: { resumeAgentId?: string | null } = {},
 ): Promise<InteractiveCursorAgentHandle> {
   // The checkout must already be open; execution cannot begin otherwise.
@@ -43,7 +43,7 @@ export async function acquireInteractiveCursorAgent(
     settingSources: ['project'],
     customTools: createNativeReadTools(checkout),
   } satisfies LocalAgentOptions;
-  // The interactive host uses only checkout-backed read tools and never
+  // The interactive host uses only RepoReader-backed read tools and never
   // resolves live repository MCP servers.
   const agent = resumeAgentId
     ? await Agent.resume(resumeAgentId, {
@@ -88,7 +88,7 @@ export async function acquireInteractiveCursorAgent(
  */
 export async function createInteractiveCursorExecution(
   snapshot: Readonly<ExecutionSnapshot>,
-  checkout: LocalCheckoutReader,
+  checkout: RepoReader,
   options: { resumeAgentId?: string | null } = {},
 ): Promise<WorkerCursorExecution & { agentId?: string | null }> {
   const handle = await acquireInteractiveCursorAgent(snapshot, checkout, options);

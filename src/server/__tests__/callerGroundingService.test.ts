@@ -1480,6 +1480,7 @@ describe('Stage 6 bare-mirror skip of working-tree materialization', () => {
       resolvedSha: grounding.groundedSha,
       nativeReads: true,
       workingTree: false,
+      mirrorPath,
     });
     expect(deps.materialize).not.toHaveBeenCalled();
     expect(deps.sharedReadCheckout.getReady).not.toHaveBeenCalled();

@@ -130,6 +130,7 @@ import type {
 import { groundingTelemetry } from './groundingTelemetry';
 import { groundingProfileResolver } from './groundingProfileResolver';
 import { createNativeReadTools } from './nativeReadToolAdapter';
+import { workerCanReadWithoutWorkingTree } from './repoRead/workerReadVisibility';
 import {
   createCursorRunEventEnvelope,
   CursorExecutionWaitError,
@@ -3914,7 +3915,7 @@ async function tryDispatchInteractiveTurn(
             : 'native-reads-false'
         );
       }
-      if (!grounding.workingTree) {
+      if (!grounding.workingTree && !workerCanReadWithoutWorkingTree()) {
         return bypass('bare-mirror-no-checkout');
       }
       const repoReader =
@@ -3959,6 +3960,12 @@ async function tryDispatchInteractiveTurn(
         skillPath,
         projectId: project,
         threadId,
+        groundedSha: grounding.resolvedSha,
+        repository: targetedRepositoryName(state.thread.kickoff),
+        provider: state.thread.kickoff.skillProvider ?? 'ado',
+        ...(grounding.mirrorPath
+          ? { mirrorRef: grounding.mirrorPath }
+          : {}),
       };
       const timeoutAt = new Date(
         Date.now() + resolveAgentRunHardLimitMs()

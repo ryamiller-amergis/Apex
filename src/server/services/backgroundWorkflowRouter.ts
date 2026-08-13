@@ -15,6 +15,7 @@ import {
   cacheOptionsFromGrounding,
   isUsableBareMirror,
 } from './repoRead/mirrorStore';
+import { workerCanReadWithoutWorkingTree } from './repoRead/workerReadVisibility';
 import {
   sharedReadCheckoutIdentityFromGrounding,
   sharedReadCheckoutService,
@@ -120,16 +121,7 @@ export interface BackgroundWorkflowRouterDependencies {
   workerCanReadWithoutWorkingTree?: () => boolean;
 }
 
-/**
- * App Service routers must not skip the clone when ACA workers cannot see
- * `repo-cache` and the HTTP read service is unset.
- */
-export function workerCanReadWithoutWorkingTree(
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return Boolean(env.REPO_READ_SERVICE_URL?.trim())
-    || !env.WEBSITE_INSTANCE_ID?.trim();
-}
+export { workerCanReadWithoutWorkingTree } from './repoRead/workerReadVisibility';
 
 export interface BackgroundWorkflowRouter {
   route(input: BackgroundWorkflowRouteInput): Promise<WorkflowRouteDecision>;
