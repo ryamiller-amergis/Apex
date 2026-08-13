@@ -3,6 +3,7 @@ import {
   fetchRepositoryTip,
   getRepoCacheDir,
   readCachedOriginSha,
+  readRemoteBranchTip,
   type RepoCacheOptions,
 } from '../repoCacheService';
 import type { RunGrounding } from '../../../shared/types/runGrounding';
@@ -23,5 +24,6 @@ export const mirrorStore = {
   fetch: fetchRepositoryTip,
   resolvePath: getRepoCacheDir,
   resolveTip: readCachedOriginSha,
+  probeRemoteTip: readRemoteBranchTip,
   cacheOptionsFromGrounding,
 };

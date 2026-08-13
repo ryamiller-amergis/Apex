@@ -2,10 +2,9 @@
 
 Architectural plan to serve AI repository reads from a single bare object
 database at a pinned SHA, instead of materialized working trees. Status:
-Stages 0–2 implemented in-process (flag `repo-read-service` default off).
-Stage 3 Terraform + HTTP client/server are in tree, gated by
-`enable_repo_read_service` (default false) and still requiring an image
-publish. Stages 4–6 follow after a project proves the in-process reader.
+Stages 0–4 are in tree (`repo-read-service` and `enable_repo_read_service`
+default off). Stage 4 probes with `ls-remote` and idle backoff (no webhook
+receiver yet). Stages 5–6 follow.
 
 ## Why
 
@@ -26,7 +25,7 @@ the parent's SHA, offer "use latest" at generate.
 | 1 | Pin refs, in-process `BareRepoReader`, `repo-read-service` flag |
 | 2 | Pin lifetime independent of idle `closeThread`; remove between-turn auto-advance |
 | 3 | Extract to a Container App (HTTP read API; ephemeral disk + Blob restore). Terraform + client/server in tree; `enable_repo_read_service` default false. |
-| 4 | Webhook or `ls-remote` adaptive refresh |
+| 4 | `ls-remote` adaptive refresh (webhooks deferred until a public callback exists) |
 | 5 | Resume card, handoff dialog, staleness rendering, artifact provenance |
 | 6 | Retire working-tree stack and six superseded flags |
 

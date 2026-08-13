@@ -33,6 +33,7 @@ import {
   ensureRepoCache,
   fetchRepositoryTip,
   getRepoCacheDir,
+  readRemoteBranchTip,
   repairRepoCache,
   resolveGitRemote,
 } from '../services/repoCacheService';
@@ -430,5 +431,25 @@ describe('repoCacheService', () => {
       expect.any(Function),
       { waitMs: USER_FACING_REPO_CACHE_LEASE_WAIT_MS },
     );
+  });
+
+  it('reads a remote branch tip with ls-remote and does not fetch objects', async () => {
+    const sha = 'b'.repeat(40);
+    mockGit.mockResolvedValue(`${sha}\trefs/heads/development\n`);
+
+    const tip = await readRemoteBranchTip({
+      provider: 'ado',
+      project: 'MaxView',
+      repo: 'MaxView',
+      branch: 'development',
+    });
+
+    expect(tip).toBe(sha);
+    const args = mockGit.mock.calls[0][0] as string[];
+    expect(args).toEqual(
+      expect.arrayContaining(['ls-remote', '--heads', 'refs/heads/development']),
+    );
+    expect(args).not.toContain('fetch');
+    expect(args).not.toContain('clone');
   });
 });

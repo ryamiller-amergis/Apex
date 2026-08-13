@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import type { SkillProvider } from '../../shared/types/projectSettings';
@@ -190,6 +191,33 @@ export async function readCachedOriginSha(
   } catch {
     return null;
   }
+}
+
+const LS_REMOTE_TIMEOUT_MS = 15_000;
+const COMMIT_SHA_RE = /^[0-9a-f]{40}$/i;
+
+/**
+ * One round-trip tip probe. Does not transfer objects. Returns null when the
+ * remote has no such head or the response is unusable.
+ */
+export async function readRemoteBranchTip(
+  options: RepoCacheOptions,
+): Promise<string | null> {
+  const remote = resolveGitRemote(options.provider, options.project, options.repo);
+  const cacheDir = getRepoCacheDir(options);
+  const workDir = cacheExists(cacheDir) ? cacheDir : os.tmpdir();
+  const ref = `refs/heads/${options.branch}`;
+  const output = await git(
+    safeArgs(workDir, ['ls-remote', '--heads', remote.url, ref]),
+    {
+      cwd: workDir,
+      timeout: LS_REMOTE_TIMEOUT_MS,
+      env: remote.env,
+    },
+  );
+  const line = output.split(/\r?\n/).find((row) => row.includes(`\t${ref}`));
+  const sha = line?.split('\t', 1)[0]?.trim() ?? '';
+  return COMMIT_SHA_RE.test(sha) ? sha.toLowerCase() : null;
 }
 
 /** Returns whether the exact pinned commit is present in the local bare cache. */
