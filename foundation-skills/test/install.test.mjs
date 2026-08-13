@@ -203,7 +203,7 @@ test('install writes fenced SKILL.md, companions path, and v2 lockfile (no .apex
 
     const lock = readLockfile(repo);
     assert.equal(lock.lockfileVersion, LOCKFILE_VERSION);
-    assert.equal(lock.suiteVersion, '2.0.3');
+    assert.equal(lock.suiteVersion, '2.1.0');
     assert.ok(lock.skills['ui-lab'].managedRegionHash);
     assert.equal(typeof lock.skills['ui-lab'].managedFiles, 'object');
     assert.equal(lock.skills['ui-lab'].adapterScaffolded, true);

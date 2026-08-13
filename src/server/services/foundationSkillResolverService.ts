@@ -19,7 +19,6 @@ import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import * as facade from './skillCatalogFacade';
 import {
   SKILL_DISCOVERY_ROOTS,
-  normalizeSkillRoot,
   skillPathFor,
   skillRootFromLock,
 } from '../../shared/skillPaths';
@@ -27,9 +26,9 @@ import {
 // ── Types ──────────────────────────────────────────────────────────────────
 
 export type SkillSource =
-  | 'adapter-only'       // project adapter present (includes baked-in foundation)
-  | 'bundled-fallback'   // neither; using caller-provided fallback
-  | 'not-found'          // no content at all
+  | 'adapter-only' // project adapter present (includes baked-in foundation)
+  | 'bundled-fallback' // neither; using caller-provided fallback
+  | 'not-found' // no content at all
   // Legacy values retained for log compatibility with older installs:
   | 'adapter+foundation'
   | 'foundation-only';
@@ -60,7 +59,9 @@ function repoPath(repoRoot: string, ...parts: string[]): string {
 function readLocal(absPath: string): string | null {
   try {
     if (fs.existsSync(absPath)) return fs.readFileSync(absPath, 'utf-8').trim();
-  } catch { /* non-fatal */ }
+  } catch {
+    /* non-fatal */
+  }
   return null;
 }
 
@@ -95,44 +96,27 @@ export function resolveLocalSkillPath(
   repoRoot = CWD
 ): string | null {
   const lock = readLockfile(repoRoot);
-  const canonicalRoot = lock ? skillRootFromLock(lock) : null;
-  const roots = canonicalRoot
-    ? [
-        canonicalRoot,
-        ...SKILL_DISCOVERY_ROOTS.filter((root) => root !== canonicalRoot),
-      ]
-    : [...SKILL_DISCOVERY_ROOTS];
-  const candidates = [...new Set(roots)]
-    .map((root) => ({
-      root: normalizeSkillRoot(root),
-      relativePath: skillPathFor(root, skillName),
-    }))
-    .filter((candidate) =>
-      fs.existsSync(repoPath(repoRoot, candidate.relativePath))
-    )
-    .map((candidate) => ({
-      ...candidate,
-      physicalPath: fs.realpathSync(repoPath(repoRoot, candidate.relativePath)),
-    }));
-
-  if (new Set(candidates.map((candidate) => candidate.physicalPath)).size > 1) {
-    throw new Error(
-      `Skill "${skillName}" exists in multiple roots: ` +
-        `${candidates.map((candidate) => candidate.root).join(', ')}`
-    );
-  }
-  if (!candidates.length) return null;
-  const selected =
-    candidates.find((candidate) => candidate.root === canonicalRoot) ??
-    candidates[0];
-  if (canonicalRoot && selected.root !== canonicalRoot) {
+  // Runtime resolution is canonical-only when a lockfile exists. Cross-root
+  // collisions are a CLI install/check concern; throwing here used to take
+  // down Bedrock entry points that call loadSkillContent() with no try/catch.
+  if (lock) {
+    const canonicalRoot = skillRootFromLock(lock);
+    const relativePath = skillPathFor(canonicalRoot, skillName);
+    const abs = repoPath(repoRoot, relativePath);
+    if (fs.existsSync(abs)) return abs;
     console.warn(
-      `[foundationSkillResolver] "${skillName}" exists at ` +
-        `${selected.relativePath}, but lockfile canonical root is ${canonicalRoot}`
+      `[foundationSkillResolver] "${skillName}" not found at lockfile ` +
+        `canonical root ${canonicalRoot}`
     );
     return null;
   }
-  return repoPath(repoRoot, selected.relativePath);
+
+  for (const root of SKILL_DISCOVERY_ROOTS) {
+    const relativePath = skillPathFor(root, skillName);
+    const abs = repoPath(repoRoot, relativePath);
+    if (fs.existsSync(abs)) return abs;
+  }
+  return null;
 }
 
 // ── Remote (ADO / GitHub) skill fetch ─────────────────────────────────────
@@ -143,7 +127,10 @@ export function resolveLocalSkillPath(
  */
 async function fetchRemoteSkillFile(
   skillPath: string,
-  config: Pick<ProjectSkillConfig, 'skillProvider' | 'skillRepo' | 'skillBranch'> & { project?: string | null },
+  config: Pick<
+    ProjectSkillConfig,
+    'skillProvider' | 'skillRepo' | 'skillBranch'
+  > & { project?: string | null }
 ): Promise<string | null> {
   if (!skillPath || !config.skillRepo) return null;
   try {
@@ -152,11 +139,13 @@ async function fetchRemoteSkillFile(
       config.skillRepo,
       skillPath,
       config.skillBranch,
-      config.skillProvider ?? 'ado',
+      config.skillProvider ?? 'ado'
     );
     return content?.trim() || null;
   } catch (e: any) {
-    console.warn(`[foundationSkillResolver] Could not fetch remote skill ${skillPath}: ${e.message}`);
+    console.warn(
+      `[foundationSkillResolver] Could not fetch remote skill ${skillPath}: ${e.message}`
+    );
     return null;
   }
 }
@@ -222,8 +211,11 @@ export function resolveLocalSkillBundle(
 export async function resolveRemoteSkillBundle(
   skillPath: string | null | undefined,
   skillName: string,
-  config: Pick<ProjectSkillConfig, 'skillProvider' | 'skillRepo' | 'skillBranch'> & { project?: string | null },
-  fallbackText?: string,
+  config: Pick<
+    ProjectSkillConfig,
+    'skillProvider' | 'skillRepo' | 'skillBranch'
+  > & { project?: string | null },
+  fallbackText?: string
 ): Promise<SkillBundle> {
   if (skillPath) {
     const remote = await fetchRemoteSkillFile(skillPath, config);
@@ -247,13 +239,18 @@ export async function resolveRemoteSkillBundle(
  * Log diagnostics for a resolved bundle. Call after resolution to surface
  * unexpected source choices without throwing.
  */
-export function logBundleDiagnostics(skillName: string, bundle: SkillBundle): void {
+export function logBundleDiagnostics(
+  skillName: string,
+  bundle: SkillBundle
+): void {
   if (bundle.notFound) {
-    console.warn(`[foundationSkillResolver] "${skillName}": not found — no content`);
+    console.warn(
+      `[foundationSkillResolver] "${skillName}": not found — no content`
+    );
   } else {
     console.log(
       `[foundationSkillResolver] "${skillName}": source=${bundle.source}` +
-      (bundle.foundationVersion ? ` version=${bundle.foundationVersion}` : ''),
+        (bundle.foundationVersion ? ` version=${bundle.foundationVersion}` : '')
     );
   }
 }

@@ -33,11 +33,21 @@ export function normalizeSkillRoot(
     !normalized ||
     normalized === '.' ||
     normalized === '..' ||
-    normalized.startsWith('../')
+    normalized.startsWith('../') ||
+    normalized.includes('/../')
   ) {
     throw new Error(`Skill root must stay within the repository: ${value}`);
   }
   return normalized;
+}
+
+/** Resolve symlinks, falling back to the literal path on EACCES/ENOENT. */
+export function safeRealpathSync(absPath) {
+  try {
+    return fs.realpathSync(absPath);
+  } catch {
+    return absPath;
+  }
 }
 
 /**
@@ -45,7 +55,7 @@ export function normalizeSkillRoot(
  *
  * Explicit CLI/API input wins. Existing lockfiles keep their recorded root;
  * v2 lockfiles created before root support remain legacy `.cursor/skills`
- * installations.
+ * installations. v3 lockfiles persist `skillRoot`; older CLIs reject v3.
  */
 export function resolveSkillRoot({ requestedRoot = null, lock = null } = {}) {
   if (requestedRoot != null) return normalizeSkillRoot(requestedRoot);
@@ -86,7 +96,7 @@ export function findSkillRootCollisions(repoRoot, skillNames, canonicalRoot) {
     );
     const physicalRoots = new Set(
       presentRoots.map((root) =>
-        fs.realpathSync(path.join(repoRoot, root, skill))
+        safeRealpathSync(path.join(repoRoot, root, skill))
       )
     );
     if (

@@ -9,7 +9,11 @@ import {
   migrateSkillRoot,
   planSkillRootMigration,
 } from '../lib/migrateRoot.mjs';
-import { normalizeSkillRoot, resolveSkillRoot } from '../lib/skillRoot.mjs';
+import {
+  normalizeSkillRoot,
+  resolveSkillRoot,
+  safeRealpathSync,
+} from '../lib/skillRoot.mjs';
 import { PKG_ROOT, cleanup, makeRepo, SAMPLE_REPO } from './helpers.mjs';
 
 test('fresh install can use .agents/skills as its canonical root', () => {
@@ -142,7 +146,7 @@ test('root migration rewrites generated root references but not project notes', 
       );
     fs.writeFileSync(source, customized, 'utf8');
 
-    migrateSkillRoot(repo, '.agents/skills');
+    const result = migrateSkillRoot(repo, '.agents/skills');
     const migrated = fs.readFileSync(
       path.join(repo, '.agents/skills/post-skill-bootstrap/SKILL.md'),
       'utf8'
@@ -155,6 +159,11 @@ test('root migration rewrites generated root references but not project notes', 
     assert.match(migrated, /legacy fallback: `\.cursor\/skills`/);
     assert.match(migrated, /Historical note: \.cursor\/skills\/archive/);
     assert.equal(checkRepo(PKG_ROOT, repo).skills[0].drift, false);
+    assert.ok(
+      result.staleRootReferences.includes(
+        '.agents/skills/post-skill-bootstrap/SKILL.md'
+      )
+    );
   } finally {
     cleanup(repo);
   }
@@ -242,7 +251,13 @@ test('a harness symlink to the canonical catalog is not a collision', (t) => {
 
 test('skill roots must remain repository-relative', () => {
   assert.equal(normalizeSkillRoot('./.agents/skills/'), '.agents/skills');
+  assert.equal(normalizeSkillRoot('.agents/foo/../skills'), '.agents/skills');
   assert.throws(() => normalizeSkillRoot('../skills'), /within the repository/);
   assert.throws(() => normalizeSkillRoot('/tmp/skills'), /repository-relative/);
   assert.throws(() => normalizeSkillRoot('C:\\skills'), /repository-relative/);
+});
+
+test('safeRealpathSync falls back to the literal path when resolution fails', () => {
+  const abs = path.resolve('definitely-missing-apex-skill-root-apex152');
+  assert.equal(safeRealpathSync(abs), abs);
 });

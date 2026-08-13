@@ -25,6 +25,7 @@ describe('skillPaths', () => {
       '.agents/skills'
     );
     expect(normalizeSkillRoot('./.agents/skills/')).toBe('.agents/skills');
+    expect(normalizeSkillRoot('.agents/foo/../skills')).toBe('.agents/skills');
     expect(() => normalizeSkillRoot('../skills')).toThrow(
       /repository-relative/i
     );
@@ -55,6 +56,26 @@ describe('skillPaths', () => {
           '.agents/skills/to-prd/SKILL.md',
           '.cursor/skills/to-prd/SKILL.md',
         ],
+      },
+    ]);
+  });
+
+  it('keeps generic skills/ ahead of .cursor/skills when both exist', () => {
+    const resolved = selectSkillsByRootPrecedence([
+      {
+        name: 'to-prd',
+        path: '.cursor/skills/to-prd/SKILL.md',
+      },
+      {
+        name: 'to-prd',
+        path: 'skills/to-prd/SKILL.md',
+      },
+    ]);
+
+    expect(resolved.skills).toEqual([
+      {
+        name: 'to-prd',
+        path: 'skills/to-prd/SKILL.md',
       },
     ]);
   });

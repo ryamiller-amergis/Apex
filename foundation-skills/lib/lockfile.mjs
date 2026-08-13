@@ -1,9 +1,9 @@
 /**
  * apex-skills.lock.json read/write.
  *
- * v2 shape:
+ * v3 shape:
  * {
- *   "lockfileVersion": 2,
+ *   "lockfileVersion": 3,
  *   "suiteVersion": "1.1.0",
  *   "package": "@apex/skills",
  *   "skillRoot": ".agents/skills",
@@ -21,15 +21,20 @@
  * }
  *
  * v1 lockfiles (vendored: { ".apex/foundation/...": hash }) are still readable
- * so install can migrate them to v2.
+ * so install can migrate them to v3.
  */
 import fs from 'node:fs';
 import { readJson, stableStringify, sha256 } from './util.mjs';
 import { repoLockfilePath, LOCKFILE_NAME } from './layout.mjs';
 import { LEGACY_SKILL_ROOT, normalizeSkillRoot } from './skillRoot.mjs';
 
-export const LOCKFILE_VERSION = 2;
+export const LOCKFILE_VERSION = 3;
+export const LOCKFILE_VERSION_V2 = 2;
 export const LOCKFILE_VERSION_V1 = 1;
+const SUPPORTED_LOCKFILE_VERSIONS = new Set([
+  LOCKFILE_VERSION,
+  LOCKFILE_VERSION_V2,
+]);
 
 export function readLockfile(repoRoot) {
   const p = repoLockfilePath(repoRoot);
@@ -45,13 +50,15 @@ export function isV1Lockfile(lock) {
     return false;
   }
   // Heuristic: any skill still carrying a `vendored` map is v1-shaped.
-  return Object.values(lock.skills ?? {}).some((s) => s && s.vendored && !s.managedRegionHash);
+  return Object.values(lock.skills ?? {}).some(
+    (s) => s && s.vendored && !s.managedRegionHash
+  );
 }
 
 export function emptyLockfile(
   suiteVersion,
   pkgName,
-  skillRoot = LEGACY_SKILL_ROOT,
+  skillRoot = LEGACY_SKILL_ROOT
 ) {
   return {
     lockfileVersion: LOCKFILE_VERSION,
@@ -84,7 +91,7 @@ export function verifyLockfileIntegrity(lock) {
   if (isV1Lockfile(lock)) {
     return { valid: true, error: null };
   }
-  if (lock.lockfileVersion !== LOCKFILE_VERSION) {
+  if (!SUPPORTED_LOCKFILE_VERSIONS.has(lock.lockfileVersion)) {
     return {
       valid: false,
       error: `Unsupported lockfile version: ${lock.lockfileVersion ?? 'missing'}`,

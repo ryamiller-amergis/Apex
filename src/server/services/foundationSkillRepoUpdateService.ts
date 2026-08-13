@@ -91,7 +91,11 @@ export interface UpdateRepoOptions {
   /** When intent is rollback, the version currently installed (for PR messaging). */
   fromVersion?: string | null;
   /** Actor for PR attribution */
-  actor?: { id?: string | null; email?: string | null; displayName?: string | null };
+  actor?: {
+    id?: string | null;
+    email?: string | null;
+    displayName?: string | null;
+  };
 }
 
 export interface RollbackRepoOptions {
@@ -105,15 +109,19 @@ export interface RollbackRepoOptions {
   releaseId: string;
   /** Optional override; defaults to last observed installed version. */
   fromVersion?: string | null;
-  actor?: { id?: string | null; email?: string | null; displayName?: string | null };
+  actor?: {
+    id?: string | null;
+    email?: string | null;
+    displayName?: string | null;
+  };
 }
 
 export type UpdateRepoResultStatus =
-  | 'pr_created'      // PR was opened successfully
-  | 'no_changes'      // install produced no file changes
-  | 'drift'           // existing managed foundation files have been hand-edited
-  | 'incompatible'    // adapter contract range not satisfied by this release
-  | 'error';          // unexpected failure
+  | 'pr_created' // PR was opened successfully
+  | 'no_changes' // install produced no file changes
+  | 'drift' // existing managed foundation files have been hand-edited
+  | 'incompatible' // adapter contract range not satisfied by this release
+  | 'error'; // unexpected failure
 
 export interface UpdateRepoResult {
   status: UpdateRepoResultStatus;
@@ -135,10 +143,12 @@ function makeSessionId(repoName: string, version: string): string {
 
 export function resolveReleasedSkillsForProject(
   release: FoundationSkillRelease,
-  apexProject: string,
+  apexProject: string
 ): string[] {
   if (!release.integritySha256 || !release.manifestSnapshot) {
-    throw new Error(`Release ${release.version} has no verified artifact manifest`);
+    throw new Error(
+      `Release ${release.version} has no verified artifact manifest`
+    );
   }
   const visible = getVisibleSkillsForProject(release, apexProject);
   const out = [...visible];
@@ -150,6 +160,14 @@ export function resolveReleasedSkillsForProject(
     }
   }
   return out;
+}
+
+function safeRealpathSync(absPath: string): string {
+  try {
+    return fs.realpathSync(absPath);
+  } catch {
+    return absPath;
+  }
 }
 
 export function resolveWorkspaceSkillRoot(
@@ -174,10 +192,10 @@ export function resolveWorkspaceSkillRoot(
     path.join(workspaceDir, LEGACY_CURSOR_SKILL_ROOT)
   );
   if (hasAgents && hasCursor) {
-    const agentsPath = fs.realpathSync(
+    const agentsPath = safeRealpathSync(
       path.join(workspaceDir, AGENT_SKILL_ROOT)
     );
-    const cursorPath = fs.realpathSync(
+    const cursorPath = safeRealpathSync(
       path.join(workspaceDir, LEGACY_CURSOR_SKILL_ROOT)
     );
     if (agentsPath === cursorPath) return AGENT_SKILL_ROOT;
@@ -261,7 +279,7 @@ async function runCliInstall(
   } catch (e: unknown) {
     const err = e as { message?: string; stdout?: string; stderr?: string };
     const output = redactSecrets(
-      [err.stdout, err.stderr, err.message].filter(Boolean).join('\n'),
+      [err.stdout, err.stderr, err.message].filter(Boolean).join('\n')
     );
     throw new Error(`@apex/skills install failed:\n${output.slice(0, 2000)}`);
   } finally {
@@ -282,8 +300,16 @@ export function buildGeneratedCliEnv(apexUrl: string): NodeJS.ProcessEnv {
     throw new Error('APEX URL must use HTTPS outside local development');
   }
   const allowed = [
-    'PATH', 'Path', 'SystemRoot', 'WINDIR', 'HOME', 'USERPROFILE',
-    'TEMP', 'TMP', 'TMPDIR', 'NODE_ENV',
+    'PATH',
+    'Path',
+    'SystemRoot',
+    'WINDIR',
+    'HOME',
+    'USERPROFILE',
+    'TEMP',
+    'TMP',
+    'TMPDIR',
+    'NODE_ENV',
   ];
   const env: NodeJS.ProcessEnv = {
     FORCE_COLOR: '0',
@@ -311,11 +337,11 @@ async function changedFiles(workspaceDir: string): Promise<string[]> {
       '--find-renames',
       '-z',
     ]),
-    { cwd: workspaceDir },
+    { cwd: workspaceDir }
   );
   const tokens = out.split('\0').filter(Boolean);
   const files: string[] = [];
-  for (let index = 0; index < tokens.length;) {
+  for (let index = 0; index < tokens.length; ) {
     const status = tokens[index++];
     if (/^[RC]/.test(status)) {
       if (tokens[index]) files.push(tokens[index++]);
@@ -343,7 +369,8 @@ export function validateGeneratedDiff(
     if (
       file.includes('../') ||
       path.posix.basename(file).toLowerCase() === '.npmrc'
-    ) return true;
+    )
+      return true;
     if (file === 'apex-skills.lock.json' || file === '.apex/config.json') {
       return false;
     }
@@ -353,16 +380,17 @@ export function validateGeneratedDiff(
       reconciliationVersion &&
       managedSkills.some((skill) =>
         file.startsWith(
-          `.apex/rollback-backups/${reconciliationVersion}/${skill}/`,
-        ),
+          `.apex/rollback-backups/${reconciliationVersion}/${skill}/`
+        )
       )
-    ) return false;
+    )
+      return false;
     return true;
   });
   if (unexpected.length) {
     throw new Error(
       `Unexpected generated files outside the APEX skills allowlist: ` +
-      `${unexpected.join(', ')}`,
+        `${unexpected.join(', ')}`
     );
   }
 }
@@ -373,7 +401,7 @@ export function reconcileRollbackWorkspace(
   targetVersion: string,
   direction: 'update' | 'rollback',
   expectedSourceVersion?: string | null,
-  requireLock = true,
+  requireLock = true
 ): { removedSkills: string[]; managedSkills: string[] } {
   buildArtifactCliArgs(targetVersion, targetSkills);
   const lockPath = path.join(workspaceDir, 'apex-skills.lock.json');
@@ -388,20 +416,17 @@ export function reconcileRollbackWorkspace(
   if (lock.package !== '@apex/skills') {
     throw new Error(`Source lock package is not @apex/skills`);
   }
-  if (
-    expectedSourceVersion &&
-    lock.suiteVersion !== expectedSourceVersion
-  ) {
+  if (expectedSourceVersion && lock.suiteVersion !== expectedSourceVersion) {
     throw new Error(
       `Source lock version ${lock.suiteVersion ?? 'missing'} does not match ` +
-      `expected installed version ${expectedSourceVersion}`,
+        `expected installed version ${expectedSourceVersion}`
     );
   }
   if (direction === 'update' && lock.suiteVersion !== targetVersion) {
     if (!isGreaterVersion(targetVersion, lock.suiteVersion!)) {
       throw new Error(
         `Update target ${targetVersion} must be newer than source ` +
-        `${lock.suiteVersion}`,
+          `${lock.suiteVersion}`
       );
     }
   }
@@ -409,7 +434,7 @@ export function reconcileRollbackWorkspace(
     if (!isGreaterVersion(lock.suiteVersion!, targetVersion)) {
       throw new Error(
         `Rollback source ${lock.suiteVersion} must be newer than target ` +
-        `${targetVersion}`,
+          `${targetVersion}`
       );
     }
   }
@@ -427,7 +452,7 @@ export function reconcileRollbackWorkspace(
       'rollback-backups',
       targetVersion,
       skill,
-      `attempt-${Date.now()}-${randomBytes(3).toString('hex')}`,
+      `attempt-${Date.now()}-${randomBytes(3).toString('hex')}`
     );
     fs.mkdirSync(path.dirname(destination), { recursive: true });
     fs.renameSync(source, destination);
@@ -445,7 +470,7 @@ function isGreaterVersion(a: string, b: string): boolean {
   for (let index = 0; index < 3; index += 1) {
     const comparison = compareNumericStrings(
       left.core[index],
-      right.core[index],
+      right.core[index]
     );
     if (comparison !== 0) return comparison > 0;
   }
@@ -473,10 +498,10 @@ function isGreaterVersion(a: string, b: string): boolean {
 }
 
 function parseSemver(
-  version: string,
+  version: string
 ): { core: [string, string, string]; prerelease: string[] } | null {
   const match = version.match(
-    /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/,
+    /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/
   );
   if (!match) return null;
   const core = [match[1], match[2], match[3]] as [string, string, string];
@@ -484,7 +509,7 @@ function parseSemver(
   const prerelease = match[4]?.split('.') ?? [];
   if (
     prerelease.some(
-      (part) => /^\d+$/.test(part) && part.length > 1 && part.startsWith('0'),
+      (part) => /^\d+$/.test(part) && part.length > 1 && part.startsWith('0')
     )
   ) {
     return null;
@@ -549,7 +574,7 @@ function readVerifiedConsumerLock(lockPath: string): {
     throw new Error('apex-skills.lock.json is not valid JSON');
   }
   if (
-    lock?.lockfileVersion !== 2 ||
+    (lock?.lockfileVersion !== 2 && lock?.lockfileVersion !== 3) ||
     typeof lock.suiteVersion !== 'string' ||
     !parseSemver(lock.suiteVersion) ||
     typeof lock.integrity !== 'string' ||
@@ -557,7 +582,7 @@ function readVerifiedConsumerLock(lockPath: string): {
     typeof lock.skills !== 'object' ||
     Array.isArray(lock.skills)
   ) {
-    throw new Error('apex-skills.lock.json has an invalid v2 schema');
+    throw new Error('apex-skills.lock.json has an invalid lockfile schema');
   }
   try {
     skillRootFromLock(lock);
@@ -686,7 +711,9 @@ function buildPrDescription(
     sections.push(`## Release notes\n\n${release.releaseNotes.trim()}`);
   }
   if (release.breakingChanges?.trim()) {
-    sections.push(`## ⚠️ Breaking changes\n\n${release.breakingChanges.trim()}`);
+    sections.push(
+      `## ⚠️ Breaking changes\n\n${release.breakingChanges.trim()}`
+    );
   }
 
   const installed = release.selectedSkills?.length
@@ -718,7 +745,7 @@ function buildPrDescription(
  */
 export async function updateRepoWithFoundationSkills(
   opts: UpdateRepoOptions,
-  adoService?: AzureDevOpsService | null,
+  adoService?: AzureDevOpsService | null
 ): Promise<UpdateRepoResult> {
   const {
     project,
@@ -743,38 +770,77 @@ export async function updateRepoWithFoundationSkills(
   }
   if (!release) {
     errors.push('No published foundation skills release found');
-    return { status: 'error', prUrl: null, branchName: null, changedFiles: [], report: errors.join('\n'), releaseVersion: null, errors };
+    return {
+      status: 'error',
+      prUrl: null,
+      branchName: null,
+      changedFiles: [],
+      report: errors.join('\n'),
+      releaseVersion: null,
+      errors,
+    };
   }
   if (release.status !== 'published') {
-    errors.push(`Release ${release.id} is not published (status: ${release.status})`);
-    return { status: 'error', prUrl: null, branchName: null, changedFiles: [], report: errors.join('\n'), releaseVersion: release.version, errors };
+    errors.push(
+      `Release ${release.id} is not published (status: ${release.status})`
+    );
+    return {
+      status: 'error',
+      prUrl: null,
+      branchName: null,
+      changedFiles: [],
+      report: errors.join('\n'),
+      releaseVersion: release.version,
+      errors,
+    };
   }
   if (!isReleaseVisibleToProject(release, apexProject)) {
-    errors.push(`Release ${release.version} is not targeted at Apex project "${apexProject}" — update the release targeting or use a different release`);
-    return { status: 'error', prUrl: null, branchName: null, changedFiles: [], report: errors.join('\n'), releaseVersion: release.version, errors };
+    errors.push(
+      `Release ${release.version} is not targeted at Apex project "${apexProject}" — update the release targeting or use a different release`
+    );
+    return {
+      status: 'error',
+      prUrl: null,
+      branchName: null,
+      changedFiles: [],
+      report: errors.join('\n'),
+      releaseVersion: release.version,
+      errors,
+    };
   }
 
-  const version        = release.version;
+  const version = release.version;
   let skills: string[];
   try {
     skills = resolveReleasedSkillsForProject(release, apexProject);
   } catch (error) {
     errors.push((error as Error).message);
-    return { status: 'error', prUrl: null, branchName: null, changedFiles: [], report: errors.join('\n'), releaseVersion: release.version, errors };
+    return {
+      status: 'error',
+      prUrl: null,
+      branchName: null,
+      changedFiles: [],
+      report: errors.join('\n'),
+      releaseVersion: release.version,
+      errors,
+    };
   }
-  const defaultBranch  = opts.defaultBranch ?? 'main';
-  const branchName     = intent === 'rollback'
-    ? `chore/apex-skills-rollback-${version.replace(/\./g, '-')}-${randomBytes(3).toString('hex')}`
-    : `chore/apex-skills-${version.replace(/\./g, '-')}-${randomBytes(3).toString('hex')}`;
-  const sessionId      = makeSessionId(repo, version);
-  const remote         = resolveGitRemote(provider, project, repo);
+  const defaultBranch = opts.defaultBranch ?? 'main';
+  const branchName =
+    intent === 'rollback'
+      ? `chore/apex-skills-rollback-${version.replace(/\./g, '-')}-${randomBytes(3).toString('hex')}`
+      : `chore/apex-skills-${version.replace(/\./g, '-')}-${randomBytes(3).toString('hex')}`;
+  const sessionId = makeSessionId(repo, version);
+  const remote = resolveGitRemote(provider, project, repo);
 
   let workspaceDir: string | null = null;
   let prUrl: string | null = null;
 
   try {
     // 1. Clone the repo
-    console.log(`[foundationSkillRepoUpdateService] Cloning ${repo} (${project}, ${provider})`);
+    console.log(
+      `[foundationSkillRepoUpdateService] Cloning ${repo} (${project}, ${provider})`
+    );
     workspaceDir = await checkoutDefaultBranch({
       project,
       repo,
@@ -803,7 +869,7 @@ export async function updateRepoWithFoundationSkills(
         version,
         intent,
         intent === 'rollback' ? fromVersion : null,
-        intent === 'rollback',
+        intent === 'rollback'
       );
       managedSkills = reconciliation.managedSkills;
       reconciliationVersion =
@@ -922,10 +988,11 @@ export async function updateRepoWithFoundationSkills(
     console.log(`[foundationSkillRepoUpdateService] Pushed ${branchName}`);
 
     // 6. Open PR
-    const prTitle = intent === 'rollback'
-      ? `chore: rollback APEX foundation skills to v${version}`
-      : `chore: update APEX foundation skills to v${version}`;
-    const prBody  = buildPrDescription(release, cliOutput, intent, fromVersion);
+    const prTitle =
+      intent === 'rollback'
+        ? `chore: rollback APEX foundation skills to v${version}`
+        : `chore: update APEX foundation skills to v${version}`;
+    const prBody = buildPrDescription(release, cliOutput, intent, fromVersion);
 
     if (provider === 'github') {
       prUrl = await githubCatalog.createPullRequest({
@@ -946,7 +1013,9 @@ export async function updateRepoWithFoundationSkills(
         description: prBody,
       });
     } else {
-      errors.push('Branch pushed but PR could not be opened — ADO service not available');
+      errors.push(
+        'Branch pushed but PR could not be opened — ADO service not available'
+      );
       return {
         status: 'error',
         prUrl: null,
@@ -970,29 +1039,42 @@ export async function updateRepoWithFoundationSkills(
         errors,
       };
     }
-    console.log(`[foundationSkillRepoUpdateService] Done: ${prUrl ?? '(no PR)'}`);
+    console.log(
+      `[foundationSkillRepoUpdateService] Done: ${prUrl ?? '(no PR)'}`
+    );
     return {
       status: 'pr_created',
       prUrl,
       branchName,
       changedFiles: changed,
-      report: intent === 'rollback'
-        ? `Foundation skills rolled back to v${version}. PR: ${prUrl ?? 'pending'}`
-        : `Foundation skills updated to v${version}. PR: ${prUrl ?? 'pending'}`,
+      report:
+        intent === 'rollback'
+          ? `Foundation skills rolled back to v${version}. PR: ${prUrl ?? 'pending'}`
+          : `Foundation skills updated to v${version}. PR: ${prUrl ?? 'pending'}`,
       releaseVersion: version,
       errors,
     };
-
   } catch (e: unknown) {
     const msg = (e as Error).message ?? String(e);
     errors.push(msg);
     console.error(`[foundationSkillRepoUpdateService] Unexpected error:`, msg);
-    return { status: 'error', prUrl: null, branchName, changedFiles: [], report: msg, releaseVersion: version, errors };
-
+    return {
+      status: 'error',
+      prUrl: null,
+      branchName,
+      changedFiles: [],
+      report: msg,
+      releaseVersion: version,
+      errors,
+    };
   } finally {
     // 7. Always clean up
     if (workspaceDir) {
-      try { cleanupWorkspace(sessionId); } catch { /* non-fatal */ }
+      try {
+        cleanupWorkspace(sessionId);
+      } catch {
+        /* non-fatal */
+      }
     }
   }
 }
@@ -1009,53 +1091,88 @@ export async function updateRepoWithFoundationSkills(
  */
 export async function rollbackRepoWithFoundationSkills(
   opts: RollbackRepoOptions,
-  adoService?: AzureDevOpsService | null,
+  adoService?: AzureDevOpsService | null
 ): Promise<RollbackFoundationSkillRepoResult> {
   const provider = opts.provider ?? 'ado';
-  const branch   = opts.defaultBranch ?? 'main';
+  const branch = opts.defaultBranch ?? 'main';
   const errors: string[] = [];
 
   const target = await getRelease(opts.releaseId);
   if (!target) {
     return {
-      status: 'error', prUrl: null, branchName: null, changedFiles: [],
+      status: 'error',
+      prUrl: null,
+      branchName: null,
+      changedFiles: [],
       report: `Release not found: ${opts.releaseId}`,
-      fromVersion: opts.fromVersion ?? null, toVersion: null, errors: [`Release not found: ${opts.releaseId}`],
+      fromVersion: opts.fromVersion ?? null,
+      toVersion: null,
+      errors: [`Release not found: ${opts.releaseId}`],
     };
   }
   if (target.status !== 'published') {
     const msg = `Rollback target v${target.version} is not published (status: ${target.status})`;
     return {
-      status: 'error', prUrl: null, branchName: null, changedFiles: [],
-      report: msg, fromVersion: opts.fromVersion ?? null, toVersion: target.version, errors: [msg],
+      status: 'error',
+      prUrl: null,
+      branchName: null,
+      changedFiles: [],
+      report: msg,
+      fromVersion: opts.fromVersion ?? null,
+      toVersion: target.version,
+      errors: [msg],
     };
   }
   if (!isReleaseVisibleToProject(target, opts.apexProject)) {
     const msg = `Release v${target.version} is not targeted at Apex project "${opts.apexProject}"`;
     return {
-      status: 'error', prUrl: null, branchName: null, changedFiles: [],
-      report: msg, fromVersion: opts.fromVersion ?? null, toVersion: target.version, errors: [msg],
+      status: 'error',
+      prUrl: null,
+      branchName: null,
+      changedFiles: [],
+      report: msg,
+      fromVersion: opts.fromVersion ?? null,
+      toVersion: target.version,
+      errors: [msg],
     };
   }
 
   // Resolve current installed version from status when not provided
   let fromVersion = opts.fromVersion ?? null;
   if (!fromVersion) {
-    const status = await getRepoStatus(provider, opts.project, opts.repo, branch);
+    const status = await getRepoStatus(
+      provider,
+      opts.project,
+      opts.repo,
+      branch
+    );
     fromVersion = status?.installedVersion ?? null;
   }
   if (!fromVersion) {
-    const msg = 'Cannot rollback — installed version unknown. Run Refresh all / Check first.';
+    const msg =
+      'Cannot rollback — installed version unknown. Run Refresh all / Check first.';
     return {
-      status: 'error', prUrl: null, branchName: null, changedFiles: [],
-      report: msg, fromVersion: null, toVersion: target.version, errors: [msg],
+      status: 'error',
+      prUrl: null,
+      branchName: null,
+      changedFiles: [],
+      report: msg,
+      fromVersion: null,
+      toVersion: target.version,
+      errors: [msg],
     };
   }
   if (!semverGreaterThan(fromVersion, target.version)) {
     const msg = `Rollback target v${target.version} is not older than installed v${fromVersion}`;
     return {
-      status: 'error', prUrl: null, branchName: null, changedFiles: [],
-      report: msg, fromVersion, toVersion: target.version, errors: [msg],
+      status: 'error',
+      prUrl: null,
+      branchName: null,
+      changedFiles: [],
+      report: msg,
+      fromVersion,
+      toVersion: target.version,
+      errors: [msg],
     };
   }
 
@@ -1064,8 +1181,14 @@ export async function rollbackRepoWithFoundationSkills(
   if (!candidates.some((c) => c.id === target.id)) {
     const msg = `v${target.version} is not a valid rollback target for ${opts.apexProject} from v${fromVersion}`;
     return {
-      status: 'error', prUrl: null, branchName: null, changedFiles: [],
-      report: msg, fromVersion, toVersion: target.version, errors: [msg],
+      status: 'error',
+      prUrl: null,
+      branchName: null,
+      changedFiles: [],
+      report: msg,
+      fromVersion,
+      toVersion: target.version,
+      errors: [msg],
     };
   }
 
@@ -1082,7 +1205,7 @@ export async function rollbackRepoWithFoundationSkills(
       fromVersion,
       actor: opts.actor,
     },
-    adoService,
+    adoService
   );
 
   // Audit against the target release (best-effort — never fail the rollback on audit)
@@ -1100,10 +1223,12 @@ export async function rollbackRepoWithFoundationSkills(
         apexProject: opts.apexProject,
         status: result.status,
         prUrl: result.prUrl,
-      },
+      }
     );
   } catch (e: unknown) {
-    console.warn(`[foundationSkillRepoUpdateService] Rollback audit failed: ${(e as Error).message}`);
+    console.warn(
+      `[foundationSkillRepoUpdateService] Rollback audit failed: ${(e as Error).message}`
+    );
   }
 
   return {

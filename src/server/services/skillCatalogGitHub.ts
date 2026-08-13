@@ -8,7 +8,12 @@
  *   GITHUB_ORG               — Default GitHub organization (optional, can be overridden per call)
  */
 
-import type { SkillEntry, SkillDetail, SupportingFile, SkillFrontmatter } from '../../shared/types/skills';
+import type {
+  SkillEntry,
+  SkillDetail,
+  SupportingFile,
+  SkillFrontmatter,
+} from '../../shared/types/skills';
 import { parseFrontmatter } from './skillCatalog';
 import {
   SKILL_DISCOVERY_ROOTS,
@@ -17,12 +22,14 @@ import {
 
 const GITHUB_API = 'https://api.github.com';
 /** Bound outbound GitHub HTTP calls so MCP tools cannot hang the agent stream forever. */
-const GITHUB_FETCH_TIMEOUT_MS = Number(process.env.GITHUB_FETCH_TIMEOUT_MS) > 0
-  ? Number(process.env.GITHUB_FETCH_TIMEOUT_MS)
-  : 30_000;
-const CODE_SEARCH_MIN_INTERVAL_MS = Number(process.env.GITHUB_CODE_SEARCH_MIN_INTERVAL_MS) >= 0
-  ? Number(process.env.GITHUB_CODE_SEARCH_MIN_INTERVAL_MS)
-  : 6_000;
+const GITHUB_FETCH_TIMEOUT_MS =
+  Number(process.env.GITHUB_FETCH_TIMEOUT_MS) > 0
+    ? Number(process.env.GITHUB_FETCH_TIMEOUT_MS)
+    : 30_000;
+const CODE_SEARCH_MIN_INTERVAL_MS =
+  Number(process.env.GITHUB_CODE_SEARCH_MIN_INTERVAL_MS) >= 0
+    ? Number(process.env.GITHUB_CODE_SEARCH_MIN_INTERVAL_MS)
+    : 6_000;
 const CODE_SEARCH_RATE_LIMIT_FALLBACK_MS = 60_000;
 // ── Cache ────────────────────────────────────────────────────────────────────
 
@@ -61,7 +68,10 @@ const skillListCache = makeCache<SkillEntry[]>();
 const skillDetailCache = makeCache<SkillDetail>();
 const fileContentCache = makeCache<string>();
 const codeSearchCache = makeCache<CodeSearchResult[]>();
-let activeCodeSearch: { key: string; promise: Promise<CodeSearchResult[]> } | null = null;
+let activeCodeSearch: {
+  key: string;
+  promise: Promise<CodeSearchResult[]>;
+} | null = null;
 let lastCodeSearchStartedAt = 0;
 let codeSearchBlockedUntil = 0;
 
@@ -87,8 +97,13 @@ interface GitHubTreeItem {
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function getToken(): string {
- const token = process.env.GITHUB_TOKEN || process.env.GITHUB_PAT || process.env.GH_SKILL_TOKEN || '';
- if (!token) throw new Error('GITHUB_TOKEN, GITHUB_PAT, or GH_SKILL_TOKEN must be set');
+  const token =
+    process.env.GITHUB_TOKEN ||
+    process.env.GITHUB_PAT ||
+    process.env.GH_SKILL_TOKEN ||
+    '';
+  if (!token)
+    throw new Error('GITHUB_TOKEN, GITHUB_PAT, or GH_SKILL_TOKEN must be set');
   return token;
 }
 
@@ -100,7 +115,7 @@ class GitHubApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
-    readonly retryAfterMs?: number,
+    readonly retryAfterMs?: number
   ) {
     super(message);
     this.name = 'GitHubApiError';
@@ -137,7 +152,7 @@ async function ghFetch<T>(path: string, textMatchAccept = false): Promise<T> {
     throw new GitHubApiError(
       response.status,
       `GitHub API ${response.status} ${response.statusText}: ${body}`.trim(),
-      resolveRetryAfterMs(response),
+      resolveRetryAfterMs(response)
     );
   }
   return response.json() as Promise<T>;
@@ -156,7 +171,9 @@ async function ghFetchRaw(path: string): Promise<string> {
   });
   if (!response.ok) {
     const body = await response.text().catch(() => '');
-    throw new Error(`GitHub API ${response.status} ${response.statusText}: ${body}`.trim());
+    throw new Error(
+      `GitHub API ${response.status} ${response.statusText}: ${body}`.trim()
+    );
   }
   return response.text();
 }
@@ -165,7 +182,10 @@ async function ghFetchRaw(path: string): Promise<string> {
 
 export async function listRepos(org?: string): Promise<GitHubRepo[]> {
   const resolvedOrg = org || getDefaultOrg();
-  if (!resolvedOrg) throw new Error('GitHub org is required (set GITHUB_ORG or pass org parameter)');
+  if (!resolvedOrg)
+    throw new Error(
+      'GitHub org is required (set GITHUB_ORG or pass org parameter)'
+    );
 
   const cacheKey = `repos:${resolvedOrg}`;
   const cached = repoCache.get(cacheKey);
@@ -181,9 +201,13 @@ export async function listRepos(org?: string): Promise<GitHubRepo[]> {
   }>;
 
   try {
-    repos = await ghFetch(`/orgs/${encodeURIComponent(resolvedOrg)}/repos?per_page=100&sort=full_name`);
+    repos = await ghFetch(
+      `/orgs/${encodeURIComponent(resolvedOrg)}/repos?per_page=100&sort=full_name`
+    );
   } catch {
-    repos = await ghFetch(`/users/${encodeURIComponent(resolvedOrg)}/repos?per_page=100&sort=full_name`);
+    repos = await ghFetch(
+      `/users/${encodeURIComponent(resolvedOrg)}/repos?per_page=100&sort=full_name`
+    );
   }
 
   const result: GitHubRepo[] = repos.map((r) => ({
@@ -198,7 +222,10 @@ export async function listRepos(org?: string): Promise<GitHubRepo[]> {
   return result;
 }
 
-export async function getDefaultBranch(repo: string, org?: string): Promise<string> {
+export async function getDefaultBranch(
+  repo: string,
+  org?: string
+): Promise<string> {
   const resolvedOrg = org || getDefaultOrg();
   if (!resolvedOrg) throw new Error('GitHub org is required');
 
@@ -236,23 +263,30 @@ export async function createPullRequest(opts: {
         body: opts.description ?? '',
       }),
       signal: AbortSignal.timeout(GITHUB_FETCH_TIMEOUT_MS),
-    },
+    }
   );
 
   if (!response.ok) {
     const body = await response.text().catch(() => '');
-    throw new Error(`GitHub API ${response.status} ${response.statusText}: ${body}`.trim());
+    throw new Error(
+      `GitHub API ${response.status} ${response.statusText}: ${body}`.trim()
+    );
   }
 
-  const pr = await response.json() as { html_url: string };
+  const pr = (await response.json()) as { html_url: string };
   return pr.html_url;
 }
 
-export async function listBranches(repo: string, org?: string): Promise<string[]> {
+export async function listBranches(
+  repo: string,
+  org?: string
+): Promise<string[]> {
   const resolvedOrg = org || getDefaultOrg();
   if (!resolvedOrg) throw new Error('GitHub org is required');
 
-  const branches = await ghFetch<Array<{ name: string }>>(`/repos/${encodeURIComponent(resolvedOrg)}/${encodeURIComponent(repo)}/branches?per_page=100`);
+  const branches = await ghFetch<Array<{ name: string }>>(
+    `/repos/${encodeURIComponent(resolvedOrg)}/${encodeURIComponent(repo)}/branches?per_page=100`
+  );
 
   const repos = await listRepos(resolvedOrg);
   const repoObj = repos.find((r) => r.name === repo);
@@ -270,7 +304,7 @@ export async function listBranches(repo: string, org?: string): Promise<string[]
 export async function listSkills(
   repo: string,
   branch?: string,
-  org?: string,
+  org?: string
 ): Promise<SkillEntry[]> {
   const resolvedOrg = org || getDefaultOrg();
   if (!resolvedOrg) throw new Error('GitHub org is required');
@@ -282,16 +316,20 @@ export async function listSkills(
 
   const skillPaths: string[] = [];
 
+  // SKILL_DISCOVERY_ROOTS order is deliberate; duplicates collapse below.
   // Use the Git Trees API to recursively list files
   try {
     const tree = await ghFetch<{ tree: GitHubTreeItem[]; truncated: boolean }>(
-      `/repos/${encodeURIComponent(resolvedOrg)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(resolvedBranch)}?recursive=1`,
+      `/repos/${encodeURIComponent(resolvedOrg)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(resolvedBranch)}?recursive=1`
     );
 
     for (const item of tree.tree) {
       if (item.type !== 'blob') continue;
       for (const root of SKILL_DISCOVERY_ROOTS) {
-        if (item.path.startsWith(`${root}/`) && item.path.endsWith('/SKILL.md')) {
+        if (
+          item.path.startsWith(`${root}/`) &&
+          item.path.endsWith('/SKILL.md')
+        ) {
           skillPaths.push(item.path);
         }
         if (item.path === `${root}/SKILL.md`) {
@@ -307,7 +345,12 @@ export async function listSkills(
 
   for (const skillPath of skillPaths) {
     try {
-      const content = await fetchFileContent(resolvedOrg, repo, skillPath, resolvedBranch);
+      const content = await fetchFileContent(
+        resolvedOrg,
+        repo,
+        skillPath,
+        resolvedBranch
+      );
       const { frontmatter } = parseFrontmatter(content);
       if (!frontmatter.name) continue;
 
@@ -331,7 +374,7 @@ export async function listSkills(
     console.warn(
       `[skillCatalogGitHub] Duplicate skill "${collision.name}" in ` +
         `${resolvedOrg}/${repo}: ${collision.paths.join(', ')}. ` +
-        `Using ${collision.paths[0]}.`,
+        `Using ${collision.paths[0]}.`
     );
   }
   skillListCache.set(cacheKey, resolved.skills);
@@ -342,18 +385,25 @@ export async function getSkill(
   repo: string,
   skillPath: string,
   branch?: string,
-  org?: string,
+  org?: string
 ): Promise<SkillDetail> {
   const resolvedOrg = org || getDefaultOrg();
   if (!resolvedOrg) throw new Error('GitHub org is required');
 
   const resolvedBranch = branch || 'main';
-  const normalizedPath = skillPath.startsWith('/') ? skillPath.slice(1) : skillPath;
+  const normalizedPath = skillPath.startsWith('/')
+    ? skillPath.slice(1)
+    : skillPath;
   const cacheKey = `detail:${resolvedOrg}:${repo}:${normalizedPath}:${resolvedBranch}`;
   const cached = skillDetailCache.get(cacheKey);
   if (cached) return cached;
 
-  const content = await fetchFileContent(resolvedOrg, repo, normalizedPath, resolvedBranch);
+  const content = await fetchFileContent(
+    resolvedOrg,
+    repo,
+    normalizedPath,
+    resolvedBranch
+  );
   const { frontmatter } = parseFrontmatter(content);
 
   // Find sibling files + check for apex-skill.json contract
@@ -361,8 +411,10 @@ export async function getSkill(
   const supportingFiles: SupportingFile[] = [];
 
   try {
-    const items = await ghFetch<Array<{ name: string; path: string; type: string }>>(
-      `/repos/${encodeURIComponent(resolvedOrg)}/${encodeURIComponent(repo)}/contents/${encodeURIComponent(folder)}?ref=${encodeURIComponent(resolvedBranch)}`,
+    const items = await ghFetch<
+      Array<{ name: string; path: string; type: string }>
+    >(
+      `/repos/${encodeURIComponent(resolvedOrg)}/${encodeURIComponent(repo)}/contents/${encodeURIComponent(folder)}?ref=${encodeURIComponent(resolvedBranch)}`
     );
     let apexSkillJsonPath: string | null = null;
     for (const item of items) {
@@ -374,13 +426,24 @@ export async function getSkill(
     // Resolve declared foundation dependencies from apex-skill.json
     if (apexSkillJsonPath) {
       try {
-        const contractText = await fetchFileContent(resolvedOrg, repo, apexSkillJsonPath.slice(1), resolvedBranch);
-        const contract = JSON.parse(contractText) as { managedFoundationFiles?: string[] };
+        const contractText = await fetchFileContent(
+          resolvedOrg,
+          repo,
+          apexSkillJsonPath.slice(1),
+          resolvedBranch
+        );
+        const contract = JSON.parse(contractText) as {
+          managedFoundationFiles?: string[];
+        };
         for (const depPath of contract.managedFoundationFiles ?? []) {
           if (!depPath) continue;
           const depName = depPath.split('/').filter(Boolean).pop() ?? depPath;
-          if (!supportingFiles.some(f => f.path === depPath)) {
-            supportingFiles.push({ path: depPath, name: depName, isFoundationDep: true });
+          if (!supportingFiles.some((f) => f.path === depPath)) {
+            supportingFiles.push({
+              path: depPath,
+              name: depName,
+              isFoundationDep: true,
+            });
           }
         }
       } catch {
@@ -412,18 +475,25 @@ export async function getSkillFile(
   repo: string,
   filePath: string,
   branch?: string,
-  org?: string,
+  org?: string
 ): Promise<string> {
   const resolvedOrg = org || getDefaultOrg();
   if (!resolvedOrg) throw new Error('GitHub org is required');
 
   const resolvedBranch = branch || 'main';
-  const normalizedPath = filePath.startsWith('/') ? filePath.slice(1) : filePath;
+  const normalizedPath = filePath.startsWith('/')
+    ? filePath.slice(1)
+    : filePath;
   const cacheKey = `file:${resolvedOrg}:${repo}:${normalizedPath}:${resolvedBranch}`;
   const cached = fileContentCache.get(cacheKey);
   if (cached) return cached;
 
-  const content = await fetchFileContent(resolvedOrg, repo, normalizedPath, resolvedBranch);
+  const content = await fetchFileContent(
+    resolvedOrg,
+    repo,
+    normalizedPath,
+    resolvedBranch
+  );
   fileContentCache.set(cacheKey, content);
   return content;
 }
@@ -438,7 +508,7 @@ export async function listRepoDir(
   repo: string,
   dirPath: string,
   branch?: string,
-  org?: string,
+  org?: string
 ): Promise<RepoFileEntry[]> {
   const resolvedOrg = org || getDefaultOrg();
   if (!resolvedOrg) throw new Error('GitHub org is required');
@@ -448,7 +518,8 @@ export async function listRepoDir(
   const encodedPath = normalizedPath ? encodeURIComponent(normalizedPath) : '';
   const url = `/repos/${encodeURIComponent(resolvedOrg)}/${encodeURIComponent(repo)}/contents/${encodedPath}?ref=${encodeURIComponent(resolvedBranch)}`;
 
-  const items = await ghFetch<Array<{ name: string; path: string; type: string }>>(url);
+  const items =
+    await ghFetch<Array<{ name: string; path: string; type: string }>>(url);
 
   return items
     .map((item) => ({
@@ -473,7 +544,7 @@ export async function searchRepoCode(
   query: string,
   branch?: string,
   org?: string,
-  limit = 10,
+  limit = 10
 ): Promise<CodeSearchResult[]> {
   const resolvedOrg = org || getDefaultOrg();
   if (!resolvedOrg) throw new Error('GitHub org is required');
@@ -490,20 +561,25 @@ export async function searchRepoCode(
   if (activeCodeSearch) {
     if (activeCodeSearch.key === cacheKey) return activeCodeSearch.promise;
     throw new Error(
-      'GitHub code search is already running; use list_repo_dir/get_skill_file or retry shortly',
+      'GitHub code search is already running; use list_repo_dir/get_skill_file or retry shortly'
     );
   }
 
   const now = Date.now();
   if (now < codeSearchBlockedUntil) {
-    const retrySeconds = Math.max(1, Math.ceil((codeSearchBlockedUntil - now) / 1_000));
-    throw new Error(`GitHub code search is rate-limited; retry after ${retrySeconds}s`);
+    const retrySeconds = Math.max(
+      1,
+      Math.ceil((codeSearchBlockedUntil - now) / 1_000)
+    );
+    throw new Error(
+      `GitHub code search is rate-limited; retry after ${retrySeconds}s`
+    );
   }
   const elapsedSinceLastSearch = now - lastCodeSearchStartedAt;
   if (elapsedSinceLastSearch < CODE_SEARCH_MIN_INTERVAL_MS) {
     const retryMs = CODE_SEARCH_MIN_INTERVAL_MS - elapsedSinceLastSearch;
     throw new Error(
-      `GitHub code search is throttled; use list_repo_dir/get_skill_file or retry after ${Math.ceil(retryMs / 1_000)}s`,
+      `GitHub code search is throttled; use list_repo_dir/get_skill_file or retry after ${Math.ceil(retryMs / 1_000)}s`
     );
   }
 
@@ -525,19 +601,22 @@ export async function searchRepoCode(
       const results = (response.items ?? []).map((item) => ({
         path: `/${item.path}`,
         url: item.html_url,
-        matches: (item.text_matches ?? []).map((m) => ({ fragment: m.fragment })),
+        matches: (item.text_matches ?? []).map((m) => ({
+          fragment: m.fragment,
+        })),
       }));
       codeSearchCache.set(cacheKey, results);
       return results;
     } catch (err) {
-      const isRateLimited = err instanceof GitHubApiError
-        && err.status === 403
-        && (err.retryAfterMs !== undefined || /rate.?limit/i.test(err.message));
+      const isRateLimited =
+        err instanceof GitHubApiError &&
+        err.status === 403 &&
+        (err.retryAfterMs !== undefined || /rate.?limit/i.test(err.message));
       if (isRateLimited) {
-        codeSearchBlockedUntil = Date.now()
-          + (err.retryAfterMs ?? CODE_SEARCH_RATE_LIMIT_FALLBACK_MS);
+        codeSearchBlockedUntil =
+          Date.now() + (err.retryAfterMs ?? CODE_SEARCH_RATE_LIMIT_FALLBACK_MS);
         throw new Error(
-          `GitHub code search rate-limited (403); retry later or use list_repo_dir/get_skill_file`,
+          `GitHub code search rate-limited (403); retry later or use list_repo_dir/get_skill_file`
         );
       }
       throw err;
@@ -577,9 +656,9 @@ async function fetchFileContent(
   org: string,
   repo: string,
   filePath: string,
-  branch: string,
+  branch: string
 ): Promise<string> {
   return ghFetchRaw(
-    `/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/contents/${encodeURIComponent(filePath)}?ref=${encodeURIComponent(branch)}`,
+    `/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/contents/${encodeURIComponent(filePath)}?ref=${encodeURIComponent(branch)}`
   );
 }

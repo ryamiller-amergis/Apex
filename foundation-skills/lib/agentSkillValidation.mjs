@@ -1,5 +1,11 @@
+/**
+ * Agent Skills frontmatter check used as an install/validate gate.
+ *
+ * Required fields and known optional fields are validated. Extra keys used by
+ * other harnesses are warnings, not errors — this is not a closed allow-list.
+ */
 const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const ALLOWED_FIELDS = new Set([
+const KNOWN_FIELDS = new Set([
   'name',
   'description',
   'license',
@@ -19,8 +25,10 @@ export function validateAgentSkillDocument(text, { expectedName = null } = {}) {
   const { frontmatter } = parsed;
 
   for (const field of Object.keys(frontmatter)) {
-    if (!ALLOWED_FIELDS.has(field)) {
-      errors.push(`unsupported frontmatter field "${field}"`);
+    if (!KNOWN_FIELDS.has(field)) {
+      warnings.push(
+        `unrecognized frontmatter field "${field}" (allowed; not in the Agent Skills core set)`
+      );
     }
   }
 

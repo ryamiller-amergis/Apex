@@ -56,14 +56,17 @@ test('Agent Skills frontmatter rejects missing and oversized descriptions', () =
   );
 });
 
-test('Agent Skills frontmatter rejects proprietary top-level fields', () => {
-  const invalid = validSkill.replace(
+test('Agent Skills frontmatter warns on extra harness fields without failing', () => {
+  const extra = validSkill.replace(
     'license: Apache-2.0',
     'disable-model-invocation: true'
   );
+  const result = validateAgentSkillDocument(extra);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.errors, []);
   assert.match(
-    validateAgentSkillDocument(invalid).errors.join('\n'),
-    /unsupported frontmatter field/
+    result.warnings.join('\n'),
+    /unrecognized frontmatter field "disable-model-invocation"/
   );
 });
 

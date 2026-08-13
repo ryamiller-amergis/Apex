@@ -25,7 +25,7 @@ describe('foundationSkillResolverService canonical roots', () => {
     }
   });
 
-  it('rejects duplicate names across canonical and legacy roots', () => {
+  it('ignores a duplicate name in a non-canonical root when a lockfile exists', () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-resolver-test-'));
     try {
       for (const root of ['.agents/skills', '.cursor/skills']) {
@@ -41,9 +41,25 @@ describe('foundationSkillResolverService canonical roots', () => {
         })
       );
 
-      expect(() => resolveLocalSkillPath('to-prd', repo)).toThrow(
-        /multiple roots/i
+      expect(resolveLocalSkillPath('to-prd', repo)).toBe(
+        path.join(repo, '.agents/skills/to-prd/SKILL.md')
       );
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('prefers skills/ over .cursor/skills when no lockfile exists', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-resolver-test-'));
+    try {
+      const generic = path.join(repo, 'skills/to-prd/SKILL.md');
+      const cursor = path.join(repo, '.cursor/skills/to-prd/SKILL.md');
+      for (const skillPath of [generic, cursor]) {
+        fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+        fs.writeFileSync(skillPath, '# to-prd\n');
+      }
+
+      expect(resolveLocalSkillPath('to-prd', repo)).toBe(generic);
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
     }

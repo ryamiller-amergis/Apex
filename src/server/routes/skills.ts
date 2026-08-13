@@ -32,7 +32,10 @@ router.get('/projects', async (_req: Request, res: Response) => {
  * List repos in a project (or GitHub org).
  */
 router.get('/repos', async (req: Request, res: Response) => {
-  const { project, provider: providerRaw } = req.query as { project?: string; provider?: string };
+  const { project, provider: providerRaw } = req.query as {
+    project?: string;
+    provider?: string;
+  };
   if (!project) return res.status(400).json({ error: 'project is required' });
 
   const provider = resolveProvider(providerRaw);
@@ -50,7 +53,11 @@ router.get('/repos', async (req: Request, res: Response) => {
  * List branch names for a repo, sorted with defaultBranch first.
  */
 router.get('/branches', async (req: Request, res: Response) => {
-  const { project, repo, provider: providerRaw } = req.query as { project?: string; repo?: string; provider?: string };
+  const {
+    project,
+    repo,
+    provider: providerRaw,
+  } = req.query as { project?: string; repo?: string; provider?: string };
   if (!project) return res.status(400).json({ error: 'project is required' });
   if (!repo) return res.status(400).json({ error: 'repo is required' });
 
@@ -67,9 +74,16 @@ router.get('/branches', async (req: Request, res: Response) => {
 /**
  * GET /api/skills/list?project=<name>&repo=<name>&branch=<name>&provider=<ado|github>
  * List all skills (SKILL.md files) in a repo.
+ * Discovery order: .agents/skills, skills/, .cursor/skills. Duplicate names
+ * collapse to the highest-precedence root.
  */
 router.get('/list', async (req: Request, res: Response) => {
-  const { project, repo, branch, provider: providerRaw } = req.query as {
+  const {
+    project,
+    repo,
+    branch,
+    provider: providerRaw,
+  } = req.query as {
     project?: string;
     repo?: string;
     branch?: string;
@@ -94,7 +108,13 @@ router.get('/list', async (req: Request, res: Response) => {
  * Get full skill detail (content + frontmatter + supporting files).
  */
 router.get('/get', async (req: Request, res: Response) => {
-  const { project, repo, path, branch, provider: providerRaw } = req.query as {
+  const {
+    project,
+    repo,
+    path,
+    branch,
+    provider: providerRaw,
+  } = req.query as {
     project?: string;
     repo?: string;
     path?: string;
@@ -121,7 +141,13 @@ router.get('/get', async (req: Request, res: Response) => {
  * Get raw content of a skill supporting file.
  */
 router.get('/file', async (req: Request, res: Response) => {
-  const { project, repo, path, branch, provider: providerRaw } = req.query as {
+  const {
+    project,
+    repo,
+    path,
+    branch,
+    provider: providerRaw,
+  } = req.query as {
     project?: string;
     repo?: string;
     path?: string;
@@ -135,7 +161,13 @@ router.get('/file', async (req: Request, res: Response) => {
 
   const provider = resolveProvider(providerRaw);
   try {
-    const content = await facade.getSkillFile(project, repo, path, branch, provider);
+    const content = await facade.getSkillFile(
+      project,
+      repo,
+      path,
+      branch,
+      provider
+    );
     res.type('text/markdown').send(content);
   } catch (err: any) {
     console.error('[skills] getSkillFile error:', err.message);
@@ -148,7 +180,14 @@ router.get('/file', async (req: Request, res: Response) => {
  * Search skills by name/description across a repo.
  */
 router.get('/search', async (req: Request, res: Response) => {
-  const { q, project, repo, branch, limit, provider: providerRaw } = req.query as {
+  const {
+    q,
+    project,
+    repo,
+    branch,
+    limit,
+    provider: providerRaw,
+  } = req.query as {
     q?: string;
     project?: string;
     repo?: string;
@@ -164,7 +203,11 @@ router.get('/search', async (req: Request, res: Response) => {
   const provider = resolveProvider(providerRaw);
   try {
     const allSkills = await facade.listSkills(project, repo, branch, provider);
-    const results = searchSkills(allSkills, q, limit ? parseInt(limit, 10) : 10);
+    const results = searchSkills(
+      allSkills,
+      q,
+      limit ? parseInt(limit, 10) : 10
+    );
     res.json(results);
   } catch (err: any) {
     console.error('[skills] searchSkills error:', err.message);
@@ -177,7 +220,11 @@ router.get('/search', async (req: Request, res: Response) => {
  * Manually invalidate the skill cache for a project/repo.
  */
 router.post('/refresh', (req: Request, res: Response) => {
-  const { project, repo, provider: providerRaw } = req.query as { project?: string; repo?: string; provider?: string };
+  const {
+    project,
+    repo,
+    provider: providerRaw,
+  } = req.query as { project?: string; repo?: string; provider?: string };
   const provider = resolveProvider(providerRaw);
   facade.invalidateCache(project, repo, provider);
   if (provider === 'ado') {
@@ -188,7 +235,10 @@ router.post('/refresh', (req: Request, res: Response) => {
 
 // ── Foundation skill release consumer endpoints (authenticated, read-only) ────
 
-import { getLatestPublishedRelease, listReleases } from '../services/foundationSkillReleaseService';
+import {
+  getLatestPublishedRelease,
+  listReleases,
+} from '../services/foundationSkillReleaseService';
 import { getRepoStatus } from '../services/foundationSkillCompatibilityService';
 
 /**
@@ -197,10 +247,14 @@ import { getRepoStatus } from '../services/foundationSkillCompatibilityService';
  */
 router.get('/foundation-releases', async (_req: Request, res: Response) => {
   try {
-    const releases = (await listReleases()).filter(r => r.status === 'published');
+    const releases = (await listReleases()).filter(
+      (r) => r.status === 'published'
+    );
     res.json({ releases });
   } catch (err: any) {
-    res.status(500).json({ error: err.message ?? 'Failed to list foundation releases' });
+    res
+      .status(500)
+      .json({ error: err.message ?? 'Failed to list foundation releases' });
   }
 });
 
@@ -209,35 +263,47 @@ router.get('/foundation-releases', async (_req: Request, res: Response) => {
  * Get the latest published release visible to the given Apex project.
  * Without ?project the first published release is returned (useful for admin contexts).
  */
-router.get('/foundation-releases/latest', async (req: Request, res: Response) => {
-  try {
-    const apexProject = (req.query.project as string | undefined) ?? null;
-    const release = await getLatestPublishedRelease(apexProject);
-    res.json({ release: release ?? null });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message ?? 'Failed to get latest foundation release' });
+router.get(
+  '/foundation-releases/latest',
+  async (req: Request, res: Response) => {
+    try {
+      const apexProject = (req.query.project as string | undefined) ?? null;
+      const release = await getLatestPublishedRelease(apexProject);
+      res.json({ release: release ?? null });
+    } catch (err: any) {
+      res
+        .status(500)
+        .json({
+          error: err.message ?? 'Failed to get latest foundation release',
+        });
+    }
   }
-});
+);
 
 /**
  * GET /api/skills/foundation-status?provider=ado&project=X&repo=Y&branch=main
  * Get the last-observed install status for a repo (from cache — no live scan).
  */
 router.get('/foundation-status', async (req: Request, res: Response) => {
-  const { provider, project, repo, branch } = req.query as Record<string, string | undefined>;
+  const { provider, project, repo, branch } = req.query as Record<
+    string,
+    string | undefined
+  >;
   if (!project || !repo) {
     return res.status(400).json({ error: 'project and repo are required' });
   }
   try {
     const status = await getRepoStatus(
-      (provider === 'github' ? 'github' : 'ado'),
+      provider === 'github' ? 'github' : 'ado',
       project,
       repo,
-      branch ?? 'main',
+      branch ?? 'main'
     );
     res.json({ status: status ?? null });
   } catch (err: any) {
-    res.status(500).json({ error: err.message ?? 'Failed to get foundation status' });
+    res
+      .status(500)
+      .json({ error: err.message ?? 'Failed to get foundation status' });
   }
 });
 

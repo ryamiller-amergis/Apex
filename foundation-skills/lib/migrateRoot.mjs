@@ -165,7 +165,12 @@ export function migrateSkillRoot(
     throw error;
   }
   if (plan.unchanged || dryRun) {
-    return { ...plan, dryRun, wrote: [] };
+    const staleRootReferences = plan.unchanged
+      ? []
+      : collectStaleRootReferences(repoRoot, plan.sourceRoot, [
+          plan.sourceRoot,
+        ]);
+    return { ...plan, dryRun, wrote: [], staleRootReferences };
   }
 
   const skillNames = plan.actions.map((action) => action.skill);
@@ -214,6 +219,12 @@ function executeMigration(repoRoot, plan) {
     'utf8'
   );
 
+  const staleRootReferences = collectStaleRootReferences(
+    repoRoot,
+    plan.sourceRoot,
+    [plan.targetRoot, plan.sourceRoot]
+  );
+
   return {
     ...plan,
     dryRun: false,
@@ -221,6 +232,7 @@ function executeMigration(repoRoot, plan) {
       ...plan.actions.map((action) => action.targetDir),
       'apex-skills.lock.json',
     ],
+    staleRootReferences,
   };
 }
 
@@ -233,4 +245,62 @@ function rewriteCanonicalRootReferences(text, sourceRoot, targetRoot) {
     zones.adapter.replaceAll(sourceRoot, targetRoot) +
     zones.project
   );
+}
+
+const TEXT_EXTS = new Set([
+  '.md',
+  '.json',
+  '.yml',
+  '.yaml',
+  '.txt',
+  '.mjs',
+  '.js',
+  '.cjs',
+  '.ts',
+  '.tsx',
+]);
+
+function walkTextFiles(absDir, visit) {
+  if (!fs.existsSync(absDir)) return;
+  let entries;
+  try {
+    entries = fs.readdirSync(absDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (entry.name === 'node_modules' || entry.name === '.git') continue;
+    const abs = path.join(absDir, entry.name);
+    if (entry.isDirectory() || entry.isSymbolicLink()) {
+      if (entry.isDirectory()) walkTextFiles(abs, visit);
+      continue;
+    }
+    if (
+      entry.isFile() &&
+      TEXT_EXTS.has(path.extname(entry.name).toLowerCase())
+    ) {
+      visit(abs);
+    }
+  }
+}
+
+/**
+ * Project notes (below the managed fence) are left intact on purpose.
+ * Report leftover mentions of the old root so operators can clean them up.
+ */
+function collectStaleRootReferences(repoRoot, sourceRoot, searchRoots) {
+  const stale = [];
+  for (const relRoot of [...new Set(searchRoots.filter(Boolean))]) {
+    walkTextFiles(path.join(repoRoot, relRoot), (absFile) => {
+      try {
+        const text = fs.readFileSync(absFile, 'utf8');
+        if (text.includes(sourceRoot)) {
+          stale.push(toPosix(path.relative(repoRoot, absFile)));
+        }
+      } catch {
+        /* unreadable — skip */
+      }
+    });
+  }
+  return [...new Set(stale)].sort();
 }

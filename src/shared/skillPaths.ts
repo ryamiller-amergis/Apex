@@ -2,25 +2,46 @@ export const AGENT_SKILL_ROOT = '.agents/skills' as const;
 export const LEGACY_CURSOR_SKILL_ROOT = '.cursor/skills' as const;
 export const LEGACY_GENERIC_SKILL_ROOT = 'skills' as const;
 
-/** Discovery precedence when a repository has no apex-skills lockfile. */
+/**
+ * Discovery precedence when a repository has no apex-skills lockfile, and when
+ * remote catalogs return the same skill name from more than one root.
+ *
+ * Order is deliberate (issue #152):
+ *   1. `.agents/skills` — Agent Skills canonical root
+ *   2. `skills/` — pre-Cursor generic catalog; kept ahead of `.cursor/skills`
+ *      so existing generic-root consumers are not silently flipped
+ *   3. `.cursor/skills` — legacy Cursor catalog
+ *
+ * Duplicate names collapse to the highest-precedence match.
+ */
 export const SKILL_DISCOVERY_ROOTS = [
   AGENT_SKILL_ROOT,
-  LEGACY_CURSOR_SKILL_ROOT,
   LEGACY_GENERIC_SKILL_ROOT,
+  LEGACY_CURSOR_SKILL_ROOT,
 ] as const;
 
 const SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export function normalizeRepoRelativePath(value: string): string {
-  const normalized = value
+  const raw = value
     .trim()
     .replace(/\\/g, '/')
     .replace(/^\/+/, '')
     .replace(/\/+/g, '/');
-  return normalized
-    .split('/')
-    .filter((segment) => segment && segment !== '.')
-    .join('/');
+  const out: string[] = [];
+  for (const segment of raw.split('/')) {
+    if (!segment || segment === '.') continue;
+    if (segment === '..') {
+      if (out.length === 0 || out[out.length - 1] === '..') {
+        out.push('..');
+      } else {
+        out.pop();
+      }
+    } else {
+      out.push(segment);
+    }
+  }
+  return out.join('/');
 }
 
 export function isSafeRepoRelativeRoot(value: string): boolean {

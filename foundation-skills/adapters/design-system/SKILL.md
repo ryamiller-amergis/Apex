@@ -7,8 +7,8 @@ description: Project design system reference for APEX prototype generation. Boot
 
 > This file is read by APEX when generating feature prototypes. Edit it to match
 > your project's actual design system, then commit. APEX picks up changes within
-> 10 minutes (cache TTL). See `SKILL.md` for the
-> full authoring guide.
+> 10 minutes (cache TTL). See the `@apex/skills` design-system foundation
+> (`foundation/design-system/SKILL.md`) for the full authoring guide.
 
 ---
 

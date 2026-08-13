@@ -22,10 +22,23 @@ export async function migrateRoot({ to, dryRun = false } = {}) {
       `[apex-skills] Would migrate ${result.actions.length} skill(s) ` +
         `from ${result.sourceRoot} to ${result.targetRoot}.`
     );
+    reportStaleRootReferences(result);
     return;
   }
   console.log(
     `[apex-skills] Migrated ${result.actions.length} skill(s) ` +
       `from ${result.sourceRoot} to ${result.targetRoot}.`
   );
+  reportStaleRootReferences(result);
+}
+
+function reportStaleRootReferences(result) {
+  const stale = result.staleRootReferences ?? [];
+  if (!stale.length) return;
+  console.log(
+    `[apex-skills] Stale references to ${result.sourceRoot} remain in:`
+  );
+  for (const file of stale) {
+    console.log(`  - ${file}`);
+  }
 }
