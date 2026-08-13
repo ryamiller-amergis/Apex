@@ -3,8 +3,10 @@
 Architectural plan to serve AI repository reads from a single bare object
 database at a pinned SHA, instead of materialized working trees. Status:
 Stages 0–5 are in tree (`repo-read-service` and `enable_repo_read_service`
-default off). Stage 5 asks at resume and generate-handoff, renders staleness,
-and stamps the SHA into generated PRDs and design docs. Stage 6 follows.
+default off). Stage 6 has started: in-process reads prefer a usable bare
+mirror even when the flag is off; LocalCheckoutReader is last-resort.
+Working-tree services and the six superseded flags are not retired yet
+(interactive Cursor still needs a cwd; those flags are still `active`).
 
 ## Why
 
