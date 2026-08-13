@@ -594,6 +594,21 @@ describe('Foundation Skills Admin Routes', () => {
       expect(res.status).toBe(400);
       expect(mockUpdate.updateRepoWithFoundationSkills).not.toHaveBeenCalled();
     });
+
+    it('rejects a skill root outside the known catalog set', async () => {
+      const res = await request(buildAdminApp())
+        .post('/api/platform-admin/foundation-skills/update-repo')
+        .send({
+          project: 'MatterWorx',
+          repo: 'MatterWorx',
+          apexProject: 'MatterWorx',
+          skillRoot: 'build/skills',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/one of/i);
+      expect(mockUpdate.updateRepoWithFoundationSkills).not.toHaveBeenCalled();
+    });
   });
 });
 

@@ -369,7 +369,7 @@ export function createAdoMcpServer(options?: {
 
   server.tool(
     'list_skills',
-    'List all skills (SKILL.md files) available in a repository. Skills are discovered under .agents/skills/, skills/, and .cursor/skills/ in that precedence; duplicate names collapse to the highest-precedence root.',
+    'List all skills (SKILL.md files) available in a repository. Skills are discovered under .agents/skills/, .cursor/skills/, and skills/ in that precedence; duplicate names collapse to the highest-precedence root.',
     {
       project: z.string().describe('ADO project name'),
       repo: z.string().describe('Repository name'),

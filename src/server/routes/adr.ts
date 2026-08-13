@@ -2,6 +2,7 @@ import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { eq } from 'drizzle-orm';
+import { AGENT_SKILL_ROOT, skillPathFor } from '../../shared/skillPaths';
 import { requirePermission } from '../middleware/rbac';
 import { getUserId } from '../utils/requestUser';
 import { db } from '../db/drizzle';
@@ -241,7 +242,7 @@ router.post('/:id/generate', requirePermission('adr:edit'), async (req, res, nex
       repo: skillConfig?.skillRepo ?? adr.repo,
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider,
-      skillPath: skillConfig?.adrFinalizeSkillPath ?? '.cursor/skills/adr-finalize/SKILL.md',
+      skillPath: skillConfig?.adrFinalizeSkillPath ?? skillPathFor(AGENT_SKILL_ROOT, 'adr-finalize'),
       transcript,
       model,
       skillSettingsId: skillConfig?.id ?? adr.skillSettingsId ?? undefined,
@@ -495,7 +496,7 @@ router.post('/:id/assistant-thread', requirePermission('adr:view'), requirePermi
       repo: skillConfig?.skillRepo ?? adr.repo,
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider,
-      skillPath: skillConfig?.adrAssistantSkillPath ?? '.cursor/skills/adr-assistant/SKILL.md',
+      skillPath: skillConfig?.adrAssistantSkillPath ?? skillPathFor(AGENT_SKILL_ROOT, 'adr-assistant'),
       freeformContext: buildContext('__THREAD_ID__'),
       model,
       assistantType: 'adr',

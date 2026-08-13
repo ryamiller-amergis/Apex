@@ -19,6 +19,7 @@ import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import * as facade from './skillCatalogFacade';
 import {
   SKILL_DISCOVERY_ROOTS,
+  skillPathCandidates,
   skillPathFor,
   skillRootFromLock,
 } from '../../shared/skillPaths';
@@ -106,15 +107,21 @@ export function resolveLocalSkillPath(
     if (fs.existsSync(abs)) return abs;
     console.warn(
       `[foundationSkillResolver] "${skillName}" not found at lockfile ` +
-        `canonical root ${canonicalRoot}`
+        `canonical root ${canonicalRoot}; searching other discovery roots`
     );
-    return null;
   }
 
   for (const root of SKILL_DISCOVERY_ROOTS) {
+    if (lock && root === skillRootFromLock(lock)) continue;
     const relativePath = skillPathFor(root, skillName);
     const abs = repoPath(repoRoot, relativePath);
-    if (fs.existsSync(abs)) return abs;
+    if (fs.existsSync(abs)) {
+      console.warn(
+        `[foundationSkillResolver] "${skillName}" resolved from fallback ` +
+          `root ${root}`
+      );
+      return abs;
+    }
   }
   return null;
 }
@@ -217,14 +224,15 @@ export async function resolveRemoteSkillBundle(
   > & { project?: string | null },
   fallbackText?: string
 ): Promise<SkillBundle> {
-  if (skillPath) {
-    const remote = await fetchRemoteSkillFile(skillPath, config);
+  const candidates = skillPathCandidates(skillName, skillPath);
+  for (const candidate of candidates) {
+    const remote = await fetchRemoteSkillFile(candidate, config);
     if (remote) {
       const version = foundationVersionFromLock(skillName);
       return {
         content: remote,
         source: 'adapter-only',
-        adapterPath: skillPath,
+        adapterPath: candidate,
         foundationPath: null,
         foundationVersion: version,
         notFound: false,

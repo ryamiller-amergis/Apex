@@ -21,7 +21,9 @@
  * }
  *
  * v1 lockfiles (vendored: { ".apex/foundation/...": hash }) are still readable
- * so install can migrate them to v3.
+ * so install can migrate them to the current write format.
+ * v3 is written only for non-legacy roots; legacy `.cursor/skills` stays v2
+ * so already-published 2.0.x CLIs keep reading those lockfiles.
  */
 import fs from 'node:fs';
 import { readJson, stableStringify, sha256 } from './util.mjs';
@@ -60,13 +62,32 @@ export function emptyLockfile(
   pkgName,
   skillRoot = LEGACY_SKILL_ROOT
 ) {
-  return {
-    lockfileVersion: LOCKFILE_VERSION,
+  const lock = {
+    lockfileVersion: lockfileVersionForRoot(skillRoot),
     suiteVersion,
     package: pkgName,
-    skillRoot: normalizeSkillRoot(skillRoot),
     skills: {},
   };
+  applyLockfileRoot(lock, skillRoot);
+  return lock;
+}
+
+export function lockfileVersionForRoot(skillRoot) {
+  return normalizeSkillRoot(skillRoot) === LEGACY_SKILL_ROOT
+    ? LOCKFILE_VERSION_V2
+    : LOCKFILE_VERSION;
+}
+
+/** v3 + skillRoot only when the catalog is not the legacy Cursor root. */
+export function applyLockfileRoot(lock, skillRoot) {
+  const root = normalizeSkillRoot(skillRoot);
+  lock.lockfileVersion = lockfileVersionForRoot(root);
+  if (root === LEGACY_SKILL_ROOT) {
+    delete lock.skillRoot;
+  } else {
+    lock.skillRoot = root;
+  }
+  return lock;
 }
 
 /**

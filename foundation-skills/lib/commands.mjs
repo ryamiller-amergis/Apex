@@ -10,7 +10,7 @@ import { validatePackage } from './validatePackage.mjs';
 import {
   loadCatalog, findSkill, listAdapterRuntimeFiles, resolveSkillDependencyClosure,
 } from './catalog.mjs';
-import { readLockfile, serializeLockfile, LOCKFILE_VERSION } from './lockfile.mjs';
+import { readLockfile, serializeLockfile, applyLockfileRoot } from './lockfile.mjs';
 import {
   writeTextFile, assertWithin, toPosix, normalizeText, sha256, listFilesRel,
 } from './util.mjs';
@@ -286,8 +286,7 @@ function refreshLockfileHashes(pkgRoot, repoRoot, skills, skillRoot) {
   const lock = readLockfile(repoRoot);
   if (!lock) return;
   const catalog = loadCatalog(pkgRoot);
-  lock.lockfileVersion = LOCKFILE_VERSION;
-  lock.skillRoot = skillRoot;
+  applyLockfileRoot(lock, skillRoot);
   for (const name of skills) {
     if (!lock.skills[name]) continue;
     const skillDef = findSkill(catalog, name);

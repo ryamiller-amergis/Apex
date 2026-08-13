@@ -3,9 +3,12 @@ import path from 'node:path';
 
 export const LEGACY_SKILL_ROOT = '.cursor/skills';
 export const AGENT_SKILL_ROOT = '.agents/skills';
+export const GENERIC_SKILL_ROOT = 'skills';
+/** Same ordered set as `SKILL_DISCOVERY_ROOTS` in src/shared/skillPaths.ts. */
 export const KNOWN_SKILL_ROOTS = Object.freeze([
   AGENT_SKILL_ROOT,
   LEGACY_SKILL_ROOT,
+  GENERIC_SKILL_ROOT,
 ]);
 
 /**
@@ -37,6 +40,11 @@ export function normalizeSkillRoot(
     normalized.includes('/../')
   ) {
     throw new Error(`Skill root must stay within the repository: ${value}`);
+  }
+  if (!KNOWN_SKILL_ROOTS.includes(normalized)) {
+    throw new Error(
+      `Skill root must be one of ${KNOWN_SKILL_ROOTS.join(', ')}: ${value}`
+    );
   }
   return normalized;
 }

@@ -14,15 +14,17 @@ the canonical root during the first install:
 npx @apex/skills install <skill...> --skill-root .agents/skills
 ```
 
-`APEX_SKILLS_ROOT=.agents/skills` is an install-only, first-install-only
-default (same as `--skill-root`). It is read by the `install` command and
-ignored by bootstrap and migrate-root. Once a lockfile exists, changing the
-root requires `migrate-root`; exporting this variable in a legacy repo will
-fail install rather than silently fork the catalog.
+`--skill-root` is first-install-only and must be passed explicitly — there is
+no environment-variable default. Once a lockfile exists, changing the root
+requires `migrate-root`; a later `--skill-root` that disagrees with the
+lockfile fails install rather than silently forking the catalog.
 
-The selected repository-relative path is persisted as `skillRoot` in
-`apex-skills.lock.json`. Install, update, bootstrap, check, lockfile integrity,
-backup, and rollback operations then use that root consistently.
+The selected repository-relative path is persisted in `apex-skills.lock.json`.
+Non-legacy roots write `lockfileVersion` 3 with a `skillRoot` field. Legacy
+`.cursor/skills` installs keep `lockfileVersion` 2 and omit `skillRoot`, so
+already-published 2.0.x CLIs keep reading those lockfiles. Install, update,
+bootstrap, check, lockfile integrity, backup, and rollback then use that root
+consistently.
 
 Keep one canonical catalog. If another harness requires a different discovery
 path, point that harness at `.agents/skills` or create a repository-owned
@@ -42,8 +44,9 @@ Migration moves each lockfile-owned skill directory intact, preserving adapter
 slots and project notes. It updates managed-file paths, hashes, and lockfile
 integrity transactionally. Migration stops without writing when managed files
 have drifted, an installed file is missing, or a same-name destination exists.
-Project notes are left intact; migrate-root reports any remaining mentions of
-the previous root so they can be cleaned up deliberately.
+Project notes are left intact; migrate-root scans the repository for remaining
+mentions of the previous root (READMEs, CI, rules, and application code, not
+only files under the skill roots) so they can be cleaned up deliberately.
 
 Run `npx @apex/skills check` after migration and commit the moved directories
 with `apex-skills.lock.json`.

@@ -237,10 +237,21 @@ test('lockfile v3 is current; v2 remains readable; newer versions fail closed', 
   assert.equal(LOCKFILE_VERSION, 3);
   assert.equal(LOCKFILE_VERSION_V2, 2);
 
-  const current = JSON.parse(
+  const legacy = JSON.parse(
     serializeLockfile(emptyLockfile('2.1.0', '@apex/skills'))
   );
+  assert.equal(legacy.lockfileVersion, 2);
+  assert.equal(legacy.skillRoot, undefined);
+  assert.deepEqual(verifyLockfileIntegrity(legacy), {
+    valid: true,
+    error: null,
+  });
+
+  const current = JSON.parse(
+    serializeLockfile(emptyLockfile('2.1.0', '@apex/skills', '.agents/skills'))
+  );
   assert.equal(current.lockfileVersion, 3);
+  assert.equal(current.skillRoot, '.agents/skills');
   assert.deepEqual(verifyLockfileIntegrity(current), {
     valid: true,
     error: null,

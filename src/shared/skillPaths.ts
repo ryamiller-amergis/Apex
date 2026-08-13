@@ -7,17 +7,18 @@ export const LEGACY_GENERIC_SKILL_ROOT = 'skills' as const;
  * remote catalogs return the same skill name from more than one root.
  *
  * Order is deliberate (issue #152):
- *   1. `.agents/skills` — Agent Skills canonical root
- *   2. `skills/` — pre-Cursor generic catalog; kept ahead of `.cursor/skills`
- *      so existing generic-root consumers are not silently flipped
- *   3. `.cursor/skills` — legacy Cursor catalog
+ *   1. `.agents/skills` — Agent Skills canonical root (editor-visible)
+ *   2. `.cursor/skills` — legacy Cursor catalog (editor-visible)
+ *   3. `skills/` — generic catalog Cursor does not load; kept last so Apex
+ *      does not prefer a file the editor will never run
  *
  * Duplicate names collapse to the highest-precedence match.
+ * Keep in sync with `KNOWN_SKILL_ROOTS` in foundation-skills/lib/skillRoot.mjs.
  */
 export const SKILL_DISCOVERY_ROOTS = [
   AGENT_SKILL_ROOT,
-  LEGACY_GENERIC_SKILL_ROOT,
   LEGACY_CURSOR_SKILL_ROOT,
+  LEGACY_GENERIC_SKILL_ROOT,
 ] as const;
 
 const SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -66,6 +67,15 @@ export function normalizeSkillRoot(
     throw new Error(`Invalid repository-relative skill root: ${value}`);
   }
   const normalized = normalizeRepoRelativePath(raw).replace(/\/+$/, '');
+  if (
+    !SKILL_DISCOVERY_ROOTS.includes(
+      normalized as (typeof SKILL_DISCOVERY_ROOTS)[number]
+    )
+  ) {
+    throw new Error(
+      `Skill root must be one of ${SKILL_DISCOVERY_ROOTS.join(', ')}: ${value}`
+    );
+  }
   return normalized;
 }
 
@@ -74,6 +84,45 @@ export function skillPathFor(root: string, skillName: string): string {
     throw new Error(`Invalid skill name: ${skillName}`);
   }
   return `${normalizeSkillRoot(root)}/${skillName}/SKILL.md`;
+}
+
+export function isKnownSkillRoot(value: string): boolean {
+  try {
+    const normalized = normalizeSkillRoot(value);
+    return (SKILL_DISCOVERY_ROOTS as readonly string[]).includes(normalized);
+  } catch {
+    return false;
+  }
+}
+
+export function skillNameFromPath(skillPath: string): string | null {
+  const normalized = normalizeRepoRelativePath(skillPath);
+  for (const root of SKILL_DISCOVERY_ROOTS) {
+    if (!normalized.startsWith(`${root}/`)) continue;
+    const name = normalized.slice(root.length + 1).split('/')[0];
+    return name || null;
+  }
+  return null;
+}
+
+/** Preferred path first, then every discovery root, de-duplicated. */
+export function skillPathCandidates(
+  skillName: string,
+  preferredPath?: string | null
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (value: string) => {
+    const normalized = normalizeRepoRelativePath(value);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    out.push(normalized);
+  };
+  if (preferredPath?.trim()) add(preferredPath);
+  for (const root of SKILL_DISCOVERY_ROOTS) {
+    add(skillPathFor(root, skillName));
+  }
+  return out;
 }
 
 export function isSupportedAgentSkillPath(value: string): boolean {

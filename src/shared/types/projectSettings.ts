@@ -20,7 +20,8 @@ export type RepositoryReadinessStatus =
   | 'snapshot_unavailable';
 
 /** Stable public error when repository-dependent AI is blocked pending admin Clone. */
-export const PROJECT_REPOSITORY_NOT_READY = 'PROJECT_REPOSITORY_NOT_READY' as const;
+export const PROJECT_REPOSITORY_NOT_READY =
+  'PROJECT_REPOSITORY_NOT_READY' as const;
 export type ProjectRepositoryNotReadyCode = typeof PROJECT_REPOSITORY_NOT_READY;
 
 export interface ProjectRepositoryReadiness {
@@ -180,8 +181,9 @@ export interface ProjectSkillConfig {
   prototypeEngine?: PrototypeEngine;
   /**
    * Path within the project's own repo to the design-system skill file used by Bedrock prototype
-   * generation. Supports canonical `.agents/skills` and legacy
-   * `.cursor/skills` paths.
+   * generation. Resolved across `.agents/skills`, `.cursor/skills`, and
+   * `skills/` when the stored path is unset or the file has moved with a
+   * catalog migration.
    */
   prototypeDesignSystemPath?: string | null;
   /**
@@ -339,7 +341,11 @@ export interface SetApproversRequest {
 
 export interface ApproverPoolResponse {
   individuals: ProjectApprover[];
-  groups: Array<GroupWithMembers & { documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case' }>;
+  groups: Array<
+    GroupWithMembers & {
+      documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case';
+    }
+  >;
 }
 
 export interface ProjectSkillConfigResponse {

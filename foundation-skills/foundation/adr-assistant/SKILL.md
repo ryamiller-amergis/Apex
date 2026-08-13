@@ -1,8 +1,7 @@
 ---
 name: adr-assistant
 description: Refines proposed Architecture Decision Records through repository-grounded discussion and stages complete ADR edits for explicit review. Use in the project's ADR assistant workflow.
-metadata:
-  apex-disable-model-invocation: "true"
+disable-model-invocation: true
 ---
 
 # ADR Assistant — Foundation

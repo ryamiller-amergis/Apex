@@ -161,6 +161,7 @@ export function validatePackage(pkgRoot) {
       aDir,
       knownRuntimeFiles,
       skillRuntimeFiles,
+      catalogNames,
     )) {
       if (ref.skill === skill.name) {
         if (!skillRuntimeFiles.has(ref.file)) {
@@ -250,20 +251,39 @@ function buildRuntimeFilesBySkill(catalog) {
   return bySkill;
 }
 
-function inspectSkillReferences(skillName, foundationDir, adapterDir, knownRuntimeFiles, localRuntimeFiles) {
+function inspectSkillReferences(
+  skillName,
+  foundationDir,
+  adapterDir,
+  knownRuntimeFiles,
+  localRuntimeFiles,
+  catalogNames,
+) {
   const refs = [];
   for (const [layer, dir] of [['foundation', foundationDir], ['adapters', adapterDir]]) {
     const skillPath = path.join(dir, 'SKILL.md');
     if (!fs.existsSync(skillPath)) continue;
     const text = fs.readFileSync(skillPath, 'utf8');
-    for (const ref of extractRuntimeRefs(text, skillName, knownRuntimeFiles, localRuntimeFiles)) {
+    for (const ref of extractRuntimeRefs(
+      text,
+      skillName,
+      knownRuntimeFiles,
+      localRuntimeFiles,
+      catalogNames,
+    )) {
       refs.push({ layer, ref });
     }
   }
   return refs;
 }
 
-function extractRuntimeRefs(text, skillName, knownRuntimeFiles, localRuntimeFiles) {
+function extractRuntimeRefs(
+  text,
+  skillName,
+  knownRuntimeFiles,
+  localRuntimeFiles,
+  catalogNames,
+) {
   if (!text || knownRuntimeFiles.size === 0) return [];
 
   const refs = [];
@@ -305,9 +325,13 @@ function extractRuntimeRefs(text, skillName, knownRuntimeFiles, localRuntimeFile
     addRef(match[1], match[2], match.index, match[0].length);
   }
 
+  // Sibling hops (`../other-skill/file`) only count when `other-skill` is a
+  // catalog skill — prose like `../docs/readme.md` must not misfire. Cross-skill
+  // runtime files still require catalog `dependsOn` (or a duplicated companion).
   for (const match of text.matchAll(
     /\.\.\/([a-z][a-z0-9-]*)\/([A-Za-z0-9._-]+)/g
   )) {
+    if (!catalogNames?.has(match[1])) continue;
     addRef(match[1], match[2], match.index, match[0].length);
   }
 

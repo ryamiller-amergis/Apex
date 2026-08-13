@@ -72,7 +72,7 @@ export async function install({
   enrich = false,
   skipFeed = false,
   skipApexCheck = false,
-  skillRoot = process.env.APEX_SKILLS_ROOT ?? null,
+  skillRoot = null,
 } = {}) {
   const repoRoot = findGitRoot();
 

@@ -74,7 +74,7 @@ router.get('/branches', async (req: Request, res: Response) => {
 /**
  * GET /api/skills/list?project=<name>&repo=<name>&branch=<name>&provider=<ado|github>
  * List all skills (SKILL.md files) in a repo.
- * Discovery order: .agents/skills, skills/, .cursor/skills. Duplicate names
+ * Discovery order: .agents/skills, .cursor/skills, skills/. Duplicate names
  * collapse to the highest-precedence root.
  */
 router.get('/list', async (req: Request, res: Response) => {

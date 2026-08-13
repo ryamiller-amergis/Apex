@@ -39,7 +39,7 @@ import {
   serializeLockfile,
   isV1Lockfile,
   verifyLockfileIntegrity,
-  LOCKFILE_VERSION,
+  applyLockfileRoot,
 } from './lockfile.mjs';
 import { bootstrapSkill } from './bootstrap.mjs';
 import { satisfies } from './semver.mjs';
@@ -405,9 +405,8 @@ function executeInstallUnlocked(pkgRoot, repoRoot, skillNames, opts) {
       catalog.package ?? '@apex/skills',
       skillRoot
     );
-  lock.lockfileVersion = LOCKFILE_VERSION;
   lock.suiteVersion = catalog.suiteVersion;
-  lock.skillRoot = skillRoot;
+  applyLockfileRoot(lock, skillRoot);
   for (const name of Object.keys(lock.skills ?? {})) {
     if (lock.skills[name]?.vendored) {
       const { vendored, ...rest } = lock.skills[name];

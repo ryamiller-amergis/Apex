@@ -49,7 +49,7 @@ describe('foundationSkillResolverService canonical roots', () => {
     }
   });
 
-  it('prefers skills/ over .cursor/skills when no lockfile exists', () => {
+  it('prefers .cursor/skills over generic skills/ when no lockfile exists', () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-resolver-test-'));
     try {
       const generic = path.join(repo, 'skills/to-prd/SKILL.md');
@@ -59,7 +59,27 @@ describe('foundationSkillResolverService canonical roots', () => {
         fs.writeFileSync(skillPath, '# to-prd\n');
       }
 
-      expect(resolveLocalSkillPath('to-prd', repo)).toBe(generic);
+      expect(resolveLocalSkillPath('to-prd', repo)).toBe(cursor);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to a non-canonical root when the lockfile skill is missing', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-resolver-test-'));
+    try {
+      const fallback = path.join(repo, '.cursor/skills/to-prd/SKILL.md');
+      fs.mkdirSync(path.dirname(fallback), { recursive: true });
+      fs.writeFileSync(fallback, '# to-prd\n');
+      fs.writeFileSync(
+        path.join(repo, 'apex-skills.lock.json'),
+        JSON.stringify({
+          skillRoot: '.agents/skills',
+          skills: { 'to-prd': {} },
+        })
+      );
+
+      expect(resolveLocalSkillPath('to-prd', repo)).toBe(fallback);
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
     }

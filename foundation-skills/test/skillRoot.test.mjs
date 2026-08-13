@@ -10,6 +10,7 @@ import {
   planSkillRootMigration,
 } from '../lib/migrateRoot.mjs';
 import {
+  KNOWN_SKILL_ROOTS,
   normalizeSkillRoot,
   resolveSkillRoot,
   safeRealpathSync,
@@ -29,6 +30,7 @@ test('fresh install can use .agents/skills as its canonical root', () => {
       'utf8'
     );
     assert.equal(lock.skillRoot, '.agents/skills');
+    assert.equal(lock.lockfileVersion, 3);
     assert.ok(
       lock.skills['to-prd'].managedFiles[
         '.agents/skills/to-prd/backlog-schema.json'
@@ -59,6 +61,7 @@ test('fresh install defaults to an existing .agents/skills catalog', () => {
     executeInstall(PKG_ROOT, repo, ['ui-lab']);
     const lock = readLockfile(repo);
     assert.equal(lock.skillRoot, '.agents/skills');
+    assert.equal(lock.lockfileVersion, 3);
     assert.equal(
       fs.existsSync(path.join(repo, '.agents/skills/ui-lab/SKILL.md')),
       true
@@ -103,6 +106,11 @@ test('root migration preserves project-owned content and rewrites lock paths', (
         '<!-- Yours. APEX never writes below this line. -->\n\nMatterWorx note.'
       );
     fs.writeFileSync(source, customized, 'utf8');
+    fs.writeFileSync(
+      path.join(repo, 'README.md'),
+      'Install notes live under .cursor/skills.\n',
+      'utf8'
+    );
 
     const result = migrateSkillRoot(repo, '.agents/skills');
     const target = path.join(repo, '.agents/skills/to-prd/SKILL.md');
@@ -112,6 +120,7 @@ test('root migration preserves project-owned content and rewrites lock paths', (
     assert.equal(fs.existsSync(source), false);
     assert.equal(fs.readFileSync(target, 'utf8'), customized);
     assert.equal(lock.skillRoot, '.agents/skills');
+    assert.equal(lock.lockfileVersion, 3);
     assert.ok(
       lock.skills['to-prd'].managedFiles[
         '.agents/skills/to-prd/backlog-schema.json'
@@ -123,6 +132,7 @@ test('root migration preserves project-owned content and rewrites lock paths', (
       ),
       false
     );
+    assert.ok(result.staleRootReferences.includes('README.md'));
     assert.equal(checkRepo(PKG_ROOT, repo).skills[0].drift, false);
   } finally {
     cleanup(repo);
@@ -190,6 +200,22 @@ test('mixed-root collisions block install and migration', () => {
     cleanup(installRepo);
   }
 
+  const genericCollisionRepo = makeRepo({
+    ...SAMPLE_REPO,
+    'skills/ui-lab/SKILL.md': '# generic catalog skill\n',
+  });
+  try {
+    assert.throws(
+      () =>
+        executeInstall(PKG_ROOT, genericCollisionRepo, ['ui-lab'], {
+          skillRoot: '.agents/skills',
+        }),
+      /exists outside canonical root/
+    );
+  } finally {
+    cleanup(genericCollisionRepo);
+  }
+
   const migrationRepo = makeRepo(SAMPLE_REPO);
   try {
     executeInstall(PKG_ROOT, migrationRepo, ['ui-lab']);
@@ -250,11 +276,16 @@ test('a harness symlink to the canonical catalog is not a collision', (t) => {
 });
 
 test('skill roots must remain repository-relative', () => {
+  assert.deepEqual(
+    [...KNOWN_SKILL_ROOTS],
+    ['.agents/skills', '.cursor/skills', 'skills']
+  );
   assert.equal(normalizeSkillRoot('./.agents/skills/'), '.agents/skills');
   assert.equal(normalizeSkillRoot('.agents/foo/../skills'), '.agents/skills');
   assert.throws(() => normalizeSkillRoot('../skills'), /within the repository/);
   assert.throws(() => normalizeSkillRoot('/tmp/skills'), /repository-relative/);
   assert.throws(() => normalizeSkillRoot('C:\\skills'), /repository-relative/);
+  assert.throws(() => normalizeSkillRoot('company/skills'), /one of/);
 });
 
 test('safeRealpathSync falls back to the literal path when resolution fails', () => {

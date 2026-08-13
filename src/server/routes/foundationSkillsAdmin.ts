@@ -402,7 +402,8 @@ router.post('/update-repo', async (req: Request, res: Response): Promise<void> =
         : undefined;
   } catch {
     res.status(400).json({
-      error: 'skillRoot must be a safe repository-relative path',
+      error:
+        'skillRoot must be one of .agents/skills, .cursor/skills, or skills',
     });
     return;
   }

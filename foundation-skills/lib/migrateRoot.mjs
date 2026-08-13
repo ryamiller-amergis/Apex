@@ -5,6 +5,7 @@ import {
   isV1Lockfile,
   serializeLockfile,
   verifyLockfileIntegrity,
+  applyLockfileRoot,
 } from './lockfile.mjs';
 import { assertWithin, hashFile, ensureDir, toPosix } from './util.mjs';
 import { hashManaged, hasFence, splitZones } from './managedRegion.mjs';
@@ -167,17 +168,34 @@ export function migrateSkillRoot(
   if (plan.unchanged || dryRun) {
     const staleRootReferences = plan.unchanged
       ? []
-      : collectStaleRootReferences(repoRoot, plan.sourceRoot, [
-          plan.sourceRoot,
-        ]);
+      : collectStaleRootReferences(repoRoot, plan.sourceRoot);
     return { ...plan, dryRun, wrote: [], staleRootReferences };
   }
 
-  const skillNames = plan.actions.map((action) => action.skill);
+  const lock = readLockfile(repoRoot);
+  const skillNames = Object.keys(lock?.skills ?? {});
   return withInstallTransaction(
     repoRoot,
     skillNames,
-    () => executeMigration(repoRoot, plan),
+    () => {
+      const lockedPlan = planSkillRootMigration(repoRoot, targetRoot);
+      if (lockedPlan.errors.length) {
+        const error = new Error(
+          `Skill-root migration aborted:\n  - ${lockedPlan.errors.join('\n  - ')}`
+        );
+        error.errors = lockedPlan.errors;
+        throw error;
+      }
+      if (lockedPlan.unchanged) {
+        return {
+          ...lockedPlan,
+          dryRun: false,
+          wrote: [],
+          staleRootReferences: [],
+        };
+      }
+      return executeMigration(repoRoot, lockedPlan);
+    },
     { skillRoots: [plan.sourceRoot, plan.targetRoot] }
   );
 }
@@ -211,7 +229,7 @@ function executeMigration(repoRoot, plan) {
     fs.rmdirSync(sourceDir);
   }
 
-  lock.skillRoot = plan.targetRoot;
+  applyLockfileRoot(lock, plan.targetRoot);
   lock.generatedAt = new Date().toISOString();
   fs.writeFileSync(
     path.join(repoRoot, 'apex-skills.lock.json'),
@@ -221,8 +239,7 @@ function executeMigration(repoRoot, plan) {
 
   const staleRootReferences = collectStaleRootReferences(
     repoRoot,
-    plan.sourceRoot,
-    [plan.targetRoot, plan.sourceRoot]
+    plan.sourceRoot
   );
 
   return {
@@ -269,7 +286,16 @@ function walkTextFiles(absDir, visit) {
     return;
   }
   for (const entry of entries) {
-    if (entry.name === 'node_modules' || entry.name === '.git') continue;
+    if (
+      entry.name === 'node_modules' ||
+      entry.name === '.git' ||
+      entry.name === 'dist' ||
+      entry.name === 'coverage' ||
+      entry.name === '.apex' ||
+      entry.name === 'data'
+    ) {
+      continue;
+    }
     const abs = path.join(absDir, entry.name);
     if (entry.isDirectory() || entry.isSymbolicLink()) {
       if (entry.isDirectory()) walkTextFiles(abs, visit);
@@ -286,21 +312,20 @@ function walkTextFiles(absDir, visit) {
 
 /**
  * Project notes (below the managed fence) are left intact on purpose.
- * Report leftover mentions of the old root so operators can clean them up.
+ * Scan the repository (not just skill roots) for leftover mentions of the
+ * old root — READMEs, CI, rules, and app code are where those refs live.
  */
-function collectStaleRootReferences(repoRoot, sourceRoot, searchRoots) {
+function collectStaleRootReferences(repoRoot, sourceRoot) {
   const stale = [];
-  for (const relRoot of [...new Set(searchRoots.filter(Boolean))]) {
-    walkTextFiles(path.join(repoRoot, relRoot), (absFile) => {
-      try {
-        const text = fs.readFileSync(absFile, 'utf8');
-        if (text.includes(sourceRoot)) {
-          stale.push(toPosix(path.relative(repoRoot, absFile)));
-        }
-      } catch {
-        /* unreadable — skip */
+  walkTextFiles(repoRoot, (absFile) => {
+    try {
+      const text = fs.readFileSync(absFile, 'utf8');
+      if (text.includes(sourceRoot)) {
+        stale.push(toPosix(path.relative(repoRoot, absFile)));
       }
-    });
-  }
+    } catch {
+      /* unreadable — skip */
+    }
+  });
   return [...new Set(stale)].sort();
 }

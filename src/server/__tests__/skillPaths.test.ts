@@ -2,10 +2,18 @@ import {
   isSupportedAgentSkillPath,
   normalizeSkillRoot,
   selectSkillsByRootPrecedence,
+  SKILL_DISCOVERY_ROOTS,
   skillRootFromLock,
 } from '../../shared/skillPaths';
 
 describe('skillPaths', () => {
+  it('pins discovery order to editor-visible catalogs first', () => {
+    expect([...SKILL_DISCOVERY_ROOTS]).toEqual([
+      '.agents/skills',
+      '.cursor/skills',
+      'skills',
+    ]);
+  });
   it('accepts Agent Skills and legacy discovery paths', () => {
     expect(isSupportedAgentSkillPath('.agents/skills/to-prd/SKILL.md')).toBe(
       true
@@ -60,7 +68,7 @@ describe('skillPaths', () => {
     ]);
   });
 
-  it('keeps generic skills/ ahead of .cursor/skills when both exist', () => {
+  it('prefers editor-visible .cursor/skills over generic skills/', () => {
     const resolved = selectSkillsByRootPrecedence([
       {
         name: 'to-prd',
@@ -75,8 +83,12 @@ describe('skillPaths', () => {
     expect(resolved.skills).toEqual([
       {
         name: 'to-prd',
-        path: 'skills/to-prd/SKILL.md',
+        path: '.cursor/skills/to-prd/SKILL.md',
       },
     ]);
+  });
+
+  it('rejects skill roots outside the known set', () => {
+    expect(() => normalizeSkillRoot('company/skills')).toThrow(/one of/i);
   });
 });
