@@ -223,9 +223,22 @@ export function buildArtifactCliArgs(
     }
   }
   const args = [cliPath, 'install', ...skills, '--skip-feed'];
-  if (skillRoot) {
-    args.push('--skill-root', normalizeSkillRoot(skillRoot));
+  if (!skillRoot) return args;
+
+  const root = normalizeSkillRoot(skillRoot);
+  // `--skill-root` shipped in @apex/skills 2.1.0. Pre-2.1 CLIs reject unknown
+  // flags, so a 2.0.x rollback/install must omit it for the legacy root and
+  // cannot target a non-legacy root at all.
+  const supportsSkillRootFlag = !isGreaterVersion('2.1.0', artifactVersion);
+  if (!supportsSkillRootFlag) {
+    if (root === LEGACY_CURSOR_SKILL_ROOT) return args;
+    throw new Error(
+      `Artifact ${artifactVersion} does not support --skill-root. ` +
+        `Use @apex/skills >= 2.1.0 to install at ${root}, or migrate the ` +
+        `canonical root back to ${LEGACY_CURSOR_SKILL_ROOT} first.`
+    );
   }
+  args.push('--skill-root', root);
   return args;
 }
 

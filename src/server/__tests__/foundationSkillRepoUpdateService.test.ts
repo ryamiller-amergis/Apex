@@ -129,10 +129,32 @@ describe('buildArtifactCliArgs', () => {
     ]);
   });
 
-  it('passes a validated canonical root to the installer', () => {
+  it('omits --skill-root for pre-2.1 artifacts on the legacy Cursor root', () => {
     expect(
       buildArtifactCliArgs(
-        '2.0.0',
+        '2.0.3',
+        ['ui-lab'],
+        'bin/apex-skills.mjs',
+        '.cursor/skills'
+      )
+    ).toEqual(['bin/apex-skills.mjs', 'install', 'ui-lab', '--skip-feed']);
+  });
+
+  it('rejects pre-2.1 artifacts targeting a non-legacy skill root', () => {
+    expect(() =>
+      buildArtifactCliArgs(
+        '2.0.3',
+        ['ui-lab'],
+        'bin/apex-skills.mjs',
+        '.agents/skills'
+      )
+    ).toThrow(/does not support --skill-root/i);
+  });
+
+  it('passes a validated canonical root to 2.1+ installers', () => {
+    expect(
+      buildArtifactCliArgs(
+        '2.1.0',
         ['ui-lab'],
         'bin/apex-skills.mjs',
         '.agents/skills'
