@@ -20,6 +20,8 @@ import {
   type SharedReadCheckoutService,
 } from './grounding/sharedReadCheckoutService';
 import { trackEvent } from './telemetry';
+import { listSkillConfigsForProject } from './projectSettingsService';
+import { enqueueRepositoryCheckout } from './projectRepositoryCheckoutService';
 
 export class ProjectRepositoryFetchError extends Error {
   readonly code = 'PROJECT_REPOSITORY_FETCH_FAILED';
@@ -27,6 +29,18 @@ export class ProjectRepositoryFetchError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'ProjectRepositoryFetchError';
+  }
+}
+
+export class ProjectRepositorySnapshotUnavailableError extends Error {
+  readonly code = 'PROJECT_REPOSITORY_SNAPSHOT_UNAVAILABLE';
+
+  constructor(message?: string) {
+    super(
+      message
+        ?? 'Repository snapshot is not ready. Ask a project administrator to Refresh the configured repository in Project Settings, then retry.',
+    );
+    this.name = 'ProjectRepositorySnapshotUnavailableError';
   }
 }
 
@@ -65,6 +79,7 @@ export interface ProjectRepositoryRootPinDependencies {
   groundingService?: Pick<RunGroundingService, 'activateGroundings'>;
   trackEvent?: typeof trackEvent;
   now?: () => number;
+  onSnapshotMiss?: (identity: SharedReadCheckoutIdentity) => Promise<void>;
 }
 
 function groundingProvider(
@@ -91,9 +106,26 @@ function sanitizeFetchError(error: unknown): string {
     .slice(0, 500);
 }
 
+async function defaultOnSnapshotMiss(
+  identity: SharedReadCheckoutIdentity,
+): Promise<void> {
+  const configs = await listSkillConfigsForProject(identity.project);
+  const match =
+    configs.find(
+      (config) =>
+        (config.skillProvider ?? 'ado') === identity.provider
+        && config.skillRepo.trim() === identity.repo.trim()
+        && config.skillBranch.trim() === identity.branch.trim(),
+    ) ?? configs.find((config) => config.isDefault);
+  if (match?.id) {
+    await enqueueRepositoryCheckout(match.id, { refresh: true });
+  }
+}
+
 /**
  * Resume an exact pinned SHA, or fetch the tip and pin it for a new root run.
- * Never cold-clones. Never falls back to an older SHA when fetch fails.
+ * Never cold-clones. Never materializes on the request path. Never falls back
+ * to an older SHA when fetch fails.
  */
 export async function pinProjectRepositoryRoot(
   input: PinProjectRepositoryRootInput,
@@ -106,6 +138,7 @@ export async function pinProjectRepositoryRoot(
     dependencies.groundingService ?? runGroundingService;
   const emit = dependencies.trackEvent ?? trackEvent;
   const now = dependencies.now ?? Date.now;
+  const onSnapshotMiss = dependencies.onSnapshotMiss ?? defaultOnSnapshotMiss;
 
   const { repository, run, caller } = input;
   const existingSha = input.existingGrounding?.groundedSha?.trim() || null;
@@ -125,9 +158,8 @@ export async function pinProjectRepositoryRoot(
       shared.retain(identity);
       return { identity, workspacePath: ready.workspacePath };
     }
-    const materialized = await shared.materialize(identity);
-    shared.retain(identity);
-    return { identity, workspacePath: materialized.workspacePath };
+    await onSnapshotMiss(identity);
+    throw new ProjectRepositorySnapshotUnavailableError();
   };
 
   if (existingSha && input.existingGrounding) {

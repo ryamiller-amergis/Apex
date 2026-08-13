@@ -1,9 +1,20 @@
 import { spawn } from 'child_process';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const LONG_TIMEOUT_MS = 120_000;
 
 export { LONG_TIMEOUT_MS };
+
+/** Optional stderr sink for the current async git tree (admin checkout progress). */
+export const gitStderrSink = new AsyncLocalStorage<(chunk: string) => void>();
+
+export function runWithGitStderrSink<T>(
+  sink: (chunk: string) => void,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return gitStderrSink.run(sink, fn);
+}
 
 export interface GitOptions {
   cwd?: string;
@@ -12,6 +23,8 @@ export interface GitOptions {
   abortSignal?: AbortSignal;
   env?: Record<string, string>;
   maxBuffer?: number;
+  /** Invoked for each stderr chunk (git --progress). Idle timer still applies. */
+  onStderr?: (chunk: string) => void;
 }
 
 /**
@@ -26,6 +39,7 @@ export function git(args: string[], options: GitOptions = {}): Promise<string> {
     abortSignal,
     env: extraEnv,
     maxBuffer = 10 * 1024 * 1024,
+    onStderr,
   } = options;
 
   return new Promise((resolve, reject) => {
@@ -149,6 +163,12 @@ export function git(args: string[], options: GitOptions = {}): Promise<string> {
       resetIdleTimer();
       totalBytes += chunk.length;
       if (totalBytes <= maxBuffer) stderr.push(chunk);
+      try {
+        onStderr?.(chunk.toString('utf-8'));
+        gitStderrSink.getStore()?.(chunk.toString('utf-8'));
+      } catch {
+        // Progress callbacks must never fail the git process.
+      }
     });
 
     child.on('error', (err) => {

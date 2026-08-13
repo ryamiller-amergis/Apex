@@ -818,6 +818,8 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
     withTimezone: true,
     mode: 'string',
   }),
+  repositoryCheckoutProgressPercent: integer('repository_checkout_progress_percent'),
+  repositoryCheckoutProgressLabel: text('repository_checkout_progress_label'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (t) => ({
@@ -1498,6 +1500,35 @@ export const pdfSessionsRelations = relations(pdfSessions, ({ one }) => ({
   user: one(appUsers, {
     fields: [pdfSessions.userId],
     references: [appUsers.oid],
+  }),
+}));
+
+export const repositoryCheckoutJobs = pgTable('repository_checkout_jobs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  skillSettingsId: uuid('skill_settings_id').notNull().references(() => projectSkillSettings.id, { onDelete: 'cascade' }),
+  refresh: boolean('refresh').notNull().default(false),
+  status: text('status').notNull().default('queued'),
+  attempts: integer('attempts').notNull().default(0),
+  ownerInstance: text('owner_instance'),
+  heartbeatAt: timestamp('heartbeat_at', { withTimezone: true, mode: 'string' }),
+  lockExpiresAt: timestamp('lock_expires_at', { withTimezone: true, mode: 'string' }),
+  errorMessage: text('error_message'),
+  startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }),
+  completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  statusCreatedIdx: index('idx_repository_checkout_jobs_status_created').on(t.status, t.createdAt),
+  claimIdx: index('idx_repository_checkout_jobs_claim').on(t.createdAt).where(sql`status = 'queued'`),
+  oneInflight: uniqueIndex('idx_repository_checkout_jobs_one_inflight')
+    .on(t.skillSettingsId)
+    .where(sql`status IN ('queued', 'claimed')`),
+}));
+
+export const repositoryCheckoutJobsRelations = relations(repositoryCheckoutJobs, ({ one }) => ({
+  skillSettings: one(projectSkillSettings, {
+    fields: [repositoryCheckoutJobs.skillSettingsId],
+    references: [projectSkillSettings.id],
   }),
 }));
 

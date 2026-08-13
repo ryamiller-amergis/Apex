@@ -32,6 +32,10 @@ export interface ProjectRepositoryReadiness {
   completedAt: string | null;
   /** True only when DB ready AND filesystem `.apex-shared-ready` is present for the SHA. */
   filesystemReady: boolean;
+  /** Approximate 0–100 clone progress while `status === 'cloning'`; otherwise null. */
+  progressPercent?: number | null;
+  /** Last git/job phase label while cloning (never jumps backward). */
+  progressLabel?: string | null;
 }
 
 export interface ProjectRepositoryNotReadyError {
@@ -225,6 +229,8 @@ export interface ProjectSkillConfig {
   repositoryCheckoutError?: string | null;
   repositoryCheckoutStartedAt?: string | null;
   repositoryCheckoutCompletedAt?: string | null;
+  repositoryCheckoutProgressPercent?: number | null;
+  repositoryCheckoutProgressLabel?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }

@@ -143,8 +143,8 @@ export function useCloneProjectRepository() {
         );
       }
       const readiness = (await res.json()) as ProjectRepositoryReadiness;
-      // Clone route returns 200 with status "failed" when the checkout itself failed.
-      if (readiness.status === 'failed') {
+      // 202 cloning is success; terminal failed is reported by the readiness poll.
+      if (res.status !== 202 && readiness.status === 'failed') {
         throw new Error(readiness.error || 'Failed to clone repository');
       }
       return readiness;
@@ -161,6 +161,8 @@ export function useCloneProjectRepository() {
         startedAt: new Date().toISOString(),
         completedAt: null,
         filesystemReady: false,
+        progressPercent: 0,
+        progressLabel: 'Queued',
       });
       return { previous };
     },
@@ -173,6 +175,8 @@ export function useCloneProjectRepository() {
         startedAt: new Date().toISOString(),
         completedAt: new Date().toISOString(),
         filesystemReady: false,
+        progressPercent: null,
+        progressLabel: null,
       });
       queryClient.invalidateQueries({ queryKey: ['admin', 'repository-readiness', id] });
       queryClient.invalidateQueries({ queryKey: ['admin', 'project-settings'] });

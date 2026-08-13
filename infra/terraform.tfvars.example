@@ -216,3 +216,15 @@ pdf_blob_container_name = "pdf-artifacts"
 # product before enforcing.
 # ai_runs_interactive_first_token_slo_ms = 1500
 
+# ---------------------------------------------------------------------------
+# Async repository checkout worker (queue on existing sbns-apex-ai-*)
+# max_executions is hardcoded to 1. Image updates from CI are ignored by TF.
+# ---------------------------------------------------------------------------
+# repo_checkout_queue_name              = null  # derives "repo-checkout"
+# repo_checkout_container_app_job_name  = null  # derives "caj-apex-repo-checkout-{environment}"
+# repo_checkout_runner_identity_name    = null  # derives "mi-apex-repo-checkout-{environment}"
+# repo_checkout_runner_image            = "<acr>.azurecr.io/apex-repo-checkout:<tag>"
+# github_org                            = null  # optional Job GITHUB_ORG
+# github_token                          = null  # optional; do not commit real tokens
+
+

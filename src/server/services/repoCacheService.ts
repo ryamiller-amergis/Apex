@@ -19,7 +19,7 @@ import {
 
 export { COLD_CACHE_TIMEOUT_MS } from './repoGitSettings';
 
-const REPO_CACHE_BASE = path.join(resolveDataRoot(), 'repo-cache');
+const REPO_CACHE_BASE = path.join(resolveDataRoot(), 'workspaces', 'repo-cache');
 const inFlightRefreshes = new Map<string, Promise<RepoCacheResult>>();
 
 export interface RepoCacheOptions {

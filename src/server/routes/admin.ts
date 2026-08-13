@@ -484,11 +484,11 @@ router.post(
         res.status(404).json({ error: 'Skill settings not found' });
         return;
       }
-      const { cloneOrRefreshRepository } = await import(
+      const { enqueueRepositoryCheckout } = await import(
         '../services/projectRepositoryCheckoutService'
       );
-      const readiness = await cloneOrRefreshRepository(id, { refresh });
-      res.json(readiness);
+      const readiness = await enqueueRepositoryCheckout(id, { refresh });
+      res.status(202).json(readiness);
     } catch (error) {
       const statusCode = (error as { statusCode?: number })?.statusCode;
       if (statusCode === 404) {

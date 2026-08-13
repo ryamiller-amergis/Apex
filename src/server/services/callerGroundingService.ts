@@ -53,6 +53,7 @@ import {
 import {
   pinProjectRepositoryRoot,
   ProjectRepositoryFetchError,
+  ProjectRepositorySnapshotUnavailableError,
   type PinProjectRepositoryRootResult,
   type ProjectRepositoryRootPinDependencies,
 } from './projectRepositoryRootPinService';
@@ -366,6 +367,11 @@ export function createCallerGroundingService(
           });
         } catch (error) {
           if (error instanceof ProjectRepositoryFetchError) {
+            throw error;
+          }
+          if (
+            error instanceof ProjectRepositorySnapshotUnavailableError
+          ) {
             throw error;
           }
           const message =

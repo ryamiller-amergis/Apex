@@ -181,6 +181,36 @@
   flex-wrap: wrap;
 }
 
+.repoCheckoutProgress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  max-width: 220px;
+}
+
+.repoCheckoutProgressTrack {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.repoCheckoutProgressFill {
+  height: 100%;
+  background: var(--accent-color);
+  box-shadow: var(--glow-accent);
+  transition: width 0.2s ease;
+}
+
+.repoCheckoutProgressLabel {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .actions {
   display: flex;
   align-items: center;

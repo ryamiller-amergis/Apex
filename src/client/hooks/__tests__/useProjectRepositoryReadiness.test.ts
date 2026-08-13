@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   isProjectRepositoryReady,
   PROJECT_REPOSITORY_NOT_READY_MESSAGE,
+  useCloneProjectRepository,
   useProjectRepositoryReadiness,
 } from '../useProjectRepositoryReadiness';
 import type { ProjectRepositoryReadiness } from '../../../shared/types/projectSettings';
@@ -140,5 +141,40 @@ describe('useProjectRepositoryReadiness', () => {
     expect(global.fetch).not.toHaveBeenCalled();
     expect(missingId.current.isReady).toBe(true);
     expect(missingProject.current.isReady).toBe(true);
+  });
+});
+
+describe('useCloneProjectRepository AC-2 — accept 202 cloning', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('treats HTTP 202 with status cloning as success', async () => {
+    const cloning: ProjectRepositoryReadiness = {
+      skillSettingsId: 'cfg-1',
+      status: 'cloning',
+      sha: null,
+      error: null,
+      startedAt: '2026-08-12T00:00:00Z',
+      completedAt: null,
+      filesystemReady: false,
+      progressPercent: 0,
+      progressLabel: 'Queued',
+    };
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: () => Promise.resolve(cloning),
+    }) as jest.Mock;
+
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(() => useCloneProjectRepository(), { wrapper });
+
+    await result.current.mutateAsync({ id: 'cfg-1', refresh: true });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/admin/project-settings/cfg-1/repository-clone',
+      expect.objectContaining({ method: 'POST' }),
+    );
   });
 });

@@ -123,6 +123,14 @@ export async function getProjectRepositoryReadiness(
     startedAt: config.repositoryCheckoutStartedAt ?? null,
     completedAt: config.repositoryCheckoutCompletedAt ?? null,
     filesystemReady: status === 'ready' && filesystemReady,
+    progressPercent:
+      status === 'cloning'
+        ? (config.repositoryCheckoutProgressPercent ?? 0)
+        : null,
+    progressLabel:
+      status === 'cloning'
+        ? (config.repositoryCheckoutProgressLabel ?? 'Cloning')
+        : null,
   };
 }
 
@@ -174,6 +182,8 @@ export async function assertProjectRepositoryReady(opts: {
       startedAt: null,
       completedAt: null,
       filesystemReady: false,
+      progressPercent: null,
+      progressLabel: null,
     };
     trackEvent('grounding.readiness_blocked', {
       surface: opts.surface,

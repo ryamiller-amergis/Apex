@@ -379,3 +379,26 @@ output "ai_runs_interactive_capacity" {
     max_replicas = var.enable_ai_runs_interactive ? local.ai_runs_interactive_max_replicas : null
   }
 }
+
+output "repo_checkout_queue_name" {
+  description = "Repo-checkout wakeup queue name on the shared AI-runs Service Bus namespace"
+  value       = azurerm_servicebus_queue.repo_checkout.name
+}
+
+output "repo_checkout_container_app_job_name" {
+  description = "Container Apps Job name for admin repository checkout"
+  value       = azurerm_container_app_job.repo_checkout.name
+}
+
+output "repo_checkout_runner_image_repository" {
+  description = "ACR repository name for the repo-checkout worker image (on load-test ACR)"
+  value       = local.repo_checkout_image_repository
+}
+
+output "repo_checkout_app_settings" {
+  description = "App Service settings the API needs to publish repo-checkout wakeups"
+  value = {
+    servicebus_namespace = "AI_RUNS_SERVICEBUS_NAMESPACE"
+    queue_name           = "REPO_CHECKOUT_QUEUE_NAME"
+  }
+}

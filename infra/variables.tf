@@ -757,3 +757,56 @@ variable "ai_runs_interactive_first_token_slo_ms" {
   type        = number
   default     = 1500
 }
+
+# ---------------------------------------------------------------------------
+# Async repository checkout worker — queue on existing sbns-apex-ai-*
+# ---------------------------------------------------------------------------
+
+variable "repo_checkout_queue_name" {
+  description = "Wakeup queue name on the shared AI-runs Service Bus namespace. Null uses 'repo-checkout'."
+  type        = string
+  default     = null
+}
+
+variable "repo_checkout_container_app_job_name" {
+  description = "Container Apps Job name for admin repository checkout. Null derives 'caj-apex-repo-checkout-{environment}'."
+  type        = string
+  default     = null
+}
+
+variable "repo_checkout_runner_identity_name" {
+  description = "User-assigned managed identity for the repo-checkout Job. Null derives 'mi-apex-repo-checkout-{environment}'."
+  type        = string
+  default     = null
+}
+
+variable "repo_checkout_runner_image" {
+  description = "Fully-qualified apex-repo-checkout image reference. Placeholder until CI publishes; job image updates from CI are ignored by Terraform lifecycle."
+  type        = string
+  default     = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
+}
+
+variable "repo_checkout_runner_cpu" {
+  description = "CPU cores allocated per repo-checkout Job execution."
+  type        = number
+  default     = 2.0
+}
+
+variable "repo_checkout_runner_memory" {
+  description = "Memory (GiB string) allocated per repo-checkout Job execution."
+  type        = string
+  default     = "4Gi"
+}
+
+variable "github_org" {
+  description = "Optional GitHub organization for Job-side GitHub clones. Null omits GITHUB_ORG on the Job."
+  type        = string
+  default     = null
+}
+
+variable "github_token" {
+  description = "Optional GitHub token for Job-side clones. Do not commit real values; leave null unless GitHub repos are cloned by this worker."
+  type        = string
+  sensitive   = true
+  default     = null
+}

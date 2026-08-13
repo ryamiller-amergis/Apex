@@ -60,6 +60,8 @@ const CHECKOUT_RESET = {
   repositoryCheckoutError: null,
   repositoryCheckoutStartedAt: null,
   repositoryCheckoutCompletedAt: null,
+  repositoryCheckoutProgressPercent: null,
+  repositoryCheckoutProgressLabel: null,
 };
 
 /** Returns the **default** config for a project (back-compat for existing callers). */
@@ -410,6 +412,8 @@ export async function updateRepositoryCheckoutState(
     error?: string | null;
     startedAt?: string | null;
     completedAt?: string | null;
+    progressPercent?: number | null;
+    progressLabel?: string | null;
   },
 ): Promise<ProjectSkillConfig | null> {
   const rows = await db
@@ -427,6 +431,12 @@ export async function updateRepositoryCheckoutState(
         : {}),
       ...(state.completedAt !== undefined
         ? { repositoryCheckoutCompletedAt: state.completedAt }
+        : {}),
+      ...(state.progressPercent !== undefined
+        ? { repositoryCheckoutProgressPercent: state.progressPercent }
+        : {}),
+      ...(state.progressLabel !== undefined
+        ? { repositoryCheckoutProgressLabel: state.progressLabel }
         : {}),
       updatedAt: new Date().toISOString(),
     })

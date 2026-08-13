@@ -37,6 +37,7 @@ export async function materializeWorkspaceFromCache(
         '--no-local',
         '--no-hardlinks',
         '--single-branch',
+        '--progress',
         '--branch',
         branch,
         cacheDir,

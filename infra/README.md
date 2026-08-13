@@ -564,6 +564,34 @@ Never mount the Azure Files share at the data-root parent — that makes
 and background runs fail immediately after bootstrap with
 `Worker execution failed`.
 
+Bare git mirrors now live at `{dataRoot}/workspaces/repo-cache` (on the same
+Azure Files share) so the repo-checkout Job can see them. One-time prod
+migration: copy existing `/home/data/ai-pilot/repo-cache/*` onto
+`/home/data/ai-pilot/workspaces/repo-cache/` (or accept a first Job clone).
+Do not click in-app Clone to migrate.
+
+### Repo-checkout worker (`infra/repo-checkout-worker.tf`)
+
+Admin Clone/Refresh git runs on Job `caj-apex-repo-checkout-{env}` in the
+existing AI-runs Container Apps Environment. Wakeups use queue `repo-checkout`
+on `sbns-apex-ai-*` (`max_executions = 1`, replica timeout 60 minutes).
+Postgres owns job state; Service Bus is payload-free.
+
+| App setting | Terraform output |
+|-------------|------------------|
+| `AI_RUNS_SERVICEBUS_NAMESPACE` | `ai_runs_servicebus_namespace_name` (already used by AI-runs) |
+| `REPO_CHECKOUT_QUEUE_NAME` | `repo_checkout_queue_name` (defaults to `repo-checkout`) |
+
+Local/dev: set `REPO_CHECKOUT_WORKER_MODE=in-process` so the API poller
+executes jobs without Azure. Leave unset in Azure so HTTP never runs git.
+
+Build the image from repo root:
+
+```bash
+npm run build:server
+docker build -f runners/repo-checkout/Dockerfile -t <acr>.azurecr.io/apex-repo-checkout:<tag> .
+```
+
 ### Smoke verification (after apply — S8 / VT-02, VT-04, VT-06)
 
 ```bash

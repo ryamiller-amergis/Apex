@@ -1203,6 +1203,8 @@ function readinessFromConfig(config: ProjectSkillConfig): ProjectRepositoryReadi
     startedAt: config.repositoryCheckoutStartedAt ?? null,
     completedAt: config.repositoryCheckoutCompletedAt ?? null,
     filesystemReady: config.repositoryCheckoutStatus === 'ready',
+    progressPercent: config.repositoryCheckoutProgressPercent ?? null,
+    progressLabel: config.repositoryCheckoutProgressLabel ?? null,
   };
 }
 
@@ -1218,11 +1220,13 @@ const RepoCheckoutControlsEnabled: React.FC<RepoCheckoutControlsProps> = ({ conf
   const status = display.status;
   const isCloning = status === 'cloning' || clone.isPending;
   const showClone = status === 'not_cloned' || status === 'snapshot_unavailable';
-  // Ready: interviews already fetch the tip. Refresh only retries Failed.
-  const showRefresh = status === 'failed';
+  // Refresh is safe once clone/refresh runs off the HTTP process.
+  const showRefresh = status === 'failed' || status === 'ready';
   const label = isCloning && !readiness
     ? 'Cloning'
     : formatRepositoryCheckoutStatusLabel(display);
+  const progressPercent = display.progressPercent ?? 0;
+  const progressLabel = display.progressLabel ?? 'Cloning…';
 
   return (
     <div className={styles.repoCheckout} {...{ 'data-testid': `repo-checkout-status-${config.id}` }}>
@@ -1233,6 +1237,33 @@ const RepoCheckoutControlsEnabled: React.FC<RepoCheckoutControlsProps> = ({ conf
         {label}
         {isFetching && status === 'cloning' ? '…' : ''}
       </span>
+      {status === 'cloning' && (
+        <div
+          className={styles.repoCheckoutProgress}
+          {...{ 'data-testid': `repo-checkout-progress-${config.id}` }}
+        >
+          <div
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={progressPercent}
+            aria-label={progressLabel}
+            className={styles.repoCheckoutProgressTrack}
+            {...{ 'data-testid': `repo-checkout-progress-bar-${config.id}` }}
+          >
+            <div
+              className={styles.repoCheckoutProgressFill}
+              style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
+            />
+          </div>
+          <span
+            className={styles.repoCheckoutProgressLabel}
+            {...{ 'data-testid': `repo-checkout-progress-label-${config.id}` }}
+          >
+            {progressLabel}
+          </span>
+        </div>
+      )}
       {status === 'failed' && display.error && (
         <span className={styles.repoCheckoutError} title={display.error}>
           {display.error}

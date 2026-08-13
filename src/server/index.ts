@@ -78,6 +78,7 @@ import foundationSkillsAuthorizeRoutes from './routes/foundationSkillsAuthorize'
 import profileRoutes from './routes/profile';
 import walkthroughsRoutes from './routes/walkthroughs';
 import { startPdfProcessingPoller } from './services/pdfAssemblyService';
+import { startRepoCheckoutPoller } from './services/repoCheckoutPoller';
 import { startLoadTestRunReaper } from './services/loadTestRunService';
 
 // ── E2E mode guard ────────────────────────────────────────────────────────────
@@ -385,6 +386,7 @@ const server = app.listen(PORT, () => {
   console.log('Grounding maintenance scheduler started');
 
   startPdfProcessingPoller();
+  startRepoCheckoutPoller();
 
   bootstrapAdmin();
 

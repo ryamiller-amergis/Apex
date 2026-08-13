@@ -61,10 +61,19 @@ jest.mock('../services/repositoryPreparationService', () => ({
   }),
 }));
 
+jest.mock('../services/projectSettingsService', () => ({
+  listSkillConfigsForProject: jest.fn().mockResolvedValue([]),
+}));
+
+jest.mock('../services/projectRepositoryCheckoutService', () => ({
+  enqueueRepositoryCheckout: jest.fn().mockResolvedValue({ status: 'cloning' }),
+}));
+
 import type { RunGrounding, RunRef } from '../../shared/types/runGrounding';
 import {
   pinProjectRepositoryRoot,
   ProjectRepositoryFetchError,
+  ProjectRepositorySnapshotUnavailableError,
 } from '../services/projectRepositoryRootPinService';
 import {
   createCallerGroundingService,
@@ -95,19 +104,19 @@ const grounding: RunGrounding = {
 };
 
 describe('VT-10/11 — projectRepositoryRootPinService fetch-and-pin', () => {
-  it('VT-10: new root uses fetchRepositoryTip, materializes tip SHA, and activates grounding', async () => {
+  it('VT-10: new root uses fetchRepositoryTip, pins an already-ready snapshot, and never materializes', async () => {
     const fetchTip = jest.fn().mockResolvedValue({
-      cacheDir: 'C:\\data\\repo-cache\\x',
+      cacheDir: 'C:\\data\\workspaces\\repo-cache\\x',
       baseSha: tipSha,
       stale: false,
       remote: { url: 'https://example.test/repo.git', env: {} },
       mirrorHit: true,
     });
-    const getReady = jest.fn().mockReturnValue(null);
-    const materialize = jest.fn().mockResolvedValue({
+    const getReady = jest.fn().mockReturnValue({
       workspacePath: 'C:\\data\\workspaces\\grounding-shared\\digest',
-      outcome: 'materialized',
+      outcome: 'hit',
     });
+    const materialize = jest.fn();
     const retain = jest.fn();
     const activateGroundings = jest.fn().mockResolvedValue({
       ok: true,
@@ -142,13 +151,10 @@ describe('VT-10/11 — projectRepositoryRootPinService fetch-and-pin', () => {
       repo: 'AI-Pilot',
       branch: 'main',
     });
-    expect(materialize).toHaveBeenCalledWith({
-      provider: 'github',
-      project: 'Apex',
-      repo: 'AI-Pilot',
-      branch: 'main',
-      sha: tipSha,
-    });
+    expect(materialize).not.toHaveBeenCalled();
+    expect(getReady).toHaveBeenCalledWith(
+      expect.objectContaining({ sha: tipSha }),
+    );
     expect(activateGroundings).toHaveBeenCalledWith({
       run,
       target: {
@@ -258,6 +264,48 @@ describe('VT-10/11 — projectRepositoryRootPinService fetch-and-pin', () => {
     expect(activateGroundings).not.toHaveBeenCalled();
     expect(getReady).toHaveBeenCalledWith(
       expect.objectContaining({ sha: pinnedSha }),
+    );
+  });
+
+  it('AC-0: snapshot miss enqueues checkout and never calls materialize', async () => {
+    const fetchTip = jest.fn().mockResolvedValue({
+      cacheDir: 'C:\\data\\workspaces\\repo-cache\\x',
+      baseSha: tipSha,
+      stale: false,
+      remote: { url: 'https://example.test/repo.git', env: {} },
+    });
+    const materialize = jest.fn();
+    const onSnapshotMiss = jest.fn().mockResolvedValue(undefined);
+
+    await expect(
+      pinProjectRepositoryRoot(
+        {
+          run,
+          repository: {
+            provider: 'github',
+            project: 'Apex',
+            repo: 'AI-Pilot',
+            branch: 'main',
+          },
+          caller: 'chat-agent',
+        },
+        {
+          fetchTip,
+          sharedReadCheckout: {
+            getReady: jest.fn().mockReturnValue(null),
+            materialize,
+            retain: jest.fn(),
+          },
+          groundingService: { activateGroundings: jest.fn() },
+          trackEvent: jest.fn(),
+          onSnapshotMiss,
+        },
+      ),
+    ).rejects.toBeInstanceOf(ProjectRepositorySnapshotUnavailableError);
+
+    expect(materialize).not.toHaveBeenCalled();
+    expect(onSnapshotMiss).toHaveBeenCalledWith(
+      expect.objectContaining({ sha: tipSha }),
     );
   });
 });

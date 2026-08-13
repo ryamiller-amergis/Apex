@@ -104,6 +104,27 @@ describe('projectRepositoryReadinessService', () => {
     expect(readiness?.filesystemReady).toBe(false);
   });
 
+  it('returns throttled progressPercent/progressLabel while cloning', async () => {
+    mockGetSkillConfigById.mockResolvedValue({
+      ...baseConfig,
+      repositoryCheckoutStatus: 'cloning',
+      repositoryCheckoutSha: null,
+      repositoryCheckoutProgressPercent: 26,
+      repositoryCheckoutProgressLabel: 'Receiving objects 45%',
+    });
+    mockExistsSync.mockReturnValue(false);
+    mockGetReady.mockReturnValue(null);
+
+    const readiness = await getProjectRepositoryReadiness('cfg-1');
+    expect(readiness).toEqual(
+      expect.objectContaining({
+        status: 'cloning',
+        progressPercent: 26,
+        progressLabel: 'Receiving objects 45%',
+      }),
+    );
+  });
+
   it('assertProjectRepositoryReady throws PROJECT_REPOSITORY_NOT_READY when blocked', async () => {
     mockGetSkillConfigById.mockResolvedValue({
       ...baseConfig,

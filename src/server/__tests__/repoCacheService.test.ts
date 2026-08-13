@@ -75,7 +75,7 @@ describe('repoCacheService', () => {
       branch: 'release',
     });
 
-    expect(development).toContain(path.join('repo-cache', 'ado-maxview-maxview-development-'));
+    expect(development).toContain(path.join('workspaces', 'repo-cache', 'ado-maxview-maxview-development-'));
     expect(development).not.toBe(release);
   });
 
