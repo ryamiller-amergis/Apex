@@ -37,6 +37,7 @@ import {
   getRepoCacheDir,
   readCachedOriginSha as readCachedOriginShaFromRepoCache,
 } from './repoCacheService';
+import { isUsableBareMirror } from './repoRead/mirrorStore';
 import {
   materializeRunGroundingWithPath,
   type RunGroundingMaterializationResult,
@@ -78,6 +79,11 @@ export interface StartCallerGroundingInput {
    * gated by the `shared-readonly-grounding-checkout` flag.
    */
   readOnlyShareable?: boolean;
+  /**
+   * Writable Agent cwd (thread scratch). Used as `cwd` when Stage 6 skips a
+   * working-tree materialization and serves reads from the bare mirror.
+   */
+  sandboxCwd?: string;
 }
 
 export interface LocalCallerGrounding {
@@ -86,6 +92,11 @@ export interface LocalCallerGrounding {
   profileId: GroundingProfileId;
   resolvedSha: string;
   nativeReads: boolean;
+  /**
+   * False when reads are served from a bare mirror and `cwd` is only a
+   * sandbox. Interactive actors that open LocalCheckoutReader must bypass.
+   */
+  workingTree: boolean;
   release(options?: { persistPin?: boolean }): Promise<void>;
 }
 
@@ -206,6 +217,8 @@ export interface CallerGroundingDependencies {
     input: Parameters<typeof pinProjectRepositoryRoot>[0],
     deps?: ProjectRepositoryRootPinDependencies
   ) => Promise<PinProjectRepositoryRootResult>;
+  getRepoCacheDir?: typeof getRepoCacheDir;
+  isUsableBareMirror?: (mirrorPath: string | undefined) => boolean;
 }
 
 function runRefKey(run: RunRef): string {
@@ -326,7 +339,8 @@ export function createCallerGroundingService(
 
   const startLocal = async (
     input: StartCallerGroundingInput,
-    setMaterializationMode: (mode: 'cold' | 'warm') => void
+    setMaterializationMode: (mode: 'cold' | 'warm') => void,
+    nativeReadEnabled: boolean
   ): Promise<CallerGroundingSelection> => {
     let sharedReadOnlyEnabled = false;
     try {
@@ -424,6 +438,7 @@ export function createCallerGroundingService(
           profileId: profile.id,
           resolvedSha: grounding.groundedSha,
           nativeReads: false,
+          workingTree: true,
           release: async (options) => {
             if (released) return;
             released = true;
@@ -442,6 +457,111 @@ export function createCallerGroundingService(
       }
       // @feature-flag:project-repository-checkout-readiness end
 
+      const existing = activeTarget(
+        await dependencies.groundingService.getGroundings(input.run)
+      );
+      let grounding = existing;
+      setMaterializationMode(existing ? 'warm' : 'cold');
+
+      const resolveMirrorPath =
+        dependencies.getRepoCacheDir ?? getRepoCacheDir;
+      const mirrorUsable =
+        dependencies.isUsableBareMirror ?? isUsableBareMirror;
+      const mirrorPath = resolveMirrorPath({
+        provider: input.repository.provider,
+        project: input.run.project,
+        repo,
+        branch: input.repository.branch,
+      });
+
+      // Stage 6: native-read callers with a warm bare mirror skip working trees.
+      // Interactive actors that need LocalCheckoutReader bypass separately.
+      if (nativeReadEnabled && mirrorUsable(mirrorPath)) {
+        if (!grounding) {
+          const cache = await dependencies.ensureRepoCache(
+            {
+              provider: input.repository.provider,
+              project: input.run.project,
+              repo,
+              branch: input.repository.branch,
+            },
+            { waitMs: USER_FACING_REPO_CACHE_LEASE_WAIT_MS }
+          );
+          if (cache.mirrorHit !== undefined) {
+            telemetry.mirror(telemetryContext(input), cache.mirrorHit);
+          }
+          telemetry.phase(telemetryContext(input), 'activate');
+          grounding = activatedTarget(
+            await dependencies.groundingService.activateGroundings({
+              run: input.run,
+              target: {
+                provider: groundingProvider(input.repository.provider),
+                repository: repo,
+                branch: input.repository.branch,
+                groundedSha: cache.baseSha,
+              },
+            })
+          );
+          telemetry.phase(telemetryContext(input), 'activate-done');
+        }
+
+        if (!grounding || grounding.groundedSha.trim().length === 0) {
+          return fallback(input, 'activation-unavailable');
+        }
+
+        const cwd = input.sandboxCwd?.trim() || mirrorPath;
+        const callerContext: GroundingCallerContext = {
+          userId: input.userId,
+          runRef: runRefKey(input.run),
+          project: input.run.project,
+        };
+        const profile = dependencies.profiles.registerConnectionProfile(
+          {
+            runRef: callerContext.runRef,
+            provider: profileProvider(grounding.provider),
+            project: grounding.project,
+            repo,
+            sha: grounding.groundedSha,
+            checkoutPath: cwd,
+            mirrorPath,
+            caller: input.caller,
+          },
+          callerContext,
+          input.reauthorize
+        );
+        dependencies.impactContexts.register(input.run, {
+          authorId: input.userId,
+          title: callerRunTitle(input.caller),
+          link: '/home',
+          caller: input.caller,
+        });
+        telemetry.phase(telemetryContext(input), 'bare-mirror-read');
+
+        let released = false;
+        return {
+          mode: 'local',
+          cwd,
+          profileId: profile.id,
+          resolvedSha: grounding.groundedSha,
+          nativeReads: false,
+          workingTree: false,
+          release: async (options) => {
+            if (released) return;
+            released = true;
+            try {
+              if (!options?.persistPin) {
+                await dependencies.groundingService.markTerminalInactive(
+                  input.run
+                );
+              }
+            } finally {
+              dependencies.impactContexts.unregister(input.run);
+              dependencies.profiles.revokeProfile(profile.id);
+            }
+          },
+        };
+      }
+
       if (input.readOnlyShareable) {
         try {
           sharedReadOnlyEnabled =
@@ -454,12 +574,6 @@ export function createCallerGroundingService(
           sharedReadOnlyEnabled = false;
         }
       }
-
-      const existing = activeTarget(
-        await dependencies.groundingService.getGroundings(input.run)
-      );
-      let grounding = existing;
-      setMaterializationMode(existing ? 'warm' : 'cold');
 
       // @feature-flag:shared-readonly-grounding-checkout start winner=enabled
       // Enabled read-only callers prefer already-ready shared snapshots. The
@@ -735,6 +849,7 @@ export function createCallerGroundingService(
         profileId: profile.id,
         resolvedSha: grounding.groundedSha,
         nativeReads: false,
+        workingTree: true,
         release: async (options) => {
           if (released) return;
           released = true;
@@ -830,7 +945,7 @@ export function createCallerGroundingService(
       let materializationMode: 'cold' | 'warm' = 'cold';
       const local = await startLocal(input, (mode) => {
         materializationMode = mode;
-      });
+      }, nativeReadEnabled);
       telemetry.materialization(
         telemetryContext(input),
         materializationMode,

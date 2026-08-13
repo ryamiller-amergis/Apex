@@ -372,6 +372,7 @@ describe('PBI-002 grounding acquisition continuity', () => {
       profileId: 'profile-1' as GroundingProfileId,
       resolvedSha: 'sha-resolved',
       nativeReads: false,
+      workingTree: true,
       release: jest.fn(),
     } satisfies CallerGroundingSelection;
     const resolved = { mode: 'local' as const, sha: 'sha-resolved' };
@@ -762,6 +763,7 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
       profileId: 'profile-pinned' as GroundingProfileId,
       resolvedSha: 'sha-pinned',
       nativeReads: true,
+      workingTree: true,
       release: jest.fn(),
     } satisfies CallerGroundingSelection;
     const kickoff = baseKickoff({
@@ -811,6 +813,7 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
       profileId: 'profile-missing' as GroundingProfileId,
       resolvedSha: 'sha-missing',
       nativeReads: true,
+      workingTree: true,
       release: jest.fn(),
     } satisfies CallerGroundingSelection;
 
@@ -843,6 +846,7 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
         profileId: 'profile-first' as GroundingProfileId,
         resolvedSha: 'sha-pinned',
         nativeReads: true,
+        workingTree: true,
         release: jest.fn(),
       },
       kickoff: baseKickoff(),
@@ -1423,6 +1427,7 @@ describe('document assistant MCP wiring', () => {
       profileId: 'interactive-profile' as GroundingProfileId,
       resolvedSha: 'interactive-sha',
       nativeReads: true,
+      workingTree: true,
       release: jest.fn().mockResolvedValue(undefined),
     });
     mockResolveConnectionProfile.mockResolvedValue(repoReader);

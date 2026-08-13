@@ -68,6 +68,7 @@ const start = jest.fn().mockResolvedValue({
   profileId: 'opaque-profile',
   resolvedSha: 'ask-pinned-sha',
   nativeReads: true,
+  workingTree: true,
   release,
 });
 jest.mock('../services/callerGroundingService', () => ({
@@ -247,6 +248,7 @@ describe('PBI-005 Ask Apex shared grounding lifecycle', () => {
         profileId: 'opaque-profile',
         resolvedSha: 'ask-pinned-sha',
         nativeReads: true,
+        workingTree: true,
         release,
       });
     const sessionId = createSession('developer-1');

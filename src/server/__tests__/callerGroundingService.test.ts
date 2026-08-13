@@ -41,6 +41,7 @@ function dependencies(
       proven: false,
       reason: 'harness-not-run',
     }),
+    isUsableBareMirror: jest.fn().mockReturnValue(false),
     sharedReadCheckout: {
       getReady: jest.fn().mockReturnValue(null),
       materialize: jest.fn().mockResolvedValue({
@@ -1440,5 +1441,91 @@ describe('Bundle B fast shared grounding selection', () => {
       mode: 'remote',
       sha: null,
     });
+  });
+});
+
+describe('Stage 6 bare-mirror skip of working-tree materialization', () => {
+  const mirrorPath = 'C:\\data\\repo-cache\\warm.git';
+  const sandbox = 'C:\\data\\threads\\thread-1';
+
+  it('skips shared and per-run checkouts when native reads and a usable mirror exist', async () => {
+    const deps = dependencies({
+      isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(true),
+      isSharedReadCheckoutEnabledForCaller: jest.fn().mockResolvedValue(true),
+      isUsableBareMirror: jest.fn().mockReturnValue(true),
+      getRepoCacheDir: jest.fn().mockReturnValue(mirrorPath),
+      evaluateNativeReadCapability: jest.fn().mockReturnValue({
+        proven: true,
+        reason: 'pinned-checkout-confined',
+      }),
+    });
+    const service = createCallerGroundingService(deps);
+
+    const selected = await service.start({
+      caller: 'chat-agent',
+      userId: 'developer-1',
+      run,
+      repository: {
+        provider: 'github',
+        repo: 'AI-Pilot',
+        branch: 'main',
+      },
+      reauthorize: async () => true,
+      readOnlyShareable: true,
+      sandboxCwd: sandbox,
+    });
+
+    expect(selected).toMatchObject({
+      mode: 'local',
+      cwd: sandbox,
+      profileId,
+      resolvedSha: grounding.groundedSha,
+      nativeReads: true,
+      workingTree: false,
+    });
+    expect(deps.materialize).not.toHaveBeenCalled();
+    expect(deps.sharedReadCheckout.getReady).not.toHaveBeenCalled();
+    expect(deps.ensureRepoCache).not.toHaveBeenCalled();
+    expect(deps.profiles.registerConnectionProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sha: grounding.groundedSha,
+        checkoutPath: sandbox,
+        mirrorPath,
+      }),
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it('uses the mirror path as cwd when no sandbox is provided', async () => {
+    const deps = dependencies({
+      isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(true),
+      isUsableBareMirror: jest.fn().mockReturnValue(true),
+      getRepoCacheDir: jest.fn().mockReturnValue(mirrorPath),
+      evaluateNativeReadCapability: jest.fn().mockReturnValue({
+        proven: true,
+        reason: 'pinned-checkout-confined',
+      }),
+    });
+    const service = createCallerGroundingService(deps);
+
+    const selected = await service.start({
+      caller: 'chat-agent',
+      userId: 'developer-1',
+      run,
+      repository: {
+        provider: 'github',
+        repo: 'AI-Pilot',
+        branch: 'main',
+      },
+      reauthorize: async () => true,
+    });
+
+    expect(selected).toMatchObject({
+      mode: 'local',
+      cwd: mirrorPath,
+      workingTree: false,
+    });
+    expect(deps.materialize).not.toHaveBeenCalled();
   });
 });

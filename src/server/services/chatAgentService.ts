@@ -3602,6 +3602,7 @@ async function ensureThreadGrounding(
       // targets `thread.workspaceDir` — so they may share a read-only per-SHA
       // checkout (gated by `shared-readonly-grounding-checkout`).
       readOnlyShareable: true,
+      sandboxCwd: state.thread.workspaceDir,
     });
 
     if (grounding.mode !== 'preparing') {
@@ -3912,6 +3913,9 @@ async function tryDispatchInteractiveTurn(
             ? `grounding-mode-${grounding.mode}`
             : 'native-reads-false'
         );
+      }
+      if (!grounding.workingTree) {
+        return bypass('bare-mirror-no-checkout');
       }
       const repoReader =
         await groundingProfileResolver.resolveConnectionProfile(
