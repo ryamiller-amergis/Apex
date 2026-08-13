@@ -14,6 +14,7 @@ import {
 import { LocalCheckoutReader } from '../services/localCheckoutReader';
 import { RemoteCatalogReader } from '../services/remoteCatalogReader';
 import { BareRepoReader } from '../services/repoRead/bareRepoReader';
+import { RepoServiceReader } from '../services/repoRead/repoServiceReader';
 import { RepoReaderError } from '../services/repoReader';
 import * as adoCatalog from '../services/skillCatalog';
 import * as skillCatalogFacade from '../services/skillCatalogFacade';
@@ -309,6 +310,42 @@ describe('TBI-001 DoD-1 rejects traversal, symlink escape, expiry, and cross-run
       await expect(reader.readFile('README.md')).resolves.toBe('fixture\n');
     } finally {
       fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('selects RepoServiceReader when repo-read-service is enabled and REPO_READ_SERVICE_URL is set', async () => {
+    const previous = process.env.REPO_READ_SERVICE_URL;
+    process.env.REPO_READ_SERVICE_URL = 'https://repo-read.test';
+    const caller = {
+      userId: 'user-1',
+      runRef: 'chat:thread-1',
+      project: 'Apex',
+    };
+    const resolver = new GroundingProfileResolver({
+      authorization: { authorize: async () => true },
+      isFeatureEnabled: async () => true,
+      isRepoReadServiceEnabledForCaller: async () => true,
+    });
+    const profile = resolver.registerConnectionProfile(
+      {
+        runRef: caller.runRef,
+        ...identity('ado', 'a'.repeat(40)),
+        checkoutPath: 'not-used-when-http',
+        caller: 'chat-agent',
+      },
+      caller,
+      async () => true,
+    );
+
+    try {
+      const reader = await resolver.resolveConnectionProfile(profile.id);
+      expect(reader).toBeInstanceOf(RepoServiceReader);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.REPO_READ_SERVICE_URL;
+      } else {
+        process.env.REPO_READ_SERVICE_URL = previous;
+      }
     }
   });
 

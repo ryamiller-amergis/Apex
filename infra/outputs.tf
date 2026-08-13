@@ -379,3 +379,20 @@ output "ai_runs_interactive_capacity" {
     max_replicas = var.enable_ai_runs_interactive ? local.ai_runs_interactive_max_replicas : null
   }
 }
+
+# ---------------------------------------------------------------------------
+# Repo read service (null while enable_repo_read_service is false)
+# ---------------------------------------------------------------------------
+
+output "repo_read_service_app_fqdn" {
+  description = "HTTPS FQDN for the repo-read Container App. App Service consumes this as REPO_READ_SERVICE_URL."
+  value       = try(azurerm_container_app.repo_read_service[0].ingress[0].fqdn, null)
+}
+
+output "repo_read_service_app_settings" {
+  description = "App setting key contract for the Apex App Service repo-read client"
+  value = {
+    url   = "REPO_READ_SERVICE_URL"
+    token = "REPO_READ_SERVICE_TOKEN"
+  }
+}

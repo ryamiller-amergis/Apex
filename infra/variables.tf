@@ -757,3 +757,43 @@ variable "ai_runs_interactive_first_token_slo_ms" {
   type        = number
   default     = 1500
 }
+
+# ---------------------------------------------------------------------------
+# Repo read service (Stage 3 — bare-mirror HTTP API)
+# ---------------------------------------------------------------------------
+
+variable "enable_repo_read_service" {
+  description = "Provision the repo-read Container App (HTTP git cat-file/ls-tree/grep API). Additive/inert; keep false until the repo-read-service flag rolls out."
+  type        = bool
+  default     = false
+}
+
+variable "repo_read_service_container_app_name" {
+  description = "Repo-read Container App name. Null derives 'ca-apex-repo-read-{environment}'."
+  type        = string
+  default     = null
+}
+
+variable "repo_read_service_image" {
+  description = "Fully-qualified repo-read service image. Placeholder until CI publishes; image updates are ignored by Terraform lifecycle."
+  type        = string
+  default     = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
+}
+
+variable "repo_read_service_cpu" {
+  description = "CPU cores per repo-read replica. 2.0 keeps Consumption-plan ephemeral disk at 8 GiB."
+  type        = number
+  default     = 2.0
+}
+
+variable "repo_read_service_memory" {
+  description = "Memory (GiB string) per repo-read replica."
+  type        = string
+  default     = "4Gi"
+}
+
+variable "repo_read_service_target_port" {
+  description = "Container port the repo-read HTTP API listens on."
+  type        = number
+  default     = 8080
+}

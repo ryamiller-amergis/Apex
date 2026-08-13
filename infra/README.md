@@ -19,6 +19,7 @@ This directory contains Terraform configuration for provisioning Azure resources
 - **Managed-identity access**: The cross-cutting Apex App Service identity is scoped to the shared Storage Account. PDF assembly stays in the Apex application; job delivery uses the Postgres queue (Service Bus deferred).
 - **Load Test infrastructure** (FEAT-002): Dedicated Service Bus namespace, Container Apps Job, and managed identities — see [Load Test module](#load-test-module-feat-002) below.
 - **AI Runs background worker** (FEAT-003): Shared AI-runs Service Bus namespace (`sbns-apex-ai-*`), `ai-runs-background` queue, KEDA Container Apps Job, runner MI, Azure Files workspace mount — see [AI Runs worker module](#ai-runs-background-worker-module-feat-003) below.
+- **Repo read service** (optional): Container App serving git reads from ephemeral disk; gated by `enable_repo_read_service` — see [Repo read service](#repo-read-service) below.
 
 ## Shared async platform conventions
 
@@ -659,6 +660,30 @@ replacement before removing the old instance, so the cutover has no downtime.
 > old `redis-apex-ai-prd`; if the prod tfvars ever loses the `-v2` name line, a
 > full apply would try to replace the live Redis. Keep both prod lines in
 > whatever tfvars the next apply is run from.
+
+---
+
+## Repo read service
+
+Optional Container App that serves repository file/list/search from a bare git
+mirror on **ephemeral container disk** (no Azure Files mount). Durable restore
+uses the existing `repo-grounding` Blob container. The module is inert while
+`enable_repo_read_service` is false.
+
+After apply:
+
+1. Publish `runners/repo-read-service/Dockerfile` to ACR and point
+   `repo_read_service_image` at it (Terraform ignores subsequent image drift).
+2. Confirm App Service `REPO_READ_SERVICE_URL` matches
+   `repo_read_service_app_fqdn` (Terraform writes this when the module is on).
+3. Confirm `REPO_READ_SERVICE_TOKEN` matches `ai_runs_runner_callback_token`.
+4. Target the `repo-read-service` feature flag in Platform Admin. Until then
+   Apex keeps in-process checkout reads even if the Container App exists.
+5. Smoke: `GET https://<fqdn>/healthz` returns `{ ok: true }`. An unauthenticated
+   `POST /v1/read` must return 401/503.
+
+Do not `terraform apply` this module until the in-process `BareRepoReader` path
+has been proven for a project behind the DB flag.
 
 ---
 

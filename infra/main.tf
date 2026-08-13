@@ -96,6 +96,10 @@ resource "azurerm_linux_web_app" "main" {
     "GROUNDING_BLOB_ACCOUNT_NAME"   = azurerm_storage_account.shared.name
     "GROUNDING_BLOB_CONTAINER_NAME" = azurerm_storage_container.shared["repo-grounding"].name
 
+    # Repo read service (null/empty while enable_repo_read_service is false)
+    "REPO_READ_SERVICE_URL"   = try("https://${azurerm_container_app.repo_read_service[0].ingress[0].fqdn}", "")
+    "REPO_READ_SERVICE_TOKEN" = var.enable_repo_read_service ? coalesce(var.ai_runs_runner_callback_token, "") : ""
+
     # Database
     "DATABASE_URL" = "postgresql://${var.postgresql_admin_username}:${var.postgresql_admin_password}@${azurerm_postgresql_flexible_server.main.fqdn}:5432/${var.postgresql_database_name}?sslmode=require"
 

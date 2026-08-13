@@ -216,3 +216,16 @@ pdf_blob_container_name = "pdf-artifacts"
 # product before enforcing.
 # ai_runs_interactive_first_token_slo_ms = 1500
 
+# ---------------------------------------------------------------------------
+# Repo read service (bare-mirror HTTP API). Keep false until the
+# `repo-read-service` DB feature flag is targeted and the image is published.
+# Does not mount Azure Files — git objects live on ephemeral container disk
+# with Blob `repo-grounding` as the restore source.
+# ---------------------------------------------------------------------------
+# enable_repo_read_service = false
+# repo_read_service_container_app_name = null
+# repo_read_service_image  = "<acr>.azurecr.io/apex-repo-read:<tag>"
+# repo_read_service_cpu    = 2.0
+# repo_read_service_memory = "4Gi"
+# repo_read_service_target_port = 8080
+

@@ -13,6 +13,10 @@ import {
 import { LocalCheckoutReader } from './localCheckoutReader';
 import { RemoteCatalogReader } from './remoteCatalogReader';
 import { BareRepoReader } from './repoRead/bareRepoReader';
+import {
+  RepoServiceReader,
+  resolveRepoReadServiceUrl,
+} from './repoRead/repoServiceReader';
 import { createRepoReader, RepoReaderError } from './repoReader';
 
 const PROFILE_FLAG = 'repo-grounding-workspace-profile';
@@ -170,14 +174,25 @@ export class GroundingProfileResolver {
     }
 
     // Retain the enabled branch after two stable sprints at full rollout.
+    // HTTP transport is an env swap inside the enabled branch (Stage 3).
     // @feature-flag:repo-read-service start winner=enabled
-    if (repoReadEnabled && profile.mirrorPath) {
+    if (repoReadEnabled) {
       // @feature-flag:repo-read-service enabled-start
-      return new BareRepoReader({
-        identity,
-        mirrorPath: profile.mirrorPath,
-        telemetryContext,
-      });
+      const serviceUrl = resolveRepoReadServiceUrl();
+      if (serviceUrl) {
+        return new RepoServiceReader({
+          identity,
+          baseUrl: serviceUrl,
+          telemetryContext,
+        });
+      }
+      if (profile.mirrorPath) {
+        return new BareRepoReader({
+          identity,
+          mirrorPath: profile.mirrorPath,
+          telemetryContext,
+        });
+      }
       // @feature-flag:repo-read-service enabled-end
     }
     // @feature-flag:repo-read-service disabled-start
