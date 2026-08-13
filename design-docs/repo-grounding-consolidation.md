@@ -3,11 +3,10 @@
 Architectural plan to serve AI repository reads from a single bare object
 database at a pinned SHA, instead of materialized working trees. Status:
 Stages 0–5 are in tree (`repo-read-service` and `enable_repo_read_service`
-default off). Stage 6 is in progress: in-process reads prefer a usable bare
-mirror; native-read callers skip shared/per-run working trees when that
-mirror already exists (`workingTree: false`). Interactive actor dispatch
-bypasses in that case so the turn stays in-process. Working-tree services
-and the six superseded flags are not retired yet.
+default off). Stage 6 is in progress: native-read callers skip working trees
+once a bare mirror exists, including cold start (fetch the mirror, then skip
+the extra copy). Interactive actor dispatch bypasses when `workingTree` is
+false. Working-tree services and the six superseded flags are not retired yet.
 
 ## Why
 

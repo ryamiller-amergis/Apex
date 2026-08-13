@@ -188,7 +188,7 @@ export interface CallerGroundingDependencies {
       branch: string;
     },
     leaseOptions?: { waitMs?: number },
-  ) => Promise<{ baseSha: string; mirrorHit?: boolean }>;
+  ) => Promise<{ baseSha: string; mirrorHit?: boolean; cacheDir?: string }>;
   readCachedOriginSha: typeof readCachedOriginShaFromRepoCache;
   groundingService: GroundingServiceDependency;
   materialize: (
@@ -467,27 +467,44 @@ export function createCallerGroundingService(
         dependencies.getRepoCacheDir ?? getRepoCacheDir;
       const mirrorUsable =
         dependencies.isUsableBareMirror ?? isUsableBareMirror;
-      const mirrorPath = resolveMirrorPath({
+      const cacheOptions = {
         provider: input.repository.provider,
         project: input.run.project,
         repo,
         branch: input.repository.branch,
-      });
+      };
+      let mirrorPath = resolveMirrorPath(cacheOptions);
+      let fetchedCache:
+        | { baseSha: string; mirrorHit?: boolean; cacheDir?: string }
+        | undefined;
 
-      // Stage 6: native-read callers with a warm bare mirror skip working trees.
-      // Interactive actors that need LocalCheckoutReader bypass separately.
-      if (nativeReadEnabled && mirrorUsable(mirrorPath)) {
+      // Stage 6: native-read callers skip working trees once a bare mirror exists.
+      // Cold start fetches the mirror first so the first visit can skip too.
+      if (nativeReadEnabled && !mirrorUsable(mirrorPath)) {
+        fetchedCache = await dependencies.ensureRepoCache(cacheOptions, {
+          waitMs: USER_FACING_REPO_CACHE_LEASE_WAIT_MS,
+        });
+        if (fetchedCache.mirrorHit !== undefined) {
+          telemetry.mirror(telemetryContext(input), fetchedCache.mirrorHit);
+        }
+        if (fetchedCache.cacheDir) {
+          mirrorPath = fetchedCache.cacheDir;
+        } else {
+          mirrorPath = resolveMirrorPath(cacheOptions);
+        }
+      }
+
+      if (
+        nativeReadEnabled &&
+        (mirrorUsable(mirrorPath) || Boolean(fetchedCache?.cacheDir))
+      ) {
         if (!grounding) {
-          const cache = await dependencies.ensureRepoCache(
-            {
-              provider: input.repository.provider,
-              project: input.run.project,
-              repo,
-              branch: input.repository.branch,
-            },
-            { waitMs: USER_FACING_REPO_CACHE_LEASE_WAIT_MS }
-          );
-          if (cache.mirrorHit !== undefined) {
+          const cache =
+            fetchedCache ??
+            (await dependencies.ensureRepoCache(cacheOptions, {
+              waitMs: USER_FACING_REPO_CACHE_LEASE_WAIT_MS,
+            }));
+          if (!fetchedCache && cache.mirrorHit !== undefined) {
             telemetry.mirror(telemetryContext(input), cache.mirrorHit);
           }
           telemetry.phase(telemetryContext(input), 'activate');
