@@ -1095,8 +1095,10 @@ export function buildDocumentAssistantEditGuidance(
   ];
 }
 
+export type GroundingStorageLabel = 'bare mirror' | 'Azure Files checkout';
+
 export interface GroundingProvenance {
-  storage: 'Azure Files checkout';
+  storage: GroundingStorageLabel;
   repository: string;
   branch: string;
   sha: string;
@@ -1108,7 +1110,7 @@ function groundingProvenanceFor(
 ): GroundingProvenance | undefined {
   if (grounding.mode !== 'local') return undefined;
   return {
-    storage: 'Azure Files checkout',
+    storage: grounding.workingTree ? 'Azure Files checkout' : 'bare mirror',
     repository: targetedRepositoryName(kickoff),
     branch: kickoff.skillBranch ?? kickoff.branch ?? 'main',
     sha: grounding.resolvedSha,

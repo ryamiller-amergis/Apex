@@ -1869,6 +1869,24 @@ describe('document assistant MCP wiring', () => {
     expect(prompt).toContain('pinned SHA: "abc123"');
   });
 
+  it('labels native-read provenance as a bare mirror when there is no working tree', () => {
+    const prompt = buildInitialPrompt(
+      baseKickoff({ skillProvider: 'ado', repo: 'Platform/MaxView' }),
+      {
+        nativeReads: true,
+        groundingProvenance: {
+          storage: 'bare mirror',
+          repository: 'Platform/MaxView',
+          branch: 'development',
+          sha: 'abc123',
+        },
+      }
+    );
+
+    expect(prompt).toContain('bare mirror');
+    expect(prompt).not.toContain('Azure Files checkout');
+  });
+
   it('retains ado-skills for document write-back under native reads with repo browse stripped', () => {
     const servers = buildMcpServers(
       baseKickoff({
