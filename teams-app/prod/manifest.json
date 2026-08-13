@@ -1,13 +1,13 @@
 {
   "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
   "manifestVersion": "1.16",
-  "version": "1.0.1",
-  "id": "1d3382ad-f82f-4ea2-9cfe-56f2fbbb539f",
+  "version": "1.0.0",
+  "id": "2f0071fc-b6cd-45a5-ae0d-f3bdfa0271c6",
   "developer": {
     "name": "Amergis",
-    "websiteUrl": "https://app-scrum-dev.azurewebsites.net",
-    "privacyUrl": "https://app-scrum-dev.azurewebsites.net/privacy",
-    "termsOfUseUrl": "https://app-scrum-dev.azurewebsites.net/terms"
+    "websiteUrl": "https://apex.amergis.com",
+    "privacyUrl": "https://apex.amergis.com/privacy",
+    "termsOfUseUrl": "https://apex.amergis.com/terms"
   },
   "name": {
     "short": "APEX Bot",
@@ -24,10 +24,10 @@
   "accentColor": "#6264A7",
   "bots": [
     {
-      "botId": "1d3382ad-f82f-4ea2-9cfe-56f2fbbb539f",
+      "botId": "REPLACE_WITH_PROD_BOT_APP_ID",
       "scopes": ["personal"],
       "supportsFiles": false
     }
   ],
-  "validDomains": ["app-scrum-dev.azurewebsites.net"]
+  "validDomains": ["apex.amergis.com", "app-apex-prd.azurewebsites.net"]
 }

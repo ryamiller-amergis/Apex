@@ -15,18 +15,25 @@
       background: #f3f3f3;
     }
     h1 { margin-bottom: 0; }
+    .env-group {
+      background: #fff;
+      padding: 24px 32px 32px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      width: 520px;
+    }
+    .env-group > h2 { margin: 0 0 4px; }
+    .env-group > .target { margin: 0 0 20px; color: #555; font-size: 0.9em; }
+    .env-group > .target code { background: #eef; padding: 2px 6px; border-radius: 4px; }
+    .icons { display: flex; gap: 32px; }
     .icon-section {
       display: flex;
       flex-direction: column;
       align-items: center;
       gap: 12px;
-      background: #fff;
-      padding: 24px 32px;
-      border-radius: 8px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      flex: 1;
     }
-    .icon-section h2 { margin: 0 0 4px; }
-    .icon-section p { margin: 0 0 8px; color: #555; font-size: 0.9em; }
+    .icon-section h3 { margin: 0; font-size: 0.95em; }
     canvas { border: 1px solid #ddd; border-radius: 4px; }
     canvas.outline-preview { background: #333; }
     button {
@@ -35,42 +42,96 @@
       color: #fff;
       border: none;
       border-radius: 6px;
-      font-size: 1em;
+      font-size: 0.9em;
       cursor: pointer;
     }
     button:hover { background: #4f5190; }
+    .warning {
+      width: 520px;
+      background: #FEF3C7;
+      border: 1px solid #D97706;
+      border-radius: 8px;
+      padding: 16px 20px;
+      color: #78350F;
+      font-size: 0.9em;
+    }
   </style>
 </head>
 <body>
   <h1>Teams App Icon Generator</h1>
-  <p>Generate the two required icons for the Scrum Teams app manifest, then save them into the <code>teams-app/</code> folder.</p>
+  <p>Generate the icons required by the APEX Teams app manifests.</p>
 
-  <div class="icon-section">
-    <h2>color.png — 192×192</h2>
-    <p>Light background with Apex logo. Required by Teams for the app card.</p>
-    <canvas id="colorCanvas" width="192" height="192"></canvas>
-    <button onclick="downloadCanvas('colorCanvas', 'color.png')">Download color.png (192×192)</button>
+  <div class="warning">
+    <strong>Download one environment at a time.</strong> Both environments download files named
+    <code>color.png</code> and <code>outline.png</code>. Move the first pair into its folder before
+    generating the second, or your browser will save them as <code>color (1).png</code>.
   </div>
 
-  <div class="icon-section">
-    <h2>outline.png — 32×32</h2>
-    <p>Transparent background with white Apex logo. Required by Teams for the sidebar/activity icon.</p>
-    <canvas id="outlineCanvas" width="32" height="32" class="outline-preview"></canvas>
-    <button onclick="downloadCanvas('outlineCanvas', 'outline.png')">Download outline.png (32×32)</button>
+  <div class="env-group">
+    <h2>Production — APEX Bot</h2>
+    <p class="target">Save both files into <code>teams-app/prod/</code></p>
+    <div class="icons">
+      <div class="icon-section">
+        <h3>color.png — 192×192</h3>
+        <canvas id="prodColorCanvas" width="192" height="192"></canvas>
+        <button onclick="downloadCanvas('prodColorCanvas', 'color.png')">Download color.png</button>
+      </div>
+      <div class="icon-section">
+        <h3>outline.png — 32×32</h3>
+        <canvas id="prodOutlineCanvas" width="32" height="32" class="outline-preview"></canvas>
+        <button onclick="downloadCanvas('prodOutlineCanvas', 'outline.png')">Download outline.png</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="env-group">
+    <h2>Development — APEX Bot - Dev</h2>
+    <p class="target">Save both files into <code>teams-app/dev/</code></p>
+    <div class="icons">
+      <div class="icon-section">
+        <h3>color.png — 192×192</h3>
+        <canvas id="devColorCanvas" width="192" height="192"></canvas>
+        <button onclick="downloadCanvas('devColorCanvas', 'color.png')">Download color.png</button>
+      </div>
+      <div class="icon-section">
+        <h3>outline.png — 32×32</h3>
+        <canvas id="devOutlineCanvas" width="32" height="32" class="outline-preview"></canvas>
+        <button onclick="downloadCanvas('devOutlineCanvas', 'outline.png')">Download outline.png</button>
+      </div>
+    </div>
   </div>
 
   <script>
-    const svgColor = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" fill="none">
+    const prodColor = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" fill="none">
       <rect x="10" y="10" width="76" height="76" rx="20" fill="#EEF2FF"/>
       <path d="M20 72L43 22H56L34 72H20Z" fill="#2747D9"/>
       <path d="M52 22L78 72H61L43 38L52 22Z" fill="#2747D9" opacity="0.9"/>
       <path d="M40 72L49 54L58 72H40Z" fill="#F8FAFF"/>
     </svg>`;
 
-    const svgOutline = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" fill="none">
+    const prodOutline = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" fill="none">
       <path d="M20 72L43 22H56L34 72H20Z" fill="#FFFFFF"/>
       <path d="M52 22L78 72H61L43 38L52 22Z" fill="#FFFFFF" opacity="0.9"/>
       <path d="M40 72L49 54L58 72H40Z" fill="#AAAACC"/>
+    </svg>`;
+
+    // Dev uses an amber palette and a "DEV" band so the two bots are
+    // distinguishable at a glance in the Teams chat list.
+    const devColor = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" fill="none">
+      <rect x="10" y="10" width="76" height="76" rx="20" fill="#FEF3C7"/>
+      <path d="M20 66L43 16H56L34 66H20Z" fill="#B45309"/>
+      <path d="M52 16L78 66H61L43 32L52 16Z" fill="#B45309" opacity="0.9"/>
+      <path d="M40 66L49 48L58 66H40Z" fill="#FFFBEB"/>
+      <rect x="10" y="68" width="76" height="18" fill="#B45309"/>
+      <text x="48" y="82" font-family="Segoe UI, sans-serif" font-size="15" font-weight="700"
+            fill="#FFFBEB" text-anchor="middle" letter-spacing="2">DEV</text>
+    </svg>`;
+
+    const devOutline = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" fill="none">
+      <path d="M20 62L43 12H56L34 62H20Z" fill="#FFFFFF"/>
+      <path d="M52 12L78 62H61L43 28L52 12Z" fill="#FFFFFF" opacity="0.9"/>
+      <path d="M40 62L49 44L58 62H40Z" fill="#AAAACC"/>
+      <rect x="14" y="70" width="68" height="14" rx="4" fill="#FFFFFF"/>
     </svg>`;
 
     function drawSvgToCanvas(svgStr, canvasId, size) {
@@ -95,8 +156,10 @@
       link.click();
     }
 
-    drawSvgToCanvas(svgColor, 'colorCanvas', 192);
-    drawSvgToCanvas(svgOutline, 'outlineCanvas', 32);
+    drawSvgToCanvas(prodColor, 'prodColorCanvas', 192);
+    drawSvgToCanvas(prodOutline, 'prodOutlineCanvas', 32);
+    drawSvgToCanvas(devColor, 'devColorCanvas', 192);
+    drawSvgToCanvas(devOutline, 'devOutlineCanvas', 32);
   </script>
 </body>
 </html>
