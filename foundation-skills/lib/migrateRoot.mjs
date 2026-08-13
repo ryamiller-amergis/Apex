@@ -172,11 +172,9 @@ export function migrateSkillRoot(
     return { ...plan, dryRun, wrote: [], staleRootReferences };
   }
 
-  const lock = readLockfile(repoRoot);
-  const skillNames = Object.keys(lock?.skills ?? {});
   return withInstallTransaction(
     repoRoot,
-    skillNames,
+    () => Object.keys(readLockfile(repoRoot)?.skills ?? {}),
     () => {
       const lockedPlan = planSkillRootMigration(repoRoot, targetRoot);
       if (lockedPlan.errors.length) {

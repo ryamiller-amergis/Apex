@@ -118,13 +118,8 @@ export function verifyLockfileIntegrity(lock) {
       error: `Unsupported lockfile version: ${lock.lockfileVersion ?? 'missing'}`,
     };
   }
-  if (lock.skillRoot != null) {
-    try {
-      normalizeSkillRoot(lock.skillRoot);
-    } catch (error) {
-      return { valid: false, error: error.message };
-    }
-  }
+  const pairing = verifyLockfileVersionRootPairing(lock);
+  if (!pairing.valid) return pairing;
   if (typeof lock.integrity !== 'string' || !lock.integrity) {
     return { valid: false, error: 'Lockfile integrity is missing' };
   }
@@ -135,3 +130,35 @@ export function verifyLockfileIntegrity(lock) {
 }
 
 export { LOCKFILE_NAME };
+
+function verifyLockfileVersionRootPairing(lock) {
+  if (lock.lockfileVersion === LOCKFILE_VERSION_V2) {
+    if (lock.skillRoot != null) {
+      return {
+        valid: false,
+        error: 'v2 lockfiles must omit skillRoot',
+      };
+    }
+    return { valid: true, error: null };
+  }
+  if (lock.lockfileVersion === LOCKFILE_VERSION) {
+    if (lock.skillRoot == null) {
+      return {
+        valid: false,
+        error: 'v3 lockfiles must include skillRoot',
+      };
+    }
+    try {
+      const root = normalizeSkillRoot(lock.skillRoot);
+      if (root === LEGACY_SKILL_ROOT) {
+        return {
+          valid: false,
+          error: 'v3 lockfiles cannot use the legacy .cursor/skills root',
+        };
+      }
+    } catch (error) {
+      return { valid: false, error: error.message };
+    }
+  }
+  return { valid: true, error: null };
+}

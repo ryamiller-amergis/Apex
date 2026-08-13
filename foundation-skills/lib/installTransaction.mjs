@@ -14,7 +14,7 @@ export const INSTALL_LOCK_REL = `${APEX_DIR}/install.lock`;
  */
 export function withInstallTransaction(
   repoRoot,
-  skillNames,
+  skillNamesOrResolver,
   action,
   { preflight = null, skillRoots = [LEGACY_SKILL_ROOT] } = {},
 ) {
@@ -59,6 +59,11 @@ export function withInstallTransaction(
     }
 
     if (typeof preflight === 'function') preflight();
+
+    const skillNames =
+      typeof skillNamesOrResolver === 'function'
+        ? skillNamesOrResolver()
+        : skillNamesOrResolver;
 
     snapshotRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-skills-transaction-'));
     const targets = transactionTargets(skillNames, skillRoots);

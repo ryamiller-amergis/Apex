@@ -279,6 +279,38 @@ test('lockfile v3 is current; v2 remains readable; newer versions fail closed', 
   const rejected = verifyLockfileIntegrity(hashed);
   assert.equal(rejected.valid, false);
   assert.match(rejected.error, /Unsupported lockfile version: 4/);
+
+  const v2WithRoot = verifyLockfileIntegrity({
+    lockfileVersion: 2,
+    suiteVersion: '2.0.3',
+    package: '@apex/skills',
+    skillRoot: '.agents/skills',
+    integrity: 'not-checked',
+    skills: {},
+  });
+  assert.equal(v2WithRoot.valid, false);
+  assert.match(v2WithRoot.error, /must omit skillRoot/);
+
+  const v3WithoutRoot = verifyLockfileIntegrity({
+    lockfileVersion: 3,
+    suiteVersion: '2.1.0',
+    package: '@apex/skills',
+    integrity: 'not-checked',
+    skills: {},
+  });
+  assert.equal(v3WithoutRoot.valid, false);
+  assert.match(v3WithoutRoot.error, /must include skillRoot/);
+
+  const v3LegacyRoot = verifyLockfileIntegrity({
+    lockfileVersion: 3,
+    suiteVersion: '2.1.0',
+    package: '@apex/skills',
+    skillRoot: '.cursor/skills',
+    integrity: 'not-checked',
+    skills: {},
+  });
+  assert.equal(v3LegacyRoot.valid, false);
+  assert.match(v3LegacyRoot.error, /legacy/);
 });
 
 test('lockfile integrity verification detects tampering', async () => {
