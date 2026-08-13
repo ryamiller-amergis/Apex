@@ -26,6 +26,7 @@ import {
   sharedReadCheckoutService,
   type SharedReadCheckoutService,
 } from './grounding/sharedReadCheckoutService';
+import { workerCanReadWithoutWorkingTree } from './repoRead/workerReadVisibility';
 
 const MAX_CHANGED_PATHS = 200;
 const PRE_WARM_CONCURRENCY = 2;
@@ -66,6 +67,11 @@ export interface GroundingPreWarmDependencies {
    * path — admin clone owns mirrors; no Blob publish / shared prewarm).
    */
   isCheckoutReadinessEnabled?: (project: string) => Promise<boolean>;
+  /**
+   * True when workers can native-read without a working tree (same disk or
+   * HTTP). Shared checkout prewarm is then skipped; Blob publish still runs.
+   */
+  workerCanReadWithoutWorkingTree?: () => boolean;
 }
 
 function cacheOptions(target: PreWarmTarget): RepoCacheOptions {
@@ -222,6 +228,9 @@ export function createGroundingPreWarmService(
         await import('./featureFlagService');
       return isProjectRepositoryCheckoutReadinessEnabledForProject(project);
     });
+  const canSkipSharedCheckout =
+    dependencies.workerCanReadWithoutWorkingTree
+    ?? (() => workerCanReadWithoutWorkingTree());
   const inFlight = new Map<string, Promise<void>>();
   const lastProbeAt = new Map<string, number>();
 
@@ -366,21 +375,32 @@ export function createGroundingPreWarmService(
         }
 
         try {
-          const { outcome } = await materializeSharedCheckout({
-            provider: options.provider,
-            project: target.project,
-            repo: target.repository,
-            branch: target.branch,
-            sha: cachedSha,
-          });
-          telemetry('grounding.shared.prewarm', {
-            provider: target.provider,
-            project: target.project,
-            repository: target.repository,
-            branch: target.branch,
-            sha: cachedSha,
-            outcome,
-          });
+          if (canSkipSharedCheckout()) {
+            telemetry('grounding.shared.prewarm', {
+              provider: target.provider,
+              project: target.project,
+              repository: target.repository,
+              branch: target.branch,
+              sha: cachedSha,
+              outcome: 'skipped-bare-mirror',
+            });
+          } else {
+            const { outcome } = await materializeSharedCheckout({
+              provider: options.provider,
+              project: target.project,
+              repo: target.repository,
+              branch: target.branch,
+              sha: cachedSha,
+            });
+            telemetry('grounding.shared.prewarm', {
+              provider: target.provider,
+              project: target.project,
+              repository: target.repository,
+              branch: target.branch,
+              sha: cachedSha,
+              outcome,
+            });
+          }
         } catch {
           telemetry('grounding.shared.prewarm', {
             provider: target.provider,

@@ -42,6 +42,7 @@ function createService(
   return createGroundingPreWarmService({
     readRemoteTip: async () => null,
     listPinnedTargets: async () => [target],
+    workerCanReadWithoutWorkingTree: () => false,
     ...overrides,
   });
 }
@@ -158,6 +159,40 @@ describe('TBI-007 groundingPreWarmService', () => {
       );
     }
   );
+
+  it('skips shared checkout prewarm when workers can read the bare mirror', async () => {
+    const sha = 'b'.repeat(40);
+    const publishBundle = jest.fn().mockResolvedValue('published' as const);
+    const materializeSharedCheckout = jest.fn();
+    const telemetry = jest.fn();
+    const service = createService({
+      workerCanReadWithoutWorkingTree: () => true,
+      withLease: jest.fn(async (_key, operation) =>
+        operation({
+          signal: new AbortController().signal,
+          assertOwned: jest.fn().mockResolvedValue(undefined),
+        })
+      ),
+      refreshUnderLease: jest.fn().mockResolvedValue(undefined),
+      wasRefreshedSince: jest.fn().mockReturnValue(false),
+      readCachedSha: jest
+        .fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(sha),
+      publishBundle,
+      materializeSharedCheckout,
+      telemetry,
+    });
+
+    await service.preWarm(target);
+
+    expect(publishBundle).toHaveBeenCalledTimes(1);
+    expect(materializeSharedCheckout).not.toHaveBeenCalled();
+    expect(telemetry).toHaveBeenCalledWith(
+      'grounding.shared.prewarm',
+      expect.objectContaining({ outcome: 'skipped-bare-mirror' }),
+    );
+  });
 
   it('treats shared checkout prewarm failure as optional after mirror and bundle succeed', async () => {
     // Arrange

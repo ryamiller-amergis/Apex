@@ -8,8 +8,9 @@ once a bare mirror exists, including cold start (fetch the mirror, then skip
 the extra copy) and background PRD/design-doc/test-case jobs when the worker
 can open that mirror (same disk or HTTP). Interactive actor dispatch uses the
 same reader when the worker can open the mirror; it still bypasses on App
-Service when HTTP is unset. Working-tree services and the six superseded
-flags are not retired yet.
+Service when HTTP is unset. Shared checkout pre-warm is skipped when workers
+can read the bare mirror. Working-tree services and the six superseded flags
+are not retired yet.
 
 ## Why
 
