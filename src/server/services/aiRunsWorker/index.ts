@@ -18,5 +18,6 @@ export {
 } from './worker';
 export {
   flushWorkspaceArtifacts,
+  openGroundedReader,
   openLocalCheckout,
 } from './workspace';

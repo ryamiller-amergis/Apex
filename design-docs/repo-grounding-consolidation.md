@@ -5,8 +5,10 @@ database at a pinned SHA, instead of materialized working trees. Status:
 Stages 0–5 are in tree (`repo-read-service` and `enable_repo_read_service`
 default off). Stage 6 is in progress: native-read callers skip working trees
 once a bare mirror exists, including cold start (fetch the mirror, then skip
-the extra copy). Interactive actor dispatch bypasses when `workingTree` is
-false. Working-tree services and the six superseded flags are not retired yet.
+the extra copy) and background PRD/design-doc/test-case jobs when the worker
+can open that mirror (same disk or HTTP). Interactive actor dispatch still
+bypasses when `workingTree` is false. Working-tree services and the six
+superseded flags are not retired yet.
 
 ## Why
 

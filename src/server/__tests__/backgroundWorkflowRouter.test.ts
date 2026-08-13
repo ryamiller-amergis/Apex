@@ -29,6 +29,7 @@ jest.mock('../services/telemetry', () => ({
 import {
   createBackgroundWorkflowRouter,
   prepareBackgroundWorkflowWorkspace,
+  workerCanReadWithoutWorkingTree,
   type BackgroundWorkflowRouteInput,
   type BackgroundWorkflowRouterDependencies,
 } from '../services/backgroundWorkflowRouter';
@@ -98,9 +99,29 @@ function makeDependencies(
     resolveHardLimitMs: jest.fn().mockReturnValue(60_000),
     now: jest.fn().mockReturnValue(1_000),
     trackEvent: jest.fn(),
+    isUsableBareMirror: jest.fn().mockReturnValue(false),
     ...overrides,
   };
 }
+
+describe('workerCanReadWithoutWorkingTree', () => {
+  it('allows skip when HTTP URL is set even on App Service', () => {
+    expect(workerCanReadWithoutWorkingTree({
+      REPO_READ_SERVICE_URL: 'https://repo-read.test',
+      WEBSITE_INSTANCE_ID: 'instance-1',
+    })).toBe(true);
+  });
+
+  it('refuses skip on App Service without HTTP', () => {
+    expect(workerCanReadWithoutWorkingTree({
+      WEBSITE_INSTANCE_ID: 'instance-1',
+    })).toBe(false);
+  });
+
+  it('allows skip on local/dev hosts', () => {
+    expect(workerCanReadWithoutWorkingTree({})).toBe(true);
+  });
+});
 
 describe('background workflow routing', () => {
   it('AC-0 / VT-01 / BR-007: Given enabled routing, materializes and prepares before lifecycle enqueue', async () => {
@@ -224,6 +245,76 @@ describe('background workflow routing', () => {
 
   it('falls back to full writable clone when shared checkout is not ready', async () => {
     const dependencies = makeDependencies({
+      sharedReadCheckout: {
+        getReady: jest.fn().mockReturnValue(null),
+        retain: jest.fn(),
+      },
+    });
+
+    const decision = await createBackgroundWorkflowRouter(dependencies).route(
+      makeInput(),
+    );
+
+    expect(decision).toEqual(
+      expect.objectContaining({
+        route: 'worker',
+        workspacePath: 'C:\\grounding-workspaces\\opaque',
+      }),
+    );
+    expect(dependencies.materializeRunGroundingWithPath).toHaveBeenCalled();
+    expect(dependencies.prepareWorkspace).toHaveBeenCalled();
+  });
+
+  it('skips the writable clone when a usable bare mirror is worker-visible', async () => {
+    const clearGenerationOutput = jest.fn().mockResolvedValue(undefined);
+    const enqueue = jest.fn().mockResolvedValue({ runId: 'run-1' });
+    const getReady = jest.fn().mockReturnValue({
+      workspacePath: 'C:\\shared\\should-not-use',
+    });
+    const dependencies = makeDependencies({
+      getRepoCacheDir: jest.fn().mockReturnValue('C:\\repo-cache\\apex.git'),
+      isUsableBareMirror: jest.fn().mockReturnValue(true),
+      workerCanReadWithoutWorkingTree: jest.fn().mockReturnValue(true),
+      sharedReadCheckout: { getReady, retain: jest.fn() },
+      clearGenerationOutput,
+      enqueue,
+    });
+
+    const decision = await createBackgroundWorkflowRouter(dependencies).route(
+      makeInput(),
+    );
+
+    expect(decision).toEqual<WorkflowRouteDecision>({
+      route: 'worker',
+      workspacePath: 'C:\\threads\\thread-1',
+      runId: 'run-1',
+    });
+    expect(clearGenerationOutput).toHaveBeenCalledWith('C:\\threads\\thread-1');
+    expect(getReady).not.toHaveBeenCalled();
+    expect(dependencies.materializeRunGroundingWithPath).not.toHaveBeenCalled();
+    expect(dependencies.prepareWorkspace).not.toHaveBeenCalled();
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        snapshot: expect.objectContaining({
+          workspaceRef: 'C:\\threads\\thread-1',
+          mirrorRef: 'C:\\repo-cache\\apex.git',
+          groundedSha: 'abc123',
+          repository: 'apex/ai-pilot',
+          provider: 'github',
+          workflowClass: 'prd',
+        }),
+      }),
+    );
+    expect(
+      (enqueue as jest.Mock).mock.calls[0][0].snapshot.checkoutRef,
+    ).toBeUndefined();
+  });
+
+  it('keeps the writable clone when App Service cannot expose the mirror to ACA', async () => {
+    const dependencies = makeDependencies({
+      getRepoCacheDir: jest.fn().mockReturnValue('C:\\repo-cache\\apex.git'),
+      isUsableBareMirror: jest.fn().mockReturnValue(true),
+      workerCanReadWithoutWorkingTree: jest.fn().mockReturnValue(false),
       sharedReadCheckout: {
         getReady: jest.fn().mockReturnValue(null),
         retain: jest.fn(),
