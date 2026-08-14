@@ -53,6 +53,9 @@ export const NutrientWebSdkPoc: React.FC = () => {
         totalPages={state.totalPages}
         status={state.status}
         error={state.error}
+        accept=".pdf,.docx,.doc,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword"
+        openLabel="Open"
+        openHint="Select a PDF or Word file to open, or multiple files to auto-merge"
         onLoadFiles={actions.loadDocuments}
         onPrevPage={actions.prevPage}
         onNextPage={actions.nextPage}
@@ -109,7 +112,8 @@ export const NutrientWebSdkPoc: React.FC = () => {
               <div className={styles.emptyIcon}>📄</div>
               <p className={styles.emptyTitle}>No document open</p>
               <p className={styles.emptyHint}>
-                Click <strong>Open PDF</strong> in the toolbar to start.
+                Click <strong>Open</strong> for a PDF or Word document. Use{' '}
+                <strong>PDF</strong> to convert a Word file to PDF.
               </p>
             </div>
           )}

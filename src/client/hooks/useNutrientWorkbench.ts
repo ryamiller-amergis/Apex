@@ -7,6 +7,8 @@
  * Page-structure operations (rotate, merge, reorder) use Nutrient's native
  * applyOperations API now that the Document Editing add-on is licensed.
  * Multi-file open still pre-merges with pdf-lib before the initial load.
+ * Word (.doc/.docx) files load natively; they are converted to PDF first
+ * when merged with other files.
  *
  * The SDK itself is loaded via CDN UMD script (see lib/nutrientViewer.ts) —
  * Vite cannot ESM-import the published UMD entry reliably.
@@ -45,11 +47,11 @@ export interface WorkbenchState {
 }
 
 export interface WorkbenchActions {
-  /** Load a single PDF File into the viewer. */
+  /** Load a single PDF or Word File into the viewer. */
   loadDocument: (file: File) => Promise<void>;
   /**
-   * Load one or more PDF Files. Multiple files are merged with pdf-lib
-   * before loading — no extra round-trips after initial load.
+   * Load one or more PDF/Word Files. Multiple files are converted to PDF
+   * (Word via Nutrient convertToPDF) then merged with pdf-lib before load.
    */
   loadDocuments: (files: File[]) => Promise<void>;
   setTool: (tool: WorkbenchTool) => void;
@@ -91,7 +93,32 @@ export interface UseNutrientWorkbenchOptions {
 
 const DOCX_MIME =
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const DOC_MIME = 'application/msword';
 const PDF_MIME = 'application/pdf';
+
+const WORD_NAME_RE = /\.(docx|doc)$/i;
+
+type NutrientConvertConfig = {
+  document: ArrayBuffer;
+  useCDN: true;
+  licenseKey?: string;
+};
+
+type NutrientViewerWithConvert = NutrientViewerModule & {
+  convertToPDF?: (config: NutrientConvertConfig) => Promise<ArrayBuffer>;
+};
+
+export function isWordFile(file: File): boolean {
+  return (
+    WORD_NAME_RE.test(file.name) ||
+    file.type === DOCX_MIME ||
+    file.type === DOC_MIME
+  );
+}
+
+function stripDocumentExtension(name: string): string {
+  return name.replace(/\.(pdf|docx|doc)$/i, '');
+}
 
 function toErrorMessage(cause: unknown): string {
   return cause instanceof Error
@@ -201,6 +228,26 @@ export function useNutrientWorkbench({
 
   // ── Core loader ───────────────────────────────────────────────────────────
 
+  const convertWordToPdf = useCallback(
+    async (
+      sdk: NutrientViewerModule,
+      file: File
+    ): Promise<ArrayBuffer> => {
+      const convert = (sdk as NutrientViewerWithConvert).convertToPDF;
+      if (typeof convert !== 'function') {
+        throw new Error(
+          'Word-to-PDF conversion is not available in this Nutrient build.'
+        );
+      }
+      return convert({
+        document: await file.arrayBuffer(),
+        useCDN: true,
+        ...(licenseKey ? { licenseKey } : {}),
+      });
+    },
+    [licenseKey]
+  );
+
   const loadBytes = useCallback(
     async (docBytes: ArrayBuffer, name: string): Promise<void> => {
       if (!containerElement) return;
@@ -264,19 +311,24 @@ export function useNutrientWorkbench({
   );
 
   /**
-   * Open one or more PDFs. When multiple files are given they are merged with
-   * pdf-lib before the initial Nutrient load (no document-editing call needed).
+   * Open one or more PDFs or Word files. Multiple files are converted to PDF
+   * (Word via Nutrient convertToPDF) then merged with pdf-lib before load.
    */
   const loadDocuments = useCallback(
     async (files: File[]): Promise<void> => {
       if (files.length === 0) return;
       if (files.length === 1) { await loadDocument(files[0]); return; }
 
-      setStatus(`Merging ${files.length} PDFs before loading…`);
+      setStatus(`Merging ${files.length} files before loading…`);
       try {
+        const sdk = await getNutrientViewer();
+        sdkRef.current = sdk;
         const merged = await PDFDocument.create();
         for (const file of files) {
-          const doc = await PDFDocument.load(await file.arrayBuffer());
+          const pdfBytes = isWordFile(file)
+            ? await convertWordToPdf(sdk, file)
+            : await file.arrayBuffer();
+          const doc = await PDFDocument.load(pdfBytes);
           const indices = Array.from({ length: doc.getPageCount() }, (_, i) => i);
           const copied = await merged.copyPages(doc, indices);
           copied.forEach((p) => merged.addPage(p));
@@ -288,7 +340,7 @@ export function useNutrientWorkbench({
         setStatus('Merge failed.');
       }
     },
-    [loadDocument, loadBytes]
+    [loadDocument, loadBytes, convertWordToPdf]
   );
 
   // ── Annotation presets (custom toolbar — must set current preset explicitly) ─
@@ -421,7 +473,7 @@ export function useNutrientWorkbench({
         await instance.saveContentEditingSession();
       }
       const buffer = await instance.exportPDF();
-      const baseName = (fileNameRef.current ?? 'document').replace(/\.pdf$/i, '');
+      const baseName = stripDocumentExtension(fileNameRef.current ?? 'document');
       downloadBuffer(buffer, `${baseName}.pdf`, PDF_MIME);
       setStatus('PDF saved.');
       setIsDirty(false);
@@ -441,7 +493,7 @@ export function useNutrientWorkbench({
         await instance.saveContentEditingSession();
       }
       const buffer = await instance.exportOffice({ format: 'docx' });
-      const baseName = (fileNameRef.current ?? 'document').replace(/\.pdf$/i, '');
+      const baseName = stripDocumentExtension(fileNameRef.current ?? 'document');
       downloadBuffer(buffer, `${baseName}.docx`, DOCX_MIME);
       setStatus('Word export completed.');
     } catch (cause) {

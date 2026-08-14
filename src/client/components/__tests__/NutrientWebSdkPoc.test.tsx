@@ -62,6 +62,7 @@ const mockSdk = {
   load: (...args: unknown[]) => mockLoad(...args),
   unload: (...args: unknown[]) => mockUnload(...args),
   preloadWorker: (...args: unknown[]) => mockPreloadWorker(...args),
+  convertToPDF: jest.fn(),
 };
 
 jest.mock('../../lib/nutrientViewer', () => ({
@@ -290,5 +291,37 @@ describe('NutrientWebSdkPoc workbench', () => {
     const resetBtn = screen.getByTestId('floating-toolbar-reset');
     fireEvent.click(resetBtn);
     expect(resetBtn).toBeInTheDocument();
+  });
+
+  it('accepts PDF and Word files in the Open picker', () => {
+    render(<NutrientWebSdkPoc />);
+    const input = screen.getByTestId('header-file-input') as HTMLInputElement;
+    expect(input.accept).toContain('.pdf');
+    expect(input.accept).toContain('.docx');
+    expect(input.accept).toContain('.doc');
+    expect(screen.getByTestId('header-open-pdf')).toHaveTextContent('Open');
+    expect(
+      screen.getByText((_, el) =>
+        Boolean(
+          el?.tagName === 'P' &&
+            /PDF or Word document/i.test(el.textContent ?? '')
+        )
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('loads a Word file selected via the header', async () => {
+    render(<NutrientWebSdkPoc />);
+    const wordFile = new File(['docx'], 'notes.docx', {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    });
+    Object.defineProperty(wordFile, 'arrayBuffer', {
+      value: jest.fn().mockResolvedValue(new ArrayBuffer(4)),
+    });
+    fireEvent.change(screen.getByTestId('header-file-input'), {
+      target: { files: [wordFile] },
+    });
+    await waitFor(() => expect(mockLoad).toHaveBeenCalledTimes(1));
+    expect(mockLoad.mock.calls[0][0].document).toBeInstanceOf(ArrayBuffer);
   });
 });
