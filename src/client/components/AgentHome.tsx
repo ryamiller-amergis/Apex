@@ -11,6 +11,7 @@ import {
 import { useProjectSkillConfig, useAvailableModels, useGlobalDefaultModel } from '../hooks/useProjectSkillConfig';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useChatAttachments } from '../hooks/useChatAttachments';
+import { useProjectRepositoryReadiness } from '../hooks/useProjectRepositoryReadiness';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { PRDPreviewDrawer } from './PRDPreviewDrawer';
@@ -529,6 +530,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
 
   const { data: skillConfig } = useProjectSkillConfig(selectedProject || null, selectedSkillSettingsId);
   const { data: repos = [] } = useSkillRepos(selectedProject || null, skillConfig?.skillProvider);
+  const repoReadiness = useProjectRepositoryReadiness(skillConfig?.id, selectedProject || null);
 
   // Prefer admin-configured repo/branch; fall back to heuristic (match project name, then first repo)
   const defaultRepo = skillConfig
@@ -555,8 +557,13 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
       !(m.role === 'user' && m.text === 'Begin.')
       && m.toolName !== '_reasoning'
       && m.toolName !== '_thinking',
+    beforeSend: () => {
+      if (!repoReadiness.isReady) {
+        throw new Error(repoReadiness.message ?? 'Repository is not ready');
+      }
+    },
   });
-  const { streamingText, prdReady, isRunning, visibleMessages } = session;
+  const { streamingText, prdReady, isRunning, visibleMessages, progressLabel } = session;
 
   const visibleMessageIds = visibleMessages.map((m) => m.id);
   const highlightedMessageId = useFocusChatMessage(focusMessageId, visibleMessageIds);
@@ -783,6 +790,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
     const text = input.trim();
     if ((!text && attachments.length === 0) || isRunning || isSending) return;
     if (!threadId && !resolvedRepoName) return;
+    if (!repoReadiness.isReady) return;
 
     if (isListening) {
       speechRecognitionRef.current?.stop();
@@ -893,7 +901,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
     } finally {
       setIsSending(false);
     }
-  }, [input, attachments, isRunning, isSending, threadId, resolvedRepoName, startChat, selectedProject, defaultBranch, selectedSkillPath, selectedSkillName, selectedQuickSkill, selectedMcpPill, model, clearAttachments, isListening, queryClient, skillConfig?.id, skillConfig?.skillProvider]);
+  }, [input, attachments, isRunning, isSending, threadId, resolvedRepoName, startChat, selectedProject, defaultBranch, selectedSkillPath, selectedSkillName, selectedQuickSkill, selectedMcpPill, model, clearAttachments, isListening, queryClient, skillConfig?.id, skillConfig?.skillProvider, repoReadiness.isReady]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (skillPickerOpen && filteredSkills.length > 0) {
@@ -964,7 +972,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
   const isCompose = !threadId;
   const hasPills = quickSkillPills.length > 0 || quickMcpPills.length > 0;
   const needsSkillSelection = isCompose && hasPills && !selectedQuickSkill && !selectedMcpPill;
-  const canSend = (input.trim().length > 0 || attachments.length > 0) && !isRunning && !isSending && !needsSkillSelection && (!!threadId || !!resolvedRepoName);
+  const canSend = (input.trim().length > 0 || attachments.length > 0) && !isRunning && !isSending && !needsSkillSelection && (!!threadId || !!resolvedRepoName) && repoReadiness.isReady;
 
   // ── Shared input area ────────────────────────────────────────────────────────
 
@@ -986,21 +994,23 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
       }}
       onSend={() => void handleSend()}
       onCancel={() => void handleStop()}
-      disabled={needsSkillSelection}
+      disabled={needsSkillSelection || !repoReadiness.isReady}
       isRunning={isRunning}
       isSending={isSending}
-      isBusy={isSending || needsSkillSelection}
-      shellDisabled={needsSkillSelection}
+      isBusy={isSending || needsSkillSelection || !repoReadiness.isReady}
+      shellDisabled={needsSkillSelection || !repoReadiness.isReady}
       canSend={canSend}
       allowEmptySend
-      autoFocus={isCompose && !needsSkillSelection}
+      autoFocus={isCompose && !needsSkillSelection && repoReadiness.isReady}
       rows={isCompose ? 3 : 1}
       placeholder={
-        isCompose
-          ? (needsSkillSelection ? 'Select an option above to get started' : 'Let Apex know what you need…')
-          : isRunning
-            ? 'Type your follow-up…'
-            : 'Continue the conversation…'
+        !repoReadiness.isReady
+          ? (repoReadiness.message ?? 'Repository not ready')
+          : isCompose
+            ? (needsSkillSelection ? 'Select an option above to get started' : 'Let Apex know what you need…')
+            : isRunning
+              ? 'Type your follow-up…'
+              : 'Continue the conversation…'
       }
       testIdPrefix="agent-home"
       testIds={{
@@ -1014,7 +1024,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
       {...{ 'data-testid': 'agent-home-composer' }}
       textareaRef={textareaRef}
       attachments={attachments}
-      attachmentError={attachmentError}
+      attachmentError={attachmentError ?? (!repoReadiness.isReady ? repoReadiness.message : null)}
       onRemoveAttachment={removeAttachment}
       onAttachClick={openFilePicker}
       speech={{
@@ -1239,10 +1249,24 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
             })()}
 
             {isRunning && !streamingText && (
-              <div className={styles.agentRow}>
+              <div
+                className={styles.agentRow}
+                role="status"
+                aria-live="polite"
+                aria-label={progressLabel ?? 'Agent is processing'}
+                {...{ 'data-testid': 'agent-home-typing' }}
+              >
                 <div className={styles.agentAvatar}>AI</div>
                 <div className={`${styles.agentBubble} ${styles.typing}`}>
                   <span /><span /><span />
+                  {progressLabel && (
+                    <p
+                      className={styles.progressLabel}
+                      {...{ 'data-testid': 'agent-home-progress-label' }}
+                    >
+                      {progressLabel}
+                    </p>
+                  )}
                 </div>
               </div>
             )}

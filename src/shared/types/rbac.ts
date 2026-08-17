@@ -1,5 +1,6 @@
 // ── Core entity types — mirror the DB schema exactly ──────────────────────────
 
+import type { MenuItemKey } from './menuSettings';
 import type { WhatsNewState } from './whatsNew';
 
 export interface AppUser {
@@ -105,6 +106,14 @@ export interface MyPermissionsResponse {
   betaAnnouncementDismissed: boolean;
   /** Unified What's New evaluation (FEAT-006). Optional during compatibility window. */
   whatsNew?: WhatsNewState;
+  /**
+   * Present when the user's email matches an enabled restricted_user_access row.
+   * Client should skip project selection and limit modules to this list.
+   */
+  restrictedAccess?: {
+    modules: MenuItemKey[];
+    project: string;
+  } | null;
 }
 
 export interface UpdatePreferencesRequest {

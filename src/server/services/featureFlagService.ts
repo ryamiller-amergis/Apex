@@ -27,6 +27,8 @@ const LIFECYCLE_BINDING_FLAG = 'repo-grounding-lifecycle-binding';
 const REMOTE_SEARCH_CONVERGENCE_FLAG = 'repo-grounding-remote-search-convergence';
 const NATIVE_READ_FLAG = 'native-read';
 const SHARED_READ_CHECKOUT_FLAG = 'shared-readonly-grounding-checkout';
+const PROJECT_REPOSITORY_CHECKOUT_READINESS_FLAG =
+  'project-repository-checkout-readiness';
 
 // ── listFlags ────────────────────────────────────────────────────────────────
 
@@ -374,4 +376,34 @@ export async function isSharedReadCheckoutEnabledForCaller(
   onEvaluationError?: FlagEvaluationErrorHandler,
 ): Promise<boolean> {
   return evaluateGroundingFlag(SHARED_READ_CHECKOUT_FLAG, ctx, onEvaluationError);
+}
+
+export async function isProjectRepositoryCheckoutReadinessEnabled(
+  ctx: GroundingFlagContext,
+  onEvaluationError?: FlagEvaluationErrorHandler,
+): Promise<boolean> {
+  return evaluateGroundingFlag(
+    PROJECT_REPOSITORY_CHECKOUT_READINESS_FLAG,
+    ctx,
+    onEvaluationError,
+  );
+}
+
+/**
+ * Project-scoped checkout-readiness probe for maintenance / settings paths that
+ * lack a real end-user caller. Uses a synthetic userId; audience matching is
+ * driven by project (and optional environment) rules.
+ */
+export async function isProjectRepositoryCheckoutReadinessEnabledForProject(
+  project: string,
+  onEvaluationError?: FlagEvaluationErrorHandler,
+): Promise<boolean> {
+  return isProjectRepositoryCheckoutReadinessEnabled(
+    {
+      userId: 'system',
+      project,
+      caller: 'project-repository-checkout-readiness',
+    },
+    onEvaluationError,
+  );
 }

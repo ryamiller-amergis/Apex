@@ -21,6 +21,13 @@ import type {
   ProjectAssignmentGroup,
   SetProjectAssignmentsRequest,
 } from '../../shared/types/platformAdmin';
+import type { RoleWithPermissions } from '../../shared/types/rbac';
+import type {
+  CreateRestrictedUserAccessRequest,
+  RestrictedUserAccess,
+  RestrictedUserAccessListResponse,
+  UpdateRestrictedUserAccessRequest,
+} from '../../shared/types/restrictedAccess';
 
 export const platformAdminQueryKeys = {
   projects: ['platform-admin', 'projects'] as const,
@@ -32,6 +39,8 @@ export const platformAdminQueryKeys = {
   accessRequests: (status: ProjectAccessRequestStatus | 'all' = 'pending') => ['platform-admin', 'access-requests', status] as const,
   menuSettings: ['platform-admin', 'menu-settings'] as const,
   menuSetting: (project: string | null) => ['platform-admin', 'menu-settings', project] as const,
+  userAccess: ['platform-admin', 'user-access'] as const,
+  userAccessRoles: ['platform-admin', 'user-access', 'roles'] as const,
 };
 
 export const projectAccessRequestQueryKeys = {
@@ -276,6 +285,71 @@ export function useSetPlatformAdminMenuConfig() {
       queryClient.invalidateQueries({ queryKey: platformAdminQueryKeys.menuSettings });
       queryClient.invalidateQueries({ queryKey: platformAdminQueryKeys.menuSetting(project) });
       queryClient.invalidateQueries({ queryKey: ['menu-config', project] });
+    },
+  });
+}
+
+export function usePlatformAdminUserAccess() {
+  return useQuery<RestrictedUserAccess[]>({
+    queryKey: platformAdminQueryKeys.userAccess,
+    queryFn: async () => {
+      const data = await platformAdminFetch<RestrictedUserAccessListResponse>('/api/platform-admin/user-access');
+      return data.entries;
+    },
+    staleTime: 30_000,
+  });
+}
+
+export function usePlatformAdminUserAccessRoles() {
+  return useQuery<RoleWithPermissions[]>({
+    queryKey: platformAdminQueryKeys.userAccessRoles,
+    queryFn: async () => {
+      const data = await platformAdminFetch<{ roles: RoleWithPermissions[] }>('/api/platform-admin/user-access/roles');
+      return data.roles;
+    },
+    staleTime: 60_000,
+  });
+}
+
+export function useCreatePlatformAdminUserAccess() {
+  const queryClient = useQueryClient();
+  return useMutation<RestrictedUserAccess, Error, CreateRestrictedUserAccessRequest>({
+    mutationFn: (body) =>
+      platformAdminFetch<RestrictedUserAccess>('/api/platform-admin/user-access', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: platformAdminQueryKeys.userAccess });
+    },
+  });
+}
+
+export function useUpdatePlatformAdminUserAccess() {
+  const queryClient = useQueryClient();
+  return useMutation<RestrictedUserAccess, Error, { id: string } & UpdateRestrictedUserAccessRequest>({
+    mutationFn: ({ id, ...body }) =>
+      platformAdminFetch<RestrictedUserAccess>(`/api/platform-admin/user-access/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: platformAdminQueryKeys.userAccess });
+    },
+  });
+}
+
+export function useDeletePlatformAdminUserAccess() {
+  const queryClient = useQueryClient();
+  return useMutation<void, Error, { id: string }>({
+    mutationFn: ({ id }) =>
+      platformAdminFetch<void>(`/api/platform-admin/user-access/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: platformAdminQueryKeys.userAccess });
     },
   });
 }

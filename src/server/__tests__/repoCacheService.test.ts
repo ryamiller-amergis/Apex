@@ -30,6 +30,7 @@ jest.mock('../services/repoCacheLeaseService', () => ({
 import {
   COLD_CACHE_TIMEOUT_MS,
   ensureRepoCache,
+  fetchRepositoryTip,
   getRepoCacheDir,
   repairRepoCache,
   resolveGitRemote,
@@ -382,5 +383,20 @@ describe('repoCacheService', () => {
       expect.stringContaining('.tmp-'),
       { recursive: true, force: true },
     );
+  });
+
+  // VT-09 — fetchRepositoryTip refuses missing mirror (no cold clone)
+  it('VT-09: fetchRepositoryTip errors when mirror is missing and never cold-clones', async () => {
+    mockFs.existsSync.mockReturnValue(false);
+
+    await expect(fetchRepositoryTip({
+      provider: 'ado',
+      project: 'MaxView',
+      repo: 'MaxView',
+      branch: 'development',
+    })).rejects.toThrow(/must Clone/i);
+
+    expect(mockGit.mock.calls.some(([args]) => (args as string[]).includes('clone'))).toBe(false);
+    expect(mockWithLease).not.toHaveBeenCalled();
   });
 });

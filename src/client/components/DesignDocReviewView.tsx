@@ -45,6 +45,10 @@ import { RunGroundingStatus } from './RunGroundingStatus';
 import type { ContentSnapshot, GapChangeEntry } from './FixValidationPanel';
 import type { DesignDocStatus, ValidationScorecardGap, ValidationScorecard, ValidationScorecardFeature } from '../../shared/types/interview';
 import {
+  collectValidationGaps,
+  designDocFeatureSectionScore,
+} from '../../shared/utils/validationReport';
+import {
   designDocHasProposedChanges,
   isDesignDocSingleCommentFixPending,
 } from '../utils/apexFixHelpers';
@@ -814,13 +818,17 @@ const ValidationSidePanel: React.FC<ValidationSidePanelProps> = ({
   const [reportExpanded, setReportExpanded] = useState(false);
 
   const features: ValidationScorecardFeature[] = scorecard?.features ?? [];
-  const allGaps: ValidationScorecardGap[] = features.flatMap((f) => f.gaps);
+  const allGaps: ValidationScorecardGap[] = collectValidationGaps(scorecard);
   const pendingCount = allGaps.filter((g) => g.resolution === 'pending').length;
 
-  const avgSection = (key: 'design_score' | 'tech_spec_score' | 'assumptions_score') =>
-    features.length
-      ? Math.round(features.reduce((sum, f) => sum + f[key], 0) / features.length)
-      : null;
+  const avgSection = (key: 'design_score' | 'tech_spec_score' | 'assumptions_score') => {
+    if (!features.length) return null;
+    const scores = features
+      .map((f) => designDocFeatureSectionScore(f as unknown as Record<string, unknown>, key))
+      .filter((n): n is number => n !== null);
+    if (!scores.length) return null;
+    return Math.round(scores.reduce((sum, n) => sum + n, 0) / scores.length);
+  };
 
   const sectionRows: Array<{ label: string; key: 'design_score' | 'tech_spec_score' | 'assumptions_score' }> = [
     { label: 'Design', key: 'design_score' },
@@ -896,19 +904,26 @@ const ValidationSidePanel: React.FC<ValidationSidePanelProps> = ({
               <div className={styles.valPanelSectionLabel}>
                 Gaps{pendingCount > 0 ? ` · ${pendingCount} pending` : ''}
               </div>
-              {features.map((feature) =>
-                feature.gaps.map((gap) => (
+              {allGaps.map((gap) => {
+                const featureTitle =
+                  features.find((f) => Array.isArray(f.gaps) && f.gaps.some((g) => g.id === gap.id))
+                    ?.feature_title
+                  ?? (features[0] as { feature_title?: string; name?: string } | undefined)?.feature_title
+                  ?? (features[0] as { name?: string } | undefined)?.name
+                  ?? gap.file
+                  ?? 'Feature';
+                return (
                   <div key={gap.id} className={`${styles.valPanelGapCard} ${gap.resolution === 'pending' ? styles.valPanelGapCardPending : styles.valPanelGapCardResolved}`}>
                     <div className={styles.valPanelGapCardHeader}>
                       <span className={`${styles.valPanelGapDot} ${gapResolutionDot(gap.resolution)}`} />
                       <span className={styles.valPanelGapDesc}>{gap.description}</span>
                     </div>
                     <div className={styles.valPanelGapMeta}>
-                      {feature.feature_title} · {gap.section} · {gap.score}/3
+                      {featureTitle} · {gap.section} · {gap.score}/3
                     </div>
                   </div>
-                ))
-              )}
+                );
+              })}
             </div>
           )}
 
@@ -1399,13 +1414,17 @@ export const DesignDocReviewView: React.FC = () => {
 
     const sectionLabels = { 'design': 'Design', 'tech-spec': 'Tech Spec', 'assumptions': 'Assumptions' } as const;
     const mapGapSection = (gap: ValidationScorecardGap): 'design' | 'tech-spec' | 'assumptions' => {
+      const file = (gap.file ?? '').toLowerCase();
+      if (file.includes('tech') || file === 'tech-spec' || file === 'tech_spec') return 'tech-spec';
+      if (file.includes('assumption')) return 'assumptions';
+      if (file.includes('design')) return 'design';
       const s = gap.section.toLowerCase();
       if (s.includes('tech') || s.includes('spec')) return 'tech-spec';
       if (s.includes('assumption')) return 'assumptions';
       return 'design';
     };
 
-    const allGaps = doc?.validationScorecard?.features?.flatMap((f) => f.gaps) ?? [];
+    const allGaps = collectValidationGaps(doc?.validationScorecard);
     const sectionGaps = allGaps.filter((g) => mapGapSection(g) === section);
     const sectionGapIds = new Set(sectionGaps.map((g) => g.id));
     const allGapChanges = (fixFlow.phase === 'reviewing' || fixFlow.phase === 'discussing')
@@ -1894,16 +1913,8 @@ export const DesignDocReviewView: React.FC = () => {
     fixFlow.phase === 'idle' &&
     !isFixWithApexBusy;
 
-  const pendingGapCount = (() => {
-    if (!doc.validationScorecard?.features) return 0;
-    let count = 0;
-    for (const f of doc.validationScorecard.features) {
-      for (const g of f.gaps) {
-        if (g.resolution === 'pending') count++;
-      }
-    }
-    return count;
-  })();
+  const pendingGapCount = collectValidationGaps(doc.validationScorecard)
+    .filter((g) => g.resolution === 'pending').length;
 
   const bannerSeverity: 'amber' | 'red' =
     doc.validationScore !== null && doc.validationScore !== undefined && doc.validationScore < 70 ? 'red' : 'amber';

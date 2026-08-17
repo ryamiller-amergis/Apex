@@ -16,11 +16,13 @@ import {
   isPrdWatcherActive,
   isPrdValidationWatcherActive,
   rehydratePrdValidationWatcher,
+  routePrdGenerationKickoff,
 } from './prdService';
 import {
   startSingleFeatureDocWatcher,
   startValidationWatcher,
   isValidationWatcherActive,
+  routeDesignDocGenerationKickoff,
 } from './designDocService';
 import { startTestCaseWatcher, isTestCaseWatcherActive } from './testCaseService';
 import { failStalePrototypes } from './designPrototypeService';
@@ -39,6 +41,7 @@ import {
 const RECOVERY_INTERVAL_MS = 60_000;
 const SHUTDOWN_GRACE_MS = 10_000;
 const DEFAULT_SETUP_TIMEOUT_MS = 15 * 60_000;
+const GENERATION_RECOVERY_GRACE_MS = DEFAULT_SETUP_TIMEOUT_MS;
 /**
  * How long a design prototype may sit in `generating`/`regenerating` before the
  * recovery loop treats it as orphaned. Set well above the maximum configurable Bedrock timeout
@@ -51,6 +54,63 @@ let recoveryTimer: ReturnType<typeof setInterval> | null = null;
 function positiveDuration(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export function isGenerationRecoveryStale(
+  updatedAt: string,
+  nowMs = Date.now(),
+  graceMs = GENERATION_RECOVERY_GRACE_MS,
+): boolean {
+  const updatedAtMs = Date.parse(updatedAt);
+  return Number.isFinite(updatedAtMs) && nowMs - updatedAtMs >= graceMs;
+}
+
+async function claimPrdGenerationRecovery(
+  id: string,
+  expectedUpdatedAt: string,
+): Promise<boolean> {
+  const claimedAt = new Date().toISOString();
+  const claimed = await db.update(prds)
+    .set({ updatedAt: claimedAt })
+    .where(and(
+      eq(prds.id, id),
+      eq(prds.status, 'generating'),
+      eq(prds.updatedAt, expectedUpdatedAt),
+    ))
+    .returning({ id: prds.id });
+  return claimed.length === 1;
+}
+
+async function claimDesignDocGenerationRecovery(
+  id: string,
+  expectedUpdatedAt: string,
+): Promise<boolean> {
+  const claimedAt = new Date().toISOString();
+  const claimed = await db.update(designDocs)
+    .set({ updatedAt: claimedAt })
+    .where(and(
+      eq(designDocs.id, id),
+      eq(designDocs.status, 'generating'),
+      eq(designDocs.updatedAt, expectedUpdatedAt),
+    ))
+    .returning({ id: designDocs.id });
+  return claimed.length === 1;
+}
+
+async function claimTestCaseGenerationRecovery(
+  id: string,
+  expectedUpdatedAt: string,
+): Promise<boolean> {
+  const claimedAt = new Date().toISOString();
+  const claimed = await db.update(testCases)
+    .set({ updatedAt: claimedAt })
+    .where(and(
+      eq(testCases.id, id),
+      eq(testCases.status, 'generating'),
+      eq(testCases.updatedAt, expectedUpdatedAt),
+    ))
+    .returning({ id: testCases.id });
+  return claimed.length === 1;
 }
 
 export interface StaleSetupRecoveryOptions {
@@ -166,7 +226,14 @@ export async function recoverInFlightWork(): Promise<void> {
 
   const generatingPrds = await db.query.prds.findMany({
     where: eq(prds.status, 'generating'),
-    columns: { id: true, chatThreadId: true },
+    columns: {
+      id: true,
+      chatThreadId: true,
+      interviewId: true,
+      project: true,
+      authorId: true,
+      updatedAt: true,
+    },
   });
   for (const prd of generatingPrds) {
     if (!prd.chatThreadId) continue;
@@ -176,6 +243,38 @@ export async function recoverInFlightWork(): Promise<void> {
       startPrdWatcher(prd.id, prd.chatThreadId);
       recovered++;
       console.log(`[recovery] Restarted PRD watcher (prdId=${prd.id})`);
+
+      // A worker run is created only after grounding preparation. Give a live
+      // preparation a bounded lease, then atomically claim stale rows so rolling
+      // or multi-instance recovery cannot start duplicate materializations.
+      const existingRun = await db.query.agentRuns.findFirst({
+        where: eq(agentRuns.threadId, prd.chatThreadId),
+        columns: { id: true },
+      });
+      if (
+        !existingRun
+        && isThreadIdle(prd.chatThreadId)
+        && isGenerationRecoveryStale(prd.updatedAt)
+        && prd.interviewId
+        && prd.authorId
+        && prd.project
+        && await claimPrdGenerationRecovery(prd.id, prd.updatedAt)
+      ) {
+        void routePrdGenerationKickoff({
+          prdId: prd.id,
+          userId: prd.authorId,
+          project: prd.project,
+          threadId: prd.chatThreadId,
+          interviewId: prd.interviewId,
+          kickoffMessage: 'Begin.',
+        }).catch((err: unknown) => {
+          console.error(
+            `[recovery] Failed to re-kick PRD generation (prdId=${prd.id}):`,
+            err,
+          );
+        });
+        console.log(`[recovery] Re-kicked PRD generation (prdId=${prd.id})`);
+      }
     } else {
       console.warn(
         `[recovery] Could not hydrate thread for PRD (prdId=${prd.id}, threadId=${prd.chatThreadId})`
@@ -191,6 +290,8 @@ export async function recoverInFlightWork(): Promise<void> {
       prdId: true,
       project: true,
       designPrototypeId: true,
+      authorId: true,
+      updatedAt: true,
     },
   });
   for (const doc of generatingDocs) {
@@ -202,6 +303,41 @@ export async function recoverInFlightWork(): Promise<void> {
       console.log(
         `[recovery] Restarted design doc watcher (designDocId=${doc.id})`
       );
+
+      // Do not mistake slow grounding preparation for an orphan. The timestamp
+      // grace is the preparation lease; the compare-and-set claim ensures that
+      // only one App Service instance may recover an expired lease.
+      const existingRun = await db.query.agentRuns.findFirst({
+        where: eq(agentRuns.threadId, doc.chatThreadId),
+        columns: { id: true },
+      });
+      if (
+        !existingRun
+        && isThreadIdle(doc.chatThreadId)
+        && isGenerationRecoveryStale(doc.updatedAt)
+        && doc.prdId
+        && doc.authorId
+        && doc.project
+        && await claimDesignDocGenerationRecovery(doc.id, doc.updatedAt)
+      ) {
+        void Promise.resolve(
+          routeDesignDocGenerationKickoff({
+            designDocId: doc.id,
+            prdId: doc.prdId,
+            userId: doc.authorId,
+            project: doc.project,
+            threadId: doc.chatThreadId,
+            kickoffMessage:
+              `Generate the design doc. This is a non-interactive generation task — do not ask questions. Write all three output files (\`design-doc-design.md\`, \`design-doc-tech-spec.md\`, \`design-doc-assumptions.md\`) to \`.ai-pilot/output/\`.`,
+          }),
+        ).catch((err: unknown) => {
+          console.error(
+            `[recovery] Failed to re-kick design doc generation (designDocId=${doc.id}):`,
+            err,
+          );
+        });
+        console.log(`[recovery] Re-kicked design doc generation (designDocId=${doc.id})`);
+      }
     } else {
       console.warn(
         `[recovery] Could not hydrate thread for design doc (designDocId=${doc.id}, threadId=${doc.chatThreadId})`
@@ -269,7 +405,7 @@ export async function recoverInFlightWork(): Promise<void> {
 
   const generatingTestCases = await db.query.testCases.findMany({
     where: eq(testCases.status, 'generating'),
-    columns: { id: true, prdId: true, chatThreadId: true },
+    columns: { id: true, prdId: true, chatThreadId: true, updatedAt: true },
   });
 
   // ── PRD validation threads stuck in 'validating' ──────────────────────────
@@ -334,7 +470,12 @@ export async function recoverInFlightWork(): Promise<void> {
         `[recovery] Restarted test-case watcher (testCaseId=${testCase.id}, prdId=${testCase.prdId})`
       );
 
-      if (isThreadIdle(testCase.chatThreadId)) {
+      if (
+        isThreadIdle(testCase.chatThreadId)
+        && !(await isThreadRunAlive(testCase.chatThreadId))
+        && isGenerationRecoveryStale(testCase.updatedAt)
+        && await claimTestCaseGenerationRecovery(testCase.id, testCase.updatedAt)
+      ) {
         sendMessage(
           testCase.chatThreadId,
           'Generate QA test cases for the provided PRD and backlog. Use the configured skill instructions and write the required output files.',

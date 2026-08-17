@@ -21,6 +21,7 @@ import { resolveSkillConfig, getSkillSettingsName } from './projectSettingsServi
 import { getDefaultModel } from './appSettingsService';
 import { getPrd } from './prdService';
 import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
+import { collectValidationGaps } from '../../shared/utils/validationReport';
 import {
   propagatePipelineGrounding,
   resolveRunGroundingSurface,
@@ -198,26 +199,11 @@ export async function createDesignDoc(opts: {
     );
   }
 
-  if (opts.chatThreadId) {
-    try {
-      const upstream = await resolveRunGroundingSurface('prd', opts.prdId);
-      if (upstream) {
-        await propagatePipelineGrounding(
-          upstream.run,
-          {
-            runType: 'chat',
-            runId: opts.chatThreadId,
-            project: opts.project,
-          },
-          opts.userId,
-        );
-      }
-    } catch {
-      console.warn(
-        `[run-grounding] Design Doc propagation unavailable (designDocId=${row.id})`,
-      );
-    }
-  }
+  // Insert only — never await grounding/materialization here. Callers start the
+  // watcher and fire routeDesignDocGenerationKickoff after this returns; blocking
+  // on cold checkout left design docs stuck in "generating" with no agent_runs.
+  // Grounding lives in routeDesignDocGenerationKickoff.prepareWorker (prdId /
+  // sourceThreadId).
 
   return { designDocId: row.id };
 }
@@ -286,6 +272,7 @@ export async function routeDesignDocGenerationKickoff(opts: {
                 sourceRun,
                 destinationRun,
                 opts.userId,
+                { deferMaterialization: true },
               );
             } catch {
               console.warn(
@@ -300,20 +287,14 @@ export async function routeDesignDocGenerationKickoff(opts: {
 
         return { ...prepared, targetGrounding };
       },
-      runInProcess: () => {
-        void sendMessage(
+      runInProcess: () =>
+        sendMessage(
           opts.threadId,
           opts.kickoffMessage,
           undefined,
           [],
           { hidden: true },
-        ).catch((err: Error) => {
-          console.error(
-            `[designDoc] Failed to kick off generation (designDocId=${opts.designDocId}, threadId=${opts.threadId}):`,
-            err.message,
-          );
-        });
-      },
+        ),
       reportRecoverablePreparationFailure: reportPreparationFailure,
     });
   } catch {
@@ -788,8 +769,18 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
       `[designDocWatcher] tick #${attempts} — found=${features.length} created=${createdSlugs.size} (seedDocId=${seedDocId})`,
     );
 
-    // Create rows for any newly complete features
-    const newFeatures = features.filter((f) => !createdSlugs.has(f.slug));
+    // Create rows only after the agent run is finished. Creating from filesystem
+    // while the run is still alive lets leftover shared-checkout triplets promote
+    // feature docs before the current generation completes.
+    const agentFinished = isThreadIdle(chatThreadId) && !(await isThreadRunAlive(chatThreadId));
+    const newFeatures = agentFinished
+      ? features.filter((f) => !createdSlugs.has(f.slug))
+      : [];
+    if (!agentFinished && features.length > 0) {
+      console.log(
+        `[designDocWatcher] Feature files present but run still alive — deferring row creation (seedDocId=${seedDocId})`,
+      );
+    }
     if (newFeatures.length > 0) {
       try {
         const skillConfig = await resolveSkillConfig({ project: seedDoc.project, settingsId: seedDoc.skillSettingsId ?? undefined });
@@ -847,7 +838,6 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
     // check, non-owner recovery watchers treat hydrated threads as idle and
     // clean up mid-generation. Without the idle check, slow agents that write
     // features one-by-one will trigger a premature "stable" detection.
-    const agentFinished = isThreadIdle(chatThreadId) && !(await isThreadRunAlive(chatThreadId));
     const allDone = agentFinished && createdSlugs.size > 0 && currentSlugsKey === prevFoundSlugsKey && currentSlugsKey !== '';
     prevFoundSlugsKey = currentSlugsKey;
 
@@ -1031,21 +1021,32 @@ export function startSingleFeatureDocWatcher(
     const design = readOutputDesignDoc(chatThreadId);
     const techSpec = readOutputTechSpec(chatThreadId);
     const assumptions = readOutputAssumptions(chatThreadId);
+    const filesReady = Boolean(design && techSpec && assumptions);
+    const agentFinished = isThreadIdle(chatThreadId) && !(await isThreadRunAlive(chatThreadId));
 
     console.log(
-      `[singleFeatureDocWatcher] tick #${attempts} — design=${!!design} techSpec=${!!techSpec} assumptions=${!!assumptions} (designDocId=${designDocId})`,
+      `[singleFeatureDocWatcher] tick #${attempts} — design=${!!design} techSpec=${!!techSpec} assumptions=${!!assumptions} agentFinished=${agentFinished} (designDocId=${designDocId})`,
     );
 
-    if (design && techSpec && assumptions) {
+    // Success finalize only after the run is terminal — leftover workspace files
+    // must not promote the doc while generation is still in flight.
+    if (filesReady && agentFinished) {
       clearInterval(interval);
       activeDocWatchers.delete(designDocId);
       await finalizeSingleFeatureDoc(designDocId, chatThreadId, project);
       return;
     }
 
+    if (filesReady && !agentFinished) {
+      console.log(
+        `[singleFeatureDocWatcher] Output files present but run still alive — waiting (designDocId=${designDocId})`,
+      );
+      return;
+    }
+
     // Fail only when the run is dead across instances — in-memory idle alone is
     // unreliable after hydrateThread resets status on non-owner workers.
-    if (isThreadIdle(chatThreadId) && !(await isThreadRunAlive(chatThreadId))) {
+    if (agentFinished) {
       if (!(await canThisInstanceFailGeneration(chatThreadId))) {
         // Keep polling — do NOT clear the interval. Clearing here permanently
         // abandoned docs in `generating` when a non-owner recovery watcher saw a
@@ -1209,6 +1210,7 @@ export async function startSingleFeatureDesignDocWatcher(
       skillPath: skillConfig?.designDocSkillPath ?? undefined,
       freeformContext,
       model,
+      skillSettingsId: prd.skillSettingsId ?? null,
     },
     { skipAutoKickoff: true },
   );
@@ -1235,13 +1237,24 @@ export async function startSingleFeatureDesignDocWatcher(
   startSingleFeatureDocWatcher(designDocId, thread.id, prdId, prd.project);
 
   // Now safe to start the agent — the row and watcher are in place.
+  // Fire-and-forget kickoff so prototype approval / auto-start isn't blocked on
+  // grounding materialization (same pattern as PRD create).
   const kickoffMessage = `Generate the design doc for the single feature "${featureName}" using the PRD, interview transcript, and prototype provided in \`.ai-pilot/kickoff-context.md\`. This is a non-interactive generation task — do not ask questions. Write all three output files (\`design-doc-design.md\`, \`design-doc-tech-spec.md\`, \`design-doc-assumptions.md\`) to \`.ai-pilot/output/\`.`;
-  await routeDesignDocGenerationKickoff({
-    designDocId,
-    userId: prd.authorId,
-    project: prd.project,
-    threadId: thread.id,
-    kickoffMessage,
+  void Promise.resolve(
+    routeDesignDocGenerationKickoff({
+      designDocId,
+      prdId,
+      sourceThreadId: prd.chatThreadId ?? null,
+      userId: prd.authorId,
+      project: prd.project,
+      threadId: thread.id,
+      kickoffMessage,
+    }),
+  ).catch((err: unknown) => {
+    console.error(
+      `[designDoc] Kickoff failed (docId=${designDocId}, prototypeId=${prototypeId}):`,
+      err,
+    );
   });
 
   const { propagateDesignDocApprovers } = await import('./documentApprovalService');
@@ -1357,6 +1370,7 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
     skillPath: skillConfig.designDocValidationSkillPath,
     freeformContext: context,
     model,
+    skillSettingsId: doc.skillSettingsId ?? skillConfig.id ?? null,
   }, { skipAutoKickoff: true });
 
 
@@ -1422,6 +1436,7 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
               },
               destinationRun,
               doc.authorId,
+              { deferMaterialization: true },
             );
           } catch {
             console.warn(
@@ -1557,7 +1572,7 @@ export function generateFallbackReport(scorecard: ValidationScorecard): string {
     }
     lines.push('');
 
-    const allGaps = scorecard.features!.flatMap((f) => f.gaps.filter((g) => g.resolution === 'pending'));
+    const allGaps = scorecard.features!.flatMap((f) => (f.gaps ?? []).filter((g) => g.resolution === 'pending'));
     if (allGaps.length > 0) {
       lines.push('## Open Gaps', '');
       for (const gap of allGaps) {
@@ -1878,15 +1893,18 @@ export async function triggerFixValidation(
 
   // Group pending gaps by section so the AI can address each section systematically
   const gapsBySection: Record<string, ValidationScorecardGap[]> = {};
-  for (const f of (scorecard.features ?? [])) {
-    for (const g of f.gaps) {
-      if (g.resolution !== 'pending') continue;
-      const sec = g.section.toLowerCase();
-      const key = sec.includes('tech') || sec.includes('spec') ? 'tech-spec'
-        : sec.includes('assumption') ? 'assumptions'
-        : 'design';
-      (gapsBySection[key] ??= []).push(g);
-    }
+  for (const g of collectValidationGaps(scorecard)) {
+    if (g.resolution !== 'pending') continue;
+    const file = (g.file ?? '').toLowerCase();
+    const sec = (g.section ?? '').toLowerCase();
+    const key =
+      file.includes('tech') || file === 'tech-spec' || file === 'tech_spec'
+      || sec.includes('tech') || sec.includes('spec')
+        ? 'tech-spec'
+        : file.includes('assumption') || sec.includes('assumption')
+          ? 'assumptions'
+          : 'design';
+    (gapsBySection[key] ??= []).push(g);
   }
 
   const sectionBlocks: string[] = [];

@@ -21,7 +21,10 @@ import {
   hasCachedCommit as hasCachedCommitInRepoCache,
   readCachedOriginSha as readCachedOriginShaFromRepoCache,
 } from './repoCacheService';
-import { isFeatureEnabled as evaluateFeatureFlag } from './featureFlagService';
+import {
+  isFeatureEnabled as evaluateFeatureFlag,
+  isProjectRepositoryCheckoutReadinessEnabled,
+} from './featureFlagService';
 import { materializeRunGrounding } from './runGroundingMaterializer';
 import { emitGroundingActiveSetChanged } from './groundingMaintenanceEvents';
 import { groundingStalenessService } from './groundingStalenessService';
@@ -29,6 +32,10 @@ import {
   groundingTelemetry,
   type GroundingTelemetry,
 } from './groundingTelemetry';
+import {
+  materializeLinkedContextForPipelineHandoff,
+} from './linkedContextMaterializerService';
+import { trackEvent } from './telemetry';
 
 export type RepositoryGroundingPin = Pick<
   CreateRunGroundingInput,
@@ -59,7 +66,7 @@ export type GroundingMaterializationState = 'materialized' | 'unavailable';
 
 export interface CopyGroundingByValueResult {
   grounding: RunGrounding | null;
-  materialization: GroundingMaterializationState;
+  materialization: GroundingMaterializationState | 'deferred';
 }
 
 export interface ResolvedRunGroundingSurface {
@@ -297,16 +304,49 @@ export async function propagatePipelineGrounding(
   options: {
     service?: RunGroundingService;
     isFeatureEnabled?: typeof evaluateFeatureFlag;
+    isCheckoutReadinessEnabled?: typeof isProjectRepositoryCheckoutReadinessEnabled;
+    propagateLinkedContext?: typeof materializeLinkedContextForPipelineHandoff;
+    deferMaterialization?: boolean;
+    trackEvent?: typeof trackEvent;
   } = {}
 ): Promise<CopyGroundingByValueResult | null> {
-  const enabled = await (options.isFeatureEnabled ?? evaluateFeatureFlag)(
+  try {
+    await (
+      options.propagateLinkedContext ??
+      materializeLinkedContextForPipelineHandoff
+    )(from, to, userId);
+  } catch (error) {
+    const errorName = error instanceof Error ? error.name : 'Error';
+    console.warn(
+      `[linked-context] pipeline propagation unavailable error=${errorName}`,
+    );
+  }
+
+  const evaluate = options.isFeatureEnabled ?? evaluateFeatureFlag;
+  const workspaceProfileEnabled = await evaluate(
     'repo-grounding-workspace-profile',
     { userId, project: to.project }
   );
 
-  // Retain the enabled branch after two stable sprints at full rollout.
+  let checkoutReadinessEnabled = false;
+  try {
+    checkoutReadinessEnabled = await (
+      options.isCheckoutReadinessEnabled ??
+      isProjectRepositoryCheckoutReadinessEnabled
+    )({
+      userId,
+      project: to.project,
+      caller: 'pipeline-propagate',
+    });
+  } catch {
+    checkoutReadinessEnabled = false;
+  }
+
+  // Propagation runs when legacy workspace-profile OR admin-managed checkout
+  // readiness is ON (winning SHA copy inlined under the new flag).
+  // @feature-flag:project-repository-checkout-readiness start winner=enabled
   // @feature-flag:repo-grounding-workspace-profile start winner=enabled
-  if (!enabled) {
+  if (!workspaceProfileEnabled && !checkoutReadinessEnabled) {
     // @feature-flag:repo-grounding-workspace-profile disabled-start
     const disabledResult = null;
     // @feature-flag:repo-grounding-workspace-profile disabled-end
@@ -314,16 +354,48 @@ export async function propagatePipelineGrounding(
   }
 
   // @feature-flag:repo-grounding-workspace-profile enabled-start
-  const result = await (
-    options.service ?? runGroundingService
-  ).copyGroundingByValue(from, to, 'target');
-  if (result.grounding && result.materialization === 'unavailable') {
-    console.warn(
-      `[run-grounding] downstream materialization unavailable ` +
-        `runType=${to.runType} runId=${to.runId}`,
-    );
+  // @feature-flag:project-repository-checkout-readiness enabled-start
+  const service = options.service ?? runGroundingService;
+  const emit = options.trackEvent ?? trackEvent;
+  let result: CopyGroundingByValueResult;
+  if (options.deferMaterialization) {
+    const grounding = await service.copyGrounding(from, to, 'target');
+    result = {
+      grounding,
+      materialization: grounding ? 'deferred' : 'unavailable',
+    };
+  } else {
+    result = await service.copyGroundingByValue(from, to, 'target');
+    if (result.grounding && result.materialization === 'unavailable') {
+      console.warn(
+        `[run-grounding] downstream materialization unavailable ` +
+          `runType=${to.runType} runId=${to.runId}`,
+      );
+    }
   }
+
+  if (result.grounding) {
+    try {
+      emit(
+        'grounding.pin_inherited',
+        {
+          outcome: 'success',
+          project: to.project,
+          runId: to.runId,
+          runType: to.runType,
+          fromRunId: from.runId,
+          fromRunType: from.runType,
+          sha: result.grounding.groundedSha.slice(0, 12),
+        },
+        { pinCount: 1 },
+      );
+    } catch {
+      // Telemetry must never block pipeline handoff.
+    }
+  }
+  // @feature-flag:project-repository-checkout-readiness enabled-end
   // @feature-flag:repo-grounding-workspace-profile enabled-end
+  // @feature-flag:project-repository-checkout-readiness end
   // @feature-flag:repo-grounding-workspace-profile end
   return result;
 }

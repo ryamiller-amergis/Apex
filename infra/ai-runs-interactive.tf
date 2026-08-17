@@ -73,6 +73,14 @@ resource "azapi_resource" "ai_runs_interactive_redis" {
 
   response_export_values = ["properties.hostName"]
   tags                   = merge(var.tags, { Environment = var.environment, Workload = "ai-runs-interactive" })
+
+  # The backplane holds no durable data (durability rides Postgres
+  # agent_run_events), but the clustering policy is immutable — switching it
+  # replaces the database. Provision the replacement BEFORE destroying the old
+  # instance so the cutover has no downtime (requires a distinct redis name).
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "azapi_resource" "ai_runs_interactive_redis_database" {
@@ -86,11 +94,15 @@ resource "azapi_resource" "ai_runs_interactive_redis_database" {
     properties = {
       accessKeysAuthentication = "Enabled"
       clientProtocol           = "Encrypted"
-      clusteringPolicy         = "OSSCluster"
+      clusteringPolicy         = var.ai_runs_interactive_managed_redis_clustering_policy
       evictionPolicy           = "VolatileLRU"
       modules                  = []
       port                     = 10000
     }
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 }
 
@@ -287,6 +299,13 @@ resource "azurerm_container_app" "ai_runs_interactive" {
       env {
         name  = "APEX_CALLBACK_URL"
         value = var.ai_runs_apex_callback_base_url
+      }
+      # Reuse the shared App Insights resource — same connection string as the
+      # Apex App Service. Enables interactive.stage / first-token telemetry from
+      # the actor host without a new secret or feature flag.
+      env {
+        name  = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+        value = azurerm_application_insights.main.connection_string
       }
       env {
         name  = "AZURE_CLIENT_ID"

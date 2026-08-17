@@ -253,6 +253,24 @@ describe('enqueue + frozen snapshot (PBI-001 AC-0 / AC-3 / VT-01 / VT-04 / DoD-2
     expect(stored.prompt).toBe('generate design doc');
   });
 
+  it('freezes optional checkoutRef on enqueue for thin shared-read snapshots', async () => {
+    await enqueue({
+      threadId: 'thread-1',
+      projectId: 'proj-1',
+      snapshot: {
+        ...snapshot,
+        workspaceRef: 'C:\\threads\\thread-1',
+        checkoutRef: 'C:\\shared\\grounding-shared\\sha',
+      },
+      timeoutAt: '2026-08-05T14:00:00.000Z',
+      runId: 'run-thin-1',
+    });
+    const stored = (mockInsertValues.mock.calls[0][0] as { executionSnapshot: ExecutionSnapshot })
+      .executionSnapshot;
+    expect(stored.workspaceRef).toBe('C:\\threads\\thread-1');
+    expect(stored.checkoutRef).toBe('C:\\shared\\grounding-shared\\sha');
+  });
+
   it('TBI-002 DoD-0: Given admission fails after insert, when enqueue returns, then the durable queued run is preserved', async () => {
     mockRunAdmissionCycle.mockRejectedValueOnce(new Error('admission unavailable'));
 

@@ -6,6 +6,7 @@ import { useProjectMenuConfig } from './useProjectMenuConfig';
 import { useWhatsNewState } from './useWhatsNewState';
 import { env } from '../config/env';
 import type { WorkItem } from '../types/workitem';
+import type { MenuItemKey } from '../../shared/types/menuSettings';
 import type { MyPermissionsResponse } from '../../shared/types/rbac';
 import type { WhatsNewState } from '../../shared/types/whatsNew';
 
@@ -75,6 +76,8 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
   const [groups, setGroups] = useState<string[]>([]);
   const [userId, setUserId] = useState<string>('');
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const [isRestricted, setIsRestricted] = useState(false);
+  const [restrictedModules, setRestrictedModules] = useState<MenuItemKey[]>([]);
   const [permissionsLoaded, setPermissionsLoaded] = useState(false);
   const [selectedItem, setSelectedItem] = useState<WorkItem | null>(null);
   const [theme, setTheme] = useState<ThemeMode>(() => {
@@ -151,6 +154,9 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
           setUserId(d.userId ?? '');
           setIsSuperAdmin(d.isSuperAdmin ?? false);
           setBetaAnnouncementDismissed(d.betaAnnouncementDismissed);
+          const restricted = d.restrictedAccess ?? null;
+          setIsRestricted(Boolean(restricted));
+          setRestrictedModules(restricted?.modules ?? []);
           // Capture What's New once per authenticated session (no project re-eval).
           if (!whatsNewCapturedRef.current) {
             whatsNewCapturedRef.current = true;
@@ -350,6 +356,8 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
     can,
     isInAnyGroup,
     isSuperAdmin,
+    isRestricted,
+    restrictedModules,
     isAdmin: isSuperAdmin || roles.includes('admin'),
     workItems,
     usesBoardWorkItems,

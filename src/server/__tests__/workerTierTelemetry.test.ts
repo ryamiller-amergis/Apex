@@ -88,13 +88,14 @@ describe('TBI-008 DoD-2 / VT-09 worker-tier telemetry vocabulary', () => {
 });
 
 describe('TBI-008 DoD-3 / security NFR / VT-09 sanitizer', () => {
-  it('allowlists exactly the five approved structured property keys', () => {
+  it('allowlists exactly the six approved structured property keys', () => {
     expect([...SAFE_PROPERTY_KEYS]).toEqual([
       'runId',
       'dispatchMessageId',
       'project',
       'lane',
       'terminalReason',
+      'stage',
     ]);
   });
 
@@ -105,6 +106,7 @@ describe('TBI-008 DoD-3 / security NFR / VT-09 sanitizer', () => {
       project: 'Apex',
       lane: 'default',
       terminalReason: 'cancelled',
+      stage: 'agent_cache_hit',
       prompt: 'private prompt content',
       executionSnapshot: '{"prompt":"private"}',
       snapshot: 'private snapshot content',
@@ -121,7 +123,17 @@ describe('TBI-008 DoD-3 / security NFR / VT-09 sanitizer', () => {
       project: 'Apex',
       lane: 'default',
       terminalReason: 'cancelled',
+      stage: 'agent_cache_hit',
     });
+  });
+
+  it('drops free-form stage values outside the interactive stage allowlist', () => {
+    expect(
+      sanitizeWorkerTierTelemetryProperties({
+        lane: 'ai-runs-interactive',
+        stage: 'not_a_real_stage',
+      }),
+    ).toEqual({ lane: 'ai-runs-interactive' });
   });
 
   it('drops local paths, Bearer credentials, and API-key-like values in safe fields', () => {

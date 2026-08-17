@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { requirePermission, requireGroupMembership } from '../middleware/rbac';
@@ -6,6 +6,7 @@ import { getDisplayName, getUserId } from '../utils/requestUser';
 import { getAdoTokenForUser } from '../services/adoUserToken';
 import { isAdoUserAuthError } from '../services/adoFactory';
 import { isAdminUser } from '../utils/rbacHelpers';
+import { isSuperAdminRequest } from '../utils/superAdmin';
 import { db } from '../db/drizzle';
 import { eq, and, isNull, sql } from 'drizzle-orm';
 import { designDocs as designDocsTable, chatThreads as chatThreadsTable, prds as prdsTable, reviewComments as reviewCommentsTable, designPrototypes as designPrototypesTable, interviews as interviewsTable, documentApproverAssignments } from '../db/schema';
@@ -19,6 +20,21 @@ import {
   updateInterviewStatus,
   updateInterviewTitle,
 } from '../services/interviewService';
+import {
+  addAdrLink,
+  addDesignModuleLink,
+  getLinkedContext,
+  listCandidates,
+  listProjectCandidates,
+  removeAdrLink,
+  removeDesignModuleLink,
+} from '../services/interviewLinkService';
+import { InterviewLinkError } from '../../shared/types/interviewLinks';
+import type {
+  AddAdrLinkRequest,
+  AddDesignModuleLinkRequest,
+  LinkCandidateType,
+} from '../../shared/types/interviewLinks';
 import { getActiveUsers } from '../services/rbacService';
 import {
   createPrd,
@@ -83,6 +99,11 @@ import {
   triggerTestCaseGeneration,
 } from '../services/testCaseService';
 import { generateFallbackReport as generateFallbackValidationReport } from '../services/documentValidationService';
+import { isProjectRepositoryCheckoutReadinessEnabled } from '../services/featureFlagService';
+import {
+  assertResolvedProjectRepositoryReady,
+  ProjectRepositoryNotReady,
+} from '../services/projectRepositoryReadinessService';
 import type { InterviewStatus, PrdStatus, ReviewPrdRequest, DesignDocStatus, ReviewDesignDocRequest } from '../../shared/types/interview';
 
 const router = Router();
@@ -128,6 +149,31 @@ router.post('/', requirePermission('interviews:manage'), requireGroupMembership(
       res.status(400).json({ error: 'project, repo, and chatThreadId are required' });
       return;
     }
+
+    const readinessEnabled = await isProjectRepositoryCheckoutReadinessEnabled({
+      userId,
+      project,
+      caller: 'interview',
+    });
+    // @feature-flag:project-repository-checkout-readiness start winner=enabled
+    if (readinessEnabled) {
+      // @feature-flag:project-repository-checkout-readiness enabled-start
+      try {
+        await assertResolvedProjectRepositoryReady({
+          project,
+          settingsId: skillSettingsId,
+          surface: 'interview',
+        });
+      } catch (e) {
+        if (e instanceof ProjectRepositoryNotReady) {
+          res.status(409).json(e.toJSON());
+          return;
+        }
+        throw e;
+      }
+      // @feature-flag:project-repository-checkout-readiness enabled-end
+    }
+    // @feature-flag:project-repository-checkout-readiness end
 
     const result = await createInterview({ userId, project, repo, title, chatThreadId, model, skillSettingsId, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds, prototypeStageEnabled, testCasesEnabled });
     res.status(201).json(result);
@@ -218,7 +264,7 @@ router.post('/prds/:prdId/test-cases/generate', requirePermission('interviews:ma
     const { prdId } = req.params;
     const prdRow = await db.query.prds.findFirst({
       where: eq(prdsTable.id, prdId),
-      columns: { id: true, chatThreadId: true, content: true, backlogJson: true },
+      columns: { id: true, chatThreadId: true, content: true, backlogJson: true, project: true, skillSettingsId: true },
     });
     if (!prdRow) {
       res.status(404).json({ error: 'PRD not found' });
@@ -228,11 +274,38 @@ router.post('/prds/:prdId/test-cases/generate', requirePermission('interviews:ma
       res.status(422).json({ error: 'PRD content must exist before generating test cases' });
       return;
     }
+
+    const userId = getUserId(req);
+    const readinessEnabled = await isProjectRepositoryCheckoutReadinessEnabled({
+      userId,
+      project: prdRow.project,
+      caller: 'test-case-generation',
+    });
+    // @feature-flag:project-repository-checkout-readiness start winner=enabled
+    if (readinessEnabled) {
+      // @feature-flag:project-repository-checkout-readiness enabled-start
+      try {
+        await assertResolvedProjectRepositoryReady({
+          project: prdRow.project,
+          settingsId: prdRow.skillSettingsId,
+          surface: 'test-case-generation',
+        });
+      } catch (e) {
+        if (e instanceof ProjectRepositoryNotReady) {
+          res.status(409).json(e.toJSON());
+          return;
+        }
+        throw e;
+      }
+      // @feature-flag:project-repository-checkout-readiness enabled-end
+    }
+    // @feature-flag:project-repository-checkout-readiness end
+
     const sourceThreadId = prdRow.chatThreadId ?? '';
     const started = await triggerTestCaseGeneration(
       prdId,
       sourceThreadId,
-      getUserId(req),
+      userId,
     );
     res.json({ started });
   } catch (err) {
@@ -578,6 +651,7 @@ async function startDesignDocsForApprovedPrd(
           skillPath: designDocSkillPath,
           freeformContext,
           model,
+          skillSettingsId: prd.skillSettingsId ?? null,
         },
         {
           kickoffMessage: `Generate the design doc for the single feature "${featureTitle}" using the PRD, backlog, and context provided in \`.ai-pilot/kickoff-context.md\`. This is a non-interactive generation task — do not ask questions. Write all three output files (\`design-doc-design.md\`, \`design-doc-tech-spec.md\`, \`design-doc-assumptions.md\`) to \`.ai-pilot/output/\`.`,
@@ -597,13 +671,23 @@ async function startDesignDocsForApprovedPrd(
       });
 
       startSingleFeatureDocWatcher(designDocId, thread.id, prdId, prd.project);
-      await routeDesignDocGenerationKickoff({
-        designDocId,
-        userId,
-        project: prd.project,
-        threadId: thread.id,
-        kickoffMessage:
-          `Generate the design doc for the single feature "${featureTitle}" using the PRD, backlog, and context provided in \`.ai-pilot/kickoff-context.md\`. This is a non-interactive generation task — do not ask questions. Write all three output files (\`design-doc-design.md\`, \`design-doc-tech-spec.md\`, \`design-doc-assumptions.md\`) to \`.ai-pilot/output/\`.`,
+      // Fire-and-forget — grounding/materialization happens inside kickoff.
+      void Promise.resolve(
+        routeDesignDocGenerationKickoff({
+          designDocId,
+          prdId,
+          sourceThreadId: prd.chatThreadId ?? null,
+          userId,
+          project: prd.project,
+          threadId: thread.id,
+          kickoffMessage:
+            `Generate the design doc for the single feature "${featureTitle}" using the PRD, backlog, and context provided in \`.ai-pilot/kickoff-context.md\`. This is a non-interactive generation task — do not ask questions. Write all three output files (\`design-doc-design.md\`, \`design-doc-tech-spec.md\`, \`design-doc-assumptions.md\`) to \`.ai-pilot/output/\`.`,
+        }),
+      ).catch((err: unknown) => {
+        console.error(
+          `[interviews] Design doc kickoff failed (docId=${designDocId}, feature="${featureTitle}"):`,
+          err,
+        );
       });
 
       createdDocs.push({ designDocId, threadId: thread.id, featureTitle });
@@ -632,6 +716,31 @@ router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage'), 
       res.status(409).json({ error: 'Design docs can only be created from approved PRDs' });
       return;
     }
+
+    const readinessEnabled = await isProjectRepositoryCheckoutReadinessEnabled({
+      userId,
+      project: prd.project,
+      caller: 'design-doc-generation',
+    });
+    // @feature-flag:project-repository-checkout-readiness start winner=enabled
+    if (readinessEnabled) {
+      // @feature-flag:project-repository-checkout-readiness enabled-start
+      try {
+        await assertResolvedProjectRepositoryReady({
+          project: prd.project,
+          settingsId: prd.skillSettingsId,
+          surface: 'design-doc-generation',
+        });
+      } catch (e) {
+        if (e instanceof ProjectRepositoryNotReady) {
+          res.status(409).json(e.toJSON());
+          return;
+        }
+        throw e;
+      }
+      // @feature-flag:project-repository-checkout-readiness enabled-end
+    }
+    // @feature-flag:project-repository-checkout-readiness end
 
     const createdDocs = await startDesignDocsForApprovedPrd(req.params.prdId, userId, prd);
     res.status(201).json({
@@ -682,6 +791,31 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
       res.status(404).json({ error: 'PRD not found' });
       return;
     }
+
+    const readinessEnabled = await isProjectRepositoryCheckoutReadinessEnabled({
+      userId,
+      project: prd.project,
+      caller: 'prd-assistant',
+    });
+    // @feature-flag:project-repository-checkout-readiness start winner=enabled
+    if (readinessEnabled) {
+      // @feature-flag:project-repository-checkout-readiness enabled-start
+      try {
+        await assertResolvedProjectRepositoryReady({
+          project: prd.project,
+          settingsId: prd.skillSettingsId,
+          surface: 'prd-assistant',
+        });
+      } catch (e) {
+        if (e instanceof ProjectRepositoryNotReady) {
+          res.status(409).json(e.toJSON());
+          return;
+        }
+        throw e;
+      }
+      // @feature-flag:project-repository-checkout-readiness enabled-end
+    }
+    // @feature-flag:project-repository-checkout-readiness end
 
     const skillConfig = await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined });
     const globalModel = await getDefaultModel();
@@ -762,6 +896,7 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
       freeformContext: buildPrdContext('__THREAD_ID__'),
       model,
       assistantType: 'prd',
+      skillSettingsId: prd.skillSettingsId ?? skillConfig?.id ?? null,
     }, {
       kickoffMessage:
         'Introduce yourself as Apex, the PRD assistant. ' +
@@ -1139,6 +1274,32 @@ router.post('/prds/:prdId/validation-thread', requirePermission('interviews:mana
     const prd = await getPrd(req.params.prdId);
     if (!prd) { res.status(404).json({ error: 'PRD not found' }); return; }
 
+    const userId = getUserId(req);
+    const readinessEnabled = await isProjectRepositoryCheckoutReadinessEnabled({
+      userId,
+      project: prd.project,
+      caller: 'prd-validation',
+    });
+    // @feature-flag:project-repository-checkout-readiness start winner=enabled
+    if (readinessEnabled) {
+      // @feature-flag:project-repository-checkout-readiness enabled-start
+      try {
+        await assertResolvedProjectRepositoryReady({
+          project: prd.project,
+          settingsId: prd.skillSettingsId,
+          surface: 'prd-validation',
+        });
+      } catch (e) {
+        if (e instanceof ProjectRepositoryNotReady) {
+          res.status(409).json(e.toJSON());
+          return;
+        }
+        throw e;
+      }
+      // @feature-flag:project-repository-checkout-readiness enabled-end
+    }
+    // @feature-flag:project-repository-checkout-readiness end
+
     await autoStartPrdValidation(req.params.prdId, { force: true });
     const updated = await getPrd(req.params.prdId);
     res.json({ threadId: updated?.validationThreadId ?? null });
@@ -1443,6 +1604,31 @@ router.post('/design-docs/:id/retry-generate', requirePermission('interviews:man
       return;
     }
 
+    const readinessEnabled = await isProjectRepositoryCheckoutReadinessEnabled({
+      userId,
+      project: doc.project,
+      caller: 'design-doc-generation',
+    });
+    // @feature-flag:project-repository-checkout-readiness start winner=enabled
+    if (readinessEnabled) {
+      // @feature-flag:project-repository-checkout-readiness enabled-start
+      try {
+        await assertResolvedProjectRepositoryReady({
+          project: doc.project,
+          settingsId: doc.skillSettingsId,
+          surface: 'design-doc-generation',
+        });
+      } catch (e) {
+        if (e instanceof ProjectRepositoryNotReady) {
+          res.status(409).json(e.toJSON());
+          return;
+        }
+        throw e;
+      }
+      // @feature-flag:project-repository-checkout-readiness enabled-end
+    }
+    // @feature-flag:project-repository-checkout-readiness end
+
     const skillConfig = await resolveSkillConfig({ project: doc.project, settingsId: doc.skillSettingsId ?? undefined });
     const prd = await getPrd(doc.prdId);
 
@@ -1547,6 +1733,7 @@ router.post('/design-docs/:id/retry-generate', requirePermission('interviews:man
       skillPath: skillConfig?.designDocSkillPath ?? undefined,
       freeformContext,
       model,
+      skillSettingsId: doc.skillSettingsId ?? skillConfig?.id ?? null,
     }, { skipAutoKickoff: true });
 
     // Reset the row: clear error, attach new thread, set back to generating.
@@ -1559,14 +1746,22 @@ router.post('/design-docs/:id/retry-generate', requirePermission('interviews:man
 
     const kickoffMessage =
       `Generate the design doc for the single feature "${doc.title}" using the PRD and context provided. This is a non-interactive generation task — do not ask questions. Write all three output files to \`.ai-pilot/output/\`.`;
-    await routeDesignDocGenerationKickoff({
-      designDocId: req.params.id,
-      prdId: doc.prdId,
-      sourceThreadId: prd?.chatThreadId ?? null,
-      userId,
-      project: doc.project,
-      threadId: thread.id,
-      kickoffMessage,
+    // Respond immediately — grounding/materialization runs inside kickoff.
+    void Promise.resolve(
+      routeDesignDocGenerationKickoff({
+        designDocId: req.params.id,
+        prdId: doc.prdId ?? undefined,
+        sourceThreadId: prd?.chatThreadId ?? null,
+        userId,
+        project: doc.project,
+        threadId: thread.id,
+        kickoffMessage,
+      }),
+    ).catch((err: unknown) => {
+      console.error(
+        `[interviews] Design doc retry kickoff failed (docId=${req.params.id}):`,
+        err,
+      );
     });
 
     res.json({ ok: true, threadId: thread.id });
@@ -1585,6 +1780,31 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
       res.status(404).json({ error: 'Design doc not found' });
       return;
     }
+
+    const readinessEnabled = await isProjectRepositoryCheckoutReadinessEnabled({
+      userId,
+      project: doc.project,
+      caller: 'design-doc-assistant',
+    });
+    // @feature-flag:project-repository-checkout-readiness start winner=enabled
+    if (readinessEnabled) {
+      // @feature-flag:project-repository-checkout-readiness enabled-start
+      try {
+        await assertResolvedProjectRepositoryReady({
+          project: doc.project,
+          settingsId: doc.skillSettingsId,
+          surface: 'design-doc-assistant',
+        });
+      } catch (e) {
+        if (e instanceof ProjectRepositoryNotReady) {
+          res.status(409).json(e.toJSON());
+          return;
+        }
+        throw e;
+      }
+      // @feature-flag:project-repository-checkout-readiness enabled-end
+    }
+    // @feature-flag:project-repository-checkout-readiness end
 
     const skillConfig = await resolveSkillConfig({ project: doc.project, settingsId: doc.skillSettingsId ?? undefined });
     const globalModel = await getDefaultModel();
@@ -1665,6 +1885,7 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
       freeformContext: buildDocContext('__THREAD_ID__'),
       model,
       assistantType: 'design-doc',
+      skillSettingsId: doc.skillSettingsId ?? skillConfig?.id ?? null,
     }, { skipAutoKickoff: true });
 
     // Rewrite the context file now that we have the real thread ID.
@@ -1691,6 +1912,32 @@ router.post('/design-docs/:id/validation-thread', requirePermission('interviews:
   try {
     const doc = await getDesignDoc(req.params.id);
     if (!doc) { res.status(404).json({ error: 'Design doc not found' }); return; }
+
+    const userId = getUserId(req);
+    const readinessEnabled = await isProjectRepositoryCheckoutReadinessEnabled({
+      userId,
+      project: doc.project,
+      caller: 'design-doc-validation',
+    });
+    // @feature-flag:project-repository-checkout-readiness start winner=enabled
+    if (readinessEnabled) {
+      // @feature-flag:project-repository-checkout-readiness enabled-start
+      try {
+        await assertResolvedProjectRepositoryReady({
+          project: doc.project,
+          settingsId: doc.skillSettingsId,
+          surface: 'design-doc-validation',
+        });
+      } catch (e) {
+        if (e instanceof ProjectRepositoryNotReady) {
+          res.status(409).json(e.toJSON());
+          return;
+        }
+        throw e;
+      }
+      // @feature-flag:project-repository-checkout-readiness enabled-end
+    }
+    // @feature-flag:project-repository-checkout-readiness end
 
     await autoStartValidation(req.params.id);
     const updated = await getDesignDoc(req.params.id);
@@ -2441,6 +2688,199 @@ router.get('/approver-pool/:project/:documentType', requirePermission('interview
 
 // ── Interview detail/update/delete ────────────────────────────────────────────
 
+function actorFromRequest(req: Request) {
+  return {
+    userId: getUserId(req),
+    isSuperAdmin: isSuperAdminRequest(req),
+  };
+}
+
+/** Map InterviewLinkError → stable HTTP status + human-readable message (no artifact bodies). */
+function sendInterviewLinkError(res: Response, err: InterviewLinkError): void {
+  const body = { error: err.message, code: err.code };
+  switch (err.code) {
+    case 'LINK_CAP_EXCEEDED':
+    case 'LINK_DUPLICATE':
+      res.status(409).json(body);
+      return;
+    case 'ADR_NOT_ACCEPTED':
+    case 'ARTIFACT_CROSS_PROJECT':
+    case 'INTERVIEW_NOT_IN_PROGRESS':
+      res.status(422).json(body);
+      return;
+    case 'PROJECT_FORBIDDEN':
+      res.status(403).json(body);
+      return;
+    case 'INTERVIEW_NOT_FOUND':
+    case 'ARTIFACT_NOT_FOUND':
+      res.status(404).json(body);
+      return;
+    default:
+      res.status(400).json(body);
+  }
+}
+
+// GET /link-candidates — kickoff candidates before an Interview id exists.
+router.get(
+  '/link-candidates',
+  requirePermission('interviews:manage'),
+  requireGroupMembership('BA', 'Manager', 'Product-Owner'),
+  async (req, res, next) => {
+    try {
+      const project = typeof req.query.project === 'string'
+        ? req.query.project.trim()
+        : '';
+      if (!project) {
+        res.status(400).json({ error: 'Query parameter project is required' });
+        return;
+      }
+
+      const typeRaw = String(req.query.type ?? '');
+      if (typeRaw !== 'adr' && typeRaw !== 'design-module') {
+        res.status(400).json({ error: 'Query parameter type must be "adr" or "design-module"' });
+        return;
+      }
+      const type = typeRaw as LinkCandidateType;
+      const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+      const offset = req.query.offset != null ? Number(req.query.offset) : undefined;
+      const limit = req.query.limit != null ? Number(req.query.limit) : undefined;
+      if (offset != null && (!Number.isFinite(offset) || offset < 0)) {
+        res.status(400).json({ error: 'offset must be a non-negative number' });
+        return;
+      }
+      if (limit != null && (!Number.isFinite(limit) || limit < 1)) {
+        res.status(400).json({ error: 'limit must be a positive number' });
+        return;
+      }
+
+      const page = await listProjectCandidates(
+        project,
+        actorFromRequest(req),
+        { type, search, offset, limit },
+      );
+      res.json(page);
+    } catch (err) {
+      if (err instanceof InterviewLinkError) {
+        sendInterviewLinkError(res, err);
+        return;
+      }
+      next(err);
+    }
+  },
+);
+
+// GET /:interviewId/links — current linked context (PBI-002)
+router.get('/:interviewId/links', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const model = await getLinkedContext(req.params.interviewId, actorFromRequest(req));
+    res.json(model);
+  } catch (err) {
+    if (err instanceof InterviewLinkError) {
+      sendInterviewLinkError(res, err);
+      return;
+    }
+    next(err);
+  }
+});
+
+// GET /:interviewId/link-candidates — paginated candidates (offset/limit, pageSize=50)
+router.get('/:interviewId/link-candidates', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const typeRaw = String(req.query.type ?? '');
+    if (typeRaw !== 'adr' && typeRaw !== 'design-module') {
+      res.status(400).json({ error: 'Query parameter type must be "adr" or "design-module"' });
+      return;
+    }
+    const type = typeRaw as LinkCandidateType;
+    const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+    const offset = req.query.offset != null ? Number(req.query.offset) : undefined;
+    const limit = req.query.limit != null ? Number(req.query.limit) : undefined;
+    if (offset != null && (!Number.isFinite(offset) || offset < 0)) {
+      res.status(400).json({ error: 'offset must be a non-negative number' });
+      return;
+    }
+    if (limit != null && (!Number.isFinite(limit) || limit < 1)) {
+      res.status(400).json({ error: 'limit must be a positive number' });
+      return;
+    }
+    const page = await listCandidates(req.params.interviewId, actorFromRequest(req), {
+      type,
+      search,
+      offset,
+      limit,
+    });
+    res.json(page);
+  } catch (err) {
+    if (err instanceof InterviewLinkError) {
+      sendInterviewLinkError(res, err);
+      return;
+    }
+    next(err);
+  }
+});
+
+router.post('/:interviewId/links/adr', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const body = req.body as AddAdrLinkRequest;
+    const result = await addAdrLink(req.params.interviewId, actorFromRequest(req), body);
+    res.json(result);
+  } catch (err) {
+    if (err instanceof InterviewLinkError) {
+      sendInterviewLinkError(res, err);
+      return;
+    }
+    next(err);
+  }
+});
+
+router.delete('/:interviewId/links/adr/:adrId', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const result = await removeAdrLink(req.params.interviewId, actorFromRequest(req), req.params.adrId);
+    res.json(result);
+  } catch (err) {
+    if (err instanceof InterviewLinkError) {
+      sendInterviewLinkError(res, err);
+      return;
+    }
+    next(err);
+  }
+});
+
+router.post('/:interviewId/links/design-module', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const body = req.body as AddDesignModuleLinkRequest;
+    const result = await addDesignModuleLink(req.params.interviewId, actorFromRequest(req), body);
+    res.json(result);
+  } catch (err) {
+    if (err instanceof InterviewLinkError) {
+      sendInterviewLinkError(res, err);
+      return;
+    }
+    next(err);
+  }
+});
+
+router.delete(
+  '/:interviewId/links/design-module/:designModuleId',
+  requirePermission('interviews:manage'),
+  async (req, res, next) => {
+    try {
+      const result = await removeDesignModuleLink(
+        req.params.interviewId,
+        actorFromRequest(req),
+        req.params.designModuleId,
+      );
+      res.json(result);
+    } catch (err) {
+      if (err instanceof InterviewLinkError) {
+        sendInterviewLinkError(res, err);
+        return;
+      }
+      next(err);
+    }
+  },
+);
+
 router.get('/:id', requirePermission('interviews:view'), async (req, res, next) => {
   try {
     const interview = await getInterview(req.params.id);
@@ -2497,6 +2937,31 @@ router.post('/:interviewId/prds', requirePermission('interviews:manage'), async 
       return;
     }
 
+    const readinessEnabled = await isProjectRepositoryCheckoutReadinessEnabled({
+      userId,
+      project: interview.project,
+      caller: 'prd-generation',
+    });
+    // @feature-flag:project-repository-checkout-readiness start winner=enabled
+    if (readinessEnabled) {
+      // @feature-flag:project-repository-checkout-readiness enabled-start
+      try {
+        await assertResolvedProjectRepositoryReady({
+          project: interview.project,
+          settingsId: interview.skillSettingsId,
+          surface: 'prd-generation',
+        });
+      } catch (e) {
+        if (e instanceof ProjectRepositoryNotReady) {
+          res.status(409).json(e.toJSON());
+          return;
+        }
+        throw e;
+      }
+      // @feature-flag:project-repository-checkout-readiness enabled-end
+    }
+    // @feature-flag:project-repository-checkout-readiness end
+
     const result = await createPrd({
       interviewId: req.params.interviewId,
       project: interview.project,
@@ -2506,6 +2971,9 @@ router.post('/:interviewId/prds', requirePermission('interviews:manage'), async 
       model,
       skillSettingsId: interview.skillSettingsId ?? null,
     });
+    // Return immediately so the client can navigate to the generating skeleton.
+    // Grounding + agent kickoff run after the response (may take minutes on cold
+    // checkout) — they must not block the Create PRD HTTP request.
     startPrdWatcher(result.prdId, chatThreadId);
     if (kickoffGeneration) {
       void Promise.resolve(
@@ -2514,6 +2982,7 @@ router.post('/:interviewId/prds', requirePermission('interviews:manage'), async 
           userId,
           project: interview.project,
           threadId: chatThreadId,
+          interviewId: req.params.interviewId,
           kickoffMessage: 'Begin.',
         }),
       ).catch((err: unknown) => {

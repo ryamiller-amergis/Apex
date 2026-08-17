@@ -1,7 +1,17 @@
 jest.mock('../db/drizzle', () => ({ db: {} }));
 
+jest.mock('../services/featureFlagService', () => ({
+  isFeatureEnabled: jest.fn().mockResolvedValue(false),
+  isProjectRepositoryCheckoutReadinessEnabled: jest.fn().mockResolvedValue(false),
+}));
+
+jest.mock('../services/telemetry', () => ({
+  trackEvent: jest.fn(),
+}));
+
 import {
   createRunGroundingService,
+  propagatePipelineGrounding,
   type RepositoryGroundingPin,
   type RunGroundingService,
 } from '../services/runGroundingService';
@@ -205,6 +215,82 @@ describe('runGroundingService AC-2 independent roles', () => {
       ['skill', 'skill-sha'],
     ]);
     expect(repository.findByRun).toHaveBeenCalledWith(run);
+  });
+});
+
+describe('pipeline propagation materialization ownership', () => {
+  it('defers checkout materialization to the background workflow router', async () => {
+    const destination: RunRef = {
+      runType: 'chat',
+      runId: 'destination-run',
+      project: 'Apex',
+    };
+    const copied = grounding('target', {
+      runId: destination.runId,
+      project: destination.project,
+    });
+    const repository = repositoryMock();
+    repository.copyGrounding.mockResolvedValue(copied);
+    const materialize = jest.fn().mockResolvedValue('materialized' as const);
+    const service = createRunGroundingService(repository, { materialize });
+
+    await expect(propagatePipelineGrounding(
+      run,
+      destination,
+      'user-1',
+      {
+        service,
+        isFeatureEnabled: jest.fn().mockResolvedValue(true),
+        deferMaterialization: true,
+      },
+    )).resolves.toEqual({
+      grounding: copied,
+      materialization: 'deferred',
+    });
+
+    expect(repository.copyGrounding).toHaveBeenCalledWith(
+      run,
+      destination,
+      'target',
+    );
+    expect(materialize).not.toHaveBeenCalled();
+  });
+
+  it('emits grounding.pin_inherited when checkout-readiness flag enables propagation', async () => {
+    const destination: RunRef = {
+      runType: 'chat',
+      runId: 'destination-run',
+      project: 'Apex',
+    };
+    const copied = grounding('target', {
+      runId: destination.runId,
+      project: destination.project,
+      groundedSha: 'b'.repeat(40),
+    });
+    const repository = repositoryMock();
+    repository.copyGrounding.mockResolvedValue(copied);
+    const service = createRunGroundingService(repository);
+    const track = jest.fn();
+
+    await propagatePipelineGrounding(run, destination, 'user-1', {
+      service,
+      isFeatureEnabled: jest.fn().mockResolvedValue(false),
+      isCheckoutReadinessEnabled: jest.fn().mockResolvedValue(true),
+      deferMaterialization: true,
+      trackEvent: track,
+    });
+
+    expect(repository.copyGrounding).toHaveBeenCalled();
+    expect(track).toHaveBeenCalledWith(
+      'grounding.pin_inherited',
+      expect.objectContaining({
+        outcome: 'success',
+        sha: 'b'.repeat(12),
+        fromRunId: run.runId,
+        runId: destination.runId,
+      }),
+      expect.any(Object),
+    );
   });
 });
 

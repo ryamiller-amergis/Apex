@@ -23,12 +23,14 @@ import {
   type DaprInvokerCallbackContent,
 } from '@dapr/dapr';
 import { DefaultAzureCredential } from '@azure/identity';
+// Side-effect: initialize Application Insights when the connection string is set.
+import '../telemetry';
 import { createAiRunsCallbackClient } from '../aiRunsWorker/callbackClient';
 import { openLocalCheckout } from '../aiRunsWorker/workspace';
 import { resolveStaticAiRunnerCallbackToken } from '../aiRunnerCallbackAuthConfig';
 import { interactiveLiveBus } from '../interactiveLiveBus';
 import type { LocalCheckoutReader } from '../localCheckoutReader';
-import { createInteractiveCursorExecution } from './interactiveCursorExecution';
+import { acquireInteractiveCursorAgent } from './interactiveCursorExecution';
 import {
   createInteractiveSessionActor,
   type WarmThreadCheckout,
@@ -224,7 +226,7 @@ export async function main(): Promise<void> {
     getToken: getCallbackToken,
   });
 
-  // Single shared logic core: thread-keyed warm checkout + agent-id cache.
+  // Single shared logic core: thread-keyed warm checkout + live Agent cache.
   const logic = createInteractiveSessionActor({
     openWarmCheckout: async (_threadId, snapshot) => {
       const reader = await openLocalCheckout(snapshot);
@@ -234,8 +236,8 @@ export async function main(): Promise<void> {
       };
       return checkout;
     },
-    createExecution: (snapshot, checkout, options) =>
-      createInteractiveCursorExecution(
+    acquireAgent: (snapshot, checkout, options) =>
+      acquireInteractiveCursorAgent(
         snapshot,
         (checkout as ReaderCheckout).reader,
         options,
@@ -250,6 +252,12 @@ export async function main(): Promise<void> {
   // Eagerly connect the publisher so first-token latency isn't paid lazily.
   await interactiveLiveBus.init();
   setInteractiveActorRuntime({ logic, callback });
+
+  const disposeOnShutdown = (): void => {
+    void logic.disposeAll().catch(() => {});
+  };
+  process.once('SIGTERM', disposeOnShutdown);
+  process.once('SIGINT', disposeOnShutdown);
 
   const server = new DaprServer({
     serverPort,

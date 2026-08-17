@@ -8,13 +8,19 @@ import {
   useProjectApprovers,
   useSetProjectApprovers,
 } from '../hooks/useProjectSkillConfig';
-import type { ProjectSkillConfig, UpsertProjectSkillConfigRequest, QuickSkillPill, QuickMcpPill, QuickMcpPillHttp, QuickMcpPillStdio, SkillProvider, InterviewSkillOption, PrototypeEngine } from '../../shared/types/projectSettings';
+import type { ProjectSkillConfig, UpsertProjectSkillConfigRequest, QuickSkillPill, QuickMcpPill, QuickMcpPillHttp, QuickMcpPillStdio, SkillProvider, InterviewSkillOption, PrototypeEngine, ProjectRepositoryReadiness } from '../../shared/types/projectSettings';
 import type { ApprovalMode } from '../../shared/types/approvals';
 import { useSkillRepos, useSkillBranches, useSkillList } from '../hooks/useChatThreads';
 import { useUsers } from '../hooks/useRbac';
 import { useGroupsWithMembers } from '../hooks/useGroups';
 import { GroupAwarePeoplePicker } from './GroupAwarePeoplePicker';
 import { useProjectAvailableSkills } from '../hooks/useFoundationSkillAdmin';
+import { useFeatureFlag } from '../hooks/useFeatureFlags';
+import {
+  formatRepositoryCheckoutStatusLabel,
+  useAdminProjectRepositoryReadiness,
+  useCloneProjectRepository,
+} from '../hooks/useProjectRepositoryReadiness';
 import styles from './AdminProjectSettings.module.css';
 
 // ── BranchCombobox ─────────────────────────────────────────────────────────────
@@ -115,7 +121,7 @@ const BranchCombobox: React.FC<BranchComboboxProps> = ({ value, branches, isLoad
         disabled={disabled || isLoading}
         aria-haspopup="listbox"
         aria-expanded={open}
-      >
+       {...{ 'data-testid': 'ps-branch-combo-trigger' }}>
         <span className={styles.branchComboTriggerIcon} aria-hidden="true">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="5" cy="3.5" r="1.5" />
@@ -142,7 +148,7 @@ const BranchCombobox: React.FC<BranchComboboxProps> = ({ value, branches, isLoad
       </button>
 
       {open && (
-        <div className={styles.branchComboDropdown} role="dialog" aria-label="Select branch">
+        <div className={styles.branchComboDropdown} role="dialog" aria-label="Select branch" {...{ 'data-testid': 'ps-branch-combo-dropdown' }}>
           <div className={styles.branchComboSearchRow}>
             <svg className={styles.branchComboSearchIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <circle cx="6.5" cy="6.5" r="4" />
@@ -157,15 +163,14 @@ const BranchCombobox: React.FC<BranchComboboxProps> = ({ value, branches, isLoad
               placeholder="Search branches…"
               autoComplete="off"
               spellCheck={false}
-              aria-label="Search branches"
-            />
+              aria-label="Search branches" {...{ 'data-testid': 'ps-branch-combo-search' }} />
             {query && (
               <button
                 type="button"
                 className={styles.branchComboClear}
                 onMouseDown={(e) => { e.preventDefault(); setQuery(''); setActiveIdx(0); searchRef.current?.focus(); }}
                 aria-label="Clear search"
-              >
+               {...{ 'data-testid': 'ps-branch-combo-clear' }}>
                 ✕
               </button>
             )}
@@ -177,7 +182,7 @@ const BranchCombobox: React.FC<BranchComboboxProps> = ({ value, branches, isLoad
               : `${branches.length} branch${branches.length !== 1 ? 'es' : ''}`}
           </div>
 
-          <div className={styles.branchComboList} ref={listRef} role="listbox">
+          <div className={styles.branchComboList} ref={listRef} role="listbox" {...{ 'data-testid': 'ps-branch-combo-listbox' }}>
             {filtered.length === 0 ? (
               <div className={styles.branchComboEmpty}>
                 No branches match &ldquo;{query}&rdquo;
@@ -196,7 +201,7 @@ const BranchCombobox: React.FC<BranchComboboxProps> = ({ value, branches, isLoad
                     onMouseDown={(e) => { e.preventDefault(); handleSelect(b); }}
                     onMouseEnter={() => setActiveIdx(idx)}
                     type="button"
-                  >
+                   {...{ 'data-testid': `ps-branch-option-${b}` }}>
                     <span className={styles.branchComboItemLabel}>{b}</span>
                     {isSelected && (
                       <svg className={styles.branchComboCheck} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -227,7 +232,7 @@ interface AccordionSectionProps {
 
 const AccordionSection: React.FC<AccordionSectionProps> = ({ title, hint, expanded, onToggle, children }) => (
   <div className={styles.accordionSection}>
-    <button type="button" className={styles.accordionHeader} onClick={onToggle} aria-expanded={expanded}>
+    <button type="button" className={styles.accordionHeader} onClick={onToggle} aria-expanded={expanded} {...{ 'data-testid': `ps-accordion-toggle-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}` }}>
       <svg
         className={`${styles.accordionChevron} ${expanded ? styles.accordionChevronOpen : ''}`}
         viewBox="0 0 12 12"
@@ -538,7 +543,7 @@ const InterviewOptionsEditor: React.FC<InterviewOptionsEditorProps> = ({
           wantsTestCases: true,
         }])}
         disabled={disabled || skillsDisabled}
-      >
+       {...{ 'data-testid': 'ps-interview-option-add' }}>
         + Add option
       </button>
     </div>
@@ -554,7 +559,7 @@ const InterviewOptionsEditor: React.FC<InterviewOptionsEditorProps> = ({
               onChange(next);
             }}
             disabled={disabled || skillsDisabled}
-          >
+           {...{ 'data-testid': `ps-interview-option-skill-${idx}` }}>
             <option value="">— select a skill —</option>
             {skillList.map((s) => (
               <option key={s.id} value={s.path}>{s.name}</option>
@@ -569,15 +574,14 @@ const InterviewOptionsEditor: React.FC<InterviewOptionsEditorProps> = ({
               next[idx] = { ...next[idx], friendlyName: e.target.value };
               onChange(next);
             }}
-            disabled={disabled}
-          />
+            disabled={disabled} {...{ 'data-testid': `ps-interview-option-name-${idx}` }} />
           <button
             type="button"
             className={`${styles.btnAction} ${styles.btnActionDanger}`}
             onClick={() => onChange(options.filter((_, i) => i !== idx))}
             disabled={disabled}
             title="Remove"
-          >
+           {...{ 'data-testid': `ps-interview-option-remove-${idx}` }}>
             Remove
           </button>
         </div>
@@ -591,7 +595,7 @@ const InterviewOptionsEditor: React.FC<InterviewOptionsEditorProps> = ({
               onChange(next);
             }}
             disabled={disabled}
-          >
+           {...{ 'data-testid': `ps-interview-option-model-${idx}` }}>
             <option value="">Model: use project default</option>
             {availableModels.map((m) => (
               <option key={m.id} value={m.id}>{m.displayName}</option>
@@ -609,8 +613,7 @@ const InterviewOptionsEditor: React.FC<InterviewOptionsEditorProps> = ({
                 next[idx] = { ...next[idx], wantsDesignPrototype: e.target.checked };
                 onChange(next);
               }}
-              disabled={disabled}
-            />
+              disabled={disabled} {...{ 'data-testid': `ps-interview-option-prototype-${idx}` }} />
             Generate design prototype
           </label>
           <label className={styles.interviewOptionFlag} htmlFor={`iso-tc-${idx}`}>
@@ -623,8 +626,7 @@ const InterviewOptionsEditor: React.FC<InterviewOptionsEditorProps> = ({
                 next[idx] = { ...next[idx], wantsTestCases: e.target.checked };
                 onChange(next);
               }}
-              disabled={disabled}
-            />
+              disabled={disabled} {...{ 'data-testid': `ps-interview-option-testcases-${idx}` }} />
             Generate test cases
           </label>
         </div>
@@ -713,7 +715,7 @@ const McpPillAddForm: React.FC<McpPillAddFormProps> = ({ availableModels, isLoad
             style={{ padding: '2px 10px', fontSize: '0.78rem' }}
             onClick={() => setTransport(t)}
             disabled={isPending}
-          >
+           {...{ 'data-testid': `ps-mcp-add-transport-${t}` }}>
             {t === 'stdio' ? 'stdio (npx / command)' : 'HTTP (hosted URL)'}
           </button>
         ))}
@@ -723,15 +725,15 @@ const McpPillAddForm: React.FC<McpPillAddFormProps> = ({ availableModels, isLoad
       <div className={styles.pillAddRow}>
         <div className={styles.field} style={{ flex: '0 0 10rem' }}>
           <label className={styles.label}>Label</label>
-          <input className={styles.input} placeholder="e.g. SendGrid" value={label} onChange={(e) => setLabel(e.target.value)} disabled={isPending} />
+          <input className={styles.input} placeholder="e.g. SendGrid" value={label} onChange={(e) => setLabel(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-mcp-add-label' }} />
         </div>
         <div className={styles.field} style={{ flex: '0 0 10rem' }}>
           <label className={styles.label}>Server Name</label>
-          <input className={styles.input} placeholder="e.g. sendgrid" value={mcpServerName} onChange={(e) => setMcpServerName(e.target.value)} disabled={isPending} />
+          <input className={styles.input} placeholder="e.g. sendgrid" value={mcpServerName} onChange={(e) => setMcpServerName(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-mcp-add-server-name' }} />
         </div>
         <div className={styles.field} style={{ flex: '0 0 10rem' }}>
           <label className={styles.label}>Model override</label>
-          <select className={styles.select} value={model} onChange={(e) => setModel(e.target.value)} disabled={isPending || isLoadingModels}>
+          <select className={styles.select} value={model} onChange={(e) => setModel(e.target.value)} disabled={isPending || isLoadingModels} {...{ 'data-testid': 'ps-mcp-add-model' }}>
             <option value="">Default model</option>
             {availableModels.map((m) => <option key={m.id} value={m.id}>{m.displayName}</option>)}
           </select>
@@ -740,33 +742,33 @@ const McpPillAddForm: React.FC<McpPillAddFormProps> = ({ availableModels, isLoad
 
       {/* Transport-specific fields */}
       {transport === 'http' ? (
-        <input className={styles.input} placeholder="HTTP URL (e.g. https://mcp.twilio.com/docs)" value={url} onChange={(e) => setUrl(e.target.value)} disabled={isPending} />
+        <input className={styles.input} placeholder="HTTP URL (e.g. https://mcp.twilio.com/docs)" value={url} onChange={(e) => setUrl(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-mcp-add-url' }} />
       ) : (
         <>
           <div className={styles.pillAddRow}>
             <div className={styles.field} style={{ flex: '0 0 8rem' }}>
               <label className={styles.label}>Command</label>
-              <input className={styles.input} placeholder="npx" value={command} onChange={(e) => setCommand(e.target.value)} disabled={isPending} />
+              <input className={styles.input} placeholder="npx" value={command} onChange={(e) => setCommand(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-mcp-add-command' }} />
             </div>
             <div className={styles.field} style={{ flex: 1 }}>
               <label className={styles.label}>Args (space-separated)</label>
-              <input className={styles.input} placeholder="-y sendgrid-mcp" value={args} onChange={(e) => setArgs(e.target.value)} disabled={isPending} />
+              <input className={styles.input} placeholder="-y sendgrid-mcp" value={args} onChange={(e) => setArgs(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-mcp-add-args' }} />
             </div>
           </div>
           <div className={styles.field}>
             <label className={styles.label}>Env vars (KEY=$&#123;ENV_VAR&#125;, comma-separated)</label>
-            <input className={styles.input} placeholder="SENDGRID_API_KEY=${SENDGRID_API_KEY}" value={envStr} onChange={(e) => setEnvStr(e.target.value)} disabled={isPending} />
+            <input className={styles.input} placeholder="SENDGRID_API_KEY=${SENDGRID_API_KEY}" value={envStr} onChange={(e) => setEnvStr(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-mcp-add-env' }} />
             <span className={styles.skillDescription}>Values like {'${SENDGRID_API_KEY}'} are resolved from the server&apos;s environment at runtime — secrets stay out of the database.</span>
           </div>
         </>
       )}
 
       {/* Optional metadata */}
-      <input className={styles.input} style={{ fontSize: '0.8rem' }} placeholder="System prompt hint (e.g. You have access to SendGrid email analytics tools for querying email activity, bounces, and stats)" value={systemPromptHint} onChange={(e) => setSystemPromptHint(e.target.value)} disabled={isPending} />
-      <input className={styles.input} style={{ fontSize: '0.8rem' }} placeholder="Description shown to users when pill is selected" value={description} onChange={(e) => setDescription(e.target.value)} disabled={isPending} />
+      <input className={styles.input} style={{ fontSize: '0.8rem' }} placeholder="System prompt hint (e.g. You have access to SendGrid email analytics tools for querying email activity, bounces, and stats)" value={systemPromptHint} onChange={(e) => setSystemPromptHint(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-mcp-add-system-prompt' }} />
+      <input className={styles.input} style={{ fontSize: '0.8rem' }} placeholder="Description shown to users when pill is selected" value={description} onChange={(e) => setDescription(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-mcp-add-description' }} />
 
       <div>
-        <button type="button" className={styles.btnAction} onClick={handleAdd} disabled={isPending}>
+        <button type="button" className={styles.btnAction} onClick={handleAdd} disabled={isPending} {...{ 'data-testid': 'ps-mcp-pill-add-submit' }}>
           Add MCP Pill
         </button>
       </div>
@@ -847,7 +849,7 @@ const InterviewWebMcpEditor: React.FC<InterviewWebMcpEditorProps> = ({ value, is
             style={{ padding: '2px 10px', fontSize: '0.78rem' }}
             onClick={() => setTransport(t)}
             disabled={isPending}
-          >
+           {...{ 'data-testid': `ps-web-mcp-transport-${t}` }}>
             {t === 'stdio' ? 'stdio (npx / command)' : 'HTTP (hosted URL)'}
           </button>
         ))}
@@ -855,18 +857,18 @@ const InterviewWebMcpEditor: React.FC<InterviewWebMcpEditorProps> = ({ value, is
 
       <div className={styles.field} style={{ flex: '0 0 10rem' }}>
         <label className={styles.label}>Server Name</label>
-        <input className={styles.input} placeholder="e.g. web" value={mcpServerName} onChange={(e) => setMcpServerName(e.target.value)} disabled={isPending} />
+        <input className={styles.input} placeholder="e.g. web" value={mcpServerName} onChange={(e) => setMcpServerName(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-web-mcp-server-name' }} />
       </div>
 
       {transport === 'http' ? (
         <>
           <div className={styles.field}>
             <label className={styles.label}>HTTP URL</label>
-            <input className={styles.input} placeholder="https://mcp.tavily.com/mcp/" value={url} onChange={(e) => setUrl(e.target.value)} disabled={isPending} />
+            <input className={styles.input} placeholder="https://mcp.tavily.com/mcp/" value={url} onChange={(e) => setUrl(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-web-mcp-url' }} />
           </div>
           <div className={styles.field}>
             <label className={styles.label}>Headers (KEY=$&#123;ENV_VAR&#125;, comma-separated)</label>
-            <input className={styles.input} placeholder="Authorization=Bearer ${TAVILY_API_KEY}" value={headersStr} onChange={(e) => setHeadersStr(e.target.value)} disabled={isPending} />
+            <input className={styles.input} placeholder="Authorization=Bearer ${TAVILY_API_KEY}" value={headersStr} onChange={(e) => setHeadersStr(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-web-mcp-headers' }} />
             <span className={styles.skillDescription}>Values like {'${TAVILY_API_KEY}'} are resolved from the server&apos;s environment at runtime — secrets stay out of the database.</span>
           </div>
         </>
@@ -875,16 +877,16 @@ const InterviewWebMcpEditor: React.FC<InterviewWebMcpEditorProps> = ({ value, is
           <div className={styles.pillAddRow}>
             <div className={styles.field} style={{ flex: '0 0 8rem' }}>
               <label className={styles.label}>Command</label>
-              <input className={styles.input} placeholder="npx" value={command} onChange={(e) => setCommand(e.target.value)} disabled={isPending} />
+              <input className={styles.input} placeholder="npx" value={command} onChange={(e) => setCommand(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-web-mcp-command' }} />
             </div>
             <div className={styles.field} style={{ flex: 1 }}>
               <label className={styles.label}>Args (space-separated)</label>
-              <input className={styles.input} placeholder="-y tavily-mcp" value={args} onChange={(e) => setArgs(e.target.value)} disabled={isPending} />
+              <input className={styles.input} placeholder="-y tavily-mcp" value={args} onChange={(e) => setArgs(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-web-mcp-args' }} />
             </div>
           </div>
           <div className={styles.field}>
             <label className={styles.label}>Env vars (KEY=$&#123;ENV_VAR&#125;, comma-separated)</label>
-            <input className={styles.input} placeholder="TAVILY_API_KEY=${TAVILY_API_KEY}" value={envStr} onChange={(e) => setEnvStr(e.target.value)} disabled={isPending} />
+            <input className={styles.input} placeholder="TAVILY_API_KEY=${TAVILY_API_KEY}" value={envStr} onChange={(e) => setEnvStr(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-web-mcp-env' }} />
             <span className={styles.skillDescription}>Values like {'${TAVILY_API_KEY}'} are resolved from the server&apos;s environment at runtime — secrets stay out of the database.</span>
           </div>
         </>
@@ -892,7 +894,7 @@ const InterviewWebMcpEditor: React.FC<InterviewWebMcpEditorProps> = ({ value, is
 
       <div className={styles.field}>
         <label className={styles.label}>System prompt hint</label>
-        <input className={styles.input} style={{ fontSize: '0.8rem' }} placeholder="Describe what the web MCP is for" value={systemPromptHint} onChange={(e) => setSystemPromptHint(e.target.value)} disabled={isPending} />
+        <input className={styles.input} style={{ fontSize: '0.8rem' }} placeholder="Describe what the web MCP is for" value={systemPromptHint} onChange={(e) => setSystemPromptHint(e.target.value)} disabled={isPending} {...{ 'data-testid': 'ps-web-mcp-system-prompt' }} />
       </div>
     </div>
   );
@@ -1054,13 +1056,13 @@ const PipelineStageCard: React.FC<PipelineStageCardProps> = ({
     : 'system default (composer-2)';
 
   return (
-    <div className={styles.stageCard} data-testid={`ps-stage-${stage.skillKey}`}>
+    <div className={styles.stageCard} {...{ 'data-testid': `ps-stage-${stage.skillKey}` }}>
       <button
         type="button"
         className={styles.stageCardHeader}
         onClick={onToggle}
         aria-expanded={expanded}
-      >
+       {...{ 'data-testid': `ps-stage-toggle-${stage.skillKey}` }}>
         <svg
           className={`${styles.stageCardChevron} ${expanded ? styles.stageCardChevronOpen : ''}`}
           viewBox="0 0 12 12"
@@ -1094,7 +1096,7 @@ const PipelineStageCard: React.FC<PipelineStageCardProps> = ({
                   value={skillValue}
                   onChange={(e) => onEditChange({ [stage.skillKey]: e.target.value })}
                   disabled={disabled || skillsDisabled}
-                >
+                 {...{ 'data-testid': `ps-stage-skill-${stage.skillKey}` }}>
                   <option value="">{stage.emptyLabel}</option>
                   {skillList.map((s) => (
                     <option key={s.id} value={s.path}>{s.name}</option>
@@ -1110,7 +1112,7 @@ const PipelineStageCard: React.FC<PipelineStageCardProps> = ({
                     value={modelValue}
                     onChange={(e) => onEditChange({ [stage.modelKey!]: e.target.value })}
                     disabled={disabled || modelsDisabled}
-                  >
+                   {...{ 'data-testid': `ps-stage-model-${stage.modelKey}` }}>
                     <option value="">Use project default</option>
                     {availableModels.map((m) => (
                       <option key={m.id} value={m.id}>{m.displayName}</option>
@@ -1130,8 +1132,7 @@ const PipelineStageCard: React.FC<PipelineStageCardProps> = ({
               availableModels={availableModels}
               disabled={disabled}
               skillsDisabled={skillsDisabled}
-              onChange={(options) => onEditChange({ interviewSkillOptions: options })}
-            />
+              onChange={(options) => onEditChange({ interviewSkillOptions: options })} {...{ 'data-testid': 'ps-interview-options-editor' }} />
           )}
           {stage.prdValidationThreshold && (
             <div className={styles.field} style={{ marginTop: '12px' }}>
@@ -1147,7 +1148,7 @@ const PipelineStageCard: React.FC<PipelineStageCardProps> = ({
                 value={String(edit.prdValidationScoreThreshold)}
                 onChange={(e) => onEditChange({ prdValidationScoreThreshold: Number(e.target.value) })}
                 disabled={disabled}
-              >
+               {...{ 'data-testid': 'ps-validation-threshold' }}>
                 <option value="50">50%</option>
                 <option value="60">60%</option>
                 <option value="70">70%</option>
@@ -1174,7 +1175,7 @@ const PipelineStageCard: React.FC<PipelineStageCardProps> = ({
                 value={String(edit.designDocValidationScoreThreshold)}
                 onChange={(e) => onEditChange({ designDocValidationScoreThreshold: Number(e.target.value) })}
                 disabled={disabled}
-              >
+               {...{ 'data-testid': 'ps-dd-validation-threshold' }}>
                 <option value="50">50%</option>
                 <option value="60">60%</option>
                 <option value="70">70%</option>
@@ -1191,6 +1192,98 @@ const PipelineStageCard: React.FC<PipelineStageCardProps> = ({
       )}
     </div>
   );
+};
+
+function readinessFromConfig(config: ProjectSkillConfig): ProjectRepositoryReadiness {
+  return {
+    skillSettingsId: config.id,
+    status: config.repositoryCheckoutStatus ?? 'not_cloned',
+    sha: config.repositoryCheckoutSha ?? null,
+    error: config.repositoryCheckoutError ?? null,
+    startedAt: config.repositoryCheckoutStartedAt ?? null,
+    completedAt: config.repositoryCheckoutCompletedAt ?? null,
+    filesystemReady: config.repositoryCheckoutStatus === 'ready',
+  };
+}
+
+interface RepoCheckoutControlsProps {
+  config: ProjectSkillConfig;
+}
+
+/** Clone / Refresh controls for a saved Project Skill Settings repository row. */
+const RepoCheckoutControlsEnabled: React.FC<RepoCheckoutControlsProps> = ({ config }) => {
+  const { data: readiness, isFetching } = useAdminProjectRepositoryReadiness(config.id);
+  const clone = useCloneProjectRepository();
+  const display = readiness ?? readinessFromConfig(config);
+  const status = display.status;
+  const isCloning = status === 'cloning' || clone.isPending;
+  const showClone = status === 'not_cloned' || status === 'snapshot_unavailable';
+  // Ready: interviews already fetch the tip. Refresh only retries Failed.
+  const showRefresh = status === 'failed';
+  const label = isCloning && !readiness
+    ? 'Cloning'
+    : formatRepositoryCheckoutStatusLabel(display);
+
+  return (
+    <div className={styles.repoCheckout} {...{ 'data-testid': `repo-checkout-status-${config.id}` }}>
+      <span
+        className={`${styles.repoCheckoutStatus} ${status === 'failed' ? styles.repoCheckoutStatusFailed : ''}`}
+        title={display.error ?? undefined}
+      >
+        {label}
+        {isFetching && status === 'cloning' ? '…' : ''}
+      </span>
+      {status === 'failed' && display.error && (
+        <span className={styles.repoCheckoutError} title={display.error}>
+          {display.error}
+        </span>
+      )}
+      <div className={styles.repoCheckoutActions}>
+        {showClone && (
+          <button
+            className={styles.btnAction}
+            type="button"
+            disabled={isCloning || clone.isPending}
+            onClick={() => void clone.mutateAsync({ id: config.id, refresh: false }).catch(() => undefined)}
+            {...{ 'data-testid': `repo-checkout-clone-${config.id}` }}
+          >
+            {clone.isPending && !clone.variables?.refresh ? 'Cloning…' : 'Clone'}
+          </button>
+        )}
+        {showRefresh && (
+          <button
+            className={styles.btnAction}
+            type="button"
+            disabled={isCloning || clone.isPending}
+            onClick={() => void clone.mutateAsync({ id: config.id, refresh: true }).catch(() => undefined)}
+            {...{ 'data-testid': `repo-checkout-refresh-${config.id}` }}
+          >
+            {clone.isPending && clone.variables?.refresh ? 'Refreshing…' : 'Refresh'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const RepoCheckoutControls: React.FC<RepoCheckoutControlsProps & { project: string }> = ({
+  config,
+  project,
+}) => {
+  const enabled = useFeatureFlag('project-repository-checkout-readiness', project);
+
+  // Retain enabled after two stable sprints at full rollout.
+  // @feature-flag:project-repository-checkout-readiness start winner=enabled
+  if (!enabled) {
+    // @feature-flag:project-repository-checkout-readiness disabled-start
+    return null;
+    // @feature-flag:project-repository-checkout-readiness disabled-end
+  }
+
+  // @feature-flag:project-repository-checkout-readiness enabled-start
+  return <RepoCheckoutControlsEnabled config={config} />;
+  // @feature-flag:project-repository-checkout-readiness enabled-end
+  // @feature-flag:project-repository-checkout-readiness end
 };
 
 export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
@@ -1530,17 +1623,28 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         testCaseApproverGroupIds.length > 0 ||
         (approversData && (approversData.approvers.length > 0 || approversData.approverGroups.length > 0));
       if (hasApprovers) {
-        await setApprovers.mutateAsync({
-          settingsId: configId,
-          designDocApprovers: designDocApproverIds,
-          prdApprovers: prdApproverIds,
-          designDocApproverGroups: designDocApproverGroupIds,
-          prdApproverGroups: prdApproverGroupIds,
-          designPrototypeApprovers: designPrototypeApproverIds,
-          designPrototypeApproverGroups: designPrototypeApproverGroupIds,
-          testCaseApprovers: testCaseApproverIds,
-          testCaseApproverGroups: testCaseApproverGroupIds,
-        });
+        try {
+          await setApprovers.mutateAsync({
+            settingsId: configId,
+            designDocApprovers: designDocApproverIds,
+            prdApprovers: prdApproverIds,
+            designDocApproverGroups: designDocApproverGroupIds,
+            prdApproverGroups: prdApproverGroupIds,
+            designPrototypeApprovers: designPrototypeApproverIds,
+            designPrototypeApproverGroups: designPrototypeApproverGroupIds,
+            testCaseApprovers: testCaseApproverIds,
+            testCaseApproverGroups: testCaseApproverGroupIds,
+          });
+        } catch (approverErr) {
+          // Repo config already saved — close the form and surface a follow-up warning.
+          setEdit(null);
+          setFormError(
+            approverErr instanceof Error
+              ? `Repo config saved, but reviewers failed to save: ${approverErr.message}`
+              : 'Repo config saved, but reviewers failed to save.',
+          );
+          return;
+        }
       }
 
       setEdit(null);
@@ -1616,7 +1720,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
             <p className={styles.pageSubtitle}>Configure skill repository, pipeline settings, and document reviewers for <strong>{selectedProject}</strong>.</p>
           </div>
           {!edit && (
-            <button className={styles.btnPrimary} onClick={handleAddNew} type="button">
+            <button className={styles.btnPrimary} onClick={handleAddNew} type="button" {...{ 'data-testid': 'ps-add-repo-config' }}>
               + Add Repo Config
             </button>
           )}
@@ -1644,8 +1748,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     className={styles.input}
                     value={edit.project}
                     disabled
-                    readOnly
-                  />
+                    readOnly {...{ 'data-testid': 'ps-project' }} />
                 </div>
 
                 <div className={styles.field}>
@@ -1656,8 +1759,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     value={edit.friendlyName}
                     onChange={(e) => setEdit((prev) => prev ? { ...prev, friendlyName: e.target.value } : prev)}
                     placeholder="e.g. Main Skills, Feature Branch"
-                    disabled={upsert.isPending}
-                  />
+                    disabled={upsert.isPending} {...{ 'data-testid': 'ps-friendlyName' }} />
                 </div>
 
                 <div className={styles.field}>
@@ -1668,8 +1770,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                       checked={edit.isDefault}
                       onChange={(e) => setEdit((prev) => prev ? { ...prev, isDefault: e.target.checked } : prev)}
                       disabled={upsert.isPending}
-                      style={{ marginRight: '6px' }}
-                    />
+                      style={{ marginRight: '6px' }} {...{ 'data-testid': 'ps-isDefault' }} />
                     Default config
                   </label>
                   <span className={styles.skillDescription}>Auto-selected when user picks this project</span>
@@ -1687,7 +1788,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                       style={{ padding: '4px 14px', fontSize: '0.82rem' }}
                       onClick={() => setEdit((prev) => prev ? { ...prev, skillProvider: p, skillRepo: '', skillBranch: '' } : prev)}
                       disabled={upsert.isPending}
-                    >
+                     {...{ 'data-testid': `ps-provider-${p}` }}>
                       {p === 'ado' ? 'Azure DevOps' : 'GitHub'}
                     </button>
                   ))}
@@ -1703,7 +1804,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     value={edit.skillRepo}
                     onChange={(e) => handleRepoChange(e.target.value)}
                     disabled={upsert.isPending || isLoadingRepos || !edit.project}
-                  >
+                   {...{ 'data-testid': 'ps-repo' }}>
                     <option value="">{isLoadingRepos ? 'Loading repos…' : '— select a repo —'}</option>
                     {repos.map((r) => (
                       <option key={r.id} value={r.name}>{r.name}</option>
@@ -1718,8 +1819,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     branches={branches}
                     isLoading={isLoadingBranches}
                     disabled={upsert.isPending || !edit.skillRepo}
-                    onChange={(branch) => setEdit((prev) => prev ? { ...prev, skillBranch: branch } : prev)}
-                  />
+                    onChange={(branch) => setEdit((prev) => prev ? { ...prev, skillBranch: branch } : prev)} {...{ 'data-testid': 'ps-branch-combobox' }} />
                 </div>
               </div>
 
@@ -1731,7 +1831,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                   value={edit.defaultModel}
                   onChange={(e) => setEdit((prev) => prev ? { ...prev, defaultModel: e.target.value } : prev)}
                   disabled={upsert.isPending || isLoadingModels}
-                >
+                 {...{ 'data-testid': 'ps-defaultModel' }}>
                   <option value="">Use system default (composer-2)</option>
                   {availableModels.map((m) => (
                     <option key={m.id} value={m.id}>{m.displayName}</option>
@@ -1748,7 +1848,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                   value={edit.prototypeEngine}
                   onChange={(e) => setEdit((prev) => prev ? { ...prev, prototypeEngine: e.target.value as PrototypeEngine } : prev)}
                   disabled={upsert.isPending}
-                >
+                 {...{ 'data-testid': 'ps-prototypeEngine' }}>
                   <option value="bedrock">Bedrock (one-shot, built-in prompt)</option>
                   <option value="agent">Agent / skill flow (web-enabled)</option>
                 </select>
@@ -1763,8 +1863,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     checked={edit.interviewWebResearchEnabled}
                     onChange={(e) => setEdit((prev) => prev ? { ...prev, interviewWebResearchEnabled: e.target.checked } : prev)}
                     disabled={upsert.isPending}
-                    style={{ marginRight: '6px' }}
-                  />
+                    style={{ marginRight: '6px' }} {...{ 'data-testid': 'ps-interviewWebResearchEnabled' }} />
                   Enable live web research during interviews
                 </label>
                 <span className={styles.skillDescription}>Adds a narrow scope carve-out and wires the web-search MCP below into interview threads. Off by default; only affects this project&apos;s interviews.</span>
@@ -1773,8 +1872,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     key={edit.id ?? 'new'}
                     value={edit.interviewWebMcp}
                     isPending={upsert.isPending}
-                    onChange={(pill) => setEdit((prev) => prev ? { ...prev, interviewWebMcp: pill } : prev)}
-                  />
+                    onChange={(pill) => setEdit((prev) => prev ? { ...prev, interviewWebMcp: pill } : prev)} {...{ 'data-testid': 'ps-interview-web-mcp-editor' }} />
                 )}
               </div>
             </AccordionSection>
@@ -1803,8 +1901,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     onEditChange={patchEdit}
                     disabled={upsert.isPending}
                     skillsDisabled={isLoadingSkills || !edit.skillRepo}
-                    modelsDisabled={isLoadingModels}
-                  />
+                    modelsDisabled={isLoadingModels} {...{ 'data-testid': `ps-pipeline-stage-card-${stage.id}` }} />
                 ))}
               </div>
             </AccordionSection>
@@ -1830,7 +1927,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     value={edit.adrModel}
                     onChange={(e) => patchEdit({ adrModel: e.target.value })}
                     disabled={upsert.isPending || isLoadingModels}
-                  >
+                   {...{ 'data-testid': 'ps-adrModel' }}>
                     <option value="">Use project default</option>
                     {availableModels.map((m) => (
                       <option key={m.id} value={m.id}>{m.displayName}</option>
@@ -1858,8 +1955,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     onEditChange={patchEdit}
                     disabled={upsert.isPending}
                     skillsDisabled={isLoadingSkills || !edit.skillRepo}
-                    modelsDisabled={isLoadingModels}
-                  />
+                    modelsDisabled={isLoadingModels} {...{ 'data-testid': `ps-pipeline-stage-card-${stage.id}` }} />
                 ))}
               </div>
             </AccordionSection>
@@ -1887,8 +1983,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     onEditChange={patchEdit}
                     disabled={upsert.isPending}
                     skillsDisabled={isLoadingSkills || !edit.skillRepo}
-                    modelsDisabled={isLoadingModels}
-                  />
+                    modelsDisabled={isLoadingModels} {...{ 'data-testid': `ps-pipeline-stage-card-${stage.id}` }} />
                 ))}
               </div>
             </AccordionSection>
@@ -1914,7 +2009,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     value={edit.prototypeDesignSystemPath}
                     onChange={(e) => setEdit((prev) => prev ? { ...prev, prototypeDesignSystemPath: e.target.value } : prev)}
                     disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
-                  >
+                   {...{ 'data-testid': 'ps-protoDesignSystemPath' }}>
                     <option value="">None (use convention path .cursor/skills/design-system/SKILL.md)</option>
                     {skillList.map((s) => (
                       <option key={s.id} value={s.path}>{s.name}</option>
@@ -1932,8 +2027,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     placeholder=".cursor/skills/figma-ui-knowledge-base/clientapp-screens.md"
                     value={edit.screenInventoryPath}
                     onChange={(e) => setEdit((prev) => prev ? { ...prev, screenInventoryPath: e.target.value } : prev)}
-                    disabled={upsert.isPending || !edit.skillRepo}
-                  />
+                    disabled={upsert.isPending || !edit.skillRepo} {...{ 'data-testid': 'ps-screenInventoryPath' }} />
                   <span className={styles.skillDescription}>
                     Optional. Path within this project&apos;s repo to a screen-inventory markdown file used in EXTEND mode (extending an existing page). Leave blank to skip.
                   </span>
@@ -1947,8 +2041,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     checked={edit.prototypeWebReferencesEnabled}
                     onChange={(e) => setEdit((prev) => prev ? { ...prev, prototypeWebReferencesEnabled: e.target.checked } : prev)}
                     disabled={upsert.isPending}
-                    style={{ marginRight: '6px' }}
-                  />
+                    style={{ marginRight: '6px' }} {...{ 'data-testid': 'ps-protoWebRefs' }} />
                   Enable live web design references (NEW-page mode only)
                 </label>
                 <span className={styles.skillDescription}>
@@ -1999,7 +2092,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     value={edit.prdReviewBedrockModelId}
                     onChange={(e) => setEdit((prev) => prev ? { ...prev, prdReviewBedrockModelId: e.target.value } : prev)}
                     disabled={upsert.isPending}
-                  >
+                   {...{ 'data-testid': 'ps-bedrock-model' }}>
                     <option value="">Use service default</option>
                     {bedrockModels.map((m) => (
                       <option key={m.id} value={m.id}>{m.label}</option>
@@ -2014,7 +2107,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     value={String(edit.prdReviewBedrockMaxTokens)}
                     onChange={(e) => setEdit((prev) => prev ? { ...prev, prdReviewBedrockMaxTokens: Number(e.target.value) } : prev)}
                     disabled={upsert.isPending}
-                  >
+                   {...{ 'data-testid': 'ps-bedrock-max-tokens' }}>
                     <option value="8000">8 000 (small PRDs)</option>
                     <option value="16000">16 000 (default)</option>
                     <option value="32000">32 000 (large PRDs)</option>
@@ -2037,7 +2130,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     value={edit.designPlanBedrockModelId}
                     onChange={(e) => setEdit((prev) => prev ? { ...prev, designPlanBedrockModelId: e.target.value } : prev)}
                     disabled={upsert.isPending}
-                  >
+                   {...{ 'data-testid': 'ps-plan-bedrock-model' }}>
                     <option value="">Use service default</option>
                     {bedrockModels.map((m) => (
                       <option key={m.id} value={m.id}>{m.label}</option>
@@ -2052,7 +2145,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     value={String(edit.designPlanBedrockMaxTokens)}
                     onChange={(e) => setEdit((prev) => prev ? { ...prev, designPlanBedrockMaxTokens: Number(e.target.value) } : prev)}
                     disabled={upsert.isPending}
-                  >
+                   {...{ 'data-testid': 'ps-plan-bedrock-max-tokens' }}>
                     <option value="2000">2 000</option>
                     <option value="4000">4 000 (default)</option>
                     <option value="8000">8 000</option>
@@ -2074,7 +2167,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     value={edit.designPrototypeBedrockModelId}
                     onChange={(e) => setEdit((prev) => prev ? { ...prev, designPrototypeBedrockModelId: e.target.value } : prev)}
                     disabled={upsert.isPending}
-                  >
+                   {...{ 'data-testid': 'ps-prototype-bedrock-model' }}>
                     <option value="">Use service default</option>
                     {bedrockModels.map((m) => (
                       <option key={m.id} value={m.id}>{m.label}</option>
@@ -2089,7 +2182,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     value={String(edit.designPrototypeBedrockMaxTokens)}
                     onChange={(e) => setEdit((prev) => prev ? { ...prev, designPrototypeBedrockMaxTokens: Number(e.target.value) } : prev)}
                     disabled={upsert.isPending}
-                  >
+                   {...{ 'data-testid': 'ps-prototype-bedrock-max-tokens' }}>
                     <option value="8000">8 000</option>
                     <option value="16000">16 000 (default)</option>
                     <option value="32000">32 000</option>
@@ -2104,7 +2197,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     value={String(edit.designPrototypeBedrockTimeoutMs)}
                     onChange={(e) => setEdit((prev) => prev ? { ...prev, designPrototypeBedrockTimeoutMs: Number(e.target.value) } : prev)}
                     disabled={upsert.isPending}
-                  >
+                   {...{ 'data-testid': 'ps-prototype-bedrock-timeout' }}>
                     <option value="480000">8 min</option>
                     <option value="720000">12 min (default)</option>
                     <option value="900000">15 min</option>
@@ -2127,7 +2220,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     value={edit.designPrototypeRegenBedrockModelId}
                     onChange={(e) => setEdit((prev) => prev ? { ...prev, designPrototypeRegenBedrockModelId: e.target.value } : prev)}
                     disabled={upsert.isPending}
-                  >
+                   {...{ 'data-testid': 'ps-prototype-regen-bedrock-model' }}>
                     <option value="">Same as generation model</option>
                     {bedrockModels.map((m) => (
                       <option key={m.id} value={m.id}>{m.label}</option>
@@ -2142,7 +2235,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     value={String(edit.designPrototypeRegenBedrockMaxTokens)}
                     onChange={(e) => setEdit((prev) => prev ? { ...prev, designPrototypeRegenBedrockMaxTokens: Number(e.target.value) } : prev)}
                     disabled={upsert.isPending}
-                  >
+                   {...{ 'data-testid': 'ps-prototype-regen-bedrock-max-tokens' }}>
                     <option value="8000">8 000</option>
                     <option value="16000">16 000 (default)</option>
                     <option value="32000">32 000</option>
@@ -2164,7 +2257,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     value={edit.uiLabBedrockModelId}
                     onChange={(e) => setEdit((prev) => prev ? { ...prev, uiLabBedrockModelId: e.target.value } : prev)}
                     disabled={upsert.isPending}
-                  >
+                   {...{ 'data-testid': 'ps-ui-lab-bedrock-model' }}>
                     <option value="">Use service default</option>
                     {bedrockModels.map((m) => (
                       <option key={m.id} value={m.id}>{m.label}</option>
@@ -2179,7 +2272,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     value={String(edit.uiLabBedrockMaxTokens)}
                     onChange={(e) => setEdit((prev) => prev ? { ...prev, uiLabBedrockMaxTokens: Number(e.target.value) } : prev)}
                     disabled={upsert.isPending}
-                  >
+                   {...{ 'data-testid': 'ps-ui-lab-bedrock-max-tokens' }}>
                     <option value="8000">8 000</option>
                     <option value="16000">16 000 (default)</option>
                     <option value="32000">32 000</option>
@@ -2194,7 +2287,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     value={String(edit.uiLabBedrockTimeoutMs)}
                     onChange={(e) => setEdit((prev) => prev ? { ...prev, uiLabBedrockTimeoutMs: Number(e.target.value) } : prev)}
                     disabled={upsert.isPending}
-                  >
+                   {...{ 'data-testid': 'ps-ui-lab-bedrock-timeout' }}>
                     <option value="300000">5 min</option>
                     <option value="480000">8 min</option>
                     <option value="600000">10 min (default)</option>
@@ -2210,7 +2303,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     value={String(edit.uiLabBedrockTemperature)}
                     onChange={(e) => setEdit((prev) => prev ? { ...prev, uiLabBedrockTemperature: Number(e.target.value) } : prev)}
                     disabled={upsert.isPending}
-                  >
+                   {...{ 'data-testid': 'ps-ui-lab-temperature' }}>
                     <option value="0">0 — deterministic (default)</option>
                     <option value="0.3">0.3 — slight variation</option>
                     <option value="0.5">0.5 — balanced</option>
@@ -2233,7 +2326,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     value={edit.uiLabRegenBedrockModelId}
                     onChange={(e) => setEdit((prev) => prev ? { ...prev, uiLabRegenBedrockModelId: e.target.value } : prev)}
                     disabled={upsert.isPending}
-                  >
+                   {...{ 'data-testid': 'ps-ui-lab-regen-model' }}>
                     <option value="">Same as generation model</option>
                     {bedrockModels.map((m) => (
                       <option key={m.id} value={m.id}>{m.label}</option>
@@ -2248,7 +2341,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     value={String(edit.uiLabRegenBedrockMaxTokens)}
                     onChange={(e) => setEdit((prev) => prev ? { ...prev, uiLabRegenBedrockMaxTokens: Number(e.target.value) } : prev)}
                     disabled={upsert.isPending}
-                  >
+                   {...{ 'data-testid': 'ps-ui-lab-regen-max-tokens' }}>
                     <option value="8000">8 000</option>
                     <option value="16000">16 000 (default)</option>
                     <option value="32000">32 000</option>
@@ -2273,7 +2366,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                 Designate who can review documents for this project. Users must also have the appropriate review permission.
               </p>
 
-              <div className={styles.approvalModeSection} data-testid="ps-approval-mode">
+              <div className={styles.approvalModeSection} {...{ 'data-testid': 'ps-approval-mode' }}>
                 <p className={styles.approverSubTitle}>Approval Mode</p>
                 <div className={styles.approvalModeOptions}>
                   <label className={`${styles.approvalModeOption} ${edit.approvalMode === 'any_one' ? styles.approvalModeOptionSelected : ''}`}>
@@ -2285,7 +2378,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                       onChange={() => setEdit((prev) => prev ? { ...prev, approvalMode: 'any_one' } : prev)}
                       disabled={upsert.isPending}
                       className={styles.approvalModeRadio}
-                      data-testid="ps-approval-mode-any-one"
+                      {...{ 'data-testid': 'ps-approval-mode-any-one' }}
                     />
                     <div>
                       <span className={styles.approvalModeLabel}>Any One</span>
@@ -2301,7 +2394,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                       onChange={() => setEdit((prev) => prev ? { ...prev, approvalMode: 'all_required' } : prev)}
                       disabled={upsert.isPending}
                       className={styles.approvalModeRadio}
-                      data-testid="ps-approval-mode-all-required"
+                      {...{ 'data-testid': 'ps-approval-mode-all-required' }}
                     />
                     <div>
                       <span className={styles.approvalModeLabel}>All Required</span>
@@ -2345,7 +2438,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                             setEdit((prev) => prev ? { ...prev, quickSkillPills: pills } : prev);
                           }}
                           disabled={upsert.isPending || isLoadingModels}
-                        >
+                         {...{ 'data-testid': `ps-skill-pill-model-${idx}` }}>
                           <option value="">Default model</option>
                           {availableModels.map((m) => (
                             <option key={m.id} value={m.id}>{m.displayName}</option>
@@ -2361,7 +2454,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                             setEdit((prev) => prev ? { ...prev, quickSkillPills: pills } : prev);
                           }}
                           title="Move up"
-                        >
+                         {...{ 'data-testid': `ps-skill-pill-up-${idx}` }}>
                           ↑
                         </button>
                         <button
@@ -2374,7 +2467,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                             setEdit((prev) => prev ? { ...prev, quickSkillPills: pills } : prev);
                           }}
                           title="Move down"
-                        >
+                         {...{ 'data-testid': `ps-skill-pill-down-${idx}` }}>
                           ↓
                         </button>
                         <button
@@ -2385,7 +2478,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                             setEdit((prev) => prev ? { ...prev, quickSkillPills: pills } : prev);
                           }}
                           title="Remove pill"
-                        >
+                         {...{ 'data-testid': `ps-skill-pill-remove-${idx}` }}>
                           Remove
                         </button>
                       </div>
@@ -2399,8 +2492,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                           pills[idx] = { ...pills[idx], description: e.target.value || null };
                           setEdit((prev) => prev ? { ...prev, quickSkillPills: pills } : prev);
                         }}
-                        disabled={upsert.isPending}
-                      />
+                        disabled={upsert.isPending} {...{ 'data-testid': `ps-skill-pill-description-${idx}` }} />
                       <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', marginTop: '4px' }}>
                         <input
                           type="checkbox"
@@ -2410,8 +2502,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                             pills[idx] = { ...pills[idx], bypassScopePolicy: e.target.checked || null };
                             setEdit((prev) => prev ? { ...prev, quickSkillPills: pills } : prev);
                           }}
-                          disabled={upsert.isPending}
-                        />
+                          disabled={upsert.isPending} {...{ 'data-testid': `ps-skill-pill-bypass-scope-${idx}` }} />
                         Bypass scope guardrail (allows this skill to research public/external topics)
                       </label>
                     </div>
@@ -2426,8 +2517,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     id="ps-pill-label"
                     className={styles.input}
                     placeholder="e.g. Production Support"
-                    disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
-                  />
+                    disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo} {...{ 'data-testid': 'ps-pill-label' }} />
                 </div>
                 <div className={styles.field} style={{ flex: 1 }}>
                   <label className={styles.label} htmlFor="ps-pill-skill">Skill</label>
@@ -2435,7 +2525,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     id="ps-pill-skill"
                     className={styles.select}
                     disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
-                  >
+                   {...{ 'data-testid': 'ps-pill-skill' }}>
                     <option value="">— select a skill —</option>
                     {skillList.map((s) => (
                       <option key={s.id} value={s.path}>{s.name}</option>
@@ -2448,7 +2538,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     id="ps-pill-model"
                     className={styles.select}
                     disabled={upsert.isPending || isLoadingModels || !edit.skillRepo}
-                  >
+                   {...{ 'data-testid': 'ps-pill-model' }}>
                     <option value="">Use default</option>
                     {availableModels.map((m) => (
                       <option key={m.id} value={m.id}>{m.displayName}</option>
@@ -2473,7 +2563,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     skillEl.value = '';
                     if (modelEl) modelEl.value = '';
                   }}
-                >
+                 {...{ 'data-testid': 'ps-skill-pill-add' }}>
                   Add
                 </button>
               </div>
@@ -2509,7 +2599,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                             setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
                           }}
                           disabled={upsert.isPending || isLoadingModels}
-                        >
+                         {...{ 'data-testid': `ps-mcp-pill-model-${idx}` }}>
                           <option value="">Default model</option>
                           {availableModels.map((m) => (
                             <option key={m.id} value={m.id}>{m.displayName}</option>
@@ -2525,7 +2615,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                             setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
                           }}
                           title="Move up"
-                        >↑</button>
+                         {...{ 'data-testid': `ps-mcp-pill-up-${idx}` }}>↑</button>
                         <button
                           type="button"
                           className={styles.btnAction}
@@ -2536,7 +2626,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                             setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
                           }}
                           title="Move down"
-                        >↓</button>
+                         {...{ 'data-testid': `ps-mcp-pill-down-${idx}` }}>↓</button>
                         <button
                           type="button"
                           className={`${styles.btnAction} ${styles.btnActionDanger}`}
@@ -2545,7 +2635,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                             setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
                           }}
                           title="Remove pill"
-                        >Remove</button>
+                         {...{ 'data-testid': `ps-mcp-pill-remove-${idx}` }}>Remove</button>
                       </div>
                       {pill.transport === 'http' ? (
                         <input
@@ -2558,8 +2648,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                             pills[idx] = { ...pills[idx], url: e.target.value } as typeof pill;
                             setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
                           }}
-                          disabled={upsert.isPending}
-                        />
+                          disabled={upsert.isPending} {...{ 'data-testid': `ps-mcp-pill-url-${idx}` }} />
                       ) : (
                         <>
                           <input
@@ -2572,8 +2661,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                               pills[idx] = { ...pills[idx], command: e.target.value } as typeof pill;
                               setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
                             }}
-                            disabled={upsert.isPending}
-                          />
+                            disabled={upsert.isPending} {...{ 'data-testid': `ps-mcp-pill-command-${idx}` }} />
                           <input
                             className={styles.input}
                             style={{ fontSize: '0.8rem', padding: '4px 8px', marginTop: '4px' }}
@@ -2585,8 +2673,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                               pills[idx] = { ...pills[idx], args } as typeof pill;
                               setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
                             }}
-                            disabled={upsert.isPending}
-                          />
+                            disabled={upsert.isPending} {...{ 'data-testid': `ps-mcp-pill-args-${idx}` }} />
                           <input
                             className={styles.input}
                             style={{ fontSize: '0.8rem', padding: '4px 8px', marginTop: '4px' }}
@@ -2602,8 +2689,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                               pills[idx] = { ...pills[idx], env: Object.keys(env).length ? env : null } as typeof pill;
                               setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
                             }}
-                            disabled={upsert.isPending}
-                          />
+                            disabled={upsert.isPending} {...{ 'data-testid': `ps-mcp-pill-env-${idx}` }} />
                         </>
                       )}
                       <input
@@ -2616,8 +2702,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                           pills[idx] = { ...pills[idx], systemPromptHint: e.target.value || null };
                           setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
                         }}
-                        disabled={upsert.isPending}
-                      />
+                        disabled={upsert.isPending} {...{ 'data-testid': `ps-mcp-pill-system-prompt-${idx}` }} />
                       <input
                         className={styles.input}
                         style={{ fontSize: '0.8rem', padding: '4px 8px', marginTop: '4px' }}
@@ -2628,8 +2713,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                           pills[idx] = { ...pills[idx], description: e.target.value || null };
                           setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
                         }}
-                        disabled={upsert.isPending}
-                      />
+                        disabled={upsert.isPending} {...{ 'data-testid': `ps-mcp-pill-description-${idx}` }} />
                     </div>
                   ))}
                 </div>
@@ -2640,16 +2724,15 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                 availableModels={availableModels}
                 isLoadingModels={isLoadingModels}
                 isPending={upsert.isPending}
-                onAdd={(pill) => setEdit((prev) => prev ? { ...prev, quickMcpPills: [...prev.quickMcpPills, pill] } : prev)}
-              />
+                onAdd={(pill) => setEdit((prev) => prev ? { ...prev, quickMcpPills: [...prev.quickMcpPills, pill] } : prev)} {...{ 'data-testid': 'ps-mcp-pill-add-form' }} />
             </AccordionSection>
 
             {formError && <p className={styles.formError}>{formError}</p>}
             <div className={styles.formActions} style={{ marginTop: '12px' }}>
-              <button className={styles.btnCancel} onClick={handleCancel} type="button" disabled={upsert.isPending}>
+              <button className={styles.btnCancel} onClick={handleCancel} type="button" disabled={upsert.isPending} {...{ 'data-testid': 'ps-form-cancel' }}>
                 Cancel
               </button>
-              <button className={styles.btnPrimary} onClick={() => void handleSave()} type="button" disabled={upsert.isPending}>
+              <button className={styles.btnPrimary} onClick={() => void handleSave()} type="button" disabled={upsert.isPending} {...{ 'data-testid': 'ps-form-save' }}>
                 {upsert.isPending ? 'Saving…' : 'Save'}
               </button>
             </div>
@@ -2704,12 +2787,13 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                       </td>
                       <td className={styles.td}>
                         <div className={styles.actions}>
+                          <RepoCheckoutControls config={config} project={selectedProject} />
                           <button
                             className={styles.btnAction}
                             onClick={() => handleEditRow(config)}
                             type="button"
                             disabled={!!edit || remove.isPending}
-                          >
+                           {...{ 'data-testid': `ps-config-edit-${config.id}` }}>
                             Edit
                           </button>
                           <button
@@ -2717,7 +2801,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                             onClick={() => void handleDelete(config)}
                             type="button"
                             disabled={deletingId === config.id || remove.isPending}
-                          >
+                           {...{ 'data-testid': `ps-config-delete-${config.id}` }}>
                             {deletingId === config.id ? 'Deleting…' : 'Delete'}
                           </button>
                         </div>
@@ -2754,7 +2838,7 @@ const FoundationSkillsProjectView: React.FC<{ project: string }> = ({ project })
         className={styles.fsToggle}
         onClick={() => setExpanded(p => !p)}
         aria-expanded={expanded}
-      >
+       {...{ 'data-testid': 'ps-foundation-skills-toggle' }}>
         <span className={styles.fsToggleTitle}>Foundation Skills</span>
         {skills.length > 0 && (
           <span className={styles.fsCount}>{skills.length} available</span>

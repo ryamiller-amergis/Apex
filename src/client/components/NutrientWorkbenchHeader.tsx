@@ -29,6 +29,8 @@ export interface WorkbenchHeaderProps {
   accept?: string;
   /** Open button label. Defaults to "Open PDF". */
   openLabel?: string;
+  /** Tooltip / extra hint for the Open button. */
+  openHint?: string;
   /** Called with one or more files — multiple = merge before loading. */
   onLoadFiles: (files: File[]) => void;
   onPrevPage: () => void;
@@ -57,6 +59,7 @@ export const NutrientWorkbenchHeader: React.FC<WorkbenchHeaderProps> = ({
   error,
   accept = 'application/pdf,.pdf',
   openLabel = 'Open PDF',
+  openHint = 'Select one file to open, or multiple PDFs to auto-merge',
   onLoadFiles,
   onPrevPage,
   onNextPage,
@@ -109,9 +112,10 @@ export const NutrientWorkbenchHeader: React.FC<WorkbenchHeaderProps> = ({
       <div className={styles.group}>
         <a
           className={styles.iconBtn}
-          href="/pdf-tools"
+          href="/pdf-tools/nutrient-poc"
           onClick={onBack}
           aria-label="Back to PDF tools"
+          data-testid="nutrient-header-back"
         >
           <ArrowLeft size={16} strokeWidth={2} aria-hidden="true" />
         </a>
@@ -120,9 +124,9 @@ export const NutrientWorkbenchHeader: React.FC<WorkbenchHeaderProps> = ({
           type="button"
           className={styles.openBtn}
           onClick={() => fileInputRef.current?.click()}
-          aria-label={`${openLabel} (select multiple PDFs to merge)`}
+          aria-label={openLabel}
           data-testid="header-open-pdf"
-          title="Select one file to open, or multiple PDFs to auto-merge"
+          title={openHint}
         >
           <FolderOpen size={15} strokeWidth={1.8} aria-hidden="true" />
           <span>{openLabel}</span>

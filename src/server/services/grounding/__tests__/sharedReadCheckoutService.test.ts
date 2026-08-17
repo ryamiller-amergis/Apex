@@ -84,6 +84,59 @@ describe('sharedReadCheckoutService', () => {
     expect(materializeToPath).toHaveBeenCalledTimes(1);
   });
 
+  it('probes ready state without acquiring a lease or materializing', async () => {
+    const withLease = jest.fn(makeLease());
+    const { service, materializeToPath } = makeService(dataRoot, {
+      withLease: withLease as SharedReadCheckoutDependencies['withLease'],
+    });
+
+    expect(service.getReady(IDENTITY)).toBeNull();
+    expect(withLease).not.toHaveBeenCalled();
+    expect(materializeToPath).not.toHaveBeenCalled();
+
+    const materialized = await service.materialize(IDENTITY);
+    withLease.mockClear();
+    const ready = service.getReady(IDENTITY);
+
+    expect(ready).toEqual({
+      workspacePath: materialized.workspacePath,
+      outcome: 'hit',
+    });
+    expect(withLease).not.toHaveBeenCalled();
+    expect(materializeToPath).toHaveBeenCalledTimes(1);
+  });
+
+  it('coalesces concurrent background warmups in one instance', async () => {
+    let releaseMaterialize!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      releaseMaterialize = resolve;
+    });
+    const materializeToPath = jest.fn(
+      async (_id: SharedReadCheckoutIdentity, destination: string) => {
+        await blocked;
+        await fsp.mkdir(destination, { recursive: true });
+        await fsp.writeFile(path.join(destination, 'README.md'), '# repo', 'utf-8');
+      },
+    );
+    const withLease = jest.fn(makeLease());
+    const service = createSharedReadCheckoutService({
+      dataRoot,
+      materializeToPath,
+      withLease: withLease as SharedReadCheckoutDependencies['withLease'],
+      listActiveGroundings: async () => [],
+      telemetry: () => undefined,
+    });
+
+    const first = service.materialize(IDENTITY);
+    const second = service.materialize(IDENTITY);
+    releaseMaterialize();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(firstResult).toEqual(secondResult);
+    expect(withLease).toHaveBeenCalledTimes(1);
+    expect(materializeToPath).toHaveBeenCalledTimes(1);
+  });
+
   it('returns "wait" when another materializer wins the lease race', async () => {
     const { service, materializeToPath } = makeService(dataRoot, {
       // Simulate a peer completing the checkout while we hold the lease.

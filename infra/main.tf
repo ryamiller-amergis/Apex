@@ -64,6 +64,12 @@ resource "azurerm_linux_web_app" "main" {
   site_config {
     always_on = true
 
+    # Required for the FEAT-007 interactive WebSocket gateway (client ↔ gateway
+    # upgrade). Declared explicitly so a full apply never reverts the runtime
+    # enablement to the azurerm default (false), which would silently break
+    # real-time chat streaming.
+    websockets_enabled = true
+
     # Node 24 is configured by deploy.yml. AzureRM 3.x cannot represent 24-lts
     # in application_stack, so Terraform intentionally does not declare it.
     app_command_line = "npm start"
@@ -140,6 +146,10 @@ resource "azurerm_linux_web_app" "main" {
       "AZURE_REDIRECT_URL",
       "APPLICATIONINSIGHTS_CONNECTION_STRING",
       var.enable_staging_slot ? "LT_APEX_CALLBACK_BASE_URL" : null,
+      # Environment-specific app base URL must stay pinned to its slot across
+      # swaps. Appended last to mirror the order Azure returns so the plan stays
+      # free of list-ordering churn.
+      "APEX_URL",
     ])
   }
 
@@ -205,8 +215,36 @@ resource "azurerm_linux_web_app_slot" "staging" {
   site_config {
     always_on = true
 
+    # Same as production: keep the WebSocket upgrade enabled so a post-swap
+    # staging slot serves the interactive gateway identically (and a full apply
+    # never flips it off).
+    websockets_enabled = true
+
     # Node 24 is configured by deploy.yml; see the main app comment above.
     app_command_line = "npm start"
+  }
+
+  # Mirror the production web app's logging so the slot is fully declared (no
+  # undeclared drift) and converges any leftover manual debug logging to the
+  # standard config on the next apply. Diagnostic only — not a runtime pointer.
+  logs {
+    detailed_error_messages = true
+    failed_request_tracing  = true
+
+    dynamic "application_logs" {
+      for_each = var.environment == "dev" ? [1] : []
+
+      content {
+        file_system_level = "Information"
+      }
+    }
+
+    http_logs {
+      file_system {
+        retention_in_days = 7
+        retention_in_mb   = 35
+      }
+    }
   }
 
   lifecycle {

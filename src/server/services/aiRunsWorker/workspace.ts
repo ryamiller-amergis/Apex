@@ -4,12 +4,12 @@ import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle'
 import { LocalCheckoutReader } from '../localCheckoutReader';
 
 /**
- * Open and probe exactly the ready checkout named by the frozen snapshot.
- * No remote reader or prepareRepositoryReadRuntime fallback exists here.
+ * Open and probe the frozen checkout. Prefer `checkoutRef` (shared read tree at
+ * the interview SHA) when present; otherwise the legacy full-clone workspaceRef.
  */
 export async function openLocalCheckout(
   snapshot: Readonly<ExecutionSnapshot>,
-  checkoutPath = snapshot.workspaceRef,
+  checkoutPath = snapshot.checkoutRef?.trim() || snapshot.workspaceRef,
 ): Promise<LocalCheckoutReader> {
   const reader = new LocalCheckoutReader({
     checkoutPath,

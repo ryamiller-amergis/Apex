@@ -73,6 +73,23 @@ jest.mock('../services/testCaseService', () => ({
   triggerTestCaseGeneration: jest.fn(),
 }));
 
+jest.mock('../services/featureFlagService', () => ({
+  isProjectRepositoryCheckoutReadinessEnabled: jest.fn().mockResolvedValue(false),
+}));
+
+jest.mock('../services/projectRepositoryReadinessService', () => ({
+  assertResolvedProjectRepositoryReady: jest.fn().mockResolvedValue(undefined),
+  ProjectRepositoryNotReady: class ProjectRepositoryNotReady extends Error {
+    toJSON() {
+      return {
+        code: 'PROJECT_REPOSITORY_NOT_READY',
+        message: this.message,
+        status: 'not_cloned',
+      };
+    }
+  },
+}));
+
 jest.mock('../services/bedrockService', () => ({
   fixPrdContentWithBedrock: jest.fn(),
   fixPrdBacklogWithBedrock: jest.fn(),
@@ -858,6 +875,7 @@ describe('POST /api/interviews/:interviewId/prds', () => {
       userId: 'user-test',
       project: 'proj-alpha',
       threadId: 'thread-new',
+      interviewId: 'interview-1',
       kickoffMessage: 'Begin.',
     });
   });
@@ -1019,6 +1037,7 @@ describe('POST /api/interviews/prds/:prdId/design-docs — design doc model reso
     expect(mockRouteDesignDocGenerationKickoff).toHaveBeenCalledWith(
       expect.objectContaining({
         designDocId: 'design-doc-1',
+        prdId: 'prd-1',
         userId: 'user-test',
         project: 'proj-alpha',
         threadId: 'thread-mock',

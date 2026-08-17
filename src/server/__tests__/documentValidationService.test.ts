@@ -187,6 +187,7 @@ describe('autoStartDocumentValidation background routing', () => {
     getDocumentId: () => 'prd-1',
     getProject: () => 'proj-alpha',
     getAuthorId: () => 'user-1',
+    getSkillSettingsId: () => 'prd-skill-settings',
     getSourceThreadId: () => 'thread-prd',
     getValidationThreadId: () => null,
     getStatus: () => 'draft',
@@ -242,6 +243,25 @@ describe('autoStartDocumentValidation background routing', () => {
     );
   });
 
+  it('inherits parent skillSettingsId onto the validation thread', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      id: 'config-from-resolve',
+      skillRepo: 'org/skills',
+      skillBranch: 'main',
+    });
+    const adapter = makeAdapter();
+
+    await autoStartDocumentValidation(adapter);
+
+    expect(agentSvc.createThread).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        skillSettingsId: 'prd-skill-settings',
+      }),
+      { skipAutoKickoff: true },
+    );
+  });
+
   it('AC-0: worker validation decision does not call sendMessage', async () => {
     mockRouteBackgroundWorkflow.mockImplementationOnce(async (input) => {
       const prepared = await input.prepareWorker();
@@ -267,34 +287,28 @@ describe('autoStartDocumentValidation background routing', () => {
       { runType: 'chat', runId: 'thread-prd', project: 'proj-alpha' },
       { runType: 'chat', runId: 'thread-validation', project: 'proj-alpha' },
       'user-1',
+      { deferMaterialization: true },
     );
   });
 
-  it('BR-008 / DoD-3: validation preparation failure persists reset before deactivation', async () => {
+  it('cold external project: validation preparation failure runs in-process and stays validating', async () => {
     const adapter = makeAdapter();
-    const deactivated = jest.fn();
-    mockRunGroundingService.persistThenMarkTerminalInactive.mockImplementationOnce(
-      async (_run, persist) => {
-        await persist();
-        deactivated();
-      },
-    );
     mockRouteBackgroundWorkflow.mockImplementationOnce(
-      async (input: { reportRecoverablePreparationFailure(): Promise<void> }) => {
-        await input.reportRecoverablePreparationFailure();
+      async (input: { runInProcess(): Promise<void> }) => {
+        await input.runInProcess();
         return {
           route: 'in-process',
           reason: 'materialization-unavailable',
-          recoverable: true,
+          fallbackStarted: true,
         };
       },
     );
 
     await autoStartDocumentValidation(adapter);
 
-    expect(adapter.updateDbForValidationError).toHaveBeenCalledTimes(1);
-    expect(adapter.updateDbForValidationError.mock.invocationCallOrder[0])
-      .toBeLessThan(deactivated.mock.invocationCallOrder[0]);
-    expect(agentSvc.sendMessage).not.toHaveBeenCalled();
+    expect(adapter.updateDbForValidationError).not.toHaveBeenCalled();
+    expect(mockRunGroundingService.persistThenMarkTerminalInactive)
+      .not.toHaveBeenCalled();
+    expect(agentSvc.sendMessage).toHaveBeenCalledTimes(1);
   });
 });

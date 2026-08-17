@@ -10,6 +10,9 @@ import {
 import * as menuSettingsService from '../services/menuSettingsService';
 import * as featureFlagService from '../services/featureFlagService';
 import * as groupService from '../services/groupService';
+import * as restrictedAccessService from '../services/restrictedAccessService';
+import { RestrictedAccessError } from '../services/restrictedAccessService';
+import { listRoles } from '../services/rbacService';
 import { getUserId, getUserEmail, getDisplayName } from '../utils/requestUser';
 import { listProjectCatalog } from '../services/projectCatalogService';
 import {
@@ -430,6 +433,70 @@ router.put('/menu-settings/:project', async (req: Request, res: Response): Promi
     const config = await menuSettingsService.upsertMenuConfig(project, enabledViews, getActingUserLabel(req));
     res.json(config);
   } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── Restricted User Access ────────────────────────────────────────────────────
+
+router.get('/user-access', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const entries = await restrictedAccessService.listRestrictedAccess();
+    res.json({ entries });
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get('/user-access/roles', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const roles = await listRoles();
+    res.json({ roles });
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/user-access', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const entry = await restrictedAccessService.createRestrictedAccess(
+      req.body,
+      getActingUserLabel(req),
+    );
+    res.status(201).json(entry);
+  } catch (err) {
+    if (err instanceof RestrictedAccessError) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.put('/user-access/:id', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const entry = await restrictedAccessService.updateRestrictedAccess(req.params.id, req.body);
+    res.json(entry);
+  } catch (err) {
+    if (err instanceof RestrictedAccessError) {
+      const status = err.message.includes('not found') ? 404 : 400;
+      res.status(status).json({ error: err.message });
+      return;
+    }
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.delete('/user-access/:id', async (req: Request, res: Response): Promise<void> => {
+  try {
+    await restrictedAccessService.deleteRestrictedAccess(req.params.id);
+    res.status(204).send();
+  } catch (err) {
+    if (err instanceof RestrictedAccessError) {
+      const status = err.message.includes('not found') ? 404 : 400;
+      res.status(status).json({ error: err.message });
+      return;
+    }
     res.status(500).json({ error: 'Internal server error' });
   }
 });

@@ -21,6 +21,10 @@ import {
   groundingBundlePublisher,
   type GroundingBundlePublisher,
 } from './grounding/groundingBundlePublisherService';
+import {
+  sharedReadCheckoutService,
+  type SharedReadCheckoutService,
+} from './grounding/sharedReadCheckoutService';
 
 const MAX_CHANGED_PATHS = 200;
 const PRE_WARM_CONCURRENCY = 2;
@@ -48,9 +52,15 @@ export interface GroundingPreWarmDependencies {
     toSha: string
   ) => Promise<string[]>;
   publishBundle?: GroundingBundlePublisher['publish'];
+  materializeSharedCheckout?: SharedReadCheckoutService['materialize'];
   enqueueImpact?: typeof groundingImpactEvaluatorService.enqueue;
   telemetry?: typeof trackEvent;
   now?: () => number;
+  /**
+   * When true for the target project, preWarm is a no-op (Deployment B enabled
+   * path — admin clone owns mirrors; no Blob publish / shared prewarm).
+   */
+  isCheckoutReadinessEnabled?: (project: string) => Promise<boolean>;
 }
 
 function cacheOptions(target: PreWarmTarget): RepoCacheOptions {
@@ -94,12 +104,14 @@ export function configuredPreWarmTargets(
         provider === 'github'
           ? repository.split('/').pop() || repository
           : repository;
-      return [{
-        provider,
-        project: config.project,
-        repository: normalizedRepository,
-        branch,
-      }];
+      return [
+        {
+          provider,
+          project: config.project,
+          repository: normalizedRepository,
+          branch,
+        },
+      ];
     })
   );
 }
@@ -110,8 +122,8 @@ async function listDefaultPreWarmTargets(): Promise<PreWarmTarget[]> {
     listSkillConfigs(),
   ]);
   if (
-    activeResult.status === 'rejected'
-    && configuredResult.status === 'rejected'
+    activeResult.status === 'rejected' &&
+    configuredResult.status === 'rejected'
   ) {
     throw activeResult.reason;
   }
@@ -172,8 +184,7 @@ export function createGroundingPreWarmService(
   dependencies: GroundingPreWarmDependencies = {}
 ): GroundingPreWarmService {
   const listActiveTargets =
-    dependencies.listActiveTargets ??
-    listDefaultPreWarmTargets;
+    dependencies.listActiveTargets ?? listDefaultPreWarmTargets;
   const withLease = dependencies.withLease ?? withRepoCacheLease;
   const refreshUnderLease =
     dependencies.refreshUnderLease ?? refreshRepoCacheUnderLease;
@@ -187,9 +198,21 @@ export function createGroundingPreWarmService(
   const publishBundle =
     dependencies.publishBundle ??
     ((input) => groundingBundlePublisher.publish(input));
+  const materializeSharedCheckout =
+    dependencies.materializeSharedCheckout ??
+    ((identity) => sharedReadCheckoutService.materialize(identity));
   const enqueueImpact =
     dependencies.enqueueImpact ??
     ((event) => groundingImpactEvaluatorService.enqueue(event));
+  const isCheckoutReadinessEnabled =
+    dependencies.isCheckoutReadinessEnabled ??
+    (async (project: string) => {
+      // Lazy import avoids pulling featureFlagService into every Jest graph that
+      // only exercises injected prewarm dependencies.
+      const { isProjectRepositoryCheckoutReadinessEnabledForProject } =
+        await import('./featureFlagService');
+      return isProjectRepositoryCheckoutReadinessEnabledForProject(project);
+    });
   const inFlight = new Map<string, Promise<void>>();
 
   const preWarm = (target: PreWarmTarget): Promise<void> => {
@@ -197,89 +220,135 @@ export function createGroundingPreWarmService(
     const existing = inFlight.get(identity);
     if (existing) return existing;
 
-    const options = cacheOptions(target);
-    const requestedAt = now();
-    const previousSha = Promise.resolve(readCachedSha(target)).catch(
-      () => null
-    );
-    const operation = previousSha
-      .then(async (fromSha) => {
-        let toSha: string | null = null;
-        await withLease(getRepoCacheLeaseKey(options), async (lease) => {
-          lease.signal.throwIfAborted();
-          const coalesced = wasRefreshedSince(options, requestedAt);
-          if (!coalesced) {
-            await refreshUnderLease(options, lease);
-          }
-          lease.signal.throwIfAborted();
-          telemetry(
-            'grounding.mirror.prewarm',
-            {
-              provider: target.provider,
-              project: target.project,
-              repository: target.repository,
-              branch: target.branch,
-              outcome: coalesced ? 'coalesced' : 'refreshed',
-            },
-            { durationMs: Math.max(0, now() - requestedAt) }
-          );
-          toSha = await Promise.resolve(readCachedSha(target)).catch(
-            () => null
-          );
-        });
+    const operation = (async () => {
+      // @feature-flag:project-repository-checkout-readiness start winner=enabled
+      let checkoutReadinessEnabled = false;
+      try {
+        checkoutReadinessEnabled = await isCheckoutReadinessEnabled(
+          target.project,
+        );
+      } catch {
+        checkoutReadinessEnabled = false;
+      }
+      if (checkoutReadinessEnabled) {
+        // @feature-flag:project-repository-checkout-readiness enabled-start
+        // Admin-managed checkouts: no mirror refresh / Blob publish / shared prewarm.
+        return;
+        // @feature-flag:project-repository-checkout-readiness enabled-end
+      }
+      // @feature-flag:project-repository-checkout-readiness end
 
-        if (toSha) {
-          try {
-            const outcome = await publishBundle({
-              identity: {
-                provider: options.provider,
-                project: target.project,
-                repo: target.repository,
-                sha: toSha,
-              },
-              cacheDir: getRepoCacheDir(options),
-              branch: target.branch,
-            });
-            telemetry('grounding.bundle.publish', {
-              provider: target.provider,
+      const options = cacheOptions(target);
+      const requestedAt = now();
+      const fromSha = await Promise.resolve(readCachedSha(target)).catch(
+        () => null,
+      );
+      const refreshed = { sha: null as string | null };
+      await withLease(getRepoCacheLeaseKey(options), async (lease) => {
+        lease.signal.throwIfAborted();
+        const coalesced = wasRefreshedSince(options, requestedAt);
+        if (!coalesced) {
+          await refreshUnderLease(options, lease);
+        }
+        lease.signal.throwIfAborted();
+        telemetry(
+          'grounding.mirror.prewarm',
+          {
+            provider: target.provider,
+            project: target.project,
+            repository: target.repository,
+            branch: target.branch,
+            outcome: coalesced ? 'coalesced' : 'refreshed',
+          },
+          { durationMs: Math.max(0, now() - requestedAt) }
+        );
+        refreshed.sha = await Promise.resolve(readCachedSha(target)).catch(
+          () => null
+        );
+      });
+
+      const cachedSha = refreshed.sha?.trim();
+      const toSha = cachedSha || null;
+      if (cachedSha) {
+        try {
+          const outcome = await publishBundle({
+            identity: {
+              provider: options.provider,
               project: target.project,
-              repository: target.repository,
-              branch: target.branch,
-              outcome,
-            });
-          } catch {
-            telemetry('grounding.bundle.publish', {
-              provider: target.provider,
-              project: target.project,
-              repository: target.repository,
-              branch: target.branch,
-              outcome: 'failed',
-            });
-          }
+              repo: target.repository,
+              sha: cachedSha,
+            },
+            cacheDir: getRepoCacheDir(options),
+            branch: target.branch,
+          });
+          telemetry('grounding.bundle.publish', {
+            provider: target.provider,
+            project: target.project,
+            repository: target.repository,
+            branch: target.branch,
+            outcome,
+          });
+        } catch {
+          telemetry('grounding.bundle.publish', {
+            provider: target.provider,
+            project: target.project,
+            repository: target.repository,
+            branch: target.branch,
+            outcome: 'failed',
+          });
         }
 
-        void Promise.resolve()
-          .then(async () => {
-            if (!fromSha || !toSha || toSha === fromSha) return;
-            const changedFiles = safeChangedPaths(
-              await listChangedPaths(options, fromSha, toSha)
-            );
-            if (changedFiles.length === 0) return;
-            enqueueImpact({
-              provider: target.provider,
-              project: target.project,
-              repository: target.repository,
-              branch: target.branch,
-              fromSha,
-              toSha,
-              changedFiles,
-            });
-          })
-          .catch(() => undefined);
-      })
-      .finally(() => {
-        inFlight.delete(identity);
-      });
+        try {
+          const { outcome } = await materializeSharedCheckout({
+            provider: options.provider,
+            project: target.project,
+            repo: target.repository,
+            branch: target.branch,
+            sha: cachedSha,
+          });
+          telemetry('grounding.shared.prewarm', {
+            provider: target.provider,
+            project: target.project,
+            repository: target.repository,
+            branch: target.branch,
+            sha: cachedSha,
+            outcome,
+          });
+        } catch {
+          telemetry('grounding.shared.prewarm', {
+            provider: target.provider,
+            project: target.project,
+            repository: target.repository,
+            branch: target.branch,
+            sha: cachedSha,
+            outcome: 'failed',
+          });
+          // Shared checkout prewarming is only an acceleration. The
+          // user-facing preparation path owns on-demand materialization.
+        }
+      }
+
+      void Promise.resolve()
+        .then(async () => {
+          if (!fromSha || !toSha || toSha === fromSha) return;
+          const changedFiles = safeChangedPaths(
+            await listChangedPaths(options, fromSha, toSha)
+          );
+          if (changedFiles.length === 0) return;
+          enqueueImpact({
+            provider: target.provider,
+            project: target.project,
+            repository: target.repository,
+            branch: target.branch,
+            fromSha,
+            toSha,
+            changedFiles,
+          });
+        })
+        .catch(() => undefined);
+    })().finally(() => {
+      inFlight.delete(identity);
+    });
     inFlight.set(identity, operation);
     return operation;
   };
@@ -289,7 +358,11 @@ export function createGroundingPreWarmService(
     async sweep() {
       const targets = await listActiveTargets();
       let firstError: unknown;
-      for (let index = 0; index < targets.length; index += PRE_WARM_CONCURRENCY) {
+      for (
+        let index = 0;
+        index < targets.length;
+        index += PRE_WARM_CONCURRENCY
+      ) {
         const results = await Promise.allSettled(
           targets
             .slice(index, index + PRE_WARM_CONCURRENCY)

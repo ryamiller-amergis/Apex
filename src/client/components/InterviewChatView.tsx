@@ -7,6 +7,7 @@ import { useStartChat, useChatThread, useSkillList, useSkillRepos } from '../hoo
 import { useProjectSkillConfig, useGlobalDefaultModel, useAvailableModels } from '../hooks/useProjectSkillConfig';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useChatAttachments, formatAttachmentSize } from '../hooks/useChatAttachments';
+import { useProjectRepositoryReadiness } from '../hooks/useProjectRepositoryReadiness';
 import {
   adrAttachmentFileName,
   buildFeatureRequestInterviewPrefillText,
@@ -16,6 +17,7 @@ import type { Adr } from '../../shared/types/adr';
 import { useSpeechInput } from '../hooks/useSpeechInput';
 import { useContextEstimate } from '../hooks/useContextEstimate';
 import { useLinkFeatureRequestInterview } from '../hooks/useFeatureRequests';
+import { usePersistStagedLinks } from '../hooks/useLinkedContext';
 import { DEFAULT_MODEL_ID } from '../config/models';
 import {
   useInterview,
@@ -34,6 +36,10 @@ import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { trackEvent, trackException } from '../services/telemetry';
 import { ReadAloudButton } from './ReadAloudButton';
+import {
+  LinkedContextPicker,
+  type StagedLinkedContextSelection,
+} from './LinkedContextPicker';
 import { AgentComposer } from './agentChat';
 import styles from './InterviewChatView.module.css';
 
@@ -259,21 +265,56 @@ interface NewInterviewLocationState {
   featureRequest?: FeatureRequestInterviewPrefill;
 }
 
+interface ExistingInterviewLocationState {
+  openLinkedContext?: boolean;
+  linkedContextInitialErrorText?: string;
+}
+
+interface StagedLinkFailure {
+  selection: Pick<StagedLinkedContextSelection, 'type' | 'id'>;
+  error: string;
+}
+
+function buildLinkedContextFailureSummary(
+  failures: StagedLinkFailure[],
+  stagedSelections: StagedLinkedContextSelection[],
+): string {
+  const details = failures.map(({ selection, error }) => {
+    const staged = stagedSelections.find(
+      (candidate) =>
+        candidate.type === selection.type && candidate.id === selection.id,
+    );
+    const fallbackLabel =
+      selection.type === 'adr'
+        ? `ADR ${selection.id}`
+        : `Design Module ${selection.id}`;
+    return `${staged?.label ?? fallbackLabel}: ${error}`;
+  });
+  return `Some linked context could not be saved. ${details.join(' ')} The Interview was created and other valid links were saved. Open Linked Context to retry.`;
+}
+
 const NewInterviewCompose: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const featureRequest = (location.state as NewInterviewLocationState | null)?.featureRequest;
-  const { selectedProject, selectedSkillSettingsId } = useAppShell();
+  const { selectedProject, selectedSkillSettingsId, can } = useAppShell();
   const [input, setInput] = useState(() => buildFeatureRequestInterviewPrefillText(featureRequest));
   const [title, setTitle] = useState(() => featureRequest?.title ?? '');
   const [titleTouched, setTitleTouched] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [showOwnerModal, setShowOwnerModal] = useState(false);
+  const [showStagedLinkedContext, setShowStagedLinkedContext] = useState(false);
   const [model, setModel] = useState(DEFAULT_MODEL_ID);
+  const [stagedLinkedContext, setStagedLinkedContext] = useState<
+    StagedLinkedContextSelection[]
+  >([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const stagedLinkedContextTriggerRef = useRef<HTMLButtonElement>(null);
+  const stagedLinkedContextDialogRef = useRef<HTMLDialogElement>(null);
+  const stagedLinkedContextWasOpenRef = useRef(false);
   const prevEffectiveDefaultRef = useRef<string>(DEFAULT_MODEL_ID);
   const featureRequestIdRef = useRef(featureRequest?.id);
   const linkedAdrSeedDoneRef = useRef(false);
@@ -282,6 +323,7 @@ const NewInterviewCompose: React.FC = () => {
 
   const { data: repos = [] } = useSkillRepos(selectedProject || null);
   const { data: skillConfig } = useProjectSkillConfig(selectedProject || null, selectedSkillSettingsId);
+  const repoReadiness = useProjectRepositoryReadiness(skillConfig?.id, selectedProject || null);
   const { data: globalDefaultModel } = useGlobalDefaultModel();
   const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
 
@@ -339,6 +381,7 @@ const NewInterviewCompose: React.FC = () => {
 
   const startChat = useStartChat();
   const createInterview = useCreateInterview();
+  const persistStagedLinks = usePersistStagedLinks(selectedProject);
   const { mutateAsync: linkFeatureRequestInterview } = useLinkFeatureRequestInterview();
 
   useEffect(() => {
@@ -394,6 +437,10 @@ const NewInterviewCompose: React.FC = () => {
     const text = input.trim();
     const trimmedTitle = title.trim();
     if ((!text && attachments.length === 0) || isSending || !resolvedRepoName) return;
+    if (!repoReadiness.isReady) {
+      setSendError(repoReadiness.message);
+      return;
+    }
     if (!trimmedTitle) {
       setTitleTouched(true);
       titleInputRef.current?.focus();
@@ -402,12 +449,17 @@ const NewInterviewCompose: React.FC = () => {
     if (speech.isListening) speech.stop();
     setSendError(null);
     setShowOwnerModal(true);
-  }, [input, title, attachments, isSending, resolvedRepoName, speech]);
+  }, [input, title, attachments, isSending, resolvedRepoName, speech, repoReadiness.isReady, repoReadiness.message]);
 
   const handleCreateInterview = useCallback(async (selections: { prdOwnerId?: string; designDocOwnerId?: string; designPrototypeOwnerId?: string; testCaseOwnerId?: string; prdApproverIds?: string[]; designDocApproverIds?: string[]; designPrototypeApproverIds?: string[]; testCaseApproverIds?: string[] }) => {
     const text = input.trim();
     const trimmedTitle = title.trim();
     if (!resolvedRepoName || !trimmedTitle) return;
+    if (!repoReadiness.isReady) {
+      setSendError(repoReadiness.message);
+      setShowOwnerModal(false);
+      return;
+    }
     setIsSending(true);
     try {
       const threadResult = await startChat.mutateAsync({
@@ -440,6 +492,31 @@ const NewInterviewCompose: React.FC = () => {
         prototypeStageEnabled,
         testCasesEnabled,
       });
+      let linkedContextInitialErrorText: string | undefined;
+      if (stagedLinkedContext.length > 0) {
+        try {
+          const persistenceResult = await persistStagedLinks.mutateAsync({
+            interviewId: result.interviewId,
+            selections: stagedLinkedContext.map(({ type, id }) => ({
+              type,
+              id,
+            })),
+          });
+          if (persistenceResult.failures.length > 0) {
+            linkedContextInitialErrorText = buildLinkedContextFailureSummary(
+              persistenceResult.failures,
+              stagedLinkedContext,
+            );
+          }
+        } catch (persistError: unknown) {
+          const message =
+            persistError instanceof Error
+              ? persistError.message
+              : 'Unable to save linked context.';
+          linkedContextInitialErrorText =
+            `Linked context could not be saved: ${message} The Interview was created. Open Linked Context to retry.`;
+        }
+      }
       trackEvent('interview.started', {
         interviewId: result.interviewId,
         project: selectedProject,
@@ -468,7 +545,16 @@ const NewInterviewCompose: React.FC = () => {
         body: JSON.stringify({ text: text || 'Please use the attached files as context.', attachments, model }),
       });
       clearAttachments();
-      navigate(`/backlog/interview/${result.interviewId}`);
+      if (linkedContextInitialErrorText) {
+        navigate(`/backlog/interview/${result.interviewId}`, {
+          state: {
+            openLinkedContext: true,
+            linkedContextInitialErrorText,
+          },
+        });
+      } else {
+        navigate(`/backlog/interview/${result.interviewId}`);
+      }
     } catch (err: unknown) {
       trackException(err instanceof Error ? err : new Error(String(err)), {
         context: 'interview.create',
@@ -477,7 +563,7 @@ const NewInterviewCompose: React.FC = () => {
       setSendError(msg);
       setIsSending(false);
     }
-  }, [input, title, attachments, resolvedRepoName, resolvedBranch, selectedProject, resolvedSkillPath, grillSkill, startChat, createInterview, linkFeatureRequestInterview, navigate, clearAttachments, model, skillConfig, prototypeStageEnabled, testCasesEnabled]);
+  }, [input, title, attachments, resolvedRepoName, resolvedBranch, selectedProject, resolvedSkillPath, grillSkill, startChat, createInterview, persistStagedLinks, stagedLinkedContext, linkFeatureRequestInterview, navigate, clearAttachments, model, skillConfig, prototypeStageEnabled, testCasesEnabled, repoReadiness.isReady, repoReadiness.message]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -490,6 +576,57 @@ const NewInterviewCompose: React.FC = () => {
     await addFiles(e.currentTarget.files);
     e.currentTarget.value = '';
   }, [addFiles]);
+
+  const openStagedLinkedContext = useCallback(() => {
+    setShowStagedLinkedContext(true);
+  }, []);
+
+  const closeStagedLinkedContext = useCallback(() => {
+    setShowStagedLinkedContext(false);
+  }, []);
+
+  const handleStagedLinkedContextKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDialogElement>) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeStagedLinkedContext();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+
+      const focusableElements = Array.from(
+        stagedLinkedContextDialogRef.current?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      ).filter((element) => element.getAttribute('aria-hidden') !== 'true');
+      if (focusableElements.length === 0) {
+        event.preventDefault();
+        return;
+      }
+
+      const first = focusableElements[0];
+      const last = focusableElements[focusableElements.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    },
+    [closeStagedLinkedContext],
+  );
+
+  useEffect(() => {
+    if (showStagedLinkedContext) {
+      stagedLinkedContextDialogRef.current
+        ?.querySelector<HTMLElement>('[data-testid="linked-context-close"]')
+        ?.focus();
+    } else if (stagedLinkedContextWasOpenRef.current) {
+      stagedLinkedContextTriggerRef.current?.focus();
+    }
+    stagedLinkedContextWasOpenRef.current = showStagedLinkedContext;
+  }, [showStagedLinkedContext]);
 
   return (
     <div className={styles.composeContainer}>
@@ -646,6 +783,39 @@ const NewInterviewCompose: React.FC = () => {
                 <path d="M7 10.5l5.2-5.2a3 3 0 114.2 4.2l-6.7 6.7a5 5 0 01-7.1-7.1l6.4-6.4" />
               </svg>
             </button>
+            {selectedProject && (
+              <button
+                ref={stagedLinkedContextTriggerRef}
+                className={`${styles.attachBtn} ${styles.linkedContextAttachBtn} ${stagedLinkedContext.length > 0 ? styles.linkedContextAttachBtnActive : ''}`}
+                onClick={openStagedLinkedContext}
+                type="button"
+                aria-label="Select ADRs and Design Modules"
+                aria-haspopup="dialog"
+                aria-expanded={showStagedLinkedContext}
+                title="Select ADRs and Design Modules for linked context"
+                disabled={isSending}
+                {...{
+                  'data-testid': 'interview-compose-linked-context-trigger',
+                }}
+              >
+                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2.5" y="2.5" width="7" height="7" rx="1.5" />
+                  <rect x="10.5" y="10.5" width="7" height="7" rx="1.5" />
+                  <path d="M8 8l4 4" />
+                </svg>
+                {stagedLinkedContext.length > 0 && (
+                  <span
+                    className={styles.linkedContextAttachCount}
+                    aria-hidden="true"
+                    {...{
+                      'data-testid': 'interview-compose-linked-context-count',
+                    }}
+                  >
+                    {stagedLinkedContext.length}
+                  </span>
+                )}
+              </button>
+            )}
             <button
               className={`${styles.micBtn} ${speech.isListening ? styles.micBtnActive : ''}`}
               onClick={() => speech.toggle(input)}
@@ -682,7 +852,7 @@ const NewInterviewCompose: React.FC = () => {
             <button
               className={styles.sendBtn}
               onClick={() => void handleSend()}
-              disabled={(!input.trim() && attachments.length === 0) || isSending || !resolvedRepoName || !title.trim() || (!resolvedSkillPath && !grillSkill)}
+              disabled={(!input.trim() && attachments.length === 0) || isSending || !resolvedRepoName || !title.trim() || (!resolvedSkillPath && !grillSkill) || !repoReadiness.isReady}
               type="button"
               aria-label="Start interview"
               {...{ 'data-testid': 'interview-compose-start' }}
@@ -708,12 +878,48 @@ const NewInterviewCompose: React.FC = () => {
             No interview skill is configured for this repo project. Please ask an admin to set the interview skill path in project settings.
           </div>
         )}
+        {!repoReadiness.isReady && repoReadiness.message && (
+          <div className={styles.composeError} {...{ 'data-testid': 'interview-compose-repo-not-ready' }}>
+            {repoReadiness.message}
+          </div>
+        )}
         {(grillSkill || resolvedSkillPath) && (
           <p className={styles.composeHint}>
             Enter to send · Shift+Enter for new line · The <strong>{selectedSkillOption?.friendlyName ?? grillSkill?.name ?? 'Interview'}</strong> skill will guide this structured interview
           </p>
         )}
       </div>
+
+      {showStagedLinkedContext && selectedProject && (
+        <div
+          className={styles.linkedContextOverlay}
+          {...{
+            'data-testid': 'interview-compose-linked-context-overlay',
+          }}
+        >
+          <dialog
+            open
+            ref={stagedLinkedContextDialogRef}
+            className={styles.linkedContextPanel}
+            aria-modal="true"
+            aria-label="Select ADRs and Design Modules"
+            onKeyDown={handleStagedLinkedContextKeyDown}
+            {...{
+              'data-testid': 'interview-compose-linked-context-dialog',
+            }}
+          >
+            <LinkedContextPicker
+              mode="staged"
+              project={selectedProject}
+              canManage={can('interviews:manage')}
+              interviewStatus="in_progress"
+              stagedSelections={stagedLinkedContext}
+              onStagedSelectionsChange={setStagedLinkedContext}
+              onClose={closeStagedLinkedContext}
+            />
+          </dialog>
+        </div>
+      )}
 
       {showOwnerModal && (
         <SectionOwnerModal
@@ -739,10 +945,17 @@ const NewInterviewCompose: React.FC = () => {
 
 const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { can, userId, isAdmin } = useAppShell();
+  const linkedContextLocationState =
+    location.state as ExistingInterviewLocationState | null;
 
   const { data: interview, isLoading, isError } = useInterview(id);
   const { data: skillConfig } = useProjectSkillConfig(interview?.project ?? null);
+  const repoReadiness = useProjectRepositoryReadiness(
+    skillConfig?.id ?? interview?.skillSettingsId,
+    interview?.project ?? null,
+  );
   const { data: globalDefaultModel } = useGlobalDefaultModel();
   const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
 
@@ -754,10 +967,16 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [wrapUpDismissed, setWrapUpDismissed] = useState(false);
   const [showSendConfirm, setShowSendConfirm] = useState(false);
+  const [showLinkedContext, setShowLinkedContext] = useState(
+    Boolean(linkedContextLocationState?.openLinkedContext),
+  );
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const linkedContextTriggerRef = useRef<HTMLButtonElement>(null);
+  const linkedContextPanelRef = useRef<HTMLDialogElement>(null);
+  const linkedContextWasOpenRef = useRef(false);
 
   const updateStatus = useUpdateInterviewStatus();
   const updateTitle = useUpdateInterviewTitle();
@@ -800,6 +1019,11 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     initialMessages: chatThread?.messages,
     initialStatus: chatThread?.status,
     enablePreparationState: interview?.status === 'in_progress',
+    beforeSend: () => {
+      if (!repoReadiness.isReady) {
+        throw new Error(repoReadiness.message ?? 'Repository is not ready');
+      }
+    },
   });
 
   const {
@@ -849,6 +1073,59 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
       titleInputRef.current.select();
     }
   }, [isEditingTitle]);
+
+  const openLinkedContext = useCallback(() => {
+    setShowLinkedContext(true);
+  }, []);
+
+  const closeLinkedContext = useCallback(() => {
+    setShowLinkedContext(false);
+  }, []);
+
+  const handleLinkedContextPanelKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDialogElement>) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeLinkedContext();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+
+      const focusableElements = Array.from(
+        linkedContextPanelRef.current?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      ).filter((element) => element.getAttribute('aria-hidden') !== 'true');
+      if (focusableElements.length === 0) {
+        event.preventDefault();
+        return;
+      }
+
+      const first = focusableElements[0];
+      const last = focusableElements[focusableElements.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    },
+    [closeLinkedContext],
+  );
+
+  useEffect(() => {
+    if (showLinkedContext) {
+      const closeControl =
+        linkedContextPanelRef.current?.querySelector<HTMLElement>(
+          '[data-testid="linked-context-close"], button[aria-label="Close linked context"]',
+        );
+      closeControl?.focus();
+    } else if (linkedContextWasOpenRef.current) {
+      linkedContextTriggerRef.current?.focus();
+    }
+    linkedContextWasOpenRef.current = showLinkedContext;
+  }, [showLinkedContext]);
 
   const sendMessageToAgent = useCallback(async (
     text: string,
@@ -948,7 +1225,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
           skillPath,
           transcript,
           model: prdModel,
-          skillSettingsId: skillConfig?.id ?? undefined,
+          skillSettingsId: interview.skillSettingsId ?? skillConfig?.id ?? undefined,
         },
         skipAutoKickoff: true,
       });
@@ -1112,6 +1389,17 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         </div>
 
         <div className={styles.headerRight}>
+          <button
+            ref={linkedContextTriggerRef}
+            className={styles.actionBtn}
+            type="button"
+            aria-haspopup="dialog"
+            aria-expanded={showLinkedContext}
+            onClick={openLinkedContext}
+            {...{ 'data-testid': 'interview-linked-context-trigger' }}
+          >
+            Linked Context
+          </button>
           {canManage && (
             <div className={styles.actions}>
               {interview.status === 'in_progress' && (
@@ -1212,16 +1500,18 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         </div>
       </div>
 
-      {(sendError || prdGenError) && (
-        <div className={styles.sendError}>
-          {sendError ?? prdGenError}
-          <button
-            type="button"
-            className={styles.sendErrorDismiss}
-            onClick={() => { clearSendError(); setPrdGenError(null); }}
-            aria-label="Dismiss error"
-            {...{ 'data-testid': 'interview-dismiss-error' }}
-          >×</button>
+      {(sendError || prdGenError || (!repoReadiness.isReady && repoReadiness.message)) && (
+        <div className={styles.sendError} {...{ 'data-testid': 'interview-repo-not-ready' }}>
+          {sendError ?? prdGenError ?? repoReadiness.message}
+          {(sendError || prdGenError) && (
+            <button
+              type="button"
+              className={styles.sendErrorDismiss}
+              onClick={() => { clearSendError(); setPrdGenError(null); }}
+              aria-label="Dismiss error"
+              {...{ 'data-testid': 'interview-dismiss-error' }}
+            >×</button>
+          )}
         </div>
       )}
 
@@ -1439,6 +1729,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                     onClick={() => void handleGeneratePrd()}
                     disabled={startChat.isPending || createPrd.isPending || interview.prds.length > 0}
                     type="button"
+                    {...{ 'data-testid': 'interview-context-generate-prd-warning' }}
                   >
                     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <rect x="3" y="1" width="10" height="14" rx="1.5" />
@@ -1450,6 +1741,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                     className={styles.wrapUpDismissBtn}
                     onClick={() => setWrapUpDismissed(true)}
                     type="button"
+                    {...{ 'data-testid': 'interview-context-dismiss-warning' }}
                   >
                     Dismiss
                   </button>
@@ -1465,6 +1757,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             className={styles.fileInput}
             onChange={handleAttachmentChange}
             disabled={isInteractionBusy || isSending}
+            {...{ 'data-testid': 'interview-file-input' }}
           />
           <AgentComposer
             className={styles.composerEmbed}
@@ -1553,6 +1846,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   disabled={
                     (!input.trim() && attachments.length === 0)
                     || isInteractionBusy
+                    || !repoReadiness.isReady
                   }
                   type="button"
                   aria-label="Send"
@@ -1565,6 +1859,35 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               </div>
             )}
           />
+        </div>
+      )}
+
+      {showLinkedContext && (
+        <div
+          className={styles.linkedContextOverlay}
+          {...{ 'data-testid': 'interview-linked-context-overlay' }}
+        >
+          <dialog
+            open
+            ref={linkedContextPanelRef}
+            className={styles.linkedContextPanel}
+            aria-modal="true"
+            aria-label="Linked Context"
+            onKeyDown={handleLinkedContextPanelKeyDown}
+            {...{ 'data-testid': 'interview-linked-context-panel' }}
+          >
+            <LinkedContextPicker
+              mode="persisted"
+              project={interview.project}
+              interviewId={interview.id}
+              canManage={canManage}
+              interviewStatus={interview.status}
+              initialErrorText={
+                linkedContextLocationState?.linkedContextInitialErrorText
+              }
+              onClose={closeLinkedContext}
+            />
+          </dialog>
         </div>
       )}
 

@@ -21,11 +21,23 @@
   box-shadow: var(--shadow-md);
   width: 540px;
   max-width: calc(100vw - 32px);
+  max-height: min(90vh, 720px);
   padding: 28px;
   display: flex;
   flex-direction: column;
   gap: 24px;
   animation: slideUp 0.3s ease;
+  overflow: hidden;
+}
+
+.scrollBody {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
 }
 
 @keyframes slideUp {
@@ -38,6 +50,7 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  flex-shrink: 0;
 }
 
 .headerText {
@@ -293,6 +306,7 @@
   align-items: center;
   gap: 0;
   margin-bottom: 4px;
+  flex-shrink: 0;
 }
 
 .stepDot {
@@ -344,6 +358,7 @@
   gap: 10px;
   justify-content: space-between;
   align-items: center;
+  flex-shrink: 0;
 }
 
 .btnSkip {
@@ -482,7 +497,6 @@
     max-height: 100dvh;
     border-radius: 0;
     padding: 24px;
-    justify-content: center;
   }
 }
 

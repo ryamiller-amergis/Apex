@@ -272,6 +272,19 @@
   box-shadow: var(--fs-ring);
 }
 
+.checkbox:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.checkbox:disabled:hover {
+  border-color: var(--border-color-light);
+}
+
+.checkbox:checked:disabled {
+  opacity: 0.55;
+}
+
 /* ── Segmented control (replaces audience <select>) ──────────────────────── */
 
 .segmented {
@@ -780,6 +793,40 @@ button:disabled {
 
 .skillRowChecked { background: var(--fs-accent-wash); }
 .skillRowChecked:hover { background: color-mix(in srgb, var(--accent-color) 13%, transparent); }
+
+/* Locked rows (always-install / auto-required deps) — visually muted */
+.skillRowLocked {
+  background: var(--bg-secondary);
+  opacity: 0.72;
+}
+
+.skillRowLocked:hover {
+  background: var(--bg-secondary);
+}
+
+.skillRowLocked.skillRowChecked {
+  background: color-mix(in srgb, var(--bg-secondary) 70%, var(--fs-accent-wash));
+}
+
+.skillRowLocked.skillRowChecked:hover {
+  background: color-mix(in srgb, var(--bg-secondary) 70%, var(--fs-accent-wash));
+}
+
+.skillRowLocked .skillRowText {
+  cursor: default;
+}
+
+.skillRowLocked .skillName {
+  color: var(--text-muted);
+}
+
+.skillRowLocked .skillSummary {
+  color: var(--text-muted);
+}
+
+.skillRowLocked .skillDependencyTag {
+  opacity: 0.9;
+}
 
 /* Two-line row: checkbox | (name + summary) */
 .skillRowMain {

@@ -186,6 +186,19 @@ pdf_blob_container_name = "pdf-artifacts"
 # ai_runs_interactive_managed_redis_sku               = "Balanced_B0"
 # ai_runs_interactive_managed_redis_high_availability = false # prod: true
 
+# Clustering policy for Azure Managed Redis. Defaults to EnterpriseCluster (a
+# single logical endpoint) so the standalone ioredis live bus and Dapr
+# non-cluster clients work. DO NOT set OSSCluster unless every consumer speaks
+# the OSS Cluster protocol — it silently breaks classic pub/sub fan-out across
+# shards, stalling the interactive live token stream, and risks Dapr actor-state
+# MOVED/CROSSSLOT if scaled.
+# NOTE: immutable on an existing DB — changing it replaces the Managed Redis.
+# create_before_destroy avoids downtime, but a new instance requires a DISTINCT
+# ai_runs_interactive_redis_name (e.g. redis-apex-ai-prd-v2). After apply,
+# redeploy the App Service so deploy.yml re-resolves REDIS_* to the new instance.
+# The backplane holds no durable data (durability is in Postgres).
+# ai_runs_interactive_managed_redis_clustering_policy = "EnterpriseCluster"
+
 # Interactive host image — placeholder until CI publishes the Dapr actor-host
 # image; Terraform ignores image drift (lifecycle ignore_changes). Point at the
 # LT ACR repo once the host Dockerfile + publish step land.

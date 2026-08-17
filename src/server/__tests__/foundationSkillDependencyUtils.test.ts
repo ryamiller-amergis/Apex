@@ -12,6 +12,35 @@ const catalog: FoundationSkillCatalogEntry[] = [
 ];
 
 describe('resolveFoundationSkillSelection', () => {
+  it('auto-includes alwaysInstall skills even when not explicitly selected', () => {
+    const result = resolveFoundationSkillSelection(
+      [
+        { name: 'to-prd', summary: 'PRD', tier: 'shippable', dependsOn: [] },
+        {
+          name: 'post-skill-bootstrap',
+          summary: 'Bootstrap',
+          tier: 'shippable',
+          dependsOn: [],
+          alwaysInstall: true,
+        },
+        {
+          name: 'update-changelog',
+          summary: 'Changelog',
+          tier: 'shippable',
+          dependsOn: [],
+          alwaysInstall: true,
+        },
+      ],
+      ['to-prd'],
+    );
+
+    expect(result.effectiveSelectedSkills).toEqual([
+      'to-prd',
+      'post-skill-bootstrap',
+      'update-changelog',
+    ]);
+  });
+
   it('derives transitive closure and dependency order deterministically', () => {
     const result = resolveFoundationSkillSelection(catalog, ['design-spec-review']);
 

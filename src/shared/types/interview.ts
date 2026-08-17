@@ -215,7 +215,8 @@ export interface ValidationScorecardFeature {
   assumptions_score: number;
   overall_score: number;
   verdict: string;
-  gaps: ValidationScorecardGap[];
+  /** Present on canonical scorecards; alternate shapes omit this and use root `gaps`. */
+  gaps?: ValidationScorecardGap[];
 }
 
 export interface ValidationScorecardFile {
@@ -223,7 +224,7 @@ export interface ValidationScorecardFile {
   filename?: string;
   score: number;
   verdict: string;
-  gaps: ValidationScorecardGap[];
+  gaps?: ValidationScorecardGap[];
 }
 
 export interface ValidationScorecard {
@@ -237,6 +238,11 @@ export interface ValidationScorecard {
   features?: ValidationScorecardFeature[];
   /** PRD validation uses `files` array instead of `features`. */
   files?: ValidationScorecardFile[];
+  /**
+   * Alternate design-doc validation shape (design-spec-review): gaps live at the
+   * root instead of under each feature. Prefer `collectValidationGaps`.
+   */
+  gaps?: ValidationScorecardGap[];
   cross_cutting_checks?: Record<string, string>;
   accepted_gaps?: string[];
   deferred_gaps?: string[];

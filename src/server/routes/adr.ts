@@ -38,6 +38,12 @@ import { getComments, getUnresolvedCount } from '../services/reviewCommentServic
 import { createNotification } from '../services/notificationService';
 import { fixAdrContentWithBedrock, regenerateMarkdownRegionWithBedrock, BedrockModelTruncatedError } from '../services/bedrockService';
 import type { OwnerApproveRequest } from '../../shared/types/approvals';
+import { isProjectRepositoryCheckoutReadinessEnabled } from '../services/featureFlagService';
+import {
+  assertResolvedProjectRepositoryReady,
+  ProjectRepositoryNotReady,
+} from '../services/projectRepositoryReadinessService';
+import { propagatePipelineGrounding } from '../services/runGroundingService';
 
 const router = Router();
 
@@ -93,8 +99,33 @@ router.post('/', requirePermission('adr:create'), async (req, res, next) => {
       res.status(400).json({ error: 'reviewerIds must be an array of user IDs' });
       return;
     }
+    const userId = getUserId(req);
+    const enabled = await isProjectRepositoryCheckoutReadinessEnabled({
+      userId,
+      project,
+      caller: 'adr-interview',
+    });
+    // @feature-flag:project-repository-checkout-readiness start winner=enabled
+    if (enabled) {
+      // @feature-flag:project-repository-checkout-readiness enabled-start
+      try {
+        await assertResolvedProjectRepositoryReady({
+          project,
+          settingsId: skillSettingsId,
+          surface: 'adr-interview',
+        });
+      } catch (e) {
+        if (e instanceof ProjectRepositoryNotReady) {
+          res.status(409).json(e.toJSON());
+          return;
+        }
+        throw e;
+      }
+      // @feature-flag:project-repository-checkout-readiness enabled-end
+    }
+    // @feature-flag:project-repository-checkout-readiness end
     const result = await createAdr({
-      userId: getUserId(req),
+      userId,
       project,
       repo,
       title: title.trim(),
@@ -162,6 +193,31 @@ router.post('/:id/generate', requirePermission('adr:edit'), async (req, res, nex
       return;
     }
 
+    const enabled = await isProjectRepositoryCheckoutReadinessEnabled({
+      userId,
+      project: adr.project,
+      caller: 'adr-finalize',
+    });
+    // @feature-flag:project-repository-checkout-readiness start winner=enabled
+    if (enabled) {
+      // @feature-flag:project-repository-checkout-readiness enabled-start
+      try {
+        await assertResolvedProjectRepositoryReady({
+          project: adr.project,
+          settingsId: adr.skillSettingsId,
+          surface: 'adr-finalize',
+        });
+      } catch (e) {
+        if (e instanceof ProjectRepositoryNotReady) {
+          res.status(409).json(e.toJSON());
+          return;
+        }
+        throw e;
+      }
+      // @feature-flag:project-repository-checkout-readiness enabled-end
+    }
+    // @feature-flag:project-repository-checkout-readiness end
+
     const sourceThread = await getThread(adr.chatThreadId);
     if (!sourceThread) {
       res.status(409).json({ error: 'ADR conversation thread is unavailable' });
@@ -192,6 +248,30 @@ router.post('/:id/generate', requirePermission('adr:edit'), async (req, res, nex
     }, {
       kickoffMessage: 'Generate the ADR from `.ai-pilot/kickoff-transcript.md`. Do not ask questions. Write exactly one `.ai-pilot/output/{slug}.adr.md` file.',
     });
+
+    // Inherit the ADR interview's pinned SHA + grounding binding onto the
+    // finalize thread — descendants must not fetch or repin.
+    try {
+      await propagatePipelineGrounding(
+        {
+          runType: 'chat',
+          runId: adr.chatThreadId,
+          project: adr.project,
+        },
+        {
+          runType: 'chat',
+          runId: thread.id,
+          project: adr.project,
+        },
+        userId,
+        { deferMaterialization: true },
+      );
+    } catch (err) {
+      console.warn(
+        `[adr] finalize grounding propagation unavailable (adrId=${adr.id}):`,
+        err instanceof Error ? err.message : err,
+      );
+    }
 
     await markAdrGenerating(adr.id, userId);
     startAdrWatcher(adr.id, thread.id);

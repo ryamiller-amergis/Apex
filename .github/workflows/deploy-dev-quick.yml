@@ -131,7 +131,9 @@ jobs:
     needs: resolve
     runs-on: ubuntu-latest
     outputs:
-      load_test_runner: ${{ steps.load_test_runner.outputs.changed }}
+      load_test_runner: ${{ steps.detect.outputs.load_test_runner }}
+      ai_runs_worker: ${{ steps.detect.outputs.ai_runs_worker }}
+      ai_runs_interactive: ${{ steps.detect.outputs.ai_runs_interactive }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -140,22 +142,14 @@ jobs:
           ref: ${{ needs.resolve.outputs.deploy_ref }}
           fetch-depth: 0
 
-      - name: Detect load-test runner changes vs origin/main
-        id: load_test_runner
+      - name: Detect runner image source changes vs origin/main
+        id: detect
+        env:
+          BASE_SHA: origin/main
+          HEAD_SHA: HEAD
         run: |
           git fetch origin main --depth=1
-          if git diff --quiet origin/main HEAD -- \
-            runners/load-test-k6/ \
-            scripts/ci/publish-lt-k6-runner.sh \
-            src/server/services/loadTestRunner/ \
-            src/shared/types/loadTest.ts \
-            package.json \
-            package-lock.json \
-            tsconfig.server.json; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
+          bash scripts/ci/detect-image-publish-changes.sh
 
   deploy-dev:
     needs: [resolve, build, detect-runner-changes]
@@ -376,8 +370,11 @@ jobs:
 
       # FEAT-003 provisions the Job now. FEAT-004 adds the worker host image;
       # until its Dockerfile exists this step is intentionally skipped.
+      # Also skip when the PR/ref does not touch worker image sources.
       - name: Publish AI-runs worker image
-        if: ${{ hashFiles('runners/ai-runs/Dockerfile') != '' }}
+        if: >-
+          needs.detect-runner-changes.outputs.ai_runs_worker == 'true' &&
+          hashFiles('runners/ai-runs/Dockerfile') != ''
         env:
           AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
           AI_RUNS_CONTAINER_APP_JOB_NAME: ${{ vars.AI_RUNS_CONTAINER_APP_JOB_NAME }}
@@ -388,8 +385,11 @@ jobs:
 
       # FEAT-007 interactive Dapr actor-host image. Skipped until its Dockerfile
       # exists; Terraform ignores image drift while the placeholder is in place.
+      # Also skip when the PR/ref does not touch interactive host image sources.
       - name: Publish AI-runs interactive host image
-        if: ${{ hashFiles('runners/ai-runs-interactive/Dockerfile') != '' }}
+        if: >-
+          needs.detect-runner-changes.outputs.ai_runs_interactive == 'true' &&
+          hashFiles('runners/ai-runs-interactive/Dockerfile') != ''
         env:
           AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
           AI_RUNS_INTERACTIVE_CONTAINER_APP_NAME: ${{ vars.AI_RUNS_INTERACTIVE_CONTAINER_APP_NAME }}

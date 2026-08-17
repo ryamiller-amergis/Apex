@@ -90,6 +90,7 @@ export async function autoStartDocumentValidation(adapter: DocumentValidationAda
     skillPath,
     freeformContext: context,
     model,
+    skillSettingsId: settingsId ?? skillConfig.id ?? null,
   }, { skipAutoKickoff: true });
 
   stopDocumentValidationWatcher(adapter.getDocumentId());
@@ -126,6 +127,7 @@ export async function autoStartDocumentValidation(adapter: DocumentValidationAda
               { runType: 'chat', runId: sourceThreadId, project },
               destinationRun,
               adapter.getAuthorId(),
+              { deferMaterialization: true },
             );
           } catch {
             console.warn(
@@ -142,20 +144,14 @@ export async function autoStartDocumentValidation(adapter: DocumentValidationAda
         ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
         return { ...prepared, targetGrounding };
       },
-      runInProcess: () => {
-        void sendMessage(
+      runInProcess: () =>
+        sendMessage(
           thread.id,
           kickoffMessage,
           undefined,
           [],
           { hidden: true },
-        ).catch((err: Error) => {
-          console.error(
-            `[autoStartDocumentValidation] Failed to kick off validation agent (documentId=${adapter.getDocumentId()}, threadId=${thread.id}):`,
-            err.message,
-          );
-        });
-      },
+        ),
       reportRecoverablePreparationFailure: reportPreparationFailure,
     });
   } catch {
@@ -267,7 +263,7 @@ export function generateFallbackReport(scorecard: ValidationScorecard): string {
     }
     lines.push('');
 
-    const allGaps = scorecard.features!.flatMap((f) => f.gaps.filter((g) => g.resolution === 'pending'));
+    const allGaps = scorecard.features!.flatMap((f) => (f.gaps ?? []).filter((g) => g.resolution === 'pending'));
     if (allGaps.length > 0) {
       lines.push('## Open Gaps', '');
       for (const gap of allGaps) {

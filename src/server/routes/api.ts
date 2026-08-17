@@ -4035,6 +4035,11 @@ import {
   evaluateWhatsNewState,
   updateWhatsNewPreference,
 } from '../services/whatsNewStateService';
+import {
+  ensureRestrictedAccessApplied,
+  getRestrictedAccessByEmail,
+} from '../services/restrictedAccessService';
+import { RESTRICTED_ACCESS_PROJECT } from '../../shared/types/restrictedAccess';
 
 router.get('/changelog', async (_req: Request, res: Response): Promise<void> => {
   try {
@@ -4057,7 +4062,18 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       return;
     }
     const superAdmin = isSuperAdminRequest(req);
-    const project = typeof req.query.project === 'string' ? req.query.project : undefined;
+    const email = getUserEmail(req);
+    const restricted = email ? await getRestrictedAccessByEmail(email) : null;
+    const restrictedActive = Boolean(restricted?.enabled);
+
+    if (restrictedActive && restricted) {
+      await ensureRestrictedAccessApplied(userId, restricted.roleId);
+    }
+
+    const project = typeof req.query.project === 'string'
+      ? req.query.project
+      : (restrictedActive ? RESTRICTED_ACCESS_PROJECT : undefined);
+
     const [permSet, roles, userGroups, whatsNew, changelogPrefs] = await Promise.all([
       getUserPermissions(userId, project),
       getUserRoleNames(userId),
@@ -4081,6 +4097,9 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       showChangelogOnLogin: whatsNew.showOnLogin,
       betaAnnouncementDismissed: changelogPrefs.dismissedBetaProdAnnouncement,
       whatsNew,
+      restrictedAccess: restrictedActive && restricted
+        ? { modules: restricted.modules, project: RESTRICTED_ACCESS_PROJECT }
+        : null,
     });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
@@ -4156,6 +4175,26 @@ router.get('/skill-configs', async (req: Request, res: Response) => {
       friendlyName: c.friendlyName,
       isDefault: c.isDefault,
     })));
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/skill-settings/:id/repository-readiness?project=<name>
+// Read-only readiness for client gating (authenticated project users).
+router.get('/skill-settings/:id/repository-readiness', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const project = req.query.project as string | undefined;
+    const { getProjectRepositoryReadiness } = await import(
+      '../services/projectRepositoryReadinessService'
+    );
+    const readiness = await getProjectRepositoryReadiness(id, { project });
+    if (!readiness) {
+      res.status(404).json({ error: 'Skill settings not found' });
+      return;
+    }
+    res.json(readiness);
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }
