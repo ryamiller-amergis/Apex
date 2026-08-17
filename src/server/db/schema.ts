@@ -1,4 +1,5 @@
-import { bigserial, boolean, check, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigserial, boolean, check, date, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import type { RepoProvider, RepoRole, RunType } from '../../shared/types/runGrounding';
 import type {
@@ -1812,7 +1813,7 @@ export const apexReleases = pgTable('apex_releases', {
   project: text('project').notNull(),
   name: text('name').notNull(),
   version: text('version'),
-  targetDate: text('target_date'),
+  targetDate: date('target_date', { mode: 'string' }),
   status: text('status').$type<ApexReleaseStatus>().notNull().default('planned'),
   position: integer('position').notNull().default(0),
   createdBy: text('created_by').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
@@ -1836,9 +1837,9 @@ export const apexWorkItems = pgTable('apex_work_items', {
   branch: text('branch'),
   prUrl: text('pr_url'),
   position: integer('position').notNull().default(0),
-  dueDate: text('due_date'),
+  dueDate: date('due_date', { mode: 'string' }),
   releaseId: uuid('release_id').references(() => apexReleases.id, { onDelete: 'set null' }),
-  parentId: uuid('parent_id'),
+  parentId: uuid('parent_id').references((): AnyPgColumn => apexWorkItems.id, { onDelete: 'set null' }),
   sourceType: text('source_type').$type<ApexWorkItemSourceType>().notNull().default('standalone'),
   prdId: uuid('prd_id').references(() => interviews.id, { onDelete: 'set null' }),
   backlogItemId: text('backlog_item_id'),

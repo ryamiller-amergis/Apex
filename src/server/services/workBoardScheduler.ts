@@ -10,6 +10,7 @@ import { notifyDueSoonWorkItems } from './apexWorkItemService';
 
 export class WorkBoardSchedulerService {
   private intervalId: NodeJS.Timeout | null = null;
+  private initialTimeoutId: NodeJS.Timeout | null = null;
   private isRunning = false;
   private readonly CHECK_INTERVAL = 60 * 60 * 1000; // 1 hour
 
@@ -20,11 +21,18 @@ export class WorkBoardSchedulerService {
     }
 
     console.log('[WorkBoardScheduler] Starting service — checking every hour');
-    setTimeout(() => this.run(), 3 * 60 * 1000);
+    this.initialTimeoutId = setTimeout(() => {
+      this.initialTimeoutId = null;
+      this.run();
+    }, 3 * 60 * 1000);
     this.intervalId = setInterval(() => this.run(), this.CHECK_INTERVAL);
   }
 
   stop(): void {
+    if (this.initialTimeoutId) {
+      clearTimeout(this.initialTimeoutId);
+      this.initialTimeoutId = null;
+    }
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = null;
