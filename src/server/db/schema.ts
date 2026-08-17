@@ -62,6 +62,7 @@ import type {
   DiagramShareAccess,
   ExcalidrawScene,
 } from '../../shared/types/diagram';
+import type { ApiKeyCadence, ApiKeyScope } from '../../shared/types/apiKey';
 import type {
   WalkthroughAnchorPlacement,
   WalkthroughGenerationProvenance,
@@ -2300,5 +2301,37 @@ export const foundationSkillReleaseAuditRelations = relations(foundationSkillRel
   release: one(foundationSkillReleases, {
     fields: [foundationSkillReleaseAudit.releaseId],
     references: [foundationSkillReleases.id],
+  }),
+}));
+
+// ── API Keys Module (FEAT-001) ────────────────────────────────────────────────
+
+export const apiKeys = pgTable('api_keys', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: text('project_id').notNull(),
+  name: text('name').notNull(),
+  keyHash: text('key_hash').notNull(),
+  keyPrefix: text('key_prefix').notNull(),
+  cadence: text('cadence').$type<ApiKeyCadence>().notNull(),
+  scopes: text('scopes').array().$type<ApiKeyScope[]>().notNull().default([]),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }),
+  createdBy: text('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
+  deletedBy: text('deleted_by'),
+}, (t) => ({
+  projectCreatedActiveIdx: index('idx_api_keys_project_created_active')
+    .on(t.projectId, t.createdAt)
+    .where(sql`${t.deletedAt} is null`),
+  projectLowerNameActiveUq: uniqueIndex('uq_api_keys_project_lower_name_active')
+    .on(t.projectId, sql`lower(${t.name})`)
+    .where(sql`${t.deletedAt} is null`),
+  keyHashUq: uniqueIndex('uq_api_keys_key_hash').on(t.keyHash),
+}));
+
+export const apiKeysRelations = relations(apiKeys, ({ one }) => ({
+  createdByUser: one(appUsers, {
+    fields: [apiKeys.createdBy],
+    references: [appUsers.oid],
   }),
 }));
