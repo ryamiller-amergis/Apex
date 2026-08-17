@@ -24,8 +24,9 @@ export function apiKeyExpiryDedupeKey(
 }
 
 /**
- * Whole calendar days remaining until expiresAt (UTC day buckets).
- * Negative when already expired; null when no expiration.
+ * Whole calendar days remaining until expiresAt (UTC day buckets via Math.ceil).
+ * 0 when expiry is earlier the same UTC day; negative when expiry is at least
+ * one full day in the past; null when no expiration.
  */
 export function daysUntilApiKeyExpiry(
   expiresAt: string | null | undefined,

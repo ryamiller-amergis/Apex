@@ -2320,7 +2320,9 @@ export const apiKeys = pgTable('api_keys', {
   deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
   deletedBy: text('deleted_by'),
 }, (t) => ({
-  projectCreatedActiveIdx: index('idx_api_keys_project_created_active').on(t.projectId, t.createdAt),
+  projectCreatedActiveIdx: index('idx_api_keys_project_created_active')
+    .on(t.projectId, t.createdAt)
+    .where(sql`${t.deletedAt} is null`),
   projectLowerNameActiveUq: uniqueIndex('uq_api_keys_project_lower_name_active')
     .on(t.projectId, sql`lower(${t.name})`)
     .where(sql`${t.deletedAt} is null`),

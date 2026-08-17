@@ -26,14 +26,12 @@ function thresholdLabel(days: ApiKeyExpiryReminderDays): string {
 
 async function resolveProjectAdmins(projectId: string): Promise<string[]> {
   const users = await listUsersForProject(projectId);
-  const admins: string[] = [];
-  for (const user of users) {
-    const perms = await getUserPermissions(user.oid, projectId);
-    if (perms.has('api-keys:manage')) {
-      admins.push(user.oid);
-    }
-  }
-  return admins;
+  const permissionSets = await Promise.all(
+    users.map((user) => getUserPermissions(user.oid, projectId)),
+  );
+  return users
+    .filter((_, i) => permissionSets[i].has('api-keys:manage'))
+    .map((user) => user.oid);
 }
 
 /**

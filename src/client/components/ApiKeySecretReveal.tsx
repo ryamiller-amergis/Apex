@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import styles from './ApiKeySecretReveal.module.css';
 
 export interface ApiKeySecretRevealProps {
@@ -38,6 +38,12 @@ export const ApiKeySecretReveal: React.FC<ApiKeySecretRevealProps> = ({
       copiedTimerRef.current = null;
     }, 2000);
   }, [rawKey]);
+
+  useEffect(() => () => {
+    if (copiedTimerRef.current !== null) {
+      window.clearTimeout(copiedTimerRef.current);
+    }
+  }, []);
 
   return (
     <div
