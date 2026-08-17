@@ -63,6 +63,7 @@ describe('StandupSummaryView', () => {
 
   it('shows loading then session summary when fetch succeeds', async () => {
     global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
       json: async () => mockSession,
     } as Response);
 

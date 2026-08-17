@@ -238,6 +238,15 @@ const PAGE_MODULE_BY_MENU_KEY: Record<
       },
     ],
   },
+  'work-board': {
+    pageEntries: [
+      {
+        component: 'src/client/components/ApexWorkBoardView.tsx',
+        routePattern: '/work-board',
+        suggestedRoute: '/work-board',
+      },
+    ],
+  },
 };
 
 const FIXED_PAGE_MODULES: readonly WalkthroughPageModuleContext[] = [

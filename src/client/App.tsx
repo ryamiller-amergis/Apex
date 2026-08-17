@@ -45,6 +45,15 @@ const CycleTimeAnalytics = lazy(() => import('./components/CycleTimeAnalytics').
 const DevStats = lazy(() => import('./components/DevStats').then(m => ({ default: m.DevStats })));
 const QAMetrics = lazy(() => import('./components/QAMetrics').then(m => ({ default: m.QAMetrics })));
 const RoadmapView = lazy(() => import('./components/RoadmapView').then(m => ({ default: m.RoadmapView })));
+const BoardReleaseRoadmap = lazy(() =>
+  import('./components/BoardReleaseRoadmap').then((m) => ({ default: m.BoardReleaseRoadmap })),
+);
+const BoardReleaseView = lazy(() =>
+  import('./components/BoardReleaseView').then((m) => ({ default: m.BoardReleaseView })),
+);
+const BoardPlanningStats = lazy(() =>
+  import('./components/BoardPlanningStats').then((m) => ({ default: m.BoardPlanningStats })),
+);
 const ReleaseView = lazy(() => import('./components/ReleaseView'));
 const CloudCost = lazy(() => import('./components/CloudCost').then(m => ({ default: m.CloudCost })));
 const AIAnalysis = lazy(() => import('./components/AIAnalysis').then(m => ({ default: m.AIAnalysis })));
@@ -73,6 +82,7 @@ const StandupCeremonyView = lazy(() => import('./components/StandupCeremonyView'
 const StandupManageView = lazy(() => import('./components/StandupManageView'));
 const StandupSummaryView = lazy(() => import('./components/StandupSummaryView'));
 const FeatureRequestsView = lazy(() => import('./components/FeatureRequestsView'));
+const ApexWorkBoardView = lazy(() => import('./components/ApexWorkBoardView').then(m => ({ default: m.ApexWorkBoardView })));
 const UiLabView = lazy(() => import('./components/UiLabView').then(m => ({ default: m.UiLabView })));
 const ApryseWebViewerPoc = lazy(() => import('./components/ApryseWebViewerPoc').then(m => ({ default: m.ApryseWebViewerPoc })));
 const NutrientWebSdkPoc = lazy(() => import('./components/NutrientWebSdkPoc').then(m => ({ default: m.NutrientWebSdkPoc })));
@@ -150,7 +160,7 @@ function App() {
   }, []);
   const { data: activeThread = null } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests' | 'diagrams' | 'not-found';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests' | 'diagrams' | 'work-board' | 'not-found';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -192,6 +202,8 @@ function App() {
                     ? 'ai-cost'
                     : location.pathname === '/design-module'
                     ? 'design-module'
+                    : location.pathname.startsWith('/work-board')
+                    ? 'work-board'
                     : location.pathname.startsWith('/load-tests')
                     ? 'load-tests'
                     : location.pathname.startsWith('/diagrams')
@@ -230,6 +242,7 @@ function App() {
     groups,
     permissionsLoaded,
     workItems,
+    usesBoardWorkItems,
     error,
     isFetchingWorkItems,
     refetchWorkItems,
@@ -426,6 +439,7 @@ function App() {
     if (currentView === 'design-module' && !isSuperAdmin && (!effectiveEnabledViews.includes('design-module') || !can('design-module:view'))) navigate(fallback);
     if (currentView === 'load-tests'    && !isSuperAdmin && (!effectiveEnabledViews.includes('load-tests')    || !can('load-test:view')))    navigate(fallback);
     if (currentView === 'diagrams'      && !isSuperAdmin && (!effectiveEnabledViews.includes('diagrams')      || !can('diagram:view')))      navigate(fallback);
+    if (currentView === 'work-board'    && !isSuperAdmin && (!effectiveEnabledViews.includes('work-board') || !can('work-board:view'))) navigate(fallback);
     if (currentView === 'planning') {
       if (!isSuperAdmin && (!effectiveEnabledViews.includes('planning') || !can('planning:view'))) {
         navigate(fallback);
@@ -669,6 +683,7 @@ function App() {
             onNavigatePdfTools={() => navigate('/pdf-tools/nutrient-poc')}
             onNavigateAiCost={() => navigate('/ai-cost')}
             onNavigateDesignModule={() => navigate('/design-module')}
+            onNavigateWorkBoard={() => navigate('/work-board')}
             onNavigateLoadTests={() => navigate('/load-tests')}
             onNavigateDiagrams={() => navigate('/diagrams')}
             onNavigateAdmin={() => navigate('/admin/roles')}
@@ -722,6 +737,7 @@ function App() {
             onNavigateDesignModule={() => navigate('/design-module')}
             onNavigateLoadTests={() => navigate('/load-tests')}
             onNavigateDiagrams={() => navigate('/diagrams')}
+            onNavigateWorkBoard={() => navigate('/work-board')}
             onOpenChangelog={() => setShowChangelog(true)}
             onThemeChange={setThemeMode}
             onLogout={handleLogout}
@@ -1008,6 +1024,12 @@ function App() {
                 <FeatureRequestsView />
               </Suspense>
             </ErrorBoundary>
+          ) : currentView === 'work-board' && (isSuperAdmin || can('work-board:view')) ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <ApexWorkBoardView currentUserId={userId ?? ''} project={selectedProject} />
+              </Suspense>
+            </ErrorBoundary>
           ) : currentView === 'ui-lab' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
@@ -1147,37 +1169,61 @@ function App() {
                   {planningTab === 'cycle-time' ? (
                     <ErrorBoundary FallbackComponent={ViewErrorFallback}>
                       <Suspense fallback={<ViewSkeleton />}>
-                        <CycleTimeAnalytics workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} />
+                        {usesBoardWorkItems ? (
+                          <BoardPlanningStats project={selectedProject} mode="cycle-time" />
+                        ) : (
+                          <CycleTimeAnalytics workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} />
+                        )}
                       </Suspense>
                     </ErrorBoundary>
                   ) : planningTab === 'dev-stats' ? (
                     <ErrorBoundary FallbackComponent={ViewErrorFallback}>
                       <Suspense fallback={<ViewSkeleton />}>
-                        <DevStats workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
+                        {usesBoardWorkItems ? (
+                          <BoardPlanningStats project={selectedProject} mode="dev-stats" />
+                        ) : (
+                          <DevStats workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
+                        )}
                       </Suspense>
                     </ErrorBoundary>
                   ) : planningTab === 'qa' ? (
                     <ErrorBoundary FallbackComponent={ViewErrorFallback}>
                       <Suspense fallback={<ViewSkeleton />}>
-                        <QAMetrics workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
+                        {usesBoardWorkItems ? (
+                          <BoardPlanningStats project={selectedProject} mode="qa" />
+                        ) : (
+                          <QAMetrics workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
+                        )}
                       </Suspense>
                     </ErrorBoundary>
                   ) : planningTab === 'ai-analysis' ? (
                     <ErrorBoundary FallbackComponent={ViewErrorFallback}>
                       <Suspense fallback={<ViewSkeleton />}>
-                        <AIAnalysis workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
+                        {usesBoardWorkItems ? (
+                          <BoardPlanningStats project={selectedProject} mode="ai-analysis" />
+                        ) : (
+                          <AIAnalysis workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
+                        )}
                       </Suspense>
                     </ErrorBoundary>
                   ) : planningTab === 'roadmap' ? (
                     <ErrorBoundary FallbackComponent={ViewErrorFallback}>
                       <Suspense fallback={<ViewSkeleton />}>
-                        <RoadmapView workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
+                        {usesBoardWorkItems ? (
+                          <BoardReleaseRoadmap project={selectedProject} />
+                        ) : (
+                          <RoadmapView workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
+                        )}
                       </Suspense>
                     </ErrorBoundary>
                   ) : planningTab === 'releases' ? (
                     <ErrorBoundary FallbackComponent={ViewErrorFallback}>
                       <Suspense fallback={<ViewSkeleton />}>
-                        <ReleaseView workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
+                        {usesBoardWorkItems ? (
+                          <BoardReleaseView project={selectedProject} />
+                        ) : (
+                          <ReleaseView workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
+                        )}
                       </Suspense>
                     </ErrorBoundary>
                   ) : null}

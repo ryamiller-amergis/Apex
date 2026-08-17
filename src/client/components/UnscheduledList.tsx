@@ -1,6 +1,13 @@
 import React, { useState, useMemo } from 'react';
 import { WorkItem } from '../types/workitem';
 import { WorkItemCard } from './WorkItemCard';
+import {
+  clearDraggedCalendarItem,
+  clearDraggedWorkItem,
+  getDraggedCalendarItem,
+  setDraggedWorkItem,
+  writeDraggedWorkItemToTransfer,
+} from '../dnd/workItemDragState';
 import './UnscheduledList.css';
 
 interface UnscheduledListProps {
@@ -218,11 +225,10 @@ export const UnscheduledList: React.FC<UnscheduledListProps> = ({
     e.preventDefault();
     setIsDropZone(false);
     
-    const draggedItem = (window as any).__DRAGGED_CALENDAR_ITEM__;
+    const draggedItem = getDraggedCalendarItem();
     if (draggedItem) {
-      console.log('Removing due date from item:', draggedItem.id);
       onUpdateDueDate(draggedItem.id, null);
-      (window as any).__DRAGGED_CALENDAR_ITEM__ = null;
+      clearDraggedCalendarItem();
     }
   };
 
@@ -528,15 +534,13 @@ const DraggableWorkItem: React.FC<DraggableWorkItemProps> = ({
 
   const handleDragStart = (e: React.DragEvent) => {
     setIsDragging(true);
-    // Set global reference for calendar to pick up
-    (window as any).__DRAGGED_WORK_ITEM__ = workItem;
-    // Required for Firefox
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', JSON.stringify(workItem));
+    setDraggedWorkItem(workItem);
+    writeDraggedWorkItemToTransfer(e.dataTransfer, workItem);
   };
 
   const handleDragEnd = () => {
     setIsDragging(false);
+    clearDraggedWorkItem();
   };
 
   return (

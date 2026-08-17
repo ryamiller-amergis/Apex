@@ -14,6 +14,7 @@ interface SessionDetail {
   participants: Array<{
     id: string;
     userId: string;
+    displayName?: string | null;
     status: string;
     structuredUpdate: { yesterday?: string; today?: string; blockers?: string; atRisk?: string; handoffs?: string; capacity?: string } | null;
     submittedAt: string | null;
@@ -25,6 +26,12 @@ interface SessionDetail {
     status: string;
     participantUserIds: string[];
   }>;
+}
+
+function shortUserLabel(userId: string, displayName?: string | null): string {
+  if (displayName?.trim()) return displayName.trim();
+  if (userId.length <= 12) return userId;
+  return `${userId.slice(0, 8)}…`;
 }
 
 const StandupSubNav: React.FC = () => {
@@ -45,19 +52,88 @@ export const StandupSummaryView: React.FC = () => {
   const [searchParams] = useSearchParams();
   const id = searchParams.get('session');
   const [session, setSession] = useState<SessionDetail | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!!id);
+  const [nameByOid, setNameByOid] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    if (!id) return;
+    if (!id) {
+      setSession(null);
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
     fetch(`/api/standup/sessions/${id}`)
-      .then((r) => r.json())
-      .then(setSession)
-      .catch(console.error)
-      .finally(() => setLoading(false));
+      .then((r) => {
+        if (!r.ok) throw new Error('Session not found');
+        return r.json() as Promise<SessionDetail>;
+      })
+      .then(async (data) => {
+        if (cancelled) return;
+        setSession(data);
+
+        const oids = [...new Set(data.participants.map((p) => p.userId).filter(Boolean))];
+        const entries = await Promise.all(
+          oids.map(async (oid) => {
+            try {
+              const res = await fetch(`/api/profile/users/${encodeURIComponent(oid)}/card`, {
+                credentials: 'include',
+              });
+              if (!res.ok) return [oid, ''] as const;
+              const card = await res.json() as { displayName?: string };
+              return [oid, card.displayName?.trim() ?? ''] as const;
+            } catch {
+              return [oid, ''] as const;
+            }
+          }),
+        );
+        if (cancelled) return;
+        const map: Record<string, string> = {};
+        for (const [oid, name] of entries) {
+          if (name) map[oid] = name;
+        }
+        setNameByOid(map);
+      })
+      .catch((err) => {
+        console.error(err);
+        if (!cancelled) setSession(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [id]);
 
-  if (loading) return <div className={styles.container}><StandupSubNav /><p>Loading session...</p></div>;
-  if (!session) return <div className={styles.container}><StandupSubNav /><p>Session not found.</p></div>;
+  if (!id) {
+    return (
+      <div className={styles.container}>
+        <StandupSubNav />
+        <p>Select a standup session</p>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className={styles.container}>
+        <StandupSubNav />
+        <p>Loading session...</p>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <div className={styles.container}>
+        <StandupSubNav />
+        <p>Session not found.</p>
+      </div>
+    );
+  }
 
   return (
     <div className={styles.container}>
@@ -84,7 +160,9 @@ export const StandupSummaryView: React.FC = () => {
             {session.participants.map((p) => (
               <div key={p.id} className={styles.participantCard}>
                 <div className={styles.participantHeader}>
-                  <span className={styles.userId}>{p.userId}</span>
+                  <span className={styles.userId} title={p.userId}>
+                    {shortUserLabel(p.userId, p.displayName ?? nameByOid[p.userId])}
+                  </span>
                   <span className={`${styles.chip} ${styles[p.status]}`}>{p.status}</span>
                 </div>
                 {p.structuredUpdate && (

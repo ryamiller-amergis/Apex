@@ -87,20 +87,13 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
       workItem.workItemType === 'Technical Backlog Item' ||
       workItem.workItemType === 'Feature';
 
-    console.log(`Work item ${workItem.id} type: ${workItem.workItemType}, should fetch relations: ${shouldFetchRelations}`);
-
     if (shouldFetchRelations) {
       setIsLoadingRelations(true);
       const url = `/api/workitems/${workItem.id}/relations?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`;
-      console.log(`Fetching relations from: ${url}`);
       
       fetch(url)
-        .then(res => {
-          console.log(`Relations API response status: ${res.status}`);
-          return res.json();
-        })
+        .then(res => res.json())
         .then(data => {
-          console.log(`Received ${data.length} related items:`, data);
           setRelatedItems(data);
           setIsLoadingRelations(false);
         })
@@ -136,14 +129,9 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
   useEffect(() => {
     if (showLinkToEpic && !currentParentEpic && workItem) {
       setIsLoadingParentEpic(true);
-      console.log(`Fetching parent epic for work item ${workItem.id}`);
       fetch(`/api/workitems/${workItem.id}/parent-epic?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`)
-        .then(res => {
-          console.log(`Parent epic API response status: ${res.status}`);
-          return res.json();
-        })
+        .then(res => res.json())
         .then(data => {
-          console.log(`Parent epic data received:`, data);
           if (data && data.id) {
             setCurrentParentEpic(data);
           }

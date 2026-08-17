@@ -84,6 +84,28 @@
   --calendar-event-bg: #C8D2E4;
   --calendar-event-border: #2747D9;
   --calendar-event-text: #1C33A6;
+  /* Work Board semantic status tokens
+     accent / bg(+20) / border(+40) / glow(+30) — swap accent only */
+  --status-idea: #6b7280;
+  --status-idea-bg: #6b728020;
+  --status-idea-border: #6b728040;
+  --status-idea-glow: #6b728030;
+  --status-ready: #06b6d4;
+  --status-ready-bg: #06b6d420;
+  --status-ready-border: #06b6d440;
+  --status-ready-glow: #06b6d430;
+  --status-in-progress: #f43f5e;
+  --status-in-progress-bg: #f43f5e20;
+  --status-in-progress-border: #f43f5e40;
+  --status-in-progress-glow: #f43f5e30;
+  --status-review: #a855f7;
+  --status-review-bg: #a855f720;
+  --status-review-border: #a855f740;
+  --status-review-glow: #a855f730;
+  --status-done: #22c55e;
+  --status-done-bg: #22c55e20;
+  --status-done-border: #22c55e40;
+  --status-done-glow: #22c55e30;
 }
 
 [data-theme="dark"] {
@@ -125,6 +147,27 @@
   --calendar-event-bg: #18181B;
   --calendar-event-border: #7C8CFF;
   --calendar-event-text: #E5E7FF;
+  /* Work Board status tokens — same accents; opacity hex adapts on dark */
+  --status-idea: #6b7280;
+  --status-idea-bg: #6b728020;
+  --status-idea-border: #6b728040;
+  --status-idea-glow: #6b728030;
+  --status-ready: #06b6d4;
+  --status-ready-bg: #06b6d420;
+  --status-ready-border: #06b6d440;
+  --status-ready-glow: #06b6d430;
+  --status-in-progress: #f43f5e;
+  --status-in-progress-bg: #f43f5e20;
+  --status-in-progress-border: #f43f5e40;
+  --status-in-progress-glow: #f43f5e30;
+  --status-review: #a855f7;
+  --status-review-bg: #a855f720;
+  --status-review-border: #a855f740;
+  --status-review-glow: #a855f730;
+  --status-done: #22c55e;
+  --status-done-bg: #22c55e20;
+  --status-done-border: #22c55e40;
+  --status-done-glow: #22c55e30;
 }
 
 [data-theme="amergis"] {
@@ -167,6 +210,27 @@
   --calendar-event-bg: #1a3330;
   --calendar-event-border: #5ACCA6;
   --calendar-event-text: #5ACCA6;
+  /* Work Board status tokens — same accents on Amergis */
+  --status-idea: #6b7280;
+  --status-idea-bg: #6b728020;
+  --status-idea-border: #6b728040;
+  --status-idea-glow: #6b728030;
+  --status-ready: #06b6d4;
+  --status-ready-bg: #06b6d420;
+  --status-ready-border: #06b6d440;
+  --status-ready-glow: #06b6d430;
+  --status-in-progress: #f43f5e;
+  --status-in-progress-bg: #f43f5e20;
+  --status-in-progress-border: #f43f5e40;
+  --status-in-progress-glow: #f43f5e30;
+  --status-review: #a855f7;
+  --status-review-bg: #a855f720;
+  --status-review-border: #a855f740;
+  --status-review-glow: #a855f730;
+  --status-done: #22c55e;
+  --status-done-bg: #22c55e20;
+  --status-done-border: #22c55e40;
+  --status-done-glow: #22c55e30;
 }
 
 /* Elevated steel classic — mid gray with warm copper (not near-black). */
