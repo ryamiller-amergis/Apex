@@ -172,9 +172,11 @@ const { routeBackgroundWorkflow: mockRouteBackgroundWorkflow } = jest.requireMoc
 ) as { routeBackgroundWorkflow: jest.Mock };
 const {
   propagatePipelineGrounding: mockPropagatePipelineGrounding,
+  resolveRunGroundingSurface: mockResolveRunGroundingSurface,
   runGroundingService: mockRunGroundingService,
 } = jest.requireMock('../services/runGroundingService') as {
   propagatePipelineGrounding: jest.Mock;
+  resolveRunGroundingSurface: jest.Mock;
   runGroundingService: {
     getGroundings: jest.Mock;
     persistThenMarkTerminalInactive: jest.Mock;
@@ -312,6 +314,23 @@ describe('createDesignDoc', () => {
       expect.objectContaining({ title: 'Untitled Design Doc' }),
     );
   });
+
+  it('does not await pipeline grounding on create (kickoff owns propagation)', async () => {
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'doc-fast' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await createDesignDoc({
+      prdId: 'prd-1',
+      project: 'proj-alpha',
+      userId: 'user-1',
+      chatThreadId: 'thread-abc',
+      title: 'Fast Create',
+    });
+
+    expect(mockPropagatePipelineGrounding).not.toHaveBeenCalled();
+    expect(mockResolveRunGroundingSurface).not.toHaveBeenCalled();
+  });
 });
 
 describe('routeDesignDocGenerationKickoff', () => {
@@ -426,6 +445,7 @@ describe('routeDesignDocGenerationKickoff', () => {
       { runType: 'chat', runId: 'thread-prd', project: 'proj-alpha' },
       { runType: 'chat', runId: 'thread-design', project: 'proj-alpha' },
       'user-1',
+      { deferMaterialization: true },
     );
     expect(mockRouteBackgroundWorkflow).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -436,21 +456,14 @@ describe('routeDesignDocGenerationKickoff', () => {
     expect(mockSendMessage).not.toHaveBeenCalled();
   });
 
-  it('BR-008 / DoD-3: design-doc preparation failure persists retryable state before deactivation', async () => {
-    const deactivated = jest.fn();
-    mockRunGroundingService.persistThenMarkTerminalInactive.mockImplementationOnce(
-      async (_run, persist) => {
-        await persist();
-        deactivated();
-      },
-    );
+  it('cold external project: design-doc preparation failure runs in-process and stays generating', async () => {
     mockRouteBackgroundWorkflow.mockImplementationOnce(
-      async (input: { reportRecoverablePreparationFailure(): Promise<void> }) => {
-        await input.reportRecoverablePreparationFailure();
+      async (input: { runInProcess(): Promise<void> }) => {
+        await input.runInProcess();
         return {
           route: 'in-process',
           reason: 'materialization-unavailable',
-          recoverable: true,
+          fallbackStarted: true,
         };
       },
     );
@@ -463,18 +476,15 @@ describe('routeDesignDocGenerationKickoff', () => {
       kickoffMessage: 'Generate design.',
     });
 
-    const updateResult = mockDb.update.mock.results[
-      mockDb.update.mock.results.length - 1
-    ].value;
-    expect(updateResult.set).toHaveBeenCalledWith(
-      expect.objectContaining({
-        status: 'generation_failed',
-        generationError: 'Generation could not be prepared. Retry to continue.',
-      }),
+    expect(mockRunGroundingService.persistThenMarkTerminalInactive)
+      .not.toHaveBeenCalled();
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      'thread-design',
+      'Generate design.',
+      undefined,
+      [],
+      { hidden: true },
     );
-    expect(updateResult.where.mock.invocationCallOrder[0])
-      .toBeLessThan(deactivated.mock.invocationCallOrder[0]);
-    expect(mockSendMessage).not.toHaveBeenCalled();
   });
 });
 
@@ -1522,6 +1532,59 @@ describe('startSingleFeatureDocWatcher', () => {
     expect(mockCanFail).toHaveBeenCalledWith('thread-1');
     expect(setMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ status: 'generation_failed' }),
+    );
+  });
+
+  it('does not finalize success while output files exist but the run is still alive', async () => {
+    mockDesign.mockReturnValue('# Design');
+    mockTech.mockReturnValue('# Tech');
+    mockAssumptions.mockReturnValue('# Assumptions');
+    mockIsThreadIdle.mockReturnValue(true);
+    mockIsThreadRunAlive.mockResolvedValue(true);
+
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    startSingleFeatureDocWatcher('doc-1', 'thread-1', 'prd-1', 'proj-alpha');
+
+    jest.advanceTimersByTime(5_000);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+
+    expect(mockIsThreadRunAlive).toHaveBeenCalledWith('thread-1');
+    expect(setMock).not.toHaveBeenCalled();
+  });
+
+  it('finalizes success when output files exist and the run is finished', async () => {
+    mockDesign.mockReturnValue('# Design');
+    mockTech.mockReturnValue('# Tech');
+    mockAssumptions.mockReturnValue('# Assumptions');
+    mockIsThreadIdle.mockReturnValue(true);
+    mockIsThreadRunAlive.mockResolvedValue(false);
+    mockDb.query.designDocs.findFirst.mockResolvedValue({
+      id: 'doc-1',
+      status: 'generating',
+      chatThreadId: 'thread-1',
+      skillSettingsId: null,
+    });
+    mockGetSkillConfig.mockResolvedValue(null);
+
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+    mockDb.query.chatThreads = { findFirst: jest.fn().mockResolvedValue(null) };
+
+    startSingleFeatureDocWatcher('doc-1', 'thread-1', 'prd-1', 'proj-alpha');
+
+    jest.advanceTimersByTime(5_000);
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        designContent: '# Design',
+        techSpecContent: '# Tech',
+        assumptionsContent: '# Assumptions',
+      }),
     );
   });
 });

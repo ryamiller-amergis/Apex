@@ -50,6 +50,20 @@ jest.mock('../../hooks/useProjectSkillConfig', () => ({
   })),
 }));
 
+// Flag-off / ready stub — these suites render without QueryClientProvider.
+jest.mock('../../hooks/useProjectRepositoryReadiness', () => ({
+  useProjectRepositoryReadiness: jest.fn(() => ({
+    isReady: true,
+    message: null,
+    readiness: null,
+    isLoading: false,
+    isFetching: false,
+    flagEnabled: false,
+  })),
+  PROJECT_REPOSITORY_NOT_READY_MESSAGE:
+    'A project administrator must clone this repository before repository-dependent AI work can run.',
+}));
+
 const mockUpdateStatus = jest.fn();
 jest.mock('../../hooks/useInterviews', () => ({
   useCreateInterview: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
@@ -94,6 +108,51 @@ jest.mock('../../hooks/useSpeechOutput', () => ({
     isSpeaking: false,
     isSpeechOutputSupported: true,
   })),
+}));
+
+jest.mock('../LinkedContextPicker', () => ({
+  LinkedContextPicker: ({
+    mode,
+    project,
+    interviewId,
+    canManage,
+    interviewStatus,
+    initialErrorText,
+    onClose,
+  }: {
+    mode: string;
+    project: string;
+    interviewId?: string;
+    canManage: boolean;
+    interviewStatus?: string;
+    initialErrorText?: string;
+    onClose?: () => void;
+  }) => {
+    const canEdit = canManage && interviewStatus === 'in_progress';
+    return (
+      <section
+        data-testid="mock-linked-context-picker"
+        data-mode={mode}
+        data-project={project}
+        data-interview-id={interviewId}
+        data-can-manage={String(canManage)}
+        data-interview-status={interviewStatus}
+      >
+        {initialErrorText && <div role="status">{initialErrorText}</div>}
+        <button
+          type="button"
+          aria-label="Close linked context"
+          data-testid="linked-context-close"
+          onClick={onClose}
+        >
+          Close
+        </button>
+        <span>Current link: Payments Module</span>
+        {canEdit && <button type="button">Remove Payments Module</button>}
+        {canEdit && <button type="button">Add context</button>}
+      </section>
+    );
+  },
 }));
 
 jest.mock('react-markdown', () => ({
@@ -200,9 +259,17 @@ const idleStream = {
 
 // ── Render helper ──────────────────────────────────────────────────────────────
 
-function renderExistingInterview(interviewId = 'iv-1') {
+function renderExistingInterview(
+  interviewId = 'iv-1',
+  state?: Record<string, unknown>,
+) {
   return render(
-    <MemoryRouter initialEntries={[`/backlog/interview/${interviewId}`]}>
+    <MemoryRouter
+      initialEntries={[{
+        pathname: `/backlog/interview/${interviewId}`,
+        state,
+      }]}
+    >
       <InterviewChatView />
     </MemoryRouter>,
   );
@@ -253,6 +320,97 @@ describe('PBI-004 Interview grounding status embed', () => {
     expect(screen.getByTestId('interview-grounding-embed')).toHaveAttribute(
       'data-project',
       'MaxView'
+    );
+  });
+});
+
+describe('PBI-004 AC-3 / VT-04 Linked Context panel read-only gating', () => {
+  it('Given a terminal Interview, When an authorized viewer opens Linked Context, Then links remain visible and mutation controls are unavailable', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ status: 'complete' }),
+      isLoading: false,
+      isError: false,
+    });
+
+    renderExistingInterview();
+    fireEvent.click(screen.getByTestId('interview-linked-context-trigger'));
+
+    const picker = screen.getByTestId('mock-linked-context-picker');
+    expect(picker).toHaveAttribute('data-mode', 'persisted');
+    expect(picker).toHaveAttribute('data-interview-status', 'complete');
+    expect(within(picker).getByText('Current link: Payments Module')).toBeInTheDocument();
+    expect(within(picker).queryByText('Remove Payments Module')).not.toBeInTheDocument();
+    expect(within(picker).queryByText('Add context')).not.toBeInTheDocument();
+  });
+
+  it('Given a view-only user, When Linked Context opens, Then the trigger remains available and canManage is false', () => {
+    (useAppShell as jest.Mock).mockReturnValue({
+      selectedProject: 'MaxView',
+      can: jest.fn((permission: string) => permission === 'interviews:view'),
+      userId: 'viewer-2',
+      isAdmin: false,
+    });
+
+    renderExistingInterview();
+    const trigger = screen.getByTestId('interview-linked-context-trigger');
+    expect(trigger).toBeInTheDocument();
+    fireEvent.click(trigger);
+
+    const picker = screen.getByTestId('mock-linked-context-picker');
+    expect(picker).toHaveAttribute('data-can-manage', 'false');
+    expect(within(picker).getByText('Current link: Payments Module')).toBeInTheDocument();
+    expect(within(picker).queryByText('Remove Payments Module')).not.toBeInTheDocument();
+    expect(within(picker).queryByText('Add context')).not.toBeInTheDocument();
+  });
+});
+
+describe('TBI keyboard/focus NFR / VT-09 Linked Context panel focus management', () => {
+  it('Given the panel is opened, When focus reaches either edge, Then Tab and Shift+Tab remain trapped', async () => {
+    renderExistingInterview();
+    const trigger = screen.getByTestId('interview-linked-context-trigger');
+    trigger.focus();
+    fireEvent.click(trigger);
+
+    const close = await screen.findByTestId('linked-context-close');
+    await waitFor(() => expect(close).toHaveFocus());
+
+    const add = screen.getByRole('button', { name: 'Add context' });
+    add.focus();
+    fireEvent.keyDown(add, { key: 'Tab' });
+    expect(close).toHaveFocus();
+
+    close.focus();
+    fireEvent.keyDown(close, { key: 'Tab', shiftKey: true });
+    expect(add).toHaveFocus();
+  });
+
+  it('Given the panel is open, When Escape is pressed, Then it closes and restores focus to the trigger', async () => {
+    renderExistingInterview();
+    const trigger = screen.getByTestId('interview-linked-context-trigger');
+    fireEvent.click(trigger);
+    const panel = await screen.findByTestId('interview-linked-context-panel');
+
+    fireEvent.keyDown(panel, { key: 'Escape' });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('interview-linked-context-panel')).not.toBeInTheDocument();
+      expect(trigger).toHaveFocus();
+    });
+  });
+
+  it('Given kickoff persistence failure state, When the Interview loads, Then the panel auto-opens with nonblocking retry context', async () => {
+    renderExistingInterview('iv-1', {
+      openLinkedContext: true,
+      linkedContextInitialErrorText:
+        'Legacy ADR could not be linked. Open Linked Context to retry.',
+    });
+
+    const panel = await screen.findByTestId('interview-linked-context-panel');
+    expect(within(panel).getByRole('status')).toHaveTextContent(
+      'Legacy ADR could not be linked. Open Linked Context to retry.',
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('linked-context-close')).toHaveFocus(),
     );
   });
 });

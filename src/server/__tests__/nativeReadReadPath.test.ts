@@ -30,7 +30,7 @@ jest.mock('../db/drizzle', () => ({
       values: jest.fn(() =>
         Object.assign(Promise.resolve(), {
           onConflictDoNothing: jest.fn(() => Promise.resolve()),
-        }),
+        })
       ),
     })),
     delete: jest.fn(() => ({ where: jest.fn(() => Promise.resolve()) })),
@@ -134,7 +134,9 @@ const grounding: RunGrounding = {
 };
 const profileId = 'native-read-s5-profile' as GroundingProfileId;
 
-function kickoff(overrides: Partial<ChatThreadKickoff> = {}): ChatThreadKickoff {
+function kickoff(
+  overrides: Partial<ChatThreadKickoff> = {}
+): ChatThreadKickoff {
   return {
     project: 'Apex',
     repo: 'org/target-repo',
@@ -146,7 +148,7 @@ function kickoff(overrides: Partial<ChatThreadKickoff> = {}): ChatThreadKickoff 
 
 function dependencies(
   checkoutPath: string,
-  overrides: Partial<CallerGroundingDependencies> = {},
+  overrides: Partial<CallerGroundingDependencies> = {}
 ): CallerGroundingDependencies {
   return {
     isGroundingEnabledForCaller: jest.fn().mockResolvedValue(true),
@@ -157,6 +159,7 @@ function dependencies(
       reason: 'harness-not-run',
     }),
     sharedReadCheckout: {
+      getReady: jest.fn().mockReturnValue(null),
       materialize: jest.fn().mockResolvedValue({
         workspacePath: checkoutPath,
         outcome: 'materialized',
@@ -165,6 +168,7 @@ function dependencies(
       releaseRef: jest.fn(),
     },
     ensureRepoCache: jest.fn().mockResolvedValue({ baseSha: sha }),
+    readCachedOriginSha: jest.fn().mockResolvedValue(sha),
     groundingService: {
       activateGroundings: jest.fn().mockResolvedValue({
         ok: true,
@@ -173,7 +177,12 @@ function dependencies(
         groundings: [grounding],
       }),
       getGroundings: jest.fn().mockResolvedValue([grounding]),
+      findActiveByRepoBranch: jest.fn().mockResolvedValue([grounding]),
       markTerminalInactive: jest.fn().mockResolvedValue(1),
+      reground: jest.fn().mockImplementation(async (_run, _role, newSha) => ({
+        ...grounding,
+        groundedSha: newSha,
+      })),
     },
     materialize: jest.fn().mockResolvedValue({
       state: 'materialized',
@@ -196,7 +205,7 @@ function dependencies(
 }
 
 async function start(
-  deps: CallerGroundingDependencies,
+  deps: CallerGroundingDependencies
 ): Promise<CallerGroundingSelection> {
   return createCallerGroundingService(deps).start({
     caller: 'chat-agent',
@@ -212,7 +221,7 @@ async function start(
 }
 
 async function runtime(
-  selection: CallerGroundingSelection,
+  selection: CallerGroundingSelection
 ): Promise<RepositoryReadRuntime> {
   return prepareRepositoryReadRuntime({
     grounding: selection,
@@ -227,12 +236,17 @@ function git(cwd: string, args: string[]): string {
 }
 
 function checkout(label: string): { root: string; sha: string } {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), `native-read-s5-${label}-`));
+  const root = fs.mkdtempSync(
+    path.join(os.tmpdir(), `native-read-s5-${label}-`)
+  );
   fs.mkdirSync(path.join(root, 'src'));
-  fs.writeFileSync(path.join(root, 'README.md'), `${label} repository content\n`);
+  fs.writeFileSync(
+    path.join(root, 'README.md'),
+    `${label} repository content\n`
+  );
   fs.writeFileSync(
     path.join(root, 'src', `${label}.ts`),
-    `export const fixtureNeedle = '${label}';\n`,
+    `export const fixtureNeedle = '${label}';\n`
   );
   git(root, ['init']);
   git(root, ['config', 'user.name', 'Apex Test']);
@@ -242,7 +256,12 @@ function checkout(label: string): { root: string; sha: string } {
   return { root, sha: git(root, ['rev-parse', 'HEAD']) };
 }
 
-function reader(root: string, repo: string, pinnedSha: string, now?: () => number) {
+function reader(
+  root: string,
+  repo: string,
+  pinnedSha: string,
+  now?: () => number
+) {
   return new LocalCheckoutReader({
     identity: {
       provider: 'github',
@@ -264,7 +283,7 @@ function reader(root: string, repo: string, pinnedSha: string, now?: () => numbe
 
 async function execute(
   tool: SDKCustomTool,
-  args: Parameters<SDKCustomTool['execute']>[0],
+  args: Parameters<SDKCustomTool['execute']>[0]
 ): Promise<unknown> {
   return tool.execute(args, {});
 }
@@ -332,21 +351,23 @@ describe('FEAT-005 S5 VT-09 fail-closed repository read integration', () => {
       expect(deps.trackEvent).toHaveBeenCalledWith(
         'grounding.fallback',
         expect.objectContaining({ reason: fallbackReason }),
-        { fallbackCount: 1 },
+        { fallbackCount: 1 }
       );
       expect(
-        jest.mocked(deps.trackEvent).mock.calls.some(([name]) =>
-          name === 'native-read.engaged'),
+        jest
+          .mocked(deps.trackEvent)
+          .mock.calls.some(([name]) => name === 'native-read.engaged')
       ).toBe(false);
-      expect(JSON.stringify(jest.mocked(deps.trackEvent).mock.calls))
-        .not.toContain('sensitive');
-    },
+      expect(
+        JSON.stringify(jest.mocked(deps.trackEvent).mock.calls)
+      ).not.toContain('sensitive');
+    }
   );
 
   it('AC-2 / DoD-2 reader-resolution failure restores provider browse and records only sanitized fallback telemetry', async () => {
     // Arrange
     mockResolveConnectionProfile.mockRejectedValue(
-      new Error('token=private C:\\secret\\checkout --raw-args'),
+      new Error('token=private C:\\secret\\checkout --raw-args')
     );
     const selection = {
       mode: 'local',
@@ -376,10 +397,11 @@ describe('FEAT-005 S5 VT-09 fail-closed repository read integration', () => {
         branch: 'release/s5',
         reason: 'native-read-reader-resolution-failed',
       },
-      { fallbackCount: 1 },
+      { fallbackCount: 1 }
     );
-    expect(mockTrackEvent.mock.calls.some(([name]) =>
-      name === 'native-read.engaged')).toBe(false);
+    expect(
+      mockTrackEvent.mock.calls.some(([name]) => name === 'native-read.engaged')
+    ).toBe(false);
     const serialized = JSON.stringify(mockTrackEvent.mock.calls);
     expect(serialized).not.toContain('secret');
     expect(serialized).not.toContain('raw-args');
@@ -412,10 +434,13 @@ describe('FEAT-005 S5 VT-09 fail-closed repository read integration', () => {
     expect(deps.trackEvent).toHaveBeenCalledWith(
       'grounding.fallback',
       expect.objectContaining({ reason: 'materialization-unavailable' }),
-      { fallbackCount: 1 },
+      { fallbackCount: 1 }
     );
-    expect(jest.mocked(deps.trackEvent).mock.calls.some(([name]) =>
-      name === 'native-read.engaged')).toBe(false);
+    expect(
+      jest
+        .mocked(deps.trackEvent)
+        .mock.calls.some(([name]) => name === 'native-read.engaged')
+    ).toBe(false);
   });
 });
 
@@ -423,13 +448,15 @@ describe('FEAT-005 S5 VT-10 actual custom-tool confinement', () => {
   it('DoD-3 / BR-012 rejects traversal, symlink escape, host-absolute, and out-of-root reads without disclosure', async () => {
     // Arrange
     const target = checkout('target');
-    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'native-read-s5-outside-'));
+    const outside = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'native-read-s5-outside-')
+    );
     const outsideContent = 'outside repository secret';
     fs.writeFileSync(path.join(outside, 'secret.txt'), outsideContent);
     // Same fixture style as repoReader.test.ts (junction is treated as dir on POSIX).
     fs.symlinkSync(outside, path.join(target.root, 'escape-link'), 'junction');
     const tools = createNativeReadTools(
-      reader(target.root, 'target-repo', target.sha),
+      reader(target.root, 'target-repo', target.sha)
     );
 
     try {
@@ -440,8 +467,10 @@ describe('FEAT-005 S5 VT-10 actual custom-tool confinement', () => {
       // normalized to an in-checkout relative miss (LOCAL_READ_UNAVAILABLE).
       const attempts = [
         () => execute(tools.get_skill_file, { path: '../secret.txt' }),
-        () => execute(tools.get_skill_file, { path: 'C:\\outside\\secret.txt' }),
-        () => execute(tools.get_skill_file, { path: '//host/share/secret.txt' }),
+        () =>
+          execute(tools.get_skill_file, { path: 'C:\\outside\\secret.txt' }),
+        () =>
+          execute(tools.get_skill_file, { path: '//host/share/secret.txt' }),
         () => execute(tools.get_skill_file, { path: 'escape-link/secret.txt' }),
       ];
 
@@ -449,7 +478,7 @@ describe('FEAT-005 S5 VT-10 actual custom-tool confinement', () => {
       for (const attempt of attempts) {
         const denied = await attempt().then(
           () => undefined,
-          (error: unknown) => error,
+          (error: unknown) => error
         );
         expect(denied).toMatchObject({
           name: 'RepoReaderError',
@@ -472,7 +501,7 @@ describe('FEAT-005 S5 VT-10 actual custom-tool confinement', () => {
     const target = checkout('target');
     const sibling = checkout('sibling');
     const tools = createNativeReadTools(
-      reader(target.root, 'target-repo', target.sha),
+      reader(target.root, 'target-repo', target.sha)
     );
 
     try {
@@ -487,7 +516,9 @@ describe('FEAT-005 S5 VT-10 actual custom-tool confinement', () => {
       // Assert
       expect(content).toBe('target repository content\n');
       expect(content).not.toContain('sibling');
-      expect(tools.get_skill_file.inputSchema?.additionalProperties).toBe(false);
+      expect(tools.get_skill_file.inputSchema?.additionalProperties).toBe(
+        false
+      );
     } finally {
       fs.rmSync(target.root, { recursive: true, force: true });
       fs.rmSync(sibling.root, { recursive: true, force: true });
@@ -526,7 +557,7 @@ describe('FEAT-005 S5 VT-11 content-free telemetry', () => {
         content: 'repository content',
         path: 'C:\\private\\checkout',
       },
-      'native-read-reader-resolution-failed',
+      'native-read-reader-resolution-failed'
     );
 
     // Assert
@@ -548,7 +579,7 @@ describe('FEAT-005 S5 VT-11 content-free telemetry', () => {
         runType: run.runType,
         reason: 'native-read-reader-resolution-failed',
       },
-      { fallbackCount: 1 },
+      { fallbackCount: 1 }
     );
     expect(JSON.stringify(emit.mock.calls)).not.toContain('repository content');
     expect(JSON.stringify(emit.mock.calls)).not.toContain('private');
@@ -587,14 +618,20 @@ describe('FEAT-005 S5 VT-15 exact targeted repository identity and NFRs', () => 
           repo: 'sibling-repo',
           profileId: 'sibling-profile',
           checkoutPath: sibling.root,
-        },
+        }
       );
       mockResolveConnectionProfile.mockResolvedValueOnce(siblingReader);
       const siblingRuntime = await runtime(selection);
 
       // Assert
-      expect(mockResolveConnectionProfile).toHaveBeenNthCalledWith(1, profileId);
-      expect(mockResolveConnectionProfile).toHaveBeenNthCalledWith(2, profileId);
+      expect(mockResolveConnectionProfile).toHaveBeenNthCalledWith(
+        1,
+        profileId
+      );
+      expect(mockResolveConnectionProfile).toHaveBeenNthCalledWith(
+        2,
+        profileId
+      );
       expect(content).toBe('target repository content\n');
       expect(content).not.toContain('sibling repository content');
       expect(targetedRuntime.nativeReads).toBe(true);
@@ -614,9 +651,9 @@ describe('FEAT-005 S5 VT-15 exact targeted repository identity and NFRs', () => 
   it('performance NFR uses deterministic reader timing for read/list/search and makes zero provider calls', async () => {
     // Arrange
     const target = checkout('performance');
-    const providerCall = jest.fn().mockRejectedValue(
-      new Error('provider browse must not be called'),
-    );
+    const providerCall = jest
+      .fn()
+      .mockRejectedValue(new Error('provider browse must not be called'));
     const deterministicNow = jest
       .fn()
       .mockReturnValueOnce(1_000)
@@ -629,7 +666,7 @@ describe('FEAT-005 S5 VT-15 exact targeted repository identity and NFRs', () => 
       target.root,
       'target-repo',
       target.sha,
-      deterministicNow,
+      deterministicNow
     );
     mockResolveConnectionProfile.mockResolvedValue(targetReader);
     const selection = {

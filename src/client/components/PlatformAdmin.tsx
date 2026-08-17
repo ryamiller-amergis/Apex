@@ -15,6 +15,11 @@ import {
   useRejectProjectAccessRequest,
   useSetPlatformAdminAssignments,
   useSetPlatformAdminMenuConfig,
+  usePlatformAdminUserAccess,
+  usePlatformAdminUserAccessRoles,
+  useCreatePlatformAdminUserAccess,
+  useUpdatePlatformAdminUserAccess,
+  useDeletePlatformAdminUserAccess,
 } from '../hooks/usePlatformAdmin';
 import {
   useFeatureFlagsList,
@@ -40,6 +45,9 @@ import type {
 } from '../../shared/types/platformAdmin';
 import type { FeatureFlagRule, FeatureFlagWithRules, FlagLifecycle, FlagRuleType } from '../../shared/types/featureFlags';
 import type { GroundingRolloutStage } from '../../shared/types/groundingOperations';
+import type { RestrictedUserAccess } from '../../shared/types/restrictedAccess';
+import { MODULE_VIEW_PERMISSIONS, isRestrictedAccessEmail } from '../../shared/types/restrictedAccess';
+import type { RoleWithPermissions } from '../../shared/types/rbac';
 import { GroundingRolloutStatus } from './GroundingRolloutStatus';
 import styles from './PlatformAdmin.module.css';
 
@@ -51,7 +59,18 @@ const menuSchema = z.object({
 
 type MenuFormValues = z.infer<typeof menuSchema>;
 
-type PlatformAdminTab = 'access' | 'menu' | 'flags' | 'skills' | 'walkthroughs';
+const userAccessSchema = z.object({
+  email: z
+    .string()
+    .refine(isRestrictedAccessEmail, 'Enter a valid email address'),
+  roleId: z.string().uuid('Select a role'),
+  modules: z.array(z.enum(MENU_ITEM_KEYS)).min(1, 'Select at least one module'),
+  enabled: z.boolean(),
+});
+
+type UserAccessFormValues = z.infer<typeof userAccessSchema>;
+
+type PlatformAdminTab = 'access' | 'menu' | 'user-access' | 'flags' | 'skills' | 'walkthroughs';
 
 function resolveGroundingRolloutStage(
   flags: FeatureFlagWithRules[],
@@ -362,6 +381,18 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
             <button
               type="button"
               role="tab"
+              id="platform-admin-tab-user-access"
+              aria-selected={activeTab === 'user-access'}
+              aria-controls="platform-admin-panel-user-access"
+              className={`${styles.tabButton} ${activeTab === 'user-access' ? styles.tabButtonActive : ''}`}
+              onClick={() => setActiveTab('user-access')}
+              {...{ 'data-testid': 'platform-admin-tab-user-access' }}
+            >
+              User Access
+            </button>
+            <button
+              type="button"
+              role="tab"
               id="platform-admin-tab-flags"
               aria-selected={activeTab === 'flags'}
               aria-controls="platform-admin-panel-flags"
@@ -456,6 +487,16 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
                 onSelectProject={setSelectedMenuProject}
                 onSave={handleSaveMenuConfig}
               />
+            </div>
+          )}
+          {activeTab === 'user-access' && (
+            <div
+              id="platform-admin-panel-user-access"
+              role="tabpanel"
+              aria-labelledby="platform-admin-tab-user-access"
+              className={styles.tabPanel}
+            >
+              <UserAccessSection />
             </div>
           )}
           {activeTab === 'flags' && (
@@ -1014,6 +1055,309 @@ const MenuVisibilitySection: React.FC<MenuVisibilitySectionProps> = ({
           </div>
         </form>
       </div>
+    </section>
+  );
+};
+
+const UserAccessSection: React.FC = () => {
+  const {
+    data: entries = [],
+    isLoading,
+    isError,
+    error,
+  } = usePlatformAdminUserAccess();
+  const {
+    data: roles = [],
+    isLoading: rolesLoading,
+  } = usePlatformAdminUserAccessRoles();
+  const createEntry = useCreatePlatformAdminUserAccess();
+  const updateEntry = useUpdatePlatformAdminUserAccess();
+  const deleteEntry = useDeletePlatformAdminUserAccess();
+
+  const [editing, setEditing] = useState<RestrictedUserAccess | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<RestrictedUserAccess | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const {
+    register,
+    handleSubmit,
+    reset,
+    watch,
+    setValue,
+    formState: { errors, isSubmitting },
+  } = useForm<UserAccessFormValues>({
+    resolver: zodResolver(userAccessSchema),
+    defaultValues: {
+      email: '',
+      roleId: '',
+      modules: [],
+      enabled: true,
+    },
+  });
+
+  // eslint-disable-next-line react-hooks/incompatible-library -- RHF watch() is intentionally unmemoizable
+  const watchedModules = watch('modules') ?? [];
+  const watchedRoleId = watch('roleId');
+
+  const selectedRole: RoleWithPermissions | undefined = useMemo(
+    () => roles.find((role) => role.id === watchedRoleId),
+    [roles, watchedRoleId],
+  );
+
+  const permissionWarnings = useMemo(() => {
+    if (!selectedRole) return [];
+    const rolePerms = new Set(selectedRole.permissions);
+    return watchedModules
+      .map((moduleKey) => {
+        const required = MODULE_VIEW_PERMISSIONS[moduleKey];
+        if (!required || rolePerms.has(required)) return null;
+        const label = CONFIGURABLE_MENU_ITEMS.find((item) => item.key === moduleKey)?.label ?? moduleKey;
+        return `${label} requires ${required}, which is not on role "${selectedRole.name}".`;
+      })
+      .filter((msg): msg is string => Boolean(msg));
+  }, [selectedRole, watchedModules]);
+
+  useEffect(() => {
+    if (!editing) {
+      reset({ email: '', roleId: roles[0]?.id ?? '', modules: [], enabled: true });
+      return;
+    }
+    reset({
+      email: editing.email,
+      roleId: editing.roleId,
+      modules: editing.modules,
+      enabled: editing.enabled,
+    });
+  }, [editing, reset, roles]);
+
+  const toggleModule = (key: MenuItemKey) => {
+    const next = watchedModules.includes(key)
+      ? watchedModules.filter((m) => m !== key)
+      : [...watchedModules, key];
+    setValue('modules', next, { shouldValidate: true, shouldDirty: true });
+  };
+
+  const onSubmit = async (values: UserAccessFormValues) => {
+    setFormError(null);
+    try {
+      if (editing) {
+        await updateEntry.mutateAsync({
+          id: editing.id,
+          email: values.email,
+          roleId: values.roleId,
+          modules: values.modules,
+          enabled: values.enabled,
+        });
+        setEditing(null);
+      } else {
+        await createEntry.mutateAsync({
+          email: values.email,
+          roleId: values.roleId,
+          modules: values.modules,
+          enabled: values.enabled,
+        });
+        reset({ email: '', roleId: roles[0]?.id ?? '', modules: [], enabled: true });
+      }
+    } catch (err) {
+      setFormError(formatError(err));
+    }
+  };
+
+  const pending = isSubmitting || createEntry.isPending || updateEntry.isPending;
+
+  const moduleLabel = (key: MenuItemKey) =>
+    CONFIGURABLE_MENU_ITEMS.find((item) => item.key === key)?.label ?? key;
+
+  return (
+    <section className={styles.section} aria-labelledby="user-access-title">
+      <div className={styles.sectionHeader}>
+        <div>
+          <h2 id="user-access-title" className={styles.sectionTitle}>User Access</h2>
+          <p className={styles.sectionHint}>
+            Pre-provision users by email with a role and the modules they can see.
+            Matching users skip project selection and land directly in those modules.
+          </p>
+        </div>
+        <span className={styles.countBadge}>{entries.length} users</span>
+      </div>
+
+      {(isError || formError) && (
+        <div className={styles.error} role="alert">
+          {formError ?? formatError(error)}
+        </div>
+      )}
+
+      <form
+        className={styles.menuForm}
+        onSubmit={(event) => void handleSubmit(onSubmit)(event)}
+        {...{ 'data-testid': 'platform-admin-user-access-form' }}
+      >
+        <h3 className={styles.cardTitle}>{editing ? `Edit ${editing.email}` : 'Add restricted user'}</h3>
+
+        <div className={styles.userAccessFields}>
+          <label className={styles.label} htmlFor="user-access-email">
+            Email
+            <input
+              id="user-access-email"
+              type="email"
+              className={styles.input}
+              disabled={pending}
+              placeholder="user@example.com"
+              {...register('email')}
+              {...{ 'data-testid': 'platform-admin-user-access-email' }}
+            />
+          </label>
+          {errors.email && <p className={styles.fieldError}>{errors.email.message}</p>}
+
+          <label className={styles.label} htmlFor="user-access-role">
+            Role
+            <select
+              id="user-access-role"
+              className={styles.input}
+              disabled={pending || rolesLoading}
+              {...register('roleId')}
+              {...{ 'data-testid': 'platform-admin-user-access-role' }}
+            >
+              <option value="">Select a role…</option>
+              {roles.map((role) => (
+                <option key={role.id} value={role.id}>
+                  {role.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {errors.roleId && <p className={styles.fieldError}>{errors.roleId.message}</p>}
+
+          <label className={styles.checkboxRow}>
+            <input
+              type="checkbox"
+              className={styles.checkbox}
+              disabled={pending}
+              {...register('enabled')}
+              {...{ 'data-testid': 'platform-admin-user-access-enabled' }}
+            />
+            <span>Enabled</span>
+          </label>
+        </div>
+
+        <p className={styles.muted}>Modules the user can see (also requires matching role permissions):</p>
+        <div className={styles.checkboxList}>
+          {CONFIGURABLE_MENU_ITEMS.map((item) => {
+            const checked = watchedModules.includes(item.key);
+            return (
+              <label
+                key={item.key}
+                className={`${styles.checkboxRow} ${checked ? styles.checkboxRowChecked : ''}`}
+              >
+                <input
+                  type="checkbox"
+                  className={styles.checkbox}
+                  checked={checked}
+                  disabled={pending}
+                  onChange={() => toggleModule(item.key)}
+                  {...{ 'data-testid': `platform-admin-user-access-module-${item.key}` }}
+                />
+                <span>{item.label}</span>
+              </label>
+            );
+          })}
+        </div>
+        {errors.modules && <p className={styles.fieldError}>{errors.modules.message}</p>}
+
+        {permissionWarnings.length > 0 && (
+          <div className={styles.fieldWarning} role="status">
+            {permissionWarnings.map((warning) => (
+              <p key={warning} className={styles.muted}>{warning}</p>
+            ))}
+          </div>
+        )}
+
+        <div className={styles.formActions}>
+          {editing && (
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              disabled={pending}
+              onClick={() => setEditing(null)}
+              {...{ 'data-testid': 'platform-admin-user-access-cancel' }}
+            >
+              Cancel
+            </button>
+          )}
+          <button
+            type="submit"
+            className={styles.primaryButton}
+            disabled={pending || rolesLoading}
+            {...{ 'data-testid': 'platform-admin-user-access-save' }}
+          >
+            {pending ? 'Saving…' : editing ? 'Update user access' : 'Add user access'}
+          </button>
+        </div>
+      </form>
+
+      {isLoading ? (
+        <p className={styles.muted}>Loading user access entries…</p>
+      ) : entries.length === 0 ? (
+        <p className={styles.muted}>No restricted users configured yet.</p>
+      ) : (
+        <div className={styles.userAccessList} role="list" aria-label="Restricted users">
+          {entries.map((entry) => (
+            <article
+              key={entry.id}
+              className={styles.requestCard}
+              role="listitem"
+              {...{ 'data-testid': `platform-admin-user-access-row-${entry.id}` }}
+            >
+              <div>
+                <h3 className={styles.cardTitle}>{entry.email}</h3>
+                <p className={styles.muted}>
+                  Role: {entry.roleName || '—'}
+                  {' · '}
+                  {entry.enabled ? 'Enabled' : 'Disabled'}
+                  {' · '}
+                  Modules: {entry.modules.map(moduleLabel).join(', ') || 'none'}
+                </p>
+              </div>
+              <div className={styles.userAccessRowActions}>
+                <button
+                  type="button"
+                  className={styles.secondaryButton}
+                  onClick={() => setEditing(entry)}
+                  {...{ 'data-testid': `platform-admin-user-access-edit-${entry.id}` }}
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  className={styles.secondaryButton}
+                  onClick={() => setDeleteTarget(entry)}
+                  {...{ 'data-testid': `platform-admin-user-access-delete-${entry.id}` }}
+                >
+                  Remove
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+
+      {deleteTarget && (
+        <ConfirmDeleteModal
+          {...{ 'data-testid': 'platform-admin-user-access-delete-modal' }}
+          title="Remove user access"
+          itemName={deleteTarget.email}
+          description="They will see the normal project selector on next login."
+          isPending={deleteEntry.isPending}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => {
+            void (async () => {
+              await deleteEntry.mutateAsync({ id: deleteTarget.id });
+              if (editing?.id === deleteTarget.id) setEditing(null);
+              setDeleteTarget(null);
+            })();
+          }}
+        />
+      )}
     </section>
   );
 };

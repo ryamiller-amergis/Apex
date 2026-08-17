@@ -62,6 +62,7 @@ import type {
   DiagramShareAccess,
   ExcalidrawScene,
 } from '../../shared/types/diagram';
+import type { ApiKeyCadence, ApiKeyScope } from '../../shared/types/apiKey';
 import type {
   WalkthroughAnchorPlacement,
   WalkthroughGenerationProvenance,
@@ -369,6 +370,26 @@ export const pendingProjectAssignments = pgTable('pending_project_assignments', 
   uniq: unique().on(t.email, t.project),
 }));
 
+// ── Restricted User Access ────────────────────────────────────────────────────
+
+export const restrictedUserAccess = pgTable('restricted_user_access', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  email: text('email').notNull().unique(),
+  roleId: uuid('role_id').notNull().references(() => appRoles.id, { onDelete: 'restrict' }),
+  modules: jsonb('modules').$type<MenuItemKey[]>().notNull().default([]),
+  enabled: boolean('enabled').notNull().default(true),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export const restrictedUserAccessRelations = relations(restrictedUserAccess, ({ one }) => ({
+  role: one(appRoles, {
+    fields: [restrictedUserAccess.roleId],
+    references: [appRoles.id],
+  }),
+}));
+
 export const projectAccessRequests = pgTable('project_access_requests', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
@@ -451,6 +472,30 @@ export const interviews = pgTable('interviews', {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
+
+/** Typed Interview ↔ ADR grounding links (FEAT-001). */
+export const interviewAdrLinks = pgTable('interview_adr_links', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  interviewId: uuid('interview_id').notNull().references(() => interviews.id, { onDelete: 'cascade' }),
+  adrId: uuid('adr_id').notNull().references(() => adrs.id, { onDelete: 'cascade' }),
+  linkedBy: text('linked_by').notNull(),
+  linkedAt: timestamp('linked_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  interviewAdrUq: unique('uq_interview_adr_links_interview_adr').on(t.interviewId, t.adrId),
+  interviewIdx: index('idx_interview_adr_links_interview_id').on(t.interviewId),
+}));
+
+/** Typed Interview ↔ Design Module grounding links (FEAT-001). */
+export const interviewDesignModuleLinks = pgTable('interview_design_module_links', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  interviewId: uuid('interview_id').notNull().references(() => interviews.id, { onDelete: 'cascade' }),
+  designModuleId: uuid('design_module_id').notNull().references(() => designModules.id, { onDelete: 'cascade' }),
+  linkedBy: text('linked_by').notNull(),
+  linkedAt: timestamp('linked_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  interviewModuleUq: unique('uq_interview_design_module_links_interview_module').on(t.interviewId, t.designModuleId),
+  interviewIdx: index('idx_interview_design_module_links_interview_id').on(t.interviewId),
+}));
 
 export const adrs = pgTable('adrs', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -585,6 +630,30 @@ export const interviewsRelations = relations(interviews, ({ one, many }) => ({
     relationName: 'interviewTestCaseOwner',
   }),
   prds: many(prds),
+  adrLinks: many(interviewAdrLinks),
+  designModuleLinks: many(interviewDesignModuleLinks),
+}));
+
+export const interviewAdrLinksRelations = relations(interviewAdrLinks, ({ one }) => ({
+  interview: one(interviews, {
+    fields: [interviewAdrLinks.interviewId],
+    references: [interviews.id],
+  }),
+  adr: one(adrs, {
+    fields: [interviewAdrLinks.adrId],
+    references: [adrs.id],
+  }),
+}));
+
+export const interviewDesignModuleLinksRelations = relations(interviewDesignModuleLinks, ({ one }) => ({
+  interview: one(interviews, {
+    fields: [interviewDesignModuleLinks.interviewId],
+    references: [interviews.id],
+  }),
+  designModule: one(designModules, {
+    fields: [interviewDesignModuleLinks.designModuleId],
+    references: [designModules.id],
+  }),
 }));
 
 export const adrsRelations = relations(adrs, ({ one, many }) => ({
@@ -606,6 +675,7 @@ export const adrsRelations = relations(adrs, ({ one, many }) => ({
     references: [projectSkillSettings.id],
   }),
   featureRequestLinks: many(featureRequestAdrs),
+  interviewLinks: many(interviewAdrLinks),
 }));
 
 export const prdsRelations = relations(prds, ({ one, many }) => ({
@@ -737,6 +807,18 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   designModuleModel: text('design_module_model'),
   designModuleScopingSkillPath: text('design_module_scoping_skill_path'),
   designModuleScopingModel: text('design_module_scoping_model'),
+  /** Admin-managed checkout readiness for this skill-settings repository identity. */
+  repositoryCheckoutStatus: text('repository_checkout_status').notNull().default('not_cloned'),
+  repositoryCheckoutSha: text('repository_checkout_sha'),
+  repositoryCheckoutError: text('repository_checkout_error'),
+  repositoryCheckoutStartedAt: timestamp('repository_checkout_started_at', {
+    withTimezone: true,
+    mode: 'string',
+  }),
+  repositoryCheckoutCompletedAt: timestamp('repository_checkout_completed_at', {
+    withTimezone: true,
+    mode: 'string',
+  }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (t) => ({
@@ -891,6 +973,10 @@ export const designModules = pgTable('design_modules', {
   projectSlugUnique: uniqueIndex('design_modules_project_slug_key').on(t.project, t.slug),
   projectIdx: index('idx_design_modules_project').on(t.project),
   sortOrderIdx: index('idx_design_modules_sort_order').on(t.sortOrder, t.label),
+}));
+
+export const designModulesRelations = relations(designModules, ({ many }) => ({
+  interviewLinks: many(interviewDesignModuleLinks),
 }));
 
 export const teamsConversationReferences = pgTable('teams_conversation_references', {
@@ -2408,5 +2494,37 @@ export const foundationSkillReleaseAuditRelations = relations(foundationSkillRel
   release: one(foundationSkillReleases, {
     fields: [foundationSkillReleaseAudit.releaseId],
     references: [foundationSkillReleases.id],
+  }),
+}));
+
+// ── API Keys Module (FEAT-001) ────────────────────────────────────────────────
+
+export const apiKeys = pgTable('api_keys', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: text('project_id').notNull(),
+  name: text('name').notNull(),
+  keyHash: text('key_hash').notNull(),
+  keyPrefix: text('key_prefix').notNull(),
+  cadence: text('cadence').$type<ApiKeyCadence>().notNull(),
+  scopes: text('scopes').array().$type<ApiKeyScope[]>().notNull().default([]),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }),
+  createdBy: text('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
+  deletedBy: text('deleted_by'),
+}, (t) => ({
+  projectCreatedActiveIdx: index('idx_api_keys_project_created_active')
+    .on(t.projectId, t.createdAt)
+    .where(sql`${t.deletedAt} is null`),
+  projectLowerNameActiveUq: uniqueIndex('uq_api_keys_project_lower_name_active')
+    .on(t.projectId, sql`lower(${t.name})`)
+    .where(sql`${t.deletedAt} is null`),
+  keyHashUq: uniqueIndex('uq_api_keys_key_hash').on(t.keyHash),
+}));
+
+export const apiKeysRelations = relations(apiKeys, ({ one }) => ({
+  createdByUser: one(appUsers, {
+    fields: [apiKeys.createdBy],
+    references: [appUsers.oid],
   }),
 }));

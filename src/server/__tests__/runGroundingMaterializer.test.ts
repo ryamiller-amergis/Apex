@@ -29,6 +29,32 @@ function run(runId: string): RunRef {
 }
 
 describe('TBI-004 default independent grounding materializer', () => {
+  it('coalesces concurrent requests for the same writable destination', async () => {
+    let finish!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const rehydrate = jest.fn(async () => {
+      await blocked;
+      return { status: 'materialized' as const, source: 'bundle' as const };
+    });
+    const materialize = createRunGroundingMaterializer({
+      dataRoot: 'C:\\persistent-data',
+      createBundleStore: jest.fn(() => ({ rehydrate })),
+    });
+    const destinationRun = run('coalesced-thread');
+
+    const first = materialize(grounding, destinationRun);
+    const second = materialize(grounding, destinationRun);
+    finish();
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      'materialized',
+      'materialized',
+    ]);
+    expect(rehydrate).toHaveBeenCalledTimes(1);
+  });
+
   it('AC-2 / VT-03 / BR-007 reconciles the same deterministic workspace on re-promotion', async () => {
     const destinations: string[] = [];
     const createBundleStore = jest.fn(() => ({
@@ -451,5 +477,167 @@ describe('TBI-004 default independent grounding materializer', () => {
     });
 
     await expect(materialize(grounding, run('telemetry-failure'))).resolves.toBe('unavailable');
+  });
+
+  it('S13: checkout readiness ON skips Blob rehydrate and publish', async () => {
+    const rehydrate = jest.fn();
+    const publishBundle = jest.fn();
+    const ensureRepoCache = jest.fn().mockResolvedValue({
+      cacheDir: 'C:\\cache\\repo.git',
+      remote: { url: 'https://example.invalid/repo.git', env: {}, secret: '' },
+    });
+    const materializeWorkspaceFromCache = jest.fn().mockResolvedValue(undefined);
+    const runGit = jest.fn().mockResolvedValue('');
+    const materialize = createRunGroundingMaterializer({
+      dataRoot: 'C:\\persistent-data',
+      isCheckoutReadinessEnabled: jest.fn().mockResolvedValue(true),
+      createBundleStore: jest.fn(() => ({ rehydrate })),
+      publishBundle,
+      ensureRepoCache,
+      materializeWorkspaceFromCache,
+      // No shared checkout — falls through to warm-mirror worktree.
+      getReadySharedCheckoutPath: jest.fn().mockReturnValue(null),
+      runGit,
+      telemetry: jest.fn(),
+    });
+
+    await expect(materialize(grounding, run('s13-local-only'))).resolves.toBe(
+      'materialized',
+    );
+
+    expect(rehydrate).not.toHaveBeenCalled();
+    expect(publishBundle).not.toHaveBeenCalled();
+    expect(ensureRepoCache).toHaveBeenCalled();
+    expect(materializeWorkspaceFromCache).toHaveBeenCalled();
+  });
+
+  it('readiness ON prefers the shared read checkout FIRST (never waits on mirror clone)', async () => {
+    const repairRepoCache = jest.fn();
+    const exactCommitFetch = jest.fn();
+    const ensureRepoCache = jest.fn(
+      () => new Promise<never>(() => undefined),
+    );
+    // If the mirror path is reached, hang forever — proving we must not call it.
+    const materializeWorkspaceFromCache = jest.fn(
+      async (): Promise<void> => new Promise(() => undefined),
+    );
+    const runGit = jest.fn().mockResolvedValue('');
+    const telemetry = jest.fn();
+    const materialize = createRunGroundingMaterializer({
+      dataRoot: 'C:\\persistent-data',
+      isCheckoutReadinessEnabled: jest.fn().mockResolvedValue(true),
+      createBundleStore: jest.fn(() => ({ rehydrate: jest.fn() })),
+      ensureRepoCache,
+      resolveGitRemote: jest.fn().mockReturnValue({
+        url: 'https://example.invalid/repo.git',
+        env: {},
+        secret: '',
+      }),
+      repairRepoCache,
+      exactCommitFetch,
+      materializeWorkspaceFromCache,
+      getReadySharedCheckoutPath: jest.fn().mockReturnValue('C:\\shared\\pinned'),
+      ensureGitSafeDirectory: jest.fn().mockResolvedValue(undefined),
+      runGit,
+      telemetry,
+    });
+
+    const startedAt = Date.now();
+    await expect(
+      materialize(grounding, run('shared-first')),
+    ).resolves.toBe('materialized');
+
+    // Must finish immediately — not wait on ensureRepoCache or mirror clone.
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    expect(ensureRepoCache).not.toHaveBeenCalled();
+    expect(materializeWorkspaceFromCache).not.toHaveBeenCalled();
+    expect(repairRepoCache).not.toHaveBeenCalled();
+    expect(exactCommitFetch).not.toHaveBeenCalled();
+    const cloneCall = runGit.mock.calls.find(([args]) => args.includes('clone'));
+    expect(cloneCall?.[0]).toEqual(
+      expect.arrayContaining(['clone', '--local', 'C:\\shared\\pinned']),
+    );
+    expect(telemetry).toHaveBeenCalledWith(
+      'grounding.materialization.local-reuse',
+      expect.objectContaining({ source: 'shared-read-checkout', outcome: 'materialized' }),
+      expect.objectContaining({ durationMs: expect.any(Number) }),
+    );
+  });
+
+  it('readiness ON falls back to warm mirror only when shared checkout is absent', async () => {
+    const repairRepoCache = jest.fn();
+    const exactCommitFetch = jest.fn();
+    const materializeWorkspaceFromCache = jest.fn().mockResolvedValue(undefined);
+    const runGit = jest.fn().mockResolvedValue('');
+    const materialize = createRunGroundingMaterializer({
+      dataRoot: 'C:\\persistent-data',
+      isCheckoutReadinessEnabled: jest.fn().mockResolvedValue(true),
+      createBundleStore: jest.fn(() => ({ rehydrate: jest.fn() })),
+      ensureRepoCache: jest.fn().mockResolvedValue({
+        cacheDir: 'C:\\cache\\repo.git',
+        remote: { url: 'https://example.invalid/repo.git', env: {}, secret: '' },
+      }),
+      resolveGitRemote: jest.fn().mockReturnValue({
+        url: 'https://example.invalid/repo.git',
+        env: {},
+        secret: '',
+      }),
+      repairRepoCache,
+      exactCommitFetch,
+      materializeWorkspaceFromCache,
+      getReadySharedCheckoutPath: jest.fn().mockReturnValue(null),
+      runGit,
+      telemetry: jest.fn(),
+    });
+
+    await expect(
+      materialize(grounding, run('mirror-fallback')),
+    ).resolves.toBe('materialized');
+
+    expect(materializeWorkspaceFromCache).toHaveBeenCalled();
+    expect(repairRepoCache).not.toHaveBeenCalled();
+    expect(exactCommitFetch).not.toHaveBeenCalled();
+  });
+
+  it('readiness ON fails fast to unavailable when neither shared nor mirror can serve the SHA', async () => {
+    const repairRepoCache = jest.fn();
+    const exactCommitFetch = jest.fn();
+    const telemetry = jest.fn();
+    const materialize = createRunGroundingMaterializer({
+      dataRoot: 'C:\\persistent-data',
+      isCheckoutReadinessEnabled: jest.fn().mockResolvedValue(true),
+      createBundleStore: jest.fn(() => ({ rehydrate: jest.fn() })),
+      ensureRepoCache: jest.fn().mockResolvedValue({
+        cacheDir: 'C:\\cache\\repo.git',
+        remote: { url: 'https://example.invalid/repo.git', env: {}, secret: '' },
+      }),
+      resolveGitRemote: jest.fn().mockReturnValue({
+        url: 'https://example.invalid/repo.git',
+        env: {},
+        secret: '',
+      }),
+      repairRepoCache,
+      exactCommitFetch,
+      materializeWorkspaceFromCache: jest
+        .fn()
+        .mockRejectedValue(new Error('pinned commit missing')),
+      getReadySharedCheckoutPath: jest.fn().mockReturnValue(null),
+      runGit: jest.fn().mockResolvedValue(''),
+      telemetry,
+    });
+
+    await expect(
+      materialize(grounding, run('no-local-sha')),
+    ).resolves.toBe('unavailable');
+    expect(repairRepoCache).not.toHaveBeenCalled();
+    expect(exactCommitFetch).not.toHaveBeenCalled();
+    expect(telemetry).toHaveBeenCalledWith(
+      'grounding.materialization.fallback',
+      expect.objectContaining({
+        reason: 'pinned-sha-unavailable',
+        outcome: 'unavailable',
+      }),
+      expect.objectContaining({ durationMs: expect.any(Number) }),
+    );
   });
 });

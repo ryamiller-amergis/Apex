@@ -7,6 +7,10 @@ description: Reads to-prd output (.prd.md + .backlog.json), surfaces unresolved 
 
 Reads `to-prd` output and produces three design artifact files per Feature: design doc, technical spec, and shared assumptions.
 
+## Linked context pre-read
+
+If `.ai-pilot/linked-context.md` is present in the workspace, read it before proceeding. Treat its provenance-labeled sections as authoritative project grounding. If it is absent, proceed normally.
+
 ## Inputs
 
 1. Read `.ai-pilot/output/{slug}.prd.md`

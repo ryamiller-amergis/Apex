@@ -2,8 +2,14 @@
  * Skills that ship with every authorized install, even when not listed in the
  * release's selectedSkills. Keep this list tiny — each entry is content every
  * entitled project receives and updates with the package.
+ *
+ * Keep in sync with src/shared/types/foundationSkills.ts ALWAYS_INSTALL_SKILLS
+ * and catalog.json `alwaysInstall: true` on these skills.
  */
-export const ALWAYS_INSTALL_SKILLS = Object.freeze(['post-skill-bootstrap']);
+export const ALWAYS_INSTALL_SKILLS = Object.freeze([
+  'post-skill-bootstrap',
+  'update-changelog',
+]);
 
 /**
  * Merge always-install skills into a skill list (deduped, stable order:

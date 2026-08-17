@@ -2,13 +2,11 @@
  * FEAT-007 / TBI-011 — resume-capable Cursor execution for the interactive
  * actor host.
  *
- * Mirrors {@link createLocalCursorExecution} (the background worker), but the
- * interactive session actor reuses one Cursor session per `threadId` across
- * turns. On the thread's first turn we `Agent.create`; on every subsequent turn
- * we `Agent.resume` by the previously observed agent id so conversation state
- * persists inside the warm single-activation actor. The grounded checkout is
- * opened once by the caller and reused; this factory only owns the per-turn
- * agent lifecycle (created here, disposed by the caller after each turn).
+ * Agent acquisition/resume is separated from `agent.send` so the session actor
+ * can keep one live Agent object per thread across serialized turns (warm
+ * cache). On cold start we `Agent.create`; after process restart we
+ * `Agent.resume` by the previously persisted agent id. The grounded checkout
+ * is opened by the caller and reused; this module owns only the Agent handle.
  */
 import { Agent } from '@cursor/sdk';
 import type { LocalAgentOptions } from '@cursor/sdk/dist/cjs/options.js';
@@ -20,11 +18,20 @@ import type {
 import type { LocalCheckoutReader } from '../localCheckoutReader';
 import { createNativeReadTools } from '../nativeReadToolAdapter';
 
-export async function createInteractiveCursorExecution(
+/** Live Cursor Agent handle that can serve multiple serialized `send` calls. */
+export interface InteractiveCursorAgentHandle {
+  agentId: string | null;
+  model: string;
+  workspaceRef: string;
+  send(prompt: string): Promise<WorkerCursorExecutionRun>;
+  dispose(): Promise<void>;
+}
+
+export async function acquireInteractiveCursorAgent(
   snapshot: Readonly<ExecutionSnapshot>,
   checkout: LocalCheckoutReader,
   options: { resumeAgentId?: string | null } = {},
-): Promise<WorkerCursorExecution & { agentId?: string | null }> {
+): Promise<InteractiveCursorAgentHandle> {
   // The checkout must already be open; execution cannot begin otherwise.
   void checkout;
   const apiKey = process.env.CURSOR_API_KEY?.trim();
@@ -57,15 +64,43 @@ export async function createInteractiveCursorExecution(
   const agentId =
     (agent as unknown as { id?: string | null }).id ?? resumeAgentId ?? null;
 
+  let disposed = false;
+  return {
+    agentId,
+    model: snapshot.model,
+    workspaceRef: snapshot.workspaceRef,
+    async send(prompt: string): Promise<WorkerCursorExecutionRun> {
+      if (disposed) throw new Error('Interactive Cursor agent is disposed');
+      const run = await agent.send(prompt);
+      return run as unknown as WorkerCursorExecutionRun;
+    },
+    async dispose(): Promise<void> {
+      if (disposed) return;
+      disposed = true;
+      await agent[Symbol.asyncDispose]().catch(() => {});
+    },
+  };
+}
+
+/**
+ * One-shot helper: acquire + send. Prefer {@link acquireInteractiveCursorAgent}
+ * when the actor retains a live Agent across turns.
+ */
+export async function createInteractiveCursorExecution(
+  snapshot: Readonly<ExecutionSnapshot>,
+  checkout: LocalCheckoutReader,
+  options: { resumeAgentId?: string | null } = {},
+): Promise<WorkerCursorExecution & { agentId?: string | null }> {
+  const handle = await acquireInteractiveCursorAgent(snapshot, checkout, options);
   try {
-    const run = await agent.send(snapshot.prompt);
+    const run = await handle.send(snapshot.prompt);
     return {
-      run: run as unknown as WorkerCursorExecutionRun,
-      agentId,
-      dispose: () => agent[Symbol.asyncDispose](),
+      run,
+      agentId: handle.agentId,
+      dispose: () => handle.dispose(),
     };
   } catch (error) {
-    await agent[Symbol.asyncDispose]().catch(() => {});
+    await handle.dispose().catch(() => {});
     throw error;
   }
 }

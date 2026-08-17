@@ -20,6 +20,8 @@ export interface RepoCacheLeaseOptions {
   heartbeatMs?: number;
   pollMs?: number;
   waitMs?: number;
+  /** Keep the lease row until expiry instead of releasing after success/failure. */
+  releaseOnComplete?: boolean;
   store?: RepoCacheLeaseStore;
 }
 
@@ -153,10 +155,12 @@ export async function withRepoCacheLease<T>(
   } finally {
     clearInterval(heartbeat);
     if (heartbeatPromise) await heartbeatPromise;
-    try {
-      await store.release(cacheKey, ownerId, generation);
-    } catch (err) {
-      console.error('[repo-cache] lease release failed; expiry will recover it:', (err as Error).message);
+    if (options.releaseOnComplete !== false) {
+      try {
+        await store.release(cacheKey, ownerId, generation);
+      } catch (err) {
+        console.error('[repo-cache] lease release failed; expiry will recover it:', (err as Error).message);
+      }
     }
   }
 }

@@ -13,7 +13,10 @@ jest.mock('../services/nativeReadToolAdapter', () => ({
   createNativeReadTools: mockCreateNativeReadTools,
 }));
 
-import { createInteractiveCursorExecution } from '../services/interactiveActorHost/interactiveCursorExecution';
+import {
+  acquireInteractiveCursorAgent,
+  createInteractiveCursorExecution,
+} from '../services/interactiveActorHost/interactiveCursorExecution';
 import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
 import type { LocalCheckoutReader } from '../services/localCheckoutReader';
 
@@ -58,6 +61,46 @@ describe('interactive Cursor execution repository tools', () => {
         }),
       );
       expect(execution.agentId).toBe('agent-1');
+    } finally {
+      delete process.env.CURSOR_API_KEY;
+      jest.clearAllMocks();
+    }
+  });
+
+  it('separates Agent acquisition from send so the actor can reuse a live Agent', async () => {
+    process.env.CURSOR_API_KEY = 'test-key';
+    const run = { supports: jest.fn(), stream: jest.fn(), wait: jest.fn() };
+    const send = jest.fn().mockResolvedValue(run);
+    const dispose = jest.fn().mockResolvedValue(undefined);
+    mockCreateAgent.mockResolvedValue({
+      id: 'agent-live',
+      send,
+      [Symbol.asyncDispose]: dispose,
+    });
+    mockCreateNativeReadTools.mockReturnValue({});
+    const snapshot: ExecutionSnapshot = {
+      prompt: 'first',
+      model: 'auto',
+      workspaceRef: '/warm',
+      workflowClass: 'agent_home_chat',
+      skillPath: 'skills/app-knowledge',
+      projectId: 'Apex',
+      threadId: 'thread-1',
+    };
+
+    try {
+      const handle = await acquireInteractiveCursorAgent(
+        snapshot,
+        {} as LocalCheckoutReader,
+      );
+      expect(send).not.toHaveBeenCalled();
+      await handle.send('turn-1');
+      await handle.send('turn-2');
+      expect(send).toHaveBeenCalledTimes(2);
+      expect(send).toHaveBeenNthCalledWith(1, 'turn-1');
+      expect(send).toHaveBeenNthCalledWith(2, 'turn-2');
+      await handle.dispose();
+      expect(dispose).toHaveBeenCalled();
     } finally {
       delete process.env.CURSOR_API_KEY;
       jest.clearAllMocks();

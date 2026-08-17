@@ -199,6 +199,8 @@ export interface FoundationSkillCatalogEntry {
   name: string;
   summary: string;
   tier: FoundationSkillTier;
+  /** When true, skill is locked into every draft/published release and install. */
+  alwaysInstall?: boolean;
   dependsOn?: string[];
 }
 
@@ -369,15 +371,51 @@ export function getEffectiveTargetProjects(
 /**
  * Skills every entitled project receives with install/update, even when omitted
  * from a release's selectedSkills. Keep in sync with
- * foundation-skills/lib/alwaysInstall.mjs.
+ * foundation-skills/lib/alwaysInstall.mjs and catalog.json `alwaysInstall`.
  */
-export const ALWAYS_INSTALL_SKILLS = ['post-skill-bootstrap'] as const;
+export const ALWAYS_INSTALL_SKILLS = [
+  'post-skill-bootstrap',
+  'update-changelog',
+] as const;
+
+export function isAlwaysInstallCatalogSkill(
+  skill: Pick<FoundationSkillCatalogEntry, 'name' | 'alwaysInstall'>,
+): boolean {
+  return skill.alwaysInstall === true
+    || (ALWAYS_INSTALL_SKILLS as readonly string[]).includes(skill.name);
+}
+
+/** Always-install skills present in the given catalog (draft UI / release enforce). */
+export function alwaysInstallSkillsFromCatalog(
+  catalog: Array<Pick<FoundationSkillCatalogEntry, 'name' | 'alwaysInstall'>>,
+): string[] {
+  return catalog.filter(isAlwaysInstallCatalogSkill).map((skill) => skill.name);
+}
 
 /** Append always-install skills (deduped) after the release-visible list. */
 export function withAlwaysInstallSkills(skills: string[]): string[] {
   const out = [...skills];
   const seen = new Set(out);
   for (const name of ALWAYS_INSTALL_SKILLS) {
+    if (!seen.has(name)) {
+      out.push(name);
+      seen.add(name);
+    }
+  }
+  return out;
+}
+
+/**
+ * Ensure a release's selectedSkills includes every always-install skill that
+ * exists in the catalog (cannot be omitted from draft create/update).
+ */
+export function ensureReleaseAlwaysInstallSkills(
+  selectedSkills: string[],
+  catalog: Array<Pick<FoundationSkillCatalogEntry, 'name' | 'alwaysInstall'>>,
+): string[] {
+  const out = [...selectedSkills];
+  const seen = new Set(out);
+  for (const name of alwaysInstallSkillsFromCatalog(catalog)) {
     if (!seen.has(name)) {
       out.push(name);
       seen.add(name);

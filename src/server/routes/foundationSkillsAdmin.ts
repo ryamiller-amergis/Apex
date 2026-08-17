@@ -37,6 +37,7 @@ import {
 } from '../services/foundationSkillRepoUpdateService';
 import { AzureDevOpsService } from '../services/azureDevOps';
 import type { CreateFoundationSkillReleaseRequest } from '../../shared/types/foundationSkills';
+import { ensureReleaseAlwaysInstallSkills } from '../../shared/types/foundationSkills';
 
 // ── Catalog helper ────────────────────────────────────────────────────────────
 
@@ -91,12 +92,19 @@ function loadCatalogFile(): CatalogFile {
     _catalogCache = {
       suiteVersion: raw.suiteVersion ?? '0.0.0',
       skills: (
-        raw.skills as Array<{ name: string; summary?: string; tier?: string; dependsOn?: string[] }>
+        raw.skills as Array<{
+          name: string;
+          summary?: string;
+          tier?: string;
+          alwaysInstall?: boolean;
+          dependsOn?: string[];
+        }>
       ).map((s) => ({
         name: s.name,
         summary: s.summary ?? '',
         // Absent tier means the skill ships to teams.
         tier: s.tier === 'apex-only' ? 'apex-only' as const : 'shippable' as const,
+        alwaysInstall: s.alwaysInstall === true,
         dependsOn: Array.isArray(s.dependsOn) ? s.dependsOn.filter((value) => typeof value === 'string') : [],
       })),
     };
@@ -178,7 +186,9 @@ router.post('/releases', async (req: Request, res: Response): Promise<void> => {
       res.status(400).json({ error: 'skillTargets must be an object mapping skill names to project arrays' });
       return;
     }
-    const notShippable = rejectNonShippableSkills(body.selectedSkills, loadCatalog());
+    const catalog = loadCatalog();
+    body.selectedSkills = ensureReleaseAlwaysInstallSkills(body.selectedSkills, catalog);
+    const notShippable = rejectNonShippableSkills(body.selectedSkills, catalog);
     if (notShippable.length > 0) {
       res.status(400).json({
         error: `These skills run inside Apex and cannot be released to projects: ${notShippable.join(', ')}`,
@@ -302,8 +312,11 @@ router.patch('/releases/:id', async (req: Request, res: Response): Promise<void>
       });
       return;
     }
+    let nextSelectedSkills: string[] | undefined;
     if (Array.isArray(selectedSkills)) {
-      const notShippable = rejectNonShippableSkills(selectedSkills, loadCatalog());
+      const catalog = loadCatalog();
+      nextSelectedSkills = ensureReleaseAlwaysInstallSkills(selectedSkills, catalog);
+      const notShippable = rejectNonShippableSkills(nextSelectedSkills, catalog);
       if (notShippable.length > 0) {
         res.status(400).json({
           error: `These skills run inside Apex and cannot be released to projects: ${notShippable.join(', ')}`,
@@ -316,7 +329,7 @@ router.patch('/releases/:id', async (req: Request, res: Response): Promise<void>
       ...(breakingChanges !== undefined && { breakingChanges }),
       ...(targetProjects  !== undefined && { targetProjects }),
       ...(skillTargets    !== undefined && { skillTargets }),
-      ...(selectedSkills  !== undefined && { selectedSkills }),
+      ...(nextSelectedSkills !== undefined && { selectedSkills: nextSelectedSkills }),
       ...(version         !== undefined && { version }),
       ...(artifactVersion !== undefined && { artifactVersion }),
     });

@@ -24,7 +24,11 @@ import type {
   SseErrorCode,
 } from '../../shared/types/chat';
 import { isAzureWwwroot, resolveDataRoot } from '../utils/dataDir';
-import { recordAiUsage, estimateTokens, resolveFeatureFromKickoff } from './aiUsageService';
+import {
+  recordAiUsage,
+  estimateTokens,
+  resolveFeatureFromKickoff,
+} from './aiUsageService';
 import {
   upsertThread as pgUpsertThread,
   insertMessage as pgInsertMessage,
@@ -36,7 +40,16 @@ import {
 } from './chatThreadRepository';
 import { db } from '../db/drizzle';
 import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
-import { interviews, adrs, prds, designDocs, testCases, devSessions, agentRuns, chatThreads } from '../db/schema';
+import {
+  interviews,
+  adrs,
+  prds,
+  designDocs,
+  testCases,
+  devSessions,
+  agentRuns,
+  chatThreads,
+} from '../db/schema';
 import {
   isThreadRunAlive,
   resolveAgentRunHardLimitMs,
@@ -45,16 +58,29 @@ import {
 import { enqueue } from './agentRunLifecycleService';
 import {
   INTERACTIVE_LANE,
+  INTERACTIVE_WORKFLOW_FLAG,
   type InteractiveWorkflowClass,
 } from '../../shared/types/interactiveWorkflow';
 import { interactiveWorkflowRouter } from './interactiveWorkflowRouter';
+import { interactiveLiveBus } from './interactiveLiveBus';
 import { isExternalRunAbortEvent } from './agentRunAbort';
 import { syncPrdContent } from './prdService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
-import { syncDesignDocContent, syncValidationResult, syncPerFeatureDesignDocs } from './designDocService';
-import { markTestCaseFailed, syncTestCaseOutput, triggerTestCaseGeneration } from './testCaseService';
+import {
+  syncDesignDocContent,
+  syncValidationResult,
+  syncPerFeatureDesignDocs,
+} from './designDocService';
+import {
+  markTestCaseFailed,
+  syncTestCaseOutput,
+  triggerTestCaseGeneration,
+} from './testCaseService';
 import type { ValidationScorecard } from '../../shared/types/interview';
-import type { ChatThreadSearchResult, ChatThreadSummary } from '../../shared/types/chat';
+import type {
+  ChatThreadSearchResult,
+  ChatThreadSummary,
+} from '../../shared/types/chat';
 import { retryWithBackoff } from '../utils/retry';
 import { trackAgentError, trackEvent } from './telemetry';
 import {
@@ -113,6 +139,7 @@ import {
   type CursorExecutionRun,
 } from './cursorExecutionCore';
 import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
+import type { RepositoryPreparationTarget } from './repositoryPreparationService';
 
 export { ThinkingPhaseCoalescer } from './cursorExecutionCore';
 
@@ -126,6 +153,7 @@ const WORKSPACE_BASE = process.env.AI_PILOT_WORKSPACE_DIR
     : path.join(os.tmpdir(), 'ai-pilot-workspaces');
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const INTERVIEW_IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours
+const GROUNDING_PREPARATION_TIMEOUT_MS = 2 * 60 * 1000;
 // After this much thread inactivity, a resumed SDK session is likely cold and
 // prone to emitting zero events. Proactively recreate the agent (with history)
 // instead of resuming a stale session. Overridable for tests/tuning.
@@ -149,6 +177,13 @@ interface ThreadState {
   isDevSession: boolean;
   /** One reader/profile selection, fixed for the lifetime of the caller. */
   grounding: CallerGroundingSelection | null;
+  /**
+   * In-flight `ensureThreadGrounding` promise. Interactive dispatch may time out
+   * and fall through to in-process while materialize is still running; sharing
+   * this promise prevents a second checkout from blocking behind the first
+   * lease holder.
+   */
+  groundingInFlight: Promise<CallerGroundingSelection> | null;
   /** Binding derived from the exact acquired selection. */
   resolvedGroundingBinding: GroundingBinding | null;
   /** Authoritative continuity classification retained for FEAT-003 routing. */
@@ -184,19 +219,19 @@ async function acquireLocalAgentSlot(threadId: string): Promise<void> {
   if (activeLocalAgentSlots < max) {
     activeLocalAgentSlots++;
     console.log(
-      `[chat] Acquired local agent slot (${activeLocalAgentSlots}/${max}) threadId=${threadId}`,
+      `[chat] Acquired local agent slot (${activeLocalAgentSlots}/${max}) threadId=${threadId}`
     );
     return;
   }
   console.log(
-    `[chat] Waiting for local agent slot (${activeLocalAgentSlots}/${max}) threadId=${threadId}`,
+    `[chat] Waiting for local agent slot (${activeLocalAgentSlots}/${max}) threadId=${threadId}`
   );
   await new Promise<void>((resolve) => {
     localAgentSlotWaiters.push(resolve);
   });
   activeLocalAgentSlots++;
   console.log(
-    `[chat] Acquired local agent slot after wait (${activeLocalAgentSlots}/${max}) threadId=${threadId}`,
+    `[chat] Acquired local agent slot after wait (${activeLocalAgentSlots}/${max}) threadId=${threadId}`
   );
 }
 
@@ -205,7 +240,7 @@ function releaseLocalAgentSlot(threadId: string): void {
   const next = localAgentSlotWaiters.shift();
   if (next) next();
   console.log(
-    `[chat] Released local agent slot (${activeLocalAgentSlots}/${resolveMaxConcurrentLocalAgents()}) threadId=${threadId}`,
+    `[chat] Released local agent slot (${activeLocalAgentSlots}/${resolveMaxConcurrentLocalAgents()}) threadId=${threadId}`
   );
 }
 
@@ -236,7 +271,9 @@ function findAllOutputFiles(dir: string, pattern: RegExp): string[] {
     }
     for (const entry of entries) {
       if (entry.isDirectory()) {
-        results.push(...findAllOutputFiles(path.join(dir, entry.name), pattern));
+        results.push(
+          ...findAllOutputFiles(path.join(dir, entry.name), pattern)
+        );
       }
     }
     results.sort();
@@ -255,7 +292,7 @@ function ensureDirs() {
 
 function persistThread(thread: ChatThread) {
   pgUpsertThread(thread).catch((err: Error) =>
-    console.error('[chat] pg upsertThread failed:', err.message),
+    console.error('[chat] pg upsertThread failed:', err.message)
   );
 }
 
@@ -272,18 +309,30 @@ async function loadThread(threadId: string): Promise<ChatThread | null> {
 function logWorkspaceContents(workspaceDir: string, context: string): void {
   try {
     if (!fs.existsSync(workspaceDir)) {
-      console.warn(`[chat] ${context}: workspace does not exist (${workspaceDir})`);
+      console.warn(
+        `[chat] ${context}: workspace does not exist (${workspaceDir})`
+      );
       return;
     }
     const outputDir = path.join(workspaceDir, '.ai-pilot', 'output');
     if (!fs.existsSync(outputDir)) {
-      console.warn(`[chat] ${context}: output dir does not exist (${outputDir})`);
-      const topLevel = fs.readdirSync(workspaceDir, { recursive: true }) as string[];
-      console.warn(`[chat] ${context}: workspace files: ${topLevel.slice(0, 30).join(', ')}`);
+      console.warn(
+        `[chat] ${context}: output dir does not exist (${outputDir})`
+      );
+      const topLevel = fs.readdirSync(workspaceDir, {
+        recursive: true,
+      }) as string[];
+      console.warn(
+        `[chat] ${context}: workspace files: ${topLevel.slice(0, 30).join(', ')}`
+      );
       return;
     }
-    const outputFiles = fs.readdirSync(outputDir, { recursive: true }) as string[];
-    console.warn(`[chat] ${context}: output dir files (${outputFiles.length}): ${outputFiles.slice(0, 30).join(', ')}`);
+    const outputFiles = fs.readdirSync(outputDir, {
+      recursive: true,
+    }) as string[];
+    console.warn(
+      `[chat] ${context}: output dir files (${outputFiles.length}): ${outputFiles.slice(0, 30).join(', ')}`
+    );
   } catch {
     console.warn(`[chat] ${context}: failed to list workspace contents`);
   }
@@ -293,26 +342,42 @@ function cleanupStaleWorkspaces() {
   if (!fs.existsSync(WORKSPACE_BASE)) return;
   const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
   for (const dir of fs.readdirSync(WORKSPACE_BASE)) {
-    const sessionFile = path.join(WORKSPACE_BASE, dir, '.ai-pilot', 'session.json');
+    const sessionFile = path.join(
+      WORKSPACE_BASE,
+      dir,
+      '.ai-pilot',
+      'session.json'
+    );
     if (fs.existsSync(sessionFile)) {
       const stat = fs.statSync(sessionFile);
       if (stat.mtimeMs < twoHoursAgo) {
-        fs.rmSync(path.join(WORKSPACE_BASE, dir), { recursive: true, force: true });
+        fs.rmSync(path.join(WORKSPACE_BASE, dir), {
+          recursive: true,
+          force: true,
+        });
       }
     }
   }
 }
 
-function injectKickoffFiles(workspaceDir: string, kickoff: ChatThreadKickoff, threadId: string): void {
+function injectKickoffFiles(
+  workspaceDir: string,
+  kickoff: ChatThreadKickoff,
+  threadId: string
+): void {
   const aiPilotDir = path.join(workspaceDir, '.ai-pilot');
   fs.mkdirSync(aiPilotDir, { recursive: true });
-  fs.mkdirSync(path.join(aiPilotDir, 'output'), { recursive: true });
+  // Fresh kickoff must not inherit leftover generation artifacts from a
+  // previous run that reused this thread workspace (or a copied tree).
+  const outputDir = path.join(aiPilotDir, 'output');
+  fs.rmSync(outputDir, { recursive: true, force: true });
+  fs.mkdirSync(outputDir, { recursive: true });
 
   if (kickoff.transcript) {
     fs.writeFileSync(
       path.join(aiPilotDir, 'kickoff-transcript.md'),
       kickoff.transcript,
-      'utf-8',
+      'utf-8'
     );
   }
 
@@ -320,7 +385,7 @@ function injectKickoffFiles(workspaceDir: string, kickoff: ChatThreadKickoff, th
     fs.writeFileSync(
       path.join(aiPilotDir, 'kickoff-context.md'),
       kickoff.freeformContext,
-      'utf-8',
+      'utf-8'
     );
   }
 
@@ -337,9 +402,9 @@ function injectKickoffFiles(workspaceDir: string, kickoff: ChatThreadKickoff, th
         startedAt: new Date().toISOString(),
       },
       null,
-      2,
+      2
     ),
-    'utf-8',
+    'utf-8'
   );
 }
 
@@ -359,11 +424,16 @@ async function extractDocxText(buffer: Buffer): Promise<string> {
 async function writeMessageAttachments(
   workspaceDir: string,
   turnId: string,
-  attachments: ChatAttachment[],
+  attachments: ChatAttachment[]
 ): Promise<ChatAttachmentMeta[]> {
   if (attachments.length === 0) return [];
 
-  const attachmentsDir = path.join(workspaceDir, '.ai-pilot', 'attachments', turnId);
+  const attachmentsDir = path.join(
+    workspaceDir,
+    '.ai-pilot',
+    'attachments',
+    turnId
+  );
   fs.mkdirSync(attachmentsDir, { recursive: true });
 
   const results: ChatAttachmentMeta[] = [];
@@ -377,25 +447,39 @@ async function writeMessageAttachments(
       fs.writeFileSync(absolutePath, attachment.content, 'utf-8');
     }
 
-    const isDocx = attachment.name.toLowerCase().endsWith('.docx')
-      || attachment.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    const isDocx =
+      attachment.name.toLowerCase().endsWith('.docx') ||
+      attachment.type ===
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
     if (isDocx && attachment.encoding === 'base64') {
       try {
         const docxBuffer = Buffer.from(attachment.content, 'base64');
         const extractedText = await extractDocxText(docxBuffer);
         const txtFileName = fileName.replace(/\.docx$/i, '.txt');
-        fs.writeFileSync(path.join(attachmentsDir, txtFileName), extractedText, 'utf-8');
+        fs.writeFileSync(
+          path.join(attachmentsDir, txtFileName),
+          extractedText,
+          'utf-8'
+        );
         results.push({
           id: attachment.id,
           name: attachment.name.replace(/\.docx$/i, '.txt'),
           type: 'text/plain',
           size: Buffer.byteLength(extractedText, 'utf-8'),
-          path: path.posix.join('.ai-pilot', 'attachments', turnId, txtFileName),
+          path: path.posix.join(
+            '.ai-pilot',
+            'attachments',
+            turnId,
+            txtFileName
+          ),
         });
         continue;
       } catch (err) {
-        console.warn(`[chat] Failed to extract text from ${attachment.name}, falling back to raw file:`, err);
+        console.warn(
+          `[chat] Failed to extract text from ${attachment.name}, falling back to raw file:`,
+          err
+        );
       }
     }
 
@@ -410,13 +494,19 @@ async function writeMessageAttachments(
   return results;
 }
 
-function buildPromptWithAttachments(text: string, attachments: ChatAttachmentMeta[]): string {
+function buildPromptWithAttachments(
+  text: string,
+  attachments: ChatAttachmentMeta[]
+): string {
   if (attachments.length === 0) return text;
 
-  const messageText = text.trim() || 'Please use the uploaded files as additional context.';
+  const messageText =
+    text.trim() || 'Please use the uploaded files as additional context.';
   const attachmentLines = attachments.map((attachment) => {
     const isImage = attachment.type.startsWith('image/');
-    const hint = isImage ? ' [IMAGE -- use the Read tool to view this file]' : '';
+    const hint = isImage
+      ? ' [IMAGE -- use the Read tool to view this file]'
+      : '';
     return `- ${attachment.name} (${attachment.type || 'text/plain'}, ${attachment.size} bytes): \`${attachment.path}\`${hint}`;
   });
 
@@ -442,11 +532,7 @@ function resolveEnvRefs(map: Record<string, string>): Record<string, string> {
   return resolved;
 }
 
-function appendMcpQuery(
-  url: string,
-  key: string,
-  value: string,
-): string {
+function appendMcpQuery(url: string, key: string, value: string): string {
   return `${url}${url.includes('?') ? '&' : '?'}${key}=${value}`;
 }
 
@@ -458,23 +544,31 @@ function appendMcpQuery(
  * Supports both HTTP and stdio transport (matching the SDK's McpServerConfig union type).
  */
 export function isDocumentAssistant(
-  assistantType: ChatThreadKickoff['assistantType'],
+  assistantType: ChatThreadKickoff['assistantType']
 ): boolean {
-  return assistantType === 'adr' || assistantType === 'prd' || assistantType === 'design-doc';
+  return (
+    assistantType === 'adr' ||
+    assistantType === 'prd' ||
+    assistantType === 'design-doc'
+  );
 }
 
 export function isRepositoryReadingChatCaller(
   kickoff: ChatThreadKickoff,
-  isDevSession: boolean,
+  isDevSession: boolean
 ): boolean {
   return !isDevSession && kickoff.assistantType !== 'calendar-work-item';
 }
 
 /** Prefer explicit assistantType; fall back to freeform context markers for older threads. */
 export function resolveDocumentAssistantType(
-  kickoff: ChatThreadKickoff,
+  kickoff: ChatThreadKickoff
 ): 'adr' | 'prd' | 'design-doc' | undefined {
-  if (kickoff.assistantType === 'adr' || kickoff.assistantType === 'prd' || kickoff.assistantType === 'design-doc') {
+  if (
+    kickoff.assistantType === 'adr' ||
+    kickoff.assistantType === 'prd' ||
+    kickoff.assistantType === 'design-doc'
+  ) {
     return kickoff.assistantType;
   }
   const ctx = kickoff.freeformContext;
@@ -495,7 +589,7 @@ export type GroundingCallerKey =
   | 'design-module';
 
 export function resolveGroundingCallerKey(
-  kickoff: ChatThreadKickoff,
+  kickoff: ChatThreadKickoff
 ): GroundingCallerKey {
   const assistantType = resolveDocumentAssistantType(kickoff);
   if (assistantType === 'adr') return 'interview';
@@ -549,7 +643,7 @@ export function buildMcpServers(
      * ado-skills only when it is still required for document write-back.
      */
     nativeReads?: boolean;
-  },
+  }
 ): Record<string, McpServerConfig> {
   const servers: Record<string, McpServerConfig> = {};
 
@@ -557,7 +651,10 @@ export function buildMcpServers(
 
   // Calendar assistant threads use a restricted MCP that only exposes the
   // propose_work_item_changes tool — never the general ado-skills MCP.
-  if (kickoff.assistantType === 'calendar-work-item' && options?.calendarSessionId) {
+  if (
+    kickoff.assistantType === 'calendar-work-item' &&
+    options?.calendarSessionId
+  ) {
     servers['calendar-assistant'] = {
       url: `http://localhost:${port}/mcp/calendar-assistant/${options.calendarSessionId}`,
     };
@@ -577,8 +674,8 @@ export function buildMcpServers(
       ? `/grounding/${options.groundingProfileId}`
       : '';
     let githubUrl = `http://localhost:${port}/mcp/github-repo${profilePath}${
-        options?.restrictRepoSearch ? '?profile=interview' : ''
-      }`;
+      options?.restrictRepoSearch ? '?profile=interview' : ''
+    }`;
     if (options?.enableRepoBrowse === false) {
       githubUrl = appendMcpQuery(githubUrl, 'enableRepoBrowse', 'false');
     }
@@ -592,16 +689,11 @@ export function buildMcpServers(
   // GitHub-backed document assistants — those tools only touch Postgres and do
   // not require ADO credentials.
   //
-  // Native reads: ado-skills also hosts repo-read tools, so under native reads
-  // we only keep it when it provides something native reads cannot — i.e. the
-  // document write-back tools. A plain ADO repo-reading chat drops it entirely
-  // (native customTools cover the reads); document assistants keep it, but with
-  // enableRepoBrowse=false so its repo-read tools are stripped.
+  // Native checkout tools replace only repository browsing. Keep ado-skills
+  // for ADO callers so work-item and wiki tools remain available, while
+  // enableRepoBrowse=false strips the redundant repository-read surface.
   const documentAssistant = Boolean(resolveDocumentAssistantType(kickoff));
-  if (
-    (!options?.nativeReads && kickoff.skillProvider !== 'github') ||
-    documentAssistant
-  ) {
+  if (kickoff.skillProvider !== 'github' || documentAssistant) {
     const profilePath = options?.groundingProfileId
       ? `/grounding/${options.groundingProfileId}`
       : '';
@@ -610,7 +702,7 @@ export function buildMcpServers(
       groundedAdoSkillsUrl = appendMcpQuery(
         groundedAdoSkillsUrl,
         'enableRepoBrowse',
-        'false',
+        'false'
       );
     }
     servers['ado-skills'] = {
@@ -663,13 +755,13 @@ function targetedRepositoryName(kickoff: ChatThreadKickoff): string {
 function isExactGroundingReader(
   reader: RepoReader,
   grounding: Extract<CallerGroundingSelection, { mode: 'local' }>,
-  kickoff: ChatThreadKickoff,
+  kickoff: ChatThreadKickoff
 ): boolean {
   return (
-    reader.identity.provider === (kickoff.skillProvider ?? 'ado')
-    && reader.identity.project === kickoff.project
-    && reader.identity.repo === targetedRepositoryName(kickoff)
-    && reader.identity.sha === grounding.resolvedSha
+    reader.identity.provider === (kickoff.skillProvider ?? 'ado') &&
+    reader.identity.project === kickoff.project &&
+    reader.identity.repo === targetedRepositoryName(kickoff) &&
+    reader.identity.sha === grounding.resolvedSha
   );
 }
 
@@ -683,16 +775,17 @@ export async function prepareRepositoryReadRuntime(options: {
   restrictRepoSearch?: boolean;
 }): Promise<RepositoryReadRuntime> {
   const requestedNative =
-    options.grounding.mode === 'local'
-    && options.grounding.nativeReads;
+    options.grounding.mode === 'local' && options.grounding.nativeReads;
   let repoReader: RepoReader | undefined;
 
   if (requestedNative && options.grounding.mode === 'local') {
     try {
       const resolved = await groundingProfileResolver.resolveConnectionProfile(
-        options.grounding.profileId,
+        options.grounding.profileId
       );
-      if (isExactGroundingReader(resolved, options.grounding, options.kickoff)) {
+      if (
+        isExactGroundingReader(resolved, options.grounding, options.kickoff)
+      ) {
         repoReader = resolved;
       }
     } catch {
@@ -713,30 +806,24 @@ export async function prepareRepositoryReadRuntime(options: {
         repository: targetedRepositoryName(options.kickoff),
         branch: options.kickoff.branch,
       },
-      'native-read-reader-resolution-failed',
+      'native-read-reader-resolution-failed'
     );
   }
   const groundingProfileId =
     options.grounding.mode === 'local' && !requestedNative
       ? options.grounding.profileId
       : undefined;
-  const mcpServers = buildMcpServers(
-    options.kickoff,
-    options.adoSkillsUrl,
-    {
-      maxviewEnabled: options.maxviewEnabled,
-      calendarSessionId: options.calendarSessionId,
-      restrictRepoSearch: options.restrictRepoSearch,
-      groundingProfileId,
-      enableRepoBrowse: !nativeReads,
-      nativeReads,
-    },
-  );
+  const mcpServers = buildMcpServers(options.kickoff, options.adoSkillsUrl, {
+    maxviewEnabled: options.maxviewEnabled,
+    calendarSessionId: options.calendarSessionId,
+    restrictRepoSearch: options.restrictRepoSearch,
+    groundingProfileId,
+    enableRepoBrowse: !nativeReads,
+    nativeReads,
+  });
   const local: LocalAgentOptions = {
     cwd: options.sandboxCwd,
-    ...(repoReader
-      ? { customTools: createNativeReadTools(repoReader) }
-      : {}),
+    ...(repoReader ? { customTools: createNativeReadTools(repoReader) } : {}),
   };
 
   return {
@@ -752,12 +839,18 @@ export async function prepareRepositoryReadRuntime(options: {
  * thread's agent. Requires both server-side config (env) and the `maxview-mcp`
  * feature flag being enabled for the user/project. Fails closed on any error.
  */
-async function isMaxviewMcpEnabled(userId: string, project: string): Promise<boolean> {
+async function isMaxviewMcpEnabled(
+  userId: string,
+  project: string
+): Promise<boolean> {
   if (!isMaxviewConfigured()) return false;
   try {
     return await isFeatureEnabled('maxview-mcp', { userId, project });
   } catch (err) {
-    console.error('[chat] maxview-mcp flag check failed:', (err as Error).message);
+    console.error(
+      '[chat] maxview-mcp flag check failed:',
+      (err as Error).message
+    );
     return false;
   }
 }
@@ -809,7 +902,7 @@ function buildScopePolicyLines(kickoff: ChatThreadKickoff): string[] {
       `# Live web research — ENABLED for this interview`,
       `This is a product-discovery interview for building **${project}**. You MAY use the available web-search MCP tools to research competitors, market context, industry/regulatory standards, UX patterns, and technical approaches when doing so sharpens the requirements for this project.`,
       `Every web lookup must be in service of this project's interview. Do NOT use web access for unrelated general knowledge, trivia, entertainment, or personal requests — the out-of-scope refusal above still applies to anything not tied to building ${project}.`,
-      `Cite what you found and tie it back to a concrete requirement, trade-off, or decision for ${project}.`,
+      `Cite what you found and tie it back to a concrete requirement, trade-off, or decision for ${project}.`
     );
   }
 
@@ -822,7 +915,9 @@ function buildScopePolicyLines(kickoff: ChatThreadKickoff): string[] {
  * the scope policy applies the narrow web-research carve-out. Additive and fail-safe:
  * never overrides an explicit Agent Home MCP pill and returns the kickoff unchanged on any error.
  */
-async function enrichKickoffForInterviewWebResearch(kickoff: ChatThreadKickoff): Promise<ChatThreadKickoff> {
+async function enrichKickoffForInterviewWebResearch(
+  kickoff: ChatThreadKickoff
+): Promise<ChatThreadKickoff> {
   // Only interview-style threads with a skill path are candidates; never override an explicit pill.
   if (kickoff.mcpPill || kickoff.webResearchEnabled) return kickoff;
   if (!kickoff.skillPath || !kickoff.project) return kickoff;
@@ -852,7 +947,10 @@ async function enrichKickoffForInterviewWebResearch(kickoff: ChatThreadKickoff):
       mcpPill: cfg.interviewWebMcp,
     };
   } catch (err) {
-    console.error('[chat] interview web-research enrichment failed:', (err as Error).message);
+    console.error(
+      '[chat] interview web-research enrichment failed:',
+      (err as Error).message
+    );
     return kickoff;
   }
 }
@@ -862,7 +960,9 @@ async function enrichKickoffForInterviewWebResearch(kickoff: ChatThreadKickoff):
  * Used by free-chat and skill-path prompts so document edits stage into the
  * Apex review wizard instead of being written as sandbox files.
  */
-export function buildDocumentAssistantEditGuidance(kickoff: ChatThreadKickoff): string[] {
+export function buildDocumentAssistantEditGuidance(
+  kickoff: ChatThreadKickoff
+): string[] {
   const assistantType = resolveDocumentAssistantType(kickoff);
   if (!kickoff.freeformContext || !assistantType) {
     return [];
@@ -871,8 +971,11 @@ export function buildDocumentAssistantEditGuidance(kickoff: ChatThreadKickoff): 
   if (assistantType === 'adr') {
     const adrIdMatch = kickoff.freeformContext.match(/^adr_id:\s*(\S+)/m);
     const threadIdMatch = kickoff.freeformContext.match(/^thread_id:\s*(\S+)/m);
-    const adrId = adrIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
-    const threadId = threadIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+    const adrId =
+      adrIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+    const threadId =
+      threadIdMatch?.[1] ??
+      '(unknown — read from .ai-pilot/kickoff-context.md)';
     return [
       ``,
       `# Document write tools (via \`ado-skills\` MCP server)`,
@@ -899,8 +1002,11 @@ export function buildDocumentAssistantEditGuidance(kickoff: ChatThreadKickoff): 
   if (assistantType === 'prd') {
     const prdIdMatch = kickoff.freeformContext.match(/^prd_id:\s*(\S+)/m);
     const threadIdMatch = kickoff.freeformContext.match(/^thread_id:\s*(\S+)/m);
-    const prdId = prdIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
-    const threadId = threadIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+    const prdId =
+      prdIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+    const threadId =
+      threadIdMatch?.[1] ??
+      '(unknown — read from .ai-pilot/kickoff-context.md)';
     return [
       ``,
       `# Document write tools (via \`ado-skills\` MCP server)`,
@@ -955,9 +1061,13 @@ export function buildDocumentAssistantEditGuidance(kickoff: ChatThreadKickoff): 
   }
 
   const docIdMatch = kickoff.freeformContext.match(/^doc_id:\s*(\S+)/m);
-  const docThreadIdMatch = kickoff.freeformContext.match(/^thread_id:\s*(\S+)/m);
-  const docId = docIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
-  const docThreadId = docThreadIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+  const docThreadIdMatch =
+    kickoff.freeformContext.match(/^thread_id:\s*(\S+)/m);
+  const docId =
+    docIdMatch?.[1] ?? '(unknown — read from .ai-pilot/kickoff-context.md)';
+  const docThreadId =
+    docThreadIdMatch?.[1] ??
+    '(unknown — read from .ai-pilot/kickoff-context.md)';
   return [
     ``,
     `# Document write tools (via \`ado-skills\` MCP server)`,
@@ -984,9 +1094,30 @@ export function buildDocumentAssistantEditGuidance(kickoff: ChatThreadKickoff): 
   ];
 }
 
+export interface GroundingProvenance {
+  storage: 'Azure Files checkout';
+  repository: string;
+  branch: string;
+  sha: string;
+}
+
+function groundingProvenanceFor(
+  grounding: CallerGroundingSelection,
+  kickoff: ChatThreadKickoff
+): GroundingProvenance | undefined {
+  if (grounding.mode !== 'local') return undefined;
+  return {
+    storage: 'Azure Files checkout',
+    repository: targetedRepositoryName(kickoff),
+    branch: kickoff.skillBranch ?? kickoff.branch ?? 'main',
+    sha: grounding.resolvedSha,
+  };
+}
+
 function buildRepositoryReadPromptLines(
   kickoff: ChatThreadKickoff,
   nativeReads: boolean,
+  provenance?: GroundingProvenance
 ): string[] {
   if (!nativeReads) {
     const repoLabel =
@@ -1002,6 +1133,15 @@ function buildRepositoryReadPromptLines(
   return [
     `# Sandbox workspace and native repository reads`,
     `You are running in an isolated sandbox. The current working directory contains the \`.ai-pilot/\` scratch inputs and outputs; it is NOT the repository checkout.`,
+    ...(provenance
+      ? [
+          `Repository grounding provenance:`,
+          `  storage: "${provenance.storage}"`,
+          `  repository: "${provenance.repository}"`,
+          `  branch: "${provenance.branch}"`,
+          `  pinned SHA: "${provenance.sha}"`,
+        ]
+      : []),
     `Repository content is available only through these local checkout-backed read-only tools:`,
     `- \`get_skill_file\` — read a repository-relative file`,
     `- \`list_repo_dir\` — list a repository-relative directory`,
@@ -1013,7 +1153,10 @@ function buildRepositoryReadPromptLines(
 
 function buildFreeChatPrompt(
   kickoff: ChatThreadKickoff,
-  options?: { nativeReads?: boolean },
+  options?: {
+    nativeReads?: boolean;
+    groundingProvenance?: GroundingProvenance;
+  }
 ): string {
   const branch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
   const isGitHub = kickoff.skillProvider === 'github';
@@ -1022,6 +1165,7 @@ function buildFreeChatPrompt(
     ...buildRepositoryReadPromptLines(
       kickoff,
       nativeReads,
+      options?.groundingProvenance
     ),
     `# Session context`,
     `  project: "${kickoff.project}"`,
@@ -1036,7 +1180,7 @@ function buildFreeChatPrompt(
       `# Mode`,
       `You are the internal project assistant for the **${kickoff.project}** team.`,
       `Skills from this project's GitHub repo are pre-loaded into the conversation by the system when applicable.`,
-      ...buildScopePolicyLines(kickoff),
+      ...buildScopePolicyLines(kickoff)
     );
   } else if (nativeReads) {
     // Native reads are engaged: the ado-skills repo-read tools are not mounted,
@@ -1045,7 +1189,7 @@ function buildFreeChatPrompt(
       `# Mode`,
       `You are the internal project assistant for the **${kickoff.project}** team.`,
       `Skills from this project's repo are pre-loaded into the conversation by the system when applicable; read any other repository files with the local checkout tools above.`,
-      ...buildScopePolicyLines(kickoff),
+      ...buildScopePolicyLines(kickoff)
     );
   } else {
     parts.push(
@@ -1061,7 +1205,7 @@ function buildFreeChatPrompt(
       `If the user asks you to run or load a skill (e.g. "run the PRD skill" or "load skill at \`.cursor/skills/to-prd/SKILL.md\`"), call \`get_skill\` with the path they provide and the project/repo/branch above, then follow the skill's procedure.`,
       ``,
       `If the user sends a message like "Run skill: <name> (<path>)", call \`get_skill\` with that path and proceed.`,
-      ...buildScopePolicyLines(kickoff),
+      ...buildScopePolicyLines(kickoff)
     );
   }
 
@@ -1070,7 +1214,8 @@ function buildFreeChatPrompt(
     parts.push(
       ``,
       `# Additional MCP server: \`${pill.mcpServerName}\``,
-      pill.systemPromptHint ?? `You have access to the \`${pill.mcpServerName}\` MCP server. Use its tools to help the user.`,
+      pill.systemPromptHint ??
+        `You have access to the \`${pill.mcpServerName}\` MCP server. Use its tools to help the user.`
     );
   }
 
@@ -1082,7 +1227,7 @@ function buildFreeChatPrompt(
       parts.push(
         ``,
         `# Additional context`,
-        `Additional user-provided context has been written to \`.ai-pilot/kickoff-context.md\`. Read it as well.`,
+        `Additional user-provided context has been written to \`.ai-pilot/kickoff-context.md\`. Read it as well.`
       );
     }
   }
@@ -1091,7 +1236,7 @@ function buildFreeChatPrompt(
     parts.push(
       ``,
       `# Kickoff transcript`,
-      `A prior conversation transcript has been written to \`.ai-pilot/kickoff-transcript.md\`. Read it as additional context.`,
+      `A prior conversation transcript has been written to \`.ai-pilot/kickoff-transcript.md\`. Read it as additional context.`
     );
   }
 
@@ -1146,7 +1291,7 @@ function buildStandupParticipantPrompt(kickoff: ChatThreadKickoff): string {
     parts.push(
       `A custom standup skill has been configured. Load it first:`,
       `  Call \`get_skill\` with path: "${kickoff.standupSkillPath}", project: "${kickoff.project}", repo: "${kickoff.repo}"`,
-      `Follow that skill's standup procedure instead of the default below.`,
+      `Follow that skill's standup procedure instead of the default below.`
     );
   } else if (boardNative) {
     parts.push(
@@ -1185,7 +1330,7 @@ function buildStandupParticipantPrompt(kickoff: ChatThreadKickoff): string {
       '```json',
       `{ "yesterday": "...", "today": "...", "blockers": "...", "atRisk": "...", "handoffs": "...", "capacity": "..." }`,
       '```',
-      `The "atRisk" field captures items that may miss their release target date (including release-relevant items with no target date or stuck in a stale state). "blockers" should include pipeline failures and production incidents. "handoffs" captures work reassigned to others; "capacity" captures availability/PTO. Leave a field as an empty string if it doesn't apply. This will be extracted by the system as the structured_update.`,
+      `The "atRisk" field captures items that may miss their release target date (including release-relevant items with no target date or stuck in a stale state). "blockers" should include pipeline failures and production incidents. "handoffs" captures work reassigned to others; "capacity" captures availability/PTO. Leave a field as an empty string if it doesn't apply. This will be extracted by the system as the structured_update.`
     );
   }
 
@@ -1258,11 +1403,14 @@ function buildStandupFollowupPrompt(kickoff: ChatThreadKickoff): string {
   return parts.join('\n');
 }
 
-function buildCalendarWorkItemAssistantPrompt(kickoff: ChatThreadKickoff): string {
+function buildCalendarWorkItemAssistantPrompt(
+  kickoff: ChatThreadKickoff
+): string {
   const sessionId = kickoff.calendarAssistantSessionId ?? '(unknown)';
   const threadId = '(read from .ai-pilot/session.json)';
   const anchorId = kickoff.calendarAnchorWorkItemId ?? '(unknown)';
-  const selectedIds = (kickoff.calendarSelectedWorkItemIds ?? []).join(', ') || '(none)';
+  const selectedIds =
+    (kickoff.calendarSelectedWorkItemIds ?? []).join(', ') || '(none)';
 
   return [
     `# Calendar Work-Item Assistant`,
@@ -1324,7 +1472,8 @@ export function buildInitialPrompt(
   options?: {
     repoSearchEnabled?: boolean;
     nativeReads?: boolean;
-  },
+    groundingProvenance?: GroundingProvenance;
+  }
 ): string {
   if (kickoff.assistantType === 'calendar-work-item') {
     return buildCalendarWorkItemAssistantPrompt(kickoff);
@@ -1344,6 +1493,7 @@ export function buildInitialPrompt(
   if (!kickoff.skillPath) {
     return buildFreeChatPrompt(kickoff, {
       nativeReads: options?.nativeReads,
+      groundingProvenance: options?.groundingProvenance,
     });
   }
 
@@ -1352,7 +1502,11 @@ export function buildInitialPrompt(
   const repoSearchEnabled = options?.repoSearchEnabled ?? true;
   const nativeReads = options?.nativeReads ?? false;
   const parts: string[] = [
-    ...buildRepositoryReadPromptLines(kickoff, nativeReads),
+    ...buildRepositoryReadPromptLines(
+      kickoff,
+      nativeReads,
+      options?.groundingProvenance
+    ),
   ];
 
   if (nativeReads) {
@@ -1366,7 +1520,7 @@ export function buildInitialPrompt(
       ...buildScopePolicyLines(kickoff),
       ``,
       `# Your task`,
-      `The skill and core repository context are pre-loaded below when available. Follow the skill exactly.`,
+      `The skill and core repository context are pre-loaded below when available. Follow the skill exactly.`
     );
   } else if (isGitHub) {
     const slashIdx = kickoff.repo.indexOf('/');
@@ -1379,8 +1533,12 @@ export function buildInitialPrompt(
     parts.push(
       `# MCP tools (github-repo server)`,
       ...(repoSearchEnabled
-        ? [`- \`search_repo_code\` — last-resort search when no known path applies`]
-        : [`- Broad \`search_repo_code\` is intentionally unavailable for this interview`]),
+        ? [
+            `- \`search_repo_code\` — last-resort search when no known path applies`,
+          ]
+        : [
+            `- Broad \`search_repo_code\` is intentionally unavailable for this interview`,
+          ]),
       `- \`list_repo_dir\`    — browse directory structure`,
       `- \`get_skill_file\`   — read any file from the repo`,
       `- \`list_skills\`      — list SKILL.md files`,
@@ -1397,7 +1555,7 @@ export function buildInitialPrompt(
       `For additional repository verification, use known paths with list_repo_dir/get_skill_file.`,
       repoSearchEnabled
         ? `Use search_repo_code only when no known path applies.`
-        : `Do not attempt broad code search; surface an unresolved assumption if exact-path exploration is insufficient.`,
+        : `Do not attempt broad code search; surface an unresolved assumption if exact-path exploration is insufficient.`
     );
   } else {
     parts.push(
@@ -1405,8 +1563,12 @@ export function buildInitialPrompt(
       `- \`list_repo_dir\`    — browse repo directory structure`,
       `- \`get_skill_file\`   — read any file from the repo`,
       ...(repoSearchEnabled
-        ? [`- \`search_repo_code\` — last-resort search when no known path applies`]
-        : [`- Broad \`search_repo_code\` is intentionally unavailable for this interview`]),
+        ? [
+            `- \`search_repo_code\` — last-resort search when no known path applies`,
+          ]
+        : [
+            `- Broad \`search_repo_code\` is intentionally unavailable for this interview`,
+          ]),
       ...buildScopePolicyLines(kickoff),
       ``,
       `# Your task`,
@@ -1414,7 +1576,7 @@ export function buildInitialPrompt(
       `For additional repository verification, use known paths with list_repo_dir/get_skill_file.`,
       repoSearchEnabled
         ? `Use search_repo_code only when no known path applies.`
-        : `Do not attempt broad code search; surface an unresolved assumption if exact-path exploration is insufficient.`,
+        : `Do not attempt broad code search; surface an unresolved assumption if exact-path exploration is insufficient.`
     );
   }
 
@@ -1425,7 +1587,7 @@ export function buildInitialPrompt(
     `Then follow the skill's instructions exactly and completely. The skill defines everything:`,
     `which repo files to load, how to interact with the user, what to produce, and when to produce it.`,
     `Do not add steps, skip steps, or modify the skill's behavior in any way.`,
-    ``,
+    ``
   );
 
   if (documentAssistant) {
@@ -1433,7 +1595,7 @@ export function buildInitialPrompt(
       `When this skill asks you to change an Apex document (ADR, PRD, or design doc), stage the edit with the`,
       `matching \`update_*\` MCP tool from the guidance below. Do NOT write proposed document content to`,
       `\`.ai-pilot/output/\` — file writes do not open the Apex review wizard.`,
-      ``,
+      ``
     );
   } else {
     parts.push(
@@ -1443,7 +1605,7 @@ export function buildInitialPrompt(
       `IMPORTANT: Always use the built-in file writing tool (Write / create_file) to create output files.`,
       `Do NOT use shell commands, Python scripts, echo/cat redirection, or any other indirect method to write files.`,
       `File writes via shell/Python may silently fail in this environment.`,
-      ``,
+      ``
     );
   }
 
@@ -1455,16 +1617,21 @@ export function buildInitialPrompt(
     `2. **Ask only ONE question per message.** After presenting a question, STOP and wait for the user's answer before continuing. Do NOT batch multiple questions into a single response.`,
     `3. You may include context, analysis, or trade-offs BEFORE the question in the same message, but the message must end with exactly one set of options.`,
     `4. After receiving an answer, acknowledge it, incorporate it into your thinking, then ask the next question. The user's answers may change which questions you ask next.`,
-    `5. You do NOT have an AskQuestion tool — format questions directly in your text output using the \`a. text\` pattern described above.`,
+    `5. You do NOT have an AskQuestion tool — format questions directly in your text output using the \`a. text\` pattern described above.`
   );
 
   if (kickoff.transcript) {
+    const isToPrdSkill = (kickoff.skillPath ?? '')
+      .replace(/\\/g, '/')
+      .toLowerCase()
+      .includes('/to-prd/');
     parts.push(
       ``,
       `# Kickoff transcript`,
       `A prior conversation transcript has been written to \`.ai-pilot/kickoff-transcript.md\`.`,
-      `Read it as input context before executing the skill. Follow the skill's own instructions`,
-      `for how to use prior context.`,
+      isToPrdSkill
+        ? `This file is the **sole requirements input** for \`/to-prd\`. Do not use any pre-existing files under \`.ai-pilot/output/\` as scope — overwrite with this run’s PRD and backlog. Do not invent scope from unrelated repo docs, ADO work items, or leftover PRD/backlog artifacts.`
+        : `Read it as input context before executing the skill. Follow the skill's own instructions for how to use prior context.`
     );
   }
 
@@ -1476,7 +1643,7 @@ export function buildInitialPrompt(
       parts.push(
         ``,
         `# Additional context`,
-        `Additional user-provided context has been written to \`.ai-pilot/kickoff-context.md\`. Read it as well.`,
+        `Additional user-provided context has been written to \`.ai-pilot/kickoff-context.md\`. Read it as well.`
       );
     }
   }
@@ -1486,7 +1653,8 @@ export function buildInitialPrompt(
     parts.push(
       ``,
       `# Additional MCP server: \`${pill.mcpServerName}\``,
-      pill.systemPromptHint ?? `You have access to the \`${pill.mcpServerName}\` MCP server. Use its tools when helpful.`,
+      pill.systemPromptHint ??
+        `You have access to the \`${pill.mcpServerName}\` MCP server. Use its tools when helpful.`
     );
   }
 
@@ -1509,20 +1677,25 @@ export interface AgentRecoveryContext {
  */
 export function buildAgentRecoveryContext(
   messages: ChatMessage[],
-  maxChars = AGENT_RECOVERY_HISTORY_MAX_CHARS,
+  maxChars = AGENT_RECOVERY_HISTORY_MAX_CHARS
 ): AgentRecoveryContext | null {
-  const conversationalMessages = messages.filter((message) =>
-    (message.role === 'user' || message.role === 'agent')
-    && !message.hidden
-    && message.toolName !== '_reasoning'
-    && Boolean(message.text.trim()),
+  const conversationalMessages = messages.filter(
+    (message) =>
+      (message.role === 'user' || message.role === 'agent') &&
+      !message.hidden &&
+      message.toolName !== '_reasoning' &&
+      Boolean(message.text.trim())
   );
   if (conversationalMessages.length === 0) return null;
 
-  const transcript = conversationalMessages.map((message, index) => [
-    `--- message ${index + 1} | role=${message.role} | timestamp=${message.ts} ---`,
-    message.text.trim(),
-  ].join('\n')).join('\n\n');
+  const transcript = conversationalMessages
+    .map((message, index) =>
+      [
+        `--- message ${index + 1} | role=${message.role} | timestamp=${message.ts} ---`,
+        message.text.trim(),
+      ].join('\n')
+    )
+    .join('\n\n');
 
   const boundedMaxChars = Math.max(1_000, maxChars);
   let boundedTranscript = transcript;
@@ -1536,11 +1709,14 @@ export function buildAgentRecoveryContext(
       '',
       '',
     ].join('\n');
-    const headBudget = Math.floor((boundedMaxChars - omissionMarker.length) * 0.3);
+    const headBudget = Math.floor(
+      (boundedMaxChars - omissionMarker.length) * 0.3
+    );
     const tailBudget = boundedMaxChars - omissionMarker.length - headBudget;
     const rawTail = transcript.slice(-tailBudget);
     const nextMessageBoundary = rawTail.indexOf('--- message ');
-    const alignedTail = nextMessageBoundary >= 0 ? rawTail.slice(nextMessageBoundary) : rawTail;
+    const alignedTail =
+      nextMessageBoundary >= 0 ? rawTail.slice(nextMessageBoundary) : rawTail;
     boundedTranscript = [
       transcript.slice(0, headBudget).trimEnd(),
       omissionMarker,
@@ -1575,7 +1751,11 @@ export async function resumeOrCreateAgent<T>(options: {
   forceRecreate?: boolean;
   resume: () => Promise<T>;
   create: () => Promise<T>;
-}): Promise<{ agent: T; mode: 'created' | 'resumed' | 'recreated'; resumeError?: unknown }> {
+}): Promise<{
+  agent: T;
+  mode: 'created' | 'resumed' | 'recreated';
+  resumeError?: unknown;
+}> {
   if (!options.cursorAgentId) {
     return { agent: await options.create(), mode: 'created' };
   }
@@ -1600,9 +1780,9 @@ export function selectGroundingBoundaryRecreation(options: {
   decision: BindingContinuityDecision;
 }): BindingRecreationReason | null {
   if (
-    !options.lifecycleEnabled
-    || !options.hasAgentIdentity
-    || options.decision.decision !== 'recreate'
+    !options.lifecycleEnabled ||
+    !options.hasAgentIdentity ||
+    options.decision.decision !== 'recreate'
   ) {
     return null;
   }
@@ -1616,7 +1796,7 @@ export function settleGroundingContinuityAfterBindingWrite(state: {
 }
 
 export async function resumePinnedTurnAgent<T>(
-  resume: () => Promise<T>,
+  resume: () => Promise<T>
 ): Promise<T> {
   return resume();
 }
@@ -1633,17 +1813,20 @@ function storedGroundingBinding(thread: ChatThread): unknown {
 
 export function classifyGroundingContinuity(
   thread: ChatThread,
-  selection: CallerGroundingSelection,
+  selection: Exclude<CallerGroundingSelection, { mode: 'preparing' }>
 ): {
   resolvedBinding: GroundingBinding;
   decision: BindingContinuityDecision;
 } {
   const resolvedBinding = callerGroundingSelectionToBinding(selection);
+  if (!resolvedBinding) {
+    throw new Error('Ready repository grounding did not produce a binding');
+  }
   return {
     resolvedBinding,
     decision: evaluateBindingContinuity(
       storedGroundingBinding(thread),
-      resolvedBinding,
+      resolvedBinding
     ),
   };
 }
@@ -1652,11 +1835,11 @@ export async function persistCreatedAgentBinding(
   thread: ChatThread,
   agent: { agentId?: string },
   acquisitionMode: 'created' | 'resumed' | 'recreated',
-  resolvedBinding: GroundingBinding | null,
+  resolvedBinding: GroundingBinding | null
 ): Promise<void> {
   if (
-    (acquisitionMode !== 'created' && acquisitionMode !== 'recreated')
-    || !resolvedBinding
+    (acquisitionMode !== 'created' && acquisitionMode !== 'recreated') ||
+    !resolvedBinding
   ) {
     return;
   }
@@ -1680,11 +1863,13 @@ async function buildNewAgentTurnPrompt(
     repoSearchEnabled?: boolean;
     nativeReads?: boolean;
     repoReader?: RepoReader;
-  },
+    groundingProvenance?: GroundingProvenance;
+  }
 ): Promise<string> {
   let initialPrompt = buildInitialPrompt(kickoff, {
     repoSearchEnabled: options?.repoSearchEnabled,
     nativeReads: options?.nativeReads,
+    groundingProvenance: options?.groundingProvenance,
   });
   const provider = kickoff.skillProvider ?? 'ado';
   const resolvedBranch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
@@ -1702,11 +1887,12 @@ async function buildNewAgentTurnPrompt(
         key: 'skill' | 'context' | 'agents';
         path: string;
       }> = [];
-      if (kickoff.skillPath) requests.push({ key: 'skill', path: kickoff.skillPath });
+      if (kickoff.skillPath)
+        requests.push({ key: 'skill', path: kickoff.skillPath });
       if (options?.preloadRepositoryContext) {
         requests.push(
           { key: 'context', path: 'context.md' },
-          { key: 'agents', path: 'AGENTS.md' },
+          { key: 'agents', path: 'AGENTS.md' }
         );
       }
 
@@ -1717,20 +1903,22 @@ async function buildNewAgentTurnPrompt(
           }
           const { getSkillFile } = await import('./skillCatalogFacade');
           return getSkillFile(
-              kickoff.project,
-              kickoff.repo,
-              request.path,
-              resolvedBranch,
-              provider,
-            );
-        }),
+            kickoff.project,
+            kickoff.repo,
+            request.path,
+            resolvedBranch,
+            provider
+          );
+        })
       );
       results.forEach((result, index) => {
         const request = requests[index];
         if (result.status === 'rejected') {
           console.warn(
             `[chat] Failed to pre-fetch ${request.path} from ${provider}:`,
-            result.reason instanceof Error ? result.reason.message : String(result.reason),
+            result.reason instanceof Error
+              ? result.reason.message
+              : String(result.reason)
           );
           return;
         }
@@ -1744,7 +1932,10 @@ async function buildNewAgentTurnPrompt(
         }
       });
     } catch (err) {
-      console.error('[chat] Failed to initialize repository context pre-fetch:', (err as Error).message);
+      console.error(
+        '[chat] Failed to initialize repository context pre-fetch:',
+        (err as Error).message
+      );
     }
   }
 
@@ -1758,7 +1949,10 @@ async function buildNewAgentTurnPrompt(
           skillSource = 'local';
           console.log('[chat] Using local skill fallback:', skillPathNorm);
         } catch (err) {
-          console.error('[chat] Failed to read local skill fallback:', (err as Error).message);
+          console.error(
+            '[chat] Failed to read local skill fallback:',
+            (err as Error).message
+          );
         }
       }
     }
@@ -1770,8 +1964,7 @@ async function buildNewAgentTurnPrompt(
       initialPrompt +=
         '\n\nThe skill content above is already loaded. Do not call `get_skill` or `get_skill_file` for this path — execute it now.';
     } else {
-      initialPrompt +=
-        `\n\n# Skill pre-fetch failed\nCould not load ${kickoff.skillPath} from ${provider} or the local checkout. Inform the user that the skill file is missing.`;
+      initialPrompt += `\n\n# Skill pre-fetch failed\nCould not load ${kickoff.skillPath} from ${provider} or the local checkout. Inform the user that the skill file is missing.`;
     }
   }
 
@@ -1813,22 +2006,17 @@ export interface PreparedBackgroundWorkflowTurn {
   skillPath: string;
   projectId: string;
   threadWorkspacePath: string;
+  repository: RepositoryPreparationTarget;
 }
 
 export function buildBackgroundWorkflowPrompt(
   kickoff: ChatThreadKickoff,
-  promptText: string,
+  promptText: string
 ): Promise<string> {
-  return buildNewAgentTurnPrompt(
-    kickoff,
-    promptText,
-    false,
-    undefined,
-    {
-      repoSearchEnabled: false,
-      nativeReads: true,
-    },
-  );
+  return buildNewAgentTurnPrompt(kickoff, promptText, false, undefined, {
+    repoSearchEnabled: false,
+    nativeReads: true,
+  });
 }
 
 /**
@@ -1838,7 +2026,7 @@ export function buildBackgroundWorkflowPrompt(
  */
 export async function prepareBackgroundWorkflowTurn(
   threadId: string,
-  promptText: string,
+  promptText: string
 ): Promise<PreparedBackgroundWorkflowTurn> {
   const state = await ensureThreadState(threadId);
   if (!state) {
@@ -1852,13 +2040,20 @@ export async function prepareBackgroundWorkflowTurn(
     skillPath: kickoff.skillPath ?? '',
     projectId: kickoff.project,
     threadWorkspacePath: state.thread.workspaceDir,
+    repository: {
+      provider: kickoff.skillProvider ?? 'ado',
+      project: kickoff.project,
+      repo: kickoff.repo,
+      branch: kickoff.skillBranch ?? kickoff.branch ?? 'main',
+    },
   };
 }
 
 export function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
   const branch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
   const isGitHub = kickoff.skillProvider === 'github';
-  const hasApexPath = !!(kickoff as ChatThreadKickoff & { prdId?: string }).prdId; // Apex PRD-sourced session
+  const hasApexPath = !!(kickoff as ChatThreadKickoff & { prdId?: string })
+    .prdId; // Apex PRD-sourced session
   const parts: string[] = [
     `# Development workspace`,
     `You are running in a REAL repository checkout. The current working directory IS a git clone of the project repo. The feature branch has already been created and checked out — you are on it now.`,
@@ -1876,13 +2071,13 @@ export function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
     parts.push(
       `Package-manager-aware development dependencies were prepared from each supported repository lockfile and attached to the corresponding install folder before the agent started.`,
       `Do not run npm install, npm ci, pnpm install, or yarn install unless package.json, package-lock.json, or the project's equivalent manifest/lockfile changes during this session.`,
-      ``,
+      ``
     );
   } else {
     parts.push(
       `Server-side dependency bootstrap was skipped for this session.`,
       `Inspect the repository's manifests and lockfiles, then install dependencies with the project's package manager if the project workflow requires them.`,
-      ``,
+      ``
     );
   }
 
@@ -1890,7 +2085,7 @@ export function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
     parts.push(
       `# Repo access`,
       `Skills from this project's GitHub repo are pre-loaded into the conversation by the system when applicable.`,
-      ``,
+      ``
     );
   } else {
     parts.push(
@@ -1900,7 +2095,7 @@ export function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
       `- \`get_skill_file\`   — read any file from the repo`,
       `- \`search_repo_code\` — search code in the repo`,
       `- \`query_work_items\` — query ADO work items`,
-      ``,
+      ``
     );
   }
 
@@ -1922,7 +2117,7 @@ export function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
       `data models, component structures, and test expectations. The tech spec is your primary`,
       `implementation guide. Respect the dependency graph in the backlog (item \`dependsOn\` and`,
       `\`parallelGroup\` fields) to determine execution order.`,
-      ``,
+      ``
     );
   } else {
     // ADO path: design-doc attachments injected by injectAdoAttachments at session setup
@@ -1935,7 +2130,7 @@ export function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
       `- **Prototype** — \`{slug}-design-spec/prototype.html\` (if present)`,
       `- **PRD placeholder** — \`{slug}.prd.md\``,
       `Read these first — they define the feature's scope, architecture, API contracts, and test targets.`,
-      ``,
+      ``
     );
   }
 
@@ -1966,16 +2161,18 @@ export function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
       `You must NOT run git commit, git push, git branch, or open pull requests.`,
       ``,
       `# Development skill`,
-      `Load it now:`,
+      `Load it now:`
     );
     if (isGitHub) {
       parts.push(`The skill content will be pre-loaded below by the system.`);
     } else {
       parts.push(
-        `  Call \`get_skill\` with path: "${kickoff.skillPath}", project: "${kickoff.project}", repo: "${kickoff.repo}", branch: "${branch}"`,
+        `  Call \`get_skill\` with path: "${kickoff.skillPath}", project: "${kickoff.project}", repo: "${kickoff.repo}", branch: "${branch}"`
       );
     }
-    parts.push(`Follow the skill's instructions exactly, starting from Phase 0.`);
+    parts.push(
+      `Follow the skill's instructions exactly, starting from Phase 0.`
+    );
   } else {
     // No skill configured: minimal direct-implement fallback.
     parts.push(
@@ -1986,7 +2183,7 @@ export function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
       `# Important constraints`,
       `- This IS a real repo checkout — you can read any project file directly from disk.`,
       `- Do NOT run \`git push\`, \`git commit\`, create branches, or open pull requests — APEX owns those steps.`,
-      `- Write clean, production-quality code. Follow existing project conventions in the codebase.`,
+      `- Write clean, production-quality code. Follow existing project conventions in the codebase.`
     );
   }
 
@@ -1995,9 +2192,17 @@ export function buildDevelopmentPrompt(kickoff: ChatThreadKickoff): string {
 
 // ── SSE broadcast ─────────────────────────────────────────────────────────────
 
-function broadcast(state: ThreadState, event: SseEvent, envelope?: AgentRunEventEnvelope) {
+function broadcast(
+  state: ThreadState,
+  event: SseEvent,
+  envelope?: AgentRunEventEnvelope
+) {
   for (const cb of state.subscribers) {
-    try { cb(event, envelope); } catch { /* subscriber gone */ }
+    try {
+      cb(event, envelope);
+    } catch {
+      /* subscriber gone */
+    }
   }
 }
 
@@ -2005,12 +2210,14 @@ function makeCancelledError(reason: string): Error & { _cancelled: true } {
   return Object.assign(new Error(reason), { _cancelled: true as const });
 }
 
-function makeOwnerDeadlineError(reason: string): Error & { _ownerDeadline: true } {
+function makeOwnerDeadlineError(
+  reason: string
+): Error & { _ownerDeadline: true } {
   return Object.assign(new Error(reason), { _ownerDeadline: true as const });
 }
 
 function makeStartupDeadlineError(
-  reason: string,
+  reason: string
 ): Error & { _startupDeadline: true } {
   return Object.assign(new Error(reason), { _startupDeadline: true as const });
 }
@@ -2023,16 +2230,18 @@ export function sanitizeTerminalDetail(detail: string): string {
 
 export async function disposeAgentWithinDeadline(
   agent: { [Symbol.asyncDispose](): Promise<void> },
-  timeoutMs = AGENT_DISPOSAL_TIMEOUT_MS,
+  timeoutMs = AGENT_DISPOSAL_TIMEOUT_MS
 ): Promise<boolean> {
   try {
     await raceWithTimeout('Cursor SDK agent disposal', timeoutMs, () =>
-      agent[Symbol.asyncDispose](),
+      agent[Symbol.asyncDispose]()
     );
     return true;
   } catch (error) {
     if (error instanceof McpTimeoutError) {
-      console.warn(`[chat] Cursor SDK disposal exceeded ${timeoutMs}ms; continuing process`);
+      console.warn(
+        `[chat] Cursor SDK disposal exceeded ${timeoutMs}ms; continuing process`
+      );
     } else {
       console.warn('[chat] Cursor SDK disposal failed; continuing process');
     }
@@ -2046,14 +2255,14 @@ export async function disposeAgentWithinDeadline(
  */
 async function forceDisposeThreadAgent(
   state: ThreadState,
-  options?: { clearCursorAgentId?: boolean; reason?: string },
+  options?: { clearCursorAgentId?: boolean; reason?: string }
 ): Promise<void> {
   if (state.agent) {
     const agent = state.agent;
     state.agent = null;
     console.log(
       `[chat] Force-disposing agent (threadId=${state.thread.id}` +
-        `, reason=${options?.reason ?? 'unspecified'})`,
+        `, reason=${options?.reason ?? 'unspecified'})`
     );
     await disposeAgentWithinDeadline(agent);
   }
@@ -2064,7 +2273,7 @@ async function forceDisposeThreadAgent(
 
 async function cancelSdkRunBestEffort(
   state: ThreadState,
-  runId: string,
+  runId: string
 ): Promise<void> {
   if (!state.agent) return;
   try {
@@ -2075,7 +2284,7 @@ async function cancelSdkRunBestEffort(
     type AgentWithGetRun = typeof Agent & {
       getRun: (
         id: string,
-        opts: { runtime: 'local'; cwd: string },
+        opts: { runtime: 'local'; cwd: string }
       ) => Promise<AgentRunHandle>;
     };
     const run = await (Agent as AgentWithGetRun).getRun(runId, {
@@ -2104,33 +2313,39 @@ export function createRunEventEnvelope(input: {
 }
 
 function shouldPersistRunEvent(event: SseEvent): boolean {
-  return event.type === 'phase'
-    || event.type === 'health'
-    || event.type === 'tool_call'
-    || event.type === 'tool_status'
-    || event.type === 'status'
-    || event.type === 'retrying'
-    || event.type === 'error'
-    || event.type === 'done';
+  return (
+    event.type === 'phase' ||
+    event.type === 'health' ||
+    event.type === 'tool_call' ||
+    event.type === 'tool_status' ||
+    event.type === 'status' ||
+    event.type === 'retrying' ||
+    event.type === 'error' ||
+    event.type === 'done'
+  );
 }
 
 function isMeaningfulProgressEvent(event: SseEvent): boolean {
-  return event.type === 'token'
-    || event.type === 'message'
-    || event.type === 'phase'
-    || event.type === 'thinking'
-    || event.type === 'tool_call'
-    || event.type === 'tool_status';
+  return (
+    event.type === 'token' ||
+    event.type === 'message' ||
+    event.type === 'phase' ||
+    event.type === 'thinking' ||
+    event.type === 'tool_call' ||
+    event.type === 'tool_status'
+  );
 }
 
-export function shouldPersistAgentRunProgress(eventDrivenTerminationEnabled: boolean): boolean {
+export function shouldPersistAgentRunProgress(
+  eventDrivenTerminationEnabled: boolean
+): boolean {
   return !eventDrivenTerminationEnabled;
 }
 
 export function buildAgentRunClaimUpdate(
   eventDrivenTerminationEnabled: boolean,
   ownerInstance: string,
-  timestamp: string,
+  timestamp: string
 ): {
   status: 'running';
   ownerInstance: string;
@@ -2170,10 +2385,14 @@ export function buildAgentRunClaimUpdate(
 
 async function persistMeaningfulProgress(
   runId: string,
-  envelope: AgentRunEventEnvelope,
+  envelope: AgentRunEventEnvelope
 ): Promise<void> {
   if (!shouldPersistAgentRunProgress(eventDrivenRunIds.has(runId))) return;
-  if (envelope.event.type === 'cancel' || !isMeaningfulProgressEvent(envelope.event)) return;
+  if (
+    envelope.event.type === 'cancel' ||
+    !isMeaningfulProgressEvent(envelope.event)
+  )
+    return;
   // Tokens and extended thinking can fire continuously; throttle DB writes.
   if (envelope.event.type === 'token' || envelope.event.type === 'thinking') {
     const nowMs = Date.parse(envelope.timestamp);
@@ -2181,11 +2400,15 @@ async function persistMeaningfulProgress(
     if (nowMs - previous < 5_000) return;
     lastTokenProgressWriteAt.set(runId, nowMs);
   }
-  await db.update(agentRuns)
+  await db
+    .update(agentRuns)
     .set({
       progressAt: envelope.timestamp,
-      progressLabel: envelope.detail
-        ?? (envelope.event.type === 'token' ? 'Generating response' : envelope.phase),
+      progressLabel:
+        envelope.detail ??
+        (envelope.event.type === 'token'
+          ? 'Generating response'
+          : envelope.phase),
       progressPhase: envelope.phase,
       updatedAt: envelope.timestamp,
     })
@@ -2194,11 +2417,38 @@ async function persistMeaningfulProgress(
     .catch(() => {});
 }
 
+/**
+ * FEAT-007 bridge — mirror an in-process run-event envelope onto the interactive
+ * live bus (Redis) so a WebSocket gateway on ANY App Service instance relays
+ * turns that execute in-process (not just turns dispatched to the ACA actor).
+ *
+ * Why this is needed: the gateway's live fan-out subscribes to the in-memory
+ * owner stream (same-instance only) and the Redis live bus (actor tier only).
+ * In-process turns already fan out over in-memory + Postgres `pg_notify`
+ * (which the SSE route consumes cross-instance) but never over Redis, so a WS
+ * client whose socket lands on a different instance than the turn never sees
+ * live tokens. Publishing the same envelope here closes that gap.
+ *
+ * Safe by construction: `interactiveLiveBus.publish` is a no-op when Redis is
+ * unconfigured (dev/local), so in-process behavior is byte-for-byte unchanged
+ * there. The gateway de-dupes by `eventId` across its in-memory, Redis, and
+ * replay sources, so a same-instance socket never receives a duplicate. Fan-out
+ * is best effort; durability continues to ride Postgres notify + replay.
+ */
+function publishInteractiveLive(
+  threadId: string,
+  envelope: AgentRunEventEnvelope
+): void {
+  void interactiveLiveBus.publish(threadId, envelope).catch(() => {
+    // Ephemeral fan-out is best effort; durability rides Postgres notify + replay.
+  });
+}
+
 async function publishRunEvent(
   state: ThreadState,
   runId: string,
   event: SseEvent,
-  metadata?: { phase?: AgentRunPhase },
+  metadata?: { phase?: AgentRunPhase }
 ): Promise<AgentRunEventEnvelope> {
   const envelope = createRunEventEnvelope({
     threadId: state.thread.id,
@@ -2213,7 +2463,7 @@ async function publishRunEvent(
 
 async function publishRunEventEnvelope(
   state: ThreadState,
-  envelope: AgentRunEventEnvelope,
+  envelope: AgentRunEventEnvelope
 ): Promise<void> {
   if (envelope.event.type === 'cancel') return;
   const event = envelope.event;
@@ -2221,8 +2471,12 @@ async function publishRunEventEnvelope(
   const persist = shouldPersistRunEvent(event);
   if (!persist) {
     broadcast(state, event, envelope);
+    publishInteractiveLive(state.thread.id, envelope);
     void notifyRunEvent(envelope, { persist: false }).catch((err) => {
-      console.error(`[chat] Failed to fan out run event ${envelope.eventId}:`, (err as Error).message);
+      console.error(
+        `[chat] Failed to fan out run event ${envelope.eventId}:`,
+        (err as Error).message
+      );
     });
     void persistMeaningfulProgress(runId, envelope);
     return;
@@ -2230,10 +2484,14 @@ async function publishRunEventEnvelope(
   try {
     await notifyRunEvent(envelope, { persist });
   } catch (err) {
-    console.error(`[chat] Failed to fan out run event ${envelope.eventId}:`, (err as Error).message);
+    console.error(
+      `[chat] Failed to fan out run event ${envelope.eventId}:`,
+      (err as Error).message
+    );
   }
   await persistMeaningfulProgress(runId, envelope);
   broadcast(state, event, envelope);
+  publishInteractiveLive(state.thread.id, envelope);
 }
 
 async function finalizeOwnerTerminal(
@@ -2241,7 +2499,7 @@ async function finalizeOwnerTerminal(
   runId: string,
   status: 'completed' | 'failed' | 'cancelled',
   detail: string,
-  events: SseEvent[],
+  events: SseEvent[]
 ): Promise<boolean> {
   const finalizedEvents = events.map((event) => ({
     event,
@@ -2264,12 +2522,16 @@ async function finalizeOwnerTerminal(
   if (won) {
     for (const { event, envelope } of finalizedEvents) {
       broadcast(state, event, envelope);
+      publishInteractiveLive(state.thread.id, envelope);
     }
   }
   return won;
 }
 
-async function publishRunCancellation(threadId: string, runId: string): Promise<void> {
+async function publishRunCancellation(
+  threadId: string,
+  runId: string
+): Promise<void> {
   const envelope: AgentRunEventEnvelope = {
     eventId: uuidv4(),
     threadId,
@@ -2284,6 +2546,7 @@ async function publishRunCancellation(threadId: string, runId: string): Promise<
     event: { type: 'cancel' },
   };
   await notifyRunEvent(envelope, { persist: true });
+  publishInteractiveLive(threadId, envelope);
 }
 
 // ── Idle cleanup ──────────────────────────────────────────────────────────────
@@ -2293,9 +2556,11 @@ function resetIdleTimer(state: ThreadState) {
   // Don't start the idle timer while a run is active — the timer will be reset
   // in the run's finally block. Starting it now could fire closeThread mid-run.
   if (state.thread.status === 'running') return;
-  const timeout = state.isInterviewThread ? INTERVIEW_IDLE_TIMEOUT_MS
-    : state.isDevSession ? INTERVIEW_IDLE_TIMEOUT_MS  // dev sessions get 2-hour window
-    : IDLE_TIMEOUT_MS;
+  const timeout = state.isInterviewThread
+    ? INTERVIEW_IDLE_TIMEOUT_MS
+    : state.isDevSession
+      ? INTERVIEW_IDLE_TIMEOUT_MS // dev sessions get 2-hour window
+      : IDLE_TIMEOUT_MS;
   state.idleTimer = setTimeout(() => closeThread(state.thread.id), timeout);
 }
 
@@ -2336,7 +2601,7 @@ async function _threadBacksDocument(threadId: string): Promise<string | null> {
     where: or(
       eq(designDocs.chatThreadId, threadId),
       eq(designDocs.docAssistantThreadId, threadId),
-      eq(designDocs.validationThreadId, threadId),
+      eq(designDocs.validationThreadId, threadId)
     ),
     columns: { id: true },
   });
@@ -2348,7 +2613,9 @@ async function _threadBacksDocument(threadId: string): Promise<string | null> {
 /**
  * Return live ThreadState from memory, or hydrate from Postgres (e.g. after server restart).
  */
-async function ensureThreadState(threadId: string): Promise<ThreadState | null> {
+async function ensureThreadState(
+  threadId: string
+): Promise<ThreadState | null> {
   const existing = threads.get(threadId);
   if (existing) return existing;
 
@@ -2380,7 +2647,7 @@ async function ensureThreadState(threadId: string): Promise<ThreadState | null> 
         '[chat] failed to recreate workspace for thread',
         threadId,
         ':',
-        (err as Error).message,
+        (err as Error).message
       );
     }
   }
@@ -2395,6 +2662,7 @@ async function ensureThreadState(threadId: string): Promise<ThreadState | null> 
     isInterviewThread: isInterview,
     isDevSession: thread.kickoff?.mode === 'development',
     grounding: null,
+    groundingInFlight: null,
     resolvedGroundingBinding: null,
     bindingContinuity: null,
     groundingWorkspaceDir: null,
@@ -2472,12 +2740,13 @@ export async function createThread(
     kickoffMessage?: string;
     workspaceDirOverride?: string;
     dependenciesPrepared?: boolean;
-  },
+  }
 ): Promise<ChatThread> {
   ensureDirs();
 
   const threadId = uuidv4();
-  const workspaceDir = options?.workspaceDirOverride ?? path.join(WORKSPACE_BASE, threadId);
+  const workspaceDir =
+    options?.workspaceDirOverride ?? path.join(WORKSPACE_BASE, threadId);
 
   // Opt interview threads into live web research (web MCP + scope carve-out) when the project enables it.
   const enrichedKickoff = await enrichKickoffForInterviewWebResearch(kickoff);
@@ -2516,6 +2785,7 @@ export async function createThread(
     isInterviewThread: false,
     isDevSession: thread.kickoff?.mode === 'development',
     grounding: null,
+    groundingInFlight: null,
     resolvedGroundingBinding: null,
     bindingContinuity: null,
     groundingWorkspaceDir: null,
@@ -2531,12 +2801,22 @@ export async function createThread(
   if (!options?.skipAutoKickoff) {
     const msg = options?.kickoffMessage ?? 'Begin.';
     setImmediate(() => {
-      console.log('[chat] auto-kickoff firing', { threadId, skillPath: kickoff.skillPath });
-      sendMessage(threadId, msg, undefined, [], { hidden: true }).then(() => {
-        console.log('[chat] auto-kickoff completed', { threadId });
-      }).catch((err: Error) => {
-        console.error('[chat] Auto-kickoff failed for thread', threadId, ':', err.message);
+      console.log('[chat] auto-kickoff firing', {
+        threadId,
+        skillPath: kickoff.skillPath,
       });
+      sendMessage(threadId, msg, undefined, [], { hidden: true })
+        .then(() => {
+          console.log('[chat] auto-kickoff completed', { threadId });
+        })
+        .catch((err: Error) => {
+          console.error(
+            '[chat] Auto-kickoff failed for thread',
+            threadId,
+            ':',
+            err.message
+          );
+        });
     });
   }
 
@@ -2550,7 +2830,10 @@ export async function createThread(
  * ID was known) with the actual thread UUID, so the system prompt contains the
  * correct thread_id when the agent first runs.
  */
-export function updateThreadKickoffContext(threadId: string, freeformContext: string): void {
+export function updateThreadKickoffContext(
+  threadId: string,
+  freeformContext: string
+): void {
   const state = threads.get(threadId);
   if (!state) return;
   state.thread.kickoff = { ...state.thread.kickoff, freeformContext };
@@ -2578,7 +2861,7 @@ export const getThreadAsync = getThread;
 
 export async function listThreadSummaries(
   userId: string,
-  opts?: { limit?: number; offset?: number; project?: string },
+  opts?: { limit?: number; offset?: number; project?: string }
 ): Promise<ChatThreadSummary[]> {
   return pgListThreadsByUser(userId, opts);
 }
@@ -2591,7 +2874,7 @@ export async function searchThreadSummaries(
     offset?: number;
     project?: string;
     flaggedOnly?: boolean;
-  },
+  }
 ): Promise<ChatThreadSearchResult[]> {
   return pgSearchThreads(userId, opts);
 }
@@ -2605,7 +2888,7 @@ export function listThreads(userId: string): ChatThread[] {
 
 export function subscribeToThread(
   threadId: string,
-  callback: (event: SseEvent, envelope?: AgentRunEventEnvelope) => void,
+  callback: (event: SseEvent, envelope?: AgentRunEventEnvelope) => void
 ): () => void {
   // Only check the in-memory map (sync). The thread is guaranteed to be
   // loaded by requireThreadOwner middleware before this is called.
@@ -2633,7 +2916,9 @@ function describeError(err: unknown): string {
  */
 export function isFatalRunError(resultText: string): boolean {
   const lower = resultText.toLowerCase();
-  return /\b(auth(entication|orization)?|unauthorized|forbidden|invalid.{0,20}(key|token|credential|config|agent)|agent.{0,10}not.found)\b/.test(lower);
+  return /\b(auth(entication|orization)?|unauthorized|forbidden|invalid.{0,20}(key|token|credential|config|agent)|agent.{0,10}not.found)\b/.test(
+    lower
+  );
 }
 
 function getErrorStatusCode(err: unknown): number | undefined {
@@ -2668,16 +2953,32 @@ function getRunId(run: unknown): string | undefined {
 
 /** Detect transient SDK / network errors worth retrying. */
 export function isTransientSdkError(err: unknown): boolean {
-  if (err instanceof Error && err.message.includes('already has active run')) return false;
+  if (err instanceof Error && err.message.includes('already has active run'))
+    return false;
 
   const statusCode = getErrorStatusCode(err);
   if (statusCode === 401 || statusCode === 403) return false;
-  if (statusCode !== undefined && statusCode >= 400 && statusCode < 500 && statusCode !== 429) return false;
-  if (statusCode === 429 || (statusCode !== undefined && statusCode >= 500 && statusCode < 600)) return true;
+  if (
+    statusCode !== undefined &&
+    statusCode >= 400 &&
+    statusCode < 500 &&
+    statusCode !== 429
+  )
+    return false;
+  if (
+    statusCode === 429 ||
+    (statusCode !== undefined && statusCode >= 500 && statusCode < 600)
+  )
+    return true;
 
   if (err instanceof Error) {
     const code = getErrorCode(err);
-    if (typeof code === 'string' && /^(ECONNRESET|ETIMEDOUT|ENOTFOUND|EPIPE|EAI_AGAIN|ECONNREFUSED)$/.test(code)) {
+    if (
+      typeof code === 'string' &&
+      /^(ECONNRESET|ETIMEDOUT|ENOTFOUND|EPIPE|EAI_AGAIN|ECONNREFUSED)$/.test(
+        code
+      )
+    ) {
       return true;
     }
   }
@@ -2689,7 +2990,9 @@ export function isTransientSdkError(err: unknown): boolean {
 export function isRecoverableSdkError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const msg = err.message.toLowerCase();
-  return /already has active run|stale.*run|agent.*disposed|run.*expired|agent.*not.*available/.test(msg);
+  return /already has active run|stale.*run|agent.*disposed|run.*expired|agent.*not.*available/.test(
+    msg
+  );
 }
 
 /**
@@ -2702,7 +3005,9 @@ export function isFatalSdkError(err: unknown): boolean {
 
   if (err instanceof Error) {
     const msg = err.message.toLowerCase();
-    return /\b(auth(entication|orization)?|unauthorized|forbidden|invalid.{0,20}(key|token|credential|config|agent)|agent.{0,10}not.found)\b/.test(msg);
+    return /\b(auth(entication|orization)?|unauthorized|forbidden|invalid.{0,20}(key|token|credential|config|agent)|agent.{0,10}not.found)\b/.test(
+      msg
+    );
   }
   return false;
 }
@@ -2744,7 +3049,9 @@ export function isAuthError(err: unknown): boolean {
   const statusCode = getErrorStatusCode(err);
   if (statusCode === 401 || statusCode === 403) return true;
   if (err instanceof Error) {
-    return /\b(auth(entication|orization)?|unauthorized|forbidden)\b/i.test(err.message);
+    return /\b(auth(entication|orization)?|unauthorized|forbidden)\b/i.test(
+      err.message
+    );
   }
   return false;
 }
@@ -2778,15 +3085,18 @@ const outputWorkspaceContext = new AsyncLocalStorage<{
 export async function syncOutputToDb(
   threadId: string,
   workspaceDir: string,
-  agentText?: string,
+  agentText?: string
 ): Promise<void> {
-  return outputWorkspaceContext.run(
-    { threadId, workspaceDir },
-    () => syncOutputToDbFromWorkspace(threadId, workspaceDir, agentText),
+  return outputWorkspaceContext.run({ threadId, workspaceDir }, () =>
+    syncOutputToDbFromWorkspace(threadId, workspaceDir, agentText)
   );
 }
 
-async function syncOutputToDbFromWorkspace(threadId: string, workspaceDir: string, agentText?: string): Promise<void> {
+async function syncOutputToDbFromWorkspace(
+  threadId: string,
+  workspaceDir: string,
+  agentText?: string
+): Promise<void> {
   let fullySynced = false;
 
   // Check if this thread belongs to a test-case generation run
@@ -2798,16 +3108,24 @@ async function syncOutputToDbFromWorkspace(threadId: string, workspaceDir: strin
       testCaseRow.id,
       testCaseRow.prdId,
       threadId,
-      workspaceDir,
+      workspaceDir
     );
     if (!synced && testCaseRow.status === 'generating') {
-      logWorkspaceContents(workspaceDir, `test-case no-output (testCaseId=${testCaseRow.id})`);
+      logWorkspaceContents(
+        workspaceDir,
+        `test-case no-output (testCaseId=${testCaseRow.id})`
+      );
       if (agentText) {
-        const preview = agentText.length > 5000 ? agentText.slice(0, 5000) + '…' : agentText;
-        console.warn(`[chat] test-case agent response (${agentText.length} chars) preview (testCaseId=${testCaseRow.id}):\n${preview}`);
+        const preview =
+          agentText.length > 5000 ? agentText.slice(0, 5000) + '…' : agentText;
+        console.warn(
+          `[chat] test-case agent response (${agentText.length} chars) preview (testCaseId=${testCaseRow.id}):\n${preview}`
+        );
       }
       await markTestCaseFailed(testCaseRow.id, testCaseRow.prdId, threadId);
-      console.warn(`[chat] post-run: test-case agent produced no output — marked failed (testCaseId=${testCaseRow.id})`);
+      console.warn(
+        `[chat] post-run: test-case agent produced no output — marked failed (testCaseId=${testCaseRow.id})`
+      );
     }
     return;
   }
@@ -2819,34 +3137,57 @@ async function syncOutputToDbFromWorkspace(threadId: string, workspaceDir: strin
   if (prdRow) {
     const content = readOutputPrd(threadId);
     const backlog = readOutputBacklog(threadId);
-    if (content) {
+    const { isPrdGenerationOutputComplete } = await import(
+      '../../shared/utils/prdGenerationOutput'
+    );
+    const outputComplete = isPrdGenerationOutputComplete(content, backlog);
+    if (outputComplete && content) {
       await syncPrdContent(prdRow.id, content, backlog ?? undefined);
-      console.log(`[chat] post-run: synced PRD output to DB (prdId=${prdRow.id})`);
-      notifyAiCompletion('prd_generated', prdRow.id, { title: prdRow.title }).catch(err =>
-        console.error(`[chat] AI notification failed for prd_generated (prdId=${prdRow.id}):`, err),
+      console.log(
+        `[chat] post-run: synced PRD output to DB (prdId=${prdRow.id})`
       );
-      fullySynced = content !== null && backlog !== null;
+      notifyAiCompletion('prd_generated', prdRow.id, {
+        title: prdRow.title,
+      }).catch((err) =>
+        console.error(
+          `[chat] AI notification failed for prd_generated (prdId=${prdRow.id}):`,
+          err
+        )
+      );
+      fullySynced = true;
     } else if (prdRow.status === 'generating') {
-      logWorkspaceContents(workspaceDir, `PRD no-output (prdId=${prdRow.id})`);
-      await db.update(prds)
+      logWorkspaceContents(workspaceDir, `PRD incomplete-output (prdId=${prdRow.id})`);
+      await db
+        .update(prds)
         .set({ status: 'draft', updatedAt: new Date().toISOString() })
         .where(and(eq(prds.id, prdRow.id), eq(prds.status, 'generating')));
-      console.warn(`[chat] post-run: agent produced no PRD output — reset to draft (prdId=${prdRow.id})`);
+      console.warn(
+        `[chat] post-run: agent produced incomplete/stub PRD output — reset to draft (prdId=${prdRow.id})`
+      );
     }
     if (fullySynced) {
       try {
-        const testCaseStarted = await triggerTestCaseGeneration(prdRow.id, threadId);
+        const testCaseStarted = await triggerTestCaseGeneration(
+          prdRow.id,
+          threadId
+        );
         if (!testCaseStarted) {
           // If no test case skill, check if PRD validation can start
           try {
-            const { arePrdValidationArtifactsReady, autoStartPrdValidation } = await import('./prdService');
+            const { arePrdValidationArtifactsReady, autoStartPrdValidation } =
+              await import('./prdService');
             const ready = await arePrdValidationArtifactsReady(prdRow.id);
             if (ready) await autoStartPrdValidation(prdRow.id);
-          } catch { /* non-fatal */ }
+          } catch {
+            /* non-fatal */
+          }
           cleanupWorkspaceDir(workspaceDir);
         }
       } catch (err) {
-        console.error(`[chat] post-run: auto test-case generation failed (prdId=${prdRow.id})`, err);
+        console.error(
+          `[chat] post-run: auto test-case generation failed (prdId=${prdRow.id})`,
+          err
+        );
         cleanupWorkspaceDir(workspaceDir);
       }
     }
@@ -2866,15 +3207,26 @@ async function syncOutputToDbFromWorkspace(threadId: string, workspaceDir: strin
     },
   });
   if (ddGenRow) {
-    const { finalizeSingleFeatureDoc, isSingleFeatureDesignDocRow } = await import('./designDocService');
+    const { finalizeSingleFeatureDoc, isSingleFeatureDesignDocRow } =
+      await import('./designDocService');
     // Single-feature docs finalize in place; legacy seeds fan out to child rows.
     if (isSingleFeatureDesignDocRow(ddGenRow)) {
       // Watcher may have already handled this; finalizeSingleFeatureDoc is idempotent.
       await finalizeSingleFeatureDoc(ddGenRow.id, threadId, ddGenRow.project);
-      console.log(`[chat] post-run: finalised single-feature design doc (designDocId=${ddGenRow.id})`);
+      console.log(
+        `[chat] post-run: finalised single-feature design doc (designDocId=${ddGenRow.id})`
+      );
     } else {
-      await syncPerFeatureDesignDocs(ddGenRow.id, ddGenRow.prdId, ddGenRow.project, ddGenRow.authorId, threadId);
-      console.log(`[chat] post-run: synced per-feature design docs to DB (prdId=${ddGenRow.prdId})`);
+      await syncPerFeatureDesignDocs(
+        ddGenRow.id,
+        ddGenRow.prdId,
+        ddGenRow.project,
+        ddGenRow.authorId,
+        threadId
+      );
+      console.log(
+        `[chat] post-run: synced per-feature design docs to DB (prdId=${ddGenRow.prdId})`
+      );
     }
     return;
   }
@@ -2891,13 +3243,21 @@ async function syncOutputToDbFromWorkspace(threadId: string, workspaceDir: strin
         eq(designDocs.status, 'generating'),
         isNull(designDocs.chatThreadId),
         isNull(designDocs.featureIndex),
-        isNull(designDocs.designPrototypeId),
+        isNull(designDocs.designPrototypeId)
       ),
       columns: { id: true, prdId: true, project: true, authorId: true },
     });
     if (seedRow) {
-      await syncPerFeatureDesignDocs(seedRow.id, seedRow.prdId, seedRow.project, seedRow.authorId, threadId);
-      console.log(`[chat] post-run: synced ${orphanFeatures.length} orphan features to DB (seedDocId=${seedRow.id})`);
+      await syncPerFeatureDesignDocs(
+        seedRow.id,
+        seedRow.prdId,
+        seedRow.project,
+        seedRow.authorId,
+        threadId
+      );
+      console.log(
+        `[chat] post-run: synced ${orphanFeatures.length} orphan features to DB (seedDocId=${seedRow.id})`
+      );
       return;
     }
   }
@@ -2916,17 +3276,24 @@ async function syncOutputToDbFromWorkspace(threadId: string, workspaceDir: strin
           columns: { validationThreadId: true },
         });
         if (freshDoc?.validationThreadId !== threadId) {
-          console.log(`[chat] post-run: discarded stale validation scorecard — thread ${threadId} no longer active (designDocId=${ddValRow.id})`);
+          console.log(
+            `[chat] post-run: discarded stale validation scorecard — thread ${threadId} no longer active (designDocId=${ddValRow.id})`
+          );
           cleanupWorkspaceDir(workspaceDir);
           return;
         }
         const scorecard = JSON.parse(scorecardRaw) as ValidationScorecard;
         const reportMd = readOutputValidationScorecardMd(threadId) ?? undefined;
         await syncValidationResult(ddValRow.id, scorecard, reportMd);
-        console.log(`[chat] post-run: synced validation scorecard to DB (designDocId=${ddValRow.id})`);
+        console.log(
+          `[chat] post-run: synced validation scorecard to DB (designDocId=${ddValRow.id})`
+        );
         fullySynced = true;
       } catch (err) {
-        console.error(`[chat] post-run: failed to parse validation scorecard`, err);
+        console.error(
+          `[chat] post-run: failed to parse validation scorecard`,
+          err
+        );
       }
     } else {
       // Agent completed but wrote no scorecard file.
@@ -2938,11 +3305,20 @@ async function syncOutputToDbFromWorkspace(threadId: string, workspaceDir: strin
         where: eq(designDocs.id, ddValRow.id),
         columns: { validationThreadId: true, status: true },
       });
-      if (freshDoc?.validationThreadId === threadId && freshDoc?.status === 'validating') {
-        await db.update(designDocs)
-          .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
+      if (
+        freshDoc?.validationThreadId === threadId &&
+        freshDoc?.status === 'validating'
+      ) {
+        await db
+          .update(designDocs)
+          .set({
+            status: 'pending_review',
+            updatedAt: new Date().toISOString(),
+          })
           .where(eq(designDocs.id, ddValRow.id));
-        console.warn(`[chat] post-run: validation agent wrote no scorecard — moved to pending_review (designDocId=${ddValRow.id})`);
+        console.warn(
+          `[chat] post-run: validation agent wrote no scorecard — moved to pending_review (designDocId=${ddValRow.id})`
+        );
       }
       fullySynced = true; // workspace can be cleaned
     }
@@ -2966,7 +3342,9 @@ async function syncOutputToDbFromWorkspace(threadId: string, workspaceDir: strin
       if (techSpec) syncOpts.techSpecContent = techSpec;
       if (assumptions) syncOpts.assumptionsContent = assumptions;
       await syncDesignDocContent(ddAssistantRow.id, syncOpts);
-      console.log(`[chat] post-run: synced doc-assistant output to DB (designDocId=${ddAssistantRow.id})`);
+      console.log(
+        `[chat] post-run: synced doc-assistant output to DB (designDocId=${ddAssistantRow.id})`
+      );
     }
     return;
   }
@@ -2984,16 +3362,20 @@ async function syncOutputToDbFromWorkspace(threadId: string, workspaceDir: strin
           columns: { validationThreadId: true },
         });
         if (freshPrd?.validationThreadId !== threadId) {
-          console.log(`[chat] post-run: discarded stale PRD validation scorecard — thread ${threadId} no longer active (prdId=${prdValRow.id})`);
+          console.log(
+            `[chat] post-run: discarded stale PRD validation scorecard — thread ${threadId} no longer active (prdId=${prdValRow.id})`
+          );
           cleanupWorkspaceDir(workspaceDir);
           return;
         }
         const scorecard = JSON.parse(scorecardRaw) as ValidationScorecard;
         const reportMd = readOutputValidationScorecardMd(threadId) ?? undefined;
-        const { generateFallbackReport } = await import('./documentValidationService');
+        const { generateFallbackReport } =
+          await import('./documentValidationService');
         const effectiveReportMd = reportMd ?? generateFallbackReport(scorecard);
         const newStatus = scorecard.is_ready ? 'pending_review' : 'draft';
-        await db.update(prds)
+        await db
+          .update(prds)
           .set({
             validationScore: Math.round(scorecard.overall_score),
             validationScorecard: scorecard,
@@ -3003,28 +3385,38 @@ async function syncOutputToDbFromWorkspace(threadId: string, workspaceDir: strin
             updatedAt: new Date().toISOString(),
           })
           .where(eq(prds.id, prdValRow.id));
-        console.log(`[chat] post-run: synced PRD validation scorecard to DB (prdId=${prdValRow.id})`);
+        console.log(
+          `[chat] post-run: synced PRD validation scorecard to DB (prdId=${prdValRow.id})`
+        );
         fullySynced = true;
       } catch (err) {
-        console.error(`[chat] post-run: failed to parse PRD validation scorecard`, err);
+        console.error(
+          `[chat] post-run: failed to parse PRD validation scorecard`,
+          err
+        );
       }
     } else {
       const freshPrd = await db.query.prds.findFirst({
         where: eq(prds.id, prdValRow.id),
         columns: { validationThreadId: true, status: true },
       });
-      if (freshPrd?.validationThreadId === threadId && freshPrd?.status === 'validating') {
-        await db.update(prds)
+      if (
+        freshPrd?.validationThreadId === threadId &&
+        freshPrd?.status === 'validating'
+      ) {
+        await db
+          .update(prds)
           .set({ status: 'draft', updatedAt: new Date().toISOString() })
           .where(eq(prds.id, prdValRow.id));
-        console.warn(`[chat] post-run: PRD validation agent wrote no scorecard, reset to draft (prdId=${prdValRow.id})`);
+        console.warn(
+          `[chat] post-run: PRD validation agent wrote no scorecard, reset to draft (prdId=${prdValRow.id})`
+        );
       }
       fullySynced = true;
     }
     if (fullySynced) cleanupWorkspaceDir(workspaceDir);
     return;
   }
-
 }
 
 function cleanupWorkspaceDir(workspaceDir: string): void {
@@ -3032,13 +3424,15 @@ function cleanupWorkspaceDir(workspaceDir: string): void {
   const isSharedRuntimeWorkspace = [...threads.values()].some(
     (state) =>
       state.groundingWorkspaceDir !== null &&
-      path.resolve(state.groundingWorkspaceDir) === resolved,
+      path.resolve(state.groundingWorkspaceDir) === resolved
   );
   if (isSharedRuntimeWorkspace) return;
   try {
     fs.rmSync(workspaceDir, { recursive: true, force: true });
     console.log(`[chat] post-run: cleaned up workspace ${workspaceDir}`);
-  } catch { /* non-fatal */ }
+  } catch {
+    /* non-fatal */
+  }
 }
 
 /**
@@ -3047,31 +3441,54 @@ function cleanupWorkspaceDir(workspaceDir: string): void {
  * can run, so the document doesn't stay in a generating limbo forever.
  */
 async function failGeneratingDocuments(threadId: string): Promise<void> {
-  const [prdResult] = await db.update(prds)
+  const [prdResult] = await db
+    .update(prds)
     .set({ status: 'draft', updatedAt: new Date().toISOString() })
     .where(and(eq(prds.chatThreadId, threadId), eq(prds.status, 'generating')))
     .returning({ id: prds.id });
 
   if (prdResult) {
-    console.warn(`[chat] failGeneratingDocuments: reset PRD to draft (prdId=${prdResult.id}, threadId=${threadId})`);
+    console.warn(
+      `[chat] failGeneratingDocuments: reset PRD to draft (prdId=${prdResult.id}, threadId=${threadId})`
+    );
   }
 
-  const [ddResult] = await db.update(designDocs)
-    .set({ status: 'generation_failed', generationError: 'Agent run failed before output was written', updatedAt: new Date().toISOString() })
-    .where(and(eq(designDocs.chatThreadId, threadId), eq(designDocs.status, 'generating')))
+  const [ddResult] = await db
+    .update(designDocs)
+    .set({
+      status: 'generation_failed',
+      generationError: 'Agent run failed before output was written',
+      updatedAt: new Date().toISOString(),
+    })
+    .where(
+      and(
+        eq(designDocs.chatThreadId, threadId),
+        eq(designDocs.status, 'generating')
+      )
+    )
     .returning({ id: designDocs.id });
 
   if (ddResult) {
-    console.warn(`[chat] failGeneratingDocuments: marked design doc generation_failed (designDocId=${ddResult.id}, threadId=${threadId})`);
+    console.warn(
+      `[chat] failGeneratingDocuments: marked design doc generation_failed (designDocId=${ddResult.id}, threadId=${threadId})`
+    );
   }
 
-  const [testCaseResult] = await db.update(testCases)
+  const [testCaseResult] = await db
+    .update(testCases)
     .set({ status: 'failed', updatedAt: new Date().toISOString() })
-    .where(and(eq(testCases.chatThreadId, threadId), eq(testCases.status, 'generating')))
+    .where(
+      and(
+        eq(testCases.chatThreadId, threadId),
+        eq(testCases.status, 'generating')
+      )
+    )
     .returning({ id: testCases.id });
 
   if (testCaseResult) {
-    console.warn(`[chat] failGeneratingDocuments: marked test cases failed (testCaseId=${testCaseResult.id}, threadId=${threadId})`);
+    console.warn(
+      `[chat] failGeneratingDocuments: marked test cases failed (testCaseId=${testCaseResult.id}, threadId=${threadId})`
+    );
   }
 }
 
@@ -3083,7 +3500,7 @@ async function failGeneratingDocuments(threadId: string): Promise<void> {
  */
 async function eagerPushDevSession(
   threadId: string,
-  kickoff: ChatThreadKickoff,
+  kickoff: ChatThreadKickoff
 ): Promise<void> {
   const session = await db.query.devSessions.findFirst({
     where: eq(devSessions.chatThreadId, threadId),
@@ -3092,7 +3509,8 @@ async function eagerPushDevSession(
   if (session.branchPushed) return;
   if (session.status !== 'in_progress') return;
 
-  const { computeDiff, pushBranch, getWorkspaceDir } = await import('./repoCheckoutService');
+  const { computeDiff, pushBranch, getWorkspaceDir } =
+    await import('./repoCheckoutService');
   const { resolveGitRemote } = await import('./repoCacheService');
   const workspaceDir = getWorkspaceDir(session.id);
 
@@ -3117,31 +3535,38 @@ async function eagerPushDevSession(
     const remote = resolveGitRemote(
       kickoff.skillProvider ?? 'ado',
       kickoff.project,
-      kickoff.repo,
+      kickoff.repo
     );
     await pushBranch(workspaceDir, session.branchName, remote);
     await db
       .update(devSessions)
       .set({ branchPushed: true, updatedAt: new Date().toISOString() })
       .where(eq(devSessions.id, session.id));
-    console.log(`[chat] eager push succeeded for dev session ${session.id}, branch ${session.branchName}`);
+    console.log(
+      `[chat] eager push succeeded for dev session ${session.id}, branch ${session.branchName}`
+    );
   } catch (pushErr) {
-    console.warn(`[chat] eager push to remote failed (non-fatal) for session ${session.id}:`, (pushErr as Error).message);
+    console.warn(
+      `[chat] eager push to remote failed (non-fatal) for session ${session.id}:`,
+      (pushErr as Error).message
+    );
   }
 }
 
 export interface StaleRecoveryGroundingState {
   grounding: CallerGroundingSelection | null;
+  groundingInFlight?: Promise<CallerGroundingSelection> | null;
   resolvedGroundingBinding: GroundingBinding | null;
   bindingContinuity: BindingContinuityDecision | null;
   groundingWorkspaceDir: string | null;
 }
 
 export async function releaseGroundingForStaleRecovery(
-  state: StaleRecoveryGroundingState,
+  state: StaleRecoveryGroundingState
 ): Promise<void> {
   const grounding = state.grounding;
   state.grounding = null;
+  if ('groundingInFlight' in state) state.groundingInFlight = null;
   state.resolvedGroundingBinding = null;
   state.bindingContinuity = null;
   state.groundingWorkspaceDir = null;
@@ -3149,13 +3574,23 @@ export async function releaseGroundingForStaleRecovery(
 }
 
 async function ensureThreadGrounding(
-  state: ThreadState,
+  state: ThreadState
 ): Promise<CallerGroundingSelection> {
-  if (state.grounding) return state.grounding;
+  const repositoryReading = isRepositoryReadingChatCaller(
+    state.thread.kickoff,
+    state.isDevSession
+  );
+  if (
+    state.grounding &&
+    (state.grounding.mode === 'local' || !repositoryReading)
+  ) {
+    return state.grounding;
+  }
+  if (state.groundingInFlight) return state.groundingInFlight;
 
   // Development workspaces own their checkout lifecycle, and calendar
   // assistants expose only the restricted calendar MCP. Neither browses repos.
-  if (!isRepositoryReadingChatCaller(state.thread.kickoff, state.isDevSession)) {
+  if (!repositoryReading) {
     state.grounding = {
       mode: 'remote',
       release: async () => undefined,
@@ -3163,45 +3598,99 @@ async function ensureThreadGrounding(
     return state.grounding;
   }
 
-  state.grounding = await callerGroundingService.start({
-    caller: resolveGroundingCallerKey(state.thread.kickoff),
-    userId: state.thread.userId,
-    run: {
-      runType: 'chat',
-      runId: state.thread.id,
-      project: state.thread.kickoff.project,
-    },
-    repository: {
-      provider: state.thread.kickoff.skillProvider ?? 'ado',
-      repo: state.thread.kickoff.repo,
-      branch:
-        state.thread.kickoff.skillBranch ??
-        state.thread.kickoff.branch ??
-        'main',
-    },
-    reauthorize: async () => {
-      const current = await getThread(state.thread.id);
-      return current?.userId === state.thread.userId &&
-        current.status !== 'closed';
-    },
-    // Chat callers read the grounding checkout only — every write in this path
-    // targets `thread.workspaceDir` — so they may share a read-only per-SHA
-    // checkout (gated by `shared-readonly-grounding-checkout`).
-    readOnlyShareable: true,
-  });
+  const inFlight = (async (): Promise<CallerGroundingSelection> => {
+    const grounding = await callerGroundingService.start({
+      caller: resolveGroundingCallerKey(state.thread.kickoff),
+      userId: state.thread.userId,
+      run: {
+        runType: 'chat',
+        runId: state.thread.id,
+        project: state.thread.kickoff.project,
+      },
+      repository: {
+        provider: state.thread.kickoff.skillProvider ?? 'ado',
+        repo: state.thread.kickoff.repo,
+        branch:
+          state.thread.kickoff.skillBranch ??
+          state.thread.kickoff.branch ??
+          'main',
+      },
+      reauthorize: async () => {
+        const current = await getThread(state.thread.id);
+        return (
+          current?.userId === state.thread.userId && current.status !== 'closed'
+        );
+      },
+      // Chat callers read the grounding checkout only — every write in this path
+      // targets `thread.workspaceDir` — so they may share a read-only per-SHA
+      // checkout (gated by `shared-readonly-grounding-checkout`).
+      readOnlyShareable: true,
+    });
 
-  const continuity = classifyGroundingContinuity(
-    state.thread,
-    state.grounding,
-  );
-  state.resolvedGroundingBinding = continuity.resolvedBinding;
-  state.bindingContinuity = continuity.decision;
+    if (grounding.mode !== 'preparing') {
+      const continuity = classifyGroundingContinuity(state.thread, grounding);
+      // Repository-reading remote selections are intentionally re-evaluated on
+      // each turn; only a ready local checkout is stable enough to cache.
+      if (grounding.mode === 'local') state.grounding = grounding;
+      state.resolvedGroundingBinding = continuity.resolvedBinding;
+      state.bindingContinuity = continuity.decision;
+    }
+    return grounding;
+  })();
 
-  return state.grounding;
+  state.groundingInFlight = inFlight;
+  try {
+    return await inFlight;
+  } finally {
+    if (state.groundingInFlight === inFlight) {
+      state.groundingInFlight = null;
+    }
+  }
+}
+
+async function waitForReadyThreadGrounding(
+  state: ThreadState
+): Promise<Exclude<CallerGroundingSelection, { mode: 'preparing' }>> {
+  const deadline = Date.now() + GROUNDING_PREPARATION_TIMEOUT_MS;
+  let announcedPreparing = false;
+
+  while (true) {
+    const grounding = await ensureThreadGrounding(state);
+    if (grounding.mode !== 'preparing') {
+      if (announcedPreparing) {
+        broadcast(state, {
+          type: 'grounding',
+          status: 'ready',
+          message: 'Project repository ready',
+        });
+      }
+      return grounding;
+    }
+
+    announcedPreparing = true;
+    broadcast(state, {
+      type: 'grounding',
+      status: 'preparing',
+      message: 'Preparing project repository…',
+      retryAfterMs: grounding.retryAfterMs,
+    });
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw new Error(
+        'Repository preparation timed out. Please retry this message.'
+      );
+    }
+    const waitMs = Math.min(grounding.retryAfterMs, remainingMs);
+    const readiness = grounding.waitUntilReady?.();
+    const retryDelay = new Promise<void>((resolve) => {
+      setTimeout(resolve, waitMs);
+    });
+    await (readiness ? Promise.race([readiness, retryDelay]) : retryDelay);
+  }
 }
 
 export async function reevaluateThreadGroundingForRecovery(
-  threadId: string,
+  threadId: string
 ): Promise<boolean> {
   const state = await ensureThreadState(threadId);
   if (!state) return false;
@@ -3219,8 +3708,40 @@ export async function reevaluateThreadGroundingForRecovery(
  */
 const INTERACTIVE_DISPATCH_URL_ENV = 'AI_RUNS_INTERACTIVE_DISPATCH_URL';
 
+/**
+ * Skills that write/read `.ai-pilot` kickoff + output files in
+ * `thread.workspaceDir` (injectKickoffFiles → poll status). The interactive
+ * actor lane runs against the shared grounding checkout and never sees those
+ * files, so these must stay on the in-process path (or the background worker
+ * path that merges thread `.ai-pilot` into a per-run writable checkout).
+ *
+ * Generation skills (`/to-prd`, design-doc, test-case, …) are included so they
+ * cannot run on the shared SHA checkout where leftover `.ai-pilot/output` from
+ * unrelated work would contaminate requirements scope.
+ */
+export function isInteractiveWorkspaceBoundSkill(
+  skillPath: string | null | undefined
+): boolean {
+  const normalized = (skillPath ?? '').replace(/\\/g, '/').toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized.includes('walkthrough-') ||
+    normalized.includes('k6-load-test') ||
+    normalized.includes('/ui-lab/') ||
+    normalized.includes('design-module-') ||
+    normalized.includes('feature-request-analysis') ||
+    normalized.includes('issue-analysis') ||
+    normalized.includes('technical-analysis') ||
+    normalized.includes('/to-prd/') ||
+    normalized.includes('create-test-case') ||
+    normalized.includes('prd-design-spec') ||
+    normalized.includes('design-doc-validation') ||
+    normalized.includes('document-validation')
+  );
+}
+
 function resolveInteractiveWorkflowClass(
-  state: ThreadState,
+  state: ThreadState
 ): InteractiveWorkflowClass {
   if (state.isInterviewThread) return 'interview';
   const skillPath = (state.thread.kickoff.skillPath ?? '').toLowerCase();
@@ -3235,13 +3756,14 @@ async function postInteractiveActorDispatch(dispatch: {
   dispatchMessageId: string;
 }): Promise<void> {
   const base = process.env[INTERACTIVE_DISPATCH_URL_ENV]?.trim();
-  if (!base) throw new Error('Interactive actor dispatch URL is not configured');
+  if (!base)
+    throw new Error('Interactive actor dispatch URL is not configured');
   const response = await fetch(`${base.replace(/\/+$/, '')}/dispatch`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(dispatch),
   });
-  const result = await response.json().catch(() => null) as {
+  const result = (await response.json().catch(() => null)) as {
     accepted?: unknown;
   } | null;
   if (!response.ok || result?.accepted !== true) {
@@ -3261,6 +3783,29 @@ async function postInteractiveActorDispatch(dispatch: {
 interface InteractiveDispatchAttempt {
   dispatched: boolean;
   persistedUserMessage?: ChatMessage;
+  /** Why actor dispatch was skipped / failed (for telemetry + troubleshooting). */
+  bypassReason?: string;
+}
+
+/** Bound interactive prep so a grounding hang cannot swallow the fire-and-forget turn. */
+function resolveInteractiveDispatchAttemptTimeoutMs(): number {
+  const raw = Number.parseInt(
+    process.env.AI_RUNS_INTERACTIVE_DISPATCH_ATTEMPT_TIMEOUT_MS ?? '',
+    10
+  );
+  return Number.isFinite(raw) && raw > 0 ? raw : 45_000;
+}
+
+function trackInteractiveDispatch(
+  name: string,
+  props: Record<string, string>,
+  measurements?: Record<string, number>
+): void {
+  try {
+    trackEvent(name, props, measurements);
+  } catch {
+    // Telemetry must never affect the turn.
+  }
 }
 
 async function tryDispatchInteractiveTurn(
@@ -3268,154 +3813,347 @@ async function tryDispatchInteractiveTurn(
   text: string,
   modelOverride?: string,
   attachments: ChatAttachment[] = [],
-  options?: { hidden?: boolean },
+  options?: { hidden?: boolean }
 ): Promise<InteractiveDispatchAttempt> {
   // Inert unless the actor host dispatch URL is configured (cloud only).
   if (!process.env[INTERACTIVE_DISPATCH_URL_ENV]?.trim()) {
-    return { dispatched: false };
+    trackInteractiveDispatch('interactive.dispatch.bypass', {
+      threadId,
+      reason: 'dispatch-url-unset',
+    });
+    return { dispatched: false, bypassReason: 'dispatch-url-unset' };
   }
   // Attachment files currently belong to the in-process workspace lifecycle.
   // Keep those turns on the established path until actor materialization owns
   // the same attachment contract.
-  if (attachments.length > 0) return { dispatched: false };
+  if (attachments.length > 0) {
+    trackInteractiveDispatch('interactive.dispatch.bypass', {
+      threadId,
+      reason: 'attachments',
+    });
+    return { dispatched: false, bypassReason: 'attachments' };
+  }
+
+  const timeoutMs = resolveInteractiveDispatchAttemptTimeoutMs();
+  const startedAt = Date.now();
+  trackInteractiveDispatch('interactive.dispatch.attempt', {
+    threadId,
+    timeoutMs: String(timeoutMs),
+  });
+  console.log('[chat] Interactive dispatch attempt', { threadId, timeoutMs });
 
   let queuedRunId: string | undefined;
   let persistedUserMessage: ChatMessage | undefined;
   let dispatchStage = 'load-thread';
-  try {
-    const state = await ensureThreadState(threadId);
-    if (!state || state.thread.status === 'running') {
-      return { dispatched: false };
-    }
-    const userId = state.thread.userId;
-    const project = state.thread.kickoff.project;
-    if (!userId || !project) return { dispatched: false };
 
-    const workflowClass = resolveInteractiveWorkflowClass(state);
-    dispatchStage = 'ground-turn';
-    const grounding = await ensureThreadGrounding(state);
-    if (grounding.mode !== 'local' || !grounding.nativeReads) {
-      return { dispatched: false };
-    }
-    const repoReader = await groundingProfileResolver.resolveConnectionProfile(
-      grounding.profileId,
-    );
-    if (!isExactGroundingReader(repoReader, grounding, state.thread.kickoff)) {
-      return { dispatched: false };
-    }
-    state.groundingWorkspaceDir = grounding.cwd;
-
-    dispatchStage = 'prepare-turn';
-    const recoveryContext = state.isInterviewThread
-      ? buildAgentRecoveryContext(state.thread.messages)
-      : null;
-    const prompt = await buildNewAgentTurnPrompt(
-      state.thread.kickoff,
-      text,
-      false,
-      recoveryContext,
+  const markStage = (stage: string): void => {
+    const prev = dispatchStage;
+    dispatchStage = stage;
+    trackInteractiveDispatch(
+      'interactive.dispatch.stage',
       {
-        preloadRepositoryContext: state.isInterviewThread,
-        repoSearchEnabled: !state.isInterviewThread,
-        nativeReads: true,
-        repoReader,
+        threadId,
+        stage,
+        previousStage: prev,
       },
+      { elapsedMs: Date.now() - startedAt }
     );
-    const skillPath = state.thread.kickoff.skillPath ?? '';
-    const snapshot: ExecutionSnapshot = {
-      prompt,
-      model: resolveModelId(modelOverride ?? state.thread.kickoff.model),
-      workspaceRef: grounding.cwd,
-      workflowClass,
-      skillPath,
-      projectId: project,
+    console.log('[chat] Interactive dispatch stage', {
       threadId,
-    };
-    const timeoutAt = new Date(
-      Date.now() + resolveAgentRunHardLimitMs(),
-    ).toISOString();
-    dispatchStage = 'enqueue';
-    const enqueued = await enqueue({
-      threadId,
-      projectId: project,
-      snapshot,
-      timeoutAt,
-      lane: INTERACTIVE_LANE,
+      stage,
+      elapsedMs: Date.now() - startedAt,
     });
-    queuedRunId = enqueued.runId;
+  };
 
-    dispatchStage = 'route';
-    const decision = await interactiveWorkflowRouter.route({
-      userId,
-      project,
-      workflowClass,
-      threadId,
-      runId: enqueued.runId,
-      dispatchToActor: async (d) => {
-        // Actor turns return before the in-process persistence block below.
-        // Persist and fan out the user message at this dispatch boundary so
-        // refresh/replay contains both sides of the conversation.
-        const userMessage: ChatMessage = {
-          id: uuidv4(),
-          role: 'user',
-          text: text.trim() || 'Uploaded files for context.',
-          ts: new Date().toISOString(),
-          ...(options?.hidden ? { hidden: true } : {}),
-        };
-        state.thread.messages.push(userMessage);
-        state.thread.lastActivityAt = userMessage.ts;
-        broadcast(state, { type: 'message', message: userMessage });
-        await pgInsertMessage(threadId, userMessage);
-        persistedUserMessage = userMessage;
-
-        state.thread.status = 'running';
-        state.thread.activeRunId = d.runId;
-        await pgUpsertThread(state.thread);
-        broadcast(state, { type: 'status', status: 'running' });
-
-        try {
-          await postInteractiveActorDispatch({
-            threadId,
-            runId: d.runId,
-            dispatchMessageId: d.dispatchMessageId,
-          });
-        } catch (error) {
-          state.thread.status = 'idle';
-          state.thread.activeRunId = undefined;
-          await pgUpsertThread(state.thread).catch(() => undefined);
-          broadcast(state, { type: 'status', status: 'idle' });
-          throw error;
-        }
+  const bypass = (reason: string): InteractiveDispatchAttempt => {
+    trackInteractiveDispatch(
+      'interactive.dispatch.bypass',
+      {
+        threadId,
+        reason,
+        stage: dispatchStage,
       },
-      // The caller (sendMessage) owns the in-process fallback; the router's own
-      // in-process branch is a no-op here so we never double-execute a turn.
-      runInProcess: () => {},
-    });
-
-    if (decision.route === 'actor') {
-      return { dispatched: true, persistedUserMessage };
-    }
-
-    // Shed / race-lost / eval-error: discard the transient queued row.
-    await db.delete(agentRuns).where(eq(agentRuns.id, enqueued.runId)).catch(() => {});
-    return { dispatched: false, persistedUserMessage };
-  } catch (error) {
-    const errorType = error instanceof Error ? error.name : 'UnknownError';
-    console.warn('[chat] Interactive dispatch failed; using in-process fallback', {
+      { elapsedMs: Date.now() - startedAt }
+    );
+    console.log('[chat] Interactive dispatch bypass', {
       threadId,
-      runId: queuedRunId,
+      reason,
       stage: dispatchStage,
-      errorType,
+      elapsedMs: Date.now() - startedAt,
     });
-    trackEvent('interactive.dispatch.failed', {
-      threadId,
-      stage: dispatchStage,
-      errorType,
-    });
-    if (queuedRunId) {
-      await db.delete(agentRuns).where(eq(agentRuns.id, queuedRunId)).catch(() => {});
+    return { dispatched: false, persistedUserMessage, bypassReason: reason };
+  };
+
+  let timedOut = false;
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
+  const runAttempt = async (): Promise<InteractiveDispatchAttempt> => {
+    try {
+      const state = await ensureThreadState(threadId);
+      if (timedOut) return bypass('timeout-abort');
+      if (!state || state.thread.status === 'running') {
+        return bypass(!state ? 'thread-missing' : 'thread-already-running');
+      }
+      // Walkthrough smart-tagging / generation / discovery (and similar
+      // file-output skills) inject kickoff context into thread.workspaceDir and
+      // poll that same tree for `.ai-pilot/output/*`. Actor dispatch uses the
+      // shared grounding checkout instead, so candidates never arrive and the
+      // status poller never finds the artifact (prod Sync review failure).
+      if (isInteractiveWorkspaceBoundSkill(state.thread.kickoff.skillPath)) {
+        return bypass('workspace-bound-skill');
+      }
+      const userId = state.thread.userId;
+      const project = state.thread.kickoff.project;
+      if (!userId || !project) return bypass('missing-user-or-project');
+
+      const workflowClass = resolveInteractiveWorkflowClass(state);
+      // Evaluate the flag before grounding. Cold shared-checkout materialize can
+      // exceed the dispatch attempt timeout; paying that cost when the flag is
+      // off (or evaluation fails) only delays the inevitable in-process path.
+      markStage('flag');
+      let interactiveEnabled = false;
+      try {
+        interactiveEnabled = await isFeatureEnabled(INTERACTIVE_WORKFLOW_FLAG, {
+          userId,
+          project,
+          caller: workflowClass,
+        });
+      } catch {
+        return bypass('flag-evaluation-error');
+      }
+      if (timedOut) return bypass('timeout-abort');
+      if (!interactiveEnabled) {
+        return bypass('flag-disabled');
+      }
+
+      markStage('ground-turn');
+      const grounding = await ensureThreadGrounding(state);
+      if (timedOut) return bypass('timeout-abort');
+      if (grounding.mode !== 'local' || !grounding.nativeReads) {
+        return bypass(
+          grounding.mode !== 'local'
+            ? `grounding-mode-${grounding.mode}`
+            : 'native-reads-false'
+        );
+      }
+      const repoReader =
+        await groundingProfileResolver.resolveConnectionProfile(
+          grounding.profileId
+        );
+      if (timedOut) return bypass('timeout-abort');
+      if (
+        !isExactGroundingReader(repoReader, grounding, state.thread.kickoff)
+      ) {
+        return bypass('grounding-reader-mismatch');
+      }
+      state.groundingWorkspaceDir = grounding.cwd;
+
+      markStage('prepare-turn');
+      const recoveryContext = state.isInterviewThread
+        ? buildAgentRecoveryContext(state.thread.messages)
+        : null;
+      const prompt = await buildNewAgentTurnPrompt(
+        state.thread.kickoff,
+        text,
+        false,
+        recoveryContext,
+        {
+          preloadRepositoryContext: state.isInterviewThread,
+          repoSearchEnabled: !state.isInterviewThread,
+          nativeReads: true,
+          repoReader,
+          groundingProvenance: groundingProvenanceFor(
+            grounding,
+            state.thread.kickoff
+          ),
+        }
+      );
+      if (timedOut) return bypass('timeout-abort');
+      const skillPath = state.thread.kickoff.skillPath ?? '';
+      const snapshot: ExecutionSnapshot = {
+        prompt,
+        model: resolveModelId(modelOverride ?? state.thread.kickoff.model),
+        workspaceRef: grounding.cwd,
+        workflowClass,
+        skillPath,
+        projectId: project,
+        threadId,
+      };
+      const timeoutAt = new Date(
+        Date.now() + resolveAgentRunHardLimitMs()
+      ).toISOString();
+      markStage('enqueue');
+      const enqueued = await enqueue({
+        threadId,
+        projectId: project,
+        snapshot,
+        timeoutAt,
+        lane: INTERACTIVE_LANE,
+      });
+      queuedRunId = enqueued.runId;
+      if (timedOut) {
+        await db
+          .delete(agentRuns)
+          .where(eq(agentRuns.id, enqueued.runId))
+          .catch(() => {});
+        queuedRunId = undefined;
+        return bypass('timeout-abort');
+      }
+
+      markStage('route');
+      const decision = await interactiveWorkflowRouter.route({
+        userId,
+        project,
+        workflowClass,
+        threadId,
+        runId: enqueued.runId,
+        dispatchToActor: async (d) => {
+          if (timedOut) {
+            throw new Error('Interactive dispatch timed out before actor post');
+          }
+          // Actor turns return before the in-process persistence block below.
+          // Persist and fan out the user message at this dispatch boundary so
+          // refresh/replay contains both sides of the conversation.
+          const userMessage: ChatMessage = {
+            id: uuidv4(),
+            role: 'user',
+            text: text.trim() || 'Uploaded files for context.',
+            ts: new Date().toISOString(),
+            ...(options?.hidden ? { hidden: true } : {}),
+          };
+          state.thread.messages.push(userMessage);
+          state.thread.lastActivityAt = userMessage.ts;
+          broadcast(state, { type: 'message', message: userMessage });
+          await pgInsertMessage(threadId, userMessage);
+          persistedUserMessage = userMessage;
+
+          state.thread.status = 'running';
+          state.thread.activeRunId = d.runId;
+          await pgUpsertThread(state.thread);
+          broadcast(state, { type: 'status', status: 'running' });
+
+          markStage('post-actor');
+          try {
+            await postInteractiveActorDispatch({
+              threadId,
+              runId: d.runId,
+              dispatchMessageId: d.dispatchMessageId,
+            });
+          } catch (error) {
+            state.thread.status = 'idle';
+            state.thread.activeRunId = undefined;
+            await pgUpsertThread(state.thread).catch(() => undefined);
+            broadcast(state, { type: 'status', status: 'idle' });
+            throw error;
+          }
+        },
+        // The caller (sendMessage) owns the in-process fallback; the router's own
+        // in-process branch is a no-op here so we never double-execute a turn.
+        runInProcess: () => {},
+      });
+
+      if (timedOut) {
+        await db
+          .delete(agentRuns)
+          .where(eq(agentRuns.id, enqueued.runId))
+          .catch(() => {});
+        return bypass('timeout-abort');
+      }
+
+      if (decision.route === 'actor') {
+        trackInteractiveDispatch(
+          'interactive.dispatch.actor',
+          {
+            threadId,
+            runId: enqueued.runId,
+            workflowClass,
+          },
+          { elapsedMs: Date.now() - startedAt }
+        );
+        return { dispatched: true, persistedUserMessage };
+      }
+
+      // Shed / race-lost / eval-error: discard the transient queued row.
+      await db
+        .delete(agentRuns)
+        .where(eq(agentRuns.id, enqueued.runId))
+        .catch(() => {});
+      const routeReason =
+        decision.route === 'in-process' ? decision.reason : 'not-actor';
+      return bypass(`route-${routeReason}`);
+    } catch (error) {
+      if (timedOut) return bypass('timeout-abort');
+      const errorType = error instanceof Error ? error.name : 'UnknownError';
+      console.warn(
+        '[chat] Interactive dispatch failed; using in-process fallback',
+        {
+          threadId,
+          runId: queuedRunId,
+          stage: dispatchStage,
+          errorType,
+          elapsedMs: Date.now() - startedAt,
+        }
+      );
+      trackInteractiveDispatch(
+        'interactive.dispatch.failed',
+        {
+          threadId,
+          stage: dispatchStage,
+          errorType,
+          errorMessage:
+            error instanceof Error ? error.message.slice(0, 200) : 'unknown',
+        },
+        { elapsedMs: Date.now() - startedAt }
+      );
+      if (queuedRunId) {
+        await db
+          .delete(agentRuns)
+          .where(eq(agentRuns.id, queuedRunId))
+          .catch(() => {});
+      }
+      return {
+        dispatched: false,
+        persistedUserMessage,
+        bypassReason: `error-${dispatchStage}-${errorType}`,
+      };
     }
-    return { dispatched: false, persistedUserMessage };
+  };
+
+  try {
+    const result = await Promise.race([
+      runAttempt(),
+      new Promise<InteractiveDispatchAttempt>((resolve) => {
+        timeoutHandle = setTimeout(() => {
+          timedOut = true;
+          trackInteractiveDispatch(
+            'interactive.dispatch.timeout',
+            {
+              threadId,
+              stage: dispatchStage,
+              timeoutMs: String(timeoutMs),
+            },
+            { elapsedMs: Date.now() - startedAt }
+          );
+          console.warn(
+            '[chat] Interactive dispatch attempt timed out; failing closed to in-process',
+            {
+              threadId,
+              stage: dispatchStage,
+              timeoutMs,
+              elapsedMs: Date.now() - startedAt,
+            }
+          );
+          resolve({
+            dispatched: false,
+            persistedUserMessage,
+            bypassReason: `timeout-${dispatchStage}`,
+          });
+        }, timeoutMs);
+      }),
+    ]);
+    return result;
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
   }
 }
 
@@ -3424,8 +4162,20 @@ export async function sendMessage(
   text: string,
   modelOverride?: string,
   attachments: ChatAttachment[] = [],
-  options?: { hidden?: boolean },
+  options?: { hidden?: boolean }
 ): Promise<void> {
+  const sendStartedAt = Date.now();
+  console.log('[chat] sendMessage.start', {
+    threadId,
+    attachmentCount: attachments.length,
+    hidden: Boolean(options?.hidden),
+  });
+  trackEvent('chat.send.start', {
+    threadId,
+    attachmentCount: String(attachments.length),
+    hidden: String(Boolean(options?.hidden)),
+  });
+
   // @feature-flag:ai-runs-interactive start winner=disabled
   // FEAT-007: offload the turn to the warm Dapr actor lane when enabled + admitted.
   // Fail-closed: any other outcome falls through to the in-process path below.
@@ -3434,8 +4184,23 @@ export async function sendMessage(
     text,
     modelOverride,
     attachments,
-    options,
+    options
   );
+  trackEvent(
+    'chat.send.interactive_result',
+    {
+      threadId,
+      dispatched: String(interactiveAttempt.dispatched),
+      bypassReason: interactiveAttempt.bypassReason ?? '',
+    },
+    { elapsedMs: Date.now() - sendStartedAt }
+  );
+  console.log('[chat] sendMessage.interactive_result', {
+    threadId,
+    dispatched: interactiveAttempt.dispatched,
+    bypassReason: interactiveAttempt.bypassReason ?? null,
+    elapsedMs: Date.now() - sendStartedAt,
+  });
   if (interactiveAttempt.dispatched) {
     return;
   }
@@ -3449,12 +4214,16 @@ export async function sendMessage(
   const logMyWork = (
     event: string,
     context: MyWorkLogContext = {},
-    level: MyWorkLogLevel = 'info',
+    level: MyWorkLogLevel = 'info'
   ): void => {
-    if (myWorkContext) logMyWorkSession(event, { ...myWorkContext, ...context }, level);
+    if (myWorkContext)
+      logMyWorkSession(event, { ...myWorkContext, ...context }, level);
   };
   const runStartedAtMs = Date.now();
-  console.log('[chat] sendMessage', { threadId, status: state.thread.status });
+  console.log('[chat] sendMessage.in_process', {
+    threadId,
+    status: state.thread.status,
+  });
   logMyWork('message.received', {
     threadStatus: state.thread.status,
     messageLength: text.length,
@@ -3477,7 +4246,9 @@ export async function sendMessage(
     const project = state.thread.kickoff?.project;
     if (project) {
       const cfg = await resolveSkillConfig({ project });
-      const envRef = (cfg as (typeof cfg & { cursorApiKeyEnvRef?: string | null }))?.cursorApiKeyEnvRef;
+      const envRef = (
+        cfg as typeof cfg & { cursorApiKeyEnvRef?: string | null }
+      )?.cursorApiKeyEnvRef;
       if (envRef) {
         const match = envRef.match(/^\$\{([^}]+)\}$/);
         const resolved = match ? (process.env[match[1]] ?? '') : envRef;
@@ -3490,7 +4261,9 @@ export async function sendMessage(
 
   // If the caller wants a different model, dispose the current agent so it
   // will be recreated (or resumed) with the new model on this turn.
-  const resolvedModel = resolveModelId(modelOverride ?? state.thread.kickoff.model);
+  const resolvedModel = resolveModelId(
+    modelOverride ?? state.thread.kickoff.model
+  );
   if (state.thread.kickoff.model !== resolvedModel) {
     state.thread.kickoff.model = resolvedModel;
     if (state.agent) {
@@ -3505,7 +4278,7 @@ export async function sendMessage(
     {
       userId: state.thread.userId,
       project: state.thread.kickoff.project,
-    },
+    }
   ).catch(() => false);
 
   // Grounding may need a cold mirror refresh. Expose that work immediately so
@@ -3524,21 +4297,25 @@ export async function sendMessage(
   // the real SDK run once agent.send() returns a definitive run ID.
   const provisionalRunTimeoutMs = resolveAgentRunHardLimitMs();
   const preparationStartedAt = new Date().toISOString();
-  await db.insert(agentRuns).values({
-    id: provisionalRunId,
-    threadId,
-    status: 'queued',
-    timeoutAt: new Date(Date.now() + provisionalRunTimeoutMs).toISOString(),
-    ...(eventDrivenTerminationEnabled
-      ? {}
-      : {
-          progressAt: preparationStartedAt,
-          progressLabel: 'Preparing the latest repository requirements…',
-          progressPhase: 'analysis' as const,
-        }),
-  }).onConflictDoNothing().catch((e) =>
-    console.warn('[chat] Failed to insert provisional agent_runs row:', e),
-  );
+  await db
+    .insert(agentRuns)
+    .values({
+      id: provisionalRunId,
+      threadId,
+      status: 'queued',
+      timeoutAt: new Date(Date.now() + provisionalRunTimeoutMs).toISOString(),
+      ...(eventDrivenTerminationEnabled
+        ? {}
+        : {
+            progressAt: preparationStartedAt,
+            progressLabel: 'Preparing the latest repository requirements…',
+            progressPhase: 'analysis' as const,
+          }),
+    })
+    .onConflictDoNothing()
+    .catch((e) =>
+      console.warn('[chat] Failed to insert provisional agent_runs row:', e)
+    );
 
   // Compute idle gap BEFORE the user message overwrites lastActivityAt.
   // The stale-idle agent dispose runs later (after grounding), but the
@@ -3547,19 +4324,23 @@ export async function sendMessage(
     ? Date.now() - Date.parse(state.thread.lastActivityAt)
     : 0;
   const staleIdleResume =
-    eventDrivenTerminationEnabled
-    && Number.isFinite(idleGapMs)
-    && idleGapMs > AGENT_STALE_RESUME_MS
-    && Boolean(state.agent || state.thread.cursorAgentId);
+    eventDrivenTerminationEnabled &&
+    Number.isFinite(idleGapMs) &&
+    idleGapMs > AGENT_STALE_RESUME_MS &&
+    Boolean(state.agent || state.thread.cursorAgentId);
 
   // Persist + broadcast the user message immediately so the UI reflects it
   // before the (potentially slow) grounding / agent acquisition below.
   const turnId = interactiveAttempt.persistedUserMessage?.id ?? uuidv4();
-  const attachmentMeta = await writeMessageAttachments(state.thread.workspaceDir, turnId, attachments);
+  const attachmentMeta = await writeMessageAttachments(
+    state.thread.workspaceDir,
+    turnId,
+    attachments
+  );
   const promptText = buildPromptWithAttachments(text, attachmentMeta);
   const priorMessages = interactiveAttempt.persistedUserMessage
     ? state.thread.messages.filter(
-        (message) => message.id !== interactiveAttempt.persistedUserMessage?.id,
+        (message) => message.id !== interactiveAttempt.persistedUserMessage?.id
       )
     : [...state.thread.messages];
   const recoveryContext = state.isInterviewThread
@@ -3588,19 +4369,30 @@ export async function sendMessage(
 
   // ── Grounding + agent lifecycle (may be slow after idle) ────────────────
   const mcpServerUrl = `http://localhost:${process.env.PORT ?? 3001}/mcp/ado-skills`;
-  let grounding: CallerGroundingSelection;
+  let grounding: Exclude<CallerGroundingSelection, { mode: 'preparing' }>;
   try {
-    grounding = await ensureThreadGrounding(state);
+    grounding = await waitForReadyThreadGrounding(state);
   } catch (error) {
     state.thread.status = 'error';
-    state.thread.lastError = 'Unable to prepare the repository for this interview.';
+    state.thread.lastError =
+      error instanceof Error && error.message.includes('timed out')
+        ? 'Repository preparation timed out. Please retry this message.'
+        : 'Unable to prepare the project repository. Please retry this message.';
+    broadcast(state, {
+      type: 'grounding',
+      status: 'failed',
+      message: state.thread.lastError,
+    });
     broadcast(state, {
       type: 'error',
       error: state.thread.lastError,
     });
     broadcast(state, { type: 'done' });
     persistThread(state.thread);
-    await db.delete(agentRuns).where(eq(agentRuns.id, provisionalRunId)).catch(() => {});
+    await db
+      .delete(agentRuns)
+      .where(eq(agentRuns.id, provisionalRunId))
+      .catch(() => {});
     throw error;
   }
   const groundingCaller = resolveGroundingCallerKey(state.thread.kickoff);
@@ -3621,12 +4413,12 @@ export async function sendMessage(
       },
       () => {
         lifecycleEvaluationFailed = true;
-      },
+      }
     );
     groundingTelemetry.lifecycleFlag(
       lifecycleTelemetryContext,
       lifecycleBindingEnabled,
-      lifecycleEvaluationFailed ? 'failure' : 'success',
+      lifecycleEvaluationFailed ? 'failure' : 'success'
     );
   }
 
@@ -3667,10 +4459,14 @@ export async function sendMessage(
     });
   }
 
-  const maxviewEnabled = await isMaxviewMcpEnabled(state.thread.userId, state.thread.kickoff.project);
-  const calendarSessionId = state.thread.kickoff.assistantType === 'calendar-work-item'
-    ? (state.thread.kickoff.calendarAssistantSessionId ?? undefined)
-    : undefined;
+  const maxviewEnabled = await isMaxviewMcpEnabled(
+    state.thread.userId,
+    state.thread.kickoff.project
+  );
+  const calendarSessionId =
+    state.thread.kickoff.assistantType === 'calendar-work-item'
+      ? (state.thread.kickoff.calendarAssistantSessionId ?? undefined)
+      : undefined;
   const repositoryRuntime = await prepareRepositoryReadRuntime({
     grounding,
     kickoff: state.thread.kickoff,
@@ -3680,14 +4476,30 @@ export async function sendMessage(
     calendarSessionId,
     restrictRepoSearch: state.isInterviewThread,
   });
+
+  // FEAT-003: live linked-context materialization (fail-open; never blocks the turn).
+  // Dynamic import avoids a circular dependency through designModuleService.
+  const { materializeLinkedContextForInterviewThread } =
+    await import('./linkedContextMaterializerService');
+  await materializeLinkedContextForInterviewThread({
+    threadId,
+    workspaceDir: state.thread.workspaceDir,
+    userId: state.thread.userId,
+    isInterviewThread: state.isInterviewThread,
+  });
+
   const agentWorkspaceDir = state.thread.workspaceDir;
   const localAgentOptions = repositoryRuntime.local;
   const mcpServers = repositoryRuntime.mcpServers;
-  console.log('[chat] MCP servers for turn:', Object.keys(mcpServers).join(', '), {
-    maxviewEnabled,
-    maxviewConfigured: isMaxviewConfigured(),
-    nativeReads: repositoryRuntime.nativeReads,
-  });
+  console.log(
+    '[chat] MCP servers for turn:',
+    Object.keys(mcpServers).join(', '),
+    {
+      maxviewEnabled,
+      maxviewConfigured: isMaxviewConfigured(),
+      nativeReads: repositoryRuntime.nativeReads,
+    }
+  );
 
   // A missing cursorAgentId can mean either a brand-new conversation or a
   // force-disposed interview agent. In the latter case, include the visible
@@ -3706,7 +4518,11 @@ export async function sendMessage(
           repoSearchEnabled: !state.isInterviewThread,
           nativeReads: repositoryRuntime.nativeReads,
           repoReader: repositoryRuntime.repoReader,
-        },
+          groundingProvenance: groundingProvenanceFor(
+            grounding,
+            state.thread.kickoff
+          ),
+        }
       );
   let agentAcquisitionMode: 'existing' | 'created' | 'resumed' | 'recreated' =
     state.agent ? 'existing' : hadCursorAgentId ? 'resumed' : 'created';
@@ -3723,7 +4539,12 @@ export async function sendMessage(
     heldLocalAgentSlot = true;
 
     // Create or resume the agent (retry up to 3x on transient errors)
-    const sdkRetryOpts = { maxRetries: 3, initialDelay: 1000, shouldRetry: isTransientSdkError, jitter: true } as const;
+    const sdkRetryOpts = {
+      maxRetries: 3,
+      initialDelay: 1000,
+      shouldRetry: isTransientSdkError,
+      jitter: true,
+    } as const;
 
     const codeReviewerAgent = {
       description:
@@ -3752,27 +4573,29 @@ export async function sendMessage(
           });
           // Agent.resume accepts Partial<AgentOptions>, which includes agents.
           return retryWithBackoff(
-            () => Agent.resume(priorCursorAgentId!, {
-              apiKey,
-              model: { id: resolvedModel },
-              local: localAgentOptions,
-              mcpServers,
-              agents: { 'code-reviewer': codeReviewerAgent },
-            }),
-            sdkRetryOpts,
+            () =>
+              Agent.resume(priorCursorAgentId!, {
+                apiKey,
+                model: { id: resolvedModel },
+                local: localAgentOptions,
+                mcpServers,
+                agents: { 'code-reviewer': codeReviewerAgent },
+              }),
+            sdkRetryOpts
           );
         },
         create: async () => {
           logMyWork('agent.create_started', { model: resolvedModel });
           return retryWithBackoff(
-            () => Agent.create({
-              apiKey,
-              model: { id: resolvedModel },
-              local: localAgentOptions,
-              mcpServers,
-              agents: { 'code-reviewer': codeReviewerAgent },
-            }),
-            sdkRetryOpts,
+            () =>
+              Agent.create({
+                apiKey,
+                model: { id: resolvedModel },
+                local: localAgentOptions,
+                mcpServers,
+                agents: { 'code-reviewer': codeReviewerAgent },
+              }),
+            sdkRetryOpts
           );
         },
       });
@@ -3782,31 +4605,31 @@ export async function sendMessage(
         state.thread,
         acquisition.agent,
         acquisition.mode,
-        state.resolvedGroundingBinding,
+        state.resolvedGroundingBinding
       );
       if (
-        (acquisition.mode === 'created' || acquisition.mode === 'recreated')
-        && state.resolvedGroundingBinding
+        (acquisition.mode === 'created' || acquisition.mode === 'recreated') &&
+        state.resolvedGroundingBinding
       ) {
         settleGroundingContinuityAfterBindingWrite(state);
         groundingTelemetry.bindingWrite(
           lifecycleTelemetryContext,
           state.resolvedGroundingBinding.mode,
-          'success',
+          'success'
         );
       }
       if (boundaryRecreationReason && acquisition.mode === 'recreated') {
         groundingTelemetry.recreation(
           lifecycleTelemetryContext,
           boundaryRecreationReason,
-          'success',
+          'success'
         );
       }
 
       if (acquisition.mode === 'recreated') {
         console.warn(
           `[chat] Agent.resume failed for thread ${threadId}; recreating with PostgreSQL history`,
-          describeError(acquisition.resumeError),
+          describeError(acquisition.resumeError)
         );
         prompt = await buildNewAgentTurnPrompt(
           state.thread.kickoff,
@@ -3819,22 +4642,30 @@ export async function sendMessage(
             repoSearchEnabled: !state.isInterviewThread,
             nativeReads: repositoryRuntime.nativeReads,
             repoReader: repositoryRuntime.repoReader,
-          },
+            groundingProvenance: groundingProvenanceFor(
+              grounding,
+              state.thread.kickoff
+            ),
+          }
         );
       }
     }
 
     const agent = state.agent;
     if (
-      recoveryContext
-      && (agentAcquisitionMode === 'created' || agentAcquisitionMode === 'recreated')
+      recoveryContext &&
+      (agentAcquisitionMode === 'created' ||
+        agentAcquisitionMode === 'recreated')
     ) {
-      console.log('[chat] Injected PostgreSQL history into replacement interview agent', {
-        threadId,
-        messageCount: recoveryContext.totalMessageCount,
-        truncated: recoveryContext.truncated,
-        acquisitionMode: agentAcquisitionMode,
-      });
+      console.log(
+        '[chat] Injected PostgreSQL history into replacement interview agent',
+        {
+          threadId,
+          messageCount: recoveryContext.totalMessageCount,
+          truncated: recoveryContext.truncated,
+          acquisitionMode: agentAcquisitionMode,
+        }
+      );
       trackEvent('agent.history.recovered', {
         threadId,
         messageCount: String(recoveryContext.totalMessageCount),
@@ -3843,10 +4674,10 @@ export async function sendMessage(
       });
     }
     // Send the prompt (retry up to 2x on transient errors)
-    const run = await retryWithBackoff(
-      () => agent.send(prompt),
-      { ...sdkRetryOpts, maxRetries: 2 },
-    );
+    const run = await retryWithBackoff(() => agent.send(prompt), {
+      ...sdkRetryOpts,
+      maxRetries: 2,
+    });
 
     trackEvent('agent.run.started', {
       threadId,
@@ -3868,48 +4699,66 @@ export async function sendMessage(
       runId: agentRunId,
       cursorAgentId: state.thread.cursorAgentId,
       model: resolvedModel,
-      resumedAgent: agentAcquisitionMode === 'existing' || agentAcquisitionMode === 'resumed',
+      resumedAgent:
+        agentAcquisitionMode === 'existing' ||
+        agentAcquisitionMode === 'resumed',
       agentAcquisitionMode,
       recoveredMessageCount:
-        agentAcquisitionMode === 'created' || agentAcquisitionMode === 'recreated'
-          ? recoveryContext?.totalMessageCount ?? 0
+        agentAcquisitionMode === 'created' ||
+        agentAcquisitionMode === 'recreated'
+          ? (recoveryContext?.totalMessageCount ?? 0)
           : 0,
     });
-    await db.insert(agentRuns).values({
-      id: agentRunId,
-      threadId,
-      status: 'queued',
-      timeoutAt: runTimeoutAt,
-    }).onConflictDoNothing();
+    await db
+      .insert(agentRuns)
+      .values({
+        id: agentRunId,
+        threadId,
+        status: 'queued',
+        timeoutAt: runTimeoutAt,
+      })
+      .onConflictDoNothing();
 
     // Clean up provisional liveness row now that the real row exists
     if (agentRunId !== provisionalRunId) {
-      db.delete(agentRuns).where(eq(agentRuns.id, provisionalRunId))
-        .catch((e) => console.warn('[chat] Failed to delete provisional agent_runs row:', e));
+      db.delete(agentRuns)
+        .where(eq(agentRuns.id, provisionalRunId))
+        .catch((e) =>
+          console.warn('[chat] Failed to delete provisional agent_runs row:', e)
+        );
     }
 
     // Atomic lease claim: only one worker transitions queued → running
     const claimedAt = new Date().toISOString();
-    const [claimed] = await db.update(agentRuns)
-      .set(buildAgentRunClaimUpdate(
-        eventDrivenTerminationEnabled,
-        RUN_EVENT_SOURCE_INSTANCE,
-        claimedAt,
-      ))
+    const [claimed] = await db
+      .update(agentRuns)
+      .set(
+        buildAgentRunClaimUpdate(
+          eventDrivenTerminationEnabled,
+          RUN_EVENT_SOURCE_INSTANCE,
+          claimedAt
+        )
+      )
       .where(and(eq(agentRuns.id, agentRunId), eq(agentRuns.status, 'queued')))
       .returning({ id: agentRuns.id });
 
     if (!claimed) {
       // Another worker already claimed this run — do not double-execute.
       // The SSE route will pick up tokens via LISTEN/NOTIFY from the owner.
-      console.log(`[chat] Run ${agentRunId} already claimed by another worker, skipping execution`);
+      console.log(
+        `[chat] Run ${agentRunId} already claimed by another worker, skipping execution`
+      );
       state.thread.status = 'running';
       state.thread.activeRunId = agentRunId;
       persistThread(state.thread);
-      logMyWork('run.claim_skipped', {
-        runId: agentRunId,
-        reason: 'claimed_by_another_worker',
-      }, 'warn');
+      logMyWork(
+        'run.claim_skipped',
+        {
+          runId: agentRunId,
+          reason: 'claimed_by_another_worker',
+        },
+        'warn'
+      );
       return;
     }
 
@@ -3928,14 +4777,23 @@ export async function sendMessage(
     // without emitting text tokens (thinking phases, tool_use, long tool_call waits).
     // agentRunId is always assigned before this function is ever called.
     let streamAbortError:
-      (Error & { _cancelled?: true; _ownerDeadline?: true; _startupDeadline?: true }) | null = null;
+      | (Error & {
+          _cancelled?: true;
+          _ownerDeadline?: true;
+          _startupDeadline?: true;
+        })
+      | null = null;
     const bumpHeartbeat = async (): Promise<void> => {
       if (eventDrivenTerminationEnabled) return;
       if (Date.now() - lastHeartbeatMs < HEARTBEAT_INTERVAL_MS) return;
       lastHeartbeatMs = Date.now();
       const runId = agentRunId!;
-      const [runRow] = await db.update(agentRuns)
-        .set({ heartbeatAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
+      const [runRow] = await db
+        .update(agentRuns)
+        .set({
+          heartbeatAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        })
         .where(and(eq(agentRuns.id, runId), eq(agentRuns.status, 'running')))
         .returning({ status: agentRuns.status });
       if (!runRow) {
@@ -3965,24 +4823,36 @@ export async function sendMessage(
       (expiredMcpTool) => {
         const detail = sanitizeTerminalDetail(
           `${expiredMcpTool.mcpLabel ?? expiredMcpTool.toolName} exceeded owner deadline ` +
-          `after ${Math.round(expiredMcpTool.elapsedMs / 1000)} seconds. Retry the turn.`,
+            `after ${Math.round(expiredMcpTool.elapsedMs / 1000)} seconds. Retry the turn.`
         );
-        console.warn(`[chat] ${detail} (threadId=${threadId}, runId=${agentRunId})`);
-        logMyWork('run.mcp_tool_timeout', {
-          runId: agentRunId,
-          toolName: expiredMcpTool.mcpLabel ?? expiredMcpTool.toolName,
-          elapsedMs: expiredMcpTool.elapsedMs,
-          timeoutMs: mcpToolTimeoutMs,
-          mode: eventDrivenTerminationEnabled ? 'enforce' : 'shadow',
-        }, 'warn');
-        trackEvent('agent.run.tool_deadline', {
-          threadId,
-          mode: eventDrivenTerminationEnabled ? 'enforce' : 'shadow',
-          outcome: eventDrivenTerminationEnabled ? 'terminal' : 'legacy-authority',
-        }, {
-          elapsedMs: expiredMcpTool.elapsedMs,
-          timeoutMs: mcpToolTimeoutMs,
-        });
+        console.warn(
+          `[chat] ${detail} (threadId=${threadId}, runId=${agentRunId})`
+        );
+        logMyWork(
+          'run.mcp_tool_timeout',
+          {
+            runId: agentRunId,
+            toolName: expiredMcpTool.mcpLabel ?? expiredMcpTool.toolName,
+            elapsedMs: expiredMcpTool.elapsedMs,
+            timeoutMs: mcpToolTimeoutMs,
+            mode: eventDrivenTerminationEnabled ? 'enforce' : 'shadow',
+          },
+          'warn'
+        );
+        trackEvent(
+          'agent.run.tool_deadline',
+          {
+            threadId,
+            mode: eventDrivenTerminationEnabled ? 'enforce' : 'shadow',
+            outcome: eventDrivenTerminationEnabled
+              ? 'terminal'
+              : 'legacy-authority',
+          },
+          {
+            elapsedMs: expiredMcpTool.elapsedMs,
+            timeoutMs: mcpToolTimeoutMs,
+          }
+        );
 
         // @feature-flag:event-driven-run-termination start winner=enabled
         if (!eventDrivenTerminationEnabled) {
@@ -4034,17 +4904,25 @@ export async function sendMessage(
           state.thread.lastError = detail;
           state.thread.status = 'idle';
           state.thread.activeRunId = undefined;
-          broadcast(state, {
-            type: 'tool_status',
-            toolName: expiredMcpTool.mcpLabel ?? expiredMcpTool.toolName,
-            callId: expiredMcpTool.key,
-            status: 'error',
-          }, toolEvent);
-          broadcast(state, {
-            type: 'error',
-            error: detail,
-            errorCode: 'transient',
-          }, errorEvent);
+          broadcast(
+            state,
+            {
+              type: 'tool_status',
+              toolName: expiredMcpTool.mcpLabel ?? expiredMcpTool.toolName,
+              callId: expiredMcpTool.key,
+              status: 'error',
+            },
+            toolEvent
+          );
+          broadcast(
+            state,
+            {
+              type: 'error',
+              error: detail,
+              errorCode: 'transient',
+            },
+            errorEvent
+          );
           broadcast(state, { type: 'done', runId }, doneEvent);
           persistThread(state.thread);
           streamAbortError = makeOwnerDeadlineError(detail);
@@ -4054,11 +4932,14 @@ export async function sendMessage(
             reason: 'owner_tool_deadline',
           });
         })().catch((error) => {
-          console.error('[chat] Failed authoritative tool-deadline finalization:', error);
+          console.error(
+            '[chat] Failed authoritative tool-deadline finalization:',
+            error
+          );
         });
         // @feature-flag:event-driven-run-termination enabled-end
         // @feature-flag:event-driven-run-termination end
-      },
+      }
     );
 
     const throwIfAborted = (): void => {
@@ -4117,7 +4998,7 @@ export async function sendMessage(
           ? createFirstEventDeadline(firstEventTimeoutMs, () => {
               if (firstEventSeen || streamAbortError) return;
               streamAbortError = makeStartupDeadlineError(
-                'The agent did not start responding.',
+                'The agent did not start responding.'
               );
               const runId = agentRunId!;
               void (async () => {
@@ -4130,16 +5011,17 @@ export async function sendMessage(
             })
           : null;
       let executionResult:
-        Awaited<ReturnType<typeof executeCursorExecutionCore>> | undefined;
+        | Awaited<ReturnType<typeof executeCursorExecutionCore>>
+        | undefined;
       try {
         const executionSnapshot: Readonly<ExecutionSnapshot> = Object.freeze({
           prompt,
           model: resolvedModel,
           workspaceRef: agentWorkspaceDir,
           workflowClass:
-            state.thread.kickoff.assistantType
-            ?? state.thread.kickoff.mode
-            ?? 'chat',
+            state.thread.kickoff.assistantType ??
+            state.thread.kickoff.mode ??
+            'chat',
           skillPath: state.thread.kickoff.skillPath ?? '',
           projectId: state.thread.kickoff.project,
           threadId,
@@ -4152,7 +5034,8 @@ export async function sendMessage(
             sourceInstance: RUN_EVENT_SOURCE_INSTANCE,
           },
           sink: {
-            publish: (_event, envelope) => publishRunEventEnvelope(state, envelope),
+            publish: (_event, envelope) =>
+              publishRunEventEnvelope(state, envelope),
           },
           thinkingPhase,
           nextSequence: () => nextRunEventSequence(agentRunId!),
@@ -4207,13 +5090,16 @@ export async function sendMessage(
               // tools. Keep progressAt fresh so the reaper's progress_timeout does
               // not kill a healthy interview/ADR turn (heartbeat alone is not enough).
               // sequence is unused for progress-only writes — do not burn run-event ids.
-              void persistMeaningfulProgress(agentRunId!, createRunEventEnvelope({
-                threadId,
-                runId: agentRunId!,
-                sequence: 0,
-                event: { type: 'thinking', text: 'Analyzing' },
-                phase: 'analysis',
-              }));
+              void persistMeaningfulProgress(
+                agentRunId!,
+                createRunEventEnvelope({
+                  threadId,
+                  runId: agentRunId!,
+                  sequence: 0,
+                  event: { type: 'thinking', text: 'Analyzing' },
+                  phase: 'analysis',
+                })
+              );
             },
             onToolStatus: ({ key, callId, name, status, args, phase }) => {
               const trackerName = name || 'unknown';
@@ -4224,13 +5110,17 @@ export async function sendMessage(
                 clearToolInFlight(inFlightToolCalls, key, trackerName, args);
                 mcpDeadlineController?.complete(key, trackerName, args);
               }
-              logMyWork('run.tool_status', {
-                runId: agentRunId,
-                toolName: trackerName,
-                toolCallId: callId ?? null,
-                toolStatus: status,
-                phase,
-              }, status === 'error' ? 'warn' : 'info');
+              logMyWork(
+                'run.tool_status',
+                {
+                  runId: agentRunId,
+                  toolName: trackerName,
+                  toolCallId: callId ?? null,
+                  toolStatus: status,
+                  phase,
+                },
+                status === 'error' ? 'warn' : 'info'
+              );
             },
             onHeartbeat: bumpHeartbeat,
           },
@@ -4243,20 +5133,27 @@ export async function sendMessage(
 
         // First-event startup deadline: the resumed agent emitted nothing.
         const startupDeadline =
-          !!streamAbortError
-          && Boolean((streamAbortError as { _startupDeadline?: unknown })._startupDeadline);
+          !!streamAbortError &&
+          Boolean(
+            (streamAbortError as { _startupDeadline?: unknown })
+              ._startupDeadline
+          );
         if (startupDeadline) {
           if (attempt < MAX_RUN_RETRIES && !startupRetryConsumed) {
             // Transparently recreate a fresh agent (with history) and retry once.
             startupRetryConsumed = true;
-            trackEvent('agent.run.startup_deadline', {
-              threadId,
-              mode: 'enforce',
-              attempt: String(attempt + 1),
-              recovered: 'true',
-            }, { firstEventTimeoutMs });
+            trackEvent(
+              'agent.run.startup_deadline',
+              {
+                threadId,
+                mode: 'enforce',
+                attempt: String(attempt + 1),
+                recovered: 'true',
+              },
+              { firstEventTimeoutMs }
+            );
             console.warn(
-              `[chat] First-event deadline on attempt ${attempt + 1}/${MAX_RUN_RETRIES + 1} for thread ${threadId}; recreating agent and retrying`,
+              `[chat] First-event deadline on attempt ${attempt + 1}/${MAX_RUN_RETRIES + 1} for thread ${threadId}; recreating agent and retrying`
             );
             await publishRunEvent(state, agentRunId!, {
               type: 'retrying',
@@ -4284,20 +5181,26 @@ export async function sendMessage(
                 repoSearchEnabled: !state.isInterviewThread,
                 nativeReads: repositoryRuntime.nativeReads,
                 repoReader: repositoryRuntime.repoReader,
-              },
+                groundingProvenance: groundingProvenanceFor(
+                  grounding,
+                  state.thread.kickoff
+                ),
+              }
             );
             state.agent = await retryWithBackoff(
-              () => Agent.create({
-                apiKey,
-                model: { id: resolvedModel },
-                local: localAgentOptions,
-                mcpServers,
-                agents: { 'code-reviewer': codeReviewerAgent },
-              }),
-              sdkRetryOpts,
+              () =>
+                Agent.create({
+                  apiKey,
+                  model: { id: resolvedModel },
+                  local: localAgentOptions,
+                  mcpServers,
+                  agents: { 'code-reviewer': codeReviewerAgent },
+                }),
+              sdkRetryOpts
             );
             currentRun = await state.agent.send(prompt);
-            state.thread.cursorAgentId = state.agent.agentId ?? state.thread.cursorAgentId;
+            state.thread.cursorAgentId =
+              state.agent.agentId ?? state.thread.cursorAgentId;
             state.thread.activeRunId = getRunId(currentRun);
             continue;
           }
@@ -4305,19 +5208,27 @@ export async function sendMessage(
           // Final attempt still produced nothing — finalize a terminal failure
           // through the owner path so the user gets an actionable message and
           // can resend, instead of a silent spinner up to the hard limit.
-          const detail = 'The agent did not start responding. Please resend your last message.';
-          trackEvent('agent.run.startup_deadline', {
-            threadId,
-            mode: 'enforce',
-            attempt: String(attempt + 1),
-            recovered: 'false',
-          }, { firstEventTimeoutMs });
+          const detail =
+            'The agent did not start responding. Please resend your last message.';
+          trackEvent(
+            'agent.run.startup_deadline',
+            {
+              threadId,
+              mode: 'enforce',
+              attempt: String(attempt + 1),
+              recovered: 'false',
+            },
+            { firstEventTimeoutMs }
+          );
           terminalFinalized = await finalizeOwnerTerminal(
             state,
             agentRunId!,
             'failed',
             detail,
-            [{ type: 'error', error: detail }, { type: 'done', runId: agentRunId }],
+            [
+              { type: 'error', error: detail },
+              { type: 'done', runId: agentRunId },
+            ]
           );
           state.thread.lastError = detail;
           state.thread.status = 'idle';
@@ -4332,8 +5243,15 @@ export async function sendMessage(
 
         if (streamAbortError) throw streamAbortError;
         if (attempt < MAX_RUN_RETRIES && isTransientSdkError(streamErr)) {
-          console.warn(`[chat] Stream error on attempt ${attempt + 1}/${MAX_RUN_RETRIES + 1} for thread ${threadId}, retrying…`, describeError(streamErr));
-          await publishRunEvent(state, agentRunId!, { type: 'retrying', attempt: attempt + 1, maxAttempts: MAX_RUN_RETRIES + 1 });
+          console.warn(
+            `[chat] Stream error on attempt ${attempt + 1}/${MAX_RUN_RETRIES + 1} for thread ${threadId}, retrying…`,
+            describeError(streamErr)
+          );
+          await publishRunEvent(state, agentRunId!, {
+            type: 'retrying',
+            attempt: attempt + 1,
+            maxAttempts: MAX_RUN_RETRIES + 1,
+          });
 
           if (state.agent) {
             await state.agent[Symbol.asyncDispose]().catch(() => {});
@@ -4341,15 +5259,16 @@ export async function sendMessage(
           }
           if (state.thread.cursorAgentId) {
             state.agent = await retryWithBackoff(
-              () => resumePinnedTurnAgent(
-                () => Agent.resume(state.thread.cursorAgentId!, {
-                  apiKey,
-                  model: { id: resolvedModel },
-                  local: localAgentOptions,
-                  mcpServers,
-                }),
-              ),
-              sdkRetryOpts,
+              () =>
+                resumePinnedTurnAgent(() =>
+                  Agent.resume(state.thread.cursorAgentId!, {
+                    apiKey,
+                    model: { id: resolvedModel },
+                    local: localAgentOptions,
+                    mcpServers,
+                  })
+                ),
+              sdkRetryOpts
             );
             currentRun = await state.agent.send(prompt);
             state.thread.activeRunId = getRunId(currentRun);
@@ -4365,12 +5284,20 @@ export async function sendMessage(
 
       if (result.status === 'error') {
         const reason = sanitizeTerminalDetail(
-          result.result?.trim() || 'Agent run failed — you can retry your last message.',
+          result.result?.trim() ||
+            'Agent run failed — you can retry your last message.'
         );
 
         if (attempt < MAX_RUN_RETRIES && !isFatalRunError(reason)) {
-          console.warn(`[chat] Run error on attempt ${attempt + 1}/${MAX_RUN_RETRIES + 1} for thread ${threadId}, retrying…`, reason);
-          await publishRunEvent(state, agentRunId!, { type: 'retrying', attempt: attempt + 1, maxAttempts: MAX_RUN_RETRIES + 1 });
+          console.warn(
+            `[chat] Run error on attempt ${attempt + 1}/${MAX_RUN_RETRIES + 1} for thread ${threadId}, retrying…`,
+            reason
+          );
+          await publishRunEvent(state, agentRunId!, {
+            type: 'retrying',
+            attempt: attempt + 1,
+            maxAttempts: MAX_RUN_RETRIES + 1,
+          });
 
           if (state.agent) {
             await state.agent[Symbol.asyncDispose]().catch(() => {});
@@ -4378,15 +5305,16 @@ export async function sendMessage(
           }
           if (state.thread.cursorAgentId) {
             state.agent = await retryWithBackoff(
-              () => resumePinnedTurnAgent(
-                () => Agent.resume(state.thread.cursorAgentId!, {
-                  apiKey,
-                  model: { id: resolvedModel },
-                  local: localAgentOptions,
-                  mcpServers,
-                }),
-              ),
-              sdkRetryOpts,
+              () =>
+                resumePinnedTurnAgent(() =>
+                  Agent.resume(state.thread.cursorAgentId!, {
+                    apiKey,
+                    model: { id: resolvedModel },
+                    local: localAgentOptions,
+                    mcpServers,
+                  })
+                ),
+              sdkRetryOpts
             );
             currentRun = await state.agent.send(prompt);
             state.thread.activeRunId = getRunId(currentRun);
@@ -4394,8 +5322,14 @@ export async function sendMessage(
           }
         }
 
-        console.error(`[chat] Agent run returned error status for thread ${threadId}:`, result.result ?? '(no detail)', { model: state.thread.kickoff.model });
-        trackAgentError(threadId, new Error(reason), { model: state.thread.kickoff?.model ?? 'unknown' });
+        console.error(
+          `[chat] Agent run returned error status for thread ${threadId}:`,
+          result.result ?? '(no detail)',
+          { model: state.thread.kickoff.model }
+        );
+        trackAgentError(threadId, new Error(reason), {
+          model: state.thread.kickoff?.model ?? 'unknown',
+        });
         state.thread.lastError = reason;
         // @feature-flag:event-driven-run-termination start winner=enabled
         if (eventDrivenTerminationEnabled) {
@@ -4405,21 +5339,39 @@ export async function sendMessage(
             agentRunId!,
             'failed',
             reason,
-            [{ type: 'error', error: reason }, { type: 'done', runId: agentRunId }],
+            [
+              { type: 'error', error: reason },
+              { type: 'done', runId: agentRunId },
+            ]
           );
           // @feature-flag:event-driven-run-termination enabled-end
         } else {
           // @feature-flag:event-driven-run-termination disabled-start
-          await db.update(agentRuns)
-            .set({ status: 'failed', lastError: reason, updatedAt: new Date().toISOString() })
-            .where(and(
-              eq(agentRuns.id, agentRunId),
-              eq(agentRuns.ownerInstance, RUN_EVENT_SOURCE_INSTANCE),
-              eq(agentRuns.status, 'running'),
-            ))
+          await db
+            .update(agentRuns)
+            .set({
+              status: 'failed',
+              lastError: reason,
+              updatedAt: new Date().toISOString(),
+            })
+            .where(
+              and(
+                eq(agentRuns.id, agentRunId),
+                eq(agentRuns.ownerInstance, RUN_EVENT_SOURCE_INSTANCE),
+                eq(agentRuns.status, 'running')
+              )
+            )
             .execute()
-            .catch((e) => console.error('[chat] Failed to mark agent run failed (in-loop):', e));
-          await publishRunEvent(state, agentRunId!, { type: 'error', error: reason });
+            .catch((e) =>
+              console.error(
+                '[chat] Failed to mark agent run failed (in-loop):',
+                e
+              )
+            );
+          await publishRunEvent(state, agentRunId!, {
+            type: 'error',
+            error: reason,
+          });
           // @feature-flag:event-driven-run-termination disabled-end
         }
         // @feature-flag:event-driven-run-termination end
@@ -4433,7 +5385,10 @@ export async function sendMessage(
         state.thread.activeRunId = undefined;
         state.thread.status = 'idle';
         if (!eventDrivenTerminationEnabled) {
-          await publishRunEvent(state, agentRunId!, { type: 'status', status: 'idle' });
+          await publishRunEvent(state, agentRunId!, {
+            type: 'status',
+            status: 'idle',
+          });
         }
         break;
       }
@@ -4463,13 +5418,18 @@ export async function sendMessage(
 
       state.thread.status = 'idle';
       if (!eventDrivenTerminationEnabled) {
-        await publishRunEvent(state, agentRunId!, { type: 'status', status: 'idle' });
+        await publishRunEvent(state, agentRunId!, {
+          type: 'status',
+          status: 'idle',
+        });
       }
       trackEvent('agent.run.completed', { threadId, model: resolvedModel });
 
       // Record usage event (fire-and-forget, never blocks)
       {
-        const kickoff = state.thread.kickoff ?? {} as import('../../shared/types/chat').ChatThreadKickoff;
+        const kickoff =
+          state.thread.kickoff ??
+          ({} as import('../../shared/types/chat').ChatThreadKickoff);
         const inputEst = estimateTokens(text ?? '');
         const outputEst = estimateTokens(agentTextBuffer ?? '');
         recordAiUsage({
@@ -4480,7 +5440,8 @@ export async function sendMessage(
           skillPath: kickoff.skillPath ?? undefined,
           threadId,
           runId: agentRunId ?? undefined,
-          workItemId: kickoff.workItemId != null ? String(kickoff.workItemId) : undefined,
+          workItemId:
+            kickoff.workItemId != null ? String(kickoff.workItemId) : undefined,
           userId: state.thread.userId ?? undefined,
           inputTokens: inputEst,
           outputTokens: outputEst,
@@ -4501,16 +5462,26 @@ export async function sendMessage(
 
     // Sync output artifacts directly to Postgres
     try {
-      await syncOutputToDb(threadId, runtimeWorkspaceDir(state), agentTextBuffer);
+      await syncOutputToDb(
+        threadId,
+        runtimeWorkspaceDir(state),
+        agentTextBuffer
+      );
     } catch (err) {
-      console.error(`[chat] post-run DB sync failed for thread ${threadId}:`, err);
+      console.error(
+        `[chat] post-run DB sync failed for thread ${threadId}:`,
+        err
+      );
     }
 
     // Eagerly push dev-session branches to remote so they survive workspace loss
     try {
       await eagerPushDevSession(threadId, state.thread.kickoff);
     } catch (err) {
-      console.warn(`[chat] eager dev-session push failed (non-fatal) for thread ${threadId}:`, (err as Error).message);
+      console.warn(
+        `[chat] eager dev-session push failed (non-fatal) for thread ${threadId}:`,
+        (err as Error).message
+      );
     }
 
     let completedRun = false;
@@ -4523,24 +5494,29 @@ export async function sendMessage(
           agentRunId!,
           'completed',
           'Run completed',
-          [{
-            type: 'done',
-            runId: state.thread.activeRunId,
-            prdReady,
-            backlogReady,
-          }],
+          [
+            {
+              type: 'done',
+              runId: state.thread.activeRunId,
+              prdReady,
+              backlogReady,
+            },
+          ]
         );
       }
       // @feature-flag:event-driven-run-termination enabled-end
     } else {
       // @feature-flag:event-driven-run-termination disabled-start
-      const [legacyCompletedRun] = await db.update(agentRuns)
+      const [legacyCompletedRun] = await db
+        .update(agentRuns)
         .set({ status: 'completed', updatedAt: new Date().toISOString() })
-        .where(and(
-          eq(agentRuns.id, agentRunId),
-          eq(agentRuns.ownerInstance, RUN_EVENT_SOURCE_INSTANCE),
-          eq(agentRuns.status, 'running'),
-        ))
+        .where(
+          and(
+            eq(agentRuns.id, agentRunId),
+            eq(agentRuns.ownerInstance, RUN_EVENT_SOURCE_INSTANCE),
+            eq(agentRuns.status, 'running')
+          )
+        )
         .returning({ id: agentRuns.id })
         .catch((e) => {
           console.error('[chat] Failed to mark agent run completed:', e);
@@ -4606,8 +5582,14 @@ export async function sendMessage(
       state.thread.activeRunId = undefined;
       if (agentRunId) {
         if (!eventDrivenTerminationEnabled) {
-          await publishRunEvent(state, agentRunId, { type: 'status', status: 'idle' });
-          await publishRunEvent(state, agentRunId, { type: 'done', runId: agentRunId });
+          await publishRunEvent(state, agentRunId, {
+            type: 'status',
+            status: 'idle',
+          });
+          await publishRunEvent(state, agentRunId, {
+            type: 'done',
+            runId: agentRunId,
+          });
         }
         clearRunEventSequence(agentRunId);
         lastTokenProgressWriteAt.delete(agentRunId);
@@ -4616,11 +5598,15 @@ export async function sendMessage(
         broadcast(state, { type: 'status', status: 'idle' });
         broadcast(state, { type: 'done' });
       }
-      logMyWork('run.cancelled', {
-        runId: agentRunId,
-        durationMs: Date.now() - runStartedAtMs,
-        reason: 'cross_worker_cancellation',
-      }, 'warn');
+      logMyWork(
+        'run.cancelled',
+        {
+          runId: agentRunId,
+          durationMs: Date.now() - runStartedAtMs,
+          reason: 'cross_worker_cancellation',
+        },
+        'warn'
+      );
       persistThread(state.thread);
       return;
     }
@@ -4630,13 +5616,17 @@ export async function sendMessage(
     const tier = classifyError(err);
     const rawMsg = sanitizeTerminalDetail(describeError(err));
     console.error(`[chat] Error tier=${tier} for thread ${threadId}:`, rawMsg);
-    logMyWork('run.failed', {
-      runId: agentRunId,
-      durationMs: Date.now() - runStartedAtMs,
-      errorTier: tier,
-      error: rawMsg,
-      cursorAgentId: state.thread.cursorAgentId,
-    }, 'error');
+    logMyWork(
+      'run.failed',
+      {
+        runId: agentRunId,
+        durationMs: Date.now() - runStartedAtMs,
+        errorTier: tier,
+        error: rawMsg,
+        cursorAgentId: state.thread.cursorAgentId,
+      },
+      'error'
+    );
     trackAgentError(threadId, new Error(rawMsg), {
       tier,
       model: state.thread.kickoff?.model ?? 'unknown',
@@ -4660,7 +5650,9 @@ export async function sendMessage(
       case 'recoverable': {
         // Stale run / agent disposed / concurrent run — clear run state, keep cursorAgentId
         // unless it's a stale-run conflict (agent still owns a run we can't cancel).
-        const isStaleRun = err instanceof Error && err.message.includes('already has active run');
+        const isStaleRun =
+          err instanceof Error &&
+          err.message.includes('already has active run');
         state.thread.lastError = isStaleRun
           ? 'A previous run is still active on the agent. Please try again.'
           : rawMsg;
@@ -4682,11 +5674,18 @@ export async function sendMessage(
     }
 
     const errorCode = mapErrorCode(tier, err);
-    trackEvent('agent.run.errored', { threadId, errorTier: tier, errorCode, model: resolvedModel });
+    trackEvent('agent.run.errored', {
+      threadId,
+      errorTier: tier,
+      errorCode,
+      model: resolvedModel,
+    });
 
     // Record error usage event (fire-and-forget)
     {
-      const kickoff = state.thread?.kickoff ?? {} as import('../../shared/types/chat').ChatThreadKickoff;
+      const kickoff =
+        state.thread?.kickoff ??
+        ({} as import('../../shared/types/chat').ChatThreadKickoff);
       recordAiUsage({
         provider: 'cursor',
         modelId: resolvedModel,
@@ -4709,38 +5708,44 @@ export async function sendMessage(
       // @feature-flag:event-driven-run-termination start winner=enabled
       if (eventDrivenTerminationEnabled) {
         // @feature-flag:event-driven-run-termination enabled-start
-        await finalizeOwnerTerminal(
-          state,
-          agentRunId,
-          'failed',
-          rawMsg,
-          [
-            {
-              type: 'error',
-              error: state.thread.lastError ?? 'Unknown error',
-              errorCode,
-            },
-            { type: 'done', runId: agentRunId },
-          ],
-        );
+        await finalizeOwnerTerminal(state, agentRunId, 'failed', rawMsg, [
+          {
+            type: 'error',
+            error: state.thread.lastError ?? 'Unknown error',
+            errorCode,
+          },
+          { type: 'done', runId: agentRunId },
+        ]);
         // @feature-flag:event-driven-run-termination enabled-end
       } else {
         // @feature-flag:event-driven-run-termination disabled-start
-        await db.update(agentRuns)
-          .set({ status: 'failed', lastError: rawMsg, updatedAt: new Date().toISOString() })
-          .where(and(
-            eq(agentRuns.id, agentRunId),
-            eq(agentRuns.ownerInstance, RUN_EVENT_SOURCE_INSTANCE),
-            eq(agentRuns.status, 'running'),
-          ))
+        await db
+          .update(agentRuns)
+          .set({
+            status: 'failed',
+            lastError: rawMsg,
+            updatedAt: new Date().toISOString(),
+          })
+          .where(
+            and(
+              eq(agentRuns.id, agentRunId),
+              eq(agentRuns.ownerInstance, RUN_EVENT_SOURCE_INSTANCE),
+              eq(agentRuns.status, 'running')
+            )
+          )
           .execute()
-          .catch((e) => console.error('[chat] Failed to mark agent run failed:', e));
+          .catch((e) =>
+            console.error('[chat] Failed to mark agent run failed:', e)
+          );
         await publishRunEvent(state, agentRunId, {
           type: 'error',
           error: state.thread.lastError ?? 'Unknown error',
           errorCode,
         });
-        await publishRunEvent(state, agentRunId, { type: 'done', runId: agentRunId });
+        await publishRunEvent(state, agentRunId, {
+          type: 'done',
+          runId: agentRunId,
+        });
         // @feature-flag:event-driven-run-termination disabled-end
       }
       // @feature-flag:event-driven-run-termination end
@@ -4748,14 +5753,21 @@ export async function sendMessage(
       lastTokenProgressWriteAt.delete(agentRunId);
       eventDrivenRunIds.delete(agentRunId);
     } else {
-      broadcast(state, { type: 'error', error: state.thread.lastError ?? 'Unknown error', errorCode });
+      broadcast(state, {
+        type: 'error',
+        error: state.thread.lastError ?? 'Unknown error',
+        errorCode,
+      });
       broadcast(state, { type: 'done' });
     }
 
     try {
       await failGeneratingDocuments(threadId);
     } catch (fgErr) {
-      console.error(`[chat] failGeneratingDocuments failed for thread ${threadId}:`, fgErr);
+      console.error(
+        `[chat] failGeneratingDocuments failed for thread ${threadId}:`,
+        fgErr
+      );
     }
   } finally {
     if (unsubscribeAbort) {
@@ -4769,7 +5781,8 @@ export async function sendMessage(
     mcpDeadlineController?.clear();
     mcpDeadlineController = null;
     // Clean up provisional liveness row if it was never replaced by the real one
-    db.delete(agentRuns).where(eq(agentRuns.id, provisionalRunId))
+    db.delete(agentRuns)
+      .where(eq(agentRuns.id, provisionalRunId))
       .catch(() => {});
     if (heldLocalAgentSlot) {
       releaseLocalAgentSlot(threadId);
@@ -4787,7 +5800,7 @@ export async function sendMessage(
  * resulting gate state for message acceptance.
  */
 export async function recoverStaleRunningThread(
-  threadId: string,
+  threadId: string
 ): Promise<'idle' | 'running' | 'missing'> {
   const alive = await isThreadRunAlive(threadId);
   if (alive) return 'running';
@@ -4798,17 +5811,21 @@ export async function recoverStaleRunningThread(
   // Prefer DB truth — ensureThreadState may flip in-memory status to idle without
   // persisting, which previously left Postgres stuck at 'running' and 409'd forever.
   const [dbRow] = await db
-    .select({ status: chatThreads.status, activeRunId: chatThreads.activeRunId })
+    .select({
+      status: chatThreads.status,
+      activeRunId: chatThreads.activeRunId,
+    })
     .from(chatThreads)
     .where(eq(chatThreads.id, threadId))
     .limit(1);
 
   const stuckInDb = dbRow?.status === 'running' || Boolean(dbRow?.activeRunId);
-  const stuckInMemory = state.thread.status === 'running' || Boolean(state.thread.activeRunId);
+  const stuckInMemory =
+    state.thread.status === 'running' || Boolean(state.thread.activeRunId);
 
   if (stuckInDb || stuckInMemory) {
     console.warn(
-      `[chat] recoverStaleRunningThread — clearing dead running state (threadId=${threadId})`,
+      `[chat] recoverStaleRunningThread — clearing dead running state (threadId=${threadId})`
     );
     await forceDisposeThreadAgent(state, {
       clearCursorAgentId: false,
@@ -4832,7 +5849,7 @@ export async function cancelRun(threadId: string): Promise<void> {
     const latest = await db.query.agentRuns.findFirst({
       where: and(
         eq(agentRuns.threadId, threadId),
-        inArray(agentRuns.status, ['queued', 'running']),
+        inArray(agentRuns.status, ['queued', 'running'])
       ),
       orderBy: [desc(agentRuns.createdAt)],
       columns: { id: true },
@@ -4866,7 +5883,7 @@ export async function cancelRun(threadId: string): Promise<void> {
     {
       userId: state.thread.userId,
       project: state.thread.kickoff.project,
-    },
+    }
   ).catch(() => false);
   // @feature-flag:event-driven-run-termination start winner=enabled
   if (eventDrivenTerminationEnabled) {
@@ -4892,23 +5909,29 @@ export async function cancelRun(threadId: string): Promise<void> {
       detail: 'Run cancelled by user',
       events: [cancelEnvelope],
     }).catch((error) => {
-      console.error('[chat] Failed to finalize run cancellation:', (error as Error).message);
+      console.error(
+        '[chat] Failed to finalize run cancellation:',
+        (error as Error).message
+      );
       return false;
     });
     // @feature-flag:event-driven-run-termination enabled-end
   } else {
     // @feature-flag:event-driven-run-termination disabled-start
-    const [cancelledRun] = await db.update(agentRuns)
+    const [cancelledRun] = await db
+      .update(agentRuns)
       .set({
         status: 'cancelled',
         cancelRequested: true,
         cancelState: 'requested',
         updatedAt: new Date().toISOString(),
       })
-      .where(and(
-        eq(agentRuns.id, activeRunId),
-        inArray(agentRuns.status, ['queued', 'running']),
-      ))
+      .where(
+        and(
+          eq(agentRuns.id, activeRunId),
+          inArray(agentRuns.status, ['queued', 'running'])
+        )
+      )
       .returning({ id: agentRuns.id })
       .catch((e) => {
         console.error('[chat] Failed to mark agent run cancelled:', e);
@@ -4917,7 +5940,10 @@ export async function cancelRun(threadId: string): Promise<void> {
 
     if (cancelledRun) {
       await publishRunCancellation(threadId, activeRunId).catch((err) => {
-        console.error('[chat] Failed to fan out run cancellation:', (err as Error).message);
+        console.error(
+          '[chat] Failed to fan out run cancellation:',
+          (err as Error).message
+        );
       });
     }
     // @feature-flag:event-driven-run-termination disabled-end
@@ -4945,11 +5971,15 @@ export async function cancelRun(threadId: string): Promise<void> {
   persistThread(state.thread);
   await clearStaleRun(threadId);
   if (myWorkContext) {
-    logMyWorkSession('run.cancelled', {
-      ...myWorkContext,
-      runId: activeRunId,
-      reason: 'user_requested',
-    }, 'warn');
+    logMyWorkSession(
+      'run.cancelled',
+      {
+        ...myWorkContext,
+        runId: activeRunId,
+        reason: 'user_requested',
+      },
+      'warn'
+    );
   }
 }
 
@@ -4965,6 +5995,7 @@ export async function closeThread(threadId: string): Promise<void> {
   }
   const grounding = state.grounding;
   state.grounding = null;
+  state.groundingInFlight = null;
   state.groundingWorkspaceDir = null;
   await grounding?.release().catch(() => undefined);
 
@@ -4978,10 +6009,15 @@ export async function closeThread(threadId: string): Promise<void> {
       columns: { status: true, branchPushed: true },
     });
     if (session) {
-      const isActive = session.status === 'in_progress' || session.status === 'setting_up' || session.status === 'conflict';
+      const isActive =
+        session.status === 'in_progress' ||
+        session.status === 'setting_up' ||
+        session.status === 'conflict';
       const hasUnpushed = !session.branchPushed;
       if (isActive || hasUnpushed) {
-        console.log(`[chat] Dev session thread ${threadId}: evicting from memory (idle timeout), keeping workspace and thread status intact (unpushed changes)`);
+        console.log(
+          `[chat] Dev session thread ${threadId}: evicting from memory (idle timeout), keeping workspace and thread status intact (unpushed changes)`
+        );
         threads.delete(threadId);
         return;
       }
@@ -4996,7 +6032,9 @@ export async function closeThread(threadId: string): Promise<void> {
 
   try {
     fs.rmSync(state.thread.workspaceDir, { recursive: true, force: true });
-  } catch { /* non-fatal */ }
+  } catch {
+    /* non-fatal */
+  }
 }
 
 /**
@@ -5015,6 +6053,7 @@ export async function permanentlyDeleteThread(threadId: string): Promise<void> {
     }
     const grounding = state.grounding;
     state.grounding = null;
+    state.groundingInFlight = null;
     state.groundingWorkspaceDir = null;
     await grounding?.release().catch(() => undefined);
 
@@ -5022,7 +6061,9 @@ export async function permanentlyDeleteThread(threadId: string): Promise<void> {
 
     try {
       fs.rmSync(state.thread.workspaceDir, { recursive: true, force: true });
-    } catch { /* non-fatal */ }
+    } catch {
+      /* non-fatal */
+    }
   }
 
   await pgDeleteThread(threadId);
@@ -5034,7 +6075,8 @@ function resolveOutputDir(threadId: string): string | null {
     return path.join(override.workspaceDir, '.ai-pilot', 'output');
   }
   const state = threads.get(threadId);
-  if (state) return path.join(runtimeWorkspaceDir(state), '.ai-pilot', 'output');
+  if (state)
+    return path.join(runtimeWorkspaceDir(state), '.ai-pilot', 'output');
   return null;
 }
 
@@ -5085,7 +6127,6 @@ export function readOutputBacklog(threadId: string): unknown | null {
   }
 }
 
-
 /**
  * Read the main design doc output ({feature-slug}-design.md) from the ephemeral workspace.
  * Returns the first matching file (used by Q&A / validation threads which operate on a single doc).
@@ -5124,21 +6165,36 @@ export function readOutputAssumptions(threadId: string): string | null {
  * Returns one entry per feature for which all three files (design, tech-spec, assumptions)
  * are present. Results are sorted alphabetically by slug.
  */
-export function readAllOutputDesignDocFeatures(
-  threadId: string,
-): Array<{ slug: string; design: string; techSpec: string; assumptions: string }> {
+export function readAllOutputDesignDocFeatures(threadId: string): Array<{
+  slug: string;
+  design: string;
+  techSpec: string;
+  assumptions: string;
+}> {
   const outputDir = resolveOutputDir(threadId);
   if (!outputDir) return [];
 
   const designFiles = findAllOutputFiles(outputDir, /[-.]design\.md$/i);
-  const results: Array<{ slug: string; design: string; techSpec: string; assumptions: string }> = [];
+  const results: Array<{
+    slug: string;
+    design: string;
+    techSpec: string;
+    assumptions: string;
+  }> = [];
 
   for (const designFile of designFiles) {
     const slug = path.basename(designFile).replace(/[-.]design\.md$/i, '');
-    const techSpecFile = designFile.replace(/[-.]design\.md$/i, '-tech-spec.md');
-    const assumptionsFile = designFile.replace(/[-.]design\.md$/i, '-assumptions.md');
+    const techSpecFile = designFile.replace(
+      /[-.]design\.md$/i,
+      '-tech-spec.md'
+    );
+    const assumptionsFile = designFile.replace(
+      /[-.]design\.md$/i,
+      '-assumptions.md'
+    );
 
-    if (!fs.existsSync(techSpecFile) || !fs.existsSync(assumptionsFile)) continue;
+    if (!fs.existsSync(techSpecFile) || !fs.existsSync(assumptionsFile))
+      continue;
 
     try {
       results.push({
@@ -5147,7 +6203,9 @@ export function readAllOutputDesignDocFeatures(
         techSpec: fs.readFileSync(techSpecFile, 'utf-8').trim(),
         assumptions: fs.readFileSync(assumptionsFile, 'utf-8').trim(),
       });
-    } catch { /* skip unreadable files */ }
+    } catch {
+      /* skip unreadable files */
+    }
   }
 
   return results;
@@ -5156,7 +6214,9 @@ export function readAllOutputDesignDocFeatures(
 /**
  * Read the human-readable validation scorecard (review-scorecard.md) from the ephemeral workspace.
  */
-export function readOutputValidationScorecardMd(threadId: string): string | null {
+export function readOutputValidationScorecardMd(
+  threadId: string
+): string | null {
   const outputDir = resolveOutputDir(threadId);
   if (!outputDir) return null;
   const found = findOutputFile(outputDir, /review-scorecard\.md$/);

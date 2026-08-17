@@ -121,4 +121,25 @@ describe('withRepoCacheLease', () => {
     await rejection;
     jest.useRealTimers();
   });
+  it('can preserve a scheduler lease until expiry after work completes', async () => {
+    const store = createStore([true]);
+
+    await expect(withRepoCacheLease(
+      'grounding-maintenance:sweep',
+      async () => 'done',
+      {
+        ownerId: 'instance-1',
+        leaseMs: 295_000,
+        releaseOnComplete: false,
+        store,
+      },
+    )).resolves.toBe('done');
+
+    expect(store.tryAcquire).toHaveBeenCalledWith(
+      'grounding-maintenance:sweep',
+      'instance-1',
+      295_000,
+    );
+    expect(store.release).not.toHaveBeenCalled();
+  });
 });

@@ -27,6 +27,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Detect runner image source changes
+        id: image_publish
+        env:
+          BASE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          if [ -z "${BASE_SHA}" ] || [ "${BASE_SHA}" = "0000000000000000000000000000000000000000" ]; then
+            BASE_SHA="$(git rev-parse HEAD~1)"
+          fi
+          export BASE_SHA
+          bash scripts/ci/detect-image-publish-changes.sh
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -306,6 +318,7 @@ jobs:
           package: ./deploy.zip
 
       - name: Publish load-test k6 runner image
+        if: steps.image_publish.outputs.load_test_runner == 'true'
         env:
           LT_ACR_NAME: ${{ vars.LT_ACR_NAME }}
           LT_CONTAINER_APP_JOB_NAME: ${{ vars.LT_CONTAINER_APP_JOB_NAME }}
@@ -315,8 +328,11 @@ jobs:
 
       # FEAT-003 provisions the Job now. FEAT-004 adds the worker host image;
       # until its Dockerfile exists this step is intentionally skipped.
+      # Also skip when this push does not touch worker image sources.
       - name: Publish AI-runs worker image
-        if: ${{ hashFiles('runners/ai-runs/Dockerfile') != '' }}
+        if: >-
+          steps.image_publish.outputs.ai_runs_worker == 'true' &&
+          hashFiles('runners/ai-runs/Dockerfile') != ''
         env:
           AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
           AI_RUNS_CONTAINER_APP_JOB_NAME: ${{ vars.AI_RUNS_CONTAINER_APP_JOB_NAME }}
@@ -327,8 +343,11 @@ jobs:
 
       # FEAT-007 interactive Dapr actor-host image. Skipped until its Dockerfile
       # exists; Terraform ignores image drift while the placeholder is in place.
+      # Also skip when this push does not touch interactive host image sources.
       - name: Publish AI-runs interactive host image
-        if: ${{ hashFiles('runners/ai-runs-interactive/Dockerfile') != '' }}
+        if: >-
+          steps.image_publish.outputs.ai_runs_interactive == 'true' &&
+          hashFiles('runners/ai-runs-interactive/Dockerfile') != ''
         env:
           AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
           AI_RUNS_INTERACTIVE_CONTAINER_APP_NAME: ${{ vars.AI_RUNS_INTERACTIVE_CONTAINER_APP_NAME }}

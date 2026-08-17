@@ -34,7 +34,17 @@ export type AgentRunCancelState = 'requested' | 'acknowledged' | 'completed';
 export interface ExecutionSnapshot {
   prompt: string;
   model: string;
+  /**
+   * Writable Agent cwd (`.ai-pilot` scratch/outputs). For PRD/design-doc this is
+   * the thin thread workspace — not a full repo clone.
+   */
   workspaceRef: string;
+  /**
+   * Optional pinned shared read checkout for native repo tools. When set, the
+   * worker opens LocalCheckoutReader here and must not treat workspaceRef as
+   * the git tree. Omitted for legacy full-clone snapshots.
+   */
+  checkoutRef?: string;
   workflowClass: string;
   skillPath: string;
   projectId: string;

@@ -59,6 +59,7 @@ import apexWorkItemsRoutes from './routes/apexWorkItems';
 import askApexRoutes from './routes/askApex';
 import { standupScheduler } from './services/standupScheduler';
 import { aiCostScheduler } from './services/aiCostScheduler';
+import { apiKeyExpiryNotificationScheduler } from './services/apiKeyExpiryNotificationScheduler';
 import { foundationSkillScanScheduler } from './services/foundationSkillScanScheduler';
 import { groundingMaintenanceScheduler } from './services/groundingMaintenanceScheduler';
 import { workBoardScheduler } from './services/workBoardScheduler';
@@ -74,6 +75,8 @@ import e2eSetupRoutes from './routes/e2eSetup';
 import designModuleRoutes from './routes/designModule';
 import loadTestsRoutes from './routes/loadTests';
 import loadTestTargetsRoutes from './routes/loadTestTargets';
+import apiKeysRoutes from './routes/apiKeys';
+import publicRoutes from './routes/public';
 import loadTestRunsInternalRoutes from './routes/loadTestRunsInternal';
 import aiRunsInternalRoutes from './routes/aiRunsInternal';
 import foundationSkillsAuthorizeRoutes from './routes/foundationSkillsAuthorize';
@@ -174,6 +177,10 @@ const aiRunnerCallbackPaths = ['/internal/ai-runs'];
 // secrets; reading the package itself still requires an Azure Artifacts token.
 const foundationSkillCliPaths = ['/internal/foundation-skills'];
 
+// Public API-key auth — session-free; requirePublicApiKey validates Bearer keys
+// on publicRoutes (mounted at /api/public).
+const publicApiPaths = ['/public'];
+
 app.use('/api', (req, res, next) => {
   const isLocalhost = req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1';
   const isInternalPath = internalOnlyPaths.some(p => req.path.startsWith(p));
@@ -187,12 +194,14 @@ app.use('/api', (req, res, next) => {
   const isFoundationSkillCli = foundationSkillCliPaths.some((p) =>
     req.path.startsWith(p),
   );
+  const isPublicApi = publicApiPaths.some((p) => req.path.startsWith(p));
 
   if (
     isHealthPath
     || isLoadTestRunnerCallback
     || isAiRunnerCallback
     || isFoundationSkillCli
+    || isPublicApi
   ) return next();
 
   if (isInternalPath) {
@@ -237,7 +246,10 @@ app.use('/api/ask-apex', ensureAuthenticated, askApexRoutes);
 app.use('/api/design-modules', ensureAuthenticated, designModuleRoutes);
 app.use('/api/projects/:projectId/load-tests', ensureAuthenticated, loadTestsRoutes);
 app.use('/api/projects/:projectId/load-test-targets', ensureAuthenticated, loadTestTargetsRoutes);
+app.use('/api/projects/:projectId/api-keys', ensureAuthenticated, apiKeysRoutes);
 app.use('/api/projects/:projectId/walkthroughs', ensureAuthenticated, walkthroughsRoutes);
+// Public API — session-free; auth is Bearer API key (FEAT-002).
+app.use('/api/public', publicRoutes);
 // Runner ingest — session-free; auth is LT_RUNNER_CALLBACK_TOKEN (FEAT-007 / A-009).
 app.use('/api/internal/load-test-runs', loadTestRunsInternalRoutes);
 // AI runner ingest — session-free; auth is runner MI + AiRun.Runner (or local test token).
@@ -380,6 +392,9 @@ const server = app.listen(PORT, () => {
 
   aiCostScheduler.start();
   console.log('AI cost scheduler started');
+
+  apiKeyExpiryNotificationScheduler.start();
+  console.log('API key expiry notification scheduler started');
 
   foundationSkillScanScheduler.start();
   console.log('Foundation skill scan scheduler started');

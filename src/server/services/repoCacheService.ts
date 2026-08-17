@@ -400,7 +400,7 @@ async function refreshWarmCache(
   );
 }
 
-export async function refreshRepoCacheUnderLease(
+async function refreshWarmMirrorUnderLease(
   options: RepoCacheOptions,
   lease: RepoCacheLeaseContext,
 ): Promise<RepoCacheResult> {
@@ -410,6 +410,61 @@ export async function refreshRepoCacheUnderLease(
   const startedAt = Date.now();
   let stale = false;
   let baseSha: string;
+  const repoLabel = `${options.provider}/${options.repo}@${options.branch}`;
+
+  console.log(`[repo-cache] phase=incremental-fetch-start repo=${repoLabel}`);
+  try {
+    await refreshWarmCache(cacheDir, options, remote, abortSignal);
+    console.log(`[repo-cache] phase=incremental-fetch-complete repo=${repoLabel}`);
+    try {
+      baseSha = await verifyBaseCommitLightweight(cacheDir, options.branch, abortSignal);
+    } catch (verificationError) {
+      if (abortSignal.aborted) throw verificationError;
+      console.warn(`[repo-cache] phase=warm-repair-start repo=${repoLabel}`);
+      baseSha = await refetchAndVerifyCache(
+        cacheDir,
+        options,
+        remote,
+        abortSignal,
+        assertOwned,
+      );
+      console.log(`[repo-cache] phase=warm-repair-complete repo=${repoLabel}`);
+    }
+    console.log(`[repo-cache] phase=warm-commit-verified repo=${repoLabel}`);
+  } catch (refreshError) {
+    if (abortSignal.aborted) throw refreshError;
+    if (!isTransientGitError(refreshError)) throw refreshError;
+    try {
+      baseSha = await verifyCacheConnectivity(cacheDir, options.branch, abortSignal);
+      stale = true;
+      console.warn(
+        `[repo-cache] refresh unavailable; using verified cached ${options.provider}/${options.repo}@${options.branch}:`,
+        (refreshError as Error).message,
+      );
+    } catch (verificationError) {
+      if (abortSignal.aborted) throw verificationError;
+      throw verificationError;
+    }
+  }
+
+  await assertOwned();
+  abortSignal.throwIfAborted();
+  writeRefreshMarker(cacheDir);
+  console.log(
+    `[repo-cache] ${stale ? 'verified stale' : 'ready'} ${options.provider}/${options.repo}@${options.branch} ` +
+    `sha=${baseSha.slice(0, 12)} durationMs=${Date.now() - startedAt}`,
+  );
+  return { cacheDir, baseSha, stale, remote, mirrorHit: true };
+}
+
+export async function refreshRepoCacheUnderLease(
+  options: RepoCacheOptions,
+  lease: RepoCacheLeaseContext,
+): Promise<RepoCacheResult> {
+  const { signal: abortSignal, assertOwned } = lease;
+  const cacheDir = getRepoCacheDir(options);
+  const remote = resolveGitRemote(options.provider, options.project, options.repo);
+  const startedAt = Date.now();
   const repoLabel = `${options.provider}/${options.repo}@${options.branch}`;
   const mirrorHit = cacheExists(cacheDir);
 
@@ -422,53 +477,66 @@ export async function refreshRepoCacheUnderLease(
     console.log(`[repo-cache] phase=cold-clone-start repo=${repoLabel}`);
     await populateColdCacheWithRetry(cacheDir, options, remote, abortSignal, assertOwned);
     console.log(`[repo-cache] phase=cold-clone-complete repo=${repoLabel}`);
-    baseSha = await verifyBaseCommitLightweight(cacheDir, options.branch, abortSignal);
+    const baseSha = await verifyBaseCommitLightweight(cacheDir, options.branch, abortSignal);
     console.log(`[repo-cache] phase=cold-connectivity-verified repo=${repoLabel}`);
-  } else {
-    console.log(`[repo-cache] phase=incremental-fetch-start repo=${repoLabel}`);
-    try {
-      await refreshWarmCache(cacheDir, options, remote, abortSignal);
-      console.log(`[repo-cache] phase=incremental-fetch-complete repo=${repoLabel}`);
-      try {
-        baseSha = await verifyBaseCommitLightweight(cacheDir, options.branch, abortSignal);
-      } catch (verificationError) {
-        if (abortSignal.aborted) throw verificationError;
-        console.warn(`[repo-cache] phase=warm-repair-start repo=${repoLabel}`);
-        baseSha = await refetchAndVerifyCache(
-          cacheDir,
-          options,
-          remote,
-          abortSignal,
-          assertOwned,
-        );
-        console.log(`[repo-cache] phase=warm-repair-complete repo=${repoLabel}`);
-      }
-      console.log(`[repo-cache] phase=warm-commit-verified repo=${repoLabel}`);
-    } catch (refreshError) {
-      if (abortSignal.aborted) throw refreshError;
-      if (!isTransientGitError(refreshError)) throw refreshError;
-      try {
-        baseSha = await verifyCacheConnectivity(cacheDir, options.branch, abortSignal);
-        stale = true;
-        console.warn(
-          `[repo-cache] refresh unavailable; using verified cached ${options.provider}/${options.repo}@${options.branch}:`,
-          (refreshError as Error).message,
-        );
-      } catch (verificationError) {
-        if (abortSignal.aborted) throw verificationError;
-        throw verificationError;
-      }
-    }
+    await assertOwned();
+    abortSignal.throwIfAborted();
+    writeRefreshMarker(cacheDir);
+    console.log(
+      `[repo-cache] ready ${options.provider}/${options.repo}@${options.branch} ` +
+      `sha=${baseSha.slice(0, 12)} durationMs=${Date.now() - startedAt}`,
+    );
+    return { cacheDir, baseSha, stale: false, remote, mirrorHit };
   }
 
-  await assertOwned();
-  abortSignal.throwIfAborted();
-  writeRefreshMarker(cacheDir);
-  console.log(
-    `[repo-cache] ${stale ? 'verified stale' : 'ready'} ${options.provider}/${options.repo}@${options.branch} ` +
-    `sha=${baseSha.slice(0, 12)} durationMs=${Date.now() - startedAt}`,
-  );
-  return { cacheDir, baseSha, stale, remote, mirrorHit };
+  return refreshWarmMirrorUnderLease(options, lease);
+}
+
+/**
+ * Admin-only cold clone (or refresh) entry point. May create a missing bare mirror.
+ * Must never be called from user chat/generation paths.
+ */
+export function cloneRepositoryForAdmin(
+  options: RepoCacheOptions,
+): Promise<RepoCacheResult> {
+  return ensureRepoCache(options);
+}
+
+/**
+ * Incremental tip fetch against an existing valid mirror. Never cold-clones.
+ * Throws when the mirror is missing — callers must require admin Clone first.
+ */
+export async function fetchRepositoryTip(
+  options: RepoCacheOptions,
+): Promise<RepoCacheResult> {
+  const cacheDir = getRepoCacheDir(options);
+  if (!cacheExists(cacheDir)) {
+    return Promise.reject(
+      new Error(
+        'Repository mirror is not cloned; a project administrator must Clone the configured repository before fetch',
+      ),
+    );
+  }
+
+  const key = `fetch:${cacheIdentity(options)}`;
+  const existing = inFlightRefreshes.get(key);
+  if (existing) return existing;
+
+  const refresh = withRepoCacheLease(
+    getRepoCacheLeaseKey(options),
+    async (lease) => {
+      if (!cacheExists(getRepoCacheDir(options))) {
+        throw new Error(
+          'Repository mirror is not cloned; a project administrator must Clone the configured repository before fetch',
+        );
+      }
+      return refreshWarmMirrorUnderLease(options, lease);
+    },
+  ).finally(() => {
+    inFlightRefreshes.delete(key);
+  });
+  inFlightRefreshes.set(key, refresh);
+  return refresh;
 }
 
 export function ensureRepoCache(options: RepoCacheOptions): Promise<RepoCacheResult> {

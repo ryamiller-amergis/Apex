@@ -612,6 +612,54 @@ After apply, mirror `ai_runs_interactive_redis_hostname`,
 Service live-bus settings, and set `AI_RUNS_INTERACTIVE_DISPATCH_URL` to the
 `ai_runs_interactive_app_fqdn` HTTPS endpoint.
 
+### Clustering policy (live-stream correctness)
+
+`ai_runs_interactive_managed_redis_clustering_policy` controls how the Managed
+Redis database presents itself to clients. **Use `EnterpriseCluster` in
+production.** The default `OSSCluster` requires cluster-aware clients; the app's
+standalone `ioredis` live bus and Dapr's non-cluster clients cannot fan out
+pub/sub across an OSS-cluster proxy, so the interactive WebSocket token stream
+silently degrades to the durable replay/poll path (chat "comes back" but not in
+real time), and Dapr actor-state ops risk `MOVED`/`CROSSSLOT` if the cache is
+scaled to multiple shards. `EnterpriseCluster` exposes a single logical endpoint
+that standalone clients (and pub/sub) use correctly.
+
+The clustering policy is **immutable on an existing database**, so changing it
+replaces the Managed Redis. The backplane holds no durable data (durability is
+in Postgres `agent_run_events`), and `create_before_destroy` provisions the
+replacement before removing the old instance, so the cutover has no downtime.
+
+**Cutover runbook (existing prod OSSCluster → EnterpriseCluster):**
+
+1. In prod tfvars set a **distinct** name (create_before_destroy needs it), the
+   new policy, and HA:
+   ```hcl
+   ai_runs_interactive_redis_name                      = "redis-apex-ai-prd-v2"
+   ai_runs_interactive_managed_redis_clustering_policy = "EnterpriseCluster"
+   ai_runs_interactive_managed_redis_high_availability = true
+   ```
+2. `terraform plan` and review: a new `redisEnterprise` + `default` database are
+   created first; the ACA app and both Dapr components (`interactive-pubsub`,
+   `interactive-actor-state`) repoint to the new host/key; the old instance is
+   destroyed last.
+3. `terraform apply` (only with explicit approval).
+4. **Redeploy the App Service** so `deploy.yml` re-resolves `REDIS_*` to the new
+   instance (it selects the `redis-apex-ai*` resource by name).
+5. Validate: send an interactive chat turn and confirm live token streaming;
+   check App Service logs for `InteractiveLiveBusSubscriberReady` and
+   `InteractiveLiveBusSubscribed` with no `SubscriberError`.
+
+> **Operational note — gitignored prod tfvars.** `terraform.prd.tfvars` is
+> gitignored (holds secrets) and Terraform is applied manually, so the prod
+> `ai_runs_interactive_redis_name` (`redis-apex-ai-prd-v2`) and
+> `ai_runs_interactive_managed_redis_clustering_policy` live only in the
+> operator's local/canonical tfvars. The tracked variable **defaults** are now
+> the safe ones (`EnterpriseCluster`), so an apply that omits the policy line
+> won't regress to OSSCluster. **But** the redis *name* default resolves to the
+> old `redis-apex-ai-prd`; if the prod tfvars ever loses the `-v2` name line, a
+> full apply would try to replace the live Redis. Keep both prod lines in
+> whatever tfvars the next apply is run from.
+
 ---
 
 ## Deployment

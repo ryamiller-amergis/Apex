@@ -139,6 +139,7 @@ export const ApproverSelectModal: React.FC<ApproverSelectModalProps> = ({
     isLoading: boolean,
     selected: Set<string>,
     onToggle: (id: string) => void,
+    sectionKey: string,
   ) => {
     if (isLoading) return <span className={styles.loadingText}>Loading approvers…</span>;
     if (!pool || (pool.individuals.length === 0 && pool.groups.length === 0)) {
@@ -166,6 +167,7 @@ export const ApproverSelectModal: React.FC<ApproverSelectModalProps> = ({
                     });
                   }}
                   disabled={isSubmitting}
+                  {...{ 'data-testid': `approver-select-${sectionKey}-group-${group.id}-select-all-btn` }}
                 >
                   {allSelected ? 'Deselect All' : 'Select All'}
                 </button>
@@ -180,6 +182,7 @@ export const ApproverSelectModal: React.FC<ApproverSelectModalProps> = ({
                       className={`${styles.chip} ${isSelected ? styles.chipSelected : ''}`}
                       onClick={() => onToggle(m.userId)}
                       disabled={isSubmitting}
+                      {...{ 'data-testid': `approver-select-${sectionKey}-chip-${m.userId}` }}
                     >
                       {isSelected && <CheckIcon />}
                       {m.displayName || m.email || m.userId}
@@ -205,6 +208,7 @@ export const ApproverSelectModal: React.FC<ApproverSelectModalProps> = ({
                     className={`${styles.chip} ${isSelected ? styles.chipSelected : ''}`}
                     onClick={() => onToggle(a.userId)}
                     disabled={isSubmitting}
+                    {...{ 'data-testid': `approver-select-${sectionKey}-chip-${a.userId}` }}
                   >
                     {isSelected && <CheckIcon />}
                     {a.displayName || a.email || a.userId}
@@ -225,6 +229,7 @@ export const ApproverSelectModal: React.FC<ApproverSelectModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="approver-select-title"
+      {...{ 'data-testid': 'approver-select-modal' }}
     >
       <div className={styles.card}>
         <div>
@@ -236,39 +241,41 @@ export const ApproverSelectModal: React.FC<ApproverSelectModalProps> = ({
           </p>
         </div>
 
-        {isPrdSection && (
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>PRD Reviewers</h3>
-            {renderGroupedChips(prdPool, prdLoading, selectedPrdApprovers, togglePrd)}
-          </div>
-        )}
+        <div className={styles.scrollBody}>
+          {isPrdSection && (
+            <div className={styles.section}>
+              <h3 className={styles.sectionTitle}>PRD Reviewers</h3>
+              {renderGroupedChips(prdPool, prdLoading, selectedPrdApprovers, togglePrd, 'prd')}
+            </div>
+          )}
 
-        <div className={styles.section}>
-          <h3 className={styles.sectionTitle}>Design Doc Reviewers</h3>
-          {renderGroupedChips(ddPool, ddLoading, selectedDdApprovers, toggleDd)}
+          <div className={styles.section}>
+            <h3 className={styles.sectionTitle}>Design Doc Reviewers</h3>
+            {renderGroupedChips(ddPool, ddLoading, selectedDdApprovers, toggleDd, 'design-doc')}
+          </div>
+
+          {isPrdSection && (
+            <div className={styles.section}>
+              <h3 className={styles.sectionTitle}>Design Prototype Reviewers</h3>
+              {renderGroupedChips(dpPool, dpLoading, selectedDpApprovers, toggleDp, 'design-prototype')}
+            </div>
+          )}
+
+          {isPrdSection && (
+            <div className={styles.section}>
+              <h3 className={styles.sectionTitle}>QA Reviewers</h3>
+              {renderGroupedChips(qaPool, qaLoading, selectedQaApprovers, toggleQa, 'qa')}
+            </div>
+          )}
+
+          {!canConfirm && !isSubmitting && (
+            <p className={styles.validationHint}>
+              {isPrdSection
+                ? 'Select at least one reviewer in each section'
+                : 'Select at least one reviewer'}
+            </p>
+          )}
         </div>
-
-        {isPrdSection && (
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>Design Prototype Reviewers</h3>
-            {renderGroupedChips(dpPool, dpLoading, selectedDpApprovers, toggleDp)}
-          </div>
-        )}
-
-        {isPrdSection && (
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>QA Reviewers</h3>
-            {renderGroupedChips(qaPool, qaLoading, selectedQaApprovers, toggleQa)}
-          </div>
-        )}
-
-        {!canConfirm && !isSubmitting && (
-          <p className={styles.validationHint}>
-            {isPrdSection
-              ? 'Select at least one reviewer in each section'
-              : 'Select at least one reviewer'}
-          </p>
-        )}
 
         <div className={styles.actions}>
           <button
@@ -276,6 +283,7 @@ export const ApproverSelectModal: React.FC<ApproverSelectModalProps> = ({
             onClick={onCancel}
             disabled={isSubmitting}
             type="button"
+            {...{ 'data-testid': 'approver-select-cancel-btn' }}
           >
             Cancel
           </button>
@@ -284,6 +292,7 @@ export const ApproverSelectModal: React.FC<ApproverSelectModalProps> = ({
             onClick={handleConfirm}
             disabled={!canConfirm}
             type="button"
+            {...{ 'data-testid': 'approver-select-confirm-btn' }}
           >
             {isSubmitting ? 'Submitting…' : (confirmLabel ?? 'Submit for Review')}
           </button>

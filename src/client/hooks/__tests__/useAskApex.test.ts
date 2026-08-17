@@ -10,7 +10,10 @@ function mockFetchOk(data: unknown, status = 200) {
   }) as jest.Mock;
 }
 
-function mockFetchError(status: number, body: unknown = { error: `HTTP ${status}` }) {
+function mockFetchError(
+  status: number,
+  body: unknown = { error: `HTTP ${status}` }
+) {
   global.fetch = jest.fn().mockResolvedValue({
     ok: false,
     status,
@@ -94,7 +97,7 @@ describe('useAskApex', () => {
       expect(result.current.sessionId).toBe('sess-1');
       expect(global.fetch).toHaveBeenCalledWith(
         '/api/ask-apex/sessions',
-        expect.objectContaining({ method: 'POST' }),
+        expect.objectContaining({ method: 'POST' })
       );
     });
 
@@ -109,13 +112,15 @@ describe('useAskApex', () => {
 
       expect(MockEventSource.instances).toHaveLength(1);
       expect(MockEventSource.instances[0].url).toBe(
-        '/api/ask-apex/sessions/sess-1/stream',
+        '/api/ask-apex/sessions/sess-1/stream'
       );
     });
 
     it('returns null when the API fails', async () => {
       mockFetchError(500);
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const consoleSpy = jest
+        .spyOn(console, 'error')
+        .mockImplementation(() => {});
 
       const { result } = renderHook(() => useAskApex());
 
@@ -151,7 +156,7 @@ describe('useAskApex', () => {
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({ text: 'Hello' }),
-        }),
+        })
       );
     });
 
@@ -192,7 +197,9 @@ describe('useAskApex', () => {
       });
 
       mockFetchError(500);
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const consoleSpy = jest
+        .spyOn(console, 'error')
+        .mockImplementation(() => {});
 
       await act(async () => {
         await result.current.sendMessage('Hello');
@@ -200,7 +207,7 @@ describe('useAskApex', () => {
 
       expect(consoleSpy).toHaveBeenCalledWith(
         '[useAskApex] sendMessage error:',
-        expect.any(Error),
+        expect.any(Error)
       );
       consoleSpy.mockRestore();
     });
@@ -232,7 +239,7 @@ describe('useAskApex', () => {
 
       expect(global.fetch).toHaveBeenCalledWith(
         '/api/ask-apex/sessions/sess-1',
-        expect.objectContaining({ method: 'DELETE' }),
+        expect.objectContaining({ method: 'DELETE' })
       );
     });
   });
@@ -270,12 +277,20 @@ describe('useAskApex', () => {
       act(() => {
         es.simulateMessage({
           type: 'message',
-          message: { id: 'msg-1', role: 'assistant', text: 'Hi', ts: '2026-07-01T00:00:00Z' },
+          message: {
+            id: 'msg-1',
+            role: 'assistant',
+            text: 'Hi',
+            ts: '2026-07-01T00:00:00Z',
+          },
         });
       });
 
       expect(result.current.messages).toHaveLength(1);
-      expect(result.current.messages[0]).toMatchObject({ id: 'msg-1', text: 'Hi' });
+      expect(result.current.messages[0]).toMatchObject({
+        id: 'msg-1',
+        text: 'Hi',
+      });
     });
 
     it('accumulates streaming tokens', async () => {
@@ -311,6 +326,27 @@ describe('useAskApex', () => {
       });
 
       expect(result.current.status).toBe('streaming');
+    });
+
+    it('PLAN-S5-AC-1 exposes repository preparation as a busy status', async () => {
+      mockFetchOk({ sessionId: 'sess-1' });
+      const { result } = renderHook(() => useAskApex());
+
+      await act(async () => {
+        await result.current.startSession();
+      });
+
+      act(() => {
+        MockEventSource.instances[0].simulateMessage({
+          type: 'status',
+          status: 'preparing',
+        });
+      });
+
+      expect(result.current.status).toBe('preparing');
+      expect(result.current.preparationMessage).toBe(
+        'Preparing project repository…'
+      );
     });
 
     it('sets status to error on SSE error event', async () => {

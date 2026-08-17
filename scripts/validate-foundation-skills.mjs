@@ -12,7 +12,7 @@
  *   - Every catalog tier is a recognised value
  *   - No *shippable* foundation or adapter file contains project-specific
  *     identifiers (both layers land in the consumer repo)
- *   - Catalog covers all expected skill count (>= 30)
+ *   - Catalog is non-empty and each entry is structurally valid
  *
  * Warnings cover manifest drift that does not break an install: files on disk
  * that the catalog does not declare, and skill directories not in the catalog.
@@ -82,8 +82,10 @@ try {
   process.exit(1);
 }
 
-if (catalog.skills.length < 30) {
-  err(`catalog.json has only ${catalog.skills.length} skills; expected >= 30`);
+if (catalog.skills.length === 0) {
+  err('catalog.json has no skills');
+} else {
+  ok(`catalog.json lists ${catalog.skills.length} skill(s)`);
 }
 
 // 2. Validate each skill

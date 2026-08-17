@@ -24,6 +24,7 @@ jest.mock('../services/telemetry', () => ({
 import {
   bundleKey,
   createGroundingBundleStore,
+  GROUNDING_WORKSPACE_READY_MARKER,
   groundingCredentialMode,
   GroundingBundleAuthorizationError,
   materializeGroundingBundle,
@@ -143,6 +144,10 @@ describe('AC-0 rehydrates an isolated checkout at the exact pinned SHA', () => {
       const pinnedSha = (
         await runRealGit(['rev-parse', 'HEAD'], destination)
       ).trim();
+      await writeFile(
+        join(destination, '.git', GROUNDING_WORKSPACE_READY_MARKER),
+        `${pinnedSha}\n`,
+      );
       const store = createGroundingBundleStore({
         getContainerClient: () => fakeContainer({ downloadToFile }),
         repairAndMaterialize: jest.fn(),
@@ -155,6 +160,45 @@ describe('AC-0 rehydrates an isolated checkout at the exact pinned SHA', () => {
       await expect(
         readFile(join(destination, 'snapshot.txt'), 'utf8')
       ).resolves.toBe('pinned content');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a partial checkout whose HEAD matches but has no ready marker', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'grounding-partial-reuse-'));
+    const destination = join(root, 'partial-checkout');
+    const downloadToFile = jest.fn().mockRejectedValue(
+      Object.assign(new Error('missing'), { statusCode: 404 }),
+    );
+    const repairAndMaterialize = jest.fn().mockResolvedValue(false);
+
+    try {
+      await runRealGit(['init', destination]);
+      await runRealGit(
+        ['config', 'user.email', 'apex-tests@example.invalid'],
+        destination,
+      );
+      await runRealGit(['config', 'user.name', 'Apex Tests'], destination);
+      await writeFile(join(destination, 'partial.txt'), 'partial content');
+      await runRealGit(['add', 'partial.txt'], destination);
+      await runRealGit(['commit', '-m', 'partial checkout'], destination);
+      const pinnedSha = (
+        await runRealGit(['rev-parse', 'HEAD'], destination)
+      ).trim();
+      const store = createGroundingBundleStore({
+        getContainerClient: () => fakeContainer({ downloadToFile }),
+        repairAndMaterialize,
+      });
+
+      await expect(
+        store.rehydrate({ ...identity, sha: pinnedSha }, destination),
+      ).resolves.toEqual({
+        status: 'remote-fallback',
+        reason: 'bundle-missing',
+      });
+      expect(downloadToFile).toHaveBeenCalledTimes(1);
+      expect(repairAndMaterialize).toHaveBeenCalledTimes(1);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -422,7 +466,10 @@ describe('performance/observability privacy-safe hit/miss and duration signals',
     });
     let cloned = false;
     const runGit: GitRunner = jest.fn(async (args) => {
-      if (args.includes('clone')) cloned = true;
+      if (args.includes('clone')) {
+        cloned = true;
+        await mkdir(join(destination, '.git'), { recursive: true });
+      }
       if (args.includes('rev-parse')) {
         if (!cloned) throw new Error('not a git checkout');
         return `${SHA}\n`;

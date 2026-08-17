@@ -110,37 +110,42 @@ describe('PBI-005 Ask Apex shared grounding lifecycle', () => {
     await Promise.resolve();
 
     // Assert
-    expect(start).toHaveBeenCalledWith(expect.objectContaining({
-      caller: 'ask-apex',
-      userId: 'developer-1',
-      run: {
-        runType: 'service',
-        runId: sessionId,
-        project: 'Apex',
-      },
-      repository: {
-        provider: 'github',
-        repo: 'AI-Pilot',
-        branch: 'main',
-      },
-    }));
-    expect(agentCreate).toHaveBeenCalledWith(expect.objectContaining({
-      local: expect.objectContaining({
-        cwd: process.cwd(),
-        customTools: expect.objectContaining({
-          get_skill_file: expect.any(Object),
-          list_repo_dir: expect.any(Object),
-          search_repo_code: expect.any(Object),
-        }),
-      }),
-      mcpServers: {
-        'github-repo': {
-          url: 'http://localhost:3001/mcp/github-repo?enableRepoBrowse=false',
+    expect(start).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caller: 'ask-apex',
+        userId: 'developer-1',
+        run: {
+          runType: 'service',
+          runId: sessionId,
+          project: 'Apex',
         },
-      },
-    }));
+        repository: {
+          provider: 'github',
+          repo: 'AI-Pilot',
+          branch: 'main',
+        },
+        readOnlyShareable: true,
+      })
+    );
+    expect(agentCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        local: expect.objectContaining({
+          cwd: process.cwd(),
+          customTools: expect.objectContaining({
+            get_skill_file: expect.any(Object),
+            list_repo_dir: expect.any(Object),
+            search_repo_code: expect.any(Object),
+          }),
+        }),
+        mcpServers: {
+          'github-repo': {
+            url: 'http://localhost:3001/mcp/github-repo?enableRepoBrowse=false',
+          },
+        },
+      })
+    );
     expect(agentCreate.mock.calls[0][0].local.cwd).not.toBe(
-      'C:\\data\\grounding-workspaces\\ask-profile',
+      'C:\\data\\grounding-workspaces\\ask-profile'
     );
     expect(mockResolveConnectionProfile).toHaveBeenCalledWith('opaque-profile');
     expect(nativeReader.readFile).toHaveBeenCalledTimes(5);
@@ -216,13 +221,61 @@ describe('PBI-005 Ask Apex shared grounding lifecycle', () => {
     // Assert
     expect(mockLocalReadFile).not.toHaveBeenCalled();
     expect(mockRemoteGetSkillFile).toHaveBeenCalledTimes(5);
-    expect(agentCreate).toHaveBeenCalledWith(expect.objectContaining({
-      local: { cwd: process.cwd() },
-      mcpServers: {
-        'github-repo': {
-          url: 'http://localhost:3001/mcp/github-repo',
+    expect(agentCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        local: { cwd: process.cwd() },
+        mcpServers: {
+          'github-repo': {
+            url: 'http://localhost:3001/mcp/github-repo',
+          },
         },
-      },
-    }));
+      })
+    );
+  });
+
+  it('PLAN-S5-AC-0 promotes one pending Ask Apex turn when shared grounding becomes ready', async () => {
+    const events: unknown[] = [];
+    start
+      .mockResolvedValueOnce({
+        mode: 'preparing',
+        retryAfterMs: 1_000,
+        release: jest.fn().mockResolvedValue(undefined),
+      })
+      .mockResolvedValueOnce({
+        mode: 'local',
+        cwd: 'C:\\data\\grounding-workspaces\\ask-profile',
+        profileId: 'opaque-profile',
+        resolvedSha: 'ask-pinned-sha',
+        nativeReads: true,
+        release,
+      });
+    const sessionId = createSession('developer-1');
+    const { subscribeToSession } = await import('../services/askApexService');
+    subscribeToSession(sessionId, 'developer-1', (event) => events.push(event));
+
+    const sending = sendMessage(
+      sessionId,
+      'developer-1',
+      'Use the ready checkout'
+    );
+    await Promise.resolve();
+    await jest.advanceTimersByTimeAsync(1_000);
+    await sending;
+
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(
+      getSession(sessionId, 'developer-1')?.messages.filter(
+        (message) => message.role === 'user'
+      )
+    ).toHaveLength(1);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'status',
+          status: 'preparing',
+        }),
+      ])
+    );
+    expect(agentCreate).toHaveBeenCalledTimes(1);
   });
 });

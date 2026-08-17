@@ -81,6 +81,7 @@ export interface CatalogSkillEntry {
   name: string;
   summary: string;
   tier: FoundationSkillTier;
+  alwaysInstall?: boolean;
   dependsOn?: string[];
 }
 

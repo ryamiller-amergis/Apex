@@ -242,7 +242,7 @@ test('repo-docs detector prefers root CONTEXT-MAP and root AGENTS over nested do
 test('glossary detector only keeps explicit terminology rows and excludes nested local-debug docs', () => {
   const repo = makeRepo(makeMaxViewFixture());
   try {
-    const recipe = loadRecipe(PKG_ROOT, 'feature-request-analysis');
+    const recipe = loadRecipe(PKG_ROOT, 'grill-with-docs');
     const entries = collectForRecipe(repo, recipe);
 
     assert.ok(entries.some((entry) => entry.detector === 'glossary' && entry.key === 'PBI'));
@@ -306,63 +306,6 @@ test('review recipes discover root docs during bounded bootstrap scans', () => {
       assert.doesNotMatch(skillText, /APEX:unfilled\(contextFile\)/);
       assert.doesNotMatch(skillText, /APEX:unfilled\(agentsFile\)/);
     }
-  } finally {
-    cleanup(repo);
-  }
-});
-
-test('feature-request-analysis mission stays unfilled when no evidence exists', () => {
-  const repo = makeRepo({
-    'package.json': JSON.stringify({ name: 'bare-product' }, null, 2) + '\n',
-    'AGENTS.md': '# Bare Product\n\n## Key Terminology\n\n| Term | Meaning |\n| --- | --- |\n| **PBI** | Product Backlog Item |\n',
-  });
-  try {
-    const boot = bootstrapSkill(PKG_ROOT, repo, 'feature-request-analysis');
-    const skillText = boot.files['SKILL.md'];
-
-    assert.match(skillText, /APEX:slot\(mission\)/);
-    assert.match(skillText, /APEX:unfilled\(mission\)/);
-    assert.doesNotMatch(skillText, /TODO\(mission\)/);
-  } finally {
-    cleanup(repo);
-  }
-});
-
-test('feature-request-analysis mission autofills only from trusted root product sections', () => {
-  const repo = makeRepo(makeApexFixture());
-  try {
-    const boot = bootstrapSkill(PKG_ROOT, repo, 'feature-request-analysis');
-    const skillText = boot.files['SKILL.md'];
-    const explain = boot.explain['SKILL.md'].mission;
-
-    assert.match(skillText, /internal product-building and project-management platform/i);
-    assert.doesNotMatch(skillText, /APEX:unfilled\(mission\)/);
-    assert.ok(explain?.filled);
-    assert.equal(explain.evidence[0].source.file, 'CONTEXT.md');
-  } finally {
-    cleanup(repo);
-  }
-});
-
-test('feature-request-analysis mission stays unfilled without an explicit trusted product section', () => {
-  const repo = makeRepo({
-    ...makeMatterWorxFixture(),
-    'package.json': JSON.stringify(
-      {
-        name: 'matterworx',
-        description: 'Stale package metadata that must be ignored.',
-      },
-      null,
-      2,
-    ) + '\n',
-  });
-  try {
-    const boot = bootstrapSkill(PKG_ROOT, repo, 'feature-request-analysis');
-    const skillText = boot.files['SKILL.md'];
-    const explain = boot.explain['SKILL.md'].mission;
-
-    assert.match(skillText, /APEX:unfilled\(mission\)/);
-    assert.equal(explain?.filled, false);
   } finally {
     cleanup(repo);
   }
