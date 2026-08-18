@@ -1,3 +1,5 @@
+import { cpus } from 'node:os';
+
 import type {
   RepoCodeSearchResult,
   RepoDirEntry,
@@ -26,6 +28,30 @@ export interface BareRepoReaderOptions {
 
 const LOCAL_UNAVAILABLE_MESSAGE = 'Repository content is unavailable';
 
+// Reading one object is a single lookup, but grep has to inflate every blob in
+// the tree because a bare mirror has no working copy to scan. Sharing one
+// budget meant search on a large repo was always killed mid-flight while the
+// object reads it was sized for finished in ~100ms.
+const OBJECT_READ_TIMEOUT_MS = 10_000;
+const SEARCH_TIMEOUT_MS = 60_000;
+
+// Blob inflation parallelizes well. Clamped because the App Service instance
+// also serves requests, and unbounded threads starve them.
+const SEARCH_THREADS = Math.max(2, Math.min(8, cpus().length || 2));
+
+const SEARCH_TIMEOUT_MESSAGE =
+  'Repository search timed out. Narrow the query or scope it to a directory.';
+
+function isTimeout(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const { killed, signal, code } = error as {
+    killed?: unknown;
+    signal?: unknown;
+    code?: unknown;
+  };
+  return killed === true || signal === 'SIGTERM' || code === 'ETIMEDOUT';
+}
+
 export class BareRepoReader implements RepoReader {
   readonly identity: RepositoryIdentity;
   private readonly mirrorPath: string;
@@ -42,20 +68,20 @@ export class BareRepoReader implements RepoReader {
   }
 
   async readFile(filePath: string): Promise<string> {
-    return this.measured(() =>
+    return this.measured('readFile', () =>
       this.controlled(async () => {
         const { portablePath } = validateRepoRelativePath(filePath);
         const spec = `${this.identity.sha}:${portablePath}`;
         return git(safeArgs(this.mirrorPath, ['cat-file', '-p', spec]), {
           cwd: this.mirrorPath,
-          timeout: 10_000,
+          timeout: OBJECT_READ_TIMEOUT_MS,
         });
       }),
     );
   }
 
   async listDir(dirPath: string): Promise<RepoDirEntry[]> {
-    return this.measured(() =>
+    return this.measured('listDir', () =>
       this.controlled(async () => {
         const { portablePath } = validateRepoRelativePath(dirPath);
         const spec = portablePath ? [`${portablePath}/`] : [];
@@ -67,7 +93,7 @@ export class BareRepoReader implements RepoReader {
             '--',
             ...spec,
           ]),
-          { cwd: this.mirrorPath, timeout: 10_000 },
+          { cwd: this.mirrorPath, timeout: OBJECT_READ_TIMEOUT_MS },
         );
 
         return output
@@ -85,7 +111,7 @@ export class BareRepoReader implements RepoReader {
   }
 
   async searchCode(query: string, limit?: number): Promise<RepoSearchResult[]> {
-    return this.measured(async () => {
+    return this.measured('searchCode', async () => {
       if (!query.trim()) return [];
       return this.controlled(async () => {
         let output: string;
@@ -97,6 +123,7 @@ export class BareRepoReader implements RepoReader {
               '-I',
               '--full-name',
               '-F',
+              `--threads=${SEARCH_THREADS}`,
               '-e',
               query,
               this.identity.sha,
@@ -105,13 +132,24 @@ export class BareRepoReader implements RepoReader {
             ]),
             {
               cwd: this.mirrorPath,
-              timeout: 10_000,
+              timeout: SEARCH_TIMEOUT_MS,
               maxBuffer: 2 * 1024 * 1024,
             },
           );
         } catch (error) {
           if (error instanceof Error && /exit code 1$/i.test(error.message)) {
             return [];
+          }
+          // A timed-out search is not worth retrying: the next attempt scans
+          // the same tree and dies at the same limit, which is what turned one
+          // slow grep into a run that respawned every minute. Tell the caller
+          // to narrow the query instead of letting it loop.
+          if (isTimeout(error)) {
+            throw new RepoReaderError(
+              'SEARCH_TIMEOUT',
+              SEARCH_TIMEOUT_MESSAGE,
+              false,
+            );
           }
           throw error;
         }
@@ -164,7 +202,10 @@ export class BareRepoReader implements RepoReader {
     }
   }
 
-  private async measured<T>(operation: () => Promise<T>): Promise<T> {
+  private async measured<T>(
+    operationName: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
     const startedAt = this.now();
     try {
       return await operation();
@@ -174,6 +215,7 @@ export class BareRepoReader implements RepoReader {
           this.telemetry.localRead(
             this.telemetryContext,
             this.now() - startedAt,
+            operationName,
           );
         } catch {
           // Observability must never change repository-read behavior.

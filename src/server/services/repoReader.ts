@@ -8,7 +8,8 @@ export type RepoReaderErrorCode =
   | 'ACCESS_DENIED'
   | 'LOCAL_READ_UNAVAILABLE'
   | 'PROFILE_UNAVAILABLE'
-  | 'REMOTE_SEARCH_DISABLED';
+  | 'REMOTE_SEARCH_DISABLED'
+  | 'SEARCH_TIMEOUT';
 
 export class RepoReaderError extends Error {
   constructor(

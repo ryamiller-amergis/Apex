@@ -109,6 +109,8 @@ function statusForCode(code: RepoReaderError['code']): number {
       return 409;
     case 'LOCAL_READ_UNAVAILABLE':
       return 404;
+    case 'SEARCH_TIMEOUT':
+      return 504;
     default: {
       const exhaustive: never = code;
       return exhaustive;

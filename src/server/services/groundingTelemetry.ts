@@ -124,7 +124,11 @@ export interface GroundingTelemetry {
   /** Narrow post-mirror progress markers (activate / shared / per-run). */
   phase(context: GroundingTelemetryContext, phase: string): void;
   bundle(context: GroundingTelemetryContext, hit: boolean): void;
-  localRead(context: GroundingTelemetryContext, durationMs: number): void;
+  localRead(
+    context: GroundingTelemetryContext,
+    durationMs: number,
+    operation?: string
+  ): void;
   fallback(context: GroundingTelemetryContext, reason: string): void;
   drift(context: GroundingTelemetryContext): void;
   staleness(
@@ -194,8 +198,12 @@ export function createGroundingTelemetry(
         { hit: hit ? 1 : 0 }
       );
     },
-    localRead(context, durationMs) {
-      emit('grounding.read.latency', properties(context), { durationMs });
+    localRead(context, durationMs, operation) {
+      emit(
+        'grounding.read.latency',
+        properties(context, operation ? { operation } : undefined),
+        { durationMs }
+      );
     },
     fallback(context, reason) {
       emit('grounding.fallback', properties(context, { reason }), {
