@@ -70,12 +70,14 @@ import standupRouter from './routes/standup';
 import featureFlagRoutes from './routes/featureFlags';
 import observabilityRoutes from './routes/observability';
 import featureRequestRoutes from './routes/featureRequests';
+import apexWorkItemsRoutes from './routes/apexWorkItems';
 import askApexRoutes from './routes/askApex';
 import { standupScheduler } from './services/standupScheduler';
 import { aiCostScheduler } from './services/aiCostScheduler';
 import { apiKeyExpiryNotificationScheduler } from './services/apiKeyExpiryNotificationScheduler';
 import { foundationSkillScanScheduler } from './services/foundationSkillScanScheduler';
 import { groundingMaintenanceScheduler } from './services/groundingMaintenanceScheduler';
+import { workBoardScheduler } from './services/workBoardScheduler';
 import { createSessionOptions, createSessionStore } from './sessionStore';
 import {
   isInteractiveGatewayEnabled,
@@ -255,6 +257,7 @@ app.use('/api/observability', ensureAuthenticated, observabilityRoutes);
 app.use('/api/ui-lab', ensureAuthenticated, uiLabRoutes);
 app.use('/api/pdf', pdfRoutes);
 app.use('/api/feature-requests', ensureAuthenticated, featureRequestRoutes);
+app.use('/api/apex-work-items', ensureAuthenticated, apexWorkItemsRoutes);
 app.use('/api/profile', ensureAuthenticated, profileRoutes);
 app.use('/api/ask-apex', ensureAuthenticated, askApexRoutes);
 app.use('/api/design-modules', ensureAuthenticated, designModuleRoutes);
@@ -427,6 +430,9 @@ const server = app.listen(PORT, () => {
 
   groundingMaintenanceScheduler.start();
   console.log('Grounding maintenance scheduler started');
+
+  workBoardScheduler.start();
+  console.log('Work board due-soon scheduler started');
 
   startPdfProcessingPoller();
 

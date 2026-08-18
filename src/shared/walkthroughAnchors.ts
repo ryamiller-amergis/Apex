@@ -139,6 +139,27 @@ const DOM_MARKER_ENTRIES: readonly WalkthroughAnchorRegistryEntry[] = Object.fre
     targetRoute: '/profile',
     allowedPlacements: Object.freeze(['top', 'bottom'] as WalkthroughRegistryPlacement[]),
   }),
+  Object.freeze({
+    key: 'work-board-view',
+    testId: 'work-board-view',
+    label: 'Work Board — root view',
+    targetRoute: '/work-board',
+    allowedPlacements: Object.freeze(['bottom', 'top', 'left', 'right'] as WalkthroughRegistryPlacement[]),
+  }),
+  Object.freeze({
+    key: 'work-board-lens-toggle',
+    testId: 'work-board-lens-toggle',
+    label: 'Work Board — status / release lens',
+    targetRoute: '/work-board',
+    allowedPlacements: Object.freeze(['bottom', 'top', 'left', 'right'] as WalkthroughRegistryPlacement[]),
+  }),
+  Object.freeze({
+    key: 'work-board-backlog-toggle',
+    testId: 'work-board-backlog-toggle',
+    label: 'Work Board — board / backlog toggle',
+    targetRoute: '/work-board',
+    allowedPlacements: Object.freeze(['bottom', 'top', 'left', 'right'] as WalkthroughRegistryPlacement[]),
+  }),
 ]);
 
 const DOM_BY_KEY = new Map(DOM_MARKER_ENTRIES.map((e) => [e.key, e]));

@@ -21,6 +21,13 @@ jest.mock('../useChangelog', () => ({
   }),
 }));
 
+// useAppShell now consumes useProjectMenuConfig, which fires its own
+// /api/menu-config fetch via TanStack Query. Mock it so it does not consume
+// the sequential fetch mocks these tests rely on for auth + permissions.
+jest.mock('../useProjectMenuConfig', () => ({
+  useProjectMenuConfig: () => ({ enabledViews: [], isLoading: false }),
+}));
+
 jest.mock('../../config/env', () => ({
   env: { VITE_TEAMS: 'ProjectA|ProjectA/Team1~~~ProjectB|ProjectB/Team2' },
 }));

@@ -5,6 +5,14 @@ import { format, parse, startOfWeek, getDay } from 'date-fns';
 import enUSLocale from 'date-fns/locale/en-US';
 import { WorkItem } from '../types/workitem';
 import { getAssigneeColor, getEpicColor } from '../utils/assigneeColors';
+import {
+  clearAllDraggedWorkItems,
+  getDraggedCalendarItem,
+  getDraggedWorkItem,
+  setDraggedCalendarItem,
+  setDraggedWorkItem,
+  writeDraggedWorkItemToTransfer,
+} from '../dnd/workItemDragState';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
 import 'react-big-calendar/lib/addons/dragAndDrop/styles.css';
 import './ScrumCalendar.css';
@@ -240,10 +248,10 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
               overlay.remove();
             });
             
-            (window as any).__DRAGGED_WORK_ITEM__ = event.resource;
-            (window as any).__DRAGGED_CALENDAR_ITEM__ = event.resource;
+            setDraggedWorkItem(event.resource);
+            setDraggedCalendarItem(event.resource);
             if (e.dataTransfer) {
-              e.dataTransfer.effectAllowed = 'move';
+              writeDraggedWorkItemToTransfer(e.dataTransfer, event.resource);
             }
           }
         }
@@ -251,8 +259,7 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
     };
 
     const handlePopupDragEnd = () => {
-      (window as any).__DRAGGED_WORK_ITEM__ = null;
-      (window as any).__DRAGGED_CALENDAR_ITEM__ = null;
+      clearAllDraggedWorkItems();
     };
 
     document.addEventListener('dragstart', handlePopupDragStart);
@@ -273,7 +280,6 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
     const year = start.getFullYear();
     const month = start.getMonth();
     const day = start.getDate();
-    const dropDate = new Date(year, month, day);
     
     // Format as YYYY-MM-DD
     const newDate = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
@@ -291,24 +297,8 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
       currentDate = event.resource.dueDate;
     }
     
-    console.log('Drop event:', { 
-      start, 
-      year,
-      month,
-      day,
-      dropDate,
-      newDate, 
-      currentDate,
-      workItemId: event.resource.id,
-      state: workItemState,
-      type: workItemType,
-      isTestOrBlockedState,
-      usesTargetDate
-    });
-    
     // Only update if the date actually changed
     if (newDate === currentDate) {
-      console.log('Date unchanged, skipping update');
       return;
     }
 
@@ -320,45 +310,26 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
     // Debounce the update slightly to prevent rapid-fire updates
     updateTimeoutRef.current = setTimeout(() => {
       if (isTestOrBlockedState && onUpdateField) {
-        console.log('Updating QA Complete Date:', event.resource.id, newDate);
         onUpdateField(event.resource.id, 'qaCompleteDate', newDate);
       } else if (usesTargetDate && onUpdateField) {
-        console.log('Updating Target Date:', event.resource.id, newDate);
         onUpdateField(event.resource.id, 'targetDate', newDate);
       } else {
-        console.log('Updating due date:', event.resource.id, newDate);
         onUpdateDueDate(event.resource.id, newDate);
       }
     }, 100);
   }, [onUpdateDueDate, onUpdateField]);
 
   const handleEventDragStart = useCallback((event: CalendarEvent) => {
-    (window as any).__DRAGGED_CALENDAR_ITEM__ = event.resource;
+    setDraggedCalendarItem(event.resource);
   }, []);
 
   const handleDropFromOutside = useCallback(({ start }: any) => {
     // This handles drops from external sources (unscheduled items or popup events)
-    const draggedItem = (window as any).__DRAGGED_WORK_ITEM__ || (window as any).__DRAGGED_CALENDAR_ITEM__;
+    const draggedItem = getDraggedWorkItem() || getDraggedCalendarItem();
     
     if (!draggedItem) {
       return;
     }
-
-    console.log('=== handleDropFromOutside ===');
-    console.log('Start Date Object:', start);
-    console.log('Start ISO:', start.toISOString());
-    console.log('Start UTC:', {
-      year: start.getUTCFullYear(),
-      month: start.getUTCMonth(),
-      day: start.getUTCDate(),
-      hours: start.getUTCHours()
-    });
-    console.log('Start Local:', {
-      year: start.getFullYear(),
-      month: start.getMonth(),
-      day: start.getDate(),
-      hours: start.getHours()
-    });
 
     // Handle timezone issues by using UTC components or local components based on what we receive
     // If the date is UTC midnight, we need to use UTC methods
@@ -366,13 +337,11 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
     
     if (start.getUTCHours() === 0 && start.getUTCMinutes() === 0) {
       // Date is UTC midnight, use UTC components
-      console.log('Using UTC components (UTC midnight detected)');
       year = start.getUTCFullYear();
       month = start.getUTCMonth();
       day = start.getUTCDate();
     } else {
       // Use local components
-      console.log('Using Local components');
       year = start.getFullYear();
       month = start.getMonth();
       day = start.getDate();
@@ -385,9 +354,6 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
     const isTestOrBlockedState = workItemState === 'Ready For Test' || workItemState === 'In Test' || workItemState === 'Blocked';
     const usesTargetDate = workItemType === 'Epic' || workItemType === 'Feature' || workItemType === 'Bug';
     
-    console.log('Formatted Date:', newDate);
-    console.log('Calling update with:', { workItemId: draggedItem.id, newDate, state: workItemState, type: workItemType, isTestOrBlockedState, usesTargetDate });
-    
     if (isTestOrBlockedState && onUpdateField) {
       onUpdateField(draggedItem.id, 'qaCompleteDate', newDate);
     } else if (usesTargetDate && onUpdateField) {
@@ -396,9 +362,7 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
       onUpdateDueDate(draggedItem.id, newDate);
     }
     
-    // Clear the dragged item references
-    (window as any).__DRAGGED_WORK_ITEM__ = null;
-    (window as any).__DRAGGED_CALENDAR_ITEM__ = null;
+    clearAllDraggedWorkItems();
   }, [onUpdateDueDate, onUpdateField]);
 
   // Helper function to check if item is overdue and in active work state
@@ -444,11 +408,6 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
     const isPBI = event.resource.workItemType === 'Product Backlog Item';
     const isTBI = event.resource.workItemType === 'Technical Backlog Item';
     const overdue = isItemOverdue(event.resource);
-    
-    // Debug: Check if tags are present
-    if (event.resource.tags) {
-      console.log(`Item #${event.resource.id} has tags:`, event.resource.tags);
-    }
     
     return (
       <div>
@@ -592,7 +551,7 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
           <button
             className="overdue-toggle-btn"
             onClick={() => setIsOverdueExpanded(!isOverdueExpanded)}
-          >
+           {...{ 'data-testid': 'scrum-calendar-overdue-toggle-btn' }}>
             <span className="overdue-badge">{overdueItems.length}</span>
             <span className="overdue-toggle-label">
               Overdue Work Items
@@ -627,7 +586,7 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
                     key={item.id}
                     className="overdue-item-row"
                     onClick={() => onSelectItem(item)}
-                  >
+                   {...{ 'data-testid': `scrum-calendar-overdue-item-row-${item.id}` }}>
                     <span className="overdue-col-item">
                       <span className="overdue-item-id">#{item.id}</span>
                       <span className="overdue-item-title">{item.title}</span>
@@ -660,7 +619,7 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
               onSelectItem(null as any);
             }}
             className="filter-select"
-          >
+           {...{ 'data-testid': 'scrum-calendar-work-item-type-select' }}>
             <option value="">All Types</option>
             {workItemTypeOptions.map(type => (
               <option key={type} value={type}>
@@ -684,7 +643,7 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
               onSelectItem(null as any);
             }}
             className="filter-select"
-          >
+           {...{ 'data-testid': 'scrum-calendar-state-select' }}>
             <option value="">All States</option>
             {stateOptions.map(state => (
               <option key={state} value={state}>{state}</option>
@@ -701,7 +660,7 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
               onSelectItem(null as any);
             }}
             className="filter-select"
-          >
+           {...{ 'data-testid': 'scrum-calendar-iteration-select' }}>
             <option value="">All Iterations</option>
             {iterationOptions.map(iteration => (
               <option key={iteration} value={iteration}>{iteration}</option>
@@ -718,7 +677,7 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
               onSelectItem(null as any); // Close details panel
             }}
             className="filter-select"
-          >
+           {...{ 'data-testid': 'scrum-calendar-assigned-to-select' }}>
             <option value="">All</option>
             {assignedToOptions.map(person => (
               <option key={person} value={person}>{person}</option>
@@ -735,7 +694,7 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
               setSelectedIteration('');
               onSelectItem(null as any); // Close details panel
             }}
-          >
+           {...{ 'data-testid': 'scrum-calendar-clear-filters-btn' }}>
             Clear
           </button>
         )}
@@ -748,7 +707,7 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
               className="collapse-btn"
               onClick={() => setIsUnscheduledCollapsed(!isUnscheduledCollapsed)}
               aria-label={isUnscheduledCollapsed ? 'Expand' : 'Collapse'}
-            >
+             {...{ 'data-testid': 'scrum-calendar-collapse-btn' }}>
               {isUnscheduledCollapsed ? '▼' : '▲'}
             </button>
           </div>
@@ -768,7 +727,7 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
                   className="unscheduled-item"
                   onClick={() => onSelectItem(item)}
                   style={{ cursor: 'pointer' }}
-                >
+                 {...{ 'data-testid': `scrum-calendar-unscheduled-item-${item.id}` }}>
                   <div className="unscheduled-item-header">
                     <div className="unscheduled-item-icons">
                       {isEpic && <span style={{ marginRight: '4px' }}>👑</span>}

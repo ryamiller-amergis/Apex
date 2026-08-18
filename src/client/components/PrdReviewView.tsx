@@ -67,6 +67,7 @@ import { AnnotationLayer } from './AnnotationLayer';
 import { ReviewerApprovalChecklist } from './ReviewerApprovalChecklist';
 import { ReviewCommentSidebar } from './ReviewCommentSidebar';
 import { BacklogViewer } from './BacklogViewer';
+import { ApexMaterializeModal } from './ApexMaterializeModal';
 import { CreateAdoItemsModal } from './CreateAdoItemsModal';
 import { ApexFixRunningBanner } from './ApexFixRunningBanner';
 import { RunGroundingStatus } from './RunGroundingStatus';
@@ -513,11 +514,80 @@ const PrdReadinessPanel: React.FC<{
   );
 };
 
+// ── Apex Work Board: Create Work Items button for approved PRDs ───────────────
+
+const ApexMaterializeModalTrigger: React.FC<{
+  project: string;
+  prdId: string;
+  prdTitle: string;
+  backlogJson: unknown;
+}> = ({ project, prdId, prdTitle, backlogJson }) => {
+  const [open, setOpen] = useState(false);
+  const backlog = backlogJson as { epics?: { id: string; title: string; features?: { id: string; title: string; items?: { id: string; title: string; type: string; description?: string; acceptanceCriteria?: string[] }[] }[] }[] };
+  if (!backlog?.epics?.length) return null;
+  return (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '8px 0 16px' }}>
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '7px 14px',
+            borderRadius: 8,
+            border: 'none',
+            background: 'var(--accent-color)',
+            color: 'var(--on-accent)',
+            fontSize: '0.8125rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+          }}
+         {...{ 'data-testid': 'prd-review-button-btn' }}>
+          <svg width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.2" viewBox="0 0 13 13">
+            <rect x="1.5" y="1.5" width="10" height="10" rx="2" />
+            <path d="M6.5 4v5M4 6.5h5" />
+          </svg>
+          Create Work Items
+        </button>
+      </div>
+      {open && (
+        <ApexMaterializeModal
+          project={project}
+          prdId={prdId}
+          prdTitle={prdTitle}
+          backlog={{
+            epics: (backlog.epics ?? []).map((e) => ({
+              id: e.id ?? e.title,
+              title: e.title,
+              features: (e.features ?? []).map((f) => ({
+                id: f.id ?? f.title,
+                title: f.title,
+                items: (f.items ?? [])
+                  .filter((i) => i.type === 'PBI' || i.type === 'TBI')
+                  .map((i) => ({
+                    id: i.id ?? i.title,
+                    title: i.title,
+                    description: i.description,
+                    type: i.type as 'PBI' | 'TBI',
+                    acceptanceCriteria: i.acceptanceCriteria,
+                  })),
+              })),
+            })),
+          }}
+          onClose={() => setOpen(false)}
+         {...{ 'data-testid': 'prd-review-apex-materialize-modal' }} />
+      )}
+    </>
+  );
+};
+
 export const PrdReviewView: React.FC = () => {
   const location = useLocation();
   const id = location.pathname.split('/').pop() ?? null;
   const navigate = useNavigate();
-  const { can, userId, isAdmin } = useAppShell();
+  const { can, userId, isAdmin, isSuperAdmin, selectedProject } = useAppShell();
 
   const queryClient = useQueryClient();
   const { data: prd, isLoading, isError } = usePrd(id);
@@ -2884,6 +2954,14 @@ export const PrdReviewView: React.FC = () => {
             {activeTab === 'backlog' && (
               <div className={styles.previewWithSidebar}>
                 <div className={styles.backlogView}>
+                  {(isSuperAdmin || can('work-board:manage')) && !!prd.backlogJson && prd.status === 'approved' && (
+                    <ApexMaterializeModalTrigger
+                      project={prd.project || selectedProject || 'Apex'}
+                      prdId={id!}
+                      prdTitle={prd.title}
+                      backlogJson={prd.backlogJson}
+                    />
+                  )}
                   {prd.backlogJson ? (
                     showCommentLayer ? (
                       <AnnotationLayer

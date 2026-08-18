@@ -9,8 +9,8 @@ import {
 } from '../../shared/types/menuSettings';
 
 describe('menuSettings shared types', () => {
-  it('CONFIGURABLE_MENU_ITEMS has exactly 14 entries', () => {
-    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(14);
+  it('CONFIGURABLE_MENU_ITEMS has exactly 15 entries', () => {
+    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(15);
   });
 
   it('contains the expected keys in order', () => {
@@ -30,6 +30,7 @@ describe('menuSettings shared types', () => {
       'design-module',
       'load-tests',
       'diagrams',
+      'work-board',
     ]);
   });
 
@@ -50,6 +51,7 @@ describe('menuSettings shared types', () => {
       'Design Module',
       'Load Tests',
       'Diagrams',
+      'Work Board',
     ]);
   });
 
