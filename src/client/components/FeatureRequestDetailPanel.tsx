@@ -115,7 +115,7 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
   isReanalyzing,
 }) => {
   const navigate = useNavigate();
-  const { can, isSuperAdmin, isInAnyGroup, permissionsLoaded, selectedProject } = useAppShell();
+  const { can, isSuperAdmin, isInAnyGroup, permissionsLoaded, selectedProject, workBoardEnabled } = useAppShell();
   const canKickOff = permissionsLoaded
     && can('interviews:manage')
     && isInAnyGroup(['BA', 'Manager', 'Product-Owner']);
@@ -310,7 +310,7 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
                 {fr.aiStatus === 'analyzing' ? 'Analyzing…' : 'Re-analyze'}
               </button>
             )}
-            {isSuperAdmin && fr.status !== 'declined' && (
+            {workBoardEnabled && isSuperAdmin && fr.status !== 'declined' && (
               <button
                 className={styles['secondaryAction']}
                 type="button"

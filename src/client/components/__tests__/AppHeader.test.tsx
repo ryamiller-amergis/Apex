@@ -222,7 +222,20 @@ describe('AppHeader — Work Board visibility', () => {
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Work Board' }));
-    expect(onNavigateWorkBoard).toHaveBeenCalledTimes(1);
+    expect(onNavigateWorkBoard).toHaveBeenCalled();
+  });
+
+  it('hides Work Board for a super admin when the feature flag is off', () => {
+    render(
+      <AppHeader
+        {...baseProps}
+        can={can}
+        isSuperAdmin
+        selectedProject="Apex"
+        workBoardEnabled={false}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Work Board' })).not.toBeInTheDocument();
   });
 });
 

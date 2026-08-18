@@ -11,7 +11,6 @@ import {
 } from '../hooks/useDevWorkbench';
 import { useApexBacklogFeatures } from '../hooks/useApexBacklog';
 import { useAssignedBoardItems } from '../hooks/useApexWorkItems';
-import { useProjectMenuConfig } from '../hooks/useProjectMenuConfig';
 import type { ApexWorkItem } from '../../shared/types/apexWorkItem';
 import { STATUS_META } from '../../shared/types/apexWorkItem';
 import type { BacklogFeatureItem, ActiveDevSession, ApexBacklogGroup } from '../../shared/types/devWorkbench';
@@ -28,10 +27,6 @@ import {
 import StartLocalDevModal, { type StartLocalDevTarget } from './StartLocalDevModal';
 import FeatureContextModal from './FeatureContextModal';
 import styles from './DevWorkbenchView.module.css';
-
-function usesBoardProject(project: string | null | undefined, enabledViews: string[]): boolean {
-  return enabledViews.includes('work-board') || (project?.toLowerCase() === 'apex');
-}
 
 const BoardAssignedSection: React.FC<{ project: string }> = ({ project }) => {
   const navigate = useNavigate();
@@ -577,10 +572,9 @@ const ApexBacklogView: React.FC<{
 
 export const DevWorkbenchView: React.FC = () => {
   const navigate = useNavigate();
-  const { selectedProject, isSuperAdmin } = useAppShell();
-  const { enabledViews } = useProjectMenuConfig(selectedProject);
+  const { selectedProject, isSuperAdmin, usesBoardWorkItems } = useAppShell();
   const usesAppNativeRequirements = isAppNativeRequirementsProject(selectedProject);
-  const showBoardAssigned = usesBoardProject(selectedProject, enabledViews);
+  const showBoardAssigned = usesBoardWorkItems;
 
   const { data: workItems, isLoading, error } = useAssignedWorkItems(
     usesAppNativeRequirements || showBoardAssigned ? null : (selectedProject || null),

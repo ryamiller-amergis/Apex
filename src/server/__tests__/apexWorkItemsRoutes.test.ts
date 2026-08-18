@@ -5,6 +5,9 @@
 import request from 'supertest';
 import express from 'express';
 import apexWorkItemsRouter from '../routes/apexWorkItems';
+import { isFeatureEnabled } from '../services/featureFlagService';
+
+const mockIsFeatureEnabled = isFeatureEnabled as jest.Mock;
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -84,6 +87,10 @@ jest.mock('../services/apexWorkBoardBus', () => ({
   emitBoardChange: jest.fn(),
 }));
 
+jest.mock('../services/featureFlagService', () => ({
+  isFeatureEnabled: jest.fn().mockResolvedValue(true),
+}));
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function buildApp(userOid = 'user-1') {
@@ -103,6 +110,10 @@ function buildApp(userOid = 'user-1') {
 
 const PROJECT = 'Apex';
 const q = `project=${encodeURIComponent(PROJECT)}`;
+
+beforeEach(() => {
+  mockIsFeatureEnabled.mockResolvedValue(true);
+});
 
 const MOCK_ITEM = {
   id: 'item-1',
@@ -409,5 +420,17 @@ describe('POST /api/apex-work-items/create-from-drafts', () => {
       });
     expect(res.status).toBe(201);
     expect(res.body.created).toHaveLength(1);
+  });
+});
+
+describe('work-board feature flag', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns 404 when the flag is off', async () => {
+    mockIsFeatureEnabled.mockResolvedValue(false);
+    const res = await request(buildApp()).get(`/api/apex-work-items/owners?${q}`);
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/not found/i);
+    expect(mockListOwners).not.toHaveBeenCalled();
   });
 });

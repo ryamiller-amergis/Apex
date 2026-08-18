@@ -587,7 +587,7 @@ export const PrdReviewView: React.FC = () => {
   const location = useLocation();
   const id = location.pathname.split('/').pop() ?? null;
   const navigate = useNavigate();
-  const { can, userId, isAdmin, isSuperAdmin, selectedProject } = useAppShell();
+  const { can, userId, isAdmin, isSuperAdmin, selectedProject, workBoardEnabled } = useAppShell();
 
   const queryClient = useQueryClient();
   const { data: prd, isLoading, isError } = usePrd(id);
@@ -2954,7 +2954,7 @@ export const PrdReviewView: React.FC = () => {
             {activeTab === 'backlog' && (
               <div className={styles.previewWithSidebar}>
                 <div className={styles.backlogView}>
-                  {(isSuperAdmin || can('work-board:manage')) && !!prd.backlogJson && prd.status === 'approved' && (
+                  {workBoardEnabled && (isSuperAdmin || can('work-board:manage')) && !!prd.backlogJson && prd.status === 'approved' && (
                     <ApexMaterializeModalTrigger
                       project={prd.project || selectedProject || 'Apex'}
                       prdId={id!}

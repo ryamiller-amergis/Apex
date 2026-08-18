@@ -372,7 +372,10 @@ function expandPrdAndEpic() {
 }
 
 function mockApexWorkbenchHooks(project = 'Apex') {
-  (useAppShell as jest.Mock).mockReturnValue({ selectedProject: project });
+  (useAppShell as jest.Mock).mockReturnValue({
+    selectedProject: project,
+    usesBoardWorkItems: project.toLowerCase() === 'apex',
+  });
   (useProjectMenuConfig as jest.Mock).mockReturnValue({
     enabledViews: [],
     isLoading: false,
