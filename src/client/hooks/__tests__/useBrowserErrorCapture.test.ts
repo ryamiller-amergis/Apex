@@ -32,4 +32,27 @@ describe('useBrowserErrorCapture (VT-11)', () => {
       }
     }
   });
+
+  it('allocates a fresh W3C trace ID when no active request trace exists', () => {
+    const enqueue = jest.fn();
+    renderHook(() =>
+      useBrowserErrorCapture(true, {
+        enqueue,
+        getTraceId: () => null,
+        getRouteTemplate: () => '/home',
+      }),
+    );
+
+    act(() => {
+      reportCaughtClientError(new Error('orphan error'), 'boundary');
+      reportCaughtClientError(new Error('second orphan'), 'boundary');
+    });
+
+    const ids = (enqueue.mock.calls as [BrowserTraceEventCandidate][]).map(([event]) => event.traceId);
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).toMatch(/^[0-9a-f]{32}$/);
+    expect(ids[1]).toMatch(/^[0-9a-f]{32}$/);
+    expect(ids[0]).not.toBe('4bf92f3577b34da6a3ce929d0e0e4736');
+    expect(ids[0]).not.toBe(ids[1]);
+  });
 });

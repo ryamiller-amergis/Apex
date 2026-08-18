@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { generateSpanId } from '../../shared/utils/w3cTrace';
+import { generateSpanId, generateTraceId } from '../../shared/utils/w3cTrace';
 import { normalizeApexRouteTemplate } from '../../shared/utils/observabilityRouteRegistry';
 import { projectBrowserError } from '../../shared/utils/browserErrorProjection';
 import { setBrowserErrorReporter } from '../observability/clientErrorReporter';
@@ -21,7 +21,7 @@ function toEvent(
   return {
     type,
     occurredAt: new Date().toISOString(),
-    traceId: traceId ?? '4bf92f3577b34da6a3ce929d0e0e4736',
+    traceId: traceId ?? generateTraceId(),
     spanId: generateSpanId(),
     routeTemplate: normalizeApexRouteTemplate(api.getRouteTemplate()),
     severity: 'error',
