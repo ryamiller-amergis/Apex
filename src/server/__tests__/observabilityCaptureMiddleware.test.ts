@@ -131,6 +131,8 @@ describe('observabilityCapturePolicy', () => {
   it('VT-02 parses W3C traceparent and normalizes Express route templates', () => {
     expect(parseTraceIdFromTraceparent(TRACEPARENT)).toBe(VALID_TRACE_ID);
     expect(parseTraceIdFromTraceparent('not-a-trace')).toBeNull();
+    expect(parseTraceIdFromTraceparent(`00-${'0'.repeat(32)}-00f067aa0ba902b7-01`)).toBeNull();
+    expect(parseTraceIdFromTraceparent(`ff-${VALID_TRACE_ID}-00f067aa0ba902b7-01`)).toBeNull();
     const req = makeReq({
       baseUrl: '/api/projects',
       path: '/abc',

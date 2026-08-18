@@ -162,8 +162,8 @@ export function createObservabilityCaptureService(
     }
   }
 
-  async function runFlush(): Promise<void> {
-    if (!isCaptureEnabled() || stopped) return;
+  async function runFlush(options?: { drain?: boolean }): Promise<void> {
+    if (!options?.drain && (!isCaptureEnabled() || stopped)) return;
     const batch = queue.splice(0, CAPTURE_FLUSH_BATCH_SIZE);
     if (batch.length === 0) return;
     const started = now();
@@ -172,9 +172,13 @@ export function createObservabilityCaptureService(
     emitMetric('observability.capture.buffer_depth', { depth: queue.length });
   }
 
-  function requestFlush(): Promise<void> {
-    if (flushInFlight) return flushInFlight;
-    const pending = runFlush().catch(() => undefined).finally(() => {
+  function requestFlush(options?: { drain?: boolean }): Promise<void> {
+    if (flushInFlight) {
+      return flushInFlight.then(() => {
+        if (options?.drain && queue.length > 0) return requestFlush(options);
+      });
+    }
+    const pending = runFlush(options).catch(() => undefined).finally(() => {
       if (flushInFlight === pending) flushInFlight = null;
     });
     flushInFlight = pending;
@@ -183,7 +187,7 @@ export function createObservabilityCaptureService(
 
   function capture(candidate: ServerTraceCandidate): CaptureDisposition {
     try {
-      if (!isCaptureEnabled()) return 'disabled';
+      if (stopped || !isCaptureEnabled()) return 'disabled';
 
       const safe = toSafeTraceEvent(toCandidateForRedaction(candidate));
       if (queue.length >= CAPTURE_BUFFER_CAPACITY) {
@@ -225,7 +229,13 @@ export function createObservabilityCaptureService(
       clearInterval(timer);
       timer = null;
     }
-    const drain = requestFlush();
+    const drain = (async () => {
+      while (queue.length > 0) {
+        const remaining = queue.length;
+        await requestFlush({ drain: true });
+        if (queue.length >= remaining) break;
+      }
+    })();
     await Promise.race([
       drain,
       delay(shutdownDrainMs),

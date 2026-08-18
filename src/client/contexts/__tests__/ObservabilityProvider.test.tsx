@@ -8,6 +8,7 @@ import { useFeatureFlag } from '../../hooks/useFeatureFlags';
 import { sendBrowserBatch } from '../../observability/browserTransport';
 import { resetRequestInstrumentationForTests } from '../../observability/requestInstrumentation';
 import { reportCaughtClientError } from '../../observability/clientErrorReporter';
+import { SELECTED_PROJECT_CHANGE_EVENT } from '../../utils/apiFetch';
 
 jest.mock('../../hooks/useFeatureFlags', () => ({
   useFeatureFlag: jest.fn(),
@@ -45,6 +46,7 @@ describe('ObservabilityProvider', () => {
     resetRequestInstrumentationForTests();
     window.fetch = originalFetch ?? (jest.fn() as unknown as typeof fetch);
     mockSend.mockClear();
+    localStorage.removeItem('selectedProject');
   });
 
   it('VT-09 / BR-010 installs nothing when the capture flag is disabled', async () => {
@@ -82,5 +84,27 @@ describe('ObservabilityProvider', () => {
   it('VT-04 flushes on pagehide without throwing', () => {
     view = renderProvider(true);
     expect(() => window.dispatchEvent(new Event('pagehide'))).not.toThrow();
+  });
+
+  it('follows selectedProject changes without polling localStorage', () => {
+    localStorage.setItem('selectedProject', 'Apex');
+    mockFlag.mockReturnValue(false);
+    const intervalSpy = jest.spyOn(window, 'setInterval');
+    view = render(
+      <MemoryRouter initialEntries={['/home']}>
+        <ObservabilityProvider>
+          <div>child</div>
+        </ObservabilityProvider>
+      </MemoryRouter>,
+    );
+    const pollingTimers = intervalSpy.mock.calls.filter((call) => call[1] === 1000);
+    expect(pollingTimers).toHaveLength(0);
+    intervalSpy.mockRestore();
+
+    localStorage.setItem('selectedProject', 'MaxView');
+    act(() => {
+      window.dispatchEvent(new Event(SELECTED_PROJECT_CHANGE_EVENT));
+    });
+    expect(mockFlag).toHaveBeenCalledWith('observability-capture', 'MaxView');
   });
 });

@@ -8,6 +8,33 @@ import {
 } from '../requestInstrumentation';
 import { parseTraceparent } from '../../../shared/utils/w3cTrace';
 
+class TestRequest {
+  url: string;
+  headers: Headers;
+  method: string;
+
+  constructor(input: string | TestRequest, init?: RequestInit) {
+    if (typeof input === 'string') {
+      this.url = input;
+      this.headers = new Headers(init?.headers);
+      this.method = init?.method ?? 'GET';
+      return;
+    }
+    this.url = input.url;
+    this.method = init?.method ?? input.method;
+    this.headers = new Headers(input.headers);
+    if (init?.headers) {
+      new Headers(init.headers).forEach((value, name) => {
+        this.headers.set(name, value);
+      });
+    }
+  }
+}
+
+if (typeof globalThis.Request === 'undefined') {
+  (globalThis as unknown as { Request: typeof Request }).Request = TestRequest as unknown as typeof Request;
+}
+
 describe('request instrumentation (S5)', () => {
   const originalFetch = window.fetch;
   let restore: () => void;
@@ -61,5 +88,26 @@ describe('request instrumentation (S5)', () => {
     await window.fetch('/api/projects', { headers: { traceparent: existing } });
     const headers = new Headers((fetchFn.mock.calls[0][1] as RequestInit).headers);
     expect(headers.get('traceparent')).toBe(existing);
+  });
+
+  it('keeps injected traceparent when fetch is given a Request plus init.headers', async () => {
+    const fetchFn = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+    window.fetch = fetchFn as unknown as typeof fetch;
+    restore = installRequestInstrumentation({
+      getTraceId: () => '4bf92f3577b34da6a3ce929d0e0e4736',
+      origin: 'https://apex.example',
+    });
+
+    const request = new Request('https://apex.example/api/projects', {
+      headers: { accept: 'application/json' },
+    });
+    await window.fetch(request, { headers: { authorization: 'Bearer test' } });
+
+    const passed = fetchFn.mock.calls[0][0] as Request;
+    expect(fetchFn.mock.calls[0][1]).toBeUndefined();
+    const headers = new Headers(passed.headers);
+    expect(parseTraceparent(headers.get('traceparent'))?.traceId).toBe('4bf92f3577b34da6a3ce929d0e0e4736');
+    expect(headers.get('accept')).toBe('application/json');
+    expect(headers.get('authorization')).toBe('Bearer test');
   });
 });

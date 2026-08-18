@@ -4,6 +4,7 @@
  */
 import type { Request } from 'express';
 import { normalizeRouteTemplate } from '../../shared/utils/traceRedaction';
+import { parseTraceparent } from '../../shared/utils/w3cTrace';
 
 const EXCLUDED_PREFIXES = [
   '/api/observability',
@@ -65,10 +66,6 @@ export function resolveCaptureProject(req: Request): string | undefined {
   return undefined;
 }
 
-const TRACEPARENT_RE = /^[\da-f]{2}-([\da-f]{32})-[\da-f]{16}-[\da-f]{2}$/i;
-
 export function parseTraceIdFromTraceparent(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const match = TRACEPARENT_RE.exec(value.trim());
-  return match?.[1]?.toLowerCase() ?? null;
+  return parseTraceparent(value)?.traceId ?? null;
 }

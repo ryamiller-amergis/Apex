@@ -90,8 +90,13 @@ function wrappedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Res
   const traceparent = formatTraceparent(traceId, generateSpanId());
   if (typeof Request !== 'undefined' && input instanceof Request) {
     const headers = new Headers(input.headers);
+    if (init?.headers) {
+      new Headers(init.headers).forEach((value, name) => {
+        headers.set(name, value);
+      });
+    }
     headers.set('traceparent', traceparent);
-    return fetchFn(new Request(input, { headers }), init);
+    return fetchFn(new Request(input, { ...init, headers }));
   }
   return fetchFn(input, withTraceparent(init, traceparent));
 }

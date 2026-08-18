@@ -38,6 +38,7 @@ function createService(options?: {
   enabled?: boolean;
   insert?: jest.Mock;
   retryDelayMs?: number;
+  shutdownDrainMs?: number;
   now?: () => number;
 }) {
   const insertBatch =
@@ -48,7 +49,7 @@ function createService(options?: {
     isCaptureEnabled: () => enabled,
     insertBatch,
     retryDelayMs: options?.retryDelayMs ?? 0,
-    shutdownDrainMs: 0,
+    shutdownDrainMs: options?.shutdownDrainMs ?? 0,
     now: options?.now,
   });
   return {
@@ -300,5 +301,19 @@ describe('observabilityCaptureService', () => {
     samples.sort((a, b) => a - b);
     const p95 = samples[Math.floor(samples.length * 0.95)] ?? 0;
     expect(p95).toBeLessThan(5);
+  });
+
+  it('drains queued events on stop after the interval is cleared', async () => {
+    const { service, insertBatch } = createService({ shutdownDrainMs: 1_000 });
+    service.start();
+    expect(service.capture(candidate())).toBe('queued');
+    expect(service.getHealth().bufferDepth).toBe(1);
+
+    await service.stop();
+
+    expect(insertBatch).toHaveBeenCalledTimes(1);
+    expect(service.getHealth().bufferDepth).toBe(0);
+    expect(service.getHealth().persistedEvents).toBe(1);
+    expect(service.capture(candidate())).toBe('disabled');
   });
 });

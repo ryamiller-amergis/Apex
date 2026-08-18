@@ -11,6 +11,10 @@ import {
   OBSERVABILITY_CAPTURE_FLAG,
   type BrowserTraceEventCandidate,
 } from '../../shared/types/observability';
+import {
+  getSelectedApexProject,
+  SELECTED_PROJECT_CHANGE_EVENT,
+} from '../utils/apiFetch';
 
 export interface ObservabilityProviderProps {
   project?: string;
@@ -19,16 +23,21 @@ export interface ObservabilityProviderProps {
 
 function useResolvedProject(project: string | undefined): string | undefined {
   const [stored, setStored] = useState<string | undefined>(
-    () => project ?? (typeof localStorage === 'undefined' ? undefined : localStorage.getItem('selectedProject') ?? undefined),
+    () => project ?? getSelectedApexProject() ?? undefined,
   );
 
   useEffect(() => {
     if (project) return undefined;
-    const timerId = window.setInterval(() => {
-      const next = localStorage.getItem('selectedProject') ?? undefined;
+    const sync = () => {
+      const next = getSelectedApexProject() ?? undefined;
       setStored((prev) => (prev === next ? prev : next));
-    }, 1000);
-    return () => window.clearInterval(timerId);
+    };
+    window.addEventListener('storage', sync);
+    window.addEventListener(SELECTED_PROJECT_CHANGE_EVENT, sync);
+    return () => {
+      window.removeEventListener('storage', sync);
+      window.removeEventListener(SELECTED_PROJECT_CHANGE_EVENT, sync);
+    };
   }, [project]);
 
   return project ?? stored;

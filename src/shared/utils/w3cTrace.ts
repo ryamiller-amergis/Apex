@@ -24,16 +24,20 @@ export function generateHexId(byteCount: number): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
+function generateNonZeroHexId(byteCount: number, allZero: string): string {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const id = generateHexId(byteCount);
+    if (id !== allZero) return id;
+  }
+  return `1${allZero.slice(1)}`;
+}
+
 export function generateTraceId(): string {
-  let id = generateHexId(16);
-  if (id === ALL_ZERO_TRACE_ID) id = generateHexId(16);
-  return id === ALL_ZERO_TRACE_ID ? '4bf92f3577b34da6a3ce929d0e0e4736' : id;
+  return generateNonZeroHexId(16, ALL_ZERO_TRACE_ID);
 }
 
 export function generateSpanId(): string {
-  let id = generateHexId(8);
-  if (id === ALL_ZERO_SPAN_ID) id = generateHexId(8);
-  return id === ALL_ZERO_SPAN_ID ? '00f067aa0ba902b7' : id;
+  return generateNonZeroHexId(8, ALL_ZERO_SPAN_ID);
 }
 
 export function isValidTraceId(value: unknown): value is string {

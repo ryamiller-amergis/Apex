@@ -43,6 +43,25 @@ describe('W3C helpers (S1 / VT-01)', () => {
     expect(isValidTraceId('00000000000000000000000000000000')).toBe(false);
     expect(isValidSpanId('0000000000000000')).toBe(false);
   });
+
+  it('retries all-zero randomness instead of using a well-known example ID', () => {
+    const spy = jest.spyOn(globalThis.crypto, 'getRandomValues').mockImplementation(((array: ArrayBufferView | null) => {
+      if (!array) return array;
+      const bytes = new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
+      bytes.fill(0);
+      return array;
+    }) as typeof crypto.getRandomValues);
+    try {
+      const traceId = generateTraceId();
+      const spanId = generateSpanId();
+      expect(isValidTraceId(traceId)).toBe(true);
+      expect(isValidSpanId(spanId)).toBe(true);
+      expect(traceId).not.toBe('4bf92f3577b34da6a3ce929d0e0e4736');
+      expect(spanId).not.toBe('00f067aa0ba902b7');
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 
 describe('route registry (S1 / VT-08 / AC-3)', () => {
