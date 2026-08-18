@@ -90,19 +90,19 @@ export const ApexWorkItemCard: React.FC<ApexWorkItemCardProps> = ({
       role="button"
       aria-label={`${item.title}, ${item.type}, ${STATUS_META[item.status].label}`}
       aria-pressed={selectMode ? selected : undefined}
-    >
+     {...{ 'data-testid': 'work-item-card-card' }}>
       {selectMode && (
         <div
           style={{ marginBottom: 6 }}
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
-        >
+         {...{ 'data-testid': 'work-item-card-div' }}>
           <input
             type="checkbox"
             checked={selected}
             onChange={() => onToggleSelect?.(item.id)}
             aria-label={`Select APX-${item.itemNumber}`}
-            data-testid={`work-board-select-${item.id}`}
+            {...{ 'data-testid': `work-board-select-${item.id}` }}
           />
         </div>
       )}
@@ -197,13 +197,13 @@ export const ApexWorkItemCard: React.FC<ApexWorkItemCardProps> = ({
         className={styles.moveMenu}
         ref={menuRef}
         onClick={(e) => e.stopPropagation()}
-      >
+       {...{ 'data-testid': 'work-item-card-move-menu' }}>
         <button
           className={styles.moveMenuBtn}
           aria-label="Move to another status"
           title="Move to"
           onClick={(e) => { e.stopPropagation(); setMenuOpen((p) => !p); }}
-        >
+         {...{ 'data-testid': 'work-item-card-move-to-another-status-btn' }}>
           ⋯
         </button>
         {menuOpen && (
@@ -218,7 +218,7 @@ export const ApexWorkItemCard: React.FC<ApexWorkItemCardProps> = ({
                   setMenuOpen(false);
                   onMove(item.id, s);
                 }}
-              >
+               {...{ 'data-testid': `work-item-card-move-menu-option-${s}` }}>
                 <span
                   style={{
                     width: 8,

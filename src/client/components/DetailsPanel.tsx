@@ -575,12 +575,12 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
         <h3>Work Item Details</h3>
         {isSaving && <span className="saving-badge">Saving...</span>}
         {navigationHistory.length > 0 && (
-          <button onClick={handleBackToPrevious} className="back-to-epic-btn" title="Go back to previous work item">
+          <button onClick={handleBackToPrevious} className="back-to-epic-btn" title="Go back to previous work item" {...{ 'data-testid': 'details-panel-go-back-to-previous-work-item-btn' }}>
             Back
           </button>
         )}
         {parentEpicId && !navigationHistory.length && (
-          <button onClick={handleBackToEpic} className="back-to-epic-btn" title="Back to Epic">
+          <button onClick={handleBackToEpic} className="back-to-epic-btn" title="Back to Epic" {...{ 'data-testid': 'details-panel-back-to-epic-btn' }}>
             Back to Epic
           </button>
         )}
@@ -591,14 +591,14 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
             onClick={() => onOpenAssistant(workItem.id, workItem.title)}
             title="Open Work-Item Assistant — AI-propose Description / Acceptance Criteria changes"
             aria-label="Open Work-Item Assistant"
-          >
+           {...{ 'data-testid': 'details-panel-open-work-item-assistant-btn' }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
             </svg>
             Assistant
           </button>
         )}
-        <button onClick={onClose} className="close-btn">
+        <button onClick={onClose} className="close-btn" {...{ 'data-testid': 'details-panel-close-btn' }}>
           ×
         </button>
       </div>
@@ -623,7 +623,7 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
                       className="tag-remove-btn"
                       onClick={() => handleRemoveTag(tag.trim())}
                       title="Remove tag"
-                    >
+                     {...{ 'data-testid': 'details-panel-remove-tag-btn' }}>
                       ×
                     </button>
                   )}
@@ -645,12 +645,12 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
                       handleAddTag();
                     }
                   }}
-                />
+                 {...{ 'data-testid': 'details-panel-add-tag-input' }} />
                 <button 
                   className="tag-add-btn"
                   onClick={handleAddTag}
                   disabled={!newTag.trim()}
-                >
+                 {...{ 'data-testid': 'details-panel-tag-add-btn' }}>
                   Add
                 </button>
               </div>
@@ -674,7 +674,7 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
             value={workItem.state}
             onChange={(e) => handleFieldChange('state', e.target.value)}
             disabled={!onUpdateField}
-          >
+           {...{ 'data-testid': 'details-panel-detail-select' }}>
             {uniqueStates.map(state => (
               <option key={state} value={state}>{state}</option>
             ))}
@@ -687,7 +687,7 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
             value={workItem.assignedTo || ''}
             onChange={(e) => handleFieldChange('assignedTo', e.target.value || undefined)}
             disabled={!onUpdateField}
-          >
+           {...{ 'data-testid': 'details-panel-detail-select-2' }}>
             <option value="">Unassigned</option>
             {uniqueAssignees.map(assignee => (
               <option key={assignee} value={assignee}>{assignee}</option>
@@ -705,9 +705,9 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
                     className="detail-date-input"
                     value={tempDueDate}
                     onChange={(e) => setTempDueDate(e.target.value)}
-                  />
-                  <button onClick={handleDueDateSave} className="date-save-btn">✓</button>
-                  <button onClick={handleDueDateCancel} className="date-cancel-btn">✕</button>
+                   {...{ 'data-testid': 'details-panel-detail-date-input' }} />
+                  <button onClick={handleDueDateSave} className="date-save-btn" {...{ 'data-testid': 'details-panel-date-save-btn' }}>✓</button>
+                  <button onClick={handleDueDateCancel} className="date-cancel-btn" {...{ 'data-testid': 'details-panel-date-cancel-btn' }}>✕</button>
                 </div>
                 {showReasonInput && (
                   <div className="detail-reason-input">
@@ -717,7 +717,7 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
                       value={dueDateReason}
                       onChange={(e) => setDueDateReason(e.target.value)}
                       autoFocus
-                    >
+                     {...{ 'data-testid': 'details-panel-reason-select' }}>
                       <option value="">Select a reason...</option>
                       <option value="Scope change">Scope change</option>
                       <option value="Dependencies">Dependencies</option>
@@ -734,17 +734,17 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
                         value={customReason}
                         onChange={(e) => setCustomReason(e.target.value)}
                         rows={3}
-                      />
+                       {...{ 'data-testid': 'details-panel-please-specify-the-reason-textarea' }} />
                     )}
                     <div className="reason-buttons">
                       <button 
                         onClick={handleDueDateSave} 
                         className="reason-confirm-btn"
                         disabled={!dueDateReason || (dueDateReason === 'Other' && !customReason.trim())}
-                      >
+                       {...{ 'data-testid': 'details-panel-reason-confirm-btn' }}>
                         Confirm Change
                       </button>
-                      <button onClick={handleDueDateCancel} className="reason-cancel-btn">
+                      <button onClick={handleDueDateCancel} className="reason-cancel-btn" {...{ 'data-testid': 'details-panel-reason-cancel-btn' }}>
                         Cancel
                       </button>
                     </div>
@@ -754,9 +754,9 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
             ) : (
               <div className="detail-date-display">
                 <span className="detail-value">{workItem.dueDate || 'Not set'}</span>
-                <button onClick={handleDueDateEdit} className="date-edit-btn">Edit</button>
+                <button onClick={handleDueDateEdit} className="date-edit-btn" {...{ 'data-testid': 'details-panel-date-edit-btn' }}>Edit</button>
                 {workItem.dueDate && (
-                  <button onClick={handleRemoveDueDate} className="date-remove-btn">Remove</button>
+                  <button onClick={handleRemoveDueDate} className="date-remove-btn" {...{ 'data-testid': 'details-panel-date-remove-btn' }}>Remove</button>
                 )}
               </div>
             )}
@@ -772,16 +772,16 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
                   className="detail-date-input"
                   value={tempQADate}
                   onChange={(e) => setTempQADate(e.target.value)}
-                />
-                <button onClick={handleQADateSave} className="date-save-btn">✓</button>
-                <button onClick={handleQADateCancel} className="date-cancel-btn">✕</button>
+                 {...{ 'data-testid': 'details-panel-detail-date-input-2' }} />
+                <button onClick={handleQADateSave} className="date-save-btn" {...{ 'data-testid': 'details-panel-date-save-btn-2' }}>✓</button>
+                <button onClick={handleQADateCancel} className="date-cancel-btn" {...{ 'data-testid': 'details-panel-date-cancel-btn-2' }}>✕</button>
               </div>
             ) : (
               <div className="detail-date-display">
                 <span className="detail-value">{workItem.qaCompleteDate || 'Not set'}</span>
-                <button onClick={handleQADateEdit} className="date-edit-btn">Edit</button>
+                <button onClick={handleQADateEdit} className="date-edit-btn" {...{ 'data-testid': 'details-panel-date-edit-btn-2' }}>Edit</button>
                 {workItem.qaCompleteDate && (
-                  <button onClick={handleRemoveQADate} className="date-remove-btn">Remove</button>
+                  <button onClick={handleRemoveQADate} className="date-remove-btn" {...{ 'data-testid': 'details-panel-date-remove-btn-2' }}>Remove</button>
                 )}
               </div>
             )}
@@ -797,9 +797,9 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
                   className="detail-date-input"
                   value={tempTargetDate}
                   onChange={(e) => setTempTargetDate(e.target.value)}
-                />
-                <button onClick={handleTargetDateSave} className="date-save-btn">✓</button>
-                <button onClick={handleTargetDateCancel} className="date-cancel-btn">✕</button>
+                 {...{ 'data-testid': 'details-panel-detail-date-input-3' }} />
+                <button onClick={handleTargetDateSave} className="date-save-btn" {...{ 'data-testid': 'details-panel-date-save-btn-3' }}>✓</button>
+                <button onClick={handleTargetDateCancel} className="date-cancel-btn" {...{ 'data-testid': 'details-panel-date-cancel-btn-3' }}>✕</button>
               </div>
             ) : (
               <div className="detail-date-display">
@@ -810,9 +810,9 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
                 }}>
                   {workItem.targetDate || 'Not set'}
                 </span>
-                <button onClick={handleTargetDateEdit} className="date-edit-btn">Edit</button>
+                <button onClick={handleTargetDateEdit} className="date-edit-btn" {...{ 'data-testid': 'details-panel-date-edit-btn-3' }}>Edit</button>
                 {workItem.targetDate && (
-                  <button onClick={handleRemoveTargetDate} className="date-remove-btn">Remove</button>
+                  <button onClick={handleRemoveTargetDate} className="date-remove-btn" {...{ 'data-testid': 'details-panel-date-remove-btn-3' }}>Remove</button>
                 )}
               </div>
             )}
@@ -831,7 +831,7 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
             <div 
               className="related-items-header"
               onClick={() => setShowRelatedItems(!showRelatedItems)}
-            >
+             {...{ 'data-testid': 'details-panel-related-items-header' }}>
               <span className="related-items-title">
                 {showRelatedItems ? '▼' : '▶'} Related Items ({relatedItems.length})
               </span>
@@ -849,7 +849,7 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
                         key={item.id} 
                         className="related-item"
                         onClick={() => handleRelatedItemSelect(item)}
-                      >
+                       {...{ 'data-testid': `details-panel-related-item-${item.id}` }}>
                         <div className="related-item-header">
                           <span className="related-item-id">#{item.id}</span>
                           <span className="related-item-type">{item.workItemType}</span>
@@ -878,7 +878,7 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
             <div 
               className="related-items-header"
               onClick={() => setShowDueDateChanges(!showDueDateChanges)}
-            >
+             {...{ 'data-testid': 'details-panel-related-items-header-2' }}>
               <span className="related-items-title">
                 {showDueDateChanges ? '▼' : '▶'} Due Date Changes ({dueDateChanges.length})
               </span>
@@ -919,7 +919,7 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
           <div 
             className="link-to-release-header"
             onClick={() => setShowLinkToEpic(!showLinkToEpic)}
-          >
+           {...{ 'data-testid': 'details-panel-link-to-release-header' }}>
             <span className="link-to-release-title">
               {showLinkToEpic ? '▼' : '▶'} Link to Release Epic
             </span>
@@ -941,7 +941,7 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
                       className="btn-unlink"
                       onClick={() => setShowUnlinkConfirmModal(true)}
                       title="Remove link to this release epic"
-                    >
+                     {...{ 'data-testid': 'details-panel-remove-link-to-this-release-epic-btn' }}>
                       🗑️
                     </button>
                   </div>
@@ -972,7 +972,7 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
                     value={selectedEpicId || ''}
                     onChange={(e) => setSelectedEpicId(e.target.value ? parseInt(e.target.value) : null)}
                     disabled={isLinkingToEpic}
-                  >
+                   {...{ 'data-testid': 'details-panel-link-select' }}>
                     <option value="">-- Select a release --</option>
                     {availableReleaseEpics.map(epic => (
                       <option key={epic.id} value={epic.id}>
@@ -984,7 +984,7 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
                     className="link-button"
                     onClick={() => setShowLinkConfirmModal(true)}
                     disabled={!selectedEpicId || isLinkingToEpic}
-                  >
+                   {...{ 'data-testid': 'details-panel-link-button-btn' }}>
                     Link to Release
                   </button>
                   <div className="link-info">
@@ -998,11 +998,11 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
 
         {/* Confirmation Modal */}
         {showLinkConfirmModal && selectedEpicId && (
-          <div className="modal-overlay" onClick={() => setShowLinkConfirmModal(false)}>
-            <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-overlay" onClick={() => setShowLinkConfirmModal(false)} {...{ 'data-testid': 'details-panel-modal-overlay' }}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()} {...{ 'data-testid': 'details-panel-modal-content' }}>
               <div className="modal-header">
                 <h3>Confirm Link to Release</h3>
-                <button className="modal-close" onClick={() => setShowLinkConfirmModal(false)}>✕</button>
+                <button className="modal-close" onClick={() => setShowLinkConfirmModal(false)} {...{ 'data-testid': 'details-panel-modal-close-btn' }}>✕</button>
               </div>
               <div className="modal-body">
                 <div className="modal-icon">🔗</div>
@@ -1028,14 +1028,14 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
                   className="modal-btn modal-btn-cancel" 
                   onClick={() => setShowLinkConfirmModal(false)}
                   disabled={isLinkingToEpic}
-                >
+                 {...{ 'data-testid': 'details-panel-modal-btn-cancel' }}>
                   Cancel
                 </button>
                 <button 
                   className="modal-btn modal-btn-confirm" 
                   onClick={handleLinkToReleaseEpic}
                   disabled={isLinkingToEpic}
-                >
+                 {...{ 'data-testid': 'details-panel-modal-btn-confirm' }}>
                   {isLinkingToEpic ? 'Linking...' : 'Confirm Link'}
                 </button>
               </div>
@@ -1045,11 +1045,11 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
 
         {/* Unlink Confirmation Modal */}
         {showUnlinkConfirmModal && currentParentEpic && (
-          <div className="modal-overlay" onClick={() => setShowUnlinkConfirmModal(false)}>
-            <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-overlay" onClick={() => setShowUnlinkConfirmModal(false)} {...{ 'data-testid': 'details-panel-modal-overlay-2' }}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()} {...{ 'data-testid': 'details-panel-modal-content-2' }}>
               <div className="modal-header">
                 <h3>Confirm Unlink from Release</h3>
-                <button className="modal-close" onClick={() => setShowUnlinkConfirmModal(false)}>✕</button>
+                <button className="modal-close" onClick={() => setShowUnlinkConfirmModal(false)} {...{ 'data-testid': 'details-panel-modal-close-btn-2' }}>✕</button>
               </div>
               <div className="modal-body">
                 <div className="modal-icon modal-icon-danger">🗑️</div>
@@ -1073,14 +1073,14 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
                   className="modal-btn modal-btn-cancel" 
                   onClick={() => setShowUnlinkConfirmModal(false)}
                   disabled={isUnlinking}
-                >
+                 {...{ 'data-testid': 'details-panel-modal-btn-cancel-2' }}>
                   Cancel
                 </button>
                 <button 
                   className="modal-btn modal-btn-danger" 
                   onClick={handleUnlinkFromReleaseEpic}
                   disabled={isUnlinking}
-                >
+                 {...{ 'data-testid': 'details-panel-modal-btn-danger' }}>
                   {isUnlinking ? 'Unlinking...' : 'Remove Link'}
                 </button>
               </div>
@@ -1099,7 +1099,7 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
             value={workItem.iterationPath}
             onChange={(e) => handleFieldChange('iterationPath', e.target.value)}
             disabled={!onUpdateField}
-          >
+           {...{ 'data-testid': 'details-panel-detail-select-3' }}>
             {uniqueIterations.map(iteration => (
               <option key={iteration} value={iteration}>{iteration}</option>
             ))}
@@ -1111,43 +1111,43 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
           {/* PBI Fields: Description, Acceptance Criteria, Discussions */}
           {workItem.workItemType === 'Product Backlog Item' && (
             <>
-              <RichTextField label="Description" content={workItem.description} defaultExpanded={true} />
-              <RichTextField label="Acceptance Criteria" content={workItem.acceptanceCriteria} />
-              <RichTextField label="Discussions" content={isLoadingDiscussions ? 'Loading discussions...' : discussions} />
+              <RichTextField label="Description" content={workItem.description} defaultExpanded={true}  {...{ 'data-testid': 'details-panel-description-rich-text-field' }} />
+              <RichTextField label="Acceptance Criteria" content={workItem.acceptanceCriteria}  {...{ 'data-testid': 'details-panel-acceptance-criteria-rich-text-field' }} />
+              <RichTextField label="Discussions" content={isLoadingDiscussions ? 'Loading discussions...' : discussions}  {...{ 'data-testid': 'details-panel-discussions-rich-text-field' }} />
             </>
           )}
 
           {/* Bug Fields: Repro Steps, Discussion */}
           {workItem.workItemType === 'Bug' && (
             <>
-              <RichTextField label="Repro Steps" content={workItem.reproSteps} defaultExpanded={true} />
-              <RichTextField label="Discussion" content={isLoadingDiscussions ? 'Loading discussions...' : discussions} />
+              <RichTextField label="Repro Steps" content={workItem.reproSteps} defaultExpanded={true}  {...{ 'data-testid': 'details-panel-repro-steps-rich-text-field' }} />
+              <RichTextField label="Discussion" content={isLoadingDiscussions ? 'Loading discussions...' : discussions}  {...{ 'data-testid': 'details-panel-discussion-rich-text-field' }} />
             </>
           )}
 
           {/* TBI Fields: Description, Design, Discussion */}
           {workItem.workItemType === 'Technical Backlog Item' && (
             <>
-              <RichTextField label="Description" content={workItem.description} defaultExpanded={true} />
-              <RichTextField label="Design" content={workItem.design} />
-              <RichTextField label="Discussion" content={isLoadingDiscussions ? 'Loading discussions...' : discussions} />
+              <RichTextField label="Description" content={workItem.description} defaultExpanded={true}  {...{ 'data-testid': 'details-panel-description-rich-text-field-2' }} />
+              <RichTextField label="Design" content={workItem.design}  {...{ 'data-testid': 'details-panel-design-rich-text-field' }} />
+              <RichTextField label="Discussion" content={isLoadingDiscussions ? 'Loading discussions...' : discussions}  {...{ 'data-testid': 'details-panel-discussion-rich-text-field-2' }} />
             </>
           )}
 
           {/* Epic Fields: Description, Acceptance Criteria, Discussions */}
           {workItem.workItemType === 'Epic' && (
             <>
-              <RichTextField label="Description" content={workItem.description} defaultExpanded={true} />
-              <RichTextField label="Acceptance Criteria" content={workItem.acceptanceCriteria} />
-              <RichTextField label="Discussions" content={isLoadingDiscussions ? 'Loading discussions...' : discussions} />
+              <RichTextField label="Description" content={workItem.description} defaultExpanded={true}  {...{ 'data-testid': 'details-panel-description-rich-text-field-3' }} />
+              <RichTextField label="Acceptance Criteria" content={workItem.acceptanceCriteria}  {...{ 'data-testid': 'details-panel-acceptance-criteria-rich-text-field-2' }} />
+              <RichTextField label="Discussions" content={isLoadingDiscussions ? 'Loading discussions...' : discussions}  {...{ 'data-testid': 'details-panel-discussions-rich-text-field-2' }} />
             </>
           )}
 
           {/* Feature Fields: Description, Acceptance Criteria */}
           {workItem.workItemType === 'Feature' && (
             <>
-              <RichTextField label="Description" content={workItem.description} defaultExpanded={true} />
-              <RichTextField label="Acceptance Criteria" content={workItem.acceptanceCriteria} />
+              <RichTextField label="Description" content={workItem.description} defaultExpanded={true}  {...{ 'data-testid': 'details-panel-description-rich-text-field-4' }} />
+              <RichTextField label="Acceptance Criteria" content={workItem.acceptanceCriteria}  {...{ 'data-testid': 'details-panel-acceptance-criteria-rich-text-field-3' }} />
             </>
           )}
         </div>
@@ -1158,7 +1158,7 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
             target="_blank"
             rel="noopener noreferrer"
             className="ado-link"
-          >
+           {...{ 'data-testid': 'details-panel-ado-link' }}>
             Open in Azure DevOps →
           </a>
         </div>

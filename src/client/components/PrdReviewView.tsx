@@ -544,7 +544,7 @@ const ApexMaterializeModalTrigger: React.FC<{
             fontWeight: 600,
             cursor: 'pointer',
           }}
-        >
+         {...{ 'data-testid': 'prd-review-button-btn' }}>
           <svg width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.2" viewBox="0 0 13 13">
             <rect x="1.5" y="1.5" width="10" height="10" rx="2" />
             <path d="M6.5 4v5M4 6.5h5" />
@@ -577,7 +577,7 @@ const ApexMaterializeModalTrigger: React.FC<{
             })),
           }}
           onClose={() => setOpen(false)}
-        />
+         {...{ 'data-testid': 'prd-review-apex-materialize-modal' }} />
       )}
     </>
   );

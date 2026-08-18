@@ -98,6 +98,6 @@ Before Phase F3, print:
 - Dispatch one subagent per execution bundle, with different bundles in the same wave running concurrently.
 - Include every task in the bundle, full owning-item contracts, design anchors, matrix rows, file scope, and cross-task contracts.
 - A bundle follows RED → GREEN for its verification-owner rows and runs deterministic checks for enabling-only rows.
-- After each non-final wave, run the lean parent Phase F5 gate: one aggregate focused-test command, matrix coverage, and only the TypeScript config needed by a downstream consumer. Run F6 instead of F5 for the final wave.
+- After each non-final wave, run the lean parent Phase F5 gate: one aggregate focused-test command per Jest project (exact file paths, `--selectProjects`), matrix coverage, and only the TypeScript config needed by a downstream consumer. Run F6 instead of F5 for the final wave.
 - Update matrix rows as `enabled` when only a prerequisite landed; use `covered` only after the verification-owner assertion passes.
 - At completion, account for every implementation step as well as every backlog item and criterion.

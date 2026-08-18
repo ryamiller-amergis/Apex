@@ -221,8 +221,8 @@ export const ApexMaterializeModal: React.FC<ApexMaterializeModalProps> = ({
   };
 
   return (
-    <div className={styles.overlay} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className={styles.modal} role="dialog" aria-modal aria-label="Create Work Items" style={{ maxWidth: 820 }}>
+    <div className={styles.overlay} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }} {...{ 'data-testid': 'materialize-modal-overlay' }}>
+      <div className={styles.modal} role="dialog" aria-modal aria-label="Create Work Items" style={{ maxWidth: 820 }} {...{ 'data-testid': 'materialize-modal-create-work-items' }}>
         <div className={styles.header}>
           <div className={styles.headerText}>
             <h2 className={styles.title}>Create Work Items</h2>
@@ -233,7 +233,7 @@ export const ApexMaterializeModal: React.FC<ApexMaterializeModalProps> = ({
                 : ' No Feature Request linked to this PRD interview.'}
             </p>
           </div>
-          <button className={styles.closeBtn} onClick={onClose} aria-label="Close">
+          <button className={styles.closeBtn} onClick={onClose} aria-label="Close" {...{ 'data-testid': 'materialize-modal-close-btn' }}>
             <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" viewBox="0 0 14 14">
               <path d="M2 2l10 10M12 2L2 12" />
             </svg>
@@ -294,7 +294,7 @@ export const ApexMaterializeModal: React.FC<ApexMaterializeModalProps> = ({
                                   disabled={done}
                                   onChange={() => toggleItem(item.id)}
                                   aria-label={item.title}
-                                />
+                                 {...{ 'data-testid': 'materialize-modal-item-checkbox-input' }} />
                                 <span
                                   className={`${styles.itemType} ${
                                     item.type === 'PBI' ? styles.itemTypePBI
@@ -322,7 +322,7 @@ export const ApexMaterializeModal: React.FC<ApexMaterializeModalProps> = ({
                                       }))
                                     }
                                     aria-label={`Reconcile action for ${item.title}`}
-                                  >
+                                   {...{ 'data-testid': 'materialize-modal-owner-select' }}>
                                     <option value="create">Create new card</option>
                                     <option value="skip">Skip</option>
                                     {plan.candidates.map((c) => (
@@ -344,7 +344,7 @@ export const ApexMaterializeModal: React.FC<ApexMaterializeModalProps> = ({
                                       }))
                                     }
                                     aria-label={`Action for ${item.title}`}
-                                  >
+                                   {...{ 'data-testid': 'materialize-modal-owner-select-2' }}>
                                     <option value="create">Create new card</option>
                                     <option value="skip">Skip</option>
                                   </select>
@@ -396,7 +396,7 @@ export const ApexMaterializeModal: React.FC<ApexMaterializeModalProps> = ({
                 className={styles.ownerSelect}
                 value={ownerId}
                 onChange={(e) => setOwnerId(e.target.value)}
-              >
+               {...{ 'data-testid': 'materialize-modal-owner-select-3' }}>
                 {owners.map((o) => (
                   <option key={o.oid} value={o.oid}>{o.displayName}</option>
                 ))}
@@ -408,12 +408,12 @@ export const ApexMaterializeModal: React.FC<ApexMaterializeModalProps> = ({
                 {selected.size} selected
                 {unresolvedChoose ? ' · resolve Choose rows' : ''}
               </span>
-              <button className={styles.btnSecondary} onClick={onClose}>Cancel</button>
+              <button className={styles.btnSecondary} onClick={onClose} {...{ 'data-testid': 'materialize-modal-btn-secondary' }}>Cancel</button>
               <button
                 className={styles.btnPrimary}
                 disabled={selected.size === 0 || !ownerId || unresolvedChoose || previewMutation.isPending}
                 onClick={handleCreate}
-              >
+               {...{ 'data-testid': 'materialize-modal-btn-primary' }}>
                 Sync to Work Board
               </button>
             </div>
@@ -423,8 +423,8 @@ export const ApexMaterializeModal: React.FC<ApexMaterializeModalProps> = ({
         {phase === 'success' && (
           <div className={styles.footer}>
             <div style={{ flex: 1 }} />
-            <button className={styles.btnSecondary} onClick={onClose}>Close</button>
-            <button className={styles.btnPrimary} onClick={() => navigate('/work-board')}>
+            <button className={styles.btnSecondary} onClick={onClose} {...{ 'data-testid': 'materialize-modal-btn-secondary-2' }}>Close</button>
+            <button className={styles.btnPrimary} onClick={() => navigate('/work-board')} {...{ 'data-testid': 'materialize-modal-btn-primary-2' }}>
               Open Work Board
             </button>
           </div>

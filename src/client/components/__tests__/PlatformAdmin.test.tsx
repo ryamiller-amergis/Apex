@@ -30,6 +30,22 @@ import type {
 } from '../../../shared/types/platformAdmin';
 import type { FeatureFlagWithRules } from '../../../shared/types/featureFlags';
 
+const mockUseFeatureFlag = jest.fn(() => false);
+const mockUseAppShell = jest.fn(() => ({ selectedProject: 'MaxView', isSuperAdmin: true }));
+
+jest.mock('../../hooks/useFeatureFlags', () => ({
+  useFeatureFlag: () => mockUseFeatureFlag(),
+  useFeatureFlags: () => ({ flags: {}, isLoading: false }),
+}));
+
+jest.mock('../../hooks/useAppShell', () => ({
+  useAppShell: () => mockUseAppShell(),
+}));
+
+jest.mock('../ObservabilityWorkspace', () => ({
+  ObservabilityWorkspace: () => <div data-testid="observability-workspace">workspace</div>,
+}));
+
 jest.mock('../UserMenu', () => ({
   UserMenu: () => <div data-testid="user-menu" />,
 }));
@@ -238,6 +254,8 @@ function setupPlatformAdmin(
 describe('PlatformAdmin user-project access', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockUseFeatureFlag.mockReturnValue(false);
+    mockUseAppShell.mockReturnValue({ selectedProject: 'MaxView', isSuperAdmin: true });
   });
 
   it('lets a super admin find and select users before saving assignments', async () => {
@@ -634,6 +652,8 @@ describe('PlatformAdmin — APEX Skills tab', () => {
 describe('PlatformAdmin walkthroughs tab', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockUseFeatureFlag.mockReturnValue(false);
+    mockUseAppShell.mockReturnValue({ selectedProject: 'MaxView', isSuperAdmin: true });
   });
 
   it('renders walkthrough catalog when walkthroughs tab is selected', async () => {
@@ -643,5 +663,37 @@ describe('PlatformAdmin walkthroughs tab', () => {
     await user.click(screen.getByTestId('platform-admin-tab-walkthroughs'));
 
     expect(screen.getByTestId('walkthrough-catalog')).toBeInTheDocument();
+  });
+});
+
+describe('PlatformAdmin observability tab', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockUseFeatureFlag.mockReturnValue(false);
+    mockUseAppShell.mockReturnValue({ selectedProject: 'MaxView', isSuperAdmin: true });
+  });
+
+  it('PBI-003 AC-3 / TC-PBI-003-005 hides Observability when observability-viewer is disabled', () => {
+    mockUseFeatureFlag.mockReturnValue(false);
+    setupPlatformAdmin();
+    expect(screen.queryByTestId('platform-admin-tab-observability')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('observability-workspace')).not.toBeInTheDocument();
+  });
+
+  it('PBI-003 AC-3 / TC-PBI-003-004 hides Observability when the caller is not a Super Admin', () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockUseAppShell.mockReturnValue({ selectedProject: 'MaxView', isSuperAdmin: false });
+    setupPlatformAdmin();
+    expect(screen.queryByTestId('platform-admin-tab-observability')).not.toBeInTheDocument();
+  });
+
+  it('PBI-003 AC-0 shows the lazy Observability workspace for an enabled Super Admin', async () => {
+    const user = userEvent.setup();
+    mockUseFeatureFlag.mockReturnValue(true);
+    setupPlatformAdmin();
+    expect(screen.getByTestId('platform-admin-tab-observability')).toBeInTheDocument();
+    await user.click(screen.getByTestId('platform-admin-tab-observability'));
+    expect(screen.getByTestId('platform-admin-panel-observability')).toBeInTheDocument();
+    expect(screen.getByTestId('observability-workspace')).toBeInTheDocument();
   });
 });

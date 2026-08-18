@@ -595,13 +595,13 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
 
   if (isLoading || !item) {
     return (
-      <div className={styles.overlay} ref={overlayRef} onClick={handleOverlayClick}>
+      <div className={styles.overlay} ref={overlayRef} onClick={handleOverlayClick} {...{ 'data-testid': 'work-item-detail-overlay' }}>
         <aside
           className={`${styles.drawer} ${isResizing ? styles.drawerResizing : ''}`}
           style={{ width: drawerWidth }}
           role="dialog"
           aria-label="Work item details"
-        >
+         {...{ 'data-testid': 'work-item-detail-work-item-details-drawer' }}>
           <div
             className={styles.resizeHandle}
             onMouseDown={handleResizeMouseDown}
@@ -624,14 +624,14 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
   };
 
   return (
-    <div className={styles.overlay} ref={overlayRef} onClick={handleOverlayClick}>
+    <div className={styles.overlay} ref={overlayRef} onClick={handleOverlayClick} {...{ 'data-testid': 'work-item-detail-overlay-2' }}>
       <aside
         className={`${styles.drawer} ${isResizing ? styles.drawerResizing : ''}`}
         style={drawerStyle}
         role="dialog"
         aria-modal
         aria-label="Work item details"
-      >
+       {...{ 'data-testid': 'work-item-detail-work-item-details-drawer-2' }}>
         <div
           className={styles.resizeHandle}
           onMouseDown={handleResizeMouseDown}
@@ -653,7 +653,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
                 </span>
               )}
             </div>
-            <button className={styles.closeBtn} onClick={onClose} aria-label="Close">
+            <button className={styles.closeBtn} onClick={onClose} aria-label="Close" {...{ 'data-testid': 'work-item-detail-close-btn' }}>
               <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" viewBox="0 0 14 14">
                 <path d="M2 2l10 10M12 2L2 12" />
               </svg>
@@ -676,7 +676,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
                     aria-haspopup="listbox"
                     aria-expanded={ownerMenuOpen}
                     aria-label={`Owner ${ownerName}. Click to change`}
-                    data-testid="work-item-owner-chip"
+                    {...{ 'data-testid': 'work-item-owner-chip' }}
                   >
                     <span className={styles.avatar}>{initials(ownerName)}</span>
                     <span className={styles.ownerChipName}>{ownerName}</span>
@@ -685,7 +685,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
                     </svg>
                   </button>
                   {ownerMenuOpen && (
-                    <div className={styles.ownerMenu} role="listbox" data-testid="work-item-owner-menu">
+                    <div className={styles.ownerMenu} role="listbox" {...{ 'data-testid': 'work-item-owner-menu' }}>
                       {owners.map((o) => (
                         <button
                           key={o.oid}
@@ -700,7 +700,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
                             }
                             setOwnerMenuOpen(false);
                           }}
-                          data-testid={`work-item-owner-option-${o.oid}`}
+                          {...{ 'data-testid': `work-item-owner-option-${o.oid}` }}
                         >
                           <span className={styles.avatar}>{initials(o.displayName)}</span>
                           <span className={styles.ownerChipName}>{o.displayName}</span>
@@ -732,7 +732,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
               value={pendingReleaseId}
               onChange={(e) => { setPendingReleaseId(e.target.value); setDirty(true); }}
               aria-label="Target release"
-              data-testid="work-item-release-select"
+              {...{ 'data-testid': 'work-item-release-select' }}
             >
               <option value="">No release</option>
               {releases.map((r) => (
@@ -752,7 +752,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
                 className={`${styles.statusBtn} ${item.status === s ? styles.statusBtnActive : ''}`}
                 style={{ ['--status-color' as string]: STATUS_COLOR_VARS[s] }}
                 onClick={() => handleStatusChange(s)}
-              >
+               {...{ 'data-testid': `work-item-detail-status-btn-${s}` }}>
                 <span
                   style={{
                     width: 8,
@@ -769,14 +769,14 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
           </div>
         </header>
 
-        <nav className={styles.sectionNav} aria-label="Work item sections" data-testid="work-item-section-nav">
+        <nav className={styles.sectionNav} aria-label="Work item sections" {...{ 'data-testid': 'work-item-section-nav' }}>
           {PRIMARY_SECTIONS.map((s) => (
             <button
               key={s.id}
               type="button"
               className={`${styles.sectionChip} ${activeSection === s.id ? styles.sectionChipActive : ''}`}
               onClick={() => scrollToSection(s.id)}
-              data-testid={`work-item-section-chip-${s.id}`}
+              {...{ 'data-testid': `work-item-section-chip-${s.id}` }}
             >
               {s.label}
             </button>
@@ -788,7 +788,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
               onClick={() => setMoreOpen((o) => !o)}
               aria-expanded={moreOpen}
               aria-haspopup="menu"
-              data-testid="work-item-section-more"
+              {...{ 'data-testid': 'work-item-section-more' }}
             >
               More
             </button>
@@ -801,7 +801,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
                     role="menuitem"
                     className={`${styles.moreMenuItem} ${activeSection === s.id ? styles.moreMenuItemActive : ''}`}
                     onClick={() => scrollToSection(s.id)}
-                    data-testid={`work-item-section-chip-${s.id}`}
+                    {...{ 'data-testid': `work-item-section-chip-${s.id}` }}
                   >
                     {s.label}
                   </button>
@@ -826,7 +826,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
                 onClick={toggleEditingDescription}
                 aria-label={editingDescription ? 'Finish editing description' : 'Edit description'}
                 title={editingDescription ? 'Done' : 'Edit'}
-              >
+               {...{ 'data-testid': 'work-item-detail-section-edit-btn' }}>
                 <PencilIcon />
               </button>
             </div>
@@ -837,7 +837,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
                 onChange={(e) => handleDescriptionChange(e.target.value)}
                 rows={4}
                 placeholder={'As a <role>\nI want <capability>\nSo that <benefit>'}
-              />
+               {...{ 'data-testid': 'work-item-detail-field-textarea' }} />
             ) : (
               <p className={styles.sectionContent}>
                 {editOutcome
@@ -855,7 +855,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
             <div className={styles.sectionHeader}>
               <span className={styles.sectionLabel}>Acceptance Criteria</span>
               <div className={styles.sectionHeaderActions}>
-                <button type="button" className={styles.sectionEditBtn} onClick={handleAcAdd}>
+                <button type="button" className={styles.sectionEditBtn} onClick={handleAcAdd} {...{ 'data-testid': 'work-item-detail-section-edit-btn-2' }}>
                   Add
                 </button>
                 <button
@@ -864,7 +864,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
                   onClick={toggleEditingAc}
                   aria-label={editingAc ? 'Finish editing acceptance criteria' : 'Edit acceptance criteria'}
                   title={editingAc ? 'Done' : 'Edit'}
-                >
+                 {...{ 'data-testid': 'work-item-detail-section-edit-btn-3' }}>
                   <PencilIcon />
                 </button>
               </div>
@@ -888,7 +888,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
                     className={`${styles.acCheckbox} ${c.done ? styles.acCheckboxDone : ''}`}
                     onClick={() => handleAcToggle(c.id)}
                     aria-label={c.done ? 'Mark criterion incomplete' : 'Mark criterion done'}
-                  >
+                   {...{ 'data-testid': 'work-item-detail-ac-checkbox-btn' }}>
                     {c.done && (
                       <svg width="9" height="9" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 9 9">
                         <path d="M1.5 4.5l2 2 4-4" />
@@ -903,14 +903,14 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
                         onChange={(e) => handleAcTextChange(c.id, e.target.value)}
                         rows={3}
                         placeholder={'Given: …\nWhen: …\nThen: …'}
-                      />
+                       {...{ 'data-testid': 'work-item-detail-ac-textarea' }} />
                       <button
                         type="button"
                         className={styles.acRemoveBtn}
                         onClick={() => handleAcRemove(c.id)}
                         aria-label="Delete criterion"
                         title="Delete"
-                      >
+                       {...{ 'data-testid': 'work-item-detail-delete-criterion-btn' }}>
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                           <path d="M3 6h18" />
                           <path d="M8 6V4h8v2" />
@@ -943,7 +943,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
                   value={editBranch}
                   onChange={(e) => { setEditBranch(e.target.value); setDirty(true); }}
                   placeholder="feature/apex-…"
-                />
+                 {...{ 'data-testid': 'work-item-detail-feature-apex-input' }} />
               </label>
               <label className={styles.devField}>
                 <span className={styles.devFieldLabel}>Pull request</span>
@@ -952,9 +952,9 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
                   value={editPrUrl}
                   onChange={(e) => { setEditPrUrl(e.target.value); setDirty(true); }}
                   placeholder="https://…"
-                />
+                 {...{ 'data-testid': 'work-item-detail-https-input' }} />
                 {editPrUrl && (
-                  <a href={editPrUrl} target="_blank" rel="noopener noreferrer" className={styles.fieldLink}>
+                  <a href={editPrUrl} target="_blank" rel="noopener noreferrer" className={styles.fieldLink} {...{ 'data-testid': 'work-item-detail-field-link' }}>
                     <svg width="11" height="11" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 11 11">
                       <path d="M2 9L9 2M5 2h4v4" />
                     </svg>
@@ -969,7 +969,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
             className={sectionClassName('hierarchy')}
             data-section-id="hierarchy"
             id="work-item-section-hierarchy"
-            data-testid="work-item-hierarchy"
+            {...{ 'data-testid': 'work-item-hierarchy' }}
           >
             <span className={styles.sectionLabel}>Hierarchy</span>
             {(item.epicTitle || item.featureTitle) && (
@@ -984,7 +984,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
                   type="button"
                   className={styles.fieldLink}
                   onClick={() => onOpenItem?.(item.parent!.id)}
-                  data-testid="work-item-parent-link"
+                  {...{ 'data-testid': 'work-item-parent-link' }}
                 >
                   APX-{item.parent.itemNumber} · {item.parent.type} · {item.parent.title}
                 </button>
@@ -1004,7 +1004,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
                       type="button"
                       className={styles.fieldLink}
                       onClick={() => onOpenItem?.(child.id)}
-                      data-testid={`work-item-child-${child.id}`}
+                      {...{ 'data-testid': `work-item-child-${child.id}` }}
                     >
                       APX-{child.itemNumber} · {child.type} · {child.title}
                     </button>
@@ -1022,7 +1022,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
             <span className={styles.sectionLabel}>Source &amp; docs</span>
             {(item.documentLinks?.length ?? 0) > 0 || item.featureRequestId || item.prdId ? (
               <>
-                <div className={styles.docLinkGrid} data-testid="work-item-document-links">
+                <div className={styles.docLinkGrid} {...{ 'data-testid': 'work-item-document-links' }}>
                   {(item.documentLinks ?? []).map((link) => (
                     <button
                       key={link.kind}
@@ -1034,7 +1034,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
                       }}
                       disabled={!link.available}
                       title={link.available ? `Open ${link.label}` : `${link.label} not available yet`}
-                      data-testid={`work-item-doc-link-${link.kind}`}
+                      {...{ 'data-testid': `work-item-doc-link-${link.kind}` }}
                     >
                       {link.label}
                     </button>
@@ -1076,7 +1076,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
                           target="_blank"
                           rel="noopener noreferrer"
                           className={styles.fieldLink}
-                          data-testid={`work-item-attachment-link-${a.id}`}
+                          {...{ 'data-testid': `work-item-attachment-link-${a.id}` }}
                         >
                           {a.fileName}
                         </a>
@@ -1094,7 +1094,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
                       onClick={() => setConfirmDeleteAttachmentId(a.id)}
                       aria-label={`Delete attachment ${a.fileName}`}
                       title="Delete attachment"
-                      data-testid={`work-item-attachment-delete-${a.id}`}
+                      {...{ 'data-testid': `work-item-attachment-delete-${a.id}` }}
                     >
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                         <path d="M3 6h18" />
@@ -1116,7 +1116,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
                   handleMetaFileAttach(e.target.files?.[0] ?? null);
                   e.target.value = '';
                 }}
-                data-testid="work-item-attach-file"
+                {...{ 'data-testid': 'work-item-attach-file' }}
               />
             </label>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10 }}>
@@ -1126,7 +1126,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
                 onChange={(e) => setAttachFileName(e.target.value)}
                 placeholder="File name"
                 aria-label="Attachment file name"
-                data-testid="work-item-attach-url-name"
+                {...{ 'data-testid': 'work-item-attach-url-name' }}
               />
               <input
                 className={styles.fieldInput}
@@ -1134,7 +1134,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
                 onChange={(e) => setAttachUrl(e.target.value)}
                 placeholder="https://… or /path"
                 aria-label="Attachment URL"
-                data-testid="work-item-attach-url"
+                {...{ 'data-testid': 'work-item-attach-url' }}
               />
               <button
                 type="button"
@@ -1145,7 +1145,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
                   !attachUrl.trim() ||
                   addAttachment.isPending
                 }
-                data-testid="work-item-attach-url-submit"
+                {...{ 'data-testid': 'work-item-attach-url-submit' }}
               >
                 {addAttachment.isPending ? 'Saving…' : 'Link URL'}
               </button>
@@ -1179,7 +1179,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
               onChange={(e) => setCommentBody(e.target.value)}
               rows={2}
               placeholder="Add a comment… use @Name to mention"
-              data-testid="work-item-comment-input"
+              {...{ 'data-testid': 'work-item-comment-input' }}
             />
             <button
               type="button"
@@ -1187,7 +1187,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
               style={{ marginTop: 8 }}
               onClick={handlePostComment}
               disabled={!commentBody.trim() || addComment.isPending}
-              data-testid="work-item-comment-submit"
+              {...{ 'data-testid': 'work-item-comment-submit' }}
             >
               {addComment.isPending ? 'Posting…' : 'Post comment'}
             </button>
@@ -1225,10 +1225,10 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
               className={styles.btnSave}
               onClick={handleSave}
               disabled={updateMutation.isPending}
-            >
+             {...{ 'data-testid': 'work-item-detail-btn-save' }}>
               {updateMutation.isPending ? 'Saving…' : 'Save Changes'}
             </button>
-            <button className={styles.btnCancel} onClick={handleCancelEdits}>
+            <button className={styles.btnCancel} onClick={handleCancelEdits} {...{ 'data-testid': 'work-item-detail-btn-cancel' }}>
               Cancel
             </button>
           </div>
@@ -1243,7 +1243,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
           isPending={deleteAttachment.isPending}
           onConfirm={() => confirmDeleteAttachment(confirmDeleteAttachmentId)}
           onCancel={() => setConfirmDeleteAttachmentId(null)}
-        />
+         {...{ 'data-testid': 'work-item-detail-delete-attachment-confirm-delete-modal' }} />
       )}
     </div>
   );

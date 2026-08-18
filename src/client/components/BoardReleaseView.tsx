@@ -77,7 +77,7 @@ export const BoardReleaseView: React.FC<BoardReleaseViewProps> = ({ project }) =
   });
 
   return (
-    <div className={styles.container} data-testid="board-release-view">
+    <div className={styles.container} {...{ 'data-testid': 'board-release-view' }}>
       <div className={styles.header}>
         <div>
           <h1 className={styles.title}>Releases</h1>
@@ -126,10 +126,10 @@ export const BoardReleaseView: React.FC<BoardReleaseViewProps> = ({ project }) =
         <section className={styles.panel} aria-labelledby="board-deployments-heading">
           <h2 id="board-deployments-heading">Deployments</h2>
           {canManage && (
-            <form className={styles.form} onSubmit={onSubmit} data-testid="board-record-deployment-form">
+            <form className={styles.form} onSubmit={onSubmit} {...{ 'data-testid': 'board-record-deployment-form' }}>
               <div className={styles.field}>
                 <label htmlFor="board-dep-env">Environment</label>
-                <select id="board-dep-env" {...register('environment')}>
+                <select id="board-dep-env" {...register('environment')} {...{ 'data-testid': 'board-release-board-dep-env-select' }}>
                   <option value="dev">Dev</option>
                   <option value="staging">Staging</option>
                   <option value="prod">Production</option>
@@ -137,12 +137,12 @@ export const BoardReleaseView: React.FC<BoardReleaseViewProps> = ({ project }) =
               </div>
               <div className={styles.field}>
                 <label htmlFor="board-dep-version">Version</label>
-                <input id="board-dep-version" placeholder="e.g. 1.4.0" {...register('version')} />
+                <input id="board-dep-version" placeholder="e.g. 1.4.0" {...register('version')}  {...{ 'data-testid': 'board-release-board-dep-version-input' }} />
                 {errors.version && <span className={styles.error}>{errors.version.message}</span>}
               </div>
               <div className={styles.field}>
                 <label htmlFor="board-dep-release">Release (optional)</label>
-                <select id="board-dep-release" {...register('releaseId')}>
+                <select id="board-dep-release" {...register('releaseId')} {...{ 'data-testid': 'board-release-board-dep-release-select' }}>
                   <option value="">None</option>
                   {(releases ?? []).map((r) => (
                     <option key={r.id} value={r.id}>
@@ -154,7 +154,7 @@ export const BoardReleaseView: React.FC<BoardReleaseViewProps> = ({ project }) =
               </div>
               <div className={styles.field}>
                 <label htmlFor="board-dep-notes">Notes</label>
-                <textarea id="board-dep-notes" {...register('notes')} />
+                <textarea id="board-dep-notes" {...register('notes')}  {...{ 'data-testid': 'board-release-board-dep-notes-textarea' }} />
               </div>
               {(formError || recordDeployment.error) && (
                 <div className={styles.error}>
@@ -166,7 +166,7 @@ export const BoardReleaseView: React.FC<BoardReleaseViewProps> = ({ project }) =
                   type="submit"
                   className={styles.primaryBtn}
                   disabled={isSubmitting || recordDeployment.isPending}
-                >
+                 {...{ 'data-testid': 'board-release-primary-btn' }}>
                   {recordDeployment.isPending ? 'Recording…' : 'Record deployment'}
                 </button>
               </div>

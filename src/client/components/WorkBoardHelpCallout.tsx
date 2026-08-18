@@ -29,7 +29,7 @@ export const WorkBoardHelpCallout: React.FC = () => {
   };
 
   return (
-    <aside className={styles.callout} role="note" data-testid="work-board-help-callout">
+    <aside className={styles.callout} role="note" {...{ 'data-testid': 'work-board-help-callout' }}>
       <div className={styles.body}>
         <strong className={styles.title}>Getting around the Work Board</strong>
         <p className={styles.text}>
@@ -38,7 +38,7 @@ export const WorkBoardHelpCallout: React.FC = () => {
           your board items.
         </p>
       </div>
-      <button type="button" className={styles.dismiss} onClick={dismiss} aria-label="Dismiss help">
+      <button type="button" className={styles.dismiss} onClick={dismiss} aria-label="Dismiss help" {...{ 'data-testid': 'work-board-help-dismiss-help-btn' }}>
         Got it
       </button>
     </aside>

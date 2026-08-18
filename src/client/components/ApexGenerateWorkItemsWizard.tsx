@@ -153,8 +153,8 @@ export const ApexGenerateWorkItemsWizard: React.FC<ApexGenerateWorkItemsWizardPr
   const isReview = phase === 'review';
 
   return (
-    <div className={styles.overlay} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className={styles.modal} role="dialog" aria-modal aria-label="Generate Work Items">
+    <div className={styles.overlay} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }} {...{ 'data-testid': 'generate-work-items-overlay' }}>
+      <div className={styles.modal} role="dialog" aria-modal aria-label="Generate Work Items" {...{ 'data-testid': 'generate-work-items-generate-work-items' }}>
 
         {/* Step indicator */}
         <div className={styles.steps}>
@@ -186,7 +186,7 @@ export const ApexGenerateWorkItemsWizard: React.FC<ApexGenerateWorkItemsWizardPr
               AI will draft work items from this feature request for your review before creating them.
             </p>
           </div>
-          <button className={styles.closeBtn} onClick={onClose} aria-label="Close">
+          <button className={styles.closeBtn} onClick={onClose} aria-label="Close" {...{ 'data-testid': 'generate-work-items-close-btn' }}>
             <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" viewBox="0 0 14 14">
               <path d="M2 2l10 10M12 2L2 12" />
             </svg>
@@ -240,7 +240,7 @@ export const ApexGenerateWorkItemsWizard: React.FC<ApexGenerateWorkItemsWizardPr
                 className={styles.fieldSelect}
                 value={ownerId}
                 onChange={(e) => setOwnerId(e.target.value)}
-              >
+               {...{ 'data-testid': 'generate-work-items-field-select' }}>
                 {owners.map((o) => (
                   <option key={o.oid} value={o.oid}>{o.displayName}</option>
                 ))}
@@ -255,7 +255,7 @@ export const ApexGenerateWorkItemsWizard: React.FC<ApexGenerateWorkItemsWizardPr
                   type="button"
                   className={`${styles.grainOption} ${grain === 'single' ? styles.grainOptionActive : ''}`}
                   onClick={() => setGrain('single')}
-                >
+                 {...{ 'data-testid': 'generate-work-items-grain-option-btn' }}>
                   <span className={styles.grainLabel}>Single item</span>
                   <span className={styles.grainHint}>1 focused work item</span>
                 </button>
@@ -263,7 +263,7 @@ export const ApexGenerateWorkItemsWizard: React.FC<ApexGenerateWorkItemsWizardPr
                   type="button"
                   className={`${styles.grainOption} ${grain === 'small-set' ? styles.grainOptionActive : ''}`}
                   onClick={() => setGrain('small-set')}
-                >
+                 {...{ 'data-testid': 'generate-work-items-grain-option-btn-2' }}>
                   <span className={styles.grainLabel}>Small set</span>
                   <span className={styles.grainHint}>2–4 decomposed items</span>
                 </button>
@@ -280,7 +280,7 @@ export const ApexGenerateWorkItemsWizard: React.FC<ApexGenerateWorkItemsWizardPr
                 className={styles.regenerateBtn}
                 onClick={handleGenerate}
                 disabled={generateMutation.isPending}
-              >
+               {...{ 'data-testid': 'generate-work-items-regenerate-btn' }}>
                 Regenerate
               </button>
             </div>
@@ -315,7 +315,7 @@ export const ApexGenerateWorkItemsWizard: React.FC<ApexGenerateWorkItemsWizardPr
                             }))
                           }
                           aria-label={`Reconcile ${draft.title}`}
-                        >
+                         {...{ 'data-testid': 'generate-work-items-field-select-2' }}>
                           <option value="create">Create new</option>
                           <option value="skip">Skip (already on board)</option>
                           {plan.candidates.map((c) => (
@@ -331,14 +331,14 @@ export const ApexGenerateWorkItemsWizard: React.FC<ApexGenerateWorkItemsWizardPr
                       value={draft.title}
                       onChange={(e) => updateDraftTitle(draft.id, e.target.value)}
                       placeholder="Work item title"
-                    />
+                     {...{ 'data-testid': 'generate-work-items-work-item-title-input' }} />
                     <textarea
                       className={styles.draftOutcomeInput}
                       value={draft.outcome}
                       onChange={(e) => updateDraftOutcome(draft.id, e.target.value)}
                       rows={2}
                       placeholder={'As a <role>\nI want <capability>\nSo that <benefit>'}
-                    />
+                     {...{ 'data-testid': 'generate-work-items-draft-outcome-input-textarea' }} />
                     {draft.acceptanceCriteria.length > 0 && (
                       <div className={styles.draftAcList}>
                         {draft.acceptanceCriteria.map((ac, i) => (
@@ -361,32 +361,32 @@ export const ApexGenerateWorkItemsWizard: React.FC<ApexGenerateWorkItemsWizardPr
           <div className={styles.footerSpacer} />
           {phase === 'success' ? (
             <>
-              <button className={styles.btnSecondary} onClick={onClose}>Close</button>
-              <button className={styles.btnPrimary} onClick={() => navigate('/work-board')}>
+              <button className={styles.btnSecondary} onClick={onClose} {...{ 'data-testid': 'generate-work-items-btn-secondary' }}>Close</button>
+              <button className={styles.btnPrimary} onClick={() => navigate('/work-board')} {...{ 'data-testid': 'generate-work-items-btn-primary' }}>
                 Open Work Board
               </button>
             </>
           ) : isReview ? (
             <>
-              <button className={styles.btnSecondary} onClick={() => setPhase('intent')}>
+              <button className={styles.btnSecondary} onClick={() => setPhase('intent')} {...{ 'data-testid': 'generate-work-items-btn-secondary-2' }}>
                 Back
               </button>
               <button
                 className={styles.btnPrimary}
                 onClick={handleCreate}
                 disabled={drafts.length === 0}
-              >
+               {...{ 'data-testid': 'generate-work-items-btn-primary-2' }}>
                 Create {drafts.length} Work Items
               </button>
             </>
           ) : isIntent ? (
             <>
-              <button className={styles.btnSecondary} onClick={onClose}>Cancel</button>
+              <button className={styles.btnSecondary} onClick={onClose} {...{ 'data-testid': 'generate-work-items-btn-secondary-3' }}>Cancel</button>
               <button
                 className={styles.btnPrimary}
                 onClick={handleGenerate}
                 disabled={!ownerId}
-              >
+               {...{ 'data-testid': 'generate-work-items-btn-primary-3' }}>
                 Generate with AI
               </button>
             </>

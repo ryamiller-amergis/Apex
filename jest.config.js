@@ -1,17 +1,20 @@
+const tsJest = (tsconfig) => [
+  'ts-jest',
+  {
+    tsconfig,
+    // Type-check stays on `tsc --noEmit` (dev-orchestrator F5/F6, CI).
+    diagnostics: false,
+  },
+];
+
 module.exports = {
   projects: [
     {
       displayName: 'server',
       testEnvironment: 'node',
       testMatch: ['<rootDir>/src/server/**/__tests__/**/*.ts'],
-      preset: 'ts-jest',
-      globals: {
-        'ts-jest': {
-          tsconfig: {
-            esModuleInterop: true,
-            allowSyntheticDefaultImports: true,
-          },
-        },
+      transform: {
+        '^.+\\.tsx?$': tsJest('<rootDir>/tsconfig.jest.server.json'),
       },
     },
     {
@@ -22,11 +25,8 @@ module.exports = {
         '\\.(css|less|scss|sass)$': 'identity-obj-proxy',
       },
       setupFilesAfterEnv: ['<rootDir>/src/setupTests.ts'],
-      preset: 'ts-jest',
-      globals: {
-        'ts-jest': {
-          tsconfig: '<rootDir>/tsconfig.jest.client.json',
-        },
+      transform: {
+        '^.+\\.tsx?$': tsJest('<rootDir>/tsconfig.jest.client.json'),
       },
     },
   ],

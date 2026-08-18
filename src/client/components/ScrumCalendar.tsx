@@ -551,7 +551,7 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
           <button
             className="overdue-toggle-btn"
             onClick={() => setIsOverdueExpanded(!isOverdueExpanded)}
-          >
+           {...{ 'data-testid': 'scrum-calendar-overdue-toggle-btn' }}>
             <span className="overdue-badge">{overdueItems.length}</span>
             <span className="overdue-toggle-label">
               Overdue Work Items
@@ -586,7 +586,7 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
                     key={item.id}
                     className="overdue-item-row"
                     onClick={() => onSelectItem(item)}
-                  >
+                   {...{ 'data-testid': `scrum-calendar-overdue-item-row-${item.id}` }}>
                     <span className="overdue-col-item">
                       <span className="overdue-item-id">#{item.id}</span>
                       <span className="overdue-item-title">{item.title}</span>
@@ -619,7 +619,7 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
               onSelectItem(null as any);
             }}
             className="filter-select"
-          >
+           {...{ 'data-testid': 'scrum-calendar-work-item-type-select' }}>
             <option value="">All Types</option>
             {workItemTypeOptions.map(type => (
               <option key={type} value={type}>
@@ -643,7 +643,7 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
               onSelectItem(null as any);
             }}
             className="filter-select"
-          >
+           {...{ 'data-testid': 'scrum-calendar-state-select' }}>
             <option value="">All States</option>
             {stateOptions.map(state => (
               <option key={state} value={state}>{state}</option>
@@ -660,7 +660,7 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
               onSelectItem(null as any);
             }}
             className="filter-select"
-          >
+           {...{ 'data-testid': 'scrum-calendar-iteration-select' }}>
             <option value="">All Iterations</option>
             {iterationOptions.map(iteration => (
               <option key={iteration} value={iteration}>{iteration}</option>
@@ -677,7 +677,7 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
               onSelectItem(null as any); // Close details panel
             }}
             className="filter-select"
-          >
+           {...{ 'data-testid': 'scrum-calendar-assigned-to-select' }}>
             <option value="">All</option>
             {assignedToOptions.map(person => (
               <option key={person} value={person}>{person}</option>
@@ -694,7 +694,7 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
               setSelectedIteration('');
               onSelectItem(null as any); // Close details panel
             }}
-          >
+           {...{ 'data-testid': 'scrum-calendar-clear-filters-btn' }}>
             Clear
           </button>
         )}
@@ -707,7 +707,7 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
               className="collapse-btn"
               onClick={() => setIsUnscheduledCollapsed(!isUnscheduledCollapsed)}
               aria-label={isUnscheduledCollapsed ? 'Expand' : 'Collapse'}
-            >
+             {...{ 'data-testid': 'scrum-calendar-collapse-btn' }}>
               {isUnscheduledCollapsed ? '▼' : '▲'}
             </button>
           </div>
@@ -727,7 +727,7 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
                   className="unscheduled-item"
                   onClick={() => onSelectItem(item)}
                   style={{ cursor: 'pointer' }}
-                >
+                 {...{ 'data-testid': `scrum-calendar-unscheduled-item-${item.id}` }}>
                   <div className="unscheduled-item-header">
                     <div className="unscheduled-item-icons">
                       {isEpic && <span style={{ marginRight: '4px' }}>👑</span>}

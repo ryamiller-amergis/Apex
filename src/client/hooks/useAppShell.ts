@@ -11,6 +11,7 @@ import type { MyPermissionsResponse } from '../../shared/types/rbac';
 import type { WhatsNewState } from '../../shared/types/whatsNew';
 
 import { THEME_CYCLE, isThemeMode, type ThemeMode } from '../config/themes';
+import { notifySelectedProjectChanged } from '../utils/apiFetch';
 
 export type { ThemeMode };
 
@@ -177,7 +178,10 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
     usesBoardWorkItems
   );
 
-  useEffect(() => { localStorage.setItem('selectedProject', selectedProject); }, [selectedProject]);
+  useEffect(() => {
+    localStorage.setItem('selectedProject', selectedProject);
+    notifySelectedProjectChanged();
+  }, [selectedProject]);
   useEffect(() => { localStorage.setItem('selectedAreaPath', selectedAreaPath); }, [selectedAreaPath]);
   useEffect(() => {
     if (selectedSkillSettingsId) {

@@ -28,6 +28,20 @@ import { mountAdoMcp } from './mcp/ado/express';
 import { mountGitHubMcp } from './mcp/github/express';
 import { mountMaxviewMcp } from './mcp/maxview/express';
 import { ensureAuthenticated } from './middleware/auth';
+import {
+  observabilityCaptureMiddleware,
+  captureServerError,
+  startObservabilityCapture,
+  stopObservabilityCapture,
+} from './middleware/observabilityCapture';
+import {
+  startObservabilityOperations,
+  stopObservabilityOperations,
+} from './services/observabilityOperationsService';
+import {
+  startJourneyAggregation,
+  stopJourneyAggregation,
+} from './services/journeyAggregationScheduler';
 import { handleIncoming } from './services/teamsBotService';
 import { assignRole, listUsers, upsertAppUser } from './services/rbacService';
 import adminRouter from './routes/admin';
@@ -54,6 +68,7 @@ import platformAdminRouter from './routes/platformAdmin';
 import devWorkbenchRoutes from './routes/devWorkbench';
 import standupRouter from './routes/standup';
 import featureFlagRoutes from './routes/featureFlags';
+import observabilityRoutes from './routes/observability';
 import featureRequestRoutes from './routes/featureRequests';
 import apexWorkItemsRoutes from './routes/apexWorkItems';
 import askApexRoutes from './routes/askApex';
@@ -181,6 +196,7 @@ const foundationSkillCliPaths = ['/internal/foundation-skills'];
 // on publicRoutes (mounted at /api/public).
 const publicApiPaths = ['/public'];
 
+app.use('/api', observabilityCaptureMiddleware);
 app.use('/api', (req, res, next) => {
   const isLocalhost = req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1';
   const isInternalPath = internalOnlyPaths.some(p => req.path.startsWith(p));
@@ -237,6 +253,7 @@ app.use('/api/platform-admin', ensureAuthenticated, platformAdminRouter);
 app.use('/api/dev-workbench', ensureAuthenticated, devWorkbenchRoutes);
 app.use('/api/standup', ensureAuthenticated, standupRouter);
 app.use('/api/feature-flags', ensureAuthenticated, featureFlagRoutes);
+app.use('/api/observability', ensureAuthenticated, observabilityRoutes);
 app.use('/api/ui-lab', ensureAuthenticated, uiLabRoutes);
 app.use('/api/pdf', pdfRoutes);
 app.use('/api/feature-requests', ensureAuthenticated, featureRequestRoutes);
@@ -292,6 +309,7 @@ if (process.env.NODE_ENV === 'production') {
 
 // Global error-handling middleware — sends unhandled errors to App Insights
 app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  captureServerError(req, err, res);
   if (telemetryClient) {
     telemetryClient.trackException({
       exception: err instanceof Error ? err : new Error(String(err)),
@@ -373,6 +391,17 @@ const server = app.listen(PORT, () => {
     registerGracefulShutdown(server);
     return;
   }
+
+  startObservabilityCapture().catch((err) =>
+    console.error('[startup] observability capture failed to start:', err),
+  );
+  startObservabilityOperations();
+  startJourneyAggregation();
+  server.once('close', () => {
+    void stopObservabilityCapture();
+    stopObservabilityOperations();
+    stopJourneyAggregation();
+  });
 
   // Start the feature auto-complete background service after a 2-minute delay
   // to avoid bursting ADO calls at the same time as UAT auto-release on boot.

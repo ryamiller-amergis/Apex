@@ -39,10 +39,10 @@ const StandupSubNav: React.FC = () => {
   const { can } = useAppShell();
   return (
     <div className={styles.subNav}>
-      <button className={styles.subNavBtn} onClick={() => navigate('/standup')}>My Standup</button>
-      <button className={`${styles.subNavBtn} ${styles.subNavActive}`} onClick={() => navigate('/standup-summary')}>Summary</button>
+      <button className={styles.subNavBtn} onClick={() => navigate('/standup')} {...{ 'data-testid': 'standup-summary-sub-nav-btn' }}>My Standup</button>
+      <button className={`${styles.subNavBtn} ${styles.subNavActive}`} onClick={() => navigate('/standup-summary')} {...{ 'data-testid': 'standup-summary-sub-nav-btn-2' }}>Summary</button>
       {can('standup:manage') && (
-        <button className={styles.subNavBtn} onClick={() => navigate('/standup-manage')}>Manage</button>
+        <button className={styles.subNavBtn} onClick={() => navigate('/standup-manage')} {...{ 'data-testid': 'standup-summary-sub-nav-btn-3' }}>Manage</button>
       )}
     </div>
   );

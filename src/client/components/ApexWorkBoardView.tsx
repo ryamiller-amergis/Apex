@@ -152,7 +152,7 @@ const Column: React.FC<ColumnProps> = ({
               selectMode={selectMode}
               selected={selectedIds.has(item.id)}
               onToggleSelect={onToggleSelect}
-            />
+             {...{ 'data-testid': `work-board-apex-work-item-card-${item.id}` }} />
           ))
         )}
       </div>
@@ -416,7 +416,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
                 type="button"
                 className={`${styles.filterChip} ${viewMode === 'board' ? styles.filterChipActive : ''}`}
                 onClick={() => setViewMode('board')}
-                data-testid="work-board-view-board"
+                {...{ 'data-testid': 'work-board-view-board' }}
               >
                 Board
               </button>
@@ -424,7 +424,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
                 type="button"
                 className={`${styles.filterChip} ${viewMode === 'backlog' ? styles.filterChipActive : ''}`}
                 onClick={() => setViewMode('backlog')}
-                data-testid="work-board-view-backlog"
+                {...{ 'data-testid': 'work-board-view-backlog' }}
               >
                 Backlog
               </button>
@@ -435,7 +435,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
                   type="button"
                   className={`${styles.filterChip} ${lens === 'status' ? styles.filterChipActive : ''}`}
                   onClick={() => setLens('status')}
-                  data-testid="work-board-lens-status"
+                  {...{ 'data-testid': 'work-board-lens-status' }}
                 >
                   Status lens
                 </button>
@@ -443,7 +443,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
                   type="button"
                   className={`${styles.filterChip} ${lens === 'release' ? styles.filterChipActive : ''}`}
                   onClick={() => setLens('release')}
-                  data-testid="work-board-lens-release"
+                  {...{ 'data-testid': 'work-board-lens-release' }}
                 >
                   Release lens
                 </button>
@@ -458,7 +458,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
                   return !prev;
                 });
               }}
-              data-testid="work-board-select-mode"
+              {...{ 'data-testid': 'work-board-select-mode' }}
             >
               {selectMode ? 'Done selecting' : 'Select'}
             </button>
@@ -471,7 +471,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
                   setImportResult(null);
                   setImportDryRun(true);
                 }}
-                data-testid="work-board-ado-import"
+                {...{ 'data-testid': 'work-board-ado-import' }}
               >
                 Import from Azure DevOps
               </button>
@@ -480,7 +480,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
               className={styles.btnPrimary}
               onClick={() => navigate('/feature-requests')}
               title="Go to Feature Requests to generate work items"
-              data-testid="work-board-new-from-fr"
+              {...{ 'data-testid': 'work-board-new-from-fr' }}
             >
               New from Feature Request
             </button>
@@ -493,7 +493,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
             value={ownerFilter}
             onChange={(e) => setOwnerFilter(e.target.value)}
             aria-label="Filter by owner"
-          >
+           {...{ 'data-testid': 'work-board-filter-by-owner-select' }}>
             <option value={currentUserId}>My board</option>
             <option value="all">All owners</option>
             {owners
@@ -508,7 +508,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
             className={`${styles.filterChip} ${deliveryTypesSelected ? styles.filterChipActive : ''}`}
             onClick={() => setTypeFilter([...APEX_BOARD_CARD_TYPES])}
             title="Show delivery work only (PBI, TBI, Bug)"
-            data-testid="work-board-type-delivery"
+            {...{ 'data-testid': 'work-board-type-delivery' }}
           >
             Delivery
           </button>
@@ -517,7 +517,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
             className={`${styles.filterChip} ${typeFilter.length === APEX_WORK_ITEM_TYPES.length ? styles.filterChipActive : ''}`}
             onClick={() => setTypeFilter([...APEX_WORK_ITEM_TYPES])}
             title="Show all types including Epic and Feature"
-            data-testid="work-board-type-all"
+            {...{ 'data-testid': 'work-board-type-all' }}
           >
             All types
           </button>
@@ -537,7 +537,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
                     prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t],
                   )
                 }
-              >
+               {...{ 'data-testid': `work-board-filter-chip-${t}` }}>
                 {t}
               </button>
             );
@@ -549,7 +549,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
               value={epicFilter}
               onChange={(e) => { setEpicFilter(e.target.value); setFeatureFilter(''); }}
               aria-label="Filter by epic"
-            >
+             {...{ 'data-testid': 'work-board-filter-by-epic-select' }}>
               <option value="">All epics</option>
               {facets.epicTitles.map((e) => (
                 <option key={e} value={e}>{e}</option>
@@ -563,7 +563,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
               value={featureFilter}
               onChange={(e) => setFeatureFilter(e.target.value)}
               aria-label="Filter by feature"
-            >
+             {...{ 'data-testid': 'work-board-filter-by-feature-select' }}>
               <option value="">All features</option>
               {facets.featureTitles.map((f) => (
                 <option key={f} value={f}>{f}</option>
@@ -576,7 +576,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
             value={releaseFilter}
             onChange={(e) => setReleaseFilter(e.target.value)}
             aria-label="Filter by release"
-            data-testid="work-board-release-filter"
+            {...{ 'data-testid': 'work-board-release-filter' }}
           >
             <option value="">All releases</option>
             <option value="none">No release</option>
@@ -590,7 +590,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
             value={sourceFilter}
             onChange={(e) => setSourceFilter(e.target.value)}
             aria-label="Filter by source"
-          >
+           {...{ 'data-testid': 'work-board-filter-by-source-select' }}>
             <option value="">All sources</option>
             <option value="prd">From PRD</option>
             <option value="feature_request">From FR</option>
@@ -606,10 +606,10 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search APX-# or title…"
             aria-label="Search work items"
-          />
+           {...{ 'data-testid': 'work-board-search-work-items-input' }} />
 
           {hasActiveFilters && (
-            <button className={styles.clearFiltersBtn} onClick={clearFilters}>
+            <button className={styles.clearFiltersBtn} onClick={clearFilters} {...{ 'data-testid': 'work-board-clear-filters-btn' }}>
               Clear filters
             </button>
           )}
@@ -623,14 +623,14 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
             onChange={(e) => setNewReleaseName(e.target.value)}
             placeholder="New release name (e.g. R5)"
             aria-label="New release name"
-            data-testid="work-board-new-release-name"
+            {...{ 'data-testid': 'work-board-new-release-name' }}
           />
           <button
             type="button"
             className={styles.btnPrimary}
             onClick={handleCreateRelease}
             disabled={!newReleaseName.trim() || createRelease.isPending}
-            data-testid="work-board-create-release"
+            {...{ 'data-testid': 'work-board-create-release' }}
           >
             Add release
           </button>
@@ -645,7 +645,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
                   e.target.value = '';
                 }}
                 aria-label="Bulk set release"
-                data-testid="work-board-bulk-release"
+                {...{ 'data-testid': 'work-board-bulk-release' }}
               >
                 <option value="" disabled>Set release…</option>
                 <option value="none">Clear release</option>
@@ -661,7 +661,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
                   e.target.value = '';
                 }}
                 aria-label="Bulk move status"
-                data-testid="work-board-bulk-move"
+                {...{ 'data-testid': 'work-board-bulk-move' }}
               >
                 <option value="" disabled>Move to…</option>
                 {APEX_WORK_ITEM_STATUSES.map((s) => (
@@ -676,7 +676,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
                   e.target.value = '';
                 }}
                 aria-label="Bulk assign owner"
-                data-testid="work-board-bulk-assign"
+                {...{ 'data-testid': 'work-board-bulk-assign' }}
               >
                 <option value="" disabled>Assign to…</option>
                 {owners.map((o) => (
@@ -697,7 +697,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
           {APEX_WORK_ITEM_STATUSES.map((s) => <SkeletonColumn key={s} />)}
         </div>
       ) : boardEmpty ? (
-        <div className={styles.emptyState} role="status" data-testid="work-board-empty">
+        <div className={styles.emptyState} role="status" {...{ 'data-testid': 'work-board-empty' }}>
           <p className={styles.emptyStateText}>
             No work items yet. Materialize from a PRD, generate from a feature request, or import from Azure DevOps.
           </p>
@@ -705,17 +705,17 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
             type="button"
             className={styles.btnPrimary}
             onClick={() => navigate('/feature-requests')}
-            data-testid="work-board-empty-cta"
+            {...{ 'data-testid': 'work-board-empty-cta' }}
           >
             New from Feature Request
           </button>
         </div>
       ) : viewMode === 'backlog' ? (
-        <div className={styles.canvas} style={{ flexDirection: 'column', padding: 24, overflow: 'auto' }} data-testid="work-board-backlog">
+        <div className={styles.canvas} style={{ flexDirection: 'column', padding: 24, overflow: 'auto' }} {...{ 'data-testid': 'work-board-backlog' }}>
           {backlogItems.length === 0 ? (
             <div className={styles.emptyState} role="status">
               <p className={styles.emptyStateText}>No work items match the current filters.</p>
-              <button type="button" className={styles.btnPrimary} onClick={clearFilters}>
+              <button type="button" className={styles.btnPrimary} onClick={clearFilters} {...{ 'data-testid': 'work-board-btn-primary' }}>
                 Clear filters
               </button>
             </div>
@@ -738,14 +738,14 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
                     key={item.id}
                     style={{ borderTop: '1px solid var(--border-color)', cursor: 'pointer' }}
                     onClick={() => handleCardOpen(item.id)}
-                  >
-                    <td style={{ padding: 8 }} onClick={(e) => e.stopPropagation()}>
+                   {...{ 'data-testid': `work-board-tr-${item.id}` }}>
+                    <td style={{ padding: 8 }} onClick={(e) => e.stopPropagation()} {...{ 'data-testid': 'work-board-td-cell' }}>
                       <input
                         type="checkbox"
                         checked={selectedIds.has(item.id)}
                         onChange={() => toggleSelected(item.id)}
                         aria-label={`Select APX-${item.itemNumber}`}
-                      />
+                       {...{ 'data-testid': 'work-board-checkbox-input' }} />
                     </td>
                     <td style={{ padding: 8 }}>APX-{item.itemNumber}</td>
                     <td style={{ padding: 8, color: 'var(--text-primary)' }}>{item.title}</td>
@@ -760,7 +760,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
           )}
         </div>
       ) : lens === 'release' ? (
-        <div className={styles.canvas} data-testid="work-board-release-lanes">
+        <div className={styles.canvas} {...{ 'data-testid': 'work-board-release-lanes' }}>
           {releaseLanes.map((lane) => (
             <div key={lane.key} className={styles.column}>
               <div className={styles.columnHeader}>
@@ -777,14 +777,14 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
                     selectMode={selectMode}
                     selected={selectedIds.has(item.id)}
                     onToggleSelect={toggleSelected}
-                  />
+                   {...{ 'data-testid': `work-board-apex-work-item-card-${item.id}` }} />
                 ))}
               </div>
             </div>
           ))}
         </div>
       ) : (
-        <div className={styles.canvas} data-testid="work-board-status-columns">
+        <div className={styles.canvas} {...{ 'data-testid': 'work-board-status-columns' }}>
           {APEX_WORK_ITEM_STATUSES.map((s) => (
             <Column
               key={s}
@@ -807,7 +807,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
           project={project}
           onClose={handleDrawerClose}
           onOpenItem={(id) => setOpenItemId(id)}
-        />
+         {...{ 'data-testid': 'work-board-apex-work-item-detail-panel' }} />
       )}
 
       {importOpen && (
@@ -816,7 +816,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
           role="dialog"
           aria-modal="true"
           aria-labelledby="work-board-import-title"
-          data-testid="work-board-ado-import-modal"
+          {...{ 'data-testid': 'work-board-ado-import-modal' }}
         >
           <div className={styles.importModal}>
             <h2 id="work-board-import-title" className={styles.importTitle}>Import from Azure DevOps</h2>
@@ -830,7 +830,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
                 type="checkbox"
                 checked={importDryRun}
                 onChange={(e) => setImportDryRun(e.target.checked)}
-              />
+               {...{ 'data-testid': 'work-board-checkbox-input-2' }} />
               Dry run (preview only — no writes)
             </label>
             {importResult && (
@@ -863,7 +863,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
                 className={styles.filterChip}
                 onClick={() => setImportOpen(false)}
                 disabled={adoImport.isPending}
-              >
+               {...{ 'data-testid': 'work-board-filter-chip-btn' }}>
                 Close
               </button>
               <button
@@ -871,7 +871,7 @@ export const ApexWorkBoardView: React.FC<ApexWorkBoardViewProps> = ({ currentUse
                 className={styles.btnPrimary}
                 onClick={handleAdoImport}
                 disabled={adoImport.isPending}
-              >
+               {...{ 'data-testid': 'work-board-btn-primary-2' }}>
                 {adoImport.isPending ? 'Working…' : importDryRun ? 'Preview import' : 'Run import'}
               </button>
             </div>

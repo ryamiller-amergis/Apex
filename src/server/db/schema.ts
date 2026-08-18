@@ -64,6 +64,7 @@ import type {
   ExcalidrawScene,
 } from '../../shared/types/diagram';
 import type { ApiKeyCadence, ApiKeyScope } from '../../shared/types/apiKey';
+import type { SafeTraceDetails, TraceEventType } from '../../shared/types/observability';
 import type {
   WalkthroughAnchorPlacement,
   WalkthroughGenerationProvenance,
@@ -2526,6 +2527,89 @@ export const apiKeys = pgTable('api_keys', {
 export const apiKeysRelations = relations(apiKeys, ({ one }) => ({
   createdByUser: one(appUsers, {
     fields: [apiKeys.createdBy],
+    references: [appUsers.oid],
+  }),
+}));
+
+// ── Observability Trace Events (Safe Trace Event Storage) ─────────────────────
+
+export const traceEvents = pgTable('trace_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  eventType: text('event_type').$type<TraceEventType>().notNull(),
+  occurredAt: timestamp('occurred_at', { withTimezone: true, mode: 'string' }).notNull(),
+  actorUserId: text('actor_user_id').references(() => appUsers.oid, { onDelete: 'set null' }),
+  projectId: text('project_id'),
+  traceId: text('trace_id').notNull(),
+  sessionId: text('session_id'),
+  routeTemplate: text('route_template'),
+  httpMethod: text('http_method'),
+  statusCode: integer('status_code'),
+  durationMs: integer('duration_ms'),
+  severity: text('severity'),
+  details: jsonb('details').$type<SafeTraceDetails>().notNull().default({}),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  actorOccurredIdx: index('idx_trace_events_actor_occurred').on(t.actorUserId, t.occurredAt, t.id),
+  traceOccurredIdx: index('idx_trace_events_trace_occurred').on(t.traceId, t.occurredAt),
+  sessionOccurredIdx: index('idx_trace_events_session_occurred')
+    .on(t.sessionId, t.occurredAt)
+    .where(sql`${t.sessionId} IS NOT NULL`),
+  routeOccurredIdx: index('idx_trace_events_route_occurred').on(t.routeTemplate, t.occurredAt),
+  occurredIdx: index('idx_trace_events_occurred').on(t.occurredAt),
+  eventTypeCheck: check(
+    'trace_events_event_type_check',
+    sql`${t.eventType} IN ('api_request', 'error', 'ui_action', 'agent_event')`,
+  ),
+  traceIdCheck: check(
+    'trace_events_trace_id_check',
+    sql`${t.traceId} ~ '^[0-9a-f]{32}$'`,
+  ),
+  statusCodeCheck: check(
+    'trace_events_status_code_check',
+    sql`${t.statusCode} IS NULL OR (${t.statusCode} >= 100 AND ${t.statusCode} <= 599)`,
+  ),
+  durationMsCheck: check(
+    'trace_events_duration_ms_check',
+    sql`${t.durationMs} IS NULL OR ${t.durationMs} >= 0`,
+  ),
+  routeTemplateCheck: check(
+    'trace_events_route_template_check',
+    sql`${t.routeTemplate} IS NULL OR position('?' IN ${t.routeTemplate}) = 0`,
+  ),
+  detailsObjectCheck: check(
+    'trace_events_details_object_check',
+    sql`jsonb_typeof(${t.details}) = 'object'`,
+  ),
+}));
+
+export const tracePathRollups = pgTable('trace_path_rollups', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  fromRoute: text('from_route').notNull(),
+  toRoute: text('to_route').notNull(),
+  day: date('day', { mode: 'string' }).notNull(),
+  transitionCount: integer('transition_count').notNull().default(0),
+  distinctActorCount: integer('distinct_actor_count').notNull().default(0),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  fromToDayUniq: unique('trace_path_rollups_from_to_day_key').on(t.fromRoute, t.toRoute, t.day),
+  fromRouteCheck: check(
+    'trace_path_rollups_from_route_check',
+    sql`position('?' IN ${t.fromRoute}) = 0`,
+  ),
+  toRouteCheck: check(
+    'trace_path_rollups_to_route_check',
+    sql`position('?' IN ${t.toRoute}) = 0`,
+  ),
+  countsCheck: check(
+    'trace_path_rollups_counts_check',
+    sql`${t.transitionCount} >= 0 AND ${t.distinctActorCount} >= 0`,
+  ),
+}));
+
+export const traceEventsRelations = relations(traceEvents, ({ one }) => ({
+  actor: one(appUsers, {
+    fields: [traceEvents.actorUserId],
     references: [appUsers.oid],
   }),
 }));
