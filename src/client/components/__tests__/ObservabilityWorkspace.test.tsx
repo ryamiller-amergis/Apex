@@ -24,6 +24,20 @@ jest.mock('../../hooks/useSessionTimeline', () => ({
   useSessionTimeline: (...args: unknown[]) => mockUseSessionTimeline(...args),
 }));
 
+jest.mock('../../hooks/usePlatformAdmin', () => ({
+  usePlatformAdminUsers: () => ({
+    data: [
+      {
+        userId: '11111111-1111-4111-8111-111111111111',
+        displayName: 'Ada Lovelace',
+        email: 'ada@example.com',
+      },
+    ],
+    isLoading: false,
+    isError: false,
+  }),
+}));
+
 jest.mock('../InteractiveJourneyMapPage', () => ({
   __esModule: true,
   default: ({
@@ -114,6 +128,10 @@ function renderWorkspace() {
   return render(<ObservabilityWorkspace project="Apex" />);
 }
 
+async function selectActor(user: ReturnType<typeof userEvent.setup>) {
+  await user.selectOptions(screen.getByTestId('observability-actor'), ACTOR);
+}
+
 describe('ObservabilityWorkspace', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -149,7 +167,7 @@ describe('ObservabilityWorkspace', () => {
   it('PBI-003 AC-0 / TC-PBI-003-009 keeps shared filters when switching sub-views', async () => {
     const user = userEvent.setup();
     renderWorkspace();
-    await user.type(screen.getByTestId('observability-actor'), ACTOR);
+    await selectActor(user);
     await user.click(screen.getByTestId('observability-tab-health'));
     expect(screen.getByTestId('observability-health-panel')).toBeInTheDocument();
     expect(screen.getByTestId('observability-actor')).toHaveValue(ACTOR);
@@ -162,18 +180,30 @@ describe('ObservabilityWorkspace', () => {
     expect(screen.getByTestId('observability-trail-empty')).toHaveTextContent(/search a user activity trail/i);
   });
 
-  it('PBI-004 AC-3 / TC-PBI-004-004 blocks invalid actor and trace ID without querying', async () => {
+  it('PBI-004 AC-3 / TC-PBI-004-004 blocks missing actor and malformed trace ID without querying', async () => {
     const user = userEvent.setup();
     renderWorkspace();
-    await user.type(screen.getByTestId('observability-actor'), 'jsmith@@bad');
     await user.type(screen.getByTestId('observability-trace-id'), 'ZZ-NOT-VALID!!');
     await user.click(screen.getByTestId('observability-apply-filters'));
     expect(screen.getByTestId('observability-validation-summary')).toHaveTextContent(/validation error/i);
-    expect(screen.getByText(/invalid actor/i)).toBeInTheDocument();
+    expect(screen.getByText(/actor is required/i)).toBeInTheDocument();
     expect(screen.getByText(/malformed trace id/i)).toBeInTheDocument();
     const calls = mockUseObservabilityTrail.mock.calls as unknown[][];
     const lastCall = calls[calls.length - 1];
     expect(lastCall?.[1]).toBeNull();
+  });
+
+  it('lists known users by display name and submits the matching UUID', async () => {
+    const user = userEvent.setup();
+    renderWorkspace();
+    const actorSelect = screen.getByTestId('observability-actor');
+    expect(within(actorSelect).getByRole('option', { name: 'Ada Lovelace' })).toHaveValue(ACTOR);
+    expect(within(actorSelect).queryByRole('option', { name: ACTOR })).not.toBeInTheDocument();
+    await selectActor(user);
+    await user.click(screen.getByTestId('observability-apply-filters'));
+    const calls = mockUseObservabilityTrail.mock.calls as unknown[][];
+    const lastCall = calls[calls.length - 1];
+    expect((lastCall?.[1] as { actorId: string } | null)?.actorId).toBe(ACTOR);
   });
 
   it('PBI-004 AC-0 / TC-PBI-004-001 shows chronological trail rows with trace and session links', async () => {
@@ -186,7 +216,7 @@ describe('ObservabilityWorkspace', () => {
       ]),
     }));
     renderWorkspace();
-    await user.type(screen.getByTestId('observability-actor'), ACTOR);
+    await selectActor(user);
     await user.click(screen.getByTestId('observability-apply-filters'));
     const table = screen.getByTestId('observability-trail-table');
     expect(within(table).getByText('UI Action')).toBeInTheDocument();
@@ -205,7 +235,7 @@ describe('ObservabilityWorkspace', () => {
       error: { message: 'HTTP 503' },
     }));
     renderWorkspace();
-    await user.type(screen.getByTestId('observability-actor'), ACTOR);
+    await selectActor(user);
     await user.click(screen.getByTestId('observability-apply-filters'));
     expect(screen.getByTestId('observability-trail-error')).toHaveTextContent(/unavailable/i);
     expect(screen.getByTestId('observability-trail-retry')).toBeInTheDocument();
@@ -220,7 +250,7 @@ describe('ObservabilityWorkspace', () => {
       error: { message: 'HTTP 503' },
     }));
     renderWorkspace();
-    await user.type(screen.getByTestId('observability-actor'), ACTOR);
+    await selectActor(user);
     await user.click(screen.getByTestId('observability-apply-filters'));
     await user.click(screen.getByTestId('observability-tab-health'));
     expect(screen.getByTestId('observability-health-panel')).toBeInTheDocument();
@@ -235,7 +265,7 @@ describe('ObservabilityWorkspace', () => {
       data: trailPage(items, 'cursor-2', true),
     }));
     renderWorkspace();
-    await user.type(screen.getByTestId('observability-actor'), ACTOR);
+    await selectActor(user);
     await user.click(screen.getByTestId('observability-apply-filters'));
     expect(screen.getByTestId('observability-trail-pagination-info')).toHaveTextContent(/cap reached/i);
     expect(screen.getByTestId('observability-trail-next')).toBeDisabled();
@@ -246,7 +276,7 @@ describe('ObservabilityWorkspace', () => {
     const user = userEvent.setup();
     mockUseObservabilityTrail.mockReturnValue(queryState({ data: trailPage([event()]) }));
     renderWorkspace();
-    await user.type(screen.getByTestId('observability-actor'), ACTOR);
+    await selectActor(user);
     await user.click(screen.getByTestId('observability-apply-filters'));
     await user.click(screen.getByTestId(`observability-session-link-${SESSION}`));
     expect(screen.getByTestId('observability-timeline-panel')).toBeInTheDocument();

@@ -93,6 +93,10 @@
   min-width: 140px;
 }
 
+.filterActor {
+  min-width: 220px;
+}
+
 .filterInput:focus {
   outline: 2px solid var(--accent-color);
   outline-offset: 1px;

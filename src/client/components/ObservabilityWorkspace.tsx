@@ -14,6 +14,7 @@ import {
 } from '../../shared/types/observability';
 import { useAppShell } from '../hooks/useAppShell';
 import { useObservabilityHealth, useObservabilityTrail } from '../hooks/useObservabilityQueries';
+import { usePlatformAdminUsers } from '../hooks/usePlatformAdmin';
 import { SessionTimelinePage } from './SessionTimelinePage';
 import { ViewErrorFallback } from './ViewErrorFallback';
 
@@ -22,6 +23,7 @@ import {
   ACTOR_UUID_PATTERN,
   TIME_RANGE_LABELS,
   TIME_RANGE_PRESETS,
+  actorOptionLabel,
   describeEventType,
   emptyFilterDraft,
   formatStoreBytes,
@@ -42,7 +44,7 @@ const filterSchema = z
     actorId: z
       .string()
       .trim()
-      .min(1, 'Actor is required — enter a user ID (UUID)')
+      .min(1, 'Actor is required — select a user')
       .regex(ACTOR_UUID_PATTERN, 'Invalid actor — must be a valid user ID (UUID)'),
     traceId: z
       .string()
@@ -114,6 +116,14 @@ export const ObservabilityWorkspace: React.FC<ObservabilityWorkspaceProps> = ({ 
   const timeRange = useWatch({ control, name: 'timeRange' });
   const trailQuery = useObservabilityTrail(resolvedProject, applied, cursor);
   const healthQuery = useObservabilityHealth(resolvedProject, activeView === 'health');
+  const { data: knownUsers = [], isLoading: usersLoading, isError: usersError } = usePlatformAdminUsers();
+  const actorOptions = useMemo(
+    () =>
+      [...knownUsers].sort((left, right) =>
+        actorOptionLabel(left).localeCompare(actorOptionLabel(right), undefined, { sensitivity: 'base' }),
+      ),
+    [knownUsers],
+  );
 
   const validationCount = Object.keys(errors).length;
   const trailFailed = Boolean(applied && trailQuery.isError);
@@ -280,15 +290,24 @@ export const ObservabilityWorkspace: React.FC<ObservabilityWorkspaceProps> = ({ 
           )}
 
           <div className={styles.filterGroup}>
-            <label className={styles.filterLabel} htmlFor="observability-actor">Actor / User ID</label>
-            <input
+            <label className={styles.filterLabel} htmlFor="observability-actor">User</label>
+            <select
               id="observability-actor"
-              className={`${styles.filterInput} ${errors.actorId ? styles.filterInputError : ''}`}
-              placeholder="User ID (UUID)"
-              autoComplete="off"
+              className={`${styles.filterInput} ${styles.filterActor} ${errors.actorId ? styles.filterInputError : ''}`}
+              disabled={usersLoading}
               {...register('actorId')}
               {...{ 'data-testid': 'observability-actor' }}
-            />
+            >
+              <option value="">{usersLoading ? 'Loading users…' : 'Select a user'}</option>
+              {actorOptions.map((user) => (
+                <option key={user.userId} value={user.userId}>
+                  {actorOptionLabel(user)}
+                </option>
+              ))}
+            </select>
+            {usersError && (
+              <span className={styles.fieldError} role="alert">Unable to load users</span>
+            )}
             {errors.actorId && <span className={styles.fieldError} role="alert">{errors.actorId.message}</span>}
           </div>
 
@@ -531,8 +550,8 @@ const TrailView: React.FC<TrailViewProps> = ({
         <p className={styles.emptyTitle}>Search a user activity trail</p>
         <p className={styles.emptyText}>
           {journeyHandoff
-            ? `Journey pivot ready: ${journeyHandoff.fromRoute} → ${journeyHandoff.toRoute} (${journeyHandoff.from} to ${journeyHandoff.to}). Enter a user ID and apply filters to search.`
-            : 'Enter a user ID and apply shared filters to load chronological UI actions, API calls, and errors.'}
+            ? `Journey pivot ready: ${journeyHandoff.fromRoute} → ${journeyHandoff.toRoute} (${journeyHandoff.from} to ${journeyHandoff.to}). Select a user and apply filters to search.`
+            : 'Select a user and apply shared filters to load chronological UI actions, API calls, and errors.'}
         </p>
       </div>
     );

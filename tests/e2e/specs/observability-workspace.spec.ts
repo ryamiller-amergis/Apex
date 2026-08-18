@@ -7,12 +7,25 @@
  *   workspaceFilters.test.ts, useObservabilityQueries.test.ts,
  *   observabilityQueryRoutes.test.ts
  */
+import type { Page } from '@playwright/test';
 import { test, expect } from '../support/fixtures';
 import { stubAdoProjects } from '../support/api-stubs';
 
 const ACTOR = '11111111-1111-4111-8111-111111111111';
 const TRACE = '4bf92f3577b34da6a3ce929d0e0e4736';
 const SESSION = '22222222-2222-4222-8222-222222222222';
+
+async function stubObservabilityUsers(page: Page): Promise<void> {
+  await page.route('**/api/platform-admin/users', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        users: [{ userId: ACTOR, displayName: 'Ada Lovelace', email: 'ada@example.com' }],
+      }),
+    });
+  });
+}
 
 test.describe('FEAT-006 Unified Observability Workspace', () => {
   test('TC-PBI-003-001 / AC-0 Super Admin opens workspace with shared controls and sub-views', async ({
@@ -22,6 +35,7 @@ test.describe('FEAT-006 Unified Observability Workspace', () => {
     // DEFERRED: Playwright env unavailable
     test.skip(true, 'DEFERRED: Playwright env unavailable');
     await stubAdoProjects(page);
+    await stubObservabilityUsers(page);
     await loginAsPersona('super-admin');
     await page.goto('/platform-admin');
     await page.getByTestId('platform-admin-tab-observability').click();
@@ -40,13 +54,14 @@ test.describe('FEAT-006 Unified Observability Workspace', () => {
     // DEFERRED: Playwright env unavailable
     test.skip(true, 'DEFERRED: Playwright env unavailable');
     await stubAdoProjects(page);
+    await stubObservabilityUsers(page);
     await page.route('**/api/platform-admin/observability/trail**', async (route) => {
       await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Internal server error' }) });
     });
     await loginAsPersona('super-admin');
     await page.goto('/platform-admin');
     await page.getByTestId('platform-admin-tab-observability').click();
-    await page.getByTestId('observability-actor').fill(ACTOR);
+    await page.getByTestId('observability-actor').selectOption(ACTOR);
     await page.getByTestId('observability-apply-filters').click();
     await expect(page.getByTestId('observability-trail-error')).toBeVisible();
     await expect(page.getByTestId('observability-actor')).toHaveValue(ACTOR);
@@ -61,6 +76,7 @@ test.describe('FEAT-006 Unified Observability Workspace', () => {
     // DEFERRED: Playwright env unavailable
     test.skip(true, 'DEFERRED: Playwright env unavailable');
     await stubAdoProjects(page);
+    await stubObservabilityUsers(page);
     await loginAsPersona('super-admin');
     await page.goto('/platform-admin');
     await page.getByTestId('platform-admin-tab-observability').click();
@@ -74,6 +90,7 @@ test.describe('FEAT-006 Unified Observability Workspace', () => {
     // DEFERRED: Playwright env unavailable
     test.skip(true, 'DEFERRED: Playwright env unavailable');
     await stubAdoProjects(page);
+    await stubObservabilityUsers(page);
     await loginAsPersona('developer');
     await page.goto('/platform-admin');
     await expect(page.getByTestId('platform-admin-tab-observability')).toHaveCount(0);
@@ -86,6 +103,7 @@ test.describe('FEAT-006 Unified Observability Workspace', () => {
     // DEFERRED: Playwright env unavailable
     test.skip(true, 'DEFERRED: Playwright env unavailable');
     await stubAdoProjects(page);
+    await stubObservabilityUsers(page);
     await page.route('**/api/feature-flags/evaluate**', async (route) => {
       await route.fulfill({
         status: 200,
@@ -105,10 +123,11 @@ test.describe('FEAT-006 Unified Observability Workspace', () => {
     // DEFERRED: Playwright env unavailable
     test.skip(true, 'DEFERRED: Playwright env unavailable');
     await stubAdoProjects(page);
+    await stubObservabilityUsers(page);
     await loginAsPersona('super-admin');
     await page.goto('/platform-admin');
     await page.getByTestId('platform-admin-tab-observability').click();
-    await page.getByTestId('observability-actor').fill(ACTOR);
+    await page.getByTestId('observability-actor').selectOption(ACTOR);
     await page.getByTestId('observability-tab-journey').click();
     await expect(page.getByTestId('observability-actor')).toHaveValue(ACTOR);
   });
@@ -120,6 +139,7 @@ test.describe('FEAT-006 Unified Observability Workspace', () => {
     // DEFERRED: Playwright env unavailable
     test.skip(true, 'DEFERRED: Playwright env unavailable');
     await stubAdoProjects(page);
+    await stubObservabilityUsers(page);
     await loginAsPersona('super-admin');
     await page.goto('/platform-admin');
     await page.getByTestId('platform-admin-tab-observability').click();
@@ -133,6 +153,7 @@ test.describe('FEAT-006 Unified Observability Workspace', () => {
     // DEFERRED: Playwright env unavailable
     test.skip(true, 'DEFERRED: Playwright env unavailable');
     await stubAdoProjects(page);
+    await stubObservabilityUsers(page);
     await page.route('**/api/platform-admin/observability/trail**', async (route) => {
       await route.fulfill({
         status: 200,
@@ -162,7 +183,7 @@ test.describe('FEAT-006 Unified Observability Workspace', () => {
     await loginAsPersona('super-admin');
     await page.goto('/platform-admin');
     await page.getByTestId('platform-admin-tab-observability').click();
-    await page.getByTestId('observability-actor').fill(ACTOR);
+    await page.getByTestId('observability-actor').selectOption(ACTOR);
     await page.getByTestId('observability-apply-filters').click();
     await expect(page.getByTestId('observability-trail-table')).toBeVisible();
     await expect(page.getByTestId(`observability-trace-link-${TRACE}`)).toBeVisible();
@@ -176,13 +197,14 @@ test.describe('FEAT-006 Unified Observability Workspace', () => {
     // DEFERRED: Playwright env unavailable
     test.skip(true, 'DEFERRED: Playwright env unavailable');
     await stubAdoProjects(page);
+    await stubObservabilityUsers(page);
     await page.route('**/api/platform-admin/observability/trail**', async (route) => {
       await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Internal server error' }) });
     });
     await loginAsPersona('super-admin');
     await page.goto('/platform-admin');
     await page.getByTestId('platform-admin-tab-observability').click();
-    await page.getByTestId('observability-actor').fill(ACTOR);
+    await page.getByTestId('observability-actor').selectOption(ACTOR);
     await page.getByTestId('observability-apply-filters').click();
     await expect(page.getByTestId('observability-trail-error')).toBeVisible();
     await expect(page.getByTestId('observability-trail-table')).toHaveCount(0);
@@ -195,6 +217,7 @@ test.describe('FEAT-006 Unified Observability Workspace', () => {
     // DEFERRED: Playwright env unavailable
     test.skip(true, 'DEFERRED: Playwright env unavailable');
     await stubAdoProjects(page);
+    await stubObservabilityUsers(page);
     await loginAsPersona('super-admin');
     await page.goto('/platform-admin');
     await page.getByTestId('platform-admin-tab-observability').click();
@@ -208,10 +231,10 @@ test.describe('FEAT-006 Unified Observability Workspace', () => {
     // DEFERRED: Playwright env unavailable
     test.skip(true, 'DEFERRED: Playwright env unavailable');
     await stubAdoProjects(page);
+    await stubObservabilityUsers(page);
     await loginAsPersona('super-admin');
     await page.goto('/platform-admin');
     await page.getByTestId('platform-admin-tab-observability').click();
-    await page.getByTestId('observability-actor').fill('jsmith@@bad');
     await page.getByTestId('observability-trace-id').fill('ZZ-NOT-VALID!!');
     await page.getByTestId('observability-apply-filters').click();
     await expect(page.getByTestId('observability-validation-summary')).toBeVisible();
@@ -224,6 +247,7 @@ test.describe('FEAT-006 Unified Observability Workspace', () => {
     // DEFERRED: Playwright env unavailable
     test.skip(true, 'DEFERRED: Playwright env unavailable');
     await stubAdoProjects(page);
+    await stubObservabilityUsers(page);
     await page.route('**/api/platform-admin/observability/trail**', async (route) => {
       await route.fulfill({
         status: 200,
@@ -253,7 +277,7 @@ test.describe('FEAT-006 Unified Observability Workspace', () => {
     await loginAsPersona('super-admin');
     await page.goto('/platform-admin');
     await page.getByTestId('platform-admin-tab-observability').click();
-    await page.getByTestId('observability-actor').fill(ACTOR);
+    await page.getByTestId('observability-actor').selectOption(ACTOR);
     await page.getByTestId('observability-apply-filters').click();
     await page.getByTestId(`observability-session-link-${SESSION}`).click();
     await expect(page.getByTestId('observability-timeline-panel')).toBeVisible();
@@ -266,6 +290,7 @@ test.describe('FEAT-006 Unified Observability Workspace', () => {
     // DEFERRED: Playwright env unavailable
     test.skip(true, 'DEFERRED: Playwright env unavailable');
     await stubAdoProjects(page);
+    await stubObservabilityUsers(page);
     await page.route('**/api/platform-admin/observability/trail**', async (route) => {
       await route.fulfill({
         status: 200,
@@ -276,7 +301,7 @@ test.describe('FEAT-006 Unified Observability Workspace', () => {
     await loginAsPersona('super-admin');
     await page.goto('/platform-admin');
     await page.getByTestId('platform-admin-tab-observability').click();
-    await page.getByTestId('observability-actor').fill(ACTOR);
+    await page.getByTestId('observability-actor').selectOption(ACTOR);
     await page.getByTestId('observability-apply-filters').click();
     await expect(page.getByTestId('observability-trail-empty')).toBeVisible();
   });
@@ -288,6 +313,7 @@ test.describe('FEAT-006 Unified Observability Workspace', () => {
     // DEFERRED: Playwright env unavailable
     test.skip(true, 'DEFERRED: Playwright env unavailable');
     await stubAdoProjects(page);
+    await stubObservabilityUsers(page);
     await page.route('**/api/platform-admin/observability/health**', async (route) => {
       await route.fulfill({
         status: 200,
@@ -333,6 +359,7 @@ test.describe('FEAT-006 Unified Observability Workspace', () => {
     // DEFERRED: Playwright env unavailable
     test.skip(true, 'DEFERRED: Playwright env unavailable');
     await stubAdoProjects(page);
+    await stubObservabilityUsers(page);
     await page.route('**/api/platform-admin/observability/health**', async (route) => {
       await route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ error: 'Internal server error' }) });
     });

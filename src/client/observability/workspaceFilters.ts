@@ -67,6 +67,18 @@ export interface FilterFieldErrors {
   timeRange?: string;
 }
 
+export function actorOptionLabel(user: {
+  displayName: string;
+  email: string;
+  userId: string;
+}): string {
+  const name = user.displayName.trim();
+  if (name) return name;
+  const email = user.email.trim();
+  if (email) return email;
+  return user.userId;
+}
+
 export function emptyFilterDraft(): WorkspaceFilterDraft {
   return {
     timeRange: '1h',
@@ -113,7 +125,7 @@ export function validateWorkspaceFilters(draft: WorkspaceFilterDraft, nowMs = Da
   const traceId = draft.traceId.trim();
 
   if (!actorId) {
-    errors.actorId = 'Actor is required — enter a user ID (UUID)';
+    errors.actorId = 'Actor is required — select a user';
   } else if (!ACTOR_UUID_PATTERN.test(actorId)) {
     errors.actorId = 'Invalid actor — must be a valid user ID (UUID)';
   }

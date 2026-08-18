@@ -6,12 +6,25 @@
  *   SessionTimelinePage.test.tsx, useSessionTimeline.test.ts,
  *   observabilitySessionTimeline.test.ts, observabilityQueryRoutes.test.ts
  */
+import type { Page } from '@playwright/test';
 import { test, expect } from '../support/fixtures';
 import { stubAdoProjects } from '../support/api-stubs';
 
 const ACTOR = '11111111-1111-4111-8111-111111111111';
 const SESSION = '22222222-2222-4222-8222-222222222222';
 const TRACE = '4bf92f3577b34da6a3ce929d0e0e4736';
+
+async function stubObservabilityUsers(page: Page): Promise<void> {
+  await page.route('**/api/platform-admin/users', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        users: [{ userId: ACTOR, displayName: 'Ada Lovelace', email: 'ada@example.com' }],
+      }),
+    });
+  });
+}
 
 const timelineBody = {
   session: { sessionId: SESSION, interviewId: '33333333-3333-4333-8333-333333333333', runIds: ['run-1'] },
@@ -60,6 +73,7 @@ test.describe('FEAT-007 Interview and Agent Session Timeline', () => {
     // DEFERRED: Playwright env unavailable
     test.skip(true, 'DEFERRED: Playwright env unavailable');
     await stubAdoProjects(page);
+    await stubObservabilityUsers(page);
     await page.route('**/api/platform-admin/observability/trail**', async (route) => {
       await route.fulfill({
         status: 200,
@@ -92,7 +106,7 @@ test.describe('FEAT-007 Interview and Agent Session Timeline', () => {
     await loginAsPersona('super-admin');
     await page.goto('/platform-admin');
     await page.getByTestId('platform-admin-tab-observability').click();
-    await page.getByTestId('observability-actor').fill(ACTOR);
+    await page.getByTestId('observability-actor').selectOption(ACTOR);
     await page.getByTestId('observability-apply-filters').click();
     await page.getByTestId(`observability-session-link-${SESSION}`).click();
     await expect(page.getByTestId('session-timeline-page')).toBeVisible();
@@ -112,6 +126,7 @@ test.describe('FEAT-007 Interview and Agent Session Timeline', () => {
     // DEFERRED: Playwright env unavailable
     test.skip(true, 'DEFERRED: Playwright env unavailable');
     await stubAdoProjects(page);
+    await stubObservabilityUsers(page);
     await page.route('**/api/platform-admin/observability/trail**', async (route) => {
       await route.fulfill({
         status: 200,
@@ -155,7 +170,7 @@ test.describe('FEAT-007 Interview and Agent Session Timeline', () => {
     await loginAsPersona('super-admin');
     await page.goto('/platform-admin');
     await page.getByTestId('platform-admin-tab-observability').click();
-    await page.getByTestId('observability-actor').fill(ACTOR);
+    await page.getByTestId('observability-actor').selectOption(ACTOR);
     await page.getByTestId('observability-apply-filters').click();
     await page.getByTestId(`observability-session-link-${SESSION}`).click();
     await expect(page.getByTestId('session-timeline-partial')).toContainText('Incomplete timeline');
@@ -169,6 +184,7 @@ test.describe('FEAT-007 Interview and Agent Session Timeline', () => {
     // DEFERRED: Playwright env unavailable
     test.skip(true, 'DEFERRED: Playwright env unavailable');
     await stubAdoProjects(page);
+    await stubObservabilityUsers(page);
     await page.route(`**/api/platform-admin/observability/sessions/${SESSION}/timeline**`, async (route) => {
       await route.fulfill({
         status: 404,

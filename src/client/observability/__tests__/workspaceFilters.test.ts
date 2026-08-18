@@ -1,4 +1,5 @@
 import {
+  actorOptionLabel,
   emptyFilterDraft,
   formatStoreBytes,
   formatTrailDescription,
@@ -10,6 +11,14 @@ import {
 const ACTOR = '11111111-1111-4111-8111-111111111111';
 const TRACE = '4bf92f3577b34da6a3ce929d0e0e4736';
 const NOW = Date.parse('2026-08-17T18:00:00.000Z');
+
+describe('actorOptionLabel', () => {
+  it('prefers display name, then email, then user id', () => {
+    expect(actorOptionLabel({ userId: ACTOR, displayName: 'Ada Lovelace', email: 'ada@example.com' })).toBe('Ada Lovelace');
+    expect(actorOptionLabel({ userId: ACTOR, displayName: '  ', email: 'ada@example.com' })).toBe('ada@example.com');
+    expect(actorOptionLabel({ userId: ACTOR, displayName: '', email: '' })).toBe(ACTOR);
+  });
+});
 
 describe('validateWorkspaceFilters', () => {
   it('PBI-004 AC-3 rejects a missing or non-UUID actor before search', () => {
