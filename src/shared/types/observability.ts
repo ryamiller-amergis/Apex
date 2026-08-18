@@ -394,7 +394,7 @@ export interface AgentTimelineEntry extends SessionTimelineEntryBase {
 
 export interface TraceTimelineEntry extends SessionTimelineEntryBase {
   source: 'trace';
-  eventType: 'api_request' | 'error';
+  eventType: 'api_request' | 'error' | 'ui_action';
   traceId: string;
   routeTemplate?: string;
   method?: string;

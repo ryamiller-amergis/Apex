@@ -23,7 +23,8 @@ function createWrapper() {
 function mockJourneyFetch(page: JourneyEdgePage) {
   global.fetch = jest.fn().mockImplementation((url: string, init?: RequestInit) => {
     const method = (init?.method ?? 'GET').toUpperCase();
-    const body = method === 'POST' ? { ok: true, daysReconciled: 1, edgesWritten: 1 } : page;
+    const isReconcile = method === 'POST' || String(url).includes('/journeys/reconcile');
+    const body = isReconcile ? { ok: true, daysReconciled: 1, edgesWritten: 1 } : page;
     return Promise.resolve({
       ok: true,
       status: 200,
