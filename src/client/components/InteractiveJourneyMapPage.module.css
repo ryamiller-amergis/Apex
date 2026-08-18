@@ -94,7 +94,7 @@
 
 .buttonPrimary {
   background: var(--accent-color);
-  color: var(--bg-primary);
+  color: var(--on-accent);
   border-color: var(--accent-color);
 }
 

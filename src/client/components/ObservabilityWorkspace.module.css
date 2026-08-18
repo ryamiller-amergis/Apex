@@ -126,7 +126,7 @@
 .primaryButton {
   border: none;
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   box-shadow: var(--glow-accent);
 }
 
@@ -160,7 +160,7 @@
 
 .pageButtonActive {
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border-color: var(--accent-color);
 }
 
@@ -249,7 +249,7 @@
 
 .chipActive {
   background: var(--accent-color);
-  color: #fff;
+  color: var(--on-accent);
   border-color: var(--accent-color);
 }
 

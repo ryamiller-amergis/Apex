@@ -168,7 +168,7 @@
 .sourceBtnPressed {
   composes: sourceBtn;
   background: var(--accent-color);
-  color: var(--bg-primary);
+  color: var(--on-accent);
   box-shadow: var(--glow-accent);
 }
 
@@ -404,7 +404,7 @@
 .buttonPrimary {
   composes: button;
   background: var(--accent-color);
-  color: var(--bg-primary);
+  color: var(--on-accent);
   border-color: var(--accent-color);
   box-shadow: var(--glow-accent);
 }

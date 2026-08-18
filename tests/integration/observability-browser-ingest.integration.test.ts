@@ -7,7 +7,7 @@ import request from 'supertest';
 import { eq } from 'drizzle-orm';
 import { db } from './setup';
 import pool from '../../src/server/db';
-import { traceEvents } from '../../src/server/db/schema';
+import { appUsers, traceEvents } from '../../src/server/db/schema';
 import { createObservabilityCaptureService } from '../../src/server/services/observabilityCaptureService';
 import {
   createObservabilityIngestService,
@@ -17,7 +17,7 @@ import {
 import observabilityRoutes from '../../src/server/routes/observability';
 import { insertSafeTraceEvents } from '../../src/server/services/traceEventStorageService';
 
-const TRACE_ID = 'cccccccccccccccccccccccccccccccc';
+const TRACE_ID = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
 
 async function cleanup(): Promise<void> {
   await db.delete(traceEvents).where(eq(traceEvents.traceId, TRACE_ID));
@@ -34,6 +34,10 @@ describe('observability browser ingest integration', () => {
   });
 
   it('AC-0 persists a browser route_view under the authenticated actor', async () => {
+    const [actor] = await db.select({ oid: appUsers.oid }).from(appUsers).limit(1);
+    expect(actor?.oid).toBeTruthy();
+    const actorOid = actor!.oid;
+
     const capture = createObservabilityCaptureService({
       isCaptureEnabled: () => true,
       insertBatch: insertSafeTraceEvents,
@@ -50,7 +54,7 @@ describe('observability browser ingest integration', () => {
     const app = express();
     app.use((req, _res, next) => {
       (req as express.Request & { user?: { profile: { oid: string } } }).user = {
-        profile: { oid: 'user-oid-1' },
+        profile: { oid: actorOid },
       };
       next();
     });
@@ -74,7 +78,7 @@ describe('observability browser ingest integration', () => {
     await capture.flush();
     const rows = await db.select().from(traceEvents).where(eq(traceEvents.traceId, TRACE_ID));
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.actorUserId).toBe('user-oid-1');
+    expect(rows[0]?.actorUserId).toBe(actorOid);
     expect(rows[0]?.eventType).toBe('ui_action');
     expect(rows[0]?.routeTemplate).toBe('/home');
   });
