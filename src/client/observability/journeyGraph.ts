@@ -94,6 +94,11 @@ export function rangeForPreset(
   return { from: addUtcDays(availableTo, -6), to: availableTo };
 }
 
+/** Trail presets like "last 1 hour" collapse to one UTC day — do not pin Journey to that. */
+export function shouldInheritSharedJourneyRange(from: string, to: string): boolean {
+  return toUtcDay(from) !== toUtcDay(to);
+}
+
 export function isRangeWithinCoverage(
   from: string,
   to: string,

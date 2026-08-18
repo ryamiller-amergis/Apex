@@ -3,6 +3,7 @@ import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import {
+  JOURNEY_DEFAULT_MIN_TRANSITIONS,
   JOURNEY_TABLE_PAGE_SIZE,
   OBSERVABILITY_MAX_ROWS,
   OBSERVABILITY_VIEWER_FLAG,
@@ -20,6 +21,7 @@ import {
   edgeStableKey,
   isRangeWithinCoverage,
   journeyCoverageWindow,
+  shouldInheritSharedJourneyRange,
   layoutJourneyGraph,
   rangeForPreset,
   routeStableKey,
@@ -75,6 +77,7 @@ function initialToolbar(sharedRange: InteractiveJourneyMapPageProps['sharedRange
   const defaults = defaultJourneyFilters(nowMs);
   if (
     sharedRange
+    && shouldInheritSharedJourneyRange(sharedRange.from, sharedRange.to)
     && isRangeWithinCoverage(sharedRange.from, sharedRange.to, coverage.availableFrom, coverage.availableTo)
   ) {
     return {
@@ -120,7 +123,7 @@ export const InteractiveJourneyMapPage: React.FC<InteractiveJourneyMapPageProps>
       preset: (preset ?? '30d') as JourneyDatePreset,
       customFrom: customFrom ?? '',
       customTo: customTo ?? '',
-      minTransitions: (minTransitions ?? '50') as ToolbarValues['minTransitions'],
+      minTransitions: (minTransitions ?? String(JOURNEY_DEFAULT_MIN_TRANSITIONS)) as ToolbarValues['minTransitions'],
     };
     const parsed = toolbarSchema.safeParse(values);
     if (!parsed.success) return filtersFromToolbar(toolbarSeed);
@@ -330,7 +333,7 @@ const JourneyResult: React.FC<JourneyResultProps> = ({
         <div className={styles.empty} {...{ 'data-testid': 'journey-map-empty' }}>
           <h4 className={styles.emptyTitle}>No transitions in this range</h4>
           <p className={styles.emptyText}>
-            Broaden the date range or lower the minimum-transition threshold. Concrete identifiers never appear in Journey results.
+            This map is aggregated page-to-page navigation, not the User Activity Trail, and the User dropdown does not apply. Choose Last 7 or 30 days, set Minimum transitions to All transitions, click Refresh, and visit at least two different Apex pages first. API-only events do not create journey edges.
           </p>
         </div>
       ) : (

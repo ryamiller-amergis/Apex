@@ -5,6 +5,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { OBSERVABILITY_VIEWER_FLAG } from '../../shared/types/observability';
 import { isFeatureEnabled } from '../services/featureFlagService';
+import { getJourneyAggregationService } from '../services/journeyAggregationService';
 import * as observabilityQueryService from '../services/observabilityQueryService';
 import {
   ObservabilityQueryError,
@@ -121,6 +122,16 @@ router.get('/journeys', async (req: Request, res: Response): Promise<void> => {
     const filters = parseJourneyQuery(queryRecord(req.query));
     const page = await observabilityQueryService.queryJourneyMap(filters);
     res.status(200).json(page);
+  } catch (err) {
+    sendQueryError('journey', err, res);
+  }
+});
+
+router.post('/journeys/reconcile', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const filters = parseJourneyQuery(queryRecord(req.query));
+    const result = await getJourneyAggregationService().reconcileJourneyDays(filters.fromDay, filters.toDay);
+    res.status(200).json({ ok: true, ...result });
   } catch (err) {
     sendQueryError('journey', err, res);
   }

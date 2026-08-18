@@ -435,15 +435,26 @@ describe('observabilitySessionTimeline', () => {
     await expect(
       getSessionTimeline(
         { sessionId: SESSION_ID, cursor: null },
-        { loaders: loaders({ identity: null }) },
+        { loaders: loaders({ identity: null, traces: [] }) },
       ),
     ).rejects.toBeInstanceOf(ObservabilityQueryError);
     await expect(
       getSessionTimeline(
         { sessionId: SESSION_ID, cursor: null },
-        { loaders: loaders({ identity: null }) },
+        { loaders: loaders({ identity: null, traces: [] }) },
       ),
     ).rejects.toMatchObject({ status: 404, code: 'OBSERVABILITY_NOT_FOUND' });
+  });
+
+  it('builds a trace-only timeline for a capture session that is not an interview thread', async () => {
+    const result = await getSessionTimeline(
+      { sessionId: 'express-session-abc', cursor: null },
+      { loaders: loaders({ identity: null }) },
+    );
+    expect(result.session.sessionId).toBe('express-session-abc');
+    expect(result.session.runIds).toEqual([]);
+    expect(result.entries.some((entry) => entry.source === 'trace')).toBe(true);
+    expect(result.verdict.detail).toMatch(/no agent runs/i);
   });
 
   it('VT-20 verifies the session overlay query path is backed by the session/time index', () => {

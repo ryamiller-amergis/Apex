@@ -7,7 +7,6 @@ import type {
   SessionTimelineResponse,
   SessionTimelineSource,
 } from '../../shared/types/observability';
-import { ACTOR_UUID_PATTERN } from '../observability/workspaceFilters';
 import { useSessionTimeline } from '../hooks/useSessionTimeline';
 import styles from './SessionTimelinePage.module.css';
 
@@ -17,7 +16,8 @@ const lookupSchema = z.object({
     .string()
     .trim()
     .min(1, 'Session ID is required')
-    .regex(ACTOR_UUID_PATTERN, 'Enter a valid session ID'),
+    .max(128, 'Session ID is too long')
+    .regex(/^[A-Za-z0-9._:-]+$/, 'Enter a valid session ID'),
 });
 type LookupValues = z.infer<typeof lookupSchema>;
 type SourceFilter = 'all' | SessionTimelineSource;

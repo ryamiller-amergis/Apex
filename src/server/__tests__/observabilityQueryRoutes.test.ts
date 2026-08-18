@@ -24,6 +24,12 @@ jest.mock('../services/observabilityQueryService', () => ({
   getCaptureHealth: jest.fn(),
   getSessionTimeline: jest.fn(),
 }));
+jest.mock('../services/journeyAggregationService', () => ({
+  getJourneyAggregationService: jest.fn(() => ({
+    reconcileJourneyDays: jest.fn().mockResolvedValue({ daysReconciled: 2, edgesWritten: 1 }),
+    runJourneyAggregationCycle: jest.fn(),
+  })),
+}));
 
 import express from 'express';
 import request from 'supertest';
@@ -154,6 +160,12 @@ describe('observability query routes', () => {
     expect(JSON.stringify(health.body)).not.toMatch(/details|actorUserId|traceId/);
     expect(mockQueryUserTrail).toHaveBeenCalledTimes(1);
     expect(mockGetCaptureHealth).toHaveBeenCalledTimes(1);
+
+    const reconcile = await request(app).post(
+      '/api/platform-admin/observability/journeys/reconcile?project=Apex&fromDay=2026-08-01&toDay=2026-08-17',
+    );
+    expect(reconcile.status).toBe(200);
+    expect(reconcile.body).toEqual({ ok: true, daysReconciled: 2, edgesWritten: 1 });
   });
 
   it('VT-09 returns 200 empty envelopes for collections and 404 for unknown exact resources', async () => {
@@ -247,7 +259,7 @@ describe('observability query routes', () => {
 
   it('PBI-006 AC-3 / VT-10 rejects a malformed session ID or cursor without calling the service', async () => {
     const badId = await request(buildApp()).get(
-      '/api/platform-admin/observability/sessions/not-a-uuid/timeline?project=Apex',
+      `/api/platform-admin/observability/sessions/${'x'.repeat(200)}/timeline?project=Apex`,
     );
     const badCursor = await request(buildApp()).get(
       `/api/platform-admin/observability/sessions/${SESSION_ID}/timeline?project=Apex&cursor=%%%`,

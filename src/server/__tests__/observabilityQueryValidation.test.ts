@@ -252,7 +252,11 @@ describe('observabilityQueryValidation VT-04', () => {
       },
     });
 
-    expect(() => parseSessionTimelineQuery({ sessionId: 'not-a-uuid' }, {})).toThrow(ObservabilityQueryError);
+    expect(parseSessionTimelineQuery({ sessionId: 'express-session-abc' }, { project: 'Apex' })).toEqual({
+      sessionId: 'express-session-abc',
+      cursor: null,
+    });
+    expect(() => parseSessionTimelineQuery({ sessionId: 'bad/session' }, {})).toThrow(ObservabilityQueryError);
     expect(() => parseSessionTimelineQuery({ sessionId: SESSION_ID }, { limit: '500' })).toThrow(
       ObservabilityQueryError,
     );

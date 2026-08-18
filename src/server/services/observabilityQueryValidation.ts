@@ -95,6 +95,14 @@ export function parseUuid(value: string, label: 'actor' | 'session'): string {
   return value.toLowerCase();
 }
 
+/** Capture sessions use Express/browser ids; interview timelines still use UUIDs. */
+export function parseSessionTimelineId(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length < 1 || trimmed.length > 128) invalid();
+  if (/[/?#\s]/.test(trimmed)) invalid();
+  return UUID_RE.test(trimmed) ? trimmed.toLowerCase() : trimmed;
+}
+
 export function parseTraceIdParam(value: string): string {
   const trimmed = value.trim();
   if (!W3C_TRACE_ID_PATTERN.test(trimmed)) invalid();
@@ -345,7 +353,7 @@ function attachSessionTimelineCursor(
 }
 
 export function parseSessionTimelineQuery(params: QueryRecord, query: QueryRecord): SessionTimelineQuery {
-  const sessionId = parseUuid(requiredString(params, 'sessionId'), 'session');
+  const sessionId = parseSessionTimelineId(requiredString(params, 'sessionId'));
   const limitRaw = optionalString(query, 'limit');
   if (limitRaw && limitRaw !== String(OBSERVABILITY_PAGE_SIZE)) invalid();
   return {

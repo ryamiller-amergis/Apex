@@ -442,7 +442,7 @@ export interface SessionTimelineResponse {
 /** FEAT-009 Interactive Journey Map — graph view over FEAT-005 paginated rollup edges. */
 export const JOURNEY_MIN_TRANSITIONS = [1, 10, 50, 100] as const;
 export type JourneyMinTransitions = (typeof JOURNEY_MIN_TRANSITIONS)[number];
-export const JOURNEY_DEFAULT_MIN_TRANSITIONS: JourneyMinTransitions = 50;
+export const JOURNEY_DEFAULT_MIN_TRANSITIONS: JourneyMinTransitions = 1;
 export const JOURNEY_CANVAS_EDGE_LIMIT = 100;
 export const JOURNEY_TABLE_PAGE_SIZE = OBSERVABILITY_PAGE_SIZE;
 

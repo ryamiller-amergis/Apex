@@ -24,6 +24,12 @@ jest.mock('../services/observabilityQueryService', () => ({
   getCaptureHealth: jest.fn(),
   getSessionTimeline: jest.fn(),
 }));
+jest.mock('../services/journeyAggregationService', () => ({
+  getJourneyAggregationService: jest.fn(() => ({
+    reconcileJourneyDays: jest.fn().mockResolvedValue({ daysReconciled: 0, edgesWritten: 0 }),
+    runJourneyAggregationCycle: jest.fn(),
+  })),
+}));
 
 import express from 'express';
 import request from 'supertest';

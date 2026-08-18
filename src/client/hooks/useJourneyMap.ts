@@ -7,8 +7,8 @@ import type {
 import { ObservabilityApiError } from './useObservabilityQueries';
 import { toJourneyMapView } from '../observability/journeyGraph';
 
-async function observabilityFetch<T>(url: string): Promise<T> {
-  const res = await fetch(url, { credentials: 'include' });
+async function observabilityFetch<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, { credentials: 'include', ...init });
   const body = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
   if (!res.ok) {
     throw new ObservabilityApiError(body.error ?? `HTTP ${res.status}`, res.status, body.code);
@@ -37,11 +37,21 @@ export function buildJourneyQueryUrl(
   return `/api/platform-admin/observability/journeys?${params.toString()}`;
 }
 
+export function buildJourneyReconcileUrl(project: string, filters: JourneyMapFilters): string {
+  const params = new URLSearchParams({
+    project,
+    fromDay: filters.from.slice(0, 10),
+    toDay: filters.to.slice(0, 10),
+  });
+  return `/api/platform-admin/observability/journeys/reconcile?${params.toString()}`;
+}
+
 export async function fetchJourneyMap(
   project: string,
   filters: JourneyMapFilters,
   generatedAt = new Date().toISOString(),
 ): Promise<JourneyMapResponse> {
+  await observabilityFetch(buildJourneyReconcileUrl(project, filters), { method: 'POST' });
   const pages: JourneyEdgePage[] = [];
   let cursor: string | null = null;
   do {

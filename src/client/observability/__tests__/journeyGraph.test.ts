@@ -7,6 +7,7 @@ import {
 import {
   JourneyNormalizationError,
   defaultJourneyFilters,
+  shouldInheritSharedJourneyRange,
   edgeStableKey,
   isNormalizedRouteTemplate,
   isRangeWithinCoverage,
@@ -153,13 +154,15 @@ describe('layoutJourneyGraph (TBI-011 DoD-0 / VT-01 / VT-07)', () => {
 describe('journey coverage presets (PBI-007 AC-0)', () => {
   const now = Date.parse('2026-08-17T18:00:00.000Z');
 
-  it('advertises only 30-day coverage and default min-50 filters', () => {
+  it('advertises only 30-day coverage and default all-transitions filters', () => {
     expect(journeyCoverageWindow(now)).toEqual({ availableFrom: '2026-07-19', availableTo: '2026-08-17' });
     expect(defaultJourneyFilters(now)).toEqual({
       from: '2026-07-19',
       to: '2026-08-17',
-      minTransitions: 50,
+      minTransitions: 1,
     });
+    expect(shouldInheritSharedJourneyRange('2026-08-17T17:00:00.000Z', '2026-08-17T18:00:00.000Z')).toBe(false);
+    expect(shouldInheritSharedJourneyRange('2026-08-11T00:00:00.000Z', '2026-08-17T18:00:00.000Z')).toBe(true);
     expect(rangeForPreset('7d', now)).toEqual({ from: '2026-08-11', to: '2026-08-17' });
     expect(isRangeWithinCoverage('2026-06-01', '2026-08-17', '2026-07-19', '2026-08-17')).toBe(false);
     expect(isRangeWithinCoverage('2026-07-19', '2026-08-17', '2026-07-19', '2026-08-17')).toBe(true);

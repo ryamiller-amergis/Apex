@@ -278,12 +278,16 @@ function traceStatus(row: TraceEventView): SessionTimelineEntryStatus {
 }
 
 export function projectTraceEntry(row: TraceEventView): TraceTimelineEntry | null {
-  if (row.eventType !== 'api_request' && row.eventType !== 'error') return null;
+  if (row.eventType !== 'api_request' && row.eventType !== 'error' && row.eventType !== 'ui_action') {
+    return null;
+  }
   const routeTemplate = row.routeTemplate ?? undefined;
   const method = row.method ?? undefined;
   const title = row.eventType === 'error'
     ? `Error ${row.statusCode ?? ''} ${routeTemplate ?? ''}`.trim()
-    : `${method ?? 'API'} ${routeTemplate ?? ''}`.trim();
+    : row.eventType === 'ui_action'
+      ? `Navigated to ${routeTemplate ?? 'unknown route'}`
+      : `${method ?? 'API'} ${routeTemplate ?? ''}`.trim();
   const safeDetail = scrubOptional(row.diagnosticSummary);
   const details: Array<{ label: string; value: string }> = [];
   addDetail(details, 'Trace ID', row.traceId);
@@ -401,9 +405,12 @@ function extractEventDuration(event: unknown): number | undefined {
   return parseDuration(asRecord(event).durationMs);
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function createDefaultSessionTimelineLoaders(): SessionTimelineLoaders {
   return {
     async loadSessionIdentity(sessionId) {
+      if (!UUID_RE.test(sessionId)) return null;
       const threads = await defaultDb
         .select({
           id: chatThreads.id,
@@ -452,6 +459,7 @@ export function createDefaultSessionTimelineLoaders(): SessionTimelineLoaders {
       };
     },
     async loadDurableEvents(sessionId) {
+      if (!UUID_RE.test(sessionId)) return [];
       const rows = await defaultDb
         .select({
           eventId: agentRunEvents.eventId,
@@ -506,7 +514,7 @@ export function createDefaultSessionTimelineLoaders(): SessionTimelineLoaders {
         .where(
           and(
             eq(traceEvents.sessionId, sessionId),
-            inArray(traceEvents.eventType, ['api_request', 'error']),
+            inArray(traceEvents.eventType, ['api_request', 'error', 'ui_action']),
           ),
         )
         .orderBy(asc(traceEvents.occurredAt), asc(traceEvents.id))
@@ -546,10 +554,8 @@ export async function getSessionTimeline(
   } catch {
     throw new ObservabilityTimelineUnavailableError();
   }
-  if (!identity) observabilityNotFound();
-
   const [agentSettled, traceSettled] = await Promise.allSettled([
-    loaders.loadDurableEvents(query.sessionId),
+    identity ? loaders.loadDurableEvents(query.sessionId) : Promise.resolve([]),
     loaders.loadTraceOverlays(query.sessionId),
   ]);
 
@@ -564,6 +570,16 @@ export async function getSessionTimeline(
 
   const agentEntries = (agentRows ?? []).map(projectAgentEntry).filter((row): row is AgentTimelineEntry => row != null);
   const traceEntries = (traceRows ?? []).map(projectTraceEntry).filter((row): row is TraceTimelineEntry => row != null);
+  if (!identity) {
+    if (traceFailed) throw new ObservabilityTimelineUnavailableError();
+    if (traceEntries.length === 0) observabilityNotFound();
+    identity = {
+      sessionId: query.sessionId,
+      startedAt: traceEntries[0]!.occurredAt,
+      completedAt: traceEntries[traceEntries.length - 1]!.occurredAt,
+      runs: [],
+    };
+  }
   const merged = [...agentEntries, ...traceEntries].sort(compareSessionTimelineEntries);
 
   const emittedCount = query.cursor?.emittedCount ?? 0;
