@@ -53,6 +53,7 @@ interface AppHeaderProps {
   onNavigateLoadTests?: () => void;
   onNavigateDiagrams?: () => void;
   onNavigateWorkBoard?: () => void;
+  workBoardEnabled?: boolean;
   onNavigateAdmin: () => void;
   onOpenChangelog: () => void;
   onThemeChange: (theme: ThemeMode) => void;
@@ -91,6 +92,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigateLoadTests,
   onNavigateDiagrams,
   onNavigateWorkBoard,
+  workBoardEnabled = true,
   onNavigateAdmin,
   onOpenChangelog,
   onThemeChange,
@@ -156,6 +158,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       return true;
     }
     if (item.view === 'work-board') {
+      if (!workBoardEnabled) return false;
       if (!isSuperAdmin && !menuEnabledViews.includes('work-board')) return false;
       return isSuperAdmin || can('work-board:view');
     }

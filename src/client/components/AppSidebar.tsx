@@ -44,6 +44,7 @@ interface AppSidebarProps {
   onNavigateAiCost?: () => void;
   onNavigateDesignModule?: () => void;
   onNavigateWorkBoard?: () => void;
+  workBoardEnabled?: boolean;
   onNavigateLoadTests?: () => void;
   onNavigateDiagrams?: () => void;
   onNavigateAdmin: () => void;
@@ -212,6 +213,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onNavigateAiCost,
   onNavigateDesignModule,
   onNavigateWorkBoard,
+  workBoardEnabled = true,
   onNavigateLoadTests,
   onNavigateDiagrams,
   onNavigateAdmin,
@@ -278,6 +280,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       return true;
     }
     if (item.view === 'work-board') {
+      if (!workBoardEnabled) return false;
       if (!isSuperAdmin && !menuEnabledViews.includes('work-board')) return false;
       return isSuperAdmin || can('work-board:view');
     }

@@ -242,6 +242,7 @@ function App() {
     groups,
     permissionsLoaded,
     workItems,
+    workBoardEnabled,
     usesBoardWorkItems,
     error,
     isFetchingWorkItems,
@@ -439,6 +440,7 @@ function App() {
     if (currentView === 'design-module' && !isSuperAdmin && (!effectiveEnabledViews.includes('design-module') || !can('design-module:view'))) navigate(fallback);
     if (currentView === 'load-tests'    && !isSuperAdmin && (!effectiveEnabledViews.includes('load-tests')    || !can('load-test:view')))    navigate(fallback);
     if (currentView === 'diagrams'      && !isSuperAdmin && (!effectiveEnabledViews.includes('diagrams')      || !can('diagram:view')))      navigate(fallback);
+    if (currentView === 'work-board' && !workBoardEnabled) navigate(fallback);
     if (currentView === 'work-board'    && !isSuperAdmin && (!effectiveEnabledViews.includes('work-board') || !can('work-board:view'))) navigate(fallback);
     if (currentView === 'planning') {
       if (!isSuperAdmin && (!effectiveEnabledViews.includes('planning') || !can('planning:view'))) {
@@ -448,7 +450,7 @@ function App() {
         navigate(firstAccessible ? `/planning/${firstAccessible}` : fallback);
       }
     }
-  }, [currentView, planningTab, permissionsLoaded, menuConfigReady, homeFlagsLoading, canAccessHome, can, isInAnyGroup, isSuperAdmin, isRestricted, effectiveEnabledViews, selectedProject, navigate]);
+  }, [currentView, planningTab, permissionsLoaded, menuConfigReady, homeFlagsLoading, canAccessHome, can, isInAnyGroup, isSuperAdmin, isRestricted, effectiveEnabledViews, selectedProject, workBoardEnabled, navigate]);
 
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
@@ -684,6 +686,7 @@ function App() {
             onNavigateAiCost={() => navigate('/ai-cost')}
             onNavigateDesignModule={() => navigate('/design-module')}
             onNavigateWorkBoard={() => navigate('/work-board')}
+            workBoardEnabled={workBoardEnabled}
             onNavigateLoadTests={() => navigate('/load-tests')}
             onNavigateDiagrams={() => navigate('/diagrams')}
             onNavigateAdmin={() => navigate('/admin/roles')}
@@ -738,6 +741,7 @@ function App() {
             onNavigateLoadTests={() => navigate('/load-tests')}
             onNavigateDiagrams={() => navigate('/diagrams')}
             onNavigateWorkBoard={() => navigate('/work-board')}
+            workBoardEnabled={workBoardEnabled}
             onOpenChangelog={() => setShowChangelog(true)}
             onThemeChange={setThemeMode}
             onLogout={handleLogout}
@@ -1024,12 +1028,22 @@ function App() {
                 <FeatureRequestsView />
               </Suspense>
             </ErrorBoundary>
-          ) : currentView === 'work-board' && (isSuperAdmin || can('work-board:view')) ? (
-            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
-              <Suspense fallback={<ViewSkeleton />}>
-                <ApexWorkBoardView currentUserId={userId ?? ''} project={selectedProject} />
-              </Suspense>
-            </ErrorBoundary>
+          ) : currentView === 'work-board' ? (
+            // @feature-flag:work-board start winner=enabled
+            workBoardEnabled && (isSuperAdmin || can('work-board:view')) ? (
+              // @feature-flag:work-board enabled-start
+              <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+                <Suspense fallback={<ViewSkeleton />}>
+                  <ApexWorkBoardView currentUserId={userId ?? ''} project={selectedProject} />
+                </Suspense>
+              </ErrorBoundary>
+              // @feature-flag:work-board enabled-end
+            ) : (
+              // @feature-flag:work-board disabled-start
+              null
+              // @feature-flag:work-board disabled-end
+            )
+            // @feature-flag:work-board end
           ) : currentView === 'ui-lab' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>

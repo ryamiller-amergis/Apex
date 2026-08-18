@@ -167,6 +167,34 @@ describe('AppSidebar — desktop navigation', () => {
   });
 });
 
+describe('AppSidebar — Work Board flag', () => {
+  it('hides Work Board for a super admin when the feature flag is off', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        isSuperAdmin
+        selectedProject="Apex"
+        workBoardEnabled={false}
+        onNavigateWorkBoard={jest.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Work Board' })).not.toBeInTheDocument();
+  });
+
+  it('renders Work Board for a super admin when the feature flag is on', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        isSuperAdmin
+        selectedProject="Apex"
+        workBoardEnabled
+        onNavigateWorkBoard={jest.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Work Board' })).toBeInTheDocument();
+  });
+});
+
 describe('AppSidebar — grouped sections', () => {
   const allViews = [
     'calendar', 'planning', 'cloudcost', 'backlog', 'adr',

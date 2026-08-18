@@ -7,6 +7,8 @@
  * opportunistic hook in listApexWorkItems.
  */
 import { notifyDueSoonWorkItems } from './apexWorkItemService';
+import { isFeatureOperational } from './featureFlagService';
+import { WORK_BOARD_FLAG } from '../../shared/types/featureFlags';
 
 export class WorkBoardSchedulerService {
   private intervalId: NodeJS.Timeout | null = null;
@@ -42,6 +44,13 @@ export class WorkBoardSchedulerService {
 
   private async run(): Promise<void> {
     if (this.isRunning) return;
+    // @feature-flag:work-board start winner=enabled
+    if (!(await isFeatureOperational(WORK_BOARD_FLAG))) {
+      // @feature-flag:work-board disabled-start
+      return;
+      // @feature-flag:work-board disabled-end
+    }
+    // @feature-flag:work-board enabled-start
     this.isRunning = true;
     try {
       const count = await notifyDueSoonWorkItems();
@@ -53,6 +62,8 @@ export class WorkBoardSchedulerService {
     } finally {
       this.isRunning = false;
     }
+    // @feature-flag:work-board enabled-end
+    // @feature-flag:work-board end
   }
 }
 

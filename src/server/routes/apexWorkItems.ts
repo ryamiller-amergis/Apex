@@ -41,7 +41,9 @@ import {
 } from '../services/apexDeploymentService';
 import { importFromAdo } from '../services/apexWorkItemImportService';
 import { subscribe as subscribeBoardBus } from '../services/apexWorkBoardBus';
+import { isFeatureEnabled } from '../services/featureFlagService';
 import { startSseHeartbeat, writeSseEvent } from '../utils/sseResponse';
+import { WORK_BOARD_FLAG } from '../../shared/types/featureFlags';
 import type {
   ApexWorkItemFilters,
   ApexWorkItemType,
@@ -73,6 +75,30 @@ function projectFromReq(req: Parameters<typeof resolveRequestProject>[0]): strin
 // View routes
 router.use(requirePermission('work-board:view'));
 router.use(requireProjectAccess(resolveRequestProject));
+router.use(async (req, res, next) => {
+  try {
+    const project = resolveRequestProject(req);
+    if (!project) {
+      next();
+      return;
+    }
+    const userId = getUserId(req);
+    const enabled = await isFeatureEnabled(WORK_BOARD_FLAG, { userId, project });
+    // @feature-flag:work-board start winner=enabled
+    if (!enabled) {
+      // @feature-flag:work-board disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:work-board disabled-end
+    }
+    // @feature-flag:work-board enabled-start
+    next();
+    // @feature-flag:work-board enabled-end
+    // @feature-flag:work-board end
+  } catch (err) {
+    next(err);
+  }
+});
 
 // ── Filters / owners / releases ───────────────────────────────────────────────
 

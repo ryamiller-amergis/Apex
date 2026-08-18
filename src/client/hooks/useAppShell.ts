@@ -3,12 +3,14 @@ import { useQueryClient } from '@tanstack/react-query';
 import { startOfMonth, endOfMonth } from 'date-fns';
 import { useWorkItems } from './useWorkItems';
 import { useProjectMenuConfig } from './useProjectMenuConfig';
+import { useFeatureFlag } from './useFeatureFlags';
 import { useWhatsNewState } from './useWhatsNewState';
 import { env } from '../config/env';
 import type { WorkItem } from '../types/workitem';
 import type { MenuItemKey } from '../../shared/types/menuSettings';
 import type { MyPermissionsResponse } from '../../shared/types/rbac';
 import type { WhatsNewState } from '../../shared/types/whatsNew';
+import { WORK_BOARD_FLAG } from '../../shared/types/featureFlags';
 
 import { THEME_CYCLE, isThemeMode, type ThemeMode } from '../config/themes';
 
@@ -105,12 +107,21 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
   const endDate = useMemo(() => endOfMonth(currentDate), [currentDate]);
 
   const { enabledViews, isLoading: menuConfigLoading } = useProjectMenuConfig(selectedProject);
-  // Board-backed when work-board is enabled, or always for Apex (even while menu is still loading).
+  const workBoardEnabled = useFeatureFlag(WORK_BOARD_FLAG, selectedProject);
   const usesBoardWorkItems = useMemo(() => {
-    if (selectedProject.toLowerCase() === 'apex') return true;
-    if (menuConfigLoading) return false;
-    return enabledViews.includes('work-board');
-  }, [selectedProject, enabledViews, menuConfigLoading]);
+    // @feature-flag:work-board start winner=enabled
+    if (workBoardEnabled) {
+      // @feature-flag:work-board enabled-start
+      if (selectedProject.toLowerCase() === 'apex') return true;
+      if (menuConfigLoading) return false;
+      return enabledViews.includes('work-board');
+      // @feature-flag:work-board enabled-end
+    }
+    // @feature-flag:work-board disabled-start
+    return false;
+    // @feature-flag:work-board disabled-end
+    // @feature-flag:work-board end
+  }, [workBoardEnabled, selectedProject, enabledViews, menuConfigLoading]);
 
   useEffect(() => {
     let cancelled = false;
@@ -360,6 +371,7 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
     restrictedModules,
     isAdmin: isSuperAdmin || roles.includes('admin'),
     workItems,
+    workBoardEnabled,
     usesBoardWorkItems,
     loading,
     error,
