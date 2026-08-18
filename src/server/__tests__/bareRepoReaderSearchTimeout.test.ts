@@ -7,7 +7,11 @@ jest.mock('../utils/asyncGit', () => ({
   safeArgs: (_mirrorPath: string, args: string[]) => args,
 }));
 
-import { BareRepoReader } from '../services/repoRead/bareRepoReader';
+import { resolveMcpToolTimeoutMs } from '../mcp/mcpTimeout';
+import {
+  BareRepoReader,
+  resolveSearchTimeoutMs,
+} from '../services/repoRead/bareRepoReader';
 import { git } from '../utils/asyncGit';
 
 const gitMock = git as jest.MockedFunction<typeof git>;
@@ -70,6 +74,27 @@ describe('BareRepoReader search timeout', () => {
     const searchOptions = gitMock.mock.calls[0][1] as { timeout: number };
     const readOptions = gitMock.mock.calls[1][1] as { timeout: number };
     expect(searchOptions.timeout).toBeGreaterThan(readOptions.timeout);
+  });
+
+  it('stays inside the MCP tool bound that wraps the call', () => {
+    // A grep allowed to outlive its caller is dead code: the generic MCP
+    // timeout fires first and the actionable message never arrives.
+    expect(resolveSearchTimeoutMs()).toBeLessThan(resolveMcpToolTimeoutMs());
+  });
+
+  it('tracks the MCP bound rather than pinning a constant that can drift', () => {
+    const previous = process.env.MCP_TOOL_TIMEOUT_MS;
+    try {
+      process.env.MCP_TOOL_TIMEOUT_MS = '90000';
+      expect(resolveSearchTimeoutMs()).toBe(85_000);
+
+      // Never collapses to nothing when the bound is configured very low.
+      process.env.MCP_TOOL_TIMEOUT_MS = '1000';
+      expect(resolveSearchTimeoutMs()).toBe(15_000);
+    } finally {
+      if (previous === undefined) delete process.env.MCP_TOOL_TIMEOUT_MS;
+      else process.env.MCP_TOOL_TIMEOUT_MS = previous;
+    }
   });
 
   it('parallelizes grep so blob inflation is not serialized', async () => {

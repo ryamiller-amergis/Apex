@@ -8,6 +8,7 @@ import type {
   RepositoryIdentity,
 } from '../../../shared/types/repoReader';
 import type { GroundingTelemetryContext } from '../../../shared/types/groundingOperations';
+import { resolveMcpToolTimeoutMs } from '../../mcp/mcpTimeout';
 import { git, safeArgs } from '../../utils/asyncGit';
 import { createGroundingTelemetry } from '../groundingTelemetry';
 import {
@@ -33,7 +34,20 @@ const LOCAL_UNAVAILABLE_MESSAGE = 'Repository content is unavailable';
 // budget meant search on a large repo was always killed mid-flight while the
 // object reads it was sized for finished in ~100ms.
 const OBJECT_READ_TIMEOUT_MS = 10_000;
-const SEARCH_TIMEOUT_MS = 60_000;
+
+// grep has to finish inside the MCP tool bound that wraps this call. Outlive
+// it and raceWithTimeout reports a generic timeout first: the caller never
+// learns to narrow the query, and the abandoned grep keeps burning CPU. The
+// headroom is what lets the specific error travel back instead.
+const SEARCH_TIMEOUT_HEADROOM_MS = 5_000;
+const MIN_SEARCH_TIMEOUT_MS = 15_000;
+
+export function resolveSearchTimeoutMs(): number {
+  return Math.max(
+    MIN_SEARCH_TIMEOUT_MS,
+    resolveMcpToolTimeoutMs() - SEARCH_TIMEOUT_HEADROOM_MS,
+  );
+}
 
 // Blob inflation parallelizes well. Clamped because the App Service instance
 // also serves requests, and unbounded threads starve them.
@@ -132,7 +146,7 @@ export class BareRepoReader implements RepoReader {
             ]),
             {
               cwd: this.mirrorPath,
-              timeout: SEARCH_TIMEOUT_MS,
+              timeout: resolveSearchTimeoutMs(),
               maxBuffer: 2 * 1024 * 1024,
             },
           );
