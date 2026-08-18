@@ -8,6 +8,7 @@ import { requireAiRunnerAuth } from '../../middleware/aiRunnerAuth';
 import type { RepositoryIdentity } from '../../../shared/types/repoReader';
 import { git, safeArgs } from '../../utils/asyncGit';
 import { createGroundingBundleStore } from '../grounding/bundleStoreService';
+import { listSkillConfigsForProject } from '../projectSettingsService';
 import {
   ensureRepoCache,
   getRepoCacheDir,
@@ -21,8 +22,8 @@ import { isUsableBareMirror } from './mirrorStore';
 const DEFAULT_PORT = 8080;
 const MIRROR_PROBE_TIMEOUT_MS = 10_000;
 
-// Read requests address objects by SHA and carry no branch. The branch only
-// tells the remote-clone fallback which head to track.
+// Used only when project settings cannot be reached. Projects configure their
+// own root branch, so assuming one repository's convention breaks the others.
 const FALLBACK_BRANCH = process.env.REPO_READ_SERVICE_BRANCH?.trim() || 'main';
 
 const bundleStore = createGroundingBundleStore({
@@ -32,13 +33,46 @@ const bundleStore = createGroundingBundleStore({
 // Concurrent requests for the same repo must not each clone it.
 const hydrations = new Map<string, Promise<string>>();
 
-function cacheOptionsFor(identity: RepositoryIdentity): RepoCacheOptions {
+function cacheOptionsFor(
+  identity: RepositoryIdentity,
+  branch: string,
+): RepoCacheOptions {
   return {
     provider: identity.provider,
     project: identity.project,
     repo: identity.repo,
-    branch: FALLBACK_BRANCH,
+    branch,
   };
+}
+
+// skillRepo is stored as `repo`, `project/repo`, or `org/repo` depending on
+// provider, while a read identity carries the bare name.
+function repoName(value: string): string {
+  return value.trim().toLowerCase().split('/').filter(Boolean).pop() ?? '';
+}
+
+/**
+ * Read requests carry no branch, but a mirror fetch verifies
+ * `refs/heads/<branch>`. The project's configured root branch is the only
+ * authority for that.
+ */
+export async function resolveBranch(
+  identity: RepositoryIdentity,
+  listConfigs = listSkillConfigsForProject,
+): Promise<string> {
+  try {
+    const configs = await listConfigs(identity.project);
+    const wanted = repoName(identity.repo);
+    // Configs come back default-first, so an unmatched repo still resolves.
+    const match =
+      configs.find((config) => repoName(config.skillRepo) === wanted) ??
+      configs[0];
+    const branch = match?.skillBranch?.trim();
+    if (branch) return branch;
+  } catch {
+    // Serving with a guess beats refusing to serve at all.
+  }
+  return FALLBACK_BRANCH;
 }
 
 async function mirrorHasCommit(
@@ -63,10 +97,13 @@ async function mirrorHasCommit(
  * backstop for a SHA that was never published.
  */
 async function hydrateMirror(identity: RepositoryIdentity): Promise<string> {
-  const options = cacheOptionsFor(identity);
-  const cacheDir = getRepoCacheDir(options);
+  // The canonical cache path ignores branch, so the warm check needs no lookup.
+  const cacheDir = getRepoCacheDir(cacheOptionsFor(identity, FALLBACK_BRANCH));
 
   if (await mirrorHasCommit(cacheDir, identity.sha)) return cacheDir;
+
+  // Only a fetch or clone reads the branch, so resolve it off the warm path.
+  const options = cacheOptionsFor(identity, await resolveBranch(identity));
 
   // A mirror that merely predates this SHA needs a fetch, not a re-download —
   // restoring the bundle would delete it first.
