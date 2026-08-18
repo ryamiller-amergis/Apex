@@ -20,6 +20,10 @@ import {
   isSharedReadCheckoutEnabledForCaller as evaluateSharedReadCheckoutFlag,
 } from './featureFlagService';
 import {
+  backgroundBundlePublisher,
+  type BackgroundBundlePublisher,
+} from './grounding/backgroundBundlePublisher';
+import {
   sharedReadCheckoutService,
   type SharedReadCheckoutIdentity,
   type SharedReadCheckoutService,
@@ -222,6 +226,7 @@ export interface CallerGroundingDependencies {
   ) => Promise<PinProjectRepositoryRootResult>;
   getRepoCacheDir?: typeof getRepoCacheDir;
   isUsableBareMirror?: (mirrorPath: string | undefined) => boolean;
+  publishGroundingBundle?: BackgroundBundlePublisher['publish'];
 }
 
 function runRefKey(run: RunRef): string {
@@ -564,6 +569,24 @@ export function createCallerGroundingService(
           caller: input.caller,
         });
         telemetry.phase(telemetryContext(input), 'bare-mirror-read');
+
+        // The repo-read service restores this bundle onto a cold container.
+        // Identity must match the profile above, or the key will not resolve.
+        // Deliberately not awaited: building it takes minutes.
+        void (
+          dependencies.publishGroundingBundle ??
+          backgroundBundlePublisher.publish
+        )({
+          identity: {
+            provider: profileProvider(grounding.provider),
+            project: grounding.project,
+            repo,
+            sha: grounding.groundedSha,
+          },
+          cacheDir: mirrorPath,
+          branch: input.repository.branch,
+          userId: input.userId,
+        });
 
         let released = false;
         return {

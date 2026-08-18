@@ -61,6 +61,15 @@ export interface GroundingBundleStore {
     identity: RepositoryIdentity,
     destination: string
   ): Promise<MaterializeResult>;
+  /**
+   * Restores the same bundle as an object-only mirror. `rehydrate` lays down a
+   * working tree, which the repo-read service must not carry — it serves
+   * cat-file/ls-tree/grep straight from the object database.
+   */
+  rehydrateBare(
+    identity: RepositoryIdentity,
+    destination: string
+  ): Promise<MaterializeResult>;
 }
 
 export interface GroundingBundleStoreOptions {
@@ -230,6 +239,51 @@ async function markWorkspaceReady(
   expectedSha: string
 ): Promise<void> {
   await writeFile(readyMarkerPath(destination), `${expectedSha}\n`, 'utf8');
+}
+
+// A bare repository has no `.git` subdirectory — its root is the git dir.
+function bareReadyMarkerPath(destination: string): string {
+  return join(destination, GROUNDING_WORKSPACE_READY_MARKER);
+}
+
+async function hasCommit(
+  runGit: GitRunner,
+  destination: string,
+  expectedSha: string
+): Promise<boolean> {
+  try {
+    // HEAD is not a reliable probe in a bare clone, so assert the commit itself.
+    await runGit(['-C', destination, 'cat-file', '-e', `${expectedSha}^{commit}`]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function isReadyMirror(
+  runGit: GitRunner,
+  destination: string,
+  expectedSha: string
+): Promise<boolean> {
+  try {
+    const markedSha = (await readFile(bareReadyMarkerPath(destination), 'utf8'))
+      .trim()
+      .toLowerCase();
+    return markedSha === expectedSha && await hasCommit(
+      runGit,
+      destination,
+      expectedSha
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function markMirrorReady(
+  destination: string,
+  expectedSha: string
+): Promise<void> {
+  await writeFile(bareReadyMarkerPath(destination), `${expectedSha}\n`, 'utf8');
 }
 
 export function createGroundingBundleStore(
@@ -420,6 +474,100 @@ export function createGroundingBundleStore(
           { durationMs: now() - startedAt }
         );
         return { status: 'remote-fallback', reason: fallbackReason };
+      } finally {
+        await rm(scratchDirectory, { recursive: true, force: true }).catch(
+          () => undefined
+        );
+      }
+    },
+
+    async rehydrateBare(identity, destination) {
+      const startedAt = now();
+      const key = bundleKey(identity);
+      const expectedSha = safeSha(identity.sha);
+      const scratchDirectory = await mkdtemp(
+        join(tmpdir(), 'apex-grounding-mirror-')
+      );
+      const downloadedBundle = join(scratchDirectory, 'snapshot.bundle');
+
+      try {
+        if (await isReadyMirror(runGit, destination, expectedSha)) {
+          telemetry('grounding.workspace.reuse', {
+            outcome: 'success',
+            shape: 'bare',
+          });
+          telemetry(
+            'grounding.bundle.materialization.duration',
+            { source: 'workspace', outcome: 'success', shape: 'bare' },
+            { durationMs: now() - startedAt }
+          );
+          return { status: 'materialized', source: 'workspace' };
+        }
+
+        await prepareEmptyDestination(destination);
+
+        try {
+          const blob = getContainerClient().getBlockBlobClient(key);
+          await blob.downloadToFile(downloadedBundle);
+          telemetry('grounding.bundle.lookup', {
+            outcome: 'hit',
+            shape: 'bare',
+          });
+          groundingOperations.bundle(
+            { caller: 'repo-read-service', project: identity.project },
+            true
+          );
+
+          const verificationRepo = join(scratchDirectory, 'verify.git');
+          await runGit(['init', '--bare', verificationRepo]);
+          await runGit([
+            '-C',
+            verificationRepo,
+            'bundle',
+            'verify',
+            downloadedBundle,
+          ]);
+
+          await runGit(['clone', '--bare', downloadedBundle, destination]);
+          if (!(await hasCommit(runGit, destination, expectedSha))) {
+            throw new Error('Grounding bundle SHA verification failed');
+          }
+          await markMirrorReady(destination, expectedSha);
+
+          telemetry(
+            'grounding.bundle.materialization.duration',
+            { source: 'bundle', outcome: 'success', shape: 'bare' },
+            { durationMs: now() - startedAt }
+          );
+          return { status: 'materialized', source: 'bundle' };
+        } catch (error) {
+          if (isAuthorizationFailure(error)) {
+            throw new GroundingBundleAuthorizationError();
+          }
+          const reason = isMissingBlob(error)
+            ? 'bundle-missing'
+            : 'bundle-corrupt';
+          telemetry('grounding.bundle.lookup', {
+            outcome: reason === 'bundle-missing' ? 'miss' : 'corrupt',
+            shape: 'bare',
+          });
+          groundingOperations.bundle(
+            { caller: 'repo-read-service', project: identity.project },
+            false
+          );
+          // A half-written mirror would fail every later read, and the caller
+          // clones from the remote instead — leave nothing behind.
+          await rm(destination, { recursive: true, force: true }).catch(
+            () => undefined
+          );
+          telemetry('grounding.bundle.fallback', { reason, shape: 'bare' });
+          telemetry(
+            'grounding.bundle.materialization.duration',
+            { source: 'fallback', outcome: 'failed', shape: 'bare' },
+            { durationMs: now() - startedAt }
+          );
+          return { status: 'remote-fallback', reason };
+        }
       } finally {
         await rm(scratchDirectory, { recursive: true, force: true }).catch(
           () => undefined

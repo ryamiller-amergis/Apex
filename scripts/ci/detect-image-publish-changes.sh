@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Detect whether runner/image sources changed between BASE_SHA and HEAD_SHA.
 # Writes GitHub Actions outputs:
-#   load_test_runner, ai_runs_worker, ai_runs_interactive  (true|false)
+#   load_test_runner, ai_runs_worker, ai_runs_interactive, repo_read_service  (true|false)
 #
 # Required env:
 #   BASE_SHA
@@ -42,3 +42,9 @@ detect ai_runs_interactive \
   runners/ai-runs-interactive/ \
   scripts/ci/publish-ai-runs-interactive.sh \
   src/server/services/interactiveActorHost/
+
+# The service also serves the shared bare reader, so a change there ships too.
+detect repo_read_service \
+  runners/repo-read-service/ \
+  scripts/ci/publish-repo-read-service.sh \
+  src/server/services/repoRead/
