@@ -258,11 +258,15 @@ The parent executor owns type-check, data-testid, and ESLint commands. Execution
 
 After all subagents in a **non-final** wave complete:
 
-1. Run one aggregate focused Jest invocation covering the wave's new or changed test files:
+1. Run one aggregate focused Jest invocation per Jest project covering the wave's **exact** new or changed test file paths:
    ```bash
-   npm test -- --testPathPattern="<pattern covering this wave's changed tests>"
+   # Server tests in this wave (omit if none)
+   npx jest --selectProjects server --no-coverage -- <exact server test files>
+
+   # Client tests in this wave (omit if none)
+   npx jest --selectProjects client --no-coverage -- <exact client test files>
    ```
-   Do not separately rerun each already-green test file.
+   Pass literal paths, not `--testPathPattern`. Do not use `--runInBand`. Do not boot both projects unless the wave has files in both. Do not separately rerun each already-green test file.
 2. **AC/DoD coverage check:** Confirm every matrix row owned by a task in this wave has a corresponding passing test/check (by criterion id in the test name/description or an explicit mapping in the synopsis). Enabling-only rows may become `enabled`, never `covered`. If any due row is uncovered, treat it as a gate failure.
 3. Determine whether a later wave consumes a TypeScript contract produced by this wave:
    - Server-only contract → run `npx tsc -p tsconfig.server.json --noEmit`.
@@ -291,7 +295,7 @@ When the last execution wave completes, run one final verification gate:
    npx tsc -p tsconfig.client.json --noEmit
    ```
    Run both only when both compilation domains are affected.
-2. Run one impacted-test command covering all new and directly related changed tests across the Feature. Do not run the full repository suite here; `build-test-push` owns the final build and full regression suite.
+2. Run one impacted-test command **per Jest project** covering all new and directly related changed test **file paths** across the Feature (same `npx jest --selectProjects … --no-coverage -- <files>` shape as F5). Do not use `--testPathPattern` or `--runInBand`. Do not run the full repository suite here; `build-test-push` owns the final build and full regression suite.
 3. Run pre-commit gates once for all touched client/shared/server TS|TSX:
    ```bash
    # data-testid — stage touched client TSX first (checker reads the index)
@@ -369,8 +373,8 @@ Copy and track per Feature Executor run:
 [ ] Every subagent prompt included its complete task bundle + verbatim owning-item contracts + design-spec anchors + matrix rows (from tdd-prompts.md)
 [ ] Every verification-owner task followed RED → GREEN with tests bound to AC-/DoD-/VT ids; post-GREEN tests reran only when later edits could invalidate them
 [ ] Verification targets from test-cases.json traceability satisfied (non-e2e)
-[ ] Each non-final wave passed one aggregate focused-test + AC/DoD gate; `tsc` ran only when a later wave consumed that TypeScript contract
-[ ] Final gate ran once: applicable `tsc` config(s), one impacted-test command, and data-testid/eslint when applicable
+[ ] Each non-final wave passed one aggregate focused-test per Jest project (exact file paths, `--selectProjects`, no `--testPathPattern` / `--runInBand`) + AC/DoD gate; `tsc` ran only when a later wave consumed that TypeScript contract
+[ ] Final gate ran once: applicable `tsc` config(s), one impacted-test command per Jest project, and data-testid/eslint when applicable
 [ ] Every tech-spec implementation task is complete (multi-task mode)
 [ ] ALL PBIs AND TBIs in this Feature's items[] have corresponding implementation AND criterion coverage
 [ ] No protected files modified without explicit permission

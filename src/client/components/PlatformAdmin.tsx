@@ -1,7 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
+import { OBSERVABILITY_VIEWER_FLAG } from '../../shared/types/observability';
+import { useAppShell } from '../hooks/useAppShell';
+import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import {
   useApproveProjectAccessRequest,
   usePlatformAdminPendingAssignments,
@@ -51,6 +54,10 @@ import type { RoleWithPermissions } from '../../shared/types/rbac';
 import { GroundingRolloutStatus } from './GroundingRolloutStatus';
 import styles from './PlatformAdmin.module.css';
 
+const ObservabilityWorkspace = lazy(() =>
+  import('./ObservabilityWorkspace').then((mod) => ({ default: mod.ObservabilityWorkspace })),
+);
+
 const MENU_ITEM_KEYS = CONFIGURABLE_MENU_ITEMS.map((item) => item.key) as [MenuItemKey, ...MenuItemKey[]];
 
 const menuSchema = z.object({
@@ -70,7 +77,7 @@ const userAccessSchema = z.object({
 
 type UserAccessFormValues = z.infer<typeof userAccessSchema>;
 
-type PlatformAdminTab = 'access' | 'menu' | 'user-access' | 'flags' | 'skills' | 'walkthroughs';
+type PlatformAdminTab = 'access' | 'menu' | 'user-access' | 'flags' | 'skills' | 'walkthroughs' | 'observability';
 
 function resolveGroundingRolloutStage(
   flags: FeatureFlagWithRules[],
@@ -214,6 +221,8 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
   const [activeTab, setActiveTab] = useState<PlatformAdminTab>('access');
   const [assignmentSavedProject, setAssignmentSavedProject] = useState<string | null>(null);
   const [menuSavedProject, setMenuSavedProject] = useState<string | null>(null);
+  const { selectedProject, isSuperAdmin } = useAppShell();
+  const observabilityViewerEnabled = useFeatureFlag(OBSERVABILITY_VIEWER_FLAG, selectedProject);
 
   const {
     data: projects = [],
@@ -426,6 +435,31 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
             >
               Walkthroughs
             </button>
+            {(() => {
+              // @feature-flag:observability-viewer start winner=enabled
+              if (!(isSuperAdmin && observabilityViewerEnabled)) {
+                // @feature-flag:observability-viewer disabled-start
+                return null;
+                // @feature-flag:observability-viewer disabled-end
+              }
+              // @feature-flag:observability-viewer enabled-start
+              return (
+                <button
+                  type="button"
+                  role="tab"
+                  id="platform-admin-tab-observability"
+                  aria-selected={activeTab === 'observability'}
+                  aria-controls="platform-admin-panel-observability"
+                  className={`${styles.tabButton} ${activeTab === 'observability' ? styles.tabButtonActive : ''}`}
+                  onClick={() => setActiveTab('observability')}
+                  {...{ 'data-testid': 'platform-admin-tab-observability' }}
+                >
+                  Observability
+                </button>
+              );
+              // @feature-flag:observability-viewer enabled-end
+              // @feature-flag:observability-viewer end
+            })()}
           </div>
 
           {activeTab === 'access' && (
@@ -530,6 +564,30 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
               <WalkthroughsAdminPanel />
             </div>
           )}
+          {(() => {
+            // @feature-flag:observability-viewer start winner=enabled
+            if (!(isSuperAdmin && observabilityViewerEnabled && activeTab === 'observability')) {
+              // @feature-flag:observability-viewer disabled-start
+              return null;
+              // @feature-flag:observability-viewer disabled-end
+            }
+            // @feature-flag:observability-viewer enabled-start
+            return (
+              <div
+                id="platform-admin-panel-observability"
+                role="tabpanel"
+                aria-labelledby="platform-admin-tab-observability"
+                className={styles.tabPanel}
+                {...{ 'data-testid': 'platform-admin-panel-observability' }}
+              >
+                <Suspense fallback={<div className={styles.loading}>Loading Observability…</div>}>
+                  <ObservabilityWorkspace project={selectedProject} />
+                </Suspense>
+              </div>
+            );
+            // @feature-flag:observability-viewer enabled-end
+            // @feature-flag:observability-viewer end
+          })()}
         </main>
       )}
     </div>

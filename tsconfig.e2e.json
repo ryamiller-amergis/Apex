@@ -4,7 +4,8 @@
     "outDir": "./dist/e2e",
     "rootDir": ".",
     "noUnusedLocals": false,
-    "noUnusedParameters": false
+    "noUnusedParameters": false,
+    "isolatedModules": true
   },
   "include": [
     "src/server/**/*",
