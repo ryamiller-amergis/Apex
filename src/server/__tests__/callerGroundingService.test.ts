@@ -1496,6 +1496,94 @@ describe('Stage 6 bare-mirror skip of working-tree materialization', () => {
     );
   });
 
+  it('prefers the mirror over the readiness checkout when both could serve', async () => {
+    const pinProjectRepositoryRoot = jest.fn();
+    const deps = dependencies({
+      isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(true),
+      // Readiness is enabled in every deployed environment. Before the
+      // precedence fix it returned a working tree first, so the mirror branch
+      // below was unreachable and every turn paid for a full clone.
+      isProjectRepositoryCheckoutReadinessEnabled: jest
+        .fn()
+        .mockResolvedValue(true),
+      isUsableBareMirror: jest.fn().mockReturnValue(true),
+      getRepoCacheDir: jest.fn().mockReturnValue(mirrorPath),
+      pinProjectRepositoryRoot,
+      evaluateNativeReadCapability: jest.fn().mockReturnValue({
+        proven: true,
+        reason: 'pinned-checkout-confined',
+      }),
+    });
+    const service = createCallerGroundingService(deps);
+
+    const selected = await service.start({
+      caller: 'chat-agent',
+      userId: 'developer-1',
+      run,
+      repository: {
+        provider: 'github',
+        repo: 'AI-Pilot',
+        branch: 'main',
+      },
+      reauthorize: async () => true,
+      readOnlyShareable: true,
+      sandboxCwd: sandbox,
+    });
+
+    expect(selected).toMatchObject({
+      mode: 'local',
+      nativeReads: true,
+      workingTree: false,
+      mirrorPath,
+    });
+    expect(pinProjectRepositoryRoot).not.toHaveBeenCalled();
+    expect(deps.materialize).not.toHaveBeenCalled();
+    expect(deps.sharedReadCheckout.materialize).not.toHaveBeenCalled();
+  });
+
+  it('still uses the readiness checkout when no mirror is available', async () => {
+    const workspacePath = 'C:\\data\\workspaces\\readiness';
+    const pinProjectRepositoryRoot = jest.fn().mockResolvedValue({
+      grounding,
+      workspacePath,
+      identity: { digest: 'readiness-digest' },
+      fetched: false,
+    });
+    const deps = dependencies({
+      isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(true),
+      isProjectRepositoryCheckoutReadinessEnabled: jest
+        .fn()
+        .mockResolvedValue(true),
+      isUsableBareMirror: jest.fn().mockReturnValue(false),
+      getRepoCacheDir: jest.fn().mockReturnValue(mirrorPath),
+      pinProjectRepositoryRoot,
+    });
+    const service = createCallerGroundingService(deps);
+
+    const selected = await service.start({
+      caller: 'chat-agent',
+      userId: 'developer-1',
+      run,
+      repository: {
+        provider: 'github',
+        repo: 'AI-Pilot',
+        branch: 'main',
+      },
+      reauthorize: async () => true,
+      readOnlyShareable: true,
+      sandboxCwd: sandbox,
+    });
+
+    // The guard is conditional, not a blanket disable: with no mirror to read
+    // from, a working tree is still the only way to serve the turn.
+    expect(pinProjectRepositoryRoot).toHaveBeenCalled();
+    expect(selected).toMatchObject({
+      mode: 'local',
+      cwd: workspacePath,
+      workingTree: true,
+    });
+  });
+
   it('uses the mirror path as cwd when no sandbox is provided', async () => {
     const deps = dependencies({
       isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(true),

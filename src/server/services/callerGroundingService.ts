@@ -355,6 +355,25 @@ export function createCallerGroundingService(
         branch: input.repository.branch,
       };
 
+      const resolveMirrorPath =
+        dependencies.getRepoCacheDir ?? getRepoCacheDir;
+      const mirrorUsable =
+        dependencies.isUsableBareMirror ?? isUsableBareMirror;
+      const cacheOptions = {
+        provider: input.repository.provider,
+        project: input.run.project,
+        repo,
+        branch: input.repository.branch,
+      };
+      let mirrorPath = resolveMirrorPath(cacheOptions);
+
+      // A usable mirror already answers reads at the pinned SHA, so nothing
+      // downstream needs a working tree. This is resolved before readiness so
+      // that branch cannot clone one first: on a large repo the clone costs
+      // minutes, and grepping the resulting tree runs slower than the read
+      // timeout, while the same grep against the mirror finishes inside it.
+      const mirrorServesReads = nativeReadEnabled && mirrorUsable(mirrorPath);
+
       let checkoutReadinessEnabled = false;
       try {
         checkoutReadinessEnabled = await (
@@ -370,7 +389,7 @@ export function createCallerGroundingService(
       }
 
       // @feature-flag:project-repository-checkout-readiness start winner=enabled
-      if (checkoutReadinessEnabled) {
+      if (checkoutReadinessEnabled && !mirrorServesReads) {
         // @feature-flag:project-repository-checkout-readiness enabled-start
         const existing = activeTarget(
           await dependencies.groundingService.getGroundings(input.run)
@@ -466,17 +485,6 @@ export function createCallerGroundingService(
       let grounding = existing;
       setMaterializationMode(existing ? 'warm' : 'cold');
 
-      const resolveMirrorPath =
-        dependencies.getRepoCacheDir ?? getRepoCacheDir;
-      const mirrorUsable =
-        dependencies.isUsableBareMirror ?? isUsableBareMirror;
-      const cacheOptions = {
-        provider: input.repository.provider,
-        project: input.run.project,
-        repo,
-        branch: input.repository.branch,
-      };
-      let mirrorPath = resolveMirrorPath(cacheOptions);
       let fetchedCache:
         | { baseSha: string; mirrorHit?: boolean; cacheDir?: string }
         | undefined;
