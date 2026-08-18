@@ -9,6 +9,7 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from '../support/fixtures';
 import { stubAdoProjects } from '../support/api-stubs';
+import { selectObservabilityActor } from '../support/observability';
 
 const ACTOR = '11111111-1111-4111-8111-111111111111';
 const SESSION = '22222222-2222-4222-8222-222222222222';
@@ -106,7 +107,7 @@ test.describe('FEAT-007 Interview and Agent Session Timeline', () => {
     await loginAsPersona('super-admin');
     await page.goto('/platform-admin');
     await page.getByTestId('platform-admin-tab-observability').click();
-    await page.getByTestId('observability-actor').selectOption(ACTOR);
+    await selectObservabilityActor(page, ACTOR);
     await page.getByTestId('observability-apply-filters').click();
     await page.getByTestId(`observability-session-link-${SESSION}`).click();
     await expect(page.getByTestId('session-timeline-page')).toBeVisible();
@@ -170,7 +171,7 @@ test.describe('FEAT-007 Interview and Agent Session Timeline', () => {
     await loginAsPersona('super-admin');
     await page.goto('/platform-admin');
     await page.getByTestId('platform-admin-tab-observability').click();
-    await page.getByTestId('observability-actor').selectOption(ACTOR);
+    await selectObservabilityActor(page, ACTOR);
     await page.getByTestId('observability-apply-filters').click();
     await page.getByTestId(`observability-session-link-${SESSION}`).click();
     await expect(page.getByTestId('session-timeline-partial')).toContainText('Incomplete timeline');

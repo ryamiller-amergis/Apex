@@ -10,6 +10,7 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from '../support/fixtures';
 import { stubAdoProjects } from '../support/api-stubs';
+import { selectObservabilityActor } from '../support/observability';
 
 const ACTOR = '11111111-1111-4111-8111-111111111111';
 const TRACE = '4bf92f3577b34da6a3ce929d0e0e4736';
@@ -61,7 +62,7 @@ test.describe('FEAT-006 Unified Observability Workspace', () => {
     await loginAsPersona('super-admin');
     await page.goto('/platform-admin');
     await page.getByTestId('platform-admin-tab-observability').click();
-    await page.getByTestId('observability-actor').selectOption(ACTOR);
+    await selectObservabilityActor(page, ACTOR);
     await page.getByTestId('observability-apply-filters').click();
     await expect(page.getByTestId('observability-trail-error')).toBeVisible();
     await expect(page.getByTestId('observability-actor')).toHaveValue(ACTOR);
@@ -127,7 +128,7 @@ test.describe('FEAT-006 Unified Observability Workspace', () => {
     await loginAsPersona('super-admin');
     await page.goto('/platform-admin');
     await page.getByTestId('platform-admin-tab-observability').click();
-    await page.getByTestId('observability-actor').selectOption(ACTOR);
+    await selectObservabilityActor(page, ACTOR);
     await page.getByTestId('observability-tab-journey').click();
     await expect(page.getByTestId('observability-actor')).toHaveValue(ACTOR);
   });
@@ -183,7 +184,7 @@ test.describe('FEAT-006 Unified Observability Workspace', () => {
     await loginAsPersona('super-admin');
     await page.goto('/platform-admin');
     await page.getByTestId('platform-admin-tab-observability').click();
-    await page.getByTestId('observability-actor').selectOption(ACTOR);
+    await selectObservabilityActor(page, ACTOR);
     await page.getByTestId('observability-apply-filters').click();
     await expect(page.getByTestId('observability-trail-table')).toBeVisible();
     await expect(page.getByTestId(`observability-trace-link-${TRACE}`)).toBeVisible();
@@ -204,7 +205,7 @@ test.describe('FEAT-006 Unified Observability Workspace', () => {
     await loginAsPersona('super-admin');
     await page.goto('/platform-admin');
     await page.getByTestId('platform-admin-tab-observability').click();
-    await page.getByTestId('observability-actor').selectOption(ACTOR);
+    await selectObservabilityActor(page, ACTOR);
     await page.getByTestId('observability-apply-filters').click();
     await expect(page.getByTestId('observability-trail-error')).toBeVisible();
     await expect(page.getByTestId('observability-trail-table')).toHaveCount(0);
@@ -277,7 +278,7 @@ test.describe('FEAT-006 Unified Observability Workspace', () => {
     await loginAsPersona('super-admin');
     await page.goto('/platform-admin');
     await page.getByTestId('platform-admin-tab-observability').click();
-    await page.getByTestId('observability-actor').selectOption(ACTOR);
+    await selectObservabilityActor(page, ACTOR);
     await page.getByTestId('observability-apply-filters').click();
     await page.getByTestId(`observability-session-link-${SESSION}`).click();
     await expect(page.getByTestId('observability-timeline-panel')).toBeVisible();
@@ -301,7 +302,7 @@ test.describe('FEAT-006 Unified Observability Workspace', () => {
     await loginAsPersona('super-admin');
     await page.goto('/platform-admin');
     await page.getByTestId('platform-admin-tab-observability').click();
-    await page.getByTestId('observability-actor').selectOption(ACTOR);
+    await selectObservabilityActor(page, ACTOR);
     await page.getByTestId('observability-apply-filters').click();
     await expect(page.getByTestId('observability-trail-empty')).toBeVisible();
   });

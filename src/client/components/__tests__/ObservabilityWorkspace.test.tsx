@@ -32,6 +32,11 @@ jest.mock('../../hooks/usePlatformAdmin', () => ({
         displayName: 'Ada Lovelace',
         email: 'ada@example.com',
       },
+      {
+        userId: '33333333-3333-4333-8333-333333333333',
+        displayName: 'Grace Hopper',
+        email: 'grace@example.com',
+      },
     ],
     isLoading: false,
     isError: false,
@@ -129,7 +134,8 @@ function renderWorkspace() {
 }
 
 async function selectActor(user: ReturnType<typeof userEvent.setup>) {
-  await user.selectOptions(screen.getByTestId('observability-actor'), ACTOR);
+  await user.click(screen.getByTestId('observability-actor-input'));
+  await user.click(screen.getByTestId(`observability-actor-option-${ACTOR}`));
 }
 
 describe('ObservabilityWorkspace', () => {
@@ -196,14 +202,27 @@ describe('ObservabilityWorkspace', () => {
   it('lists known users by display name and submits the matching UUID', async () => {
     const user = userEvent.setup();
     renderWorkspace();
-    const actorSelect = screen.getByTestId('observability-actor');
-    expect(within(actorSelect).getByRole('option', { name: 'Ada Lovelace' })).toHaveValue(ACTOR);
-    expect(within(actorSelect).queryByRole('option', { name: ACTOR })).not.toBeInTheDocument();
-    await selectActor(user);
+    await user.click(screen.getByTestId('observability-actor-input'));
+    const option = screen.getByTestId(`observability-actor-option-${ACTOR}`);
+    expect(option).toHaveTextContent('Ada Lovelace');
+    expect(option).not.toHaveTextContent(ACTOR);
+    await user.click(option);
     await user.click(screen.getByTestId('observability-apply-filters'));
     const calls = mockUseObservabilityTrail.mock.calls as unknown[][];
     const lastCall = calls[calls.length - 1];
     expect((lastCall?.[1] as { actorId: string } | null)?.actorId).toBe(ACTOR);
+  });
+
+  it('filters the user dropdown as the operator types', async () => {
+    const user = userEvent.setup();
+    renderWorkspace();
+    const search = screen.getByTestId('observability-actor-input');
+    await user.click(search);
+    expect(screen.getByTestId(`observability-actor-option-${ACTOR}`)).toBeInTheDocument();
+    expect(screen.getByTestId('observability-actor-option-33333333-3333-4333-8333-333333333333')).toBeInTheDocument();
+    await user.type(search, 'grace');
+    expect(screen.queryByTestId(`observability-actor-option-${ACTOR}`)).not.toBeInTheDocument();
+    expect(screen.getByTestId('observability-actor-option-33333333-3333-4333-8333-333333333333')).toHaveTextContent('Grace Hopper');
   });
 
   it('PBI-004 AC-0 / TC-PBI-004-001 shows chronological trail rows with trace and session links', async () => {

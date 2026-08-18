@@ -1,6 +1,6 @@
-import React, { lazy, Suspense, useCallback, useMemo, useState } from 'react';
+import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ErrorBoundary } from 'react-error-boundary';
-import { useForm, useWatch } from 'react-hook-form';
+import { Controller, useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import {
@@ -290,21 +290,23 @@ export const ObservabilityWorkspace: React.FC<ObservabilityWorkspaceProps> = ({ 
           )}
 
           <div className={styles.filterGroup}>
-            <label className={styles.filterLabel} htmlFor="observability-actor">User</label>
-            <select
-              id="observability-actor"
-              className={`${styles.filterInput} ${styles.filterActor} ${errors.actorId ? styles.filterInputError : ''}`}
-              disabled={usersLoading}
-              {...register('actorId')}
-              {...{ 'data-testid': 'observability-actor' }}
-            >
-              <option value="">{usersLoading ? 'Loading users…' : 'Select a user'}</option>
-              {actorOptions.map((user) => (
-                <option key={user.userId} value={user.userId}>
-                  {actorOptionLabel(user)}
-                </option>
-              ))}
-            </select>
+            <label className={styles.filterLabel} htmlFor="observability-actor-input">User</label>
+            <Controller
+              name="actorId"
+              control={control}
+              render={({ field }) => (
+                <ActorSearchDropdown
+                  id="observability-actor"
+                  value={field.value}
+                  onChange={field.onChange}
+                  users={actorOptions}
+                  disabled={usersLoading}
+                  invalid={Boolean(errors.actorId)}
+                  loading={usersLoading}
+                  {...{ 'data-testid': 'observability-actor-dropdown' }}
+                />
+              )}
+            />
             {usersError && (
               <span className={styles.fieldError} role="alert">Unable to load users</span>
             )}
@@ -444,6 +446,186 @@ export const ObservabilityWorkspace: React.FC<ObservabilityWorkspaceProps> = ({ 
         </div>
       )}
     </section>
+  );
+};
+
+interface ActorSearchUser {
+  userId: string;
+  displayName: string;
+  email: string;
+}
+
+interface ActorSearchDropdownProps {
+  id: string;
+  value: string;
+  onChange: (userId: string) => void;
+  users: ActorSearchUser[];
+  disabled?: boolean;
+  invalid?: boolean;
+  loading?: boolean;
+  'data-testid'?: string;
+}
+
+const ActorSearchDropdown: React.FC<ActorSearchDropdownProps> = ({
+  id,
+  value,
+  onChange,
+  users,
+  disabled = false,
+  invalid = false,
+  loading = false,
+  'data-testid': testId,
+}) => {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const [highlightIdx, setHighlightIdx] = useState(-1);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+
+  const selectedUser = useMemo(
+    () => users.find((user) => user.userId === value) ?? null,
+    [users, value],
+  );
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return users;
+    return users.filter((user) => {
+      const label = actorOptionLabel(user).toLowerCase();
+      return label.includes(needle)
+        || user.email.toLowerCase().includes(needle)
+        || user.userId.toLowerCase().includes(needle);
+    });
+  }, [query, users]);
+
+  const handleSelect = useCallback((userId: string) => {
+    onChange(userId);
+    setQuery('');
+    setOpen(false);
+  }, [onChange]);
+
+  const handleClear = useCallback(() => {
+    onChange('');
+    setQuery('');
+    setOpen(false);
+  }, [onChange]);
+
+  const handleKeyDown = useCallback((event: React.KeyboardEvent) => {
+    if (!open && (event.key === 'ArrowDown' || event.key === 'Enter')) {
+      setOpen(true);
+      event.preventDefault();
+      return;
+    }
+    if (!open) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setHighlightIdx((prev) => (prev < filtered.length - 1 ? prev + 1 : 0));
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setHighlightIdx((prev) => (prev > 0 ? prev - 1 : filtered.length - 1));
+    } else if (event.key === 'Enter' && highlightIdx >= 0 && filtered[highlightIdx]) {
+      event.preventDefault();
+      handleSelect(filtered[highlightIdx].userId);
+    } else if (event.key === 'Escape') {
+      setOpen(false);
+    }
+  }, [filtered, handleSelect, highlightIdx, open]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  useEffect(() => {
+    setHighlightIdx(-1);
+  }, [query]);
+
+  useEffect(() => {
+    if (highlightIdx < 0 || !listRef.current) return;
+    const option = listRef.current.children[highlightIdx] as HTMLElement | undefined;
+    option?.scrollIntoView({ block: 'nearest' });
+  }, [highlightIdx]);
+
+  return (
+    <div
+      className={styles.actorCombo}
+      ref={wrapperRef}
+      {...{ 'data-testid': testId ?? `${id}-dropdown` }}
+    >
+      <input type="hidden" value={value} readOnly {...{ 'data-testid': id }} />
+      {selectedUser ? (
+        <div className={`${styles.actorChip} ${invalid ? styles.filterInputError : ''}`}>
+          <span className={styles.actorChipName}>{actorOptionLabel(selectedUser)}</span>
+          {!disabled && (
+            <button
+              type="button"
+              className={styles.actorChipClear}
+              onClick={handleClear}
+              aria-label="Clear selected user"
+              {...{ 'data-testid': `${id}-clear` }}
+            >
+              ×
+            </button>
+          )}
+        </div>
+      ) : (
+        <>
+          <input
+            id={`${id}-input`}
+            type="text"
+            className={`${styles.filterInput} ${styles.filterActor} ${invalid ? styles.filterInputError : ''}`}
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setOpen(true);
+            }}
+            onFocus={() => setOpen(true)}
+            onKeyDown={handleKeyDown}
+            placeholder={loading ? 'Loading users…' : 'Search users…'}
+            disabled={disabled}
+            autoComplete="off"
+            role="combobox"
+            aria-expanded={open}
+            aria-controls={`${id}-listbox`}
+            aria-autocomplete="list"
+            {...{ 'data-testid': `${id}-input` }}
+          />
+          {open && filtered.length > 0 && (
+            <ul
+              id={`${id}-listbox`}
+              className={styles.actorList}
+              role="listbox"
+              ref={listRef}
+              {...{ 'data-testid': `${id}-listbox` }}
+            >
+              {filtered.map((user, index) => (
+                <li
+                  key={user.userId}
+                  role="option"
+                  aria-selected={index === highlightIdx}
+                  className={`${styles.actorOption} ${index === highlightIdx ? styles.actorOptionActive : ''}`}
+                  onMouseDown={() => handleSelect(user.userId)}
+                  onMouseEnter={() => setHighlightIdx(index)}
+                  {...{ 'data-testid': `${id}-option-${user.userId}` }}
+                >
+                  <span className={styles.actorOptionName}>{actorOptionLabel(user)}</span>
+                  {user.email.trim() && actorOptionLabel(user) !== user.email.trim() && (
+                    <span className={styles.actorOptionEmail}>{user.email}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          {open && query.trim() && filtered.length === 0 && (
+            <div className={styles.actorEmpty} role="status">No users match “{query}”</div>
+          )}
+        </>
+      )}
+    </div>
   );
 };
 
