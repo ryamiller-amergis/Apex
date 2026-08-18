@@ -257,6 +257,11 @@
   border-color: var(--accent-color);
 }
 
+.filterHint {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
 .pageMeta {
   margin-left: auto;
   font-size: 0.75rem;

@@ -272,6 +272,38 @@ describe('ObservabilityWorkspace', () => {
     expect(screen.getAllByRole('row')).toHaveLength(51);
   });
 
+  it('keeps event chips visible and queries errors without resetting the trail search', async () => {
+    const user = userEvent.setup();
+    mockUseObservabilityTrail.mockImplementation((
+      _project: unknown,
+      filters: { eventType?: string | null } | null,
+    ) => {
+      if (filters?.eventType === 'error') {
+        return queryState({ data: trailPage([]) });
+      }
+      return queryState({
+        data: trailPage([
+          event({ id: 'evt-api', eventType: 'api_request' }),
+          event({ id: 'evt-err', eventType: 'error', diagnosticSummary: 'ValidationError' }),
+        ]),
+      });
+    });
+    renderWorkspace();
+    await selectActor(user);
+    await user.click(screen.getByTestId('observability-apply-filters'));
+    expect(screen.getByTestId('observability-trail-table')).toBeInTheDocument();
+    await user.click(screen.getByTestId('observability-trail-chip-error'));
+    const calls = mockUseObservabilityTrail.mock.calls as unknown[][];
+    const lastCall = calls[calls.length - 1];
+    expect((lastCall?.[1] as { eventType: string | null } | null)?.eventType).toBe('error');
+    expect(screen.getByTestId('observability-trail-chip-error')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('observability-trail-empty')).toHaveTextContent(/no error events/i);
+    expect(screen.queryByText(/search a user activity trail/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId('observability-actor')).toHaveValue(ACTOR);
+    await user.click(screen.getByTestId('observability-trail-chip-all'));
+    expect(screen.getByTestId('observability-trail-table')).toBeInTheDocument();
+  });
+
   it('PBI-004 AC-0 / TC-PBI-004-010 opens Timeline from a session link', async () => {
     const user = userEvent.setup();
     mockUseObservabilityTrail.mockReturnValue(queryState({ data: trailPage([event()]) }));

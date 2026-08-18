@@ -504,6 +504,31 @@ interface TrailViewProps {
   journeyHandoff: JourneyTrailHandoff | null;
 }
 
+function trailEmptyCopy(eventChip: TrailEventFilter): { title: string; text: string } {
+  if (eventChip === 'error') {
+    return {
+      title: 'No error events',
+      text: 'No errors match the current user and time range. Choose All to see other activity.',
+    };
+  }
+  if (eventChip === 'ui_action') {
+    return {
+      title: 'No UI actions',
+      text: 'No UI actions match the current user and time range. Choose All to see other activity.',
+    };
+  }
+  if (eventChip === 'api_request') {
+    return {
+      title: 'No API calls',
+      text: 'No API calls match the current user and time range. Choose All to see other activity.',
+    };
+  }
+  return {
+    title: 'No matching Trace Events',
+    text: 'No events match the current actor, time range, and filters.',
+  };
+}
+
 const TrailView: React.FC<TrailViewProps> = ({
   applied,
   eventChip,
@@ -525,25 +550,6 @@ const TrailView: React.FC<TrailViewProps> = ({
   onOpenSession,
   journeyHandoff,
 }) => {
-  if (isError) {
-    return (
-      <div>
-        <div className={styles.errorCard} role="alert" {...{ 'data-testid': 'observability-trail-error' }}>
-          <div>
-            <p className={styles.errorTitle}>User Activity Trail service is unavailable</p>
-            <p className={styles.errorDetail}>
-              {errorMessage}. No results are displayed. Stale data is not shown to avoid misleading investigation context. The error is isolated — other workspace sub-views remain functional.
-            </p>
-            <button type="button" className={styles.retryButton} onClick={onRetry} {...{ 'data-testid': 'observability-trail-retry' }}>
-              Retry
-            </button>
-          </div>
-        </div>
-        <div className={styles.intact}>Shared filters are preserved — Timeline, Journey Map, and Capture Health sub-views are unaffected by this error.</div>
-      </div>
-    );
-  }
-
   if (!applied) {
     return (
       <div className={styles.empty} {...{ 'data-testid': 'observability-trail-empty' }}>
@@ -557,22 +563,8 @@ const TrailView: React.FC<TrailViewProps> = ({
     );
   }
 
-  if (isLoading || (isFetching && items.length === 0)) {
-    return (
-      <div className={styles.loading} role="status" {...{ 'data-testid': 'observability-trail-loading' }}>
-        Loading User Activity Trail…
-      </div>
-    );
-  }
-
-  if (items.length === 0) {
-    return (
-      <div className={styles.empty} {...{ 'data-testid': 'observability-trail-empty' }}>
-        <p className={styles.emptyTitle}>No matching Trace Events</p>
-        <p className={styles.emptyText}>No events match the current actor, time range, and filters.</p>
-      </div>
-    );
-  }
+  const showRange = !isError && !isLoading && !(isFetching && items.length === 0) && items.length > 0;
+  const emptyCopy = trailEmptyCopy(eventChip);
 
   return (
     <>
@@ -582,17 +574,47 @@ const TrailView: React.FC<TrailViewProps> = ({
         </div>
       )}
       <div className={styles.toolbar}>
-        <span className={styles.pageMeta}>Filter events:</span>
+        <span className={styles.filterHint}>Filter events:</span>
         <EventFilterControl chip="all" label="All" active={eventChip === 'all'} onSelect={onChip} />
         <EventFilterControl chip="ui_action" label="UI Actions" active={eventChip === 'ui_action'} onSelect={onChip} />
         <EventFilterControl chip="api_request" label="API Calls" active={eventChip === 'api_request'} onSelect={onChip} />
         <EventFilterControl chip="error" label="Errors" active={eventChip === 'error'} onSelect={onChip} />
-        <span className={styles.pageMeta}>
-          Showing {pageStart}–{pageEnd}
-          {capReached ? ` of ${OBSERVABILITY_MAX_ROWS} (cap reached)` : ''}
-        </span>
+        {showRange && (
+          <span className={styles.pageMeta}>
+            Showing {pageStart}–{pageEnd}
+            {capReached ? ` of ${OBSERVABILITY_MAX_ROWS} (cap reached)` : ''}
+          </span>
+        )}
       </div>
 
+      {isError ? (
+        <div>
+          <div className={styles.errorCard} role="alert" {...{ 'data-testid': 'observability-trail-error' }}>
+            <div>
+              <p className={styles.errorTitle}>User Activity Trail service is unavailable</p>
+              <p className={styles.errorDetail}>
+                {errorMessage}. No results are displayed. Stale data is not shown to avoid misleading investigation context. The error is isolated — other workspace sub-views remain functional.
+              </p>
+              <button type="button" className={styles.retryButton} onClick={onRetry} {...{ 'data-testid': 'observability-trail-retry' }}>
+                Retry
+              </button>
+            </div>
+          </div>
+          <div className={styles.intact}>Shared filters are preserved — Timeline, Journey Map, and Capture Health sub-views are unaffected by this error.</div>
+        </div>
+      ) : isLoading || (isFetching && items.length === 0) ? (
+        <div className={styles.loading} role="status" {...{ 'data-testid': 'observability-trail-loading' }}>
+          Loading User Activity Trail…
+        </div>
+      ) : items.length === 0 ? (
+        <div className={styles.empty} {...{ 'data-testid': 'observability-trail-empty' }}>
+          <p className={styles.emptyTitle}>{emptyCopy.title}</p>
+          <p className={styles.emptyText}>{emptyCopy.text}</p>
+        </div>
+      ) : null}
+
+      {showRange && (
+        <>
       <div className={styles.tableWrap}>
         <table className={styles.table} {...{ 'data-testid': 'observability-trail-table' }}>
           <caption className="sr-only">Chronological user activity trail</caption>
@@ -658,6 +680,8 @@ const TrailView: React.FC<TrailViewProps> = ({
           </button>
         </div>
       </div>
+        </>
+      )}
     </>
   );
 };
