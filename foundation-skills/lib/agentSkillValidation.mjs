@@ -167,17 +167,21 @@ export function parseSkillFrontmatter(text) {
       continue;
     }
 
-    if (rawValue === '|' || rawValue === '>') {
+    const blockHeader = parseBlockScalarHeader(rawValue);
+    if (blockHeader) {
       const blockLines = [];
       index += 1;
-      while (index < lines.length && /^\s/.test(lines[index])) {
+      while (
+        index < lines.length &&
+        (lines[index] === '' || /^\s/.test(lines[index]))
+      ) {
         blockLines.push(lines[index].replace(/^\s{2}/, ''));
         index += 1;
       }
-      frontmatter[key] =
-        rawValue === '>'
-          ? blockLines.join(' ').trim()
-          : blockLines.join('\n').trimEnd();
+      const joined = blockHeader.folded
+        ? blockLines.join(' ').trim()
+        : blockLines.join('\n');
+      frontmatter[key] = blockHeader.chomp === '+' ? joined : joined.trimEnd();
       continue;
     }
 
@@ -186,6 +190,18 @@ export function parseSkillFrontmatter(text) {
   }
 
   return { error: null, frontmatter };
+}
+
+/** YAML block headers: `|`, `>`, plus chomping (`-`/`+`) and indent digits. */
+function parseBlockScalarHeader(rawValue) {
+  const match = /^([|>])(?:([+-])([1-9])?|([1-9])([+-])?)?$/.exec(
+    String(rawValue ?? '').trim()
+  );
+  if (!match) return null;
+  return {
+    folded: match[1] === '>',
+    chomp: match[2] || match[5] || '',
+  };
 }
 
 function parseScalar(value) {

@@ -91,3 +91,33 @@ description: >
     'First sentence. Use when folded YAML is preferred.'
   );
 });
+
+test('frontmatter parser accepts YAML block chomping indicators', () => {
+  for (const indicator of ['>-', '>+', '|-', '|+']) {
+    const parsed = parseSkillFrontmatter(`---
+name: chomp-skill
+description: ${indicator}
+  First sentence.
+
+  Use when chomped YAML is preferred.
+---
+`);
+    assert.equal(parsed.error, null, indicator);
+    assert.match(parsed.frontmatter.description, /First sentence/, indicator);
+    assert.equal(
+      validateAgentSkillDocument(
+        `---
+name: chomp-skill
+description: ${indicator}
+  First sentence.
+
+  Use when chomped YAML is preferred.
+---
+`,
+        { expectedName: 'chomp-skill' }
+      ).ok,
+      true,
+      indicator
+    );
+  }
+});

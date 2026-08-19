@@ -14,10 +14,17 @@ the canonical root during the first install:
 npx @apex/skills install <skill...> --skill-root .agents/skills
 ```
 
-`--skill-root` is first-install-only and must be passed explicitly — there is
-no environment-variable default. Once a lockfile exists, changing the root
-requires `migrate-root`; a later `--skill-root` that disagrees with the
-lockfile fails install rather than silently forking the catalog.
+`--skill-root` is first-install-only. There is no environment-variable default.
+When no lockfile exists, root selection is:
+
+1. Explicit `--skill-root` (or API `skillRoot`)
+2. `.agents/skills` if that directory already exists (for example a catalog
+   created by another harness)
+3. otherwise `.cursor/skills`
+
+Once a lockfile exists, that recorded root wins. Changing it requires
+`migrate-root`; a later `--skill-root` that disagrees with the lockfile fails
+install rather than silently forking the catalog.
 
 The selected repository-relative path is persisted in `apex-skills.lock.json`.
 Non-legacy roots write `lockfileVersion` 3 with a `skillRoot` field. Legacy
