@@ -16,7 +16,10 @@ export function withInstallTransaction(
   repoRoot,
   skillNamesOrResolver,
   action,
-  { preflight = null, skillRoots = [LEGACY_SKILL_ROOT] } = {},
+  {
+    preflight = null,
+    skillRoots: skillRootsOrResolver = [LEGACY_SKILL_ROOT],
+  } = {}
 ) {
   const root = path.resolve(repoRoot);
   const apexDir = assertWithin(root, APEX_DIR);
@@ -37,7 +40,7 @@ export function withInstallTransaction(
       if (error?.code === 'EEXIST') {
         throw new Error(
           `APEX skills install already in progress (${INSTALL_LOCK_REL}). ` +
-          `If no install is running, inspect and remove the stale lock deliberately.`,
+            `If no install is running, inspect and remove the stale lock deliberately.`
         );
       }
       throw error;
@@ -51,7 +54,7 @@ export function withInstallTransaction(
           startedAt: new Date().toISOString(),
           transactionId: randomUUID(),
         }) + '\n',
-        'utf8',
+        'utf8'
       );
     } finally {
       fs.closeSync(lockFd);
@@ -64,10 +67,18 @@ export function withInstallTransaction(
       typeof skillNamesOrResolver === 'function'
         ? skillNamesOrResolver()
         : skillNamesOrResolver;
+    const skillRoots =
+      typeof skillRootsOrResolver === 'function'
+        ? skillRootsOrResolver()
+        : skillRootsOrResolver;
 
-    snapshotRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-skills-transaction-'));
+    snapshotRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'apex-skills-transaction-')
+    );
     const targets = transactionTargets(skillNames, skillRoots);
-    snapshots = targets.map((rel, index) => snapshotTarget(root, rel, snapshotRoot, index));
+    snapshots = targets.map((rel, index) =>
+      snapshotTarget(root, rel, snapshotRoot, index)
+    );
     return action();
   } catch (error) {
     if (snapshots) {
@@ -85,19 +96,42 @@ export function withInstallTransaction(
     throw error;
   } finally {
     if (lockFd !== null) {
-      try { fs.closeSync(lockFd); } catch { /* best effort */ }
+      try {
+        fs.closeSync(lockFd);
+      } catch {
+        /* best effort */
+      }
     }
     if (snapshotRoot && !preserveSnapshot) {
-      try { fs.rmSync(snapshotRoot, { recursive: true, force: true }); }
-      catch (error) { console.warn(`[apex-skills] Could not remove transaction snapshot: ${error.message}`); }
+      try {
+        fs.rmSync(snapshotRoot, { recursive: true, force: true });
+      } catch (error) {
+        console.warn(
+          `[apex-skills] Could not remove transaction snapshot: ${error.message}`
+        );
+      }
     }
     if (ownsLock && fs.existsSync(lockPath)) {
-      try { fs.rmSync(lockPath, { force: true }); }
-      catch (error) { console.warn(`[apex-skills] Could not remove ${INSTALL_LOCK_REL}: ${error.message}`); }
+      try {
+        fs.rmSync(lockPath, { force: true });
+      } catch (error) {
+        console.warn(
+          `[apex-skills] Could not remove ${INSTALL_LOCK_REL}: ${error.message}`
+        );
+      }
     }
-    if (!apexExisted && fs.existsSync(apexDir) && fs.readdirSync(apexDir).length === 0) {
-      try { fs.rmdirSync(apexDir); }
-      catch (error) { console.warn(`[apex-skills] Could not remove empty ${APEX_DIR}: ${error.message}`); }
+    if (
+      !apexExisted &&
+      fs.existsSync(apexDir) &&
+      fs.readdirSync(apexDir).length === 0
+    ) {
+      try {
+        fs.rmdirSync(apexDir);
+      } catch (error) {
+        console.warn(
+          `[apex-skills] Could not remove empty ${APEX_DIR}: ${error.message}`
+        );
+      }
     }
   }
 }
@@ -134,14 +168,22 @@ function restoreSnapshots(repoRoot, snapshots) {
       removePathWithoutFollowingLinks(absolute);
       if (entry.existed) {
         ensureDir(path.dirname(absolute));
-        fs.cpSync(entry.snapshot, absolute, { recursive: true, dereference: false });
+        fs.cpSync(entry.snapshot, absolute, {
+          recursive: true,
+          dereference: false,
+        });
       }
     } catch (error) {
-      errors.push(new Error(`Failed to restore ${entry.rel}: ${error.message}`));
+      errors.push(
+        new Error(`Failed to restore ${entry.rel}: ${error.message}`)
+      );
     }
   }
   if (errors.length) {
-    throw new AggregateError(errors, `${errors.length} managed path(s) failed to restore`);
+    throw new AggregateError(
+      errors,
+      `${errors.length} managed path(s) failed to restore`
+    );
   }
 }
 

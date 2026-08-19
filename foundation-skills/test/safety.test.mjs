@@ -140,6 +140,24 @@ test('concurrent installs are rejected by the repository install lock', async ()
   }
 });
 
+test('skillRoots resolver runs after the install lock is acquired', async () => {
+  const { withInstallTransaction, INSTALL_LOCK_REL } =
+    await import('../lib/installTransaction.mjs');
+  const repo = makeRepo(SAMPLE_REPO);
+  try {
+    let sawLock = false;
+    withInstallTransaction(repo, ['ui-lab'], () => undefined, {
+      skillRoots: () => {
+        sawLock = fs.existsSync(path.join(repo, INSTALL_LOCK_REL));
+        return ['.cursor/skills'];
+      },
+    });
+    assert.equal(sawLock, true);
+  } finally {
+    cleanup(repo);
+  }
+});
+
 test('executeInstall honors an existing repository install lock', () => {
   const repo = makeRepo({
     ...SAMPLE_REPO,

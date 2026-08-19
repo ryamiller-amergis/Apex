@@ -194,7 +194,20 @@ export function migrateSkillRoot(
       }
       return executeMigration(repoRoot, lockedPlan);
     },
-    { skillRoots: [plan.sourceRoot, plan.targetRoot] }
+    {
+      skillRoots: () => {
+        const lockedPlan = planSkillRootMigration(repoRoot, targetRoot);
+        return [
+          ...new Set(
+            [
+              lockedPlan.sourceRoot,
+              lockedPlan.targetRoot,
+              ...KNOWN_SKILL_ROOTS,
+            ].filter(Boolean)
+          ),
+        ];
+      },
+    }
   );
 }
 
