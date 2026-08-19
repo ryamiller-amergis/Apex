@@ -10,6 +10,7 @@ import type {
   RunPhaseProgress,
   RunHealthProgress,
 } from './useChatStream';
+import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -203,8 +204,11 @@ export function useAgentChatSession(
     (enablePreparationState && isEmptyInProgress && status === 'error')
   );
   const preparationMessage =
-    groundingPreparation?.message ??
-    (isPreparing ? 'Preparing project repository…' : null);
+    groundingPreparation?.message
+      ? friendlyChatProgressLabel(groundingPreparation.message, 'setup')
+      : isPreparing
+        ? friendlyChatProgressLabel('Preparing project repository…', 'setup')
+        : null;
 
   const isInteractionBusy =
     isRunning || isSending || isAwaitingAgentResponse || isPreparing;

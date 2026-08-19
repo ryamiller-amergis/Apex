@@ -1,4 +1,7 @@
-import { stampGroundingProvenance } from '../../shared/utils/groundingProvenance';
+import {
+  rewriteGroundingProvenanceForDisplay,
+  stampGroundingProvenance,
+} from '../../shared/utils/groundingProvenance';
 
 const input = {
   groundedSha: 'A'.repeat(40),
@@ -12,9 +15,10 @@ describe('stampGroundingProvenance', () => {
     const stamped = stampGroundingProvenance('# PRD\n\nHello', input);
 
     expect(stamped).toContain(`<!-- apex-grounded-sha:${'a'.repeat(40)} -->`);
-    expect(stamped).toContain('AI-Pilot');
-    expect(stamped).toContain('main');
+    expect(stamped).toContain('Based on the **AI-Pilot** project, **main** branch');
     expect(stamped).toContain('# PRD');
+    expect(stamped).not.toMatch(/> Grounded on /);
+    expect(stamped).not.toMatch(/> Based on[^\n]*`a{40}`/);
   });
 
   it('replaces an existing stamp instead of stacking another copy', () => {
@@ -33,5 +37,50 @@ describe('stampGroundingProvenance', () => {
     expect(
       stampGroundingProvenance('# PRD', { ...input, groundedSha: '  ' }),
     ).toBe('# PRD');
+  });
+});
+
+describe('rewriteGroundingProvenanceForDisplay', () => {
+  it('hides the SHA comment and rewrites the legacy engineer quote', () => {
+    const raw = [
+      `<!-- apex-grounded-sha:${'a'.repeat(40)} -->`,
+      '',
+      `> Grounded on \`MaxView\` @ \`development\` at \`${'a'.repeat(40)}\` (Aug 19, 2026).`,
+      '',
+      '# PRD',
+    ].join('\n');
+
+    const displayed = rewriteGroundingProvenanceForDisplay(raw);
+    expect(displayed).not.toContain('apex-grounded-sha');
+    expect(displayed).not.toContain('Grounded on');
+    expect(displayed).not.toContain('a'.repeat(40));
+    expect(displayed).toBe(
+      [
+        '> Based on the **MaxView** project, **development** branch, as of Aug 19, 2026.',
+        '',
+        '# PRD',
+      ].join('\n'),
+    );
+  });
+
+  it('rewrites the no-backtick quote BAs see in the PRD preview', () => {
+    const sha = '0649183681bebe4f6570ebd63ec47d75303ca447';
+    const raw = [
+      `<!-- apex-grounded-sha:${sha} -->`,
+      `> Grounded on MaxView @ development at ${sha} (Aug 19, 2026).`,
+      '',
+      '# PRD',
+    ].join('\n');
+
+    const displayed = rewriteGroundingProvenanceForDisplay(raw);
+    expect(displayed).not.toContain('apex-grounded-sha');
+    expect(displayed).not.toContain(sha);
+    expect(displayed).toBe(
+      [
+        '> Based on the **MaxView** project, **development** branch, as of Aug 19, 2026.',
+        '',
+        '# PRD',
+      ].join('\n'),
+    );
   });
 });

@@ -420,9 +420,7 @@ describe('useChatStream', () => {
       }),
     ]);
     expect(result.current.progressPhase).toBe('queued');
-    expect(result.current.progressLabel).toBe(
-      'Queued — waiting for available worker'
-    );
+    expect(result.current.progressLabel).toBe('Waiting…');
     expect(result.current.status).toBe('running');
   });
 
@@ -473,6 +471,25 @@ describe('useChatStream', () => {
       lastES!.emit('message', { type: 'done' }, 'phase-done-1');
     });
     expect(result.current.status).toBe('idle');
+  });
+
+  it('maps repo-read tool labels to friendly actor copy', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+
+    act(() => {
+      lastES!.emit(
+        'message',
+        {
+          type: 'phase',
+          phase: 'analysis',
+          status: 'running',
+          detail: 'mcp:get_skill_file running',
+        },
+        'phase-catfile-1'
+      );
+    });
+
+    expect(result.current.progressLabel).toBe('Reading…');
   });
 
   it('consumes semantic envelope metadata from durable tool events without inference', () => {

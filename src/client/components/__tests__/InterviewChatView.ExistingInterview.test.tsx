@@ -506,7 +506,7 @@ describe('ExistingInterviewView — input locked when not in_progress', () => {
     });
     renderExistingInterview();
     expect(screen.getByTestId('interview-preparation-state')).toHaveTextContent(
-      'Refreshing the repository mirror…'
+      'Loading…'
     );
     expect(screen.getByPlaceholderText(/Preparing the latest requirements/i)).toBeDisabled();
     expect(screen.queryByText(/complete and the chat is closed/i)).not.toBeInTheDocument();
@@ -528,14 +528,14 @@ describe('ExistingInterviewView — input locked when not in_progress', () => {
     const labelRegion = screen.getByTestId('agent-run-status-label');
     expect(labelRegion).toHaveAttribute('role', 'status');
     expect(labelRegion).toHaveAttribute('aria-live', 'polite');
-    expect(labelRegion).toHaveTextContent('Queued — waiting for available worker');
+    expect(labelRegion).toHaveTextContent('Waiting…');
     expect(screen.getByTestId('agent-run-status-queued')).toHaveTextContent(
-      'Queued — waiting for available worker',
+      'Waiting…',
     );
     expect(screen.queryByTestId('agent-run-status-dispatched')).not.toBeInTheDocument();
   });
 
-  it('PBI-006 AC-0 / VT-02 renders dispatched as textual Starting… without an error state', () => {
+  it('PBI-006 AC-0 / VT-02 renders dispatched as textual actor spin-up without an error state', () => {
     mockUseAgentChatSession.mockReturnValue({
       ...idleStream,
       status: 'running',

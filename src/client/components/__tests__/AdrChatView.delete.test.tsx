@@ -250,7 +250,7 @@ describe('AdrChatView — delete', () => {
     renderAdrView();
 
     expect(screen.getByTestId('adr-preparation-state')).toHaveTextContent(
-      'Refreshing the repository mirror…',
+      'Loading…',
     );
     expect(screen.getByPlaceholderText(/Preparing the workspace/i)).toBeDisabled();
     expect(screen.queryByTestId('adr-agent-processing')).not.toBeInTheDocument();
@@ -292,7 +292,7 @@ describe('AdrChatView — delete', () => {
     renderAdrView();
 
     expect(screen.getByTestId('agent-run-status-queued')).toHaveTextContent(
-      'Queued — waiting for available worker',
+      'Waiting…',
     );
   });
 });

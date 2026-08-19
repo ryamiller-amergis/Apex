@@ -7,6 +7,7 @@ import { useAppShell } from '../hooks/useAppShell';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useChatThread, useSkillRepos, useStartChat } from '../hooks/useChatThreads';
 import type { ChatMessage } from '../../shared/types/chat';
+import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
 import { useAvailableModels, useGlobalDefaultModel, useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
 import {
   useAdr,
@@ -845,19 +846,20 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                 >
                   {progressPhase === 'queued' ? (
                     <span {...{ 'data-testid': 'agent-run-status-queued' }}>
-                      Queued — waiting for available worker
+                      {friendlyChatProgressLabel(progressLabel, 'queued')}
                     </span>
                   ) : progressPhase === 'dispatched' ? (
                     <span {...{ 'data-testid': 'agent-run-status-dispatched' }}>
-                      Starting…
+                      {friendlyChatProgressLabel(progressLabel, 'dispatched')}
                     </span>
+                  ) : progressLabel ? (
+                    friendlyChatProgressLabel(progressLabel, progressPhase)
+                  ) : isChatThreadError ? (
+                    'The ADR service is reconnecting after a temporary interruption…'
+                  ) : isChatThreadLoading ? (
+                    'Connecting to the ADR service…'
                   ) : (
-                    progressLabel
-                      ?? (isChatThreadError
-                        ? 'The ADR service is reconnecting after a temporary interruption…'
-                        : isChatThreadLoading
-                          ? 'Connecting to the ADR service…'
-                          : 'Setting up the workspace and repository context so your ADR interview starts grounded…')
+                    'Setting up the workspace and repository context so your ADR interview starts grounded…'
                   )}
                 </p>
               </div>

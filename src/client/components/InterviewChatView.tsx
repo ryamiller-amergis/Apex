@@ -19,6 +19,7 @@ import { useContextEstimate } from '../hooks/useContextEstimate';
 import { useLinkFeatureRequestInterview } from '../hooks/useFeatureRequests';
 import { usePersistStagedLinks } from '../hooks/useLinkedContext';
 import { DEFAULT_MODEL_ID } from '../config/models';
+import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
 import {
   useInterview,
   useUpdateInterviewStatus,
@@ -1564,19 +1565,23 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               >
                 {progressPhase === 'queued' ? (
                   <span {...{ 'data-testid': 'agent-run-status-queued' }}>
-                    Queued — waiting for available worker
+                    {friendlyChatProgressLabel(progressLabel, 'queued')}
                   </span>
                 ) : progressPhase === 'dispatched' ? (
                   <span {...{ 'data-testid': 'agent-run-status-dispatched' }}>
-                    Starting…
+                    {friendlyChatProgressLabel(progressLabel, 'dispatched')}
                   </span>
+                ) : progressLabel ? (
+                  friendlyChatProgressLabel(progressLabel, progressPhase)
+                ) : isChatThreadError ? (
+                  'The interview service is reconnecting after a temporary interruption…'
+                ) : isChatThreadLoading ? (
+                  'Connecting to the interview service…'
                 ) : (
-                  progressLabel
-                    ?? (isChatThreadError
-                      ? 'The interview service is reconnecting after a temporary interruption…'
-                      : isChatThreadLoading
-                        ? 'Connecting to the interview service…'
-                        : 'Getting the latest repository requirements so your interview starts with current context…')
+                  friendlyChatProgressLabel(
+                    'Getting the latest repository requirements so your interview starts with current context…',
+                    'setup'
+                  )
                 )}
               </p>
             </div>

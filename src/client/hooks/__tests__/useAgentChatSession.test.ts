@@ -335,9 +335,7 @@ describe('useAgentChatSession', () => {
     );
 
     expect(result.current.isPreparing).toBe(true);
-    expect(result.current.preparationMessage).toBe(
-      'Preparing project repository…'
-    );
+    expect(result.current.preparationMessage).toBe('Loading…');
   });
 
   it('PLAN-S3-AC-3 surfaces bounded grounding failure as an actionable retry error', () => {

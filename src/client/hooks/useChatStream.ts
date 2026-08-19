@@ -18,6 +18,7 @@ import type {
   SseToolStatusEvent,
 } from '../../shared/types/chat';
 import { v4 as uuidv4 } from 'uuid';
+import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
 import {
   INTERACTIVE_WS_CHANGED_EVENT,
   isInteractiveWsEnabled,
@@ -149,9 +150,7 @@ function safeTimestamp(value: unknown, fallback = Date.now()): number {
 }
 
 function progressLabelForPhase(phase: AgentRunPhase, detail?: string): string {
-  if (phase === 'queued') return 'Queued — waiting for available worker';
-  if (phase === 'dispatched') return 'Starting…';
-  return detail ?? phase;
+  return friendlyChatProgressLabel(detail, phase);
 }
 
 function normalizePhaseEvent(
@@ -520,7 +519,7 @@ export function useChatStream(
                 }
               : {}),
           });
-          setProgressLabel(message);
+          setProgressLabel(friendlyChatProgressLabel(message, 'setup'));
           break;
         }
         case 'retrying': {
