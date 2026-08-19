@@ -44,7 +44,11 @@ detect ai_runs_interactive \
   src/server/services/interactiveActorHost/
 
 # The service also serves the shared bare reader, so a change there ships too.
+# Shared modules the image embeds fall outside the repoRead/ prefix and must be
+# listed by hand. Miss one and App Service picks the change up while the
+# container keeps serving stale code, which reads as the fix not working.
 detect repo_read_service \
   runners/repo-read-service/ \
   scripts/ci/publish-repo-read-service.sh \
-  src/server/services/repoRead/
+  src/server/services/repoRead/ \
+  src/server/services/groundingTelemetry.ts

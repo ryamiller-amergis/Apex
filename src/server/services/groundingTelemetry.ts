@@ -36,6 +36,7 @@ const SAFE_PROPERTY_KEYS = new Set([
   'denialCategory',
   'flag',
   'mode',
+  'operation',
   'outcome',
   'phase',
   'project',
