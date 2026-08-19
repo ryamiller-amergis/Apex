@@ -394,6 +394,26 @@ resource "azurerm_container_app" "ai_runs_interactive" {
           secret_name = "ai-runs-runner-callback-token"
         }
       }
+
+      # Stage 3 repo-read service. The actor host has no bare mirror on its
+      # ephemeral disk and cannot see the one on App Service, so reads must go
+      # over HTTP. Without the URL the reader falls back to a LocalCheckoutReader
+      # pointed at a checkout the router already decided not to materialize.
+      dynamic "env" {
+        for_each = local.repo_read_service_enabled ? [1] : []
+        content {
+          name  = "REPO_READ_SERVICE_URL"
+          value = "https://${azurerm_container_app.repo_read_service[0].ingress[0].fqdn}"
+        }
+      }
+
+      dynamic "env" {
+        for_each = local.repo_read_service_enabled && var.ai_runs_runner_callback_token != null && var.ai_runs_runner_callback_token != "" ? [1] : []
+        content {
+          name        = "REPO_READ_SERVICE_TOKEN"
+          secret_name = "ai-runs-runner-callback-token"
+        }
+      }
     }
   }
 
