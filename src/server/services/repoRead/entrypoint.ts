@@ -14,6 +14,7 @@ import {
   getRepoCacheDir,
   type RepoCacheOptions,
 } from '../repoCacheService';
+import { flushTelemetry, trackEvent } from '../telemetry';
 import { BareRepoReader } from './bareRepoReader';
 import { handleRepoReadRequest } from './httpHandler';
 import type { RepoReadOperation } from './httpProtocol';
@@ -35,7 +36,7 @@ const hydrations = new Map<string, Promise<string>>();
 
 function cacheOptionsFor(
   identity: RepositoryIdentity,
-  branch: string,
+  branch: string
 ): RepoCacheOptions {
   return {
     provider: identity.provider,
@@ -58,7 +59,7 @@ function repoName(value: string): string {
  */
 export async function resolveBranch(
   identity: RepositoryIdentity,
-  listConfigs = listSkillConfigsForProject,
+  listConfigs = listSkillConfigsForProject
 ): Promise<string> {
   try {
     const configs = await listConfigs(identity.project);
@@ -77,7 +78,7 @@ export async function resolveBranch(
 
 async function mirrorHasCommit(
   mirrorPath: string,
-  sha: string,
+  sha: string
 ): Promise<boolean> {
   if (!isUsableBareMirror(mirrorPath)) return false;
   try {
@@ -121,7 +122,9 @@ async function hydrateMirror(identity: RepositoryIdentity): Promise<string> {
   return cloned.cacheDir;
 }
 
-async function readerFor(identity: RepositoryIdentity): Promise<BareRepoReader> {
+async function readerFor(
+  identity: RepositoryIdentity
+): Promise<BareRepoReader> {
   const key = [
     identity.provider,
     identity.project,
@@ -164,23 +167,98 @@ export function createRepoReadApp(): express.Express {
   return app;
 }
 
+// Git errors can echo a remote URL carrying a PAT, and this event bypasses the
+// grounding sanitizer, so credentials are stripped at the point of capture.
+function redactCredentials(message: string): string {
+  return message.replace(/\/\/[^/@\s]+@/g, '//***@').slice(0, 300);
+}
+
+export interface LifecycleDiagnosticsDeps {
+  startedAt?: number;
+  emit?: typeof trackEvent;
+  flush?: typeof flushTelemetry;
+  exit?: (code: number) => void;
+  inFlight?: () => number;
+  rssBytes?: () => number;
+}
+
+/**
+ * This container gets restarted often enough that the cause matters, and from
+ * the outside the causes are indistinguishable: a failed health probe arrives as
+ * SIGTERM, a bug arrives as an uncaught error, and an OOM arrives as SIGKILL,
+ * which by definition no handler can observe. Recording the first two is what
+ * makes the third identifiable — a disappearance with no event preceding it.
+ *
+ * RSS is read here rather than trusted from platform metrics, which sample once
+ * a minute and so miss the spike immediately before a kill.
+ */
+export function installLifecycleDiagnostics(
+  deps: LifecycleDiagnosticsDeps = {}
+): void {
+  const startedAt = deps.startedAt ?? Date.now();
+  const emit = deps.emit ?? trackEvent;
+  const flush = deps.flush ?? flushTelemetry;
+  const exit = deps.exit ?? ((code: number) => process.exit(code));
+  const inFlight = deps.inFlight ?? (() => hydrations.size);
+  const rssBytes = deps.rssBytes ?? (() => process.memoryUsage().rss);
+
+  const report = async (reason: string, error?: unknown): Promise<void> => {
+    const properties: Record<string, string> = {
+      reason,
+      rssMb: String(Math.round(rssBytes() / 1_048_576)),
+      // A hydration or search in flight at exit is the link between the kill and
+      // the request that provoked it.
+      inFlightHydrations: String(inFlight()),
+      uptimeSeconds: String(Math.round((Date.now() - startedAt) / 1000)),
+    };
+    if (error !== undefined) {
+      properties.errorName = error instanceof Error ? error.name : typeof error;
+      properties.errorMessage = redactCredentials(
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+    emit('RepoReadServiceExit', properties);
+    console.error(
+      JSON.stringify({ event: 'RepoReadServiceExit', ...properties })
+    );
+    await flush();
+  };
+
+  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+    process.once(signal, () => {
+      void report(signal).then(() => exit(0));
+    });
+  }
+  process.once('uncaughtException', (error) => {
+    void report('uncaughtException', error).then(() => exit(1));
+  });
+  process.once('unhandledRejection', (reason) => {
+    void report('unhandledRejection', reason).then(() => exit(1));
+  });
+}
+
 async function main(): Promise<void> {
+  installLifecycleDiagnostics();
+
   const port = Number.parseInt(
-    process.env.REPO_READ_SERVICE_PORT?.trim()
-      || process.env.PORT?.trim()
-      || String(DEFAULT_PORT),
-    10,
+    process.env.REPO_READ_SERVICE_PORT?.trim() ||
+      process.env.PORT?.trim() ||
+      String(DEFAULT_PORT),
+    10
   );
   const app = createRepoReadApp();
   await new Promise<void>((resolve, reject) => {
     const server = app.listen(port, () => resolve());
     server.on('error', reject);
   });
+  // Paired with RepoReadServiceExit so a restart is one query rather than a
+  // correlation against platform events that arrive minutes late.
+  trackEvent('RepoReadServiceStarted', { serverPort: String(port) });
   console.log(
     JSON.stringify({
       event: 'RepoReadServiceStarted',
       serverPort: port,
-    }),
+    })
   );
 }
 
@@ -190,7 +268,7 @@ if (require.main === module) {
       JSON.stringify({
         event: 'RepoReadServiceFatal',
         errorMessage: error instanceof Error ? error.message : String(error),
-      }),
+      })
     );
     process.exitCode = 1;
   });

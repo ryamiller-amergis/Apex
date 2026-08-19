@@ -689,6 +689,39 @@ After apply:
 Do not `terraform apply` this module until the in-process `BareRepoReader` path
 has been proven for a project behind the DB flag.
 
+### Probes are deliberately slack
+
+Reads are fast but a search legitimately pegs a core for several seconds, and a
+cold replica spends ten to twenty restoring its mirror before it can answer at
+all. Under the platform's default probes that reads as unhealthy, and the kill
+costs more than the work did: the replacement re-materializes the mirror before
+serving, so the caller sees a hang rather than an error. The declared probes
+allow roughly five minutes of slowness. Readiness is as tolerant as liveness
+because only one replica runs, so evicting it fails every caller instead of
+shifting load elsewhere.
+
+### Console log retention is not wired up, and enabling it has two traps
+
+`cae-apex-ai-dev` streams logs only — nothing is retained, so a crash can only be
+investigated live. Before changing that, know:
+
+- The workspace backing `appi-app-scrum-dev` **cannot** be reused as the
+  destination. It lives in an App Insights-managed resource group carrying a deny
+  assignment on `sharedKeys/action`, which is the credential Container Apps needs.
+  A separate workspace is required.
+- Setting `log_analytics_workspace_id` on `azurerm_container_app_environment`
+  historically forced replacement, and on provider 4.17+ its mere presence can
+  block every later update to the environment. Replacing this environment would
+  take both container apps, both Dapr components and the workspace storage mount
+  with it. Treat it as a change to validate against a plan first, not a one-liner.
+
+Because of that, repo-read reports its own exits instead: see
+`installLifecycleDiagnostics` in `src/server/services/repoRead/entrypoint.ts`. A
+`RepoReadServiceExit` event with reason `SIGTERM` means the platform stopped it
+(probe or scale), `uncaughtException` means it died on its own, and a
+`RepoReadServiceStarted` with no preceding exit means SIGKILL — OOM or an expired
+shutdown grace period, neither of which a handler can catch.
+
 ---
 
 ## Deployment
