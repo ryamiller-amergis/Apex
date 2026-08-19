@@ -352,6 +352,11 @@ export function createCallerGroundingService(
   ): Promise<CallerGroundingSelection> => {
     let sharedReadOnlyEnabled = false;
     try {
+      // Everything this function does is reported as a single
+      // grounding.materialize total, and no other event fires between dispatch
+      // and 'activate'. On a first turn that span is ~25s, so it needs its own
+      // markers or the cost cannot be attributed to a step.
+      telemetry.phase(telemetryContext(input), 'local-start');
       const repo = repositoryName(input.repository);
       const preparationRepository = {
         provider: input.repository.provider,
@@ -392,6 +397,7 @@ export function createCallerGroundingService(
       } catch {
         checkoutReadinessEnabled = false;
       }
+      telemetry.phase(telemetryContext(input), 'readiness-flag-resolved');
 
       // @feature-flag:project-repository-checkout-readiness start winner=enabled
       if (checkoutReadinessEnabled && !mirrorServesReads) {
@@ -489,6 +495,7 @@ export function createCallerGroundingService(
       );
       let grounding = existing;
       setMaterializationMode(existing ? 'warm' : 'cold');
+      telemetry.phase(telemetryContext(input), 'groundings-resolved');
 
       let fetchedCache:
         | { baseSha: string; mirrorHit?: boolean; cacheDir?: string }
@@ -497,9 +504,11 @@ export function createCallerGroundingService(
       // Stage 6: native-read callers skip working trees once a bare mirror exists.
       // Cold start fetches the mirror first so the first visit can skip too.
       if (nativeReadEnabled && !mirrorUsable(mirrorPath)) {
+        telemetry.phase(telemetryContext(input), 'mirror-clone-start');
         fetchedCache = await dependencies.ensureRepoCache(cacheOptions, {
           waitMs: USER_FACING_REPO_CACHE_LEASE_WAIT_MS,
         });
+        telemetry.phase(telemetryContext(input), 'mirror-clone-done');
         if (fetchedCache.mirrorHit !== undefined) {
           telemetry.mirror(telemetryContext(input), fetchedCache.mirrorHit);
         }
@@ -515,11 +524,16 @@ export function createCallerGroundingService(
         (mirrorUsable(mirrorPath) || Boolean(fetchedCache?.cacheDir))
       ) {
         if (!grounding) {
+          // A first turn refreshes even when the mirror is already warm, and the
+          // mirror event below is only emitted once this resolves — which is why
+          // a hit can appear to arrive 24s late rather than at the start.
+          telemetry.phase(telemetryContext(input), 'mirror-ensure-start');
           const cache =
             fetchedCache ??
             (await dependencies.ensureRepoCache(cacheOptions, {
               waitMs: USER_FACING_REPO_CACHE_LEASE_WAIT_MS,
             }));
+          telemetry.phase(telemetryContext(input), 'mirror-ensure-done');
           if (!fetchedCache && cache.mirrorHit !== undefined) {
             telemetry.mirror(telemetryContext(input), cache.mirrorHit);
           }
