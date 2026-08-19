@@ -292,3 +292,28 @@ test('safeRealpathSync falls back to the literal path when resolution fails', ()
   const abs = path.resolve('definitely-missing-apex-skill-root-apex152');
   assert.equal(safeRealpathSync(abs), abs);
 });
+
+test('root migration rejects lockfile skill keys that escape the catalog', () => {
+  const repo = makeRepo(SAMPLE_REPO);
+  try {
+    executeInstall(PKG_ROOT, repo, ['ui-lab'], { skillRoot: 'skills' });
+    const lock = readLockfile(repo);
+    lock.skills['../src'] = { ...lock.skills['ui-lab'] };
+    fs.writeFileSync(
+      path.join(repo, 'apex-skills.lock.json'),
+      serializeLockfile(lock),
+      'utf8'
+    );
+    const canary = path.join(repo, 'src/canary.txt');
+    fs.mkdirSync(path.dirname(canary), { recursive: true });
+    fs.writeFileSync(canary, 'do-not-move\n', 'utf8');
+
+    const plan = planSkillRootMigration(repo, '.agents/skills');
+    assert.match(plan.errors.join('\n'), /not a valid Agent Skills name/);
+    assert.equal(plan.actions.length, 1);
+    assert.equal(fs.readFileSync(canary, 'utf8'), 'do-not-move\n');
+    assert.equal(fs.existsSync(path.join(repo, '.agents/src')), false);
+  } finally {
+    cleanup(repo);
+  }
+});

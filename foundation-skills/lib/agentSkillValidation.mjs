@@ -4,7 +4,11 @@
  * Required fields and known optional fields are validated. Extra keys used by
  * other harnesses are warnings, not errors — this is not a closed allow-list.
  */
-const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+export const AGENT_SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+export function isAgentSkillName(value) {
+  return typeof value === 'string' && AGENT_SKILL_NAME_PATTERN.test(value);
+}
 const KNOWN_FIELDS = new Set([
   'name',
   'description',
@@ -37,7 +41,7 @@ export function validateAgentSkillDocument(text, { expectedName = null } = {}) {
     errors.push('name is required');
   } else {
     if (name.length > 64) errors.push('name must be at most 64 characters');
-    if (!NAME_PATTERN.test(name)) {
+    if (!AGENT_SKILL_NAME_PATTERN.test(name)) {
       errors.push(
         'name must contain lowercase letters, numbers, and single hyphens only'
       );

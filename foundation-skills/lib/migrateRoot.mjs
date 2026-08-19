@@ -10,6 +10,7 @@ import {
 import { assertWithin, hashFile, ensureDir, toPosix } from './util.mjs';
 import { hashManaged, hasFence, splitZones } from './managedRegion.mjs';
 import { withInstallTransaction } from './installTransaction.mjs';
+import { isAgentSkillName } from './agentSkillValidation.mjs';
 import {
   KNOWN_SKILL_ROOTS,
   normalizeSkillRoot,
@@ -68,6 +69,12 @@ export function planSkillRootMigration(repoRoot, targetRoot) {
   ].filter((root) => root !== sourceRoot);
 
   for (const [skill, info] of Object.entries(lock.skills ?? {})) {
+    if (!isAgentSkillName(skill)) {
+      errors.push(
+        `Installed skill "${skill}" is not a valid Agent Skills name.`
+      );
+      continue;
+    }
     const sourceDir = path.join(repoRoot, sourceRoot, skill);
     if (!fs.existsSync(sourceDir)) {
       errors.push(`Installed skill "${skill}" is missing from ${sourceRoot}.`);
@@ -174,7 +181,10 @@ export function migrateSkillRoot(
 
   return withInstallTransaction(
     repoRoot,
-    () => Object.keys(readLockfile(repoRoot)?.skills ?? {}),
+    () =>
+      Object.keys(readLockfile(repoRoot)?.skills ?? {}).filter(
+        isAgentSkillName
+      ),
     () => {
       const lockedPlan = planSkillRootMigration(repoRoot, targetRoot);
       if (lockedPlan.errors.length) {
