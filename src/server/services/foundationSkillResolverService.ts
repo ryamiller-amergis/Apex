@@ -92,6 +92,19 @@ function foundationVersionFromLock(skillName: string): string | null {
   return skills[skillName] ? String(version ?? '') || null : null;
 }
 
+function canonicalRootFromLock(lock: ConsumerSkillLock | null): string | null {
+  if (!lock) return null;
+  try {
+    return skillRootFromLock(lock);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(
+      `[foundationSkillResolver] ignoring invalid lockfile skillRoot: ${message}`
+    );
+    return null;
+  }
+}
+
 export function resolveLocalSkillPath(
   skillName: string,
   repoRoot = CWD
@@ -100,8 +113,8 @@ export function resolveLocalSkillPath(
   // Runtime resolution is canonical-only when a lockfile exists. Cross-root
   // collisions are a CLI install/check concern; throwing here used to take
   // down Bedrock entry points that call loadSkillContent() with no try/catch.
-  if (lock) {
-    const canonicalRoot = skillRootFromLock(lock);
+  const canonicalRoot = canonicalRootFromLock(lock);
+  if (canonicalRoot) {
     const relativePath = skillPathFor(canonicalRoot, skillName);
     const abs = repoPath(repoRoot, relativePath);
     if (fs.existsSync(abs)) return abs;
@@ -112,7 +125,7 @@ export function resolveLocalSkillPath(
   }
 
   for (const root of SKILL_DISCOVERY_ROOTS) {
-    if (lock && root === skillRootFromLock(lock)) continue;
+    if (canonicalRoot && root === canonicalRoot) continue;
     const relativePath = skillPathFor(root, skillName);
     const abs = repoPath(repoRoot, relativePath);
     if (fs.existsSync(abs)) {
