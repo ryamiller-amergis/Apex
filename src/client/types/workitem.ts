@@ -20,6 +20,10 @@ export interface WorkItem {
   design?: string;
   discussions?: string;
   parentId?: number;
+  /** Present when sourced from the Apex Work Board (not ADO). */
+  apexWorkItemId?: string;
+  source?: 'ado' | 'board';
+  releaseId?: string;
 }
 
 export interface StateTransition {

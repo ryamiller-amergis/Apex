@@ -14,6 +14,7 @@ const mockAddEventListener = jest.fn();
 const mockLoad = jest.fn();
 const mockUnload = jest.fn();
 const mockPreloadWorker = jest.fn();
+const mockConvertToPDF = jest.fn();
 const mockCreateObjectURL = jest.fn(() => 'blob:fake');
 const mockRevokeObjectURL = jest.fn();
 const mockAnchorClick = jest.fn();
@@ -49,6 +50,7 @@ function makeSdk() {
     load: (...args: unknown[]) => mockLoad(...args),
     unload: (...args: unknown[]) => mockUnload(...args),
     preloadWorker: (...args: unknown[]) => mockPreloadWorker(...args),
+    convertToPDF: (...args: unknown[]) => mockConvertToPDF(...args),
   };
 }
 
@@ -59,14 +61,18 @@ jest.mock('../../lib/nutrientViewer', () => ({
   getNutrientViewerSync: jest.fn(() => mockSdk),
 }));
 
-import { useNutrientWorkbench } from '../useNutrientWorkbench';
+import { PDFDocument } from 'pdf-lib';
+import { isWordFile, useNutrientWorkbench } from '../useNutrientWorkbench';
 
 function makeContainer(): HTMLDivElement {
   return document.createElement('div');
 }
 
-function makeFile(name = 'invoice.pdf'): File {
-  const f = new File(['%PDF'], name, { type: 'application/pdf' });
+function makeFile(
+  name = 'invoice.pdf',
+  type = 'application/pdf'
+): File {
+  const f = new File(['%PDF'], name, { type });
   Object.defineProperty(f, 'arrayBuffer', {
     value: jest.fn().mockResolvedValue(new ArrayBuffer(4)),
     writable: true,
@@ -115,6 +121,7 @@ beforeEach(() => {
   mockDiscardContentEditingSession.mockResolvedValue(undefined);
   mockExportPDF.mockResolvedValue(new ArrayBuffer(8));
   mockExportOffice.mockResolvedValue(new ArrayBuffer(8));
+  mockConvertToPDF.mockResolvedValue(new ArrayBuffer(8));
   Object.defineProperty(URL, 'createObjectURL', {
     configurable: true,
     value: mockCreateObjectURL,
@@ -435,5 +442,94 @@ describe('useNutrientWorkbench', () => {
     unmount();
 
     expect(mockUnload).toHaveBeenCalledWith(container);
+  });
+
+  it('loads a Word file by passing the File so Nutrient can detect Office format', async () => {
+    const container = makeContainer();
+    const { result } = renderHook(() =>
+      useNutrientWorkbench({ licenseKey: 'key', containerElement: container })
+    );
+    const wordFile = makeFile(
+      'notes.docx',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    );
+
+    await act(() => result.current.actions.loadDocument(wordFile));
+    await waitFor(() => expect(result.current.state.isLoaded).toBe(true));
+
+    expect(mockLoad.mock.calls[0][0].document).toBeInstanceOf(ArrayBuffer);
+    expect(result.current.state.fileName).toBe('notes.docx');
+    expect(mockConvertToPDF).not.toHaveBeenCalled();
+  });
+
+  it('converts Word to PDF before merging with another file', async () => {
+    const pdfBytes = await PDFDocument.create().then(async (doc) => {
+      doc.addPage();
+      return doc.save();
+    });
+    const pdfBuffer = pdfBytes.buffer.slice(
+      pdfBytes.byteOffset,
+      pdfBytes.byteOffset + pdfBytes.byteLength
+    );
+    mockConvertToPDF.mockResolvedValue(pdfBuffer);
+    const container = makeContainer();
+    const { result } = renderHook(() =>
+      useNutrientWorkbench({ licenseKey: 'key', containerElement: container })
+    );
+    const wordFile = makeFile(
+      'notes.docx',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    );
+    const pdfFile = makeFile('other.pdf');
+    Object.defineProperty(pdfFile, 'arrayBuffer', {
+      value: jest.fn().mockResolvedValue(pdfBuffer),
+    });
+
+    await act(() =>
+      result.current.actions.loadDocuments([wordFile, pdfFile])
+    );
+    await waitFor(() => expect(result.current.state.isLoaded).toBe(true));
+
+    expect(mockConvertToPDF).toHaveBeenCalledWith(
+      expect.objectContaining({
+        document: expect.any(ArrayBuffer),
+        useCDN: true,
+        licenseKey: 'key',
+      })
+    );
+    expect(result.current.state.fileName).toBe('merged-2-files.pdf');
+  });
+
+  it('saves an opened Word file as a .pdf download', async () => {
+    const container = makeContainer();
+    const { result } = renderHook(() =>
+      useNutrientWorkbench({ licenseKey: '', containerElement: container })
+    );
+    const wordFile = makeFile(
+      'report.docx',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    );
+
+    await act(() => result.current.actions.loadDocument(wordFile));
+    await act(() => result.current.actions.downloadPdf());
+
+    expect(mockExportPDF).toHaveBeenCalled();
+    expect(mockAnchorClick).toHaveBeenCalled();
+  });
+});
+
+describe('isWordFile', () => {
+  it('recognizes .docx and .doc by name or MIME type', () => {
+    expect(isWordFile(makeFile('a.docx', 'application/octet-stream'))).toBe(true);
+    expect(isWordFile(makeFile('a.doc', 'application/octet-stream'))).toBe(true);
+    expect(
+      isWordFile(
+        makeFile(
+          'no-ext',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        )
+      )
+    ).toBe(true);
+    expect(isWordFile(makeFile('a.pdf'))).toBe(false);
   });
 });

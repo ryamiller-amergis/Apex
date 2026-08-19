@@ -701,8 +701,10 @@ export function validateAnchorRegistryCandidate(
 // ── Baseline seed (mirrors REGISTRY_ENTRIES) ──────────────────────────────────
 
 /**
- * Deterministic Phase 1 seed for the seven curated registry entries.
+ * Deterministic baseline seed for the curated registry entries.
  * Kept in sync with DOM markers in `src/shared/walkthroughAnchors.ts`.
+ * Seeded across the create migration (original 7) plus follow-up seed
+ * migrations (e.g. the Work Board anchors) so existing databases stay current.
  */
 export const WALKTHROUGH_ANCHOR_REGISTRY_BASELINE_SEEDS: readonly WalkthroughAnchorRegistrySeed[] = [
   {
@@ -854,6 +856,72 @@ export const WALKTHROUGH_ANCHOR_REGISTRY_BASELINE_SEEDS: readonly WalkthroughAnc
       },
     ],
     sourceHash: 'baseline:v1:profile-notifications',
+    reviewStatus: 'approved',
+    isActive: true,
+    createdBy: 'system',
+    updatedBy: 'system',
+  },
+  {
+    anchorKey: 'work-board-view',
+    testId: 'work-board-view',
+    label: 'Work Board — root view',
+    suggestedRoute: null,
+    approvedRoute: '/work-board',
+    allowedPlacements: ['bottom', 'top', 'left', 'right'],
+    smartTags: ['work-board', 'board', 'root-view', 'navigation'],
+    openerAnchorKeys: [],
+    sourceKind: 'explicit',
+    sourceLocations: [
+      {
+        filePath: 'src/client/components/ApexWorkBoardView.tsx',
+        discoveryKind: 'explicit',
+      },
+    ],
+    sourceHash: 'baseline:v1:work-board-view',
+    reviewStatus: 'approved',
+    isActive: true,
+    createdBy: 'system',
+    updatedBy: 'system',
+  },
+  {
+    anchorKey: 'work-board-lens-toggle',
+    testId: 'work-board-lens-toggle',
+    label: 'Work Board — status / release lens',
+    suggestedRoute: null,
+    approvedRoute: '/work-board',
+    allowedPlacements: ['bottom', 'top', 'left', 'right'],
+    smartTags: ['work-board', 'lens', 'toggle', 'status', 'release'],
+    openerAnchorKeys: [],
+    sourceKind: 'explicit',
+    sourceLocations: [
+      {
+        filePath: 'src/client/components/ApexWorkBoardView.tsx',
+        discoveryKind: 'explicit',
+      },
+    ],
+    sourceHash: 'baseline:v1:work-board-lens-toggle',
+    reviewStatus: 'approved',
+    isActive: true,
+    createdBy: 'system',
+    updatedBy: 'system',
+  },
+  {
+    anchorKey: 'work-board-backlog-toggle',
+    testId: 'work-board-backlog-toggle',
+    label: 'Work Board — board / backlog toggle',
+    suggestedRoute: null,
+    approvedRoute: '/work-board',
+    allowedPlacements: ['bottom', 'top', 'left', 'right'],
+    smartTags: ['work-board', 'backlog', 'toggle', 'board-view'],
+    openerAnchorKeys: [],
+    sourceKind: 'explicit',
+    sourceLocations: [
+      {
+        filePath: 'src/client/components/ApexWorkBoardView.tsx',
+        discoveryKind: 'explicit',
+      },
+    ],
+    sourceHash: 'baseline:v1:work-board-backlog-toggle',
     reviewStatus: 'approved',
     isActive: true,
     createdBy: 'system',

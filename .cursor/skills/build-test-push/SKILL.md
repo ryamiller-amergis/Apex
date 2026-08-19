@@ -114,7 +114,8 @@ For each changed source file **without** a matching test file:
 3. Run the new test in isolation to confirm it passes before proceeding:
 
 ```bash
-npx jest <path-to-new-test-file> --passWithNoTests
+npx jest --selectProjects server --no-coverage -- <path-to-new-test-file> --passWithNoTests
+# use --selectProjects client when the file is under src/client
 ```
 
 If the new test fails, fix it (source or test) before continuing. This ensures newly created tests start green.

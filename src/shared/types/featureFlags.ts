@@ -1,3 +1,5 @@
+export const WORK_BOARD_FLAG = 'work-board';
+
 export type FlagLifecycle = 'active' | 'stale' | 'archived';
 
 export type FlagRuleType =

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { AppHeader } from '../AppHeader';
 
 jest.mock('react-markdown', () => ({
@@ -174,6 +174,68 @@ describe('AppHeader — UI Lab admin-gated behavior', () => {
   it('renders UI Lab for a super admin even when not in enabledViews or the UI/UX group', () => {
     render(<AppHeader {...baseProps} can={(_k) => false} isSuperAdmin menuEnabledViews={[]} isInAnyGroup={() => false} />);
     expect(screen.getByRole('button', { name: 'UI Lab' })).toBeInTheDocument();
+  });
+});
+
+// ── Work Board: super admin always; otherwise menu-enabled + work-board:view ──
+
+describe('AppHeader — Work Board visibility', () => {
+  const can = (_key: string) => false;
+
+  it('renders Work Board for a super admin on the Apex project', () => {
+    render(<AppHeader {...baseProps} can={can} isSuperAdmin selectedProject="Apex" />);
+    expect(screen.getByRole('button', { name: 'Work Board' })).toBeInTheDocument();
+  });
+
+  it('does NOT render Work Board for a non-super-admin without the view enabled', () => {
+    render(<AppHeader {...baseProps} can={can} selectedProject="Apex" menuEnabledViews={[]} />);
+    expect(screen.queryByRole('button', { name: 'Work Board' })).not.toBeInTheDocument();
+  });
+
+  it('renders Work Board for a super admin on a non-Apex project', () => {
+    render(<AppHeader {...baseProps} can={can} isSuperAdmin selectedProject="MaxView" />);
+    expect(screen.getByRole('button', { name: 'Work Board' })).toBeInTheDocument();
+  });
+
+  it('renders Work Board for a non-super-admin when menu-enabled and permitted', () => {
+    const canWorkBoard = (key: string) => key === 'work-board:view';
+    render(
+      <AppHeader
+        {...baseProps}
+        can={canWorkBoard}
+        selectedProject="MaxView"
+        menuEnabledViews={['work-board']}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Work Board' })).toBeInTheDocument();
+  });
+
+  it('navigates to the work board when the Work Board item is clicked', () => {
+    const onNavigateWorkBoard = jest.fn();
+    render(
+      <AppHeader
+        {...baseProps}
+        can={can}
+        isSuperAdmin
+        selectedProject="Apex"
+        onNavigateWorkBoard={onNavigateWorkBoard}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Work Board' }));
+    expect(onNavigateWorkBoard).toHaveBeenCalled();
+  });
+
+  it('hides Work Board for a super admin when the feature flag is off', () => {
+    render(
+      <AppHeader
+        {...baseProps}
+        can={can}
+        isSuperAdmin
+        selectedProject="Apex"
+        workBoardEnabled={false}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Work Board' })).not.toBeInTheDocument();
   });
 });
 

@@ -1,6 +1,13 @@
 import React, { useState, useMemo } from 'react';
 import { WorkItem } from '../types/workitem';
 import { WorkItemCard } from './WorkItemCard';
+import {
+  clearDraggedCalendarItem,
+  clearDraggedWorkItem,
+  getDraggedCalendarItem,
+  setDraggedWorkItem,
+  writeDraggedWorkItemToTransfer,
+} from '../dnd/workItemDragState';
 import './UnscheduledList.css';
 
 interface UnscheduledListProps {
@@ -218,11 +225,10 @@ export const UnscheduledList: React.FC<UnscheduledListProps> = ({
     e.preventDefault();
     setIsDropZone(false);
     
-    const draggedItem = (window as any).__DRAGGED_CALENDAR_ITEM__;
+    const draggedItem = getDraggedCalendarItem();
     if (draggedItem) {
-      console.log('Removing due date from item:', draggedItem.id);
       onUpdateDueDate(draggedItem.id, null);
-      (window as any).__DRAGGED_CALENDAR_ITEM__ = null;
+      clearDraggedCalendarItem();
     }
   };
 
@@ -257,7 +263,7 @@ export const UnscheduledList: React.FC<UnscheduledListProps> = ({
 
   return (
     <div 
-      data-testid="unscheduled-list"
+      {...{ 'data-testid': 'unscheduled-list' }}
       className={`unscheduled-list ${isDropZone ? 'drop-zone-active' : ''} ${isCollapsed ? 'collapsed' : ''}`}
       style={{ width: isCollapsed ? '40px' : `${width}px` }}
       onDragOver={handleDragOver}
@@ -268,7 +274,7 @@ export const UnscheduledList: React.FC<UnscheduledListProps> = ({
         className="collapse-toggle"
         onClick={() => setIsCollapsed(!isCollapsed)}
         title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-      >
+       {...{ 'data-testid': 'unscheduled-list-collapse-toggle-btn' }}>
         {isCollapsed ? '▶' : '◀'}
       </button>
       {!isCollapsed && (
@@ -293,11 +299,11 @@ export const UnscheduledList: React.FC<UnscheduledListProps> = ({
               onSelectItem(null as any); // Close details panel
             }}
             className="search-input"
-          />
+           {...{ 'data-testid': 'unscheduled-list-search-items-input' }} />
           <button 
             className="filters-toggle"
             onClick={() => setShowFilters(!showFilters)}
-          >
+           {...{ 'data-testid': 'unscheduled-list-filters-toggle-btn' }}>
             {showFilters ? '▲' : '▼'} Filters
           </button>
           {showFilters && (
@@ -307,7 +313,7 @@ export const UnscheduledList: React.FC<UnscheduledListProps> = ({
               value={selectedWorkItemType}
               onChange={(e) => setSelectedWorkItemType(e.target.value)}
               className="filter-select"
-            >
+             {...{ 'data-testid': 'unscheduled-list-filter-select' }}>
               <option value="">All Types</option>
               {workItemTypeOptions.map(type => (
                 <option key={type} value={type}>
@@ -324,7 +330,7 @@ export const UnscheduledList: React.FC<UnscheduledListProps> = ({
               value={selectedAssignedTo}
               onChange={(e) => setSelectedAssignedTo(e.target.value)}
               className="filter-select"
-            >
+             {...{ 'data-testid': 'unscheduled-list-filter-select-2' }}>
               <option value="">Assigned To</option>
               {assignedToOptions.map(person => (
                 <option key={person} value={person}>{person}</option>
@@ -347,7 +353,7 @@ export const UnscheduledList: React.FC<UnscheduledListProps> = ({
                       }
                     }}
                     className="state-checkbox"
-                  />
+                   {...{ 'data-testid': 'unscheduled-list-state-checkbox-input' }} />
                   <span>{state}</span>
                 </label>
               ))}
@@ -357,7 +363,7 @@ export const UnscheduledList: React.FC<UnscheduledListProps> = ({
             value={selectedIteration}
             onChange={(e) => setSelectedIteration(e.target.value)}
             className="iteration-select"
-          >
+           {...{ 'data-testid': 'unscheduled-list-iteration-select' }}>
             <option value="">All Iterations</option>
             {iterationOptions.map(iteration => (
               <option key={iteration} value={iteration}>{iteration}</option>
@@ -372,7 +378,7 @@ export const UnscheduledList: React.FC<UnscheduledListProps> = ({
                 setSelectedStates([]);
                 setSelectedIteration('');
               }}
-            >
+             {...{ 'data-testid': 'unscheduled-list-clear-filters-btn' }}>
               Clear Filters
             </button>
           )}
@@ -394,7 +400,7 @@ export const UnscheduledList: React.FC<UnscheduledListProps> = ({
                 onSelectItem(null as any);
               }}
               className="id-search-input"
-            />
+             {...{ 'data-testid': 'unscheduled-list-enter-work-item-id-input' }} />
             {idSearch.trim() && (
               <div className="id-search-meta">
                 {idSearchResults.length === 0
@@ -404,7 +410,7 @@ export const UnscheduledList: React.FC<UnscheduledListProps> = ({
                   className="id-search-clear"
                   onClick={() => setIdSearch('')}
                   title="Clear ID search"
-                >
+                 {...{ 'data-testid': 'unscheduled-list-clear-id-search-btn' }}>
                   ✕
                 </button>
               </div>
@@ -422,7 +428,7 @@ export const UnscheduledList: React.FC<UnscheduledListProps> = ({
                       workItem={item}
                       onClick={() => onSelectItem(item)}
                       scheduledDate={item.dueDate || item.targetDate}
-                    />
+                     {...{ 'data-testid': `unscheduled-list-draggable-work-item-${item.id}` }} />
                   </div>
                 ))
               )
@@ -436,7 +442,7 @@ export const UnscheduledList: React.FC<UnscheduledListProps> = ({
                       workItem={item}
                       onClick={() => onSelectItem(item)}
                       scheduledDate={item.dueDate || item.targetDate}
-                    />
+                     {...{ 'data-testid': `unscheduled-list-draggable-work-item-${item.id}` }} />
                   </div>
                 ))
               )
@@ -490,7 +496,7 @@ const HierarchicalItemList: React.FC<HierarchicalItemListProps> = ({
                 e.stopPropagation();
                 onToggleExpanded(item.id);
               }}
-            >
+             {...{ 'data-testid': 'unscheduled-list-expand-toggle-btn' }}>
               {isExpanded ? '▼' : '▶'}
             </button>
           )}
@@ -498,7 +504,7 @@ const HierarchicalItemList: React.FC<HierarchicalItemListProps> = ({
             <DraggableWorkItem
               workItem={item}
               onClick={() => onSelectItem(item)}
-            />
+             {...{ 'data-testid': `unscheduled-list-draggable-work-item-${item.id}` }} />
           </div>
         </div>
         {hasChildren && isExpanded && (
@@ -528,15 +534,13 @@ const DraggableWorkItem: React.FC<DraggableWorkItemProps> = ({
 
   const handleDragStart = (e: React.DragEvent) => {
     setIsDragging(true);
-    // Set global reference for calendar to pick up
-    (window as any).__DRAGGED_WORK_ITEM__ = workItem;
-    // Required for Firefox
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', JSON.stringify(workItem));
+    setDraggedWorkItem(workItem);
+    writeDraggedWorkItemToTransfer(e.dataTransfer, workItem);
   };
 
   const handleDragEnd = () => {
     setIsDragging(false);
+    clearDraggedWorkItem();
   };
 
   return (
@@ -549,7 +553,7 @@ const DraggableWorkItem: React.FC<DraggableWorkItemProps> = ({
         workItem={workItem}
         onClick={onClick}
         isDragging={isDragging}
-      />
+       {...{ 'data-testid': `unscheduled-list-work-item-card-${workItem.id}` }} />
       {scheduledDate && (
         <div className="scheduled-badge">
           Scheduled: {scheduledDate}

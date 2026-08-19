@@ -43,6 +43,8 @@ interface AppSidebarProps {
   onNavigatePdfTools?: () => void;
   onNavigateAiCost?: () => void;
   onNavigateDesignModule?: () => void;
+  onNavigateWorkBoard?: () => void;
+  workBoardEnabled?: boolean;
   onNavigateLoadTests?: () => void;
   onNavigateDiagrams?: () => void;
   onNavigateAdmin: () => void;
@@ -139,6 +141,14 @@ const IconDesignModule: React.FC = () => (
   </svg>
 );
 
+const IconWorkBoard: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="2" y="4" width="4" height="12" rx="1" />
+    <rect x="8" y="4" width="4" height="9" rx="1" />
+    <rect x="14" y="4" width="4" height="6" rx="1" />
+  </svg>
+);
+
 const IconLoadTests: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <path d="M10 3a7 7 0 100 14A7 7 0 0010 3z" />
@@ -202,6 +212,8 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onNavigatePdfTools,
   onNavigateAiCost,
   onNavigateDesignModule,
+  onNavigateWorkBoard,
+  workBoardEnabled = true,
   onNavigateLoadTests,
   onNavigateDiagrams,
   onNavigateAdmin,
@@ -247,6 +259,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         { label: 'PDF Assembly Tool', view: 'pdf-tools', icon: <IconPdfTools />, permission: 'pdf-assembly:use', onNavigate: onNavigatePdfTools ?? (() => {}) },
         { label: 'Load Tests', view: 'load-tests', icon: <IconLoadTests />, permission: 'load-test:view', onNavigate: onNavigateLoadTests ?? (() => {}), testId: 'nav-load-tests' },
         { label: 'Apex Backlog', view: 'feature-requests', icon: <IconFeatureRequests />, permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
+        { label: 'Work Board', view: 'work-board', icon: <IconWorkBoard />, permission: 'work-board:view', onNavigate: onNavigateWorkBoard ?? (() => {}) },
       ],
     },
   ];
@@ -265,6 +278,11 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       if (!isSuperAdmin && !menuEnabledViews.includes('feature-requests')) return false;
       if (!isSuperAdmin && !can('feature-requests:view')) return false;
       return true;
+    }
+    if (item.view === 'work-board') {
+      if (!workBoardEnabled) return false;
+      if (!isSuperAdmin && !menuEnabledViews.includes('work-board')) return false;
+      return isSuperAdmin || can('work-board:view');
     }
     if (item.view === 'pdf-tools') {
       if (!isSuperAdmin && !menuEnabledViews.includes('pdf-tools')) return false;
@@ -290,6 +308,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   const isActive = (view: string) => {
     if (view === 'home') return currentView === 'home';
     if (view === 'standup') return currentView === 'standup' || currentView === 'standup-manage' || currentView === 'standup-summary';
+    if (view === 'work-board') return currentView === 'work-board';
     return currentView === view;
   };
 

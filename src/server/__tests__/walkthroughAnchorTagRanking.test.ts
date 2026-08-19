@@ -96,7 +96,7 @@ describe('walkthroughAnchorTagRanking (Wave 2 Track D)', () => {
 
     expect(ranked.every((c) => c.anchorKey !== 'notification-bell')).toBe(true);
     expect(ranked.every((c) => c.anchorKey !== 'inactive-identity')).toBe(true);
-    expect(ranked.length).toBe(7);
+    expect(ranked.length).toBe(10);
   });
 
   it('orders route-compatible anchors ahead of incompatible ones', () => {
