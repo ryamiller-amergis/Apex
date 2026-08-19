@@ -135,6 +135,43 @@ resource "azurerm_container_app" "repo_read_service" {
           secret_name = "ai-runs-runner-callback-token"
         }
       }
+
+      # Without explicit probes the platform applies tight defaults, and a search
+      # holds a core long enough that /healthz goes unanswered — so the container
+      # is killed mid-read and has to re-materialize its mirror on the way back,
+      # which reads to the caller as the search hanging. Grep over a bare mirror
+      # has to inflate blobs, so slow is normal here and must not mean unhealthy.
+      startup_probe {
+        transport               = "HTTP"
+        port                    = var.repo_read_service_target_port
+        path                    = "/healthz"
+        initial_delay           = 5
+        interval_seconds        = 10
+        timeout                 = 5
+        failure_count_threshold = 30
+      }
+
+      liveness_probe {
+        transport               = "HTTP"
+        port                    = var.repo_read_service_target_port
+        path                    = "/healthz"
+        initial_delay           = 30
+        interval_seconds        = 30
+        timeout                 = 10
+        failure_count_threshold = 10
+      }
+
+      # Only one replica runs, so pulling it from rotation fails every caller
+      # rather than shifting load. Tolerate the same slowness liveness does.
+      readiness_probe {
+        transport               = "HTTP"
+        port                    = var.repo_read_service_target_port
+        path                    = "/healthz"
+        interval_seconds        = 30
+        timeout                 = 10
+        failure_count_threshold = 10
+        success_count_threshold = 1
+      }
     }
   }
 
