@@ -240,8 +240,8 @@ describe('resolveWorkspaceSkillRoot', () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-root-test-'));
     try {
       const lock = {
-        lockfileVersion: 2,
-        suiteVersion: '2.0.0',
+        lockfileVersion: 3,
+        suiteVersion: '2.1.0',
         package: '@apex/skills',
         skillRoot: '.agents/skills',
         skills: { 'ui-lab': {} },
@@ -258,6 +258,32 @@ describe('resolveWorkspaceSkillRoot', () => {
       expect(() =>
         resolveWorkspaceSkillRoot(workspace, '.cursor/skills')
       ).toThrow(/migrate/i);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects lockfiles whose version and skillRoot pairing is invalid', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-root-test-'));
+    try {
+      const lock = {
+        lockfileVersion: 2,
+        suiteVersion: '2.0.0',
+        package: '@apex/skills',
+        skillRoot: '.agents/skills',
+        skills: { 'ui-lab': {} },
+      };
+      const integrity = createHash('sha256')
+        .update(stableJson(lock))
+        .digest('hex');
+      fs.writeFileSync(
+        path.join(workspace, 'apex-skills.lock.json'),
+        JSON.stringify({ ...lock, integrity }, null, 2)
+      );
+
+      expect(() => resolveWorkspaceSkillRoot(workspace)).toThrow(
+        /omit skillRoot/i
+      );
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
     }
@@ -367,7 +393,7 @@ describe('reconcileRollbackWorkspace', () => {
         path.join(workspace, 'apex-skills.lock.json'),
         (() => {
           const lock = {
-            lockfileVersion: 2,
+            lockfileVersion: 3,
             suiteVersion: '2.1.0',
             package: '@apex/skills',
             skillRoot: '.agents/skills',

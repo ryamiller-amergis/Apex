@@ -597,10 +597,32 @@ function readVerifiedConsumerLock(lockPath: string): {
   ) {
     throw new Error('apex-skills.lock.json has an invalid lockfile schema');
   }
-  try {
-    skillRootFromLock(lock);
-  } catch {
-    throw new Error('apex-skills.lock.json has an invalid skillRoot');
+  if (lock.lockfileVersion === 2 && lock.skillRoot != null) {
+    throw new Error('apex-skills.lock.json v2 lockfiles must omit skillRoot');
+  }
+  if (lock.lockfileVersion === 3) {
+    if (lock.skillRoot == null) {
+      throw new Error(
+        'apex-skills.lock.json v3 lockfiles must include skillRoot'
+      );
+    }
+    let root: string;
+    try {
+      root = skillRootFromLock(lock);
+    } catch {
+      throw new Error('apex-skills.lock.json has an invalid skillRoot');
+    }
+    if (root === LEGACY_CURSOR_SKILL_ROOT) {
+      throw new Error(
+        'apex-skills.lock.json v3 lockfiles cannot use the legacy .cursor/skills root'
+      );
+    }
+  } else {
+    try {
+      skillRootFromLock(lock);
+    } catch {
+      throw new Error('apex-skills.lock.json has an invalid skillRoot');
+    }
   }
   const { generatedAt: _generatedAt, integrity, ...rest } = lock;
   const expected = createHash('sha256')
