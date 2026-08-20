@@ -74,6 +74,7 @@ import {
 import { MarkdownWithMermaid, MermaidDiagram } from './MarkdownWithMermaid';
 import type { ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
 import styles from './DesignDocReviewView.module.css';
+import { ApexLoader } from './ApexLoader';
 
 type TabId = 'design' | 'tech-spec' | 'assumptions' | 'validation';
 
@@ -1804,7 +1805,14 @@ export const DesignDocReviewView: React.FC = () => {
     };
   }, [actionMenuOpen]);
 
-  if (isLoading) return <div className={styles.loadingState}>Loading Design Doc…</div>;
+  if (isLoading) {
+    return (
+      <div className={styles.loadingState} role="status" aria-busy="true" aria-label="Loading Design Doc">
+        <ApexLoader size={72} />
+        <div className={styles.loadingLabel}>Loading Design Doc…</div>
+      </div>
+    );
+  }
   if (isError || !doc) return <div className={styles.errorState}>Design doc not found.</div>;
 
   const isAuthor = doc.authorId === userId;

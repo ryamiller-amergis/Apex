@@ -470,7 +470,13 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
   // the very first connect right after thread creation) never miss events.
   // Prefer the hydrated in-memory messages (may include writes not yet
   // flushed to Postgres) over the stale middleware snapshot.
-  const replayMessages = hydrated?.messages ?? thread.messages;
+  const replayMessages = [...(hydrated?.messages ?? thread.messages)].sort(
+    (a, b) => {
+      const byTs = a.ts.localeCompare(b.ts);
+      if (byTs !== 0) return byTs;
+      return a.id.localeCompare(b.id);
+    },
+  );
   for (const msg of replayMessages) {
     sendEvent({ type: 'message', message: msg });
   }

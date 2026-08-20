@@ -50,6 +50,7 @@ import { GroundingResumeCard } from './GroundingResumeCard';
 import { parseAgentMessage, type ChoiceBlock } from '../utils/parseAgentMessage';
 import type { ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
 import styles from './InterviewChatView.module.css';
+import { ApexLoader } from './ApexLoader';
 
 function formatElapsed(milliseconds: number): string {
   const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
@@ -500,7 +501,14 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     if (hasKickoffEcho) setSeededKickoffPrompt(null);
   }, [seededKickoffPrompt, sessionVisibleMessages]);
 
-  if (isLoading) return <div className={styles.loadingState}>Loading ADR…</div>;
+  if (isLoading) {
+    return (
+      <div className={styles.loadingState} role="status" aria-busy="true" aria-label="Loading ADR">
+        <ApexLoader size={72} />
+        <div className={styles.loadingLabel}>Loading ADR…</div>
+      </div>
+    );
+  }
   if (isError || !adr) return <div className={styles.errorState}>ADR not found.</div>;
 
   const unresolvedCount = reviewComments.filter((comment) => comment.status === 'open').length;

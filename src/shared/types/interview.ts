@@ -246,6 +246,8 @@ export interface ValidationScorecard {
   cross_cutting_checks?: Record<string, string>;
   accepted_gaps?: string[];
   deferred_gaps?: string[];
+  /** SHA-256 of PRD content + backlog at score time; skips agent re-run when unchanged. */
+  contentHash?: string;
 }
 
 export interface ContentSnapshot {

@@ -19,10 +19,15 @@ export interface MarkdownBlock {
 export type MessagePart = MarkdownBlock | ChoiceBlock;
 
 // Single-line option: "a. text", "b) text", "A. text", "A **bold**"
-const OPTION_RE = /^[\s\-*]*([a-dA-D])(?:[.)]\s+|\s+(?=\*\*))(.+)$/;
+// Letters a–e so agent "e. Other — describe" can be matched then stripped.
+const OPTION_RE = /^[\s\-*]*([a-eA-E])(?:[.)]\s+|\s+(?=\*\*))(.+)$/;
 
 // Standalone letter on its own line: "A", "  B", "- C"
-const SOLO_LETTER_RE = /^[\s\-*]*([a-dA-D])\s*$/;
+const SOLO_LETTER_RE = /^[\s\-*]*([a-eA-E])\s*$/;
+
+/** Agent "Other — describe" lines; UI already provides Other / free-form. */
+const OTHER_OPTION_RE = /^other\b/i;
+const ORPHAN_OTHER_LINE_RE = /^[\s\-*]*[a-eA-E][.)]\s+[Oo]ther\b/;
 
 /**
  * Try to match an option starting at line index `i`.
@@ -46,6 +51,10 @@ function tryMatchOption(lines: string[], i: number): [string, string, number] | 
   return null;
 }
 
+function isOtherOptionText(text: string): boolean {
+  return OTHER_OPTION_RE.test(text.trim());
+}
+
 export function parseAgentMessage(text: string): MessagePart[] {
   const lines = text.split('\n');
   const parts: MessagePart[] = [];
@@ -62,15 +71,25 @@ export function parseAgentMessage(text: string): MessagePart[] {
 
   let i = 0;
   while (i < lines.length) {
+    // Swallow orphan "e. Other — describe" lines that are not part of a choice block.
+    if (ORPHAN_OTHER_LINE_RE.test(lines[i])) {
+      i++;
+      continue;
+    }
+
     const optMatch = tryMatchOption(lines, i);
     if (optMatch) {
       const options: ChoiceOption[] = [];
       while (i < lines.length) {
         const m = tryMatchOption(lines, i);
         if (m) {
-          options.push({ letter: m[0], text: m[1] });
+          if (!isOtherOptionText(m[1])) {
+            options.push({ letter: m[0], text: m[1] });
+          }
           i += m[2];
         } else if (lines[i].trim() === '' && i + 1 < lines.length && tryMatchOption(lines, i + 1)) {
+          i++;
+        } else if (ORPHAN_OTHER_LINE_RE.test(lines[i])) {
           i++;
         } else {
           break;

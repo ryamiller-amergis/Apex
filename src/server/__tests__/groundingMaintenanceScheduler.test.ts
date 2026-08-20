@@ -28,6 +28,16 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
       .fn()
       .mockResolvedValue({ scanned: 0, evicted: 0, protected: 0 });
     const evaluateActive = jest.fn().mockResolvedValue([]);
+    const runIfDue = jest.fn().mockResolvedValue({
+      due: false,
+      etDate: '2026-08-20',
+      considered: 0,
+      reGrounded: 0,
+      skippedRunning: 0,
+      skippedFresh: 0,
+      skippedIneligible: 0,
+      errors: 0,
+    });
     const runLeaderSweep = jest.fn(
       async (operation: () => Promise<void>) => operation(),
     );
@@ -38,6 +48,7 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
       evictionService: { evictIdle },
       sharedReadCheckoutService: { evictIdle: sharedEvictIdle },
       stalenessService: { evaluateActive },
+      nightlyIdleReGround: { runIfDue },
       runLeaderSweep,
       subscribe: (handler) => {
         eventHandler = handler;
@@ -87,6 +98,18 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
       evictionService: { evictIdle },
       sharedReadCheckoutService: { evictIdle: sharedEvictIdle },
       stalenessService: { evaluateActive },
+      nightlyIdleReGround: {
+        runIfDue: jest.fn().mockResolvedValue({
+          due: false,
+          etDate: '2026-08-20',
+          considered: 0,
+          reGrounded: 0,
+          skippedRunning: 0,
+          skippedFresh: 0,
+          skippedIneligible: 0,
+          errors: 0,
+        }),
+      },
       runLeaderSweep: async (operation) => operation(),
       subscribe: () => jest.fn(),
     });
@@ -121,6 +144,18 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
       evictionService: { evictIdle },
       sharedReadCheckoutService: { evictIdle: sharedEvictIdle },
       stalenessService: { evaluateActive },
+      nightlyIdleReGround: {
+        runIfDue: jest.fn().mockResolvedValue({
+          due: false,
+          etDate: '2026-08-20',
+          considered: 0,
+          reGrounded: 0,
+          skippedRunning: 0,
+          skippedFresh: 0,
+          skippedIneligible: 0,
+          errors: 0,
+        }),
+      },
       runLeaderSweep: jest.fn().mockRejectedValue(
         new Error(
           'Timed out waiting for repository cache lease: grounding-maintenance:sweep',

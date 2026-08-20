@@ -171,6 +171,28 @@ describe('useChatStream', () => {
     expect(result.current.messages).toHaveLength(1);
   });
 
+  it('sorts replayed messages by timestamp so Q/A stay interleaved', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+    const agent = {
+      id: 'a1',
+      role: 'agent' as const,
+      text: 'Question?',
+      ts: '2026-01-01T00:00:02.000Z',
+    };
+    const user = {
+      id: 'u1',
+      role: 'user' as const,
+      text: 'Answer',
+      ts: '2026-01-01T00:00:01.000Z',
+    };
+    act(() => {
+      // Arrive out of chronological order (agent before user by wall clock).
+      lastES!.emit('message', { type: 'message', message: agent });
+      lastES!.emit('message', { type: 'message', message: user });
+    });
+    expect(result.current.messages.map((m) => m.id)).toEqual(['u1', 'a1']);
+  });
+
   it('deduplicates replayed durable SSE events by lastEventId before applying them', () => {
     const { result } = renderHook(() => useChatStream('t1'));
 

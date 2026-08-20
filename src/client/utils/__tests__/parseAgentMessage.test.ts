@@ -150,12 +150,43 @@ describe('parseAgentMessage', () => {
     expect(block.options[0].text).toBe('Padded option');
   });
 
-  it('does not match option lines beyond d', () => {
-    // 'e. option' should not be treated as a lettered choice
-    const text = 'e. Fifth option\nf. Sixth option';
+  it('does not match option lines beyond e', () => {
+    // 'f. option' should not be treated as a lettered choice
+    const text = 'f. Sixth option\ng. Seventh option';
     const parts = parseAgentMessage(text);
     expect(parts).toHaveLength(1);
     expect(parts[0].type).toBe('markdown');
+  });
+
+  it('strips agent Other options and orphan e. Other lines', () => {
+    const text = [
+      'Which per-item action set do you want?',
+      'a. Edit + delete + uncomplete',
+      'b. Edit + delete only',
+      'c. Delete only',
+      'd. Edit only',
+      'e. Other — describe',
+    ].join('\n');
+    const parts = parseAgentMessage(text);
+    expect(parts).toHaveLength(1);
+    expect(parts[0].type).toBe('choices');
+    const block = parts[0] as ChoiceBlock;
+    expect(block.options).toHaveLength(4);
+    expect(block.options.every((o) => !/^other/i.test(o.text))).toBe(true);
+  });
+
+  it('strips d. Other when the agent puts Other on letter d', () => {
+    const text = [
+      'Pick one:',
+      'a. First',
+      'b. Second',
+      'c. Third',
+      'd. Other — describe',
+    ].join('\n');
+    const parts = parseAgentMessage(text);
+    expect(parts).toHaveLength(1);
+    expect(parts[0].type).toBe('choices');
+    expect((parts[0] as ChoiceBlock).options).toHaveLength(3);
   });
 
   // ── Real agent message patterns ──────────────────────────────────────────────

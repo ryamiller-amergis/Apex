@@ -46,6 +46,7 @@ import {
   type StagedLinkedContextSelection,
 } from './LinkedContextPicker';
 import { AgentComposer } from './agentChat';
+import { ApexLoader } from './ApexLoader';
 import styles from './InterviewChatView.module.css';
 
 function badgeClass(status: InterviewStatus): string {
@@ -89,7 +90,9 @@ const InterviewChoiceBlockUI: React.FC<ChoiceBlockUIProps> = ({
       </div>
     )}
     <div className={styles.choiceOptions}>
-      {block.options.map((opt) => {
+      {block.options
+        .filter((opt) => !/^other\b/i.test(opt.text))
+        .map((opt) => {
         const isSelected = selection === opt.letter;
         return (
           <button
@@ -1272,7 +1275,14 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     void handleGeneratePrd('inherit');
   }, [handleGeneratePrd, resumeGate.status]);
 
-  if (isLoading) return <div className={styles.loadingState}>Loading interview…</div>;
+  if (isLoading) {
+    return (
+      <div className={styles.loadingState} role="status" aria-busy="true" aria-label="Loading interview">
+        <ApexLoader size={72} />
+        <div className={styles.loadingLabel}>Loading interview…</div>
+      </div>
+    );
+  }
   if (isError || !interview) return <div className={styles.errorState}>Interview not found.</div>;
 
   const visibleMessages = messages.filter((m) =>

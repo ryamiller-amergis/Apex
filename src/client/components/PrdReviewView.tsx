@@ -106,6 +106,7 @@ import type {
   TextSelector,
 } from '../../shared/types/reviewComments';
 import styles from './PrdReviewView.module.css';
+import { ApexLoader } from './ApexLoader';
 
 type TabId = 'preview' | 'backlog' | 'validation';
 
@@ -1099,9 +1100,9 @@ export const PrdReviewView: React.FC = () => {
     }
   }, [id, fixWithAi]);
 
-  const handleAcceptAllProposed = useCallback(() => {
+  const handleAcceptAllProposed = useCallback(async () => {
     if (!id) return;
-    applyProposedPrd.mutate();
+    await applyProposedPrd.mutateAsync();
   }, [id, applyProposedPrd]);
 
   const handleRejectAllProposed = useCallback(() => {
@@ -1581,7 +1582,14 @@ export const PrdReviewView: React.FC = () => {
     void handleSubmit();
   }, [canAutoSubmitDraft, id, prd?.status, submitPrd.isPending, handleSubmit]);
 
-  if (isLoading) return <div className={styles.loadingState}>Loading PRD…</div>;
+  if (isLoading) {
+    return (
+      <div className={styles.loadingState} role="status" aria-busy="true" aria-label="Loading PRD">
+        <ApexLoader size={72} />
+        <div className={styles.loadingLabel}>Loading PRD…</div>
+      </div>
+    );
+  }
   if (isError || !prd)
     return <div className={styles.errorState}>PRD not found.</div>;
   if (!readiness)
@@ -2963,7 +2971,16 @@ export const PrdReviewView: React.FC = () => {
                     onReply={(commentId, body) =>
                       void handleReply(commentId, body)
                     }
-                    onResolve={(commentId) => resolveComment.mutate(commentId)}
+                    onResolve={(commentId) => {
+                      if (
+                        prd.fixCommentId === commentId &&
+                        (prd.proposedContent != null || prd.proposedBacklogJson != null)
+                      ) {
+                        void applyProposedPrd.mutateAsync();
+                        return;
+                      }
+                      resolveComment.mutate(commentId);
+                    }}
                     onReopen={(commentId) =>
                       reopenReviewComment.mutate(commentId)
                     }
@@ -3051,7 +3068,16 @@ export const PrdReviewView: React.FC = () => {
                     onReply={(commentId, body) =>
                       void handleReply(commentId, body)
                     }
-                    onResolve={(commentId) => resolveComment.mutate(commentId)}
+                    onResolve={(commentId) => {
+                      if (
+                        prd.fixCommentId === commentId &&
+                        (prd.proposedContent != null || prd.proposedBacklogJson != null)
+                      ) {
+                        void applyProposedPrd.mutateAsync();
+                        return;
+                      }
+                      resolveComment.mutate(commentId);
+                    }}
                     onReopen={(commentId) =>
                       reopenReviewComment.mutate(commentId)
                     }

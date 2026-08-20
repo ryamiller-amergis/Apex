@@ -61,10 +61,14 @@ export function useGroundingResumeGate(
       ? readAck(ackKey(surface, domainRunId, status.groundedSha))
       : false;
   const behind = status ? isGroundingBehind(status) : false;
+  // Routine commit drift is handled by the nightly idle re-ground pass.
+  // Only surface a non-blocking hard-checkpoint notice (14+ days).
+  const hardCheckpoint = status?.stalenessState === 'hard-checkpoint';
   const showCard =
     flagEnabled &&
     !isAgentRunning &&
     Boolean(domainRunId) &&
+    hardCheckpoint &&
     behind &&
     !acknowledged &&
     !grounding.isLoading &&
@@ -85,7 +89,8 @@ export function useGroundingResumeGate(
   }, [domainRunId, grounding, status, surface]);
 
   return {
-    composerBlocked: showCard,
+    // Never block the composer on routine drift — nightly re-ground keeps pins fresh.
+    composerBlocked: false,
     showCard,
     status,
     continueOnPin,

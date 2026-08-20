@@ -26,6 +26,15 @@ import {
   type ThreadStreamHandle,
 } from '../utils/threadEventStream';
 
+/** Chronological order for chat history (SSE replay + REST merge). */
+export function sortChatMessagesByTs(messages: ChatMessage[]): ChatMessage[] {
+  return [...messages].sort((a, b) => {
+    const byTs = a.ts.localeCompare(b.ts);
+    if (byTs !== 0) return byTs;
+    return a.id.localeCompare(b.id);
+  });
+}
+
 export interface ToolProgress {
   callId: string;
   toolName: string;
@@ -320,11 +329,11 @@ export function useChatStream(
     const snapshot = options.initialMessages;
     if (!snapshot || snapshot.length === 0) return;
     setMessages((prev) => {
-      if (prev.length === 0) return snapshot;
+      if (prev.length === 0) return sortChatMessagesByTs(snapshot);
       const known = new Set(prev.map((message) => message.id));
       const missing = snapshot.filter((message) => !known.has(message.id));
-      if (missing.length === 0) return prev;
-      return [...prev, ...missing].sort((a, b) => a.ts.localeCompare(b.ts));
+      if (missing.length === 0) return sortChatMessagesByTs(prev);
+      return sortChatMessagesByTs([...prev, ...missing]);
     });
   }, [options.initialMessages]);
 
@@ -422,7 +431,9 @@ export function useChatStream(
           clearRetryTimeout();
           setMessages((prev) => {
             const exists = prev.some((m) => m.id === messageEvent.message.id);
-            return exists ? prev : [...prev, messageEvent.message];
+            return exists
+              ? prev
+              : sortChatMessagesByTs([...prev, messageEvent.message]);
           });
           break;
         }

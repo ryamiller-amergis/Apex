@@ -985,9 +985,9 @@ router.post('/prds/:prdId/apply-proposed', requirePermission('interviews:manage'
     const userId = getUserId(req);
     const prdId = req.params.prdId;
 
-    await applyProposedPrdChanges(prdId, { resolvedBy: userId });
+    const result = await applyProposedPrdChanges(prdId, { resolvedBy: userId });
 
-    res.json({ ok: true });
+    res.json({ ok: true, prd: result.prd ?? null });
   } catch (err) {
     next(err);
   }
@@ -1011,13 +1011,13 @@ router.post('/prds/:prdId/apply-proposed-selective', requirePermission('intervie
       return;
     }
 
-    await applyProposedPrdChanges(prdId, {
+    const result = await applyProposedPrdChanges(prdId, {
       resolvedBy: userId,
       mergedContent: body.content,
       mergedBacklogJson: body.backlogJson,
     });
 
-    res.json({ ok: true });
+    res.json({ ok: true, prd: result.prd ?? null });
   } catch (err) {
     next(err);
   }

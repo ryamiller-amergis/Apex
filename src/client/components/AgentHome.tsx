@@ -7,6 +7,7 @@ import {
   useSkillRepos,
   useStartChat,
   useSkillList,
+  useChatThread,
 } from '../hooks/useChatThreads';
 import { useProjectSkillConfig, useAvailableModels, useGlobalDefaultModel } from '../hooks/useProjectSkillConfig';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
@@ -19,7 +20,7 @@ import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { PRDPreviewDrawer } from './PRDPreviewDrawer';
 import { ThreadHistorySidebar } from './ThreadHistorySidebar';
 import { DEFAULT_MODEL_ID } from '../config/models';
-import type { ChatMessage, ChatThread, SelectChatThreadOptions } from '../../shared/types/chat';
+import type { ChatAttachment, ChatMessage, ChatThread, SelectChatThreadOptions } from '../../shared/types/chat';
 import type { QuickSkillPill, QuickMcpPill } from '../../shared/types/projectSettings';
 import { useContextEstimate } from '../hooks/useContextEstimate';
 import { useFocusChatMessage } from '../hooks/useFocusChatMessage';
@@ -28,6 +29,12 @@ import { ReadAloudButton } from './ReadAloudButton';
 import { FoundationSkillUpdateBanner } from './FoundationSkillUpdateBanner';
 import { AgentComposer } from './agentChat';
 import styles from './AgentHome.module.css';
+
+interface PendingOutgoing {
+  text: string;
+  attachments: ChatAttachment[];
+  model: string;
+}
 
 interface AgentHomeProps {
   selectedProject: string;
@@ -497,6 +504,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
   const [model, setModel] = useState(DEFAULT_MODEL_ID);
   const { data: globalDefaultModel } = useGlobalDefaultModel();
   const [isSending, setIsSending] = useState(false);
+  const [pendingOutgoing, setPendingOutgoing] = useState<PendingOutgoing | null>(null);
   const [isListening, setIsListening] = useState(false);
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [isSpeechSupported, setIsSpeechSupported] = useState(false);
@@ -516,7 +524,6 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const skillPickerRef = useRef<HTMLDivElement>(null);
   const prdAutoOpenedRef = useRef(false);
-  const initialThreadIdRef = useRef(threadId); // captures URL param value at first render
   const speechRecognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const speechInputBaseRef = useRef('');
 
@@ -552,6 +559,11 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
   );
 
   const startChat = useStartChat();
+  const {
+    data: persistedThread,
+    isLoading: isThreadLoading,
+    isFetching: isThreadFetching,
+  } = useChatThread(threadId);
   const session = useAgentChatSession(threadId, {
     initialMessages: seedMessages,
     initialPrdReady,
@@ -573,7 +585,45 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
     isRunning,
   );
 
-  const visibleMessageIds = visibleMessages.map((m) => m.id);
+  // Keep seed messages aligned with the persisted thread (refresh / remount).
+  useEffect(() => {
+    if (!persistedThread || persistedThread.id !== threadId) return;
+    setSeedMessages(persistedThread.messages ?? []);
+    setInitialPrdReady(persistedThread.prdReady ?? false);
+  }, [persistedThread, threadId]);
+
+  const pendingUserBubble: ChatMessage | null = useMemo(() => {
+    if (!pendingOutgoing) return null;
+    return {
+      id: 'pending-outgoing-user',
+      role: 'user',
+      text: pendingOutgoing.text,
+      ts: new Date().toISOString(),
+      ...(pendingOutgoing.attachments.length
+        ? {
+            attachments: pendingOutgoing.attachments.map(({ id, name, type, size }) => ({
+              id,
+              name,
+              type,
+              size,
+            })),
+          }
+        : {}),
+    };
+  }, [pendingOutgoing]);
+
+  const displayMessages = useMemo(() => {
+    if (!pendingUserBubble) return visibleMessages;
+    const alreadyShown = visibleMessages.some(
+      (m) => m.role === 'user' && m.text === pendingUserBubble.text,
+    );
+    return alreadyShown ? visibleMessages : [...visibleMessages, pendingUserBubble];
+  }, [visibleMessages, pendingUserBubble]);
+
+  const showHomeTypingIndicator =
+    (showTypingIndicator || isSending || Boolean(pendingOutgoing)) && !streamingText;
+
+  const visibleMessageIds = displayMessages.map((m) => m.id);
   const highlightedMessageId = useFocusChatMessage(focusMessageId, visibleMessageIds);
 
   const hasPrd = prdReady;
@@ -584,7 +634,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
     contextLimit: contextTokenLimit,
     usagePercent: contextPercent,
     label: contextLabel,
-  } = useContextEstimate(visibleMessages, input, streamingText, model, draftAttachmentChars);
+  } = useContextEstimate(displayMessages, input, streamingText, model, draftAttachmentChars);
 
   const slashQuery = useMemo(() => {
     const m = input.match(/^\/(.*)$/s);
@@ -735,24 +785,6 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
     }
   }, [threadId, setSearchParams, sessionStorageKey]);
 
-  // On first mount, if a ?thread=<id> param was present, reload that thread's
-  // message history so the UI is immediately usable without re-fetching.
-  useEffect(() => {
-    const id = initialThreadIdRef.current;
-    if (!id) return;
-    fetch(`/api/chat/threads/${id}`, { credentials: 'include' })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((thread: ChatThread | null) => {
-        if (!thread) {
-          setThreadId(null);
-          return;
-        }
-        setSeedMessages(thread.messages ?? []);
-        setInitialPrdReady(thread.prdReady ?? false);
-      })
-      .catch(() => {});
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- intentional mount-only
-
   // ── Callbacks ────────────────────────────────────────────────────────────────
 
   const selectSkill = useCallback((skill: { name: string; path: string }) => {
@@ -805,13 +837,37 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
       speechRecognitionRef.current?.stop();
     }
 
+    const wasNewThread = !threadId;
+    let messageText = text || 'Please use the attached files as additional context.';
+
+    // For existing threads, translate a skill selection into the explicit "Run skill"
+    // format that the agent's free-chat system prompt is documented to handle.
+    if (!wasNewThread && selectedSkillPath && selectedSkillName) {
+      const isSkillSlug = text === `/${selectedSkillName}` || text === selectedSkillName;
+      messageText = isSkillSlug
+        ? `Run skill: ${selectedSkillName} (\`${selectedSkillPath}\`)`
+        : `Run skill: ${selectedSkillName} (\`${selectedSkillPath}\`)\n\n${text}`;
+      setSelectedSkillPath(null);
+      setSelectedSkillName(null);
+    }
+
+    const outgoingAttachments = [...attachments];
+    const outgoing: PendingOutgoing = {
+      text: messageText,
+      attachments: outgoingAttachments,
+      model,
+    };
+
     setInput('');
     setSkillPickerOpen(false);
     setIsSending(true);
+    if (wasNewThread) {
+      // Leave compose immediately with the user bubble + typing row.
+      setPendingOutgoing(outgoing);
+    }
 
     try {
       let activeThreadId = threadId;
-      const wasNewThread = !activeThreadId;
 
       if (!activeThreadId) {
         // Starting a new thread: bake the skill path into the kickoff so the
@@ -847,70 +903,76 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
           skipAutoKickoff: !skillSlugOnlyKickoff,
         });
         activeThreadId = result.threadId;
-        setThreadId(activeThreadId);
+        try {
+          sessionStorage.setItem(sessionStorageKey, activeThreadId);
+        } catch {
+          // Private mode — effect will retry when threadId updates.
+        }
         setSelectedQuickSkill(null);
         setSelectedMcpPill(null);
-      }
 
-      // For new threads the skill is baked into the kickoff system prompt, so a bare
-      // /skill send needs no extra user message. Attachments still need a real first
-      // message so they are persisted and shown before the agent response.
-      if (
-        wasNewThread &&
-        selectedSkillPath &&
-        selectedSkillName &&
-        text === `/${selectedSkillName}` &&
-        attachments.length === 0
-      ) {
-        setSelectedSkillPath(null);
-        setSelectedSkillName(null);
+        // For new threads the skill is baked into the kickoff system prompt, so a bare
+        // /skill send needs no extra user message. Attachments still need a real first
+        // message so they are persisted and shown before the agent response.
+        if (
+          selectedSkillPath &&
+          selectedSkillName &&
+          text === `/${selectedSkillName}` &&
+          attachments.length === 0
+        ) {
+          setSelectedSkillPath(null);
+          setSelectedSkillName(null);
+          clearAttachments();
+          setPendingOutgoing(null);
+          setThreadId(activeThreadId);
+          return;
+        }
+
+        if (
+          selectedSkillPath &&
+          selectedSkillName &&
+          text === `/${selectedSkillName}` &&
+          attachments.length > 0
+        ) {
+          outgoing.text = 'Please use the attached files as additional context.';
+          setPendingOutgoing({ ...outgoing });
+        }
+
+        setThreadId(activeThreadId);
+
+        // First message cannot use session.send yet — the hook still closes over
+        // the previous null threadId until the next render. POST directly; the
+        // pending bubble already covers optimistic UI.
+        const response = await fetch(`/api/chat/threads/${activeThreadId}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            text: outgoing.text,
+            model,
+            attachments: outgoingAttachments,
+          }),
+        });
+        if (!response.ok) {
+          const errorBody = await response.json().catch(() => ({}));
+          throw new Error((errorBody as { error?: string }).error ?? `HTTP ${response.status}`);
+        }
+        void queryClient.invalidateQueries({ queryKey: ['chat-thread-list'] });
         clearAttachments();
+        setPendingOutgoing(null);
         return;
       }
 
-      // For existing threads, translate a skill selection into the explicit "Run skill"
-      // format that the agent's free-chat system prompt is documented to handle.
-      // This ensures mid-conversation skill switches (e.g. /to-prd after a /grill-with-docs
-      // interview) reliably trigger get_skill via MCP instead of being treated as plain text.
-      let messageText = text || 'Please use the attached files as additional context.';
-      if (
-        wasNewThread &&
-        selectedSkillPath &&
-        selectedSkillName &&
-        text === `/${selectedSkillName}` &&
-        attachments.length > 0
-      ) {
-        messageText = 'Please use the attached files as additional context.';
-      }
-      if (!wasNewThread && selectedSkillPath && selectedSkillName) {
-        const isSkillSlug = text === `/${selectedSkillName}` || text === selectedSkillName;
-        messageText = isSkillSlug
-          ? `Run skill: ${selectedSkillName} (\`${selectedSkillPath}\`)`
-          : `Run skill: ${selectedSkillName} (\`${selectedSkillPath}\`)\n\n${text}`;
-        setSelectedSkillPath(null);
-        setSelectedSkillName(null);
-      }
-
-      const response = await fetch(`/api/chat/threads/${activeThreadId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          text: messageText,
-          model,
-          attachments,
-        }),
-      });
-      if (!response.ok) {
-        const errorBody = await response.json().catch(() => ({}));
-        throw new Error((errorBody as { error?: string }).error ?? `HTTP ${response.status}`);
-      }
+      await session.send(messageText, { model, attachments: outgoingAttachments });
       void queryClient.invalidateQueries({ queryKey: ['chat-thread-list'] });
       clearAttachments();
+      setPendingOutgoing(null);
+    } catch {
+      setPendingOutgoing(null);
     } finally {
       setIsSending(false);
     }
-  }, [input, attachments, isRunning, isSending, threadId, resolvedRepoName, startChat, selectedProject, defaultBranch, selectedSkillPath, selectedSkillName, selectedQuickSkill, selectedMcpPill, model, clearAttachments, isListening, queryClient, skillConfig?.id, skillConfig?.skillProvider, repoReadiness.isReady, resumeGate.composerBlocked]);
+  }, [input, attachments, isRunning, isSending, threadId, resolvedRepoName, startChat, selectedProject, defaultBranch, selectedSkillPath, selectedSkillName, selectedQuickSkill, selectedMcpPill, model, clearAttachments, isListening, queryClient, skillConfig?.id, skillConfig?.skillProvider, repoReadiness.isReady, resumeGate.composerBlocked, session, sessionStorageKey]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (skillPickerOpen && filteredSkills.length > 0) {
@@ -945,6 +1007,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
     if (isListening) {
       speechRecognitionRef.current?.stop();
     }
+    setPendingOutgoing(null);
     setSeedMessages([]);
     setThreadId(null);
     setFocusMessageId(undefined);
@@ -978,7 +1041,14 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
     }
   }, []);
 
-  const isCompose = !threadId;
+  const isCompose = !threadId && !isSending && !pendingOutgoing;
+  const isRestoringThread =
+    Boolean(threadId) &&
+    displayMessages.length === 0 &&
+    !isSending &&
+    !pendingOutgoing &&
+    !isRunning &&
+    (isThreadLoading || isThreadFetching);
   const hasPills = quickSkillPills.length > 0 || quickMcpPills.length > 0;
   const needsSkillSelection = isCompose && hasPills && !selectedQuickSkill && !selectedMcpPill;
   const canSend = (input.trim().length > 0 || attachments.length > 0) && !isRunning && !isSending && !needsSkillSelection && (!!threadId || !!resolvedRepoName) && repoReadiness.isReady && !resumeGate.composerBlocked;
@@ -1243,15 +1313,30 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
           </div>
 
           <div className={styles.messages}>
+            {isRestoringThread && (
+              <div
+                className={styles.agentRow}
+                role="status"
+                aria-live="polite"
+                aria-label="Loading conversation"
+                {...{ 'data-testid': 'agent-home-restoring' }}
+              >
+                <div className={styles.agentAvatar}>AI</div>
+                <div className={`${styles.agentBubble} ${styles.typing}`}>
+                  <span /><span /><span />
+                  <p className={styles.progressLabel}>Loading conversation…</p>
+                </div>
+              </div>
+            )}
             {(() => {
               let qOffset = 0;
-              return visibleMessages.map((msg, idx) => {
+              return displayMessages.map((msg, idx) => {
                 const offset = qOffset;
                 if (msg.role === 'agent') {
                   qOffset += parseAgentMessage(msg.text).filter((p) => p.type === 'choices').length;
                 }
                 const lastUserText = msg.role === 'system' && msg.text.startsWith('Error:')
-                  ? visibleMessages.slice(0, idx).reverse().find((m) => m.role === 'user')?.text ?? null
+                  ? displayMessages.slice(0, idx).reverse().find((m) => m.role === 'user')?.text ?? null
                   : null;
                 return (
                   <MessageBubble
@@ -1267,7 +1352,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
               });
             })()}
 
-            {showTypingIndicator && (
+            {showHomeTypingIndicator && (
               <div
                 className={styles.agentRow}
                 role="status"

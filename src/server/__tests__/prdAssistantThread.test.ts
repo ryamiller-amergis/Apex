@@ -355,7 +355,7 @@ describe('POST /api/interviews/prds/:prdId/apply-proposed', () => {
     const res = await request(buildApp()).post('/api/interviews/prds/prd-1/apply-proposed');
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true });
+    expect(res.body).toEqual({ ok: true, prd: null });
     expect(mockApplyProposedPrdChanges).toHaveBeenCalledWith('prd-1', {
       resolvedBy: 'user-test',
     });
