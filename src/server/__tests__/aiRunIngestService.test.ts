@@ -10,6 +10,7 @@ const mockTransition = jest.fn();
 const mockMarkTerminal = jest.fn();
 const mockNotifyRunEvent = jest.fn();
 const mockConsumeCompletedArtifacts = jest.fn();
+const mockFailGeneratingTestCasesForThread = jest.fn();
 const mockWorkerColdStart = jest.fn();
 
 const executionSnapshot = {
@@ -67,6 +68,11 @@ jest.mock('../services/chatThreadRepository', () => ({
   insertMessage: jest.fn(),
 }));
 
+jest.mock('../services/testCaseService', () => ({
+  failGeneratingTestCasesForThread: (...args: unknown[]) =>
+    mockFailGeneratingTestCasesForThread(...args),
+}));
+
 import {
   AiRunIngestError,
   getBootstrap,
@@ -111,6 +117,7 @@ beforeEach(() => {
   mockReturning.mockImplementation(async () => [baseRow()]);
   mockNotifyRunEvent.mockResolvedValue(undefined);
   mockConsumeCompletedArtifacts.mockResolvedValue(undefined);
+  mockFailGeneratingTestCasesForThread.mockResolvedValue(undefined);
   mockWorkerColdStart.mockReset();
   mockTransition.mockImplementation(async (_runId, status) => ({
     ok: true,
@@ -354,6 +361,24 @@ describe('aiRunIngestService accepted events', () => {
     );
   });
 
+  it('strips U+0000 from progress detail before writing clocks', async () => {
+    mockFindFirst.mockResolvedValue(baseRow());
+
+    await ingest('project-1', 'run-1', {
+      dispatchMessageId: 'dispatch-current',
+      kind: 'progress',
+      phase: 'implementation',
+      status: 'running',
+      detail: 'reading file\u0000.bin',
+    });
+
+    expect(mockSet.mock.calls[0][0].progressLabel).toBe('reading file.bin');
+    expect(mockNotifyRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ detail: 'reading file.bin' }),
+      { persist: true },
+    );
+  });
+
   it('PBI-004 AC-2 / VT-04: next callback reports cancellation request', async () => {
     mockFindFirst.mockResolvedValue(baseRow({ cancelRequested: true }));
     mockReturning.mockResolvedValue([baseRow({ cancelRequested: true })]);
@@ -395,6 +420,7 @@ describe('aiRunIngestService accepted events', () => {
     );
     expect(result.run.status).toBe('cancelled');
     expect(result.cancelRequested).toBe(true);
+    expect(mockFailGeneratingTestCasesForThread).toHaveBeenCalledWith('thread-1');
   });
 });
 
@@ -536,6 +562,7 @@ describe('aiRunIngestService durable terminal completion', () => {
       });
 
       expect(mockConsumeCompletedArtifacts).not.toHaveBeenCalled();
+      expect(mockFailGeneratingTestCasesForThread).toHaveBeenCalledWith('thread-1');
       expect(mockMarkTerminal).toHaveBeenCalledTimes(1);
     },
   );
@@ -556,6 +583,7 @@ describe('aiRunIngestService durable terminal completion', () => {
     });
 
     expect(mockConsumeCompletedArtifacts).not.toHaveBeenCalled();
+    expect(mockFailGeneratingTestCasesForThread).toHaveBeenCalledWith('thread-1');
     expect(mockMarkTerminal).toHaveBeenCalledWith(
       'run-1',
       expect.objectContaining({
@@ -572,6 +600,25 @@ describe('aiRunIngestService durable terminal completion', () => {
         ],
       }),
     );
+  });
+
+  it('retries a failed terminal and still flips generating test-case rows', async () => {
+    mockFindFirst.mockResolvedValue(baseRow({
+      status: 'failed',
+      executionSnapshot,
+    }));
+
+    await ingest('project-1', 'run-1', {
+      dispatchMessageId: 'dispatch-current',
+      kind: 'terminal',
+      status: 'failed',
+      artifactsFlushed: true,
+    }, {
+      consumeCompletedArtifacts: mockConsumeCompletedArtifacts,
+    });
+
+    expect(mockConsumeCompletedArtifacts).not.toHaveBeenCalled();
+    expect(mockFailGeneratingTestCasesForThread).toHaveBeenCalledWith('thread-1');
   });
 
   it('PBI-004 AC-3 regression: stale completed callback consumes nothing', async () => {

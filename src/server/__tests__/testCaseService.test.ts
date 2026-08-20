@@ -107,6 +107,7 @@ import {
   syncTestCaseOutput,
   triggerTestCaseGeneration,
   extractUncoveredCoverageItems,
+  failGeneratingTestCasesForThread,
 } from '../services/testCaseService';
 
 const { db: mockDb, __mockUpdateChains: mockUpdateChains } = jest.requireMock('../db/drizzle') as {
@@ -246,6 +247,32 @@ describe('testCaseService', () => {
 
       expect(result.size).toBe(0);
       expect(mockDb.select).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('failGeneratingTestCasesForThread', () => {
+    it('marks the generating row failed for that thread', async () => {
+      mockDb.query.testCases.findFirst.mockResolvedValue({
+        id: 'tc-1',
+        prdId: 'prd-1',
+        chatThreadId: 'thread-tc',
+      });
+      mockDb.query.prds.findFirst.mockResolvedValue({ chatThreadId: 'prd-thread' });
+      mockDb.query.chatThreads.findFirst.mockResolvedValue(null);
+
+      await failGeneratingTestCasesForThread('thread-tc');
+
+      expect(mockUpdateChains[0].set).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'failed' }),
+      );
+    });
+
+    it('is a no-op when no generating row exists', async () => {
+      mockDb.query.testCases.findFirst.mockResolvedValue(null);
+
+      await failGeneratingTestCasesForThread('thread-tc');
+
+      expect(mockUpdateChains).toHaveLength(0);
     });
   });
 

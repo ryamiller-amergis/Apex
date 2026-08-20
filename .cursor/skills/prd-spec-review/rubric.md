@@ -79,8 +79,8 @@ File weights: **PRD markdown 50%, backlog JSON 50%**.
 |-------|----------|
 | 0 | PRD contains an authored `## User Stories` section (contract violation); OR backlog has no PBI `userStory` objects |
 | 1 | PRD correctly omits `## User Stories`, but at least one PBI is missing `userStory` or uses a persona not in the Apex groups enum (valid: `Product-Owner`, `BA`, `UI/UX`, `Manager`, `Developer`, `QA`, `Platform Admin`, `Project Admin`, `Authenticated User`) |
-| 2 | Every PBI has a complete `userStory` with valid Apex persona; PRD omits authored stories; 1–2 stories not traceable to PRD `## Solution` |
-| 3 | PRD has no authored stories; every PBI `userStory` uses Apex enum persona verbatim and is in parent Feature `affectedPersonas`; every story traces to PRD content |
+| 2 | Every PBI has a complete `userStory` with valid Apex persona; PRD omits authored stories; 1–2 stories not traceable to PRD `## Solution`; or `iWant` names a system artifact (table, endpoint, helper, schema) instead of a persona action |
+| 3 | PRD has no authored stories; every PBI `userStory` uses Apex enum persona verbatim and is in parent Feature `affectedPersonas`; every `iWant` is a verb phrase the persona performs; every story traces to PRD content |
 
 ### Target Surface — weight 8
 
@@ -216,8 +216,8 @@ Optional `userTypes` / `personaBehaviors` on PBIs are schema-valid (design-proto
 |-------|----------|
 | 0 | PBI missing any required field; or contains properties not in `backlog-schema.json` (e.g. `compliance`) |
 | 1 | `userStory.persona` not from Apex groups enum (valid: `Product-Owner`, `BA`, `UI/UX`, `Manager`, `Developer`, `QA`, `Platform Admin`, `Project Admin`, `Authenticated User`; Super Admin ≡ Platform Admin) |
-| 2 | Complete with valid Apex persona; `nonFunctionalRequirements` sub-fields (`performance`, `accessibility`, `security`) have some blanks |
-| 3 | All fields populated; persona from Apex enum; NFR sub-fields (`performance`, `accessibility`, `security`) populated with concrete values; no extra properties beyond schema |
+| 2 | Complete with valid Apex persona; `nonFunctionalRequirements` sub-fields (`performance`, `accessibility`, `security`) have some blanks; or `iWant` is a noun/artifact ("a table", "endpoints", "helpers") rather than a verb phrase |
+| 3 | All fields populated; persona from Apex enum; `iWant` is a verb phrase the persona performs (completes "I want to …"); NFR sub-fields (`performance`, `accessibility`, `security`) populated with concrete values; no extra properties beyond schema |
 
 ### Acceptance Criteria coverage — weight 15
 

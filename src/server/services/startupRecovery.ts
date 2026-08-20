@@ -24,7 +24,7 @@ import {
   isValidationWatcherActive,
   routeDesignDocGenerationKickoff,
 } from './designDocService';
-import { startTestCaseWatcher, isTestCaseWatcherActive } from './testCaseService';
+import { startTestCaseWatcher, isTestCaseWatcherActive, routeTestCaseGenerationKickoff } from './testCaseService';
 import { failStalePrototypes } from './designPrototypeService';
 import {
   findRunningInterviewThreads,
@@ -476,21 +476,32 @@ export async function recoverInFlightWork(): Promise<void> {
         && isGenerationRecoveryStale(testCase.updatedAt)
         && await claimTestCaseGenerationRecovery(testCase.id, testCase.updatedAt)
       ) {
-        sendMessage(
-          testCase.chatThreadId,
-          'Generate QA test cases for the provided PRD and backlog. Use the configured skill instructions and write the required output files.',
-          undefined,
-          [],
-          { hidden: true }
-        ).catch((err: Error) => {
-          console.error(
-            `[recovery] Failed to re-kick test-case agent (testCaseId=${testCase.id}, threadId=${testCase.chatThreadId}):`,
-            err.message
-          );
+        const prd = await db.query.prds.findFirst({
+          where: eq(prds.id, testCase.prdId),
+          columns: { authorId: true, project: true, chatThreadId: true },
         });
-        console.log(
-          `[recovery] Re-kicked dead test-case agent (testCaseId=${testCase.id})`
-        );
+        if (prd?.authorId && prd.project) {
+          void routeTestCaseGenerationKickoff({
+            testCaseId: testCase.id,
+            prdId: testCase.prdId,
+            userId: prd.authorId,
+            project: prd.project,
+            threadId: testCase.chatThreadId,
+            sourceThreadId: prd.chatThreadId ?? testCase.chatThreadId,
+          }).catch((err: unknown) => {
+            console.error(
+              `[recovery] Failed to re-kick test-case generation (testCaseId=${testCase.id}):`,
+              err,
+            );
+          });
+          console.log(
+            `[recovery] Re-kicked test-case generation (testCaseId=${testCase.id})`
+          );
+        } else {
+          console.warn(
+            `[recovery] Cannot re-kick test-case generation without PRD author/project (testCaseId=${testCase.id}, prdId=${testCase.prdId})`
+          );
+        }
       }
     } else {
       console.warn(
