@@ -290,7 +290,7 @@ export function rewriteRootPathReferences(text, sourceRoot, targetRoot) {
   if (!sourceRoot || sourceRoot === targetRoot) return text;
   const otherRoots = KNOWN_SKILL_ROOTS.filter((root) => root !== sourceRoot);
   const escaped = sourceRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(`${escaped}(?=/)`, 'g');
+  const re = new RegExp(`(?<![A-Za-z0-9._-])${escaped}(?=/)`, 'g');
   return text.replace(re, (match, offset) => {
     const embedded = otherRoots.some((root) => {
       if (!root.endsWith(sourceRoot)) return false;
