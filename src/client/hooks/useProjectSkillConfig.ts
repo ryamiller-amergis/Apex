@@ -79,7 +79,10 @@ export function useUpsertProjectSkillConfig() {
         credentials: 'include',
         body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error('Failed to save project settings');
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as { error?: string }).error || 'Failed to save project settings');
+      }
       return res.json() as Promise<ProjectSkillConfig>;
     },
     onSuccess: (data, { project }) => {

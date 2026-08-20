@@ -31,6 +31,11 @@ jest.mock('../services/notificationService', () => ({
   createNotification: jest.fn().mockResolvedValue(undefined),
 }));
 
+jest.mock('../services/rfpEvaluationChatService', () => ({
+  listEvaluationChat: jest.fn(),
+  askEvaluationChat: jest.fn(),
+}));
+
 import {
   createRequest,
   listOwnerRequests,
@@ -42,6 +47,7 @@ import {
   RfpIntakeError,
 } from '../services/rfpIntakeService';
 import { createNotification } from '../services/notificationService';
+import { askEvaluationChat, listEvaluationChat } from '../services/rfpEvaluationChatService';
 
 const mockedCreate = createRequest as jest.MockedFunction<typeof createRequest>;
 const mockedList = listOwnerRequests as jest.MockedFunction<typeof listOwnerRequests>;
@@ -53,6 +59,8 @@ const mockedRecipients = resolveRfpSubmissionRecipients as jest.MockedFunction<
   typeof resolveRfpSubmissionRecipients
 >;
 const mockedNotify = createNotification as jest.MockedFunction<typeof createNotification>;
+const mockedListChat = listEvaluationChat as jest.MockedFunction<typeof listEvaluationChat>;
+const mockedAskChat = askEvaluationChat as jest.MockedFunction<typeof askEvaluationChat>;
 
 const VALID_INTAKE = {
   title: 'Internal intake tracker',
@@ -253,6 +261,24 @@ describe('RFP intake self-scoped routes', () => {
 
       expect(response.status).toBe(201);
       expect(mockedAddComment).toHaveBeenCalledWith('rfp-1', 'user-1', { body: 'Thanks', mentionedUserIds: [], attachmentIds: [] });
+    });
+  });
+
+  describe('POST /api/rfp-intake/requests/:id/evaluation-chat', () => {
+    it('asks the evaluator about a completed evaluation', async () => {
+      mockedAskChat.mockResolvedValue([
+        { id: 'm-1', rfpRequestId: 'rfp-1', evaluationId: 'ev-1', authorId: 'user-1', role: 'user', body: 'Why buy?', createdAt: CREATED.createdAt },
+        { id: 'm-2', rfpRequestId: 'rfp-1', evaluationId: 'ev-1', authorId: null, role: 'assistant', body: 'Cornerstone already exists.', createdAt: CREATED.createdAt },
+      ]);
+
+      const response = await request(buildApp())
+        .post('/api/rfp-intake/requests/rfp-1/evaluation-chat')
+        .send({ message: 'Why buy?' });
+
+      expect(response.status).toBe(201);
+      expect(response.body).toHaveLength(2);
+      expect(mockedAskChat).toHaveBeenCalledWith('rfp-1', 'user-1', 'Why buy?');
+      expect(mockedListChat).not.toHaveBeenCalled();
     });
   });
 

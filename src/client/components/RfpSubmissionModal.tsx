@@ -19,12 +19,14 @@ import styles from './RfpIntakeLanding.module.css';
 
 interface RfpSubmissionModalProps {
   onClose: () => void;
+  onSubmitted?: (request: { id: string; title: string }) => void;
 }
 
-export const RfpSubmissionModal: React.FC<RfpSubmissionModalProps> = ({ onClose }) => {
+export const RfpSubmissionModal: React.FC<RfpSubmissionModalProps> = ({ onClose, onSubmitted }) => {
   const submitRfp = useSubmitRfpRequest();
   const [files, setFiles] = useState<File[]>([]);
   const [fileError, setFileError] = useState<string | null>(null);
+  const [submitted, setSubmitted] = useState<{ id: string; title: string } | null>(null);
   const firstFieldRef = useRef<HTMLInputElement | null>(null);
   const {
     register,
@@ -61,8 +63,8 @@ export const RfpSubmissionModal: React.FC<RfpSubmissionModalProps> = ({ onClose 
     }
     setFileError(null);
     try {
-      await submitRfp.mutateAsync({ intake: toRfpIntakePayload(values), files });
-      onClose();
+      const created = await submitRfp.mutateAsync({ intake: toRfpIntakePayload(values), files });
+      setSubmitted({ id: created.id, title: created.title });
     } catch {
       // Form values stay; actionable error is shown below.
     }
@@ -95,17 +97,43 @@ export const RfpSubmissionModal: React.FC<RfpSubmissionModalProps> = ({ onClose 
           </button>
         </div>
 
-        {summary.length > 0 && (
+        {submitted && (
+          <div className={styles.successBanner} role="status" aria-live="polite" {...{ 'data-testid': 'rfp-submit-success' }}>
+            <p className={styles.successTitle}>Request submitted successfully</p>
+            <p className={styles.successBody}>
+              “{submitted.title}” is in the queue and evaluation is starting.
+            </p>
+            <div className={styles.successActions}>
+              <button type="button" className={styles.secondaryButton} onClick={onClose} {...{ 'data-testid': 'rfp-submit-success-close' }}>
+                Close
+              </button>
+              <button
+                type="button"
+                className={styles.primaryButton}
+                onClick={() => {
+                  onSubmitted?.(submitted);
+                  onClose();
+                }}
+                {...{ 'data-testid': 'rfp-submit-success-view' }}
+              >
+                View request
+              </button>
+            </div>
+          </div>
+        )}
+
+        {!submitted && summary.length > 0 && (
           <p className={styles.summary} aria-live="assertive" {...{ 'data-testid': 'rfp-validation-summary' }}>
             {summary.join('. ')}
           </p>
         )}
-        {submitRfp.isError && (
+        {!submitted && submitRfp.isError && (
           <p className={styles.summary} role="alert" {...{ 'data-testid': 'rfp-submit-error' }}>
             {submitRfp.error.message || 'Could not create the request. Your answers are still here — try again.'}
           </p>
         )}
 
+        {!submitted && (
         <form className={styles.form} onSubmit={(event) => void handleSubmit(onSubmit)(event)} {...{ 'data-testid': 'rfp-submission-form' }}>
           <label className={styles.field}>
             <span className={styles.label}>Title</span>
@@ -205,6 +233,7 @@ export const RfpSubmissionModal: React.FC<RfpSubmissionModalProps> = ({ onClose 
             </button>
           </div>
         </form>
+        )}
       </div>
     </div>
   );

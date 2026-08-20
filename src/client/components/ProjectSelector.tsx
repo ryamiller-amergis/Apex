@@ -105,7 +105,10 @@ const RfpEnabledProjectSelector: React.FC<ProjectSelectorProps> = (props) => {
       />
       {isSubmitOpen && (
         // data-testid-exempt — root dialog already has rfp-submission-modal
-        <RfpSubmissionModal onClose={() => setIsSubmitOpen(false)} />
+        <RfpSubmissionModal
+          onClose={() => setIsSubmitOpen(false)}
+          onSubmitted={(request) => openRequest(request.id)}
+        />
       )}
       {requestId && (
         // data-testid-exempt — root dialog already has rfp-detail-drawer

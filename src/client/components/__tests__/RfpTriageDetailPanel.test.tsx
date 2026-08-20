@@ -6,6 +6,17 @@ import { RFP_ATTACHMENT_MAX_BYTES } from '../../../shared/types/rfpIntake';
 
 jest.mock('../../hooks/useRfpIntake', () => ({
   useAddRfpComment: jest.fn(),
+  useRfpEvaluationChat: jest.fn(() => ({
+    data: [],
+    isLoading: false,
+    isError: false,
+  })),
+  useAskRfpEvaluationChat: jest.fn(() => ({
+    mutateAsync: jest.fn(),
+    isPending: false,
+    isError: false,
+    error: null,
+  })),
 }));
 
 jest.mock('../../hooks/useRfpTriage', () => ({
@@ -14,6 +25,11 @@ jest.mock('../../hooks/useRfpTriage', () => ({
   useRfpMentionCandidates: jest.fn(),
   useRfpStatusTransition: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false, isError: false, error: null })),
   useRfpReopen: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false, isError: false, error: null })),
+}));
+
+jest.mock('react-markdown', () => ({
+  __esModule: true,
+  default: ({ children }: { children: string }) => <div>{children}</div>,
 }));
 
 const mockDetail = useRfpTriageDetail as jest.MockedFunction<typeof useRfpTriageDetail>;
@@ -49,19 +65,25 @@ const detail = {
     version: 1,
     verdict: 'build',
     confidence: 'high',
-    techVelocity: 'accelerating',
+    techVelocity: 'stable',
     nativeBenefit: 'high',
     audience: 'internal',
     dataLeavesTenant: false,
     priority: 'high',
     risk: 'low',
     deliveryApproach: 'full-code',
-    recommendedLane: 'apex',
-    recommendedTooling: [],
-    hostingRecommendation: 'internal',
+    recommendedLane: 'committed-product',
+    recommendedTooling: ['Apex SDLC'],
+    hostingRecommendation: 'apex-managed-aws',
+    operationalOwner: 'People Operations',
+    reuseOpportunity: 'none',
+    entersInterviewFlow: true,
     buildBuyRentSummary: 'Build it.',
     rationale: 'Native fit.',
+    existingOverlap: 'none',
     clarifyingQuestions: [],
+    rawOutput: {} as never,
+    committedProductBadge: true,
     createdAt: '2026-08-19T12:00:00.000Z',
   },
   comments: [],

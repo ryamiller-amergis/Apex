@@ -62,6 +62,7 @@ import type {
   RfpRisk,
   RfpTechVelocity,
   RfpVerdict,
+  RfpEvaluationChatRole,
 } from '../../shared/types/rfpIntake';
 import type { DesignModuleIconKey } from '../../shared/types/designModule';
 import type {
@@ -2732,6 +2733,18 @@ export const rfpRequestEvents = pgTable('rfp_request_events', {
   requestCreatedIdx: index('idx_rfp_request_events_request_created').on(t.rfpRequestId, t.createdAt),
 }));
 
+export const rfpEvaluationMessages = pgTable('rfp_evaluation_messages', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  rfpRequestId: uuid('rfp_request_id').notNull().references(() => rfpRequests.id, { onDelete: 'cascade' }),
+  evaluationId: uuid('evaluation_id').references(() => rfpEvaluations.id, { onDelete: 'set null' }),
+  authorId: text('author_id').references(() => appUsers.oid, { onDelete: 'set null' }),
+  role: text('role').$type<RfpEvaluationChatRole>().notNull(),
+  body: text('body').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  requestCreatedIdx: index('idx_rfp_evaluation_messages_request_created').on(t.rfpRequestId, t.createdAt),
+}));
+
 export const rfpRequestsRelations = relations(rfpRequests, ({ one, many }) => ({
   owner: one(appUsers, {
     fields: [rfpRequests.ownerId],
@@ -2745,6 +2758,7 @@ export const rfpRequestsRelations = relations(rfpRequests, ({ one, many }) => ({
   comments: many(rfpComments),
   attachments: many(rfpAttachments),
   events: many(rfpRequestEvents),
+  evaluationMessages: many(rfpEvaluationMessages),
 }));
 
 export const rfpEvaluationsRelations = relations(rfpEvaluations, ({ one }) => ({
@@ -2784,6 +2798,21 @@ export const rfpRequestEventsRelations = relations(rfpRequestEvents, ({ one }) =
   }),
   actor: one(appUsers, {
     fields: [rfpRequestEvents.actorId],
+    references: [appUsers.oid],
+  }),
+}));
+
+export const rfpEvaluationMessagesRelations = relations(rfpEvaluationMessages, ({ one }) => ({
+  request: one(rfpRequests, {
+    fields: [rfpEvaluationMessages.rfpRequestId],
+    references: [rfpRequests.id],
+  }),
+  evaluation: one(rfpEvaluations, {
+    fields: [rfpEvaluationMessages.evaluationId],
+    references: [rfpEvaluations.id],
+  }),
+  author: one(appUsers, {
+    fields: [rfpEvaluationMessages.authorId],
     references: [appUsers.oid],
   }),
 }));

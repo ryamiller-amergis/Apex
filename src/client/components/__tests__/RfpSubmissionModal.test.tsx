@@ -59,4 +59,26 @@ describe('RfpSubmissionModal', () => {
     expect(screen.getByTestId('rfp-field-title')).toHaveValue('Keep me');
     expect(screen.getByTestId('rfp-submit-error')).toHaveTextContent(/create failed/i);
   });
+
+  it('shows a success confirmation after submit', async () => {
+    const mutateAsync = jest.fn().mockResolvedValue({ id: 'rfp-9', title: 'Keep me' });
+    mockUseSubmit.mockReturnValue({
+      mutateAsync,
+      isPending: false,
+      isError: false,
+      error: null,
+    } as never);
+
+    renderModal();
+    fireEvent.change(screen.getByTestId('rfp-field-title'), { target: { value: 'Keep me' } });
+    fireEvent.change(screen.getByTestId('rfp-field-stakeholder'), { target: { value: 'BA' } });
+    fireEvent.change(screen.getByTestId('rfp-field-request'), { target: { value: 'Need a tracker' } });
+    fireEvent.change(screen.getByTestId('rfp-field-problem'), { target: { value: 'Fragmented' } });
+    fireEvent.change(screen.getByTestId('rfp-field-existingSolution'), { target: { value: 'none' } });
+    fireEvent.click(screen.getByTestId('rfp-submit-button'));
+
+    await waitFor(() => expect(screen.getByTestId('rfp-submit-success')).toBeInTheDocument());
+    expect(screen.getByTestId('rfp-submit-success')).toHaveTextContent(/submitted successfully/i);
+    expect(screen.queryByTestId('rfp-submission-form')).not.toBeInTheDocument();
+  });
 });

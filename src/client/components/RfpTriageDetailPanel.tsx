@@ -4,6 +4,8 @@ import { validateRfpAttachments } from '../../shared/types/rfpIntake';
 import { useAddRfpComment } from '../hooks/useRfpIntake';
 import { useRfpAttachmentUpload, useRfpMentionCandidates, useRfpTriageDetail } from '../hooks/useRfpTriage';
 import { formatLabel, RfpStatusControl } from './RfpStatusControl';
+import { RfpEvaluationCard } from './RfpEvaluationCard';
+import { RfpEvaluationChat } from './RfpEvaluationChat';
 import styles from './RfpQueueView.module.css';
 
 interface RfpTriageDetailPanelProps {
@@ -127,8 +129,16 @@ export const RfpTriageDetailPanel: React.FC<RfpTriageDetailPanelProps> = ({
             {detail.currentEvaluation && (
               <section className={styles.block}>
                 <h3 className={styles.blockTitle}>Current Evaluation</h3>
-                <p><strong>{formatLabel(detail.currentEvaluation.verdict)}</strong> · {detail.currentEvaluation.confidence} confidence</p>
-                <p>{detail.currentEvaluation.buildBuyRentSummary}</p>
+                <RfpEvaluationCard
+                  evaluation={detail.currentEvaluation}
+                  {...{ 'data-testid': 'rfp-evaluation-card' }}
+                />
+              </section>
+            )}
+
+            {detail.currentEvaluation && (
+              <section className={styles.block}>
+                <RfpEvaluationChat requestId={detail.id} />
               </section>
             )}
 

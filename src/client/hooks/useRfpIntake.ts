@@ -3,6 +3,7 @@ import type {
   CreateRfpCommentDTO,
   CreateRfpRequestDTO,
   RfpComment,
+  RfpEvaluationChatMessage,
   RfpOwnerListResponse,
   RfpRequest,
   RfpRequestDetail,
@@ -149,6 +150,36 @@ export function useAddRfpComment() {
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: detailKey(variables.id) });
       qc.invalidateQueries({ queryKey: RFP_INTAKE_QUERY_KEY });
+    },
+  });
+}
+
+function evaluationChatKey(id: string) {
+  return [...RFP_INTAKE_QUERY_KEY, 'evaluation-chat', id] as const;
+}
+
+export function useRfpEvaluationChat(id: string | null, enabled: boolean) {
+  return useQuery<RfpEvaluationChatMessage[]>({
+    queryKey: evaluationChatKey(id ?? ''),
+    queryFn: () => apiFetch(`/api/rfp-intake/requests/${id}/evaluation-chat`),
+    enabled: enabled && Boolean(id),
+  });
+}
+
+export function useAskRfpEvaluationChat() {
+  const qc = useQueryClient();
+  return useMutation<RfpEvaluationChatMessage[], Error, { id: string; message: string }>({
+    mutationFn: ({ id, message }) =>
+      apiFetch(`/api/rfp-intake/requests/${id}/evaluation-chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message }),
+      }),
+    onSuccess: (created, variables) => {
+      qc.setQueryData<RfpEvaluationChatMessage[]>(evaluationChatKey(variables.id), (current) => [
+        ...(current ?? []),
+        ...created,
+      ]);
     },
   });
 }

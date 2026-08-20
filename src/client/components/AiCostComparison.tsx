@@ -36,6 +36,7 @@ const FEATURE_LABELS: Record<string, string> = {
   'backlog-generate': 'Backlog Generation',
   'home-chat': 'Home Chat',
   'ai-cost-insights': 'AI Cost Insights',
+  'rfp-intake': 'RFP Intake',
   other: 'Other',
 };
 
@@ -55,6 +56,7 @@ const FEATURE_COLORS: Record<string, string> = {
   'backlog-generate': '#0ea5e9',
   'home-chat': '#3b82f6',
   'ai-cost-insights': '#64748b',
+  'rfp-intake': '#14b8a6',
   other: '#94a3b8',
 };
 
@@ -162,6 +164,7 @@ const ProjectLeaderboard: React.FC<LeaderboardProps> = ({ projects }) => {
             <div
               className={`${styles.leaderboardRow} ${isExpanded ? styles.leaderboardRowExpanded : ''}`}
               onClick={() => setExpandedProject(isExpanded ? null : p.project)}
+              {...{ 'data-testid': `ai-cost-compare-project-${p.project}` }}
             >
               <span className={`${styles.rankBadge} ${rankClass}`}>{p.rank}</span>
 
@@ -264,7 +267,7 @@ const HeadToHeadChart: React.FC<HeadToHeadProps> = ({ projects }) => {
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
         <XAxis dataKey="feature" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} />
         <YAxis tickFormatter={(v) => formatCost(v)} tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} />
-        <Tooltip content={<ComparisonTooltip />} />
+        <Tooltip content={<ComparisonTooltip />} {...{ 'data-testid': 'ai-cost-compare-feature-tooltip' }} />
         <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
         {projects.slice(0, 8).map((p, i) => (
           <Bar key={p.project} dataKey={p.project} fill={projectColor(i)} radius={[3, 3, 0, 0]} />
@@ -312,7 +315,7 @@ const FeatureRankingsChart: React.FC<FeatureRankingsProps> = ({ projects }) => {
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
         <XAxis dataKey="feature" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} />
         <YAxis tickFormatter={(v) => formatCost(v)} tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} />
-        <Tooltip content={<ComparisonTooltip />} />
+        <Tooltip content={<ComparisonTooltip />} {...{ 'data-testid': 'ai-cost-compare-rankings-tooltip' }} />
         <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
         {projects.slice(0, 8).map((p, i) => (
           <Bar key={p.project} dataKey={p.project} stackId="a" fill={projectColor(i)} />
@@ -347,6 +350,7 @@ const ModelMixChart: React.FC<ModelMixProps> = ({ projects }) => {
         <XAxis dataKey="project" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} />
         <YAxis tickFormatter={(v) => formatCost(v)} tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} />
         <Tooltip
+          {...{ 'data-testid': 'ai-cost-compare-model-mix-tooltip' }}
           content={({ active, payload, label }) => {
             if (!active || !payload?.length) return null;
             const fullProject = chartData.find((d) => d.project === label)?.fullProject ?? label;
@@ -494,7 +498,7 @@ export const AiCostComparison: React.FC<AiCostComparisonProps> = ({ onBack }) =>
             <span className={styles.adminBadge}>
               <ApexIcon size={10} /> Super Admin
             </span>
-            <button className={styles.backBtn} onClick={onBack}>
+            <button className={styles.backBtn} onClick={onBack} {...{ 'data-testid': 'ai-cost-compare-back' }}>
               ← AI Cost Overview
             </button>
           </div>
@@ -509,6 +513,7 @@ export const AiCostComparison: React.FC<AiCostComparisonProps> = ({ onBack }) =>
             key={p}
             className={`${styles.presetBtn} ${preset === p ? styles.presetBtnActive : ''}`}
             onClick={() => setPreset(p)}
+            {...{ 'data-testid': `ai-cost-compare-preset-${p}` }}
           >
             {p}
           </button>

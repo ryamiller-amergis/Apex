@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { requirePermission } from '../middleware/rbac';
 import * as rbacService from '../services/rbacService';
 import * as projectSettingsService from '../services/projectSettingsService';
-import { validateConfiguredRepository } from '../services/foundationSkillAuthorizeService';
+import { normalizeConfiguredRepository, validateConfiguredRepository } from '../services/foundationSkillAuthorizeService';
 import * as groupService from '../services/groupService';
 import { getDefaultModel, getAppSetting, setAppSetting } from '../services/appSettingsService';
 import { fetchAvailableModels } from '../services/modelsService';
@@ -333,6 +333,7 @@ router.post('/project-settings', async (req: Request, res: Response): Promise<vo
       res.status(400).json({ error: 'project, friendlyName, skillRepo, and skillBranch are required' });
       return;
     }
+    body.skillRepo = normalizeConfiguredRepository(body.skillProvider, body.skillRepo);
     const repoError = validateConfiguredRepository(body.skillProvider, body.skillRepo);
     if (repoError) {
       res.status(400).json({ error: repoError });
@@ -354,6 +355,7 @@ router.put('/project-settings/:id', async (req: Request, res: Response): Promise
       res.status(400).json({ error: 'skillRepo and skillBranch are required' });
       return;
     }
+    body.skillRepo = normalizeConfiguredRepository(body.skillProvider, body.skillRepo);
     const repoError = validateConfiguredRepository(body.skillProvider, body.skillRepo);
     if (repoError) {
       res.status(400).json({ error: repoError });

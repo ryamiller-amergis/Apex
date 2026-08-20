@@ -36,6 +36,7 @@ import {
   setRfpEvaluationNotificationHook,
   transitionStatus,
 } from '../services/rfpIntakeService';
+import { askEvaluationChat, listEvaluationChat } from '../services/rfpEvaluationChatService';
 import { createNotification } from '../services/notificationService';
 
 const router = Router();
@@ -249,6 +250,25 @@ router.post('/requests/:id/comments', async (req, res, next) => {
       attachmentIds,
     });
     return res.status(201).json(comment);
+  } catch (err) {
+    handleRfpError(err, res, next);
+  }
+});
+
+router.get('/requests/:id/evaluation-chat', async (req, res, next) => {
+  try {
+    const messages = await listEvaluationChat(req.params.id, getUserId(req));
+    return res.json(messages);
+  } catch (err) {
+    handleRfpError(err, res, next);
+  }
+});
+
+router.post('/requests/:id/evaluation-chat', async (req, res, next) => {
+  try {
+    const message = typeof req.body?.message === 'string' ? req.body.message : '';
+    const created = await askEvaluationChat(req.params.id, getUserId(req), message);
+    return res.status(201).json(created);
   } catch (err) {
     handleRfpError(err, res, next);
   }

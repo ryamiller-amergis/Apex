@@ -344,6 +344,25 @@ export interface RfpComment {
   createdAt: string;
 }
 
+export const RFP_EVALUATION_CHAT_ROLES = ['user', 'assistant'] as const;
+export type RfpEvaluationChatRole = (typeof RFP_EVALUATION_CHAT_ROLES)[number];
+
+export const RFP_EVALUATION_CHAT_MAX_MESSAGE_CHARS = 2000;
+
+export interface RfpEvaluationChatMessage {
+  id: string;
+  rfpRequestId: string;
+  evaluationId: string | null;
+  authorId: string | null;
+  role: RfpEvaluationChatRole;
+  body: string;
+  createdAt: string;
+}
+
+export interface CreateRfpEvaluationChatDTO {
+  message: string;
+}
+
 export interface RfpAttachment {
   id: string;
   rfpRequestId: string;

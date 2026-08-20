@@ -1977,6 +1977,14 @@ export class BedrockModelTruncatedError extends Error {
   }
 }
 
+export async function completePlainTextWithBedrock(
+  prompt: string,
+  usageCtx: BedrockUsageContext,
+  options?: { maxTokens?: number },
+): Promise<string> {
+  return invokeModel(prompt, undefined, MODEL_ID, options?.maxTokens ?? 2048, undefined, usageCtx);
+}
+
 /**
  * Invoke Claude on Bedrock.
  * When `image` is provided the call is multimodal — the image is prepended

@@ -11,6 +11,17 @@ jest.mock('../../hooks/useRfpIntake', () => ({
     isError: false,
     error: null,
   })),
+  useRfpEvaluationChat: jest.fn(() => ({
+    data: [],
+    isLoading: false,
+    isError: false,
+  })),
+  useAskRfpEvaluationChat: jest.fn(() => ({
+    mutateAsync: jest.fn(),
+    isPending: false,
+    isError: false,
+    error: null,
+  })),
 }));
 
 jest.mock('../../hooks/useRfpTriage', () => ({
@@ -20,6 +31,11 @@ jest.mock('../../hooks/useRfpTriage', () => ({
     isError: false,
     error: null,
   })),
+}));
+
+jest.mock('react-markdown', () => ({
+  __esModule: true,
+  default: ({ children }: { children: string }) => <div>{children}</div>,
 }));
 
 const mockDetail = useRfpRequestDetail as jest.MockedFunction<typeof useRfpRequestDetail>;

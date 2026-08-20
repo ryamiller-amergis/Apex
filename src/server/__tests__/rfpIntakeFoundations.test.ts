@@ -98,6 +98,10 @@ describe('FEAT-001 TBI-001 RFP persistence and shared contracts', () => {
     expect(RFP_AI_STATUSES).toEqual(['evaluating', 'failed', 'complete']);
     expect(PRODUCT_INTAKE_EVALUATION_OUTPUT_FILE).toBe('product-intake-evaluation.json');
     expect(parseProductIntakeEvaluationOutput(VALID_OUTPUT)).toEqual(VALID_OUTPUT);
+    expect(parseProductIntakeEvaluationOutput({
+      ...VALID_OUTPUT,
+      rationale: '## Call\nBuild a standalone app.\n\n## Caveat\nOwner is unassigned.',
+    })?.rationale).toContain('## Call');
     expect(parseProductIntakeEvaluationOutput({ verdict: 'maybe' })).toBeNull();
     expect(parseProductIntakeEvaluationOutput(null)).toBeNull();
   });

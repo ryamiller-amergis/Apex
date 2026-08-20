@@ -58,6 +58,7 @@ const FEATURE_LABELS: Record<string, string> = {
   'backlog-generate': 'Backlog Generation',
   'home-chat': 'Home Chat (Ask Apex)',
   'ai-cost-insights': 'AI Cost Insights',
+  'rfp-intake': 'RFP Intake',
   other: 'Other',
 };
 
@@ -86,6 +87,7 @@ const FEATURE_COLORS: Record<string, string> = {
   'backlog-generate': '#0ea5e9',
   'home-chat': '#3b82f6',
   'ai-cost-insights': '#64748b',
+  'rfp-intake': '#14b8a6',
   other: '#94a3b8',
 };
 
@@ -161,12 +163,22 @@ interface KpiCardProps {
   delta?: number;
   accent?: 'default' | 'green' | 'blue' | 'orange';
   onClick?: () => void;
+  'data-testid'?: string;
 }
 
-const KpiCard: React.FC<KpiCardProps> = ({ label, value, sub, delta, accent = 'default', onClick }) => {
+const KpiCard: React.FC<KpiCardProps> = ({
+  label,
+  value,
+  sub,
+  delta,
+  accent = 'default',
+  onClick,
+  'data-testid': testId,
+}) => {
   const accentClass = accent === 'green' ? styles.kpiCardAccentGreen : accent === 'blue' ? styles.kpiCardAccentBlue : accent === 'orange' ? styles.kpiCardAccentOrange : styles.kpiCardAccent;
   const deltaClass = delta === undefined ? '' : delta > 0 ? styles.kpiDeltaUp : delta < 0 ? styles.kpiDeltaDown : styles.kpiDeltaFlat;
   const deltaIcon = delta === undefined ? '' : delta > 0 ? '↑' : delta < 0 ? '↓' : '→';
+  const fallbackId = `ai-cost-kpi-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
 
   return (
     <div
@@ -174,6 +186,7 @@ const KpiCard: React.FC<KpiCardProps> = ({ label, value, sub, delta, accent = 'd
       onClick={onClick}
       style={onClick ? { cursor: 'pointer' } : undefined}
       title={onClick ? `Click to drill down into ${label}` : undefined}
+      {...{ 'data-testid': testId ?? fallbackId }}
     >
       <div className={accentClass} />
       <div className={styles.kpiLabel}>{label}{onClick && <span style={{ fontSize: 10, marginLeft: 4, opacity: 0.5 }}>↗</span>}</div>
@@ -247,7 +260,7 @@ const SpendChart: React.FC<SpendChartProps> = ({ timeseries, forecast, isLoading
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
         <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
         <YAxis tickFormatter={(v) => formatCost(v)} tick={{ fontSize: 11, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} />
-        <Tooltip content={<CustomTooltip />} />
+        <Tooltip content={<CustomTooltip />} {...{ 'data-testid': 'ai-cost-spend-tooltip' }} />
         <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12 }} />
         <ReferenceLine x={formatDate(today)} stroke="#64748b" strokeDasharray="4 2" label={{ value: 'Today', position: 'top', fontSize: 10, fill: 'var(--text-muted)' }} />
         <Area type="monotone" dataKey="cursor" name="Cursor" stroke={PROVIDER_COLORS.cursor} fill="url(#gradCursor)" strokeWidth={2} dot={false} />
@@ -275,11 +288,12 @@ const FeatureBarChart: React.FC<{ data: Array<{ feature: string; costUsd: number
         margin={{ top: 0, right: 40, left: 110, bottom: 0 }}
         onClick={onFeatureClick ? (data: any) => { const f = data?.activePayload?.[0]?.payload?.feature; if (f) onFeatureClick(f); } : undefined}
         style={onFeatureClick ? { cursor: 'pointer' } : undefined}
+        {...{ 'data-testid': 'ai-cost-feature-bar-chart' }}
       >
         <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="var(--border-color)" />
         <XAxis type="number" tickFormatter={(v) => formatCost(v)} tick={{ fontSize: 11, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} />
         <YAxis type="category" dataKey="label" tick={{ fontSize: 11, fill: 'var(--text-secondary)' }} tickLine={false} axisLine={false} width={105} />
-        <Tooltip formatter={(v) => [formatCost(Number(v) || 0), 'Cost']} cursor={{ fill: 'rgba(99,102,241,0.05)' }} />
+        <Tooltip formatter={(v) => [formatCost(Number(v) || 0), 'Cost']} cursor={{ fill: 'rgba(99,102,241,0.05)' }} {...{ 'data-testid': 'ai-cost-feature-bar-tooltip' }} />
         <Bar dataKey="costUsd" radius={[0, 4, 4, 0]} name="Cost">
           {chartData.map((entry) => (
             <Cell key={entry.feature} fill={getFeatureColor(entry.feature)} />
@@ -312,7 +326,7 @@ const ModelDonut: React.FC<{ data: Array<{ modelId: string; costUsd: number }>; 
           <Pie data={pieData} cx="50%" cy="50%" innerRadius={40} outerRadius={65} dataKey="value" strokeWidth={2} stroke="var(--bg-secondary)">
             {pieData.map((entry, i) => <Cell key={i} fill={entry.fill} />)}
           </Pie>
-          <Tooltip formatter={(v) => [formatCost(Number(v) || 0), 'Cost']} />
+          <Tooltip formatter={(v) => [formatCost(Number(v) || 0), 'Cost']} {...{ 'data-testid': 'ai-cost-model-donut-tooltip' }} />
         </PieChart>
       </ResponsiveContainer>
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -388,9 +402,9 @@ const EventsTable: React.FC<EventsTableProps> = ({ filters }) => {
       </table>
 
       <div className={styles.pagination}>
-        <button className={styles.pageBtn} disabled={page === 1} onClick={() => setPage(p => p - 1)}>← Prev</button>
+        <button className={styles.pageBtn} disabled={page === 1} onClick={() => setPage(p => p - 1)} {...{ 'data-testid': 'ai-cost-events-prev' }}>← Prev</button>
         <span className={styles.pageInfo}>Page {page} of {Math.max(1, Math.ceil(data.total / PAGE_SIZE))}</span>
-        <button className={styles.pageBtn} disabled={page >= Math.ceil(data.total / PAGE_SIZE)} onClick={() => setPage(p => p + 1)}>Next →</button>
+        <button className={styles.pageBtn} disabled={page >= Math.ceil(data.total / PAGE_SIZE)} onClick={() => setPage(p => p + 1)} {...{ 'data-testid': 'ai-cost-events-next' }}>Next →</button>
       </div>
     </>
   );
@@ -401,6 +415,7 @@ const EventsTable: React.FC<EventsTableProps> = ({ filters }) => {
 interface ExecutiveBriefBannerProps {
   project: string;
   onDismiss: () => void;
+  'data-testid'?: string;
 }
 
 const ExecutiveBriefBanner: React.FC<ExecutiveBriefBannerProps> = ({ project, onDismiss }) => {
@@ -445,7 +460,7 @@ const ExecutiveBriefBanner: React.FC<ExecutiveBriefBannerProps> = ({ project, on
           )}
         </div>
         <div className={styles.briefBannerActions}>
-          <button className={styles.dismissBtn} onClick={onDismiss} title="Dismiss for this session">×</button>
+          <button className={styles.dismissBtn} onClick={onDismiss} title="Dismiss for this session" {...{ 'data-testid': 'ai-cost-brief-dismiss' }}>×</button>
         </div>
       </div>
 
@@ -634,6 +649,7 @@ export const AiCostAnalytics: React.FC<AiCostAnalyticsProps> = ({ project }) => 
         <ExecutiveBriefBanner
           project={activeProject}
           onDismiss={() => setBriefDismissed(true)}
+          {...{ 'data-testid': 'ai-cost-brief-banner' }}
         />
       )}
 
@@ -646,12 +662,14 @@ export const AiCostAnalytics: React.FC<AiCostAnalyticsProps> = ({ project }) => 
           delta={forecast?.trendPct}
           accent="default"
           onClick={() => setDrillDown({ type: 'total', label: 'Total AI Spend' })}
+          {...{ 'data-testid': 'ai-cost-kpi-total-spend' }}
         />
         <KpiCard
           label="Projected EOM"
           value={forecast ? formatCost(forecast.projectedEndOfMonthUsd) : '…'}
           sub={`${forecast?.trendDirection ?? '—'} trend`}
           accent={forecast?.trendDirection === 'down' ? 'green' : forecast?.trendDirection === 'up' ? 'orange' : 'blue'}
+          {...{ 'data-testid': 'ai-cost-kpi-projected-eom' }}
         />
         <KpiCard
           label="Cursor SDK"
@@ -659,6 +677,7 @@ export const AiCostAnalytics: React.FC<AiCostAnalyticsProps> = ({ project }) => 
           sub="Agentic workflows"
           accent="blue"
           onClick={() => setDrillDown({ type: 'provider', provider: 'cursor', label: 'Cursor SDK' })}
+          {...{ 'data-testid': 'ai-cost-kpi-cursor-sdk' }}
         />
         <KpiCard
           label="AWS Bedrock"
@@ -666,6 +685,7 @@ export const AiCostAnalytics: React.FC<AiCostAnalyticsProps> = ({ project }) => 
           sub="Direct generation"
           accent="orange"
           onClick={() => setDrillDown({ type: 'provider', provider: 'bedrock', label: 'AWS Bedrock' })}
+          {...{ 'data-testid': 'ai-cost-kpi-aws-bedrock' }}
         />
         {costOutcomes?.prd && (
           <KpiCard
@@ -674,6 +694,7 @@ export const AiCostAnalytics: React.FC<AiCostAnalyticsProps> = ({ project }) => 
             sub={`${costOutcomes.prd.interactions} PRDs`}
             accent="green"
             onClick={() => setDrillDown({ type: 'outcome', feature: 'prd', label: 'PRD Generation', metricLabel: `${costOutcomes.prd!.interactions} PRDs · avg ${formatCost(costOutcomes.prd!.avgCostUsd)} each` })}
+            {...{ 'data-testid': 'ai-cost-kpi-cost-prd' }}
           />
         )}
         {costOutcomes?.doc && (
@@ -683,6 +704,7 @@ export const AiCostAnalytics: React.FC<AiCostAnalyticsProps> = ({ project }) => 
             sub={`${costOutcomes.doc.interactions} docs`}
             accent="green"
             onClick={() => setDrillDown({ type: 'outcome', feature: 'design-doc', label: 'Design Docs', metricLabel: `${costOutcomes.doc!.interactions} docs · avg ${formatCost(costOutcomes.doc!.avgCostUsd)} each` })}
+            {...{ 'data-testid': 'ai-cost-kpi-cost-design-doc' }}
           />
         )}
         {costOutcomes?.proto && (
@@ -692,6 +714,7 @@ export const AiCostAnalytics: React.FC<AiCostAnalyticsProps> = ({ project }) => 
             sub={`${costOutcomes.proto.interactions} prototypes`}
             accent="green"
             onClick={() => setDrillDown({ type: 'outcome', feature: 'design-prototype', label: 'Prototypes', metricLabel: `${costOutcomes.proto!.interactions} prototypes · avg ${formatCost(costOutcomes.proto!.avgCostUsd)} each` })}
+            {...{ 'data-testid': 'ai-cost-kpi-cost-prototype' }}
           />
         )}
       </div>
@@ -788,6 +811,7 @@ export const AiCostAnalytics: React.FC<AiCostAnalyticsProps> = ({ project }) => 
                       onClick={() => setDrillDown({ type: 'total', label: u.displayName || u.email || u.userId })}
                       onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-secondary)')}
                       onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                      {...{ 'data-testid': `ai-cost-user-row-${u.userId}` }}
                     >
                       <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-color-light, var(--border-color))' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

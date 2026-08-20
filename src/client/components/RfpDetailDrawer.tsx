@@ -3,6 +3,8 @@ import { isClarificationAvailable, validateRfpAttachments } from '../../shared/t
 import { useAddRfpComment, useRfpRequestDetail } from '../hooks/useRfpIntake';
 import { useRfpAttachmentUpload } from '../hooks/useRfpTriage';
 import { RfpClarificationForm } from './RfpClarificationForm';
+import { RfpEvaluationCard } from './RfpEvaluationCard';
+import { RfpEvaluationChat } from './RfpEvaluationChat';
 import styles from './RfpIntakeLanding.module.css';
 
 interface RfpDetailDrawerProps {
@@ -97,11 +99,18 @@ export const RfpDetailDrawer: React.FC<RfpDetailDrawerProps> = ({ requestId, onC
             )}
 
             {detail.currentEvaluation && (
-              <section className={styles.block} {...{ 'data-testid': 'rfp-current-evaluation' }}>
+              <section className={styles.block}>
                 <h3 className={styles.blockTitle}>Current Evaluation</h3>
-                <p><strong>{formatLabel(detail.currentEvaluation.verdict)}</strong> · {detail.currentEvaluation.confidence} confidence</p>
-                <p>{detail.currentEvaluation.buildBuyRentSummary}</p>
-                <p className={styles.subtitle}>{detail.currentEvaluation.rationale}</p>
+                <RfpEvaluationCard
+                  evaluation={detail.currentEvaluation}
+                  {...{ 'data-testid': 'rfp-evaluation-card' }}
+                />
+              </section>
+            )}
+
+            {detail.currentEvaluation && (
+              <section className={styles.block}>
+                <RfpEvaluationChat requestId={detail.id} />
               </section>
             )}
 

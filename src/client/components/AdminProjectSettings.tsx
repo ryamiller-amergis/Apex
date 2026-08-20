@@ -1817,7 +1817,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                   <select
                     id="ps-repo"
                     className={styles.select}
-                    value={edit.skillRepo}
+                    value={edit.skillProvider === 'github' ? edit.skillRepo.split('/').filter(Boolean).pop() ?? '' : edit.skillRepo}
                     onChange={(e) => handleRepoChange(e.target.value)}
                     disabled={upsert.isPending || isLoadingRepos || !edit.project}
                    {...{ 'data-testid': 'ps-repo' }}>
