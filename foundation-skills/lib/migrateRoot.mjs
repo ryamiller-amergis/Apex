@@ -280,9 +280,28 @@ function rewriteCanonicalRootReferences(text, sourceRoot, targetRoot) {
   return (
     zones.prefix +
     zones.managed +
-    zones.adapter.replaceAll(sourceRoot, targetRoot) +
+    rewriteRootPathReferences(zones.adapter, sourceRoot, targetRoot) +
     zones.project
   );
+}
+
+/** Rewrite `sourceRoot/` as a path prefix, never as a substring of another token. */
+export function rewriteRootPathReferences(text, sourceRoot, targetRoot) {
+  if (!sourceRoot || sourceRoot === targetRoot) return text;
+  const otherRoots = KNOWN_SKILL_ROOTS.filter((root) => root !== sourceRoot);
+  const escaped = sourceRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`${escaped}(?=/)`, 'g');
+  return text.replace(re, (match, offset) => {
+    const embedded = otherRoots.some((root) => {
+      if (!root.endsWith(sourceRoot)) return false;
+      const prefixLen = root.length - sourceRoot.length;
+      if (prefixLen <= 0 || offset < prefixLen) return false;
+      return (
+        text.slice(offset - prefixLen, offset + sourceRoot.length) === root
+      );
+    });
+    return embedded ? match : targetRoot;
+  });
 }
 
 const TEXT_EXTS = new Set([

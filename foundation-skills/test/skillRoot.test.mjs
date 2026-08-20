@@ -8,6 +8,7 @@ import { readLockfile, serializeLockfile } from '../lib/lockfile.mjs';
 import {
   migrateSkillRoot,
   planSkillRootMigration,
+  rewriteRootPathReferences,
 } from '../lib/migrateRoot.mjs';
 import {
   KNOWN_SKILL_ROOTS,
@@ -177,6 +178,26 @@ test('root migration rewrites generated root references but not project notes', 
   } finally {
     cleanup(repo);
   }
+});
+
+test('root path rewrite does not treat skills as a substring', () => {
+  const adapter = [
+    'Lockfile: apex-skills.lock.json',
+    'Catalog: skills/ui-lab/SKILL.md',
+    'Also under .agents/skills/other/SKILL.md',
+    'Prose about skills in general.',
+  ].join('\n');
+
+  const rewritten = rewriteRootPathReferences(
+    adapter,
+    'skills',
+    '.agents/skills'
+  );
+  assert.match(rewritten, /apex-skills\.lock\.json/);
+  assert.match(rewritten, /Catalog: \.agents\/skills\/ui-lab\/SKILL\.md/);
+  assert.match(rewritten, /\.agents\/skills\/other\/SKILL\.md/);
+  assert.match(rewritten, /Prose about skills in general\./);
+  assert.doesNotMatch(rewritten, /apex-\.agents\/skills\.lock/);
 });
 
 test('mixed-root collisions block install and migration', () => {
