@@ -38,7 +38,7 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
   const qc = useQueryClient();
 
   const session = useAgentChatSession(threadId);
-  const { messages, streamingText, isRunning, isSending } = session;
+  const { messages, streamingText, isRunning, isSending, showTypingIndicator } = session;
   const wasRunningRef = useRef(false);
 
   // When the assistant finishes a run, invalidate the PRD, generated test
@@ -266,7 +266,7 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
                 </div>
               );
             })}
-            {isRunning && !streamingText && (
+            {showTypingIndicator && (
               <div className={styles.typingIndicator}>
                 <span className={styles.typingDot} />
                 <span className={styles.typingDot} />

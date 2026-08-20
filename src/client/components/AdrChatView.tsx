@@ -362,6 +362,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     progressPhase,
     isPreparing,
     hasPreparationError,
+    showTypingIndicator,
   } = session;
   const {
     attachments,
@@ -870,7 +871,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
               </div>
             )}
-            {isAgentProcessing && !streamingText && !showPreparationState && (
+            {showTypingIndicator && !showPreparationState && (
               <div
                 className={styles.typingIndicator}
                 role="status"

@@ -861,8 +861,7 @@ describe('ExistingInterviewView — processing state after send', () => {
     ts: '2026-01-01T00:00:00Z',
   };
 
-  it('disables input and shows bouncing dots while session is busy', async () => {
-    // Simulate session in "awaiting agent response" state
+  it('disables input while session is busy without extra typing dots after an agent reply', async () => {
     mockUseAgentChatSession.mockReturnValue({
       ...idleStream,
       messages: [initialAgentMessage],
@@ -873,10 +872,9 @@ describe('ExistingInterviewView — processing state after send', () => {
     const view = renderExistingInterview();
     const input = screen.getByTestId('interview-message-input');
     expect(input).toBeDisabled();
-    expect(screen.getByTestId('interview-agent-processing')).toBeInTheDocument();
+    expect(screen.queryByTestId('interview-agent-processing')).not.toBeInTheDocument();
     expect(input).toHaveAttribute('placeholder', 'Agent is thinking…');
 
-    // Simulate agent responding
     mockUseAgentChatSession.mockReturnValue({
       ...idleStream,
       messages: [
@@ -915,6 +913,7 @@ describe('ExistingInterviewView — processing state after send', () => {
       ],
       isAwaitingAgentResponse: true,
       isInteractionBusy: true,
+      showTypingIndicator: true,
     });
 
     renderExistingInterview();
@@ -979,7 +978,7 @@ describe('ExistingInterviewView — processing state after send', () => {
     };
 
     expect(screen.getByTestId('interview-message-input')).toBeDisabled();
-    expect(screen.getByTestId('interview-agent-processing')).toBeInTheDocument();
+    expect(screen.queryByTestId('interview-agent-processing')).not.toBeInTheDocument();
 
     streamState = { ...streamState, status: 'idle' as ChatThreadStatus, isRunning: false, isInteractionBusy: false };
     renderCurrentStream();

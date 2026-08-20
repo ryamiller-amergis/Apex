@@ -1046,6 +1046,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     isInteractionBusy,
     sendError,
     clearSendError,
+    showTypingIndicator,
   } = session;
 
   const isAgentProcessing = isRunning || isSending || session.isAwaitingAgentResponse;
@@ -1649,7 +1650,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             </div>
           )}
 
-          {isAgentProcessing && !streamingText && !isRetrying && (
+          {showTypingIndicator && (
             <div
               className={styles.typingIndicator}
               role="status"

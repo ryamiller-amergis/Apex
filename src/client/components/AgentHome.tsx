@@ -565,7 +565,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
       }
     },
   });
-  const { streamingText, prdReady, isRunning, visibleMessages, progressLabel } = session;
+  const { streamingText, prdReady, isRunning, visibleMessages, progressLabel, showTypingIndicator } = session;
   const resumeGate = useGroundingResumeGate(
     'chat',
     threadId,
@@ -1267,7 +1267,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
               });
             })()}
 
-            {isRunning && !streamingText && (
+            {showTypingIndicator && (
               <div
                 className={styles.agentRow}
                 role="status"

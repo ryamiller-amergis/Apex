@@ -354,7 +354,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
   const qc = useQueryClient();
 
   const session = useAgentChatSession(threadId, { locked: readOnly });
-  const { messages, streamingText, isRunning, isSending } = session;
+  const { messages, streamingText, isRunning, isSending, showTypingIndicator } = session;
   const wasRunningRef = useRef(false);
 
   // When the assistant finishes a run, invalidate the design doc so the main
@@ -607,7 +607,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
               </div>
             );
           })}
-          {isRunning && !streamingText && (
+          {showTypingIndicator && (
             <div className={styles.qaTypingIndicator}>
               <span className={styles.qaTypingDot} />
               <span className={styles.qaTypingDot} />
