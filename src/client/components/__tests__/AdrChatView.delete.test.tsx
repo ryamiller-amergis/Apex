@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { AdrChatView } from '../AdrChatView';
+import type { AgentRunPhase } from '../../../shared/types/chat';
 import type { Adr } from '../../../shared/types/adr';
 
 const mockNavigate = jest.fn();
@@ -13,7 +14,7 @@ let mockStreamState: {
   streamingText: string;
   status: 'idle' | 'running' | 'error';
   progressLabel?: string | null;
-  progressPhase?: string | null;
+  progressPhase?: AgentRunPhase | null;
   lastError?: string | null;
 } = { messages: [], streamingText: '', status: 'idle' };
 

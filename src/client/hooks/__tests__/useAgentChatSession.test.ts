@@ -1,6 +1,6 @@
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useAgentChatSession } from '../useAgentChatSession';
-import type { ChatMessage, ChatThreadStatus } from '../../../shared/types/chat';
+import type { ChatMessage, ChatThreadStatus, AgentRunPhase } from '../../../shared/types/chat';
 import type {
   GroundingPreparationProgress,
   ToolProgress,
@@ -20,7 +20,7 @@ interface MockStreamReturn {
   phaseEvents: RunPhaseProgress[];
   runHealth: RunHealthProgress | null;
   progressLabel: string | null;
-  progressPhase: string | null;
+  progressPhase: AgentRunPhase | null;
   prdReady: boolean;
   backlogReady: boolean;
   isRetrying: boolean;

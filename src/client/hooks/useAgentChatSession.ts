@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useChatStream } from './useChatStream';
 import type {
+  AgentRunPhase,
   ChatAttachment,
   ChatMessage,
   ChatThreadStatus,
@@ -82,7 +83,7 @@ export interface AgentChatSession {
   phaseEvents: RunPhaseProgress[];
   runHealth: RunHealthProgress | null;
   progressLabel: string | null;
-  progressPhase: string | null;
+  progressPhase: AgentRunPhase | null;
   prdReady: boolean;
   backlogReady: boolean;
   isRetrying: boolean;
