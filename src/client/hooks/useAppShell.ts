@@ -2,14 +2,18 @@ import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { startOfMonth, endOfMonth } from 'date-fns';
 import { useWorkItems } from './useWorkItems';
+import { useProjectMenuConfig } from './useProjectMenuConfig';
+import { useFeatureFlag } from './useFeatureFlags';
 import { useWhatsNewState } from './useWhatsNewState';
 import { env } from '../config/env';
 import type { WorkItem } from '../types/workitem';
 import type { MenuItemKey } from '../../shared/types/menuSettings';
 import type { MyPermissionsResponse } from '../../shared/types/rbac';
 import type { WhatsNewState } from '../../shared/types/whatsNew';
+import { WORK_BOARD_FLAG } from '../../shared/types/featureFlags';
 
 import { THEME_CYCLE, isThemeMode, type ThemeMode } from '../config/themes';
+import { notifySelectedProjectChanged } from '../utils/apiFetch';
 
 export type { ThemeMode };
 
@@ -103,6 +107,23 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
   const startDate = useMemo(() => startOfMonth(currentDate), [currentDate]);
   const endDate = useMemo(() => endOfMonth(currentDate), [currentDate]);
 
+  const { enabledViews, isLoading: menuConfigLoading } = useProjectMenuConfig(selectedProject);
+  const workBoardEnabled = useFeatureFlag(WORK_BOARD_FLAG, selectedProject);
+  const usesBoardWorkItems = useMemo(() => {
+    // @feature-flag:work-board start winner=enabled
+    if (workBoardEnabled) {
+      // @feature-flag:work-board enabled-start
+      if (selectedProject.toLowerCase() === 'apex') return true;
+      if (menuConfigLoading) return false;
+      return enabledViews.includes('work-board');
+      // @feature-flag:work-board enabled-end
+    }
+    // @feature-flag:work-board disabled-start
+    return false;
+    // @feature-flag:work-board disabled-end
+    // @feature-flag:work-board end
+  }, [workBoardEnabled, selectedProject, enabledViews, menuConfigLoading]);
+
   useEffect(() => {
     let cancelled = false;
     let retryTimer: number | null = null;
@@ -164,10 +185,14 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
     endDate,
     selectedProject,
     selectedAreaPath,
-    isAuthenticated === true && workItemsEnabled
+    isAuthenticated === true && workItemsEnabled,
+    usesBoardWorkItems
   );
 
-  useEffect(() => { localStorage.setItem('selectedProject', selectedProject); }, [selectedProject]);
+  useEffect(() => {
+    localStorage.setItem('selectedProject', selectedProject);
+    notifySelectedProjectChanged();
+  }, [selectedProject]);
   useEffect(() => { localStorage.setItem('selectedAreaPath', selectedAreaPath); }, [selectedAreaPath]);
   useEffect(() => {
     if (selectedSkillSettingsId) {
@@ -350,6 +375,8 @@ export function useAppShell(options?: { workItemsEnabled?: boolean }) {
     restrictedModules,
     isAdmin: isSuperAdmin || roles.includes('admin'),
     workItems,
+    workBoardEnabled,
+    usesBoardWorkItems,
     loading,
     error,
     isFetchingWorkItems: isFetching,

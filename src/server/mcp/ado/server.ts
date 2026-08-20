@@ -34,6 +34,7 @@ import type {
 } from '../../../shared/types/interview';
 import type { RepoReader } from '../../../shared/types/repoReader';
 import { raceWithTimeout, resolveMcpToolTimeoutMs } from '../mcpTimeout';
+import { registerBoardMcpTools } from '../board/tools';
 
 function toolErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -947,6 +948,9 @@ export function createAdoMcpServer(options?: {
       };
     }
   );
+
+  // ── Work Board tools (standups for board-native projects) ───────────────────
+  registerBoardMcpTools(server);
 
   // ── Standup ceremony tools ───────────────────────────────────────────────────
 

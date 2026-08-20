@@ -30,6 +30,14 @@ jest.mock('../../hooks/useApexBacklog', () => ({
   useApexBacklogFeatures: jest.fn(),
 }));
 
+jest.mock('../../hooks/useProjectMenuConfig', () => ({
+  useProjectMenuConfig: jest.fn(),
+}));
+
+jest.mock('../../hooks/useApexWorkItems', () => ({
+  useAssignedBoardItems: jest.fn(),
+}));
+
 jest.mock('../StartLocalDevModal', () => ({
   __esModule: true,
   default: ({ onClose }: { onClose: () => void }) => (
@@ -59,6 +67,8 @@ import {
   useStartLocalFeature,
 } from '../../hooks/useDevWorkbench';
 import { useApexBacklogFeatures } from '../../hooks/useApexBacklog';
+import { useProjectMenuConfig } from '../../hooks/useProjectMenuConfig';
+import { useAssignedBoardItems } from '../../hooks/useApexWorkItems';
 import type { ActiveDevSession, ApexBacklogGroup } from '../../../shared/types/devWorkbench';
 
 const workItems = [
@@ -118,6 +128,15 @@ describe('DevWorkbenchView', () => {
     });
     (useApexBacklogFeatures as jest.Mock).mockReturnValue({
       data: undefined,
+      isLoading: false,
+      error: null,
+    });
+    (useProjectMenuConfig as jest.Mock).mockReturnValue({
+      enabledViews: [],
+      isLoading: false,
+    });
+    (useAssignedBoardItems as jest.Mock).mockReturnValue({
+      data: [],
       isLoading: false,
       error: null,
     });
@@ -353,7 +372,19 @@ function expandPrdAndEpic() {
 }
 
 function mockApexWorkbenchHooks(project = 'Apex') {
-  (useAppShell as jest.Mock).mockReturnValue({ selectedProject: project });
+  (useAppShell as jest.Mock).mockReturnValue({
+    selectedProject: project,
+    usesBoardWorkItems: project.toLowerCase() === 'apex',
+  });
+  (useProjectMenuConfig as jest.Mock).mockReturnValue({
+    enabledViews: [],
+    isLoading: false,
+  });
+  (useAssignedBoardItems as jest.Mock).mockReturnValue({
+    data: [],
+    isLoading: false,
+    error: null,
+  });
   (useAssignedWorkItems as jest.Mock).mockReturnValue({
     data: undefined,
     isLoading: false,

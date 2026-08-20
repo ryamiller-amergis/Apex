@@ -1,6 +1,14 @@
 /** Selected project from localStorage, used for project-scoped RBAC. */
+export const SELECTED_PROJECT_CHANGE_EVENT = 'apex:selected-project';
+
 export function getSelectedApexProject(): string | null {
   return localStorage.getItem('selectedProject');
+}
+
+/** Same-tab signal that `selectedProject` in localStorage changed. */
+export function notifySelectedProjectChanged(): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new Event(SELECTED_PROJECT_CHANGE_EVENT));
 }
 
 /**

@@ -1,4 +1,5 @@
-import { bigserial, boolean, check, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigserial, boolean, check, date, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import type { RepoProvider, RepoRole, RunType } from '../../shared/types/runGrounding';
 import type {
@@ -62,6 +63,8 @@ import type {
   DiagramShareAccess,
   ExcalidrawScene,
 } from '../../shared/types/diagram';
+import type { ApiKeyCadence, ApiKeyScope } from '../../shared/types/apiKey';
+import type { SafeTraceDetails, TraceEventType } from '../../shared/types/observability';
 import type {
   WalkthroughAnchorPlacement,
   WalkthroughGenerationProvenance,
@@ -1794,6 +1797,199 @@ export const workItemChangeProposalsRelations = relations(workItemChangeProposal
 // Add calendar assistant columns to projectSkillSettings (applied via migration)
 // Drizzle schema mirrors columns added in 20260715170000_calendar-work-item-assistant.sql
 
+// ── Apex Work Board ───────────────────────────────────────────────────────────
+
+import type {
+  AcceptanceCriterion,
+  ApexWorkItemStatus,
+  ApexWorkItemType,
+  ApexWorkItemSourceType,
+  ApexWorkItemEventAction,
+  ApexReleaseStatus,
+  ApexWorkItemLinkType,
+} from '../../shared/types/apexWorkItem';
+
+export const apexReleases = pgTable('apex_releases', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  name: text('name').notNull(),
+  version: text('version'),
+  targetDate: date('target_date', { mode: 'string' }),
+  status: text('status').$type<ApexReleaseStatus>().notNull().default('planned'),
+  position: integer('position').notNull().default(0),
+  createdBy: text('created_by').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  updatedBy: text('updated_by').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectTargetIdx: index('idx_apex_releases_project_target').on(t.project, t.targetDate),
+}));
+
+export const apexWorkItems = pgTable('apex_work_items', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  itemNumber: integer('item_number').notNull(),
+  title: text('title').notNull(),
+  outcome: text('outcome').notNull().default(''),
+  type: text('type').$type<ApexWorkItemType>().notNull(),
+  status: text('status').$type<ApexWorkItemStatus>().notNull().default('idea'),
+  ownerOid: text('owner_oid').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  acceptanceCriteria: jsonb('acceptance_criteria').$type<AcceptanceCriterion[]>().notNull().default([]),
+  branch: text('branch'),
+  prUrl: text('pr_url'),
+  position: integer('position').notNull().default(0),
+  dueDate: date('due_date', { mode: 'string' }),
+  releaseId: uuid('release_id').references(() => apexReleases.id, { onDelete: 'set null' }),
+  parentId: uuid('parent_id').references((): AnyPgColumn => apexWorkItems.id, { onDelete: 'set null' }),
+  sourceType: text('source_type').$type<ApexWorkItemSourceType>().notNull().default('standalone'),
+  prdId: uuid('prd_id').references(() => interviews.id, { onDelete: 'set null' }),
+  backlogItemId: text('backlog_item_id'),
+  featureRequestId: uuid('feature_request_id').references(() => featureRequests.id, { onDelete: 'set null' }),
+  /** Azure DevOps work item id when imported / linked from ADO */
+  adoWorkItemId: integer('ado_work_item_id'),
+  epicId: text('epic_id'),
+  epicTitle: text('epic_title'),
+  featureId: text('feature_id'),
+  featureTitle: text('feature_title'),
+  /** Approved design doc (design + tech-spec + assumptions) linked like ADO Feature attachments */
+  designDocId: uuid('design_doc_id').references(() => designDocs.id, { onDelete: 'set null' }),
+  designPrototypeId: uuid('design_prototype_id').references(() => designPrototypes.id, { onDelete: 'set null' }),
+  createdBy: text('created_by').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  updatedBy: text('updated_by').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  ownerStatusIdx: index('idx_apex_work_items_owner_status').on(t.ownerOid, t.status),
+  statusPosIdx: index('idx_apex_work_items_status_pos').on(t.status, t.position),
+  projectStatusPosIdx: index('idx_apex_work_items_project_status_pos').on(t.project, t.status, t.position),
+  projectOwnerIdx: index('idx_apex_work_items_project_owner').on(t.project, t.ownerOid),
+  projectItemNumberIdx: uniqueIndex('idx_apex_work_items_project_item_number').on(t.project, t.itemNumber),
+  projectAdoIdx: uniqueIndex('idx_apex_work_items_project_ado')
+    .on(t.project, t.adoWorkItemId)
+    .where(sql`${t.adoWorkItemId} IS NOT NULL`),
+  frIdx: index('idx_apex_work_items_feature_request').on(t.featureRequestId),
+  releaseIdx: index('idx_apex_work_items_release').on(t.releaseId),
+  parentIdx: index('idx_apex_work_items_parent').on(t.parentId),
+  designDocIdx: index('idx_apex_work_items_design_doc').on(t.designDocId),
+  designPrototypeIdx: index('idx_apex_work_items_design_prototype').on(t.designPrototypeId),
+}));
+
+export const apexWorkItemCollaborators = pgTable('apex_work_item_collaborators', {
+  workItemId: uuid('work_item_id').notNull().references(() => apexWorkItems.id, { onDelete: 'cascade' }),
+  userOid: text('user_oid').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  addedAt: timestamp('added_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.workItemId, t.userOid] }),
+  userIdx: index('idx_apex_work_item_collab_user').on(t.userOid),
+}));
+
+export const apexWorkItemEvents = pgTable('apex_work_item_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workItemId: uuid('work_item_id').notNull().references(() => apexWorkItems.id, { onDelete: 'cascade' }),
+  actorId: text('actor_id').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  action: text('action').$type<ApexWorkItemEventAction>().notNull(),
+  fromStatus: text('from_status').$type<ApexWorkItemStatus>(),
+  toStatus: text('to_status').$type<ApexWorkItemStatus>(),
+  details: jsonb('details').$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  itemCreatedIdx: index('idx_apex_work_item_events_item').on(t.workItemId, t.createdAt),
+}));
+
+export const apexWorkItemLinks = pgTable('apex_work_item_links', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  sourceId: uuid('source_id').notNull().references(() => apexWorkItems.id, { onDelete: 'cascade' }),
+  targetId: uuid('target_id').notNull().references(() => apexWorkItems.id, { onDelete: 'cascade' }),
+  linkType: text('link_type').$type<ApexWorkItemLinkType>().notNull().default('predecessor'),
+  createdBy: text('created_by').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  targetIdx: index('idx_apex_work_item_links_target').on(t.targetId),
+  projectIdx: index('idx_apex_work_item_links_project').on(t.project),
+}));
+
+export const apexWorkItemComments = pgTable('apex_work_item_comments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workItemId: uuid('work_item_id').notNull().references(() => apexWorkItems.id, { onDelete: 'cascade' }),
+  project: text('project').notNull(),
+  authorOid: text('author_oid').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  body: text('body').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  itemIdx: index('idx_apex_work_item_comments_item').on(t.workItemId, t.createdAt),
+  projectIdx: index('idx_apex_work_item_comments_project').on(t.project),
+}));
+
+export const apexWorkItemAttachments = pgTable('apex_work_item_attachments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workItemId: uuid('work_item_id').notNull().references(() => apexWorkItems.id, { onDelete: 'cascade' }),
+  project: text('project').notNull(),
+  fileName: text('file_name').notNull(),
+  contentType: text('content_type').notNull().default('application/octet-stream'),
+  byteSize: integer('byte_size').notNull().default(0),
+  storagePath: text('storage_path').notNull(),
+  uploadedBy: text('uploaded_by').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  itemIdx: index('idx_apex_work_item_attachments_item').on(t.workItemId),
+}));
+
+export const apexDeployments = pgTable('apex_deployments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  releaseId: uuid('release_id').references(() => apexReleases.id, { onDelete: 'set null' }),
+  environment: text('environment').notNull(),
+  version: text('version').notNull(),
+  deployedAt: timestamp('deployed_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  deployedBy: text('deployed_by').references(() => appUsers.oid, { onDelete: 'set null' }),
+  notes: text('notes'),
+  workItemIds: jsonb('work_item_ids').$type<string[]>().notNull().default([]),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectEnvIdx: index('idx_apex_deployments_project_env').on(t.project, t.environment, t.deployedAt),
+  releaseIdx: index('idx_apex_deployments_release').on(t.releaseId),
+}));
+
+export const apexWorkItemsRelations = relations(apexWorkItems, ({ one, many }) => ({
+  owner: one(appUsers, { fields: [apexWorkItems.ownerOid], references: [appUsers.oid] }),
+  release: one(apexReleases, { fields: [apexWorkItems.releaseId], references: [apexReleases.id] }),
+  parent: one(apexWorkItems, { fields: [apexWorkItems.parentId], references: [apexWorkItems.id], relationName: 'workItemParent' }),
+  children: many(apexWorkItems, { relationName: 'workItemParent' }),
+  collaborators: many(apexWorkItemCollaborators),
+  events: many(apexWorkItemEvents),
+  comments: many(apexWorkItemComments),
+  attachments: many(apexWorkItemAttachments),
+  featureRequest: one(featureRequests, { fields: [apexWorkItems.featureRequestId], references: [featureRequests.id] }),
+}));
+
+export const apexReleasesRelations = relations(apexReleases, ({ many }) => ({
+  workItems: many(apexWorkItems),
+  deployments: many(apexDeployments),
+}));
+
+export const apexWorkItemCollaboratorsRelations = relations(apexWorkItemCollaborators, ({ one }) => ({
+  workItem: one(apexWorkItems, { fields: [apexWorkItemCollaborators.workItemId], references: [apexWorkItems.id] }),
+  user: one(appUsers, { fields: [apexWorkItemCollaborators.userOid], references: [appUsers.oid] }),
+}));
+
+export const apexWorkItemEventsRelations = relations(apexWorkItemEvents, ({ one }) => ({
+  workItem: one(apexWorkItems, { fields: [apexWorkItemEvents.workItemId], references: [apexWorkItems.id] }),
+  actor: one(appUsers, { fields: [apexWorkItemEvents.actorId], references: [appUsers.oid] }),
+}));
+
+export const apexWorkItemCommentsRelations = relations(apexWorkItemComments, ({ one }) => ({
+  workItem: one(apexWorkItems, { fields: [apexWorkItemComments.workItemId], references: [apexWorkItems.id] }),
+  author: one(appUsers, { fields: [apexWorkItemComments.authorOid], references: [appUsers.oid] }),
+}));
+
+export const apexWorkItemAttachmentsRelations = relations(apexWorkItemAttachments, ({ one }) => ({
+  workItem: one(apexWorkItems, { fields: [apexWorkItemAttachments.workItemId], references: [apexWorkItems.id] }),
+  uploader: one(appUsers, { fields: [apexWorkItemAttachments.uploadedBy], references: [appUsers.oid] }),
+}));
+
 // ── Load Testing Module ───────────────────────────────────────────────────────
 
 export const loadTests = pgTable('load_test', {
@@ -2300,5 +2496,120 @@ export const foundationSkillReleaseAuditRelations = relations(foundationSkillRel
   release: one(foundationSkillReleases, {
     fields: [foundationSkillReleaseAudit.releaseId],
     references: [foundationSkillReleases.id],
+  }),
+}));
+
+// ── API Keys Module (FEAT-001) ────────────────────────────────────────────────
+
+export const apiKeys = pgTable('api_keys', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  projectId: text('project_id').notNull(),
+  name: text('name').notNull(),
+  keyHash: text('key_hash').notNull(),
+  keyPrefix: text('key_prefix').notNull(),
+  cadence: text('cadence').$type<ApiKeyCadence>().notNull(),
+  scopes: text('scopes').array().$type<ApiKeyScope[]>().notNull().default([]),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }),
+  createdBy: text('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
+  deletedBy: text('deleted_by'),
+}, (t) => ({
+  projectCreatedActiveIdx: index('idx_api_keys_project_created_active')
+    .on(t.projectId, t.createdAt)
+    .where(sql`${t.deletedAt} is null`),
+  projectLowerNameActiveUq: uniqueIndex('uq_api_keys_project_lower_name_active')
+    .on(t.projectId, sql`lower(${t.name})`)
+    .where(sql`${t.deletedAt} is null`),
+  keyHashUq: uniqueIndex('uq_api_keys_key_hash').on(t.keyHash),
+}));
+
+export const apiKeysRelations = relations(apiKeys, ({ one }) => ({
+  createdByUser: one(appUsers, {
+    fields: [apiKeys.createdBy],
+    references: [appUsers.oid],
+  }),
+}));
+
+// ── Observability Trace Events (Safe Trace Event Storage) ─────────────────────
+
+export const traceEvents = pgTable('trace_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  eventType: text('event_type').$type<TraceEventType>().notNull(),
+  occurredAt: timestamp('occurred_at', { withTimezone: true, mode: 'string' }).notNull(),
+  actorUserId: text('actor_user_id').references(() => appUsers.oid, { onDelete: 'set null' }),
+  projectId: text('project_id'),
+  traceId: text('trace_id').notNull(),
+  sessionId: text('session_id'),
+  routeTemplate: text('route_template'),
+  httpMethod: text('http_method'),
+  statusCode: integer('status_code'),
+  durationMs: integer('duration_ms'),
+  severity: text('severity'),
+  details: jsonb('details').$type<SafeTraceDetails>().notNull().default({}),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  actorOccurredIdx: index('idx_trace_events_actor_occurred').on(t.actorUserId, t.occurredAt, t.id),
+  traceOccurredIdx: index('idx_trace_events_trace_occurred').on(t.traceId, t.occurredAt),
+  sessionOccurredIdx: index('idx_trace_events_session_occurred')
+    .on(t.sessionId, t.occurredAt)
+    .where(sql`${t.sessionId} IS NOT NULL`),
+  routeOccurredIdx: index('idx_trace_events_route_occurred').on(t.routeTemplate, t.occurredAt),
+  occurredIdx: index('idx_trace_events_occurred').on(t.occurredAt),
+  eventTypeCheck: check(
+    'trace_events_event_type_check',
+    sql`${t.eventType} IN ('api_request', 'error', 'ui_action', 'agent_event')`,
+  ),
+  traceIdCheck: check(
+    'trace_events_trace_id_check',
+    sql`${t.traceId} ~ '^[0-9a-f]{32}$'`,
+  ),
+  statusCodeCheck: check(
+    'trace_events_status_code_check',
+    sql`${t.statusCode} IS NULL OR (${t.statusCode} >= 100 AND ${t.statusCode} <= 599)`,
+  ),
+  durationMsCheck: check(
+    'trace_events_duration_ms_check',
+    sql`${t.durationMs} IS NULL OR ${t.durationMs} >= 0`,
+  ),
+  routeTemplateCheck: check(
+    'trace_events_route_template_check',
+    sql`${t.routeTemplate} IS NULL OR position('?' IN ${t.routeTemplate}) = 0`,
+  ),
+  detailsObjectCheck: check(
+    'trace_events_details_object_check',
+    sql`jsonb_typeof(${t.details}) = 'object'`,
+  ),
+}));
+
+export const tracePathRollups = pgTable('trace_path_rollups', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  fromRoute: text('from_route').notNull(),
+  toRoute: text('to_route').notNull(),
+  day: date('day', { mode: 'string' }).notNull(),
+  transitionCount: integer('transition_count').notNull().default(0),
+  distinctActorCount: integer('distinct_actor_count').notNull().default(0),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  fromToDayUniq: unique('trace_path_rollups_from_to_day_key').on(t.fromRoute, t.toRoute, t.day),
+  fromRouteCheck: check(
+    'trace_path_rollups_from_route_check',
+    sql`position('?' IN ${t.fromRoute}) = 0`,
+  ),
+  toRouteCheck: check(
+    'trace_path_rollups_to_route_check',
+    sql`position('?' IN ${t.toRoute}) = 0`,
+  ),
+  countsCheck: check(
+    'trace_path_rollups_counts_check',
+    sql`${t.transitionCount} >= 0 AND ${t.distinctActorCount} >= 0`,
+  ),
+}));
+
+export const traceEventsRelations = relations(traceEvents, ({ one }) => ({
+  actor: one(appUsers, {
+    fields: [traceEvents.actorUserId],
+    references: [appUsers.oid],
   }),
 }));

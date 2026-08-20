@@ -17,12 +17,14 @@ module.exports = {
   displayName: 'integration',
   testEnvironment: 'node',
   testMatch: ['<rootDir>/tests/integration/**/*.test.ts'],
-  preset: 'ts-jest',
-  globals: {
-    'ts-jest': {
-      tsconfig: '<rootDir>/tsconfig.e2e.json',
-      diagnostics: false,
-    },
+  transform: {
+    '^.+\\.tsx?$': [
+      'ts-jest',
+      {
+        tsconfig: '<rootDir>/tsconfig.e2e.json',
+        diagnostics: false,
+      },
+    ],
   },
   testTimeout: 30_000,
   // Each test file gets its own database schema to avoid cross-test contamination.

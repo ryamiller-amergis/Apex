@@ -211,10 +211,10 @@ TDD — Red to Green:
    - Mock the Drizzle db instance: jest.mock('../db/drizzle', () => ({ db: { ... } }))
    - Follow the mock shape in src/server/__tests__/rbacService.test.ts
    - Use AAA (Arrange / Act / Assert); test public API only
-   - Run: npm test -- <testfile> — confirm tests FAIL before writing implementation
+   - Run: npx jest --selectProjects server --no-coverage -- <testfile> — confirm tests FAIL before writing implementation
 
 2. GREEN: Write the implementation (minimum code to pass).
-   - Run: npm test -- <testfile> — confirm all tests PASS
+   - Run: npx jest --selectProjects server --no-coverage -- <testfile> — confirm all tests PASS
 
 3. REFACTOR: Clean up; re-run tests to confirm still green.
 
@@ -231,10 +231,10 @@ TDD — Red to Green:
    - Use @testing-library/react + jest-environment-jsdom
    - Mock fetch and external hooks; use MSW or inline jest.fn() mocks
    - Use AAA pattern; test user-visible behavior, not implementation details
-   - Run: npm test -- <testfile> — confirm tests FAIL before writing implementation
+   - Run: npx jest --selectProjects client --no-coverage -- <testfile> — confirm tests FAIL before writing implementation
 
 2. GREEN: Write the implementation.
-   - Run: npm test -- <testfile> — confirm all tests PASS
+   - Run: npx jest --selectProjects client --no-coverage -- <testfile> — confirm all tests PASS
 
 3. REFACTOR: Clean up; re-run tests to confirm still green.
 
@@ -248,10 +248,10 @@ TDD — Red to Green:
 
 1. RED: Write tests that import and validate the new types/utilities.
    - For pure functions, use standard Jest unit tests
-   - Run: npm test -- <testfile> — confirm tests FAIL
+   - Run: npx jest --selectProjects server --no-coverage -- <testfile> when the file is under src/server (use client if under src/client) — confirm tests FAIL
 
 2. GREEN: Implement the types and utilities.
-   - Run: npm test -- <testfile> — confirm PASS
+   - Run the same focused command — confirm PASS
 
 3. TYPE-CHECK (both configs):
    npx tsc -p tsconfig.server.json --noEmit
@@ -269,9 +269,10 @@ After all subagents in a phase complete, the **coordinator** (you, in the parent
    npx tsc -p tsconfig.server.json --noEmit
    npx tsc -p tsconfig.client.json --noEmit
    ```
-2. Run tests for all new test files:
+2. Run tests for all new test files (exact paths; `--selectProjects` matching each file; never `--testPathPattern` or `--runInBand`):
    ```bash
-   npm test -- --testPathPattern="<pattern covering new files>"
+   npx jest --selectProjects server --no-coverage -- <exact server test files>
+   npx jest --selectProjects client --no-coverage -- <exact client test files>
    ```
 3. If failures: diagnose, fix inline or dispatch a targeted fix subagent, then re-run.
 4. Update the design doc on disk at `design-docs/<name>.md`: change `status: pending` → `status: done` for completed tasks (use StrReplace or Write — do not only update in chat).

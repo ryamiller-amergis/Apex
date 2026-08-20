@@ -1,6 +1,7 @@
-import React, { useEffect, useCallback } from 'react';
+import React, { useEffect, useCallback, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppShell } from '../hooks/useAppShell';
+import { ApexGenerateWorkItemsWizard } from './ApexGenerateWorkItemsWizard';
 import type {
   FeatureRequest,
   FeatureRequestStatus,
@@ -114,10 +115,11 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
   isReanalyzing,
 }) => {
   const navigate = useNavigate();
-  const { can, isInAnyGroup, permissionsLoaded } = useAppShell();
+  const { can, isSuperAdmin, isInAnyGroup, permissionsLoaded, selectedProject, workBoardEnabled } = useAppShell();
   const canKickOff = permissionsLoaded
     && can('interviews:manage')
     && isInAnyGroup(['BA', 'Manager', 'Product-Owner']);
+  const [showGenerateWizard, setShowGenerateWizard] = useState(false);
   const handleClose = useCallback(() => onClose(), [onClose]);
 
   useEffect(() => {
@@ -136,13 +138,13 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
           if (e.target === e.currentTarget) handleClose();
         }}
         aria-hidden="true"
-      />
+       {...{ 'data-testid': 'feature-request-detail-overlay' }} />
       <aside
         className={styles['drawer']}
         role="dialog"
         aria-modal="true"
         aria-labelledby="fr-detail-title"
-      >
+       {...{ 'data-testid': 'feature-request-detail-drawer' }}>
         <header className={styles['header']}>
           <div className={styles['headerLeft']}>
             <h2 className={styles['title']} id="fr-detail-title">
@@ -152,7 +154,7 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
               {fr.submitterName ?? 'Unknown'} · {fr.sourceProject} · {formatDate(fr.createdAt)}
             </p>
           </div>
-          <button className={styles['closeBtn']} type="button" onClick={handleClose} aria-label="Close">
+          <button className={styles['closeBtn']} type="button" onClick={handleClose} aria-label="Close" {...{ 'data-testid': 'feature-request-detail-close-btn' }}>
             ×
           </button>
         </header>
@@ -179,7 +181,7 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
                     type="button"
                     onClick={() => navigate(`/adr/${adr.id}`)}
                     title={`${adr.repo} / ${adr.slug ?? adr.id}`}
-                  >
+                   {...{ 'data-testid': `feature-request-detail-adr-chip-${adr.id}` }}>
                     {adr.title}
                   </button>
                 ))}
@@ -194,7 +196,7 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
                 className={styles['secondaryAction']}
                 type="button"
                 onClick={() => navigate(`/backlog/interview/${fr.interviewId}`)}
-              >
+               {...{ 'data-testid': 'feature-request-detail-secondary-action-btn' }}>
                 View Interview
               </button>
             </section>
@@ -207,7 +209,7 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
                 className={listStyles['controlSelect']}
                 value={fr.status}
                 onChange={(e) => onUpdate(fr.id, { status: e.target.value as FeatureRequestStatus })}
-              >
+               {...{ 'data-testid': 'feature-request-detail-select' }}>
                 {FEATURE_REQUEST_STATUSES.map((s) => (
                   <option key={s} value={s}>
                     {STATUS_LABELS[s]}
@@ -246,7 +248,7 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
                         teamPriority: (e.target.value || null) as FeatureRequestPriority | null,
                       })
                     }
-                  >
+                   {...{ 'data-testid': 'feature-request-detail-select-2' }}>
                     <option value="">Use AI suggestion</option>
                     {FEATURE_REQUEST_PRIORITIES.map((p) => (
                       <option key={p} value={p}>
@@ -265,7 +267,7 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
                         teamRisk: (e.target.value || null) as FeatureRequestRisk | null,
                       })
                     }
-                  >
+                   {...{ 'data-testid': 'feature-request-detail-select-3' }}>
                     <option value="">Use AI suggestion</option>
                     {FEATURE_REQUEST_RISKS.map((r) => (
                       <option key={r} value={r}>
@@ -304,8 +306,17 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
                 type="button"
                 disabled={isReanalyzing || fr.aiStatus === 'analyzing'}
                 onClick={() => onReanalyze(fr.id)}
-              >
+               {...{ 'data-testid': 'feature-request-detail-button-btn' }}>
                 {fr.aiStatus === 'analyzing' ? 'Analyzing…' : 'Re-analyze'}
+              </button>
+            )}
+            {workBoardEnabled && isSuperAdmin && fr.status !== 'declined' && (
+              <button
+                className={styles['secondaryAction']}
+                type="button"
+                onClick={() => setShowGenerateWizard(true)}
+               {...{ 'data-testid': 'feature-request-detail-secondary-action-btn-2' }}>
+                Generate Work Items
               </button>
             )}
             {isInterviewableWorkItemType(fr.type) && canKickOff && !fr.interviewId && (
@@ -317,13 +328,20 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
                     featureRequest: toFeatureRequestInterviewPrefill(fr),
                   },
                 })}
-              >
+               {...{ 'data-testid': 'feature-request-detail-primary-action-btn' }}>
                 Kick Off Interview
               </button>
             )}
           </footer>
         )}
       </aside>
+      {showGenerateWizard && (
+        <ApexGenerateWorkItemsWizard
+          featureRequest={fr}
+          project={selectedProject || fr.sourceProject || 'Apex'}
+          onClose={() => setShowGenerateWizard(false)}
+        />
+      )}
     </>
   );
 };

@@ -29,6 +29,9 @@ infra/terraform.tfvars
 infra/terraform.prd.tfvars
 infra/terraform.prd.tfstate
 infra/*.tfplan
+# Plan files without a .tfplan extension (e.g. tfplan-interactive-redis)
+infra/tfplan*
+infra/*tfplan*
 
 # Logs
 logs

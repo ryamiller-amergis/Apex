@@ -1,4 +1,4 @@
-import { apexProjectHeaders, getSelectedApexProject, withApexProject } from '../apiFetch';
+import { apexProjectHeaders, getSelectedApexProject, notifySelectedProjectChanged, SELECTED_PROJECT_CHANGE_EVENT, withApexProject } from '../apiFetch';
 import { pdfFileUrl } from '../pdfUrls';
 
 describe('apex project helpers', () => {
@@ -37,5 +37,13 @@ describe('apex project helpers', () => {
     expect(pdfFileUrl('sess-1', 'file-1')).toBe(
       '/api/pdf/sessions/sess-1/files/file-1?project=Apex',
     );
+  });
+
+  it('notifies same-tab listeners when the selected project changes', () => {
+    const listener = jest.fn();
+    window.addEventListener(SELECTED_PROJECT_CHANGE_EVENT, listener);
+    notifySelectedProjectChanged();
+    window.removeEventListener(SELECTED_PROJECT_CHANGE_EVENT, listener);
+    expect(listener).toHaveBeenCalledTimes(1);
   });
 });

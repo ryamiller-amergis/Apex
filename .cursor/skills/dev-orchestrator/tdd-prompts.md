@@ -43,6 +43,7 @@ From {feature-slug}-assumptions.md:
 - Implement ONLY behavior justified by the work-item contract + design-spec anchors above
 - Do NOT modify protected files without user approval
 - Do NOT run `git commit` or `git push`
+- Run focused Jest only: `npx jest --selectProjects server --no-coverage -- <exact test file>` (or `client` for client files). Never `--testPathPattern`, never `--runInBand`, never unscoped `npm test`.
 - If feature-flag gating applies: load `feature-flags`; use a top-level split at the entry route/component with the agreed key; keep the disabled branch functional; add its exact balanced `@feature-flag:<key>` start/end and enabled/disabled branch markers so `feature-flag-cleanup` can retire it deterministically
 - UI: every interactive element in a staged client TSX file MUST have data-testid via spread `{...{ 'data-testid': 'kebab-id' }}` (not `data-testid="…"`; match design.md; whole-file scan). Source of truth: `scripts/check-data-testid.mjs` (includes `form`, `*Panel`, and the full PascalCase suffix list — do not use a shortened list). The parent executor runs data-testid and ESLint once in the final F6 gate. Hook failures → /resolve-pre-commit-data-testid or /resolve-pre-commit-eslint.
 
@@ -84,10 +85,10 @@ TDD — Red to Green:
    - Follow the mock shape in src/server/__tests__/rbacService.test.ts
    - Use AAA (Arrange / Act / Assert); test public API only
    - Arrange = Given / DoD precondition; Act = When / operation; Assert = Then / DoD outcome
-   - Run: npm test -- <testfile> — confirm tests FAIL before writing implementation
+   - Run: npx jest --selectProjects server --no-coverage -- <testfile> — confirm tests FAIL before writing implementation
 
 2. GREEN: Write the implementation (minimum code to pass every matrix row).
-   - Run: npm test -- <testfile> — confirm all tests PASS
+   - Run: npx jest --selectProjects server --no-coverage -- <testfile> — confirm all tests PASS
 
 3. REFACTOR: Clean up. Re-run the focused test only if source or test code changes after the passing GREEN run.
 
@@ -107,7 +108,7 @@ TDD — Red to Green:
    - Use AAA pattern; test user-visible behavior matching Given/When/Then, not implementation details
    - Align UI assertions with {feature-slug}-design.md states/labels where specified
    - Prefer querying by data-testid from the design-spec list (getByTestId) for interactive controls
-   - Run: npm test -- <testfile> — confirm tests FAIL before writing implementation
+   - Run: npx jest --selectProjects client --no-coverage -- <testfile> — confirm tests FAIL before writing implementation
 
 2. GREEN: Write the implementation.
    - data-testid policy (pre-commit enforced): every interactive UI element in a staged client TSX file MUST have a stable kebab-case id via spread syntax
@@ -124,7 +125,7 @@ TDD — Red to Green:
    - Screen / landmark roots (page container, primary panel, empty/error states used by E2E) also need the spread form.
    - Do not rely on CSS class or text selectors for new E2E/unit queries when a test id exists.
    - Img alt: do not use redundant words like "image"/"photo"/"picture" in alt (jsx-a11y/img-redundant-alt is an ESLint error).
-   - Run: npm test -- <testfile> — confirm all tests PASS
+   - Run: npx jest --selectProjects client --no-coverage -- <testfile> — confirm all tests PASS
 
 3. REFACTOR: Clean up. Re-run the focused test only if source or test code changes after the passing GREEN run.
 
@@ -139,10 +140,10 @@ TDD — Red to Green:
 1. RED: Write tests that import and validate the new types/utilities.
    - Map each DoD/AC row that constrains the shared contract to a type or pure-function assertion
    - For pure functions, use standard Jest unit tests
-   - Run: npm test -- <testfile> — confirm tests FAIL
+   - Run: npx jest --selectProjects server --no-coverage -- <testfile> when the file is under src/server (use client if under src/client) — confirm tests FAIL
 
 2. GREEN: Implement the types and utilities.
-   - Run: npm test -- <testfile> — confirm PASS
+   - Run the same focused command — confirm PASS
 
 3. REFACTOR: Re-run the focused test only if source or test code changes after the passing GREEN run.
 

@@ -77,6 +77,7 @@ import {
   type GroundingRolloutStage,
 } from '../../shared/types/groundingOperations';
 import { groundingGateService } from '../services/groundingGateService';
+import observabilityQueryRouter from './observabilityQuery';
 
 const router = Router();
 const validMenuItemKeys = new Set<MenuItemKey>(CONFIGURABLE_MENU_ITEMS.map((item) => item.key));
@@ -187,6 +188,7 @@ function mapWalkthroughAiError(err: unknown, res: Response): boolean {
 }
 
 router.use(requireSuperAdmin);
+router.use('/observability', observabilityQueryRouter);
 
 // ── Foundation Skills (Platform Admin only — guard inherited from above) ───────
 router.use('/foundation-skills', foundationSkillsAdminRouter);

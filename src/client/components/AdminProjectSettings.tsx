@@ -1218,7 +1218,8 @@ const RepoCheckoutControlsEnabled: React.FC<RepoCheckoutControlsProps> = ({ conf
   const status = display.status;
   const isCloning = status === 'cloning' || clone.isPending;
   const showClone = status === 'not_cloned' || status === 'snapshot_unavailable';
-  const showRefresh = status === 'ready' || status === 'failed';
+  // Ready: interviews already fetch the tip. Refresh only retries Failed.
+  const showRefresh = status === 'failed';
   const label = isCloning && !readiness
     ? 'Cloning'
     : formatRepositoryCheckoutStatusLabel(display);
