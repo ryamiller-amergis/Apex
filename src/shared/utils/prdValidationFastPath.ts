@@ -4,13 +4,19 @@ import type { ValidationScorecard } from '../types/interview';
 const TEMPLATE_TOKEN_RE = /\{[a-zA-Z][a-zA-Z0-9_.-]*\}/;
 const TBD_RE = /\[TBD\]/i;
 
-/** Required PRD markdown section headings (subset of prd-spec-review rubric). */
-const REQUIRED_PRD_HEADINGS = [
-  'Problem Statement',
-  'Proposed Solution',
-  'User Stories',
-  'Acceptance Criteria',
-] as const;
+/** Required PRD markdown section headings — match to-prd template, not the old rubric aliases. */
+const REQUIRED_PRD_HEADING_ALIASES: ReadonlyArray<readonly string[]> = [
+  ['Problem Statement'],
+  // to-prd writes "## Solution"; older docs / rubric may say "Proposed Solution".
+  ['Solution', 'Proposed Solution'],
+];
+
+function hasAnyHeading(body: string, aliases: readonly string[]): boolean {
+  return aliases.some((heading) => {
+    const re = new RegExp(`^#{1,3}\\s+${heading}\\b`, 'im');
+    return re.test(body);
+  });
+}
 
 export function hashPrdValidationContent(
   content: string,
@@ -35,6 +41,9 @@ export function scorecardMatchesContentHash(
 /**
  * Deterministic fail-fast before launching the validation agent.
  * Returns a failing scorecard when structural gaps are obvious; null when OK to run the agent.
+ *
+ * Do not require "## User Stories" / "## Acceptance Criteria" in markdown — to-prd
+ * owns those in the backlog and projects them into the PRD view.
  */
 export function evaluatePrdStructuralValidation(
   content: string,
@@ -55,16 +64,16 @@ export function evaluatePrdStructuralValidation(
     });
   }
 
-  for (const heading of REQUIRED_PRD_HEADINGS) {
-    const re = new RegExp(`^#{1,3}\\s+${heading}\\b`, 'im');
-    if (!re.test(body)) {
+  for (const aliases of REQUIRED_PRD_HEADING_ALIASES) {
+    if (!hasAnyHeading(body, aliases)) {
+      const primary = aliases[0];
       gaps.push({
-        id: `missing-${heading.toLowerCase().replace(/\s+/g, '-')}`,
+        id: `missing-${primary.toLowerCase().replace(/\s+/g, '-')}`,
         file: 'prd.md',
-        section: heading,
+        section: primary,
         score: 0,
-        description: `Required section "${heading}" is missing.`,
-        what_3_looks_like: `A "## ${heading}" section with substantive content.`,
+        description: `Required section "${primary}" is missing.`,
+        what_3_looks_like: `A "## ${primary}" section with substantive content.`,
         resolution: 'pending',
       });
     }

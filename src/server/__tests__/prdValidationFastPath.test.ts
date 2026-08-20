@@ -2,8 +2,8 @@ import {
   evaluatePrdStructuralValidation,
   hashPrdValidationContent,
   scorecardMatchesContentHash,
-} from '../prdValidationFastPath';
-import type { ValidationScorecard } from '../../types/interview';
+} from '../../shared/utils/prdValidationFastPath';
+import type { ValidationScorecard } from '../../shared/types/interview';
 
 describe('prdValidationFastPath', () => {
   it('hashes content + backlog stably', () => {
@@ -24,7 +24,7 @@ describe('prdValidationFastPath', () => {
     expect(scorecardMatchesContentHash(scorecard, 'changed', backlog)).toBe(false);
   });
 
-  it('fails fast on missing sections and TBD', () => {
+  it('fails fast on empty / TBD / missing core sections', () => {
     const result = evaluatePrdStructuralValidation(
       '## Intro\n[TBD] stuff',
       { epics: [] },
@@ -32,22 +32,44 @@ describe('prdValidationFastPath', () => {
     expect(result).not.toBeNull();
     expect(result!.is_ready).toBe(false);
     expect(result!.overall_score).toBe(0);
+    expect(result!.slug).toBe('prd-structural');
     expect(result!.gaps?.some((g) => g.id.includes('missing'))).toBe(true);
     expect(result!.gaps?.some((g) => g.id === 'tbd-markers')).toBe(true);
     expect(result!.contentHash).toBeTruthy();
   });
 
-  it('returns null when structure looks complete', () => {
+  it('accepts to-prd shape (Solution, no authored User Stories)', () => {
+    const content = [
+      '## Problem Statement',
+      'Users need X.',
+      '## Solution',
+      'Build Y on Agent Home.',
+      '## Implementation Decisions',
+      'Use ADO.',
+      '## Testing Decisions',
+      'Cover AC.',
+    ].join('\n');
+    expect(evaluatePrdStructuralValidation(content, { epics: [] })).toBeNull();
+  });
+
+  it('accepts Proposed Solution as an alias for Solution', () => {
     const content = [
       '## Problem Statement',
       'Users need X.',
       '## Proposed Solution',
       'Build Y.',
-      '## User Stories',
-      'As a user…',
-      '## Acceptance Criteria',
-      '- Done when…',
     ].join('\n');
     expect(evaluatePrdStructuralValidation(content, { epics: [] })).toBeNull();
+  });
+
+  it('does not require User Stories or Acceptance Criteria headings in markdown', () => {
+    const content = [
+      '## Problem Statement',
+      'Users need X.',
+      '## Solution',
+      'Build Y.',
+    ].join('\n');
+    const result = evaluatePrdStructuralValidation(content, { epics: [] });
+    expect(result).toBeNull();
   });
 });

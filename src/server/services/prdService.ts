@@ -1969,10 +1969,13 @@ export async function autoStartPrdValidation(
     const ready = await arePrdValidationArtifactsReady(prdId);
     if (!ready) return;
 
-    // Content-hash skip: unchanged doc reuses the last scorecard (no agent).
+    // Content-hash skip: unchanged doc reuses the last *agent* scorecard (no agent).
+    // Never skip on a structural fail-fast card — those must be allowed to proceed to
+    // the real validator after the fail-fast rules change or content is fixed.
     if (
       options?.force &&
       prd.validationScorecard &&
+      prd.validationScorecard.slug !== 'prd-structural' &&
       scorecardMatchesContentHash(
         prd.validationScorecard,
         prd.content,
