@@ -8,7 +8,6 @@ import {
   hydrateThread,
   isThreadIdle,
   reevaluateThreadGroundingForRecovery,
-  sendMessage,
 } from './chatAgentService';
 import { isThreadRunAlive } from './agentRunReaperService';
 import {
@@ -24,7 +23,8 @@ import {
   isValidationWatcherActive,
   routeDesignDocGenerationKickoff,
 } from './designDocService';
-import { startTestCaseWatcher, isTestCaseWatcherActive } from './testCaseService';
+import { startTestCaseWatcher, isTestCaseWatcherActive, routeTestCaseGenerationKickoff } from './testCaseService';
+import { routeDocumentValidationKickoff } from './documentValidationService';
 import { failStalePrototypes } from './designPrototypeService';
 import {
   findRunningInterviewThreads,
@@ -210,7 +210,8 @@ export async function recoverStuckInterviewThreads(): Promise<number> {
  * Safe to call repeatedly — watchers are idempotent (stop-then-start).
  *
  * For validation threads, if the agent was killed mid-run (status idle after
- * hydration), the agent is re-kicked via sendMessage so the run resumes.
+ * hydration), the agent is re-kicked through the background worker so the run
+ * resumes on the same lane as a fresh validation.
  * Generation agents are NOT re-kicked here — dead generation agents must be
  * retried manually via POST /design-docs/:id/retry-generate to avoid ENOENT
  * crashes from missing local workspaces.
@@ -347,7 +348,13 @@ export async function recoverInFlightWork(): Promise<void> {
 
   const validatingDocs = await db.query.designDocs.findMany({
     where: eq(designDocs.status, 'validating'),
-    columns: { id: true, validationThreadId: true },
+    columns: {
+      id: true,
+      validationThreadId: true,
+      chatThreadId: true,
+      authorId: true,
+      project: true,
+    },
   });
   for (const doc of validatingDocs) {
     if (!doc.validationThreadId) {
@@ -376,12 +383,25 @@ export async function recoverInFlightWork(): Promise<void> {
       // it so the validation run actually resumes rather than the watcher polling forever.
       // Skip re-kick when another instance still owns a live run.
       if (isThreadIdle(doc.validationThreadId) && !(await isThreadRunAlive(doc.validationThreadId))) {
-        sendMessage(doc.validationThreadId, 'Begin.').catch((err: Error) => {
-          console.error(
-            `[recovery] Failed to re-kick validation agent (designDocId=${doc.id}, threadId=${doc.validationThreadId}):`,
-            err.message
+        if (doc.authorId && doc.project) {
+          void routeDocumentValidationKickoff({
+            userId: doc.authorId,
+            project: doc.project,
+            threadId: doc.validationThreadId,
+            documentId: doc.id,
+            sourceThreadId: doc.chatThreadId,
+            onFailure: async () => undefined,
+          }).catch((err: unknown) => {
+            console.error(
+              `[recovery] Failed to re-kick validation (designDocId=${doc.id}):`,
+              err,
+            );
+          });
+        } else {
+          console.warn(
+            `[recovery] Cannot re-kick validation without author/project (designDocId=${doc.id})`,
           );
-        });
+        }
         console.log(
           `[recovery] Re-kicked dead validation agent (designDocId=${doc.id})`
         );
@@ -411,7 +431,13 @@ export async function recoverInFlightWork(): Promise<void> {
   // ── PRD validation threads stuck in 'validating' ──────────────────────────
   const validatingPrds = await db.query.prds.findMany({
     where: eq(prds.status, 'validating'),
-    columns: { id: true, validationThreadId: true },
+    columns: {
+      id: true,
+      validationThreadId: true,
+      chatThreadId: true,
+      authorId: true,
+      project: true,
+    },
   });
   for (const prd of validatingPrds) {
     if (!prd.validationThreadId) {
@@ -434,12 +460,25 @@ export async function recoverInFlightWork(): Promise<void> {
       );
 
       if (isThreadIdle(prd.validationThreadId) && !(await isThreadRunAlive(prd.validationThreadId))) {
-        sendMessage(prd.validationThreadId, 'Begin.').catch((err: Error) => {
-          console.error(
-            `[recovery] Failed to re-kick PRD validation agent (prdId=${prd.id}, threadId=${prd.validationThreadId}):`,
-            err.message
+        if (prd.authorId && prd.project) {
+          void routeDocumentValidationKickoff({
+            userId: prd.authorId,
+            project: prd.project,
+            threadId: prd.validationThreadId,
+            documentId: prd.id,
+            sourceThreadId: prd.chatThreadId,
+            onFailure: async () => undefined,
+          }).catch((err: unknown) => {
+            console.error(
+              `[recovery] Failed to re-kick PRD validation (prdId=${prd.id}):`,
+              err,
+            );
+          });
+        } else {
+          console.warn(
+            `[recovery] Cannot re-kick PRD validation without author/project (prdId=${prd.id})`,
           );
-        });
+        }
         console.log(
           `[recovery] Re-kicked dead PRD validation agent (prdId=${prd.id})`
         );
@@ -476,21 +515,32 @@ export async function recoverInFlightWork(): Promise<void> {
         && isGenerationRecoveryStale(testCase.updatedAt)
         && await claimTestCaseGenerationRecovery(testCase.id, testCase.updatedAt)
       ) {
-        sendMessage(
-          testCase.chatThreadId,
-          'Generate QA test cases for the provided PRD and backlog. Use the configured skill instructions and write the required output files.',
-          undefined,
-          [],
-          { hidden: true }
-        ).catch((err: Error) => {
-          console.error(
-            `[recovery] Failed to re-kick test-case agent (testCaseId=${testCase.id}, threadId=${testCase.chatThreadId}):`,
-            err.message
-          );
+        const prd = await db.query.prds.findFirst({
+          where: eq(prds.id, testCase.prdId),
+          columns: { authorId: true, project: true, chatThreadId: true },
         });
-        console.log(
-          `[recovery] Re-kicked dead test-case agent (testCaseId=${testCase.id})`
-        );
+        if (prd?.authorId && prd.project) {
+          void routeTestCaseGenerationKickoff({
+            testCaseId: testCase.id,
+            prdId: testCase.prdId,
+            userId: prd.authorId,
+            project: prd.project,
+            threadId: testCase.chatThreadId,
+            sourceThreadId: prd.chatThreadId ?? testCase.chatThreadId,
+          }).catch((err: unknown) => {
+            console.error(
+              `[recovery] Failed to re-kick test-case generation (testCaseId=${testCase.id}):`,
+              err,
+            );
+          });
+          console.log(
+            `[recovery] Re-kicked test-case generation (testCaseId=${testCase.id})`
+          );
+        } else {
+          console.warn(
+            `[recovery] Cannot re-kick test-case generation without PRD author/project (testCaseId=${testCase.id}, prdId=${testCase.prdId})`
+          );
+        }
       }
     } else {
       console.warn(

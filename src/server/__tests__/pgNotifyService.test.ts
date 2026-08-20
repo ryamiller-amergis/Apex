@@ -69,6 +69,35 @@ describe('pgNotifyService durable run events', () => {
     );
   });
 
+  it('strips U+0000 from jsonb event payloads before persist (PG 22P05)', async () => {
+    mockPoolQuery
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+    await notifyRunEvent({
+      ...envelope,
+      detail: 'tool output\u0000truncated',
+      event: {
+        type: 'tool_status',
+        toolName: 'Read',
+        callId: 'call-1',
+        status: 'completed',
+        args: { contents: 'binary\u0000chunk' },
+      },
+    }, { persist: true });
+
+    const insertParams = mockPoolQuery.mock.calls[0][1] as unknown[];
+    expect(insertParams[9]).toBe('tool outputtruncated');
+    expect(String(insertParams[10])).not.toContain('\\u0000');
+    expect(JSON.parse(String(insertParams[10]))).toEqual({
+      type: 'tool_status',
+      toolName: 'Read',
+      callId: 'call-1',
+      status: 'completed',
+      args: { contents: 'binarychunk' },
+    });
+  });
+
   it('replays durable envelopes after an SSE event id in ordinal order', async () => {
     mockPoolQuery.mockResolvedValue({
       rows: [

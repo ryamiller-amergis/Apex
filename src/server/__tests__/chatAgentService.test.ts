@@ -161,6 +161,7 @@ import {
   isRepositoryReadingChatCaller,
   isInteractiveWorkspaceBoundSkill,
   resolveGroundingCallerKey,
+  resolveInteractiveWorkflowClass,
   resumeOrCreateAgent,
   selectGroundingBoundaryRecreation,
   resumePinnedTurnAgent,
@@ -1193,6 +1194,42 @@ describe('document assistant MCP wiring', () => {
       expect(resolveGroundingCallerKey(baseKickoff(overrides))).toBe(
         expectedCaller
       );
+    }
+  );
+
+  it.each([
+    [
+      { isInterviewThread: true, assistantType: 'prd' as const },
+      'interview',
+    ],
+    [{ assistantType: 'prd' as const }, 'assistant'],
+    [{ assistantType: 'design-doc' as const }, 'assistant'],
+    [{ skillPath: '.cursor/skills/adr-finalize/SKILL.md' }, 'adr'],
+    [{ isDevSession: true }, 'assistant'],
+    [{}, 'home-chat'],
+  ])(
+    'routes interactive class %j as %s',
+    (
+      overrides: {
+        isInterviewThread?: boolean;
+        isDevSession?: boolean;
+        assistantType?: 'prd' | 'design-doc';
+        skillPath?: string;
+      },
+      expected
+    ) => {
+      expect(
+        resolveInteractiveWorkflowClass({
+          isInterviewThread: Boolean(overrides.isInterviewThread),
+          isDevSession: Boolean(overrides.isDevSession),
+          thread: {
+            kickoff: baseKickoff({
+              assistantType: overrides.assistantType,
+              skillPath: overrides.skillPath,
+            }),
+          },
+        } as Parameters<typeof resolveInteractiveWorkflowClass>[0]),
+      ).toBe(expected);
     }
   );
 

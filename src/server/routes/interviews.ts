@@ -87,7 +87,8 @@ import {
   overrideDesignDocValidation,
   syncValidationResult,
 } from '../services/designDocService';
-import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, updateThreadKickoffContext } from '../services/chatAgentService';
+import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, updateThreadKickoffContext, sendMessage } from '../services/chatAgentService';
+import { propagatePipelineGrounding } from '../services/runGroundingService';
 import { getApproverPoolForProject, resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import { assignApprovers, getAssignments, getAvailableApprovers, isApprovalComplete, isAssignedApprover, reassignApprovers, recordApproverResponse } from '../services/documentApprovalService';
@@ -111,6 +112,28 @@ const router = Router();
 
 function parsePinPolicy(value: unknown): PipelinePinPolicy {
   return value === 'latest' ? 'latest' : 'inherit';
+}
+
+async function inheritAssistantPin(opts: {
+  sourceThreadId: string | null | undefined;
+  destThreadId: string;
+  project: string;
+  userId: string;
+}): Promise<void> {
+  const sourceThreadId = opts.sourceThreadId?.trim();
+  if (!sourceThreadId) return;
+  try {
+    await propagatePipelineGrounding(
+      { runType: 'chat', runId: sourceThreadId, project: opts.project },
+      { runType: 'chat', runId: opts.destThreadId, project: opts.project },
+      opts.userId,
+      { deferMaterialization: true },
+    );
+  } catch {
+    console.warn(
+      `[run-grounding] Assistant pin inherit unavailable (dest=${opts.destThreadId})`,
+    );
+  }
 }
 
 // ── Interviews ────────────────────────────────────────────────────────────────
@@ -909,15 +932,7 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
       model,
       assistantType: 'prd',
       skillSettingsId: prd.skillSettingsId ?? skillConfig?.id ?? null,
-    }, {
-      kickoffMessage:
-        'Introduce yourself as Apex, the PRD assistant. ' +
-        'In 3–5 short bullet points, summarize what you can help with in this context: ' +
-        'editing PRD content, adding new requirements/sections, answering questions about the PRD, ' +
-        'resolving review comments, and refining the backlog. ' +
-        'Mention that when you make changes, they appear as a proposed diff for the owner to review and accept. ' +
-        'Keep it concise and friendly — this is the first thing the user sees.',
-    });
+    }, { skipAutoKickoff: true });
 
     // Rewrite context now that we have the real thread ID.
     // Also update the thread's in-memory kickoff so buildFreeChatPrompt injects
@@ -926,6 +941,28 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
     const contextPath = path.join(thread.workspaceDir, '.ai-pilot', 'kickoff-context.md');
     fs.writeFileSync(contextPath, realContext, 'utf-8');
     updateThreadKickoffContext(thread.id, realContext);
+
+    await inheritAssistantPin({
+      sourceThreadId: prd.chatThreadId,
+      destThreadId: thread.id,
+      project: prd.project,
+      userId,
+    });
+
+    void sendMessage(
+      thread.id,
+      'Introduce yourself as Apex, the PRD assistant. ' +
+        'In 3–5 short bullet points, summarize what you can help with in this context: ' +
+        'editing PRD content, adding new requirements/sections, answering questions about the PRD, ' +
+        'resolving review comments, and refining the backlog. ' +
+        'Mention that when you make changes, they appear as a proposed diff for the owner to review and accept. ' +
+        'Keep it concise and friendly — this is the first thing the user sees.',
+    ).catch((err: unknown) => {
+      console.error(
+        `[interviews] PRD assistant kickoff failed (prdId=${req.params.prdId}):`,
+        err,
+      );
+    });
 
     await db
       .update(prdsTable)
@@ -1907,6 +1944,13 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
     const contextPath = path.join(thread.workspaceDir, '.ai-pilot', 'kickoff-context.md');
     fs.writeFileSync(contextPath, realDocContext, 'utf-8');
     updateThreadKickoffContext(thread.id, realDocContext);
+
+    await inheritAssistantPin({
+      sourceThreadId: doc.chatThreadId ?? prd?.chatThreadId,
+      destThreadId: thread.id,
+      project: doc.project,
+      userId,
+    });
 
     await db
       .update(designDocsTable)

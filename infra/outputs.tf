@@ -385,7 +385,7 @@ output "ai_runs_interactive_capacity" {
 # ---------------------------------------------------------------------------
 
 output "repo_read_service_app_fqdn" {
-  description = "HTTPS FQDN for the repo-read Container App. App Service consumes this as REPO_READ_SERVICE_URL."
+  description = "HTTPS FQDN for the repo-read Container App. App Service, the interactive actor host, and the background job consume this as REPO_READ_SERVICE_URL."
   value       = try(azurerm_container_app.repo_read_service[0].ingress[0].fqdn, null)
 }
 

@@ -16,6 +16,10 @@ import {
 
 const VALIDATION_WATCHER_INTERVAL_MS = 5_000;
 const VALIDATION_WATCHER_MAX_ATTEMPTS = 720;
+const VALIDATION_KICKOFF_MESSAGE =
+  'Score the document in `.ai-pilot/kickoff-context.md` using the validation skill. ' +
+  'This is a non-interactive task — do not ask questions. Write `review-scorecard.json` and ' +
+  '`review-scorecard.md` to `.ai-pilot/output/`.';
 
 export interface DocumentValidationAdapter {
   getDocumentId(): string;
@@ -97,47 +101,60 @@ export async function autoStartDocumentValidation(adapter: DocumentValidationAda
   await adapter.updateDbForValidationStart(thread.id);
   startDocumentValidationWatcher(adapter, thread.id);
 
-  const kickoffMessage =
-    'Score the document in `.ai-pilot/kickoff-context.md` using the validation skill. ' +
-    'This is a non-interactive task — do not ask questions. Write `review-scorecard.json` and ' +
-    '`review-scorecard.md` to `.ai-pilot/output/`.';
+  await routeDocumentValidationKickoff({
+    userId: adapter.getAuthorId(),
+    project,
+    threadId: thread.id,
+    documentId: adapter.getDocumentId(),
+    sourceThreadId: adapter.getSourceThreadId?.(),
+    onFailure: () => adapter.updateDbForValidationError(),
+  });
+}
+
+export async function routeDocumentValidationKickoff(opts: {
+  userId: string;
+  project: string;
+  threadId: string;
+  documentId: string;
+  sourceThreadId?: string | null;
+  onFailure: () => Promise<void>;
+}): Promise<void> {
   const destinationRun = {
     runType: 'chat' as const,
-    runId: thread.id,
-    project,
+    runId: opts.threadId,
+    project: opts.project,
   };
   const reportPreparationFailure = async (): Promise<void> => {
     await runGroundingService.persistThenMarkTerminalInactive(
       destinationRun,
-      () => adapter.updateDbForValidationError(),
+      () => opts.onFailure(),
     );
   };
 
   try {
     await routeBackgroundWorkflow({
-      userId: adapter.getAuthorId(),
+      userId: opts.userId,
       workflowClass: 'validation',
       destinationRun,
-      threadId: thread.id,
+      threadId: opts.threadId,
       prepareWorker: async () => {
-        const sourceThreadId = adapter.getSourceThreadId?.();
-        if (sourceThreadId) {
+        if (opts.sourceThreadId) {
           try {
             await propagatePipelineGrounding(
-              { runType: 'chat', runId: sourceThreadId, project },
+              { runType: 'chat', runId: opts.sourceThreadId, project: opts.project },
               destinationRun,
-              adapter.getAuthorId(),
+              opts.userId,
               { deferMaterialization: true },
             );
           } catch {
             console.warn(
-              `[run-grounding] Validation propagation unavailable (documentId=${adapter.getDocumentId()})`,
+              `[run-grounding] Validation propagation unavailable (documentId=${opts.documentId})`,
             );
           }
         }
         const prepared = await prepareBackgroundWorkflowTurn(
-          thread.id,
-          kickoffMessage,
+          opts.threadId,
+          VALIDATION_KICKOFF_MESSAGE,
         );
         const targetGrounding = (
           await runGroundingService.getGroundings(destinationRun)
@@ -146,8 +163,8 @@ export async function autoStartDocumentValidation(adapter: DocumentValidationAda
       },
       runInProcess: () =>
         sendMessage(
-          thread.id,
-          kickoffMessage,
+          opts.threadId,
+          VALIDATION_KICKOFF_MESSAGE,
           undefined,
           [],
           { hidden: true },

@@ -3744,10 +3744,14 @@ export function isInteractiveWorkspaceBoundSkill(
   );
 }
 
-function resolveInteractiveWorkflowClass(
+export function resolveInteractiveWorkflowClass(
   state: ThreadState
 ): InteractiveWorkflowClass {
   if (state.isInterviewThread) return 'interview';
+  const assistantType = state.thread.kickoff.assistantType;
+  if (assistantType === 'prd' || assistantType === 'design-doc') {
+    return 'assistant';
+  }
   const skillPath = (state.thread.kickoff.skillPath ?? '').toLowerCase();
   if (skillPath.includes('adr')) return 'adr';
   if (state.isDevSession) return 'assistant';

@@ -677,13 +677,14 @@ After apply:
 
 1. Publish `runners/repo-read-service/Dockerfile` to ACR and point
    `repo_read_service_image` at it (Terraform ignores subsequent image drift).
-2. Confirm `REPO_READ_SERVICE_URL` matches `repo_read_service_app_fqdn` on **both**
-   the App Service and the interactive actor Container App (Terraform writes both
-   when the module is on). The actor host has no working tree and cannot see the
-   App Service mirror, so a missing URL there leaves interactive turns reading a
-   checkout that was never materialized — a silent hang rather than an error.
+2. Confirm `REPO_READ_SERVICE_URL` matches `repo_read_service_app_fqdn` on the
+   App Service, the interactive actor Container App, **and** the background
+   Container App Job (Terraform writes all three when the module is on). The
+   actor host and background job have no working tree and cannot see the App
+   Service mirror, so a missing URL there leaves turns/jobs reading a checkout
+   that was never materialized — a silent hang rather than an error.
 3. Confirm `REPO_READ_SERVICE_TOKEN` matches `ai_runs_runner_callback_token` on
-   both hosts.
+   those hosts.
 4. Confirm the Container App has `GITHUB_ORG` / `GITHUB_TOKEN` matching App
    Service (copy from the live web app settings into tfvars). Without them,
    Azure DevOps projects still clone; GitHub projects (Apex) fail on fetch
