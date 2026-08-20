@@ -41,6 +41,8 @@ export const APEX_ROUTE_TEMPLATES = [
   '/standup-manage',
   '/standup-summary',
   '/feature-requests',
+  '/rfp-intake',
+  '/rfp-intake/:id',
   '/ui-lab',
   '/ui-lab/:id',
   '/pdf-tools',

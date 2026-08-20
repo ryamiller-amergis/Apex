@@ -19,7 +19,7 @@ interface NavItem {
 }
 
 interface AppHeaderProps {
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests' | 'diagrams' | 'work-board';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests' | 'diagrams' | 'work-board' | 'rfp-intake';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -48,6 +48,8 @@ interface AppHeaderProps {
   onNavigateStandup?: () => void;
   onNavigateUiLab?: () => void;
   onNavigateFeatureRequests?: () => void;
+  onNavigateRfpIntake?: () => void;
+  rfpIntakeEnabled?: boolean;
   onNavigateAiCost?: () => void;
   onNavigateDesignModule?: () => void;
   onNavigateLoadTests?: () => void;
@@ -87,6 +89,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigateStandup,
   onNavigateUiLab,
   onNavigateFeatureRequests,
+  onNavigateRfpIntake,
+  rfpIntakeEnabled = false,
   onNavigateAiCost,
   onNavigateDesignModule,
   onNavigateLoadTests,
@@ -133,6 +137,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'Standup', view: 'standup', permission: 'standup:participate', onNavigate: onNavigateStandup ?? (() => {}) },
     { label: 'UI Lab', view: 'ui-lab', permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
     { label: 'Apex Backlog', view: 'feature-requests', permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
+    { label: 'RFP Intake', view: 'rfp-intake', permission: 'rfp-intake:view', onNavigate: onNavigateRfpIntake ?? (() => {}) },
     { label: 'Design Module', view: 'design-module', permission: 'design-module:view', onNavigate: onNavigateDesignModule ?? (() => {}) },
     { label: 'Diagrams', view: 'diagrams', permission: 'diagram:view', onNavigate: onNavigateDiagrams ?? (() => {}) },
     { label: 'Load Tests', view: 'load-tests', permission: 'load-test:view', onNavigate: onNavigateLoadTests ?? (() => {}) },
@@ -155,6 +160,13 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     if (item.view === 'feature-requests') {
       if (!isSuperAdmin && !menuEnabledViews.includes('feature-requests')) return false;
       if (!isSuperAdmin && !can('feature-requests:view')) return false;
+      return true;
+    }
+    if (item.view === 'rfp-intake') {
+      if (!rfpIntakeEnabled) return false;
+      if (selectedProject?.toLowerCase() !== 'apex') return false;
+      if (!isSuperAdmin && !menuEnabledViews.includes('rfp-intake')) return false;
+      if (!isSuperAdmin && !can('rfp-intake:view')) return false;
       return true;
     }
     if (item.view === 'work-board') {

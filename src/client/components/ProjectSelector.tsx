@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -8,10 +9,16 @@ import {
   useMyProjectAccessRequests,
   useRequestableProjectCatalog,
 } from '../hooks/usePlatformAdmin';
+import { useFeatureFlag } from '../hooks/useFeatureFlags';
+import { useCanViewRfpTriage } from '../hooks/useRfpTriage';
 import { IS_BETA_RELEASE } from '../config/release';
 import { BrandLogo } from './BrandLogo';
 import { WhatsNewBanner } from './WhatsNewBanner';
 import { UserMenu } from './UserMenu';
+import { LandingChoiceCards } from './LandingChoiceCards';
+import { RfpSubmissionModal } from './RfpSubmissionModal';
+import { YourRequestsList } from './YourRequestsList';
+import { RfpDetailDrawer } from './RfpDetailDrawer';
 import type { ThemeMode } from '../hooks/useAppShell';
 import styles from './ProjectSelector.module.css';
 
@@ -39,7 +46,82 @@ interface ProjectSelectorProps {
   onLogout?: () => void;
 }
 
-export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
+export const ProjectSelector: React.FC<ProjectSelectorProps> = (props) => {
+  const rfpIntakeEnabled = useFeatureFlag('rfp-intake', 'Apex');
+  // @feature-flag:rfp-intake start winner=enabled
+  return rfpIntakeEnabled ? (
+    // @feature-flag:rfp-intake enabled-start
+    <RfpEnabledProjectSelector {...props} />
+    // @feature-flag:rfp-intake enabled-end
+  ) : (
+    // @feature-flag:rfp-intake disabled-start
+    <ProjectSelectorView {...props} />
+    // @feature-flag:rfp-intake disabled-end
+  );
+  // @feature-flag:rfp-intake end
+};
+
+const RfpEnabledProjectSelector: React.FC<ProjectSelectorProps> = (props) => {
+  const [isSubmitOpen, setIsSubmitOpen] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const projectGridRef = useRef<HTMLDivElement | null>(null);
+  const requestId = searchParams.get('request');
+  const canViewTriage = useCanViewRfpTriage(Boolean(props.isSuperAdmin));
+
+  const openRequest = (id: string) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('request', id);
+    setSearchParams(next);
+  };
+
+  const closeRequest = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('request');
+    setSearchParams(next);
+  };
+
+  return (
+    <>
+      <ProjectSelectorView
+        {...props}
+        beforeGrid={
+          <LandingChoiceCards
+            onRequestProduct={() => setIsSubmitOpen(true)}
+            onGoToProject={() => projectGridRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+            onOpenTriage={canViewTriage ? () => {
+              props.onSelect('Apex');
+              navigate('/rfp-intake');
+            } : undefined}
+          />
+        }
+        afterGrid={
+          <YourRequestsList
+            onOpenRequest={openRequest}
+            onStartRequest={() => setIsSubmitOpen(true)}
+          />
+        }
+        projectGridRef={projectGridRef}
+      />
+      {isSubmitOpen && (
+        // data-testid-exempt — root dialog already has rfp-submission-modal
+        <RfpSubmissionModal onClose={() => setIsSubmitOpen(false)} />
+      )}
+      {requestId && (
+        // data-testid-exempt — root dialog already has rfp-detail-drawer
+        <RfpDetailDrawer requestId={requestId} onClose={closeRequest} />
+      )}
+    </>
+  );
+};
+
+interface ProjectSelectorViewProps extends ProjectSelectorProps {
+  beforeGrid?: React.ReactNode;
+  afterGrid?: React.ReactNode;
+  projectGridRef?: React.Ref<HTMLDivElement>;
+}
+
+const ProjectSelectorView: React.FC<ProjectSelectorViewProps> = ({
   selectedProject,
   onSelect,
   isSuperAdmin = false,
@@ -53,6 +135,9 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   theme = 'dark',
   onThemeChange,
   onLogout,
+  beforeGrid,
+  afterGrid,
+  projectGridRef,
 }) => {
   const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
   const { data: projects = [], isLoading, isError } = useProjects();
@@ -61,6 +146,7 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
     <div className={styles.page}>
       {onLogout && onThemeChange && (
         <div className={styles.userMenuCorner}>
+          {/* data-testid-exempt */}
           <UserMenu
             onOpenChangelog={() => onSetShowChangelog?.(true)}
             onThemeChange={onThemeChange}
@@ -82,6 +168,7 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
               type="button"
               className={styles.platformAdminButton}
               onClick={onOpenPlatformAdmin}
+              {...{ 'data-testid': 'project-selector-platform-admin' }}
             >
               Platform Admin
             </button>
@@ -91,6 +178,7 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
               type="button"
               className={styles.requestAccessButton}
               onClick={() => setIsRequestModalOpen(true)}
+              {...{ 'data-testid': 'project-selector-request-access' }}
             >
               Request Access
             </button>
@@ -99,6 +187,7 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
       </div>
 
       {hasUnreadChangelog && onSetShowChangelog && onMarkChangelogAsRead && (
+        // data-testid-exempt
         <WhatsNewBanner
           currentVersion={whatsNewCurrentVersion}
           onOpenChangelog={() => onSetShowChangelog(true)}
@@ -106,6 +195,8 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
           onToggleShowOnLogin={onToggleShowChangelogOnLogin}
         />
       )}
+
+      {beforeGrid}
 
       {isLoading ? (
         <div className={styles.loadingState}>
@@ -115,13 +206,14 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
       ) : isError ? (
         <p className={styles.errorMsg}>Could not load projects. Check your project catalog connection.</p>
       ) : (
-        <div className={styles.grid}>
+        <div className={styles.grid} ref={projectGridRef} {...{ 'data-testid': 'project-selector-grid' }}>
           {projects.map((project) => (
             <button
               key={project.id}
               className={`${styles.card} ${project.name === selectedProject ? styles.cardSelected : ''}`}
               onClick={() => onSelect(project.name)}
               type="button"
+              {...{ 'data-testid': `project-selector-card-${project.id}` }}
             >
               <div className={styles.cardIcon}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -149,7 +241,10 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
         </div>
       )}
 
+      {afterGrid}
+
       {isRequestModalOpen && (
+        // data-testid-exempt — dialog root is marked inside RequestAccessModal
         <RequestAccessModal onClose={() => setIsRequestModalOpen(false)} />
       )}
     </div>
@@ -203,8 +298,14 @@ const RequestAccessModal: React.FC<RequestAccessModalProps> = ({ onClose }) => {
   };
 
   return (
-    <div className={styles.modalBackdrop}>
-      <div className={styles.modal} role="dialog" aria-modal="true" aria-labelledby="request-access-title">
+    <div className={styles.modalBackdrop} {...{ 'data-testid': 'request-access-modal' }}>
+      <div
+        className={styles.modal}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="request-access-title"
+        {...{ 'data-testid': 'request-access-dialog' }}
+      >
         <div className={styles.modalHeader}>
           <div>
             <h2 id="request-access-title" className={styles.modalTitle}>Request Project Access</h2>
@@ -212,7 +313,13 @@ const RequestAccessModal: React.FC<RequestAccessModalProps> = ({ onClose }) => {
               Choose one or more ADO or non-ADO projects. A platform admin will review your request.
             </p>
           </div>
-          <button type="button" className={styles.iconButton} onClick={onClose} aria-label="Close request access">
+          <button
+            type="button"
+            className={styles.iconButton}
+            onClick={onClose}
+            aria-label="Close request access"
+            {...{ 'data-testid': 'request-access-close' }}
+          >
             &times;
           </button>
         </div>
@@ -236,7 +343,11 @@ const RequestAccessModal: React.FC<RequestAccessModalProps> = ({ onClose }) => {
         ) : catalogIsError ? (
           <p className={styles.errorMsg}>{loadError}</p>
         ) : (
-          <form className={styles.requestForm} onSubmit={(event) => void handleSubmit(onSubmit)(event)}>
+          <form
+            className={styles.requestForm}
+            onSubmit={(event) => void handleSubmit(onSubmit)(event)}
+            {...{ 'data-testid': 'request-access-form' }}
+          >
             {requestableProjects.length === 0 ? (
               <p className={styles.emptyText}>No additional projects are available to request.</p>
             ) : (
@@ -254,6 +365,7 @@ const RequestAccessModal: React.FC<RequestAccessModalProps> = ({ onClose }) => {
                         className={styles.projectCheckbox}
                         disabled={pending}
                         {...register('projects')}
+                        {...{ 'data-testid': `request-access-project-${project.id}` }}
                       />
                       <span>
                         <span className={styles.projectOptionName}>{project.name}</span>
@@ -272,13 +384,20 @@ const RequestAccessModal: React.FC<RequestAccessModalProps> = ({ onClose }) => {
             {submitMessage && <p className={styles.successMsg}>{submitMessage}</p>}
 
             <div className={styles.modalActions}>
-              <button type="button" className={styles.secondaryButton} onClick={onClose} disabled={pending}>
+              <button
+                type="button"
+                className={styles.secondaryButton}
+                onClick={onClose}
+                disabled={pending}
+                {...{ 'data-testid': 'request-access-cancel' }}
+              >
                 Close
               </button>
               <button
                 type="submit"
                 className={styles.platformAdminButton}
                 disabled={pending || requestableProjects.length === 0}
+                {...{ 'data-testid': 'request-access-submit' }}
               >
                 {pending ? 'Requesting...' : 'Submit request'}
               </button>

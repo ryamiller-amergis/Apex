@@ -248,6 +248,48 @@ describe('AppSidebar — grouped sections', () => {
     expect(screen.queryByText('Delivery')).not.toBeInTheDocument();
     expect(screen.queryByText('Tools')).not.toBeInTheDocument();
   });
+
+  it('PBI-005 AC-3 shows RFP Intake only in Apex when flagged, menu-enabled, and permitted', () => {
+    const can = (key: string) => key === 'rfp-intake:view';
+    const { rerender } = render(
+      <AppSidebar
+        {...baseProps}
+        can={can}
+        menuEnabledViews={['rfp-intake']}
+        selectedProject="Apex"
+        rfpIntakeEnabled
+        onNavigateRfpIntake={jest.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'RFP Intake' })).toBeInTheDocument();
+
+    rerender(
+      <AppSidebar
+        {...baseProps}
+        can={can}
+        menuEnabledViews={['rfp-intake']}
+        selectedProject="MaxView"
+        rfpIntakeEnabled
+        onNavigateRfpIntake={jest.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'RFP Intake' })).not.toBeInTheDocument();
+  });
+
+  it('PBI-005 AC-3 hides RFP Intake when the feature flag is off', () => {
+    const can = (key: string) => key === 'rfp-intake:view';
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={can}
+        menuEnabledViews={['rfp-intake']}
+        selectedProject="Apex"
+        rfpIntakeEnabled={false}
+        onNavigateRfpIntake={jest.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'RFP Intake' })).not.toBeInTheDocument();
+  });
 });
 
 describe('AppSidebar — mobile', () => {

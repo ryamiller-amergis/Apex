@@ -199,6 +199,8 @@ export interface UpsertSkillConfigOptions {
   designModuleModel?: string | null;
   designModuleScopingSkillPath?: string | null;
   designModuleScopingModel?: string | null;
+  productIntakeEvaluationSkillPath?: string | null;
+  productIntakeEvaluationModel?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   interviewSkillOptions?: InterviewSkillOption[] | null;
@@ -287,6 +289,8 @@ export async function upsertSkillConfig(
     designModuleModel: opts.designModuleModel ?? null,
     designModuleScopingSkillPath: opts.designModuleScopingSkillPath ?? null,
     designModuleScopingModel: opts.designModuleScopingModel ?? null,
+    productIntakeEvaluationSkillPath: opts.productIntakeEvaluationSkillPath ?? null,
+    productIntakeEvaluationModel: opts.productIntakeEvaluationModel ?? null,
     quickSkillPills: opts.quickSkillPills ?? null,
     quickMcpPills: opts.quickMcpPills ?? null,
     interviewSkillOptions: opts.interviewSkillOptions ?? null,

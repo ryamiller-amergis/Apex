@@ -2,6 +2,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import { ProjectSelector } from '../ProjectSelector';
 import { useProjects } from '../../hooks/useProjects';
+import { useFeatureFlag } from '../../hooks/useFeatureFlags';
+import { useCanViewRfpTriage } from '../../hooks/useRfpTriage';
 import {
   useCreateProjectAccessRequests,
   useMyProjectAccessRequests,
@@ -10,6 +12,29 @@ import {
 
 jest.mock('../../hooks/useProjects', () => ({
   useProjects: jest.fn(),
+}));
+
+jest.mock('../../hooks/useFeatureFlags', () => ({
+  useFeatureFlag: jest.fn(() => false),
+}));
+
+jest.mock('react-router-dom', () => ({
+  ...jest.requireActual('react-router-dom'),
+  useSearchParams: () => [new URLSearchParams(), jest.fn()],
+  useNavigate: () => jest.fn(),
+}));
+
+jest.mock('../../hooks/useRfpTriage', () => ({
+  useCanViewRfpTriage: jest.fn(() => false),
+}));
+
+jest.mock('../../hooks/useRfpIntake', () => ({
+  useMyRfpRequests: jest.fn(() => ({
+    data: { items: [], total: 0 },
+    isLoading: false,
+    isError: false,
+    refetch: jest.fn(),
+  })),
 }));
 
 jest.mock('../UserMenu', () => ({
@@ -25,10 +50,12 @@ jest.mock('../../hooks/usePlatformAdmin', () => ({
 const mockUseCreateProjectAccessRequests = useCreateProjectAccessRequests as jest.Mock;
 const mockUseMyProjectAccessRequests = useMyProjectAccessRequests as jest.Mock;
 const mockUseRequestableProjectCatalog = useRequestableProjectCatalog as jest.Mock;
+const mockUseFeatureFlag = useFeatureFlag as jest.Mock;
 
 describe('ProjectSelector platform admin action', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockUseFeatureFlag.mockReturnValue(false);
     (useProjects as jest.Mock).mockReturnValue({
       data: [{ id: 'project-1', name: 'MaxView', description: 'Delivery planning' }],
       isLoading: false,
@@ -152,5 +179,32 @@ describe('ProjectSelector platform admin action', () => {
     fireEvent.click(screen.getByRole('button', { name: /platform admin/i }));
 
     expect(onOpenPlatformAdmin).toHaveBeenCalledTimes(1);
+  });
+
+  it('VT-10 hides Request a Product when rfp-intake is off', () => {
+    mockUseFeatureFlag.mockReturnValue(false);
+    render(
+      <ProjectSelector
+        selectedProject="MaxView"
+        isSuperAdmin={false}
+        onSelect={jest.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('rfp-request-product-card')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('rfp-your-requests-list')).not.toBeInTheDocument();
+    expect(screen.getByText(/select a project to start planning/i)).toBeInTheDocument();
+  });
+
+  it('TBI-004 DoD-0 shows the landing triage entry when Apex view is granted', () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    (useCanViewRfpTriage as jest.Mock).mockReturnValue(true);
+    render(
+      <ProjectSelector
+        selectedProject="MaxView"
+        isSuperAdmin={false}
+        onSelect={jest.fn()}
+      />,
+    );
+    expect(screen.getByTestId('rfp-triage-entry-card')).toBeInTheDocument();
   });
 });

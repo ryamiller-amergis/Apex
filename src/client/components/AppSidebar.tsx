@@ -40,6 +40,8 @@ interface AppSidebarProps {
   onNavigateStandup?: () => void;
   onNavigateUiLab?: () => void;
   onNavigateFeatureRequests?: () => void;
+  onNavigateRfpIntake?: () => void;
+  rfpIntakeEnabled?: boolean;
   onNavigatePdfTools?: () => void;
   onNavigateAiCost?: () => void;
   onNavigateDesignModule?: () => void;
@@ -198,6 +200,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   isInAnyGroup,
   menuEnabledViews = [],
   isSuperAdmin = false,
+  selectedProject,
   canAccessHome = true,
   onNavigateHome,
   onNavigateCalendar,
@@ -209,6 +212,8 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onNavigateStandup,
   onNavigateUiLab,
   onNavigateFeatureRequests,
+  onNavigateRfpIntake,
+  rfpIntakeEnabled = false,
   onNavigatePdfTools,
   onNavigateAiCost,
   onNavigateDesignModule,
@@ -259,6 +264,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         { label: 'PDF Assembly Tool', view: 'pdf-tools', icon: <IconPdfTools />, permission: 'pdf-assembly:use', onNavigate: onNavigatePdfTools ?? (() => {}) },
         { label: 'Load Tests', view: 'load-tests', icon: <IconLoadTests />, permission: 'load-test:view', onNavigate: onNavigateLoadTests ?? (() => {}), testId: 'nav-load-tests' },
         { label: 'Apex Backlog', view: 'feature-requests', icon: <IconFeatureRequests />, permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
+        { label: 'RFP Intake', view: 'rfp-intake', icon: <IconFeatureRequests />, permission: 'rfp-intake:view', onNavigate: onNavigateRfpIntake ?? (() => {}) },
         { label: 'Work Board', view: 'work-board', icon: <IconWorkBoard />, permission: 'work-board:view', onNavigate: onNavigateWorkBoard ?? (() => {}) },
       ],
     },
@@ -277,6 +283,13 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
     if (item.view === 'feature-requests') {
       if (!isSuperAdmin && !menuEnabledViews.includes('feature-requests')) return false;
       if (!isSuperAdmin && !can('feature-requests:view')) return false;
+      return true;
+    }
+    if (item.view === 'rfp-intake') {
+      if (!rfpIntakeEnabled) return false;
+      if (selectedProject?.toLowerCase() !== 'apex') return false;
+      if (!isSuperAdmin && !menuEnabledViews.includes('rfp-intake')) return false;
+      if (!isSuperAdmin && !can('rfp-intake:view')) return false;
       return true;
     }
     if (item.view === 'work-board') {

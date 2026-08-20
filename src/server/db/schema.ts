@@ -45,6 +45,24 @@ import type { MenuItemKey } from '../../shared/types/menuSettings';
 import type { ProjectAccessRequestStatus } from '../../shared/types/platformAdmin';
 import type { FlagLifecycle, FlagRuleType, FlagAuditAction } from '../../shared/types/featureFlags';
 import type { WorkItemType } from '../../shared/types/featureRequest';
+import type {
+  ProductIntakeEvaluationOutput,
+  RfpAiStatus,
+  RfpAudience,
+  RfpConfidence,
+  RfpDataSensitivity,
+  RfpDeliveryApproach,
+  RfpHostingRecommendation,
+  RfpHumanStatus,
+  RfpNativeBenefit,
+  RfpPriority,
+  RfpRecommendedLane,
+  RfpRequestEventType,
+  RfpRequestType,
+  RfpRisk,
+  RfpTechVelocity,
+  RfpVerdict,
+} from '../../shared/types/rfpIntake';
 import type { DesignModuleIconKey } from '../../shared/types/designModule';
 import type {
   LoadProfile,
@@ -303,6 +321,7 @@ export const appUsersRelations = relations(appUsers, ({ many, one }) => ({
   projectAssignments: many(userProjectAssignments),
   projectAccessRequests: many(projectAccessRequests),
   featureRequests: many(featureRequests),
+  rfpRequests: many(rfpRequests),
   profile: one(userProfiles, {
     fields: [appUsers.oid],
     references: [userProfiles.userOid],
@@ -809,6 +828,8 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   designModuleModel: text('design_module_model'),
   designModuleScopingSkillPath: text('design_module_scoping_skill_path'),
   designModuleScopingModel: text('design_module_scoping_model'),
+  productIntakeEvaluationSkillPath: text('product_intake_evaluation_skill_path'),
+  productIntakeEvaluationModel: text('product_intake_evaluation_model'),
   /** Admin-managed checkout readiness for this skill-settings repository identity. */
   repositoryCheckoutStatus: text('repository_checkout_status').notNull().default('not_cloned'),
   repositoryCheckoutSha: text('repository_checkout_sha'),
@@ -2610,6 +2631,159 @@ export const tracePathRollups = pgTable('trace_path_rollups', {
 export const traceEventsRelations = relations(traceEvents, ({ one }) => ({
   actor: one(appUsers, {
     fields: [traceEvents.actorUserId],
+    references: [appUsers.oid],
+  }),
+}));
+
+// ── RFP Intake ────────────────────────────────────────────────────────────────
+
+export const rfpRequests = pgTable('rfp_requests', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  ownerId: text('owner_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  title: text('title').notNull(),
+  stakeholder: text('stakeholder').notNull(),
+  request: text('request').notNull(),
+  problem: text('problem').notNull(),
+  audience: text('audience').$type<RfpAudience>().notNull(),
+  dataSensitivity: text('data_sensitivity').$type<RfpDataSensitivity>().notNull(),
+  existingSolution: text('existing_solution').notNull(),
+  advantage: text('advantage'),
+  constraints: text('constraints'),
+  requestType: text('request_type').$type<RfpRequestType>(),
+  existingSystemStack: text('existing_system_stack'),
+  status: text('status').$type<RfpHumanStatus>().notNull().default('evaluating'),
+  aiStatus: text('ai_status').$type<RfpAiStatus>().notNull().default('evaluating'),
+  aiThreadId: text('ai_thread_id'),
+  sourceProject: text('source_project').notNull(),
+  currentEvaluationId: uuid('current_evaluation_id').references((): AnyPgColumn => rfpEvaluations.id, { onDelete: 'set null' }),
+  clarificationUsed: boolean('clarification_used').notNull().default(false),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  ownerCreatedIdx: index('idx_rfp_requests_owner_created').on(t.ownerId, t.createdAt),
+  statusCreatedIdx: index('idx_rfp_requests_status_created').on(t.status, t.createdAt),
+  aiStatusIdx: index('idx_rfp_requests_ai_status').on(t.aiStatus),
+}));
+
+export const rfpEvaluations = pgTable('rfp_evaluations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  rfpRequestId: uuid('rfp_request_id').notNull().references(() => rfpRequests.id, { onDelete: 'cascade' }),
+  version: integer('version').notNull(),
+  verdict: text('verdict').$type<RfpVerdict>().notNull(),
+  confidence: text('confidence').$type<RfpConfidence>().notNull(),
+  techVelocity: text('tech_velocity').$type<RfpTechVelocity>().notNull(),
+  nativeBenefit: text('native_benefit').$type<RfpNativeBenefit>().notNull(),
+  audience: text('audience').$type<RfpAudience>().notNull(),
+  dataLeavesTenant: boolean('data_leaves_tenant').notNull(),
+  priority: text('priority').$type<RfpPriority>().notNull(),
+  risk: text('risk').$type<RfpRisk>().notNull(),
+  deliveryApproach: text('delivery_approach').$type<RfpDeliveryApproach>().notNull(),
+  recommendedLane: text('recommended_lane').$type<RfpRecommendedLane>().notNull(),
+  recommendedTooling: jsonb('recommended_tooling').$type<string[]>().notNull().default([]),
+  hostingRecommendation: text('hosting_recommendation').$type<RfpHostingRecommendation>().notNull(),
+  operationalOwner: text('operational_owner').notNull(),
+  reuseOpportunity: text('reuse_opportunity').notNull(),
+  entersInterviewFlow: boolean('enters_interview_flow').notNull(),
+  buildBuyRentSummary: text('build_buy_rent_summary').notNull(),
+  rationale: text('rationale').notNull(),
+  existingOverlap: text('existing_overlap').notNull(),
+  clarifyingQuestions: jsonb('clarifying_questions').$type<string[]>().notNull().default([]),
+  rawOutput: jsonb('raw_output').$type<ProductIntakeEvaluationOutput>().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  requestVersionUniq: unique('rfp_evaluations_request_version_key').on(t.rfpRequestId, t.version),
+  requestIdx: index('idx_rfp_evaluations_request_id').on(t.rfpRequestId),
+  verdictIdx: index('idx_rfp_evaluations_verdict').on(t.verdict),
+}));
+
+export const rfpComments = pgTable('rfp_comments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  rfpRequestId: uuid('rfp_request_id').notNull().references(() => rfpRequests.id, { onDelete: 'cascade' }),
+  authorId: text('author_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  body: text('body').notNull(),
+  mentionedUserIds: jsonb('mentioned_user_ids').$type<string[]>().notNull().default([]),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  requestCreatedIdx: index('idx_rfp_comments_request_created').on(t.rfpRequestId, t.createdAt),
+}));
+
+export const rfpAttachments = pgTable('rfp_attachments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  rfpRequestId: uuid('rfp_request_id').notNull().references(() => rfpRequests.id, { onDelete: 'cascade' }),
+  commentId: uuid('comment_id').references(() => rfpComments.id, { onDelete: 'cascade' }),
+  filename: text('filename').notNull(),
+  contentType: text('content_type').notNull(),
+  sizeBytes: integer('size_bytes').notNull(),
+  storageKey: text('storage_key').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  requestIdx: index('idx_rfp_attachments_request_id').on(t.rfpRequestId),
+  commentIdx: index('idx_rfp_attachments_comment_id').on(t.commentId),
+}));
+
+export const rfpRequestEvents = pgTable('rfp_request_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  rfpRequestId: uuid('rfp_request_id').notNull().references(() => rfpRequests.id, { onDelete: 'cascade' }),
+  eventType: text('event_type').$type<RfpRequestEventType>().notNull(),
+  actorId: text('actor_id').references(() => appUsers.oid, { onDelete: 'set null' }),
+  payload: jsonb('payload').$type<Record<string, unknown>>(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  requestCreatedIdx: index('idx_rfp_request_events_request_created').on(t.rfpRequestId, t.createdAt),
+}));
+
+export const rfpRequestsRelations = relations(rfpRequests, ({ one, many }) => ({
+  owner: one(appUsers, {
+    fields: [rfpRequests.ownerId],
+    references: [appUsers.oid],
+  }),
+  currentEvaluation: one(rfpEvaluations, {
+    fields: [rfpRequests.currentEvaluationId],
+    references: [rfpEvaluations.id],
+  }),
+  evaluations: many(rfpEvaluations),
+  comments: many(rfpComments),
+  attachments: many(rfpAttachments),
+  events: many(rfpRequestEvents),
+}));
+
+export const rfpEvaluationsRelations = relations(rfpEvaluations, ({ one }) => ({
+  request: one(rfpRequests, {
+    fields: [rfpEvaluations.rfpRequestId],
+    references: [rfpRequests.id],
+  }),
+}));
+
+export const rfpCommentsRelations = relations(rfpComments, ({ one, many }) => ({
+  request: one(rfpRequests, {
+    fields: [rfpComments.rfpRequestId],
+    references: [rfpRequests.id],
+  }),
+  author: one(appUsers, {
+    fields: [rfpComments.authorId],
+    references: [appUsers.oid],
+  }),
+  attachments: many(rfpAttachments),
+}));
+
+export const rfpAttachmentsRelations = relations(rfpAttachments, ({ one }) => ({
+  request: one(rfpRequests, {
+    fields: [rfpAttachments.rfpRequestId],
+    references: [rfpRequests.id],
+  }),
+  comment: one(rfpComments, {
+    fields: [rfpAttachments.commentId],
+    references: [rfpComments.id],
+  }),
+}));
+
+export const rfpRequestEventsRelations = relations(rfpRequestEvents, ({ one }) => ({
+  request: one(rfpRequests, {
+    fields: [rfpRequestEvents.rfpRequestId],
+    references: [rfpRequests.id],
+  }),
+  actor: one(appUsers, {
+    fields: [rfpRequestEvents.actorId],
     references: [appUsers.oid],
   }),
 }));

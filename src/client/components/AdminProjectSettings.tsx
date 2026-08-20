@@ -274,7 +274,8 @@ type SkillPathKey =
   | 'issueSkillPath'
   | 'loadTestGenerationSkillPath'
   | 'designModuleSkillPath'
-  | 'designModuleScopingSkillPath';
+  | 'designModuleScopingSkillPath'
+  | 'productIntakeEvaluationSkillPath';
 
 type ModelKey =
   | 'interviewModel'
@@ -292,7 +293,8 @@ type ModelKey =
   | 'issueModel'
   | 'loadTestGenerationModel'
   | 'designModuleModel'
-  | 'designModuleScopingModel';
+  | 'designModuleScopingModel'
+  | 'productIntakeEvaluationModel';
 
 interface PipelineStageDef {
   id: string;
@@ -467,6 +469,14 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     skillKey: 'designModuleScopingSkillPath',
     emptyLabel: 'Default (.cursor/skills/design-module-scoping/SKILL.md)',
     modelKey: 'designModuleScopingModel',
+  },
+  {
+    id: 'product-intake-evaluation',
+    label: 'Product Intake Evaluation',
+    desc: 'Evaluates Requests for Product with a build / buy / rent / decline recommendation',
+    skillKey: 'productIntakeEvaluationSkillPath',
+    emptyLabel: 'None (evaluation unavailable)',
+    modelKey: 'productIntakeEvaluationModel',
   },
 ];
 
@@ -934,6 +944,7 @@ interface EditState {
   loadTestGenerationSkillPath: string;
   designModuleSkillPath: string;
   designModuleScopingSkillPath: string;
+  productIntakeEvaluationSkillPath: string;
   interviewModel: string;
   prdModel: string;
   adrModel: string;
@@ -951,6 +962,7 @@ interface EditState {
   loadTestGenerationModel: string;
   designModuleModel: string;
   designModuleScopingModel: string;
+  productIntakeEvaluationModel: string;
   defaultModel: string;
   prdReviewBedrockModelId: string;
   prdReviewBedrockMaxTokens: number;
@@ -991,13 +1003,13 @@ const emptyEdit = (): EditState => ({
   designDocAssistantSkillPath: '', designPrototypeSkillPath: '', testCaseSkillPath: '', designDocValidationSkillPath: '', prdValidationSkillPath: '',
   developmentSkillPath: '', standupSkillPath: '', featureRequestSkillPath: '',
   technicalSkillPath: '', issueSkillPath: '', loadTestGenerationSkillPath: '', designModuleSkillPath: '',
-  designModuleScopingSkillPath: '',
+  designModuleScopingSkillPath: '', productIntakeEvaluationSkillPath: '',
   interviewModel: '', prdModel: '', designDocModel: '',
   adrModel: '',
   designDocAssistantModel: '', designPrototypeModel: '', testCaseModel: '', designDocValidationModel: '', prdValidationModel: '',
   developmentModel: '', standupModel: '', featureRequestModel: '',
   technicalModel: '', issueModel: '', loadTestGenerationModel: '', designModuleModel: '',
-  designModuleScopingModel: '',
+  designModuleScopingModel: '', productIntakeEvaluationModel: '',
   defaultModel: '',
   prdReviewBedrockModelId: '',
   prdReviewBedrockMaxTokens: 16000,
@@ -1458,6 +1470,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       loadTestGenerationSkillPath: config.loadTestGenerationSkillPath ?? '',
       designModuleSkillPath: config.designModuleSkillPath ?? '',
       designModuleScopingSkillPath: config.designModuleScopingSkillPath ?? '',
+      productIntakeEvaluationSkillPath: config.productIntakeEvaluationSkillPath ?? '',
       interviewModel: config.interviewModel ?? '',
       prdModel: config.prdModel ?? '',
       adrModel: config.adrModel ?? '',
@@ -1475,6 +1488,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       loadTestGenerationModel: config.loadTestGenerationModel ?? '',
       designModuleModel: config.designModuleModel ?? '',
       designModuleScopingModel: config.designModuleScopingModel ?? '',
+      productIntakeEvaluationModel: config.productIntakeEvaluationModel ?? '',
       defaultModel: config.defaultModel ?? '',
       prdReviewBedrockModelId: config.prdReviewBedrockModelId ?? '',
       prdReviewBedrockMaxTokens: config.prdReviewBedrockMaxTokens ?? 16000,
@@ -1556,6 +1570,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         loadTestGenerationSkillPath: edit.loadTestGenerationSkillPath || null,
         designModuleSkillPath: edit.designModuleSkillPath || null,
         designModuleScopingSkillPath: edit.designModuleScopingSkillPath || null,
+        productIntakeEvaluationSkillPath: edit.productIntakeEvaluationSkillPath || null,
         interviewModel: edit.interviewModel || null,
         prdModel: edit.prdModel || null,
         adrModel: edit.adrModel || null,
@@ -1573,6 +1588,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         loadTestGenerationModel: edit.loadTestGenerationModel || null,
         designModuleModel: edit.designModuleModel || null,
         designModuleScopingModel: edit.designModuleScopingModel || null,
+        productIntakeEvaluationModel: edit.productIntakeEvaluationModel || null,
         defaultModel: edit.defaultModel || null,
         prdReviewBedrockModelId: edit.prdReviewBedrockModelId || null,
         prdReviewBedrockMaxTokens: edit.prdReviewBedrockMaxTokens || null,

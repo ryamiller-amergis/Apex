@@ -64,10 +64,12 @@ import {
 
 import runGroundingsRouter from './runGroundings';
 import diagramsRouter from './diagrams';
+import rfpIntakeRouter from './rfpIntake';
 const router = express.Router();
 
 router.use('/run-groundings', runGroundingsRouter);
 router.use('/projects/:projectId/diagrams', diagramsRouter);
+router.use('/rfp-intake', rfpIntakeRouter);
 // GET /api/available-models — accessible to all authenticated users so that
 // non-admin roles (e.g. interviews:manage) can populate model dropdowns.
 router.get('/available-models', async (_req: Request, res: Response) => {

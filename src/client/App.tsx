@@ -82,6 +82,7 @@ const StandupCeremonyView = lazy(() => import('./components/StandupCeremonyView'
 const StandupManageView = lazy(() => import('./components/StandupManageView'));
 const StandupSummaryView = lazy(() => import('./components/StandupSummaryView'));
 const FeatureRequestsView = lazy(() => import('./components/FeatureRequestsView'));
+const RfpQueueView = lazy(() => import('./components/RfpQueueView'));
 const ApexWorkBoardView = lazy(() => import('./components/ApexWorkBoardView').then(m => ({ default: m.ApexWorkBoardView })));
 const UiLabView = lazy(() => import('./components/UiLabView').then(m => ({ default: m.UiLabView })));
 const ApryseWebViewerPoc = lazy(() => import('./components/ApryseWebViewerPoc').then(m => ({ default: m.ApryseWebViewerPoc })));
@@ -160,7 +161,7 @@ function App() {
   }, []);
   const { data: activeThread = null } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests' | 'diagrams' | 'work-board' | 'not-found';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'rfp-intake' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests' | 'diagrams' | 'work-board' | 'not-found';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -194,6 +195,8 @@ function App() {
                     ? 'standup'
                     : location.pathname === '/feature-requests'
                     ? 'feature-requests'
+                    : location.pathname.startsWith('/rfp-intake')
+                    ? 'rfp-intake'
                     : location.pathname.startsWith('/ui-lab')
                     ? 'ui-lab'
                     : location.pathname.startsWith('/pdf-tools')
@@ -294,6 +297,7 @@ function App() {
   }, [location.pathname, location.search, selectedProject, availableProjects, changeProject]);
 
   const showBetaAnnouncement = useFeatureFlag('beta-to-prod-announcement', selectedProject);
+  const rfpIntakeEnabled = useFeatureFlag('rfp-intake', 'Apex');
   const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
   const agentHomeFlag = homeFlags['agent-home'] ?? false;
   const interactiveWsEnabled = homeFlags['ai-runs-interactive'] === true;
@@ -435,6 +439,11 @@ function App() {
     if (currentView === 'standup-manage' && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:manage')))      navigate(fallback);
     if (currentView === 'standup-summary' && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:participate'))) navigate(fallback);
     if (currentView === 'feature-requests' && !isSuperAdmin && (!effectiveEnabledViews.includes('feature-requests') || !can('feature-requests:view'))) navigate(fallback);
+    if (currentView === 'rfp-intake') {
+      const isApex = selectedProject.toLowerCase() === 'apex';
+      const allowed = rfpIntakeEnabled && isApex && (isSuperAdmin || (effectiveEnabledViews.includes('rfp-intake') && can('rfp-intake:view')));
+      if (!allowed) navigate(fallback);
+    }
     if (currentView === 'ui-lab'        && !isSuperAdmin && (!effectiveEnabledViews.includes('ui-lab') || !can('ui-lab:view') || !isInAnyGroup(['UI/UX']))) navigate(fallback);
     if (currentView === 'pdf-tools'     && !isSuperAdmin && (!effectiveEnabledViews.includes('pdf-tools') || !can('pdf-assembly:use'))) navigate(fallback);
     if (currentView === 'design-module' && !isSuperAdmin && (!effectiveEnabledViews.includes('design-module') || !can('design-module:view'))) navigate(fallback);
@@ -450,7 +459,7 @@ function App() {
         navigate(firstAccessible ? `/planning/${firstAccessible}` : fallback);
       }
     }
-  }, [currentView, planningTab, permissionsLoaded, menuConfigReady, homeFlagsLoading, canAccessHome, can, isInAnyGroup, isSuperAdmin, isRestricted, effectiveEnabledViews, selectedProject, workBoardEnabled, navigate]);
+  }, [currentView, planningTab, permissionsLoaded, menuConfigReady, homeFlagsLoading, canAccessHome, can, isInAnyGroup, isSuperAdmin, isRestricted, effectiveEnabledViews, selectedProject, workBoardEnabled, rfpIntakeEnabled, navigate]);
 
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
@@ -682,6 +691,8 @@ function App() {
             onNavigateStandup={() => navigate('/standup')}
             onNavigateUiLab={() => navigate('/ui-lab')}
             onNavigateFeatureRequests={() => navigate('/feature-requests')}
+            onNavigateRfpIntake={() => navigate('/rfp-intake')}
+            rfpIntakeEnabled={rfpIntakeEnabled}
             onNavigatePdfTools={() => navigate('/pdf-tools/nutrient-poc')}
             onNavigateAiCost={() => navigate('/ai-cost')}
             onNavigateDesignModule={() => navigate('/design-module')}
@@ -734,6 +745,8 @@ function App() {
             onNavigateMyWork={() => navigate('/my-work')}
             onNavigateStandup={() => navigate('/standup')}
             onNavigateFeatureRequests={() => navigate('/feature-requests')}
+            onNavigateRfpIntake={() => navigate('/rfp-intake')}
+            rfpIntakeEnabled={rfpIntakeEnabled}
             onNavigateUiLab={() => navigate('/ui-lab')}
             onNavigateAdmin={() => navigate('/admin/roles')}
             onNavigateAiCost={() => navigate('/ai-cost')}
@@ -1026,6 +1039,12 @@ function App() {
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
                 <FeatureRequestsView />
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'rfp-intake' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <RfpQueueView />
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'work-board' ? (

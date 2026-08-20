@@ -32,6 +32,7 @@ import {
 } from './chatThreadRepository';
 import { expireOldSessions } from './pdfAssemblyService';
 import { recoverAnalyzingFeatureRequests } from './featureRequestAnalysisService';
+import { recoverEvaluatingRfps } from './rfpEvaluationOrchestrationService';
 import {
   finalizeOwnedAgentRun,
   nextRunEventSequence,
@@ -545,6 +546,18 @@ export async function recoverInFlightWork(): Promise<void> {
     }
   } catch (err) {
     console.error('[recovery] Failed to recover feature-request analysis:', err);
+  }
+
+  try {
+    const rfpRecovered = await recoverEvaluatingRfps();
+    if (rfpRecovered > 0) {
+      recovered += rfpRecovered;
+      console.log(
+        `[recovery] Restarted ${rfpRecovered} RFP evaluation watcher(s)`,
+      );
+    }
+  } catch (err) {
+    console.error('[recovery] Failed to recover RFP evaluations:', err);
   }
 
   if (recovered > 0) {
