@@ -7,6 +7,7 @@ import {
   type RfpEvaluationChatMessage,
   type RfpRequest,
 } from '../../shared/types/rfpIntake';
+import { stripReviewerDecisionFence } from '../../shared/utils/rfpReviewerDecision';
 import { completePlainTextWithBedrock } from './bedrockService';
 import {
   APEX_PROJECT,
@@ -56,10 +57,23 @@ function buildPrompt(
   question: string,
 ): string {
   const historyBlock = history
-    .map((item) => `${item.role === 'user' ? 'User' : 'Evaluator'}: ${item.body}`)
+    .map((item) => {
+      const body = item.role === 'assistant' ? stripReviewerDecisionFence(item.body) : item.body;
+      return `${item.role === 'user' ? 'User' : 'Evaluator'}: ${body}`;
+    })
     .join('\n\n');
 
-  return `You are the Apex product-intake evaluator answering follow-up questions about a completed evaluation. Explain your reasoning. Do not change the verdict, rewrite the evaluation JSON, or invent a new recommendation. If the user asks whether a full SDLC build is valid, answer against this rule: Apex builds standalone apps via the interview flow (grill-with-docs → to-prd → backlog) and hosts them outside the Apex UI. Do not treat the request as an Apex module unless the intake explicitly asked to extend Apex itself.
+  return `You are the Apex product-intake evaluator answering follow-up questions about a completed evaluation. Explain your reasoning against the stored evaluation JSON. Do not rewrite that JSON yourself. Chat does not persist a new official call.
+
+If the reviewer clearly agrees in this conversation that the official Apex call should change (for example Buy → Build because they will replace the named vendor and host a standalone SDLC app outside Apex), you MAY propose a reviewer decision. Only then, after your markdown answer, emit exactly this fence (valid JSON, no commentary inside the fence):
+
+:::reviewer-decision
+{"verdict":"build","rationale":"one short reason","constraintsToAdd":"constraints to append onto the intake"}
+:::
+
+Do not emit that fence for a hypothetical "would build be valid?" question. Emit it only when the reviewer has agreed to change the official call. Apex triage still has to Apply the decision; you do not flip the stored evaluation.
+
+If the intake already has a reviewerDecision, treat it as binding context.
 
 Answer in short Markdown (headings and bullets). Stay grounded in the intake and evaluation below. If something was not evaluated, say so.
 
@@ -76,6 +90,7 @@ ${JSON.stringify({
     constraints: request.constraints,
     requestType: request.requestType,
     existingSystemStack: request.existingSystemStack,
+    reviewerDecision: request.reviewerDecision,
   }, null, 2)}
 
 ## Evaluation

@@ -87,6 +87,7 @@ describe('RfpDetailDrawer VT-06 PBI-004', () => {
         clarificationUsed: false,
         createdAt: '2026-08-19T12:00:00.000Z',
         updatedAt: '2026-08-19T12:00:00.000Z',
+        reviewerDecision: null,
         currentEvaluation: {
           id: 'ev-1',
           rfpRequestId: 'rfp-1',

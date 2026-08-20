@@ -35,6 +35,7 @@ function detail(status: RfpTriageDetail['status']): RfpTriageDetail {
     createdAt: '2026-08-19T12:00:00.000Z',
     updatedAt: '2026-08-19T12:00:00.000Z',
     currentEvaluation: null,
+    reviewerDecision: null,
     comments: [],
     attachments: [],
     activity: [],

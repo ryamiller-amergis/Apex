@@ -5,6 +5,7 @@ import { useRfpAttachmentUpload } from '../hooks/useRfpTriage';
 import { RfpClarificationForm } from './RfpClarificationForm';
 import { RfpEvaluationCard } from './RfpEvaluationCard';
 import { RfpEvaluationChat } from './RfpEvaluationChat';
+import { formatRfpStatusSubtitle } from '../../shared/utils/rfpEvaluationDisplay';
 import styles from './RfpIntakeLanding.module.css';
 
 interface RfpDetailDrawerProps {
@@ -52,8 +53,11 @@ export const RfpDetailDrawer: React.FC<RfpDetailDrawerProps> = ({ requestId, onC
             <h2 id="rfp-detail-title" className={styles.title}>{detail?.title ?? 'Request detail'}</h2>
             {detail && (
               <p className={styles.subtitle} aria-live="polite">
-                {formatLabel(detail.status)}
-                {detail.currentEvaluation ? ` · ${formatLabel(detail.currentEvaluation.verdict)}` : ''}
+                {formatRfpStatusSubtitle(
+                  detail.status,
+                  detail.currentEvaluation?.verdict,
+                  detail.reviewerDecision?.verdict,
+                )}
               </p>
             )}
           </div>
@@ -103,6 +107,7 @@ export const RfpDetailDrawer: React.FC<RfpDetailDrawerProps> = ({ requestId, onC
                 <h3 className={styles.blockTitle}>Current Evaluation</h3>
                 <RfpEvaluationCard
                   evaluation={detail.currentEvaluation}
+                  reviewerDecision={detail.reviewerDecision}
                   {...{ 'data-testid': 'rfp-evaluation-card' }}
                 />
               </section>

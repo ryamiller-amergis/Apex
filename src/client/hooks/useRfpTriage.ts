@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   RfpHumanStatus,
   RfpMentionCandidate,
+  RfpRequest,
   RfpTriageDetail,
   RfpTriageListResponse,
   RfpVerdict,
@@ -84,6 +85,32 @@ export function useRfpReopen() {
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: RFP_INTAKE_QUERY_KEY });
       qc.setQueryData(triageDetailKey(data.id), data);
+    },
+  });
+}
+
+export function useApplyRfpReviewerDecision() {
+  const qc = useQueryClient();
+  return useMutation<
+    RfpRequest,
+    Error,
+    {
+      id: string;
+      verdict: RfpVerdict;
+      rationale: string;
+      constraintsToAdd?: string;
+      sourceMessageIds?: string[];
+      reevaluate?: boolean;
+    }
+  >({
+    mutationFn: ({ id, ...body }) =>
+      apiFetch(`/api/rfp-intake/triage/requests/${id}/reviewer-decision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: RFP_INTAKE_QUERY_KEY });
     },
   });
 }

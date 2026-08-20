@@ -9,6 +9,7 @@ import {
   validateRfpIntakePayload,
   type RfpHumanStatus,
   type RfpIntakePayload,
+  type RfpVerdict,
 } from '../../shared/types/rfpIntake';
 import { getUserId } from '../utils/requestUser';
 import { isSuperAdminRequest } from '../utils/superAdmin';
@@ -32,6 +33,7 @@ import {
   reopenRequest,
   resolveRfpSubmissionRecipients,
   retryEvaluation,
+  applyReviewerDecision,
   RfpIntakeError,
   setRfpEvaluationNotificationHook,
   transitionStatus,
@@ -427,6 +429,22 @@ router.post('/triage/requests/:id/retry', ...triageManage, async (req, res, next
 router.post('/triage/requests/:id/reevaluate', ...triageManage, async (req, res, next) => {
   try {
     const updated = await reevaluate(req.params.id, getUserId(req));
+    return res.json(updated);
+  } catch (err) {
+    handleRfpError(err, res, next);
+  }
+});
+
+router.post('/triage/requests/:id/reviewer-decision', ...triageManage, async (req, res, next) => {
+  try {
+    const body = req.body ?? {};
+    const updated = await applyReviewerDecision(req.params.id, getUserId(req), {
+      verdict: body.verdict as RfpVerdict,
+      rationale: typeof body.rationale === 'string' ? body.rationale : '',
+      constraintsToAdd: typeof body.constraintsToAdd === 'string' ? body.constraintsToAdd : null,
+      sourceMessageIds: Array.isArray(body.sourceMessageIds) ? body.sourceMessageIds : [],
+      reevaluate: body.reevaluate !== false,
+    }, { isSuperAdmin: isSuperAdminRequest(req) });
     return res.json(updated);
   } catch (err) {
     handleRfpError(err, res, next);

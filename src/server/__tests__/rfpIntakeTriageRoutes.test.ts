@@ -33,6 +33,7 @@ jest.mock('../services/rfpIntakeService', () => {
     reopenRequest: jest.fn(),
     retryEvaluation: jest.fn(),
     reevaluate: jest.fn(),
+    applyReviewerDecision: jest.fn(),
     addComment: jest.fn(),
     addAttachment: jest.fn(),
     getAttachment: jest.fn(),
@@ -53,6 +54,7 @@ import {
   getTriageDetail,
   listTriageRequests,
   reopenRequest,
+  applyReviewerDecision,
   RfpIntakeError,
   transitionStatus,
 } from '../services/rfpIntakeService';
@@ -61,6 +63,7 @@ const mockedList = listTriageRequests as jest.MockedFunction<typeof listTriageRe
 const mockedDetail = getTriageDetail as jest.MockedFunction<typeof getTriageDetail>;
 const mockedTransition = transitionStatus as jest.MockedFunction<typeof transitionStatus>;
 const mockedReopen = reopenRequest as jest.MockedFunction<typeof reopenRequest>;
+const mockedApply = applyReviewerDecision as jest.MockedFunction<typeof applyReviewerDecision>;
 const mockedFlag = isFeatureEnabled as jest.MockedFunction<typeof isFeatureEnabled>;
 
 const DETAIL = {
@@ -92,6 +95,7 @@ describe('RFP intake triage routes', () => {
     mockedDetail.mockResolvedValue(DETAIL as never);
     mockedTransition.mockResolvedValue(DETAIL as never);
     mockedReopen.mockResolvedValue(DETAIL as never);
+    mockedApply.mockResolvedValue(DETAIL as never);
   });
 
   it('VT-04 AC-3 returns 403 with no RFP data when view permission is missing', async () => {
@@ -134,6 +138,40 @@ describe('RFP intake triage routes', () => {
 
     expect(response.status).toBe(200);
     expect(mockedReopen).toHaveBeenCalledWith('rfp-1', 'triage-1', 'Need more discussion', expect.any(Object));
+  });
+
+  it('records a reviewer decision through the manage endpoint', async () => {
+    const response = await request(buildApp())
+      .post('/api/rfp-intake/triage/requests/rfp-1/reviewer-decision')
+      .send({
+        verdict: 'build',
+        rationale: 'Replace Cornerstone',
+        constraintsToAdd: 'Host outside Apex',
+        reevaluate: true,
+      });
+
+    expect(response.status).toBe(200);
+    expect(mockedApply).toHaveBeenCalledWith(
+      'rfp-1',
+      'triage-1',
+      expect.objectContaining({
+        verdict: 'build',
+        rationale: 'Replace Cornerstone',
+        constraintsToAdd: 'Host outside Apex',
+        reevaluate: true,
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it('returns 403 for reviewer decision when manage permission is missing', async () => {
+    const response = await request(buildApp())
+      .post('/api/rfp-intake/triage/requests/rfp-1/reviewer-decision')
+      .set('x-deny', '1')
+      .send({ verdict: 'build', rationale: 'Replace Cornerstone' });
+
+    expect(response.status).toBe(403);
+    expect(mockedApply).not.toHaveBeenCalled();
   });
 
   it('returns 404 for triage routes when the rfp-intake flag is off', async () => {

@@ -57,7 +57,12 @@ never fires. Read the payload first.
   "advantage": "the benefit they expect (optional)",
   "constraints": "deadline, budget, compliance, or data constraints (optional)",
   "requestType": "new-app | change-existing | internal-tool | integration | reporting | other (optional)",
-  "existingSystemStack": "for change-existing only: e.g. '.NET Framework/IIS', '.NET Core', 'Node/Vite' (optional)"
+  "existingSystemStack": "for change-existing only: e.g. '.NET Framework/IIS', '.NET Core', 'Node/Vite' (optional)",
+  "reviewerDecision": {
+    "verdict": "build",
+    "rationale": "Apex-injected; omit when null",
+    "constraintsToHonor": "binding reviewer constraints already merged into constraints"
+  }
 }
 ```
 
@@ -77,6 +82,14 @@ what lets scoring skip Phase 0.
 | `requestType` | `recommendedLane` routing |
 | `existingSystemStack` | `fix-existing` local-handoff vs cloud-sandbox routing and `hostingRecommendation` |
 | `advantage` / `constraints` | priority, risk, and caveats |
+
+**Apex reviewer override (injected by triage, not the form):** When the JSON
+includes `reviewerDecision`, that is a **binding Apex triage decision**. Honor
+`reviewerDecision.verdict` and the constraints text. Do not keep a Buy/Rent call
+merely because `existingSolution` still names a vendor the reviewers have already
+decided to replace. Treat “replace the current SaaS and host outside Apex” as a
+`build` / `committed-product` / standalone-app path unless the override itself
+says otherwise. Record the override in Axis B and the caveat.
 
 Also read `context.md` and `AGENTS.md` for Apex's current capabilities so you do not
 recommend building something Apex already has, and can judge native fit. When the

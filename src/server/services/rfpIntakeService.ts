@@ -28,6 +28,7 @@ import {
   sanitizeRfpFilename,
   validateRfpAttachments,
   validateRfpIntakePayload,
+  type ApplyRfpReviewerDecisionDTO,
   type CreateRfpCommentDTO,
   type ProductIntakeEvaluationOutput,
   type RfpAttachment,
@@ -45,11 +46,13 @@ import {
   type RfpRequestDetail,
   type RfpRequestEvent,
   type RfpRequestEventType,
+  type RfpReviewerDecision,
   type RfpTriageDetail,
   type RfpTriageListQuery,
   type RfpTriageListResponse,
   type RfpVerdict,
 } from '../../shared/types/rfpIntake';
+import { appendReviewerConstraints } from '../../shared/utils/rfpReviewerDecision';
 import { getUserPermissions } from './rbacService';
 import { getSuperAdminEmails } from '../utils/superAdmin';
 import { resolveDataRoot } from '../utils/dataDir';
@@ -89,6 +92,19 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function mapReviewerDecision(row: RequestRow): RfpReviewerDecision | null {
+  if (!row.reviewerVerdict || !row.reviewerRationale || !row.reviewerId || !row.reviewerDecidedAt) {
+    return null;
+  }
+  return {
+    verdict: row.reviewerVerdict,
+    rationale: row.reviewerRationale,
+    reviewerId: row.reviewerId,
+    decidedAt: row.reviewerDecidedAt,
+    sourceMessageIds: row.reviewerSourceMessageIds ?? [],
+  };
+}
+
 function mapRequest(row: RequestRow, currentEvaluation?: RfpEvaluation | null): RfpRequest {
   return {
     id: row.id,
@@ -113,6 +129,7 @@ function mapRequest(row: RequestRow, currentEvaluation?: RfpEvaluation | null): 
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     currentEvaluation: currentEvaluation ?? null,
+    reviewerDecision: mapReviewerDecision(row),
   };
 }
 
@@ -410,6 +427,73 @@ export async function reevaluate(rfpId: string, actorId: string): Promise<RfpReq
 
   await appendEvent(rfpId, 'reevaluation-requested', actorId, null);
   await startEvaluation(rfpId);
+  const updated = await getRequestById(rfpId);
+  if (!updated) throw new RfpIntakeError('RFP not found', 404, 'NOT_FOUND');
+  return updated;
+}
+
+function sanitizeSourceMessageIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is string => typeof item === 'string' && item.trim() !== '')
+    .map((item) => item.trim())
+    .slice(0, 20);
+}
+
+export async function applyReviewerDecision(
+  rfpId: string,
+  actorId: string,
+  dto: ApplyRfpReviewerDecisionDTO,
+  options?: { isSuperAdmin?: boolean },
+): Promise<RfpRequest> {
+  if (!options?.isSuperAdmin) await requireManage(actorId);
+  if (!isRfpVerdict(dto.verdict)) {
+    throw new RfpIntakeError('verdict is invalid', 400, 'VALIDATION');
+  }
+  const rationale = typeof dto.rationale === 'string' ? dto.rationale.trim() : '';
+  if (!rationale) {
+    throw new RfpIntakeError('rationale is required', 400, 'VALIDATION');
+  }
+
+  const request = await getRequestById(rfpId);
+  if (!request) throw new RfpIntakeError('RFP not found', 404, 'NOT_FOUND');
+  if (request.aiStatus === 'evaluating') {
+    throw new RfpIntakeError('An evaluation is already in progress', 409, 'INVALID_STATE');
+  }
+
+  const constraintsToAdd = typeof dto.constraintsToAdd === 'string' ? dto.constraintsToAdd.trim() : '';
+  const nextConstraints = appendReviewerConstraints(request.constraints, rationale, constraintsToAdd || null);
+  const sourceMessageIds = sanitizeSourceMessageIds(dto.sourceMessageIds);
+  const shouldReevaluate = dto.reevaluate !== false;
+  const decidedAt = nowIso();
+
+  await db.update(rfpRequests)
+    .set({
+      constraints: nextConstraints,
+      reviewerVerdict: dto.verdict,
+      reviewerRationale: rationale,
+      reviewerId: actorId,
+      reviewerDecidedAt: decidedAt,
+      reviewerSourceMessageIds: sourceMessageIds,
+      ...(shouldReevaluate
+        ? { aiStatus: 'evaluating' as const, aiThreadId: null, status: 'evaluating' as const }
+        : {}),
+      updatedAt: decidedAt,
+    })
+    .where(eq(rfpRequests.id, rfpId));
+
+  await appendEvent(rfpId, 'reviewer-decision-applied', actorId, {
+    verdict: dto.verdict,
+    previousAiVerdict: request.currentEvaluation?.verdict ?? null,
+    reevaluate: shouldReevaluate,
+    sourceMessageIds,
+  });
+
+  if (shouldReevaluate) {
+    await appendEvent(rfpId, 'reevaluation-requested', actorId, null);
+    await startEvaluation(rfpId);
+  }
+
   const updated = await getRequestById(rfpId);
   if (!updated) throw new RfpIntakeError('RFP not found', 404, 'NOT_FOUND');
   return updated;

@@ -42,6 +42,7 @@ import { getUserPermissions } from '../services/rbacService';
 import { autoStartEvaluation } from '../services/rfpEvaluationOrchestrationService';
 import {
   answerClarification,
+  applyReviewerDecision,
   createRequest,
   persistSuccessfulEvaluation,
   reevaluate,
@@ -295,6 +296,75 @@ describe('PBI-002 negative clarification VT-10', () => {
       status: 403,
       code: 'FORBIDDEN',
     });
+    expect(mockedAutoStart).not.toHaveBeenCalled();
+  });
+});
+
+describe('applyReviewerDecision', () => {
+  const evaluatedRow = {
+    ...REQUEST_ROW,
+    status: 'evaluated',
+    aiStatus: 'complete',
+    currentEvaluationId: 'eval-1',
+    constraints: 'Keep data in tenant',
+  };
+
+  beforeEach(() => {
+    mockedDb.query.rfpRequests.findFirst.mockResolvedValue(evaluatedRow);
+    mockedDb.query.rfpEvaluations.findFirst.mockResolvedValue({
+      id: 'eval-1',
+      rfpRequestId: 'rfp-1',
+      version: 1,
+      ...BUILD_OUTPUT,
+      verdict: 'buy',
+      rawOutput: { ...BUILD_OUTPUT, verdict: 'buy' },
+      createdAt: NOW,
+    });
+  });
+
+  it('rejects the requestor without rfp-intake:manage', async () => {
+    mockedGetUserPermissions.mockResolvedValue(new Set());
+    await expect(applyReviewerDecision('rfp-1', 'owner-1', {
+      verdict: 'build',
+      rationale: 'Replace Cornerstone',
+    })).rejects.toMatchObject({ status: 403, code: 'FORBIDDEN' });
+    expect(mockUpdateSet).not.toHaveBeenCalled();
+    expect(mockedAutoStart).not.toHaveBeenCalled();
+  });
+
+  it('records the reviewer call, appends constraints, and re-runs evaluation', async () => {
+    await applyReviewerDecision('rfp-1', 'triage-1', {
+      verdict: 'build',
+      rationale: 'Cornerstone is unused; host a standalone app outside Apex',
+      constraintsToAdd: 'No Power Platform staff. Replace Cornerstone.',
+      sourceMessageIds: ['m-ai'],
+    });
+
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+      reviewerVerdict: 'build',
+      reviewerRationale: 'Cornerstone is unused; host a standalone app outside Apex',
+      reviewerId: 'triage-1',
+      reviewerSourceMessageIds: ['m-ai'],
+      aiStatus: 'evaluating',
+      status: 'evaluating',
+      constraints: expect.stringContaining('[Apex reviewer decision]'),
+    }));
+    expect(mockedAutoStart).toHaveBeenCalledWith('rfp-1');
+  });
+
+  it('skips the re-run when reevaluate is false', async () => {
+    await applyReviewerDecision('rfp-1', 'triage-1', {
+      verdict: 'build',
+      rationale: 'Build it as a standalone app',
+      reevaluate: false,
+    });
+
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+      reviewerVerdict: 'build',
+    }));
+    expect(mockUpdateSet).not.toHaveBeenCalledWith(expect.objectContaining({
+      aiStatus: 'evaluating',
+    }));
     expect(mockedAutoStart).not.toHaveBeenCalled();
   });
 });

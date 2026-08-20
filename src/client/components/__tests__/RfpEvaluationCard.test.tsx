@@ -42,4 +42,21 @@ describe('RfpEvaluationCard', () => {
     expect(screen.getByTestId('rfp-evaluation-rationale').textContent).toMatch(/Axis A is moderate/);
     expect(screen.getByTestId('rfp-evaluation-rationale').textContent).toMatch(/Host on vendor SaaS/);
   });
+
+  it('shows the reviewer override beside the stored AI call', () => {
+    render(
+      <RfpEvaluationCard
+        evaluation={evaluation}
+        reviewerDecision={{
+          verdict: 'build',
+          rationale: 'Replace unused Cornerstone and host outside Apex.',
+          reviewerId: 'triage-1',
+          decidedAt: '2026-08-20T00:00:00.000Z',
+          sourceMessageIds: ['m-ai'],
+        }}
+      />,
+    );
+    expect(screen.getByTestId('rfp-reviewer-decision')).toHaveTextContent(/AI: Buy/i);
+    expect(screen.getByTestId('rfp-reviewer-decision')).toHaveTextContent(/Reviewer: Build/i);
+  });
 });

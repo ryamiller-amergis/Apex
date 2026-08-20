@@ -2658,6 +2658,11 @@ export const rfpRequests = pgTable('rfp_requests', {
   sourceProject: text('source_project').notNull(),
   currentEvaluationId: uuid('current_evaluation_id').references((): AnyPgColumn => rfpEvaluations.id, { onDelete: 'set null' }),
   clarificationUsed: boolean('clarification_used').notNull().default(false),
+  reviewerVerdict: text('reviewer_verdict').$type<RfpVerdict>(),
+  reviewerRationale: text('reviewer_rationale'),
+  reviewerId: text('reviewer_id').references(() => appUsers.oid, { onDelete: 'set null' }),
+  reviewerDecidedAt: timestamp('reviewer_decided_at', { withTimezone: true, mode: 'string' }),
+  reviewerSourceMessageIds: jsonb('reviewer_source_message_ids').$type<string[]>().notNull().default([]),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({

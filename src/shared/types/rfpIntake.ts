@@ -107,6 +107,7 @@ export const RFP_REQUEST_EVENT_TYPES = [
   'reopened',
   'comment-added',
   'attachment-added',
+  'reviewer-decision-applied',
 ] as const;
 export type RfpRequestEventType = (typeof RFP_REQUEST_EVENT_TYPES)[number];
 
@@ -333,6 +334,7 @@ export interface RfpRequest {
   createdAt: string;
   updatedAt: string;
   currentEvaluation?: RfpEvaluation | null;
+  reviewerDecision: RfpReviewerDecision | null;
 }
 
 export interface RfpComment {
@@ -361,6 +363,29 @@ export interface RfpEvaluationChatMessage {
 
 export interface CreateRfpEvaluationChatDTO {
   message: string;
+}
+
+/** Recorded Apex-triage override; the original AI evaluation versions stay immutable. */
+export interface RfpReviewerDecision {
+  verdict: RfpVerdict;
+  rationale: string;
+  reviewerId: string;
+  decidedAt: string;
+  sourceMessageIds: string[];
+}
+
+export interface SuggestedReviewerDecision {
+  verdict: RfpVerdict;
+  rationale: string;
+  constraintsToAdd: string;
+}
+
+export interface ApplyRfpReviewerDecisionDTO {
+  verdict: RfpVerdict;
+  rationale: string;
+  constraintsToAdd?: string | null;
+  sourceMessageIds?: string[];
+  reevaluate?: boolean;
 }
 
 export interface RfpAttachment {

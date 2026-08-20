@@ -93,6 +93,7 @@ const BASE_REQUEST: RfpRequest = {
   createdAt: NOW,
   updatedAt: NOW,
   currentEvaluation: null,
+  reviewerDecision: null,
 };
 
 function thenableInsert(rows: unknown[]) {

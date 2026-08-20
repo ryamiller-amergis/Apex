@@ -51,6 +51,10 @@ const REQUEST = {
   aiStatus: 'complete',
   sourceProject: 'Apex',
   currentEvaluationId: 'ev-1',
+  clarificationUsed: false,
+  createdAt: '2026-08-20T00:00:00.000Z',
+  updatedAt: '2026-08-20T00:00:00.000Z',
+  reviewerDecision: null,
   currentEvaluation: {
     id: 'ev-1',
     rfpRequestId: 'rfp-1',
@@ -108,7 +112,7 @@ describe('rfpEvaluationChatService', () => {
   it('asks Bedrock with the evaluation and stores both turns', async () => {
     const created = await askEvaluationChat('rfp-1', 'user-1', 'Is a build valid?');
     expect(mockedBedrock).toHaveBeenCalledWith(
-      expect.stringContaining('standalone apps via the interview flow'),
+      expect.stringContaining(':::reviewer-decision'),
       expect.objectContaining({ feature: 'rfp-intake', entityId: 'rfp-1' }),
     );
     expect(created).toHaveLength(2);

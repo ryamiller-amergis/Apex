@@ -15,6 +15,7 @@ import {
   RFP_HUMAN_STATUSES,
   RFP_INTAKE_MANAGE,
   RFP_INTAKE_VIEW,
+  RFP_REQUEST_EVENT_TYPES,
   RFP_VERDICTS,
 } from '../../shared/types/rfpIntake';
 
@@ -82,6 +83,8 @@ describe('FEAT-001 TBI-001 RFP persistence and shared contracts', () => {
       expect.arrayContaining([
         'id', 'ownerId', 'status', 'aiStatus', 'aiThreadId',
         'sourceProject', 'currentEvaluationId', 'clarificationUsed',
+        'reviewerVerdict', 'reviewerRationale', 'reviewerId',
+        'reviewerDecidedAt', 'reviewerSourceMessageIds',
       ]),
     );
     expect(Object.keys(getTableColumns(rfpEvaluations))).toEqual(
@@ -95,6 +98,7 @@ describe('FEAT-001 TBI-001 RFP persistence and shared contracts', () => {
     ]);
     expect(RFP_HUMAN_STATUSES).toContain('evaluating');
     expect(RFP_HUMAN_STATUSES).toContain('evaluated');
+    expect(RFP_REQUEST_EVENT_TYPES).toContain('reviewer-decision-applied');
     expect(RFP_AI_STATUSES).toEqual(['evaluating', 'failed', 'complete']);
     expect(PRODUCT_INTAKE_EVALUATION_OUTPUT_FILE).toBe('product-intake-evaluation.json');
     expect(parseProductIntakeEvaluationOutput(VALID_OUTPUT)).toEqual(VALID_OUTPUT);

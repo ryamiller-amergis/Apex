@@ -1,9 +1,15 @@
-import { formatRationaleMarkdown } from '../../shared/utils/rfpEvaluationDisplay';
+import { formatRationaleMarkdown, formatRfpStatusSubtitle } from '../../shared/utils/rfpEvaluationDisplay';
 
 describe('formatRationaleMarkdown', () => {
   it('keeps markdown with headings', () => {
     const input = '## Call\nBuild it.\n\n## Caveat\nOwner is unassigned.';
     expect(formatRationaleMarkdown(input)).toBe(input);
+  });
+
+  it('labels AI and reviewer verdicts in the subtitle', () => {
+    expect(formatRfpStatusSubtitle('evaluated', 'buy', 'build')).toBe(
+      'Evaluated · AI: Buy · Reviewer: Build',
+    );
   });
 
   it('splits semicolon-packed legacy rationale into paragraphs', () => {

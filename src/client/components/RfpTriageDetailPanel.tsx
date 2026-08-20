@@ -4,6 +4,7 @@ import { validateRfpAttachments } from '../../shared/types/rfpIntake';
 import { useAddRfpComment } from '../hooks/useRfpIntake';
 import { useRfpAttachmentUpload, useRfpMentionCandidates, useRfpTriageDetail } from '../hooks/useRfpTriage';
 import { formatLabel, RfpStatusControl } from './RfpStatusControl';
+import { formatRfpStatusSubtitle } from '../../shared/utils/rfpEvaluationDisplay';
 import { RfpEvaluationCard } from './RfpEvaluationCard';
 import { RfpEvaluationChat } from './RfpEvaluationChat';
 import styles from './RfpQueueView.module.css';
@@ -98,8 +99,11 @@ export const RfpTriageDetailPanel: React.FC<RfpTriageDetailPanelProps> = ({
             <h2 id="rfp-triage-title" className={styles.title}>{detail?.title ?? 'Request detail'}</h2>
             {detail && (
               <p className={styles.subtitle} aria-live="polite">
-                {formatLabel(detail.status)}
-                {detail.currentEvaluation ? ` · ${formatLabel(detail.currentEvaluation.verdict)}` : ''}
+                {formatRfpStatusSubtitle(
+                  detail.status,
+                  detail.currentEvaluation?.verdict,
+                  detail.reviewerDecision?.verdict,
+                )}
               </p>
             )}
           </div>
@@ -131,6 +135,7 @@ export const RfpTriageDetailPanel: React.FC<RfpTriageDetailPanelProps> = ({
                 <h3 className={styles.blockTitle}>Current Evaluation</h3>
                 <RfpEvaluationCard
                   evaluation={detail.currentEvaluation}
+                  reviewerDecision={detail.reviewerDecision}
                   {...{ 'data-testid': 'rfp-evaluation-card' }}
                 />
               </section>
@@ -138,7 +143,11 @@ export const RfpTriageDetailPanel: React.FC<RfpTriageDetailPanelProps> = ({
 
             {detail.currentEvaluation && (
               <section className={styles.block}>
-                <RfpEvaluationChat requestId={detail.id} />
+                <RfpEvaluationChat
+                  requestId={detail.id}
+                  canManage={canManage}
+                  reviewerDecision={detail.reviewerDecision}
+                />
               </section>
             )}
 

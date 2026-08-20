@@ -108,6 +108,7 @@ const FAKE_REQUEST: RfpRequest = {
   clarificationUsed: false,
   createdAt: '2026-08-19T12:00:00.000Z',
   updatedAt: '2026-08-19T12:00:00.000Z',
+  reviewerDecision: null,
 };
 
 const FAKE_SKILL_CONFIG = {
@@ -173,6 +174,28 @@ describe('autoStartEvaluation TBI-002', () => {
     }));
     expect(mockedSetThread).toHaveBeenCalledWith('rfp-1', 'thread-1');
     expect(isWatcherActive('rfp-1')).toBe(true);
+  });
+
+  it('includes a binding reviewer decision in kickoff context', async () => {
+    mockedGetRequest.mockResolvedValue({
+      ...FAKE_REQUEST,
+      reviewerDecision: {
+        verdict: 'build',
+        rationale: 'Replace unused Cornerstone',
+        reviewerId: 'triage-1',
+        decidedAt: '2026-08-19T12:00:00.000Z',
+        sourceMessageIds: ['m-ai'],
+      },
+      constraints: '[Apex reviewer decision] Replace unused Cornerstone',
+    });
+    mockedResolveSkillConfig.mockResolvedValue(FAKE_SKILL_CONFIG as any);
+    mockedCreateThread.mockResolvedValue(FAKE_THREAD as any);
+
+    await autoStartEvaluation('rfp-1');
+
+    expect(mockedCreateThread).toHaveBeenCalledWith('system', expect.objectContaining({
+      freeformContext: expect.stringContaining('Replace unused Cornerstone'),
+    }));
   });
 
   it('marks failed without a thread when productIntakeEvaluationSkillPath is missing', async () => {

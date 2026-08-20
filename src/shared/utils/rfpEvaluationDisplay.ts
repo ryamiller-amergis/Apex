@@ -23,6 +23,21 @@ export function formatRationaleMarkdown(rationale: string): string {
   return chunks.join('\n\n');
 }
 
+export function formatVerdictLabel(value: string): string {
+  return value.split('-').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
+}
+
+export function formatRfpStatusSubtitle(
+  status: string,
+  aiVerdict?: string | null,
+  reviewerVerdict?: string | null,
+): string {
+  const parts = [formatVerdictLabel(status)];
+  if (aiVerdict) parts.push(`AI: ${formatVerdictLabel(aiVerdict)}`);
+  if (reviewerVerdict) parts.push(`Reviewer: ${formatVerdictLabel(reviewerVerdict)}`);
+  return parts.join(' · ');
+}
+
 function toSentence(value: string): string {
   if (/[.!?]$/.test(value)) return value;
   return `${value}.`;

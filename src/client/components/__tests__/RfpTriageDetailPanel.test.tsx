@@ -25,6 +25,7 @@ jest.mock('../../hooks/useRfpTriage', () => ({
   useRfpMentionCandidates: jest.fn(),
   useRfpStatusTransition: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false, isError: false, error: null })),
   useRfpReopen: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false, isError: false, error: null })),
+  useApplyRfpReviewerDecision: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false, isError: false, error: null })),
 }));
 
 jest.mock('react-markdown', () => ({
@@ -59,6 +60,7 @@ const detail = {
   clarificationUsed: false,
   createdAt: '2026-08-19T12:00:00.000Z',
   updatedAt: '2026-08-19T12:00:00.000Z',
+  reviewerDecision: null,
   currentEvaluation: {
     id: 'ev-1',
     rfpRequestId: 'rfp-1',
