@@ -396,3 +396,11 @@ output "repo_read_service_app_settings" {
     token = "REPO_READ_SERVICE_TOKEN"
   }
 }
+
+output "github_app_setting_names" {
+  description = "Non-secret app setting contract for GitHub repo checkout (same keys on App Service and the repo-read Container App)"
+  value = {
+    org   = "GITHUB_ORG"
+    token = "GITHUB_TOKEN"
+  }
+}

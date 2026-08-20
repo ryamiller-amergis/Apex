@@ -50,6 +50,7 @@ RBAC defaults to least-privilege per container (or queue). The shared Apex App S
    - Update Azure DevOps organization URL
    - Add your Personal Access Token (PAT)
    - Set project name
+   - Copy App Service `GITHUB_ORG` / `GITHUB_TOKEN` into `github_org` / `github_token` so GitHub projects (including Apex) can be cloned by the repo-read Container App
    - Customize resource names if needed
 
 4. **Initialize Terraform**:
@@ -177,6 +178,8 @@ Dev and prod **must not share state**. See [Workspaces and environments](#worksp
 | `ado_org` | Azure DevOps org URL | (required) |
 | `ado_pat` | Azure DevOps PAT | (required) |
 | `ado_project` | Azure DevOps project | (required) |
+| `github_org` | GitHub org for checkout (`GITHUB_ORG`; not the Apex product name) | `""` |
+| `github_token` | GitHub PAT for clone/fetch (`GITHUB_TOKEN`; same as App Service) | `null` |
 
 The App Service plan uses the fixed `app_service_worker_count`. Production
 autoscaling is intentionally deferred until Interview and other long-running AI
@@ -681,9 +684,14 @@ After apply:
    checkout that was never materialized — a silent hang rather than an error.
 3. Confirm `REPO_READ_SERVICE_TOKEN` matches `ai_runs_runner_callback_token` on
    both hosts.
-4. Target the `repo-read-service` feature flag in Platform Admin. Until then
+4. Confirm the Container App has `GITHUB_ORG` / `GITHUB_TOKEN` matching App
+   Service (copy from the live web app settings into tfvars). Without them,
+   Azure DevOps projects still clone; GitHub projects (Apex) fail on fetch
+   unless that SHA was already restored from Blob. Fine-grained `github_pat_`
+   tokens need Contents: Read and Metadata: Read on each GitHub skill repo.
+5. Target the `repo-read-service` feature flag in Platform Admin. Until then
    Apex keeps in-process checkout reads even if the Container App exists.
-5. Smoke: `GET https://<fqdn>/healthz` returns `{ ok: true }`. An unauthenticated
+6. Smoke: `GET https://<fqdn>/healthz` returns `{ ok: true }`. An unauthenticated
    `POST /v1/read` must return 401/503.
 
 Do not `terraform apply` this module until the in-process `BareRepoReader` path
@@ -757,6 +765,8 @@ The following environment variables are automatically configured in App Service:
 - `ADO_ORG` - Azure DevOps organization URL
 - `ADO_PAT` - Azure DevOps Personal Access Token
 - `ADO_PROJECT` - Azure DevOps project name
+- `GITHUB_ORG` - GitHub organization for skill-repo checkout
+- `GITHUB_TOKEN` - GitHub PAT (fine-grained `github_pat_…` or classic); same secret the repo-read Container App uses
 - `NODE_ENV` - Set to `production`
 - `VITE_ADO_ORG` - ADO org for client-side
 - `VITE_ADO_PROJECT` - ADO project for client-side

@@ -110,6 +110,12 @@ resource "azurerm_linux_web_app" "main" {
     "ADO_AREA_PATH"        = var.ado_area_path
     "ADO_ALLOWED_PROJECTS" = var.ado_allowed_projects
 
+    # GitHub (skill catalog + repo checkout). Copy the live App Service
+    # GITHUB_ORG / GITHUB_TOKEN values. ignore_changes on app_settings means
+    # deploy.yml remains the runtime writer after first apply.
+    "GITHUB_ORG"   = var.github_org
+    "GITHUB_TOKEN" = coalesce(var.github_token, "")
+
     # Vite / client-side
     "VITE_ADO_ORG"     = var.ado_org
     "VITE_ADO_PROJECT" = var.ado_project

@@ -12,6 +12,7 @@ locals {
   repo_read_service_enabled  = var.enable_repo_read_service
   repo_read_service_app_name = coalesce(var.repo_read_service_container_app_name, "ca-apex-repo-read-${var.environment}")
   repo_read_service_data_dir = "/tmp/ai-pilot"
+  repo_read_github_token     = var.github_token != null && var.github_token != ""
 }
 
 resource "azurerm_role_assignment" "repo_read_service_blob_contributor" {
@@ -56,6 +57,14 @@ resource "azurerm_container_app" "repo_read_service" {
   secret {
     name  = "ado-pat"
     value = var.ado_pat
+  }
+
+  dynamic "secret" {
+    for_each = local.repo_read_github_token ? [1] : []
+    content {
+      name  = "github-token"
+      value = var.github_token
+    }
   }
 
   ingress {
@@ -120,6 +129,17 @@ resource "azurerm_container_app" "repo_read_service" {
         secret_name = "ado-pat"
       }
       env {
+        name  = "GITHUB_ORG"
+        value = var.github_org
+      }
+      dynamic "env" {
+        for_each = local.repo_read_github_token ? [1] : []
+        content {
+          name        = "GITHUB_TOKEN"
+          secret_name = "github-token"
+        }
+      }
+      env {
         name        = "DATABASE_URL"
         secret_name = "database-url"
       }
@@ -141,11 +161,12 @@ resource "azurerm_container_app" "repo_read_service" {
       # is killed mid-read and has to re-materialize its mirror on the way back,
       # which reads to the caller as the search hanging. Grep over a bare mirror
       # has to inflate blobs, so slow is normal here and must not mean unhealthy.
+      # azurerm ~> 3.0 has no initial_delay on these probes; slack comes from
+      # interval_seconds * failure_count_threshold instead.
       startup_probe {
         transport               = "HTTP"
         port                    = var.repo_read_service_target_port
         path                    = "/healthz"
-        initial_delay           = 5
         interval_seconds        = 10
         timeout                 = 5
         failure_count_threshold = 30
@@ -155,7 +176,6 @@ resource "azurerm_container_app" "repo_read_service" {
         transport               = "HTTP"
         port                    = var.repo_read_service_target_port
         path                    = "/healthz"
-        initial_delay           = 30
         interval_seconds        = 30
         timeout                 = 10
         failure_count_threshold = 10

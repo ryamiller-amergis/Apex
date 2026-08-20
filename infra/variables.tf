@@ -87,6 +87,19 @@ variable "ado_project" {
   type        = string
 }
 
+variable "github_org" {
+  description = "Default GitHub organization for repo checkout (GITHUB_ORG). Use the org that owns Apex, not the Apex product name. Same value as the App Service GITHUB_ORG setting."
+  type        = string
+  default     = ""
+}
+
+variable "github_token" {
+  description = "GitHub fine-grained or classic PAT for git clone/fetch and the skill catalog (GITHUB_TOKEN). Same value as the App Service GITHUB_TOKEN setting (deploy maps GH_SKILL_TOKEN). Null skips wiring on the repo-read Container App."
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
 variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)

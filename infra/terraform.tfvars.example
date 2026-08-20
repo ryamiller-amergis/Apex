@@ -13,6 +13,13 @@ ado_org     = "https://dev.azure.com/your-org"
 ado_pat     = "your-pat-token-here"
 ado_project = "YourProject"
 
+# GitHub Configuration (Apex and other github skillProvider projects)
+# Copy the live App Service GITHUB_ORG / GITHUB_TOKEN into gitignored
+# terraform.tfvars — never put a real PAT in this example file.
+# Fine-grained github_pat_… tokens need Contents: Read + Metadata: Read.
+github_org   = "ryamiller-amergis"
+github_token = "github_pat_replace-me"
+
 # Optional: Override default tags
 # tags = {
 #   ManagedBy   = "Terraform"
