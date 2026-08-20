@@ -12,6 +12,7 @@ import { readOutputPrd, readOutputBacklog, sendMessage, createThread as createCh
 import { isThreadRunAlive } from './agentRunReaperService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
 import { isPrdGenerationOutputComplete } from '../../shared/utils/prdGenerationOutput';
+import { normalizeBacklogUserStories, resolveUserStoryIWant } from '../../shared/utils/userStory';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import { createNotification } from './notificationService';
 import { isAdminUser } from '../utils/rbacHelpers';
@@ -441,10 +442,10 @@ export async function getPrd(id: string): Promise<Prd | null> {
       },
     ),
     content: row.content,
-    backlogJson: row.backlogJson ?? undefined,
+    backlogJson: normalizeBacklogUserStories(row.backlogJson) ?? undefined,
     prdAssistantThreadId: row.prdAssistantThreadId ?? null,
     proposedContent: row.proposedContent ?? null,
-    proposedBacklogJson: row.proposedBacklogJson ?? undefined,
+    proposedBacklogJson: normalizeBacklogUserStories(row.proposedBacklogJson) ?? undefined,
     designDocApproverIds: row.designDocApproverIds ?? undefined,
     validationThreadId: row.validationThreadId ?? null,
     validationScore: row.validationScore ?? null,
@@ -501,7 +502,7 @@ export async function updatePrdBacklog(
 
   await db
     .update(prds)
-    .set({ backlogJson: backlog as any, updatedAt: new Date().toISOString() })
+    .set({ backlogJson: normalizeBacklogUserStories(backlog) as any, updatedAt: new Date().toISOString() })
     .where(eq(prds.id, id));
 }
 
@@ -826,6 +827,8 @@ export async function syncPrdContent(
     } catch (err) {
       console.warn(`[prdService] Persona enrichment skipped for PRD ${id}:`, err);
     }
+
+    resolvedBacklog = normalizeBacklogUserStories(resolvedBacklog);
   }
 
   let stampedContent = content;
@@ -1104,10 +1107,11 @@ function buildPbiDescriptionHtml(pbi: SelectedBacklogPBI): string {
   let html = '';
 
   const us = pbi.userStory;
-  if (us && (us.persona || us.iWant || us.soThat)) {
+  if (us && (us.persona || us.iWant || us.soThat || (us as { want?: string }).want)) {
     const parts: string[] = [];
+    const iWant = resolveUserStoryIWant(us);
     if (us.persona) parts.push(`As <em>${esc(us.persona)}</em>`);
-    if (us.iWant)   parts.push(`I want to ${esc(us.iWant)}`);
+    if (iWant)      parts.push(`I want to ${esc(iWant)}`);
     if (us.soThat)  parts.push(`so that ${esc(us.soThat)}`);
     html += `<p><strong>User Story</strong></p><p>${parts.join(', ')}.</p>`;
   }

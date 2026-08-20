@@ -8,6 +8,8 @@
 // into the `parentPath` breadcrumb on each child change so the BA sees context
 // without noise.
 
+import { resolveUserStoryIWant } from '../../shared/utils/userStory';
+
 /* ── Backlog shapes (mirrors BacklogViewer local types) ──────────────────── */
 
 interface AcceptanceCriterion {
@@ -19,6 +21,7 @@ interface AcceptanceCriterion {
 interface UserStory {
   persona?: string;
   iWant?: string;
+  want?: string;
   soThat?: string;
 }
 
@@ -144,8 +147,9 @@ function formatAc(ac: AcceptanceCriterion): string {
 
 function formatUserStory(us: UserStory): string {
   const parts: string[] = [];
+  const iWant = resolveUserStoryIWant(us);
   if (us.persona) parts.push(`As a ${us.persona}`);
-  if (us.iWant) parts.push(`I want ${us.iWant}`);
+  if (iWant) parts.push(`I want to ${iWant}`);
   if (us.soThat) parts.push(`So that ${us.soThat}`);
   return parts.join(', ');
 }
