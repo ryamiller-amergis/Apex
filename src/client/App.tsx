@@ -761,7 +761,12 @@ function App() {
 
           {canAccessHome ? (
             <div
-              style={currentView === 'home' ? undefined : { display: 'none' }}
+              className="agent-home-keepalive"
+              style={
+                currentView === 'home'
+                  ? undefined
+                  : { display: 'none' }
+              }
               aria-hidden={currentView !== 'home'}
             >
               <ErrorBoundary FallbackComponent={ViewErrorFallback}>
