@@ -7,6 +7,7 @@ import {
   kickBackgroundMirrorRefresh,
   resetBackgroundMirrorRefreshesForTests,
   REPO_SYNCING_MESSAGE,
+  type MirrorHydrationDependencies,
 } from '../services/repoRead/mirrorHydration';
 import type { RepositoryIdentity } from '../../shared/types/repoReader';
 
@@ -25,25 +26,31 @@ function deps(overrides: {
   kick?: jest.Mock;
   rehydrateBare?: jest.Mock;
   ensureRepoCache?: jest.Mock;
-}) {
+}): MirrorHydrationDependencies {
   const hasCommit = overrides.hasCommit ?? false;
-  return {
-    getRepoCacheDir: jest.fn().mockReturnValue(cacheDir),
-    isUsableBareMirror: jest.fn().mockReturnValue(overrides.usable ?? true),
-    mirrorHasCommit: jest.fn().mockImplementation(async () =>
-      typeof hasCommit === 'function' ? hasCommit() : hasCommit,
-    ),
-    resolveBranch: jest.fn().mockResolvedValue('development'),
-    rehydrateBare: overrides.rehydrateBare ?? jest.fn().mockResolvedValue({
-      status: 'remote-fallback',
-    }),
-    ensureRepoCache: overrides.ensureRepoCache ?? jest.fn().mockResolvedValue({
+  const usable = overrides.usable ?? true;
+  const kick = overrides.kick ?? jest.fn();
+  const rehydrateBare =
+    overrides.rehydrateBare ??
+    jest.fn().mockResolvedValue({ status: 'remote-fallback' });
+  const ensureRepoCache =
+    overrides.ensureRepoCache ??
+    jest.fn().mockResolvedValue({
       cacheDir,
       baseSha: identity.sha,
       stale: false,
       remote: { url: 'https://example', env: {}, secret: '' },
-    }),
-    kickBackgroundRefresh: overrides.kick ?? jest.fn(),
+    });
+  return {
+    getRepoCacheDir: () => cacheDir,
+    isUsableBareMirror: () => usable,
+    mirrorHasCommit: async () =>
+      typeof hasCommit === 'function' ? hasCommit() : hasCommit,
+    resolveBranch: async () => 'development',
+    rehydrateBare: (identityArg, destination) =>
+      rehydrateBare(identityArg, destination),
+    ensureRepoCache: (options) => ensureRepoCache(options),
+    kickBackgroundRefresh: (options, sha) => kick(options, sha),
   };
 }
 

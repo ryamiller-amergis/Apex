@@ -6,14 +6,14 @@ import {
   getRepoCacheDir,
   type RepoCacheOptions,
 } from '../repoCacheService';
-import { isUsableBareMirror } from './mirrorStore';
 
 export const REPO_SYNCING_MESSAGE =
   'Repository is syncing the pinned commit. Retry this question in a minute.';
 
 export interface MirrorHydrationDependencies {
   getRepoCacheDir: typeof getRepoCacheDir;
-  isUsableBareMirror: typeof isUsableBareMirror;
+  /** Boolean on purpose — a type predicate cannot be mocked under tsc. */
+  isUsableBareMirror: (mirrorPath: string | undefined) => boolean;
   mirrorHasCommit: (mirrorPath: string, sha: string) => Promise<boolean>;
   resolveBranch: (identity: RepositoryIdentity) => Promise<string>;
   rehydrateBare: (
