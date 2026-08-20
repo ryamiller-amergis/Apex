@@ -27,7 +27,30 @@ const SOLO_LETTER_RE = /^[\s\-*]*([a-eA-E])\s*$/;
 
 /** Agent "Other — describe" lines; UI already provides Other / free-form. */
 const OTHER_OPTION_RE = /^other\b/i;
-const ORPHAN_OTHER_LINE_RE = /^[\s\-*]*[a-eA-E][.)]\s+[Oo]ther\b/;
+
+/**
+ * Strip common inline markdown so "Other" detection works when the agent
+ * wraps the label (e.g. `E. **Other — describe** (…)`).
+ */
+function stripInlineMarkdown(text: string): string {
+  return text
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/_([^_]+)_/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .trim();
+}
+
+/** True for agent "Other / describe" choice text (plain or markdown-wrapped). */
+export function isAgentOtherOptionText(text: string): boolean {
+  return OTHER_OPTION_RE.test(stripInlineMarkdown(text));
+}
+
+function isOrphanOtherLine(line: string): boolean {
+  const match = line.match(/^[\s\-*]*[a-eA-E](?:[.)]\s+|\s+)(.+)$/);
+  return match ? isAgentOtherOptionText(match[1]) : false;
+}
 
 /**
  * Try to match an option starting at line index `i`.
@@ -51,10 +74,6 @@ function tryMatchOption(lines: string[], i: number): [string, string, number] | 
   return null;
 }
 
-function isOtherOptionText(text: string): boolean {
-  return OTHER_OPTION_RE.test(text.trim());
-}
-
 export function parseAgentMessage(text: string): MessagePart[] {
   const lines = text.split('\n');
   const parts: MessagePart[] = [];
@@ -72,7 +91,7 @@ export function parseAgentMessage(text: string): MessagePart[] {
   let i = 0;
   while (i < lines.length) {
     // Swallow orphan "e. Other — describe" lines that are not part of a choice block.
-    if (ORPHAN_OTHER_LINE_RE.test(lines[i])) {
+    if (isOrphanOtherLine(lines[i])) {
       i++;
       continue;
     }
@@ -83,13 +102,13 @@ export function parseAgentMessage(text: string): MessagePart[] {
       while (i < lines.length) {
         const m = tryMatchOption(lines, i);
         if (m) {
-          if (!isOtherOptionText(m[1])) {
+          if (!isAgentOtherOptionText(m[1])) {
             options.push({ letter: m[0], text: m[1] });
           }
           i += m[2];
         } else if (lines[i].trim() === '' && i + 1 < lines.length && tryMatchOption(lines, i + 1)) {
           i++;
-        } else if (ORPHAN_OTHER_LINE_RE.test(lines[i])) {
+        } else if (isOrphanOtherLine(lines[i])) {
           i++;
         } else {
           break;

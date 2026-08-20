@@ -189,6 +189,26 @@ describe('parseAgentMessage', () => {
     expect((parts[0] as ChoiceBlock).options).toHaveLength(3);
   });
 
+  it('strips bold-wrapped Other options like E. **Other — describe** (…)', () => {
+    const text = [
+      'Which fields are sensitive in this context, and what handling do you require?',
+      'a. **Assignee names/emails** — mask in logs only',
+      'b. **Work item titles/descriptions** — exclude from API responses',
+      'c. **All ADO fields shown in the widget** — mask in logs',
+      'd. **All three** — encrypt at rest, mask in logs, exclude from API responses',
+      'e. **Other — describe** (same fields as Calendar; no additional handling beyond existing Calendar behavior)',
+    ].join('\n');
+    const parts = parseAgentMessage(text);
+    expect(parts).toHaveLength(1);
+    expect(parts[0].type).toBe('choices');
+    const block = parts[0] as ChoiceBlock;
+    expect(block.options).toHaveLength(4);
+    expect(block.options.map((o) => o.letter)).toEqual(['a', 'b', 'c', 'd']);
+    expect(
+      block.options.every((o) => !/^other\b/i.test(o.text.replace(/\*+/g, ''))),
+    ).toBe(true);
+  });
+
   // ── Real agent message patterns ──────────────────────────────────────────────
 
   it('parses a typical agent interview message with intro + question + options', () => {

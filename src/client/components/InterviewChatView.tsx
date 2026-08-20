@@ -37,7 +37,7 @@ import { useGroundingResumeGate } from '../hooks/useGroundingResumeGate';
 import type { PipelinePinPolicy } from '../../shared/types/runGrounding';
 import type { InterviewStatus } from '../../shared/types/interview';
 import type { InterviewSkillOption } from '../../shared/types/projectSettings';
-import { parseAgentMessage } from '../utils/parseAgentMessage';
+import { parseAgentMessage, isAgentOtherOptionText } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { trackEvent, trackException } from '../services/telemetry';
 import { ReadAloudButton } from './ReadAloudButton';
@@ -91,7 +91,7 @@ const InterviewChoiceBlockUI: React.FC<ChoiceBlockUIProps> = ({
     )}
     <div className={styles.choiceOptions}>
       {block.options
-        .filter((opt) => !/^other\b/i.test(opt.text))
+        .filter((opt) => !isAgentOtherOptionText(opt.text))
         .map((opt) => {
         const isSelected = selection === opt.letter;
         return (
@@ -1665,13 +1665,16 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               className={styles.typingIndicator}
               role="status"
               aria-live="polite"
-              aria-label="Agent is processing your response"
+              aria-label={friendlyChatProgressLabel(progressLabel, progressPhase) || 'Agent is processing your response'}
               {...{ 'data-testid': 'interview-agent-processing' }}
             >
               <span aria-hidden="true" {...{ 'data-testid': 'chat-run-spinner' }} />
               <span className={styles.typingDot} />
               <span className={styles.typingDot} />
               <span className={styles.typingDot} />
+              <span className={styles.typingProgressLabel} {...{ 'data-testid': 'interview-progress-label' }}>
+                {friendlyChatProgressLabel(progressLabel, progressPhase)}
+              </span>
             </div>
           )}
 

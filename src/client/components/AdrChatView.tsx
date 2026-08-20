@@ -884,13 +884,16 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                 className={styles.typingIndicator}
                 role="status"
                 aria-live="polite"
-                aria-label="Architect is processing your response"
+                aria-label={friendlyChatProgressLabel(progressLabel, progressPhase) || 'Architect is processing your response'}
                 {...{ 'data-testid': 'adr-agent-processing' }}
               >
                 <span aria-hidden="true" {...{ 'data-testid': 'chat-run-spinner' }} />
                 <span className={styles.typingDot} />
                 <span className={styles.typingDot} />
                 <span className={styles.typingDot} />
+                <span className={styles.typingProgressLabel} {...{ 'data-testid': 'adr-progress-label' }}>
+                  {friendlyChatProgressLabel(progressLabel, progressPhase)}
+                </span>
               </div>
             )}
             <div ref={messagesEndRef} />

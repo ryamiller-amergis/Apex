@@ -2426,7 +2426,7 @@ export const DesignDocReviewView: React.FC = () => {
       )}
 
       {isGenerating ? (
-        /* ── Generating skeleton ─────────────────────────────────────── */
+        /* ── Generating (same Apex mark as prototypes) ───────────────── */
         <>
           <div className={styles.tabs}>
             {(['design', 'tech-spec', 'assumptions'] as TabId[]).map((t) => (
@@ -2436,44 +2436,17 @@ export const DesignDocReviewView: React.FC = () => {
             ))}
           </div>
           <div className={styles.tabContent}>
-            <div className={styles.skeletonArea}>
-              <div className={styles.generatingBanner}>
-                <svg
-                  className={styles.bannerSpinner}
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                >
-                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                </svg>
-                <div>
-                  <div className={styles.bannerTitle}>Generating your Design Doc…</div>
-                  <div className={styles.bannerSub}>This may take a few minutes. You can navigate away and return.</div>
-                </div>
-              </div>
-
-              <div className={styles.skeletonSection}>
-                <div className={styles.skeletonHeader} style={{ width: '75%' }} />
-                <div className={styles.skeletonLine} style={{ width: '100%' }} />
-                <div className={styles.skeletonLine} style={{ width: '65%' }} />
-                <div className={styles.skeletonLine} style={{ width: '100%' }} />
-              </div>
-
-              <div className={styles.skeletonSection}>
-                <div className={styles.skeletonHeader} style={{ width: '45%' }} />
-                <div className={styles.skeletonLine} style={{ width: '100%' }} />
-                <div className={styles.skeletonLine} style={{ width: '70%' }} />
-              </div>
-
-              <div className={styles.skeletonSection}>
-                <div className={styles.skeletonHeader} style={{ width: '60%' }} />
-                <div className={styles.skeletonLine} style={{ width: '100%' }} />
-                <div className={styles.skeletonLine} style={{ width: '100%' }} />
-                <div className={styles.skeletonLine} style={{ width: '40%' }} />
+            <div
+              className={styles.loadingState}
+              role="status"
+              aria-busy="true"
+              aria-label="Generating design doc"
+              {...{ 'data-testid': 'dd-generating-loader' }}
+            >
+              <ApexLoader size={72} />
+              <div className={styles.loadingLabel}>Generating your Design Doc…</div>
+              <div className={styles.bannerSub}>
+                This may take a few minutes. You can navigate away and return.
               </div>
             </div>
           </div>

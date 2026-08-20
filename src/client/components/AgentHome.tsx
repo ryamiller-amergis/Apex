@@ -15,7 +15,7 @@ import { useChatAttachments } from '../hooks/useChatAttachments';
 import { useProjectRepositoryReadiness } from '../hooks/useProjectRepositoryReadiness';
 import { useGroundingResumeGate } from '../hooks/useGroundingResumeGate';
 import { GroundingResumeCard } from './GroundingResumeCard';
-import { parseAgentMessage } from '../utils/parseAgentMessage';
+import { parseAgentMessage, isAgentOtherOptionText } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { PRDPreviewDrawer } from './PRDPreviewDrawer';
 import { ThreadHistorySidebar } from './ThreadHistorySidebar';
@@ -28,6 +28,7 @@ import { BrandLogo } from './BrandLogo';
 import { ReadAloudButton } from './ReadAloudButton';
 import { FoundationSkillUpdateBanner } from './FoundationSkillUpdateBanner';
 import { AgentComposer } from './agentChat';
+import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
 import styles from './AgentHome.module.css';
 
 interface PendingOutgoing {
@@ -188,11 +189,9 @@ const ChoiceBlockUI: React.FC<ChoiceBlockProps> = ({
   onFreeform,
   onSubmit,
 }) => {
-  // True when the agent already included an "other" option (e.g. "d. Other — I'll describe…")
-  const hasBuiltInOther = block.options.some((o) => /^other/i.test(o.text));
-  // True when the currently selected option is the agent's built-in "other" entry
-  const selectedBuiltInOther = hasBuiltInOther && block.options.some((o) => o.letter === selection && /^other/i.test(o.text));
-  const showFreeform = selection === 'other' || selectedBuiltInOther;
+  // Agent "Other" lines are stripped; the UI always supplies Other / free-form.
+  const visibleOptions = block.options.filter((o) => !isAgentOtherOptionText(o.text));
+  const showFreeform = selection === 'other';
 
   // Use the number the agent embedded in the question text when available so
   // "Q6" matches "Question 6" regardless of which message the block appears in.
@@ -211,7 +210,7 @@ const ChoiceBlockUI: React.FC<ChoiceBlockProps> = ({
         </div>
       )}
       <div className={styles.choiceOptions}>
-        {block.options.map((opt) => {
+        {visibleOptions.map((opt) => {
           const isSelected = selection === opt.letter;
           return (
             <button
@@ -227,18 +226,16 @@ const ChoiceBlockUI: React.FC<ChoiceBlockProps> = ({
             </button>
           );
         })}
-        {!hasBuiltInOther && (
-          <button
-            className={`${styles.choiceOption} ${selection === 'other' ? styles.choiceOptionSelected : ''}`}
-            onClick={() => !locked && onSelect('other')}
-            disabled={locked}
-            type="button"
-            {...{ 'data-testid': 'agent-home-choice-option-other' }}
-          >
-            <span className={styles.choiceOptionLetter}>✎</span>
-            <span className={styles.choiceOptionText}>Other / free-form</span>
-          </button>
-        )}
+        <button
+          className={`${styles.choiceOption} ${selection === 'other' ? styles.choiceOptionSelected : ''}`}
+          onClick={() => !locked && onSelect('other')}
+          disabled={locked}
+          type="button"
+          {...{ 'data-testid': 'agent-home-choice-option-other' }}
+        >
+          <span className={styles.choiceOptionLetter}>✎</span>
+          <span className={styles.choiceOptionText}>Other / free-form</span>
+        </button>
       </div>
       {showFreeform && !locked && (
         <textarea
@@ -622,6 +619,13 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
 
   const showHomeTypingIndicator =
     (showTypingIndicator || isSending || Boolean(pendingOutgoing)) && !streamingText;
+
+  const homeProgressLabel = showHomeTypingIndicator
+    ? friendlyChatProgressLabel(
+        progressLabel,
+        pendingOutgoing || (isSending && !threadId) ? 'dispatched' : 'analysis',
+      )
+    : null;
 
   const visibleMessageIds = displayMessages.map((m) => m.id);
   const highlightedMessageId = useFocusChatMessage(focusMessageId, visibleMessageIds);
@@ -1357,20 +1361,18 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
                 className={styles.agentRow}
                 role="status"
                 aria-live="polite"
-                aria-label={progressLabel ?? 'Agent is processing'}
+                aria-label={homeProgressLabel ?? 'Agent is processing'}
                 {...{ 'data-testid': 'agent-home-typing' }}
               >
                 <div className={styles.agentAvatar}>AI</div>
                 <div className={`${styles.agentBubble} ${styles.typing}`}>
                   <span /><span /><span />
-                  {progressLabel && (
-                    <p
-                      className={styles.progressLabel}
-                      {...{ 'data-testid': 'agent-home-progress-label' }}
-                    >
-                      {progressLabel}
-                    </p>
-                  )}
+                  <p
+                    className={styles.progressLabel}
+                    {...{ 'data-testid': 'agent-home-progress-label' }}
+                  >
+                    {homeProgressLabel}
+                  </p>
                 </div>
               </div>
             )}
