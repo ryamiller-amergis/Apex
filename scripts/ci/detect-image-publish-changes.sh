@@ -51,5 +51,6 @@ detect repo_read_service \
   runners/repo-read-service/ \
   scripts/ci/publish-repo-read-service.sh \
   src/server/services/repoRead/ \
+  src/server/services/repoCacheService.ts \
   src/server/services/groundingTelemetry.ts \
   src/server/services/telemetry.ts

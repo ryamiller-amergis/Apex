@@ -12,12 +12,15 @@ import { listSkillConfigsForProject } from '../projectSettingsService';
 import {
   ensureRepoCache,
   getRepoCacheDir,
-  type RepoCacheOptions,
 } from '../repoCacheService';
 import { flushTelemetry, trackEvent } from '../telemetry';
 import { BareRepoReader } from './bareRepoReader';
 import { handleRepoReadRequest } from './httpHandler';
 import type { RepoReadOperation } from './httpProtocol';
+import {
+  hydrateRepoReadMirror,
+  kickBackgroundMirrorRefresh,
+} from './mirrorHydration';
 import { isUsableBareMirror } from './mirrorStore';
 
 const DEFAULT_PORT = 8080;
@@ -33,18 +36,6 @@ const bundleStore = createGroundingBundleStore({
 
 // Concurrent requests for the same repo must not each clone it.
 const hydrations = new Map<string, Promise<string>>();
-
-function cacheOptionsFor(
-  identity: RepositoryIdentity,
-  branch: string
-): RepoCacheOptions {
-  return {
-    provider: identity.provider,
-    project: identity.project,
-    repo: identity.repo,
-    branch,
-  };
-}
 
 // skillRepo is stored as `repo`, `project/repo`, or `org/repo` depending on
 // provider, while a read identity carries the bare name.
@@ -95,31 +86,20 @@ async function mirrorHasCommit(
 /**
  * Container disk is ephemeral, so a cold replica starts with no mirror at all.
  * Restoring the published bundle is the fast path; cloning the remote is the
- * backstop for a SHA that was never published.
+ * backstop for a SHA that was never published. A warm mirror missing this pin
+ * is fetched in the background — chat must not await or abort that fetch.
  */
 async function hydrateMirror(identity: RepositoryIdentity): Promise<string> {
-  // The canonical cache path ignores branch, so the warm check needs no lookup.
-  const cacheDir = getRepoCacheDir(cacheOptionsFor(identity, FALLBACK_BRANCH));
-
-  if (await mirrorHasCommit(cacheDir, identity.sha)) return cacheDir;
-
-  // Only a fetch or clone reads the branch, so resolve it off the warm path.
-  const options = cacheOptionsFor(identity, await resolveBranch(identity));
-
-  // A mirror that merely predates this SHA needs a fetch, not a re-download —
-  // restoring the bundle would delete it first.
-  if (isUsableBareMirror(cacheDir)) {
-    const refreshed = await ensureRepoCache(options);
-    if (await mirrorHasCommit(refreshed.cacheDir, identity.sha)) {
-      return refreshed.cacheDir;
-    }
-  }
-
-  const restored = await bundleStore.rehydrateBare(identity, cacheDir);
-  if (restored.status === 'materialized') return cacheDir;
-
-  const cloned = await ensureRepoCache(options);
-  return cloned.cacheDir;
+  return hydrateRepoReadMirror(identity, {
+    getRepoCacheDir,
+    isUsableBareMirror,
+    mirrorHasCommit,
+    resolveBranch,
+    rehydrateBare: (id, destination) =>
+      bundleStore.rehydrateBare(id, destination),
+    ensureRepoCache,
+    kickBackgroundRefresh: kickBackgroundMirrorRefresh,
+  });
 }
 
 async function readerFor(

@@ -31,6 +31,7 @@ import {
   COLD_CACHE_TIMEOUT_MS,
   USER_FACING_REPO_CACHE_LEASE_WAIT_MS,
   ensureRepoCache,
+  fetchPinnedCommit,
   fetchRepositoryTip,
   getRepoCacheDir,
   readRemoteBranchTip,
@@ -451,5 +452,35 @@ describe('repoCacheService', () => {
     );
     expect(args).not.toContain('fetch');
     expect(args).not.toContain('clone');
+  });
+
+  it('fetches only the pinned SHA into an existing mirror', async () => {
+    mockFs.existsSync.mockReturnValue(true);
+    const sha = 'c'.repeat(40);
+    let sawCommit = false;
+    mockGit.mockImplementation(async (args: string[]) => {
+      if (args.includes('cat-file')) {
+        if (!sawCommit) throw new Error('missing commit');
+        return '';
+      }
+      if (args.includes('fetch')) {
+        sawCommit = true;
+        return '';
+      }
+      return '';
+    });
+
+    await expect(fetchPinnedCommit({
+      provider: 'ado',
+      project: 'MaxView',
+      repo: 'MaxView',
+      branch: 'development',
+    }, sha)).resolves.toBe(true);
+
+    const fetchArgs = mockGit.mock.calls
+      .map(([args]) => args as string[])
+      .find((args) => args.includes('fetch'));
+    expect(fetchArgs).toEqual(expect.arrayContaining(['fetch', 'origin', sha]));
+    expect(fetchArgs?.some((arg) => arg.includes('refs/heads/*'))).toBe(false);
   });
 });

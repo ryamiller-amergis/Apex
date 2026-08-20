@@ -25,6 +25,7 @@ export { USER_FACING_REPO_CACHE_LEASE_WAIT_MS } from './repoCacheLeaseService';
 
 const REPO_CACHE_BASE = path.join(resolveDataRoot(), 'repo-cache');
 const inFlightRefreshes = new Map<string, Promise<RepoCacheResult>>();
+const inFlightPinFetches = new Map<string, Promise<boolean>>();
 
 export interface RepoCacheOptions {
   provider: SkillProvider;
@@ -478,6 +479,13 @@ async function refreshWarmMirrorUnderLease(
     }
     console.log(`[repo-cache] phase=warm-commit-verified repo=${repoLabel}`);
   } catch (refreshError) {
+    const message =
+      refreshError instanceof Error ? refreshError.message : String(refreshError);
+    console.warn(
+      `[repo-cache] phase=incremental-fetch-failed repo=${repoLabel} ` +
+        `aborted=${abortSignal.aborted} durationMs=${Date.now() - startedAt}: ` +
+        message.replace(/\/\/[^/@\s]+@/g, '//***@').slice(0, 300),
+    );
     if (abortSignal.aborted) throw refreshError;
     if (!isTransientGitError(refreshError)) throw refreshError;
     try {
@@ -584,6 +592,92 @@ export async function fetchRepositoryTip(
   });
   inFlightRefreshes.set(key, refresh);
   return refresh;
+}
+
+async function commitExistsInCache(
+  cacheDir: string,
+  sha: string,
+  abortSignal?: AbortSignal,
+): Promise<boolean> {
+  try {
+    await git(
+      safeArgs(cacheDir, ['cat-file', '-e', `${sha}^{commit}`]),
+      { cwd: cacheDir, abortSignal, timeout: 10_000 },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Fetch one pinned commit into an existing bare mirror. Does not clone, and
+ * does not fetch every branch — MaxView's all-heads incremental fetch is what
+ * hung home chat. Coalesces per SHA so overlapping chats share one git fetch.
+ */
+export async function fetchPinnedCommit(
+  options: RepoCacheOptions,
+  sha: string,
+): Promise<boolean> {
+  const normalized = sha.trim().toLowerCase();
+  if (!COMMIT_SHA_RE.test(normalized)) return false;
+  const cacheDir = getRepoCacheDir(options);
+  if (!cacheExists(cacheDir)) return false;
+  if (await commitExistsInCache(cacheDir, normalized)) return true;
+
+  const key = `pin:${cacheIdentity(options)}:${normalized}`;
+  const existing = inFlightPinFetches.get(key);
+  if (existing) return existing;
+
+  const work = withRepoCacheLease(
+    getRepoCacheLeaseKey(options),
+    async ({ signal, assertOwned }) => {
+      if (await commitExistsInCache(cacheDir, normalized, signal)) return true;
+      const remote = resolveGitRemote(
+        options.provider,
+        options.project,
+        options.repo,
+      );
+      const repoLabel = `${options.provider}/${options.repo}@${options.branch}`;
+      const startedAt = Date.now();
+      console.log(
+        `[repo-cache] phase=pin-fetch-start repo=${repoLabel} sha=${normalized.slice(0, 12)}`,
+      );
+      try {
+        await git(
+          safeArgs(cacheDir, ['fetch', 'origin', normalized]),
+          {
+            cwd: cacheDir,
+            timeout: CACHE_FETCH_TIMEOUT_MS,
+            idleTimeout: CACHE_FETCH_IDLE_TIMEOUT_MS,
+            abortSignal: signal,
+            env: remote.env,
+          },
+        );
+        await assertOwned();
+        const got = await commitExistsInCache(cacheDir, normalized, signal);
+        console.log(
+          `[repo-cache] phase=pin-fetch-${got ? 'complete' : 'miss'} repo=${repoLabel} ` +
+            `sha=${normalized.slice(0, 12)} durationMs=${Date.now() - startedAt}`,
+        );
+        return got;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[repo-cache] phase=pin-fetch-failed repo=${repoLabel} ` +
+            `sha=${normalized.slice(0, 12)} aborted=${signal.aborted} ` +
+            `durationMs=${Date.now() - startedAt}: ` +
+            message.replace(/\/\/[^/@\s]+@/g, '//***@').slice(0, 300),
+        );
+        throw error;
+      }
+    },
+  ).finally(() => {
+    inFlightPinFetches.delete(key);
+  });
+
+  inFlightPinFetches.set(key, work);
+  return work;
 }
 
 export function ensureRepoCache(
