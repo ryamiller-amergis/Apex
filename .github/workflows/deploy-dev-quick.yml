@@ -403,9 +403,7 @@ jobs:
       # App name is unset or Terraform has not applied enable_repo_read_service,
       # so this stays green until the service is provisioned.
       - name: Publish repo-read service image
-        if: >-
-          needs.detect-runner-changes.outputs.repo_read_service == 'true' &&
-          hashFiles('runners/repo-read-service/Dockerfile') != ''
+        if: hashFiles('runners/repo-read-service/Dockerfile') != ''
         env:
           AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
           REPO_READ_SERVICE_CONTAINER_APP_NAME: ${{ vars.REPO_READ_SERVICE_CONTAINER_APP_NAME }}
