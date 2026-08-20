@@ -23,6 +23,7 @@ import type {
 } from '../../../shared/types/grounding';
 import { isFeatureEnabled as evaluateFeatureFlag } from '../featureFlagService';
 import { createGroundingTelemetry } from '../groundingTelemetry';
+import { resolveGitRemote } from '../repoCacheService';
 import { trackEvent } from '../telemetry';
 
 const execFileAsync = promisify(execFile);
@@ -529,6 +530,23 @@ export function createGroundingBundleStore(
           ]);
 
           await runGit(['clone', '--bare', downloadedBundle, destination]);
+          try {
+            const remote = resolveGitRemote(
+              identity.provider,
+              identity.project,
+              identity.repo,
+            );
+            await runGit([
+              '-C',
+              destination,
+              'remote',
+              'set-url',
+              'origin',
+              remote.url,
+            ]);
+          } catch {
+            // Pin-fetch uses the configured remote URL even if origin stays stale.
+          }
           if (!(await hasCommit(runGit, destination, expectedSha))) {
             throw new Error('Grounding bundle SHA verification failed');
           }

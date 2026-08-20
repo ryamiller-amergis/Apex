@@ -182,7 +182,7 @@ describe('repoCacheService', () => {
       expect.arrayContaining([
         'fetch',
         '--prune',
-        'origin',
+        'https://dev.azure.com/amergis/MaxView/_git/MaxView',
         '+refs/heads/*:refs/heads/*',
       ]),
       expect.objectContaining({ env: expect.objectContaining({ GIT_CONFIG_COUNT: '1' }) }),
@@ -212,7 +212,12 @@ describe('repoCacheService', () => {
     })).resolves.toEqual(expect.objectContaining({ baseSha: 'head123' }));
 
     expect(mockGit).toHaveBeenCalledWith(
-      expect.arrayContaining(['fetch', '--refetch', '--prune', 'origin']),
+      expect.arrayContaining([
+        'fetch',
+        '--refetch',
+        '--prune',
+        'https://dev.azure.com/amergis/MaxView/_git/MaxView',
+      ]),
       expect.any(Object),
     );
     expect(mockGit).toHaveBeenCalledWith(
@@ -325,7 +330,12 @@ describe('repoCacheService', () => {
     })).resolves.toEqual(expect.objectContaining({ baseSha: 'repaired123' }));
 
     expect(mockGit).toHaveBeenCalledWith(
-      expect.arrayContaining(['fetch', '--refetch', '--prune', 'origin']),
+      expect.arrayContaining([
+        'fetch',
+        '--refetch',
+        '--prune',
+        'https://dev.azure.com/amergis/MaxView/_git/MaxView',
+      ]),
       expect.any(Object),
     );
     expect(mockGit).toHaveBeenCalledWith(
@@ -480,7 +490,15 @@ describe('repoCacheService', () => {
     const fetchArgs = mockGit.mock.calls
       .map(([args]) => args as string[])
       .find((args) => args.includes('fetch'));
-    expect(fetchArgs).toEqual(expect.arrayContaining(['fetch', 'origin', sha]));
+    expect(fetchArgs).toEqual(
+      expect.arrayContaining([
+        'fetch',
+        '--no-tags',
+        'https://dev.azure.com/amergis/MaxView/_git/MaxView',
+        sha,
+      ]),
+    );
+    expect(fetchArgs).not.toContain('origin');
     expect(fetchArgs?.some((arg) => arg.includes('refs/heads/*'))).toBe(false);
   });
 });

@@ -330,7 +330,7 @@ async function refetchAndVerifyCache(
       'fetch',
       '--refetch',
       '--prune',
-      'origin',
+      remote.url,
       ALL_HEADS_REFSPEC,
     ]),
     {
@@ -434,7 +434,7 @@ async function refreshWarmCache(
     safeArgs(cacheDir, [
       'fetch',
       '--prune',
-      'origin',
+      remote.url,
       ALL_HEADS_REFSPEC,
     ]),
     {
@@ -644,8 +644,18 @@ export async function fetchPinnedCommit(
         `[repo-cache] phase=pin-fetch-start repo=${repoLabel} sha=${normalized.slice(0, 12)}`,
       );
       try {
+        // Bundle restore clones from snapshot.bundle, so `origin` is that temp
+        // path. The scratch dir is deleted; fetch by URL, not the remote name.
+        try {
+          await git(
+            safeArgs(cacheDir, ['remote', 'set-url', 'origin', remote.url]),
+            { cwd: cacheDir, timeout: 10_000, abortSignal: signal },
+          );
+        } catch {
+          // Fetch below uses remote.url regardless of origin.
+        }
         await git(
-          safeArgs(cacheDir, ['fetch', 'origin', normalized]),
+          safeArgs(cacheDir, ['fetch', '--no-tags', remote.url, normalized]),
           {
             cwd: cacheDir,
             timeout: CACHE_FETCH_TIMEOUT_MS,
