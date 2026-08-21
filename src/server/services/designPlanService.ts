@@ -12,6 +12,12 @@ import type {
   DesignPlanHistoryEntry,
 } from '../../shared/types/designPlan';
 import type { GenerateDesignPlanInput } from './bedrockService';
+import {
+  buildUpdatePageGenerateHelperText,
+  collectUpdatePageScreenshotGaps,
+  splitTargetRoutes,
+} from '../../shared/utils/updatePageScreenshotGaps';
+import { normaliseUrlToRoute } from '../../shared/utils/routeNormalization';
 
 function toDesignPlan(row: typeof designPlans.$inferSelect): DesignPlan {
   return {
@@ -213,6 +219,31 @@ export async function savePlan(planId: string, features: DesignPlanFeature[], us
   return toDesignPlan(updated);
 }
 
+async function assertUpdatePageScreenshots(features: DesignPlanFeature[]): Promise<void> {
+  const { getScreenshotByRoute } = await import('./pageScreenshotService');
+  const screenshotByRoute = new Map<string, boolean>();
+  for (const feature of features) {
+    if (feature.decision !== 'update-page') continue;
+    for (const raw of splitTargetRoutes(feature.targetRoute)) {
+      const route = normaliseUrlToRoute(raw);
+      if (screenshotByRoute.has(route)) continue;
+      const shot = await getScreenshotByRoute(route);
+      screenshotByRoute.set(route, Boolean(shot));
+    }
+  }
+
+  const { gaps } = collectUpdatePageScreenshotGaps(
+    features,
+    (route) => screenshotByRoute.get(route) ?? false,
+  );
+  if (gaps.length === 0) return;
+
+  throw Object.assign(
+    new Error(buildUpdatePageGenerateHelperText(gaps, false) ?? 'Upload page screenshots for Update page features'),
+    { status: 400 },
+  );
+}
+
 /** The Generate button: consume the plan and kick off HTML prototype generation. Approver-gated. */
 export async function generatePrototypesFromPlan(planId: string, userId: string): Promise<string[]> {
   const row = await db.query.designPlans.findFirst({ where: eq(designPlans.id, planId) });
@@ -221,6 +252,7 @@ export async function generatePrototypesFromPlan(planId: string, userId: string)
   if (row.status === 'generating') {
     throw Object.assign(new Error('Plan is still generating'), { status: 409 });
   }
+  await assertUpdatePageScreenshots(row.features ?? []);
 
   const { generatePrototypesForPrd } = await import('./designPrototypeService');
   const ids = await generatePrototypesForPrd(row.prdId);

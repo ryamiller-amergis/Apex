@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { PageScreenshot } from '../../server/services/pageScreenshotService';
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
@@ -23,6 +23,34 @@ export function usePageScreenshot(route: string | undefined) {
     staleTime: 60_000,
     retry: false,
   });
+}
+
+/** Known / in-flight screenshot status for a set of normalised routes. */
+export function usePageScreenshotStatuses(routes: readonly string[]): Map<string, boolean | undefined> {
+  const unique = [...new Set(routes.filter(Boolean))];
+  const results = useQueries({
+    queries: unique.map((route) => ({
+      queryKey: ['page-screenshot', route] as const,
+      queryFn: () =>
+        apiFetch<PageScreenshot | undefined>(
+          `/api/page-screenshots/by-route?route=${encodeURIComponent(route)}`,
+        ),
+      enabled: !!route,
+      staleTime: 60_000,
+      retry: false,
+    })),
+  });
+
+  const byRoute = new Map<string, boolean | undefined>();
+  unique.forEach((route, index) => {
+    const query = results[index];
+    if (!query || (query.isLoading && query.data === undefined)) {
+      byRoute.set(route, undefined);
+      return;
+    }
+    byRoute.set(route, Boolean(query.data));
+  });
+  return byRoute;
 }
 
 export function useUploadPageScreenshot() {

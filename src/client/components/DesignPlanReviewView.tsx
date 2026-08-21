@@ -8,7 +8,12 @@ import {
   useGeneratePrototypesFromPlan,
 } from '../hooks/useDesignPlan';
 import { usePrototypeAssignments } from '../hooks/useDesignPrototypes';
-import { usePageScreenshot, useUploadPageScreenshot, useDeletePageScreenshot } from '../hooks/usePageScreenshots';
+import {
+  usePageScreenshot,
+  usePageScreenshotStatuses,
+  useUploadPageScreenshot,
+  useDeletePageScreenshot,
+} from '../hooks/usePageScreenshots';
 import type { PageScreenshot } from '../../server/services/pageScreenshotService';
 import { designPlanStatusLabel } from '../../shared/types/designPlan';
 import type {
@@ -17,6 +22,11 @@ import type {
   UiMockDecision,
 } from '../../shared/types/designPlan';
 import { normaliseUrlToRoute } from '../../shared/utils/routeNormalization';
+import {
+  buildUpdatePageGenerateHelperText,
+  collectUpdatePageScreenshotGaps,
+  splitTargetRoutes,
+} from '../../shared/utils/updatePageScreenshotGaps';
 import styles from './DesignPlanReviewView.module.css';
 
 const LAYOUT_PATTERNS: UiLayoutPattern[] = [
@@ -32,18 +42,18 @@ interface PageScreenshotFieldProps {
 }
 
 const PageScreenshotField: React.FC<PageScreenshotFieldProps> = ({ route, disabled }) => {
-  const normalised = route ? normaliseUrlToRoute(route) : undefined;
-  const { data: fetched, isLoading } = usePageScreenshot(normalised);
-  const uploadMutation = useUploadPageScreenshot();
-  const deleteMutation = useDeletePageScreenshot();
   const fileRef = useRef<HTMLInputElement>(null);
-  const [pageUrl, setPageUrl] = useState('');
   const [uploadSuccess, setUploadSuccess] = useState(false);
   // Local state holds the most recent upload so the thumbnail shows immediately
   // without depending on cache invalidation timing.
   const [localScreenshot, setLocalScreenshot] = useState<PageScreenshot | null>(null);
   const [localRemoved, setLocalRemoved] = useState(false);
   const [expandedImage, setExpandedImage] = useState(false);
+
+  const normalised = route?.trim() ? normaliseUrlToRoute(route) : undefined;
+  const { data: fetched, isLoading } = usePageScreenshot(normalised);
+  const uploadMutation = useUploadPageScreenshot();
+  const deleteMutation = useDeletePageScreenshot();
   const resolvedDisplay = normalised ?? '';
 
   // Prefer local state: after upload use local copy; after remove show nothing
@@ -79,24 +89,25 @@ const PageScreenshotField: React.FC<PageScreenshotFieldProps> = ({ route, disabl
     if (fileRef.current) fileRef.current.value = '';
   }, [normalised, route, uploadMutation]);
 
-  if (!normalised) return null;
+  if (!normalised) {
+    return (
+      <div className={styles.screenshotSection}>
+        <div className={styles.field}>
+          <span className={styles.label}>Page Screenshot (required)</span>
+          <span className={styles.screenshotRequired}>
+            Enter the existing page address above, then upload a screenshot of that page.
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
     <div className={styles.screenshotSection}>
-      <div className={styles.field}>
-        <span className={styles.label}>Page URL (for screenshot lookup)</span>
-        <input
-          className={styles.input}
-          value={pageUrl}
-          placeholder="e.g. dev.mymaxview.com/Timecard/Entry or /Timecard/Entry"
-          disabled={disabled}
-          onChange={(e) => setPageUrl(e.target.value)}
-        />
-        {resolvedDisplay && (
-          <span className={styles.resolvedRoute}>Resolved route: {resolvedDisplay}</span>
-        )}
-      </div>
+      {resolvedDisplay && (
+        <span className={styles.resolvedRoute}>Screenshot is stored for: {resolvedDisplay}</span>
+      )}
 
       <div className={styles.field}>
         <span className={styles.label}>
@@ -116,6 +127,7 @@ const PageScreenshotField: React.FC<PageScreenshotFieldProps> = ({ route, disabl
             <button
               type="button"
               className={styles.screenshotThumbBtn}
+              data-testid="design-plan-screenshot-expand-btn"
               onClick={() => setExpandedImage(true)}
               aria-label="Expand screenshot"
             >
@@ -134,6 +146,7 @@ const PageScreenshotField: React.FC<PageScreenshotFieldProps> = ({ route, disabl
                   <button
                     type="button"
                     className={styles.secondaryBtn}
+                    data-testid="design-plan-screenshot-replace-btn"
                     onClick={() => fileRef.current?.click()}
                     disabled={uploadMutation.isPending}
                   >
@@ -142,6 +155,7 @@ const PageScreenshotField: React.FC<PageScreenshotFieldProps> = ({ route, disabl
                   <button
                     type="button"
                     className={styles.secondaryBtn}
+                    data-testid="design-plan-screenshot-remove-btn"
                     onClick={() => deleteMutation.mutate({ id: screenshot.id, route: screenshot.route }, {
                       onSuccess: () => {
                         setLocalScreenshot(null);
@@ -161,6 +175,7 @@ const PageScreenshotField: React.FC<PageScreenshotFieldProps> = ({ route, disabl
             <button
               type="button"
               className={styles.secondaryBtn}
+              data-testid="design-plan-screenshot-upload-btn"
               onClick={() => fileRef.current?.click()}
               disabled={disabled || uploadMutation.isPending}
             >
@@ -177,6 +192,7 @@ const PageScreenshotField: React.FC<PageScreenshotFieldProps> = ({ route, disabl
           type="file"
           accept="image/png,image/jpeg"
           style={{ display: 'none' }}
+          data-testid="design-plan-screenshot-file-input"
           onChange={handleFileChange}
         />
       </div>
@@ -185,6 +201,7 @@ const PageScreenshotField: React.FC<PageScreenshotFieldProps> = ({ route, disabl
     {expandedImage && screenshot && (
       <div
         className={styles.imageOverlay}
+        data-testid="design-plan-screenshot-preview-overlay"
         onClick={() => setExpandedImage(false)}
         role="dialog"
         aria-modal="true"
@@ -193,6 +210,7 @@ const PageScreenshotField: React.FC<PageScreenshotFieldProps> = ({ route, disabl
         <button
           type="button"
           className={styles.imageOverlayClose}
+          data-testid="design-plan-screenshot-preview-close-btn"
           onClick={(e) => { e.stopPropagation(); setExpandedImage(false); }}
           aria-label="Close preview"
         >
@@ -202,6 +220,7 @@ const PageScreenshotField: React.FC<PageScreenshotFieldProps> = ({ route, disabl
           src={`data:${screenshot.mediaType};base64,${screenshot.imageBase64}`}
           alt={`Screenshot of ${screenshot.route}`}
           className={styles.imageOverlayImg}
+          data-testid="design-plan-screenshot-preview-img"
           onClick={(e) => e.stopPropagation()}
         />
       </div>
@@ -229,6 +248,23 @@ const DesignPlanReviewView: React.FC = () => {
   const [expandedDetails, setExpandedDetails] = useState<Set<number>>(new Set());
 
   const plan = data?.plan ?? null;
+
+  const updatePageRoutes = useMemo(
+    () => edited
+      .filter((feature) => feature.decision === 'update-page')
+      .flatMap((feature) => splitTargetRoutes(feature.targetRoute).map((raw) => normaliseUrlToRoute(raw))),
+    [edited],
+  );
+  const screenshotStatus = usePageScreenshotStatuses(updatePageRoutes);
+  const { gaps: updatePageScreenshotGaps, isChecking: isCheckingScreenshots } = useMemo(
+    () => collectUpdatePageScreenshotGaps(edited, (route) => screenshotStatus.get(route)),
+    [edited, screenshotStatus],
+  );
+  const generateHelperText = useMemo(
+    () => buildUpdatePageGenerateHelperText(updatePageScreenshotGaps, isCheckingScreenshots),
+    [updatePageScreenshotGaps, isCheckingScreenshots],
+  );
+  const generateBlockedByScreenshot = updatePageScreenshotGaps.length > 0 || isCheckingScreenshots;
 
   const isAssignedApprover = useMemo(
     () => assignments.some((a) => a.approverUserId === userId),
@@ -280,27 +316,9 @@ const DesignPlanReviewView: React.FC = () => {
   const handleGenerate = useCallback(async () => {
     if (!plan) return;
 
-    const updatePageFeatures = edited.filter((f) => f.decision === 'update-page' && f.targetRoute);
-    if (updatePageFeatures.length > 0) {
-      const missingRoutes: string[] = [];
-      for (const f of updatePageFeatures) {
-        const routes = f.targetRoute!.split(',').map((r) => r.trim()).filter(Boolean);
-        for (const rawRoute of routes) {
-          const route = normaliseUrlToRoute(rawRoute);
-          try {
-            const res = await fetch(`/api/page-screenshots/by-route?route=${encodeURIComponent(route)}`, {
-              credentials: 'include',
-            });
-            if (!res.ok) missingRoutes.push(rawRoute);
-          } catch {
-            missingRoutes.push(rawRoute);
-          }
-        }
-      }
-      if (missingRoutes.length > 0) {
-        alert(`Upload page screenshots for: ${missingRoutes.join(', ')}`);
-        return;
-      }
+    if (generateBlockedByScreenshot) {
+      if (generateHelperText) alert(generateHelperText);
+      return;
     }
 
     if (dirty) {
@@ -309,7 +327,7 @@ const DesignPlanReviewView: React.FC = () => {
     }
     await generatePrototypes.mutateAsync({ planId: plan.id, prdId });
     navigate(`/backlog/design-prototypes/${prdId}`);
-  }, [plan, prdId, dirty, edited, savePlan, generatePrototypes, navigate]);
+  }, [plan, prdId, dirty, edited, savePlan, generatePrototypes, navigate, generateBlockedByScreenshot, generateHelperText]);
 
   if (isLoading) {
     return <div className={styles.container}><p className={styles.muted}>Loading design plan…</p></div>;
@@ -318,7 +336,7 @@ const DesignPlanReviewView: React.FC = () => {
   if (error || !plan) {
     return (
       <div className={styles.container}>
-        <button className={styles.backBtn} onClick={() => navigate(`/backlog/prd/${prdId}`)} type="button">← Back to PRD</button>
+        <button className={styles.backBtn} data-testid="design-plan-back-btn" onClick={() => navigate(`/backlog/prd/${prdId}`)} type="button">← Back to PRD</button>
         <p className={styles.muted}>No design plan found for this PRD yet.</p>
       </div>
     );
@@ -332,7 +350,7 @@ const DesignPlanReviewView: React.FC = () => {
     <div className={styles.container}>
       <div className={styles.header}>
         <div>
-          <button className={styles.backBtn} onClick={() => navigate(`/backlog/prd/${prdId}`)} type="button">← Back to PRD</button>
+          <button className={styles.backBtn} data-testid="design-plan-back-btn" onClick={() => navigate(`/backlog/prd/${prdId}`)} type="button">← Back to PRD</button>
           <h2 className={styles.title}>Design Brief</h2>
           <p className={styles.muted}>
             Review and edit the design brief for each feature below. Edit the text directly — the prototype
@@ -377,13 +395,29 @@ const DesignPlanReviewView: React.FC = () => {
               <div key={feature.featureIndex} className={styles.card}>
                 <div className={styles.cardHeader}>
                   <h3 className={styles.featureName}>{feature.featureName}</h3>
-                  <span className={styles.decisionPill}>{feature.decision}</span>
+                  {canEditPlan ? (
+                    <label className={styles.decisionField}>
+                      <span className={styles.label}>Decision</span>
+                      <select
+                        className={styles.select}
+                        data-testid={`design-plan-decision-select-${feature.featureIndex}`}
+                        value={feature.decision}
+                        disabled={busy}
+                        onChange={(e) => updateFeature(index, { decision: e.target.value as UiMockDecision })}
+                      >
+                        {DECISIONS.map((d) => <option key={d} value={d}>{d}</option>)}
+                      </select>
+                    </label>
+                  ) : (
+                    <span className={styles.decisionPill}>{feature.decision}</span>
+                  )}
                 </div>
 
                 <label className={styles.briefField}>
                   <span className={styles.briefLabel}>Design Brief</span>
                   <textarea
                     className={styles.briefTextarea}
+                    data-testid={`design-plan-brief-textarea-${feature.featureIndex}`}
                     value={feature.designBrief ?? ''}
                     rows={10}
                     placeholder="Describe the screen layout, key interactions, and user flow in plain English. The prototype generator will follow this brief."
@@ -392,8 +426,51 @@ const DesignPlanReviewView: React.FC = () => {
                   />
                 </label>
 
+                {feature.decision === 'update-page' && (
+                  <div className={styles.updatePageSection}>
+                    <div className={styles.fieldRow}>
+                      <label className={styles.field}>
+                        <span className={styles.label}>Existing page address (required)</span>
+                        <input
+                          className={styles.input}
+                          data-testid={`design-plan-target-route-input-${feature.featureIndex}`}
+                          value={feature.targetRoute ?? ''}
+                          placeholder="e.g. /Timecard/Entry or dev.mymaxview.com/Timecard/Entry"
+                          disabled={!canEditPlan || busy}
+                          onChange={(e) => updateFeature(index, { targetRoute: e.target.value || undefined })}
+                        />
+                      </label>
+                      <label className={styles.field}>
+                        <span className={styles.label}>Page title</span>
+                        <input
+                          className={styles.input}
+                          data-testid={`design-plan-page-title-input-${feature.featureIndex}`}
+                          value={feature.targetPageTitle ?? ''}
+                          disabled={!canEditPlan || busy}
+                          onChange={(e) => updateFeature(index, { targetPageTitle: e.target.value || undefined })}
+                        />
+                      </label>
+                    </div>
+                    {splitTargetRoutes(feature.targetRoute).length > 0
+                      ? splitTargetRoutes(feature.targetRoute).map((r) => (
+                        <PageScreenshotField
+                          key={r}
+                          route={r}
+                          disabled={!canEditPlan || busy}
+                        />
+                      ))
+                      : (
+                        <PageScreenshotField
+                          route={undefined}
+                          disabled={!canEditPlan || busy}
+                        />
+                      )}
+                  </div>
+                )}
+
                 <button
                   className={styles.detailsToggle}
+                  data-testid={`design-plan-details-toggle-${feature.featureIndex}`}
                   type="button"
                   onClick={() => toggleDetails(index)}
                 >
@@ -404,21 +481,10 @@ const DesignPlanReviewView: React.FC = () => {
                   <div className={styles.detailsSection}>
                     <div className={styles.fieldRow}>
                       <label className={styles.field}>
-                        <span className={styles.label}>Decision</span>
-                        <select
-                          className={styles.select}
-                          value={feature.decision}
-                          disabled={!canEditPlan || busy}
-                          onChange={(e) => updateFeature(index, { decision: e.target.value as UiMockDecision })}
-                        >
-                          {DECISIONS.map((d) => <option key={d} value={d}>{d}</option>)}
-                        </select>
-                      </label>
-
-                      <label className={styles.field}>
                         <span className={styles.label}>Layout pattern</span>
                         <select
                           className={styles.select}
+                          data-testid={`design-plan-layout-select-${feature.featureIndex}`}
                           value={feature.layoutPattern ?? ''}
                           disabled={!canEditPlan || busy}
                           onChange={(e) => updateFeature(index, { layoutPattern: (e.target.value || undefined) as UiLayoutPattern | undefined })}
@@ -429,45 +495,11 @@ const DesignPlanReviewView: React.FC = () => {
                       </label>
                     </div>
 
-                    {feature.decision === 'update-page' && (
-                      <>
-                        <div className={styles.fieldRow}>
-                          <label className={styles.field}>
-                            <span className={styles.label}>Target route</span>
-                            <input
-                              className={styles.input}
-                              value={feature.targetRoute ?? ''}
-                              placeholder="/existing-route"
-                              disabled={!canEditPlan || busy}
-                              onChange={(e) => updateFeature(index, { targetRoute: e.target.value || undefined })}
-                            />
-                          </label>
-                          <label className={styles.field}>
-                            <span className={styles.label}>Page title</span>
-                            <input
-                              className={styles.input}
-                              value={feature.targetPageTitle ?? ''}
-                              disabled={!canEditPlan || busy}
-                              onChange={(e) => updateFeature(index, { targetPageTitle: e.target.value || undefined })}
-                            />
-                          </label>
-                        </div>
-                        {feature.targetRoute
-                          ? feature.targetRoute.split(',').map((r) => r.trim()).filter(Boolean).map((r) => (
-                            <PageScreenshotField
-                              key={r}
-                              route={r}
-                              disabled={!canEditPlan || busy}
-                            />
-                          ))
-                          : null}
-                      </>
-                    )}
-
                     <label className={styles.field}>
                       <span className={styles.label}>Primary components (comma-separated)</span>
                       <input
                         className={styles.input}
+                        data-testid={`design-plan-components-input-${feature.featureIndex}`}
                         value={feature.primaryComponents.join(', ')}
                         disabled={!canEditPlan || busy}
                         onChange={(e) => updateFeature(index, {
@@ -480,6 +512,7 @@ const DesignPlanReviewView: React.FC = () => {
                       <span className={styles.label}>States (comma-separated)</span>
                       <input
                         className={styles.input}
+                        data-testid={`design-plan-states-input-${feature.featureIndex}`}
                         value={feature.states.join(', ')}
                         disabled={!canEditPlan || busy}
                         onChange={(e) => updateFeature(index, {
@@ -497,6 +530,7 @@ const DesignPlanReviewView: React.FC = () => {
                               <span className={styles.pbiTitle}>{c.pbiTitle}</span>
                               <input
                                 className={styles.input}
+                                data-testid={`design-plan-pbi-contribution-input-${feature.featureIndex}-${pbiIndex}`}
                                 value={c.contribution}
                                 placeholder="How this PBI appears in the UI"
                                 disabled={!canEditPlan || busy}
@@ -512,6 +546,7 @@ const DesignPlanReviewView: React.FC = () => {
                       <span className={styles.label}>Rationale</span>
                       <textarea
                         className={styles.textarea}
+                        data-testid={`design-plan-rationale-textarea-${feature.featureIndex}`}
                         value={feature.rationale}
                         rows={2}
                         disabled={!canEditPlan || busy}
@@ -523,6 +558,7 @@ const DesignPlanReviewView: React.FC = () => {
                       <span className={styles.label}>Notes for generation</span>
                       <textarea
                         className={styles.textarea}
+                        data-testid={`design-plan-notes-textarea-${feature.featureIndex}`}
                         value={feature.notes ?? ''}
                         rows={2}
                         placeholder="Anything the generator must honor"
@@ -537,31 +573,39 @@ const DesignPlanReviewView: React.FC = () => {
           </div>
 
           {canEditPlan && (
-            <div className={styles.footer}>
-              <button
-                className={styles.secondaryBtn}
-                onClick={handleRegenerate}
-                type="button"
-                disabled={busy}
-              >
-                Regenerate Plan
-              </button>
-              <button
-                className={styles.secondaryBtn}
-                onClick={handleSave}
-                type="button"
-                disabled={busy || !dirty}
-              >
-                {savePlan.isPending ? 'Saving…' : 'Save Changes'}
-              </button>
-              <button
-                className={styles.primaryBtn}
-                onClick={handleGenerate}
-                type="button"
-                disabled={busy}
-              >
-                {generatePrototypes.isPending ? 'Generating…' : 'Generate Designs →'}
-              </button>
+            <div className={styles.footerBlock}>
+              {generateHelperText && (
+                <p className={styles.generateHelper}>{generateHelperText}</p>
+              )}
+              <div className={styles.footer}>
+                <button
+                  className={styles.secondaryBtn}
+                  data-testid="design-plan-regenerate-btn"
+                  onClick={handleRegenerate}
+                  type="button"
+                  disabled={busy}
+                >
+                  Regenerate Plan
+                </button>
+                <button
+                  className={styles.secondaryBtn}
+                  data-testid="design-plan-save-btn"
+                  onClick={handleSave}
+                  type="button"
+                  disabled={busy || !dirty}
+                >
+                  {savePlan.isPending ? 'Saving…' : 'Save Changes'}
+                </button>
+                <button
+                  className={styles.primaryBtn}
+                  data-testid="design-plan-generate-btn"
+                  onClick={handleGenerate}
+                  type="button"
+                  disabled={busy || generateBlockedByScreenshot}
+                >
+                  {generatePrototypes.isPending ? 'Generating…' : 'Generate Designs →'}
+                </button>
+              </div>
             </div>
           )}
         </>
