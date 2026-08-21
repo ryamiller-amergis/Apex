@@ -240,6 +240,10 @@ function executeMigration(repoRoot, plan) {
       fs.writeFileSync(skillMdPath, rewrittenSkillText, 'utf8');
     }
     ensureDir(path.dirname(target));
+    // Windows rename fails if the destination exists, even when empty.
+    if (fs.existsSync(target) && !isOccupiedSkillDir(target)) {
+      fs.rmdirSync(target);
+    }
     fs.renameSync(source, target);
     lock.skills[action.skill].managedRegionHash =
       hashManaged(rewrittenSkillText);
