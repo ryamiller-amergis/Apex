@@ -49,6 +49,10 @@ import {
 } from '../../shared/types/walkthroughAiDraft';
 import type { WalkthroughAnchorRegistryRecord } from '../../shared/types/walkthroughAnchorRegistry';
 import type { WalkthroughGenerationProvenance } from '../../shared/types/walkthrough';
+import {
+  isSupportedAgentSkillPath,
+  normalizeRepoRelativePath,
+} from '../../shared/skillPaths';
 
 // ── Constants ────────────────────────────────────────────────────────────────────
 
@@ -61,7 +65,6 @@ export const DEFAULT_GENERATION_ANCHOR_RANK_LIMIT = 12;
 const APEX_REPOSITORY_PROJECT = 'Apex';
 const OUTPUT_RELATIVE_PATH = ['.ai-pilot', 'output', 'walkthrough-generation.json'];
 
-const SKILL_PATH_PATTERN = /^\.cursor\/skills\/[^/]+\/SKILL\.md$/;
 const CATALOG_PAGE_LIMIT = 200;
 
 /**
@@ -237,11 +240,11 @@ function resolveLocalRepositoryConnection(
 
 function validateSkillPath(skillPath: string | undefined): string {
   if (!skillPath) return DEFAULT_WALKTHROUGH_GENERATION_SKILL_PATH;
-  const normalized = skillPath.replace(/^\//, '').replace(/\\/g, '/');
-  if (!SKILL_PATH_PATTERN.test(normalized)) {
+  const normalized = normalizeRepoRelativePath(skillPath);
+  if (!isSupportedAgentSkillPath(normalized)) {
     throw new WalkthroughAiError(
       'INTENT_INVALID',
-      'skillPath must match .cursor/skills/*/SKILL.md',
+      'skillPath must use a supported Agent Skills root',
     );
   }
   return normalized;

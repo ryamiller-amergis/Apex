@@ -2,8 +2,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { ADAPTER_DIR, BACKUP_DIR, LEGACY_VENDOR_DIR, APEX_DIR } from './layout.mjs';
+import { BACKUP_DIR, LEGACY_VENDOR_DIR, APEX_DIR } from './layout.mjs';
 import { assertWithin, ensureDir } from './util.mjs';
+import { LEGACY_SKILL_ROOT, normalizeSkillRoot } from './skillRoot.mjs';
 
 export const INSTALL_LOCK_REL = `${APEX_DIR}/install.lock`;
 
@@ -13,9 +14,12 @@ export const INSTALL_LOCK_REL = `${APEX_DIR}/install.lock`;
  */
 export function withInstallTransaction(
   repoRoot,
-  skillNames,
+  skillNamesOrResolver,
   action,
-  { preflight = null } = {},
+  {
+    preflight = null,
+    skillRoots: skillRootsOrResolver = [LEGACY_SKILL_ROOT],
+  } = {}
 ) {
   const root = path.resolve(repoRoot);
   const apexDir = assertWithin(root, APEX_DIR);
@@ -36,7 +40,7 @@ export function withInstallTransaction(
       if (error?.code === 'EEXIST') {
         throw new Error(
           `APEX skills install already in progress (${INSTALL_LOCK_REL}). ` +
-          `If no install is running, inspect and remove the stale lock deliberately.`,
+            `If no install is running, inspect and remove the stale lock deliberately.`
         );
       }
       throw error;
@@ -50,7 +54,7 @@ export function withInstallTransaction(
           startedAt: new Date().toISOString(),
           transactionId: randomUUID(),
         }) + '\n',
-        'utf8',
+        'utf8'
       );
     } finally {
       fs.closeSync(lockFd);
@@ -59,9 +63,22 @@ export function withInstallTransaction(
 
     if (typeof preflight === 'function') preflight();
 
-    snapshotRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-skills-transaction-'));
-    const targets = transactionTargets(skillNames);
-    snapshots = targets.map((rel, index) => snapshotTarget(root, rel, snapshotRoot, index));
+    const skillNames =
+      typeof skillNamesOrResolver === 'function'
+        ? skillNamesOrResolver()
+        : skillNamesOrResolver;
+    const skillRoots =
+      typeof skillRootsOrResolver === 'function'
+        ? skillRootsOrResolver()
+        : skillRootsOrResolver;
+
+    snapshotRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'apex-skills-transaction-')
+    );
+    const targets = transactionTargets(skillNames, skillRoots);
+    snapshots = targets.map((rel, index) =>
+      snapshotTarget(root, rel, snapshotRoot, index)
+    );
     return action();
   } catch (error) {
     if (snapshots) {
@@ -79,29 +96,55 @@ export function withInstallTransaction(
     throw error;
   } finally {
     if (lockFd !== null) {
-      try { fs.closeSync(lockFd); } catch { /* best effort */ }
+      try {
+        fs.closeSync(lockFd);
+      } catch {
+        /* best effort */
+      }
     }
     if (snapshotRoot && !preserveSnapshot) {
-      try { fs.rmSync(snapshotRoot, { recursive: true, force: true }); }
-      catch (error) { console.warn(`[apex-skills] Could not remove transaction snapshot: ${error.message}`); }
+      try {
+        fs.rmSync(snapshotRoot, { recursive: true, force: true });
+      } catch (error) {
+        console.warn(
+          `[apex-skills] Could not remove transaction snapshot: ${error.message}`
+        );
+      }
     }
     if (ownsLock && fs.existsSync(lockPath)) {
-      try { fs.rmSync(lockPath, { force: true }); }
-      catch (error) { console.warn(`[apex-skills] Could not remove ${INSTALL_LOCK_REL}: ${error.message}`); }
+      try {
+        fs.rmSync(lockPath, { force: true });
+      } catch (error) {
+        console.warn(
+          `[apex-skills] Could not remove ${INSTALL_LOCK_REL}: ${error.message}`
+        );
+      }
     }
-    if (!apexExisted && fs.existsSync(apexDir) && fs.readdirSync(apexDir).length === 0) {
-      try { fs.rmdirSync(apexDir); }
-      catch (error) { console.warn(`[apex-skills] Could not remove empty ${APEX_DIR}: ${error.message}`); }
+    if (
+      !apexExisted &&
+      fs.existsSync(apexDir) &&
+      fs.readdirSync(apexDir).length === 0
+    ) {
+      try {
+        fs.rmdirSync(apexDir);
+      } catch (error) {
+        console.warn(
+          `[apex-skills] Could not remove empty ${APEX_DIR}: ${error.message}`
+        );
+      }
     }
   }
 }
 
-function transactionTargets(skillNames) {
+function transactionTargets(skillNames, skillRoots) {
   const names = [...new Set(skillNames ?? [])];
+  const roots = [
+    ...new Set(skillRoots.map((root) => normalizeSkillRoot(root))),
+  ];
   return [
     'apex-skills.lock.json',
     LEGACY_VENDOR_DIR,
-    ...names.map((name) => path.join(ADAPTER_DIR, name)),
+    ...roots.flatMap((root) => names.map((name) => path.join(root, name))),
     ...names.map((name) => path.join(BACKUP_DIR, name)),
   ];
 }
@@ -125,14 +168,22 @@ function restoreSnapshots(repoRoot, snapshots) {
       removePathWithoutFollowingLinks(absolute);
       if (entry.existed) {
         ensureDir(path.dirname(absolute));
-        fs.cpSync(entry.snapshot, absolute, { recursive: true, dereference: false });
+        fs.cpSync(entry.snapshot, absolute, {
+          recursive: true,
+          dereference: false,
+        });
       }
     } catch (error) {
-      errors.push(new Error(`Failed to restore ${entry.rel}: ${error.message}`));
+      errors.push(
+        new Error(`Failed to restore ${entry.rel}: ${error.message}`)
+      );
     }
   }
   if (errors.length) {
-    throw new AggregateError(errors, `${errors.length} managed path(s) failed to restore`);
+    throw new AggregateError(
+      errors,
+      `${errors.length} managed path(s) failed to restore`
+    );
   }
 }
 

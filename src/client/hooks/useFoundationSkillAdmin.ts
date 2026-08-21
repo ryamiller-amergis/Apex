@@ -222,6 +222,7 @@ export function useUpdateRepoWithFoundationSkills() {
       defaultBranch?: string;
       releaseId?: string;
       apexProject: string;
+      skillRoot?: string;
     }
   >({
     mutationFn: (body) =>

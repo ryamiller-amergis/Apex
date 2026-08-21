@@ -10,7 +10,7 @@ description: Project adapter for prd-design-spec. Customize for your project.
 
 - Project: {{slot:projectName}}
 - Inputs: `{{slot:aiPilotDir}}output/{slug}.prd.md`, `{{slot:aiPilotDir}}output/{slug}.backlog.json`, `{{slot:contextFile}}`, `{{slot:agentsFile}}`
-- Templates: `{{slot:skillsDir}}prd-design-spec/design-template.md`, `tech-spec-template.md`, `assumptions-template.md`
+- Templates: `design-template.md`, `tech-spec-template.md`, `assumptions-template.md`
 - Output dir: `{{slot:aiPilotDir}}output/{slug}-design-spec/`
 
 ## Project layers and ownership

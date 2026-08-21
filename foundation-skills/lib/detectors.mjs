@@ -331,8 +331,11 @@ export function detectRepoDocs(ctx) {
     }
   }
 
-  // Skills / cursor directory
-  const skillsDir = ctx.files.some((f) => f.startsWith('.cursor/skills/')) ? '.cursor/skills/' : '.cursor/skills/';
+  // Canonical Agent Skills directory. Explicit install/lockfile configuration
+  // overrides this detector in bootstrap.mjs.
+  const skillsDir = ctx.files.some((f) => f.startsWith('.agents/skills/'))
+    ? '.agents/skills/'
+    : '.cursor/skills/';
   out.push(entry('repo-docs', 'skillsDir', skillsDir, skillsDir));
 
   return out;
