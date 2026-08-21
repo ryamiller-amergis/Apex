@@ -278,6 +278,49 @@ test('mixed-root collisions block install and migration', () => {
   }
 });
 
+test('empty leftover skill dirs are not collisions', () => {
+  const installRepo = makeRepo(SAMPLE_REPO);
+  try {
+    fs.mkdirSync(path.join(installRepo, '.cursor/skills/ui-lab'), {
+      recursive: true,
+    });
+    fs.mkdirSync(path.join(installRepo, 'skills/ui-lab'), { recursive: true });
+    executeInstall(PKG_ROOT, installRepo, ['ui-lab'], {
+      skillRoot: '.agents/skills',
+    });
+    assert.equal(
+      fs.existsSync(path.join(installRepo, '.agents/skills/ui-lab/SKILL.md')),
+      true
+    );
+    assert.equal(
+      checkRepo(PKG_ROOT, installRepo).skills[0].rootCollision,
+      false
+    );
+  } finally {
+    cleanup(installRepo);
+  }
+
+  const migrationRepo = makeRepo(SAMPLE_REPO);
+  try {
+    executeInstall(PKG_ROOT, migrationRepo, ['ui-lab']);
+    fs.mkdirSync(path.join(migrationRepo, '.agents/skills/ui-lab'), {
+      recursive: true,
+    });
+    const result = migrateSkillRoot(migrationRepo, '.agents/skills');
+    assert.equal(result.errors.length, 0);
+    assert.equal(
+      fs.existsSync(path.join(migrationRepo, '.agents/skills/ui-lab/SKILL.md')),
+      true
+    );
+    assert.equal(
+      fs.existsSync(path.join(migrationRepo, '.cursor/skills/ui-lab')),
+      false
+    );
+  } finally {
+    cleanup(migrationRepo);
+  }
+});
+
 test('a harness symlink to the canonical catalog is not a collision', (t) => {
   const repo = makeRepo(SAMPLE_REPO);
   try {

@@ -13,6 +13,7 @@ import { withInstallTransaction } from './installTransaction.mjs';
 import { isAgentSkillName } from './agentSkillValidation.mjs';
 import {
   KNOWN_SKILL_ROOTS,
+  isOccupiedSkillDir,
   normalizeSkillRoot,
   resolveSkillRoot,
 } from './skillRoot.mjs';
@@ -81,7 +82,7 @@ export function planSkillRootMigration(repoRoot, targetRoot) {
       continue;
     }
     const collisionRoots = competingRoots.filter((root) =>
-      fs.existsSync(path.join(repoRoot, root, skill))
+      isOccupiedSkillDir(path.join(repoRoot, root, skill))
     );
     if (collisionRoots.length) {
       errors.push(

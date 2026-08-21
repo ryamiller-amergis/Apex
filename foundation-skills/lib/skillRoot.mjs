@@ -93,6 +93,25 @@ export function alternateKnownSkillRoots(canonicalRoot) {
   return KNOWN_SKILL_ROOTS.filter((candidate) => candidate !== canonical);
 }
 
+/** True when a skill path has content (empty leftover dirs are not collisions). */
+export function isOccupiedSkillDir(absPath) {
+  if (!fs.existsSync(absPath)) return false;
+  let stat;
+  try {
+    stat = fs.lstatSync(absPath);
+  } catch {
+    return false;
+  }
+  if (stat.isDirectory()) {
+    try {
+      return fs.readdirSync(absPath).length > 0;
+    } catch {
+      return true;
+    }
+  }
+  return true;
+}
+
 export function findSkillRootCollisions(repoRoot, skillNames, canonicalRoot) {
   const canonical = normalizeSkillRoot(canonicalRoot);
   const roots = [...new Set([canonical, ...KNOWN_SKILL_ROOTS])];
@@ -100,7 +119,7 @@ export function findSkillRootCollisions(repoRoot, skillNames, canonicalRoot) {
 
   for (const skill of [...new Set(skillNames ?? [])]) {
     const presentRoots = roots.filter((root) =>
-      fs.existsSync(path.join(repoRoot, root, skill))
+      isOccupiedSkillDir(path.join(repoRoot, root, skill))
     );
     const physicalRoots = new Set(
       presentRoots.map((root) =>
