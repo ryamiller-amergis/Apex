@@ -186,6 +186,7 @@ test('root path rewrite does not treat skills as a substring', () => {
     'Catalog: skills/ui-lab/SKILL.md',
     'Also under .agents/skills/other/SKILL.md',
     'Project path: docs-skills/example/SKILL.md',
+    'Nested path: docs/skills/guide.md',
     'Prose about skills in general.',
   ].join('\n');
 
@@ -198,9 +199,11 @@ test('root path rewrite does not treat skills as a substring', () => {
   assert.match(rewritten, /Catalog: \.agents\/skills\/ui-lab\/SKILL\.md/);
   assert.match(rewritten, /\.agents\/skills\/other\/SKILL\.md/);
   assert.match(rewritten, /docs-skills\/example\/SKILL\.md/);
+  assert.match(rewritten, /docs\/skills\/guide\.md/);
   assert.match(rewritten, /Prose about skills in general\./);
   assert.doesNotMatch(rewritten, /apex-\.agents\/skills\.lock/);
   assert.doesNotMatch(rewritten, /docs-\.agents\/skills/);
+  assert.doesNotMatch(rewritten, /docs\/\.agents\/skills/);
   assert.equal(
     rewriteRootPathReferences(
       'See .cursor/skills/ui-lab/SKILL.md',
