@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { isClarificationAvailable, validateRfpAttachments } from '../../shared/types/rfpIntake';
 import { useAddRfpComment, useRfpRequestDetail } from '../hooks/useRfpIntake';
 import { useRfpAttachmentUpload } from '../hooks/useRfpTriage';
+import { useRightDrawerResize } from '../hooks/useRightDrawerResize';
 import { RfpClarificationForm } from './RfpClarificationForm';
 import { RfpEvaluationCard } from './RfpEvaluationCard';
 import { RfpEvaluationChat } from './RfpEvaluationChat';
@@ -24,6 +25,7 @@ export const RfpDetailDrawer: React.FC<RfpDetailDrawerProps> = ({ requestId, onC
   const [commentBody, setCommentBody] = useState('');
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [fileError, setFileError] = useState<string | null>(null);
+  const resize = useRightDrawerResize();
   const detail = detailQuery.data;
   const canClarify = Boolean(
     detail && isClarificationAvailable(detail.clarificationUsed, detail.currentEvaluation?.verdict),
@@ -43,11 +45,32 @@ export const RfpDetailDrawer: React.FC<RfpDetailDrawerProps> = ({ requestId, onC
       role="dialog"
       aria-modal="true"
       aria-labelledby="rfp-detail-title"
-      onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
+      onClick={(event) => {
+        if (resize.consumeResizeClick()) return;
+        if (event.target === event.currentTarget) onClose();
+      }}
       onKeyDown={(event) => { if (event.key === 'Escape') onClose(); }}
       {...{ 'data-testid': 'rfp-detail-drawer' }}
     >
-      <aside className={styles.drawer}>
+      <aside
+        className={`${styles.drawer}${resize.isDragging ? ` ${styles.drawerResizing}` : ''}`}
+        style={{ width: resize.width }}
+      >
+        {/* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- WAI-ARIA separator resize must be focusable */}
+        <div
+          className={`${styles.resizeHandle}${resize.isDragging ? ` ${styles.resizeHandleDragging}` : ''}`}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize request detail"
+          aria-valuemin={resize.minWidth}
+          aria-valuemax={resize.maxWidth}
+          aria-valuenow={resize.width}
+          tabIndex={0}
+          onMouseDown={resize.handleResizeMouseDown}
+          onKeyDown={resize.handleResizeKeyDown}
+          {...{ 'data-testid': 'rfp-detail-resize' }}
+        />
+        {/* eslint-enable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}
         <div className={styles.header}>
           <div>
             <h2 id="rfp-detail-title" className={styles.title}>{detail?.title ?? 'Request detail'}</h2>

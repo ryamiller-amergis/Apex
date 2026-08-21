@@ -5,7 +5,6 @@ import styles from './RfpIntakeLanding.module.css';
 
 interface YourRequestsListProps {
   onOpenRequest: (id: string) => void;
-  onStartRequest: () => void;
 }
 
 function formatLabel(value: string): string {
@@ -14,13 +13,15 @@ function formatLabel(value: string): string {
 
 export const YourRequestsList: React.FC<YourRequestsListProps> = ({
   onOpenRequest,
-  onStartRequest,
 }) => {
   const [page, setPage] = React.useState(0);
   const query = useMyRfpRequests(true, page);
   const items = query.data?.items ?? [];
   const total = query.data?.total ?? 0;
   const pageCount = Math.max(1, Math.ceil(total / 50));
+
+  if (query.isLoading && items.length === 0) return null;
+  if (!query.isError && items.length === 0) return null;
 
   return (
     <section className={styles.section} {...{ 'data-testid': 'rfp-your-requests-list' }}>
@@ -32,20 +33,6 @@ export const YourRequestsList: React.FC<YourRequestsListProps> = ({
           Could not load your requests.{' '}
           <button type="button" className={styles.secondaryButton} onClick={() => void query.refetch()} {...{ 'data-testid': 'rfp-your-requests-retry' }}>
             Retry
-          </button>
-        </p>
-      )}
-      {query.isLoading && (
-        <>
-          <div className={styles.skeleton} />
-          <div className={styles.skeleton} />
-        </>
-      )}
-      {!query.isLoading && !query.isError && items.length === 0 && (
-        <p className={styles.empty}>
-          You haven&apos;t requested a product yet.{' '}
-          <button type="button" className={styles.secondaryButton} onClick={onStartRequest} {...{ 'data-testid': 'rfp-your-requests-empty-cta' }}>
-            Request a Product
           </button>
         </p>
       )}

@@ -1169,6 +1169,12 @@ body {
   color: var(--text-primary);
 }
 
+.app-loading-status {
+  margin: 16px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+}
+
 .spinner {
   border: 4px solid var(--bg-tertiary);
   border-top: 4px solid var(--accent-color);

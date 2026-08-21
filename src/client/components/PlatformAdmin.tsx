@@ -7,8 +7,10 @@ import { useAppShell } from '../hooks/useAppShell';
 import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import {
   useApproveProjectAccessRequest,
+  useApproveRfpSubmitAccessRequest,
   usePlatformAdminPendingAssignments,
   usePlatformAdminAccessRequests,
+  usePlatformAdminRfpSubmitAccessRequests,
   usePlatformAdminAssignments,
   usePlatformAdminMenuConfigs,
   usePlatformAdminProjects,
@@ -16,6 +18,7 @@ import {
   usePlatformAdminGroups,
   useRemovePlatformAdminPendingAssignment,
   useRejectProjectAccessRequest,
+  useRejectRfpSubmitAccessRequest,
   useSetPlatformAdminAssignments,
   useSetPlatformAdminMenuConfig,
   usePlatformAdminUserAccess,
@@ -49,6 +52,7 @@ import type {
 import type { FeatureFlagRule, FeatureFlagWithRules, FlagLifecycle, FlagRuleType } from '../../shared/types/featureFlags';
 import type { GroundingRolloutStage } from '../../shared/types/groundingOperations';
 import type { RestrictedUserAccess } from '../../shared/types/restrictedAccess';
+import type { PlatformAdminRfpSubmitAccessRequest } from '../../shared/types/rfpIntake';
 import { MODULE_VIEW_PERMISSIONS, isRestrictedAccessEmail } from '../../shared/types/restrictedAccess';
 import type { RoleWithPermissions } from '../../shared/types/rbac';
 import { GroundingRolloutStatus } from './GroundingRolloutStatus';
@@ -254,10 +258,18 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
     isError: accessRequestsIsError,
     error: accessRequestsError,
   } = usePlatformAdminAccessRequests('pending');
+  const {
+    data: rfpSubmitAccessRequests = [],
+    isLoading: rfpSubmitAccessRequestsLoading,
+    isError: rfpSubmitAccessRequestsIsError,
+    error: rfpSubmitAccessRequestsError,
+  } = usePlatformAdminRfpSubmitAccessRequests('pending');
   const setAssignments = useSetPlatformAdminAssignments();
   const setMenuConfig = useSetPlatformAdminMenuConfig();
   const approveAccessRequest = useApproveProjectAccessRequest();
   const rejectAccessRequest = useRejectProjectAccessRequest();
+  const approveRfpSubmitAccess = useApproveRfpSubmitAccessRequest();
+  const rejectRfpSubmitAccess = useRejectRfpSubmitAccessRequest();
 
   const projectNames = useMemo(() => {
     return projects.map((project) => project.name);
@@ -275,10 +287,10 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
     return new Map(menuConfigs.map((config) => [config.project, config]));
   }, [menuConfigs]);
 
-  const loadError = projectsError ?? assignmentsError ?? menuConfigsError ?? usersError ?? accessRequestsError;
-  const mutationError = setAssignments.error ?? setMenuConfig.error ?? approveAccessRequest.error ?? rejectAccessRequest.error;
-  const isLoading = projectsLoading || assignmentsLoading || menuConfigsLoading || usersLoading || accessRequestsLoading;
-  const hasLoadError = projectsIsError || assignmentsIsError || menuConfigsIsError || usersIsError || accessRequestsIsError;
+  const loadError = projectsError ?? assignmentsError ?? menuConfigsError ?? usersError ?? accessRequestsError ?? rfpSubmitAccessRequestsError;
+  const mutationError = setAssignments.error ?? setMenuConfig.error ?? approveAccessRequest.error ?? rejectAccessRequest.error ?? approveRfpSubmitAccess.error ?? rejectRfpSubmitAccess.error;
+  const isLoading = projectsLoading || assignmentsLoading || menuConfigsLoading || usersLoading || accessRequestsLoading || rfpSubmitAccessRequestsLoading;
+  const hasLoadError = projectsIsError || assignmentsIsError || menuConfigsIsError || usersIsError || accessRequestsIsError || rfpSubmitAccessRequestsIsError;
 
   const handleSaveAssignments = useCallback(async (project: string, userIds: string[], pendingEmails?: string[]) => {
     setAssignmentSavedProject(null);
@@ -299,6 +311,14 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
   const handleRejectAccessRequest = useCallback(async (requestId: string) => {
     await rejectAccessRequest.mutateAsync({ requestId });
   }, [rejectAccessRequest]);
+
+  const handleApproveRfpSubmitAccess = useCallback(async (requestId: string) => {
+    await approveRfpSubmitAccess.mutateAsync({ requestId });
+  }, [approveRfpSubmitAccess]);
+
+  const handleRejectRfpSubmitAccess = useCallback(async (requestId: string) => {
+    await rejectRfpSubmitAccess.mutateAsync({ requestId });
+  }, [rejectRfpSubmitAccess]);
 
   useEffect(() => {
     if (selectedMenuProject && projectNames.includes(selectedMenuProject)) return;
@@ -475,6 +495,14 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
                 isRejecting={rejectAccessRequest.isPending}
                 onApprove={handleApproveAccessRequest}
                 onReject={handleRejectAccessRequest}
+              />
+
+              <RfpSubmitAccessRequestsSection
+                requests={rfpSubmitAccessRequests}
+                isApproving={approveRfpSubmitAccess.isPending}
+                isRejecting={rejectRfpSubmitAccess.isPending}
+                onApprove={handleApproveRfpSubmitAccess}
+                onReject={handleRejectRfpSubmitAccess}
               />
 
               <section className={styles.section} aria-labelledby="user-project-access-title">
@@ -657,6 +685,83 @@ const AccessRequestsSection: React.FC<AccessRequestsSectionProps> = ({
                   disabled={pending}
                   onClick={() => void onApprove(request.id)}
                   {...{ 'data-testid': `platform-admin-access-approve-${request.id}` }}
+                >
+                  Accept
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+};
+
+interface RfpSubmitAccessRequestsSectionProps {
+  requests: PlatformAdminRfpSubmitAccessRequest[];
+  isApproving: boolean;
+  isRejecting: boolean;
+  onApprove: (requestId: string) => Promise<void>;
+  onReject: (requestId: string) => Promise<void>;
+}
+
+const RfpSubmitAccessRequestsSection: React.FC<RfpSubmitAccessRequestsSectionProps> = ({
+  requests,
+  isApproving,
+  isRejecting,
+  onApprove,
+  onReject,
+}) => {
+  const pending = isApproving || isRejecting;
+
+  return (
+    <section className={styles.section} aria-labelledby="rfp-submit-access-requests-title">
+      <div className={styles.sectionHeader}>
+        <div>
+          <h2 id="rfp-submit-access-requests-title" className={styles.sectionTitle}>
+            Request for Product Access
+          </h2>
+          <p className={styles.sectionHint}>
+            Review requests from users who want permission to submit a Request for Product.
+          </p>
+        </div>
+        <span className={styles.countBadge}>{requests.length} pending</span>
+      </div>
+
+      {requests.length === 0 ? (
+        <p className={styles.muted}>No pending Request for Product access requests.</p>
+      ) : (
+        <div className={styles.requestList}>
+          {requests.map((request) => (
+            <article key={request.id} className={styles.requestCard}>
+              <div className={styles.requestDetails}>
+                <div>
+                  <h3 className={styles.cardTitle}>Submit Requests for Product</h3>
+                  <p className={styles.muted}>
+                    Requested by {request.displayName || request.email || request.userId}
+                  </p>
+                  {request.email && <p className={styles.requestMeta}>{request.email}</p>}
+                </div>
+                <span className={styles.requestMeta}>
+                  {new Date(request.requestedAt).toLocaleString()}
+                </span>
+              </div>
+              <div className={styles.requestActions}>
+                <button
+                  type="button"
+                  className={styles.secondaryButton}
+                  disabled={pending}
+                  onClick={() => void onReject(request.id)}
+                  {...{ 'data-testid': `platform-admin-rfp-submit-reject-${request.id}` }}
+                >
+                  Reject
+                </button>
+                <button
+                  type="button"
+                  className={styles.primaryButton}
+                  disabled={pending}
+                  onClick={() => void onApprove(request.id)}
+                  {...{ 'data-testid': `platform-admin-rfp-submit-approve-${request.id}` }}
                 >
                   Accept
                 </button>

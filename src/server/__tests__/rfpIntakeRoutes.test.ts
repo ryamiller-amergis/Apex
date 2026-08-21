@@ -1,9 +1,27 @@
 import express from 'express';
 import request from 'supertest';
-import rfpIntakeRouter from '../routes/rfpIntake';
 
 jest.mock('../utils/requestUser', () => ({
   getUserId: () => 'user-1',
+}));
+
+jest.mock('../services/featureFlagService', () => ({
+  isFeatureEnabled: jest.fn().mockResolvedValue(true),
+}));
+
+jest.mock('../middleware/rbac', () => ({
+  requirePermission: () => (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (req.headers['x-deny'] === '1') {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+    next();
+  },
+}));
+
+jest.mock('../services/rfpSubmitAccessRequestService', () => ({
+  createRfpSubmitAccessRequest: jest.fn(),
+  listCurrentUserSubmitAccessRequests: jest.fn(),
 }));
 
 jest.mock('../services/rfpIntakeService', () => {
@@ -48,6 +66,11 @@ import {
 } from '../services/rfpIntakeService';
 import { createNotification } from '../services/notificationService';
 import { askEvaluationChat, listEvaluationChat } from '../services/rfpEvaluationChatService';
+import {
+  createRfpSubmitAccessRequest,
+  listCurrentUserSubmitAccessRequests,
+} from '../services/rfpSubmitAccessRequestService';
+import rfpIntakeRouter from '../routes/rfpIntake';
 
 const mockedCreate = createRequest as jest.MockedFunction<typeof createRequest>;
 const mockedList = listOwnerRequests as jest.MockedFunction<typeof listOwnerRequests>;
@@ -61,6 +84,10 @@ const mockedRecipients = resolveRfpSubmissionRecipients as jest.MockedFunction<
 const mockedNotify = createNotification as jest.MockedFunction<typeof createNotification>;
 const mockedListChat = listEvaluationChat as jest.MockedFunction<typeof listEvaluationChat>;
 const mockedAskChat = askEvaluationChat as jest.MockedFunction<typeof askEvaluationChat>;
+const mockedCreateSubmitAccess = createRfpSubmitAccessRequest as jest.MockedFunction<typeof createRfpSubmitAccessRequest>;
+const mockedListSubmitAccess = listCurrentUserSubmitAccessRequests as jest.MockedFunction<
+  typeof listCurrentUserSubmitAccessRequests
+>;
 
 const VALID_INTAKE = {
   title: 'Internal intake tracker',
@@ -302,5 +329,60 @@ describe('RFP intake self-scoped routes', () => {
       expect(response.status).toBe(201);
       expect(mockedAddAttachment).toHaveBeenCalled();
     });
+  });
+
+  describe('submit access request routes', () => {
+    it('creates a pending Request for Product access request', async () => {
+      mockedCreateSubmitAccess.mockResolvedValue({
+        id: 'access-1',
+        userId: 'user-1',
+        status: 'pending',
+        requestedAt: CREATED.createdAt,
+        reviewedBy: null,
+        reviewedAt: null,
+        reviewNote: null,
+      });
+
+      const response = await request(buildApp()).post('/api/rfp-intake/submit-access-requests');
+
+      expect(response.status).toBe(201);
+      expect(response.body.request.status).toBe('pending');
+      expect(mockedCreateSubmitAccess).toHaveBeenCalledWith('user-1');
+    });
+
+    it('returns alreadyGranted when the user already has submit access', async () => {
+      mockedCreateSubmitAccess.mockResolvedValue(null);
+
+      const response = await request(buildApp()).post('/api/rfp-intake/submit-access-requests');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ request: null, alreadyGranted: true });
+    });
+
+    it('lists the current user submit-access requests', async () => {
+      mockedListSubmitAccess.mockResolvedValue([
+        {
+          id: 'access-1',
+          userId: 'user-1',
+          status: 'pending',
+          requestedAt: CREATED.createdAt,
+        },
+      ]);
+
+      const response = await request(buildApp()).get('/api/rfp-intake/submit-access-requests/me');
+
+      expect(response.status).toBe(200);
+      expect(response.body.requests).toHaveLength(1);
+    });
+  });
+
+  it('returns 403 when the owner lacks rfp-intake:submit', async () => {
+    const response = await request(buildApp())
+      .post('/api/rfp-intake/requests')
+      .set('x-deny', '1')
+      .send(VALID_INTAKE);
+
+    expect(response.status).toBe(403);
+    expect(mockedCreate).not.toHaveBeenCalled();
   });
 });

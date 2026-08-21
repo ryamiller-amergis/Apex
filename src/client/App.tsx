@@ -234,6 +234,7 @@ function App() {
 
   const {
     isAuthenticated,
+    isAuthReconnecting,
     authenticatedUser,
     can,
     isInAnyGroup,
@@ -494,7 +495,18 @@ function App() {
     }
   }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig]);
 
-  if (isAuthenticated === null) return <div className="app-loading"><ApexLoader size={80} /></div>;
+  if (isAuthenticated === null) {
+    return (
+      <div className="app-loading">
+        <ApexLoader size={80} />
+        {isAuthReconnecting ? (
+          <p className="app-loading-status" {...{ 'data-testid': 'app-auth-reconnecting' }}>
+            Reconnecting…
+          </p>
+        ) : null}
+      </div>
+    );
+  }
   if (!isAuthenticated) return <Login />;
 
   if (currentView === 'project-selector') {

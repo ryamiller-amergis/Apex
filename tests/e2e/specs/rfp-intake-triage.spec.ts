@@ -55,7 +55,7 @@ const DETAIL = {
 };
 
 test.describe('RFP intake triage VT-05', () => {
-  test('PBI-005 AC-0 opens the queue from the landing triage entry and records a decision', async ({ page, loginAsPersona }) => {
+  test('PBI-005 AC-0 opens the triage queue and records a decision', async ({ page, loginAsPersona }) => {
     test.setTimeout(120_000);
     await suppressBetaAnnouncement(page);
     await stubRfpIntakeFlag(page, true);
@@ -115,10 +115,11 @@ test.describe('RFP intake triage VT-05', () => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(DETAIL) });
     });
 
+    await page.addInitScript(() => {
+      window.localStorage.setItem('selectedProject', 'Apex');
+    });
     await loginAsPersona('ba');
-    await page.goto('/');
-    await expect(page.getByTestId('rfp-triage-entry-card')).toBeVisible({ timeout: 15_000 });
-    await page.getByTestId('rfp-triage-entry-card').click();
+    await page.goto('/rfp-intake');
     await expect(page.getByTestId('rfp-queue-view')).toBeVisible({ timeout: 15_000 });
     await page.getByTestId('rfp-queue-search').fill('Triage');
     await expect(page.getByTestId('rfp-queue-row-rfp-triage-1')).toBeVisible();

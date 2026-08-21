@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { RfpDetailDrawer } from '../RfpDetailDrawer';
 import { useAddRfpComment, useRfpRequestDetail } from '../../hooks/useRfpIntake';
 
@@ -127,5 +127,26 @@ describe('RfpDetailDrawer VT-06 PBI-004', () => {
     expect(screen.getByTestId('rfp-clarification-form')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /retry evaluation/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /reopen/i })).not.toBeInTheDocument();
+  });
+
+  it('widens the drawer when the left edge is dragged', async () => {
+    mockDetail.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: undefined,
+      refetch: jest.fn(),
+    } as never);
+
+    render(<RfpDetailDrawer requestId="rfp-1" onClose={jest.fn()} />);
+    const handle = screen.getByTestId('rfp-detail-resize');
+    const panel = handle.closest('aside') as HTMLElement;
+    const initialWidth = parseInt(panel.style.width, 10);
+
+    act(() => { fireEvent.mouseDown(handle, { clientX: 600 }); });
+    act(() => { document.dispatchEvent(new MouseEvent('mousemove', { clientX: 400, bubbles: true })); });
+
+    await waitFor(() => {
+      expect(parseInt(panel.style.width, 10)).toBeGreaterThan(initialWidth);
+    });
   });
 });

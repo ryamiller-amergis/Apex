@@ -60,6 +60,7 @@ import type {
   RfpRequestEventType,
   RfpRequestType,
   RfpRisk,
+  RfpSubmitAccessRequestStatus,
   RfpTechVelocity,
   RfpVerdict,
   RfpEvaluationChatRole,
@@ -321,6 +322,7 @@ export const appUsersRelations = relations(appUsers, ({ many, one }) => ({
   groupMemberships: many(appGroupMembers),
   projectAssignments: many(userProjectAssignments),
   projectAccessRequests: many(projectAccessRequests),
+  rfpIntakeSubmitRequests: many(rfpIntakeSubmitRequests),
   featureRequests: many(featureRequests),
   rfpRequests: many(rfpRequests),
   profile: one(userProfiles, {
@@ -430,6 +432,26 @@ export const projectAccessRequests = pgTable('project_access_requests', {
 export const projectAccessRequestsRelations = relations(projectAccessRequests, ({ one }) => ({
   user: one(appUsers, {
     fields: [projectAccessRequests.userId],
+    references: [appUsers.oid],
+  }),
+}));
+
+export const rfpIntakeSubmitRequests = pgTable('rfp_intake_submit_requests', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  status: text('status').$type<RfpSubmitAccessRequestStatus>().notNull().default('pending'),
+  requestedAt: timestamp('requested_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  reviewedBy: text('reviewed_by'),
+  reviewedAt: timestamp('reviewed_at', { withTimezone: true, mode: 'string' }),
+  reviewNote: text('review_note'),
+}, (t) => ({
+  userIdx: index('idx_rfp_intake_submit_requests_user_id').on(t.userId),
+  statusIdx: index('idx_rfp_intake_submit_requests_status').on(t.status),
+}));
+
+export const rfpIntakeSubmitRequestsRelations = relations(rfpIntakeSubmitRequests, ({ one }) => ({
+  user: one(appUsers, {
+    fields: [rfpIntakeSubmitRequests.userId],
     references: [appUsers.oid],
   }),
 }));

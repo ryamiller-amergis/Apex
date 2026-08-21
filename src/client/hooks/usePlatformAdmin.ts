@@ -28,6 +28,7 @@ import type {
   RestrictedUserAccessListResponse,
   UpdateRestrictedUserAccessRequest,
 } from '../../shared/types/restrictedAccess';
+import type { PlatformAdminRfpSubmitAccessRequest } from '../../shared/types/rfpIntake';
 
 export const platformAdminQueryKeys = {
   projects: ['platform-admin', 'projects'] as const,
@@ -37,6 +38,7 @@ export const platformAdminQueryKeys = {
   users: ['platform-admin', 'users'] as const,
   groups: ['platform-admin', 'groups'] as const,
   accessRequests: (status: ProjectAccessRequestStatus | 'all' = 'pending') => ['platform-admin', 'access-requests', status] as const,
+  rfpSubmitAccessRequests: (status: ProjectAccessRequestStatus | 'all' = 'pending') => ['platform-admin', 'rfp-submit-access-requests', status] as const,
   menuSettings: ['platform-admin', 'menu-settings'] as const,
   menuSetting: (project: string | null) => ['platform-admin', 'menu-settings', project] as const,
   userAccess: ['platform-admin', 'user-access'] as const,
@@ -231,6 +233,58 @@ export function useApproveProjectAccessRequest() {
       queryClient.invalidateQueries({ queryKey: ['ado-projects'] });
       queryClient.invalidateQueries({ queryKey: ['platform-admin', 'assignments'] });
       queryClient.invalidateQueries({ queryKey: ['platform-admin', 'access-requests', requestId] });
+    },
+  });
+}
+
+export function usePlatformAdminRfpSubmitAccessRequests(status: ProjectAccessRequestStatus | 'all' = 'pending') {
+  return useQuery<PlatformAdminRfpSubmitAccessRequest[]>({
+    queryKey: platformAdminQueryKeys.rfpSubmitAccessRequests(status),
+    queryFn: async () => {
+      const params = new URLSearchParams({ status });
+      const data = await platformAdminFetch<{ requests: PlatformAdminRfpSubmitAccessRequest[] }>(
+        `/api/platform-admin/rfp-submit-access-requests?${params.toString()}`,
+      );
+      return data.requests;
+    },
+    staleTime: 30_000,
+  });
+}
+
+export function useApproveRfpSubmitAccessRequest() {
+  const queryClient = useQueryClient();
+  return useMutation<PlatformAdminRfpSubmitAccessRequest, Error, { requestId: string }>({
+    mutationFn: ({ requestId }) =>
+      platformAdminFetch<PlatformAdminRfpSubmitAccessRequest>(
+        `/api/platform-admin/rfp-submit-access-requests/${encodeURIComponent(requestId)}/approve`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: platformAdminQueryKeys.rfpSubmitAccessRequests() });
+      queryClient.invalidateQueries({ queryKey: platformAdminQueryKeys.rfpSubmitAccessRequests('all') });
+    },
+  });
+}
+
+export function useRejectRfpSubmitAccessRequest() {
+  const queryClient = useQueryClient();
+  return useMutation<PlatformAdminRfpSubmitAccessRequest, Error, { requestId: string }>({
+    mutationFn: ({ requestId }) =>
+      platformAdminFetch<PlatformAdminRfpSubmitAccessRequest>(
+        `/api/platform-admin/rfp-submit-access-requests/${encodeURIComponent(requestId)}/reject`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: platformAdminQueryKeys.rfpSubmitAccessRequests() });
+      queryClient.invalidateQueries({ queryKey: platformAdminQueryKeys.rfpSubmitAccessRequests('all') });
     },
   });
 }

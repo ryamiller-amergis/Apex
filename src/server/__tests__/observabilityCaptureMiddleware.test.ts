@@ -87,6 +87,7 @@ describe('observabilityCapturePolicy', () => {
     expect(isCaptureExcludedPath('/api/observability/events')).toBe(true);
     expect(isCaptureExcludedPath('/api/health')).toBe(true);
     expect(isCaptureExcludedPath('/api/health/db')).toBe(true);
+    expect(isCaptureExcludedPath('/api/health/live')).toBe(true);
     expect(isCaptureExcludedPath('/health/agents')).toBe(true);
     expect(isCaptureExcludedPath('/ready')).toBe(true);
     expect(isCaptureExcludedPath('/api/ready')).toBe(true);

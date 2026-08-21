@@ -15,6 +15,7 @@ jest.mock('../services/menuSettingsService');
 jest.mock('../services/userProjectAssignmentService');
 jest.mock('../services/projectCatalogService');
 jest.mock('../services/projectAccessRequestService');
+jest.mock('../services/rfpSubmitAccessRequestService');
 jest.mock('../services/pendingAssignmentService');
 jest.mock('../services/groupService', () => ({
   listGroups: jest.fn(),

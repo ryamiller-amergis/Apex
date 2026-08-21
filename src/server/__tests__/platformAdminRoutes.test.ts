@@ -5,6 +5,7 @@ import * as assignmentService from '../services/userProjectAssignmentService';
 import * as menuSettingsService from '../services/menuSettingsService';
 import * as projectCatalogService from '../services/projectCatalogService';
 import * as projectAccessRequestService from '../services/projectAccessRequestService';
+import * as rfpSubmitAccessRequestService from '../services/rfpSubmitAccessRequestService';
 import * as groupService from '../services/groupService';
 import { requireSuperAdmin } from '../middleware/rbac';
 
@@ -32,6 +33,12 @@ jest.mock('../services/projectAccessRequestService', () => ({
   rejectProjectAccessRequest: jest.fn(),
 }));
 
+jest.mock('../services/rfpSubmitAccessRequestService', () => ({
+  approveRfpSubmitAccessRequest: jest.fn(),
+  listPlatformAdminRfpSubmitAccessRequests: jest.fn(),
+  rejectRfpSubmitAccessRequest: jest.fn(),
+}));
+
 jest.mock('../services/groupService', () => ({
   listGroups: jest.fn(),
 }));
@@ -55,6 +62,7 @@ const mockAssignments = assignmentService as jest.Mocked<typeof assignmentServic
 const mockMenuSettings = menuSettingsService as jest.Mocked<typeof menuSettingsService>;
 const mockProjectCatalog = projectCatalogService as jest.Mocked<typeof projectCatalogService>;
 const mockProjectAccessRequests = projectAccessRequestService as jest.Mocked<typeof projectAccessRequestService>;
+const mockRfpSubmitAccessRequests = rfpSubmitAccessRequestService as jest.Mocked<typeof rfpSubmitAccessRequestService>;
 const mockGroupService = groupService as jest.Mocked<typeof groupService>;
 const mockRequireSuperAdmin = requireSuperAdmin as jest.Mock;
 
@@ -286,6 +294,64 @@ describe('platformAdminRouter', () => {
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('rejected');
       expect(mockProjectAccessRequests.rejectProjectAccessRequest).toHaveBeenCalledWith('request-1', 'admin-oid', null);
+    });
+  });
+
+  describe('RFP submit access request review routes', () => {
+    const submitRequest = {
+      id: 'rfp-access-1',
+      userId: 'user-1',
+      displayName: 'Alice',
+      email: 'alice@example.com',
+      status: 'pending' as const,
+      requestedAt: '2026-08-20T12:00:00Z',
+      reviewedBy: null,
+      reviewedAt: null,
+      reviewNote: null,
+    };
+
+    it('returns pending Request for Product access requests', async () => {
+      mockRfpSubmitAccessRequests.listPlatformAdminRfpSubmitAccessRequests.mockResolvedValue([submitRequest]);
+
+      const res = await request(buildApp()).get('/api/platform-admin/rfp-submit-access-requests');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ requests: [submitRequest] });
+      expect(mockRfpSubmitAccessRequests.listPlatformAdminRfpSubmitAccessRequests).toHaveBeenCalledWith('pending');
+    });
+
+    it('approves a Request for Product access request', async () => {
+      mockRfpSubmitAccessRequests.approveRfpSubmitAccessRequest.mockResolvedValue({
+        ...submitRequest,
+        status: 'approved',
+        reviewedBy: 'admin-oid',
+        reviewedAt: '2026-08-20T13:00:00Z',
+      });
+
+      const res = await request(buildApp({ oid: 'admin-oid' }))
+        .post('/api/platform-admin/rfp-submit-access-requests/rfp-access-1/approve')
+        .send({});
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('approved');
+      expect(mockRfpSubmitAccessRequests.approveRfpSubmitAccessRequest).toHaveBeenCalledWith('rfp-access-1', 'admin-oid', null);
+    });
+
+    it('rejects a Request for Product access request', async () => {
+      mockRfpSubmitAccessRequests.rejectRfpSubmitAccessRequest.mockResolvedValue({
+        ...submitRequest,
+        status: 'rejected',
+        reviewedBy: 'admin-oid',
+        reviewedAt: '2026-08-20T13:00:00Z',
+      });
+
+      const res = await request(buildApp({ oid: 'admin-oid' }))
+        .post('/api/platform-admin/rfp-submit-access-requests/rfp-access-1/reject')
+        .send({});
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('rejected');
+      expect(mockRfpSubmitAccessRequests.rejectRfpSubmitAccessRequest).toHaveBeenCalledWith('rfp-access-1', 'admin-oid', null);
     });
   });
 

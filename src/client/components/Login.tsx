@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import type { DevMockPersonaId } from '../../shared/constants/devMockUsers';
 import { IS_BETA_RELEASE } from '../config/release';
+import { fetchAuthStatus } from '../utils/fetchAuthStatus';
 import { BrandLogo } from './BrandLogo';
 import styles from './Login.module.css';
 
@@ -17,7 +18,7 @@ export const Login: React.FC = () => {
   const [devLoggingIn, setDevLoggingIn] = useState<DevMockPersonaId | null>(null);
 
   useEffect(() => {
-    const checkAuth = fetch('/auth/status', { credentials: 'include' })
+    const checkAuth = fetchAuthStatus()
       .then(res => res.json())
       .then(data => {
         if (data.authenticated) {
@@ -67,13 +68,13 @@ export const Login: React.FC = () => {
   if (checking) {
     return (
       <div className={styles['login-container']}>
-        <div className={styles['login-split']} data-testid="login-split">
-          <div className={styles['login-brand-panel']} data-testid="login-brand-panel" aria-label="Apex brand">
+        <div className={styles['login-split']} {...{ 'data-testid': 'login-split' }}>
+          <div className={styles['login-brand-panel']} {...{ 'data-testid': 'login-brand-panel' }} aria-label="Apex brand">
             <div className={styles['login-logo']}>
               <BrandLogo tone="inverse" beta={IS_BETA_RELEASE} align="center" />
             </div>
           </div>
-          <div className={styles['login-action-panel']} data-testid="login-action-panel" aria-label="Sign in">
+          <div className={styles['login-action-panel']} {...{ 'data-testid': 'login-action-panel' }} aria-label="Sign in">
             <p className={styles['login-action-copy']}>Checking authentication...</p>
           </div>
         </div>
@@ -83,18 +84,23 @@ export const Login: React.FC = () => {
 
   return (
     <div className={styles['login-container']}>
-      <div className={styles['login-split']} data-testid="login-split">
-        <div className={styles['login-brand-panel']} data-testid="login-brand-panel" aria-label="Apex brand">
+      <div className={styles['login-split']} {...{ 'data-testid': 'login-split' }}>
+        <div className={styles['login-brand-panel']} {...{ 'data-testid': 'login-brand-panel' }} aria-label="Apex brand">
           <div className={styles['login-logo']}>
             <BrandLogo tone="inverse" beta={IS_BETA_RELEASE} align="center" />
           </div>
         </div>
 
-        <div className={styles['login-action-panel']} data-testid="login-action-panel" aria-label="Sign in">
+        <div className={styles['login-action-panel']} {...{ 'data-testid': 'login-action-panel' }} aria-label="Sign in">
           <div className={styles['login-action-content']}>
             <h1 className={styles['login-action-title']}>Sign in</h1>
             <p className={styles['login-action-copy']}>Continue with your Amergis account.</p>
-            <button className={styles['login-button']} onClick={handleLogin}>
+            <button
+              type="button"
+              className={styles['login-button']}
+              onClick={handleLogin}
+              {...{ 'data-testid': 'login-sso-button' }}
+            >
               Sign in with Amergis SSO
             </button>
 
@@ -107,10 +113,12 @@ export const Login: React.FC = () => {
                   {devPersonas.map((persona) => (
                     <button
                       key={persona.id}
+                      type="button"
                       className={styles['dev-login-button']}
                       onClick={() => handleDevLogin(persona.id)}
                       disabled={devLoggingIn !== null}
                       title={persona.displayName}
+                      {...{ 'data-testid': `login-dev-${persona.id}` }}
                     >
                       {devLoggingIn === persona.id ? 'Signing in...' : persona.label}
                     </button>

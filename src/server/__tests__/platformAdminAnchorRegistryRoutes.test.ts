@@ -33,6 +33,11 @@ jest.mock('../services/projectAccessRequestService', () => ({
   listPlatformAdminAccessRequests: jest.fn(),
   rejectProjectAccessRequest: jest.fn(),
 }));
+jest.mock('../services/rfpSubmitAccessRequestService', () => ({
+  approveRfpSubmitAccessRequest: jest.fn(),
+  listPlatformAdminRfpSubmitAccessRequests: jest.fn(),
+  rejectRfpSubmitAccessRequest: jest.fn(),
+}));
 jest.mock('../services/groupService', () => ({
   listGroups: jest.fn(),
 }));

@@ -3,6 +3,7 @@ import type { RfpAttachment } from '../../shared/types/rfpIntake';
 import { validateRfpAttachments } from '../../shared/types/rfpIntake';
 import { useAddRfpComment } from '../hooks/useRfpIntake';
 import { useRfpAttachmentUpload, useRfpMentionCandidates, useRfpTriageDetail } from '../hooks/useRfpTriage';
+import { useRightDrawerResize } from '../hooks/useRightDrawerResize';
 import { formatLabel, RfpStatusControl } from './RfpStatusControl';
 import { formatRfpStatusSubtitle } from '../../shared/utils/rfpEvaluationDisplay';
 import { RfpEvaluationCard } from './RfpEvaluationCard';
@@ -28,6 +29,7 @@ export const RfpTriageDetailPanel: React.FC<RfpTriageDetailPanelProps> = ({
   const [mentionedUserIds, setMentionedUserIds] = useState<string[]>([]);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [unsavedError, setUnsavedError] = useState<string | null>(null);
+  const resize = useRightDrawerResize();
   const mentions = useRfpMentionCandidates(requestId, mentionQuery, mentionQuery.length > 0);
   const detail = detailQuery.data;
 
@@ -89,11 +91,32 @@ export const RfpTriageDetailPanel: React.FC<RfpTriageDetailPanelProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="rfp-triage-title"
-      onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
+      onClick={(event) => {
+        if (resize.consumeResizeClick()) return;
+        if (event.target === event.currentTarget) onClose();
+      }}
       onKeyDown={(event) => { if (event.key === 'Escape') onClose(); }}
       {...{ 'data-testid': 'rfp-triage-detail' }}
     >
-      <aside className={styles.drawer}>
+      <aside
+        className={`${styles.drawer}${resize.isDragging ? ` ${styles.drawerResizing}` : ''}`}
+        style={{ width: resize.width }}
+      >
+        {/* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- WAI-ARIA separator resize must be focusable */}
+        <div
+          className={`${styles.resizeHandle}${resize.isDragging ? ` ${styles.resizeHandleDragging}` : ''}`}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize request detail"
+          aria-valuemin={resize.minWidth}
+          aria-valuemax={resize.maxWidth}
+          aria-valuenow={resize.width}
+          tabIndex={0}
+          onMouseDown={resize.handleResizeMouseDown}
+          onKeyDown={resize.handleResizeKeyDown}
+          {...{ 'data-testid': 'rfp-triage-resize' }}
+        />
+        {/* eslint-enable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}
         <div className={styles.header}>
           <div>
             <h2 id="rfp-triage-title" className={styles.title}>{detail?.title ?? 'Request detail'}</h2>

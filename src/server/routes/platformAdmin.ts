@@ -21,12 +21,18 @@ import {
   rejectProjectAccessRequest,
 } from '../services/projectAccessRequestService';
 import {
+  approveRfpSubmitAccessRequest,
+  listPlatformAdminRfpSubmitAccessRequests,
+  rejectRfpSubmitAccessRequest,
+} from '../services/rfpSubmitAccessRequestService';
+import {
   addPendingAssignments,
   listPendingForProject,
   removePendingAssignment,
 } from '../services/pendingAssignmentService';
 import { CONFIGURABLE_MENU_ITEMS, type MenuItemKey, type UpsertProjectMenuConfigRequest } from '../../shared/types/menuSettings';
 import type { ProjectAccessRequestStatus, SetProjectAssignmentsRequest } from '../../shared/types/platformAdmin';
+import type { RfpSubmitAccessRequestStatus } from '../../shared/types/rfpIntake';
 import foundationSkillsAdminRouter from './foundationSkillsAdmin';
 import type { AddRuleRequest, FlagRuleType } from '../../shared/types/featureFlags';
 import * as walkthroughService from '../services/walkthroughService';
@@ -252,6 +258,12 @@ function getStatusFilter(value: unknown): ProjectAccessRequestStatus | 'all' | n
   return null;
 }
 
+function getRfpSubmitAccessStatusFilter(value: unknown): RfpSubmitAccessRequestStatus | 'all' | null {
+  if (value === undefined) return 'pending';
+  if (value === 'all' || value === 'pending' || value === 'approved' || value === 'rejected') return value;
+  return null;
+}
+
 router.get('/assignments', async (_req: Request, res: Response): Promise<void> => {
   try {
     const assignments = await getAllAssignments();
@@ -319,6 +331,49 @@ router.post('/access-requests/:id/reject', async (req: Request, res: Response): 
     const request = await rejectProjectAccessRequest(req.params.id, getActingUserId(req), req.body?.reviewNote ?? null);
     if (!request) {
       res.status(404).json({ error: 'No pending access request found' });
+      return;
+    }
+
+    res.json(request);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get('/rfp-submit-access-requests', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const status = getRfpSubmitAccessStatusFilter(req.query.status);
+    if (!status) {
+      res.status(400).json({ error: 'status must be pending, approved, rejected, or all' });
+      return;
+    }
+
+    const requests = await listPlatformAdminRfpSubmitAccessRequests(status);
+    res.json({ requests });
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/rfp-submit-access-requests/:id/approve', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const request = await approveRfpSubmitAccessRequest(req.params.id, getActingUserId(req), req.body?.reviewNote ?? null);
+    if (!request) {
+      res.status(404).json({ error: 'No pending Request for Product access request found' });
+      return;
+    }
+
+    res.json(request);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/rfp-submit-access-requests/:id/reject', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const request = await rejectRfpSubmitAccessRequest(req.params.id, getActingUserId(req), req.body?.reviewNote ?? null);
+    if (!request) {
+      res.status(404).json({ error: 'No pending Request for Product access request found' });
       return;
     }
 

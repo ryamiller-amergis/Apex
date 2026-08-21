@@ -9,10 +9,15 @@
   position: relative;
 }
 
-.userMenuCorner {
+.userMenuCorner,
+.chrome {
   position: absolute;
   top: 16px;
   right: 24px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 30;
 }
 
 .header {
@@ -29,14 +34,8 @@
 
 .subtitle {
   margin: 0;
-  font-size: 1rem;
+  font-size: 0.95rem;
   color: var(--text-secondary);
-}
-
-.actions {
-  display: flex;
-  justify-content: center;
-  margin-top: 18px;
 }
 
 .platformAdminButton {
@@ -67,10 +66,105 @@
   transition: all 0.2s ease;
 }
 
+.requestAccessButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 34px;
+  padding: 0 12px;
+  font-weight: 600;
+}
+
+.chrome .platformAdminButton {
+  height: 34px;
+  padding: 0 12px;
+  font-weight: 600;
+}
+
 .requestAccessButton:hover,
 .secondaryButton:hover:not(:disabled) {
   border-color: var(--accent-color);
   color: var(--accent-color);
+}
+
+.requestMenu {
+  position: relative;
+}
+
+.requestMenuTriggerOpen {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.requestMenuChevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 6px;
+  color: currentColor;
+  transition: transform 0.2s ease;
+}
+
+.requestMenuChevron svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.requestMenuTriggerOpen .requestMenuChevron {
+  transform: rotate(180deg);
+}
+
+.requestMenuList {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  left: auto;
+  min-width: 220px;
+  padding: 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: var(--shadow-md);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.requestMenuItem {
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  transition: all 0.2s ease;
+}
+
+.requestMenuItem:hover,
+.requestMenuItem:focus-visible {
+  background: var(--bg-tertiary);
+  color: var(--accent-color);
+}
+
+.requestMenuItem:disabled {
+  cursor: default;
+  opacity: 0.7;
+  color: var(--text-secondary);
+}
+
+.requestMenuItem:disabled:hover,
+.requestMenuItem:disabled:focus-visible {
+  background: transparent;
+  color: var(--text-secondary);
 }
 
 .platformAdminButton:disabled,
@@ -200,6 +294,27 @@
 .errorMsg {
   color: var(--error-color);
   font-size: 0.9rem;
+}
+
+.intakeStatusBanner,
+.intakeStatusError {
+  width: 100%;
+  max-width: 800px;
+  margin: -24px 0 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: center;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.intakeStatusBanner {
+  color: var(--text-secondary);
+}
+
+.intakeStatusError {
+  color: var(--error-color);
 }
 
 .modalBackdrop {

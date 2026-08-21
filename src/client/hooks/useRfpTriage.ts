@@ -139,14 +139,24 @@ export function useRfpMentionCandidates(rfpId: string | null, q: string, enabled
   });
 }
 
-export function useCanViewRfpTriage(isSuperAdmin: boolean) {
-  const query = useQuery<{ permissions: string[] }>({
+export function useApexRfpPermissions() {
+  return useQuery<{ permissions: string[] }>({
     queryKey: ['me', 'permissions', 'Apex', 'rfp-intake'],
     queryFn: () => apiFetch('/api/me/permissions?project=Apex'),
     staleTime: 60_000,
   });
+}
+
+export function useCanViewRfpTriage(isSuperAdmin: boolean) {
+  const query = useApexRfpPermissions();
   const permissions = query.data?.permissions ?? [];
   return isSuperAdmin
     || permissions.includes('rfp-intake:view')
     || permissions.includes('rfp-intake:manage');
+}
+
+export function useCanSubmitRfp(isSuperAdmin: boolean) {
+  const query = useApexRfpPermissions();
+  const permissions = query.data?.permissions ?? [];
+  return isSuperAdmin || permissions.includes('rfp-intake:submit');
 }

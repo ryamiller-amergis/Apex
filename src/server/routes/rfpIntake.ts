@@ -16,6 +16,10 @@ import { isSuperAdminRequest } from '../utils/superAdmin';
 import { requirePermission } from '../middleware/rbac';
 import { isFeatureEnabled } from '../services/featureFlagService';
 import {
+  createRfpSubmitAccessRequest,
+  listCurrentUserSubmitAccessRequests,
+} from '../services/rfpSubmitAccessRequestService';
+import {
   APEX_PROJECT,
   addAttachment,
   addComment,
@@ -159,172 +163,6 @@ async function notifySubmission(created: { id: string; title: string }): Promise
   }
 }
 
-router.post('/requests', acceptAttachments, async (req, res, next) => {
-  try {
-    const userId = getUserId(req);
-    const payload = parseIntakeBody((req.body ?? {}) as Record<string, unknown>);
-    const intakeErrors = validateRfpIntakePayload(payload);
-    if (intakeErrors.length > 0) {
-      return res.status(400).json({
-        error: intakeErrors.join('; '),
-        fields: fieldErrors(intakeErrors),
-      });
-    }
-
-    const files = filesFromRequest(req);
-    const fileErrors = validateRfpAttachments(
-      files.map((file) => ({
-        filename: file.originalname,
-        contentType: file.mimetype,
-        sizeBytes: file.size,
-      })),
-    );
-    if (fileErrors.length > 0) {
-      return res.status(400).json({ error: fileErrors.join('; '), fields: fieldErrors(fileErrors) });
-    }
-
-    const created = await createRequest(userId, payload);
-    if (files.length > 0) {
-    await persistUploadedFiles(created.id, userId, files);
-    }
-    await notifySubmission(created);
-    return res.status(201).json(created);
-  } catch (err) {
-    handleRfpError(err, res, next);
-  }
-});
-
-router.get('/requests/mine', async (req, res, next) => {
-  try {
-    const userId = getUserId(req);
-    const limit = Number.parseInt(String(req.query.limit ?? '50'), 10);
-    const offset = Number.parseInt(String(req.query.offset ?? '0'), 10);
-    const result = await listOwnerRequests(userId, {
-      limit: Number.isFinite(limit) ? limit : 50,
-      offset: Number.isFinite(offset) ? offset : 0,
-    });
-    return res.json(result);
-  } catch (err) {
-    handleRfpError(err, res, next);
-  }
-});
-
-router.get('/requests/:id', async (req, res, next) => {
-  try {
-    const detail = await getOwnerRequestDetail(req.params.id, getUserId(req));
-    return res.json(detail);
-  } catch (err) {
-    handleRfpError(err, res, next);
-  }
-});
-
-router.post('/requests/:id/clarify', upload.none(), async (req, res, next) => {
-  try {
-    const payload = parseIntakeBody((req.body ?? {}) as Record<string, unknown>);
-    const updated = await answerClarification(req.params.id, getUserId(req), payload);
-    return res.json(updated);
-  } catch (err) {
-    handleRfpError(err, res, next);
-  }
-});
-
-router.get('/requests/:id/comments', async (req, res, next) => {
-  try {
-    const comments = await listComments(req.params.id, getUserId(req));
-    return res.json(comments);
-  } catch (err) {
-    handleRfpError(err, res, next);
-  }
-});
-
-router.post('/requests/:id/comments', async (req, res, next) => {
-  try {
-    const body = typeof req.body?.body === 'string' ? req.body.body : '';
-    const mentionedUserIds = Array.isArray(req.body?.mentionedUserIds)
-      ? req.body.mentionedUserIds.filter((id: unknown) => typeof id === 'string')
-      : [];
-    const attachmentIds = Array.isArray(req.body?.attachmentIds)
-      ? req.body.attachmentIds.filter((id: unknown) => typeof id === 'string')
-      : [];
-    const comment = await addComment(req.params.id, getUserId(req), {
-      body,
-      mentionedUserIds,
-      attachmentIds,
-    });
-    return res.status(201).json(comment);
-  } catch (err) {
-    handleRfpError(err, res, next);
-  }
-});
-
-router.get('/requests/:id/evaluation-chat', async (req, res, next) => {
-  try {
-    const messages = await listEvaluationChat(req.params.id, getUserId(req));
-    return res.json(messages);
-  } catch (err) {
-    handleRfpError(err, res, next);
-  }
-});
-
-router.post('/requests/:id/evaluation-chat', async (req, res, next) => {
-  try {
-    const message = typeof req.body?.message === 'string' ? req.body.message : '';
-    const created = await askEvaluationChat(req.params.id, getUserId(req), message);
-    return res.status(201).json(created);
-  } catch (err) {
-    handleRfpError(err, res, next);
-  }
-});
-
-router.post('/requests/:id/attachments', acceptAttachments, async (req, res, next) => {
-  try {
-    const files = filesFromRequest(req);
-    if (files.length === 0) {
-      return res.status(400).json({ error: 'At least one attachment is required' });
-    }
-    const fileErrors = validateRfpAttachments(
-      files.map((file) => ({
-        filename: file.originalname,
-        contentType: file.mimetype,
-        sizeBytes: file.size,
-      })),
-    );
-    if (fileErrors.length > 0) {
-      return res.status(400).json({ error: fileErrors.join('; '), fields: fieldErrors(fileErrors) });
-    }
-    const stored = [];
-    for (const file of files) {
-      stored.push(await addAttachment(req.params.id, getUserId(req), {
-        filename: file.originalname,
-        contentType: file.mimetype,
-        sizeBytes: file.size,
-        buffer: file.buffer,
-      }));
-    }
-    return res.status(201).json(stored.length === 1 ? stored[0] : stored);
-  } catch (err) {
-    handleRfpError(err, res, next);
-  }
-});
-
-router.get('/requests/:id/attachments/:attachmentId', async (req, res, next) => {
-  try {
-    const { attachment, filePath } = await getAttachment(
-      req.params.id,
-      req.params.attachmentId,
-      getUserId(req),
-    );
-    if (!filePath || !fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'RFP not found' });
-    }
-    res.setHeader('Content-Type', attachment.contentType);
-    res.setHeader('Content-Disposition', `inline; filename="${attachment.filename.replace(/"/g, '')}"`);
-    return fs.createReadStream(filePath).pipe(res);
-  } catch (err) {
-    handleRfpError(err, res, next);
-  }
-});
-
 function forceApexProject(
   req: import('express').Request,
   _res: import('express').Response,
@@ -359,6 +197,203 @@ async function requireRfpIntakeFlag(
     next(err);
   }
 }
+
+const ownerSubmit = [requireRfpIntakeFlag, forceApexProject, requirePermission('rfp-intake:submit')];
+
+router.get('/submit-access-requests/me', requireRfpIntakeFlag, async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    if (userId === 'anonymous') {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const requests = await listCurrentUserSubmitAccessRequests(userId);
+    return res.json({ requests });
+  } catch (err) {
+    handleRfpError(err, res, next);
+  }
+});
+
+router.post('/submit-access-requests', requireRfpIntakeFlag, async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    if (userId === 'anonymous') {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const request = await createRfpSubmitAccessRequest(userId);
+    if (!request) {
+      return res.status(200).json({ request: null, alreadyGranted: true });
+    }
+    return res.status(201).json({ request });
+  } catch (err) {
+    handleRfpError(err, res, next);
+  }
+});
+
+router.post('/requests', ...ownerSubmit, acceptAttachments, async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const payload = parseIntakeBody((req.body ?? {}) as Record<string, unknown>);
+    const intakeErrors = validateRfpIntakePayload(payload);
+    if (intakeErrors.length > 0) {
+      return res.status(400).json({
+        error: intakeErrors.join('; '),
+        fields: fieldErrors(intakeErrors),
+      });
+    }
+
+    const files = filesFromRequest(req);
+    const fileErrors = validateRfpAttachments(
+      files.map((file) => ({
+        filename: file.originalname,
+        contentType: file.mimetype,
+        sizeBytes: file.size,
+      })),
+    );
+    if (fileErrors.length > 0) {
+      return res.status(400).json({ error: fileErrors.join('; '), fields: fieldErrors(fileErrors) });
+    }
+
+    const created = await createRequest(userId, payload);
+    if (files.length > 0) {
+    await persistUploadedFiles(created.id, userId, files);
+    }
+    await notifySubmission(created);
+    return res.status(201).json(created);
+  } catch (err) {
+    handleRfpError(err, res, next);
+  }
+});
+
+router.get('/requests/mine', ...ownerSubmit, async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const limit = Number.parseInt(String(req.query.limit ?? '50'), 10);
+    const offset = Number.parseInt(String(req.query.offset ?? '0'), 10);
+    const result = await listOwnerRequests(userId, {
+      limit: Number.isFinite(limit) ? limit : 50,
+      offset: Number.isFinite(offset) ? offset : 0,
+    });
+    return res.json(result);
+  } catch (err) {
+    handleRfpError(err, res, next);
+  }
+});
+
+router.get('/requests/:id', ...ownerSubmit, async (req, res, next) => {
+  try {
+    const detail = await getOwnerRequestDetail(req.params.id, getUserId(req));
+    return res.json(detail);
+  } catch (err) {
+    handleRfpError(err, res, next);
+  }
+});
+
+router.post('/requests/:id/clarify', ...ownerSubmit, upload.none(), async (req, res, next) => {
+  try {
+    const payload = parseIntakeBody((req.body ?? {}) as Record<string, unknown>);
+    const updated = await answerClarification(req.params.id, getUserId(req), payload);
+    return res.json(updated);
+  } catch (err) {
+    handleRfpError(err, res, next);
+  }
+});
+
+router.get('/requests/:id/comments', ...ownerSubmit, async (req, res, next) => {
+  try {
+    const comments = await listComments(req.params.id, getUserId(req));
+    return res.json(comments);
+  } catch (err) {
+    handleRfpError(err, res, next);
+  }
+});
+
+router.post('/requests/:id/comments', ...ownerSubmit, async (req, res, next) => {
+  try {
+    const body = typeof req.body?.body === 'string' ? req.body.body : '';
+    const mentionedUserIds = Array.isArray(req.body?.mentionedUserIds)
+      ? req.body.mentionedUserIds.filter((id: unknown) => typeof id === 'string')
+      : [];
+    const attachmentIds = Array.isArray(req.body?.attachmentIds)
+      ? req.body.attachmentIds.filter((id: unknown) => typeof id === 'string')
+      : [];
+    const comment = await addComment(req.params.id, getUserId(req), {
+      body,
+      mentionedUserIds,
+      attachmentIds,
+    });
+    return res.status(201).json(comment);
+  } catch (err) {
+    handleRfpError(err, res, next);
+  }
+});
+
+router.get('/requests/:id/evaluation-chat', ...ownerSubmit, async (req, res, next) => {
+  try {
+    const messages = await listEvaluationChat(req.params.id, getUserId(req));
+    return res.json(messages);
+  } catch (err) {
+    handleRfpError(err, res, next);
+  }
+});
+
+router.post('/requests/:id/evaluation-chat', ...ownerSubmit, async (req, res, next) => {
+  try {
+    const message = typeof req.body?.message === 'string' ? req.body.message : '';
+    const created = await askEvaluationChat(req.params.id, getUserId(req), message);
+    return res.status(201).json(created);
+  } catch (err) {
+    handleRfpError(err, res, next);
+  }
+});
+
+router.post('/requests/:id/attachments', ...ownerSubmit, acceptAttachments, async (req, res, next) => {
+  try {
+    const files = filesFromRequest(req);
+    if (files.length === 0) {
+      return res.status(400).json({ error: 'At least one attachment is required' });
+    }
+    const fileErrors = validateRfpAttachments(
+      files.map((file) => ({
+        filename: file.originalname,
+        contentType: file.mimetype,
+        sizeBytes: file.size,
+      })),
+    );
+    if (fileErrors.length > 0) {
+      return res.status(400).json({ error: fileErrors.join('; '), fields: fieldErrors(fileErrors) });
+    }
+    const stored = [];
+    for (const file of files) {
+      stored.push(await addAttachment(req.params.id, getUserId(req), {
+        filename: file.originalname,
+        contentType: file.mimetype,
+        sizeBytes: file.size,
+        buffer: file.buffer,
+      }));
+    }
+    return res.status(201).json(stored.length === 1 ? stored[0] : stored);
+  } catch (err) {
+    handleRfpError(err, res, next);
+  }
+});
+
+router.get('/requests/:id/attachments/:attachmentId', ...ownerSubmit, async (req, res, next) => {
+  try {
+    const { attachment, filePath } = await getAttachment(
+      req.params.id,
+      req.params.attachmentId,
+      getUserId(req),
+    );
+    if (!filePath || !fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'RFP not found' });
+    }
+    res.setHeader('Content-Type', attachment.contentType);
+    res.setHeader('Content-Disposition', `inline; filename="${attachment.filename.replace(/"/g, '')}"`);
+    return fs.createReadStream(filePath).pipe(res);
+  } catch (err) {
+    handleRfpError(err, res, next);
+  }
+});
 
 const triageView = [requireRfpIntakeFlag, forceApexProject, requirePermission('rfp-intake:view')];
 const triageManage = [requireRfpIntakeFlag, forceApexProject, requirePermission('rfp-intake:manage')];

@@ -5,6 +5,25 @@
 
 export const RFP_INTAKE_VIEW = 'rfp-intake:view';
 export const RFP_INTAKE_MANAGE = 'rfp-intake:manage';
+export const RFP_INTAKE_SUBMIT = 'rfp-intake:submit';
+export const RFP_SUBMITTER_ROLE = 'rfp-submitter';
+
+export type RfpSubmitAccessRequestStatus = 'pending' | 'approved' | 'rejected';
+
+export interface RfpSubmitAccessRequest {
+  id: string;
+  userId: string;
+  status: RfpSubmitAccessRequestStatus;
+  requestedAt: string;
+  reviewedBy?: string | null;
+  reviewedAt?: string | null;
+  reviewNote?: string | null;
+}
+
+export interface PlatformAdminRfpSubmitAccessRequest extends RfpSubmitAccessRequest {
+  displayName: string;
+  email: string;
+}
 
 export const RFP_HUMAN_STATUSES = [
   'submitted',

@@ -69,6 +69,7 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `prds:review` | prds | admin, member |
 | `rfp-intake:view` | rfp-intake | admin |
 | `rfp-intake:manage` | rfp-intake | admin |
+| `rfp-intake:submit` | rfp-intake | admin, rfp-submitter |
 | `skills:manage` | skills | admin |
 | `wiki:write` | wiki | admin, member |
 | `work-board:view` | work-board | admin, member, viewer |

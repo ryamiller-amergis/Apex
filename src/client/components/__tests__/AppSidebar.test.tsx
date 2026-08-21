@@ -290,6 +290,26 @@ describe('AppSidebar — grouped sections', () => {
     );
     expect(screen.queryByRole('button', { name: 'RFP Intake' })).not.toBeInTheDocument();
   });
+
+  it('uses a distinct icon from Apex Backlog', () => {
+    const can = (key: string) => key === 'rfp-intake:view' || key === 'feature-requests:view';
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={can}
+        menuEnabledViews={['rfp-intake', 'feature-requests']}
+        selectedProject="Apex"
+        rfpIntakeEnabled
+        onNavigateRfpIntake={jest.fn()}
+        onNavigateFeatureRequests={jest.fn()}
+      />,
+    );
+    const rfpIcon = screen.getByRole('button', { name: 'RFP Intake' }).querySelector('svg')?.innerHTML;
+    const backlogIcon = screen.getByRole('button', { name: 'Apex Backlog' }).querySelector('svg')?.innerHTML;
+    expect(rfpIcon).toBeTruthy();
+    expect(backlogIcon).toBeTruthy();
+    expect(rfpIcon).not.toEqual(backlogIcon);
+  });
 });
 
 describe('AppSidebar — mobile', () => {

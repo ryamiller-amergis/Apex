@@ -127,6 +127,14 @@ const IconFeatureRequests: React.FC = () => (
   </svg>
 );
 
+const IconRfpIntake: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 10h3.2L8 12.5h4L13.8 10H17" />
+    <path d="M4.4 5.2L3 10v5.5A1.5 1.5 0 004.5 17h11a1.5 1.5 0 001.5-1.5V10l-1.4-4.8A1.5 1.5 0 0014.2 4H5.8a1.5 1.5 0 00-1.4 1.2z" />
+    <path d="M10 2.5v5M8.2 5.8L10 7.5l1.8-1.7" />
+  </svg>
+);
+
 const IconPdfTools: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <rect x="4" y="2" width="12" height="16" rx="1.5" />
@@ -264,7 +272,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         { label: 'PDF Assembly Tool', view: 'pdf-tools', icon: <IconPdfTools />, permission: 'pdf-assembly:use', onNavigate: onNavigatePdfTools ?? (() => {}) },
         { label: 'Load Tests', view: 'load-tests', icon: <IconLoadTests />, permission: 'load-test:view', onNavigate: onNavigateLoadTests ?? (() => {}), testId: 'nav-load-tests' },
         { label: 'Apex Backlog', view: 'feature-requests', icon: <IconFeatureRequests />, permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
-        { label: 'RFP Intake', view: 'rfp-intake', icon: <IconFeatureRequests />, permission: 'rfp-intake:view', onNavigate: onNavigateRfpIntake ?? (() => {}) },
+        { label: 'RFP Intake', view: 'rfp-intake', icon: <IconRfpIntake />, permission: 'rfp-intake:view', onNavigate: onNavigateRfpIntake ?? (() => {}) },
         { label: 'Work Board', view: 'work-board', icon: <IconWorkBoard />, permission: 'work-board:view', onNavigate: onNavigateWorkBoard ?? (() => {}) },
       ],
     },

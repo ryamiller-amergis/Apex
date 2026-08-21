@@ -32,7 +32,8 @@ test.describe('RFP intake landing VT-05 VT-10', () => {
     await page.goto('/');
 
     await expect(page.getByText(/select a project to start planning/i)).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByTestId('rfp-request-product-card')).toHaveCount(0);
+    await expect(page.getByTestId('rfp-request-product-item')).toHaveCount(0);
+    await expect(page.getByTestId('project-selector-request-menu')).toHaveCount(0);
     await expect(page.getByTestId('rfp-your-requests-list')).toHaveCount(0);
   });
 
@@ -92,8 +93,9 @@ test.describe('RFP intake landing VT-05 VT-10', () => {
     await loginAsPersona('ba');
     await page.goto('/');
 
-    await expect(page.getByTestId('rfp-request-product-card')).toBeVisible({ timeout: 15_000 });
-    await page.getByTestId('rfp-request-product-card').click();
+    await expect(page.getByTestId('project-selector-request-menu')).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId('project-selector-request-menu').click();
+    await page.getByTestId('rfp-request-product-item').click();
     await expect(page.getByTestId('rfp-submission-modal')).toBeVisible();
 
     await page.getByTestId('rfp-field-title').fill('E2E intake tracker');

@@ -181,6 +181,42 @@ The App Service plan uses the fixed `app_service_worker_count`. Production
 autoscaling is intentionally deferred until Interview and other long-running AI
 flows have a multi-instance ownership, cleanup, and scale-in recovery design.
 
+### App Service health check (liveness)
+
+Both the production app and the staging slot probe **`GET /api/health/live`**.
+That route is mounted **before** `express-session` and does no database or ADO
+I/O. Azure removes an instance after **2 minutes** of failed pings
+(`health_check_eviction_time_in_min = 2`) so ARR affinity cannot pin a browser
+to a wedged worker.
+
+Do **not** point Health Check at `/api/health` (Azure DevOps) or
+`/api/health/db`. Those fail every instance together and would take the site
+offline during a shared dependency blip.
+
+**Apply order:** deploy the app image that serves `/api/health/live` with HTTP
+200 **first**. Then `terraform apply`. If Terraform enables the probe before
+that route exists, Azure receives 401 from the authenticated `/api` gate and
+can drain every instance.
+
+From `infra/` after the app is live:
+
+```bash
+# Dev
+az account set --subscription "MSS-DevTest"
+terraform workspace select default
+terraform plan
+terraform apply
+
+# Production — only after the production slot (or swap) is serving /api/health/live
+az account set --subscription "MSS-Production"
+terraform workspace select prd
+terraform plan  -var-file="terraform.prd.tfvars"
+terraform apply -var-file="terraform.prd.tfvars"
+```
+
+Smoke: `curl -sS -o NUL -w "%{http_code}\n" https://<host>/api/health/live`
+must print `200` with no `connect.sid` required.
+
 ### Shared async + PDF processing settings
 
 The shared Blob account is created in every Terraform workspace. PDF is the first consumer (`pdf-artifacts` container) and runs **inside the Apex App Service**. Job delivery uses the **Postgres queue** (revised ADR) — Terraform does **not** provision Service Bus or a separate PDF worker host.

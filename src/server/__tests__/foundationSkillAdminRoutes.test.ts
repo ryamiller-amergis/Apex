@@ -83,6 +83,11 @@ jest.mock('../services/projectAccessRequestService', () => ({
   listPlatformAdminAccessRequests: jest.fn().mockResolvedValue([]),
   rejectProjectAccessRequest: jest.fn(),
 }));
+jest.mock('../services/rfpSubmitAccessRequestService', () => ({
+  approveRfpSubmitAccessRequest: jest.fn(),
+  listPlatformAdminRfpSubmitAccessRequests: jest.fn().mockResolvedValue([]),
+  rejectRfpSubmitAccessRequest: jest.fn(),
+}));
 jest.mock('../services/groupService', () => ({ listGroups: jest.fn().mockResolvedValue([]) }));
 jest.mock('../services/featureFlagService', () => ({
   listFlags: jest.fn().mockResolvedValue([]),

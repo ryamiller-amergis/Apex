@@ -7,6 +7,7 @@ import type {
   RfpOwnerListResponse,
   RfpRequest,
   RfpRequestDetail,
+  RfpSubmitAccessRequest,
 } from '../../shared/types/rfpIntake';
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
@@ -180,6 +181,40 @@ export function useAskRfpEvaluationChat() {
         ...(current ?? []),
         ...created,
       ]);
+    },
+  });
+}
+
+function submitAccessKey() {
+  return [...RFP_INTAKE_QUERY_KEY, 'submit-access', 'me'] as const;
+}
+
+export function useMyRfpSubmitAccessRequests(enabled: boolean) {
+  return useQuery<RfpSubmitAccessRequest[]>({
+    queryKey: submitAccessKey(),
+    queryFn: async () => {
+      const data = await apiFetch<{ requests: RfpSubmitAccessRequest[] }>(
+        '/api/rfp-intake/submit-access-requests/me',
+      );
+      return data.requests;
+    },
+    enabled,
+    staleTime: 15_000,
+  });
+}
+
+export function useCreateRfpSubmitAccessRequest() {
+  const qc = useQueryClient();
+  return useMutation<RfpSubmitAccessRequest | null, Error, void>({
+    mutationFn: async () => {
+      const data = await apiFetch<{ request: RfpSubmitAccessRequest | null }>(
+        '/api/rfp-intake/submit-access-requests',
+        { method: 'POST' },
+      );
+      return data.request;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: submitAccessKey() });
     },
   });
 }

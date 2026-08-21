@@ -99,6 +99,7 @@ import profileRoutes from './routes/profile';
 import walkthroughsRoutes from './routes/walkthroughs';
 import { startPdfProcessingPoller } from './services/pdfAssemblyService';
 import { startLoadTestRunReaper } from './services/loadTestRunService';
+import { LIVENESS_PATH, sendLiveness } from './liveness';
 
 // ── E2E mode guard ────────────────────────────────────────────────────────────
 // When E2E_MODE=true, background services and schedulers are suppressed so
@@ -120,6 +121,10 @@ const PORT = process.env.PORT || 3001;
 if (process.env.NODE_ENV === 'production') {
   app.set('trust proxy', 1);
 }
+
+// Liveness for Azure App Service Health Check — before session/body parsers so a
+// starved Postgres pool cannot make the probe hang (and drain every instance).
+app.get(LIVENESS_PATH, sendLiveness);
 
 // Middleware
 app.use(cors({
@@ -179,7 +184,7 @@ const internalOnlyPaths = [
 
 // Health check paths are unauthenticated — used by Azure slot-swap warmup and
 // external monitoring. req.path is relative to /api (prefix is stripped by Express).
-const unauthenticatedPaths = ['/health', '/health/db', '/health/agents'];
+const unauthenticatedPaths = ['/health', '/health/db', '/health/agents', '/health/live'];
 
 // Load-test runner ingest/validate — session-free; auth is requireLoadTestRunnerAuth
 // on loadTestRunsInternalRoutes (LT_RUNNER_CALLBACK_TOKEN or runner MI JWT).

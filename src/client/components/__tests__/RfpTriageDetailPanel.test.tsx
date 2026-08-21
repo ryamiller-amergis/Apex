@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { RfpTriageDetailPanel } from '../RfpTriageDetailPanel';
 import { useAddRfpComment } from '../../hooks/useRfpIntake';
 import { useRfpAttachmentUpload, useRfpMentionCandidates, useRfpTriageDetail } from '../../hooks/useRfpTriage';
@@ -129,5 +129,19 @@ describe('RfpTriageDetailPanel PBI-006', () => {
     fireEvent.change(screen.getByTestId('rfp-attachment-input'), { target: { files: extra } });
     expect(screen.getByRole('alert')).toHaveTextContent(/at most 5 attachments/i);
     expect(mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('widens the drawer when the left edge is dragged', async () => {
+    render(<RfpTriageDetailPanel requestId="rfp-1" canManage onClose={jest.fn()} />);
+    const handle = screen.getByTestId('rfp-triage-resize');
+    const panel = handle.closest('aside') as HTMLElement;
+    const initialWidth = parseInt(panel.style.width, 10);
+
+    act(() => { fireEvent.mouseDown(handle, { clientX: 600 }); });
+    act(() => { document.dispatchEvent(new MouseEvent('mousemove', { clientX: 400, bubbles: true })); });
+
+    await waitFor(() => {
+      expect(parseInt(panel.style.width, 10)).toBeGreaterThan(initialWidth);
+    });
   });
 });

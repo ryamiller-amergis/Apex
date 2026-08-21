@@ -14,6 +14,7 @@ import {
   RFP_AI_STATUSES,
   RFP_HUMAN_STATUSES,
   RFP_INTAKE_MANAGE,
+  RFP_INTAKE_SUBMIT,
   RFP_INTAKE_VIEW,
   RFP_REQUEST_EVENT_TYPES,
   RFP_VERDICTS,
@@ -118,5 +119,21 @@ describe('FEAT-001 TBI-001 RFP persistence and shared contracts', () => {
     expect(downSql).toMatch(/DROP TABLE IF EXISTS rfp_requests/);
     expect(downSql).toMatch(/DELETE FROM app_permissions WHERE key IN \('rfp-intake:view', 'rfp-intake:manage'\)/);
     expect(downSql).not.toMatch(/DROP TABLE IF EXISTS app_users/);
+  });
+});
+
+describe('RFP submit access permission migration', () => {
+  const submitMigration = fs.readFileSync(
+    path.resolve(process.cwd(), 'migrations/20260820180000_rfp-intake-submit-access.sql'),
+    'utf8',
+  );
+  const [upSql = '', downSql = ''] = submitMigration.split(/-- Down Migration/i);
+
+  it('adds rfp-intake:submit, the rfp-submitter role, and the access-request table', () => {
+    expect(upSql).toContain(`'${RFP_INTAKE_SUBMIT}'`);
+    expect(upSql).toMatch(/rfp-submitter/);
+    expect(upSql).toMatch(/CREATE TABLE rfp_intake_submit_requests/i);
+    expect(downSql).toMatch(/DROP TABLE IF EXISTS rfp_intake_submit_requests/);
+    expect(downSql).toMatch(/DELETE FROM app_permissions WHERE key = 'rfp-intake:submit'/);
   });
 });

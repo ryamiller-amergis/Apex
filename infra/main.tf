@@ -11,6 +11,11 @@ locals {
   use_dedicated_app_rg           = var.app_service_resource_group_name != null
   app_resource_group_name        = local.use_dedicated_app_rg ? var.app_service_resource_group_name : azurerm_resource_group.main.name
   postgresql_resource_group_name = coalesce(var.postgresql_resource_group_name, var.resource_group_name)
+  # Cheap Node liveness only — must match LIVENESS_PATH in src/server/liveness.ts.
+  # Do not point this at /api/health (ADO) or /api/health/db; those fail all
+  # instances together. Apply Terraform only after that route is deployed.
+  app_health_check_path                 = "/api/health/live"
+  app_health_check_eviction_time_in_min = 2
 }
 
 # Dedicated App Service RG in the app region (required for zone-redundant P1v3 when main RG is elsewhere).
@@ -69,6 +74,11 @@ resource "azurerm_linux_web_app" "main" {
     # enablement to the azurerm default (false), which would silently break
     # real-time chat streaming.
     websockets_enabled = true
+
+    # Drain a wedged worker (hung event loop) instead of pinning browsers to it
+    # via ARR affinity. Path must already return 200 in the running app image.
+    health_check_path                 = local.app_health_check_path
+    health_check_eviction_time_in_min = local.app_health_check_eviction_time_in_min
 
     # Node 24 is configured by deploy.yml. AzureRM 3.x cannot represent 24-lts
     # in application_stack, so Terraform intentionally does not declare it.
@@ -219,6 +229,9 @@ resource "azurerm_linux_web_app_slot" "staging" {
     # staging slot serves the interactive gateway identically (and a full apply
     # never flips it off).
     websockets_enabled = true
+
+    health_check_path                 = local.app_health_check_path
+    health_check_eviction_time_in_min = local.app_health_check_eviction_time_in_min
 
     # Node 24 is configured by deploy.yml; see the main app comment above.
     app_command_line = "npm start"

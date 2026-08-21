@@ -39,6 +39,7 @@ jest.mock('../../config/env', () => ({
 
 import { useAppShell } from '../useAppShell';
 import { useFeatureFlag } from '../useFeatureFlags';
+import { AUTH_STATUS_TIMEOUT_MS } from '../../utils/fetchAuthStatus';
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -177,5 +178,48 @@ describe('useAppShell – work-board flag', () => {
     await waitFor(() => expect(result.current.permissionsLoaded).toBe(true));
     expect(result.current.workBoardEnabled).toBe(false);
     expect(result.current.usesBoardWorkItems).toBe(false);
+  });
+});
+
+describe('useAppShell – auth status timeout', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('sets isAuthReconnecting after a hung /auth/status and retries', async () => {
+    const fetchMock = jest.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          const err = new Error('Aborted');
+          err.name = 'AbortError';
+          reject(err);
+        });
+      });
+    });
+    global.fetch = fetchMock;
+
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(() => useAppShell(), { wrapper });
+
+    expect(result.current.isAuthenticated).toBeNull();
+    expect(result.current.isAuthReconnecting).toBe(false);
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(AUTH_STATUS_TIMEOUT_MS);
+    });
+
+    expect(result.current.isAuthenticated).toBeNull();
+    expect(result.current.isAuthReconnecting).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(2_000);
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

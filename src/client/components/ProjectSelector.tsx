@@ -1,5 +1,5 @@
-import React, { useMemo, useRef, useState } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -10,12 +10,12 @@ import {
   useRequestableProjectCatalog,
 } from '../hooks/usePlatformAdmin';
 import { useFeatureFlag } from '../hooks/useFeatureFlags';
-import { useCanViewRfpTriage } from '../hooks/useRfpTriage';
+import { useCanSubmitRfp } from '../hooks/useRfpTriage';
+import { useCreateRfpSubmitAccessRequest, useMyRfpSubmitAccessRequests } from '../hooks/useRfpIntake';
 import { IS_BETA_RELEASE } from '../config/release';
 import { BrandLogo } from './BrandLogo';
 import { WhatsNewBanner } from './WhatsNewBanner';
 import { UserMenu } from './UserMenu';
-import { LandingChoiceCards } from './LandingChoiceCards';
 import { RfpSubmissionModal } from './RfpSubmissionModal';
 import { YourRequestsList } from './YourRequestsList';
 import { RfpDetailDrawer } from './RfpDetailDrawer';
@@ -61,13 +61,24 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = (props) => {
   // @feature-flag:rfp-intake end
 };
 
+interface IntakeRequestMenuConfig {
+  onRequestProduct?: () => void;
+  onRequestSubmitAccess?: () => void;
+  submitAccessPending?: boolean;
+  submitAccessRequesting?: boolean;
+  submitAccessError?: string | null;
+}
+
 const RfpEnabledProjectSelector: React.FC<ProjectSelectorProps> = (props) => {
   const [isSubmitOpen, setIsSubmitOpen] = useState(false);
+  const [intakeAccessRequested, setIntakeAccessRequested] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
-  const navigate = useNavigate();
-  const projectGridRef = useRef<HTMLDivElement | null>(null);
   const requestId = searchParams.get('request');
-  const canViewTriage = useCanViewRfpTriage(Boolean(props.isSuperAdmin));
+  const canSubmit = useCanSubmitRfp(Boolean(props.isSuperAdmin));
+  const submitAccessQuery = useMyRfpSubmitAccessRequests(!canSubmit);
+  const createSubmitAccess = useCreateRfpSubmitAccessRequest();
+  const submitAccessPending = intakeAccessRequested
+    || (submitAccessQuery.data ?? []).some((request) => request.status === 'pending');
 
   const openRequest = (id: string) => {
     const next = new URLSearchParams(searchParams);
@@ -85,32 +96,30 @@ const RfpEnabledProjectSelector: React.FC<ProjectSelectorProps> = (props) => {
     <>
       <ProjectSelectorView
         {...props}
-        beforeGrid={
-          <LandingChoiceCards
-            onRequestProduct={() => setIsSubmitOpen(true)}
-            onGoToProject={() => projectGridRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-            onOpenTriage={canViewTriage ? () => {
-              props.onSelect('Apex');
-              navigate('/rfp-intake');
-            } : undefined}
-          />
-        }
+        intakeRequest={{
+          onRequestProduct: canSubmit ? () => setIsSubmitOpen(true) : undefined,
+          onRequestSubmitAccess: canSubmit || submitAccessPending ? undefined : async () => {
+            await createSubmitAccess.mutateAsync();
+            setIntakeAccessRequested(true);
+          },
+          submitAccessPending,
+          submitAccessRequesting: createSubmitAccess.isPending,
+          submitAccessError: createSubmitAccess.error?.message ?? null,
+        }}
         afterGrid={
-          <YourRequestsList
-            onOpenRequest={openRequest}
-            onStartRequest={() => setIsSubmitOpen(true)}
-          />
+          canSubmit ? (
+            <YourRequestsList onOpenRequest={openRequest} />
+          ) : undefined
         }
-        projectGridRef={projectGridRef}
       />
-      {isSubmitOpen && (
+      {isSubmitOpen && canSubmit && (
         // data-testid-exempt — root dialog already has rfp-submission-modal
         <RfpSubmissionModal
           onClose={() => setIsSubmitOpen(false)}
           onSubmitted={(request) => openRequest(request.id)}
         />
       )}
-      {requestId && (
+      {requestId && canSubmit && (
         // data-testid-exempt — root dialog already has rfp-detail-drawer
         <RfpDetailDrawer requestId={requestId} onClose={closeRequest} />
       )}
@@ -118,10 +127,130 @@ const RfpEnabledProjectSelector: React.FC<ProjectSelectorProps> = (props) => {
   );
 };
 
+interface RequestMenuProps extends IntakeRequestMenuConfig {
+  showProjectAccess: boolean;
+  onProjectAccess: () => void;
+  'data-testid'?: string;
+}
+
+const RequestMenu: React.FC<RequestMenuProps> = ({
+  showProjectAccess,
+  onProjectAccess,
+  onRequestProduct,
+  onRequestSubmitAccess,
+  submitAccessPending = false,
+  submitAccessRequesting = false,
+  'data-testid': testId = 'project-selector-request-menu-host',
+}) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsOpen(false);
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [isOpen]);
+
+  const closeAndRun = (action: () => void) => {
+    setIsOpen(false);
+    action();
+  };
+
+  return (
+    <div className={styles.requestMenu} ref={menuRef} {...{ 'data-testid': testId }}>
+      <button
+        type="button"
+        className={`${styles.requestAccessButton} ${isOpen ? styles.requestMenuTriggerOpen : ''}`}
+        aria-haspopup="menu"
+        aria-expanded={isOpen}
+        aria-label="Request"
+        onClick={() => setIsOpen((open) => !open)}
+        {...{ 'data-testid': 'project-selector-request-menu' }}
+      >
+        Request
+        <span className={styles.requestMenuChevron} aria-hidden="true">
+          <svg viewBox="0 0 12 12" fill="none">
+            <path d="M3 4.5L6 7.5l3-3" />
+          </svg>
+        </span>
+      </button>
+      {isOpen && (
+        <div
+          className={styles.requestMenuList}
+          role="menu"
+          aria-label="Request"
+          {...{ 'data-testid': 'project-selector-request-menu-list' }}
+        >
+          {showProjectAccess && (
+            <button
+              type="button"
+              role="menuitem"
+              className={styles.requestMenuItem}
+              onClick={() => closeAndRun(onProjectAccess)}
+              {...{ 'data-testid': 'project-selector-request-project-access' }}
+            >
+              Project access
+            </button>
+          )}
+          {onRequestProduct ? (
+            <button
+              type="button"
+              role="menuitem"
+              className={styles.requestMenuItem}
+              onClick={() => closeAndRun(onRequestProduct)}
+              {...{ 'data-testid': 'rfp-request-product-item' }}
+            >
+              Request a Product
+            </button>
+          ) : submitAccessPending ? (
+            <button
+              type="button"
+              role="menuitem"
+              className={styles.requestMenuItem}
+              disabled
+              aria-label="Intake access pending"
+              {...{ 'data-testid': 'rfp-submit-access-pending-item' }}
+            >
+              Intake access pending
+            </button>
+          ) : (
+            <button
+              type="button"
+              role="menuitem"
+              className={styles.requestMenuItem}
+              disabled={submitAccessRequesting || !onRequestSubmitAccess}
+              onClick={() => {
+                if (!onRequestSubmitAccess) return;
+                void onRequestSubmitAccess();
+              }}
+              {...{ 'data-testid': 'rfp-submit-access-request-item' }}
+            >
+              {submitAccessRequesting ? 'Requesting…' : 'Request intake access'}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 interface ProjectSelectorViewProps extends ProjectSelectorProps {
-  beforeGrid?: React.ReactNode;
   afterGrid?: React.ReactNode;
-  projectGridRef?: React.Ref<HTMLDivElement>;
+  intakeRequest?: IntakeRequestMenuConfig;
 }
 
 const ProjectSelectorView: React.FC<ProjectSelectorViewProps> = ({
@@ -138,26 +267,62 @@ const ProjectSelectorView: React.FC<ProjectSelectorViewProps> = ({
   theme = 'dark',
   onThemeChange,
   onLogout,
-  beforeGrid,
   afterGrid,
-  projectGridRef,
+  intakeRequest,
 }) => {
   const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
   const { data: projects = [], isLoading, isError } = useProjects();
+  const showPlatformAdmin = Boolean(isSuperAdmin && onOpenPlatformAdmin);
+  const showRequest = Boolean(intakeRequest) || !isSuperAdmin;
+  const showUserMenu = Boolean(onLogout && onThemeChange);
 
   return (
     <div className={styles.page}>
-      {onLogout && onThemeChange && (
-        <div className={styles.userMenuCorner}>
-          {/* data-testid-exempt */}
-          <UserMenu
-            onOpenChangelog={() => onSetShowChangelog?.(true)}
-            onThemeChange={onThemeChange}
-            onLogout={onLogout}
-            theme={theme}
-            user={user ?? null}
-            hasUnreadChangelog={hasUnreadChangelog ?? false}
-          />
+      {(showPlatformAdmin || showRequest || showUserMenu) && (
+        <div className={styles.chrome}>
+          {showPlatformAdmin && (
+            <button
+              type="button"
+              className={styles.platformAdminButton}
+              onClick={() => onOpenPlatformAdmin?.()}
+              {...{ 'data-testid': 'project-selector-platform-admin' }}
+            >
+              Platform Admin
+            </button>
+          )}
+          {intakeRequest ? (
+            <RequestMenu
+              showProjectAccess={!isSuperAdmin}
+              onProjectAccess={() => setIsRequestModalOpen(true)}
+              onRequestProduct={intakeRequest.onRequestProduct}
+              onRequestSubmitAccess={intakeRequest.onRequestSubmitAccess}
+              submitAccessPending={intakeRequest.submitAccessPending}
+              submitAccessRequesting={intakeRequest.submitAccessRequesting}
+              {...{ 'data-testid': 'project-selector-request-menu-host' }}
+            />
+          ) : (
+            !isSuperAdmin && (
+              <button
+                type="button"
+                className={styles.requestAccessButton}
+                onClick={() => setIsRequestModalOpen(true)}
+                {...{ 'data-testid': 'project-selector-request-access' }}
+              >
+                Request Access
+              </button>
+            )
+          )}
+          {onLogout && onThemeChange && (
+            // data-testid-exempt
+            <UserMenu
+              onOpenChangelog={() => onSetShowChangelog?.(true)}
+              onThemeChange={onThemeChange}
+              onLogout={onLogout}
+              theme={theme}
+              user={user ?? null}
+              hasUnreadChangelog={hasUnreadChangelog ?? false}
+            />
+          )}
         </div>
       )}
       <div className={styles.header}>
@@ -165,28 +330,6 @@ const ProjectSelectorView: React.FC<ProjectSelectorViewProps> = ({
           <BrandLogo beta={IS_BETA_RELEASE} align="center" />
         </div>
         <p className={styles.subtitle}>Select a project to start planning</p>
-        <div className={styles.actions}>
-          {isSuperAdmin && onOpenPlatformAdmin && (
-            <button
-              type="button"
-              className={styles.platformAdminButton}
-              onClick={onOpenPlatformAdmin}
-              {...{ 'data-testid': 'project-selector-platform-admin' }}
-            >
-              Platform Admin
-            </button>
-          )}
-          {!isSuperAdmin && (
-            <button
-              type="button"
-              className={styles.requestAccessButton}
-              onClick={() => setIsRequestModalOpen(true)}
-              {...{ 'data-testid': 'project-selector-request-access' }}
-            >
-              Request Access
-            </button>
-          )}
-        </div>
       </div>
 
       {hasUnreadChangelog && onSetShowChangelog && onMarkChangelogAsRead && (
@@ -199,7 +342,21 @@ const ProjectSelectorView: React.FC<ProjectSelectorViewProps> = ({
         />
       )}
 
-      {beforeGrid}
+      {intakeRequest?.submitAccessError && (
+        <p className={styles.intakeStatusError} role="alert" {...{ 'data-testid': 'rfp-submit-access-error-banner' }}>
+          {intakeRequest.submitAccessError}
+        </p>
+      )}
+      {intakeRequest?.submitAccessPending && (
+        <p
+          className={styles.intakeStatusBanner}
+          role="status"
+          aria-live="polite"
+          {...{ 'data-testid': 'rfp-submit-access-pending-banner' }}
+        >
+          Intake access requested. The Apex team will review your request.
+        </p>
+      )}
 
       {isLoading ? (
         <div className={styles.loadingState}>
@@ -209,7 +366,7 @@ const ProjectSelectorView: React.FC<ProjectSelectorViewProps> = ({
       ) : isError ? (
         <p className={styles.errorMsg}>Could not load projects. Check your project catalog connection.</p>
       ) : (
-        <div className={styles.grid} ref={projectGridRef} {...{ 'data-testid': 'project-selector-grid' }}>
+        <div className={styles.grid} {...{ 'data-testid': 'project-selector-grid' }}>
           {projects.map((project) => (
             <button
               key={project.id}
