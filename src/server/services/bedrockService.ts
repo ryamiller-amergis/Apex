@@ -3370,6 +3370,7 @@ export async function generateDesignPlanForPrd(
     try {
       const extend = input.prototypeContext.extend;
       const screenInventory = await designSystemService.getScreenInventory({
+        provider: extend.provider,
         adoProject: extend.adoProject,
         repo: extend.repo,
         branch: extend.branch,
@@ -3585,6 +3586,7 @@ export async function generateDesignPrototypeHtml(
   const projectCtx = input.prototypeContext;
   const adoTarget = projectCtx?.extend
     ? {
+        provider: projectCtx.extend.provider,
         adoProject: projectCtx.extend.adoProject,
         repo: projectCtx.extend.repo,
         branch: projectCtx.extend.branch,

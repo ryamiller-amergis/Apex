@@ -8,6 +8,7 @@ import {
 import { resolveSkillConfig } from '../services/projectSettingsService';
 import { fetchAdoFileGeneric } from '../utils/adoFileFetch';
 import { fetchExistingPageContext } from '../services/designSystemService';
+import { getSkillFile } from '../services/skillCatalogFacade';
 
 jest.mock('../services/projectSettingsService', () => ({
   resolveSkillConfig: jest.fn(),
@@ -15,6 +16,10 @@ jest.mock('../services/projectSettingsService', () => ({
 
 jest.mock('../utils/adoFileFetch', () => ({
   fetchAdoFileGeneric: jest.fn(),
+}));
+
+jest.mock('../services/skillCatalogFacade', () => ({
+  getSkillFile: jest.fn(),
 }));
 
 jest.mock('../services/designTokensService', () => ({
@@ -28,6 +33,7 @@ jest.mock('../services/designSystemService', () => ({
 
 const mockResolveSkillConfig = resolveSkillConfig as jest.Mock;
 const mockFetchAdoFileGeneric = fetchAdoFileGeneric as jest.Mock;
+const mockGetSkillFile = getSkillFile as jest.Mock;
 
 describe('prototypeContextService', () => {
   beforeEach(() => {
@@ -103,6 +109,34 @@ describe('prototypeContextService', () => {
         '.cursor/skills/custom-design/SKILL.md',
         'main',
       );
+    });
+
+    it('loads the design-system skill from GitHub when skillProvider is github', async () => {
+      mockResolveSkillConfig.mockResolvedValue({
+        skillProvider: 'github',
+        skillRepo: 'ryamiller-amergis/Apex',
+        skillBranch: 'main',
+        prototypeDesignSystemPath: 'design-system',
+        screenInventoryPath: '.cursor/skills/design-system/apex-screens.md',
+        prototypeWebReferencesEnabled: false,
+      });
+      mockGetSkillFile.mockResolvedValue('# Apex Design System\nprimary: #2747D9');
+
+      const ctx = await resolvePrototypeContext('Apex', undefined);
+
+      expect(ctx).not.toBeNull();
+      expect(ctx!.isProjectSpecific).toBe(true);
+      expect(ctx!.designSystemMarkdown).toContain('# Apex Design System');
+      expect(ctx!.extend?.provider).toBe('github');
+      expect(ctx!.extend?.repo).toBe('ryamiller-amergis/Apex');
+      expect(mockGetSkillFile).toHaveBeenCalledWith(
+        'Apex',
+        'ryamiller-amergis/Apex',
+        '.cursor/skills/design-system/SKILL.md',
+        'main',
+        'github',
+      );
+      expect(mockFetchAdoFileGeneric).not.toHaveBeenCalled();
     });
 
     it('returns null (fail loudly) when a configured project ADO fetch fails', async () => {

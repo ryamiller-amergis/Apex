@@ -21,6 +21,7 @@ const CATALOG_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 /** Optional override so inventory/page fetch uses a project's own ADO repo instead of MaxView. */
 export interface DesignSystemAdoTarget {
+  provider?: 'ado' | 'github';
   adoProject: string;
   repo: string;
   branch?: string;
@@ -869,6 +870,8 @@ export async function fetchExistingPageContext(
   target?: DesignSystemAdoTarget,
 ): Promise<string> {
   if (!route?.trim()) return '';
+  // GitHub EXTEND uses the screenshot + inventory; page-source tree walk is ADO-only.
+  if (target?.provider === 'github') return '';
 
   const keywords = featureText ? extractKeywords(featureText) : new Set<string>();
   const keywordSig = [...keywords].sort((a, b) => a.localeCompare(b)).join(',');
@@ -1045,22 +1048,33 @@ export async function getScreenInventory(target?: DesignSystemAdoTarget): Promis
     ? adoItemPath(target.inventoryPath)
     : SCREENS_INVENTORY_PATH;
   const cacheKey = target
-    ? `${target.adoProject}/${target.repo}/${target.branch ?? ''}:${inventoryPath}`
+    ? `${target.provider ?? 'ado'}:${target.adoProject}/${target.repo}/${target.branch ?? ''}:${inventoryPath}`
     : 'maxview-default';
   const cached = screenInventoryCache.get(cacheKey);
   if (cached && now - cached.fetchedAt < CATALOG_TTL_MS) {
     return cached.rows.map(toScreenInventoryRoute);
   }
 
-  const orgUrl = process.env.ADO_ORG;
-  const pat = process.env.ADO_PAT;
-  if (!orgUrl || !pat) {
-    console.warn('[designSystemService] getScreenInventory: ADO_ORG or ADO_PAT not set — returning empty inventory');
-    return [];
-  }
-
   try {
-    const md = await fetchAdoFile(orgUrl, pat, inventoryPath, target);
+    let md = '';
+    if (target?.provider === 'github') {
+      const { getSkillFile } = await import('./skillCatalogFacade');
+      md = await getSkillFile(
+        '',
+        target.repo,
+        inventoryPath.replace(/^\//, ''),
+        target.branch ?? 'main',
+        'github',
+      );
+    } else {
+      const orgUrl = process.env.ADO_ORG;
+      const pat = process.env.ADO_PAT;
+      if (!orgUrl || !pat) {
+        console.warn('[designSystemService] getScreenInventory: ADO_ORG or ADO_PAT not set — returning empty inventory');
+        return [];
+      }
+      md = await fetchAdoFile(orgUrl, pat, inventoryPath, target);
+    }
     const rows = parseScreenInventory(md);
     screenInventoryCache.set(cacheKey, { rows, fetchedAt: now });
     console.log(`[designSystemService] getScreenInventory: ${rows.length} screen(s) loaded (${cacheKey})`);
