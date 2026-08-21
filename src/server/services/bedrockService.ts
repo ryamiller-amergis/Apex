@@ -10,6 +10,7 @@ import type { DesignPlanFeature } from '../../shared/types/designPlan';
 import { DESIGN_PROTOTYPE_STATE_NAMES, type DesignPrototypeStateName } from '../../shared/types/designPrototype';
 import { recordAiUsage, computeCost } from './aiUsageService';
 import type { AiFeature } from '../../shared/types/aiCostAnalytics';
+import { resolvePrototypeExtendMode } from './prototypeContextService';
 
 /** Attribution context passed down from callers to the invokeModel wrapper. */
 export interface BedrockUsageContext {
@@ -1606,7 +1607,7 @@ function inventoryRouteMatches(inventoryRoute: string, target: string): boolean 
  * One line per screen: `route` — purpose [users: …] [states: …]. The user-types and
  * states annotations are only appended when present. Returns '' when the inventory is empty.
  */
-function buildScreensContextSection(inventory: ScreenInventoryRoute[]): string {
+function buildScreensContextSection(inventory: ScreenInventoryRoute[], appName = 'MaxView'): string {
   const lines = inventory
     .filter(s => s.route)
     .map(s => {
@@ -1619,7 +1620,7 @@ function buildScreensContextSection(inventory: ScreenInventoryRoute[]): string {
 
   if (lines.length === 0) return '';
 
-  return `### Existing MaxView screens — inventory (route — purpose — user types — states)\n\n` +
+  return `### Existing ${appName} screens — inventory (route — purpose — user types — states)\n\n` +
     `Use this to understand which personas each screen serves and the UI states it supports.\n\n` +
     lines.join('\n') + '\n\n---\n\n';
 }
@@ -3205,14 +3206,16 @@ function buildDesignPlanPrompt(input: GenerateDesignPlanInput, catalogSection: s
   const ctx = input.prototypeContext;
   const appName = ctx?.appName ?? 'MaxView';
 
-  // Project-specific design system section (replaces MaxView catalog + screen inventory).
+  // Project-specific design system section (replaces MaxView catalog). Project inventory
+  // is appended when present so update-page can target real routes.
   const designSystemSection = ctx
-    ? `## ${appName} Design System (AUTHORITATIVE — use these components, tokens, and shell conventions)\n\n${ctx.designSystemMarkdown}\n\n`
+    ? `## ${appName} Design System (AUTHORITATIVE — use these components, tokens, and shell conventions)\n\n${ctx.designSystemMarkdown}\n\n${screensContextSection}`
     : `${catalogSection}${screensContextSection}`;
 
-  // In project-specific mode, `update-page` / targetRoute only apply when the project
-  // has existing pages (non-greenfield). For greenfield projects all features are new-page.
-  const targetRouteRule = ctx
+  const hasInventory = screensContextSection.trim().length > 0;
+  const targetRouteRule = hasInventory
+    ? `- \`targetRoute\` is null for "new-page" and "no-ui"; for "update-page" it MUST be a SINGLE route — exactly one of the existing routes listed in the screen inventory above. NEVER return a comma-separated list or multiple routes.`
+    : ctx
     ? `- \`targetRoute\` must be null for all features unless the project has documented existing pages/routes. For a greenfield application with no existing pages, set every feature to "new-page" and \`targetRoute\` to null.`
     : `- \`targetRoute\` is null for "new-page" and "no-ui"; for "update-page" it MUST be a SINGLE route — exactly one of the existing routes listed above. NEVER return a comma-separated list or multiple routes. If the feature touches several related screens, choose the ONE primary route where the change is most central; the others can be mentioned in the \`designBrief\`.`;
 
@@ -3353,8 +3356,8 @@ export async function generateDesignPlanForPrd(
   // misleading context (e.g. MaxView routes/components showing up in non-MaxView design briefs).
   let catalogSection = '';
   let screensContextSection = '';
+  const designSystemService = await import('./designSystemService');
   if (!input.prototypeContext) {
-    const designSystemService = await import('./designSystemService');
     const catalog = await designSystemService.getDesignSystemCatalog();
     catalogSection = buildCatalogSection(catalog);
     try {
@@ -3362,6 +3365,22 @@ export async function generateDesignPlanForPrd(
       screensContextSection = buildScreensContextSection(screenInventory);
     } catch (err) {
       console.warn('[bedrockService] getScreenInventory failed for design plan:', err);
+    }
+  } else if (input.prototypeContext.extend?.screenInventoryPath) {
+    try {
+      const extend = input.prototypeContext.extend;
+      const screenInventory = await designSystemService.getScreenInventory({
+        adoProject: extend.adoProject,
+        repo: extend.repo,
+        branch: extend.branch,
+        inventoryPath: extend.screenInventoryPath ?? undefined,
+      });
+      screensContextSection = buildScreensContextSection(
+        screenInventory,
+        input.prototypeContext.appName,
+      );
+    } catch (err) {
+      console.warn('[bedrockService] getScreenInventory failed for project design plan:', err);
     }
   }
 
@@ -3465,19 +3484,16 @@ function buildProjectPrototypePrompt(
   const ctx = input.prototypeContext!;
   const appName = ctx.appName;
 
-  const scopingSection = extendMode && existingPageContext?.trim()
+  const scopingSection = extendMode
     ? `### CRITICAL SCOPING RULE — EXTEND an existing page; the EXISTING layout is FIXED ground truth
 ${targetScreenHint}${pageScreenshotHint}
-The existing page is defined by the AUTHORITATIVE source(s) below: the **ACTUAL source code** at \`${input.targetRoute}\`${input.pageScreenshot ? ' **and the page screenshot (vision input)**' : ''}. Reproduce the existing page faithfully and add the new feature as a clearly annotated delta.
+The existing page is defined by the AUTHORITATIVE source(s) below${existingPageContext?.trim() ? `: the **ACTUAL source code** at \`${input.targetRoute}\`` : ''}${input.pageScreenshot ? `${existingPageContext?.trim() ? ' and' : ':'} the **page screenshot (vision input)**` : ''}. Reproduce the existing page faithfully and add the new feature as a clearly annotated delta.
 1. **Reproduce the existing page faithfully.** Keep the real structure: regions, panels, tab bars, and the real entry mechanism.
 2. **The feature description, PBIs, and design brief describe ONLY the DELTA.** Use them solely to decide what to add or modify.
 3. **Add the new feature** in the correct location. Wrap ONLY the new/changed element(s) in a 2px dashed annotation border using the project's primary color with 8px padding, and a small "NEW: ${input.featureName}" label at the top-left. Also wrap in \`<!-- NEW_FEATURE:START -->\` … \`<!-- NEW_FEATURE:END -->\` markers.
 4. **DO NOT invent, fabricate, or hallucinate** UI elements not in the existing page or described in the PBIs.
 5. **The four state sections apply ONLY to the NEW feature** — the reproduced existing page remains identical across all sections.
-
-## Existing Page Code (route: ${input.targetRoute})
-
-${existingPageContext}`
+${existingPageContext?.trim() ? `\n## Existing Page Code (route: ${input.targetRoute})\n\n${existingPageContext}` : '\nUse the screenshot as the ground truth for the existing page layout when source code is not available.'}`
     : `### CRITICAL SCOPING RULE — ONLY render what is described; NEVER invent content
 
 1. **DO NOT invent, fabricate, or hallucinate any UI elements** that are not explicitly described in the PBI Requirements or the feature description.
@@ -3566,23 +3582,36 @@ export async function generateDesignPrototypeHtml(
   usageCtx?: BedrockUsageContext,
 ): Promise<string> {
   const designSystemService = await import('./designSystemService');
-  const catalog = await designSystemService.getDesignSystemCatalog();
-  const catalogSection = buildCatalogSection(catalog);
+  const projectCtx = input.prototypeContext;
+  const adoTarget = projectCtx?.extend
+    ? {
+        adoProject: projectCtx.extend.adoProject,
+        repo: projectCtx.extend.repo,
+        branch: projectCtx.extend.branch,
+        inventoryPath: projectCtx.extend.screenInventoryPath ?? undefined,
+      }
+    : undefined;
 
-  // Pull the screen inventory (route → purpose → user types → states) so the model has
-  // persona/state context for the existing pages. Non-fatal: empty when unavailable.
+  let catalogSection = '';
+  if (!projectCtx) {
+    const catalog = await designSystemService.getDesignSystemCatalog();
+    catalogSection = buildCatalogSection(catalog);
+  }
+
   let screenInventory: ScreenInventoryRoute[] = [];
   try {
-    screenInventory = await designSystemService.getScreenInventory();
+    if (adoTarget?.inventoryPath) {
+      screenInventory = await designSystemService.getScreenInventory(adoTarget);
+    } else if (!projectCtx) {
+      screenInventory = await designSystemService.getScreenInventory();
+    }
   } catch (err) {
     console.warn('[bedrockService] getScreenInventory failed for design prototype:', err);
   }
-  const screensContextSection = buildScreensContextSection(screenInventory);
-
-  const ref = getFigmaReference();
-  const image: ImageInput | undefined = ref.tablePageBase64
-    ? { base64: ref.tablePageBase64, mediaType: 'image/png', width: ref.tablePageWidth, height: ref.tablePageHeight }
-    : undefined;
+  const screensContextSection = buildScreensContextSection(
+    screenInventory,
+    projectCtx?.appName ?? 'MaxView',
+  );
 
   const pbiSection = input.pbis.map((pbi, i) => {
     const parts = [`### PBI ${i + 1}: ${pbi.title}`];
@@ -3598,31 +3627,30 @@ export async function generateDesignPrototypeHtml(
     return parts.join('\n');
   }).join('\n\n');
 
-  // EXTEND mode: when the feature targets an existing page, fetch that page's actual
-  // code (unless supplied) and reproduce it faithfully instead of using a generic shell.
-  // For project-specific prototypes (non-MaxView), the existing-page fetch is skipped
-  // because fetchExistingPageContext is hardcoded to the MaxView ADO repo. Those
-  // projects use NEW-page mode instead (no existing page to reproduce). MaxView
-  // (isProjectSpecific=false fallback, or no prototypeContext) keeps the full path.
+  // EXTEND mode: fetch existing page source from this project's repo (MaxView default when
+  // no prototype context). A screenshot alone is enough to EXTEND when page source is missing.
   let existingPageContext = input.existingPageContext;
   if (input.targetRoute && !existingPageContext) {
-    if (input.prototypeContext?.isProjectSpecific) {
-      console.log(`[bedrockService] Skipping EXTEND page fetch for project-specific prototype "${input.featureName}" (non-MaxView repo fetch not yet supported — using NEW-page mode)`);
-    } else {
-      try {
-        const { fetchExistingPageContext } = await import('./designSystemService');
-        const featureText = [
-          input.featureName,
-          input.featureDescription,
-          ...input.pbis.flatMap(p => [p.title, p.description, p.acceptanceCriteria]),
-        ].filter(Boolean).join(' ');
-        existingPageContext = await fetchExistingPageContext(input.targetRoute, featureText);
-      } catch (err) {
-        console.warn(`[bedrockService] fetchExistingPageContext failed for ${input.targetRoute}:`, err);
-      }
+    try {
+      const featureText = [
+        input.featureName,
+        input.featureDescription,
+        ...input.pbis.flatMap(p => [p.title, p.description, p.acceptanceCriteria]),
+      ].filter(Boolean).join(' ');
+      existingPageContext = await designSystemService.fetchExistingPageContext(
+        input.targetRoute,
+        featureText,
+        adoTarget,
+      );
+    } catch (err) {
+      console.warn(`[bedrockService] fetchExistingPageContext failed for ${input.targetRoute}:`, err);
     }
   }
-  const extendMode = Boolean(input.targetRoute && existingPageContext?.trim());
+  const { extendMode, attachScreenshot } = resolvePrototypeExtendMode({
+    targetRoute: input.targetRoute,
+    existingPageContext,
+    pageScreenshot: input.pageScreenshot,
+  });
 
   // EXTEND mode: surface the target screen's personas/states from the inventory (when known).
   const targetScreen = input.targetRoute
@@ -3715,7 +3743,7 @@ You must follow these rules with zero exceptions:
     const effectiveModelPS = modelId ?? UI_MOCK_MODEL_ID;
     const effectiveMaxTokensPS = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
     const projectImages: ImageInput[] = [];
-    if (extendMode && input.pageScreenshot) {
+    if (attachScreenshot && input.pageScreenshot) {
       projectImages.push({
         base64: input.pageScreenshot.base64,
         mediaType: (input.pageScreenshot.mediaType === 'image/jpeg' ? 'image/jpeg' : 'image/png') as ImageInput['mediaType'],
@@ -3843,12 +3871,17 @@ The START marker must be the first thing inside each state block and the END mar
 
 Return ONLY the complete HTML document. No markdown fences, no explanation — just the raw HTML starting with <!DOCTYPE html>.`;
 
+  const ref = getFigmaReference();
+  const image: ImageInput | undefined = ref.tablePageBase64
+    ? { base64: ref.tablePageBase64, mediaType: 'image/png', width: ref.tablePageWidth, height: ref.tablePageHeight }
+    : undefined;
+
   const effectiveModel = modelId ?? UI_MOCK_MODEL_ID;
   const effectiveMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
 
   const images: ImageInput[] = [];
   if (image) images.push(image);
-  if (extendMode && input.pageScreenshot) {
+  if (attachScreenshot && input.pageScreenshot) {
     images.push({
       base64: input.pageScreenshot.base64,
       mediaType: (input.pageScreenshot.mediaType === 'image/jpeg' ? 'image/jpeg' : 'image/png') as ImageInput['mediaType'],

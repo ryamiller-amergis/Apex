@@ -1,6 +1,13 @@
-import { resolvePrototypeContext, invalidatePrototypeContextCache } from '../services/prototypeContextService';
+import {
+  resolvePrototypeContext,
+  invalidatePrototypeContextCache,
+  normalizeDesignSystemSkillPath,
+  resolvePrototypeExtendMode,
+  fetchProjectPageContext,
+} from '../services/prototypeContextService';
 import { resolveSkillConfig } from '../services/projectSettingsService';
 import { fetchAdoFileGeneric } from '../utils/adoFileFetch';
+import { fetchExistingPageContext } from '../services/designSystemService';
 
 jest.mock('../services/projectSettingsService', () => ({
   resolveSkillConfig: jest.fn(),
@@ -16,6 +23,7 @@ jest.mock('../services/designTokensService', () => ({
 
 jest.mock('../services/designSystemService', () => ({
   getDesignSystemCatalog: jest.fn().mockResolvedValue({ uiKnowledgeBase: 'MaxView screens catalog', routes: [], tokensCss: '', componentNames: [], componentDescriptions: {}, routeLayoutHints: {}, fetchedAt: 0 }),
+  fetchExistingPageContext: jest.fn().mockResolvedValue('### File: /src/client/components/AgentHome.tsx'),
 }));
 
 const mockResolveSkillConfig = resolveSkillConfig as jest.Mock;
@@ -155,5 +163,77 @@ describe('prototypeContextService', () => {
       // ADO fetch should only happen once (second call is cached)
       expect(mockFetchAdoFileGeneric).toHaveBeenCalledTimes(1);
     });
+
+    it('expands a design-system skill name to the convention SKILL.md path', async () => {
+      mockResolveSkillConfig.mockResolvedValue({
+        skillRepo: 'Org/Apex',
+        skillBranch: 'main',
+        prototypeDesignSystemPath: 'design-system',
+        screenInventoryPath: '.cursor/skills/design-system/apex-screens.md',
+        prototypeWebReferencesEnabled: false,
+      });
+      mockFetchAdoFileGeneric.mockResolvedValue('# Apex Design System');
+
+      await resolvePrototypeContext('apex', undefined);
+
+      expect(mockFetchAdoFileGeneric).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        '.cursor/skills/design-system/SKILL.md',
+        'main',
+      );
+    });
+  });
+});
+
+describe('normalizeDesignSystemSkillPath', () => {
+  it('uses the convention path when the setting is blank', () => {
+    expect(normalizeDesignSystemSkillPath(null)).toBe('.cursor/skills/design-system/SKILL.md');
+    expect(normalizeDesignSystemSkillPath('')).toBe('.cursor/skills/design-system/SKILL.md');
+  });
+
+  it('keeps a full SKILL.md path from the skill list', () => {
+    expect(normalizeDesignSystemSkillPath('/.cursor/skills/design-system/SKILL.md'))
+      .toBe('.cursor/skills/design-system/SKILL.md');
+  });
+
+  it('expands a skill name to the convention folder', () => {
+    expect(normalizeDesignSystemSkillPath('design-system'))
+      .toBe('.cursor/skills/design-system/SKILL.md');
+  });
+});
+
+describe('resolvePrototypeExtendMode', () => {
+  it('uses a screenshot as EXTEND ground truth even without page source', () => {
+    expect(resolvePrototypeExtendMode({
+      targetRoute: '/home',
+      existingPageContext: '',
+      pageScreenshot: { base64: 'abc', mediaType: 'image/png' },
+    })).toEqual({ extendMode: true, attachScreenshot: true });
+  });
+
+  it('does not EXTEND when there is no target route', () => {
+    expect(resolvePrototypeExtendMode({
+      pageScreenshot: { base64: 'abc', mediaType: 'image/png' },
+    })).toEqual({ extendMode: false, attachScreenshot: false });
+  });
+});
+
+describe('fetchProjectPageContext', () => {
+  const mockFetchExisting = fetchExistingPageContext as jest.Mock;
+
+  it('passes the project repo into the existing-page fetch', async () => {
+    mockFetchExisting.mockResolvedValue('page source');
+
+    const result = await fetchProjectPageContext('ApexProj', 'Apex', 'main', '/home');
+
+    expect(result).toBe('page source');
+    expect(mockFetchExisting).toHaveBeenCalledWith(
+      '/home',
+      undefined,
+      expect.objectContaining({ adoProject: 'ApexProj', repo: 'Apex', branch: 'main' }),
+    );
   });
 });

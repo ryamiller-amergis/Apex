@@ -100,7 +100,7 @@ import {
   type PrdReadinessStageStatus,
 } from '../../shared/utils/prdReadiness';
 import { resolvePrototypeStageEnabled } from '../../shared/utils/prototypeStage';
-import { buildPassingValidationReasonsMarkdown } from '../../shared/utils/validationReport';
+import { buildPassingValidationReasonsMarkdown, normalizeCrossCuttingCheck } from '../../shared/utils/validationReport';
 import type {
   ReviewSectionKey,
   TextSelector,
@@ -3191,12 +3191,15 @@ export const PrdReviewView: React.FC = () => {
                           <div className={styles.crossCuttingSection}>
                             <h4 className={styles.crossCuttingTitle}>Cross-Cutting Checks</h4>
                             <div className={styles.crossCuttingGrid}>
-                              {Object.entries(sc.cross_cutting_checks).map(([key, value]) => (
-                                <div key={key} className={styles.crossCuttingItem}>
-                                  <span className={styles.crossCuttingKey}>{key.replace(/_/g, ' ')}</span>
-                                  <span className={styles.crossCuttingValue} data-status={value.toLowerCase()}>{value}</span>
-                                </div>
-                              ))}
+                              {Object.entries(sc.cross_cutting_checks).map(([key, value]) => {
+                                const check = normalizeCrossCuttingCheck(key, value);
+                                return (
+                                  <div key={key} className={styles.crossCuttingItem}>
+                                    <span className={styles.crossCuttingKey}>{check.label}</span>
+                                    <span className={styles.crossCuttingValue} data-status={check.status}>{check.displayText}</span>
+                                  </div>
+                                );
+                              })}
                             </div>
                           </div>
                         )}

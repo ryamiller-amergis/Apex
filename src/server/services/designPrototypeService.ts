@@ -522,8 +522,19 @@ async function generateSinglePrototype(
         if (resolved) {
           prototypeContext = resolved;
           console.log(`[designPrototypeService] Using project-specific design system for "${feature.title}" (${project}, isProjectSpecific=${resolved.isProjectSpecific})`);
+        } else {
+          const { resolveSkillConfig } = await import('./projectSettingsService');
+          const cfg = await resolveSkillConfig({ project, settingsId: skillSettingsId ?? undefined });
+          if (cfg?.skillRepo?.trim()) {
+            throw new Error(
+              `Could not load the design-system skill for project "${project}" from ${cfg.skillRepo}. Check Prototype Design System path and that the file exists on the skill branch.`,
+            );
+          }
         }
       } catch (err: any) {
+        if (typeof err?.message === 'string' && err.message.startsWith('Could not load the design-system skill')) {
+          throw err;
+        }
         console.warn(`[designPrototypeService] resolvePrototypeContext failed for "${project}": ${err.message}`);
       }
     }

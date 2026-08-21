@@ -3,7 +3,7 @@ import { eq, and } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { chatThreads } from '../db/schema';
 import type { ValidationScorecard } from '../../shared/types/interview';
-import { buildPassingValidationReasonsMarkdown } from '../../shared/utils/validationReport';
+import { buildPassingValidationReasonsMarkdown, normalizeCrossCuttingCheck } from '../../shared/utils/validationReport';
 import { readOutputValidationScorecard, readOutputValidationScorecardMd, isThreadIdle, createThread as createChatThread, cancelRun, sendMessage, prepareBackgroundWorkflowTurn } from './chatAgentService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
 import { isThreadRunAlive, canThisInstanceFailGeneration } from './agentRunReaperService';
@@ -294,7 +294,8 @@ export function generateFallbackReport(scorecard: ValidationScorecard): string {
   if (crossCuttingEntries.length > 0) {
     lines.push('## Cross-Cutting Checks', '');
     for (const [check, result] of crossCuttingEntries) {
-      lines.push(`- **${check}**: ${result}`);
+      const normalized = normalizeCrossCuttingCheck(check, result);
+      lines.push(`- **${normalized.label}**: ${normalized.displayText}`);
     }
     lines.push('');
   }

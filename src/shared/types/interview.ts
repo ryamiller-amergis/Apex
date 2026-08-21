@@ -227,6 +227,13 @@ export interface ValidationScorecardFile {
   gaps?: ValidationScorecardGap[];
 }
 
+/** Object-shaped cross-cutting check from the foundation prd-spec-review skill. */
+export interface ValidationCrossCuttingCheck {
+  label?: string;
+  status?: string;
+  detail?: string;
+}
+
 export interface ValidationScorecard {
   slug: string;
   generated_at: string;
@@ -243,7 +250,11 @@ export interface ValidationScorecard {
    * root instead of under each feature. Prefer `collectValidationGaps`.
    */
   gaps?: ValidationScorecardGap[];
-  cross_cutting_checks?: Record<string, string>;
+  /**
+   * PRD spec-review may emit a plain status string (`"pass"`) or an object
+   * `{ label, status, detail }`. Normalize with `normalizeCrossCuttingCheck`.
+   */
+  cross_cutting_checks?: Record<string, string | ValidationCrossCuttingCheck>;
   accepted_gaps?: string[];
   deferred_gaps?: string[];
   /** SHA-256 of PRD content + backlog at score time; skips agent re-run when unchanged. */
