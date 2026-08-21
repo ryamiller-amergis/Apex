@@ -77,6 +77,7 @@ jest.mock('../services/backgroundWorkflowRouter', () => ({
 jest.mock('../services/runGroundingService', () => ({
   propagatePipelineGrounding: jest.fn().mockResolvedValue({ state: 'propagated' }),
   resolveRunGroundingSurface: jest.fn().mockResolvedValue(null),
+  readActiveTargetProvenance: jest.fn().mockResolvedValue(null),
   runGroundingService: {
     getGroundings: jest.fn().mockResolvedValue([{
       id: 'grounding-prd',
@@ -579,7 +580,7 @@ describe('routePrdGenerationKickoff', () => {
       { runType: 'chat', runId: 'interview-thread', project: 'proj-alpha' },
       { runType: 'chat', runId: 'thread-prd', project: 'proj-alpha' },
       'user-1',
-      { deferMaterialization: true },
+      { deferMaterialization: true, pinPolicy: 'inherit' },
     );
     expect(mockRouteBackgroundWorkflow).toHaveBeenCalled();
   });
@@ -1812,14 +1813,21 @@ describe('PRD validation lifecycle', () => {
   });
 
   it('starts document validation only when a skill is configured and artifacts are ready', async () => {
-    mockPrdSelectForGetPrd({ validationThreadId: null, validationScorecard: null });
+    mockPrdSelectForGetPrd({
+      validationThreadId: null,
+      validationScorecard: null,
+      content: '## Problem Statement\nNeed\n## Solution\nBuild it',
+    });
     mockGetSkillConfig.mockResolvedValue({
       skillRepo: 'org/skills',
       skillBranch: 'main',
       prdValidationSkillPath: '.cursor/skills/prd-validation/SKILL.md',
       prdValidationModel: 'gpt-5.5',
     });
-    mockDb.query.prds.findFirst.mockResolvedValue({ content: '# PRD', backlogJson: { items: [] } });
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      content: '## Problem Statement\nNeed\n## Solution\nBuild it',
+      backlogJson: { items: [] },
+    });
     mockDb.query.testCases.findFirst.mockResolvedValue({ id: 'tc-ready' });
 
     await autoStartPrdValidation('prd-1');
@@ -1832,6 +1840,38 @@ describe('PRD validation lifecycle', () => {
     expect(adapter.buildValidationContext({})).toContain('## Backlog JSON');
     expect(adapter.buildValidationContext({})).toContain('TBIs');
     expect(adapter.buildValidationContext({})).toContain('must **NOT** have `userTypes`');
+  });
+
+  it('does not auto-start the agent when structural fail-fast scores 0%', async () => {
+    mockPrdSelectForGetPrd({
+      validationThreadId: null,
+      validationScorecard: null,
+      content: '# Intro only',
+    });
+    mockGetSkillConfig.mockResolvedValue({
+      skillRepo: 'org/skills',
+      skillBranch: 'main',
+      prdValidationSkillPath: '.cursor/skills/prd-validation/SKILL.md',
+    });
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      content: '# Intro only',
+      backlogJson: { items: [] },
+    });
+    mockDb.query.testCases.findFirst.mockResolvedValue({ id: 'tc-ready' });
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await autoStartPrdValidation('prd-1');
+
+    expect(mockAutoStartDocumentValidation).not.toHaveBeenCalled();
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'draft',
+        validationScore: 0,
+        validationScorecard: expect.objectContaining({ slug: 'prd-structural' }),
+      }),
+    );
   });
 
   it('does not start another validation while the PRD is already validating', async () => {
@@ -1858,6 +1898,37 @@ describe('PRD validation lifecycle', () => {
       prdValidationSkillPath: '.cursor/skills/prd-validation/SKILL.md',
     });
     mockDb.query.prds.findFirst.mockResolvedValue({ content: '# PRD', backlogJson: { items: [] } });
+    mockDb.query.testCases.findFirst.mockResolvedValue({ id: 'tc-ready' });
+
+    await autoStartPrdValidation('prd-1', { force: true });
+
+    expect(mockAutoStartDocumentValidation).toHaveBeenCalledTimes(1);
+  });
+
+  it('explicit re-run starts the agent even when structural fail-fast would score 0%', async () => {
+    mockPrdSelectForGetPrd({
+      validationThreadId: 'previous-validation-thread',
+      validationScorecard: {
+        slug: 'prd-structural',
+        generated_at: '2026-01-01T00:00:00Z',
+        review_phase: 'initial',
+        overall_score: 0,
+        ready_threshold: 90,
+        is_ready: false,
+        verdict: 'significant_gaps',
+        gaps: [],
+      },
+      content: '# Intro only',
+    });
+    mockGetSkillConfig.mockResolvedValue({
+      skillRepo: 'org/skills',
+      skillBranch: 'main',
+      prdValidationSkillPath: '.cursor/skills/prd-validation/SKILL.md',
+    });
+    mockDb.query.prds.findFirst.mockResolvedValue({
+      content: '# Intro only',
+      backlogJson: { items: [] },
+    });
     mockDb.query.testCases.findFirst.mockResolvedValue({ id: 'tc-ready' });
 
     await autoStartPrdValidation('prd-1', { force: true });
@@ -1922,7 +1993,10 @@ describe('PRD validation lifecycle', () => {
     expect(setMock).toHaveBeenCalledWith(
       expect.objectContaining({
         validationScore: 93,
-        validationScorecard: scorecard,
+        validationScorecard: expect.objectContaining({
+          ...scorecard,
+          contentHash: expect.any(String),
+        }),
         validationReportMd: '# Validation Report',
         status: 'pending_review',
       }),

@@ -52,6 +52,11 @@ Key constraints:
 - `priority` values must be exactly: `"Must Have"`, `"Should Have"`, `"Could Have"`, or `"Won't Have"`
 - PBI `acceptanceCriteria` must include all four coverage scenarios: (a) happy path, (b) error/failure, (c) edge case/boundary, (d) negative scenario
 - PBI `userStory.persona` must match a name from the Apex groups enum (`Product-Owner`, `BA`, `UI/UX`, `Manager`, `Developer`, `QA`, `Platform Admin`, `Project Admin`, `Authenticated User`) **and** must be listed on the parent Feature's `affectedPersonas`.
+- PBI `userStory` keys are exactly `persona`, `iWant`, `soThat` — never `want`, `iWantTo`, or a single string.
+- **`iWant` is the action the persona performs** — a verb phrase that completes `As a {persona}, I want to {iWant}, so that {soThat}`. Do **not** include the words "I want to" (the UI prefixes them). Write what the person **does**, not a system artifact.
+  - Good: `"invite teammates to the workspace"`, `"organize my personal todos"`, `"see my team's progress"`, `"toggle notification types on or off"`
+  - Bad: `"a dedicated user_todos table"`, `"list and create endpoints"`, `"shared validation helpers"`, `"a React component"`
+  - Tables, endpoints, helpers, schemas, and migrations belong on **TBIs**, not in PBI `iWant`.
 - Feature `description` and `affectedPersonas` must describe the **same audience** — use exact persona names from the enum; never generic labels ("User", "authenticated user", "all users").
 - Persona `type` must be exactly one of: `"Internal"`, `"Admin"`, `"Technical"` — no other values.
 - Every Feature's `items` array holds both PBIs and TBIs
@@ -78,6 +83,7 @@ Follow [`prd-template.md`](prd-template.md) exactly. Key constraints:
 - [ ] PRD does NOT contain an authored `## User Stories` section
 - [ ] No file paths or code snippets in Implementation Decisions
 - [ ] PBI AC covers all four required scenarios (a–d)
+- [ ] Every PBI `userStory.iWant` is a verb phrase the persona performs — not a table, endpoint, helper, or other implementation artifact
 - [ ] Backlog JSON field names match `backlog-schema.json` required properties
 - [ ] **No extra properties** at any level — schema uses `additionalProperties: false`; strip `route`, `compliance`, or anything not in the schema. Optional `userTypes` / `personaBehaviors` on Features/PBIs are allowed; never on TBIs.
 - [ ] Persona `type` values are exactly `"Internal"`, `"Admin"`, or `"Technical"`
@@ -104,6 +110,7 @@ Follow [`prd-template.md`](prd-template.md) exactly. Key constraints:
 Run every check below; fix both files if needed before finishing:
 
 - [ ] **Scope traceability:** Every Feature and PBI/TBI in the backlog maps to something stated or implied in the PRD. Remove backlog-only items that the PRD does not cover.
+- [ ] Every PBI `userStory` uses keys `persona`, `iWant`, `soThat` exactly — never `want` or a prose string. `iWant` is a verb phrase (what the persona does) without the words "I want to"; never a table, endpoint, helper, or other system artifact
 - [ ] Every PBI `userStory.persona` matches a name from the Apex groups enum
 - [ ] Every PBI `userStory.persona` is included in its parent Feature's `affectedPersonas`
 - [ ] No Feature `description` uses generic user labels — beneficiaries match `affectedPersonas` verbatim

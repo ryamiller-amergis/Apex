@@ -26,10 +26,10 @@ import { DefaultAzureCredential } from '@azure/identity';
 // Side-effect: initialize Application Insights when the connection string is set.
 import '../telemetry';
 import { createAiRunsCallbackClient } from '../aiRunsWorker/callbackClient';
-import { openLocalCheckout } from '../aiRunsWorker/workspace';
+import { openGroundedReader } from '../aiRunsWorker/workspace';
 import { resolveStaticAiRunnerCallbackToken } from '../aiRunnerCallbackAuthConfig';
 import { interactiveLiveBus } from '../interactiveLiveBus';
-import type { LocalCheckoutReader } from '../localCheckoutReader';
+import type { RepoReader } from '../../../shared/types/repoReader';
 import { acquireInteractiveCursorAgent } from './interactiveCursorExecution';
 import {
   createInteractiveSessionActor,
@@ -42,7 +42,7 @@ import {
 } from './interactiveSessionActorClass';
 
 /** Warm checkout carrying the reader the execution factory needs. */
-type ReaderCheckout = WarmThreadCheckout & { reader: LocalCheckoutReader };
+type ReaderCheckout = WarmThreadCheckout & { reader: RepoReader };
 
 export interface InteractiveDispatchRequest {
   threadId: string;
@@ -229,7 +229,7 @@ export async function main(): Promise<void> {
   // Single shared logic core: thread-keyed warm checkout + live Agent cache.
   const logic = createInteractiveSessionActor({
     openWarmCheckout: async (_threadId, snapshot) => {
-      const reader = await openLocalCheckout(snapshot);
+      const reader = await openGroundedReader(snapshot);
       const checkout: ReaderCheckout = {
         workspacePath: snapshot.workspaceRef,
         reader,

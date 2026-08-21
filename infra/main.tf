@@ -96,6 +96,10 @@ resource "azurerm_linux_web_app" "main" {
     "GROUNDING_BLOB_ACCOUNT_NAME"   = azurerm_storage_account.shared.name
     "GROUNDING_BLOB_CONTAINER_NAME" = azurerm_storage_container.shared["repo-grounding"].name
 
+    # Repo read service (null/empty while enable_repo_read_service is false)
+    "REPO_READ_SERVICE_URL"   = try("https://${azurerm_container_app.repo_read_service[0].ingress[0].fqdn}", "")
+    "REPO_READ_SERVICE_TOKEN" = var.enable_repo_read_service ? coalesce(var.ai_runs_runner_callback_token, "") : ""
+
     # Database
     "DATABASE_URL" = "postgresql://${var.postgresql_admin_username}:${var.postgresql_admin_password}@${azurerm_postgresql_flexible_server.main.fqdn}:5432/${var.postgresql_database_name}?sslmode=require"
 
@@ -105,6 +109,12 @@ resource "azurerm_linux_web_app" "main" {
     "ADO_PROJECT"          = var.ado_project
     "ADO_AREA_PATH"        = var.ado_area_path
     "ADO_ALLOWED_PROJECTS" = var.ado_allowed_projects
+
+    # GitHub (skill catalog + repo checkout). Copy the live App Service
+    # GITHUB_ORG / GITHUB_TOKEN values. ignore_changes on app_settings means
+    # deploy.yml remains the runtime writer after first apply.
+    "GITHUB_ORG"   = var.github_org
+    "GITHUB_TOKEN" = coalesce(var.github_token, "")
 
     # Vite / client-side
     "VITE_ADO_ORG"     = var.ado_org

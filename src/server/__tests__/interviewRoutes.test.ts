@@ -2335,7 +2335,7 @@ describe('POST /api/interviews/prds/:prdId/apply-proposed-selective', () => {
       .send({ content: '# Merged', backlogJson: { items: [{ id: 'x' }] } });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true });
+    expect(res.body).toEqual({ ok: true, prd: null });
     expect(mockPrdService.applyProposedPrdChanges).toHaveBeenCalledWith('prd-1', {
       resolvedBy: 'user-test',
       mergedContent: '# Merged',

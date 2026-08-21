@@ -156,7 +156,7 @@ describe('generateFallbackReport', () => {
     expect(report).toContain('- All required evidence is present.');
     expect(report).toContain('| Slider Defaults | 90% | 92% | 91% | 91% | ready |');
     expect(report).toContain('- **Assumptions** (design): Clarify launch assumptions.');
-    expect(report).toContain('- **traceability**: No traceability blockers remain.');
+    expect(report).toContain('- **Traceability**: No traceability blockers remain.');
     expect(report).toContain('- Manual QA will cover legacy browser behavior.');
     expect(report).toContain('- Analytics refinement deferred to phase 2.');
   });

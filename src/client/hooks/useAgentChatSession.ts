@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useChatStream } from './useChatStream';
 import type {
+  AgentRunPhase,
   ChatAttachment,
   ChatMessage,
   ChatThreadStatus,
@@ -10,6 +11,7 @@ import type {
   RunPhaseProgress,
   RunHealthProgress,
 } from './useChatStream';
+import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -81,7 +83,7 @@ export interface AgentChatSession {
   phaseEvents: RunPhaseProgress[];
   runHealth: RunHealthProgress | null;
   progressLabel: string | null;
-  progressPhase: string | null;
+  progressPhase: AgentRunPhase | null;
   prdReady: boolean;
   backlogReady: boolean;
   isRetrying: boolean;
@@ -99,6 +101,8 @@ export interface AgentChatSession {
   hasPreparationError: boolean;
   preparationMessage: string | null;
   isInteractionBusy: boolean;
+  /** True while a turn is in flight but the agent reply is not on screen yet. */
+  showTypingIndicator: boolean;
 
   // --- Actions ---
   send: (text: string, opts?: SendOptions) => Promise<void>;
@@ -113,6 +117,19 @@ export interface AgentChatSession {
 // Default visible-message filter: hide hidden internal prompts
 const DEFAULT_VISIBLE_FILTER = (m: ChatMessage): boolean =>
   !(m.role === 'user' && m.text === 'Begin.' && !m.attachments?.length);
+
+/** Typing dots belong before the first on-screen agent bubble of this turn, not after it. */
+export function shouldShowAgentTypingIndicator(input: {
+  isBusy: boolean;
+  streamingText: string;
+  lastVisibleRole?: ChatMessage['role'];
+  isRetrying?: boolean;
+}): boolean {
+  if (!input.isBusy) return false;
+  if (input.streamingText) return false;
+  if (input.isRetrying) return false;
+  return input.lastVisibleRole !== 'agent';
+}
 
 // ---------------------------------------------------------------------------
 // Hook
@@ -203,11 +220,21 @@ export function useAgentChatSession(
     (enablePreparationState && isEmptyInProgress && status === 'error')
   );
   const preparationMessage =
-    groundingPreparation?.message ??
-    (isPreparing ? 'Preparing project repository…' : null);
+    groundingPreparation?.message
+      ? friendlyChatProgressLabel(groundingPreparation.message, 'setup')
+      : isPreparing
+        ? friendlyChatProgressLabel('Preparing project repository…', 'setup')
+        : null;
 
   const isInteractionBusy =
     isRunning || isSending || isAwaitingAgentResponse || isPreparing;
+
+  const showTypingIndicator = shouldShowAgentTypingIndicator({
+    isBusy: isRunning || isSending || isAwaitingAgentResponse,
+    streamingText,
+    lastVisibleRole: visibleMessages[visibleMessages.length - 1]?.role,
+    isRetrying,
+  });
 
   // --- Awaiting-agent-response tracking ---
   const beginAwaitingAgentResponse = useCallback(() => {
@@ -418,6 +445,7 @@ export function useAgentChatSession(
     hasPreparationError,
     preparationMessage,
     isInteractionBusy,
+    showTypingIndicator,
 
     // Actions
     send,

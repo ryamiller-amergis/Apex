@@ -22,6 +22,8 @@ import type { PreWarmTarget } from '../../shared/types/runGrounding';
 import {
   configuredPreWarmTargets,
   createGroundingPreWarmService,
+  IDLE_REMOTE_PROBE_INTERVAL_MS,
+  type GroundingPreWarmDependencies,
 } from '../services/groundingPreWarmService';
 
 const target: PreWarmTarget = {
@@ -33,6 +35,17 @@ const target: PreWarmTarget = {
 
 const flushAsyncWork = () =>
   new Promise<void>((resolve) => setImmediate(resolve));
+
+function createService(
+  overrides: GroundingPreWarmDependencies = {},
+) {
+  return createGroundingPreWarmService({
+    readRemoteTip: async () => null,
+    listPinnedTargets: async () => [target],
+    workerCanReadWithoutWorkingTree: () => false,
+    ...overrides,
+  });
+}
 
 describe('TBI-007 groundingPreWarmService', () => {
   it('prepares configured project repositories before their first active run', () => {
@@ -99,7 +112,7 @@ describe('TBI-007 groundingPreWarmService', () => {
           outcome: 'materialized' as const,
         };
       });
-      const service = createGroundingPreWarmService({
+      const service = createService({
         withLease: jest.fn(async (_key, operation) => {
           leaseActive = true;
           await operation({
@@ -147,6 +160,40 @@ describe('TBI-007 groundingPreWarmService', () => {
     }
   );
 
+  it('skips shared checkout prewarm when workers can read the bare mirror', async () => {
+    const sha = 'b'.repeat(40);
+    const publishBundle = jest.fn().mockResolvedValue('published' as const);
+    const materializeSharedCheckout = jest.fn();
+    const telemetry = jest.fn();
+    const service = createService({
+      workerCanReadWithoutWorkingTree: () => true,
+      withLease: jest.fn(async (_key, operation) =>
+        operation({
+          signal: new AbortController().signal,
+          assertOwned: jest.fn().mockResolvedValue(undefined),
+        })
+      ),
+      refreshUnderLease: jest.fn().mockResolvedValue(undefined),
+      wasRefreshedSince: jest.fn().mockReturnValue(false),
+      readCachedSha: jest
+        .fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(sha),
+      publishBundle,
+      materializeSharedCheckout,
+      telemetry,
+    });
+
+    await service.preWarm(target);
+
+    expect(publishBundle).toHaveBeenCalledTimes(1);
+    expect(materializeSharedCheckout).not.toHaveBeenCalled();
+    expect(telemetry).toHaveBeenCalledWith(
+      'grounding.shared.prewarm',
+      expect.objectContaining({ outcome: 'skipped-bare-mirror' }),
+    );
+  });
+
   it('treats shared checkout prewarm failure as optional after mirror and bundle succeed', async () => {
     // Arrange
     const sha = 'b'.repeat(40);
@@ -156,7 +203,7 @@ describe('TBI-007 groundingPreWarmService', () => {
       .fn()
       .mockRejectedValue(new Error('shared checkout unavailable'));
     const telemetry = jest.fn();
-    const service = createGroundingPreWarmService({
+    const service = createService({
       withLease: jest.fn(async (_key, operation) =>
         operation({
           signal: new AbortController().signal,
@@ -188,7 +235,7 @@ describe('TBI-007 groundingPreWarmService', () => {
   it('keeps a usable mirror warm when bundle publication fails', async () => {
     // Arrange
     const telemetry = jest.fn();
-    const service = createGroundingPreWarmService({
+    const service = createService({
       withLease: jest.fn(async (_key, operation) =>
         operation({
           signal: new AbortController().signal,
@@ -227,7 +274,7 @@ describe('TBI-007 groundingPreWarmService', () => {
       })
     );
     const listActiveTargets = jest.fn().mockResolvedValue([target]);
-    const service = createGroundingPreWarmService({
+    const service = createService({
       listActiveTargets,
       withLease,
       refreshUnderLease,
@@ -257,7 +304,7 @@ describe('TBI-007 groundingPreWarmService', () => {
       controller.abort(new Error('lease lost'));
       lease.signal.throwIfAborted();
     });
-    const service = createGroundingPreWarmService({
+    const service = createService({
       listActiveTargets: jest.fn().mockResolvedValue([]),
       withLease: jest.fn(async (_key, operation) =>
         operation({
@@ -304,8 +351,8 @@ describe('TBI-007 groundingPreWarmService', () => {
       telemetry: jest.fn(),
       now: () => 100,
     };
-    const firstInstance = createGroundingPreWarmService(dependencies);
-    const secondInstance = createGroundingPreWarmService(dependencies);
+    const firstInstance = createService(dependencies);
+    const secondInstance = createService(dependencies);
 
     // Act
     await Promise.all([firstInstance.sweep(), secondInstance.sweep()]);
@@ -330,7 +377,7 @@ describe('TBI-007 groundingPreWarmService', () => {
         .mockResolvedValue(['src/server/a.ts', 'README.md']);
       const enqueueImpact = jest.fn();
       const refreshUnderLease = jest.fn().mockResolvedValue(undefined);
-      const service = createGroundingPreWarmService({
+      const service = createService({
         withLease: jest.fn(async (_key, operation) =>
           operation({
             signal: new AbortController().signal,
@@ -384,7 +431,7 @@ describe('TBI-007 groundingPreWarmService', () => {
     async (_label, fromSha, toSha) => {
       // Arrange
       const enqueueImpact = jest.fn();
-      const service = createGroundingPreWarmService({
+      const service = createService({
         withLease: jest.fn(async (_key, operation) =>
           operation({
             signal: new AbortController().signal,
@@ -420,7 +467,7 @@ describe('TBI-007 groundingPreWarmService', () => {
       rejectDiff = reject;
     });
     const enqueueImpact = jest.fn();
-    const service = createGroundingPreWarmService({
+    const service = createService({
       withLease: jest.fn(async (_key, operation) =>
         operation({
           signal: new AbortController().signal,
@@ -452,7 +499,7 @@ describe('TBI-007 groundingPreWarmService', () => {
       { length: 205 },
       (_, index) => `src/file-${index}.ts`
     );
-    const service = createGroundingPreWarmService({
+    const service = createService({
       withLease: jest.fn(async (_key, operation) =>
         operation({
           signal: new AbortController().signal,
@@ -499,7 +546,7 @@ describe('TBI-007 groundingPreWarmService', () => {
     const publishBundle = jest.fn();
     const refreshUnderLease = jest.fn();
     const materializeSharedCheckout = jest.fn();
-    const service = createGroundingPreWarmService({
+    const service = createService({
       isCheckoutReadinessEnabled: jest.fn().mockResolvedValue(true),
       publishBundle,
       refreshUnderLease,
@@ -519,5 +566,80 @@ describe('TBI-007 groundingPreWarmService', () => {
     expect(publishBundle).not.toHaveBeenCalled();
     expect(refreshUnderLease).not.toHaveBeenCalled();
     expect(materializeSharedCheckout).not.toHaveBeenCalled();
+  });
+
+  it('skips object fetch when ls-remote tip matches the cached SHA', async () => {
+    const sha = 'b'.repeat(40);
+    const refreshUnderLease = jest.fn();
+    const publishBundle = jest.fn();
+    const telemetry = jest.fn();
+    const service = createService({
+      readCachedSha: jest.fn().mockResolvedValue(sha),
+      readRemoteTip: jest.fn().mockResolvedValue(sha),
+      refreshUnderLease,
+      publishBundle,
+      withLease: jest.fn(async (_key, operation) =>
+        operation({
+          signal: new AbortController().signal,
+          assertOwned: jest.fn().mockResolvedValue(undefined),
+        }),
+      ),
+      telemetry,
+    });
+
+    await service.preWarm(target);
+
+    expect(refreshUnderLease).not.toHaveBeenCalled();
+    expect(publishBundle).not.toHaveBeenCalled();
+    expect(telemetry).toHaveBeenCalledWith(
+      'grounding.mirror.prewarm',
+      expect.objectContaining({ outcome: 'unchanged' }),
+      expect.any(Object),
+    );
+  });
+
+  it('defers idle configured repos between probes and always probes active pins', async () => {
+    const refreshUnderLease = jest.fn().mockResolvedValue(undefined);
+    let nowMs = 1_000;
+    const idleService = createService({
+      listPinnedTargets: async () => [],
+      now: () => nowMs,
+      refreshUnderLease,
+      withLease: jest.fn(async (_key, operation) =>
+        operation({
+          signal: new AbortController().signal,
+          assertOwned: jest.fn().mockResolvedValue(undefined),
+        }),
+      ),
+      wasRefreshedSince: jest.fn().mockReturnValue(false),
+      readCachedSha: jest.fn().mockResolvedValue(null),
+      telemetry: jest.fn(),
+    });
+
+    await idleService.preWarm(target);
+    expect(refreshUnderLease).toHaveBeenCalledTimes(1);
+
+    nowMs += IDLE_REMOTE_PROBE_INTERVAL_MS - 1;
+    await idleService.preWarm(target);
+    expect(refreshUnderLease).toHaveBeenCalledTimes(1);
+
+    const activeRefresh = jest.fn().mockResolvedValue(undefined);
+    const activeService = createService({
+      listPinnedTargets: async () => [target],
+      now: () => nowMs,
+      refreshUnderLease: activeRefresh,
+      withLease: jest.fn(async (_key, operation) =>
+        operation({
+          signal: new AbortController().signal,
+          assertOwned: jest.fn().mockResolvedValue(undefined),
+        }),
+      ),
+      wasRefreshedSince: jest.fn().mockReturnValue(false),
+      readCachedSha: jest.fn().mockResolvedValue(null),
+      telemetry: jest.fn(),
+    });
+    await activeService.preWarm(target);
+    await activeService.preWarm(target);
+    expect(activeRefresh).toHaveBeenCalledTimes(2);
   });
 });

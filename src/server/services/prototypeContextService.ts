@@ -13,7 +13,7 @@
 import { fetchAdoFileGeneric } from '../utils/adoFileFetch';
 
 /** Default convention path for a project's design-system skill within its repo. */
-const DEFAULT_DESIGN_SYSTEM_PATH = '.cursor/skills/design-system/SKILL.md';
+export const DEFAULT_DESIGN_SYSTEM_PATH = '.cursor/skills/design-system/SKILL.md';
 
 /** Cache TTL for resolved design-system content. 10 minutes. */
 const CONTEXT_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -41,8 +41,11 @@ export interface PrototypeContext {
   isProjectSpecific: boolean;
   /** EXTEND-mode sources, present when the project has a screen inventory configured. */
   extend?: {
-    /** ADO project name (for fetching existing page source). */
+    /** GitHub vs Azure DevOps — taken from Project Settings skill provider. */
+    provider: 'ado' | 'github';
+    /** ADO project name (for fetching existing page source). Empty for GitHub. */
     adoProject: string;
+    /** ADO repo name, or GitHub `org/repo` as stored in Project Settings. */
     repo: string;
     branch: string;
     screenInventoryPath: string | null;
@@ -73,13 +76,24 @@ export async function resolvePrototypeContext(
   // Derive the app name from the project identifier (last path segment, title-cased).
   const appName = project.split(/[/\\]/).pop()?.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) ?? project;
 
-  // Parse adoProject + repo from skillRepo using the same split logic used below
-  // for the design-system fetch. Format: "ADOProject/RepoName" or just "RepoName".
+  // Parse repo coordinates from skillRepo using the Project Settings provider
+  // (GitHub `org/repo` vs Azure DevOps `ADOProject/RepoName` or `RepoName`).
   const extendCtx = cfg?.skillRepo ? (() => {
+    const provider: 'ado' | 'github' = cfg.skillProvider === 'github' ? 'github' : 'ado';
+    if (provider === 'github') {
+      return {
+        provider,
+        adoProject: '',
+        repo: cfg.skillRepo,
+        branch: cfg.skillBranch ?? 'main',
+        screenInventoryPath: cfg.screenInventoryPath ?? null,
+      };
+    }
     const [adoProj, repoName] = cfg.skillRepo!.includes('/')
       ? cfg.skillRepo!.split('/', 2) as [string, string]
       : [project, cfg.skillRepo!];
     return {
+      provider,
       adoProject: adoProj,
       repo: repoName,
       branch: cfg.skillBranch ?? 'main',
@@ -88,9 +102,9 @@ export async function resolvePrototypeContext(
   })() : undefined;
 
   // ── Try project-specific design system ──────────────────────────────────────
-  if (cfg?.skillRepo && orgUrl && pat) {
-    const skillPath = cfg.prototypeDesignSystemPath?.trim() || DEFAULT_DESIGN_SYSTEM_PATH;
-    const cacheKey = `${cfg.skillRepo}@${cfg.skillBranch ?? 'main'}:${skillPath}`;
+  if (cfg?.skillRepo) {
+    const skillPath = normalizeDesignSystemSkillPath(cfg.prototypeDesignSystemPath);
+    const cacheKey = `${cfg.skillProvider ?? 'ado'}:${cfg.skillRepo}@${cfg.skillBranch ?? 'main'}:${skillPath}`;
     const cached = designSystemCache.get(cacheKey);
     if (cached && Date.now() - cached.resolvedAt < CONTEXT_CACHE_TTL_MS) {
       return {
@@ -101,17 +115,26 @@ export async function resolvePrototypeContext(
       };
     }
 
-    // Derive ADO project from the skillRepo (format: "ADOProject/RepoName" or just "RepoName")
-    const [adoProject, repo] = cfg.skillRepo.includes('/')
-      ? cfg.skillRepo.split('/', 2) as [string, string]
-      : [project, cfg.skillRepo];
     const branch = cfg.skillBranch ?? 'main';
+    const provider: 'ado' | 'github' = cfg.skillProvider === 'github' ? 'github' : 'ado';
 
     try {
-      const content = await fetchAdoFileGeneric(orgUrl, pat, adoProject, repo, skillPath, branch);
+      let content = '';
+      if (provider === 'github') {
+        const { getSkillFile } = await import('./skillCatalogFacade');
+        content = await getSkillFile(project, cfg.skillRepo, skillPath, branch, 'github');
+      } else {
+        if (!orgUrl || !pat) {
+          throw new Error('ADO_ORG or ADO_PAT not set');
+        }
+        const [adoProject, repo] = cfg.skillRepo.includes('/')
+          ? cfg.skillRepo.split('/', 2) as [string, string]
+          : [project, cfg.skillRepo];
+        content = await fetchAdoFileGeneric(orgUrl, pat, adoProject, repo, skillPath, branch);
+      }
       if (content.trim()) {
         designSystemCache.set(cacheKey, { content: content.trim(), resolvedAt: Date.now() });
-        console.log(`[prototypeContextService] Loaded design system for "${project}" from ${repo}@${branch}:${skillPath} (${content.length} chars)`);
+        console.log(`[prototypeContextService] Loaded design system for "${project}" from ${provider}:${cfg.skillRepo}@${branch}:${skillPath} (${content.length} chars)`);
         return {
           appName,
           designSystemMarkdown: content.trim(),
@@ -119,14 +142,10 @@ export async function resolvePrototypeContext(
           extend: extendCtx,
         };
       }
-      // File exists but is empty — treat as a misconfiguration, not a missing file.
-      console.error(`[prototypeContextService] Design system skill at "${skillPath}" in ${repo}@${branch} is empty for project "${project}" — prototype generation will fail`);
+      console.error(`[prototypeContextService] Design system skill at "${skillPath}" in ${cfg.skillRepo}@${branch} is empty for project "${project}" — prototype generation will fail`);
       return null;
     } catch (err: any) {
-      // The project has a skillRepo + ADO creds configured, but the design-system file
-      // could not be fetched. This is a configuration error — fail loudly so the
-      // prototype is marked generation_failed rather than silently using MaxView styles.
-      console.error(`[prototypeContextService] Could not fetch project design system for "${project}" (${repo}@${branch}:${skillPath}): ${err.message} — failing prototype rather than using MaxView fallback`);
+      console.error(`[prototypeContextService] Could not fetch project design system for "${project}" (${provider}:${cfg.skillRepo}@${branch}:${skillPath}): ${err.message} — failing prototype rather than using MaxView fallback`);
       return null;
     }
   }
@@ -166,6 +185,34 @@ export async function resolvePrototypeContext(
   return null;
 }
 
+/** Turn a Project Settings design-system skill value into a repo-relative SKILL.md path. */
+export function normalizeDesignSystemSkillPath(raw: string | null | undefined): string {
+  const trimmed = (raw ?? '').trim().replace(/\\/g, '/');
+  if (!trimmed) return DEFAULT_DESIGN_SYSTEM_PATH;
+  const withoutLeading = trimmed.startsWith('/') ? trimmed.slice(1) : trimmed;
+  if (/\.md$/i.test(withoutLeading)) return withoutLeading;
+  if (!withoutLeading.includes('/')) return `.cursor/skills/${withoutLeading}/SKILL.md`;
+  return `${withoutLeading.replace(/\/$/, '')}/SKILL.md`;
+}
+
+/**
+ * EXTEND when the plan targets an existing route and we have page source and/or a screenshot.
+ * Project-specific apps (Apex, foundation-skill consumers) are not forced into NEW-page mode.
+ */
+export function resolvePrototypeExtendMode(input: {
+  targetRoute?: string;
+  existingPageContext?: string | null;
+  pageScreenshot?: unknown;
+}): { extendMode: boolean; attachScreenshot: boolean } {
+  const hasRoute = Boolean(input.targetRoute?.trim());
+  const hasPage = Boolean(input.existingPageContext?.trim());
+  const hasShot = Boolean(input.pageScreenshot);
+  return {
+    extendMode: hasRoute && (hasPage || hasShot),
+    attachScreenshot: hasRoute && hasShot,
+  };
+}
+
 /** Invalidate the design system cache for a specific project/repo path (e.g. after config change). */
 export function invalidatePrototypeContextCache(cacheKey?: string): void {
   if (cacheKey) {
@@ -184,18 +231,16 @@ export async function fetchProjectPageContext(
   repo: string,
   branch: string,
   route: string,
+  inventoryPath?: string | null,
 ): Promise<string | null> {
-  const orgUrl = process.env.ADO_ORG;
-  const pat = process.env.ADO_PAT;
-  if (!orgUrl || !pat) return null;
-
   try {
     const { fetchExistingPageContext } = await import('./designSystemService');
-    // designSystemService's fetchExistingPageContext currently uses the MaxView DS_REPO/DS_PROJECT.
-    // Until those are made parameterised, this wrapper provides the interface; the actual
-    // generalization of the underlying ADO calls is done in the bedrock-refactor step.
-    void adoProject; void repo; void branch; // future: pass these through once designSystemService is parameterised
-    const ctx = await fetchExistingPageContext(route);
+    const ctx = await fetchExistingPageContext(route, undefined, {
+      adoProject,
+      repo,
+      branch,
+      inventoryPath: inventoryPath ?? undefined,
+    });
     return ctx || null;
   } catch {
     return null;

@@ -718,6 +718,7 @@ export const DevSessionView: React.FC = () => {
     runHealth,
     isRetrying,
     retryReason,
+    showTypingIndicator,
   } = chatSession;
   const { data: diff, refetch: refetchDiff } = useDevDiff(threadId);
 
@@ -899,7 +900,7 @@ export const DevSessionView: React.FC = () => {
             return elements;
           })()}
 
-          {isRunning && !streamingText && (
+          {showTypingIndicator && (
             <div className={`${styles.message} ${styles['role-agent']}`}>
               <div className={styles['agent-header']}>
                 <span className={styles['agent-avatar']}>AI</span>

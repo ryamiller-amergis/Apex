@@ -19,6 +19,7 @@ import { useContextEstimate } from '../hooks/useContextEstimate';
 import { useLinkFeatureRequestInterview } from '../hooks/useFeatureRequests';
 import { usePersistStagedLinks } from '../hooks/useLinkedContext';
 import { DEFAULT_MODEL_ID } from '../config/models';
+import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
 import {
   useInterview,
   useUpdateInterviewStatus,
@@ -30,9 +31,13 @@ import {
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { SectionOwnerModal } from './SectionOwnerModal';
 import { RunGroundingStatus } from './RunGroundingStatus';
+import { GroundingResumeCard } from './GroundingResumeCard';
+import { GroundingHandoffDialog } from './GroundingHandoffDialog';
+import { useGroundingResumeGate } from '../hooks/useGroundingResumeGate';
+import type { PipelinePinPolicy } from '../../shared/types/runGrounding';
 import type { InterviewStatus } from '../../shared/types/interview';
 import type { InterviewSkillOption } from '../../shared/types/projectSettings';
-import { parseAgentMessage } from '../utils/parseAgentMessage';
+import { parseAgentMessage, isAgentOtherOptionText } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { trackEvent, trackException } from '../services/telemetry';
 import { ReadAloudButton } from './ReadAloudButton';
@@ -41,6 +46,7 @@ import {
   type StagedLinkedContextSelection,
 } from './LinkedContextPicker';
 import { AgentComposer } from './agentChat';
+import { ApexLoader } from './ApexLoader';
 import styles from './InterviewChatView.module.css';
 
 function badgeClass(status: InterviewStatus): string {
@@ -84,7 +90,9 @@ const InterviewChoiceBlockUI: React.FC<ChoiceBlockUIProps> = ({
       </div>
     )}
     <div className={styles.choiceOptions}>
-      {block.options.map((opt) => {
+      {block.options
+        .filter((opt) => !isAgentOtherOptionText(opt.text))
+        .map((opt) => {
         const isSelected = selection === opt.letter;
         return (
           <button
@@ -1041,9 +1049,17 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     isInteractionBusy,
     sendError,
     clearSendError,
+    showTypingIndicator,
   } = session;
 
   const isAgentProcessing = isRunning || isSending || session.isAwaitingAgentResponse;
+  const resumeGate = useGroundingResumeGate(
+    'interview',
+    interview?.id ?? id,
+    interview?.project ?? null,
+    isRunning,
+  );
+  const [handoffOpen, setHandoffOpen] = useState(false);
   const draftAttachmentChars = attachments.reduce((sum, a) => sum + a.content.length, 0);
   const contextEstimate = useContextEstimate(
     visibleMessagesForContext, input, streamingText, model, draftAttachmentChars,
@@ -1136,6 +1152,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
       (!text && outgoingAttachments.length === 0)
       || isInteractionBusy
       || !interview?.chatThreadId
+      || resumeGate.composerBlocked
     ) return;
 
     if (speech.isListening) speech.stop();
@@ -1153,6 +1170,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     isInteractionBusy,
     interview?.chatThreadId,
     model,
+    resumeGate.composerBlocked,
     session,
     speech,
   ]);
@@ -1196,7 +1214,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     if (e.key === 'Escape') setIsEditingTitle(false);
   }, [commitTitleEdit]);
 
-  const handleGeneratePrd = useCallback(async () => {
+  const handleGeneratePrd = useCallback(async (groundingPolicy: PipelinePinPolicy = 'inherit') => {
     if (!interview) return;
     try {
       // Build a transcript from the interview conversation so the /to-prd skill has full context
@@ -1236,6 +1254,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         title: interview.title,
         model: prdModel,
         kickoffGeneration: true,
+        groundingPolicy,
       });
       navigate(`/backlog/prd/${prdResult.prdId}`);
     } catch (err: unknown) {
@@ -1248,7 +1267,22 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     }
   }, [id, interview, messages, toPrdSkill, skillConfig?.prdModel, globalDefaultModel?.value, startChat, createPrd, navigate]);
 
-  if (isLoading) return <div className={styles.loadingState}>Loading interview…</div>;
+  const requestGeneratePrd = useCallback(() => {
+    if (resumeGate.status) {
+      setHandoffOpen(true);
+      return;
+    }
+    void handleGeneratePrd('inherit');
+  }, [handleGeneratePrd, resumeGate.status]);
+
+  if (isLoading) {
+    return (
+      <div className={styles.loadingState} role="status" aria-busy="true" aria-label="Loading interview">
+        <ApexLoader size={72} />
+        <div className={styles.loadingLabel}>Loading interview…</div>
+      </div>
+    );
+  }
   if (isError || !interview) return <div className={styles.errorState}>Interview not found.</div>;
 
   const visibleMessages = messages.filter((m) =>
@@ -1453,7 +1487,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               {interview.status === 'complete' && (
                 <button
                   className={styles.actionBtnPrimary}
-                  onClick={() => void handleGeneratePrd()}
+                  onClick={requestGeneratePrd}
                   disabled={startChat.isPending || createPrd.isPending || interview.prds.length > 0}
                   type="button"
                   title={interview.prds.length > 0 ? 'A PRD has already been generated for this interview' : 'Generate a PRD from this interview'}
@@ -1542,19 +1576,23 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               >
                 {progressPhase === 'queued' ? (
                   <span {...{ 'data-testid': 'agent-run-status-queued' }}>
-                    Queued — waiting for available worker
+                    {friendlyChatProgressLabel(progressLabel, 'queued')}
                   </span>
                 ) : progressPhase === 'dispatched' ? (
                   <span {...{ 'data-testid': 'agent-run-status-dispatched' }}>
-                    Starting…
+                    {friendlyChatProgressLabel(progressLabel, 'dispatched')}
                   </span>
+                ) : progressLabel ? (
+                  friendlyChatProgressLabel(progressLabel, progressPhase)
+                ) : isChatThreadError ? (
+                  'The interview service is reconnecting after a temporary interruption…'
+                ) : isChatThreadLoading ? (
+                  'Connecting to the interview service…'
                 ) : (
-                  progressLabel
-                    ?? (isChatThreadError
-                      ? 'The interview service is reconnecting after a temporary interruption…'
-                      : isChatThreadLoading
-                        ? 'Connecting to the interview service…'
-                        : 'Getting the latest repository requirements so your interview starts with current context…')
+                  friendlyChatProgressLabel(
+                    'Getting the latest repository requirements so your interview starts with current context…',
+                    'setup'
+                  )
                 )}
               </p>
             </div>
@@ -1622,18 +1660,21 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             </div>
           )}
 
-          {isAgentProcessing && !streamingText && !isRetrying && (
+          {showTypingIndicator && (
             <div
               className={styles.typingIndicator}
               role="status"
               aria-live="polite"
-              aria-label="Agent is processing your response"
+              aria-label={friendlyChatProgressLabel(progressLabel, progressPhase) || 'Agent is processing your response'}
               {...{ 'data-testid': 'interview-agent-processing' }}
             >
               <span aria-hidden="true" {...{ 'data-testid': 'chat-run-spinner' }} />
               <span className={styles.typingDot} />
               <span className={styles.typingDot} />
               <span className={styles.typingDot} />
+              <span className={styles.typingProgressLabel} {...{ 'data-testid': 'interview-progress-label' }}>
+                {friendlyChatProgressLabel(progressLabel, progressPhase)}
+              </span>
             </div>
           )}
 
@@ -1674,6 +1715,16 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         </div>
       ) : (
         <div className={styles.inputArea}>
+          {resumeGate.showCard && resumeGate.status ? (
+            <GroundingResumeCard
+              status={resumeGate.status}
+              isPending={resumeGate.isUpdating}
+              error={resumeGate.error}
+              onContinue={resumeGate.continueOnPin}
+              onUpdateToLatest={() => void resumeGate.updateToLatest()}
+              {...{ 'data-testid': 'grounding-resume-card' }}
+            />
+          ) : null}
           <div className={styles.contextBar}>
             <div
               className={styles.contextBarTrack}
@@ -1700,7 +1751,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 <div className={styles.wrapUpActions}>
                   <button
                     className={styles.wrapUpGenerateBtn}
-                    onClick={() => void handleGeneratePrd()}
+                    onClick={requestGeneratePrd}
                     disabled={startChat.isPending || createPrd.isPending || interview.prds.length > 0}
                     type="button"
                     {...{ 'data-testid': 'interview-context-generate-prd-critical' }}
@@ -1726,7 +1777,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 <div className={styles.wrapUpActions}>
                   <button
                     className={styles.wrapUpGenerateBtn}
-                    onClick={() => void handleGeneratePrd()}
+                    onClick={requestGeneratePrd}
                     disabled={startChat.isPending || createPrd.isPending || interview.prds.length > 0}
                     type="button"
                     {...{ 'data-testid': 'interview-context-generate-prd-warning' }}
@@ -1771,7 +1822,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               }
             }}
             onCancel={() => void session.cancel()}
-            disabled={isInteractionBusy || isSending}
+            disabled={isInteractionBusy || isSending || resumeGate.composerBlocked}
             isRunning={isRunning}
             isSending={isSending}
             isBusy={isInteractionBusy}
@@ -1847,6 +1898,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                     (!input.trim() && attachments.length === 0)
                     || isInteractionBusy
                     || !repoReadiness.isReady
+                    || resumeGate.composerBlocked
                   }
                   type="button"
                   aria-label="Send"
@@ -1861,6 +1913,25 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
           />
         </div>
       )}
+
+      {handoffOpen && resumeGate.status ? (
+        <GroundingHandoffDialog
+          parentLabel="the interview"
+          status={resumeGate.status}
+          isPending={startChat.isPending || createPrd.isPending}
+          error={prdGenError ? new Error(prdGenError) : null}
+          onInherit={() => {
+            setHandoffOpen(false);
+            void handleGeneratePrd('inherit');
+          }}
+          onUseLatest={() => {
+            setHandoffOpen(false);
+            void handleGeneratePrd('latest');
+          }}
+          onClose={() => setHandoffOpen(false)}
+          {...{ 'data-testid': 'grounding-handoff-dialog' }}
+        />
+      ) : null}
 
       {showLinkedContext && (
         <div

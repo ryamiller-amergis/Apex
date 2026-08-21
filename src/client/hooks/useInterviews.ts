@@ -470,7 +470,7 @@ export function useCreatePrd() {
   return useMutation<
     CreatePrdResponse,
     Error,
-    { interviewId: string; chatThreadId: string; title?: string; model?: string; kickoffGeneration?: boolean }
+    { interviewId: string; chatThreadId: string; title?: string; model?: string; kickoffGeneration?: boolean; groundingPolicy?: 'inherit' | 'latest' }
   >({
     mutationFn: ({ interviewId, ...body }) =>
       apiFetch(`/api/interviews/${interviewId}/prds`, {
@@ -615,12 +615,12 @@ export function useSyncPrd() {
 
 export function useCreateDesignDoc() {
   const qc = useQueryClient();
-  return useMutation<CreateDesignDocResponse, Error, { prdId: string }>({
-    mutationFn: ({ prdId }) =>
+  return useMutation<CreateDesignDocResponse, Error, { prdId: string; groundingPolicy?: 'inherit' | 'latest' }>({
+    mutationFn: ({ prdId, groundingPolicy }) =>
       apiFetch(`/api/interviews/prds/${prdId}/design-docs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ groundingPolicy }),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['design-docs'] });
@@ -1126,16 +1126,33 @@ export function useDismissPrdFixSession() {
 
 export function useApplyProposedPrd(prdId: string) {
   const qc = useQueryClient();
-  return useMutation<void, Error>({
+  return useMutation<{ ok: boolean; prd?: Prd | null }, Error>({
     mutationFn: () =>
       apiFetch(`/api/interviews/prds/${prdId}/apply-proposed`, {
         method: 'POST',
       }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['prd', prdId] });
-      qc.invalidateQueries({ queryKey: ['prd-test-cases', prdId] });
-      qc.invalidateQueries({ queryKey: ['review-comments', 'prd', prdId] });
-      qc.invalidateQueries({
+    onSuccess: (data) => {
+      if (data?.prd) {
+        qc.setQueryData(['prd', prdId], data.prd);
+      } else {
+        qc.setQueryData(['prd', prdId], (old: Prd | undefined) => {
+          if (!old) return old;
+          return {
+            ...old,
+            content: old.proposedContent ?? old.content,
+            backlogJson: old.proposedBacklogJson ?? old.backlogJson,
+            proposedContent: null,
+            proposedBacklogJson: null,
+            fixCommentId: null,
+            validationScore: null,
+            validationScorecard: null,
+          };
+        });
+      }
+      void qc.refetchQueries({ queryKey: ['prd', prdId] });
+      void qc.invalidateQueries({ queryKey: ['prd-test-cases', prdId] });
+      void qc.invalidateQueries({ queryKey: ['review-comments', 'prd', prdId] });
+      void qc.invalidateQueries({
         queryKey: ['unresolved-comment-count', 'prd', prdId],
       });
     },
@@ -1144,18 +1161,39 @@ export function useApplyProposedPrd(prdId: string) {
 
 export function useApplyProposedPrdSelective(prdId: string) {
   const qc = useQueryClient();
-  return useMutation<void, Error, { content?: string; backlogJson?: unknown }>({
+  return useMutation<
+    { ok: boolean; prd?: Prd | null },
+    Error,
+    { content?: string; backlogJson?: unknown }
+  >({
     mutationFn: (body) =>
       apiFetch(`/api/interviews/prds/${prdId}/apply-proposed-selective`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['prd', prdId] });
-      qc.invalidateQueries({ queryKey: ['prd-test-cases', prdId] });
-      qc.invalidateQueries({ queryKey: ['review-comments', 'prd', prdId] });
-      qc.invalidateQueries({
+    onSuccess: (data, vars) => {
+      if (data?.prd) {
+        qc.setQueryData(['prd', prdId], data.prd);
+      } else {
+        qc.setQueryData(['prd', prdId], (old: Prd | undefined) => {
+          if (!old) return old;
+          return {
+            ...old,
+            content: vars.content ?? old.proposedContent ?? old.content,
+            backlogJson: vars.backlogJson ?? old.proposedBacklogJson ?? old.backlogJson,
+            proposedContent: null,
+            proposedBacklogJson: null,
+            fixCommentId: null,
+            validationScore: null,
+            validationScorecard: null,
+          };
+        });
+      }
+      void qc.refetchQueries({ queryKey: ['prd', prdId] });
+      void qc.invalidateQueries({ queryKey: ['prd-test-cases', prdId] });
+      void qc.invalidateQueries({ queryKey: ['review-comments', 'prd', prdId] });
+      void qc.invalidateQueries({
         queryKey: ['unresolved-comment-count', 'prd', prdId],
       });
     },

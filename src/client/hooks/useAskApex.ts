@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
 import {
   openInteractiveStream,
   type ThreadStreamHandle,
@@ -174,7 +175,9 @@ export function useAskApex() {
     streamingText,
     status,
     preparationMessage:
-      status === 'preparing' ? 'Preparing project repository…' : null,
+      status === 'preparing'
+        ? friendlyChatProgressLabel('Preparing project repository…', 'setup')
+        : null,
     isConnected,
     startSession,
     sendMessage,

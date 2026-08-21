@@ -171,6 +171,28 @@ describe('useChatStream', () => {
     expect(result.current.messages).toHaveLength(1);
   });
 
+  it('sorts replayed messages by timestamp so Q/A stay interleaved', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+    const agent = {
+      id: 'a1',
+      role: 'agent' as const,
+      text: 'Question?',
+      ts: '2026-01-01T00:00:02.000Z',
+    };
+    const user = {
+      id: 'u1',
+      role: 'user' as const,
+      text: 'Answer',
+      ts: '2026-01-01T00:00:01.000Z',
+    };
+    act(() => {
+      // Arrive out of chronological order (agent before user by wall clock).
+      lastES!.emit('message', { type: 'message', message: agent });
+      lastES!.emit('message', { type: 'message', message: user });
+    });
+    expect(result.current.messages.map((m) => m.id)).toEqual(['u1', 'a1']);
+  });
+
   it('deduplicates replayed durable SSE events by lastEventId before applying them', () => {
     const { result } = renderHook(() => useChatStream('t1'));
 
@@ -420,9 +442,7 @@ describe('useChatStream', () => {
       }),
     ]);
     expect(result.current.progressPhase).toBe('queued');
-    expect(result.current.progressLabel).toBe(
-      'Queued — waiting for available worker'
-    );
+    expect(result.current.progressLabel).toBe('Waiting…');
     expect(result.current.status).toBe('running');
   });
 
@@ -473,6 +493,25 @@ describe('useChatStream', () => {
       lastES!.emit('message', { type: 'done' }, 'phase-done-1');
     });
     expect(result.current.status).toBe('idle');
+  });
+
+  it('maps repo-read tool labels to friendly actor copy', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+
+    act(() => {
+      lastES!.emit(
+        'message',
+        {
+          type: 'phase',
+          phase: 'analysis',
+          status: 'running',
+          detail: 'mcp:get_skill_file running',
+        },
+        'phase-catfile-1'
+      );
+    });
+
+    expect(result.current.progressLabel).toBe('Reading…');
   });
 
   it('consumes semantic envelope metadata from durable tool events without inference', () => {

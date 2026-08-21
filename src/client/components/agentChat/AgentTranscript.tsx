@@ -5,6 +5,7 @@ import type { ChatMessage } from '../../../shared/types/chat';
 import { parseAgentMessage } from '../../utils/parseAgentMessage';
 import { AgentMessage } from './AgentMessage';
 import { AgentTypingIndicator } from './AgentTypingIndicator';
+import { shouldShowAgentTypingIndicator } from '../../hooks/useAgentChatSession';
 import styles from './agentChat.module.css';
 
 export interface AgentTranscriptProps {
@@ -138,7 +139,11 @@ export const AgentTranscript: React.FC<AgentTranscriptProps> = ({
       )}
 
       {/* Typing indicator */}
-      {isRunning && !streamingText && (
+      {shouldShowAgentTypingIndicator({
+        isBusy: isRunning,
+        streamingText,
+        lastVisibleRole: messages[messages.length - 1]?.role,
+      }) && (
         <AgentTypingIndicator />
       )}
 

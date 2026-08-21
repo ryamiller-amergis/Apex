@@ -12,7 +12,7 @@ import { createLocalCursorExecution } from './cursorExecution';
 import { createAiRunsWorker } from './worker';
 import {
   flushWorkspaceArtifacts,
-  openLocalCheckout,
+  openGroundedReader,
 } from './workspace';
 
 const SERVICE_BUS_SCOPE = 'https://servicebus.azure.net/.default';
@@ -148,11 +148,11 @@ export async function main(): Promise<void> {
   });
   const worker = createAiRunsWorker({
     getBootstrap: (message) => callback.getBootstrap(message),
-    openCheckout: (snapshot) => openLocalCheckout(snapshot),
+    openCheckout: (snapshot) => openGroundedReader(snapshot),
     createExecution: (snapshot, checkout) =>
       createLocalCursorExecution(
         snapshot,
-        checkout as Awaited<ReturnType<typeof openLocalCheckout>>,
+        checkout as Awaited<ReturnType<typeof openGroundedReader>>,
       ),
     postIngest: (projectId, runId, body) =>
       callback.postIngest(projectId, runId, body),

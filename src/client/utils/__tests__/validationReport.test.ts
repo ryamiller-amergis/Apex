@@ -2,6 +2,7 @@ import {
   buildPassingValidationReasonsMarkdown,
   collectValidationGaps,
   designDocFeatureSectionScore,
+  normalizeCrossCuttingCheck,
   normalizeValidationGap,
 } from '../../../shared/utils/validationReport';
 import type { ValidationScorecard } from '../../../shared/types/interview';
@@ -96,6 +97,29 @@ describe('buildPassingValidationReasonsMarkdown', () => {
     );
 
     expect(markdown).toBe('');
+  });
+
+  it('does not throw when cross-cutting checks are foundation-skill objects', () => {
+    const markdown = buildPassingValidationReasonsMarkdown(
+      makeScorecard({
+        cross_cutting_checks: {
+          template_tokens: {
+            label: 'Template token scan',
+            status: 'pass',
+            detail: 'None found',
+          },
+          tbd_markers: {
+            label: '[TBD] scan',
+            status: 'fail',
+            detail: '3 TBD markers remain',
+          },
+        },
+      }),
+    );
+
+    expect(markdown).toContain('## Passing Validation Reasons');
+    expect(markdown).toContain('**Template token scan**: pass — None found');
+    expect(markdown).not.toContain('3 TBD markers remain');
   });
 });
 
@@ -256,6 +280,40 @@ describe('normalizeValidationGap', () => {
     expect(normalizeValidationGap(null)).toBeNull();
     expect(normalizeValidationGap({})).toBeNull();
     expect(normalizeValidationGap({ id: '' })).toBeNull();
+  });
+});
+
+describe('normalizeCrossCuttingCheck', () => {
+  it('keeps the string scorecard shape', () => {
+    expect(normalizeCrossCuttingCheck('template_tokens', 'PASS')).toEqual({
+      key: 'template_tokens',
+      label: 'Template Tokens',
+      status: 'pass',
+      detail: '',
+      displayText: 'PASS',
+    });
+  });
+
+  it('reads the foundation-skill object shape', () => {
+    expect(
+      normalizeCrossCuttingCheck('tbd_markers', {
+        label: '[TBD] / TODO / FIXME scan',
+        status: 'pass',
+        detail: 'None found',
+      }),
+    ).toEqual({
+      key: 'tbd_markers',
+      label: '[TBD] / TODO / FIXME scan',
+      status: 'pass',
+      detail: 'None found',
+      displayText: 'pass — None found',
+    });
+  });
+
+  it('does not throw for non-string values', () => {
+    expect(normalizeCrossCuttingCheck('ok', true).displayText).toBe('true');
+    expect(normalizeCrossCuttingCheck('count', 2).displayText).toBe('2');
+    expect(normalizeCrossCuttingCheck('empty', null).displayText).toBe('');
   });
 });
 

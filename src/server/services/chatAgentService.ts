@@ -130,6 +130,7 @@ import type {
 import { groundingTelemetry } from './groundingTelemetry';
 import { groundingProfileResolver } from './groundingProfileResolver';
 import { createNativeReadTools } from './nativeReadToolAdapter';
+import { workerCanReadWithoutWorkingTree } from './repoRead/workerReadVisibility';
 import {
   createCursorRunEventEnvelope,
   CursorExecutionWaitError,
@@ -1094,8 +1095,10 @@ export function buildDocumentAssistantEditGuidance(
   ];
 }
 
+export type GroundingStorageLabel = 'bare mirror' | 'Azure Files checkout';
+
 export interface GroundingProvenance {
-  storage: 'Azure Files checkout';
+  storage: GroundingStorageLabel;
   repository: string;
   branch: string;
   sha: string;
@@ -1107,7 +1110,7 @@ function groundingProvenanceFor(
 ): GroundingProvenance | undefined {
   if (grounding.mode !== 'local') return undefined;
   return {
-    storage: 'Azure Files checkout',
+    storage: grounding.workingTree ? 'Azure Files checkout' : 'bare mirror',
     repository: targetedRepositoryName(kickoff),
     branch: kickoff.skillBranch ?? kickoff.branch ?? 'main',
     sha: grounding.resolvedSha,
@@ -3570,7 +3573,7 @@ export async function releaseGroundingForStaleRecovery(
   state.resolvedGroundingBinding = null;
   state.bindingContinuity = null;
   state.groundingWorkspaceDir = null;
-  await grounding?.release().catch(() => undefined);
+  await grounding?.release({ persistPin: true }).catch(() => undefined);
 }
 
 async function ensureThreadGrounding(
@@ -3625,6 +3628,7 @@ async function ensureThreadGrounding(
       // targets `thread.workspaceDir` — so they may share a read-only per-SHA
       // checkout (gated by `shared-readonly-grounding-checkout`).
       readOnlyShareable: true,
+      sandboxCwd: state.thread.workspaceDir,
     });
 
     if (grounding.mode !== 'preparing') {
@@ -3740,10 +3744,14 @@ export function isInteractiveWorkspaceBoundSkill(
   );
 }
 
-function resolveInteractiveWorkflowClass(
+export function resolveInteractiveWorkflowClass(
   state: ThreadState
 ): InteractiveWorkflowClass {
   if (state.isInterviewThread) return 'interview';
+  const assistantType = state.thread.kickoff.assistantType;
+  if (assistantType === 'prd' || assistantType === 'design-doc') {
+    return 'assistant';
+  }
   const skillPath = (state.thread.kickoff.skillPath ?? '').toLowerCase();
   if (skillPath.includes('adr')) return 'adr';
   if (state.isDevSession) return 'assistant';
@@ -3936,6 +3944,9 @@ async function tryDispatchInteractiveTurn(
             : 'native-reads-false'
         );
       }
+      if (!grounding.workingTree && !workerCanReadWithoutWorkingTree()) {
+        return bypass('bare-mirror-no-checkout');
+      }
       const repoReader =
         await groundingProfileResolver.resolveConnectionProfile(
           grounding.profileId
@@ -3978,6 +3989,12 @@ async function tryDispatchInteractiveTurn(
         skillPath,
         projectId: project,
         threadId,
+        groundedSha: grounding.resolvedSha,
+        repository: targetedRepositoryName(state.thread.kickoff),
+        provider: state.thread.kickoff.skillProvider ?? 'ado',
+        ...(grounding.mirrorPath
+          ? { mirrorRef: grounding.mirrorPath }
+          : {}),
       };
       const timeoutAt = new Date(
         Date.now() + resolveAgentRunHardLimitMs()
@@ -5997,7 +6014,7 @@ export async function closeThread(threadId: string): Promise<void> {
   state.grounding = null;
   state.groundingInFlight = null;
   state.groundingWorkspaceDir = null;
-  await grounding?.release().catch(() => undefined);
+  await grounding?.release({ persistPin: true }).catch(() => undefined);
 
   // For dev sessions with unpushed changes: evict from memory (free resources)
   // but leave the thread status as-is (idle) and preserve the workspace.

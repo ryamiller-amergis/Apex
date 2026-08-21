@@ -138,6 +138,17 @@ jest.mock('../RunGroundingStatus', () => ({
     />
   ),
 }));
+jest.mock('../../hooks/useGroundingResumeGate', () => ({
+  useGroundingResumeGate: () => ({
+    composerBlocked: false,
+    showCard: false,
+    status: null,
+    continueOnPin: jest.fn(),
+    updateToLatest: jest.fn(),
+    isUpdating: false,
+    error: null,
+  }),
+}));
 
 // ── Base fixtures ──────────────────────────────────────────────────────────────
 

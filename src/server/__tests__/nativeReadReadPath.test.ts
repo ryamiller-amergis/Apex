@@ -158,6 +158,7 @@ function dependencies(
       proven: false,
       reason: 'harness-not-run',
     }),
+    isUsableBareMirror: jest.fn().mockReturnValue(false),
     sharedReadCheckout: {
       getReady: jest.fn().mockReturnValue(null),
       materialize: jest.fn().mockResolvedValue({
@@ -375,6 +376,7 @@ describe('FEAT-005 S5 VT-09 fail-closed repository read integration', () => {
       profileId,
       resolvedSha: sha,
       nativeReads: true,
+      workingTree: true,
       release: jest.fn(),
     } satisfies CallerGroundingSelection;
 
@@ -603,6 +605,7 @@ describe('FEAT-005 S5 VT-15 exact targeted repository identity and NFRs', () => 
       profileId,
       resolvedSha: target.sha,
       nativeReads: true,
+      workingTree: true,
       release: jest.fn(),
     } satisfies CallerGroundingSelection;
 
@@ -675,6 +678,7 @@ describe('FEAT-005 S5 VT-15 exact targeted repository identity and NFRs', () => 
       profileId,
       resolvedSha: target.sha,
       nativeReads: true,
+      workingTree: true,
       release: jest.fn(),
     } satisfies CallerGroundingSelection;
 

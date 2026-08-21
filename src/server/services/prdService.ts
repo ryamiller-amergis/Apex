@@ -12,6 +12,7 @@ import { readOutputPrd, readOutputBacklog, sendMessage, createThread as createCh
 import { isThreadRunAlive } from './agentRunReaperService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
 import { isPrdGenerationOutputComplete } from '../../shared/utils/prdGenerationOutput';
+import { normalizeBacklogUserStories, resolveUserStoryIWant } from '../../shared/utils/userStory';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import { createNotification } from './notificationService';
 import { isAdminUser } from '../utils/rbacHelpers';
@@ -25,6 +26,11 @@ import { stampAdoIds } from '../../shared/utils/backlogTransform';
 import { derivePrdReadiness } from '../../shared/utils/prdReadiness';
 import { buildOverrideHistory } from '../../shared/utils/validationOverride';
 import { BACKLOG_USER_TYPE_CONVENTIONS_MD } from '../../shared/utils/backlogUserTypeConventions';
+import {
+  evaluatePrdStructuralValidation,
+  hashPrdValidationContent,
+  scorecardMatchesContentHash,
+} from '../../shared/utils/prdValidationFastPath';
 import { getTestCases, listLatestTestCaseSummariesForPrds, getUncoveredCoverageItems, recalculateTestCaseCoverage } from './testCaseService';
 import { getSkillConfig, resolveSkillConfig, getSkillSettingsName } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
@@ -40,9 +46,12 @@ import {
 } from './documentValidationService';
 import {
   propagatePipelineGrounding,
+  readActiveTargetProvenance,
   resolveRunGroundingSurface,
   runGroundingService,
 } from './runGroundingService';
+import type { PipelinePinPolicy } from '../../shared/types/runGrounding';
+import { stampGroundingProvenance } from '../../shared/utils/groundingProvenance';
 
 const VALID_PRD_STATUSES: PrdStatus[] = ['generating', 'draft', 'validating', 'pending_review', 'reviewer_approved', 'approved', 'revision_requested'];
 
@@ -213,6 +222,7 @@ export async function propagatePrdGenerationGrounding(opts: {
   project: string;
   userId: string;
   threadId: string;
+  pinPolicy?: PipelinePinPolicy;
 }): Promise<void> {
   try {
     const upstream = await resolveRunGroundingSurface(
@@ -228,7 +238,7 @@ export async function propagatePrdGenerationGrounding(opts: {
         project: opts.project,
       },
       opts.userId,
-      { deferMaterialization: true },
+      { deferMaterialization: true, pinPolicy: opts.pinPolicy ?? 'inherit' },
     );
   } catch {
     console.warn(
@@ -244,6 +254,7 @@ export async function routePrdGenerationKickoff(opts: {
   threadId: string;
   interviewId?: string;
   kickoffMessage?: string;
+  pinPolicy?: PipelinePinPolicy;
 }): Promise<void> {
   const kickoffMessage = opts.kickoffMessage ?? 'Begin.';
   const destinationRun = {
@@ -269,6 +280,7 @@ export async function routePrdGenerationKickoff(opts: {
       project: opts.project,
       userId: opts.userId,
       threadId: opts.threadId,
+      pinPolicy: opts.pinPolicy,
     });
   }
 
@@ -435,10 +447,10 @@ export async function getPrd(id: string): Promise<Prd | null> {
       },
     ),
     content: row.content,
-    backlogJson: row.backlogJson ?? undefined,
+    backlogJson: normalizeBacklogUserStories(row.backlogJson) ?? undefined,
     prdAssistantThreadId: row.prdAssistantThreadId ?? null,
     proposedContent: row.proposedContent ?? null,
-    proposedBacklogJson: row.proposedBacklogJson ?? undefined,
+    proposedBacklogJson: normalizeBacklogUserStories(row.proposedBacklogJson) ?? undefined,
     designDocApproverIds: row.designDocApproverIds ?? undefined,
     validationThreadId: row.validationThreadId ?? null,
     validationScore: row.validationScore ?? null,
@@ -468,6 +480,8 @@ export async function updatePrdContent(
 
   const updates: Partial<typeof prds.$inferInsert> = {
     content,
+    validationScore: null,
+    validationScorecard: null,
     updatedAt: new Date().toISOString(),
   };
 
@@ -495,7 +509,12 @@ export async function updatePrdBacklog(
 
   await db
     .update(prds)
-    .set({ backlogJson: backlog as any, updatedAt: new Date().toISOString() })
+    .set({
+      backlogJson: normalizeBacklogUserStories(backlog) as any,
+      validationScore: null,
+      validationScorecard: null,
+      updatedAt: new Date().toISOString(),
+    })
     .where(eq(prds.id, id));
 }
 
@@ -820,12 +839,27 @@ export async function syncPrdContent(
     } catch (err) {
       console.warn(`[prdService] Persona enrichment skipped for PRD ${id}:`, err);
     }
+
+    resolvedBacklog = normalizeBacklogUserStories(resolvedBacklog);
+  }
+
+  let stampedContent = content;
+  try {
+    const surface = await resolveRunGroundingSurface('prd', id);
+    const provenance = surface
+      ? await readActiveTargetProvenance(surface.run)
+      : null;
+    if (provenance) {
+      stampedContent = stampGroundingProvenance(content, provenance);
+    }
+  } catch {
+    stampedContent = content;
   }
 
   await db
     .update(prds)
     .set({
-      content,
+      content: stampedContent,
       status: finalStatus,
       ...(resolvedBacklog !== undefined ? { backlogJson: resolvedBacklog as any } : {}),
       updatedAt: new Date().toISOString(),
@@ -1085,10 +1119,11 @@ function buildPbiDescriptionHtml(pbi: SelectedBacklogPBI): string {
   let html = '';
 
   const us = pbi.userStory;
-  if (us && (us.persona || us.iWant || us.soThat)) {
+  if (us && (us.persona || us.iWant || us.soThat || (us as { want?: string }).want)) {
     const parts: string[] = [];
+    const iWant = resolveUserStoryIWant(us);
     if (us.persona) parts.push(`As <em>${esc(us.persona)}</em>`);
-    if (us.iWant)   parts.push(`I want to ${esc(us.iWant)}`);
+    if (iWant)      parts.push(`I want to ${esc(iWant)}`);
     if (us.soThat)  parts.push(`so that ${esc(us.soThat)}`);
     html += `<p><strong>User Story</strong></p><p>${parts.join(', ')}.</p>`;
   }
@@ -1588,7 +1623,7 @@ export async function applyProposedPrdChanges(
     mergedContent?: string;
     mergedBacklogJson?: unknown;
   },
-): Promise<{ applied: boolean }> {
+): Promise<{ applied: boolean; prd?: Prd | null }> {
   const prdRow = await db.query.prds.findFirst({
     where: eq(prds.id, prdId),
     columns: {
@@ -1690,22 +1725,18 @@ export async function applyProposedPrdChanges(
       );
   }
 
-  // Never re-validate mid Fix-with-Apex — accept-fix owns that kickoff.
-  const afterApply = await db.query.prds.findFirst({
-    where: eq(prds.id, prdId),
-    columns: { fixBaseline: true },
-  });
-  if (afterApply?.fixBaseline) {
-    console.log(
-      `[prd] Skipping autoStartPrdValidation after apply-proposed — fix session active (prdId=${prdId})`,
-    );
-  } else {
-    void autoStartPrdValidation(prdId, { force: true }).catch((err) =>
-      console.error(`[prd] autoStartPrdValidation after apply-proposed failed (prdId=${prdId})`, err),
-    );
-  }
+  // Never re-validate on comment/assistant apply — Run Validation is manual.
+  // Clear the prior score so Approve stays disabled until the user re-runs validation.
+  await db
+    .update(prds)
+    .set({
+      validationScore: null,
+      validationScorecard: null,
+      updatedAt: new Date().toISOString(),
+    } as any)
+    .where(eq(prds.id, prdId));
 
-  return { applied: true };
+  return { applied: true, prd: await getPrd(prdId) };
 }
 
 /** Resolve a PRD review comment, applying any pending proposed edits first. */
@@ -1840,11 +1871,22 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
       const kickoff = newStatus === 'pending_review'
         ? await applyKickoffApproversForReview(prd.id, prd.interviewId, prd.authorId)
         : null;
+      const latest = await db.query.prds.findFirst({
+        where: eq(prds.id, prd.id),
+        columns: { content: true, backlogJson: true },
+      });
+      const stamped: ValidationScorecard = {
+        ...scorecard,
+        contentHash: hashPrdValidationContent(
+          latest?.content ?? prd.content,
+          latest?.backlogJson ?? prd.backlogJson,
+        ),
+      };
       await db.update(prds)
         .set({
-          validationScore: Math.round(scorecard.overall_score),
-          validationScorecard: scorecard,
-          validationPhase: scorecard.review_phase,
+          validationScore: Math.round(stamped.overall_score),
+          validationScorecard: stamped,
+          validationPhase: stamped.review_phase,
           validationReportMd: reportMd,
           status: newStatus,
           ...(kickoff?.designDocApproverIds
@@ -1898,7 +1940,13 @@ export async function autoStartPrdValidation(
 
   try {
     const prd = await getPrd(prdId);
-    if (!prd || prd.status === 'validating') return;
+    if (!prd) return;
+    if (prd.status === 'validating') {
+      console.log(
+        `[prd] Skipping autoStartPrdValidation — already validating (prdId=${prdId})`,
+      );
+      return;
+    }
     if (!options?.force && prd.validationThreadId) {
       console.log(
         `[prd] Skipping automatic validation restart — validation was already attempted (prdId=${prdId})`,
@@ -1920,6 +1968,49 @@ export async function autoStartPrdValidation(
 
     const ready = await arePrdValidationArtifactsReady(prdId);
     if (!ready) return;
+
+    // Content-hash skip: unchanged doc reuses the last *agent* scorecard (no agent).
+    // Never skip on a structural fail-fast card — those must be allowed to proceed to
+    // the real validator after the fail-fast rules change or content is fixed.
+    if (
+      options?.force &&
+      prd.validationScorecard &&
+      prd.validationScorecard.slug !== 'prd-structural' &&
+      scorecardMatchesContentHash(
+        prd.validationScorecard,
+        prd.content,
+        prd.backlogJson,
+      )
+    ) {
+      console.log(
+        `[prd] Skipping validation agent — content hash unchanged (prdId=${prdId})`,
+      );
+      return;
+    }
+
+    // Cheap structural fail-fast (no agent) for empty/TBD/missing sections.
+    // Explicit Re-run / Run Validation / Accept & Re-validate pass force:true and
+    // must reach the real scorer — fail-fast would otherwise rewrite 0% with no UI change.
+    if (!options?.force) {
+      const structural = evaluatePrdStructuralValidation(prd.content, prd.backlogJson);
+      if (structural) {
+        const reportMd = generateFallbackReport(structural);
+        await db.update(prds)
+          .set({
+            validationScore: Math.round(structural.overall_score),
+            validationScorecard: structural,
+            validationPhase: structural.review_phase,
+            validationReportMd: reportMd,
+            status: 'draft',
+            updatedAt: new Date().toISOString(),
+          })
+          .where(eq(prds.id, prdId));
+        console.log(
+          `[prd] Structural validation failed fast (prdId=${prdId}, gaps=${structural.gaps?.length ?? 0})`,
+        );
+        return;
+      }
+    }
 
     const adapter = createPrdValidationAdapter(prd);
     await autoStartDocumentValidation(adapter);
@@ -1967,17 +2058,21 @@ export async function syncPrdValidationResult(prdId: string): Promise<{ score: n
   }
 
   const scorecard = JSON.parse(scorecardRaw) as ValidationScorecard;
-  const reportMd = readOutputValidationScorecardMd(prd.validationThreadId) ?? generateFallbackReport(scorecard);
-  const newStatus: PrdStatus = scorecard.is_ready ? 'pending_review' : 'draft';
+  const stamped: ValidationScorecard = {
+    ...scorecard,
+    contentHash: hashPrdValidationContent(prd.content, prd.backlogJson),
+  };
+  const reportMd = readOutputValidationScorecardMd(prd.validationThreadId) ?? generateFallbackReport(stamped);
+  const newStatus: PrdStatus = stamped.is_ready ? 'pending_review' : 'draft';
   const kickoff = newStatus === 'pending_review'
     ? await applyKickoffApproversForReview(prd.id, prd.interviewId, prd.authorId)
     : null;
 
   await db.update(prds)
     .set({
-      validationScore: Math.round(scorecard.overall_score),
-      validationScorecard: scorecard,
-      validationPhase: scorecard.review_phase,
+      validationScore: Math.round(stamped.overall_score),
+      validationScorecard: stamped,
+      validationPhase: stamped.review_phase,
       validationReportMd: reportMd,
       status: newStatus,
       ...(kickoff?.designDocApproverIds
@@ -1996,7 +2091,7 @@ export async function syncPrdValidationResult(prdId: string): Promise<{ score: n
     );
   }
 
-  return { score: scorecard.overall_score, is_ready: scorecard.is_ready };
+  return { score: stamped.overall_score, is_ready: stamped.is_ready };
 }
 
 export async function markPrdValidationReady(prdId: string, requestingUserId: string): Promise<void> {

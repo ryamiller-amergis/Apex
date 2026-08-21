@@ -1,6 +1,7 @@
 const mockFindMany = jest.fn();
 const mockAgentRunsFindMany = jest.fn();
 const mockPrdsFindMany = jest.fn();
+const mockPrdsFindFirst = jest.fn();
 const mockDesignDocsFindMany = jest.fn();
 const mockTestCasesFindMany = jest.fn();
 const mockAgentRunsFindFirst = jest.fn();
@@ -12,7 +13,10 @@ jest.mock('../db/drizzle', () => ({
   db: {
     query: {
       devSessions: { findMany: (...args: unknown[]) => mockFindMany(...args) },
-      prds: { findMany: (...args: unknown[]) => mockPrdsFindMany(...args) },
+      prds: {
+        findMany: (...args: unknown[]) => mockPrdsFindMany(...args),
+        findFirst: (...args: unknown[]) => mockPrdsFindFirst(...args),
+      },
       designDocs: { findMany: (...args: unknown[]) => mockDesignDocsFindMany(...args) },
       testCases: { findMany: (...args: unknown[]) => mockTestCasesFindMany(...args) },
       agentRuns: {
@@ -45,6 +49,10 @@ jest.mock('../services/designDocService', () => ({
 jest.mock('../services/testCaseService', () => ({
   startTestCaseWatcher: jest.fn(),
   isTestCaseWatcherActive: jest.fn(),
+  routeTestCaseGenerationKickoff: jest.fn(),
+}));
+jest.mock('../services/documentValidationService', () => ({
+  routeDocumentValidationKickoff: jest.fn(),
 }));
 jest.mock('../services/designPrototypeService', () => ({
   failStalePrototypes: jest.fn(),
@@ -82,10 +90,12 @@ import { findRunningInterviewThreads, clearStaleRun } from '../services/chatThre
 import {
   hydrateThread,
   reevaluateThreadGroundingForRecovery,
+  sendMessage,
 } from '../services/chatAgentService';
 import { isThreadRunAlive } from '../services/agentRunReaperService';
 import { finalizeOwnedAgentRun } from '../services/pgNotifyService';
 import { routeDesignDocGenerationKickoff } from '../services/designDocService';
+import { routeTestCaseGenerationKickoff } from '../services/testCaseService';
 
 const mockedFindRunning = findRunningInterviewThreads as jest.MockedFunction<typeof findRunningInterviewThreads>;
 const mockedClearStale = clearStaleRun as jest.MockedFunction<typeof clearStaleRun>;
@@ -217,6 +227,70 @@ describe('design-doc generation recovery claim', () => {
 
     expect(mockUpdateReturning).toHaveBeenCalledTimes(1);
     expect(routeDesignDoc).not.toHaveBeenCalled();
+  });
+});
+
+describe('test-case generation recovery routing', () => {
+  const routeTestCases = routeTestCaseGenerationKickoff as jest.MockedFunction<
+    typeof routeTestCaseGenerationKickoff
+  >;
+  const mockSendMessage = sendMessage as jest.MockedFunction<typeof sendMessage>;
+  const mockIsThreadIdle = jest.requireMock('../services/chatAgentService')
+    .isThreadIdle as jest.Mock;
+  const mockIsTestCaseWatcherActive = jest.requireMock('../services/testCaseService')
+    .isTestCaseWatcherActive as jest.Mock;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockUpdateWhere.mockImplementation(() => ({ returning: mockUpdateReturning }));
+    mockFindMany.mockResolvedValue([]);
+    mockPrdsFindMany.mockResolvedValue([]);
+    mockDesignDocsFindMany.mockResolvedValue([]);
+    mockAgentRunsFindFirst.mockResolvedValue(null);
+    mockTestCasesFindMany.mockResolvedValue([{
+      id: 'tc-1',
+      prdId: 'prd-1',
+      chatThreadId: 'thread-tc',
+      updatedAt: '2026-08-11T05:00:00.000Z',
+    }]);
+    mockPrdsFindFirst.mockResolvedValue({
+      authorId: 'user-1',
+      project: 'Apex',
+      chatThreadId: 'thread-prd',
+    });
+    mockedHydrate.mockResolvedValue(true);
+    mockIsThreadIdle.mockReturnValue(true);
+    mockedIsAlive.mockResolvedValue(false);
+    mockIsTestCaseWatcherActive.mockReturnValue(false);
+    mockedFindRunning.mockResolvedValue([]);
+    jest.requireMock('../services/designPrototypeService')
+      .failStalePrototypes.mockResolvedValue(0);
+    jest.requireMock('../services/pdfAssemblyService')
+      .expireOldSessions.mockResolvedValue({ expired: 0, errors: 0 });
+    jest.requireMock('../services/featureRequestAnalysisService')
+      .recoverAnalyzingFeatureRequests.mockResolvedValue(0);
+    routeTestCases.mockResolvedValue(true);
+  });
+
+  it('re-kicks a stale test-case row through the background worker, not sendMessage', async () => {
+    mockUpdateReturning.mockResolvedValueOnce([{ id: 'tc-1' }]);
+    const nowSpy = jest.spyOn(Date, 'now')
+      .mockReturnValue(Date.parse('2026-08-11T05:16:37.000Z'));
+    try {
+      await recoverInFlightWork();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(routeTestCases).toHaveBeenCalledWith(expect.objectContaining({
+      testCaseId: 'tc-1',
+      prdId: 'prd-1',
+      userId: 'user-1',
+      project: 'Apex',
+      threadId: 'thread-tc',
+      sourceThreadId: 'thread-prd',
+    }));
+    expect(mockSendMessage).not.toHaveBeenCalled();
   });
 });
 

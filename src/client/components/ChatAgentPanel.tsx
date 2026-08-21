@@ -348,7 +348,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
       && m.toolName !== '_reasoning'
       && m.toolName !== '_thinking',
   });
-  const { messages, streamingText, isConnected, prdReady, isRunning, status, progressLabel } = session;
+  const { messages, streamingText, isConnected, prdReady, isRunning, status, progressLabel, showTypingIndicator } = session;
 
   const closeThread = useCloseThread();
 
@@ -715,7 +715,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             })}
 
             {/* Loading spinner — shown while waiting for first tokens */}
-            {isRunning && !streamingText && (
+            {showTypingIndicator && (
               <div
                 className={styles.message}
                 role="status"

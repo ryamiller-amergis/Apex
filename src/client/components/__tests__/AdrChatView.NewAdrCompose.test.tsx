@@ -10,6 +10,17 @@ jest.mock('react-markdown', () => ({
   default: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 jest.mock('remark-gfm', () => ({ __esModule: true, default: jest.fn() }));
+jest.mock('../../hooks/useGroundingResumeGate', () => ({
+  useGroundingResumeGate: () => ({
+    composerBlocked: false,
+    showCard: false,
+    status: null,
+    continueOnPin: jest.fn(),
+    updateToLatest: jest.fn(),
+    isUpdating: false,
+    error: null,
+  }),
+}));
 jest.mock('react-router-dom', () => ({
   ...jest.requireActual('react-router-dom'),
   useNavigate: () => jest.fn(),

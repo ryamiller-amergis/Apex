@@ -40,6 +40,11 @@ jest.mock('../../hooks/useChatThreads', () => ({
   useSkillRepos: jest.fn(),
   useStartChat: jest.fn(),
   useSkillList: jest.fn(),
+  useChatThread: jest.fn(() => ({
+    data: undefined,
+    isLoading: false,
+    isFetching: false,
+  })),
   useChatThreadList: jest.fn(() => ({ data: [], isLoading: false, error: null })),
   useDeleteThread: jest.fn(() => ({ mutate: jest.fn() })),
   useFlagThread: jest.fn(() => ({ mutate: jest.fn() })),
@@ -89,6 +94,17 @@ jest.mock('../../hooks/useProjectRepositoryReadiness', () => ({
   })),
   PROJECT_REPOSITORY_NOT_READY_MESSAGE:
     'A project administrator must clone this repository before repository-dependent AI work can run.',
+}));
+jest.mock('../../hooks/useGroundingResumeGate', () => ({
+  useGroundingResumeGate: () => ({
+    composerBlocked: false,
+    showCard: false,
+    status: null,
+    continueOnPin: jest.fn(),
+    updateToLatest: jest.fn(),
+    isUpdating: false,
+    error: null,
+  }),
 }));
 
 jest.mock('../../hooks/useSpeechOutput', () => ({
@@ -676,7 +692,15 @@ describe('AgentHome', () => {
     });
 
     it('clears skill selection state after sending so next message is plain text', async () => {
-      const input = await startThread(); // fetch already cleared by startThread()
+      const { rerender } = renderAgentHome({ selectedProject: "MaxView" });
+
+      fireEvent.change(screen.getByPlaceholderText(/Let Apex know what you need/i), {
+        target: { value: 'start session' },
+      });
+      fireEvent.click(screen.getByLabelText('Send'));
+      await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
+      const input = await screen.findByPlaceholderText(/Continue the conversation/i);
+      (global.fetch as jest.Mock).mockClear();
 
       // Select skill then send
       fireEvent.change(input, { target: { value: '/' } });
@@ -685,9 +709,31 @@ describe('AgentHome', () => {
       fireEvent.click(screen.getByLabelText('Send'));
       await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1));
 
+      // Simulate the agent completing so the session leaves awaiting and allows follow-up.
+      mockUseChatStream.mockReturnValue({
+        ...idleStream,
+        messages: [
+          {
+            id: 'u1',
+            role: 'user' as const,
+            text: 'Run skill: to-prd (`.cursor/skills/to-prd/SKILL.md`)',
+            ts: '2026-01-01T00:00:00Z',
+          },
+          {
+            id: 'a1',
+            role: 'agent' as const,
+            text: 'Skill started.',
+            ts: '2026-01-01T00:00:01Z',
+          },
+        ],
+      });
+      rerenderAgentHome(rerender, { selectedProject: 'MaxView' });
+
       // Second plain message — must NOT be wrapped in "Run skill"
       (global.fetch as jest.Mock).mockClear();
-      fireEvent.change(input, { target: { value: 'just a follow-up' } });
+      fireEvent.change(screen.getByPlaceholderText(/Continue the conversation/i), {
+        target: { value: 'just a follow-up' },
+      });
       fireEvent.click(screen.getByLabelText('Send'));
 
       await waitFor(() => {

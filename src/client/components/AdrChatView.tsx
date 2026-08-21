@@ -7,6 +7,7 @@ import { useAppShell } from '../hooks/useAppShell';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useChatThread, useSkillRepos, useStartChat } from '../hooks/useChatThreads';
 import type { ChatMessage } from '../../shared/types/chat';
+import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
 import { useAvailableModels, useGlobalDefaultModel, useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
 import {
   useAdr,
@@ -44,9 +45,12 @@ import {
   PROJECT_REPOSITORY_NOT_READY_MESSAGE,
   useProjectRepositoryReadiness,
 } from '../hooks/useProjectRepositoryReadiness';
+import { useGroundingResumeGate } from '../hooks/useGroundingResumeGate';
+import { GroundingResumeCard } from './GroundingResumeCard';
 import { parseAgentMessage, type ChoiceBlock } from '../utils/parseAgentMessage';
 import type { ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
 import styles from './InterviewChatView.module.css';
+import { ApexLoader } from './ApexLoader';
 
 function formatElapsed(milliseconds: number): string {
   const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
@@ -359,6 +363,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     progressPhase,
     isPreparing,
     hasPreparationError,
+    showTypingIndicator,
   } = session;
   const {
     attachments,
@@ -383,6 +388,12 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const fixCommentWithAi = useFixAdrCommentWithAi(id);
   const isRunning = session.isRunning || thread?.status === 'running';
   const isInteractionBusy = session.isInteractionBusy || isRunning;
+  const resumeGate = useGroundingResumeGate(
+    'adr',
+    id,
+    adr?.project ?? null,
+    isRunning,
+  );
   const isAgentProcessing = isRunning || session.isSending || session.isAwaitingAgentResponse;
   const isAuthor = adr?.authorId === userId;
   const chatLocked = !isAuthor || adr?.status !== 'in_progress';
@@ -443,7 +454,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   }, [adr?.status]);
 
   const send = useCallback(async (text: string) => {
-    if (!adr || isInteractionBusy || chatLocked) return;
+    if (!adr || isInteractionBusy || chatLocked || resumeGate.composerBlocked) return;
     if (!text.trim() && attachments.length === 0) return;
     const payload = text.trim();
     const pendingAttachments = attachments;
@@ -452,7 +463,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     setError(null);
     await session.send(payload, { model, attachments: pendingAttachments });
     if (session.sendError) setError(session.sendError);
-  }, [adr, attachments, chatLocked, clearAttachments, isInteractionBusy, model, session]);
+  }, [adr, attachments, chatLocked, clearAttachments, isInteractionBusy, model, resumeGate.composerBlocked, session]);
 
   const cancelActiveRun = useCallback(async () => {
     setError(null);
@@ -490,7 +501,14 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     if (hasKickoffEcho) setSeededKickoffPrompt(null);
   }, [seededKickoffPrompt, sessionVisibleMessages]);
 
-  if (isLoading) return <div className={styles.loadingState}>Loading ADR…</div>;
+  if (isLoading) {
+    return (
+      <div className={styles.loadingState} role="status" aria-busy="true" aria-label="Loading ADR">
+        <ApexLoader size={72} />
+        <div className={styles.loadingLabel}>Loading ADR…</div>
+      </div>
+    );
+  }
   if (isError || !adr) return <div className={styles.errorState}>ADR not found.</div>;
 
   const unresolvedCount = reviewComments.filter((comment) => comment.status === 'open').length;
@@ -837,19 +855,20 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                 >
                   {progressPhase === 'queued' ? (
                     <span {...{ 'data-testid': 'agent-run-status-queued' }}>
-                      Queued — waiting for available worker
+                      {friendlyChatProgressLabel(progressLabel, 'queued')}
                     </span>
                   ) : progressPhase === 'dispatched' ? (
                     <span {...{ 'data-testid': 'agent-run-status-dispatched' }}>
-                      Starting…
+                      {friendlyChatProgressLabel(progressLabel, 'dispatched')}
                     </span>
+                  ) : progressLabel ? (
+                    friendlyChatProgressLabel(progressLabel, progressPhase)
+                  ) : isChatThreadError ? (
+                    'The ADR service is reconnecting after a temporary interruption…'
+                  ) : isChatThreadLoading ? (
+                    'Connecting to the ADR service…'
                   ) : (
-                    progressLabel
-                      ?? (isChatThreadError
-                        ? 'The ADR service is reconnecting after a temporary interruption…'
-                        : isChatThreadLoading
-                          ? 'Connecting to the ADR service…'
-                          : 'Setting up the workspace and repository context so your ADR interview starts grounded…')
+                    'Setting up the workspace and repository context so your ADR interview starts grounded…'
                   )}
                 </p>
               </div>
@@ -860,18 +879,21 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
               </div>
             )}
-            {isAgentProcessing && !streamingText && !showPreparationState && (
+            {showTypingIndicator && !showPreparationState && (
               <div
                 className={styles.typingIndicator}
                 role="status"
                 aria-live="polite"
-                aria-label="Architect is processing your response"
+                aria-label={friendlyChatProgressLabel(progressLabel, progressPhase) || 'Architect is processing your response'}
                 {...{ 'data-testid': 'adr-agent-processing' }}
               >
                 <span aria-hidden="true" {...{ 'data-testid': 'chat-run-spinner' }} />
                 <span className={styles.typingDot} />
                 <span className={styles.typingDot} />
                 <span className={styles.typingDot} />
+                <span className={styles.typingProgressLabel} {...{ 'data-testid': 'adr-progress-label' }}>
+                  {friendlyChatProgressLabel(progressLabel, progressPhase)}
+                </span>
               </div>
             )}
             <div ref={messagesEndRef} />
@@ -885,12 +907,23 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
       ) : !adr.content && (chatLocked ? (
         <div className={styles.lockedNotice}>This ADR conversation is read-only.</div>
       ) : (
+        <>
+        {resumeGate.showCard && resumeGate.status ? (
+          <GroundingResumeCard
+            status={resumeGate.status}
+            isPending={resumeGate.isUpdating}
+            error={resumeGate.error}
+            onContinue={resumeGate.continueOnPin}
+            onUpdateToLatest={() => void resumeGate.updateToLatest()}
+            {...{ 'data-testid': 'grounding-resume-card' }}
+          />
+        ) : null}
         <AgentComposer
           value={input}
           onChange={setInput}
           onSend={() => void send(input)}
           onCancel={() => void cancelActiveRun()}
-          disabled={isInteractionBusy}
+          disabled={isInteractionBusy || resumeGate.composerBlocked}
           isRunning={isRunning}
           isSending={session.isSending}
           isBusy={isInteractionBusy}
@@ -929,6 +962,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
             />
           )}
         />
+        </>
       ))}
       {pendingSelector && (
         <div

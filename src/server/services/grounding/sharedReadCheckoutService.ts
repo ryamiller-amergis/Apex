@@ -25,7 +25,10 @@ import type { SkillProvider } from '../../../shared/types/projectSettings';
 import type { RunGrounding } from '../../../shared/types/runGrounding';
 import { resolveDataRoot } from '../../utils/dataDir';
 import { git, safeArgs } from '../../utils/asyncGit';
-import { ensureRepoCache } from '../repoCacheService';
+import {
+  USER_FACING_REPO_CACHE_LEASE_WAIT_MS,
+  ensureRepoCache,
+} from '../repoCacheService';
 import { materializeWorkspaceFromCache } from '../repoWorkspaceService';
 import {
   withRepoCacheLease,
@@ -157,7 +160,9 @@ async function defaultMaterializeToPath(
     repo: identity.repo,
     branch: identity.branch,
   } as const;
-  const cache = await ensureRepoCache(options);
+  const cache = await ensureRepoCache(options, {
+    waitMs: USER_FACING_REPO_CACHE_LEASE_WAIT_MS,
+  });
   const checkoutPinnedSha = async (): Promise<void> => {
     await materializeWorkspaceFromCache(
       cache.cacheDir,
