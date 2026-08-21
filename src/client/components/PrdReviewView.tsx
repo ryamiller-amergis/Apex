@@ -1136,6 +1136,16 @@ export const PrdReviewView: React.FC = () => {
     }
   }, [id, prd, fixPrdValidation, prdFixFlow.phase, apexFixStartLocked]);
 
+  const handleRunPrdValidation = useCallback(async () => {
+    if (!prd) return;
+    setFixIdleNotice(null);
+    try {
+      await createPrdValidationThread.mutateAsync(prd.id);
+    } catch (err) {
+      setFixIdleNotice(err instanceof Error ? err.message : 'Validation could not start.');
+    }
+  }, [prd, createPrdValidationThread]);
+
   const handleStartFixCoverage = useCallback(async () => {
     if (!id || !prd) return;
     if (prdFixFlow.phase !== 'idle' || apexFixStartLocked) return;
@@ -2211,7 +2221,7 @@ export const PrdReviewView: React.FC = () => {
                       className={styles.actionMenuItem}
                       onClick={() => {
                         setActionMenuOpen(false);
-                        void createPrdValidationThread.mutateAsync(prd.id);
+                        void handleRunPrdValidation();
                       }}
                       disabled={createPrdValidationThread.isPending}
                       type="button"
@@ -2406,7 +2416,7 @@ export const PrdReviewView: React.FC = () => {
                     {prdFixFlow.phase === 'idle' && (
                       <button
                         className={styles.fixBtnSecondary}
-                        onClick={() => void createPrdValidationThread.mutateAsync(prd.id)}
+                        onClick={() => void handleRunPrdValidation()}
                         disabled={createPrdValidationThread.isPending}
                         type="button"
                       {...{ 'data-testid': 'prd-revalidate-btn' }}>

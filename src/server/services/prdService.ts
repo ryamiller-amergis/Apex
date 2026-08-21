@@ -1989,23 +1989,27 @@ export async function autoStartPrdValidation(
     }
 
     // Cheap structural fail-fast (no agent) for empty/TBD/missing sections.
-    const structural = evaluatePrdStructuralValidation(prd.content, prd.backlogJson);
-    if (structural) {
-      const reportMd = generateFallbackReport(structural);
-      await db.update(prds)
-        .set({
-          validationScore: Math.round(structural.overall_score),
-          validationScorecard: structural,
-          validationPhase: structural.review_phase,
-          validationReportMd: reportMd,
-          status: 'draft',
-          updatedAt: new Date().toISOString(),
-        })
-        .where(eq(prds.id, prdId));
-      console.log(
-        `[prd] Structural validation failed fast (prdId=${prdId}, gaps=${structural.gaps?.length ?? 0})`,
-      );
-      return;
+    // Explicit Re-run / Run Validation / Accept & Re-validate pass force:true and
+    // must reach the real scorer — fail-fast would otherwise rewrite 0% with no UI change.
+    if (!options?.force) {
+      const structural = evaluatePrdStructuralValidation(prd.content, prd.backlogJson);
+      if (structural) {
+        const reportMd = generateFallbackReport(structural);
+        await db.update(prds)
+          .set({
+            validationScore: Math.round(structural.overall_score),
+            validationScorecard: structural,
+            validationPhase: structural.review_phase,
+            validationReportMd: reportMd,
+            status: 'draft',
+            updatedAt: new Date().toISOString(),
+          })
+          .where(eq(prds.id, prdId));
+        console.log(
+          `[prd] Structural validation failed fast (prdId=${prdId}, gaps=${structural.gaps?.length ?? 0})`,
+        );
+        return;
+      }
     }
 
     const adapter = createPrdValidationAdapter(prd);
