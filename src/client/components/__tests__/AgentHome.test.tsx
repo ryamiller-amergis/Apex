@@ -29,6 +29,7 @@ const rerenderAgentHome = (
   props: { selectedProject: string },
 ) => rerender(agentHomeTree(props));
 import {
+  useChatThread,
   useSkillList,
   useSkillRepos,
   useStartChat,
@@ -853,6 +854,44 @@ describe('AgentHome', () => {
 
       renderAgentHome({ selectedProject: 'MaxView' });
       expect(screen.getByRole('button', { name: 'Read aloud' })).toBeInTheDocument();
+    });
+  });
+
+  describe('thinking restore after refresh', () => {
+    it('keeps the typing indicator when the last message is still the user answer', () => {
+      sessionStorage.setItem('agentHomeThreadId:MaxView', 'thread-home');
+      (useChatThread as jest.Mock).mockReturnValue({
+        data: {
+          id: 'thread-home',
+          status: 'idle',
+          activeRunId: 'run-9',
+          messages: [
+            {
+              id: '1',
+              role: 'user',
+              text: 'My question',
+              ts: '2026-01-01T00:00:00Z',
+            },
+          ],
+          prdReady: false,
+        },
+        isLoading: false,
+        isFetching: false,
+      });
+      mockUseChatStream.mockReturnValue({
+        ...idleStream,
+        messages: [
+          {
+            id: '1',
+            role: 'user',
+            text: 'My question',
+            ts: '2026-01-01T00:00:00Z',
+          },
+        ],
+      });
+
+      renderAgentHome({ selectedProject: 'MaxView' });
+      expect(screen.getByTestId('agent-home-typing')).toBeInTheDocument();
     });
   });
 });

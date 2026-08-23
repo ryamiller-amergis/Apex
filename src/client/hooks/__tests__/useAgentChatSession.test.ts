@@ -57,6 +57,7 @@ describe('useAgentChatSession', () => {
   beforeEach(() => {
     currentStreamReturn = { ...mockStreamReturn };
     global.fetch = jest.fn().mockResolvedValue({ ok: true }) as jest.Mock;
+    window.sessionStorage.clear();
   });
 
   afterEach(() => {
@@ -381,6 +382,69 @@ describe('useAgentChatSession', () => {
       ],
     };
     const { result } = renderHook(() => useAgentChatSession('thread-1'));
+    expect(result.current.showTypingIndicator).toBe(true);
+  });
+
+  it('keeps thinking visible after a remount when the last message is still the user answer', () => {
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'running',
+      messages: [
+        { id: '1', role: 'user', text: 'My answer', ts: '2026-01-01T00:00:00Z' },
+      ],
+    };
+    const first = renderHook(() => useAgentChatSession('thread-1'));
+    expect(first.result.current.showTypingIndicator).toBe(true);
+    first.unmount();
+
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'idle',
+      messages: [
+        { id: '1', role: 'user', text: 'My answer', ts: '2026-01-01T00:00:00Z' },
+      ],
+    };
+    const second = renderHook(() => useAgentChatSession('thread-1'));
+    expect(second.result.current.showTypingIndicator).toBe(true);
+    expect(second.result.current.isAwaitingAgentResponse).toBe(true);
+  });
+
+  it('does not restore thinking after remount once an agent reply is saved', () => {
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'running',
+      messages: [
+        { id: '1', role: 'user', text: 'My answer', ts: '2026-01-01T00:00:00Z' },
+      ],
+    };
+    const first = renderHook(() => useAgentChatSession('thread-1'));
+    expect(first.result.current.showTypingIndicator).toBe(true);
+    first.unmount();
+
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'idle',
+      messages: [
+        { id: '1', role: 'user', text: 'My answer', ts: '2026-01-01T00:00:00Z' },
+        { id: '2', role: 'agent', text: 'Next question', ts: '2026-01-01T00:00:02Z' },
+      ],
+    };
+    const second = renderHook(() => useAgentChatSession('thread-1'));
+    expect(second.result.current.showTypingIndicator).toBe(false);
+    expect(second.result.current.isAwaitingAgentResponse).toBe(false);
+  });
+
+  it('restores thinking from an active run id when status is idle after refresh', () => {
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'idle',
+      messages: [
+        { id: '1', role: 'user', text: 'My answer', ts: '2026-01-01T00:00:00Z' },
+      ],
+    };
+    const { result } = renderHook(() =>
+      useAgentChatSession('thread-1', { initialActiveRunId: 'run-1' }),
+    );
     expect(result.current.showTypingIndicator).toBe(true);
   });
 

@@ -342,6 +342,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   const session = useAgentChatSession(thread?.id ?? null, {
     initialMessages: thread?.messages,
     initialStatus: thread?.status,
+    initialActiveRunId: thread?.activeRunId,
     initialPrdReady: thread?.prdReady,
     visibleMessageFilter: (m) =>
       !(m.role === 'user' && m.text === 'Begin.')

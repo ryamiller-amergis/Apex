@@ -1026,6 +1026,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const session = useAgentChatSession(interview?.chatThreadId ?? null, {
     initialMessages: chatThread?.messages,
     initialStatus: chatThread?.status,
+    initialActiveRunId: chatThread?.activeRunId,
     enablePreparationState: interview?.status === 'in_progress',
     beforeSend: () => {
       if (!repoReadiness.isReady) {

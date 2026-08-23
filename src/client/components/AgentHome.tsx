@@ -563,6 +563,8 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
   } = useChatThread(threadId);
   const session = useAgentChatSession(threadId, {
     initialMessages: seedMessages,
+    initialStatus: persistedThread?.status,
+    initialActiveRunId: persistedThread?.activeRunId,
     initialPrdReady,
     visibleMessageFilter: (m) =>
       !(m.role === 'user' && m.text === 'Begin.')
