@@ -100,7 +100,7 @@ import {
   type PrdReadinessStageStatus,
 } from '../../shared/utils/prdReadiness';
 import { resolvePrototypeStageEnabled } from '../../shared/utils/prototypeStage';
-import { buildPassingValidationReasonsMarkdown, normalizeCrossCuttingCheck } from '../../shared/utils/validationReport';
+import { buildPassingValidationReasonsMarkdown, collectValidationGaps, normalizeCrossCuttingCheck } from '../../shared/utils/validationReport';
 import type {
   ReviewSectionKey,
   TextSelector,
@@ -3064,9 +3064,7 @@ export const PrdReviewView: React.FC = () => {
                     const scoreColor = sc.overall_score >= effectiveThreshold ? 'var(--success-color)' : sc.overall_score >= 70 ? '#e6a817' : 'var(--error-color)';
                     const files = sc.files ?? [];
                     const features = sc.features ?? [];
-                    const allGaps = files.length > 0
-                      ? files.flatMap(f => (f.gaps ?? []))
-                      : features.flatMap(f => (f.gaps ?? []));
+                    const allGaps = collectValidationGaps(sc);
                     const pendingGaps = allGaps.filter(g => g.resolution === 'pending');
                     const filledGaps = allGaps.filter(g => g.resolution === 'filled');
                     const deferredGaps = allGaps.filter(g => g.resolution === 'deferred' || g.resolution === 'accepted');
@@ -3193,6 +3191,26 @@ export const PrdReviewView: React.FC = () => {
                                 </div>
                               );
                             })}
+                          </div>
+                        )}
+
+                        {files.length === 0 && features.length === 0 && pendingGaps.length > 0 && (
+                          <div className={styles.featureGaps} data-testid="prd-validation-root-gaps">
+                            {pendingGaps.map((gap) => (
+                              <div key={gap.id} className={styles.gapItem} data-resolution={gap.resolution}>
+                                <span className={styles.gapIcon}>
+                                  {gap.resolution === 'filled' ? '✓' : gap.resolution === 'pending' ? '○' : '—'}
+                                </span>
+                                <div className={styles.gapContent}>
+                                  <span className={styles.gapDesc}>{gap.description}</span>
+                                  <span className={styles.gapSection}>
+                                    {gap.section}
+                                    {gap.what_3_looks_like ? ` — ${gap.what_3_looks_like}` : ''}
+                                  </span>
+                                </div>
+                                <span className={styles.gapScore}>{gap.score}/3</span>
+                              </div>
+                            ))}
                           </div>
                         )}
 

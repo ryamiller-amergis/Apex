@@ -180,6 +180,33 @@ describe('generateFallbackReport', () => {
     expect(report).toContain('**PRD Content** passed at 93%');
     expect(report).not.toContain('## Feature Scores');
   });
+
+  it('lists top-level structural gaps so a 0% fail-fast card explains why', () => {
+    const report = generateFallbackReport(
+      makeScorecard({
+        slug: 'prd-structural',
+        overall_score: 0,
+        is_ready: false,
+        verdict: 'significant_gaps',
+        features: undefined,
+        files: undefined,
+        gaps: [
+          {
+            id: 'missing-problem-statement',
+            file: 'prd.md',
+            section: 'Problem Statement',
+            score: 0,
+            description: 'Required section "Problem Statement" is missing.',
+            what_3_looks_like: 'A "## Problem Statement" section with substantive content.',
+            resolution: 'pending',
+          },
+        ],
+      }),
+    );
+
+    expect(report).toContain('## Open Gaps');
+    expect(report).toContain('Required section "Problem Statement" is missing.');
+  });
 });
 
 describe('autoStartDocumentValidation background routing', () => {

@@ -232,6 +232,7 @@ import {
   dismissPrdFixSession,
   createPrdAdoWorkItems,
 } from '../services/prdService';
+import { hashPrdValidationContent } from '../../shared/utils/prdValidationFastPath';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
 const { routeBackgroundWorkflow: mockRouteBackgroundWorkflow } = jest.requireMock(
@@ -1842,7 +1843,7 @@ describe('PRD validation lifecycle', () => {
     expect(adapter.buildValidationContext({})).toContain('must **NOT** have `userTypes`');
   });
 
-  it('does not auto-start the agent when structural fail-fast scores 0%', async () => {
+  it('auto-starts the real scorer even when the structural check would score 0%', async () => {
     mockPrdSelectForGetPrd({
       validationThreadId: null,
       validationScorecard: null,
@@ -1858,20 +1859,10 @@ describe('PRD validation lifecycle', () => {
       backlogJson: { items: [] },
     });
     mockDb.query.testCases.findFirst.mockResolvedValue({ id: 'tc-ready' });
-    const whereMock = jest.fn().mockResolvedValue(undefined);
-    const setMock = jest.fn().mockReturnValue({ where: whereMock });
-    mockDb.update.mockReturnValue({ set: setMock });
 
     await autoStartPrdValidation('prd-1');
 
-    expect(mockAutoStartDocumentValidation).not.toHaveBeenCalled();
-    expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        status: 'draft',
-        validationScore: 0,
-        validationScorecard: expect.objectContaining({ slug: 'prd-structural' }),
-      }),
-    );
+    expect(mockAutoStartDocumentValidation).toHaveBeenCalledTimes(1);
   });
 
   it('does not start another validation while the PRD is already validating', async () => {
@@ -1929,6 +1920,38 @@ describe('PRD validation lifecycle', () => {
       content: '# Intro only',
       backlogJson: { items: [] },
     });
+    mockDb.query.testCases.findFirst.mockResolvedValue({ id: 'tc-ready' });
+
+    await autoStartPrdValidation('prd-1', { force: true });
+
+    expect(mockAutoStartDocumentValidation).toHaveBeenCalledTimes(1);
+  });
+
+  it('explicit re-run starts the agent even when the last scorecard hash still matches', async () => {
+    const content = '## Problem Statement\nNeed\n## Solution\nBuild it';
+    const backlogJson = { items: [] };
+    mockPrdSelectForGetPrd({
+      validationThreadId: 'previous-validation-thread',
+      content,
+      backlogJson,
+      validationScorecard: {
+        slug: 'feature-prd',
+        generated_at: '2026-01-01T00:00:00Z',
+        review_phase: 'initial',
+        overall_score: 0,
+        ready_threshold: 90,
+        is_ready: false,
+        verdict: 'significant_gaps',
+        files: [],
+        contentHash: hashPrdValidationContent(content, backlogJson),
+      },
+    });
+    mockGetSkillConfig.mockResolvedValue({
+      skillRepo: 'org/skills',
+      skillBranch: 'main',
+      prdValidationSkillPath: '.cursor/skills/prd-validation/SKILL.md',
+    });
+    mockDb.query.prds.findFirst.mockResolvedValue({ content, backlogJson });
     mockDb.query.testCases.findFirst.mockResolvedValue({ id: 'tc-ready' });
 
     await autoStartPrdValidation('prd-1', { force: true });

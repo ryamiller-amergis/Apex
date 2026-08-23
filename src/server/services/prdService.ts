@@ -27,9 +27,7 @@ import { derivePrdReadiness } from '../../shared/utils/prdReadiness';
 import { buildOverrideHistory } from '../../shared/utils/validationOverride';
 import { BACKLOG_USER_TYPE_CONVENTIONS_MD } from '../../shared/utils/backlogUserTypeConventions';
 import {
-  evaluatePrdStructuralValidation,
   hashPrdValidationContent,
-  scorecardMatchesContentHash,
 } from '../../shared/utils/prdValidationFastPath';
 import { getTestCases, listLatestTestCaseSummariesForPrds, getUncoveredCoverageItems, recalculateTestCaseCoverage } from './testCaseService';
 import { getSkillConfig, resolveSkillConfig, getSkillSettingsName } from './projectSettingsService';
@@ -1968,49 +1966,6 @@ export async function autoStartPrdValidation(
 
     const ready = await arePrdValidationArtifactsReady(prdId);
     if (!ready) return;
-
-    // Content-hash skip: unchanged doc reuses the last *agent* scorecard (no agent).
-    // Never skip on a structural fail-fast card — those must be allowed to proceed to
-    // the real validator after the fail-fast rules change or content is fixed.
-    if (
-      options?.force &&
-      prd.validationScorecard &&
-      prd.validationScorecard.slug !== 'prd-structural' &&
-      scorecardMatchesContentHash(
-        prd.validationScorecard,
-        prd.content,
-        prd.backlogJson,
-      )
-    ) {
-      console.log(
-        `[prd] Skipping validation agent — content hash unchanged (prdId=${prdId})`,
-      );
-      return;
-    }
-
-    // Cheap structural fail-fast (no agent) for empty/TBD/missing sections.
-    // Explicit Re-run / Run Validation / Accept & Re-validate pass force:true and
-    // must reach the real scorer — fail-fast would otherwise rewrite 0% with no UI change.
-    if (!options?.force) {
-      const structural = evaluatePrdStructuralValidation(prd.content, prd.backlogJson);
-      if (structural) {
-        const reportMd = generateFallbackReport(structural);
-        await db.update(prds)
-          .set({
-            validationScore: Math.round(structural.overall_score),
-            validationScorecard: structural,
-            validationPhase: structural.review_phase,
-            validationReportMd: reportMd,
-            status: 'draft',
-            updatedAt: new Date().toISOString(),
-          })
-          .where(eq(prds.id, prdId));
-        console.log(
-          `[prd] Structural validation failed fast (prdId=${prdId}, gaps=${structural.gaps?.length ?? 0})`,
-        );
-        return;
-      }
-    }
 
     const adapter = createPrdValidationAdapter(prd);
     await autoStartDocumentValidation(adapter);

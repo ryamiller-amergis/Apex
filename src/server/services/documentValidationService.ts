@@ -3,7 +3,7 @@ import { eq, and } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { chatThreads } from '../db/schema';
 import type { ValidationScorecard } from '../../shared/types/interview';
-import { buildPassingValidationReasonsMarkdown, normalizeCrossCuttingCheck } from '../../shared/utils/validationReport';
+import { buildPassingValidationReasonsMarkdown, collectValidationGaps, normalizeCrossCuttingCheck } from '../../shared/utils/validationReport';
 import { readOutputValidationScorecard, readOutputValidationScorecardMd, isThreadIdle, createThread as createChatThread, cancelRun, sendMessage, prepareBackgroundWorkflowTurn } from './chatAgentService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
 import { isThreadRunAlive, canThisInstanceFailGeneration } from './agentRunReaperService';
@@ -279,15 +279,16 @@ export function generateFallbackReport(scorecard: ValidationScorecard): string {
       lines.push(`| ${f.feature_title} | ${f.design_score}% | ${f.tech_spec_score}% | ${f.assumptions_score}% | ${f.overall_score}% | ${f.verdict} |`);
     }
     lines.push('');
+  }
 
-    const allGaps = scorecard.features!.flatMap((f) => (f.gaps ?? []).filter((g) => g.resolution === 'pending'));
-    if (allGaps.length > 0) {
-      lines.push('## Open Gaps', '');
-      for (const gap of allGaps) {
-        lines.push(`- **${gap.section}** (${gap.file}): ${gap.description} — Score: ${gap.score}/3`);
-      }
-      lines.push('');
+  const openGaps = collectValidationGaps(scorecard).filter((g) => g.resolution === 'pending');
+  if (openGaps.length > 0) {
+    lines.push('## Open Gaps', '');
+    for (const gap of openGaps) {
+      const where = gap.file ? ` (${gap.file})` : '';
+      lines.push(`- **${gap.section || 'PRD'}**${where}: ${gap.description}`);
     }
+    lines.push('');
   }
 
   const crossCuttingEntries = Object.entries(scorecard.cross_cutting_checks ?? {});
