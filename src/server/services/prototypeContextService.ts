@@ -11,9 +11,10 @@
  */
 
 import { fetchAdoFileGeneric } from '../utils/adoFileFetch';
+import { skillNameFromPath, skillPathCandidates } from '../../shared/skillPaths';
 
-/** Default convention path for a project's design-system skill within its repo. */
-const DEFAULT_DESIGN_SYSTEM_PATH = '.cursor/skills/design-system/SKILL.md';
+/** Default convention skill name for a project's design-system skill. */
+const DEFAULT_DESIGN_SYSTEM_SKILL = 'design-system';
 
 /** Cache TTL for resolved design-system content. 10 minutes. */
 const CONTEXT_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -89,8 +90,11 @@ export async function resolvePrototypeContext(
 
   // ── Try project-specific design system ──────────────────────────────────────
   if (cfg?.skillRepo && orgUrl && pat) {
-    const skillPath = cfg.prototypeDesignSystemPath?.trim() || DEFAULT_DESIGN_SYSTEM_PATH;
-    const cacheKey = `${cfg.skillRepo}@${cfg.skillBranch ?? 'main'}:${skillPath}`;
+    const configuredPath = cfg.prototypeDesignSystemPath?.trim() || null;
+    const skillName =
+      (configuredPath && skillNameFromPath(configuredPath)) || DEFAULT_DESIGN_SYSTEM_SKILL;
+    const candidates = skillPathCandidates(skillName, configuredPath);
+    const cacheKey = `${cfg.skillRepo}@${cfg.skillBranch ?? 'main'}:${candidates.join('|')}`;
     const cached = designSystemCache.get(cacheKey);
     if (cached && Date.now() - cached.resolvedAt < CONTEXT_CACHE_TTL_MS) {
       return {
@@ -107,28 +111,27 @@ export async function resolvePrototypeContext(
       : [project, cfg.skillRepo];
     const branch = cfg.skillBranch ?? 'main';
 
-    try {
-      const content = await fetchAdoFileGeneric(orgUrl, pat, adoProject, repo, skillPath, branch);
-      if (content.trim()) {
-        designSystemCache.set(cacheKey, { content: content.trim(), resolvedAt: Date.now() });
-        console.log(`[prototypeContextService] Loaded design system for "${project}" from ${repo}@${branch}:${skillPath} (${content.length} chars)`);
-        return {
-          appName,
-          designSystemMarkdown: content.trim(),
-          isProjectSpecific: true,
-          extend: extendCtx,
-        };
+    let lastError: string | null = null;
+    for (const candidate of candidates) {
+      try {
+        const content = await fetchAdoFileGeneric(orgUrl, pat, adoProject, repo, candidate, branch);
+        if (content.trim()) {
+          designSystemCache.set(cacheKey, { content: content.trim(), resolvedAt: Date.now() });
+          console.log(`[prototypeContextService] Loaded design system for "${project}" from ${repo}@${branch}:${candidate} (${content.length} chars)`);
+          return {
+            appName,
+            designSystemMarkdown: content.trim(),
+            isProjectSpecific: true,
+            extend: extendCtx,
+          };
+        }
+        lastError = `Design system skill at "${candidate}" in ${repo}@${branch} is empty`;
+      } catch (err: any) {
+        lastError = err.message;
       }
-      // File exists but is empty — treat as a misconfiguration, not a missing file.
-      console.error(`[prototypeContextService] Design system skill at "${skillPath}" in ${repo}@${branch} is empty for project "${project}" — prototype generation will fail`);
-      return null;
-    } catch (err: any) {
-      // The project has a skillRepo + ADO creds configured, but the design-system file
-      // could not be fetched. This is a configuration error — fail loudly so the
-      // prototype is marked generation_failed rather than silently using MaxView styles.
-      console.error(`[prototypeContextService] Could not fetch project design system for "${project}" (${repo}@${branch}:${skillPath}): ${err.message} — failing prototype rather than using MaxView fallback`);
-      return null;
     }
+    console.error(`[prototypeContextService] Could not fetch project design system for "${project}" (${repo}@${branch}): ${lastError} — failing prototype rather than using MaxView fallback`);
+    return null;
   }
 
   // ── Transition fallback: bundled MaxView design system ──────────────────────

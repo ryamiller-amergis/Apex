@@ -406,7 +406,7 @@ const ADR_PIPELINE_STAGES: PipelineStageDef[] = [
     label: 'ADR Assistant',
     desc: 'Guides repository-grounded refinement of proposed ADRs',
     skillKey: 'adrAssistantSkillPath',
-    emptyLabel: 'Default (.cursor/skills/adr-assistant/SKILL.md)',
+    emptyLabel: 'Default (.agents/skills/adr-assistant/SKILL.md)',
     optional: true,
   },
 ];
@@ -457,7 +457,7 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     label: 'Design Module',
     desc: 'Generates Architecture Explorer module documents from curated source globs',
     skillKey: 'designModuleSkillPath',
-    emptyLabel: 'Default (.cursor/skills/design-module-doc/SKILL.md)',
+    emptyLabel: 'Default (.agents/skills/design-module-doc/SKILL.md)',
     modelKey: 'designModuleModel',
   },
   {
@@ -1998,7 +1998,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                 Each project supplies its own design system for Bedrock prototype generation.
                 The design-system skill file (from the project&apos;s repo) defines brand tokens,
                 components, and shell — no MaxView styles are injected. Leave the path blank to
-                use the convention path <code>.cursor/skills/design-system/SKILL.md</code>.
+                use the convention path <code>.agents/skills/design-system/SKILL.md</code>
+                (then <code>.cursor/skills/design-system/SKILL.md</code>).
               </p>
               <div className={styles.formGrid}>
                 <div className={styles.field}>
@@ -2010,7 +2011,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     onChange={(e) => setEdit((prev) => prev ? { ...prev, prototypeDesignSystemPath: e.target.value } : prev)}
                     disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
                    {...{ 'data-testid': 'ps-protoDesignSystemPath' }}>
-                    <option value="">None (use convention path .cursor/skills/design-system/SKILL.md)</option>
+                    <option value="">None (convention: .agents/skills/design-system/SKILL.md, then .cursor/skills)</option>
                     {skillList.map((s) => (
                       <option key={s.id} value={s.path}>{s.name}</option>
                     ))}

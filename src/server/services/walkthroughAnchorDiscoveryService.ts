@@ -31,6 +31,10 @@ import {
   parseWalkthroughAnchorDiscoveryOutput,
   type WalkthroughAnchorDiscoveryResult,
 } from '../../shared/types/walkthroughAnchorDiscovery';
+import {
+  isSupportedAgentSkillPath,
+  normalizeRepoRelativePath,
+} from '../../shared/skillPaths';
 
 export {
   DEFAULT_WALKTHROUGH_ANCHOR_DISCOVERY_SKILL_PATH,
@@ -44,7 +48,6 @@ export type {
 } from '../../shared/types/walkthroughAnchorDiscovery';
 
 const APEX_REPOSITORY_PROJECT = APEX_WALKTHROUGH_PROJECT;
-const SKILL_PATH_PATTERN = /^\.cursor\/skills\/[^/]+\/SKILL\.md$/;
 const OUTPUT_RELATIVE_PATH = [...WALKTHROUGH_ANCHOR_DISCOVERY_OUTPUT_RELATIVE_PATH];
 const CATALOG_PAGE_LIMIT = 200;
 
@@ -116,11 +119,11 @@ export function _resetDiscoveryForTests(): void {
 
 function validateSkillPath(skillPath: string | undefined): string {
   if (!skillPath) return DEFAULT_WALKTHROUGH_ANCHOR_DISCOVERY_SKILL_PATH;
-  const normalized = skillPath.replace(/^\//, '').replace(/\\/g, '/');
-  if (!SKILL_PATH_PATTERN.test(normalized)) {
+  const normalized = normalizeRepoRelativePath(skillPath);
+  if (!isSupportedAgentSkillPath(normalized)) {
     throw new WalkthroughAnchorDiscoveryOrchestrationError(
       'INVALID_REQUEST',
-      'skillPath must match .cursor/skills/*/SKILL.md',
+      'skillPath must use a supported Agent Skills root',
     );
   }
   return normalized;

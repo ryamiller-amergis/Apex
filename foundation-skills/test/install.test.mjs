@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { executeInstall, planInstall } from '../lib/install.mjs';
 import { loadCatalog, findSkill, listAdapterRuntimeFiles } from '../lib/catalog.mjs';
-import { readLockfile, lockfileIntegrity, LOCKFILE_VERSION } from '../lib/lockfile.mjs';
+import { readLockfile, lockfileIntegrity, LOCKFILE_VERSION_V2 } from '../lib/lockfile.mjs';
 import { hasFence, hashManaged, END_MARKER } from '../lib/managedRegion.mjs';
 import { ensureAlwaysInstallSkills } from '../lib/alwaysInstall.mjs';
 import { cmdBootstrap, cmdInstall } from '../lib/commands.mjs';
@@ -202,8 +202,8 @@ test('install writes fenced SKILL.md, companions path, and v2 lockfile (no .apex
     assert.ok(fs.existsSync(path.join(repo, 'apex-skills.lock.json')));
 
     const lock = readLockfile(repo);
-    assert.equal(lock.lockfileVersion, LOCKFILE_VERSION);
-    assert.equal(lock.suiteVersion, '2.0.3');
+    assert.equal(lock.lockfileVersion, LOCKFILE_VERSION_V2);
+    assert.equal(lock.suiteVersion, '2.1.0');
     assert.ok(lock.skills['ui-lab'].managedRegionHash);
     assert.equal(typeof lock.skills['ui-lab'].managedFiles, 'object');
     assert.equal(lock.skills['ui-lab'].adapterScaffolded, true);
@@ -657,7 +657,7 @@ test('v1 migration only migrates installed skills; leftover foundation folders a
     assert.ok(hasFence(skillMd));
     assert.ok(skillMd.includes('APEX:BEGIN adapter'));
     const lock = readLockfile(repo);
-    assert.equal(lock.lockfileVersion, LOCKFILE_VERSION);
+    assert.equal(lock.lockfileVersion, LOCKFILE_VERSION_V2);
     assert.ok(lock.skills['ui-lab'].managedRegionHash);
     assert.equal(lock.skills['ui-lab'].vendored, undefined);
     assert.equal(lock.skills['to-prd'], undefined);

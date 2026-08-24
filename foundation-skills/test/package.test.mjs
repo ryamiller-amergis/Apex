@@ -272,7 +272,7 @@ test('check reports installed vs available after install', () => {
     executeInstall(PKG_ROOT, repo, ['ui-lab']);
     const res = checkRepo(PKG_ROOT, repo);
     assert.equal(res.installed, true);
-    assert.equal(res.installedSuite, '2.0.3');
+    assert.equal(res.installedSuite, '2.1.0');
     assert.equal(res.skills[0].name, 'ui-lab');
     assert.equal(res.skills[0].compatible, true);
     assert.equal(res.skills[0].drift, false);

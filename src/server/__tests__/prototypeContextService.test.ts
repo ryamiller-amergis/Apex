@@ -1,4 +1,7 @@
-import { resolvePrototypeContext, invalidatePrototypeContextCache } from '../services/prototypeContextService';
+import {
+  resolvePrototypeContext,
+  invalidatePrototypeContextCache,
+} from '../services/prototypeContextService';
 import { resolveSkillConfig } from '../services/projectSettingsService';
 import { fetchAdoFileGeneric } from '../utils/adoFileFetch';
 
@@ -11,11 +14,23 @@ jest.mock('../utils/adoFileFetch', () => ({
 }));
 
 jest.mock('../services/designTokensService', () => ({
-  getMaxviewColorTokens: jest.fn().mockReturnValue('## MaxView Color Tokens\nprimary: #323695'),
+  getMaxviewColorTokens: jest
+    .fn()
+    .mockReturnValue('## MaxView Color Tokens\nprimary: #323695'),
 }));
 
 jest.mock('../services/designSystemService', () => ({
-  getDesignSystemCatalog: jest.fn().mockResolvedValue({ uiKnowledgeBase: 'MaxView screens catalog', routes: [], tokensCss: '', componentNames: [], componentDescriptions: {}, routeLayoutHints: {}, fetchedAt: 0 }),
+  getDesignSystemCatalog: jest
+    .fn()
+    .mockResolvedValue({
+      uiKnowledgeBase: 'MaxView screens catalog',
+      routes: [],
+      tokensCss: '',
+      componentNames: [],
+      componentDescriptions: {},
+      routeLayoutHints: {},
+      fetchedAt: 0,
+    }),
 }));
 
 const mockResolveSkillConfig = resolveSkillConfig as jest.Mock;
@@ -43,7 +58,9 @@ describe('prototypeContextService', () => {
         screenInventoryPath: null,
         prototypeWebReferencesEnabled: false,
       });
-      mockFetchAdoFileGeneric.mockResolvedValue('# Amego Design System\n## Colors\n:root { --primary: #1FB6AE; }');
+      mockFetchAdoFileGeneric.mockResolvedValue(
+        '# Amego Design System\n## Colors\n:root { --primary: #1FB6AE; }'
+      );
 
       const ctx = await resolvePrototypeContext('amego-project', undefined);
 
@@ -70,8 +87,45 @@ describe('prototypeContextService', () => {
         expect.anything(),
         expect.anything(),
         expect.anything(),
+        '.agents/skills/design-system/SKILL.md',
+        'develop'
+      );
+    });
+
+    it('falls back to .cursor/skills when the canonical convention path is missing', async () => {
+      mockResolveSkillConfig.mockResolvedValue({
+        skillRepo: 'MyOrg/Amego',
+        skillBranch: 'develop',
+        prototypeDesignSystemPath: null,
+        screenInventoryPath: null,
+        prototypeWebReferencesEnabled: false,
+      });
+      mockFetchAdoFileGeneric.mockImplementation(
+        async (_org, _pat, _project, _repo, skillPath) => {
+          if (skillPath === '.cursor/skills/design-system/SKILL.md') {
+            return '# Design System Content';
+          }
+          throw new Error(`ADO 404: ${skillPath}`);
+        }
+      );
+
+      await resolvePrototypeContext('amego', undefined);
+
+      expect(mockFetchAdoFileGeneric).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        '.agents/skills/design-system/SKILL.md',
+        'develop'
+      );
+      expect(mockFetchAdoFileGeneric).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
         '.cursor/skills/design-system/SKILL.md',
-        'develop',
+        'develop'
       );
     });
 
@@ -93,7 +147,7 @@ describe('prototypeContextService', () => {
         expect.anything(),
         expect.anything(),
         '.cursor/skills/custom-design/SKILL.md',
-        'main',
+        'main'
       );
     });
 
@@ -118,7 +172,10 @@ describe('prototypeContextService', () => {
     it('falls back to MaxView bundle when no skillRepo is configured', async () => {
       mockResolveSkillConfig.mockResolvedValue(null);
 
-      const ctx = await resolvePrototypeContext('unconfigured-project', undefined);
+      const ctx = await resolvePrototypeContext(
+        'unconfigured-project',
+        undefined
+      );
 
       expect(ctx).not.toBeNull();
       expect(ctx!.isProjectSpecific).toBe(false);
@@ -129,14 +186,17 @@ describe('prototypeContextService', () => {
         skillRepo: 'Org/MaxView',
         skillBranch: 'development',
         prototypeDesignSystemPath: null,
-        screenInventoryPath: '.cursor/skills/figma-ui-knowledge-base/clientapp-screens.md',
+        screenInventoryPath:
+          '.cursor/skills/figma-ui-knowledge-base/clientapp-screens.md',
         prototypeWebReferencesEnabled: false,
       });
       mockFetchAdoFileGeneric.mockResolvedValue('# MaxView Design System');
 
       const ctx = await resolvePrototypeContext('maxview-project', undefined);
 
-      expect(ctx!.extend?.screenInventoryPath).toBe('.cursor/skills/figma-ui-knowledge-base/clientapp-screens.md');
+      expect(ctx!.extend?.screenInventoryPath).toBe(
+        '.cursor/skills/figma-ui-knowledge-base/clientapp-screens.md'
+      );
     });
 
     it('caches and returns the cached result on repeated calls', async () => {
