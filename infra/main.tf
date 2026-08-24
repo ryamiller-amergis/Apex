@@ -88,10 +88,6 @@ resource "azurerm_linux_web_app" "main" {
     # Observability
     "APPLICATIONINSIGHTS_CONNECTION_STRING" = azurerm_application_insights.main.connection_string
 
-    # PDF artifacts (managed identity; no storage keys)
-    "PDF_BLOB_ACCOUNT_NAME"   = azurerm_storage_account.shared.name
-    "PDF_BLOB_CONTAINER_NAME" = azurerm_storage_container.shared[var.pdf_blob_container_name].name
-
     # Repository grounding bundles (managed identity; no storage keys)
     "GROUNDING_BLOB_ACCOUNT_NAME"   = azurerm_storage_account.shared.name
     "GROUNDING_BLOB_CONTAINER_NAME" = azurerm_storage_container.shared["repo-grounding"].name
@@ -196,8 +192,8 @@ resource "azurerm_linux_web_app_slot" "staging" {
   tags           = merge(var.tags, { Environment = var.environment, Slot = var.staging_slot_name })
 
   # Slot identities are not swapped with application code. Keep a dedicated
-  # system identity on staging so pre-swap PDF smoke tests retain managed-
-  # identity access to the production shared Blob account.
+  # system identity on staging so pre-swap checks retain managed-identity
+  # access to the production shared Blob account.
   identity {
     type = "SystemAssigned"
   }

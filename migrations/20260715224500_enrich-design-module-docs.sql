@@ -300,15 +300,6 @@ sequenceDiagram
   (
     'pdf-assembly',
     '[
-      "src/client/components/PdfAssemblyView.tsx",
-      "src/client/components/AssemblyLane.tsx",
-      "src/client/components/PageThumbnail.tsx",
-      "src/server/routes/pdf.ts",
-      "src/server/services/pdfAssemblyService.ts",
-      "src/server/services/pdfConversionJobService.ts",
-      "src/server/services/documentConversionService.ts",
-      "src/server/services/documentConversionWorker.ts",
-      "src/server/workers/pdfExportWorker.ts",
       "src/server/utils/dataDir.ts",
       "src/server/db/schema.ts",
       "src/shared/types/pdf.ts",

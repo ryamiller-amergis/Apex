@@ -200,7 +200,6 @@ For greenfield features with no natural home, use `new-page` and `targetRoute: n
 | `/ui-lab` | `UiLabView.tsx` | UI Lab designs | Hub | empty: no designs |
 | `/feature-requests` | `FeatureRequestsView.tsx` | Apex Backlog / feature requests | List | empty/loading |
 | `/design-module` | `DesignModuleView.tsx` | Design modules | Hub | empty/loading |
-| `/pdf-tools` | `PdfAssemblyView.tsx` | PDF assembly tools | Form | — |
 | `/notifications` | `NotificationsPage.tsx` | In-app notification center | List | empty: no notifications |
 | `/platform-admin` | `PlatformAdmin.tsx` | Platform-level admin | Hub | — |
 

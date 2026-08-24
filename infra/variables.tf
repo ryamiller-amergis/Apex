@@ -317,13 +317,6 @@ variable "blob_containers" {
   }
 }
 
-# PDF workload selector — must match a key in blob_containers.
-variable "pdf_blob_container_name" {
-  description = "Shared-account container used by PDF session and job artifacts. Must exist as a key in blob_containers."
-  type        = string
-  default     = "pdf-artifacts"
-}
-
 # ---------------------------------------------------------------------------
 # Load Test module — FEAT-002
 # Resource names follow the Apex convention {type}-apex-lt-{environment}.

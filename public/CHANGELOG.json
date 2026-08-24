@@ -1,5 +1,16 @@
 [
   {
+    "version": "1.37.0",
+    "date": "2026-08-21",
+    "title": "PDF Tools Moved to DocHub",
+    "changes": [
+      {
+        "type": "breaking",
+        "description": "PDF Assembly Tool, Nutrient, and Apryse viewers are no longer in Apex. Use the standalone DocHub app for document editing and conversion"
+      }
+    ]
+  },
+  {
     "version": "1.36.0",
     "date": "2026-07-30",
     "title": "Smarter PDF Text Editing & SDK POCs",

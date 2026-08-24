@@ -183,15 +183,6 @@ const PAGE_MODULE_BY_MENU_KEY: Record<
       },
     ],
   },
-  'pdf-tools': {
-    pageEntries: [
-      {
-        component: 'src/client/components/PdfAssemblyView.tsx',
-        routePattern: '/pdf-tools',
-        suggestedRoute: '/pdf-tools',
-      },
-    ],
-  },
   'ai-cost': {
     pageEntries: [
       {

@@ -30,7 +30,6 @@ import {
   findRunningInterviewThreads,
   clearStaleRun,
 } from './chatThreadRepository';
-import { expireOldSessions } from './pdfAssemblyService';
 import { recoverAnalyzingFeatureRequests } from './featureRequestAnalysisService';
 import {
   finalizeOwnedAgentRun,
@@ -521,18 +520,6 @@ export async function recoverInFlightWork(): Promise<void> {
     }
   } catch (err) {
     console.error('[recovery] Failed to reset stale design prototypes:', err);
-  }
-
-  try {
-    const pdfCleanup = await expireOldSessions();
-    if (pdfCleanup.expired > 0 || pdfCleanup.errors > 0) {
-      console.log(
-        `[recovery] PDF session cleanup completed ` +
-          `(expired=${pdfCleanup.expired}, errors=${pdfCleanup.errors})`,
-      );
-    }
-  } catch (err) {
-    console.error('[recovery] Failed to clean expired PDF sessions:', err);
   }
 
   try {

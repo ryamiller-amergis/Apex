@@ -19,7 +19,7 @@ interface NavItem {
 }
 
 interface AppHeaderProps {
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests' | 'diagrams' | 'work-board';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'load-tests' | 'diagrams' | 'work-board';
   planningTab: string;
   theme: ThemeMode;
   user: {

@@ -65,13 +65,10 @@ postgresql_sku_name       = "B_Standard_B1ms"
 # Null uses the standard stapex<environment>async name (for example,
 # stapexdevasync or stapexprdasync). Override only for a global-name collision.
 shared_storage_account_name = null
-# blob_containers default includes pdf-artifacts. Example for another module:
-# blob_containers = {
-#   pdf-artifacts      = {}
-#   standup-recordings = {}
-# }
-
-pdf_blob_container_name = "pdf-artifacts"
+# blob_containers default still includes pdf-artifacts so apply does not
+# destroy existing blobs. PDF assembly moved to DocHub; purge the container
+# in a later change when operators confirm it is unused.
+# shared_storage_account_name = null
 
 # ---------------------------------------------------------------------------
 # Load Test module — FEAT-002

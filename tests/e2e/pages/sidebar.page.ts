@@ -22,7 +22,6 @@ export type ModuleView =
   | 'standup'
   | 'ui-lab'
   | 'feature-requests'
-  | 'pdf-tools'
   | 'design-module';
 
 export class SidebarPage {

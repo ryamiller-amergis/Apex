@@ -9,11 +9,10 @@
     "skills:pack": "npm pack --dry-run",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "nodemon --watch src/server --ext ts --exec \"ts-node -P tsconfig.server.json src/server/index.ts\"",
-    "dev:client": "npm run webviewer:assets && vite",
+    "dev:client": "vite",
     "build": "npm run build:server && npm run build:client",
     "build:server": "tsc -p tsconfig.server.json",
-    "build:client": "npm run webviewer:assets && tsc -p tsconfig.client.json && vite build",
-    "webviewer:assets": "node scripts/copy-webviewer-assets.mjs",
+    "build:client": "tsc -p tsconfig.client.json && vite build",
     "start": "node dist/server/index.js",
     "test": "jest",
     "test:e2e": "playwright test",
@@ -75,13 +74,8 @@
     "@excalidraw/excalidraw": "0.18.1",
     "@floating-ui/react": "^0.27.20",
     "@hookform/resolvers": "^5.2.2",
-    "@matbee/libreoffice-converter": "^2.7.0",
     "@microsoft/applicationinsights-web": "^3.4.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@nutrient-sdk/viewer": "^1.18.0",
-    "@pdf-lib/fontkit": "^1.1.1",
-    "@pdftron/pdfnet-node": "^12.0.0",
-    "@pdftron/webviewer": "^12.0.1",
     "@tanstack/react-query": "^5.90.21",
     "@tanstack/react-query-devtools": "^5.91.3",
     "@types/express-session": "^1.18.2",
@@ -105,8 +99,6 @@
     "node-pg-migrate": "^8.0.4",
     "passport": "^0.7.0",
     "passport-azure-ad": "^4.3.5",
-    "pdf-lib": "^1.17.1",
-    "pdfjs-dist": "^6.1.200",
     "pg": "^8.20.0",
     "react-error-boundary": "^6.1.1",
     "react-hook-form": "^7.71.1",
@@ -179,8 +171,5 @@
     "@azure/core-rest-pipeline": "1.24.0",
     "@azure/core-xml": "1.5.0",
     "@typespec/ts-http-runtime": "0.3.4"
-  },
-  "allowScripts": {
-    "@pdftron/pdfnet-node@12.0.0": true
   }
 }
