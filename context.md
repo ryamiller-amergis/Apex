@@ -196,7 +196,7 @@ k6-based load test definitions and runs scoped per project.
 - **Run history** — view run status, threshold results, and script details
 - **Gated by** — `load-test:view` / `load-test:run` / `load-test:manage` permissions
 
-### 20. User Profile
+### 19. User Profile
 
 Per-user settings accessible from the header user menu.
 

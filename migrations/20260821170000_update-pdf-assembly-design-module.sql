@@ -15,7 +15,7 @@ SET
   ]'::jsonb,
   source_fingerprint = NULL,
   source_commit = NULL,
-  documentation = $pdf$
+  content = $pdf$
 ## Purpose and Scope
 
 Interactive PDF assembly, Nutrient, and Apryse viewers were removed from Apex and now live in the standalone DocHub app. This module covers only leftover Apex artifacts: Drizzle types for orphan `pdf_sessions` / job tables, historical migrations, and shared Blob notes for `pdf-artifacts`.
@@ -87,7 +87,7 @@ sequenceDiagram
 ## Related Docs
 
 - `infra/README.md`
-- `public/CHANGELOG.json` (1.37.0)
+- `public/CHANGELOG.json` (1.38.0)
   $pdf$,
   updated_at = now()
 WHERE slug = 'pdf-assembly';
