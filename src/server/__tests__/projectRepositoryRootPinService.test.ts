@@ -7,6 +7,8 @@ jest.mock('../services/runGroundingService', () => ({
 
 jest.mock('../services/repoCacheService', () => ({
   fetchRepositoryTip: jest.fn(),
+  getRepoCacheDir: jest.fn().mockReturnValue('C:\\data\\repo-cache\\x'),
+  USER_FACING_REPO_CACHE_LEASE_WAIT_MS: 90_000,
 }));
 
 jest.mock('../services/grounding/sharedReadCheckoutService', () => ({
@@ -277,6 +279,8 @@ describe('VT-10/16 — callerGroundingService admin-managed root pin', () => {
         proven: false,
         reason: 'harness-not-run',
       }),
+      isUsableBareMirror: jest.fn().mockReturnValue(false),
+      getRepoCacheDir: jest.fn().mockReturnValue('C:\\data\\repo-cache\\x'),
       sharedReadCheckout: {
         getReady: jest.fn().mockReturnValue(null),
         materialize: jest.fn(),

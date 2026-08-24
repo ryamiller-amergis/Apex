@@ -759,16 +759,27 @@ function App() {
             </div>
           )}
 
-          {currentView === 'home' && canAccessHome ? (
-            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
-              {/* Top-level split: demo component gated by "example-flag-demo" flag */}
-              <FeatureFlagDemo project={selectedProject} />
-              <AgentHome selectedProject={selectedProject} selectedSkillSettingsId={selectedSkillSettingsId} isAdmin={isSuperAdmin || isAdmin || (groups ?? []).includes('Manager') || (groups ?? []).includes('Product-Owner')} />
-            </ErrorBoundary>
+          {canAccessHome ? (
+            <div
+              className="agent-home-keepalive"
+              style={
+                currentView === 'home'
+                  ? undefined
+                  : { display: 'none' }
+              }
+              aria-hidden={currentView !== 'home'}
+            >
+              <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+                {/* Top-level split: demo component gated by "example-flag-demo" flag */}
+                <FeatureFlagDemo project={selectedProject} />
+                <AgentHome selectedProject={selectedProject} selectedSkillSettingsId={selectedSkillSettingsId} isAdmin={isSuperAdmin || isAdmin || (groups ?? []).includes('Manager') || (groups ?? []).includes('Product-Owner')} />
+              </ErrorBoundary>
+            </div>
           ) : currentView === 'home' ? (
             /* Access controls still loading — withhold content to avoid a flash */
             null
-          ) : currentView === 'calendar' ? (
+          ) : null}
+          {currentView === 'home' ? null : currentView === 'calendar' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
                 {error && !isLoading && (

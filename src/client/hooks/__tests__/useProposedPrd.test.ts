@@ -46,10 +46,10 @@ describe('useApplyProposedPrd', () => {
     );
   });
 
-  it('invalidates [prd, prdId] query on success', async () => {
+  it('refetches [prd, prdId] query on success', async () => {
     mockFetchOk({ ok: true });
     const { wrapper, queryClient } = createWrapper();
-    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+    const refetchSpy = jest.spyOn(queryClient, 'refetchQueries');
 
     const { result } = renderHook(() => useApplyProposedPrd('prd-42'), { wrapper });
 
@@ -59,7 +59,7 @@ describe('useApplyProposedPrd', () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(invalidateSpy).toHaveBeenCalledWith(
+    expect(refetchSpy).toHaveBeenCalledWith(
       expect.objectContaining({ queryKey: ['prd', 'prd-42'] }),
     );
   });

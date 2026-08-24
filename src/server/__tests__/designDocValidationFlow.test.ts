@@ -59,6 +59,7 @@ jest.mock('../services/backgroundWorkflowRouter', () => ({
 jest.mock('../services/runGroundingService', () => ({
   propagatePipelineGrounding: jest.fn().mockResolvedValue({ state: 'propagated' }),
   resolveRunGroundingSurface: jest.fn().mockResolvedValue(null),
+  readActiveTargetProvenance: jest.fn().mockResolvedValue(null),
   runGroundingService: {
     getGroundings: jest.fn().mockImplementation(async (run: {
       runType: string;

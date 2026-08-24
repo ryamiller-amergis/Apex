@@ -8,7 +8,8 @@ export type RepoReaderErrorCode =
   | 'ACCESS_DENIED'
   | 'LOCAL_READ_UNAVAILABLE'
   | 'PROFILE_UNAVAILABLE'
-  | 'REMOTE_SEARCH_DISABLED';
+  | 'REMOTE_SEARCH_DISABLED'
+  | 'SEARCH_TIMEOUT';
 
 export class RepoReaderError extends Error {
   constructor(
@@ -31,6 +32,7 @@ export function boundedSearchLimit(limit?: number): number {
 export interface RepoReaderFactories {
   local(): RepoReader;
   remote(): RepoReader;
+  bare(): RepoReader;
 }
 
 /**
@@ -38,8 +40,19 @@ export interface RepoReaderFactories {
  * The resolver deliberately chooses the mode only after authorization.
  */
 export function createRepoReader(
-  mode: 'local' | 'remote',
+  mode: 'local' | 'remote' | 'bare',
   factories: RepoReaderFactories
 ): RepoReader {
-  return mode === 'local' ? factories.local() : factories.remote();
+  switch (mode) {
+    case 'local':
+      return factories.local();
+    case 'remote':
+      return factories.remote();
+    case 'bare':
+      return factories.bare();
+    default: {
+      const exhaustive: never = mode;
+      return exhaustive;
+    }
+  }
 }

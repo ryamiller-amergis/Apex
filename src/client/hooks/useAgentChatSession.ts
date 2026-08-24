@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useChatStream } from './useChatStream';
 import type {
+  AgentRunPhase,
   ChatAttachment,
   ChatMessage,
   ChatThreadStatus,
@@ -10,6 +11,7 @@ import type {
   RunPhaseProgress,
   RunHealthProgress,
 } from './useChatStream';
+import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -64,6 +66,9 @@ export interface AgentChatSessionOptions {
    * in-progress context + no streaming text). Default: false.
    */
   enablePreparationState?: boolean;
+
+  /** Active run id from the persisted thread, used to restore thinking after refresh. */
+  initialActiveRunId?: string | null;
 }
 
 export interface SendOptions {
@@ -81,7 +86,7 @@ export interface AgentChatSession {
   phaseEvents: RunPhaseProgress[];
   runHealth: RunHealthProgress | null;
   progressLabel: string | null;
-  progressPhase: string | null;
+  progressPhase: AgentRunPhase | null;
   prdReady: boolean;
   backlogReady: boolean;
   isRetrying: boolean;
@@ -99,6 +104,8 @@ export interface AgentChatSession {
   hasPreparationError: boolean;
   preparationMessage: string | null;
   isInteractionBusy: boolean;
+  /** True while a turn is in flight but the agent reply is not on screen yet. */
+  showTypingIndicator: boolean;
 
   // --- Actions ---
   send: (text: string, opts?: SendOptions) => Promise<void>;
@@ -113,6 +120,66 @@ export interface AgentChatSession {
 // Default visible-message filter: hide hidden internal prompts
 const DEFAULT_VISIBLE_FILTER = (m: ChatMessage): boolean =>
   !(m.role === 'user' && m.text === 'Begin.' && !m.attachments?.length);
+
+/** Typing dots belong before the first on-screen agent bubble of this turn, not after it. */
+export function shouldShowAgentTypingIndicator(input: {
+  isBusy: boolean;
+  streamingText: string;
+  lastVisibleRole?: ChatMessage['role'];
+  isRetrying?: boolean;
+}): boolean {
+  if (!input.isBusy) return false;
+  if (input.streamingText) return false;
+  if (input.isRetrying) return false;
+  return input.lastVisibleRole !== 'agent';
+}
+
+const PENDING_THINKING_TTL_MS = 2 * 60 * 60 * 1000;
+
+function pendingThinkingStorageKey(threadId: string): string {
+  return `apex:pending-agent-thinking:${threadId}`;
+}
+
+function readPendingAgentThinking(threadId: string | null): boolean {
+  if (!threadId || typeof window === 'undefined') return false;
+  try {
+    const raw = window.sessionStorage.getItem(pendingThinkingStorageKey(threadId));
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as { startedAt?: number };
+    if (typeof parsed.startedAt !== 'number') {
+      window.sessionStorage.removeItem(pendingThinkingStorageKey(threadId));
+      return false;
+    }
+    if (Date.now() - parsed.startedAt > PENDING_THINKING_TTL_MS) {
+      window.sessionStorage.removeItem(pendingThinkingStorageKey(threadId));
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function writePendingAgentThinking(threadId: string | null): void {
+  if (!threadId || typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(
+      pendingThinkingStorageKey(threadId),
+      JSON.stringify({ startedAt: Date.now() }),
+    );
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+function clearPendingAgentThinking(threadId: string | null): void {
+  if (!threadId || typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.removeItem(pendingThinkingStorageKey(threadId));
+  } catch {
+    /* ignore */
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Hook
@@ -133,6 +200,7 @@ export function useAgentChatSession(
     cancelEndpoint,
     visibleMessageFilter = DEFAULT_VISIBLE_FILTER,
     enablePreparationState = false,
+    initialActiveRunId,
   } = options;
 
   // --- useChatStream (the SSE subscription) ---
@@ -173,6 +241,7 @@ export function useAgentChatSession(
   // Refs for pending-message tracking (generalized from Interview)
   const pendingMessageIdsRef = useRef<Set<string>>(new Set());
   const pendingObservedRunningRef = useRef(false);
+  const skipThinkingRestoreRef = useRef(false);
 
   // Derived
   const isRunning = status === 'running';
@@ -203,33 +272,44 @@ export function useAgentChatSession(
     (enablePreparationState && isEmptyInProgress && status === 'error')
   );
   const preparationMessage =
-    groundingPreparation?.message ??
-    (isPreparing ? 'Preparing project repository…' : null);
+    groundingPreparation?.message
+      ? friendlyChatProgressLabel(groundingPreparation.message, 'setup')
+      : isPreparing
+        ? friendlyChatProgressLabel('Preparing project repository…', 'setup')
+        : null;
 
   const isInteractionBusy =
     isRunning || isSending || isAwaitingAgentResponse || isPreparing;
 
+  const showTypingIndicator = shouldShowAgentTypingIndicator({
+    isBusy: isRunning || isSending || isAwaitingAgentResponse,
+    streamingText,
+    lastVisibleRole: visibleMessages[visibleMessages.length - 1]?.role,
+    isRetrying,
+  });
+
   // --- Awaiting-agent-response tracking ---
+  const lastVisibleRole = visibleMessages[visibleMessages.length - 1]?.role;
+
   const beginAwaitingAgentResponse = useCallback(() => {
+    skipThinkingRestoreRef.current = false;
     pendingMessageIdsRef.current = new Set(messages.map((m) => m.id));
     pendingObservedRunningRef.current = false;
     setIsAwaitingAgentResponse(true);
-  }, [messages]);
+    writePendingAgentThinking(threadId);
+  }, [messages, threadId]);
 
   const clearAwaitingAgentResponse = useCallback(() => {
     pendingMessageIdsRef.current.clear();
     pendingObservedRunningRef.current = false;
     setIsAwaitingAgentResponse(false);
-  }, []);
+    clearPendingAgentThinking(threadId);
+  }, [threadId]);
 
-  // Clear when agent responds or thread transitions
+  // Clear when an agent reply lands or the thread errors/closes — not when a
+  // refresh snapshot briefly looks idle while the turn is still in flight.
   useEffect(() => {
     if (!isAwaitingAgentResponse) return;
-
-    if (isRunning) {
-      pendingObservedRunningRef.current = true;
-      return;
-    }
 
     const receivedAgentOutcome = messages.some(
       (m) =>
@@ -239,7 +319,7 @@ export function useAgentChatSession(
 
     if (
       receivedAgentOutcome ||
-      pendingObservedRunningRef.current ||
+      lastVisibleRole === 'agent' ||
       status === 'error' ||
       status === 'closed'
     ) {
@@ -248,17 +328,75 @@ export function useAgentChatSession(
   }, [
     clearAwaitingAgentResponse,
     isAwaitingAgentResponse,
-    isRunning,
+    lastVisibleRole,
     messages,
     status,
   ]);
 
-  // Reset awaiting on thread change
+  // Reset local turn state when switching threads.
   useEffect(() => {
-    clearAwaitingAgentResponse();
+    skipThinkingRestoreRef.current = false;
     setOptimisticUserMessage(null);
     setIsCancelling(false);
-  }, [threadId, clearAwaitingAgentResponse]);
+    pendingMessageIdsRef.current.clear();
+    pendingObservedRunningRef.current = false;
+    setIsAwaitingAgentResponse(false);
+  }, [threadId]);
+
+  // Restore thinking after refresh when the last visible line is still the user.
+  useEffect(() => {
+    if (!threadId || isAwaitingAgentResponse || skipThinkingRestoreRef.current) return;
+
+    if (lastVisibleRole === 'agent') {
+      clearPendingAgentThinking(threadId);
+      return;
+    }
+
+    if (lastVisibleRole !== 'user') return;
+
+    const shouldResume =
+      isRunning ||
+      initialStatus === 'running' ||
+      Boolean(initialActiveRunId) ||
+      readPendingAgentThinking(threadId);
+
+    if (!shouldResume) return;
+
+    pendingMessageIdsRef.current = new Set(messages.map((m) => m.id));
+    pendingObservedRunningRef.current = false;
+    setIsAwaitingAgentResponse(true);
+    writePendingAgentThinking(threadId);
+  }, [
+    initialActiveRunId,
+    initialStatus,
+    isAwaitingAgentResponse,
+    isRunning,
+    lastVisibleRole,
+    messages,
+    threadId,
+  ]);
+
+  useEffect(() => {
+    if (!threadId) return;
+    if (lastVisibleRole === 'agent' || status === 'error' || status === 'closed') {
+      clearPendingAgentThinking(threadId);
+      return;
+    }
+    if (
+      !isCancelling &&
+      (isRunning || isAwaitingAgentResponse) &&
+      lastVisibleRole === 'user'
+    ) {
+      writePendingAgentThinking(threadId);
+    }
+  }, [
+    isAwaitingAgentResponse,
+    isCancelling,
+    isRunning,
+    lastVisibleRole,
+    status,
+    threadId,
+  ]);
 
   useEffect(() => {
     if (hasPersistedOptimisticEcho) setOptimisticUserMessage(null);
@@ -376,6 +514,8 @@ export function useAgentChatSession(
     if (!threadId || isCancelling) return;
     const endpoint = cancelEndpoint ?? `/api/chat/threads/${threadId}/cancel`;
     setIsCancelling(true);
+    skipThinkingRestoreRef.current = true;
+    clearAwaitingAgentResponse();
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
@@ -385,7 +525,7 @@ export function useAgentChatSession(
     } catch {
       setIsCancelling(false);
     }
-  }, [threadId, cancelEndpoint, isCancelling]);
+  }, [threadId, cancelEndpoint, isCancelling, clearAwaitingAgentResponse]);
 
   // --- Clear send error ---
   const clearSendError = useCallback(() => setSendError(null), []);
@@ -418,6 +558,7 @@ export function useAgentChatSession(
     hasPreparationError,
     preparationMessage,
     isInteractionBusy,
+    showTypingIndicator,
 
     // Actions
     send,

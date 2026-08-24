@@ -85,6 +85,21 @@ const GroundingStatusEnabled: React.FC<RunGroundingStatusProps> = ({
               : 'Pinned source unavailable locally — using remote fallback.'}
           </p>
         ) : null}
+        {target.stalenessState !== 'fresh' ? (
+          <p
+            className={styles.notice}
+            role="status"
+            aria-live="polite"
+            {...{ 'data-testid': 'run-grounding-staleness-notice' }}
+          >
+            {target.stalenessState === 'hard-checkpoint'
+              ? 'Hard checkpoint — this pin is 14+ days old.'
+              : 'This pin is aging (7+ days or 50+ commits behind).'}
+            {target.commitsBehind > 0
+              ? ` ${target.commitsBehind} commit${target.commitsBehind === 1 ? '' : 's'} behind.`
+              : ''}
+          </p>
+        ) : null}
         <button
           ref={triggerRef}
           type="button"

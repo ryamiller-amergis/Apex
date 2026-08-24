@@ -87,8 +87,11 @@ export type CompletedArtifactConsumer = (
   workspaceDir: string,
 ) => Promise<void>;
 
+export type FailedGenerationConsumer = (threadId: string) => Promise<void>;
+
 export interface AiRunIngestDependencies {
   consumeCompletedArtifacts?: CompletedArtifactConsumer;
+  failGeneratingArtifacts?: FailedGenerationConsumer;
   persistThreadMessage?: (
     threadId: string,
     message: ChatMessage,
@@ -101,6 +104,20 @@ async function consumeCompletedArtifacts(
 ): Promise<void> {
   const { syncOutputToDb } = await import('./chatAgentService');
   await syncOutputToDb(threadId, workspaceDir);
+}
+
+async function failGeneratingArtifacts(threadId: string): Promise<void> {
+  const { failGeneratingTestCasesForThread } = await import('./testCaseService');
+  await failGeneratingTestCasesForThread(threadId);
+}
+
+async function reflectFailedGeneration(
+  threadId: string,
+  dependencies: AiRunIngestDependencies,
+): Promise<void> {
+  await (dependencies.failGeneratingArtifacts ?? failGeneratingArtifacts)(
+    threadId,
+  );
 }
 
 /**
@@ -118,7 +135,11 @@ async function persistThreadMessage(
 
 function sanitizeDetail(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
-  const sanitized = value.replace(/\s+/g, ' ').trim().slice(0, MAX_DETAIL_LENGTH);
+  const sanitized = value
+    .split('\u0000').join('')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_DETAIL_LENGTH);
   return sanitized || undefined;
 }
 
@@ -525,6 +546,9 @@ export async function ingest(
         terminalReason: body.terminalReason,
         detail: detail ?? body.status,
       }));
+      if (body.status === 'failed' || body.status === 'cancelled') {
+        await reflectFailedGeneration(existing.threadId, dependencies);
+      }
       return { run, cancelRequested: run.cancelRequested };
     }
     throw new AiRunIngestError(
@@ -654,6 +678,7 @@ export async function ingest(
       )
       .returning();
     const run = updated[0] ? mapRow(updated[0]) : terminal;
+    await reflectFailedGeneration(existing.threadId, dependencies);
     return { run, cancelRequested: true };
   }
 
@@ -686,6 +711,8 @@ export async function ingest(
         await setCursorAgentId(existing.threadId, cursorAgentId).catch(() => {});
       }
     }
+  } else {
+    await reflectFailedGeneration(existing.threadId, dependencies);
   }
 
   const envelope = buildTerminalEnvelope(

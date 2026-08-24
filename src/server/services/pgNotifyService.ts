@@ -23,6 +23,34 @@ const RECONNECT_DELAY_MS = 3_000;
 const PAYLOAD_MAX_BYTES = 7_500; // PG NOTIFY payload limit is ~8000 bytes
 const MAX_DELIVERED_EVENT_IDS = 2_000;
 
+/** PostgreSQL jsonb/text reject U+0000 (22P05 / 22021). Agent tool output can embed it. */
+function stripNullBytes(value: string): string {
+  return value.split('\u0000').join('');
+}
+
+export function sanitizePgJsonb(value: unknown): unknown {
+  if (typeof value === 'string') return stripNullBytes(value);
+  if (Array.isArray(value)) return value.map(sanitizePgJsonb);
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = sanitizePgJsonb(nested);
+    }
+    return out;
+  }
+  return value;
+}
+
+export function sanitizeRunEventEnvelope(
+  event: AgentRunEventEnvelope,
+): AgentRunEventEnvelope {
+  return {
+    ...event,
+    detail: event.detail == null ? event.detail : stripNullBytes(event.detail),
+    event: sanitizePgJsonb(event.event) as AgentRunEventEnvelope['event'],
+  };
+}
+
 export const RUN_EVENT_SOURCE_INSTANCE = `${os.hostname()}:${process.pid}:${randomUUID()}`;
 
 interface ChannelPayload {
@@ -189,6 +217,7 @@ export async function notifyRunEvent(
   event: AgentRunEventEnvelope,
   options: { persist: boolean },
 ): Promise<void> {
+  const safe = sanitizeRunEventEnvelope(event);
   if (options.persist) {
     await pool.query(
       `INSERT INTO agent_run_events (
@@ -197,25 +226,25 @@ export async function notifyRunEvent(
        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
        ON CONFLICT (event_id) DO NOTHING`,
       [
-        event.eventId,
-        event.threadId,
-        event.runId,
-        event.sourceInstance,
-        event.sequence,
-        event.timestamp,
-        event.type,
-        event.phase,
-        event.status,
-        event.detail ?? null,
-        JSON.stringify(event.event),
+        safe.eventId,
+        safe.threadId,
+        safe.runId,
+        safe.sourceInstance,
+        safe.sequence,
+        safe.timestamp,
+        safe.type,
+        safe.phase,
+        safe.status,
+        safe.detail ?? null,
+        JSON.stringify(safe.event),
       ],
     );
   }
 
   const fullPayload = {
-    threadId: event.threadId,
-    eventId: event.eventId,
-    event,
+    threadId: safe.threadId,
+    eventId: safe.eventId,
+    event: safe,
   } satisfies ChannelPayload;
   let payload = JSON.stringify(fullPayload);
   if (Buffer.byteLength(payload) > PAYLOAD_MAX_BYTES) {
@@ -262,9 +291,10 @@ async function finalizeAgentRun(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const terminalDetail = input.detail ? stripNullBytes(input.detail) : input.detail;
     const params: unknown[] = [
       input.status,
-      input.status === 'failed' ? input.detail : null,
+      input.status === 'failed' ? terminalDetail : null,
       input.runId,
     ];
     let ownerClause = '';
@@ -298,6 +328,7 @@ async function finalizeAgentRun(
     }
 
     for (const event of input.events) {
+      const safe = sanitizeRunEventEnvelope(event);
       await client.query(
         `INSERT INTO agent_run_events (
            event_id, thread_id, run_id, source_instance, sequence,
@@ -305,17 +336,17 @@ async function finalizeAgentRun(
          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
          ON CONFLICT (event_id) DO NOTHING`,
         [
-          event.eventId,
-          event.threadId,
-          event.runId,
-          event.sourceInstance,
-          event.sequence,
-          event.timestamp,
-          event.type,
-          event.phase,
-          event.status,
-          event.detail ?? null,
-          JSON.stringify(event.event),
+          safe.eventId,
+          safe.threadId,
+          safe.runId,
+          safe.sourceInstance,
+          safe.sequence,
+          safe.timestamp,
+          safe.type,
+          safe.phase,
+          safe.status,
+          safe.detail ?? null,
+          JSON.stringify(safe.event),
         ],
       );
     }
@@ -337,7 +368,7 @@ async function finalizeAgentRun(
               last_activity_at = CURRENT_TIMESTAMP
         WHERE id = $2
           AND (active_run_id = $3 OR active_run_id IS NULL)`,
-      [input.status === 'failed' ? input.detail : null, input.threadId, input.runId],
+      [input.status === 'failed' ? terminalDetail : null, input.threadId, input.runId],
     );
 
     await client.query('COMMIT');

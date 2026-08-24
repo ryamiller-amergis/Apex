@@ -4,6 +4,7 @@ import {
   getRepoCacheDir,
   getRepoCacheLeaseKey,
   readCachedOriginSha,
+  readRemoteBranchTip,
   refreshRepoCacheUnderLease,
   wasRepoCacheRefreshedSince,
   type RepoCacheOptions,
@@ -25,9 +26,12 @@ import {
   sharedReadCheckoutService,
   type SharedReadCheckoutService,
 } from './grounding/sharedReadCheckoutService';
+import { workerCanReadWithoutWorkingTree } from './repoRead/workerReadVisibility';
 
 const MAX_CHANGED_PATHS = 200;
 const PRE_WARM_CONCURRENCY = 2;
+/** Idle configured repos are probed at most this often. Active pins probe every sweep. */
+export const IDLE_REMOTE_PROBE_INTERVAL_MS = 30 * 60 * 1000;
 
 export interface GroundingPreWarmService {
   preWarm(target: PreWarmTarget): Promise<void>;
@@ -46,6 +50,8 @@ export interface GroundingPreWarmDependencies {
   ) => Promise<unknown>;
   wasRefreshedSince?: (options: RepoCacheOptions, sinceMs: number) => boolean;
   readCachedSha?: (target: PreWarmTarget) => Promise<string | null>;
+  readRemoteTip?: (options: RepoCacheOptions) => Promise<string | null>;
+  listPinnedTargets?: () => Promise<PreWarmTarget[]>;
   listChangedPaths?: (
     options: RepoCacheOptions,
     fromSha: string,
@@ -61,6 +67,11 @@ export interface GroundingPreWarmDependencies {
    * path — admin clone owns mirrors; no Blob publish / shared prewarm).
    */
   isCheckoutReadinessEnabled?: (project: string) => Promise<boolean>;
+  /**
+   * True when workers can native-read without a working tree (same disk or
+   * HTTP). Shared checkout prewarm is then skipped; Blob publish still runs.
+   */
+  workerCanReadWithoutWorkingTree?: () => boolean;
 }
 
 function cacheOptions(target: PreWarmTarget): RepoCacheOptions {
@@ -193,6 +204,10 @@ export function createGroundingPreWarmService(
   const telemetry = dependencies.telemetry ?? trackEvent;
   const now = dependencies.now ?? Date.now;
   const readCachedSha = dependencies.readCachedSha ?? readCachedOriginSha;
+  const readRemoteTip = dependencies.readRemoteTip ?? readRemoteBranchTip;
+  const listPinnedTargets =
+    dependencies.listPinnedTargets ??
+    (() => runGroundingRepository.listActiveTargets());
   const listChangedPaths =
     dependencies.listChangedPaths ?? listChangedRepositoryPaths;
   const publishBundle =
@@ -213,7 +228,30 @@ export function createGroundingPreWarmService(
         await import('./featureFlagService');
       return isProjectRepositoryCheckoutReadinessEnabledForProject(project);
     });
+  const canSkipSharedCheckout =
+    dependencies.workerCanReadWithoutWorkingTree
+    ?? (() => workerCanReadWithoutWorkingTree());
   const inFlight = new Map<string, Promise<void>>();
+  const lastProbeAt = new Map<string, number>();
+
+  const isActivelyPinned = async (target: PreWarmTarget): Promise<boolean> => {
+    try {
+      const pinned = await listPinnedTargets();
+      const identity = targetIdentity(target);
+      return pinned.some((candidate) => targetIdentity(candidate) === identity);
+    } catch {
+      return true;
+    }
+  };
+
+  const shouldDeferIdleProbe = async (
+    target: PreWarmTarget,
+  ): Promise<boolean> => {
+    if (await isActivelyPinned(target)) return false;
+    const last = lastProbeAt.get(targetIdentity(target));
+    if (last === undefined) return false;
+    return now() - last < IDLE_REMOTE_PROBE_INTERVAL_MS;
+  };
 
   const preWarm = (target: PreWarmTarget): Promise<void> => {
     const identity = targetIdentity(target);
@@ -238,11 +276,49 @@ export function createGroundingPreWarmService(
       }
       // @feature-flag:project-repository-checkout-readiness end
 
+      if (await shouldDeferIdleProbe(target)) {
+        telemetry(
+          'grounding.mirror.prewarm',
+          {
+            provider: target.provider,
+            project: target.project,
+            repository: target.repository,
+            branch: target.branch,
+            outcome: 'deferred',
+          },
+          { durationMs: 0 },
+        );
+        return;
+      }
+
       const options = cacheOptions(target);
       const requestedAt = now();
       const fromSha = await Promise.resolve(readCachedSha(target)).catch(
         () => null,
       );
+      const cachedTip = fromSha?.trim().toLowerCase() || null;
+      let remoteTip: string | null = null;
+      try {
+        remoteTip = (await readRemoteTip(options))?.trim().toLowerCase() || null;
+      } catch {
+        remoteTip = null;
+      }
+      if (cachedTip && remoteTip && remoteTip === cachedTip) {
+        lastProbeAt.set(identity, now());
+        telemetry(
+          'grounding.mirror.prewarm',
+          {
+            provider: target.provider,
+            project: target.project,
+            repository: target.repository,
+            branch: target.branch,
+            outcome: 'unchanged',
+          },
+          { durationMs: Math.max(0, now() - requestedAt) },
+        );
+        return;
+      }
+
       const refreshed = { sha: null as string | null };
       await withLease(getRepoCacheLeaseKey(options), async (lease) => {
         lease.signal.throwIfAborted();
@@ -299,21 +375,32 @@ export function createGroundingPreWarmService(
         }
 
         try {
-          const { outcome } = await materializeSharedCheckout({
-            provider: options.provider,
-            project: target.project,
-            repo: target.repository,
-            branch: target.branch,
-            sha: cachedSha,
-          });
-          telemetry('grounding.shared.prewarm', {
-            provider: target.provider,
-            project: target.project,
-            repository: target.repository,
-            branch: target.branch,
-            sha: cachedSha,
-            outcome,
-          });
+          if (canSkipSharedCheckout()) {
+            telemetry('grounding.shared.prewarm', {
+              provider: target.provider,
+              project: target.project,
+              repository: target.repository,
+              branch: target.branch,
+              sha: cachedSha,
+              outcome: 'skipped-bare-mirror',
+            });
+          } else {
+            const { outcome } = await materializeSharedCheckout({
+              provider: options.provider,
+              project: target.project,
+              repo: target.repository,
+              branch: target.branch,
+              sha: cachedSha,
+            });
+            telemetry('grounding.shared.prewarm', {
+              provider: target.provider,
+              project: target.project,
+              repository: target.repository,
+              branch: target.branch,
+              sha: cachedSha,
+              outcome,
+            });
+          }
         } catch {
           telemetry('grounding.shared.prewarm', {
             provider: target.provider,
@@ -327,6 +414,8 @@ export function createGroundingPreWarmService(
           // user-facing preparation path owns on-demand materialization.
         }
       }
+
+      lastProbeAt.set(identity, now());
 
       void Promise.resolve()
         .then(async () => {

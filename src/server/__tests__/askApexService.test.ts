@@ -323,6 +323,7 @@ describe('askApexService', () => {
         profileId: 'ask-profile' as GroundingProfileId,
         resolvedSha: 'sha-pinned',
         nativeReads: true,
+        workingTree: true,
         release: jest.fn(),
       });
       mockResolveConnectionProfile.mockResolvedValue(reader);
@@ -375,6 +376,7 @@ describe('askApexService', () => {
         profileId: 'ask-missing' as GroundingProfileId,
         resolvedSha: 'sha-missing',
         nativeReads: true,
+        workingTree: true,
         release: jest.fn(),
       });
       mockResolveConnectionProfile.mockRejectedValue(

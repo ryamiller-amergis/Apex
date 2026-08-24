@@ -87,6 +87,19 @@ variable "ado_project" {
   type        = string
 }
 
+variable "github_org" {
+  description = "Default GitHub organization for repo checkout (GITHUB_ORG). Use the org that owns Apex, not the Apex product name. Same value as the App Service GITHUB_ORG setting."
+  type        = string
+  default     = ""
+}
+
+variable "github_token" {
+  description = "GitHub fine-grained or classic PAT for git clone/fetch and the skill catalog (GITHUB_TOKEN). Same value as the App Service GITHUB_TOKEN setting (deploy maps GH_SKILL_TOKEN). Null skips wiring on the repo-read Container App."
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
 variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)
@@ -756,4 +769,44 @@ variable "ai_runs_interactive_first_token_slo_ms" {
   description = "First-token latency SLO (P95, ms) gating the interactive alert. Confirm with product before enforcing; default 1500."
   type        = number
   default     = 1500
+}
+
+# ---------------------------------------------------------------------------
+# Repo read service (Stage 3 — bare-mirror HTTP API)
+# ---------------------------------------------------------------------------
+
+variable "enable_repo_read_service" {
+  description = "Provision the repo-read Container App (HTTP git cat-file/ls-tree/grep API). Additive/inert; keep false until the repo-read-service flag rolls out."
+  type        = bool
+  default     = false
+}
+
+variable "repo_read_service_container_app_name" {
+  description = "Repo-read Container App name. Null derives 'ca-apex-repo-read-{environment}'."
+  type        = string
+  default     = null
+}
+
+variable "repo_read_service_image" {
+  description = "Fully-qualified repo-read service image. Placeholder until CI publishes; image updates are ignored by Terraform lifecycle."
+  type        = string
+  default     = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
+}
+
+variable "repo_read_service_cpu" {
+  description = "CPU cores per repo-read replica. 2.0 keeps Consumption-plan ephemeral disk at 8 GiB."
+  type        = number
+  default     = 2.0
+}
+
+variable "repo_read_service_memory" {
+  description = "Memory (GiB string) per repo-read replica."
+  type        = string
+  default     = "4Gi"
+}
+
+variable "repo_read_service_target_port" {
+  description = "Container port the repo-read HTTP API listens on."
+  type        = number
+  default     = 8080
 }

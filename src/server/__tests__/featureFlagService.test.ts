@@ -63,6 +63,7 @@ import {
   isFeatureOperational,
   isRemoteSearchConvergenceEnabled,
   isNativeReadEnabledForCaller,
+  isRepoReadServiceEnabledForCaller,
 } from '../services/featureFlagService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
@@ -1021,6 +1022,19 @@ describe('grounding rollout accessors', () => {
     expect(enabled).toBe(false);
     expect(onEvaluationError).toHaveBeenCalledTimes(1);
     expect(onEvaluationError).toHaveBeenCalledWith();
+  });
+
+  it('fails repo-read-service evaluation closed on throw', async () => {
+    mockDb.query.featureFlags.findMany.mockRejectedValue(new Error('database unavailable'));
+    const onEvaluationError = jest.fn();
+
+    const enabled = await isRepoReadServiceEnabledForCaller(
+      { userId: 'user-1', project: 'proj-a', caller: 'interview' },
+      onEvaluationError,
+    );
+
+    expect(enabled).toBe(false);
+    expect(onEvaluationError).toHaveBeenCalledTimes(1);
   });
 
   it.each([

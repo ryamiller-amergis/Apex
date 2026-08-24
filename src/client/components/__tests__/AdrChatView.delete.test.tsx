@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { AdrChatView } from '../AdrChatView';
+import type { AgentRunPhase } from '../../../shared/types/chat';
 import type { Adr } from '../../../shared/types/adr';
 
 const mockNavigate = jest.fn();
@@ -13,7 +14,7 @@ let mockStreamState: {
   streamingText: string;
   status: 'idle' | 'running' | 'error';
   progressLabel?: string | null;
-  progressPhase?: string | null;
+  progressPhase?: AgentRunPhase | null;
   lastError?: string | null;
 } = { messages: [], streamingText: '', status: 'idle' };
 
@@ -22,6 +23,17 @@ jest.mock('react-markdown', () => ({
   default: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 jest.mock('remark-gfm', () => ({ __esModule: true, default: jest.fn() }));
+jest.mock('../../hooks/useGroundingResumeGate', () => ({
+  useGroundingResumeGate: () => ({
+    composerBlocked: false,
+    showCard: false,
+    status: null,
+    continueOnPin: jest.fn(),
+    updateToLatest: jest.fn(),
+    isUpdating: false,
+    error: null,
+  }),
+}));
 jest.mock('react-router-dom', () => ({
   ...jest.requireActual('react-router-dom'),
   useNavigate: () => mockNavigate,
@@ -239,7 +251,7 @@ describe('AdrChatView — delete', () => {
     renderAdrView();
 
     expect(screen.getByTestId('adr-preparation-state')).toHaveTextContent(
-      'Refreshing the repository mirror…',
+      'Loading…',
     );
     expect(screen.getByPlaceholderText(/Preparing the workspace/i)).toBeDisabled();
     expect(screen.queryByTestId('adr-agent-processing')).not.toBeInTheDocument();
@@ -281,7 +293,7 @@ describe('AdrChatView — delete', () => {
     renderAdrView();
 
     expect(screen.getByTestId('agent-run-status-queued')).toHaveTextContent(
-      'Queued — waiting for available worker',
+      'Waiting…',
     );
   });
 });
