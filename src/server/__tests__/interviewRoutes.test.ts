@@ -877,6 +877,7 @@ describe('POST /api/interviews/:interviewId/prds', () => {
       threadId: 'thread-new',
       interviewId: 'interview-1',
       kickoffMessage: 'Begin.',
+      pinPolicy: 'inherit',
     });
   });
 

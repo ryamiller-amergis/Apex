@@ -46,6 +46,7 @@ jest.mock('../services/chatAgentService', () => ({
   readOutputValidationScorecardMd: jest.fn().mockReturnValue(null),
   readAllOutputDesignDocFeatures: jest.fn().mockReturnValue([]),
   createThread: jest.fn(),
+  sendMessage: jest.fn().mockResolvedValue(undefined),
   getThreadAsync: jest.fn().mockResolvedValue(null),
   updateThreadKickoffContext: jest.fn(),
 }));
@@ -125,7 +126,10 @@ const { getPrd: mockGetPrd, applyProposedPrdChanges: mockApplyProposedPrdChanges
 // Capture permission calls from route registration (before any clearAllMocks)
 let permissionsRequestedAtLoad: string[] = [];
 const { getComments: mockGetComments } = jest.requireMock('../services/reviewCommentService') as { getComments: jest.Mock };
-const { createThread: mockCreateThread } = jest.requireMock('../services/chatAgentService') as { createThread: jest.Mock };
+const { createThread: mockCreateThread, sendMessage: mockSendMessage } = jest.requireMock('../services/chatAgentService') as {
+  createThread: jest.Mock;
+  sendMessage: jest.Mock;
+};
 const { db: mockDb } = jest.requireMock('../db/drizzle') as {
   db: {
     select: jest.Mock;
@@ -247,7 +251,7 @@ describe('POST /api/interviews/prds/:prdId/assistant-thread — new thread creat
     );
   });
 
-  it('passes a kickoffMessage to createThread', async () => {
+  it('passes skipAutoKickoff: true to createThread and kicks off via sendMessage', async () => {
     mockGetPrd.mockResolvedValue({ ...basePrd, prdAssistantThreadId: null });
     mockGetComments.mockResolvedValue([]);
 
@@ -256,7 +260,11 @@ describe('POST /api/interviews/prds/:prdId/assistant-thread — new thread creat
     expect(mockCreateThread).toHaveBeenCalledWith(
       'user-test',
       expect.any(Object),
-      expect.objectContaining({ kickoffMessage: expect.stringContaining('Apex') }),
+      { skipAutoKickoff: true },
+    );
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      'thread-new',
+      expect.stringContaining('Apex'),
     );
   });
 
