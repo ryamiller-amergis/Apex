@@ -8,6 +8,7 @@ import {
   validateGeneratedDiff,
   reconcileRollbackWorkspace,
   buildGeneratedCliEnv,
+  resolveWorkspaceSkillRoot,
 } from '../services/foundationSkillRepoUpdateService';
 import type { FoundationSkillRelease } from '../../shared/types/foundationSkills';
 
@@ -128,6 +129,46 @@ describe('buildArtifactCliArgs', () => {
     ]);
   });
 
+  it('omits --skill-root for pre-2.1 artifacts on the legacy Cursor root', () => {
+    expect(
+      buildArtifactCliArgs(
+        '2.0.3',
+        ['ui-lab'],
+        'bin/apex-skills.mjs',
+        '.cursor/skills'
+      )
+    ).toEqual(['bin/apex-skills.mjs', 'install', 'ui-lab', '--skip-feed']);
+  });
+
+  it('rejects pre-2.1 artifacts targeting a non-legacy skill root', () => {
+    expect(() =>
+      buildArtifactCliArgs(
+        '2.0.3',
+        ['ui-lab'],
+        'bin/apex-skills.mjs',
+        '.agents/skills'
+      )
+    ).toThrow(/does not support --skill-root/i);
+  });
+
+  it('passes a validated canonical root to 2.1+ installers', () => {
+    expect(
+      buildArtifactCliArgs(
+        '2.1.0',
+        ['ui-lab'],
+        'bin/apex-skills.mjs',
+        '.agents/skills'
+      )
+    ).toEqual([
+      'bin/apex-skills.mjs',
+      'install',
+      'ui-lab',
+      '--skip-feed',
+      '--skill-root',
+      '.agents/skills',
+    ]);
+  });
+
   it('rejects command injection payloads', () => {
     expect(() => buildArtifactCliArgs('2.0.0; whoami', ['ui-lab'])).toThrow(
       /artifact version/i
@@ -172,6 +213,17 @@ describe('validateGeneratedDiff', () => {
     ).not.toThrow();
   });
 
+  it('accepts managed paths under a configured canonical root', () => {
+    expect(() =>
+      validateGeneratedDiff(
+        ['apex-skills.lock.json', '.agents/skills/ui-lab/SKILL.md'],
+        ['ui-lab'],
+        null,
+        '.agents/skills'
+      )
+    ).not.toThrow();
+  });
+
   it('rejects npm credentials and unrelated source changes', () => {
     expect(() =>
       validateGeneratedDiff(
@@ -180,6 +232,108 @@ describe('validateGeneratedDiff', () => {
         null
       )
     ).toThrow(/unexpected generated files/i);
+  });
+});
+
+describe('resolveWorkspaceSkillRoot', () => {
+  it('uses the installed lock root and rejects an implicit root change', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-root-test-'));
+    try {
+      const lock = {
+        lockfileVersion: 3,
+        suiteVersion: '2.1.0',
+        package: '@apex/skills',
+        skillRoot: '.agents/skills',
+        skills: { 'ui-lab': {} },
+      };
+      const integrity = createHash('sha256')
+        .update(stableJson(lock))
+        .digest('hex');
+      fs.writeFileSync(
+        path.join(workspace, 'apex-skills.lock.json'),
+        JSON.stringify({ ...lock, integrity }, null, 2)
+      );
+
+      expect(resolveWorkspaceSkillRoot(workspace)).toBe('.agents/skills');
+      expect(() =>
+        resolveWorkspaceSkillRoot(workspace, '.cursor/skills')
+      ).toThrow(/migrate/i);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects lockfiles whose version and skillRoot pairing is invalid', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-root-test-'));
+    try {
+      const lock = {
+        lockfileVersion: 2,
+        suiteVersion: '2.0.0',
+        package: '@apex/skills',
+        skillRoot: '.agents/skills',
+        skills: { 'ui-lab': {} },
+      };
+      const integrity = createHash('sha256')
+        .update(stableJson(lock))
+        .digest('hex');
+      fs.writeFileSync(
+        path.join(workspace, 'apex-skills.lock.json'),
+        JSON.stringify({ ...lock, integrity }, null, 2)
+      );
+
+      expect(() => resolveWorkspaceSkillRoot(workspace)).toThrow(
+        /omit skillRoot/i
+      );
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('requires an explicit choice when both known roots exist without a lock', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-root-test-'));
+    try {
+      fs.mkdirSync(path.join(workspace, '.agents/skills'), {
+        recursive: true,
+      });
+      fs.mkdirSync(path.join(workspace, '.cursor/skills'), {
+        recursive: true,
+      });
+
+      expect(() => resolveWorkspaceSkillRoot(workspace)).toThrow(
+        /canonical root/i
+      );
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('uses .agents when the legacy root is only a harness symlink', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-root-test-'));
+    try {
+      fs.mkdirSync(path.join(workspace, '.agents/skills'), {
+        recursive: true,
+      });
+      fs.mkdirSync(path.join(workspace, '.cursor'), { recursive: true });
+      try {
+        fs.symlinkSync(
+          '../.agents/skills',
+          path.join(workspace, '.cursor/skills'),
+          'dir'
+        );
+      } catch (error) {
+        if (
+          (error as NodeJS.ErrnoException).code === 'EPERM' ||
+          (error as NodeJS.ErrnoException).code === 'EACCES'
+        ) {
+          return;
+        }
+        throw error;
+      }
+
+      expect(resolveWorkspaceSkillRoot(workspace)).toBe('.agents/skills');
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
   });
 });
 
@@ -218,14 +372,14 @@ describe('reconcileRollbackWorkspace', () => {
       path.join(os.tmpdir(), 'apex-rollback-test-')
     );
     try {
-      fs.mkdirSync(path.join(workspace, '.cursor/skills/ui-lab'), {
+      fs.mkdirSync(path.join(workspace, '.agents/skills/ui-lab'), {
         recursive: true,
       });
-      fs.mkdirSync(path.join(workspace, '.cursor/skills/newer-skill'), {
+      fs.mkdirSync(path.join(workspace, '.agents/skills/newer-skill'), {
         recursive: true,
       });
       fs.writeFileSync(
-        path.join(workspace, '.cursor/skills/newer-skill/SKILL.md'),
+        path.join(workspace, '.agents/skills/newer-skill/SKILL.md'),
         'TEAM_CUSTOMIZATION\n'
       );
       fs.mkdirSync(
@@ -239,9 +393,10 @@ describe('reconcileRollbackWorkspace', () => {
         path.join(workspace, 'apex-skills.lock.json'),
         (() => {
           const lock = {
-            lockfileVersion: 2,
+            lockfileVersion: 3,
             suiteVersion: '2.1.0',
             package: '@apex/skills',
+            skillRoot: '.agents/skills',
             skills: { 'ui-lab': {}, 'newer-skill': {} },
           };
           const integrity = createHash('sha256')
@@ -261,7 +416,7 @@ describe('reconcileRollbackWorkspace', () => {
 
       expect(result.removedSkills).toEqual(['newer-skill']);
       expect(
-        fs.existsSync(path.join(workspace, '.cursor/skills/newer-skill'))
+        fs.existsSync(path.join(workspace, '.agents/skills/newer-skill'))
       ).toBe(false);
       const backupRoot = path.join(
         workspace,

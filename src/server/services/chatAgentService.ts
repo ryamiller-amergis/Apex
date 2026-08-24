@@ -64,6 +64,10 @@ import {
 import { interactiveWorkflowRouter } from './interactiveWorkflowRouter';
 import { interactiveLiveBus } from './interactiveLiveBus';
 import { isExternalRunAbortEvent } from './agentRunAbort';
+import {
+  skillNameFromPath,
+  skillPathCandidates,
+} from '../../shared/skillPaths';
 import { syncPrdContent } from './prdService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import {
@@ -1205,7 +1209,7 @@ function buildFreeChatPrompt(
       `# Mode`,
       `You are the internal project assistant for the **${kickoff.project}** team.`,
       ``,
-      `If the user asks you to run or load a skill (e.g. "run the PRD skill" or "load skill at \`.cursor/skills/to-prd/SKILL.md\`"), call \`get_skill\` with the path they provide and the project/repo/branch above, then follow the skill's procedure.`,
+      `If the user asks you to run or load a skill (e.g. "run the PRD skill" or "load skill at \`.agents/skills/to-prd/SKILL.md\`"), call \`get_skill\` with the path they provide and the project/repo/branch above, then follow the skill's procedure.`,
       ``,
       `If the user sends a message like "Run skill: <name> (<path>)", call \`get_skill\` with that path and proceed.`,
       ...buildScopePolicyLines(kickoff)
@@ -1944,13 +1948,48 @@ async function buildNewAgentTurnPrompt(
 
   if (kickoff.skillPath) {
     const skillPathNorm = kickoff.skillPath.replace(/^\//, '');
+    const skillName = skillNameFromPath(skillPathNorm);
+    const candidates = skillName
+      ? skillPathCandidates(skillName, skillPathNorm)
+      : [skillPathNorm];
+
+    if (!skillContent) {
+      for (const candidate of candidates.slice(1)) {
+        try {
+          const content = options?.repoReader
+            ? await options.repoReader.readFile(candidate)
+            : await (
+                await import('./skillCatalogFacade')
+              ).getSkillFile(
+                kickoff.project,
+                kickoff.repo,
+                candidate,
+                resolvedBranch,
+                provider
+              );
+          if (content) {
+            skillContent = content;
+            skillSource = options?.repoReader ? 'local' : provider;
+            break;
+          }
+        } catch (err) {
+          console.warn(
+            `[chat] Cross-root skill fetch failed for ${candidate}:`,
+            err instanceof Error ? err.message : String(err)
+          );
+        }
+      }
+    }
+
     if (!skillContent && !options?.repoReader) {
-      const localPath = path.join(process.cwd(), skillPathNorm);
-      if (fs.existsSync(localPath)) {
+      for (const candidate of candidates) {
+        const localPath = path.join(process.cwd(), candidate);
+        if (!fs.existsSync(localPath)) continue;
         try {
           skillContent = fs.readFileSync(localPath, 'utf8');
           skillSource = 'local';
-          console.log('[chat] Using local skill fallback:', skillPathNorm);
+          console.log('[chat] Using local skill fallback:', candidate);
+          break;
         } catch (err) {
           console.error(
             '[chat] Failed to read local skill fallback:',

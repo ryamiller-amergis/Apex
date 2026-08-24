@@ -11,9 +11,13 @@
  */
 
 import { fetchAdoFileGeneric } from '../utils/adoFileFetch';
+import { skillNameFromPath, skillPathCandidates } from '../../shared/skillPaths';
 
 /** Default convention path for a project's design-system skill within its repo. */
 export const DEFAULT_DESIGN_SYSTEM_PATH = '.cursor/skills/design-system/SKILL.md';
+
+/** Default convention skill name for a project's design-system skill. */
+const DEFAULT_DESIGN_SYSTEM_SKILL = 'design-system';
 
 /** Cache TTL for resolved design-system content. 10 minutes. */
 const CONTEXT_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -52,12 +56,24 @@ export interface PrototypeContext {
   };
 }
 
+function designSystemPathCandidates(configuredPath: string | null): string[] {
+  const looksLikePath = Boolean(
+    configuredPath && (configuredPath.includes('/') || /\.md$/i.test(configuredPath)),
+  );
+  const skillName =
+    (looksLikePath && configuredPath && skillNameFromPath(configuredPath)) ||
+    (!looksLikePath && configuredPath) ||
+    DEFAULT_DESIGN_SYSTEM_SKILL;
+  const preferredPath = looksLikePath ? configuredPath : null;
+  return skillPathCandidates(skillName, preferredPath);
+}
+
 /**
  * Resolve the prototype context for a project.
  *
  * Resolution order:
- *   1. Try to fetch the project's own design-system skill from its ADO repo
- *      (at `prototype_design_system_path`, defaulting to the convention path).
+ *   1. Try to fetch the project's own design-system skill from its repo
+ *      (GitHub or ADO), trying the standard skill-folder candidates.
  *   2. On failure, log a warning and fall back to the bundled MaxView design
  *      system (transition fallback — removed once MaxView is migrated).
  *
@@ -103,8 +119,9 @@ export async function resolvePrototypeContext(
 
   // ── Try project-specific design system ──────────────────────────────────────
   if (cfg?.skillRepo) {
-    const skillPath = normalizeDesignSystemSkillPath(cfg.prototypeDesignSystemPath);
-    const cacheKey = `${cfg.skillProvider ?? 'ado'}:${cfg.skillRepo}@${cfg.skillBranch ?? 'main'}:${skillPath}`;
+    const configuredPath = cfg.prototypeDesignSystemPath?.trim() || null;
+    const candidates = designSystemPathCandidates(configuredPath);
+    const cacheKey = `${cfg.skillProvider ?? 'ado'}:${cfg.skillRepo}@${cfg.skillBranch ?? 'main'}:${candidates.join('|')}`;
     const cached = designSystemCache.get(cacheKey);
     if (cached && Date.now() - cached.resolvedAt < CONTEXT_CACHE_TTL_MS) {
       return {
@@ -117,37 +134,40 @@ export async function resolvePrototypeContext(
 
     const branch = cfg.skillBranch ?? 'main';
     const provider: 'ado' | 'github' = cfg.skillProvider === 'github' ? 'github' : 'ado';
+    let lastError: string | null = null;
 
-    try {
-      let content = '';
-      if (provider === 'github') {
-        const { getSkillFile } = await import('./skillCatalogFacade');
-        content = await getSkillFile(project, cfg.skillRepo, skillPath, branch, 'github');
-      } else {
-        if (!orgUrl || !pat) {
-          throw new Error('ADO_ORG or ADO_PAT not set');
+    for (const candidate of candidates) {
+      try {
+        let content = '';
+        if (provider === 'github') {
+          const { getSkillFile } = await import('./skillCatalogFacade');
+          content = await getSkillFile(project, cfg.skillRepo, candidate, branch, 'github');
+        } else {
+          if (!orgUrl || !pat) {
+            throw new Error('ADO_ORG or ADO_PAT not set');
+          }
+          const [adoProject, repo] = cfg.skillRepo.includes('/')
+            ? cfg.skillRepo.split('/', 2) as [string, string]
+            : [project, cfg.skillRepo];
+          content = await fetchAdoFileGeneric(orgUrl, pat, adoProject, repo, candidate, branch);
         }
-        const [adoProject, repo] = cfg.skillRepo.includes('/')
-          ? cfg.skillRepo.split('/', 2) as [string, string]
-          : [project, cfg.skillRepo];
-        content = await fetchAdoFileGeneric(orgUrl, pat, adoProject, repo, skillPath, branch);
+        if (content.trim()) {
+          designSystemCache.set(cacheKey, { content: content.trim(), resolvedAt: Date.now() });
+          console.log(`[prototypeContextService] Loaded design system for "${project}" from ${provider}:${cfg.skillRepo}@${branch}:${candidate} (${content.length} chars)`);
+          return {
+            appName,
+            designSystemMarkdown: content.trim(),
+            isProjectSpecific: true,
+            extend: extendCtx,
+          };
+        }
+        lastError = `Design system skill at "${candidate}" in ${cfg.skillRepo}@${branch} is empty`;
+      } catch (err: any) {
+        lastError = err.message;
       }
-      if (content.trim()) {
-        designSystemCache.set(cacheKey, { content: content.trim(), resolvedAt: Date.now() });
-        console.log(`[prototypeContextService] Loaded design system for "${project}" from ${provider}:${cfg.skillRepo}@${branch}:${skillPath} (${content.length} chars)`);
-        return {
-          appName,
-          designSystemMarkdown: content.trim(),
-          isProjectSpecific: true,
-          extend: extendCtx,
-        };
-      }
-      console.error(`[prototypeContextService] Design system skill at "${skillPath}" in ${cfg.skillRepo}@${branch} is empty for project "${project}" — prototype generation will fail`);
-      return null;
-    } catch (err: any) {
-      console.error(`[prototypeContextService] Could not fetch project design system for "${project}" (${provider}:${cfg.skillRepo}@${branch}:${skillPath}): ${err.message} — failing prototype rather than using MaxView fallback`);
-      return null;
     }
+    console.error(`[prototypeContextService] Could not fetch project design system for "${project}" (${provider}:${cfg.skillRepo}@${branch}): ${lastError} — failing prototype rather than using MaxView fallback`);
+    return null;
   }
 
   // ── Transition fallback: bundled MaxView design system ──────────────────────

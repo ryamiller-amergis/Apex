@@ -8,6 +8,7 @@ import { chatThreads, designModules } from '../db/schema';
 import { getDefaultModel } from './appSettingsService';
 import { createThread, isThreadIdle, sendMessage } from './chatAgentService';
 import { resolveSkillConfig } from './projectSettingsService';
+import { AGENT_SKILL_ROOT, skillPathFor } from '../../shared/skillPaths';
 import {
   DESIGN_MODULE_ICON_KEYS,
   type CreateDesignModuleInput,
@@ -17,7 +18,10 @@ import {
   type UpdateDesignModuleInput,
 } from '../../shared/types/designModule';
 
-const DESIGN_MODULE_SKILL_PATH = '.cursor/skills/design-module-doc/SKILL.md';
+const DESIGN_MODULE_SKILL_PATH = skillPathFor(
+  AGENT_SKILL_ROOT,
+  'design-module-doc'
+);
 export const DEFAULT_DESIGN_MODULE_SKILL_PATH = DESIGN_MODULE_SKILL_PATH;
 const OUTPUT_FILE = 'design-module.md';
 const WATCHER_INTERVAL_MS = 5_000;

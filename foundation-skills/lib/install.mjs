@@ -2,7 +2,7 @@
  * Transactional, repo-local install (three-zone SKILL.md layout).
  *
  * For each selected skill:
- *   - write .cursor/skills/<skill>/SKILL.md with:
+ *   - write <skillRoot>/<skill>/SKILL.md with:
  *       foundation fence (APEX:managed) + adapter zone (APEX:adapter) + project notes
  *   - copy companion foundation files (non-SKILL.md) alongside, always replaced
  *   - if an unfenced SKILL.md already exists, leave it untouched and warn
@@ -16,26 +16,54 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  hashFile, writeTextFile, normalizeText, sha256, assertWithin, toPosix, ensureDir,
+  hashFile,
+  writeTextFile,
+  normalizeText,
+  sha256,
+  assertWithin,
+  toPosix,
+  ensureDir,
   listFilesRel,
 } from './util.mjs';
 import {
-  pkgFoundationDir, repoAdapterDir, repoLegacyVendorDir,
-  ADAPTER_DIR, LEGACY_VENDOR_DIR, BACKUP_DIR,
+  pkgFoundationDir,
+  repoAdapterDir,
+  repoLegacyVendorDir,
+  LEGACY_VENDOR_DIR,
+  BACKUP_DIR,
 } from './layout.mjs';
 import { loadCatalog, findSkill, listAdapterRuntimeFiles } from './catalog.mjs';
 import {
-  readLockfile, emptyLockfile, serializeLockfile, isV1Lockfile,
-  verifyLockfileIntegrity, LOCKFILE_VERSION,
+  readLockfile,
+  emptyLockfile,
+  serializeLockfile,
+  isV1Lockfile,
+  verifyLockfileIntegrity,
+  applyLockfileRoot,
 } from './lockfile.mjs';
 import { bootstrapSkill } from './bootstrap.mjs';
 import { satisfies } from './semver.mjs';
 import {
-  compose, composeAdapter, composeManaged, splice, spliceAdapter, spliceFoundation,
-  hashManaged, hasFence, inspectFences, splitZones,
+  compose,
+  composeAdapter,
+  composeManaged,
+  splice,
+  spliceAdapter,
+  spliceFoundation,
+  hashManaged,
+  hasFence,
+  inspectFences,
+  splitZones,
 } from './managedRegion.mjs';
 import { mergeAdapterRegions } from './adapterMerge.mjs';
 import { withInstallTransaction } from './installTransaction.mjs';
+import {
+  findSkillRootCollisions,
+  normalizeSkillRoot,
+  resolveRepoSkillRoot,
+  resolveSkillRoot,
+} from './skillRoot.mjs';
+import { validateAgentSkillDocument } from './agentSkillValidation.mjs';
 
 /**
  * Plan an install without writing. Returns { actions, errors, warnings }.
@@ -47,6 +75,37 @@ export function planInstall(pkgRoot, repoRoot, skillNames, opts = {}) {
   const actions = [];
 
   const existingLock = readLockfile(repoRoot);
+  let skillRoot;
+  try {
+    skillRoot = resolveRepoSkillRoot(repoRoot, {
+      requestedRoot: opts.skillRoot,
+      lock: existingLock,
+    });
+  } catch (error) {
+    errors.push(error.message);
+    return { catalog, actions, errors, warnings, skillRoot: null };
+  }
+
+  if (existingLock && opts.skillRoot != null) {
+    const installedRoot = resolveSkillRoot({ lock: existingLock });
+    if (normalizeSkillRoot(opts.skillRoot) !== installedRoot) {
+      errors.push(
+        `This repository is installed at "${installedRoot}". ` +
+          `Use "apex-skills migrate-root --to ${skillRoot}" before changing roots.`
+      );
+    }
+  }
+
+  for (const collision of findSkillRootCollisions(
+    repoRoot,
+    skillNames,
+    skillRoot
+  )) {
+    errors.push(
+      `Skill "${collision.skill}" exists outside canonical root "${skillRoot}": ` +
+        `${collision.roots.join(', ')}. Resolve the collision or run migrate-root.`
+    );
+  }
 
   if (existingLock && !isV1Lockfile(existingLock)) {
     const integrity = verifyLockfileIntegrity(existingLock);
@@ -63,19 +122,27 @@ export function planInstall(pkgRoot, repoRoot, skillNames, opts = {}) {
       const skillMd = assertAdapterManagedPath(
         repoRoot,
         skill,
-        path.join(ADAPTER_DIR, skill, 'SKILL.md'),
+        path.join(skillRoot, skill, 'SKILL.md'),
+        skillRoot
       );
       if (!fs.existsSync(skillMd)) continue;
       const actual = hashManaged(fs.readFileSync(skillMd, 'utf8'));
       if (actual && actual !== info.managedRegionHash) {
         warnings.push(
-          `Foundation fence drift for "${skill}" — will back up to ${BACKUP_DIR}/${skill}/ before updating`,
+          `Foundation fence drift for "${skill}" — will back up to ${BACKUP_DIR}/${skill}/ before updating`
         );
       }
-      for (const [relPath, expected] of Object.entries(info.managedFiles ?? {})) {
+      for (const [relPath, expected] of Object.entries(
+        info.managedFiles ?? {}
+      )) {
         let managedPath;
         try {
-          managedPath = assertAdapterManagedPath(repoRoot, skill, relPath);
+          managedPath = assertAdapterManagedPath(
+            repoRoot,
+            skill,
+            relPath,
+            skillRoot
+          );
         } catch (error) {
           errors.push(error.message);
           continue;
@@ -114,21 +181,25 @@ export function planInstall(pkgRoot, repoRoot, skillNames, opts = {}) {
     const companions = {};
     for (const rel of listFilesRel(foundationDir)) {
       if (rel === 'SKILL.md') continue;
-      const destRel = toPosix(path.join(ADAPTER_DIR, name, rel));
+      const destRel = toPosix(path.join(skillRoot, name, rel));
       assertWithin(repoRoot, destRel);
-      const text = normalizeText(fs.readFileSync(path.join(foundationDir, rel), 'utf8'));
+      const text = normalizeText(
+        fs.readFileSync(path.join(foundationDir, rel), 'utf8')
+      );
       companions[destRel] = { text, hash: sha256(text) };
     }
 
-    const adapterDest = repoAdapterDir(repoRoot, name);
+    const adapterDest = repoAdapterDir(repoRoot, name, skillRoot);
     const skillMdPath = path.join(adapterDest, 'SKILL.md');
     const skillMdExists = fs.existsSync(skillMdPath);
-    const existingText = skillMdExists ? fs.readFileSync(skillMdPath, 'utf8') : null;
+    const existingText = skillMdExists
+      ? fs.readFileSync(skillMdPath, 'utf8')
+      : null;
     const fenceStatus = existingText ? inspectFences(existingText) : null;
     if (fenceStatus?.malformed) {
       errors.push(
         `Skill "${name}" has malformed APEX fence markers: ${fenceStatus.reason}. ` +
-        `The file was left unchanged.`,
+          `The file was left unchanged.`
       );
       continue;
     }
@@ -142,7 +213,10 @@ export function planInstall(pkgRoot, repoRoot, skillNames, opts = {}) {
       continue;
     }
 
-    const boot = bootstrapSkill(pkgRoot, repoRoot, name, opts);
+    const boot = bootstrapSkill(pkgRoot, repoRoot, name, {
+      ...opts,
+      skillRoot,
+    });
     const adapterSkillMd = boot.files['SKILL.md'] ?? '';
     const suiteVersion = catalog.suiteVersion;
 
@@ -155,7 +229,7 @@ export function planInstall(pkgRoot, repoRoot, skillNames, opts = {}) {
         missingAdapterFiles.push(rel);
         continue;
       }
-      const destRel = toPosix(path.join(ADAPTER_DIR, name, rel));
+      const destRel = toPosix(path.join(skillRoot, name, rel));
       assertWithin(repoRoot, destRel);
       const normalized = normalizeText(text);
       adapterExtras[destRel] = { text: normalized, hash: sha256(normalized) };
@@ -216,6 +290,22 @@ export function planInstall(pkgRoot, repoRoot, skillNames, opts = {}) {
       );
     }
 
+    const skillValidation = validateAgentSkillDocument(skillMdText, {
+      expectedName: name,
+    });
+    if (!skillValidation.ok) {
+      errors.push(
+        `Generated ${skillRoot}/${name}/SKILL.md violates the Agent Skills ` +
+          `specification: ${skillValidation.errors.join('; ')}`
+      );
+      continue;
+    }
+    warnings.push(
+      ...skillValidation.warnings.map(
+        (warning) => `${skillRoot}/${name}/SKILL.md: ${warning}`
+      )
+    );
+
     actions.push({
       skill: name,
       companions: { ...companions, ...adapterExtras },
@@ -230,26 +320,33 @@ export function planInstall(pkgRoot, repoRoot, skillNames, opts = {}) {
     });
   }
 
-  return { catalog, actions, errors, warnings };
+  return { catalog, actions, errors, warnings, skillRoot };
 }
 
 /** Execute a previously computed plan. Writes files and the lockfile. */
 export function executeInstall(pkgRoot, repoRoot, skillNames, opts = {}) {
+  const existingLock = readLockfile(repoRoot);
+  const skillRoot = resolveRepoSkillRoot(repoRoot, {
+    requestedRoot: opts.skillRoot,
+    lock: existingLock,
+  });
   const preflight = () => {
     assertLockfileIntegrity(repoRoot);
   };
-  const perform = () => executeInstallUnlocked(pkgRoot, repoRoot, skillNames, opts);
+  const perform = () =>
+    executeInstallUnlocked(pkgRoot, repoRoot, skillNames, {
+      ...opts,
+      skillRoot,
+    });
 
   if (opts.dryRun) {
     preflight();
     return perform();
   }
-  return withInstallTransaction(
-    repoRoot,
-    skillNames,
-    perform,
-    { preflight },
-  );
+  return withInstallTransaction(repoRoot, skillNames, perform, {
+    preflight,
+    skillRoots: [skillRoot],
+  });
 }
 
 function assertLockfileIntegrity(repoRoot) {
@@ -263,14 +360,26 @@ function assertLockfileIntegrity(repoRoot) {
 }
 
 function executeInstallUnlocked(pkgRoot, repoRoot, skillNames, opts) {
+  const skillRoot = normalizeSkillRoot(opts.skillRoot);
   // Scope migration to ONLY the skills being installed (authorized set).
-  const migration = migrateV1IfNeeded(pkgRoot, repoRoot, { ...opts, skillNames });
+  const migration = migrateV1IfNeeded(pkgRoot, repoRoot, {
+    ...opts,
+    skillNames,
+    skillRoot,
+  });
   if (migration.errors?.length) {
-    const err = new Error('Migration aborted:\n  - ' + migration.errors.join('\n  - '));
+    const err = new Error(
+      'Migration aborted:\n  - ' + migration.errors.join('\n  - ')
+    );
     err.errors = migration.errors;
     throw err;
   }
-  const { catalog, actions, errors, warnings } = planInstall(pkgRoot, repoRoot, skillNames, opts);
+  const { catalog, actions, errors, warnings } = planInstall(
+    pkgRoot,
+    repoRoot,
+    skillNames,
+    { ...opts, skillRoot }
+  );
   const allWarnings = [...(migration.warnings ?? []), ...warnings];
 
   if (errors.length) {
@@ -279,13 +388,25 @@ function executeInstallUnlocked(pkgRoot, repoRoot, skillNames, opts) {
     throw err;
   }
   if (opts.dryRun) {
-    return { dryRun: true, actions, warnings: allWarnings, wrote: [], migration };
+    return {
+      dryRun: true,
+      actions,
+      warnings: allWarnings,
+      wrote: [],
+      migration,
+    };
   }
 
   const wrote = [...(migration.wrote ?? [])];
-  const lock = readLockfile(repoRoot) ?? emptyLockfile(catalog.suiteVersion, catalog.package ?? '@apex/skills');
-  lock.lockfileVersion = LOCKFILE_VERSION;
+  const lock =
+    readLockfile(repoRoot) ??
+    emptyLockfile(
+      catalog.suiteVersion,
+      catalog.package ?? '@apex/skills',
+      skillRoot
+    );
   lock.suiteVersion = catalog.suiteVersion;
+  applyLockfileRoot(lock, skillRoot);
   for (const name of Object.keys(lock.skills ?? {})) {
     if (lock.skills[name]?.vendored) {
       const { vendored, ...rest } = lock.skills[name];
@@ -311,7 +432,7 @@ function executeInstallUnlocked(pkgRoot, repoRoot, skillNames, opts) {
       action.skillMdAction === 'splice' ||
       action.skillMdAction === 'adopt'
     ) {
-      const destRel = toPosix(path.join(ADAPTER_DIR, action.skill, 'SKILL.md'));
+      const destRel = toPosix(path.join(skillRoot, action.skill, 'SKILL.md'));
       assertWithin(repoRoot, destRel);
       writeTextFile(path.join(repoRoot, destRel), action.skillMdText);
       wrote.push(destRel);
@@ -324,7 +445,7 @@ function executeInstallUnlocked(pkgRoot, repoRoot, skillNames, opts) {
       wrote.push(destRel);
     }
 
-    const skillMdAbs = path.join(repoRoot, ADAPTER_DIR, action.skill, 'SKILL.md');
+    const skillMdAbs = path.join(repoRoot, skillRoot, action.skill, 'SKILL.md');
     const regionHash = fs.existsSync(skillMdAbs)
       ? hashManaged(fs.readFileSync(skillMdAbs, 'utf8'))
       : null;
@@ -365,11 +486,16 @@ function executeInstallUnlocked(pkgRoot, repoRoot, skillNames, opts) {
  * Migrate a v1 install (.apex/foundation) to the three-zone layout.
  * Only migrates skills listed in opts.skillNames (the install/authorize set).
  * Other leftover .apex/foundation/<skill>/ folders are discarded when the
- * legacy root is removed after install — they are NOT written into .cursor/skills.
+ * legacy root is removed after install — they are NOT written into the
+ * configured canonical root.
  */
 export function migrateV1IfNeeded(pkgRoot, repoRoot, opts = {}) {
   const warnings = [];
   const wrote = [];
+  const skillRoot = resolveRepoSkillRoot(repoRoot, {
+    requestedRoot: opts.skillRoot,
+    lock: readLockfile(repoRoot),
+  });
   const lock = readLockfile(repoRoot);
   const legacyRoot = path.join(repoRoot, LEGACY_VENDOR_DIR);
   const hasLegacy = fs.existsSync(legacyRoot);
@@ -379,15 +505,16 @@ export function migrateV1IfNeeded(pkgRoot, repoRoot, opts = {}) {
     return { didMigrate: false, warnings, wrote };
   }
 
-  const requested = Array.isArray(opts.skillNames) && opts.skillNames.length
-    ? opts.skillNames
-    : null;
+  const requested =
+    Array.isArray(opts.skillNames) && opts.skillNames.length
+      ? opts.skillNames
+      : null;
 
   if (opts.dryRun) {
     warnings.push(
       requested
         ? `Would migrate v1 .apex/foundation for ${requested.length} installed skill(s) only`
-        : 'Would migrate v1 .apex/foundation layout to fenced .cursor/skills adapters',
+        : `Would migrate v1 .apex/foundation layout to fenced ${skillRoot} skills`
     );
     return { didMigrate: true, warnings, wrote };
   }
@@ -421,7 +548,10 @@ export function migrateV1IfNeeded(pkgRoot, repoRoot, opts = {}) {
   }
 
   const malformedAdapters = skillNames.filter((name) => {
-    const skillMdPath = path.join(repoAdapterDir(repoRoot, name), 'SKILL.md');
+    const skillMdPath = path.join(
+      repoAdapterDir(repoRoot, name, skillRoot),
+      'SKILL.md'
+    );
     if (!fs.existsSync(skillMdPath)) return false;
     return inspectFences(fs.readFileSync(skillMdPath, 'utf8')).malformed;
   });
@@ -439,10 +569,15 @@ export function migrateV1IfNeeded(pkgRoot, repoRoot, opts = {}) {
   }
 
   const unsafeAdapters = skillNames.filter((name) => {
-    const skillMdPath = path.join(repoAdapterDir(repoRoot, name), 'SKILL.md');
+    const skillMdPath = path.join(
+      repoAdapterDir(repoRoot, name, skillRoot),
+      'SKILL.md'
+    );
     if (!fs.existsSync(skillMdPath)) return false;
     const existing = fs.readFileSync(skillMdPath, 'utf8');
-    return !hasFence(existing) && lock?.skills?.[name]?.adapterScaffolded !== true;
+    return (
+      !hasFence(existing) && lock?.skills?.[name]?.adapterScaffolded !== true
+    );
   });
   if (unsafeAdapters.length) {
     return {
@@ -476,59 +611,79 @@ export function migrateV1IfNeeded(pkgRoot, repoRoot, opts = {}) {
     for (const rel of listFilesRel(legacyDir)) {
       if (rel === 'SKILL.md') continue;
       const src = path.join(legacyDir, rel);
-      const destRel = toPosix(path.join(ADAPTER_DIR, name, rel));
+      const destRel = toPosix(path.join(skillRoot, name, rel));
       assertWithin(repoRoot, destRel);
       writeTextFile(path.join(repoRoot, destRel), fs.readFileSync(src, 'utf8'));
       wrote.push(destRel);
     }
 
-    const skillMdPath = path.join(repoAdapterDir(repoRoot, name), 'SKILL.md');
+    const skillMdPath = path.join(
+      repoAdapterDir(repoRoot, name, skillRoot),
+      'SKILL.md'
+    );
     const legacySkillMd = path.join(legacyDir, 'SKILL.md');
     const foundationText = fs.existsSync(legacySkillMd)
       ? fs.readFileSync(legacySkillMd, 'utf8')
       : '';
 
     if (!fs.existsSync(skillMdPath)) {
-      const boot = bootstrapSkill(pkgRoot, repoRoot, name, opts);
-      const composed = compose(foundationText, boot.files['SKILL.md'] ?? '', name, catalog.suiteVersion);
+      const boot = bootstrapSkill(pkgRoot, repoRoot, name, {
+        ...opts,
+        skillRoot,
+      });
+      const composed = compose(
+        foundationText,
+        boot.files['SKILL.md'] ?? '',
+        name,
+        catalog.suiteVersion
+      );
       writeTextFile(skillMdPath, composed);
-      wrote.push(toPosix(path.join(ADAPTER_DIR, name, 'SKILL.md')));
-      warnings.push(`Migrated "${name}": created three-zone skill from legacy foundation`);
+      wrote.push(toPosix(path.join(skillRoot, name, 'SKILL.md')));
+      warnings.push(
+        `Migrated "${name}": created three-zone skill from legacy foundation`
+      );
     } else if (!hasFence(fs.readFileSync(skillMdPath, 'utf8'))) {
       const existingAdapter = fs.readFileSync(skillMdPath, 'utf8');
       const composed = compose(
         foundationText,
         existingAdapter,
         name,
-        catalog.suiteVersion,
+        catalog.suiteVersion
       );
       writeTextFile(skillMdPath, composed);
-      wrote.push(toPosix(path.join(ADAPTER_DIR, name, 'SKILL.md')));
+      wrote.push(toPosix(path.join(skillRoot, name, 'SKILL.md')));
       warnings.push(
-        `Migrated "${name}": combined legacy foundation with its recorded scaffolded adapter`,
+        `Migrated "${name}": combined legacy foundation with its recorded scaffolded adapter`
       );
     } else {
       const existing = fs.readFileSync(skillMdPath, 'utf8');
       if (!splitZones(existing).hasAdapterFence) {
         warnings.push(
           `Migrated "${name}": legacy single-fence skill cannot safely separate foundation ` +
-          `from project adapter content; left unchanged for manual migration`,
+            `from project adapter content; left unchanged for manual migration`
         );
         continue;
       }
-      const foundationRegion = composeManaged(foundationText, '', name, catalog.suiteVersion);
+      const foundationRegion = composeManaged(
+        foundationText,
+        '',
+        name,
+        catalog.suiteVersion
+      );
       const next = splice(existing, foundationRegion);
       if (next) {
         writeTextFile(skillMdPath, next);
-        wrote.push(toPosix(path.join(ADAPTER_DIR, name, 'SKILL.md')));
-        warnings.push(`Migrated "${name}": refreshed foundation; project adapter left unchanged`);
+        wrote.push(toPosix(path.join(skillRoot, name, 'SKILL.md')));
+        warnings.push(
+          `Migrated "${name}": refreshed foundation; project adapter left unchanged`
+        );
       }
     }
   }
 
   warnings.push(
     `v1 → v2 migration prepared for ${skillNames.length} skill(s); ` +
-    `${LEGACY_VENDOR_DIR}/ will be removed after install completes`,
+      `${LEGACY_VENDOR_DIR}/ will be removed after install completes`
   );
 
   return { didMigrate: true, warnings, wrote };
@@ -548,16 +703,31 @@ export function writeBackup(repoRoot, skill, basename, text) {
  * Never rewrites the foundation fence or project notes.
  * Previously filled APEX:slot values win over incoming detector output.
  */
-export function applyAdapterSkillMd(repoRoot, skill, newAdapterRegion, {
-  foundationText = '',
-  version = '0.0.0',
-} = {}) {
-  const destRel = toPosix(path.join(ADAPTER_DIR, skill, 'SKILL.md'));
+export function applyAdapterSkillMd(
+  repoRoot,
+  skill,
+  newAdapterRegion,
+  {
+    foundationText = '',
+    version = '0.0.0',
+    skillRoot: requestedRoot = null,
+  } = {}
+) {
+  const skillRoot = resolveRepoSkillRoot(repoRoot, {
+    requestedRoot,
+    lock: readLockfile(repoRoot),
+  });
+  const destRel = toPosix(path.join(skillRoot, skill, 'SKILL.md'));
   const abs = path.join(repoRoot, destRel);
   assertWithin(repoRoot, destRel);
 
   if (!fs.existsSync(abs)) {
-    const full = compose(foundationText, extractAdapterBody(newAdapterRegion), skill, version);
+    const full = compose(
+      foundationText,
+      extractAdapterBody(newAdapterRegion),
+      skill,
+      version
+    );
     writeTextFile(abs, full);
     return { wrote: destRel, skipped: false, backedUp: null, warning: null };
   }
@@ -587,19 +757,35 @@ export function applyAdapterSkillMd(repoRoot, skill, newAdapterRegion, {
 }
 
 /** @deprecated use applyAdapterSkillMd — kept for any stray callers */
-export function applyManagedSkillMd(repoRoot, skill, newManagedText, opts = {}) {
+export function applyManagedSkillMd(
+  repoRoot,
+  skill,
+  newManagedText,
+  opts = {}
+) {
+  const skillRoot = resolveRepoSkillRoot(repoRoot, {
+    requestedRoot: opts.skillRoot,
+    lock: readLockfile(repoRoot),
+  });
   // If caller passed a full compose() output, write/splice foundation+adapter.
   const text = normalizeText(newManagedText ?? '');
   if (hasFence(text) && text.includes('APEX:BEGIN adapter')) {
-    const abs = path.join(repoRoot, ADAPTER_DIR, skill, 'SKILL.md');
+    const abs = path.join(repoRoot, skillRoot, skill, 'SKILL.md');
     if (!fs.existsSync(abs)) {
       writeTextFile(abs, text);
-      return { wrote: toPosix(path.join(ADAPTER_DIR, skill, 'SKILL.md')), skipped: false, backedUp: null, warning: null };
+      return {
+        wrote: toPosix(path.join(skillRoot, skill, 'SKILL.md')),
+        skipped: false,
+        backedUp: null,
+        warning: null,
+      };
     }
     const existing = fs.readFileSync(abs, 'utf8');
     if (!hasFence(existing)) {
       return {
-        wrote: null, skipped: true, backedUp: null,
+        wrote: null,
+        skipped: true,
+        backedUp: null,
         warning: `Adapter for "${skill}" has no APEX managed fence — left untouched`,
       };
     }
@@ -610,14 +796,22 @@ export function applyManagedSkillMd(repoRoot, skill, newManagedText, opts = {}) 
         existing,
         z.adapter,
         skill,
-        opts.version ?? '0.0.0',
+        opts.version ?? '0.0.0'
       );
       next = spliceAdapter(next, mergedAdapter);
     }
     writeTextFile(abs, next);
-    return { wrote: toPosix(path.join(ADAPTER_DIR, skill, 'SKILL.md')), skipped: false, backedUp: null, warning: null };
+    return {
+      wrote: toPosix(path.join(skillRoot, skill, 'SKILL.md')),
+      skipped: false,
+      backedUp: null,
+      warning: null,
+    };
   }
-  return applyAdapterSkillMd(repoRoot, skill, newManagedText, opts);
+  return applyAdapterSkillMd(repoRoot, skill, newManagedText, {
+    ...opts,
+    skillRoot,
+  });
 }
 
 function extractAdapterBody(adapterRegion) {
@@ -645,11 +839,23 @@ function readContractTemplate(pkgRoot, skill) {
 }
 
 function assertLegacyManagedPath(repoRoot, skill, relPath) {
-  return assertManagedPath(repoRoot, skill, relPath, LEGACY_VENDOR_DIR, 'legacy foundation');
+  return assertManagedPath(
+    repoRoot,
+    skill,
+    relPath,
+    LEGACY_VENDOR_DIR,
+    'legacy foundation'
+  );
 }
 
-function assertAdapterManagedPath(repoRoot, skill, relPath) {
-  return assertManagedPath(repoRoot, skill, relPath, ADAPTER_DIR, 'skill directory');
+function assertAdapterManagedPath(repoRoot, skill, relPath, skillRoot) {
+  return assertManagedPath(
+    repoRoot,
+    skill,
+    relPath,
+    skillRoot,
+    'skill directory'
+  );
 }
 
 function assertManagedPath(repoRoot, skill, relPath, ownerRoot, label) {

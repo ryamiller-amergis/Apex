@@ -45,6 +45,10 @@ import {
   resolveWalkthroughAnchorSyncProvider,
 } from './walkthroughAnchorSyncRepoService';
 import { getWorkspaceDir } from './repoCheckoutService';
+import {
+  isSupportedAgentSkillPath,
+  normalizeRepoRelativePath,
+} from '../../shared/skillPaths';
 
 export {
   DEFAULT_WALKTHROUGH_ANCHOR_SMART_TAGGING_SKILL_PATH,
@@ -69,7 +73,6 @@ export type {
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const APEX_REPOSITORY_PROJECT = APEX_WALKTHROUGH_PROJECT;
-const SKILL_PATH_PATTERN = /^\.cursor\/skills\/[^/]+\/SKILL\.md$/;
 const OUTPUT_RELATIVE_PATH = [
   ...WALKTHROUGH_ANCHOR_SMART_TAGGING_OUTPUT_RELATIVE_PATH,
 ];
@@ -225,11 +228,11 @@ function resolveLocalRepositoryConnection(
 
 function validateSkillPath(skillPath: string | undefined): string {
   if (!skillPath) return DEFAULT_WALKTHROUGH_ANCHOR_SMART_TAGGING_SKILL_PATH;
-  const normalized = skillPath.replace(/^\//, '').replace(/\\/g, '/');
-  if (!SKILL_PATH_PATTERN.test(normalized)) {
+  const normalized = normalizeRepoRelativePath(skillPath);
+  if (!isSupportedAgentSkillPath(normalized)) {
     throw new WalkthroughAnchorSmartTaggingOrchestrationError(
       'INVALID_REQUEST',
-      'skillPath must match .cursor/skills/*/SKILL.md'
+      'skillPath must use a supported Agent Skills root'
     );
   }
   return normalized;

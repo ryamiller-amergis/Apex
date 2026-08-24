@@ -270,7 +270,7 @@ describe('walkthroughAnchorSmartTaggingService', () => {
           { candidates: [{ testId: 'x' }], skillPath: '../../../etc/passwd' },
           USER_ID
         )
-      ).rejects.toThrow(/skillPath must match/);
+      ).rejects.toThrow(/skillPath must use a supported Agent Skills root/);
     });
 
     it('throws when Apex repo is not configured', async () => {
