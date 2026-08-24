@@ -1,7 +1,9 @@
 /**
  * FEAT-004 / TBI-004 thin background worker host.
  */
+import { execFileSync } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
 import type { AiRunIngestBody } from '../../shared/types/aiRunIngest';
@@ -10,9 +12,13 @@ import {
   AI_RUNS_DEFAULT_HEARTBEAT_MS,
   AiRunFenceConflictError,
   createAiRunsWorker,
+  openGroundedReader,
   openLocalCheckout,
   resolveAiRunsHeartbeatMs,
 } from '../services/aiRunsWorker';
+import { BareRepoReader } from '../services/repoRead/bareRepoReader';
+import { LocalCheckoutReader } from '../services/localCheckoutReader';
+import { RepoServiceReader } from '../services/repoRead/repoServiceReader';
 
 const snapshot: Readonly<ExecutionSnapshot> = Object.freeze({
   prompt: 'Implement only the frozen requirement.',
@@ -288,6 +294,93 @@ describe('aiRunsWorker local checkout and heartbeat contracts', () => {
       expect(entries.some((entry) => entry.name === 'README.md')).toBe(true);
     } finally {
       await fs.promises.rm(sharedCheckout, { recursive: true, force: true });
+    }
+  });
+
+  it('opens BareRepoReader when mirrorRef is a usable bare repo', async () => {
+    const fixture = path.join(os.tmpdir(), `apex-worker-bare-${Date.now()}`);
+    const checkout = path.join(fixture, 'checkout');
+    const mirror = path.join(fixture, 'mirror.git');
+    fs.mkdirSync(checkout, { recursive: true });
+    fs.writeFileSync(path.join(checkout, 'README.md'), 'from-mirror\n');
+    execFileSync('git', ['init'], { cwd: checkout, encoding: 'utf-8' });
+    execFileSync('git', ['config', 'user.name', 'Apex Test'], { cwd: checkout });
+    execFileSync('git', ['config', 'user.email', 'apex-test@example.com'], {
+      cwd: checkout,
+    });
+    execFileSync('git', ['config', 'core.autocrlf', 'false'], { cwd: checkout });
+    execFileSync('git', ['add', '.'], { cwd: checkout });
+    execFileSync('git', ['commit', '-m', 'fixture'], { cwd: checkout });
+    const sha = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: checkout,
+      encoding: 'utf-8',
+    }).trim();
+    execFileSync('git', ['clone', '--bare', checkout, mirror], {
+      encoding: 'utf-8',
+    });
+
+    try {
+      const reader = await openGroundedReader({
+        ...snapshot,
+        workspaceRef: checkout,
+        mirrorRef: mirror,
+        groundedSha: sha,
+        repository: 'apex/ai-pilot',
+        provider: 'github',
+      });
+      expect(reader).toBeInstanceOf(BareRepoReader);
+      await expect(reader.readFile('README.md')).resolves.toBe('from-mirror\n');
+    } finally {
+      await fs.promises.rm(fixture, { recursive: true, force: true });
+    }
+  });
+
+  it('opens RepoServiceReader when the mirror is missing and the HTTP URL is set', async () => {
+    const previous = process.env.REPO_READ_SERVICE_URL;
+    process.env.REPO_READ_SERVICE_URL = 'https://repo-read.test';
+    const fetchImpl = jest.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({
+        ok: true,
+        operation: 'list',
+        entries: [{ path: '/src', name: 'src', isFolder: true }],
+      }), { status: 200 }),
+    );
+
+    try {
+      const reader = await openGroundedReader({
+        ...snapshot,
+        groundedSha: 'a'.repeat(40),
+        repository: 'apex/ai-pilot',
+        provider: 'github',
+      });
+      expect(reader).toBeInstanceOf(RepoServiceReader);
+    } finally {
+      fetchImpl.mockRestore();
+      if (previous === undefined) {
+        delete process.env.REPO_READ_SERVICE_URL;
+      } else {
+        process.env.REPO_READ_SERVICE_URL = previous;
+      }
+    }
+  });
+
+  it('falls back to LocalCheckoutReader when neither mirror nor HTTP is usable', async () => {
+    const checkout = path.join(
+      process.cwd(),
+      `.fallback-ai-run-checkout-${Date.now()}`,
+    );
+    await fs.promises.mkdir(checkout, { recursive: true });
+    await fs.promises.writeFile(path.join(checkout, 'README.md'), 'ok');
+    try {
+      const reader = await openGroundedReader({
+        ...snapshot,
+        workspaceRef: checkout,
+        mirrorRef: path.join(checkout, 'missing.git'),
+        groundedSha: 'abc123',
+      });
+      expect(reader).toBeInstanceOf(LocalCheckoutReader);
+    } finally {
+      await fs.promises.rm(checkout, { recursive: true, force: true });
     }
   });
 

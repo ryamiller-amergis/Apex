@@ -3,6 +3,8 @@
  * Human-readable labels are rendered downstream in FEAT-006 (TBI-008).
  */
 
+import type { SkillProvider } from './projectSettings';
+
 export type AgentRunStatus =
   | 'queued'
   | 'dispatched'
@@ -45,6 +47,17 @@ export interface ExecutionSnapshot {
    * the git tree. Omitted for legacy full-clone snapshots.
    */
   checkoutRef?: string;
+  /**
+   * Optional bare-mirror path for Stage 6 native reads. When set with
+   * `groundedSha`, the worker opens BareRepoReader instead of a working tree.
+   */
+  mirrorRef?: string;
+  /** SHA pinned for `mirrorRef` / BareRepoReader. */
+  groundedSha?: string;
+  /** Repository name for BareRepoReader / HTTP identity. */
+  repository?: string;
+  /** Provider for BareRepoReader / HTTP identity (`ado` | `github`). */
+  provider?: SkillProvider;
   workflowClass: string;
   skillPath: string;
   projectId: string;

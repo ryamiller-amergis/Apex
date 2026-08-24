@@ -1,6 +1,6 @@
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useAgentChatSession } from '../useAgentChatSession';
-import type { ChatMessage, ChatThreadStatus } from '../../../shared/types/chat';
+import type { ChatMessage, ChatThreadStatus, AgentRunPhase } from '../../../shared/types/chat';
 import type {
   GroundingPreparationProgress,
   ToolProgress,
@@ -20,7 +20,7 @@ interface MockStreamReturn {
   phaseEvents: RunPhaseProgress[];
   runHealth: RunHealthProgress | null;
   progressLabel: string | null;
-  progressPhase: string | null;
+  progressPhase: AgentRunPhase | null;
   prdReady: boolean;
   backlogReady: boolean;
   isRetrying: boolean;
@@ -57,6 +57,7 @@ describe('useAgentChatSession', () => {
   beforeEach(() => {
     currentStreamReturn = { ...mockStreamReturn };
     global.fetch = jest.fn().mockResolvedValue({ ok: true }) as jest.Mock;
+    window.sessionStorage.clear();
   });
 
   afterEach(() => {
@@ -335,9 +336,7 @@ describe('useAgentChatSession', () => {
     );
 
     expect(result.current.isPreparing).toBe(true);
-    expect(result.current.preparationMessage).toBe(
-      'Preparing project repository…'
-    );
+    expect(result.current.preparationMessage).toBe('Loading…');
   });
 
   it('PLAN-S3-AC-3 surfaces bounded grounding failure as an actionable retry error', () => {
@@ -358,6 +357,95 @@ describe('useAgentChatSession', () => {
     expect(result.current.preparationMessage).toBe(
       'Repository preparation timed out. Please retry.'
     );
+  });
+
+  it('hides typing once an agent reply is on screen while the run is still finishing', () => {
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'running',
+      messages: [
+        { id: '1', role: 'user', text: 'Hi', ts: '2026-01-01T00:00:00Z' },
+        { id: '2', role: 'agent', text: 'Hello!', ts: '2026-01-01T00:00:01Z' },
+      ],
+    };
+    const { result } = renderHook(() => useAgentChatSession('thread-1'));
+    expect(result.current.isRunning).toBe(true);
+    expect(result.current.showTypingIndicator).toBe(false);
+  });
+
+  it('shows typing while running before the agent reply lands', () => {
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'running',
+      messages: [
+        { id: '1', role: 'user', text: 'Hi', ts: '2026-01-01T00:00:00Z' },
+      ],
+    };
+    const { result } = renderHook(() => useAgentChatSession('thread-1'));
+    expect(result.current.showTypingIndicator).toBe(true);
+  });
+
+  it('keeps thinking visible after a remount when the last message is still the user answer', () => {
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'running',
+      messages: [
+        { id: '1', role: 'user', text: 'My answer', ts: '2026-01-01T00:00:00Z' },
+      ],
+    };
+    const first = renderHook(() => useAgentChatSession('thread-1'));
+    expect(first.result.current.showTypingIndicator).toBe(true);
+    first.unmount();
+
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'idle',
+      messages: [
+        { id: '1', role: 'user', text: 'My answer', ts: '2026-01-01T00:00:00Z' },
+      ],
+    };
+    const second = renderHook(() => useAgentChatSession('thread-1'));
+    expect(second.result.current.showTypingIndicator).toBe(true);
+    expect(second.result.current.isAwaitingAgentResponse).toBe(true);
+  });
+
+  it('does not restore thinking after remount once an agent reply is saved', () => {
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'running',
+      messages: [
+        { id: '1', role: 'user', text: 'My answer', ts: '2026-01-01T00:00:00Z' },
+      ],
+    };
+    const first = renderHook(() => useAgentChatSession('thread-1'));
+    expect(first.result.current.showTypingIndicator).toBe(true);
+    first.unmount();
+
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'idle',
+      messages: [
+        { id: '1', role: 'user', text: 'My answer', ts: '2026-01-01T00:00:00Z' },
+        { id: '2', role: 'agent', text: 'Next question', ts: '2026-01-01T00:00:02Z' },
+      ],
+    };
+    const second = renderHook(() => useAgentChatSession('thread-1'));
+    expect(second.result.current.showTypingIndicator).toBe(false);
+    expect(second.result.current.isAwaitingAgentResponse).toBe(false);
+  });
+
+  it('restores thinking from an active run id when status is idle after refresh', () => {
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'idle',
+      messages: [
+        { id: '1', role: 'user', text: 'My answer', ts: '2026-01-01T00:00:00Z' },
+      ],
+    };
+    const { result } = renderHook(() =>
+      useAgentChatSession('thread-1', { initialActiveRunId: 'run-1' }),
+    );
+    expect(result.current.showTypingIndicator).toBe(true);
   });
 
   it('filters visible messages with default filter', () => {

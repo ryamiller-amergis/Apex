@@ -8,6 +8,7 @@ interface ConfirmDeleteModalProps {
   isPending?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+  'data-testid'?: string;
 }
 
 export const ConfirmDeleteModal: React.FC<ConfirmDeleteModalProps> = ({
@@ -17,6 +18,7 @@ export const ConfirmDeleteModal: React.FC<ConfirmDeleteModalProps> = ({
   isPending = false,
   onConfirm,
   onCancel,
+  'data-testid': testId,
 }) => {
   const cancelRef = useRef<HTMLButtonElement>(null);
 
@@ -37,6 +39,7 @@ export const ConfirmDeleteModal: React.FC<ConfirmDeleteModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="confirm-delete-title"
+      {...(testId ? { 'data-testid': testId } : {})}
     >
       <div className={styles.card}>
         <div className={styles.iconWrap} aria-hidden="true">
@@ -64,6 +67,7 @@ export const ConfirmDeleteModal: React.FC<ConfirmDeleteModalProps> = ({
             onClick={onCancel}
             disabled={isPending}
             type="button"
+            {...{ 'data-testid': 'confirm-delete-cancel-btn' }}
           >
             Cancel
           </button>
@@ -72,6 +76,7 @@ export const ConfirmDeleteModal: React.FC<ConfirmDeleteModalProps> = ({
             onClick={onConfirm}
             disabled={isPending}
             type="button"
+            {...{ 'data-testid': 'confirm-delete-confirm-btn' }}
           >
             {isPending ? 'Deleting…' : 'Delete'}
           </button>

@@ -13,6 +13,13 @@ ado_org     = "https://dev.azure.com/your-org"
 ado_pat     = "your-pat-token-here"
 ado_project = "YourProject"
 
+# GitHub Configuration (Apex and other github skillProvider projects)
+# Copy the live App Service GITHUB_ORG / GITHUB_TOKEN into gitignored
+# terraform.tfvars — never put a real PAT in this example file.
+# Fine-grained github_pat_… tokens need Contents: Read + Metadata: Read.
+github_org   = "ryamiller-amergis"
+github_token = "github_pat_replace-me"
+
 # Optional: Override default tags
 # tags = {
 #   ManagedBy   = "Terraform"
@@ -212,4 +219,17 @@ shared_storage_account_name = null
 # First-token P95 SLO (ms) gating the interactive latency alert. Confirm with
 # product before enforcing.
 # ai_runs_interactive_first_token_slo_ms = 1500
+
+# ---------------------------------------------------------------------------
+# Repo read service (bare-mirror HTTP API). Keep false until the
+# `repo-read-service` DB feature flag is targeted and the image is published.
+# Does not mount Azure Files — git objects live on ephemeral container disk
+# with Blob `repo-grounding` as the restore source.
+# ---------------------------------------------------------------------------
+# enable_repo_read_service = false
+# repo_read_service_container_app_name = null
+# repo_read_service_image  = "<acr>.azurecr.io/apex-repo-read:<tag>"
+# repo_read_service_cpu    = 2.0
+# repo_read_service_memory = "4Gi"
+# repo_read_service_target_port = 8080
 

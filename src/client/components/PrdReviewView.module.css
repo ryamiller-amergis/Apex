@@ -949,7 +949,22 @@
   word-break: break-all;
 }
 
-.loadingState,
+.loadingState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 280px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.loadingLabel {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
 .errorState {
   display: flex;
   align-items: center;

@@ -293,11 +293,11 @@ Next steps — first-time setup:
   3. npx @apex/skills bootstrap <skill…> Scoped to the same list; defaults to locked skills if no names given
                                           Re-fills adapters from repo evidence — install already scaffolds them
   4. In Cursor: /post-skill-bootstrap     Fill unfilled markers in adapter slots (markers removed when addressed)
-  5. Review .cursor/skills/<skill>/       Verify adapter content + project notes, then commit
+  5. Review <skillRoot>/<skill>/          Verify adapter content + project notes, then commit
 
 File layout per skill:
-  .cursor/skills/<skill>/SKILL.md   Three zones: APEX foundation fence | APEX adapter (merged on bootstrap) | Project notes
-  .cursor/skills/<skill>/*          Companion files (schemas/templates; fully managed)
+  <skillRoot>/<skill>/SKILL.md      Three zones: APEX foundation fence | APEX adapter (merged on bootstrap) | Project notes
+  <skillRoot>/<skill>/*             Companion files (schemas/templates; fully managed)
   .apex/config.json                 Records the APEX release that authorized this install (commit this)
   .apex/backups/<skill>/            Backups of foundation-fence edits before overwrite
   apex-skills.lock.json             Records installed skills and file hashes (commit this)

@@ -313,6 +313,18 @@ export async function enqueue(input: EnqueueAgentRunInput): Promise<{ runId: str
     ...(input.snapshot.checkoutRef
       ? { checkoutRef: input.snapshot.checkoutRef }
       : {}),
+    ...(input.snapshot.mirrorRef
+      ? { mirrorRef: input.snapshot.mirrorRef }
+      : {}),
+    ...(input.snapshot.groundedSha
+      ? { groundedSha: input.snapshot.groundedSha }
+      : {}),
+    ...(input.snapshot.repository
+      ? { repository: input.snapshot.repository }
+      : {}),
+    ...(input.snapshot.provider
+      ? { provider: input.snapshot.provider }
+      : {}),
     workflowClass: input.snapshot.workflowClass,
     skillPath: input.snapshot.skillPath,
     projectId: input.snapshot.projectId,

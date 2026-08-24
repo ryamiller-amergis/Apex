@@ -166,6 +166,57 @@ function isPositiveCheckText(value: string): boolean {
   return clearlyPositive || !clearlyNegative;
 }
 
+export interface NormalizedCrossCuttingCheck {
+  key: string;
+  label: string;
+  /** Lowercased status token for CSS `data-status` (e.g. `pass`, `fail`). */
+  status: string;
+  detail: string;
+  displayText: string;
+}
+
+function textFromUnknown(value: unknown): string {
+  if (typeof value === 'string') return cleanText(value);
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return '';
+}
+
+/**
+ * Accept both the string shape (`"pass"`) and the foundation-skill object
+ * shape (`{ label, status, detail }`) so scorecard UI does not call
+ * `.toLowerCase()` on a non-string.
+ */
+export function normalizeCrossCuttingCheck(
+  key: string,
+  value: unknown,
+): NormalizedCrossCuttingCheck {
+  const record = asRecord(value);
+  if (record) {
+    const status = textFromUnknown(record.status);
+    const detail = textFromUnknown(record.detail)
+      || textFromUnknown(record.description)
+      || textFromUnknown(record.result);
+    const label = textFromUnknown(record.label) || humanizeLabel(key);
+    const displayText = [status, detail].filter(Boolean).join(' — ') || label;
+    return {
+      key,
+      label,
+      status: status.toLowerCase(),
+      detail,
+      displayText,
+    };
+  }
+
+  const text = textFromUnknown(value);
+  return {
+    key,
+    label: humanizeLabel(key),
+    status: text.toLowerCase(),
+    detail: '',
+    displayText: text,
+  };
+}
+
 function pushUnique(lines: string[], seen: Set<string>, line: string): void {
   const cleaned = cleanText(line);
   if (!cleaned || seen.has(cleaned)) return;
@@ -229,8 +280,10 @@ export function buildPassingValidationReasonsMarkdown(scorecard: ValidationScore
   }
 
   for (const [check, result] of Object.entries(scorecard.cross_cutting_checks ?? {})) {
-    if (isPositiveCheckText(result)) {
-      pushUnique(reasons, seen, `**${humanizeLabel(check)}**: ${result}`);
+    const normalized = normalizeCrossCuttingCheck(check, result);
+    if (!normalized.displayText) continue;
+    if (isPositiveCheckText(normalized.displayText) || isPositiveCheckText(normalized.status)) {
+      pushUnique(reasons, seen, `**${normalized.label}**: ${normalized.displayText}`);
     }
   }
 

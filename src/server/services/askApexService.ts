@@ -47,7 +47,7 @@ Your baseline context below includes \`context.md\` (comprehensive product guide
 2. When a question goes beyond what the baseline covers, USE YOUR TOOLS to look up the answer:
    - Browse \`src/client/components/\` for UI features
    - Browse \`src/server/services/\` and \`src/server/routes/\` for backend logic
-   - Browse \`.cursor/skills/\` and \`design-docs/\` for feature documentation
+   - Browse \`.agents/skills/\`, legacy \`.cursor/skills/\`, and \`design-docs/\` for feature documentation
    - Read \`public/CHANGELOG.json\` for recent changes
    - Search code to find where specific features or concepts are implemented
 3. If you still can't find the answer after searching, say so honestly and suggest the user submit a feature request — the Feature Request system will even auto-analyze it with AI!
@@ -67,7 +67,8 @@ Do NOT answer off-topic questions even if the user insists — always redirect b
 function buildRepositoryReadGuidance(
   nativeReads: boolean,
   repoInfo?: RepoInfo | null,
-  repoReader?: RepoReader
+  repoReader?: RepoReader,
+  storage: 'bare mirror' | 'Azure Files checkout' = 'Azure Files checkout',
 ): string {
   return nativeReads
     ? [
@@ -76,7 +77,7 @@ function buildRepositoryReadGuidance(
         ...(repoInfo && repoReader
           ? [
               'Repository grounding provenance:',
-              '  storage: "Azure Files checkout"',
+              `  storage: "${storage}"`,
               `  repository: "${repoReader.identity.repo}"`,
               `  branch: "${repoInfo.branch}"`,
               `  pinned SHA: "${repoReader.identity.sha}"`,
@@ -102,11 +103,12 @@ function buildRepositoryReadGuidance(
 function fallbackSystemPrompt(
   nativeReads: boolean,
   repoInfo?: RepoInfo | null,
-  repoReader?: RepoReader
+  repoReader?: RepoReader,
+  storage?: 'bare mirror' | 'Azure Files checkout',
 ): string {
   return `${SYSTEM_PROMPT_BASE}
 
-${buildRepositoryReadGuidance(nativeReads, repoInfo, repoReader)}
+${buildRepositoryReadGuidance(nativeReads, repoInfo, repoReader, storage)}
 
 Note: I was unable to load the latest documentation from the repository. I'll do my best to answer using my tools and general knowledge of the application.`;
 }
@@ -152,7 +154,8 @@ async function fetchRepoContext(
     return fallbackSystemPrompt(
       runtime.nativeReads,
       repoInfo,
-      runtime.repoReader
+      runtime.repoReader,
+      runtime.storage,
     );
   }
 
@@ -174,7 +177,8 @@ async function fetchRepoContext(
     buildRepositoryReadGuidance(
       runtime.nativeReads,
       repoInfo,
-      runtime.repoReader
+      runtime.repoReader,
+      runtime.storage,
     ),
     '',
   ];
@@ -221,7 +225,12 @@ async function fetchRepoContext(
   const prompt =
     sections.length > 6
       ? sections.join('\n\n')
-      : fallbackSystemPrompt(runtime.nativeReads, repoInfo, runtime.repoReader);
+      : fallbackSystemPrompt(
+          runtime.nativeReads,
+          repoInfo,
+          runtime.repoReader,
+          runtime.storage,
+        );
   contextPromptCache.set(sourceKey, {
     prompt,
     fetchedAt: Date.now(),
@@ -258,6 +267,7 @@ interface AskApexRepositoryRuntime {
   local: LocalAgentOptions;
   mcpServers: Record<string, McpServerConfig>;
   repoReader?: RepoReader;
+  storage?: 'bare mirror' | 'Azure Files checkout';
 }
 
 function isExactAskApexReader(
@@ -306,6 +316,10 @@ async function prepareAskApexRepositoryRuntime(
       omitGroundingProfile: requestedNative,
     }),
     repoReader,
+    storage:
+      grounding.mode === 'local' && !grounding.workingTree
+        ? 'bare mirror'
+        : 'Azure Files checkout',
   };
 }
 
@@ -323,7 +337,8 @@ async function buildSystemPrompt(
     return fallbackSystemPrompt(
       runtime.nativeReads,
       repoInfo,
-      runtime.repoReader
+      runtime.repoReader,
+      runtime.storage,
     );
   }
 }

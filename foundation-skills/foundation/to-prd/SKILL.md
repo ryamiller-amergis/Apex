@@ -48,6 +48,7 @@ Derive a `{kebab-slug}` from the PRD title. Write both files to `.ai-pilot/outpu
 - Every epic must be assigned to exactly one implementation phase
 - Backlog items must trace to PRD content — do not add backlog-only scope
 - Feature `dependsOn` arrays reference only Feature IDs in the same backlog
+- PBI `userStory.iWant` is a verb phrase the persona performs (e.g. "invite teammates"), never a system artifact (table, endpoint, helper)
 
 ## Quality gates
 

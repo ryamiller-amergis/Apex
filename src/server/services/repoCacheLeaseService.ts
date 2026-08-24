@@ -7,6 +7,8 @@ const DEFAULT_LEASE_MS = 5 * 60 * 1000;
 const DEFAULT_HEARTBEAT_MS = 60 * 1000;
 const DEFAULT_POLL_MS = 250;
 const DEFAULT_WAIT_MS = 65 * 60 * 1000;
+/** Bound for chat/generation paths. Must stay below GROUNDING_PREPARATION_TIMEOUT_MS (2 min). */
+export const USER_FACING_REPO_CACHE_LEASE_WAIT_MS = 90 * 1000;
 
 export interface RepoCacheLeaseStore {
   tryAcquire(cacheKey: string, ownerId: string, leaseMs: number): Promise<number | null>;

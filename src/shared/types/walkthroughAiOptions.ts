@@ -1,6 +1,10 @@
 /**
  * Platform Admin → Walkthroughs → Options (persisted skill + agent model).
  */
+import {
+  isSupportedAgentSkillPath,
+  normalizeRepoRelativePath,
+} from '../skillPaths';
 
 export const WALKTHROUGH_AI_OPTIONS_SINGLETON_ID = 'default' as const;
 
@@ -12,8 +16,6 @@ export const DEFAULT_WALKTHROUGH_ANCHOR_SMART_TAGGING_SKILL_PATH_FOR_OPTIONS =
 
 export const DEFAULT_WALKTHROUGH_ANCHOR_DISCOVERY_SKILL_PATH_FOR_OPTIONS =
   '.cursor/skills/walkthrough-anchor-discovery/SKILL.md';
-
-const SKILL_PATH_RE = /^\.cursor\/skills\/[^/]+\/SKILL\.md$/;
 
 export interface WalkthroughAiOptionsRecord {
   id: typeof WALKTHROUGH_AI_OPTIONS_SINGLETON_ID;
@@ -57,11 +59,12 @@ export function validateWalkthroughSkillPath(
   skillPath: string,
   fieldName: string,
 ): string {
-  const normalized = skillPath.trim().replace(/^\//, '').replace(/\\/g, '/');
-  if (!SKILL_PATH_RE.test(normalized)) {
+  const normalized = normalizeRepoRelativePath(skillPath);
+  if (!isSupportedAgentSkillPath(normalized)) {
     throw new WalkthroughAiOptionsError(
       'VALIDATION_ERROR',
-      `${fieldName} must match .cursor/skills/*/SKILL.md`,
+      `${fieldName} must match .agents/skills/*/SKILL.md, ` +
+        `.cursor/skills/*/SKILL.md, or skills/*/SKILL.md`,
     );
   }
   return normalized;

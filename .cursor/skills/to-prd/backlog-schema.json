@@ -266,7 +266,10 @@
           "additionalProperties": false,
           "properties": {
             "persona": { "$ref": "#/definitions/apexPersonaName" },
-            "iWant": { "type": "string" },
+            "iWant": {
+              "type": "string",
+              "description": "Verb phrase for the persona's action (completes 'I want to …'). JSON key MUST be iWant (camelCase), never want. Do not include the words 'I want to'. Do not name tables, endpoints, helpers, schemas, or other implementation artifacts — those belong on TBIs."
+            },
             "soThat": { "type": "string" }
           }
         },

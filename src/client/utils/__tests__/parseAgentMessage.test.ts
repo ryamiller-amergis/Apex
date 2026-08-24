@@ -150,12 +150,63 @@ describe('parseAgentMessage', () => {
     expect(block.options[0].text).toBe('Padded option');
   });
 
-  it('does not match option lines beyond d', () => {
-    // 'e. option' should not be treated as a lettered choice
-    const text = 'e. Fifth option\nf. Sixth option';
+  it('does not match option lines beyond e', () => {
+    // 'f. option' should not be treated as a lettered choice
+    const text = 'f. Sixth option\ng. Seventh option';
     const parts = parseAgentMessage(text);
     expect(parts).toHaveLength(1);
     expect(parts[0].type).toBe('markdown');
+  });
+
+  it('strips agent Other options and orphan e. Other lines', () => {
+    const text = [
+      'Which per-item action set do you want?',
+      'a. Edit + delete + uncomplete',
+      'b. Edit + delete only',
+      'c. Delete only',
+      'd. Edit only',
+      'e. Other — describe',
+    ].join('\n');
+    const parts = parseAgentMessage(text);
+    expect(parts).toHaveLength(1);
+    expect(parts[0].type).toBe('choices');
+    const block = parts[0] as ChoiceBlock;
+    expect(block.options).toHaveLength(4);
+    expect(block.options.every((o) => !/^other/i.test(o.text))).toBe(true);
+  });
+
+  it('strips d. Other when the agent puts Other on letter d', () => {
+    const text = [
+      'Pick one:',
+      'a. First',
+      'b. Second',
+      'c. Third',
+      'd. Other — describe',
+    ].join('\n');
+    const parts = parseAgentMessage(text);
+    expect(parts).toHaveLength(1);
+    expect(parts[0].type).toBe('choices');
+    expect((parts[0] as ChoiceBlock).options).toHaveLength(3);
+  });
+
+  it('strips bold-wrapped Other options like E. **Other — describe** (…)', () => {
+    const text = [
+      'Which fields are sensitive in this context, and what handling do you require?',
+      'a. **Assignee names/emails** — mask in logs only',
+      'b. **Work item titles/descriptions** — exclude from API responses',
+      'c. **All ADO fields shown in the widget** — mask in logs',
+      'd. **All three** — encrypt at rest, mask in logs, exclude from API responses',
+      'e. **Other — describe** (same fields as Calendar; no additional handling beyond existing Calendar behavior)',
+    ].join('\n');
+    const parts = parseAgentMessage(text);
+    expect(parts).toHaveLength(1);
+    expect(parts[0].type).toBe('choices');
+    const block = parts[0] as ChoiceBlock;
+    expect(block.options).toHaveLength(4);
+    expect(block.options.map((o) => o.letter)).toEqual(['a', 'b', 'c', 'd']);
+    expect(
+      block.options.every((o) => !/^other\b/i.test(o.text.replace(/\*+/g, ''))),
+    ).toBe(true);
   });
 
   // ── Real agent message patterns ──────────────────────────────────────────────

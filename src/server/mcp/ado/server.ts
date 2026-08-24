@@ -17,14 +17,21 @@ import {
 } from '../../services/wikiCatalog';
 import { AzureDevOpsService } from '../../services/azureDevOps';
 import { getThread } from '../../services/chatAgentService';
-import { syncDesignDocContent, getDesignDoc, stageDesignDocProposedContent } from '../../services/designDocService';
+import {
+  syncDesignDocContent,
+  getDesignDoc,
+  stageDesignDocProposedContent,
+} from '../../services/designDocService';
 import { resolvePrdCommentWithApply } from '../../services/prdService';
 import { addTestCaseToPrd } from '../../services/testCaseService';
 import { stageAdrProposedContent } from '../../services/adrService';
 import { db } from '../../db/drizzle';
 import { eq } from 'drizzle-orm';
 import { prds } from '../../db/schema';
-import type { ContentSnapshot, PrdValidationBaseline } from '../../../shared/types/interview';
+import type {
+  ContentSnapshot,
+  PrdValidationBaseline,
+} from '../../../shared/types/interview';
 import type { RepoReader } from '../../../shared/types/repoReader';
 import { raceWithTimeout, resolveMcpToolTimeoutMs } from '../mcpTimeout';
 import { registerBoardMcpTools } from '../board/tools';
@@ -35,7 +42,7 @@ function toolErrorMessage(err: unknown): string {
 
 function isActiveFixThread(
   baseline: { fixThreadId?: string } | null | undefined,
-  threadId: string,
+  threadId: string
 ): boolean {
   return !!baseline?.fixThreadId && baseline.fixThreadId === threadId;
 }
@@ -50,7 +57,11 @@ export async function handleUpdatePrd(params: {
 }): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
   const thread = await getThread(params.threadId);
   if (!thread) {
-    return { content: [{ type: 'text', text: JSON.stringify({ error: 'Thread not found' }) }] };
+    return {
+      content: [
+        { type: 'text', text: JSON.stringify({ error: 'Thread not found' }) },
+      ],
+    };
   }
   try {
     const now = new Date().toISOString();
@@ -62,17 +73,26 @@ export async function handleUpdatePrd(params: {
       columns: { fixBaseline: true, prdAssistantThreadId: true },
     });
     if (!prdRow) {
-      return { content: [{ type: 'text', text: JSON.stringify({ error: 'PRD not found' }) }] };
+      return {
+        content: [
+          { type: 'text', text: JSON.stringify({ error: 'PRD not found' }) },
+        ],
+      };
     }
-    const baseline = (prdRow?.fixBaseline as PrdValidationBaseline | null) ?? null;
+    const baseline =
+      (prdRow?.fixBaseline as PrdValidationBaseline | null) ?? null;
     const fixMode = isActiveFixThread(baseline, params.threadId);
     const assistantMode = prdRow.prdAssistantThreadId === params.threadId;
     if (!fixMode && !assistantMode) {
       return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({ error: 'Thread is not authorized to update this PRD' }),
-        }],
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              error: 'Thread is not authorized to update this PRD',
+            }),
+          },
+        ],
       };
     }
 
@@ -86,7 +106,7 @@ export async function handleUpdatePrd(params: {
                 proposedContent: null,
                 updatedAt: now,
               }
-            : { proposedContent: params.content, updatedAt: now },
+            : { proposedContent: params.content, updatedAt: now }
         )
         .where(eq(prds.id, params.prdId));
     } else {
@@ -101,25 +121,38 @@ export async function handleUpdatePrd(params: {
         .set(
           fixMode
             ? {
-                backlogJson: parsed as (typeof prds.$inferInsert)['backlogJson'],
+                backlogJson:
+                  parsed as (typeof prds.$inferInsert)['backlogJson'],
                 proposedBacklogJson: null,
                 updatedAt: now,
               }
             : {
-                proposedBacklogJson: parsed as (typeof prds.$inferInsert)['proposedBacklogJson'],
+                proposedBacklogJson:
+                  parsed as (typeof prds.$inferInsert)['proposedBacklogJson'],
                 updatedAt: now,
-              },
+              }
         )
         .where(eq(prds.id, params.prdId));
     }
     console.log(
-      `[MCP] update_prd: saved ${params.section} for prd ${params.prdId} (fixMode=${fixMode})`,
+      `[MCP] update_prd: saved ${params.section} for prd ${params.prdId} (fixMode=${fixMode})`
     );
-    return { content: [{ type: 'text', text: JSON.stringify({ ok: true, section: params.section, fixMode }) }] };
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({ ok: true, section: params.section, fixMode }),
+        },
+      ],
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[MCP] update_prd: FAILED ${params.section} for prd ${params.prdId} — ${message}`);
-    return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
+    console.error(
+      `[MCP] update_prd: FAILED ${params.section} for prd ${params.prdId} — ${message}`
+    );
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ error: message }) }],
+    };
   }
 }
 
@@ -130,16 +163,29 @@ export async function handleUpdateAdr(params: {
 }): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
   const thread = await getThread(params.threadId);
   if (!thread) {
-    return { content: [{ type: 'text', text: JSON.stringify({ error: 'Thread not found' }) }] };
+    return {
+      content: [
+        { type: 'text', text: JSON.stringify({ error: 'Thread not found' }) },
+      ],
+    };
   }
   try {
-    await stageAdrProposedContent(params.adrId, thread.userId, params.threadId, params.content);
+    await stageAdrProposedContent(
+      params.adrId,
+      thread.userId,
+      params.threadId,
+      params.content
+    );
     console.log(`[MCP] update_adr: staged content for adr ${params.adrId}`);
     return { content: [{ type: 'text', text: JSON.stringify({ ok: true }) }] };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[MCP] update_adr: FAILED for adr ${params.adrId} — ${message}`);
-    return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
+    console.error(
+      `[MCP] update_adr: FAILED for adr ${params.adrId} — ${message}`
+    );
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ error: message }) }],
+    };
   }
 }
 
@@ -151,12 +197,18 @@ export async function handleUpdateDesignDoc(params: {
 }): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
   const thread = await getThread(params.threadId);
   if (!thread) {
-    return { content: [{ type: 'text', text: JSON.stringify({ error: 'Thread not found' }) }] };
+    return {
+      content: [
+        { type: 'text', text: JSON.stringify({ error: 'Thread not found' }) },
+      ],
+    };
   }
   const opts =
-    params.section === 'design' ? { designContent: params.content } :
-    params.section === 'tech-spec' ? { techSpecContent: params.content } :
-    { assumptionsContent: params.content };
+    params.section === 'design'
+      ? { designContent: params.content }
+      : params.section === 'tech-spec'
+        ? { techSpecContent: params.content }
+        : { assumptionsContent: params.content };
   try {
     const doc = await getDesignDoc(params.docId);
     const baseline = (doc?.fixBaseline as ContentSnapshot | null) ?? null;
@@ -168,15 +220,24 @@ export async function handleUpdateDesignDoc(params: {
       await stageDesignDocProposedContent(params.docId, thread.userId, opts);
     }
     console.log(
-      `[MCP] update_design_doc: saved ${params.section} for doc ${params.docId} (fixMode=${fixMode})`,
+      `[MCP] update_design_doc: saved ${params.section} for doc ${params.docId} (fixMode=${fixMode})`
     );
     return {
-      content: [{ type: 'text', text: JSON.stringify({ ok: true, section: params.section, fixMode }) }],
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({ ok: true, section: params.section, fixMode }),
+        },
+      ],
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[MCP] update_design_doc: FAILED ${params.section} for doc ${params.docId} — ${message}`);
-    return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
+    console.error(
+      `[MCP] update_design_doc: FAILED ${params.section} for doc ${params.docId} — ${message}`
+    );
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ error: message }) }],
+    };
   }
 }
 
@@ -186,16 +247,33 @@ export async function handleResolvePrdComment(params: {
 }): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
   const thread = await getThread(params.threadId);
   if (!thread) {
-    return { content: [{ type: 'text', text: JSON.stringify({ error: 'Thread not found' }) }] };
+    return {
+      content: [
+        { type: 'text', text: JSON.stringify({ error: 'Thread not found' }) },
+      ],
+    };
   }
   try {
     await resolvePrdCommentWithApply(params.commentId, thread.userId);
-    console.log(`[MCP] resolve_prd_comment: resolved comment ${params.commentId}`);
-    return { content: [{ type: 'text', text: JSON.stringify({ ok: true, commentId: params.commentId }) }] };
+    console.log(
+      `[MCP] resolve_prd_comment: resolved comment ${params.commentId}`
+    );
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({ ok: true, commentId: params.commentId }),
+        },
+      ],
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[MCP] resolve_prd_comment: FAILED ${params.commentId} — ${message}`);
-    return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
+    console.error(
+      `[MCP] resolve_prd_comment: FAILED ${params.commentId} — ${message}`
+    );
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ error: message }) }],
+    };
   }
 }
 
@@ -210,7 +288,11 @@ export async function handleAddTestCase(params: {
 }): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
   const thread = await getThread(params.threadId);
   if (!thread) {
-    return { content: [{ type: 'text', text: JSON.stringify({ error: 'Thread not found' }) }] };
+    return {
+      content: [
+        { type: 'text', text: JSON.stringify({ error: 'Thread not found' }) },
+      ],
+    };
   }
   try {
     const result = await addTestCaseToPrd({
@@ -222,7 +304,7 @@ export async function handleAddTestCase(params: {
       businessRules: params.businessRules,
     });
     console.log(
-      `[MCP] add_test_case: added ${result.testCaseId} to pbi ${params.pbiId} for prd ${params.prdId}`,
+      `[MCP] add_test_case: added ${result.testCaseId} to pbi ${params.pbiId} for prd ${params.prdId}`
     );
     return {
       content: [
@@ -239,18 +321,20 @@ export async function handleAddTestCase(params: {
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[MCP] add_test_case: FAILED for prd ${params.prdId} pbi ${params.pbiId} — ${message}`);
-    return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
+    console.error(
+      `[MCP] add_test_case: FAILED for prd ${params.prdId} pbi ${params.pbiId} — ${message}`
+    );
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ error: message }) }],
+    };
   }
 }
 
-export function createAdoMcpServer(
-  options?: {
-    enableCodeSearch?: boolean;
-    enableRepoBrowse?: boolean;
-    repoReader?: RepoReader;
-  },
-): McpServer {
+export function createAdoMcpServer(options?: {
+  enableCodeSearch?: boolean;
+  enableRepoBrowse?: boolean;
+  repoReader?: RepoReader;
+}): McpServer {
   const server = new McpServer({
     name: 'ado-skills',
     version: '1.0.0',
@@ -269,7 +353,7 @@ export function createAdoMcpServer(
       return {
         content: [{ type: 'text', text: JSON.stringify(projects, null, 2) }],
       };
-    },
+    }
   );
 
   server.tool(
@@ -281,23 +365,26 @@ export function createAdoMcpServer(
       return {
         content: [{ type: 'text', text: JSON.stringify(repos, null, 2) }],
       };
-    },
+    }
   );
 
   server.tool(
     'list_skills',
-    'List all skills (SKILL.md files) available in a repository. Skills are discovered under skills/ and .cursor/skills/ directories.',
+    'List all skills (SKILL.md files) available in a repository. Skills are discovered under .agents/skills/, .cursor/skills/, and skills/ in that precedence; duplicate names collapse to the highest-precedence root.',
     {
       project: z.string().describe('ADO project name'),
       repo: z.string().describe('Repository name'),
-      branch: z.string().optional().describe('Branch name (defaults to repo default branch)'),
+      branch: z
+        .string()
+        .optional()
+        .describe('Branch name (defaults to repo default branch)'),
     },
     async ({ project, repo, branch }) => {
       const skills = await listSkills(project, repo, branch);
       return {
         content: [{ type: 'text', text: JSON.stringify(skills, null, 2) }],
       };
-    },
+    }
   );
 
   server.tool(
@@ -306,7 +393,11 @@ export function createAdoMcpServer(
     {
       project: z.string().describe('ADO project name'),
       repo: z.string().describe('Repository name'),
-      path: z.string().describe('Path to the SKILL.md file, e.g. /skills/product/prd-generation/SKILL.md'),
+      path: z
+        .string()
+        .describe(
+          'Path to the SKILL.md file, e.g. /skills/product/prd-generation/SKILL.md'
+        ),
       branch: z.string().optional().describe('Branch name'),
     },
     async ({ project, repo, path, branch }) => {
@@ -314,7 +405,7 @@ export function createAdoMcpServer(
       return {
         content: [{ type: 'text', text: JSON.stringify(skill, null, 2) }],
       };
-    },
+    }
   );
 
   if (enableRepoBrowse) {
@@ -324,15 +415,22 @@ export function createAdoMcpServer(
       {
         project: z.string().describe('ADO project name'),
         repo: z.string().describe('Repository name'),
-        path: z.string().describe('Directory path to list (e.g. "/", "/docs", "/docs/adr"). Leading slash is optional.'),
+        path: z
+          .string()
+          .describe(
+            'Directory path to list (e.g. "/", "/docs", "/docs/adr"). Leading slash is optional.'
+          ),
         branch: z.string().optional().describe('Branch name'),
       },
       async ({ project, repo, path, branch }) => {
         try {
-          const entries = await raceWithTimeout('list_repo_dir', toolTimeoutMs, () =>
-            options?.repoReader
-              ? options.repoReader.listDir(path)
-              : listRepoDir(project, repo, path, branch),
+          const entries = await raceWithTimeout(
+            'list_repo_dir',
+            toolTimeoutMs,
+            () =>
+              options?.repoReader
+                ? options.repoReader.listDir(path)
+                : listRepoDir(project, repo, path, branch)
           );
           return {
             content: [{ type: 'text', text: JSON.stringify(entries, null, 2) }],
@@ -342,7 +440,7 @@ export function createAdoMcpServer(
             content: [{ type: 'text', text: '[]' }],
           };
         }
-      },
+      }
     );
 
     server.tool(
@@ -351,60 +449,87 @@ export function createAdoMcpServer(
       {
         project: z.string().describe('ADO project name'),
         repo: z.string().describe('Repository name'),
-        path: z.string().describe('Absolute path in the repo, starting with "/" (e.g. "/CONTEXT.md", "/.cursor/skills/foo/PRD-FORMAT.md", "/docs/adr/0001-foo.md")'),
+        path: z
+          .string()
+          .describe(
+            'Absolute path in the repo, starting with "/" (e.g. "/CONTEXT.md", "/.agents/skills/foo/PRD-FORMAT.md", "/docs/adr/0001-foo.md")'
+          ),
         branch: z.string().optional().describe('Branch name'),
       },
       async ({ project, repo, path, branch }) => {
         try {
-          const content = await raceWithTimeout('get_skill_file', toolTimeoutMs, () =>
-            options?.repoReader
-              ? options.repoReader.readFile(path)
-              : getSkillFile(project, repo, path, branch),
+          const content = await raceWithTimeout(
+            'get_skill_file',
+            toolTimeoutMs,
+            () =>
+              options?.repoReader
+                ? options.repoReader.readFile(path)
+                : getSkillFile(project, repo, path, branch)
           );
           return {
             content: [{ type: 'text', text: content }],
           };
         } catch (err) {
           return {
-            content: [{ type: 'text', text: `Error reading file: ${toolErrorMessage(err)}` }],
+            content: [
+              {
+                type: 'text',
+                text: `Error reading file: ${toolErrorMessage(err)}`,
+              },
+            ],
             isError: true,
           };
         }
-      },
+      }
     );
   }
 
-  if (
-    enableRepoBrowse
-    && options?.enableCodeSearch !== false
-  ) {
+  if (enableRepoBrowse && options?.enableCodeSearch !== false) {
     server.tool(
       'search_repo_code',
       'Search code in a repository by keyword and return matching file paths with snippets. Use this when you need to locate implementation areas quickly before reading full files.',
       {
         project: z.string().describe('ADO project name'),
         repo: z.string().describe('Repository name'),
-        query: z.string().describe('Search query (keywords, symbol, or phrase)'),
-        branch: z.string().optional().describe('Branch name (best-effort; may use indexed default branch)'),
-        limit: z.number().int().min(1).max(50).optional().describe('Maximum results (default 10)'),
+        query: z
+          .string()
+          .describe('Search query (keywords, symbol, or phrase)'),
+        branch: z
+          .string()
+          .optional()
+          .describe(
+            'Branch name (best-effort; may use indexed default branch)'
+          ),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(50)
+          .optional()
+          .describe('Maximum results (default 10)'),
       },
       async ({ project, repo, query, branch, limit }) => {
         try {
-          const results = await raceWithTimeout('search_repo_code', toolTimeoutMs, () =>
-            options?.repoReader
-              ? options.repoReader.searchCode(query, limit ?? 10)
-              : searchRepoCode(project, repo, query, branch, limit ?? 10),
+          const results = await raceWithTimeout(
+            'search_repo_code',
+            toolTimeoutMs,
+            () =>
+              options?.repoReader
+                ? options.repoReader.searchCode(query, limit ?? 10)
+                : searchRepoCode(project, repo, query, branch, limit ?? 10)
           );
           return {
             content: [{ type: 'text', text: JSON.stringify(results, null, 2) }],
           };
         } catch (err) {
           return {
-            content: [{ type: 'text', text: `Search error: ${toolErrorMessage(err)}` }],
+            content: [
+              { type: 'text', text: `Search error: ${toolErrorMessage(err)}` },
+            ],
             isError: true,
           };
         }
-      },
+      }
     );
   }
 
@@ -416,7 +541,13 @@ export function createAdoMcpServer(
       repo: z.string().describe('Repository name'),
       query: z.string().describe('Search query'),
       branch: z.string().optional().describe('Branch name'),
-      limit: z.number().int().min(1).max(20).optional().describe('Maximum results (default 10)'),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(20)
+        .optional()
+        .describe('Maximum results (default 10)'),
     },
     async ({ project, repo, query, branch, limit }) => {
       const allSkills = await listSkills(project, repo, branch);
@@ -424,7 +555,7 @@ export function createAdoMcpServer(
       return {
         content: [{ type: 'text', text: JSON.stringify(results, null, 2) }],
       };
-    },
+    }
   );
 
   // ── Design Doc write-back ───────────────────────────────────────────────────
@@ -432,16 +563,26 @@ export function createAdoMcpServer(
   server.tool(
     'update_design_doc',
     'Update one section of the current design doc (design, tech-spec, or assumptions) and save it as a proposed draft for the owner to review. ' +
-    'Call this when the user explicitly asks you to apply, save, or write changes to the doc. ' +
-    'Only one section can be updated per call — make multiple calls to update multiple sections. ' +
-    'After calling this tool, changes appear as a proposed diff the owner can accept or reject section by section.',
+      'Call this when the user explicitly asks you to apply, save, or write changes to the doc. ' +
+      'Only one section can be updated per call — make multiple calls to update multiple sections. ' +
+      'After calling this tool, changes appear as a proposed diff the owner can accept or reject section by section.',
     {
-      threadId: z.string().describe('The current session thread ID (from .ai-pilot/session.json)'),
-      docId: z.string().describe('The design doc ID (from .ai-pilot/kickoff-context.md)'),
-      section: z.enum(['design', 'tech-spec', 'assumptions']).describe('Which section to update'),
-      content: z.string().describe('The full new markdown content for the section'),
+      threadId: z
+        .string()
+        .describe(
+          'The current session thread ID (from .ai-pilot/session.json)'
+        ),
+      docId: z
+        .string()
+        .describe('The design doc ID (from .ai-pilot/kickoff-context.md)'),
+      section: z
+        .enum(['design', 'tech-spec', 'assumptions'])
+        .describe('Which section to update'),
+      content: z
+        .string()
+        .describe('The full new markdown content for the section'),
     },
-    async (params) => handleUpdateDesignDoc(params),
+    async (params) => handleUpdateDesignDoc(params)
   );
 
   // ── PRD write-back ──────────────────────────────────────────────────────────
@@ -449,48 +590,86 @@ export function createAdoMcpServer(
   server.tool(
     'update_prd',
     'Update the proposed content or backlog of the current PRD and save it to the database as a draft proposal. ' +
-    'Call this when the user asks you to apply, save, or write changes to the PRD or its backlog. ' +
-    'Pass section="content" to update the PRD narrative; pass section="backlog" to update the backlog JSON.',
+      'Call this when the user asks you to apply, save, or write changes to the PRD or its backlog. ' +
+      'Pass section="content" to update the PRD narrative; pass section="backlog" to update the backlog JSON.',
     {
-      threadId: z.string().describe('The current session thread ID (from .ai-pilot/session.json)'),
-      prdId: z.string().describe('The PRD ID (from .ai-pilot/kickoff-context.md)'),
-      section: z.enum(['content', 'backlog']).describe('Which part to update: "content" for the PRD narrative, "backlog" for the JSON backlog'),
-      content: z.string().describe('The full new content for the section (markdown for content; JSON string for backlog)'),
+      threadId: z
+        .string()
+        .describe(
+          'The current session thread ID (from .ai-pilot/session.json)'
+        ),
+      prdId: z
+        .string()
+        .describe('The PRD ID (from .ai-pilot/kickoff-context.md)'),
+      section: z
+        .enum(['content', 'backlog'])
+        .describe(
+          'Which part to update: "content" for the PRD narrative, "backlog" for the JSON backlog'
+        ),
+      content: z
+        .string()
+        .describe(
+          'The full new content for the section (markdown for content; JSON string for backlog)'
+        ),
     },
-    async (params) => handleUpdatePrd(params),
+    async (params) => handleUpdatePrd(params)
   );
 
   server.tool(
     'update_adr',
     'Stage a complete revised Architecture Decision Record for explicit author review. This writes only proposed content and never changes the live ADR or its status.',
     {
-      threadId: z.string().describe('The ADR assistant thread ID from kickoff-context.md'),
+      threadId: z
+        .string()
+        .describe('The ADR assistant thread ID from kickoff-context.md'),
       adrId: z.string().describe('The ADR ID from kickoff-context.md'),
-      content: z.string().describe('The complete revised ADR markdown, including frontmatter'),
+      content: z
+        .string()
+        .describe('The complete revised ADR markdown, including frontmatter'),
     },
-    async (params) => handleUpdateAdr(params),
+    async (params) => handleUpdateAdr(params)
   );
 
   server.tool(
     'resolve_prd_comment',
     'Mark a review comment on the current PRD as resolved. Call this after you have addressed a comment by updating the PRD or backlog.',
     {
-      threadId: z.string().describe('The current session thread ID (from .ai-pilot/session.json)'),
-      commentId: z.string().describe('The ID of the comment to resolve (from the Review Comments section in kickoff-context.md)'),
+      threadId: z
+        .string()
+        .describe(
+          'The current session thread ID (from .ai-pilot/session.json)'
+        ),
+      commentId: z
+        .string()
+        .describe(
+          'The ID of the comment to resolve (from the Review Comments section in kickoff-context.md)'
+        ),
     },
-    async (params) => handleResolvePrdComment(params),
+    async (params) => handleResolvePrdComment(params)
   );
 
   server.tool(
     'add_test_case',
     'Add a single REAL QA test case (with steps) to the current PRD, attached to a specific backlog item (PBI). ' +
-    'Use this when the user asks you to add, write, or author a test case — not just to increase a count. ' +
-    'The case is appended to the matching test suite, backlog test-case counts are recomputed, and the coverage summary is updated.',
+      'Use this when the user asks you to add, write, or author a test case — not just to increase a count. ' +
+      'The case is appended to the matching test suite, backlog test-case counts are recomputed, and the coverage summary is updated.',
     {
-      threadId: z.string().describe('The current session thread ID (from .ai-pilot/session.json)'),
-      prdId: z.string().describe('The PRD ID (from .ai-pilot/kickoff-context.md)'),
-      pbiId: z.string().describe('The backlog item (PBI) ID the test case validates, e.g. "PBI-1"'),
-      title: z.string().describe('A concise, descriptive title for the test case'),
+      threadId: z
+        .string()
+        .describe(
+          'The current session thread ID (from .ai-pilot/session.json)'
+        ),
+      prdId: z
+        .string()
+        .describe('The PRD ID (from .ai-pilot/kickoff-context.md)'),
+      pbiId: z
+        .string()
+        .describe(
+          'The backlog item (PBI) ID the test case validates, e.g. "PBI-1"'
+        ),
+      title: z
+        .string()
+        .describe('A concise, descriptive title for the test case'),
       steps: z
         .array(z.string())
         .min(1)
@@ -500,13 +679,15 @@ export function createAdoMcpServer(
         .int()
         .min(0)
         .optional()
-        .describe('Optional zero-based index of the acceptance criterion this case traces to'),
+        .describe(
+          'Optional zero-based index of the acceptance criterion this case traces to'
+        ),
       businessRules: z
         .array(z.string())
         .optional()
         .describe('Business-rule IDs this case covers, e.g. ["BR-001"]'),
     },
-    async (params) => handleAddTestCase(params),
+    async (params) => handleAddTestCase(params)
   );
 
   // ── Wiki namespace ──────────────────────────────────────────────────────────
@@ -520,7 +701,7 @@ export function createAdoMcpServer(
       return {
         content: [{ type: 'text', text: JSON.stringify(wikis, null, 2) }],
       };
-    },
+    }
   );
 
   server.tool(
@@ -536,7 +717,7 @@ export function createAdoMcpServer(
       return {
         content: [{ type: 'text', text: JSON.stringify(pages, null, 2) }],
       };
-    },
+    }
   );
 
   server.tool(
@@ -552,7 +733,7 @@ export function createAdoMcpServer(
       return {
         content: [{ type: 'text', text: JSON.stringify(page, null, 2) }],
       };
-    },
+    }
   );
 
   // ── Work items namespace ─────────────────────────────────────────────────────
@@ -562,11 +743,16 @@ export function createAdoMcpServer(
       .enum(['Epic', 'Feature', 'Product Backlog Item', 'Task', 'Bug'])
       .describe('ADO work item type'),
     title: z.string().describe('Work item title'),
-    description: z.string().optional().describe('HTML or plain-text description'),
+    description: z
+      .string()
+      .optional()
+      .describe('HTML or plain-text description'),
     parentTitle: z
       .string()
       .optional()
-      .describe('Title of a previously created item in this batch to use as parent'),
+      .describe(
+        'Title of a previously created item in this batch to use as parent'
+      ),
     tags: z.array(z.string()).optional().describe('Tags to apply'),
   });
 
@@ -583,20 +769,31 @@ export function createAdoMcpServer(
       fields: z
         .array(z.string())
         .optional()
-        .describe('Optional list of fields to hydrate (defaults to all available fields)'),
+        .describe(
+          'Optional list of fields to hydrate (defaults to all available fields)'
+        ),
       maxResults: z
         .number()
         .int()
         .min(1)
         .max(500)
         .optional()
-        .describe('Maximum number of items to return (default 200, capped at 500)'),
+        .describe(
+          'Maximum number of items to return (default 200, capped at 500)'
+        ),
       includeRelations: z
         .boolean()
         .optional()
         .describe('When true, include work item relations in each result'),
     },
-    async ({ project, wiql, areaPath, fields, maxResults, includeRelations }) => {
+    async ({
+      project,
+      wiql,
+      areaPath,
+      fields,
+      maxResults,
+      includeRelations,
+    }) => {
       const adoService = new AzureDevOpsService(project, areaPath);
       const result = await adoService.queryWorkItemsByWiql({
         wiql,
@@ -607,7 +804,7 @@ export function createAdoMcpServer(
       return {
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
       };
-    },
+    }
   );
 
   server.tool(
@@ -626,18 +823,25 @@ export function createAdoMcpServer(
         .min(1)
         .max(500)
         .optional()
-        .describe('Maximum number of most recent revisions to return (default 100)'),
+        .describe(
+          'Maximum number of most recent revisions to return (default 100)'
+        ),
     },
     async ({ project, workItemId, areaPath, limit }) => {
       const adoService = new AzureDevOpsService(project, areaPath);
-      const history = await adoService.getWorkItemRevisionHistory(workItemId, limit ?? 100);
+      const history = await adoService.getWorkItemRevisionHistory(
+        workItemId,
+        limit ?? 100
+      );
       return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({ workItemId, revisions: history }, null, 2),
-        }],
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({ workItemId, revisions: history }, null, 2),
+          },
+        ],
       };
-    },
+    }
   );
 
   server.tool(
@@ -656,40 +860,56 @@ export function createAdoMcpServer(
         .min(1)
         .max(500)
         .optional()
-        .describe('Maximum number of most recent comments to return (default 200)'),
+        .describe(
+          'Maximum number of most recent comments to return (default 200)'
+        ),
     },
     async ({ project, workItemId, areaPath, limit }) => {
       const adoService = new AzureDevOpsService(project, areaPath);
-      const comments = await adoService.getWorkItemCommentHistory(workItemId, limit ?? 200);
+      const comments = await adoService.getWorkItemCommentHistory(
+        workItemId,
+        limit ?? 200
+      );
       return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({ workItemId, comments }, null, 2),
-        }],
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({ workItemId, comments }, null, 2),
+          },
+        ],
       };
-    },
+    }
   );
 
   server.tool(
     'create_work_items',
     'Create one or more Azure DevOps work items from a PRD-generated list. ' +
-    'Items are created in order so parents must appear before their children. ' +
-    'Returns the created item IDs and URLs.',
+      'Items are created in order so parents must appear before their children. ' +
+      'Returns the created item IDs and URLs.',
     {
       project: z.string().describe('ADO project name'),
       areaPath: z
         .string()
         .optional()
-        .describe('Area path override (e.g. "MyProject\\MyTeam"). Omit to use project root.'),
+        .describe(
+          'Area path override (e.g. "MyProject\\MyTeam"). Omit to use project root.'
+        ),
       wikiId: z
         .string()
         .optional()
-        .describe('Wiki ID — when provided the PRD page URL will be linked to each work item'),
+        .describe(
+          'Wiki ID — when provided the PRD page URL will be linked to each work item'
+        ),
       wikiPagePath: z
         .string()
         .optional()
-        .describe('Path to the PRD wiki page used for linking, e.g. /scrum-app-requirement/prd'),
-      items: z.array(workItemSpec).min(1).describe('Work items to create, in dependency order'),
+        .describe(
+          'Path to the PRD wiki page used for linking, e.g. /scrum-app-requirement/prd'
+        ),
+      items: z
+        .array(workItemSpec)
+        .min(1)
+        .describe('Work items to create, in dependency order'),
     },
     async ({ project, areaPath, wikiId, wikiPagePath, items }) => {
       // Resolve PRD wiki URL for hyperlinking (non-fatal if unavailable)
@@ -708,7 +928,9 @@ export function createAdoMcpServer(
       const titleToId = new Map<string, number>();
 
       for (const spec of items) {
-        const parentId = spec.parentTitle ? titleToId.get(spec.parentTitle) : undefined;
+        const parentId = spec.parentTitle
+          ? titleToId.get(spec.parentTitle)
+          : undefined;
         const wi = await adoService.createWorkItemForPrd({
           type: spec.type,
           title: spec.title,
@@ -724,7 +946,7 @@ export function createAdoMcpServer(
       return {
         content: [{ type: 'text', text: JSON.stringify({ created }, null, 2) }],
       };
-    },
+    }
   );
 
   // ── Work Board tools (standups for board-native projects) ───────────────────
@@ -735,29 +957,55 @@ export function createAdoMcpServer(
   server.tool(
     'update_work_item',
     'Update one or more fields on an Azure DevOps work item as the logged-in user. ' +
-    'Resolves the per-user token from the standup participant thread. Never deletes items.',
+      'Resolves the per-user token from the standup participant thread. Never deletes items.',
     {
       threadId: z.string().describe('The current chat thread ID'),
       project: z.string().describe('ADO project name'),
       areaPath: z.string().optional().describe('Optional area path override'),
       workItemId: z.number().int().describe('Work item ID to update'),
-      fields: z.record(z.string(), z.any()).describe('Map of field names to new values (e.g. { "state": "Active", "assignedTo": "user@example.com" })'),
+      fields: z
+        .record(z.string(), z.any())
+        .describe(
+          'Map of field names to new values (e.g. { "state": "Active", "assignedTo": "user@example.com" })'
+        ),
     },
     async ({ threadId, project, areaPath, workItemId, fields }) => {
       try {
-        const { adoServiceForStandupThread } = await import('../../services/standupTokenResolver');
-        const adoService = await adoServiceForStandupThread(threadId, project, areaPath);
+        const { adoServiceForStandupThread } =
+          await import('../../services/standupTokenResolver');
+        const adoService = await adoServiceForStandupThread(
+          threadId,
+          project,
+          areaPath
+        );
         for (const [field, value] of Object.entries(fields)) {
           await adoService.updateWorkItemField(workItemId, field, value);
         }
-        console.log(`[MCP] update_work_item: updated ${Object.keys(fields).length} fields on #${workItemId}`);
-        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, workItemId, updatedFields: Object.keys(fields) }) }] };
+        console.log(
+          `[MCP] update_work_item: updated ${Object.keys(fields).length} fields on #${workItemId}`
+        );
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                ok: true,
+                workItemId,
+                updatedFields: Object.keys(fields),
+              }),
+            },
+          ],
+        };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        console.error(`[MCP] update_work_item: FAILED #${workItemId} — ${message}`);
-        return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
+        console.error(
+          `[MCP] update_work_item: FAILED #${workItemId} — ${message}`
+        );
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ error: message }) }],
+        };
       }
-    },
+    }
   );
 
   server.tool(
@@ -771,29 +1019,48 @@ export function createAdoMcpServer(
     },
     async ({ threadId, project, workItemId, comment }) => {
       try {
-        const { adoServiceForStandupThread } = await import('../../services/standupTokenResolver');
+        const { adoServiceForStandupThread } =
+          await import('../../services/standupTokenResolver');
         const adoService = await adoServiceForStandupThread(threadId, project);
         const result = await adoService.addWorkItemComment(workItemId, comment);
-        console.log(`[MCP] add_work_item_comment: added comment ${result.id} to #${workItemId}`);
-        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, workItemId, commentId: result.id }) }] };
+        console.log(
+          `[MCP] add_work_item_comment: added comment ${result.id} to #${workItemId}`
+        );
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                ok: true,
+                workItemId,
+                commentId: result.id,
+              }),
+            },
+          ],
+        };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        console.error(`[MCP] add_work_item_comment: FAILED #${workItemId} — ${message}`);
-        return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
+        console.error(
+          `[MCP] add_work_item_comment: FAILED #${workItemId} — ${message}`
+        );
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ error: message }) }],
+        };
       }
-    },
+    }
   );
 
   server.tool(
     'get_standup_session',
-    'Get the full standup session data including all participants\' structured updates and transcripts. Used by the facilitator agent.',
+    "Get the full standup session data including all participants' structured updates and transcripts. Used by the facilitator agent.",
     {
       sessionId: z.string().describe('Standup session ID'),
     },
     async ({ sessionId }) => {
       try {
         const { eq } = await import('drizzle-orm');
-        const { standupSessions, appUsers, chatMessages } = await import('../../db/schema');
+        const { standupSessions, appUsers, chatMessages } =
+          await import('../../db/schema');
         const session = await db.query.standupSessions.findFirst({
           where: eq(standupSessions.id, sessionId),
           with: {
@@ -802,58 +1069,77 @@ export function createAdoMcpServer(
           },
         });
         if (!session) {
-          return { content: [{ type: 'text', text: JSON.stringify({ error: 'Session not found' }) }] };
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ error: 'Session not found' }),
+              },
+            ],
+          };
         }
 
         const participantData = await Promise.all(
-          session.participants.map(async (p: {
+          session.participants.map(
+            async (p: {
               userId: string;
               threadId: string | null;
               status: string;
               structuredUpdate: unknown;
             }) => {
-            const user = await db.query.appUsers.findFirst({
-              where: eq(appUsers.oid, p.userId),
-              columns: { displayName: true, email: true },
-            });
-            let transcript: string[] = [];
-            if (p.threadId) {
-              const messages = await db
-                .select({ role: chatMessages.role, text: chatMessages.text })
-                .from(chatMessages)
-                .where(eq(chatMessages.threadId, p.threadId));
-              transcript = messages.map((m) => `[${m.role}] ${m.text}`);
+              const user = await db.query.appUsers.findFirst({
+                where: eq(appUsers.oid, p.userId),
+                columns: { displayName: true, email: true },
+              });
+              let transcript: string[] = [];
+              if (p.threadId) {
+                const messages = await db
+                  .select({ role: chatMessages.role, text: chatMessages.text })
+                  .from(chatMessages)
+                  .where(eq(chatMessages.threadId, p.threadId));
+                transcript = messages.map((m) => `[${m.role}] ${m.text}`);
+              }
+              return {
+                userId: p.userId,
+                displayName: user?.displayName ?? p.userId,
+                email: user?.email,
+                status: p.status,
+                structuredUpdate: p.structuredUpdate,
+                transcript,
+              };
             }
-            return {
-              userId: p.userId,
-              displayName: user?.displayName ?? p.userId,
-              email: user?.email,
-              status: p.status,
-              structuredUpdate: p.structuredUpdate,
-              transcript,
-            };
-          }),
+          )
         );
 
         return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify({
-              sessionId: session.id,
-              sessionDate: session.sessionDate,
-              status: session.status,
-              project: session.config.project,
-              areaPath: session.config.areaPath,
-              participants: participantData,
-            }, null, 2),
-          }],
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  sessionId: session.id,
+                  sessionDate: session.sessionDate,
+                  status: session.status,
+                  project: session.config.project,
+                  areaPath: session.config.areaPath,
+                  participants: participantData,
+                },
+                null,
+                2
+              ),
+            },
+          ],
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        console.error(`[MCP] get_standup_session: FAILED ${sessionId} — ${message}`);
-        return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
+        console.error(
+          `[MCP] get_standup_session: FAILED ${sessionId} — ${message}`
+        );
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ error: message }) }],
+        };
       }
-    },
+    }
   );
 
   server.tool(
@@ -863,50 +1149,88 @@ export function createAdoMcpServer(
       sessionId: z.string().describe('Standup session ID'),
       title: z.string().describe('Follow-up title'),
       description: z.string().optional().describe('Follow-up description'),
-      participantUserIds: z.array(z.string()).describe('User IDs involved in this follow-up'),
-      relatedWorkItemIds: z.array(z.number().int()).optional().describe('Related ADO work item IDs'),
+      participantUserIds: z
+        .array(z.string())
+        .describe('User IDs involved in this follow-up'),
+      relatedWorkItemIds: z
+        .array(z.number().int())
+        .optional()
+        .describe('Related ADO work item IDs'),
     },
-    async ({ sessionId, title, description, participantUserIds, relatedWorkItemIds }) => {
+    async ({
+      sessionId,
+      title,
+      description,
+      participantUserIds,
+      relatedWorkItemIds,
+    }) => {
       try {
         const { standupFollowups } = await import('../../db/schema');
-        const [row] = await db.insert(standupFollowups).values({
-          sessionId,
-          title,
-          description: description ?? null,
-          participantUserIds,
-          relatedWorkItemIds: relatedWorkItemIds ?? [],
-        }).returning();
-        console.log(`[MCP] create_standup_followup: created ${row.id} for session ${sessionId}`);
-        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, followupId: row.id, title }) }] };
+        const [row] = await db
+          .insert(standupFollowups)
+          .values({
+            sessionId,
+            title,
+            description: description ?? null,
+            participantUserIds,
+            relatedWorkItemIds: relatedWorkItemIds ?? [],
+          })
+          .returning();
+        console.log(
+          `[MCP] create_standup_followup: created ${row.id} for session ${sessionId}`
+        );
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ ok: true, followupId: row.id, title }),
+            },
+          ],
+        };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        console.error(`[MCP] create_standup_followup: FAILED session ${sessionId} — ${message}`);
-        return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
+        console.error(
+          `[MCP] create_standup_followup: FAILED session ${sessionId} — ${message}`
+        );
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ error: message }) }],
+        };
       }
-    },
+    }
   );
 
   server.tool(
     'complete_standup_session',
-    'Finalize a standup session. Persists the facilitator\'s markdown summary, transitions the session to completed, ' +
-    'spins up joint follow-up discussion threads, and notifies the involved members. ' +
-    'The facilitator MUST call this exactly once as the final step, after recording any follow-ups.',
+    "Finalize a standup session. Persists the facilitator's markdown summary, transitions the session to completed, " +
+      'spins up joint follow-up discussion threads, and notifies the involved members. ' +
+      'The facilitator MUST call this exactly once as the final step, after recording any follow-ups.',
     {
       sessionId: z.string().describe('Standup session ID'),
-      summaryMarkdown: z.string().describe('The final markdown summary of the standup'),
+      summaryMarkdown: z
+        .string()
+        .describe('The final markdown summary of the standup'),
     },
     async ({ sessionId, summaryMarkdown }) => {
       try {
-        const { completeSession } = await import('../../services/standupService');
+        const { completeSession } =
+          await import('../../services/standupService');
         await completeSession(sessionId, summaryMarkdown);
         console.log(`[MCP] complete_standup_session: completed ${sessionId}`);
-        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, sessionId }) }] };
+        return {
+          content: [
+            { type: 'text', text: JSON.stringify({ ok: true, sessionId }) },
+          ],
+        };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        console.error(`[MCP] complete_standup_session: FAILED ${sessionId} — ${message}`);
-        return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
+        console.error(
+          `[MCP] complete_standup_session: FAILED ${sessionId} — ${message}`
+        );
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ error: message }) }],
+        };
       }
-    },
+    }
   );
 
   // ── Prompts ──────────────────────────────────────────────────────────────────
@@ -918,7 +1242,10 @@ export function createAdoMcpServer(
       project: z.string().describe('ADO project name'),
       repo: z.string().describe('Repository name'),
       path: z.string().describe('Path to SKILL.md'),
-      context: z.string().optional().describe('Additional context to pass to the skill'),
+      context: z
+        .string()
+        .optional()
+        .describe('Additional context to pass to the skill'),
     },
     ({ project, repo, path, context }) => ({
       messages: [
@@ -930,7 +1257,7 @@ export function createAdoMcpServer(
           },
         },
       ],
-    }),
+    })
   );
 
   server.prompt(
@@ -939,7 +1266,10 @@ export function createAdoMcpServer(
     {
       project: z.string().describe('ADO project name'),
       repo: z.string().describe('Repository containing the skill'),
-      transcript: z.string().optional().describe('Prior chat transcript or context'),
+      transcript: z
+        .string()
+        .optional()
+        .describe('Prior chat transcript or context'),
     },
     ({ project, repo, transcript }) => ({
       messages: [
@@ -959,7 +1289,7 @@ export function createAdoMcpServer(
           },
         },
       ],
-    }),
+    })
   );
 
   return server;

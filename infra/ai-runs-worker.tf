@@ -364,6 +364,24 @@ resource "azurerm_container_app_job" "ai_runs_runner" {
           secret_name = "cursor-api-key"
         }
       }
+
+      # Same HTTP reader as the interactive actor host. Without this, App Service
+      # skip-clone snapshots leave the job unable to open the App Service mirror.
+      dynamic "env" {
+        for_each = local.repo_read_service_enabled ? [1] : []
+        content {
+          name  = "REPO_READ_SERVICE_URL"
+          value = "https://${azurerm_container_app.repo_read_service[0].ingress[0].fqdn}"
+        }
+      }
+
+      dynamic "env" {
+        for_each = local.repo_read_service_enabled && var.ai_runs_runner_callback_token != null && var.ai_runs_runner_callback_token != "" ? [1] : []
+        content {
+          name        = "REPO_READ_SERVICE_TOKEN"
+          secret_name = "ai-runs-runner-callback-token"
+        }
+      }
     }
   }
 

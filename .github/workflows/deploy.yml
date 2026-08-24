@@ -351,6 +351,21 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: bash scripts/ci/publish-ai-runs-interactive.sh
 
+      # Stage 3 repo-read service. The script exits cleanly when the Container
+      # App name is unset or Terraform has not applied enable_repo_read_service,
+      # so this stays green until the service is provisioned.
+      - name: Publish repo-read service image
+        if: >-
+          steps.image_publish.outputs.repo_read_service == 'true' &&
+          hashFiles('runners/repo-read-service/Dockerfile') != ''
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          REPO_READ_SERVICE_CONTAINER_APP_NAME: ${{ vars.REPO_READ_SERVICE_CONTAINER_APP_NAME }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || env.RESOURCE_GROUP_NAME }}
+          REPO_READ_SERVICE_IMAGE_REPO: ${{ vars.REPO_READ_SERVICE_IMAGE_REPO }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: bash scripts/ci/publish-repo-read-service.sh
+
       - name: Health check staging slot
         run: |
           echo "Waiting for staging slot to warm up..."

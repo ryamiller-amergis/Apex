@@ -132,6 +132,7 @@ jobs:
       load_test_runner: ${{ steps.detect.outputs.load_test_runner }}
       ai_runs_worker: ${{ steps.detect.outputs.ai_runs_worker }}
       ai_runs_interactive: ${{ steps.detect.outputs.ai_runs_interactive }}
+      repo_read_service: ${{ steps.detect.outputs.repo_read_service }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -392,6 +393,19 @@ jobs:
           AI_RUNS_INTERACTIVE_IMAGE_REPO: ${{ vars.AI_RUNS_INTERACTIVE_IMAGE_REPO }}
           IMAGE_TAG: ${{ steps.deployed.outputs.sha }}
         run: bash scripts/ci/publish-ai-runs-interactive.sh
+
+      # Stage 3 repo-read service. The script exits cleanly when the Container
+      # App name is unset or Terraform has not applied enable_repo_read_service,
+      # so this stays green until the service is provisioned.
+      - name: Publish repo-read service image
+        if: hashFiles('runners/repo-read-service/Dockerfile') != ''
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          REPO_READ_SERVICE_CONTAINER_APP_NAME: ${{ vars.REPO_READ_SERVICE_CONTAINER_APP_NAME }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || 'rg-scrum-dev' }}
+          REPO_READ_SERVICE_IMAGE_REPO: ${{ vars.REPO_READ_SERVICE_IMAGE_REPO }}
+          IMAGE_TAG: ${{ steps.deployed.outputs.sha }}
+        run: bash scripts/ci/publish-repo-read-service.sh
 
       - name: Azure logout
         run: az logout

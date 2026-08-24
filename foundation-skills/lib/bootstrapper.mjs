@@ -17,7 +17,9 @@
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { runDetectors } from './detectors/index.mjs';
-import { FOUNDATION_DIR, ADAPTER_DEST, repoPath, toPosix } from './paths.mjs';
+import { FOUNDATION_DIR, toPosix } from './paths.mjs';
+import { readLockfile } from './lockfile.mjs';
+import { resolveRepoSkillRoot } from './skillRoot.mjs';
 
 /** Load a skill's bootstrap recipe from its foundation directory. */
 function loadRecipe(skillId) {
@@ -139,6 +141,7 @@ export async function bootstrapSkill({
   enrich = false,
   capMs = 45_000,
   onProgress,
+  skillRoot: requestedRoot = null,
 }) {
   const recipe = loadRecipe(skillId);
   const template = loadAdapterTemplate(skillId);
@@ -158,7 +161,11 @@ export async function bootstrapSkill({
   const finalContent = enrich ? content : content; // placeholder for Stage C
 
   // Compute adapter output path
-  const adapterPath = join(repoRoot, ADAPTER_DEST, skillId, 'SKILL.md');
+  const skillRoot = resolveRepoSkillRoot(repoRoot, {
+    requestedRoot,
+    lock: readLockfile(repoRoot),
+  });
+  const adapterPath = join(repoRoot, skillRoot, skillId, 'SKILL.md');
 
   if (!dryRun) {
     mkdirSync(dirname(adapterPath), { recursive: true });

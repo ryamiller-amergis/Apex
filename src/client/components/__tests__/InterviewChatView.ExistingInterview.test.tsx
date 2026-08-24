@@ -179,6 +179,17 @@ jest.mock('../RunGroundingStatus', () => ({
     />
   ),
 }));
+jest.mock('../../hooks/useGroundingResumeGate', () => ({
+  useGroundingResumeGate: () => ({
+    composerBlocked: false,
+    showCard: false,
+    status: null,
+    continueOnPin: jest.fn(),
+    updateToLatest: jest.fn(),
+    isUpdating: false,
+    error: null,
+  }),
+}));
 
 // ── Imports needed after mocks ─────────────────────────────────────────────────
 
@@ -495,7 +506,7 @@ describe('ExistingInterviewView — input locked when not in_progress', () => {
     });
     renderExistingInterview();
     expect(screen.getByTestId('interview-preparation-state')).toHaveTextContent(
-      'Refreshing the repository mirror…'
+      'Loading…'
     );
     expect(screen.getByPlaceholderText(/Preparing the latest requirements/i)).toBeDisabled();
     expect(screen.queryByText(/complete and the chat is closed/i)).not.toBeInTheDocument();
@@ -517,14 +528,14 @@ describe('ExistingInterviewView — input locked when not in_progress', () => {
     const labelRegion = screen.getByTestId('agent-run-status-label');
     expect(labelRegion).toHaveAttribute('role', 'status');
     expect(labelRegion).toHaveAttribute('aria-live', 'polite');
-    expect(labelRegion).toHaveTextContent('Queued — waiting for available worker');
+    expect(labelRegion).toHaveTextContent('Waiting…');
     expect(screen.getByTestId('agent-run-status-queued')).toHaveTextContent(
-      'Queued — waiting for available worker',
+      'Waiting…',
     );
     expect(screen.queryByTestId('agent-run-status-dispatched')).not.toBeInTheDocument();
   });
 
-  it('PBI-006 AC-0 / VT-02 renders dispatched as textual Starting… without an error state', () => {
+  it('PBI-006 AC-0 / VT-02 renders dispatched as textual actor spin-up without an error state', () => {
     mockUseAgentChatSession.mockReturnValue({
       ...idleStream,
       status: 'running',
@@ -850,8 +861,7 @@ describe('ExistingInterviewView — processing state after send', () => {
     ts: '2026-01-01T00:00:00Z',
   };
 
-  it('disables input and shows bouncing dots while session is busy', async () => {
-    // Simulate session in "awaiting agent response" state
+  it('disables input while session is busy without extra typing dots after an agent reply', async () => {
     mockUseAgentChatSession.mockReturnValue({
       ...idleStream,
       messages: [initialAgentMessage],
@@ -862,10 +872,9 @@ describe('ExistingInterviewView — processing state after send', () => {
     const view = renderExistingInterview();
     const input = screen.getByTestId('interview-message-input');
     expect(input).toBeDisabled();
-    expect(screen.getByTestId('interview-agent-processing')).toBeInTheDocument();
+    expect(screen.queryByTestId('interview-agent-processing')).not.toBeInTheDocument();
     expect(input).toHaveAttribute('placeholder', 'Agent is thinking…');
 
-    // Simulate agent responding
     mockUseAgentChatSession.mockReturnValue({
       ...idleStream,
       messages: [
@@ -904,6 +913,7 @@ describe('ExistingInterviewView — processing state after send', () => {
       ],
       isAwaitingAgentResponse: true,
       isInteractionBusy: true,
+      showTypingIndicator: true,
     });
 
     renderExistingInterview();
@@ -968,7 +978,7 @@ describe('ExistingInterviewView — processing state after send', () => {
     };
 
     expect(screen.getByTestId('interview-message-input')).toBeDisabled();
-    expect(screen.getByTestId('interview-agent-processing')).toBeInTheDocument();
+    expect(screen.queryByTestId('interview-agent-processing')).not.toBeInTheDocument();
 
     streamState = { ...streamState, status: 'idle' as ChatThreadStatus, isRunning: false, isInteractionBusy: false };
     renderCurrentStream();

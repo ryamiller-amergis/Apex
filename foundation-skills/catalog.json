@@ -1,5 +1,5 @@
 {
-  "suiteVersion": "2.0.3",
+  "suiteVersion": "2.1.0",
   "package": "@apex/skills",
   "contractApiVersion": 1,
   "skills": [

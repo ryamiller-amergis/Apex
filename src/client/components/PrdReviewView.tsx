@@ -71,6 +71,8 @@ import { ApexMaterializeModal } from './ApexMaterializeModal';
 import { CreateAdoItemsModal } from './CreateAdoItemsModal';
 import { ApexFixRunningBanner } from './ApexFixRunningBanner';
 import { RunGroundingStatus } from './RunGroundingStatus';
+import { GroundingHandoffDialog } from './GroundingHandoffDialog';
+import { useGroundingResumeGate } from '../hooks/useGroundingResumeGate';
 import type { PrdStatus, PrdValidationBaseline, TestCaseCoverageSummary, Prd } from '../../shared/types/interview';
 import {
   isPrdFixFlowOwningAccept,
@@ -98,12 +100,13 @@ import {
   type PrdReadinessStageStatus,
 } from '../../shared/utils/prdReadiness';
 import { resolvePrototypeStageEnabled } from '../../shared/utils/prototypeStage';
-import { buildPassingValidationReasonsMarkdown } from '../../shared/utils/validationReport';
+import { buildPassingValidationReasonsMarkdown, collectValidationGaps, normalizeCrossCuttingCheck } from '../../shared/utils/validationReport';
 import type {
   ReviewSectionKey,
   TextSelector,
 } from '../../shared/types/reviewComments';
 import styles from './PrdReviewView.module.css';
+import { ApexLoader } from './ApexLoader';
 
 type TabId = 'preview' | 'backlog' | 'validation';
 
@@ -597,6 +600,12 @@ export const PrdReviewView: React.FC = () => {
   );
   const generatePrototypes = useGeneratePrototypesForPrd();
   const createDesignDoc = useCreateDesignDoc();
+  const [designHandoffOpen, setDesignHandoffOpen] = useState(false);
+  const groundingGate = useGroundingResumeGate(
+    'prd',
+    id,
+    prd?.project ?? null,
+  );
   const { data: testCaseRecord } = usePrdTestCases(id);
   const prevTestCaseStatusRef = useRef<string | undefined>(undefined);
   const actionMenuRef = useRef<HTMLDivElement>(null);
@@ -1091,9 +1100,9 @@ export const PrdReviewView: React.FC = () => {
     }
   }, [id, fixWithAi]);
 
-  const handleAcceptAllProposed = useCallback(() => {
+  const handleAcceptAllProposed = useCallback(async () => {
     if (!id) return;
-    applyProposedPrd.mutate();
+    await applyProposedPrd.mutateAsync();
   }, [id, applyProposedPrd]);
 
   const handleRejectAllProposed = useCallback(() => {
@@ -1126,6 +1135,16 @@ export const PrdReviewView: React.FC = () => {
       prdFixFlowDispatch({ type: 'RESET' });
     }
   }, [id, prd, fixPrdValidation, prdFixFlow.phase, apexFixStartLocked]);
+
+  const handleRunPrdValidation = useCallback(async () => {
+    if (!prd) return;
+    setFixIdleNotice(null);
+    try {
+      await createPrdValidationThread.mutateAsync(prd.id);
+    } catch (err) {
+      setFixIdleNotice(err instanceof Error ? err.message : 'Validation could not start.');
+    }
+  }, [prd, createPrdValidationThread]);
 
   const handleStartFixCoverage = useCallback(async () => {
     if (!id || !prd) return;
@@ -1573,7 +1592,14 @@ export const PrdReviewView: React.FC = () => {
     void handleSubmit();
   }, [canAutoSubmitDraft, id, prd?.status, submitPrd.isPending, handleSubmit]);
 
-  if (isLoading) return <div className={styles.loadingState}>Loading PRD…</div>;
+  if (isLoading) {
+    return (
+      <div className={styles.loadingState} role="status" aria-busy="true" aria-label="Loading PRD">
+        <ApexLoader size={72} />
+        <div className={styles.loadingLabel}>Loading PRD…</div>
+      </div>
+    );
+  }
   if (isError || !prd)
     return <div className={styles.errorState}>PRD not found.</div>;
   if (!readiness)
@@ -2195,7 +2221,7 @@ export const PrdReviewView: React.FC = () => {
                       className={styles.actionMenuItem}
                       onClick={() => {
                         setActionMenuOpen(false);
-                        void createPrdValidationThread.mutateAsync(prd.id);
+                        void handleRunPrdValidation();
                       }}
                       disabled={createPrdValidationThread.isPending}
                       type="button"
@@ -2390,7 +2416,7 @@ export const PrdReviewView: React.FC = () => {
                     {prdFixFlow.phase === 'idle' && (
                       <button
                         className={styles.fixBtnSecondary}
-                        onClick={() => void createPrdValidationThread.mutateAsync(prd.id)}
+                        onClick={() => void handleRunPrdValidation()}
                         disabled={createPrdValidationThread.isPending}
                         type="button"
                       {...{ 'data-testid': 'prd-revalidate-btn' }}>
@@ -2654,6 +2680,10 @@ export const PrdReviewView: React.FC = () => {
               className={styles.designDocBannerLink}
               onClick={() => {
                 if (!id) return;
+                if (groundingGate.status) {
+                  setDesignHandoffOpen(true);
+                  return;
+                }
                 createDesignDoc.mutate({ prdId: id });
               }}
               disabled={createDesignDoc.isPending}
@@ -2664,6 +2694,25 @@ export const PrdReviewView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {designHandoffOpen && groundingGate.status && id ? (
+        <GroundingHandoffDialog
+          parentLabel="the PRD"
+          status={groundingGate.status}
+          isPending={createDesignDoc.isPending}
+          error={createDesignDoc.error}
+          onInherit={() => {
+            setDesignHandoffOpen(false);
+            createDesignDoc.mutate({ prdId: id, groundingPolicy: 'inherit' });
+          }}
+          onUseLatest={() => {
+            setDesignHandoffOpen(false);
+            createDesignDoc.mutate({ prdId: id, groundingPolicy: 'latest' });
+          }}
+          onClose={() => setDesignHandoffOpen(false)}
+          {...{ 'data-testid': 'grounding-handoff-dialog' }}
+        />
+      ) : null}
 
       {/* Fix-with-Apex (validation/coverage): review baseline → live diffs section by section. */}
       {prdFixFlow.phase === 'reviewing'
@@ -2722,7 +2771,7 @@ export const PrdReviewView: React.FC = () => {
       )}
 
       {isGenerating ? (
-        /* ── Generating skeleton ─────────────────────────────────────────────── */
+        /* ── Generating (same Apex mark as prototypes) ───────────────────────── */
         <>
           <div className={styles.tabs}>
             <button
@@ -2737,71 +2786,17 @@ export const PrdReviewView: React.FC = () => {
             </button>
           </div>
           <div className={styles.tabContent}>
-            <div className={styles.skeletonArea}>
-              <div className={styles.generatingBanner}>
-                <svg
-                  className={styles.bannerSpinner}
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                >
-                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                </svg>
-                <div>
-                  <div className={styles.bannerTitle}>Generating your PRD…</div>
-                  <div className={styles.bannerSub}>
-                    This may take a few minutes. You can navigate away and
-                    return.
-                  </div>
-                </div>
-              </div>
-
-              <div className={styles.skeletonSection}>
-                <div
-                  className={styles.skeletonHeader}
-                  style={{ width: '75%' }}
-                />
-                <div
-                  className={styles.skeletonLine}
-                  style={{ width: '100%' }}
-                />
-                <div className={styles.skeletonLine} style={{ width: '65%' }} />
-                <div
-                  className={styles.skeletonLine}
-                  style={{ width: '100%' }}
-                />
-              </div>
-
-              <div className={styles.skeletonSection}>
-                <div
-                  className={styles.skeletonHeader}
-                  style={{ width: '45%' }}
-                />
-                <div
-                  className={styles.skeletonLine}
-                  style={{ width: '100%' }}
-                />
-                <div className={styles.skeletonLine} style={{ width: '70%' }} />
-              </div>
-
-              <div className={styles.skeletonSection}>
-                <div
-                  className={styles.skeletonHeader}
-                  style={{ width: '60%' }}
-                />
-                <div
-                  className={styles.skeletonLine}
-                  style={{ width: '100%' }}
-                />
-                <div
-                  className={styles.skeletonLine}
-                  style={{ width: '100%' }}
-                />
-                <div className={styles.skeletonLine} style={{ width: '40%' }} />
+            <div
+              className={styles.loadingState}
+              role="status"
+              aria-busy="true"
+              aria-label="Generating PRD"
+              {...{ 'data-testid': 'prd-generating-loader' }}
+            >
+              <ApexLoader size={72} />
+              <div className={styles.loadingLabel}>Generating your PRD…</div>
+              <div className={styles.bannerSub}>
+                This may take a few minutes. You can navigate away and return.
               </div>
             </div>
           </div>
@@ -2932,7 +2927,16 @@ export const PrdReviewView: React.FC = () => {
                     onReply={(commentId, body) =>
                       void handleReply(commentId, body)
                     }
-                    onResolve={(commentId) => resolveComment.mutate(commentId)}
+                    onResolve={(commentId) => {
+                      if (
+                        prd.fixCommentId === commentId &&
+                        (prd.proposedContent != null || prd.proposedBacklogJson != null)
+                      ) {
+                        void applyProposedPrd.mutateAsync();
+                        return;
+                      }
+                      resolveComment.mutate(commentId);
+                    }}
                     onReopen={(commentId) =>
                       reopenReviewComment.mutate(commentId)
                     }
@@ -3020,7 +3024,16 @@ export const PrdReviewView: React.FC = () => {
                     onReply={(commentId, body) =>
                       void handleReply(commentId, body)
                     }
-                    onResolve={(commentId) => resolveComment.mutate(commentId)}
+                    onResolve={(commentId) => {
+                      if (
+                        prd.fixCommentId === commentId &&
+                        (prd.proposedContent != null || prd.proposedBacklogJson != null)
+                      ) {
+                        void applyProposedPrd.mutateAsync();
+                        return;
+                      }
+                      resolveComment.mutate(commentId);
+                    }}
                     onReopen={(commentId) =>
                       reopenReviewComment.mutate(commentId)
                     }
@@ -3051,9 +3064,7 @@ export const PrdReviewView: React.FC = () => {
                     const scoreColor = sc.overall_score >= effectiveThreshold ? 'var(--success-color)' : sc.overall_score >= 70 ? '#e6a817' : 'var(--error-color)';
                     const files = sc.files ?? [];
                     const features = sc.features ?? [];
-                    const allGaps = files.length > 0
-                      ? files.flatMap(f => (f.gaps ?? []))
-                      : features.flatMap(f => (f.gaps ?? []));
+                    const allGaps = collectValidationGaps(sc);
                     const pendingGaps = allGaps.filter(g => g.resolution === 'pending');
                     const filledGaps = allGaps.filter(g => g.resolution === 'filled');
                     const deferredGaps = allGaps.filter(g => g.resolution === 'deferred' || g.resolution === 'accepted');
@@ -3183,17 +3194,40 @@ export const PrdReviewView: React.FC = () => {
                           </div>
                         )}
 
+                        {files.length === 0 && features.length === 0 && pendingGaps.length > 0 && (
+                          <div className={styles.featureGaps} data-testid="prd-validation-root-gaps">
+                            {pendingGaps.map((gap) => (
+                              <div key={gap.id} className={styles.gapItem} data-resolution={gap.resolution}>
+                                <span className={styles.gapIcon}>
+                                  {gap.resolution === 'filled' ? '✓' : gap.resolution === 'pending' ? '○' : '—'}
+                                </span>
+                                <div className={styles.gapContent}>
+                                  <span className={styles.gapDesc}>{gap.description}</span>
+                                  <span className={styles.gapSection}>
+                                    {gap.section}
+                                    {gap.what_3_looks_like ? ` — ${gap.what_3_looks_like}` : ''}
+                                  </span>
+                                </div>
+                                <span className={styles.gapScore}>{gap.score}/3</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
                         {/* Cross-cutting checks */}
                         {sc.cross_cutting_checks && Object.keys(sc.cross_cutting_checks).length > 0 && (
                           <div className={styles.crossCuttingSection}>
                             <h4 className={styles.crossCuttingTitle}>Cross-Cutting Checks</h4>
                             <div className={styles.crossCuttingGrid}>
-                              {Object.entries(sc.cross_cutting_checks).map(([key, value]) => (
-                                <div key={key} className={styles.crossCuttingItem}>
-                                  <span className={styles.crossCuttingKey}>{key.replace(/_/g, ' ')}</span>
-                                  <span className={styles.crossCuttingValue} data-status={value.toLowerCase()}>{value}</span>
-                                </div>
-                              ))}
+                              {Object.entries(sc.cross_cutting_checks).map(([key, value]) => {
+                                const check = normalizeCrossCuttingCheck(key, value);
+                                return (
+                                  <div key={key} className={styles.crossCuttingItem}>
+                                    <span className={styles.crossCuttingKey}>{check.label}</span>
+                                    <span className={styles.crossCuttingValue} data-status={check.status}>{check.displayText}</span>
+                                  </div>
+                                );
+                              })}
                             </div>
                           </div>
                         )}

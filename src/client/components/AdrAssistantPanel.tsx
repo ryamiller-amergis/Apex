@@ -37,7 +37,7 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
   const dragStartWidthRef = useRef(DEFAULT_PANEL_WIDTH);
   const queryClient = useQueryClient();
   const session = useAgentChatSession(threadId);
-  const { messages, streamingText, isRunning, isSending } = session;
+  const { messages, streamingText, isRunning, isSending, showTypingIndicator } = session;
   const wasRunning = useRef(false);
 
   const createThread = useCallback(async (forceNew = false) => {
@@ -185,7 +185,7 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
                 </div>
               );
             })}
-            {isRunning && !streamingText && (
+            {showTypingIndicator && (
               <div className={styles.typingIndicator} aria-label="Assistant is thinking">
                 <span className={styles.typingDot} />
                 <span className={styles.typingDot} />

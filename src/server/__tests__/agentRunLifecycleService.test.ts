@@ -271,6 +271,31 @@ describe('enqueue + frozen snapshot (PBI-001 AC-0 / AC-3 / VT-01 / VT-04 / DoD-2
     expect(stored.checkoutRef).toBe('C:\\shared\\grounding-shared\\sha');
   });
 
+  it('freezes optional mirrorRef and groundedSha on enqueue for bare-mirror snapshots', async () => {
+    await enqueue({
+      threadId: 'thread-1',
+      projectId: 'proj-1',
+      snapshot: {
+        ...snapshot,
+        workspaceRef: 'C:\\threads\\thread-1',
+        mirrorRef: 'C:\\repo-cache\\apex.git',
+        groundedSha: 'abc123',
+        repository: 'apex/ai-pilot',
+        provider: 'github',
+      },
+      timeoutAt: '2026-08-05T14:00:00.000Z',
+      runId: 'run-mirror-1',
+    });
+    const stored = (mockInsertValues.mock.calls[0][0] as { executionSnapshot: ExecutionSnapshot })
+      .executionSnapshot;
+    expect(stored.workspaceRef).toBe('C:\\threads\\thread-1');
+    expect(stored.mirrorRef).toBe('C:\\repo-cache\\apex.git');
+    expect(stored.groundedSha).toBe('abc123');
+    expect(stored.repository).toBe('apex/ai-pilot');
+    expect(stored.provider).toBe('github');
+    expect(stored.checkoutRef).toBeUndefined();
+  });
+
   it('TBI-002 DoD-0: Given admission fails after insert, when enqueue returns, then the durable queued run is preserved', async () => {
     mockRunAdmissionCycle.mockRejectedValueOnce(new Error('admission unavailable'));
 

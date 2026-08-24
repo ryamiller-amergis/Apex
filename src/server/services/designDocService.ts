@@ -8,7 +8,8 @@ import { designDocs, appUsers, chatThreads, prds, interviews, designPrototypes, 
 const authorUser = alias(appUsers, 'author_user');
 const designDocOwnerUser = alias(appUsers, 'design_doc_owner_user');
 import type { ContentSnapshot, DesignDoc, DesignDocStatus, DesignDocSummary, DesignDocValidationOverride, ReviewDesignDocRequest, ValidationScorecard, ValidationScorecardGap } from '../../shared/types/interview';
-import type { RunRef } from '../../shared/types/runGrounding';
+import type { PipelinePinPolicy, RunRef } from '../../shared/types/runGrounding';
+import { stampGroundingProvenance } from '../../shared/utils/groundingProvenance';
 import { buildOverrideHistory } from '../../shared/utils/validationOverride';
 import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, createThread as createChatThread, sendMessage, cancelRun, prepareBackgroundWorkflowTurn } from './chatAgentService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
@@ -24,6 +25,7 @@ import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
 import { collectValidationGaps } from '../../shared/utils/validationReport';
 import {
   propagatePipelineGrounding,
+  readActiveTargetProvenance,
   resolveRunGroundingSurface,
   runGroundingService,
 } from './runGroundingService';
@@ -216,6 +218,7 @@ export async function routeDesignDocGenerationKickoff(opts: {
   project: string;
   threadId: string;
   kickoffMessage: string;
+  pinPolicy?: PipelinePinPolicy;
 }): Promise<void> {
   const destinationRun = {
     runType: 'chat' as const,
@@ -272,7 +275,10 @@ export async function routeDesignDocGenerationKickoff(opts: {
                 sourceRun,
                 destinationRun,
                 opts.userId,
-                { deferMaterialization: true },
+                {
+                  deferMaterialization: true,
+                  pinPolicy: opts.pinPolicy ?? 'inherit',
+                },
               );
             } catch {
               console.warn(
@@ -577,7 +583,21 @@ export async function syncDesignDocContent(
     updatedAt: new Date().toISOString(),
   };
 
-  if (opts.designContent !== undefined) updates.designContent = opts.designContent;
+  if (opts.designContent !== undefined) {
+    let designContent = opts.designContent;
+    try {
+      const surface = await resolveRunGroundingSurface('design_doc', id);
+      const provenance = surface
+        ? await readActiveTargetProvenance(surface.run)
+        : null;
+      if (provenance) {
+        designContent = stampGroundingProvenance(designContent, provenance);
+      }
+    } catch {
+      designContent = opts.designContent;
+    }
+    updates.designContent = designContent;
+  }
   if (opts.techSpecContent !== undefined) {
     updates.techSpecContent = stripPrototypeArtifactsFromTechSpec(opts.techSpecContent);
   }

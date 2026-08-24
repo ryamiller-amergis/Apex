@@ -342,13 +342,14 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   const session = useAgentChatSession(thread?.id ?? null, {
     initialMessages: thread?.messages,
     initialStatus: thread?.status,
+    initialActiveRunId: thread?.activeRunId,
     initialPrdReady: thread?.prdReady,
     visibleMessageFilter: (m) =>
       !(m.role === 'user' && m.text === 'Begin.')
       && m.toolName !== '_reasoning'
       && m.toolName !== '_thinking',
   });
-  const { messages, streamingText, isConnected, prdReady, isRunning, status, progressLabel } = session;
+  const { messages, streamingText, isConnected, prdReady, isRunning, status, progressLabel, showTypingIndicator } = session;
 
   const closeThread = useCloseThread();
 
@@ -715,7 +716,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             })}
 
             {/* Loading spinner — shown while waiting for first tokens */}
-            {isRunning && !streamingText && (
+            {showTypingIndicator && (
               <div
                 className={styles.message}
                 role="status"
