@@ -11,7 +11,7 @@ import type { ContentSnapshot, DesignDoc, DesignDocStatus, DesignDocSummary, Des
 import type { PipelinePinPolicy, RunRef } from '../../shared/types/runGrounding';
 import { stampGroundingProvenance } from '../../shared/utils/groundingProvenance';
 import { buildOverrideHistory } from '../../shared/utils/validationOverride';
-import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, createThread as createChatThread, sendMessage, cancelRun, prepareBackgroundWorkflowTurn } from './chatAgentService';
+import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, createThread as createChatThread, sendMessage, cancelRun, prepareBackgroundWorkflowTurn, hydrateThread } from './chatAgentService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
 import { isThreadRunAlive, canThisInstanceFailGeneration } from './agentRunReaperService';
 import { isAdminUser } from '../utils/rbacHelpers';
@@ -741,6 +741,12 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
   let prevFoundSlugsKey = '';
 
   console.log(`[designDocWatcher] Started — seedDocId=${seedDocId} threadId=${chatThreadId}`);
+  void hydrateThread(chatThreadId).catch((err) => {
+    console.warn(
+      `[designDocWatcher] hydrate failed (threadId=${chatThreadId}):`,
+      (err as Error).message,
+    );
+  });
 
   const interval = setInterval(async () => {
     attempts += 1;
@@ -1020,6 +1026,12 @@ export function startSingleFeatureDocWatcher(
   let attempts = 0;
 
   console.log(`[singleFeatureDocWatcher] Started — designDocId=${designDocId} threadId=${chatThreadId}`);
+  void hydrateThread(chatThreadId).catch((err) => {
+    console.warn(
+      `[singleFeatureDocWatcher] hydrate failed (threadId=${chatThreadId}):`,
+      (err as Error).message,
+    );
+  });
 
   const interval = setInterval(async () => {
     attempts += 1;
@@ -1502,6 +1514,12 @@ export function startValidationWatcher(designDocId: string, validationThreadId: 
   let attempts = 0;
 
   console.log(`[validationWatcher] Started — designDocId=${designDocId} threadId=${validationThreadId}`);
+  void hydrateThread(validationThreadId).catch((err) => {
+    console.warn(
+      `[validationWatcher] hydrate failed (threadId=${validationThreadId}):`,
+      (err as Error).message,
+    );
+  });
 
   const interval = setInterval(async () => {
     attempts += 1;

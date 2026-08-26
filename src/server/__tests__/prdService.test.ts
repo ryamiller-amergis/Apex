@@ -61,6 +61,7 @@ jest.mock('../services/chatAgentService', () => ({
   }),
   createThread: jest.fn().mockResolvedValue({ id: 'thread-new', workspaceDir: '/tmp/thread-new' }),
   cancelRun: jest.fn().mockResolvedValue(undefined),
+  hydrateThread: jest.fn().mockResolvedValue(true),
 }));
 
 jest.mock('../services/agentRunReaperService', () => ({

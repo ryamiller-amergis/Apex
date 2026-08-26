@@ -47,6 +47,7 @@ jest.mock('../services/chatAgentService', () => ({
   readOutputTechSpec: jest.fn().mockReturnValue(null),
   readOutputAssumptions: jest.fn().mockReturnValue(null),
   readAllOutputDesignDocFeatures: jest.fn().mockReturnValue([]),
+  hydrateThread: jest.fn().mockResolvedValue(true),
 }));
 
 jest.mock('../services/backgroundWorkflowRouter', () => ({

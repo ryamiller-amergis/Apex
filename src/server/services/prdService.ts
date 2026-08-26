@@ -8,7 +8,7 @@ const authorUser = alias(appUsers, 'author_user');
 const prdOwnerUser = alias(appUsers, 'prd_owner_user');
 import type { Prd, PrdStatus, PrdSummary, PrdValidationBaseline, PrdReadinessOverride, ReviewPrdRequest, TestCaseSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { CreatePrdAdoItemsRequest, CreatePrdAdoItemsResponse, SelectedBacklogEpic, SelectedBacklogFeature, SelectedBacklogPBI, GlobalBusinessRule, DependencyGraphNode } from '../../shared/types/interview';
-import { readOutputPrd, readOutputBacklog, sendMessage, createThread as createChatThread, cancelRun, prepareBackgroundWorkflowTurn, isThreadIdle } from './chatAgentService';
+import { readOutputPrd, readOutputBacklog, sendMessage, createThread as createChatThread, cancelRun, prepareBackgroundWorkflowTurn, isThreadIdle, hydrateThread } from './chatAgentService';
 import { isThreadRunAlive } from './agentRunReaperService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
 import { isPrdGenerationOutputComplete } from '../../shared/utils/prdGenerationOutput';
@@ -887,6 +887,12 @@ export function startPrdWatcher(prdId: string, chatThreadId: string): void {
   stopPrdWatcher(prdId);
   let attempts = 0;
   console.log(`[prdWatcher] Started — prdId=${prdId} threadId=${chatThreadId}`);
+  void hydrateThread(chatThreadId).catch((err) => {
+    console.warn(
+      `[prdWatcher] hydrate failed (threadId=${chatThreadId}):`,
+      (err as Error).message,
+    );
+  });
 
   const interval = setInterval(async () => {
     attempts += 1;

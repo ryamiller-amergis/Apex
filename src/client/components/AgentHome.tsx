@@ -14,7 +14,6 @@ import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useChatAttachments } from '../hooks/useChatAttachments';
 import { useProjectRepositoryReadiness } from '../hooks/useProjectRepositoryReadiness';
 import { useGroundingResumeGate } from '../hooks/useGroundingResumeGate';
-import { GroundingResumeCard } from './GroundingResumeCard';
 import { parseAgentMessage, isAgentOtherOptionText } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { PRDPreviewDrawer } from './PRDPreviewDrawer';
@@ -1063,16 +1062,6 @@ export const AgentHome: React.FC<AgentHomeProps> = ({ selectedProject, selectedS
 
   const inputArea = (
     <div className={styles.inputWrapper}>
-      {resumeGate.showCard && resumeGate.status ? (
-        <GroundingResumeCard
-          status={resumeGate.status}
-          isPending={resumeGate.isUpdating}
-          error={resumeGate.error}
-          onContinue={resumeGate.continueOnPin}
-          onUpdateToLatest={() => void resumeGate.updateToLatest()}
-          {...{ 'data-testid': 'grounding-resume-card' }}
-        />
-      ) : null}
       <AgentComposer
         className={styles.composerEmbed}
       value={input}

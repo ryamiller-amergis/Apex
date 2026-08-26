@@ -4,7 +4,7 @@ import { db } from '../db/drizzle';
 import { chatThreads } from '../db/schema';
 import type { ValidationScorecard } from '../../shared/types/interview';
 import { buildPassingValidationReasonsMarkdown, collectValidationGaps, normalizeCrossCuttingCheck } from '../../shared/utils/validationReport';
-import { readOutputValidationScorecard, readOutputValidationScorecardMd, isThreadIdle, createThread as createChatThread, cancelRun, sendMessage, prepareBackgroundWorkflowTurn } from './chatAgentService';
+import { readOutputValidationScorecard, readOutputValidationScorecardMd, isThreadIdle, createThread as createChatThread, cancelRun, sendMessage, prepareBackgroundWorkflowTurn, hydrateThread } from './chatAgentService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
 import { isThreadRunAlive, canThisInstanceFailGeneration } from './agentRunReaperService';
 import { getSkillConfig, resolveSkillConfig } from './projectSettingsService';
@@ -185,6 +185,12 @@ export function startDocumentValidationWatcher(
   let attempts = 0;
 
   console.log(`[documentValidationWatcher] Started — documentId=${documentId} threadId=${validationThreadId}`);
+  void hydrateThread(validationThreadId).catch((err) => {
+    console.warn(
+      `[documentValidationWatcher] hydrate failed (threadId=${validationThreadId}):`,
+      (err as Error).message,
+    );
+  });
 
   const interval = setInterval(async () => {
     attempts += 1;

@@ -315,23 +315,14 @@ beforeEach(() => {
 });
 
 describe('PBI-004 Interview grounding status embed', () => {
-  it('AC-2 / VT-03 Given an existing Interview, When its run view renders, Then reusable grounding status receives the Interview scope', () => {
-    // Arrange / Act
+  it('does not show SHA or re-ground controls on an existing Interview', () => {
     renderExistingInterview();
 
-    // Assert
-    expect(screen.getByTestId('interview-grounding-embed')).toHaveAttribute(
-      'data-surface',
-      'interview'
-    );
-    expect(screen.getByTestId('interview-grounding-embed')).toHaveAttribute(
-      'data-domain-run-id',
-      'iv-1'
-    );
-    expect(screen.getByTestId('interview-grounding-embed')).toHaveAttribute(
-      'data-project',
-      'MaxView'
-    );
+    expect(
+      screen.queryByTestId('interview-grounding-embed')
+    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId('run-grounding-status')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('run-grounding-sha')).not.toBeInTheDocument();
   });
 });
 

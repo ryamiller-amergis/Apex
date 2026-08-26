@@ -63,6 +63,7 @@ jest.mock('../services/chatAgentService', () => ({
     threadWorkspacePath: '/tmp/ws',
   }),
   cancelRun: jest.fn().mockResolvedValue(undefined),
+  hydrateThread: jest.fn().mockResolvedValue(true),
 }));
 
 jest.mock('../services/backgroundWorkflowRouter', () => ({

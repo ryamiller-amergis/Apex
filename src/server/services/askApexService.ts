@@ -69,9 +69,10 @@ function buildRepositoryReadGuidance(
   repoInfo?: RepoInfo | null,
   repoReader?: RepoReader,
   storage: 'bare mirror' | 'Azure Files checkout' = 'Azure Files checkout',
+  forbidProviderRepoMcp = false,
 ): string {
-  return nativeReads
-    ? [
+  if (nativeReads) {
+    return [
         '# Sandbox workspace and native repository reads',
         'The current working directory remains the Apex agent sandbox; it is NOT the repository checkout.',
         ...(repoInfo && repoReader
@@ -88,8 +89,16 @@ function buildRepositoryReadGuidance(
         '- `list_repo_dir` — list a repository-relative directory',
         '- `search_repo_code` — search the pinned checkout',
         'Never use the GitHub or ADO provider MCP servers for repository reads.',
-      ].join('\n')
-    : [
+      ].join('\n');
+  }
+  if (forbidProviderRepoMcp) {
+    return [
+      '# Sandbox workspace',
+      'The current working directory is an isolated sandbox, not the project checkout.',
+      'Do not use the GitHub or ADO provider MCP servers for repository reads. Local checkout tools are unavailable this turn.',
+    ].join('\n');
+  }
+  return [
         '# Sandbox workspace and provider repository reads',
         'The current working directory is an isolated sandbox, not the project checkout.',
         'Repository files must be fetched via the `github-repo` MCP server.',
@@ -105,10 +114,11 @@ function fallbackSystemPrompt(
   repoInfo?: RepoInfo | null,
   repoReader?: RepoReader,
   storage?: 'bare mirror' | 'Azure Files checkout',
+  forbidProviderRepoMcp = false,
 ): string {
   return `${SYSTEM_PROMPT_BASE}
 
-${buildRepositoryReadGuidance(nativeReads, repoInfo, repoReader, storage)}
+${buildRepositoryReadGuidance(nativeReads, repoInfo, repoReader, storage, forbidProviderRepoMcp)}
 
 Note: I was unable to load the latest documentation from the repository. I'll do my best to answer using my tools and general knowledge of the application.`;
 }
@@ -150,12 +160,14 @@ async function fetchRepoContext(
   repoInfo: RepoInfo | null,
   runtime: AskApexRepositoryRuntime
 ): Promise<string> {
+  const forbidProviderRepoMcp = runtime.localGrounded && !runtime.nativeReads;
   if (!repoInfo) {
     return fallbackSystemPrompt(
       runtime.nativeReads,
       repoInfo,
       runtime.repoReader,
       runtime.storage,
+      forbidProviderRepoMcp,
     );
   }
 
@@ -168,9 +180,10 @@ async function fetchRepoContext(
     return cached.prompt;
   }
 
-  const remoteCatalog = runtime.nativeReads
-    ? null
-    : await import('./skillCatalogGitHub');
+  const remoteCatalog =
+    runtime.nativeReads || forbidProviderRepoMcp
+      ? null
+      : await import('./skillCatalogGitHub');
   const sections: string[] = [
     SYSTEM_PROMPT_BASE,
     '',
@@ -179,11 +192,12 @@ async function fetchRepoContext(
       repoInfo,
       runtime.repoReader,
       runtime.storage,
+      forbidProviderRepoMcp,
     ),
     '',
   ];
 
-  if (!runtime.nativeReads) {
+  if (!runtime.nativeReads && !forbidProviderRepoMcp) {
     // Inject repo coordinates so the agent knows what to pass to provider MCP tools.
     sections.push(
       `# Repo coordinates (use with MCP tools)`,
@@ -205,6 +219,7 @@ async function fetchRepoContext(
   ];
 
   for (const file of filesToFetch) {
+    if (!runtime.repoReader && !remoteCatalog) break;
     try {
       const content = runtime.repoReader
         ? await runtime.repoReader.readFile(file.path)
@@ -230,6 +245,7 @@ async function fetchRepoContext(
           repoInfo,
           runtime.repoReader,
           runtime.storage,
+          forbidProviderRepoMcp,
         );
   contextPromptCache.set(sourceKey, {
     prompt,
@@ -249,6 +265,10 @@ function buildAskApexMcpServers(
     omitGroundingProfile?: boolean;
   }
 ): Record<string, McpServerConfig> {
+  // Local grounding never remounts github-repo — list_skills is the hang path.
+  if (options?.nativeReads || grounding.mode === 'local') {
+    return {};
+  }
   const port = process.env.PORT ?? '3001';
   const profilePath =
     grounding.mode === 'local' && !options?.omitGroundingProfile
@@ -264,6 +284,7 @@ function buildAskApexMcpServers(
 
 interface AskApexRepositoryRuntime {
   nativeReads: boolean;
+  localGrounded: boolean;
   local: LocalAgentOptions;
   mcpServers: Record<string, McpServerConfig>;
   repoReader?: RepoReader;
@@ -307,6 +328,7 @@ async function prepareAskApexRepositoryRuntime(
   const nativeReads = Boolean(repoReader);
   return {
     nativeReads,
+    localGrounded: grounding.mode === 'local',
     local: {
       cwd: process.cwd(),
       ...(repoReader ? { customTools: createNativeReadTools(repoReader) } : {}),
@@ -339,6 +361,7 @@ async function buildSystemPrompt(
       repoInfo,
       runtime.repoReader,
       runtime.storage,
+      runtime.localGrounded && !runtime.nativeReads,
     );
   }
 }

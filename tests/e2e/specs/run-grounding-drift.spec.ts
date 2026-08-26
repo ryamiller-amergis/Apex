@@ -1,6 +1,6 @@
 /**
  * @interview-flow @pipeline
- * PBI-004 grounding drift, explicit confirmation, and flag-off behavior.
+ * Manual SHA / re-ground controls are hidden; overnight idle re-ground owns freshness.
  */
 import type { Page } from '@playwright/test';
 import {
@@ -67,7 +67,7 @@ test.describe('PBI-004 run grounding drift', () => {
     await SeedApi.reset(e2eApi);
   });
 
-  test('AC-2 / VT-09 shows polite source-changed status while normal review controls remain enabled', async ({
+  test('hides SHA and re-ground controls while review actions stay enabled', async ({
     page,
     loginAsPersona,
     e2eApi,
@@ -100,82 +100,19 @@ test.describe('PBI-004 run grounding drift', () => {
 
     await page.goto(`/backlog/design-doc/${doc.id}`);
 
-    const notice = page.getByTestId('run-grounding-drift-notice');
-    await expect(notice).toBeVisible();
-    await expect(notice).toHaveAttribute('role', 'status');
-    await expect(notice).toHaveAttribute('aria-live', 'polite');
-    await expect(notice).toContainText(/source changed/i);
-    await expect(page.getByTestId('run-grounding-sha')).toContainText(
-      shaA.slice(0, 12),
-    );
+    await expect(page.getByTestId('run-grounding-status')).toHaveCount(0);
+    await expect(page.getByTestId('run-grounding-sha')).toHaveCount(0);
+    await expect(page.getByTestId('run-grounding-reground-button')).toHaveCount(0);
     await expect(page.getByTestId('dd-submit-btn')).toBeEnabled();
   });
 
-  test('AC-3 / VT-10 Escape dismisses re-ground without changing SHA A and returns focus', async ({
-    page,
-    loginAsPersona,
-    e2eApi,
-  }) => {
-    const { doc } = await seedPipeline(e2eApi);
-    let reGroundPosts = 0;
-    await stubGroundingFlag(page, true);
-    await page.route(
-      `**/api/run-groundings/design_doc/${doc.id}*`,
-      (route) => {
-        if (route.request().method() === 'POST') {
-          reGroundPosts += 1;
-        }
-        return route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify([
-            {
-              runType: 'chat',
-              runId: 'design-doc-thread',
-              role: 'target',
-              groundedSha: shaA,
-              groundedShaShort: shaA.slice(0, 12),
-              groundedAt: '2026-08-02T14:00:00.000Z',
-              driftState: 'source-changed',
-              canReGround: true,
-            },
-          ]),
-        });
-      },
-    );
-    await stubAdoProjects(page);
-    await stubAllAiTraffic(page);
-    await loginAsPersona('ba');
-    await page.goto(`/backlog/design-doc/${doc.id}`);
-    const trigger = page.getByTestId('run-grounding-reground-button');
-    const pinnedText = await page.getByTestId('run-grounding-sha').innerText();
-
-    await trigger.click();
-    await expect(page.getByTestId('run-grounding-reground-confirm')).toBeVisible();
-    await page.keyboard.press('Escape');
-
-    await expect(page.getByTestId('run-grounding-reground-confirm')).toHaveCount(0);
-    await expect(page.getByTestId('run-grounding-sha')).toHaveText(pinnedText);
-    await expect(trigger).toBeFocused();
-    expect(reGroundPosts).toBe(0);
-  });
-
-  test('VT-11 flag off hides grounding UI in Interview, PRD, and Design Doc run views', async ({
+  test('hides grounding UI in Interview, PRD, and Design Doc run views', async ({
     page,
     loginAsPersona,
     e2eApi,
   }) => {
     const { interview, prd, doc } = await seedPipeline(e2eApi);
-    let groundingRequests = 0;
-    await stubGroundingFlag(page, false);
-    await page.route('**/api/run-groundings/**', (route) => {
-      groundingRequests += 1;
-      return route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: '[]',
-      });
-    });
+    await stubGroundingFlag(page, true);
     await stubAdoProjects(page);
     await stubAllAiTraffic(page);
     await loginAsPersona('ba');
@@ -191,6 +128,5 @@ test.describe('PBI-004 run grounding drift', () => {
     await page.goto(`/backlog/design-doc/${doc.id}`);
     await expect(page.getByTestId('design-doc-review')).toBeVisible();
     await expect(page.getByTestId('run-grounding-status')).toHaveCount(0);
-    expect(groundingRequests).toBe(0);
   });
 });

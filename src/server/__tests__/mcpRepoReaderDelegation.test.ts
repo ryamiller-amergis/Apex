@@ -159,21 +159,26 @@ describe('PBI-005 MCP RepoReader delegation contracts', () => {
       .filter((name) => !disabled.handlers.has(name));
 
     // Assert
-    expect(removed).toEqual([
+    expect(removed).toEqual(expect.arrayContaining([
+      'list_projects',
+      'list_repos',
+      'list_skills',
+      'get_skill',
       'list_repo_dir',
       'get_skill_file',
       'search_repo_code',
-    ]);
+      'search_skills',
+    ]));
     expect([...disabled.handlers.keys()]).toEqual(expect.arrayContaining([
       'update_design_doc',
       'update_prd',
       'update_adr',
       'resolve_prd_comment',
       'add_test_case',
-      'list_skills',
-      'search_skills',
       'query_work_items',
     ]));
+    expect(disabled.handlers.has('list_skills')).toBe(false);
+    expect(disabled.handlers.has('list_projects')).toBe(false);
   });
 
   it('VT-04 omits all three GitHub repo-browse tools and retains non-browse tools', () => {
@@ -190,8 +195,9 @@ describe('PBI-005 MCP RepoReader delegation contracts', () => {
       'get_skill_file',
       'list_repo_dir',
       'search_repo_code',
+      'list_skills',
     ]);
-    expect([...disabled.handlers.keys()]).toEqual(['list_skills']);
+    expect([...disabled.handlers.keys()]).toEqual([]);
   });
 
   it('AC-0 / VT-01 and VT-07: two profile-bound handlers read only their pinned checkout through all three tools', async () => {
