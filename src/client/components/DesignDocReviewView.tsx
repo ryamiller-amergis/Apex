@@ -41,7 +41,6 @@ import { AnnotationLayer, unwrapCommentMarks } from './AnnotationLayer';
 import { ReviewCommentSidebar } from './ReviewCommentSidebar';
 import { FixValidationPanel } from './FixValidationPanel';
 import { ApexFixRunningBanner } from './ApexFixRunningBanner';
-import { RunGroundingStatus } from './RunGroundingStatus';
 import type { ContentSnapshot, GapChangeEntry } from './FixValidationPanel';
 import type { DesignDocStatus, ValidationScorecardGap, ValidationScorecard, ValidationScorecardFeature } from '../../shared/types/interview';
 import {
@@ -2102,11 +2101,6 @@ export const DesignDocReviewView: React.FC = () => {
                 </button>
               </div>
             )}
-            <RunGroundingStatus
-              surface="design_doc"
-              domainRunId={doc.id}
-              project={doc.project}
-            />
           </div>
         </div>
 

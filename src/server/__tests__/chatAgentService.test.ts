@@ -146,6 +146,13 @@ jest.mock('../services/groundingProfileResolver', () => ({
   },
 }));
 
+const mockIsThreadRunAlive = jest.fn().mockResolvedValue(false);
+jest.mock('../services/agentRunReaperService', () => ({
+  isThreadRunAlive: (...args: unknown[]) => mockIsThreadRunAlive(...args),
+  resolveAgentRunHardLimitMs: jest.fn().mockReturnValue(10 * 60 * 1000),
+  resolveAgentFirstEventTimeoutMs: jest.fn().mockReturnValue(2 * 60 * 1000),
+}));
+
 // ── Imports ───────────────────────────────────────────────────────────────────
 
 import {
@@ -172,6 +179,7 @@ import {
   resolveDocumentAssistantType,
   buildBackgroundWorkflowPrompt,
   buildInitialPrompt,
+  prepareBackgroundWorkflowTurn,
   prepareRepositoryReadRuntime,
   subscribeToThread,
 } from '../services/chatAgentService';
@@ -180,6 +188,7 @@ import type {
   ChatThread,
   ChatThreadKickoff,
 } from '../../shared/types/chat';
+import { getSkillFile } from '../services/skillCatalogFacade';
 import type { CallerGroundingSelection } from '../services/callerGroundingService';
 import type {
   GroundingProfileId,
@@ -704,6 +713,44 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
     expect(prompt).not.toContain('current working directory IS a git clone');
   });
 
+  it('forbids provider MCP in the prompt when local grounding has no checkout tools', () => {
+    const prompt = buildInitialPrompt(
+      baseKickoff({ skillPath: '.cursor/skills/grill-with-docs/SKILL.md' }),
+      { nativeReads: false, forbidProviderRepoMcp: true }
+    );
+
+    expect(prompt).toContain('Do not use the GitHub or ADO provider MCP servers');
+    expect(prompt).not.toContain('# MCP tools (github-repo server)');
+    expect(prompt).not.toContain('must be fetched via MCP');
+  });
+
+  it('directs native-read generation skills to Write .ai-pilot/output, not staging MCP', () => {
+    const prompt = buildInitialPrompt(
+      baseKickoff({ skillPath: '.cursor/skills/prd-design-spec/SKILL.md' }),
+      { nativeReads: true }
+    );
+
+    expect(prompt).toContain(
+      'Write required output files with the built-in Write / create_file tool'
+    );
+    expect(prompt).toContain('.ai-pilot/output/');
+    expect(prompt).not.toContain('document-staging/write-back MCP tools');
+  });
+
+  it('keeps staging MCP instructions for native-read document assistants', () => {
+    const prompt = buildInitialPrompt(
+      baseKickoff({
+        skillPath: '.cursor/skills/prd-design-spec/SKILL.md',
+        assistantType: 'design-doc',
+        freeformContext: 'doc_id: doc-1\nthread_id: t-1',
+      }),
+      { nativeReads: true }
+    );
+
+    expect(prompt).toContain('document-staging/write-back MCP tools');
+    expect(prompt).toContain('Do NOT write proposed design-doc content to `.ai-pilot/output/`');
+  });
+
   it('AC-0 / DoD-4: freezes skill content for local-only worker reads with broad search disabled', async () => {
     const prompt = await buildBackgroundWorkflowPrompt(
       baseKickoff({
@@ -722,6 +769,73 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
     expect(prompt).toContain('# Frozen skill content');
     expect(prompt).toContain('Begin.');
     expect(prompt).not.toContain('# MCP tools (github-repo server)');
+    expect(prompt).toContain(
+      'Write required output files with the built-in Write / create_file tool'
+    );
+    expect(prompt).not.toContain('document-staging/write-back MCP tools');
+  });
+
+  it('does not HTTP-fetch the provider skill catalog when local grounding has no checkout reader', async () => {
+    const mockGetSkillFile = getSkillFile as jest.Mock;
+    mockGetSkillFile.mockClear();
+
+    const prompt = await buildBackgroundWorkflowPrompt(
+      baseKickoff({
+        skillPath: '.cursor/skills/prd-design-spec/SKILL.md',
+        skillProvider: 'github',
+      }),
+      'Generate.',
+      { skipProviderCatalogFetch: true }
+    );
+
+    expect(mockGetSkillFile).not.toHaveBeenCalled();
+    expect(prompt).toContain('Load it with `get_skill_file` from the pinned checkout');
+    expect(prompt).not.toContain('# Frozen skill content');
+    expect(prompt).not.toContain('Skill pre-fetch failed');
+    expect(prompt).not.toContain('# MCP tools (github-repo server)');
+  });
+
+  it('prepareBackgroundWorkflowTurn skips the provider catalog on local grounding without a reader', async () => {
+    const mockGetSkillFile = getSkillFile as jest.Mock;
+    mockEvaluateBindingContinuity.mockReset();
+    mockEvaluateBindingContinuity.mockReturnValue({ decision: 'resume' });
+    mockCallerGroundingSelectionToBinding.mockReturnValue({
+      mode: 'local',
+      sha: 'sha-gen',
+    });
+    mockCallerGroundingStart.mockResolvedValue({
+      mode: 'local',
+      cwd: 'C:\\data\\grounding-workspaces\\gen',
+      profileId: 'profile-gen' as GroundingProfileId,
+      resolvedSha: 'sha-gen',
+      nativeReads: true,
+      workingTree: true,
+      release: jest.fn().mockResolvedValue(undefined),
+    } satisfies CallerGroundingSelection);
+    mockResolveConnectionProfile.mockRejectedValue(
+      new Error('authorized checkout unavailable')
+    );
+    const thread = await createThread(
+      'developer-1',
+      baseKickoff({
+        skillPath: '.cursor/skills/prd-design-spec/SKILL.md',
+        skillProvider: 'github',
+      }),
+      { skipAutoKickoff: true }
+    );
+    mockGetSkillFile.mockClear();
+
+    try {
+      const prepared = await prepareBackgroundWorkflowTurn(thread.id, 'Generate.');
+
+      expect(mockGetSkillFile).not.toHaveBeenCalled();
+      expect(prepared.prompt).toContain(
+        'Load it with `get_skill_file` from the pinned checkout'
+      );
+      expect(prepared.prompt).not.toContain('# Frozen skill content');
+    } finally {
+      await closeThread(thread.id);
+    }
   });
 
   it('AC-1 / VT-06 fallback prompt remains sandbox and provider-MCP directed', () => {
@@ -826,14 +940,10 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
       sandboxCwd: 'C:\\sandbox\\thread-1',
     });
 
-    // Then no native tool is exposed and the configured provider MCP path is restored.
+    // Then no native tool is exposed and provider repo MCP is NOT restored.
     expect(runtime.nativeReads).toBe(false);
     expect(runtime.local).toEqual({ cwd: 'C:\\sandbox\\thread-1' });
-    expect(runtime.mcpServers).toEqual({
-      'github-repo': {
-        url: 'http://localhost:3001/mcp/github-repo',
-      },
-    });
+    expect(runtime.mcpServers['github-repo']).toBeUndefined();
   });
 
   it('AC-3 / VT-12 rebuilds prompt, custom tools, and MCP wiring across a SHA-to-remote recreation boundary', async () => {
@@ -897,6 +1007,7 @@ describe('closeThread — thread retention', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
+    mockIsThreadRunAlive.mockResolvedValue(false);
     mockDb.query.prds.findFirst.mockResolvedValue(null);
     mockDb.query.designDocs.findFirst.mockResolvedValue(null);
   });
@@ -992,6 +1103,24 @@ describe('closeThread — thread retention', () => {
     expect(mockedFs.rmSync).not.toHaveBeenCalledWith(
       profileCheckout,
       expect.anything()
+    );
+  });
+
+  it('does not delete the generation workspace while a worker run is still alive', async () => {
+    mockIsThreadRunAlive.mockResolvedValue(true);
+    const mockedFs = jest.requireMock('fs') as { rmSync: jest.Mock };
+    const thread = await createThread(
+      'user-1',
+      { project: 'proj', repo: 'org/repo', branch: 'main' },
+      { skipAutoKickoff: true }
+    );
+    mockedFs.rmSync.mockClear();
+
+    await closeThread(thread.id);
+
+    expect(mockedFs.rmSync).not.toHaveBeenCalled();
+    expect(mockPgUpsertThread).not.toHaveBeenCalledWith(
+      expect.objectContaining({ id: thread.id, status: 'closed' })
     );
   });
 
@@ -1754,6 +1883,14 @@ describe('document assistant MCP wiring', () => {
     expect(
       isInteractiveWorkspaceBoundSkill(
         '.cursor/skills/prd-design-spec/SKILL.md'
+      )
+    ).toBe(true);
+    expect(
+      isInteractiveWorkspaceBoundSkill('.cursor/skills/adr-finalize/SKILL.md')
+    ).toBe(true);
+    expect(
+      isInteractiveWorkspaceBoundSkill(
+        '.cursor/skills/prd-spec-review/SKILL.md'
       )
     ).toBe(true);
     expect(

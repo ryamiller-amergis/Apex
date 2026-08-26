@@ -30,9 +30,6 @@ import {
 } from '../hooks/useInterviews';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { SectionOwnerModal } from './SectionOwnerModal';
-import { RunGroundingStatus } from './RunGroundingStatus';
-import { GroundingResumeCard } from './GroundingResumeCard';
-import { GroundingHandoffDialog } from './GroundingHandoffDialog';
 import { useGroundingResumeGate } from '../hooks/useGroundingResumeGate';
 import type { PipelinePinPolicy } from '../../shared/types/runGrounding';
 import type { InterviewStatus } from '../../shared/types/interview';
@@ -1060,7 +1057,6 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     interview?.project ?? null,
     isRunning,
   );
-  const [handoffOpen, setHandoffOpen] = useState(false);
   const draftAttachmentChars = attachments.reduce((sum, a) => sum + a.content.length, 0);
   const contextEstimate = useContextEstimate(
     visibleMessagesForContext, input, streamingText, model, draftAttachmentChars,
@@ -1269,12 +1265,8 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   }, [id, interview, messages, toPrdSkill, skillConfig?.prdModel, globalDefaultModel?.value, startChat, createPrd, navigate]);
 
   const requestGeneratePrd = useCallback(() => {
-    if (resumeGate.status) {
-      setHandoffOpen(true);
-      return;
-    }
     void handleGeneratePrd('inherit');
-  }, [handleGeneratePrd, resumeGate.status]);
+  }, [handleGeneratePrd]);
 
   if (isLoading) {
     return (
@@ -1415,11 +1407,6 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 ))}
               </div>
             )}
-            <RunGroundingStatus
-              surface="interview"
-              domainRunId={interview.id}
-              project={interview.project}
-            />
           </div>
         </div>
 
@@ -1716,16 +1703,6 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         </div>
       ) : (
         <div className={styles.inputArea}>
-          {resumeGate.showCard && resumeGate.status ? (
-            <GroundingResumeCard
-              status={resumeGate.status}
-              isPending={resumeGate.isUpdating}
-              error={resumeGate.error}
-              onContinue={resumeGate.continueOnPin}
-              onUpdateToLatest={() => void resumeGate.updateToLatest()}
-              {...{ 'data-testid': 'grounding-resume-card' }}
-            />
-          ) : null}
           <div className={styles.contextBar}>
             <div
               className={styles.contextBarTrack}
@@ -1914,25 +1891,6 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
           />
         </div>
       )}
-
-      {handoffOpen && resumeGate.status ? (
-        <GroundingHandoffDialog
-          parentLabel="the interview"
-          status={resumeGate.status}
-          isPending={startChat.isPending || createPrd.isPending}
-          error={prdGenError ? new Error(prdGenError) : null}
-          onInherit={() => {
-            setHandoffOpen(false);
-            void handleGeneratePrd('inherit');
-          }}
-          onUseLatest={() => {
-            setHandoffOpen(false);
-            void handleGeneratePrd('latest');
-          }}
-          onClose={() => setHandoffOpen(false)}
-          {...{ 'data-testid': 'grounding-handoff-dialog' }}
-        />
-      ) : null}
 
       {showLinkedContext && (
         <div

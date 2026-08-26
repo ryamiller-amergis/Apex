@@ -342,8 +342,11 @@ export function createAdoMcpServer(options?: {
   const toolTimeoutMs = resolveMcpToolTimeoutMs();
   const enableRepoBrowse = options?.enableRepoBrowse ?? true;
 
-  // ── Skills namespace ────────────────────────────────────────────────────────
+  // ── Skills / remote repo catalog ────────────────────────────────────────────
+  // When native checkout tools are engaged, omit the entire remote catalog so
+  // interviews cannot hang on list_projects / list_skills / get_skill.
 
+  if (enableRepoBrowse) {
   server.tool(
     'list_projects',
     'List all Azure DevOps projects the configured PAT can access.',
@@ -408,7 +411,6 @@ export function createAdoMcpServer(options?: {
     }
   );
 
-  if (enableRepoBrowse) {
     server.tool(
       'list_repo_dir',
       'List the immediate children (files and sub-folders) of a directory in the repo. Use this BEFORE calling get_skill_file when you are unsure of exact file paths — e.g. to discover whether /docs/adr/, /docs/, /handbook/, or /CONTEXT.md exist. Returns each entry with its full path, name, and whether it is a folder. If a path does not exist the tool returns an empty list.',
@@ -482,9 +484,8 @@ export function createAdoMcpServer(options?: {
         }
       }
     );
-  }
 
-  if (enableRepoBrowse && options?.enableCodeSearch !== false) {
+  if (options?.enableCodeSearch !== false) {
     server.tool(
       'search_repo_code',
       'Search code in a repository by keyword and return matching file paths with snippets. Use this when you need to locate implementation areas quickly before reading full files.',
@@ -557,6 +558,7 @@ export function createAdoMcpServer(options?: {
       };
     }
   );
+  }
 
   // ── Design Doc write-back ───────────────────────────────────────────────────
 
@@ -1234,7 +1236,11 @@ export function createAdoMcpServer(options?: {
   );
 
   // ── Prompts ──────────────────────────────────────────────────────────────────
+  // Catalog prompts tell the agent to call list_skills / get_skill. Omit them
+  // when repo browse is stripped so interviews cannot be steered back onto
+  // the remote catalog hang path.
 
+  if (enableRepoBrowse) {
   server.prompt(
     'start_skill',
     'Load and follow a skill from the ADO skills catalog.',
@@ -1291,6 +1297,7 @@ export function createAdoMcpServer(options?: {
       ],
     })
   );
+  }
 
   return server;
 }

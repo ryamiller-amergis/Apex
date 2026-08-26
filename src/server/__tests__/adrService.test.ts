@@ -25,6 +25,7 @@ jest.mock('../db/drizzle', () => {
 jest.mock('../services/chatAgentService', () => ({
   markAsInterviewThread: jest.fn(),
   readOutputAdr: jest.fn(),
+  hydrateThread: jest.fn().mockResolvedValue(true),
 }));
 
 jest.mock('../services/projectSettingsService', () => ({

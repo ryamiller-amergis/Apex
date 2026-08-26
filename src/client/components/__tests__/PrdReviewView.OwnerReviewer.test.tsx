@@ -204,23 +204,12 @@ beforeEach(() => {
 });
 
 describe('PBI-004 PRD grounding status embed', () => {
-  it('AC-2 / VT-03 Given an existing PRD, When its run view renders, Then reusable grounding status receives the PRD scope', () => {
-    // Arrange / Act
+  it('does not show SHA or re-ground controls on an existing PRD', () => {
     renderView();
 
-    // Assert
-    expect(screen.getByTestId('prd-grounding-embed')).toHaveAttribute(
-      'data-surface',
-      'prd'
-    );
-    expect(screen.getByTestId('prd-grounding-embed')).toHaveAttribute(
-      'data-domain-run-id',
-      'prd-1'
-    );
-    expect(screen.getByTestId('prd-grounding-embed')).toHaveAttribute(
-      'data-project',
-      'proj-alpha'
-    );
+    expect(screen.queryByTestId('prd-grounding-embed')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('run-grounding-status')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('run-grounding-sha')).not.toBeInTheDocument();
   });
 });
 

@@ -119,6 +119,7 @@ export function createGitHubMcpServer(
     );
   }
 
+  if (enableRepoBrowse) {
   server.tool(
     'list_skills',
     'List all available skills (SKILL.md files) in the repo.',
@@ -143,6 +144,7 @@ export function createGitHubMcpServer(
       }
     },
   );
+  }
 
   return server;
 }

@@ -20,6 +20,7 @@ jest.mock('../services/chatAgentService', () => ({
     projectId: 'proj-alpha',
     threadWorkspacePath: '/tmp/validation',
   }),
+  hydrateThread: jest.fn().mockResolvedValue(true),
 }));
 
 jest.mock('../services/backgroundWorkflowRouter', () => ({

@@ -9,7 +9,7 @@ import {
   reviewComments,
 } from '../db/schema';
 import type { Adr, AdrStatus, AdrSummary } from '../../shared/types/adr';
-import { cancelRun, markAsInterviewThread, readOutputAdr } from './chatAgentService';
+import { cancelRun, markAsInterviewThread, readOutputAdr, hydrateThread } from './chatAgentService';
 import { getSkillSettingsName } from './projectSettingsService';
 import { assignApprovers, isApprovalComplete } from './documentApprovalService';
 import { getUnresolvedCount } from './reviewCommentService';
@@ -351,6 +351,12 @@ export function startAdrWatcher(adrId: string, generationThreadId: string): void
   const existing = activeAdrWatchers.get(adrId);
   if (existing) clearInterval(existing);
   let attempts = 0;
+  void hydrateThread(generationThreadId).catch((err) => {
+    console.warn(
+      `[adrWatcher] hydrate failed (threadId=${generationThreadId}):`,
+      (err as Error).message,
+    );
+  });
 
   const interval = setInterval(async () => {
     attempts += 1;

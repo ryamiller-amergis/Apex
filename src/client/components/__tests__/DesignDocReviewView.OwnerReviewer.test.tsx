@@ -162,23 +162,14 @@ beforeEach(() => {
 });
 
 describe('PBI-004 Design Doc grounding status embed', () => {
-  it('AC-2 / VT-03 Given an existing Design Doc, When its run view renders, Then reusable grounding status receives the Design Doc scope', () => {
-    // Arrange / Act
+  it('does not show SHA or re-ground controls on an existing Design Doc', () => {
     renderView();
 
-    // Assert
-    expect(screen.getByTestId('design-doc-grounding-embed')).toHaveAttribute(
-      'data-surface',
-      'design_doc'
-    );
-    expect(screen.getByTestId('design-doc-grounding-embed')).toHaveAttribute(
-      'data-domain-run-id',
-      'doc-1'
-    );
-    expect(screen.getByTestId('design-doc-grounding-embed')).toHaveAttribute(
-      'data-project',
-      'proj-alpha'
-    );
+    expect(
+      screen.queryByTestId('design-doc-grounding-embed')
+    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId('run-grounding-status')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('run-grounding-sha')).not.toBeInTheDocument();
   });
 });
 

@@ -201,10 +201,6 @@ const threads = new Map<string, ThreadState>();
 const lastTokenProgressWriteAt = new Map<string, number>();
 const eventDrivenRunIds = new Set<string>();
 
-function runtimeWorkspaceDir(state: ThreadState): string {
-  return state.groundingWorkspaceDir ?? state.thread.workspaceDir;
-}
-
 /**
  * Cap concurrent local Cursor agents per App Service instance. Interview →
  * design-doc kickoff spawns one agent per backlog feature in a tight loop;
@@ -814,6 +810,11 @@ export async function prepareRepositoryReadRuntime(options: {
       'native-read-reader-resolution-failed'
     );
   }
+  // Local grounding means the workspace-profile flag is on. Never restore
+  // github-repo / ADO catalog MCP — that is the interview hang path
+  // (`list_skills` / `list_projects`). Staging write-back can stay.
+  const localGrounded = options.grounding.mode === 'local';
+  const suppressProviderRepoMcp = localGrounded;
   const groundingProfileId =
     options.grounding.mode === 'local' && !requestedNative
       ? options.grounding.profileId
@@ -823,8 +824,8 @@ export async function prepareRepositoryReadRuntime(options: {
     calendarSessionId: options.calendarSessionId,
     restrictRepoSearch: options.restrictRepoSearch,
     groundingProfileId,
-    enableRepoBrowse: !nativeReads,
-    nativeReads,
+    enableRepoBrowse: !nativeReads && !suppressProviderRepoMcp,
+    nativeReads: nativeReads || suppressProviderRepoMcp,
   });
   const local: LocalAgentOptions = {
     cwd: options.sandboxCwd,
@@ -836,6 +837,27 @@ export async function prepareRepositoryReadRuntime(options: {
     local,
     mcpServers,
     repoReader,
+  };
+}
+
+function groundedTurnPromptOptions(
+  state: ThreadState,
+  grounding: CallerGroundingSelection,
+  runtime: RepositoryReadRuntime
+) {
+  const localGrounded = grounding.mode === 'local';
+  return {
+    preloadRepositoryContext:
+      state.isInterviewThread && grounding.mode === 'remote',
+    repoSearchEnabled: !state.isInterviewThread,
+    nativeReads: runtime.nativeReads,
+    forbidProviderRepoMcp: localGrounded && !runtime.nativeReads,
+    skipProviderCatalogFetch: localGrounded && !runtime.repoReader,
+    repoReader: runtime.repoReader,
+    groundingProvenance: groundingProvenanceFor(
+      grounding,
+      state.thread.kickoff
+    ),
   };
 }
 
@@ -1124,8 +1146,18 @@ function groundingProvenanceFor(
 function buildRepositoryReadPromptLines(
   kickoff: ChatThreadKickoff,
   nativeReads: boolean,
-  provenance?: GroundingProvenance
+  provenance?: GroundingProvenance,
+  forbidProviderRepoMcp = false
 ): string[] {
+  if (!nativeReads && forbidProviderRepoMcp) {
+    return [
+      `# Sandbox workspace`,
+      `You are running in an isolated sandbox. The current working directory contains only a \`.ai-pilot/\` scratch folder.`,
+      `Do not use the GitHub or ADO provider MCP servers for repository reads. Local checkout tools are unavailable this turn.`,
+      `Use only \`.ai-pilot/\` kickoff files already in the workspace.`,
+      ``,
+    ];
+  }
   if (!nativeReads) {
     const repoLabel =
       kickoff.skillProvider === 'github' ? 'GitHub repo' : 'ADO repo';
@@ -1153,9 +1185,25 @@ function buildRepositoryReadPromptLines(
     `- \`get_skill_file\` — read a repository-relative file`,
     `- \`list_repo_dir\` — list a repository-relative directory`,
     `- \`search_repo_code\` — search the authorized pinned checkout`,
-    `Never use the GitHub or ADO provider MCP servers for repository reads. Use document-staging/write-back MCP tools for repository-related output when the workflow requires them.`,
+    `Never use the GitHub or ADO provider MCP servers for repository reads.`,
+    buildNativeReadOutputInstruction(kickoff),
     ``,
   ];
+}
+
+/**
+ * Native-read turns share repo tools but must not share write instructions.
+ * Assistants stage edits via MCP; generation skills must Write into the
+ * thread scratch `.ai-pilot/output/` or watchers report missing files.
+ */
+function buildNativeReadOutputInstruction(kickoff: ChatThreadKickoff): string {
+  if (resolveDocumentAssistantType(kickoff)) {
+    return `Use document-staging/write-back MCP tools for repository-related output when the workflow requires them.`;
+  }
+  if (isInteractiveWorkspaceBoundSkill(kickoff.skillPath)) {
+    return `Write required output files with the built-in Write / create_file tool into \`.ai-pilot/output/\`. Do not use document-staging MCP tools for this generation run. Do not write generation output into the repository checkout.`;
+  }
+  return `Do not write files into the repository checkout.`;
 }
 
 function buildFreeChatPrompt(
@@ -1163,6 +1211,7 @@ function buildFreeChatPrompt(
   options?: {
     nativeReads?: boolean;
     groundingProvenance?: GroundingProvenance;
+    forbidProviderRepoMcp?: boolean;
   }
 ): string {
   const branch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
@@ -1172,7 +1221,8 @@ function buildFreeChatPrompt(
     ...buildRepositoryReadPromptLines(
       kickoff,
       nativeReads,
-      options?.groundingProvenance
+      options?.groundingProvenance,
+      options?.forbidProviderRepoMcp
     ),
     `# Session context`,
     `  project: "${kickoff.project}"`,
@@ -1189,7 +1239,7 @@ function buildFreeChatPrompt(
       `Skills from this project's GitHub repo are pre-loaded into the conversation by the system when applicable.`,
       ...buildScopePolicyLines(kickoff)
     );
-  } else if (nativeReads) {
+  } else if (nativeReads || options?.forbidProviderRepoMcp) {
     // Native reads are engaged: the ado-skills repo-read tools are not mounted,
     // so read exclusively through the local checkout tools described above.
     parts.push(
@@ -1480,6 +1530,7 @@ export function buildInitialPrompt(
     repoSearchEnabled?: boolean;
     nativeReads?: boolean;
     groundingProvenance?: GroundingProvenance;
+    forbidProviderRepoMcp?: boolean;
   }
 ): string {
   if (kickoff.assistantType === 'calendar-work-item') {
@@ -1501,6 +1552,7 @@ export function buildInitialPrompt(
     return buildFreeChatPrompt(kickoff, {
       nativeReads: options?.nativeReads,
       groundingProvenance: options?.groundingProvenance,
+      forbidProviderRepoMcp: options?.forbidProviderRepoMcp,
     });
   }
 
@@ -1512,7 +1564,8 @@ export function buildInitialPrompt(
     ...buildRepositoryReadPromptLines(
       kickoff,
       nativeReads,
-      options?.groundingProvenance
+      options?.groundingProvenance,
+      options?.forbidProviderRepoMcp
     ),
   ];
 
@@ -1528,6 +1581,14 @@ export function buildInitialPrompt(
       ``,
       `# Your task`,
       `The skill and core repository context are pre-loaded below when available. Follow the skill exactly.`
+    );
+  } else if (options?.forbidProviderRepoMcp) {
+    parts.push(
+      ...buildScopePolicyLines(kickoff),
+      ``,
+      `# Your task`,
+      `The skill and core repository context are pre-loaded below when available. Follow the skill exactly.`,
+      `Do not call GitHub or ADO provider MCP servers for repository reads.`
     );
   } else if (isGitHub) {
     const slashIdx = kickoff.repo.indexOf('/');
@@ -1869,6 +1930,8 @@ async function buildNewAgentTurnPrompt(
     preloadRepositoryContext?: boolean;
     repoSearchEnabled?: boolean;
     nativeReads?: boolean;
+    forbidProviderRepoMcp?: boolean;
+    skipProviderCatalogFetch?: boolean;
     repoReader?: RepoReader;
     groundingProvenance?: GroundingProvenance;
   }
@@ -1877,6 +1940,7 @@ async function buildNewAgentTurnPrompt(
     repoSearchEnabled: options?.repoSearchEnabled,
     nativeReads: options?.nativeReads,
     groundingProvenance: options?.groundingProvenance,
+    forbidProviderRepoMcp: options?.forbidProviderRepoMcp,
   });
   const provider = kickoff.skillProvider ?? 'ado';
   const resolvedBranch = kickoff.skillBranch ?? kickoff.branch ?? 'main';
@@ -1886,9 +1950,14 @@ async function buildNewAgentTurnPrompt(
   let agentsContent: string | null = null;
 
   // Fetch independent bootstrap documents concurrently. Native turns use the
-  // same authorized pinned reader exposed through custom tools; fallback turns
-  // retain the configured provider catalog behavior.
-  if (kickoff.skillPath || options?.preloadRepositoryContext) {
+  // same authorized pinned reader exposed through custom tools. Local grounding
+  // without a reader must not call the provider catalog (that hangs the turn).
+  const skipProviderCatalog =
+    options?.skipProviderCatalogFetch && !options?.repoReader;
+  if (
+    (kickoff.skillPath || options?.preloadRepositoryContext) &&
+    !skipProviderCatalog
+  ) {
     try {
       const requests: Array<{
         key: 'skill' | 'context' | 'agents';
@@ -1953,7 +2022,7 @@ async function buildNewAgentTurnPrompt(
       ? skillPathCandidates(skillName, skillPathNorm)
       : [skillPathNorm];
 
-    if (!skillContent) {
+    if (!skillContent && !skipProviderCatalog) {
       for (const candidate of candidates.slice(1)) {
         try {
           const content = options?.repoReader
@@ -2005,6 +2074,10 @@ async function buildNewAgentTurnPrompt(
         `\n\n${skillContent}`;
       initialPrompt +=
         '\n\nThe skill content above is already loaded. Do not call `get_skill` or `get_skill_file` for this path — execute it now.';
+    } else if (options?.nativeReads) {
+      initialPrompt += `\n\n# Skill load\nCould not preload ${kickoff.skillPath} on the web tier. Load it with \`get_skill_file\` from the pinned checkout, then follow it. Do not use the GitHub or ADO provider MCP servers.`;
+    } else if (options?.forbidProviderRepoMcp || skipProviderCatalog) {
+      initialPrompt += `\n\n# Skill unavailable this turn\nCould not preload ${kickoff.skillPath}. Do not use the GitHub or ADO provider MCP servers. Use only \`.ai-pilot/\` kickoff files already in the workspace.`;
     } else {
       initialPrompt += `\n\n# Skill pre-fetch failed\nCould not load ${kickoff.skillPath} from ${provider} or the local checkout. Inform the user that the skill file is missing.`;
     }
@@ -2053,18 +2126,27 @@ export interface PreparedBackgroundWorkflowTurn {
 
 export function buildBackgroundWorkflowPrompt(
   kickoff: ChatThreadKickoff,
-  promptText: string
+  promptText: string,
+  options?: {
+    repoReader?: RepoReader;
+    skipProviderCatalogFetch?: boolean;
+    groundingProvenance?: GroundingProvenance;
+  }
 ): Promise<string> {
   return buildNewAgentTurnPrompt(kickoff, promptText, false, undefined, {
     repoSearchEnabled: false,
     nativeReads: true,
+    repoReader: options?.repoReader,
+    skipProviderCatalogFetch: options?.skipProviderCatalogFetch,
+    groundingProvenance: options?.groundingProvenance,
   });
 }
 
 /**
  * Freezes the same first-turn system and skill context used by sendMessage,
  * while directing a background worker to its pinned local checkout only.
- * Skill content is still preloaded on the authorized web tier.
+ * Under local grounding, skill preload uses the checkout reader or is skipped
+ * entirely — never the GitHub/ADO HTTP catalog (that hangs generation).
  */
 export async function prepareBackgroundWorkflowTurn(
   threadId: string,
@@ -2076,8 +2158,35 @@ export async function prepareBackgroundWorkflowTurn(
   }
 
   const kickoff = state.thread.kickoff;
+  let repoReader: RepoReader | undefined;
+  let skipProviderCatalogFetch = false;
+  let groundingProvenance: GroundingProvenance | undefined;
+
+  const grounding = await waitForReadyThreadGrounding(state);
+  if (grounding.mode === 'local') {
+    if (grounding.nativeReads) {
+      try {
+        const resolved = await groundingProfileResolver.resolveConnectionProfile(
+          grounding.profileId
+        );
+        if (isExactGroundingReader(resolved, grounding, kickoff)) {
+          repoReader = resolved;
+        }
+      } catch {
+        repoReader = undefined;
+      }
+    }
+    // Local grounding must never HTTP-fetch the old GitHub/ADO skill catalog.
+    skipProviderCatalogFetch = !repoReader;
+    groundingProvenance = groundingProvenanceFor(grounding, kickoff);
+  }
+
   return {
-    prompt: await buildBackgroundWorkflowPrompt(kickoff, promptText),
+    prompt: await buildBackgroundWorkflowPrompt(kickoff, promptText, {
+      repoReader,
+      skipProviderCatalogFetch,
+      groundingProvenance,
+    }),
     model: resolveModelId(kickoff.model),
     skillPath: kickoff.skillPath ?? '',
     projectId: kickoff.project,
@@ -2331,7 +2440,7 @@ async function cancelSdkRunBestEffort(
     };
     const run = await (Agent as AgentWithGetRun).getRun(runId, {
       runtime: 'local',
-      cwd: runtimeWorkspaceDir(state),
+      cwd: state.thread.workspaceDir,
     });
     if (run.supports('cancel')) await run.cancel();
   } catch {
@@ -3779,7 +3888,9 @@ export function isInteractiveWorkspaceBoundSkill(
     normalized.includes('create-test-case') ||
     normalized.includes('prd-design-spec') ||
     normalized.includes('design-doc-validation') ||
-    normalized.includes('document-validation')
+    normalized.includes('document-validation') ||
+    normalized.includes('adr-finalize') ||
+    normalized.includes('prd-spec-review')
   );
 }
 
@@ -4568,17 +4679,7 @@ export async function sendMessage(
         promptText,
         maxviewEnabled,
         recoveryContext,
-        {
-          preloadRepositoryContext:
-            state.isInterviewThread && grounding.mode === 'remote',
-          repoSearchEnabled: !state.isInterviewThread,
-          nativeReads: repositoryRuntime.nativeReads,
-          repoReader: repositoryRuntime.repoReader,
-          groundingProvenance: groundingProvenanceFor(
-            grounding,
-            state.thread.kickoff
-          ),
-        }
+        groundedTurnPromptOptions(state, grounding, repositoryRuntime)
       );
   let agentAcquisitionMode: 'existing' | 'created' | 'resumed' | 'recreated' =
     state.agent ? 'existing' : hadCursorAgentId ? 'resumed' : 'created';
@@ -4692,17 +4793,7 @@ export async function sendMessage(
           promptText,
           maxviewEnabled,
           recoveryContext,
-          {
-            preloadRepositoryContext:
-              state.isInterviewThread && grounding.mode === 'remote',
-            repoSearchEnabled: !state.isInterviewThread,
-            nativeReads: repositoryRuntime.nativeReads,
-            repoReader: repositoryRuntime.repoReader,
-            groundingProvenance: groundingProvenanceFor(
-              grounding,
-              state.thread.kickoff
-            ),
-          }
+          groundedTurnPromptOptions(state, grounding, repositoryRuntime)
         );
       }
     }
@@ -5231,17 +5322,7 @@ export async function sendMessage(
               promptText,
               maxviewEnabled,
               recoveryContext,
-              {
-                preloadRepositoryContext:
-                  state.isInterviewThread && grounding.mode === 'remote',
-                repoSearchEnabled: !state.isInterviewThread,
-                nativeReads: repositoryRuntime.nativeReads,
-                repoReader: repositoryRuntime.repoReader,
-                groundingProvenance: groundingProvenanceFor(
-                  grounding,
-                  state.thread.kickoff
-                ),
-              }
+              groundedTurnPromptOptions(state, grounding, repositoryRuntime)
             );
             state.agent = await retryWithBackoff(
               () =>
@@ -5520,7 +5601,7 @@ export async function sendMessage(
     try {
       await syncOutputToDb(
         threadId,
-        runtimeWorkspaceDir(state),
+        state.thread.workspaceDir,
         agentTextBuffer
       );
     } catch (err) {
@@ -6043,6 +6124,16 @@ export async function closeThread(threadId: string): Promise<void> {
   const state = await ensureThreadState(threadId);
   if (!state) return;
 
+  // Generation workers keep in-memory status idle while agent_runs is live.
+  // Idle eviction must not delete the thin workspace the worker is writing.
+  if (await isThreadRunAlive(threadId)) {
+    console.warn(
+      `[chat] closeThread deferred — run still alive (threadId=${threadId})`
+    );
+    resetIdleTimer(state);
+    return;
+  }
+
   if (state.idleTimer) clearTimeout(state.idleTimer);
 
   if (state.agent) {
@@ -6125,6 +6216,12 @@ export async function permanentlyDeleteThread(threadId: string): Promise<void> {
   await pgDeleteThread(threadId);
 }
 
+/**
+ * Generation artifacts always live in the thread scratch tree. Never use the
+ * shared SHA checkout (`groundingWorkspaceDir`) — leftover or empty checkout
+ * output is how "Missing output files: design, tech-spec, assumptions" happens
+ * when repo-grounding is on.
+ */
 function resolveOutputDir(threadId: string): string | null {
   const override = outputWorkspaceContext.getStore();
   if (override?.threadId === threadId) {
@@ -6132,7 +6229,7 @@ function resolveOutputDir(threadId: string): string | null {
   }
   const state = threads.get(threadId);
   if (state)
-    return path.join(runtimeWorkspaceDir(state), '.ai-pilot', 'output');
+    return path.join(state.thread.workspaceDir, '.ai-pilot', 'output');
   return null;
 }
 

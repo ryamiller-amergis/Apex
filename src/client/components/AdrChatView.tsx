@@ -46,7 +46,6 @@ import {
   useProjectRepositoryReadiness,
 } from '../hooks/useProjectRepositoryReadiness';
 import { useGroundingResumeGate } from '../hooks/useGroundingResumeGate';
-import { GroundingResumeCard } from './GroundingResumeCard';
 import { parseAgentMessage, type ChoiceBlock } from '../utils/parseAgentMessage';
 import type { ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
 import styles from './InterviewChatView.module.css';
@@ -908,16 +907,6 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
         <div className={styles.lockedNotice}>This ADR conversation is read-only.</div>
       ) : (
         <>
-        {resumeGate.showCard && resumeGate.status ? (
-          <GroundingResumeCard
-            status={resumeGate.status}
-            isPending={resumeGate.isUpdating}
-            error={resumeGate.error}
-            onContinue={resumeGate.continueOnPin}
-            onUpdateToLatest={() => void resumeGate.updateToLatest()}
-            {...{ 'data-testid': 'grounding-resume-card' }}
-          />
-        ) : null}
         <AgentComposer
           value={input}
           onChange={setInput}
