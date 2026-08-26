@@ -262,7 +262,6 @@ function buildAskApexMcpServers(
   grounding: CallerGroundingSelection,
   options?: {
     nativeReads?: boolean;
-    omitGroundingProfile?: boolean;
   }
 ): Record<string, McpServerConfig> {
   // Local grounding never remounts github-repo — list_skills is the hang path.
@@ -270,14 +269,9 @@ function buildAskApexMcpServers(
     return {};
   }
   const port = process.env.PORT ?? '3001';
-  const profilePath =
-    grounding.mode === 'local' && !options?.omitGroundingProfile
-      ? `/grounding/${grounding.profileId}`
-      : '';
-  const browseQuery = options?.nativeReads ? '?enableRepoBrowse=false' : '';
   return {
     'github-repo': {
-      url: `http://localhost:${port}/mcp/github-repo${profilePath}${browseQuery}`,
+      url: `http://localhost:${port}/mcp/github-repo`,
     },
   };
 }
@@ -333,10 +327,7 @@ async function prepareAskApexRepositoryRuntime(
       cwd: process.cwd(),
       ...(repoReader ? { customTools: createNativeReadTools(repoReader) } : {}),
     },
-    mcpServers: buildAskApexMcpServers(grounding, {
-      nativeReads,
-      omitGroundingProfile: requestedNative,
-    }),
+    mcpServers: buildAskApexMcpServers(grounding, { nativeReads }),
     repoReader,
     storage:
       grounding.mode === 'local' && !grounding.workingTree
