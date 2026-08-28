@@ -46,14 +46,17 @@ async function readJson(response: Response): Promise<unknown> {
   }
 }
 
+function callbackErrorCode(body: unknown): string | undefined {
+  return body && typeof body === 'object' && typeof (body as CallbackErrorBody).code === 'string'
+    ? (body as CallbackErrorBody).code
+    : undefined;
+}
+
 async function assertOk(response: Response): Promise<unknown> {
   const body = await readJson(response);
   if (response.ok) return body;
 
-  const code =
-    body && typeof body === 'object' && typeof (body as CallbackErrorBody).code === 'string'
-      ? (body as CallbackErrorBody).code
-      : undefined;
+  const code = callbackErrorCode(body);
   if (response.status === 409 && code === 'AI_RUN_DISPATCH_MISMATCH') {
     throw new AiRunFenceConflictError();
   }
@@ -64,26 +67,53 @@ async function assertOk(response: Response): Promise<unknown> {
   );
 }
 
+export type AiRunsCallbackGetToken = (options?: {
+  forceRefresh?: boolean;
+}) => Promise<string>;
+
 export function createAiRunsCallbackClient(options: {
   callbackBaseUrl: string;
-  getToken: () => Promise<string>;
+  getToken: AiRunsCallbackGetToken;
   fetchImpl?: typeof fetch;
 }): AiRunsCallbackClient {
   const fetchImpl = options.fetchImpl ?? fetch;
   const base = options.callbackBaseUrl.replace(/\/+$/, '');
 
-  const request = async (
+  const send = async (
     url: string,
     init: RequestInit,
-  ): Promise<unknown> => {
-    const token = await options.getToken();
-    const response = await fetchImpl(url, {
+    forceRefresh: boolean,
+  ): Promise<Response> => {
+    const token = await options.getToken(
+      forceRefresh ? { forceRefresh: true } : undefined,
+    );
+    return fetchImpl(url, {
       ...init,
       headers: {
         Authorization: `Bearer ${token}`,
         ...(init.headers ?? {}),
       },
     });
+  };
+
+  const request = async (
+    url: string,
+    init: RequestInit,
+  ): Promise<unknown> => {
+    let response = await send(url, init, false);
+    if (response.status === 401) {
+      const body = await readJson(response);
+      const code = callbackErrorCode(body);
+      if (code === 'AI_RUNNER_UNAUTHORIZED') {
+        response = await send(url, init, true);
+        return assertOk(response);
+      }
+      throw new AiRunCallbackError(
+        `AI run callback failed (${response.status})`,
+        response.status,
+        code,
+      );
+    }
     return assertOk(response);
   };
 

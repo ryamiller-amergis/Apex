@@ -45,17 +45,18 @@ function badgeClass(status: DesignPrototypeSummary['status']): string {
 const DesignPrototypeReviewView: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { can, userId, isAdmin } = useAppShell();
+  const { can, userId, isAdmin, isSuperAdmin } = useAppShell();
 
   const prdId = location.pathname.split('/').pop() ?? '';
 
   const { data: prototypes = [], isLoading: isLoadingList } = usePrototypesForPrd(prdId);
-  const { data: prototypeAssignments = [] } = usePrototypeAssignments(prdId);
+  const { data: prototypeAssignments = [], isLoading: assignmentsLoading } = usePrototypeAssignments(prdId);
   const { data: relatedDesignDocs = [] } = useDesignDocsByPrd(prdId);
   const { data: prdData } = usePrd(prdId);
   const { data: interviewData } = useInterview(prdData?.interviewId ?? null);
   const ownerApproveProto = useOwnerApprove(prdId, 'design_prototype');
-  const isDesignPrototypeOwner = interviewData?.designPrototypeOwnerId === userId;
+  const prototypeOwnerId = interviewData?.designPrototypeOwnerId ?? prdData?.ownerId ?? prdData?.authorId;
+  const isDesignPrototypeOwner = prototypeOwnerId === userId;
   const [selectedIndex, setSelectedIndex] = useState(0);
 
   const selectedProto = prototypes[selectedIndex] ?? null;
@@ -211,8 +212,11 @@ const DesignPrototypeReviewView: React.FC = () => {
 
   // Only designated design-prototype approvers (or admins) may approve/reject.
   const isAssignedApprover = prototypeAssignments.some(a => a.approverUserId === userId);
-  const canReview = can('design-prototypes:review') && (isAssignedApprover || isAdmin);
+  const ownerOnly = !assignmentsLoading && prototypeAssignments.length === 0;
+  const isOwnerActor = isDesignPrototypeOwner || isSuperAdmin;
+  const canReview = !ownerOnly && can('design-prototypes:review') && (isAssignedApprover || isAdmin);
   const isReviewable = selectedProto?.status === 'pending_review';
+  const unresolvedCommentCount = comments.filter((comment) => !comment.resolved).length;
 
   const renderPreviewContent = () => {
     const isGenerating = pendingRegeneration || selectedProto?.status === 'generating' || selectedProto?.status === 'regenerating';
@@ -236,6 +240,7 @@ const DesignPrototypeReviewView: React.FC = () => {
                 onClick={handleReset}
                 disabled={isBusy}
                 type="button"
+                {...{ 'data-testid': 'prototype-reset-btn' }}
               >
                 {resetPrototype.isPending ? 'Resetting…' : 'Reset generation'}
               </button>
@@ -251,7 +256,12 @@ const DesignPrototypeReviewView: React.FC = () => {
           <div className={styles.errorText}>
             Generation failed: {selectedProto.generationError ?? 'Unknown error'}
           </div>
-          <button className={styles.retryBtn} onClick={handleRetry} disabled={isBusy}>
+          <button
+            className={styles.retryBtn}
+            onClick={handleRetry}
+            disabled={isBusy}
+            {...{ 'data-testid': 'prototype-retry-btn' }}
+          >
             Retry Generation
           </button>
         </div>
@@ -287,6 +297,7 @@ const DesignPrototypeReviewView: React.FC = () => {
               type="button"
               className={`${styles.viewToggleBtn}${!viewSource && !editingBoundary ? ` ${styles.viewToggleBtnActive}` : ''}`}
               onClick={() => { setViewSource(false); setEditingBoundary(false); }}
+              {...{ 'data-testid': 'prototype-preview-tab' }}
             >
               Preview
             </button>
@@ -294,6 +305,7 @@ const DesignPrototypeReviewView: React.FC = () => {
               type="button"
               className={`${styles.viewToggleBtn}${viewSource ? ` ${styles.viewToggleBtnActive}` : ''}`}
               onClick={() => { setViewSource(true); setEditingBoundary(false); }}
+              {...{ 'data-testid': 'prototype-source-tab' }}
             >
               View Source
             </button>
@@ -302,6 +314,7 @@ const DesignPrototypeReviewView: React.FC = () => {
                 type="button"
                 className={styles.boundaryBtn}
                 onClick={() => { setEditingBoundary(true); setViewSource(false); }}
+                {...{ 'data-testid': 'prototype-edit-boundary-btn' }}
               >
                 Edit Feature Boundary
               </button>
@@ -345,7 +358,11 @@ const DesignPrototypeReviewView: React.FC = () => {
       <div className={styles.container}>
         <div className={styles.header}>
           <div className={styles.headerLeft}>
-            <button className={styles.backBtn} onClick={() => navigate(`/backlog/prd/${prdId}`)}>
+            <button
+              className={styles.backBtn}
+              onClick={() => navigate(`/backlog/prd/${prdId}`)}
+              {...{ 'data-testid': 'prototype-empty-back-btn' }}
+            >
               Back to PRD
             </button>
           </div>
@@ -359,6 +376,7 @@ const DesignPrototypeReviewView: React.FC = () => {
               onClick={handleGeneratePrototypes}
               disabled={generatePrototypes.isPending}
               type="button"
+              {...{ 'data-testid': 'prototype-generate-btn' }}
             >
               {generatePrototypes.isPending ? 'Generating…' : 'Generate prototypes'}
             </button>
@@ -369,11 +387,15 @@ const DesignPrototypeReviewView: React.FC = () => {
   }
 
   return (
-    <div className={styles.container} data-testid="prototype-review">
+    <div className={styles.container} {...{ 'data-testid': 'prototype-review' }}>
       {/* Header */}
       <div className={styles.header}>
         <div className={styles.headerLeft}>
-          <button className={styles.backBtn} onClick={() => navigate(`/backlog/prd/${prdId}`)}>
+          <button
+            className={styles.backBtn}
+            onClick={() => navigate(`/backlog/prd/${prdId}`)}
+            {...{ 'data-testid': 'prototype-back-btn' }}
+          >
             Back to PRD
           </button>
           <span className={styles.headerTitle}>Design Prototypes</span>
@@ -390,6 +412,7 @@ const DesignPrototypeReviewView: React.FC = () => {
               disabled={generatePrototypes.isPending}
               type="button"
               title="Re-create any prototypes that were deleted (existing ones are left untouched)"
+              {...{ 'data-testid': 'prototype-generate-missing-btn' }}
             >
               {generatePrototypes.isPending ? 'Generating…' : 'Generate missing'}
             </button>
@@ -399,7 +422,7 @@ const DesignPrototypeReviewView: React.FC = () => {
           {(pendingRegeneration || selectedProto?.status === 'regenerating' || selectedProto?.status === 'generating') ? (
             <span
               className={`${styles.badge} ${styles.badgeGenerating}`}
-              data-testid="prototype-status-badge"
+              {...{ 'data-testid': 'prototype-status-badge' }}
             >
               <span className={styles.headerSpinner} />{' '}
               {selectedProto?.status === 'generating' && !pendingRegeneration ? 'Generating…' : 'Regenerating…'}
@@ -422,6 +445,7 @@ const DesignPrototypeReviewView: React.FC = () => {
                         className={`${styles.stateChip}${overrideStates.includes(state) ? ` ${styles.stateChipActive}` : ''}`}
                         onClick={() => toggleOverrideState(state)}
                         disabled={isBusy}
+                        {...{ 'data-testid': `prototype-state-${state}` }}
                       >
                         {state}
                       </button>
@@ -432,7 +456,7 @@ const DesignPrototypeReviewView: React.FC = () => {
                     onClick={handleRegenerate}
                     disabled={isBusy || !feedback.trim()}
                     title={!feedback.trim() ? 'Enter feedback in the preview panel first' : undefined}
-                    data-testid="prototype-regenerate-btn"
+                    {...{ 'data-testid': 'prototype-regenerate-btn' }}
                   >
                     Regenerate
                   </button>
@@ -444,7 +468,7 @@ const DesignPrototypeReviewView: React.FC = () => {
                     className={`${styles.btnSecondary} ${styles.btnRevision}`}
                     onClick={() => setShowRevisionModal(true)}
                     disabled={isBusy}
-                    data-testid="prototype-request-changes-btn"
+                    {...{ 'data-testid': 'prototype-request-changes-btn' }}
                   >
                     Request Changes
                   </button>
@@ -452,35 +476,50 @@ const DesignPrototypeReviewView: React.FC = () => {
                     className={`${styles.btnPrimary} ${styles.btnApprove}`}
                     onClick={handleApprove}
                     disabled={isBusy}
-                    data-testid="prototype-approve-btn"
+                    {...{ 'data-testid': 'prototype-approve-btn' }}
                   >
                     Approve
                   </button>
                 </>
               )}
-              {selectedProto?.status === 'reviewer_approved' && (isDesignPrototypeOwner || isAdmin) && (
+              {((selectedProto?.status === 'reviewer_approved' && !ownerOnly) || (isReviewable && ownerOnly)) && (isOwnerActor || ownerOnly) && (
                 <>
                   <button
                     className={`${styles.btnPrimary} ${styles.btnApprove}`}
                     onClick={handleOwnerApprove}
-                    disabled={ownerApproveProto.isPending}
-                    data-testid="prototype-approve-owner-btn"
+                    disabled={ownerApproveProto.isPending || !isOwnerActor || unresolvedCommentCount > 0}
+                    aria-disabled={ownerApproveProto.isPending || !isOwnerActor || unresolvedCommentCount > 0}
+                    aria-describedby={ownerOnly && !isOwnerActor ? 'owner-approve-disabled-reason' : undefined}
+                    title={unresolvedCommentCount > 0 ? 'Resolve all comments before approving' : undefined}
+                    {...{ 'data-testid': 'prototype-approve-owner-btn' }}
                   >
                     Approve as Owner
                   </button>
-                  <button
-                    className={`${styles.btnSecondary} ${styles.btnRevision}`}
-                    onClick={handleOwnerRevision}
-                    disabled={ownerApproveProto.isPending}
-                  >
-                    Request Revision
-                  </button>
+                  {!ownerOnly && (
+                    <button
+                      className={`${styles.btnSecondary} ${styles.btnRevision}`}
+                      onClick={handleOwnerRevision}
+                      disabled={ownerApproveProto.isPending}
+                      {...{ 'data-testid': 'prototype-owner-request-revision-btn' }}
+                    >
+                      Request Revision
+                    </button>
+                  )}
+                  {ownerOnly && !isOwnerActor && (
+                    <span
+                      id="owner-approve-disabled-reason"
+                      role="status"
+                      {...{ 'data-testid': 'owner-approve-disabled-reason' }}
+                    >
+                      Only the document owner or a Platform Admin can approve
+                    </span>
+                  )}
                 </>
               )}
               {selectedProto?.status === 'reviewer_approved' && !isDesignPrototypeOwner && !isAdmin && (
                 <span
                   className={`${styles.badge} ${styles.badgePendingReview}`}
-                  data-testid="prototype-status-badge"
+                  {...{ 'data-testid': 'prototype-status-badge' }}
                 >
                   Awaiting Owner Approval
                 </span>
@@ -489,7 +528,7 @@ const DesignPrototypeReviewView: React.FC = () => {
                 <>
                   <span
                     className={`${styles.badge} ${styles.badgeApproved}`}
-                    data-testid="prototype-status-badge"
+                    {...{ 'data-testid': 'prototype-status-badge' }}
                   >
                     Approved
                   </span>
@@ -504,6 +543,7 @@ const DesignPrototypeReviewView: React.FC = () => {
                           ? 'Cannot reopen — design docs have already been created for this PRD'
                           : 'Admin: force this prototype back to Pending Review'
                       }
+                      {...{ 'data-testid': 'prototype-reopen-btn' }}
                     >
                       {reopenPrototype.isPending ? 'Reopening…' : 'Reopen for Review'}
                     </button>
@@ -525,6 +565,7 @@ const DesignPrototypeReviewView: React.FC = () => {
                 key={proto.id}
                 className={`${styles.featureTab}${idx === selectedIndex ? ` ${styles.featureTabActive}` : ''}`}
                 onClick={() => setSelectedIndex(idx)}
+                {...{ 'data-testid': `prototype-feature-tab-${proto.id}` }}
               >
                 <span className={styles.featureTabName}>{proto.featureName}</span>
                 <span className={`${styles.badge} ${badgeClass(proto.status)}`}>
@@ -590,6 +631,7 @@ const DesignPrototypeReviewView: React.FC = () => {
                         <button
                           className={styles.commentResolveBtn}
                           onClick={() => handleResolveComment(c.id)}
+                          {...{ 'data-testid': `prototype-resolve-comment-${c.id}` }}
                         >
                           Resolve
                         </button>
@@ -601,13 +643,17 @@ const DesignPrototypeReviewView: React.FC = () => {
 
               {/* Error toast */}
               {mutationError && (
-                <div className={styles.errorBanner}>
+                <div
+                  className={styles.errorBanner}
+                  role="alert"
+                  {...{ 'data-testid': 'prototype-review-error' }}
+                >
                   {(mutationError as Error).message}
                 </div>
               )}
 
               {/* Comment bar */}
-              {selectedProto && selectedProto.status !== 'generating' && selectedProto.status !== 'regenerating' && selectedProto.status !== 'generation_failed' && can('interviews:manage') && (
+              {selectedProto && selectedProto.status !== 'generating' && selectedProto.status !== 'regenerating' && selectedProto.status !== 'generation_failed' && (
                 <div className={styles.actionsBar}>
                   <div className={styles.actionsLeft}>
                     <input
@@ -616,11 +662,13 @@ const DesignPrototypeReviewView: React.FC = () => {
                       value={commentText}
                       onChange={e => setCommentText(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter') handleAddComment(); }}
+                      {...{ 'data-testid': 'prototype-comment-input' }}
                     />
                     <button
                       className={styles.btnSecondary}
                       onClick={handleAddComment}
                       disabled={!commentText.trim()}
+                      {...{ 'data-testid': 'prototype-comment-btn' }}
                     >
                       Comment
                     </button>
@@ -642,6 +690,7 @@ const DesignPrototypeReviewView: React.FC = () => {
           confirmLabel="Request Changes"
           onConfirm={handleRequestRevision}
           onCancel={() => setShowRevisionModal(false)}
+          {...{ 'data-testid': 'prototype-request-changes-modal' }}
         />
       )}
     </div>

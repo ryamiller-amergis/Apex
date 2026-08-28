@@ -625,6 +625,7 @@ export const PrdReviewView: React.FC = () => {
   const reviewPrd = useReviewPrd();
   const reviewTestCases = useReviewTestCases();
   const ownerApprovePrd = useOwnerApprove(id ?? null, 'prd');
+  const ownerApproveQa = useOwnerApprove(id ?? null, 'test_case');
   const deletePrd = useDeletePrd();
   const createAdoItems = useCreatePrdAdoItems();
   const syncAdoStatus = useSyncPrdAdoStatus(id);
@@ -726,8 +727,8 @@ export const PrdReviewView: React.FC = () => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
 
-  const { data: assignments = [] } = useDocumentAssignments(id, 'prd');
-  const { data: qaAssignments = [] } = useDocumentAssignments(id, 'test_case');
+  const { data: assignments = [], isLoading: assignmentsLoading } = useDocumentAssignments(id, 'prd');
+  const { data: qaAssignments = [], isLoading: qaAssignmentsLoading } = useDocumentAssignments(id, 'test_case');
   const { data: designPrototypeAssignments = [] } = useDocumentAssignments(id, 'design_prototype');
 
   const reviewerApprovalComplete = useMemo(() => {
@@ -737,10 +738,8 @@ export const PrdReviewView: React.FC = () => {
         ? assignments.every((a) => a.status === 'approved')
         : assignments.some((a) => a.status === 'approved');
     }
-    const kickoffReviewerIds = sourceInterview?.prdApproverIds;
-    if (kickoffReviewerIds && kickoffReviewerIds.length > 0) return false;
     return true;
-  }, [assignments, projectConfig?.approvalMode, sourceInterview?.prdApproverIds]);
+  }, [assignments, projectConfig?.approvalMode]);
   const { data: activeUsers = [] } = useActiveUsers();
   const { data: routeOptions = [] } = useScreenInventoryRoutes(!!prd && prd.status !== 'approved');
 
@@ -1010,6 +1009,11 @@ export const PrdReviewView: React.FC = () => {
     if (!id) return;
     await reviewTestCases.mutateAsync({ prdId: id, status: 'approved' });
   }, [id, reviewTestCases]);
+
+  const handleQaOwnerApprove = useCallback(async () => {
+    if (!id) return;
+    await ownerApproveQa.mutateAsync({ status: 'approved' });
+  }, [id, ownerApproveQa]);
 
   const handleOwnerApprove = useCallback(async () => {
     if (!id) return;
@@ -1598,6 +1602,9 @@ export const PrdReviewView: React.FC = () => {
 
   const isAuthor = prd.authorId === userId;
   const isOwner = prd.ownerId === userId;
+  const ownerOnly = !assignmentsLoading && assignments.length === 0;
+  const qaOwnerOnly = !qaAssignmentsLoading && qaAssignments.length === 0;
+  const isOwnerActor = (prd.ownerId ? isOwner : isAuthor) || isSuperAdmin;
   const canManage = can('interviews:manage');
   const canReview = can('prds:review');
   const isAssignedApprover = assignments.length > 0
@@ -1613,7 +1620,7 @@ export const PrdReviewView: React.FC = () => {
     (a) => a.approverUserId === userId && a.status === 'approved'
   );
   const canPerformReview =
-    canReview && (isAssignedApprover || isAdmin) && (!isAuthor || isAdmin);
+    !ownerOnly && canReview && (isAssignedApprover || isAdmin) && (!isAuthor || isAdmin);
   const anyDesignDocApproved =
     relatedDesignDocs && relatedDesignDocs.some((d) => d.status === 'approved');
 
@@ -1626,7 +1633,7 @@ export const PrdReviewView: React.FC = () => {
   const showCommentLayer =
     (prd.status === 'pending_review' || prd.status === 'revision_requested') &&
     readiness.readyForReviewActions &&
-    (canPerformReview || isAssignedQaApprover || isAuthor || isOwner || isAdmin);
+    (ownerOnly || canPerformReview || isAssignedQaApprover || isAuthor || isOwner || isAdmin);
 
   const canEditContent =
     canManage && (isAuthor || isOwner || isAdmin) && prd.status !== 'approved';
@@ -1663,7 +1670,7 @@ export const PrdReviewView: React.FC = () => {
     canManageDraftReviewAction && prd.status === 'pending_review';
   const canDeletePrdAction = canManageDraftReviewAction;
   const canReassignReviewersAction =
-    prd.status === 'pending_review' && canManageDraftReviewAction;
+    !ownerOnly && prd.status === 'pending_review' && canManageDraftReviewAction;
   const canShowHeaderActionMenu =
     canShowApprovalsAction ||
     canRunValidationAction ||
@@ -2113,15 +2120,38 @@ export const PrdReviewView: React.FC = () => {
               </>
             )}
 
-          {prd.status === 'pending_review' && (isOwner || isAdmin) && (
+          {testCasesRequired &&
+            qaOwnerOnly &&
+            prd.status === 'pending_review' &&
+            isOwnerActor && (
+              <>
+                <span className={styles.actionDivider} />
+                <div className={styles.reviewControls}>
+                  <button
+                    className={styles.btnApprove}
+                    onClick={() => void handleQaOwnerApprove()}
+                    disabled={ownerApproveQa.isPending || !readiness.readyForReviewActions}
+                    title={!readiness.readyForReviewActions ? readiness.blockingReason : undefined}
+                    type="button"
+                    {...{ 'data-testid': 'approve-qa-owner-btn' }}
+                  >
+                    Approve QA as Owner
+                  </button>
+                </div>
+              </>
+            )}
+
+          {prd.status === 'pending_review' && (isOwnerActor || ownerOnly) && (
             <>
               <span className={styles.actionDivider} />
               <div className={styles.reviewControls}>
                 <button
                   className={styles.btnApprove}
                   onClick={() => void handleOwnerApprove()}
-                  disabled={ownerApprovePrd.isPending || (!reviewerApprovalComplete && !isAdmin)}
-                  title={!reviewerApprovalComplete && !isAdmin
+                  disabled={ownerApprovePrd.isPending || !isOwnerActor || (!reviewerApprovalComplete && !isSuperAdmin)}
+                  aria-disabled={ownerApprovePrd.isPending || !isOwnerActor || (!reviewerApprovalComplete && !isSuperAdmin)}
+                  aria-describedby={ownerOnly && !isOwnerActor ? 'owner-approve-disabled-reason' : undefined}
+                  title={!reviewerApprovalComplete && !isSuperAdmin
                     ? 'Reviewers must approve the PRD before owner approval'
                     : undefined}
                   type="button"
@@ -2129,6 +2159,15 @@ export const PrdReviewView: React.FC = () => {
                 >
                   Approve as Owner
                 </button>
+                {ownerOnly && !isOwnerActor && (
+                  <span
+                    id="owner-approve-disabled-reason"
+                    role="status"
+                    {...{ 'data-testid': 'owner-approve-disabled-reason' }}
+                  >
+                    Only the document owner or a Platform Admin can approve
+                  </span>
+                )}
               </div>
             </>
           )}
@@ -3158,7 +3197,10 @@ export const PrdReviewView: React.FC = () => {
                         )}
 
                         {files.length === 0 && features.length === 0 && pendingGaps.length > 0 && (
-                          <div className={styles.featureGaps} data-testid="prd-validation-root-gaps">
+                          <div
+                            className={styles.featureGaps}
+                            {...{ 'data-testid': 'prd-validation-root-gaps' }}
+                          >
                             {pendingGaps.map((gap) => (
                               <div key={gap.id} className={styles.gapItem} data-resolution={gap.resolution}>
                                 <span className={styles.gapIcon}>

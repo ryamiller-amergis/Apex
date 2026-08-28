@@ -10,11 +10,10 @@ import {
 } from '../db/schema';
 import type { Adr, AdrStatus, AdrSummary } from '../../shared/types/adr';
 import { cancelRun, markAsInterviewThread, readOutputAdr, hydrateThread } from './chatAgentService';
-import { getSkillSettingsName } from './projectSettingsService';
+import { getApproverUserIdsForProject, getSkillSettingsName } from './projectSettingsService';
 import { assignApprovers, isApprovalComplete } from './documentApprovalService';
 import { getUnresolvedCount } from './reviewCommentService';
 import { recordOwnerApproval } from './ownerApprovalService';
-import { listGroupsWithMembers } from './groupService';
 
 const EDITABLE_STATUSES: AdrStatus[] = ['in_progress', 'accepted', 'superseded'];
 const WATCHER_INTERVAL_MS = 5_000;
@@ -117,17 +116,17 @@ export async function createAdr(opts: {
   reviewerIds?: string[];
 }): Promise<{ adrId: string; threadId: string }> {
   const reviewerIds = [...new Set(opts.reviewerIds ?? [])];
-  if (reviewerIds.includes(opts.userId)) {
-    throw httpError('The ADR owner cannot also be assigned as a reviewer', 400);
-  }
   if (reviewerIds.length > 0) {
-    const groups = await listGroupsWithMembers(opts.project);
-    const developerIds = new Set(
-      groups.find((group) => group.name === 'Developer')?.members.map((member) => member.userId) ?? [],
+    const configuredReviewerIds = new Set(
+      await getApproverUserIdsForProject(opts.project, 'adr'),
     );
-    const invalidReviewerIds = reviewerIds.filter((id) => !developerIds.has(id));
+    const invalidReviewerIds = reviewerIds.filter((id) => !configuredReviewerIds.has(id));
     if (invalidReviewerIds.length > 0) {
-      throw httpError(`ADR reviewers must belong to the Developer group: ${invalidReviewerIds.join(', ')}`, 400);
+      const subject = invalidReviewerIds.length === 1 ? 'ADR reviewer is' : 'ADR reviewers are';
+      throw httpError(
+        `${subject} not in the configured reviewer pool: ${invalidReviewerIds.join(', ')}`,
+        400,
+      );
     }
   }
   const [row] = await db.insert(adrs).values({
@@ -183,9 +182,17 @@ async function requireAuthor(id: string, userId: string): Promise<typeof adrs.$i
   return row;
 }
 
-export async function updateAdrStatus(id: string, userId: string, status: AdrStatus): Promise<void> {
+export async function updateAdrStatus(
+  id: string,
+  userId: string,
+  status: AdrStatus,
+  options?: { allowNonAuthor?: boolean },
+): Promise<void> {
   if (!EDITABLE_STATUSES.includes(status)) throw httpError(`Invalid ADR status: ${status}`, 400);
-  const row = await requireAuthor(id, userId);
+  const row = options?.allowNonAuthor
+    ? await db.query.adrs.findFirst({ where: eq(adrs.id, id) })
+    : await requireAuthor(id, userId);
+  if (!row) throw httpError('ADR not found', 404);
   if (status === 'accepted' && row.proposedContent != null) {
     throw httpError('Apply or reject the proposed ADR edits before accepting the ADR', 409);
   }

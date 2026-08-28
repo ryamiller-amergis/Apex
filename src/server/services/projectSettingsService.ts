@@ -3,6 +3,7 @@ import {
   projectSkillSettings,
   projectApprovers,
   projectApproverGroups,
+  projectApprovalModes,
   appGroupMembers,
   appGroups,
   appUsers,
@@ -21,7 +22,11 @@ import type {
   RepositoryCheckoutStatus,
 } from '../../shared/types/projectSettings';
 import type { GroupWithMembers } from '../../shared/types/groups';
-import type { ApprovalMode } from '../../shared/types/approvals';
+import type {
+  ApprovalMode,
+  ModuleApprovalModes,
+  ReviewerDocumentType,
+} from '../../shared/types/approvals';
 import { emitGroundingActiveSetChanged } from './groundingMaintenanceEvents';
 import { isProjectRepositoryCheckoutReadinessEnabled } from './featureFlagService';
 
@@ -210,13 +215,18 @@ export interface UpsertSkillConfigOptions {
   screenInventoryPath?: string | null;
   prototypeWebReferencesEnabled?: boolean;
   approvalMode?: ApprovalMode;
+  approvalModes?: Partial<ModuleApprovalModes>;
 }
 
 export async function upsertSkillConfig(
   opts: UpsertSkillConfigOptions
 ): Promise<ProjectSkillConfig> {
   const now = new Date().toISOString();
-  const approvalModeValue = opts.approvalMode ?? 'any_one';
+  const providedApprovalModes = validateApprovalModeEntries(
+    opts.approvalModes ?? {}
+  );
+  const approvalModeValue =
+    opts.approvalModes?.prd ?? opts.approvalMode ?? 'any_one';
 
   const values = {
     project: opts.project,
@@ -342,7 +352,15 @@ export async function upsertSkillConfig(
         .set(resetCheckout ? { ...values, ...CHECKOUT_RESET } : values)
         .where(eq(projectSkillSettings.id, opts.id))
         .returning();
-      return rows[0];
+      const row = rows[0];
+      await writeApprovalModeRows(
+        tx,
+        row.id,
+        providedApprovalModes,
+        now,
+        false
+      );
+      return row;
     }
 
     // INSERT — if it's the first config for the project, force isDefault = true
@@ -360,7 +378,23 @@ export async function upsertSkillConfig(
       .insert(projectSkillSettings)
       .values({ ...values, ...CHECKOUT_RESET })
       .returning();
-    return rows[0];
+    const row = rows[0];
+    const initialModes: ModuleApprovalModes = {
+      prd: approvalModeValue,
+      design_doc: approvalModeValue,
+      design_prototype: approvalModeValue,
+      test_case: approvalModeValue,
+      adr: 'any_one',
+      ...opts.approvalModes,
+    };
+    await writeApprovalModeRows(
+      tx,
+      row.id,
+      validateApprovalModeEntries(initialModes),
+      now,
+      false
+    );
+    return row;
   });
 
   await groupService.seedDefaultGroupsForProject(opts.project, opts.updatedBy);
@@ -499,11 +533,7 @@ export async function listApprovers(
 
   return rows.map((r) => ({
     ...r,
-    documentType: r.documentType as
-      | 'design_doc'
-      | 'prd'
-      | 'design_prototype'
-      | 'test_case',
+    documentType: r.documentType as ReviewerDocumentType,
   }));
 }
 
@@ -543,11 +573,7 @@ export async function listApproversForAllProjects(): Promise<
   for (const r of rows) {
     const approver: ProjectApprover = {
       ...r,
-      documentType: r.documentType as
-        | 'design_doc'
-        | 'prd'
-        | 'design_prototype'
-        | 'test_case',
+      documentType: r.documentType as ReviewerDocumentType,
     };
     if (!grouped[r.settingsId]) grouped[r.settingsId] = [];
     grouped[r.settingsId].push(approver);
@@ -557,7 +583,7 @@ export async function listApproversForAllProjects(): Promise<
 
 export async function setApprovers(
   settingsId: string,
-  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case',
+  documentType: ReviewerDocumentType,
   userIds: string[],
   assignedBy?: string
 ): Promise<ProjectApprover[]> {
@@ -588,7 +614,7 @@ export async function setApprovers(
 
 export async function getApproversForDocument(
   settingsId: string,
-  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case'
+  documentType: ReviewerDocumentType
 ): Promise<ProjectApprover[]> {
   const rows = await db
     .select({
@@ -612,17 +638,13 @@ export async function getApproversForDocument(
 
   return rows.map((r) => ({
     ...r,
-    documentType: r.documentType as
-      | 'design_doc'
-      | 'prd'
-      | 'design_prototype'
-      | 'test_case',
+    documentType: r.documentType as ReviewerDocumentType,
   }));
 }
 
 export async function setApproverGroups(
   settingsId: string,
-  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case',
+  documentType: ReviewerDocumentType,
   groupIds: string[],
   assignedBy?: string
 ): Promise<void> {
@@ -649,9 +671,87 @@ export async function setApproverGroups(
   });
 }
 
+export interface ApproverPoolReplacement {
+  individuals: string[];
+  groups: string[];
+}
+
+/**
+ * Replaces every supplied module's individual and group pools in one
+ * transaction. Omitted modules remain unchanged.
+ */
+export async function replaceApproverPools(
+  settingsId: string,
+  pools: Partial<Record<ReviewerDocumentType, ApproverPoolReplacement>>,
+  assignedBy?: string
+): Promise<void> {
+  const entries = Object.entries(pools);
+  for (const [documentType, pool] of entries) {
+    if (!isReviewerDocumentType(documentType)) {
+      throw new Error(`Unsupported reviewer document type: ${documentType}`);
+    }
+    if (
+      !pool ||
+      !Array.isArray(pool.individuals) ||
+      !pool.individuals.every((value) => typeof value === 'string') ||
+      !Array.isArray(pool.groups) ||
+      !pool.groups.every((value) => typeof value === 'string')
+    ) {
+      throw new Error(`Invalid approver pool for ${documentType}`);
+    }
+  }
+
+  if (entries.length === 0) return;
+
+  await db.transaction(async (tx) => {
+    for (const [documentType, pool] of entries) {
+      const typedDocumentType = documentType as ReviewerDocumentType;
+      const typedPool = pool as ApproverPoolReplacement;
+
+      await tx
+        .delete(projectApprovers)
+        .where(
+          and(
+            eq(projectApprovers.settingsId, settingsId),
+            eq(projectApprovers.documentType, typedDocumentType)
+          )
+        );
+      await tx
+        .delete(projectApproverGroups)
+        .where(
+          and(
+            eq(projectApproverGroups.settingsId, settingsId),
+            eq(projectApproverGroups.documentType, typedDocumentType)
+          )
+        );
+
+      if (typedPool.individuals.length > 0) {
+        await tx.insert(projectApprovers).values(
+          typedPool.individuals.map((userId) => ({
+            settingsId,
+            userId,
+            documentType: typedDocumentType,
+            assignedBy: assignedBy ?? null,
+          }))
+        );
+      }
+      if (typedPool.groups.length > 0) {
+        await tx.insert(projectApproverGroups).values(
+          typedPool.groups.map((groupId) => ({
+            settingsId,
+            groupId,
+            documentType: typedDocumentType,
+            assignedBy: assignedBy ?? null,
+          }))
+        );
+      }
+    }
+  });
+}
+
 export async function getApproverPool(
   settingsId: string,
-  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case'
+  documentType: ReviewerDocumentType
 ): Promise<ApproverPoolResponse> {
   const individuals = await getApproversForDocument(settingsId, documentType);
 
@@ -680,9 +780,7 @@ export async function getApproverPool(
     );
 
   const groups: Array<
-    GroupWithMembers & {
-      documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case';
-    }
+    GroupWithMembers & { documentType: ReviewerDocumentType }
   > = [];
   for (const ref of groupRefs) {
     const memberRows = await db
@@ -706,11 +804,7 @@ export async function getApproverPool(
       isDefault: ref.groupIsDefault,
       createdBy: ref.groupCreatedBy,
       createdAt: ref.groupCreatedAt,
-      documentType: ref.documentType as
-        | 'design_doc'
-        | 'prd'
-        | 'design_prototype'
-        | 'test_case',
+      documentType: ref.documentType as ReviewerDocumentType,
       members: memberRows,
     });
   }
@@ -720,7 +814,7 @@ export async function getApproverPool(
 
 export async function getApproverUserIds(
   settingsId: string,
-  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case'
+  documentType: ReviewerDocumentType
 ): Promise<string[]> {
   const pool = await getApproverPool(settingsId, documentType);
   const userIds = new Set<string>();
@@ -738,7 +832,7 @@ export async function getApproverUserIds(
 /** Back-compat wrapper: resolves the default config for a project, then fetches approver user IDs. */
 export async function getApproverUserIdsForProject(
   project: string,
-  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case'
+  documentType: ReviewerDocumentType
 ): Promise<string[]> {
   const config = await getSkillConfig(project);
   if (!config?.id) return [];
@@ -748,7 +842,7 @@ export async function getApproverUserIdsForProject(
 /** Back-compat wrapper: resolves the default config for a project, then fetches the approver pool. */
 export async function getApproverPoolForProject(
   project: string,
-  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case'
+  documentType: ReviewerDocumentType
 ): Promise<ApproverPoolResponse> {
   const config = await getSkillConfig(project);
   if (!config?.id) return { individuals: [], groups: [] };
@@ -758,7 +852,7 @@ export async function getApproverPoolForProject(
 /** Back-compat wrapper: resolves the default config for a project, then fetches approvers for a document type. */
 export async function getApproversForDocumentByProject(
   project: string,
-  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case'
+  documentType: ReviewerDocumentType
 ): Promise<ProjectApprover[]> {
   const config = await getSkillConfig(project);
   if (!config?.id) return [];
@@ -822,4 +916,261 @@ export async function listApproverGroupsForAllProjects(): Promise<
     });
   }
   return grouped;
+}
+
+// ── Approval Modes (per reviewer module) ─────────────────────────────────────
+
+/** Every module that carries a reviewer pool and an approval mode. */
+export const REVIEWER_DOCUMENT_TYPES: readonly ReviewerDocumentType[] = [
+  'prd',
+  'design_doc',
+  'design_prototype',
+  'test_case',
+  'adr',
+];
+
+export const APPROVAL_MODES: readonly ApprovalMode[] = [
+  'any_one',
+  'all_required',
+];
+
+export function isReviewerDocumentType(
+  value: unknown
+): value is ReviewerDocumentType {
+  return (
+    typeof value === 'string' &&
+    REVIEWER_DOCUMENT_TYPES.includes(value as ReviewerDocumentType)
+  );
+}
+
+export function isApprovalMode(value: unknown): value is ApprovalMode {
+  return (
+    typeof value === 'string' &&
+    APPROVAL_MODES.includes(value as ApprovalMode)
+  );
+}
+
+function assertReviewerDocumentType(
+  value: string
+): asserts value is ReviewerDocumentType {
+  if (!isReviewerDocumentType(value)) {
+    throw new Error(`Unsupported reviewer document type: ${value}`);
+  }
+}
+
+function assertApprovalMode(value: string): asserts value is ApprovalMode {
+  if (!isApprovalMode(value)) {
+    throw new Error(`Unsupported approval mode: ${value}`);
+  }
+}
+
+function validateApprovalModeEntries(
+  modes: Partial<ModuleApprovalModes>
+): Array<[ReviewerDocumentType, ApprovalMode]> {
+  const entries = Object.entries(modes);
+  for (const [documentType, mode] of entries) {
+    if (!isReviewerDocumentType(documentType)) {
+      throw new Error(`Unsupported reviewer document type: ${documentType}`);
+    }
+    if (!isApprovalMode(mode)) {
+      throw new Error(`Unsupported approval mode: ${String(mode)}`);
+    }
+  }
+  return entries as Array<[ReviewerDocumentType, ApprovalMode]>;
+}
+
+async function writeApprovalModeRows(
+  tx: Pick<typeof db, 'insert' | 'update'>,
+  settingsId: string,
+  entries: Array<[ReviewerDocumentType, ApprovalMode]>,
+  now: string,
+  mirrorPrdLegacy: boolean
+): Promise<void> {
+  for (const [documentType, mode] of entries) {
+    await tx
+      .insert(projectApprovalModes)
+      .values({ settingsId, documentType, mode, updatedAt: now })
+      .onConflictDoUpdate({
+        target: [
+          projectApprovalModes.settingsId,
+          projectApprovalModes.documentType,
+        ],
+        set: { mode, updatedAt: now },
+      });
+  }
+
+  const prdMode = entries.find(([documentType]) => documentType === 'prd')?.[1];
+  if (mirrorPrdLegacy && prdMode !== undefined) {
+    await tx
+      .update(projectSkillSettings)
+      .set({ approvalMode: prdMode, updatedAt: now })
+      .where(eq(projectSkillSettings.id, settingsId));
+  }
+}
+
+/**
+ * Mode to use when no per-module row exists yet. The four pre-existing modules
+ * inherit the legacy project-wide column so partially migrated databases keep
+ * resolving the mode an admin already configured; `adr` has no legacy value and
+ * starts permissive.
+ */
+function fallbackApprovalMode(
+  documentType: ReviewerDocumentType,
+  legacyMode: ApprovalMode | null | undefined
+): ApprovalMode {
+  if (documentType === 'adr') return 'any_one';
+  return legacyMode ?? 'any_one';
+}
+
+/** Reads the stored per-module mode, or null when the module has no row yet. */
+async function readStoredApprovalMode(
+  settingsId: string,
+  documentType: ReviewerDocumentType
+): Promise<ApprovalMode | null> {
+  const rows = await db
+    .select({ mode: projectApprovalModes.mode })
+    .from(projectApprovalModes)
+    .where(
+      and(
+        eq(projectApprovalModes.settingsId, settingsId),
+        eq(projectApprovalModes.documentType, documentType)
+      )
+    )
+    .limit(1);
+  return rows[0]?.mode ?? null;
+}
+
+async function readLegacyApprovalMode(
+  settingsId: string
+): Promise<ApprovalMode | null> {
+  const rows = await db
+    .select({ approvalMode: projectSkillSettings.approvalMode })
+    .from(projectSkillSettings)
+    .where(eq(projectSkillSettings.id, settingsId))
+    .limit(1);
+  return rows[0]?.approvalMode ?? null;
+}
+
+/**
+ * Approval mode for one module of one settings config. Falls back to the legacy
+ * project-wide column (or `any_one` for `adr`) when the module row is missing;
+ * the fallback is never written back to storage.
+ */
+export async function getApprovalMode(
+  settingsId: string,
+  documentType: ReviewerDocumentType
+): Promise<ApprovalMode> {
+  assertReviewerDocumentType(documentType);
+
+  const stored = await readStoredApprovalMode(settingsId, documentType);
+  if (stored) return stored;
+
+  // `adr` has no legacy column to inherit, so skip that read entirely.
+  const legacyMode =
+    documentType === 'adr' ? null : await readLegacyApprovalMode(settingsId);
+  return fallbackApprovalMode(documentType, legacyMode);
+}
+
+/**
+ * Complete module→mode map for a settings config. Missing rows resolve through
+ * the same fallback as {@link getApprovalMode}, so a partially migrated database
+ * still yields a mode for every module without a write.
+ */
+export async function getApprovalModes(
+  settingsId: string
+): Promise<ModuleApprovalModes> {
+  const rows = await db
+    .select({
+      documentType: projectApprovalModes.documentType,
+      mode: projectApprovalModes.mode,
+    })
+    .from(projectApprovalModes)
+    .where(eq(projectApprovalModes.settingsId, settingsId));
+
+  const stored = new Map<string, ApprovalMode>(
+    rows.map((r) => [r.documentType, r.mode])
+  );
+
+  const needsLegacy = REVIEWER_DOCUMENT_TYPES.some(
+    (documentType) => documentType !== 'adr' && !stored.has(documentType)
+  );
+  const legacyMode = needsLegacy
+    ? await readLegacyApprovalMode(settingsId)
+    : null;
+
+  const modes = {} as ModuleApprovalModes;
+  for (const documentType of REVIEWER_DOCUMENT_TYPES) {
+    modes[documentType] =
+      stored.get(documentType) ??
+      fallbackApprovalMode(documentType, legacyMode);
+  }
+  return modes;
+}
+
+/**
+ * Writes one module's approval mode. `prd` is the canonical mirror for the
+ * retained legacy project-wide column, so a PRD write updates both rows in one
+ * transaction; writes to any other module leave the legacy column alone.
+ */
+export async function setApprovalMode(
+  settingsId: string,
+  documentType: ReviewerDocumentType,
+  mode: ApprovalMode
+): Promise<void> {
+  assertReviewerDocumentType(documentType);
+  assertApprovalMode(mode);
+
+  const now = new Date().toISOString();
+
+  await db.transaction(async (tx) => {
+    await tx
+      .insert(projectApprovalModes)
+      .values({ settingsId, documentType, mode, updatedAt: now })
+      .onConflictDoUpdate({
+        target: [
+          projectApprovalModes.settingsId,
+          projectApprovalModes.documentType,
+        ],
+        set: { mode, updatedAt: now },
+      });
+
+    if (documentType === 'prd') {
+      await tx
+        .update(projectSkillSettings)
+        .set({ approvalMode: mode, updatedAt: now })
+        .where(eq(projectSkillSettings.id, settingsId));
+    }
+  });
+}
+
+/**
+ * Writes a partial module map in one transaction. All keys and values are
+ * validated before the transaction starts; omitted modules remain unchanged.
+ */
+export async function setApprovalModes(
+  settingsId: string,
+  modes: Partial<ModuleApprovalModes>
+): Promise<void> {
+  const entries = validateApprovalModeEntries(modes);
+
+  if (entries.length === 0) return;
+  const now = new Date().toISOString();
+
+  await db.transaction(async (tx) => {
+    await writeApprovalModeRows(tx, settingsId, entries, now, true);
+  });
+}
+
+/** Back-compat wrapper: resolves the default config for a project, then reads that module's mode. */
+export async function getApprovalModeForProject(
+  project: string,
+  documentType: ReviewerDocumentType
+): Promise<ApprovalMode> {
+  assertReviewerDocumentType(documentType);
+
+  const config = await getSkillConfig(project);
+  if (!config?.id) return fallbackApprovalMode(documentType, null);
+
+  const stored = await readStoredApprovalMode(config.id, documentType);
+  return stored ?? fallbackApprovalMode(documentType, config.approvalMode);
 }

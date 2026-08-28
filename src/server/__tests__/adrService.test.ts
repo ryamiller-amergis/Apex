@@ -12,6 +12,7 @@ jest.mock('../db/drizzle', () => {
         },
       },
       update: jest.fn().mockReturnValue({ set }),
+      insert: jest.fn(),
       delete: deleteFn,
       transaction: jest.fn(async (fn: (tx: { delete: jest.Mock }) => Promise<void>) => fn(tx)),
       _set: set,
@@ -30,6 +31,7 @@ jest.mock('../services/chatAgentService', () => ({
 
 jest.mock('../services/projectSettingsService', () => ({
   getSkillSettingsName: jest.fn(),
+  getApproverUserIdsForProject: jest.fn(),
 }));
 
 jest.mock('../services/documentApprovalService', () => ({
@@ -45,12 +47,9 @@ jest.mock('../services/ownerApprovalService', () => ({
   recordOwnerApproval: jest.fn(),
 }));
 
-jest.mock('../services/groupService', () => ({
-  listGroupsWithMembers: jest.fn(),
-}));
-
-import { deleteAdr, updateAdrStatus } from '../services/adrService';
-import { isApprovalComplete } from '../services/documentApprovalService';
+import { createAdr, deleteAdr, updateAdrStatus } from '../services/adrService';
+import { assignApprovers, isApprovalComplete } from '../services/documentApprovalService';
+import { getApproverUserIdsForProject } from '../services/projectSettingsService';
 import { getUnresolvedCount } from '../services/reviewCommentService';
 import { recordOwnerApproval } from '../services/ownerApprovalService';
 import {
@@ -64,6 +63,7 @@ const { db: mockDb } = jest.requireMock('../db/drizzle') as {
   db: {
     query: { adrs: { findFirst: jest.Mock } };
     update: jest.Mock;
+    insert: jest.Mock;
     delete: jest.Mock;
     transaction: jest.Mock;
     _set: jest.Mock;
@@ -71,6 +71,108 @@ const { db: mockDb } = jest.requireMock('../db/drizzle') as {
     _delete: jest.Mock;
   };
 };
+
+describe('createAdr reviewer eligibility', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('BR-009 accepts the ADR owner as a reviewer when they are in the configured pool', async () => {
+    const returning = jest.fn().mockResolvedValue([{ id: 'adr-owner-reviewer' }]);
+    const values = jest.fn().mockReturnValue({ returning });
+    mockDb.insert.mockReturnValue({ values });
+    (getApproverUserIdsForProject as jest.Mock).mockResolvedValue(['owner-1', 'u2']);
+
+    await createAdr({
+      userId: 'owner-1',
+      project: 'Apex',
+      repo: 'Apex',
+      title: 'Owner may review',
+      chatThreadId: 'thread-owner-reviewer',
+      reviewerIds: ['owner-1', 'u2', 'owner-1'],
+    });
+
+    expect(values).toHaveBeenCalledWith(expect.objectContaining({
+      reviewerIds: ['owner-1', 'u2'],
+    }));
+    expect(assignApprovers).toHaveBeenCalledWith(
+      'adr-owner-reviewer',
+      'adr',
+      ['owner-1', 'u2'],
+      'owner-1',
+    );
+  });
+
+  it('VT-14 rejects a reviewer outside the configured ADR pool with no Developer wording', async () => {
+    (getApproverUserIdsForProject as jest.Mock).mockResolvedValue(['u1', 'u2']);
+
+    const result = createAdr({
+      userId: 'owner-1',
+      project: 'Apex',
+      repo: 'Apex',
+      title: 'Choose event transport',
+      chatThreadId: 'thread-1',
+      reviewerIds: ['u3'],
+    });
+
+    await expect(result).rejects.toMatchObject({ status: 400 });
+    await expect(result).rejects.toThrow('ADR reviewer is not in the configured reviewer pool: u3');
+    await expect(result).rejects.not.toThrow(/Developer/i);
+    expect(getApproverUserIdsForProject).toHaveBeenCalledWith('Apex', 'adr');
+  });
+
+  it('TBI-004 DoD-0/DoD-2 stores explicit selections without rewriting prior ADR snapshots', async () => {
+    const returning = jest.fn()
+      .mockResolvedValueOnce([{ id: 'adr-before' }])
+      .mockResolvedValueOnce([{ id: 'adr-after' }]);
+    const values = jest.fn().mockReturnValue({ returning });
+    mockDb.insert.mockReturnValue({ values });
+    (getApproverUserIdsForProject as jest.Mock)
+      .mockResolvedValueOnce(['reviewer-before'])
+      .mockResolvedValueOnce(['reviewer-after']);
+
+    await createAdr({
+      userId: 'owner-1',
+      project: 'Apex',
+      repo: 'Apex',
+      title: 'Before pool change',
+      chatThreadId: 'thread-before',
+      reviewerIds: ['reviewer-before'],
+    });
+    await createAdr({
+      userId: 'owner-1',
+      project: 'Apex',
+      repo: 'Apex',
+      title: 'After pool change',
+      chatThreadId: 'thread-after',
+      reviewerIds: ['reviewer-after'],
+    });
+
+    expect(values).toHaveBeenNthCalledWith(1, expect.objectContaining({ reviewerIds: ['reviewer-before'] }));
+    expect(values).toHaveBeenNthCalledWith(2, expect.objectContaining({ reviewerIds: ['reviewer-after'] }));
+    expect(assignApprovers).toHaveBeenNthCalledWith(1, 'adr-before', 'adr', ['reviewer-before'], 'owner-1');
+    expect(assignApprovers).toHaveBeenNthCalledWith(2, 'adr-after', 'adr', ['reviewer-after'], 'owner-1');
+  });
+
+  it('TBI-004 DoD-1 / TBI-006 DoD-0 keeps an empty ADR owner-only with no assignments', async () => {
+    const returning = jest.fn().mockResolvedValue([{ id: 'adr-owner-only' }]);
+    const values = jest.fn().mockReturnValue({ returning });
+    mockDb.insert.mockReturnValue({ values });
+
+    await createAdr({
+      userId: 'owner-1',
+      project: 'Apex',
+      repo: 'Apex',
+      title: 'Owner only',
+      chatThreadId: 'thread-owner-only',
+      reviewerIds: [],
+    });
+
+    expect(values).toHaveBeenCalledWith(expect.objectContaining({ reviewerIds: [] }));
+    expect(getApproverUserIdsForProject).not.toHaveBeenCalled();
+    expect(assignApprovers).not.toHaveBeenCalled();
+  });
+});
 
 describe('updateAdrStatus', () => {
   beforeEach(() => {

@@ -972,7 +972,7 @@ export const DesignDocReviewView: React.FC = () => {
   const location = useLocation();
   const id = location.pathname.split('/').pop() ?? null;
   const navigate = useNavigate();
-  const { can, userId, isAdmin } = useAppShell();
+  const { can, userId, isAdmin, isSuperAdmin } = useAppShell();
   const qc = useQueryClient();
 
   const { data: doc, isLoading, isError } = useDesignDoc(id);
@@ -1184,7 +1184,7 @@ export const DesignDocReviewView: React.FC = () => {
   // Restore React-owned text before this render's commit (tab/split remounts).
   unwrapCommentMarks(tabContentSplitRef.current);
 
-  const { data: assignments = [] } = useDocumentAssignments(id, 'design_doc');
+  const { data: assignments = [], isLoading: assignmentsLoading } = useDocumentAssignments(id, 'design_doc');
   useDesignDocOwnerApproval(id);
   const ownerApproveMutation = useDesignDocOwnerApprove(id);
 
@@ -1816,6 +1816,8 @@ export const DesignDocReviewView: React.FC = () => {
 
   const isAuthor = doc.authorId === userId;
   const isOwner = doc.ownerId === userId;
+  const ownerOnly = !assignmentsLoading && assignments.length === 0;
+  const isOwnerActor = (doc.ownerId ? isOwner : isAuthor) || isSuperAdmin;
   const validationThreshold = doc.validationScoreThreshold ?? 90;
   const scoreBelowThreshold =
     doc.validationScore !== undefined &&
@@ -1827,8 +1829,10 @@ export const DesignDocReviewView: React.FC = () => {
   const canReview = can('design-docs:review');
   const isAssignedApprover = assignments.some((a) => a.approverUserId === userId);
   const isReviewer = canReview && (!isAuthor || isAdmin) && (!isOwner || isAdmin);
-  const canPerformReview = isReviewer && (isAssignedApprover || isAdmin);
-  const showOwnerApproveButton = doc.status === 'reviewer_approved' && (isOwner || isAdmin);
+  const canPerformReview = !ownerOnly && isReviewer && (isAssignedApprover || isAdmin);
+  const showOwnerApproveButton =
+    (doc.status === 'reviewer_approved' || (ownerOnly && doc.status === 'pending_review'))
+    && (isOwnerActor || ownerOnly);
   const canEdit = canManage && (isAuthor || isOwner || isAdmin) && doc.status !== 'approved' && doc.status !== 'reviewer_approved';
   const canUseAssistant = (isReviewer || isOwner || isAuthor || isAdmin) &&
     (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'reviewer_approved' || doc.status === 'revision_requested');
@@ -1891,7 +1895,7 @@ export const DesignDocReviewView: React.FC = () => {
     hasAnyContent &&
     (doc.status === 'draft' || doc.status === 'pending_review' || doc.status === 'revision_requested');
   const canWithdrawAction = canManageAuthorActions && doc.status === 'pending_review';
-  const canShowApproversAction = doc.status === 'pending_review';
+  const canShowApproversAction = !ownerOnly && doc.status === 'pending_review';
   const canDeleteDocAction = canManageAuthorActions;
   const canShowHeaderActionMenu =
     canRunValidationAction ||
@@ -1904,7 +1908,7 @@ export const DesignDocReviewView: React.FC = () => {
 
   const showCommentLayer =
     (doc.status === 'pending_review' || doc.status === 'reviewer_approved' || doc.status === 'revision_requested') &&
-    (canPerformReview || isOwner || isAuthor || isAdmin);
+    (ownerOnly || canPerformReview || isOwner || isAuthor || isAdmin);
 
   const tabToSectionKey: Record<string, ReviewSectionKey> = {
     'design': 'design',
@@ -2179,7 +2183,7 @@ export const DesignDocReviewView: React.FC = () => {
               </button>
             )}
 
-          {isReviewer && doc.status === 'pending_review' && (
+          {!ownerOnly && isReviewer && doc.status === 'pending_review' && (
             <>
               <span className={styles.actionDivider} />
               <div className={styles.reviewControls}>
@@ -2212,12 +2216,32 @@ export const DesignDocReviewView: React.FC = () => {
                 <button
                   className={styles.btnApprove}
                   onClick={() => void handleOwnerApprove()}
-                  disabled={ownerApproveMutation.isPending}
+                  disabled={ownerApproveMutation.isPending || !isOwnerActor || unresolvedCount > 0 || validationBlocking}
+                  aria-disabled={ownerApproveMutation.isPending || !isOwnerActor || unresolvedCount > 0 || validationBlocking}
+                  aria-describedby={ownerOnly && !isOwnerActor ? 'owner-approve-disabled-reason' : undefined}
+                  title={
+                    !isOwnerActor
+                      ? undefined
+                      : unresolvedCount > 0
+                        ? 'Resolve all comments before approving'
+                        : validationBlocking
+                          ? `Validation score must be ≥ ${validationThreshold}% (current: ${doc.validationScore}%)`
+                          : undefined
+                  }
                   type="button"
                   {...{ 'data-testid': 'dd-approve-owner-btn' }}
                 >
                   Approve as Owner
                 </button>
+                {ownerOnly && !isOwnerActor && (
+                  <span
+                    id="owner-approve-disabled-reason"
+                    role="status"
+                    {...{ 'data-testid': 'owner-approve-disabled-reason' }}
+                  >
+                    Only the document owner or a Platform Admin can approve
+                  </span>
+                )}
               </div>
             </>
           )}

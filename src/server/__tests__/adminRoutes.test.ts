@@ -13,6 +13,8 @@ import * as projectSettingsService from '../services/projectSettingsService';
 
 // ── Mocks ──────────────────────────────────────────────────────────────────────
 
+let mockPermissions = new Set(['admin:roles']);
+
 jest.mock('../services/rbacService');
 jest.mock('../services/projectSettingsService');
 jest.mock('../services/groupService');
@@ -25,11 +27,18 @@ jest.mock('@cursor/sdk', () => ({
   },
 }));
 
-// Default: all permission checks pass. Tests that verify auth behaviour
-// re-configure these mocks per test.
+// Established route-permission harness: admin access passes by default, while
+// permission tests can remove admin:roles and exercise the router-level gate.
 jest.mock('../middleware/rbac', () => ({
-  requirePermission: (..._keys: string[]) =>
-    (_req: any, _res: any, next: any) => next(),
+  requirePermission: (...keys: string[]) =>
+    (_req: any, res: any, next: any) => {
+      const missing = keys.filter((key) => !mockPermissions.has(key));
+      if (missing.length > 0) {
+        res.status(403).json({ error: 'Forbidden', missing });
+        return;
+      }
+      next();
+    },
   requireAnyPermission: (..._keys: string[]) =>
     (_req: any, _res: any, next: any) => next(),
   attachPermissions: (_req: any, _res: any, next: any) => next(),
@@ -38,6 +47,19 @@ jest.mock('../middleware/rbac', () => ({
 
 const mockService = rbacService as jest.Mocked<typeof rbacService>;
 const mockProjectSettings = projectSettingsService as jest.Mocked<typeof projectSettingsService>;
+
+beforeEach(() => {
+  mockPermissions = new Set(['admin:roles']);
+  mockProjectSettings.isReviewerDocumentType.mockImplementation(
+    (value): value is import('../../shared/types/approvals').ReviewerDocumentType =>
+      typeof value === 'string' &&
+      ['prd', 'design_doc', 'design_prototype', 'test_case', 'adr'].includes(value),
+  );
+  mockProjectSettings.isApprovalMode.mockImplementation(
+    (value): value is import('../../shared/types/approvals').ApprovalMode =>
+      value === 'any_one' || value === 'all_required',
+  );
+});
 
 const { Cursor: MockCursor } = jest.requireMock('@cursor/sdk') as {
   Cursor: { models: { list: jest.Mock } };
@@ -476,6 +498,35 @@ describe('GET /api/admin/project-settings', () => {
     });
   });
 
+  it('VT-01 / VT-06 exposes all approval modes and the ADR reviewer count', async () => {
+    const approvalModes = {
+      prd: 'all_required',
+      design_doc: 'any_one',
+      design_prototype: 'all_required',
+      test_case: 'any_one',
+      adr: 'any_one',
+    } as const;
+    mockProjectSettings.listSkillConfigs.mockResolvedValue([configs[0]]);
+    mockProjectSettings.listApproversForAllProjects.mockResolvedValue({
+      'cfg-1': [
+        { id: 'a-adr', settingsId: 'cfg-1', userId: 'u1', documentType: 'adr', displayName: 'Ada', email: null, assignedBy: null, assignedAt: '2026-01-01T00:00:00Z' },
+      ],
+    });
+    mockProjectSettings.listApproverGroupsForAllProjects.mockResolvedValue({
+      'cfg-1': [{ groupId: 'g-adr', groupName: 'Architects', documentType: 'adr' }],
+    });
+    mockProjectSettings.getApprovalModes.mockResolvedValue(approvalModes);
+
+    const res = await request(buildApp()).get('/api/admin/project-settings');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({
+      approvalModes,
+      adrApproverCount: 2,
+    });
+    expect(mockProjectSettings.getApprovalModes).toHaveBeenCalledWith('cfg-1');
+  });
+
   it('returns 500 when listSkillConfigs throws', async () => {
     mockProjectSettings.listSkillConfigs.mockRejectedValue(new Error('DB error'));
 
@@ -677,6 +728,117 @@ describe('PUT /api/admin/project-settings/:project', () => {
     );
   });
 
+  it('PBI-002 AC-0 / VT-06 persists a partial mode map and returns the complete map', async () => {
+    const approvalModes = {
+      prd: 'all_required',
+      design_doc: 'any_one',
+      design_prototype: 'all_required',
+      test_case: 'any_one',
+      adr: 'any_one',
+    } as const;
+    mockProjectSettings.upsertSkillConfig.mockResolvedValue(savedConfig);
+    mockProjectSettings.getApprovalModes.mockResolvedValue(approvalModes);
+
+    const res = await request(buildApp())
+      .put('/api/admin/project-settings/proj-alpha')
+      .send({
+        skillRepo: 'org/repo',
+        skillBranch: 'main',
+        approvalModes: { design_doc: 'any_one' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.approvalModes).toEqual(approvalModes);
+    expect(mockProjectSettings.upsertSkillConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'proj-alpha',
+        approvalModes: { design_doc: 'any_one' },
+      }),
+    );
+    expect(mockProjectSettings.setApprovalModes).not.toHaveBeenCalled();
+  });
+
+  it('VT-06 makes approvalModes.prd authoritative over legacy approvalMode', async () => {
+    mockProjectSettings.upsertSkillConfig.mockResolvedValue(savedConfig);
+    mockProjectSettings.getApprovalModes.mockResolvedValue({
+      prd: 'all_required',
+      design_doc: 'any_one',
+      design_prototype: 'any_one',
+      test_case: 'any_one',
+      adr: 'any_one',
+    });
+
+    await request(buildApp())
+      .put('/api/admin/project-settings/proj-alpha')
+      .send({
+        skillRepo: 'org/repo',
+        skillBranch: 'main',
+        approvalMode: 'any_one',
+        approvalModes: { prd: 'all_required' },
+      });
+
+    expect(mockProjectSettings.upsertSkillConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalMode: 'all_required',
+        approvalModes: { prd: 'all_required' },
+      }),
+    );
+    expect(mockProjectSettings.setApprovalModes).not.toHaveBeenCalled();
+  });
+
+  it.each<[Record<string, string>, string]>([
+    [{ adr: 'majority' }, 'invalid value'],
+    [{ standup: 'any_one' }, 'invalid key'],
+  ])(
+    'PBI-002 AC-1 / VT-08 rejects an %s before any write (%s)',
+    async (approvalModes, _reason) => {
+      const res = await request(buildApp())
+        .put('/api/admin/project-settings/proj-alpha')
+        .send({ skillRepo: 'org/repo', skillBranch: 'main', approvalModes });
+
+      expect(res.status).toBe(400);
+      expect(mockProjectSettings.upsertSkillConfig).not.toHaveBeenCalled();
+      expect(mockProjectSettings.setApprovalModes).not.toHaveBeenCalled();
+    },
+  );
+
+  it('PBI-002 AC-1 delegates config and mode writes to one service call', async () => {
+    mockProjectSettings.upsertSkillConfig.mockRejectedValue(new Error('DB error'));
+
+    const res = await request(buildApp())
+      .put('/api/admin/project-settings/proj-alpha')
+      .send({
+        skillRepo: 'org/repo',
+        skillBranch: 'main',
+        approvalModes: { adr: 'all_required', design_doc: 'any_one' },
+      });
+
+    expect(res.status).toBe(500);
+    expect(mockProjectSettings.upsertSkillConfig).toHaveBeenCalledTimes(1);
+    expect(mockProjectSettings.upsertSkillConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalModes: { adr: 'all_required', design_doc: 'any_one' },
+      }),
+    );
+    expect(mockProjectSettings.setApprovalModes).not.toHaveBeenCalled();
+  });
+
+  it('PBI-002 AC-3 rejects mode changes without admin:roles', async () => {
+    mockPermissions = new Set();
+
+    const res = await request(buildApp('non-admin'))
+      .put('/api/admin/project-settings/proj-alpha')
+      .send({
+        skillRepo: 'org/repo',
+        skillBranch: 'main',
+        approvalModes: { adr: 'all_required' },
+      });
+
+    expect(res.status).toBe(403);
+    expect(mockProjectSettings.upsertSkillConfig).not.toHaveBeenCalled();
+    expect(mockProjectSettings.setApprovalModes).not.toHaveBeenCalled();
+  });
+
   it('returns 500 when upsertSkillConfig throws', async () => {
     mockProjectSettings.upsertSkillConfig.mockRejectedValue(new Error('DB error'));
 
@@ -781,7 +943,8 @@ describe('PUT /api/admin/project-settings/:project/approvers', () => {
   ];
 
   it('returns 200 with designDoc and prd approver lists', async () => {
-    mockProjectSettings.setApprovers
+    mockProjectSettings.replaceApproverPools.mockResolvedValue(undefined);
+    mockProjectSettings.getApproversForDocument
       .mockResolvedValueOnce(designDoc)
       .mockResolvedValueOnce(prd);
 
@@ -791,16 +954,15 @@ describe('PUT /api/admin/project-settings/:project/approvers', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ designDoc, prd });
-    expect(mockProjectSettings.setApprovers).toHaveBeenCalledWith(
+    expect(mockProjectSettings.replaceApproverPools).toHaveBeenCalledTimes(1);
+    expect(mockProjectSettings.replaceApproverPools).toHaveBeenCalledWith(
       'proj-alpha',
-      'design_doc',
-      ['user-1'],
-      'oid-1',
-    );
-    expect(mockProjectSettings.setApprovers).toHaveBeenCalledWith(
-      'proj-alpha',
-      'prd',
-      ['user-2'],
+      {
+        design_doc: { individuals: ['user-1'], groups: [] },
+        prd: { individuals: ['user-2'], groups: [] },
+        design_prototype: { individuals: [], groups: [] },
+        test_case: { individuals: [], groups: [] },
+      },
       'oid-1',
     );
   });
@@ -811,7 +973,7 @@ describe('PUT /api/admin/project-settings/:project/approvers', () => {
       .send({ designDocApprovers: 'user-1', prdApprovers: [] });
 
     expect(res.status).toBe(400);
-    expect(mockProjectSettings.setApprovers).not.toHaveBeenCalled();
+    expect(mockProjectSettings.replaceApproverPools).not.toHaveBeenCalled();
   });
 
   it('returns 400 when prdApprovers is not an array', async () => {
@@ -820,17 +982,168 @@ describe('PUT /api/admin/project-settings/:project/approvers', () => {
       .send({ designDocApprovers: [], prdApprovers: null });
 
     expect(res.status).toBe(400);
-    expect(mockProjectSettings.setApprovers).not.toHaveBeenCalled();
+    expect(mockProjectSettings.replaceApproverPools).not.toHaveBeenCalled();
   });
 
-  it('returns 500 when setApprovers throws', async () => {
-    mockProjectSettings.setApprovers.mockRejectedValue(new Error('DB error'));
+  it('returns 500 when replaceApproverPools throws', async () => {
+    mockProjectSettings.replaceApproverPools.mockRejectedValue(new Error('DB error'));
 
     const res = await request(buildApp())
       .put('/api/admin/project-settings/proj-alpha/approvers')
       .send({ designDocApprovers: [], prdApprovers: [], designPrototypeApprovers: [] });
 
     expect(res.status).toBe(500);
+  });
+
+  it('PBI-001 AC-0 / VT-02 saves ADR users and groups and returns the ADR pool', async () => {
+    const adr = [
+      {
+        id: 'a-adr',
+        settingsId: 'proj-alpha',
+        userId: 'architect-1',
+        documentType: 'adr' as const,
+        displayName: 'Architect One',
+        email: null,
+        assignedBy: 'oid-1',
+        assignedAt: '2026-01-01T00:00:00Z',
+      },
+    ];
+    mockProjectSettings.replaceApproverPools.mockResolvedValue(undefined);
+    mockProjectSettings.getApproversForDocument.mockResolvedValue([]);
+    mockProjectSettings.getApproversForDocument.mockResolvedValueOnce(designDoc);
+    mockProjectSettings.getApproversForDocument.mockResolvedValueOnce(prd);
+    mockProjectSettings.getApproversForDocument.mockResolvedValueOnce([]);
+    mockProjectSettings.getApproversForDocument.mockResolvedValueOnce([]);
+    mockProjectSettings.getApproversForDocument.mockResolvedValueOnce(adr);
+
+    const res = await request(buildApp('oid-1'))
+      .put('/api/admin/project-settings/proj-alpha/approvers')
+      .send({
+        designDocApprovers: ['user-1'],
+        prdApprovers: ['user-2'],
+        designPrototypeApprovers: [],
+        testCaseApprovers: [],
+        adrApprovers: ['architect-1', 'architect-2'],
+        adrApproverGroups: ['architect-group'],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.adr).toEqual(adr);
+    expect(mockProjectSettings.replaceApproverPools).toHaveBeenCalledWith(
+      'proj-alpha',
+      expect.objectContaining({
+        adr: {
+          individuals: ['architect-1', 'architect-2'],
+          groups: ['architect-group'],
+        },
+      }),
+      'oid-1',
+    );
+  });
+
+  it('VT-02 does not wipe ADR reviewers when legacy clients omit ADR fields', async () => {
+    mockProjectSettings.replaceApproverPools.mockResolvedValue(undefined);
+    mockProjectSettings.getApproversForDocument.mockResolvedValue([]);
+
+    const res = await request(buildApp('oid-1'))
+      .put('/api/admin/project-settings/proj-alpha/approvers')
+      .send({ designDocApprovers: [], prdApprovers: [], designPrototypeApprovers: [] });
+
+    expect(res.status).toBe(200);
+    expect(mockProjectSettings.replaceApproverPools).toHaveBeenCalledWith(
+      'proj-alpha',
+      expect.not.objectContaining({ adr: expect.anything() }),
+      'oid-1',
+    );
+  });
+
+  it('PBI-001 AC-1 uses one atomic batch and performs no reads when it fails', async () => {
+    mockProjectSettings.replaceApproverPools.mockRejectedValue(new Error('DB error'));
+
+    const res = await request(buildApp('oid-1'))
+      .put('/api/admin/project-settings/proj-alpha/approvers')
+      .send({
+        designDocApprovers: [],
+        prdApprovers: [],
+        designPrototypeApprovers: [],
+        adrApprovers: ['architect-1'],
+        adrApproverGroups: [],
+      });
+
+    expect(res.status).toBe(500);
+    expect(mockProjectSettings.replaceApproverPools).toHaveBeenCalledTimes(1);
+    expect(mockProjectSettings.getApproversForDocument).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { adrApprovers: ['architect-1'] },
+    { adrApproverGroups: ['architecture-group'] },
+  ])('rejects a partial ADR pair before writes', async (adrFields) => {
+    const res = await request(buildApp('oid-1'))
+      .put('/api/admin/project-settings/proj-alpha/approvers')
+      .send({
+        designDocApprovers: [],
+        prdApprovers: [],
+        designPrototypeApprovers: [],
+        ...adrFields,
+      });
+
+    expect(res.status).toBe(400);
+    expect(mockProjectSettings.replaceApproverPools).not.toHaveBeenCalled();
+  });
+
+  it('PBI-001 AC-3 rejects ADR pool saves without admin:roles', async () => {
+    mockPermissions = new Set();
+
+    const res = await request(buildApp('non-admin'))
+      .put('/api/admin/project-settings/proj-alpha/approvers')
+      .send({
+        designDocApprovers: [],
+        prdApprovers: [],
+        designPrototypeApprovers: [],
+        adrApprovers: ['architect-1'],
+        adrApproverGroups: [],
+      });
+
+    expect(res.status).toBe(403);
+    expect(mockProjectSettings.setApprovers).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/admin/project-settings/:project/approver-pool/:documentType', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('PBI-001 AC-2 / VT-04 accepts ADR and preserves a zero-member group', async () => {
+    const pool = {
+      individuals: [],
+      groups: [{
+        id: 'g-empty',
+        name: 'Architecture Reviewers',
+        description: null,
+        project: 'proj-alpha',
+        isDefault: false,
+        createdBy: null,
+        createdAt: '2026-01-01T00:00:00Z',
+        documentType: 'adr' as const,
+        members: [],
+      }],
+    };
+    mockProjectSettings.getApproverPool.mockResolvedValue(pool);
+
+    const res = await request(buildApp())
+      .get('/api/admin/project-settings/proj-alpha/approver-pool/adr');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(pool);
+    expect(mockProjectSettings.getApproverPool).toHaveBeenCalledWith('proj-alpha', 'adr');
+  });
+
+  it('VT-04 rejects an invalid reviewer document type', async () => {
+    const res = await request(buildApp())
+      .get('/api/admin/project-settings/proj-alpha/approver-pool/standup');
+
+    expect(res.status).toBe(400);
+    expect(mockProjectSettings.getApproverPool).not.toHaveBeenCalled();
   });
 });
 

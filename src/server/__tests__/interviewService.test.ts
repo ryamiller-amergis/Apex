@@ -234,6 +234,61 @@ describe('createInterview', () => {
     expect(mockCreateNotification).not.toHaveBeenCalled();
   });
 
+  it('TBI-006 DoD-0/DoD-1 creates owner-only modules with zero reviewer notifications', async () => {
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'interview-owner-only' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await createInterview({
+      userId: 'user-1',
+      project: 'proj',
+      repo: 'org/repo',
+      chatThreadId: 'thread-owner-only',
+      prdApproverIds: [],
+      designDocApproverIds: [],
+      designPrototypeApproverIds: [],
+      testCaseApproverIds: [],
+    });
+
+    expect(valuesMock).toHaveBeenCalledWith(expect.objectContaining({
+      prdApproverIds: [],
+      designDocApproverIds: [],
+      designPrototypeApproverIds: [],
+      testCaseApproverIds: [],
+    }));
+    expect(mockCreateNotification).not.toHaveBeenCalled();
+  });
+
+  it('TBI-004 DoD-0/DoD-2 persists each explicitly supplied reviewer snapshot', async () => {
+    const returningMock = jest.fn()
+      .mockResolvedValueOnce([{ id: 'interview-before' }])
+      .mockResolvedValueOnce([{ id: 'interview-after' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await createInterview({
+      userId: 'user-1',
+      project: 'proj',
+      repo: 'org/repo',
+      chatThreadId: 'thread-before',
+      prdApproverIds: ['reviewer-before'],
+    });
+    await createInterview({
+      userId: 'user-1',
+      project: 'proj',
+      repo: 'org/repo',
+      chatThreadId: 'thread-after',
+      prdApproverIds: ['reviewer-after'],
+    });
+
+    expect(valuesMock).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      prdApproverIds: ['reviewer-before'],
+    }));
+    expect(valuesMock).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      prdApproverIds: ['reviewer-after'],
+    }));
+  });
+
   it('sends reviewer notifications for each approver role', async () => {
     const returningMock = jest.fn().mockResolvedValue([{ id: 'interview-reviewers' }]);
     const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });

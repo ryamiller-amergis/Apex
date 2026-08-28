@@ -10,6 +10,9 @@ jest.mock('../middleware/rbac', () => ({
 jest.mock('../utils/requestUser', () => ({
   getUserId: () => 'reviewer-1',
 }));
+jest.mock('../utils/superAdmin', () => ({
+  isSuperAdminRequest: jest.fn().mockReturnValue(false),
+}));
 
 jest.mock('../db/drizzle', () => ({
   db: {
@@ -43,15 +46,16 @@ jest.mock('../services/projectSettingsService', () => ({
   resolveSkillConfig: jest.fn(),
 }));
 
+jest.mock('../services/reviewerAvailabilityService', () => ({
+  resolveReviewerAvailability: jest.fn(),
+}));
+
 jest.mock('../services/appSettingsService', () => ({
   getDefaultModel: jest.fn(),
 }));
 
-jest.mock('../services/groupService', () => ({
-  listGroupsWithMembers: jest.fn(),
-}));
-
 jest.mock('../services/documentApprovalService', () => ({
+  getAvailableApproverPool: jest.fn(),
   getAssignments: jest.fn(),
   isApprovalComplete: jest.fn(),
   isAssignedApprover: jest.fn(),
@@ -62,6 +66,7 @@ jest.mock('../services/documentApprovalService', () => ({
 
 jest.mock('../services/ownerApprovalService', () => ({
   getOwnerApproval: jest.fn(),
+  isDocumentOwner: jest.fn().mockResolvedValue(true),
   recordOwnerApproval: jest.fn(),
 }));
 
@@ -105,6 +110,7 @@ jest.mock('../services/runGroundingService', () => ({
 
 import { deleteAdr, getAdr, updateAdrStatus } from '../services/adrService';
 import {
+  getAvailableApproverPool,
   getAssignments,
   isApprovalComplete,
   isAssignedApprover,
@@ -114,7 +120,7 @@ import {
 } from '../services/documentApprovalService';
 import { getUnresolvedCount } from '../services/reviewCommentService';
 import { createNotification } from '../services/notificationService';
-import { listGroupsWithMembers } from '../services/groupService';
+import { resolveReviewerAvailability } from '../services/reviewerAvailabilityService';
 
 const adr: Adr = {
   id: 'adr-1',
@@ -139,6 +145,44 @@ function buildApp() {
   return app;
 }
 
+describe('GET ADR reviewer availability', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('TBI-003 DoD-2 / PBI-004 AC-2 returns the shared all-unavailable signal unchanged', async () => {
+    const payload = {
+      project: 'Apex',
+      modules: [{ documentType: 'adr', available: false, candidateCount: 0 }],
+    };
+    (resolveReviewerAvailability as jest.Mock).mockResolvedValue(payload);
+
+    const response = await request(buildApp()).get('/reviewer-availability?project=Apex');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(payload);
+    expect(resolveReviewerAvailability).toHaveBeenCalledWith('Apex', ['adr']);
+  });
+
+  it('PBI-004 AC-1 forwards resolver failure to error middleware', async () => {
+    (resolveReviewerAvailability as jest.Mock).mockRejectedValue(new Error('directory unavailable'));
+
+    const app = buildApp();
+    app.use((err: Error, _req: unknown, res: express.Response, _next: unknown) => {
+      res.status(503).json({ error: err.message });
+    });
+    const response = await request(app).get('/reviewer-availability?project=Apex');
+
+    expect(response.status).toBe(503);
+    expect(response.body).toEqual({ error: 'directory unavailable' });
+  });
+
+  it('TBI-003 DoD-2 rejects a missing project', async () => {
+    const response = await request(buildApp()).get('/reviewer-availability');
+
+    expect(response.status).toBe(400);
+    expect(resolveReviewerAvailability).not.toHaveBeenCalled();
+  });
+});
+
 describe('ADR reviewer response route', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -147,6 +191,7 @@ describe('ADR reviewer response route', () => {
     (isApprovalComplete as jest.Mock).mockResolvedValue({ complete: true, mode: 'any_one' });
     (getUnresolvedCount as jest.Mock).mockResolvedValue(0);
     (createNotification as jest.Mock).mockResolvedValue(undefined);
+    (getAssignments as jest.Mock).mockResolvedValue([{ id: 'assignment-1' }]);
   });
 
   it('records an assigned reviewer approval and notifies the owner', async () => {
@@ -169,6 +214,17 @@ describe('ADR reviewer response route', () => {
     expect(response.status).toBe(409);
     expect(recordApproverResponse).not.toHaveBeenCalled();
   });
+
+  it('PBI-007 AC-3 rejects reviewer action on an owner-only ADR before mutation', async () => {
+    (getAssignments as jest.Mock).mockResolvedValue([]);
+
+    const response = await request(buildApp())
+      .post('/adr-1/review')
+      .send({ status: 'revision_requested' });
+
+    expect(response.status).toBe(409);
+    expect(recordApproverResponse).not.toHaveBeenCalled();
+  });
 });
 
 describe('ADR owner approval route', () => {
@@ -182,6 +238,7 @@ describe('ADR owner approval route', () => {
     });
     (updateAdrStatus as jest.Mock).mockResolvedValue(undefined);
     (createNotification as jest.Mock).mockResolvedValue(undefined);
+    (getAssignments as jest.Mock).mockResolvedValue([{ id: 'assignment-1' }]);
   });
 
   it('accepts a proposed ADR after owner approval', async () => {
@@ -218,6 +275,9 @@ describe('ADR reviewer assignment route', () => {
   });
 
   it('replaces proposed ADR reviewers and removes deselected assignments', async () => {
+    (getAssignments as jest.Mock)
+      .mockResolvedValueOnce([{ id: 'assignment-1', approverUserId: 'reviewer-1', status: 'pending' }])
+      .mockResolvedValueOnce([{ id: 'assignment-2', approverUserId: 'dev-1', status: 'pending' }]);
     const response = await request(buildApp())
       .put('/adr-1/assignments')
       .send({ reviewerIds: ['dev-1', 'dev-1'] });
@@ -228,6 +288,17 @@ describe('ADR reviewer assignment route', () => {
     expect(response.body).toEqual([
       expect.objectContaining({ approverUserId: 'dev-1' }),
     ]);
+  });
+
+  it('TBI-004 DoD-1 rejects reassignment when the ADR started owner-only', async () => {
+    (getAssignments as jest.Mock).mockResolvedValue([]);
+
+    const response = await request(buildApp())
+      .put('/adr-1/assignments')
+      .send({ reviewerIds: ['dev-1'] });
+
+    expect(response.status).toBe(409);
+    expect(reassignApprovers).not.toHaveBeenCalled();
   });
 
   it('rejects reviewer changes after the ADR leaves proposed status', async () => {
@@ -245,38 +316,152 @@ describe('ADR reviewer assignment route', () => {
     expect(reassignApprovers).not.toHaveBeenCalled();
   });
 
-  it('rejects assigning the ADR owner as a reviewer', async () => {
+  it('BR-009 allows assigning the ADR owner as a reviewer when they are already assigned', async () => {
     const response = await request(buildApp())
       .put('/adr-1/assignments')
       .send({ reviewerIds: ['reviewer-1'] });
 
-    expect(response.status).toBe(400);
-    expect(reassignApprovers).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(reassignApprovers).toHaveBeenCalledWith('adr-1', 'adr', ['reviewer-1'], 'reviewer-1');
+  });
+
+  it('TBI-002 DoD-1 surfaces the pool rejection when a reviewer is outside the ADR pool', async () => {
+    (reassignApprovers as jest.Mock).mockRejectedValue(
+      new Error('Users not in the adr approver pool for project "Apex": outsider-1'),
+    );
+    const { db } = jest.requireMock('../db/drizzle') as { db: { update: jest.Mock } };
+
+    const response = await request(buildApp())
+      .put('/adr-1/assignments')
+      .send({ reviewerIds: ['outsider-1'] });
+
+    expect(response.status).toBe(500);
+    expect(reassignApprovers).toHaveBeenCalledWith('adr-1', 'adr', ['outsider-1'], 'reviewer-1');
+    expect(removeApproverAssignments).not.toHaveBeenCalled();
+    expect(db.update).not.toHaveBeenCalled();
   });
 });
 
 describe('ADR reviewer candidates route', () => {
+  function poolGroup(name: string, members: Array<{
+    userId: string;
+    displayName: string | null;
+    email: string | null;
+  }>) {
+    return {
+      id: `group-${name}`,
+      name,
+      description: null,
+      project: 'Apex',
+      isDefault: false,
+      createdBy: 'admin-1',
+      createdAt: '2026-07-17T00:00:00Z',
+      documentType: 'adr',
+      members: members.map((member) => ({
+        ...member,
+        groupId: `group-${name}`,
+        addedBy: 'admin-1',
+        addedAt: '2026-07-17T00:00:00Z',
+      })),
+    };
+  }
+
   beforeEach(() => {
     jest.clearAllMocks();
-    (listGroupsWithMembers as jest.Mock).mockResolvedValue([
-      {
-        name: 'Developer',
-        members: [
-          { userId: 'reviewer-1', displayName: 'ADR Owner' },
-          { userId: 'dev-1', displayName: 'Dev One' },
-        ],
-      },
-    ]);
   });
 
-  it('returns Developer group members without the signed-in ADR owner', async () => {
+  it('VT-14 returns the expanded configured ADR pool without Developer-group dependency', async () => {
+    (getAvailableApproverPool as jest.Mock).mockResolvedValue({
+      individuals: [
+        { userId: 'individual-1', displayName: 'Individual One', email: 'individual@example.com' },
+      ],
+      groups: [
+        poolGroup('Architects', [
+          { userId: 'group-member-1', displayName: 'Group Member One', email: 'group@example.com' },
+        ]),
+      ],
+    });
+
     const response = await request(buildApp())
       .get('/reviewer-candidates?project=Apex');
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual([
-      expect.objectContaining({ id: 'dev-1', displayName: 'Dev One' }),
+      { id: 'individual-1', displayName: 'Individual One', email: 'individual@example.com' },
+      { id: 'group-member-1', displayName: 'Group Member One', email: 'group@example.com' },
     ]);
+    expect(getAvailableApproverPool).toHaveBeenCalledWith('Apex', 'adr');
+  });
+
+  it('TBI-002 DoD-1 returns expanded group members when the ADR pool has no individuals', async () => {
+    (getAvailableApproverPool as jest.Mock).mockResolvedValue({
+      individuals: [],
+      groups: [
+        poolGroup('Architects', [
+          { userId: 'group-member-1', displayName: 'Group Member One', email: 'one@example.com' },
+          { userId: 'group-member-2', displayName: null, email: 'two@example.com' },
+        ]),
+      ],
+    });
+
+    const response = await request(buildApp())
+      .get('/reviewer-candidates?project=Apex');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([
+      { id: 'group-member-1', displayName: 'Group Member One', email: 'one@example.com' },
+      { id: 'group-member-2', displayName: 'two@example.com', email: 'two@example.com' },
+    ]);
+  });
+
+  it('TBI-002 DoD-1 dedupes a user configured both individually and through a group', async () => {
+    (getAvailableApproverPool as jest.Mock).mockResolvedValue({
+      individuals: [
+        { userId: 'dev-1', displayName: 'Dev One', email: 'dev@example.com' },
+      ],
+      groups: [
+        poolGroup('Architects', [
+          { userId: 'dev-1', displayName: 'Dev One', email: 'dev@example.com' },
+          { userId: 'dev-2', displayName: 'Dev Two', email: 'dev2@example.com' },
+        ]),
+        poolGroup('Platform', [
+          { userId: 'dev-2', displayName: 'Dev Two', email: 'dev2@example.com' },
+        ]),
+      ],
+    });
+
+    const response = await request(buildApp())
+      .get('/reviewer-candidates?project=Apex');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([
+      { id: 'dev-1', displayName: 'Dev One', email: 'dev@example.com' },
+      { id: 'dev-2', displayName: 'Dev Two', email: 'dev2@example.com' },
+    ]);
+  });
+
+  it('BR-009 includes the starter/owner when they are in the configured ADR pool', async () => {
+    (getAvailableApproverPool as jest.Mock).mockResolvedValue({
+      individuals: [
+        { userId: 'reviewer-1', displayName: 'Owner', email: 'owner@example.com' },
+        { userId: 'dev-1', displayName: 'Dev One', email: 'dev@example.com' },
+      ],
+      groups: [
+        poolGroup('Architects', [
+          { userId: 'reviewer-1', displayName: 'Owner', email: 'owner@example.com' },
+        ]),
+      ],
+    });
+
+    const response = await request(buildApp())
+      .get('/reviewer-candidates?project=Apex');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([
+      { id: 'reviewer-1', displayName: 'Owner', email: 'owner@example.com' },
+      { id: 'dev-1', displayName: 'Dev One', email: 'dev@example.com' },
+    ]);
+    expect(getAvailableApproverPool).toHaveBeenCalledWith('Apex', 'adr');
   });
 });
 

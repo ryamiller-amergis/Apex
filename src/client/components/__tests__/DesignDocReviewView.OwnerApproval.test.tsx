@@ -71,10 +71,11 @@ jest.mock('../../hooks/useChatStream', () => ({
 }));
 
 const mockUseReviewComments = jest.fn();
+const mockUseUnresolvedCommentCount = jest.fn();
 
 jest.mock('../../hooks/useReviewComments', () => ({
   useReviewComments: (...args: unknown[]) => mockUseReviewComments(...args),
-  useUnresolvedCommentCount: jest.fn(() => ({ data: { count: 0 } })),
+  useUnresolvedCommentCount: (...args: unknown[]) => mockUseUnresolvedCommentCount(...args),
   useCreateComment: jest.fn(() => ({ mutateAsync: jest.fn() })),
   useResolveComment: jest.fn(() => ({ mutate: jest.fn() })),
   useReopenComment: jest.fn(() => ({ mutate: jest.fn() })),
@@ -139,12 +140,14 @@ function renderView() {
 beforeEach(() => {
   jest.clearAllMocks();
   mockUseReviewComments.mockReturnValue({ data: [] });
+  mockUseUnresolvedCommentCount.mockReturnValue({ data: { count: 0 } });
   mockUseDesignDoc.mockReturnValue({ data: baseDoc, isLoading: false, isError: false });
   mockUseDesignDocOwnerApprove.mockReturnValue({ mutateAsync: jest.fn(), isPending: false });
   mockUseAppShell.mockReturnValue({
     can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
     userId: 'user-viewer',
     isAdmin: false,
+    isSuperAdmin: false,
     groups: [],
   });
   mockUseDocumentAssignments.mockReturnValue({
@@ -168,17 +171,69 @@ describe('Owner Approval in DesignDocReviewView', () => {
     expect(screen.getByRole('button', { name: 'Approve as Owner' })).toBeInTheDocument();
   });
 
-  it('shows "Approve as Owner" for admin even when not owner', () => {
+  it('PBI-006 AC-3 does not treat Project Admin as an owner-only approval bypass', () => {
     mockUseAppShell.mockReturnValue({
       can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
       userId: 'admin-user',
       isAdmin: true,
+      isSuperAdmin: false,
       groups: [],
     });
+    mockUseDocumentAssignments.mockReturnValue({ data: [] });
 
     renderView();
 
-    expect(screen.getByRole('button', { name: 'Approve as Owner' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve as Owner' })).toBeDisabled();
+    expect(screen.getByTestId('owner-approve-disabled-reason')).toHaveTextContent(
+      'Only the document owner or a Platform Admin can approve',
+    );
+  });
+
+  it('PBI-006 AC-0 gives an owner-only pending Design Doc one-step owner approval', () => {
+    mockUseAppShell.mockReturnValue({
+      can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
+      userId: 'user-owner',
+      isAdmin: false,
+      isSuperAdmin: false,
+      groups: [],
+    });
+    mockUseDesignDoc.mockReturnValue({
+      data: { ...baseDoc, status: 'pending_review' },
+      isLoading: false,
+      isError: false,
+    });
+    mockUseDocumentAssignments.mockReturnValue({ data: [] });
+
+    renderView();
+
+    expect(screen.getByRole('button', { name: 'Approve as Owner' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+  });
+
+  it('PBI-006 AC-1 keeps the unresolved-comment reason visible for owner-only approval', () => {
+    mockUseAppShell.mockReturnValue({
+      can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
+      userId: 'user-owner',
+      isAdmin: false,
+      isSuperAdmin: false,
+      groups: [],
+    });
+    mockUseDesignDoc.mockReturnValue({
+      data: { ...baseDoc, status: 'pending_review' },
+      isLoading: false,
+      isError: false,
+    });
+    mockUseDocumentAssignments.mockReturnValue({ data: [] });
+    mockUseReviewComments.mockReturnValue({
+      data: [{ id: 'open-1', sectionKey: 'design', status: 'open', replies: [] }],
+    });
+    mockUseUnresolvedCommentCount.mockReturnValue({ data: { count: 1 } });
+
+    renderView();
+
+    const approve = screen.getByRole('button', { name: 'Approve as Owner' });
+    expect(approve).toBeDisabled();
+    expect(approve).toHaveAttribute('title', 'Resolve all comments before approving');
   });
 
   it('does not show owner approval UI when status is pending_review', () => {
