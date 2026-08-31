@@ -54,8 +54,6 @@ jobs:
       - name: Build application
         env:
           VITE_TEAMS: ${{ vars.VITE_TEAMS }}
-          VITE_NUTRIENT_LICENSE_KEY: ${{ secrets.VITE_NUTRIENT_LICENSE_KEY }}
-          VITE_APRYSE_WEBVIEWER_LICENSE_KEY: ${{ secrets.VITE_APRYSE_WEBVIEWER_LICENSE_KEY }}
         run: npm run build
 
       - name: Detect migration changes
@@ -189,7 +187,6 @@ jobs:
               VITE_ADO_ORG="amergis" \
               VITE_ADO_PROJECT="${{ secrets.ADO_PROJECT }}" \
               VITE_TEAMS="${{ vars.VITE_TEAMS }}" \
-              APRYSE_LICENSE_KEY="${{ secrets.APRYSE_LICENSE_KEY }}" \
               AZURE_TENANT_ID="${{ env.AZURE_TENANT_ID }}" \
               AZURE_CLIENT_ID="${{ env.AZURE_CLIENT_ID }}" \
               AZURE_CLIENT_SECRET="${{ env.AZURE_CLIENT_SECRET }}" \
@@ -215,8 +212,6 @@ jobs:
               MAXVIEW_CLIENTAPP_ROOT="/src/Maxim.TimeClock.Web/ClientApp/js" \
               DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}" \
-              PDF_BLOB_ACCOUNT_NAME="${{ vars.PDF_BLOB_ACCOUNT_NAME }}" \
-              PDF_BLOB_CONTAINER_NAME="${{ vars.PDF_BLOB_CONTAINER_NAME }}" \
               GROUNDING_BLOB_ACCOUNT_NAME="${{ vars.GROUNDING_BLOB_ACCOUNT_NAME }}" \
               GROUNDING_BLOB_CONTAINER_NAME="${{ vars.GROUNDING_BLOB_CONTAINER_NAME }}" \
               LT_SERVICEBUS_NAMESPACE="${{ vars.LT_SERVICEBUS_NAMESPACE }}" \

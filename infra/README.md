@@ -185,24 +185,21 @@ The App Service plan uses the fixed `app_service_worker_count`. Production
 autoscaling is intentionally deferred until Interview and other long-running AI
 flows have a multi-instance ownership, cleanup, and scale-in recovery design.
 
-### Shared async + PDF processing settings
+### Shared async storage
 
-The shared Blob account is created in every Terraform workspace. PDF is the first consumer (`pdf-artifacts` container) and runs **inside the Apex App Service**. Job delivery uses the **Postgres queue** (revised ADR) — Terraform does **not** provision Service Bus or a separate PDF worker host.
+The shared Blob account is created in every Terraform workspace. PDF assembly has moved to DocHub; the `pdf-artifacts` container is **kept** in `blob_containers` so apply does not destroy existing blobs. Purge it in a later change after operators confirm it is unused. Job delivery for remaining Apex async work uses the **Postgres queue** — Terraform does **not** provision Service Bus for PDF.
 
-**Artifact layout:** PDF session/job files live in the private `pdf-artifacts` container keyed per user and session (`{userId}/{sessionId}/...`) rather than on the App Service local disk (`PDF_TEMP_DIR`). This is required because the production API is zone-redundant across multiple fixed instances — any instance must be able to read/write a session's artifacts. The cross-cutting Apex managed identity has shared-account access; clients receive artifacts only through the authenticated API.
+**Do not** grant account-wide Blob Contributor “for PDF”; that role assignment lived in `pdf-processing.tf` and has been removed.
 
 | Terraform variable | Purpose | Default |
 |--------------------|---------|---------|
-| `shared_storage_account_name` | Globally unique shared artifact account; null derives `stapex<environment>async` (for example, `stapexdevasync`) | derived |
+| `shared_storage_account_name` | Globally unique shared artifact account; null derives `stapex<environment>async` | derived |
 | `blob_containers` | Map of private containers on the shared account | `{ pdf-artifacts = {}, repo-grounding = {} }` |
-| `pdf_blob_container_name` | PDF container key inside `blob_containers` | `pdf-artifacts` |
 
 App setting contract for the Apex application (wire via deploy pipeline / App Service config — `main.tf` ignores `app_settings` drift):
 
 | App setting | Value source | Consumer |
 |-------------|--------------|----------|
-| `PDF_BLOB_ACCOUNT_NAME` | `shared_storage_account_name` / `pdf_storage_account_name` output | Apex app |
-| `PDF_BLOB_CONTAINER_NAME` | `pdf_blob_container_name` output | Apex app |
 | `GROUNDING_BLOB_ACCOUNT_NAME` | `grounding_storage_account_name` output | Grounding bundle store |
 | `GROUNDING_BLOB_CONTAINER_NAME` | `grounding_blob_container_name` output | Grounding bundle store |
 
@@ -225,23 +222,16 @@ finishes.
 
 The production Apex app and its staging deployment slot each have a distinct
 system-assigned managed identity. Both receive Storage Account-scoped Blob
-contributor so narrow pre-swap PDF smoke tests use the same production Blob
-boundary without connection strings or shared keys. Slot identities do not
-move during swaps; Terraform must retain the staging identity and its RBAC grant.
+contributor for remaining shared containers (grounding, load-test artifacts).
+Slot identities do not move during swaps; Terraform must retain the staging
+identity and its RBAC grant.
 
 When adding the system identity to an existing App Service with AzureRM 3.x,
 provisioning is intentionally two-stage:
 
 1. The first `terraform apply` adds the identity, Storage Account, and container.
 2. Run `terraform plan` again after Azure returns the principal ID, then apply
-   the Storage Account-scoped Blob role assignment.
-
-Do not deploy the Blob-backed application settings until the second plan shows
-`azurerm_role_assignment.api_pdf_blob_contributor` will be created.
-When enabling the production staging slot, the plan must also retain the slot's
-system identity and manage
-`azurerm_role_assignment.staging_pdf_blob_contributor`; removing the identity
-would cause staging PDF requests to fail with Blob authorization errors.
+   the container-scoped Blob role assignment.
 
 #### Extending for another module
 
@@ -258,17 +248,18 @@ terraform fmt -check
 terraform validate
 terraform plan
 terraform output shared_storage_account_name
-terraform output pdf_blob_container_name
 terraform output grounding_blob_container_name
 ```
 
 Complete the following smoke checks before marking the infrastructure ready:
 
-1. From the Apex App Service identity, upload/read/delete a test blob under a `{userId}/{sessionId}/` prefix in `pdf-artifacts`.
-2. Attempt anonymous Blob access from an unassigned principal; access must fail.
-3. Confirm `repo-grounding` is private, last-access tracking is enabled, its
+1. Attempt anonymous Blob access from an unassigned principal; access must fail.
+2. Confirm `repo-grounding` is private, last-access tracking is enabled, its
    lifecycle rule uses 14 days since last access, and the Apex identity role is
    scoped to that container.
+3. `pdf-artifacts` remains in `blob_containers` so this apply does not destroy
+   historical PDF blobs. Purge later when operators confirm DocHub has replaced
+   Apex PDF assembly.
 
 ---
 

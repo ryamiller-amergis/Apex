@@ -97,12 +97,6 @@ const MODULE_ORDER: ReadonlyArray<{
       (enabledViews.includes('feature-requests') && can('feature-requests:view')),
   },
   {
-    view: 'pdf-tools',
-    route: '/pdf-tools/nutrient-poc',
-    isAccessible: ({ can, isSuperAdmin, enabledViews }) =>
-      isSuperAdmin || (enabledViews.includes('pdf-tools') && can('pdf-assembly:use')),
-  },
-  {
     view: 'design-module',
     route: '/design-module',
     isAccessible: ({ can, isSuperAdmin, enabledViews }) =>

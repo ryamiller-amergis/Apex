@@ -199,7 +199,7 @@ describe('AppSidebar — grouped sections', () => {
   const allViews = [
     'calendar', 'planning', 'cloudcost', 'backlog', 'adr',
     'my-work', 'standup', 'ui-lab', 'feature-requests',
-    'pdf-tools', 'ai-cost', 'design-module', 'load-tests', 'diagrams',
+    'ai-cost', 'design-module', 'load-tests', 'diagrams',
   ];
   const superAdminProps = {
     ...baseProps,
@@ -210,7 +210,6 @@ describe('AppSidebar — grouped sections', () => {
     onNavigateStandup: jest.fn(),
     onNavigateUiLab: jest.fn(),
     onNavigateFeatureRequests: jest.fn(),
-    onNavigatePdfTools: jest.fn(),
     onNavigateAiCost: jest.fn(),
     onNavigateDesignModule: jest.fn(),
     onNavigateLoadTests: jest.fn(),

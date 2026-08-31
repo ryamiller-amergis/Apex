@@ -2,7 +2,7 @@
 
 ## What is Apex?
 
-Apex (formerly AI-Pilot) is an internal product-building and project-management platform that centralizes the software delivery lifecycle into a single AI-enhanced application. It connects Azure DevOps work items, AI-guided design interviews, automated PRD generation, design doc workflows, daily standups, planning analytics, cloud cost tracking, guided walkthroughs, load testing, UI prototyping, PDF assembly, AI cost analytics, and design-module scoping into one cohesive experience — replacing fragmented manual processes with streamlined, AI-assisted workflows.
+Apex (formerly AI-Pilot) is an internal product-building and project-management platform that centralizes the software delivery lifecycle into a single AI-enhanced application. It connects Azure DevOps work items, AI-guided design interviews, automated PRD generation, design doc workflows, daily standups, planning analytics, cloud cost tracking, guided walkthroughs, load testing, UI prototyping, AI cost analytics, and design-module scoping into one cohesive experience — replacing fragmented manual processes with streamlined, AI-assisted workflows.
 
 **Core value proposition:** Apex eliminates context-switching between disconnected tools by bringing work item management, document generation, review workflows, team ceremonies, and analytics into one platform — with AI agents that automate repetitive tasks, enforce consistency, and surface insights that would otherwise require manual effort.
 
@@ -168,16 +168,7 @@ AI-assisted UI prototyping for the UI/UX group.
 - **Versioning and comments** — iterate on designs with version history and threaded feedback
 - **Gated by** — `ui-lab:view` permission, UI/UX group membership, and menu visibility
 
-### 16. PDF Assembly Tool
-
-A three-panel PDF workspace for merging, reordering, and exporting documents.
-
-- **Upload and convert** — ingest PDFs and common office formats; background workers handle conversion
-- **Page manipulation** — reorder, rotate, and remove pages in a visual sidebar
-- **Export** — assemble a final PDF artifact for download
-- **Gated by** — `pdf-assembly:use` permission (no default role assignment — assign explicitly)
-
-### 17. AI Cost Analytics
+### 16. AI Cost Analytics
 
 Platform-wide visibility into AI spend across Apex capabilities.
 
@@ -186,7 +177,7 @@ Platform-wide visibility into AI spend across Apex capabilities.
 - **Cursor usage** — ingests Cursor analytics events alongside Bedrock/SDK usage
 - **Gated by** — `analytics:ai-cost:view` permission (admin by default)
 
-### 18. Design Module
+### 17. Design Module
 
 Project-scoped repository slices that ground AI agents on specific areas of the codebase.
 
@@ -195,7 +186,7 @@ Project-scoped repository slices that ground AI agents on specific areas of the 
 - **Documentation** — attach or regenerate module docs for agent context
 - **Gated by** — `design-module:view` permission and menu visibility
 
-### 19. Load Testing
+### 18. Load Testing
 
 k6-based load test definitions and runs scoped per project.
 
@@ -205,7 +196,7 @@ k6-based load test definitions and runs scoped per project.
 - **Run history** — view run status, threshold results, and script details
 - **Gated by** — `load-test:view` / `load-test:run` / `load-test:manage` permissions
 
-### 20. User Profile
+### 19. User Profile
 
 Per-user settings accessible from the header user menu.
 
@@ -328,7 +319,7 @@ Per-user settings accessible from the header user menu.
 - **Azure Application Insights** for telemetry
 
 ### Data Storage
-- **PostgreSQL** — all persistent data: users, roles, permissions, chat threads, interviews, PRDs, design docs, notifications, feature flags, feature requests, standup sessions, walkthroughs, load tests, UI Lab designs, PDF sessions, design modules, AI usage events, project settings
+- **PostgreSQL** — all persistent data: users, roles, permissions, chat threads, interviews, PRDs, design docs, notifications, feature flags, feature requests, standup sessions, walkthroughs, load tests, UI Lab designs, design modules, AI usage events, project settings
 - **Azure DevOps** — work items, iterations, area paths (accessed via API, not stored locally)
 
 ### AI Integration
@@ -350,7 +341,6 @@ Per-user settings accessible from the header user menu.
 | Standup | `/standup` | `standup:participate` + menu enabled | Daily standup ceremony participation |
 | UI Lab | `/ui-lab` | `ui-lab:view` + UI/UX group + menu enabled | AI-assisted UI mockup generation |
 | Apex Backlog | `/feature-requests` | `feature-requests:view` + menu enabled | Shared feature request review and triage; availability is configured per project |
-| PDF Assembly Tool | `/pdf-tools` | `pdf-assembly:use` + menu enabled | PDF merge, reorder, and export workspace |
 | AI Cost Analytics | `/ai-cost` | `analytics:ai-cost:view` + menu enabled | AI usage and cost dashboards |
 | Design Module | `/design-module` | `design-module:view` + menu enabled | Repository module catalog and AI scoping |
 | Load Tests | `/load-tests` | `load-test:view` + menu enabled | k6 load test definitions and run history |

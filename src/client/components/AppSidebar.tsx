@@ -40,7 +40,6 @@ interface AppSidebarProps {
   onNavigateStandup?: () => void;
   onNavigateUiLab?: () => void;
   onNavigateFeatureRequests?: () => void;
-  onNavigatePdfTools?: () => void;
   onNavigateAiCost?: () => void;
   onNavigateDesignModule?: () => void;
   onNavigateWorkBoard?: () => void;
@@ -125,13 +124,6 @@ const IconFeatureRequests: React.FC = () => (
   </svg>
 );
 
-const IconPdfTools: React.FC = () => (
-  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="4" y="2" width="12" height="16" rx="1.5" />
-    <path d="M7 6h6M7 9h6M7 12h4" />
-  </svg>
-);
-
 const IconDesignModule: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <rect x="3" y="3" width="5" height="5" rx="1" />
@@ -209,7 +201,6 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onNavigateStandup,
   onNavigateUiLab,
   onNavigateFeatureRequests,
-  onNavigatePdfTools,
   onNavigateAiCost,
   onNavigateDesignModule,
   onNavigateWorkBoard,
@@ -256,7 +247,6 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       label: 'Tools',
       items: [
         { label: 'UI Lab', view: 'ui-lab', icon: <IconUiLab />, permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
-        { label: 'PDF Assembly Tool', view: 'pdf-tools', icon: <IconPdfTools />, permission: 'pdf-assembly:use', onNavigate: onNavigatePdfTools ?? (() => {}) },
         { label: 'Load Tests', view: 'load-tests', icon: <IconLoadTests />, permission: 'load-test:view', onNavigate: onNavigateLoadTests ?? (() => {}), testId: 'nav-load-tests' },
         { label: 'Apex Backlog', view: 'feature-requests', icon: <IconFeatureRequests />, permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
         { label: 'Work Board', view: 'work-board', icon: <IconWorkBoard />, permission: 'work-board:view', onNavigate: onNavigateWorkBoard ?? (() => {}) },
@@ -283,11 +273,6 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       if (!workBoardEnabled) return false;
       if (!isSuperAdmin && !menuEnabledViews.includes('work-board')) return false;
       return isSuperAdmin || can('work-board:view');
-    }
-    if (item.view === 'pdf-tools') {
-      if (!isSuperAdmin && !menuEnabledViews.includes('pdf-tools')) return false;
-      if (!isSuperAdmin && !can('pdf-assembly:use')) return false;
-      return true;
     }
     if (item.view === 'ui-lab') {
       if (!isSuperAdmin && !menuEnabledViews.includes('ui-lab')) return false;

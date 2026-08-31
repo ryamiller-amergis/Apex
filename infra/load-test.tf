@@ -1,7 +1,7 @@
 # Load Test Azure Infrastructure — FEAT-002
 #
 # Dedicated resources for the Apex Load Testing module. These are intentionally
-# isolated from the shared async platform (shared-async.tf / pdf-processing.tf)
+# isolated from the shared async platform (shared-async.tf)
 # because load-test dispatch must never share queue/compute with latency-sensitive
 # platform workloads (PRD isolation driver; accepted ADR).
 #
@@ -202,7 +202,7 @@ resource "azurerm_role_assignment" "lt_runner_kv_secrets_user" {
 # ---------------------------------------------------------------------------
 # RBAC — Apex API identity (queue send + blob read)
 # Created after the App Service identity is available (same two-apply pattern
-# as pdf-processing.tf).
+# as other container-scoped Blob role assignments).
 # ---------------------------------------------------------------------------
 
 resource "azurerm_role_assignment" "lt_api_sb_sender" {

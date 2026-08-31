@@ -61,9 +61,6 @@ jest.mock('../services/chatThreadRepository', () => ({
   findRunningInterviewThreads: jest.fn(),
   clearStaleRun: jest.fn(),
 }));
-jest.mock('../services/pdfAssemblyService', () => ({
-  expireOldSessions: jest.fn(),
-}));
 jest.mock('../services/featureRequestAnalysisService', () => ({
   recoverAnalyzingFeatureRequests: jest.fn(),
 }));
@@ -155,8 +152,6 @@ describe('design-doc generation recovery claim', () => {
     mockedFindRunning.mockResolvedValue([]);
     jest.requireMock('../services/designPrototypeService')
       .failStalePrototypes.mockResolvedValue(0);
-    jest.requireMock('../services/pdfAssemblyService')
-      .expireOldSessions.mockResolvedValue({ expired: 0, errors: 0 });
     jest.requireMock('../services/featureRequestAnalysisService')
       .recoverAnalyzingFeatureRequests.mockResolvedValue(0);
     routeDesignDoc.mockResolvedValue();
@@ -265,8 +260,6 @@ describe('test-case generation recovery routing', () => {
     mockedFindRunning.mockResolvedValue([]);
     jest.requireMock('../services/designPrototypeService')
       .failStalePrototypes.mockResolvedValue(0);
-    jest.requireMock('../services/pdfAssemblyService')
-      .expireOldSessions.mockResolvedValue({ expired: 0, errors: 0 });
     jest.requireMock('../services/featureRequestAnalysisService')
       .recoverAnalyzingFeatureRequests.mockResolvedValue(0);
     routeTestCases.mockResolvedValue(true);

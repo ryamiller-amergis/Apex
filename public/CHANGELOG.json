@@ -1,5 +1,16 @@
 [
   {
+    "version": "1.38.0",
+    "date": "2026-08-24",
+    "title": "PDF Tools Moved to DocHub",
+    "changes": [
+      {
+        "type": "breaking",
+        "description": "PDF Assembly Tool, Nutrient, and Apryse viewers are no longer in Apex. Use the standalone DocHub app for document editing and conversion"
+      }
+    ]
+  },
+  {
     "version": "1.37.0",
     "date": "2026-08-13",
     "title": "Canonical Agent Skills Roots",
