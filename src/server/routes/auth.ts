@@ -165,7 +165,12 @@ router.get(
         console.error('Authentication failed - no user:', info);
         return res.redirect('/auth/login-failed');
       }
-      req.logIn(user, (loginErr) => {
+      // Capture before logIn: Passport 0.7 regenerates the session and drops
+      // prior fields unless keepSessionInfo is set. The snapshot covers both.
+      const pendingReturnTo = sanitizeAuthReturnTo(
+        (req.session as { returnTo?: string } | undefined)?.returnTo,
+      );
+      req.logIn(user, { session: true, keepSessionInfo: true }, (loginErr) => {
         if (loginErr) {
           console.error('Login error:', loginErr);
           return res.redirect('/auth/login-failed');
@@ -193,7 +198,7 @@ router.get(
           userEmail,
         ).catch((err) => console.error('resolvePendingAssignments failed:', err));
         const session = req.session as { returnTo?: string } | undefined;
-        const sessionReturnTo = sanitizeAuthReturnTo(session?.returnTo);
+        const sessionReturnTo = sanitizeAuthReturnTo(session?.returnTo) ?? pendingReturnTo;
         if (session) delete session.returnTo;
         // Redirect to the Vite dev server (or root in production), preserving a
         // validated internal return path when one was supplied at login.

@@ -1,6 +1,7 @@
 import {
   capabilitiesForAccess,
   isUiLabShareNotificationLink,
+  resolveUiLabRouteAccess,
   uiLabShareDeepLink,
   uiLabShareDedupeKey,
 } from '../../shared/types/uiLab';
@@ -58,5 +59,58 @@ describe('sanitizeAuthReturnTo', () => {
       '/auth/login?returnTo=%2Fui-lab%2Fabc%3Fproject%3DMaxView',
     );
     expect(buildLoginUrl('https://evil.example')).toBe('/auth/login');
+  });
+});
+
+describe('resolveUiLabRouteAccess', () => {
+  const base = {
+    isSuperAdmin: false,
+    menuEnabled: true,
+    canView: true,
+    inUiUxGroup: false,
+    isDesignDeepLink: false,
+    hasShares: false,
+    sharesPending: false,
+    projectSwitchPending: false,
+  };
+
+  it('waits while the share list is still loading', () => {
+    expect(resolveUiLabRouteAccess({ ...base, sharesPending: true })).toBe('wait');
+  });
+
+  it('waits while the link project has not been selected yet', () => {
+    expect(resolveUiLabRouteAccess({
+      ...base,
+      isDesignDeepLink: true,
+      projectSwitchPending: true,
+    })).toBe('wait');
+  });
+
+  it('allows a design deep link without waiting for the share list', () => {
+    expect(resolveUiLabRouteAccess({
+      ...base,
+      isDesignDeepLink: true,
+      sharesPending: true,
+    })).toBe('allow');
+  });
+
+  it('allows UI/UX members even without shares', () => {
+    expect(resolveUiLabRouteAccess({ ...base, inUiUxGroup: true })).toBe('allow');
+  });
+
+  it('allows the shared list once shares have arrived', () => {
+    expect(resolveUiLabRouteAccess({ ...base, hasShares: true })).toBe('allow');
+  });
+
+  it('denies the shared list when none exist', () => {
+    expect(resolveUiLabRouteAccess(base)).toBe('deny');
+  });
+
+  it('denies when UI Lab is off for the resolved project', () => {
+    expect(resolveUiLabRouteAccess({
+      ...base,
+      isDesignDeepLink: true,
+      menuEnabled: false,
+    })).toBe('deny');
   });
 });

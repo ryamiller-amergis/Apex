@@ -154,3 +154,30 @@ export function capabilitiesForAccess(access: UiLabEffectiveAccess): UiLabCapabi
     canViewSource: true,
   };
 }
+
+export type UiLabRouteAccess = 'allow' | 'deny' | 'wait';
+
+/**
+ * Client route decision for `/ui-lab` and `/ui-lab/:id`.
+ *
+ * `wait` means a required input is still unresolved (target project not
+ * selected yet, or the shared-with-me list has not returned). The caller
+ * must not redirect to a fallback in that state.
+ */
+export function resolveUiLabRouteAccess(input: {
+  isSuperAdmin: boolean;
+  menuEnabled: boolean;
+  canView: boolean;
+  inUiUxGroup: boolean;
+  isDesignDeepLink: boolean;
+  hasShares: boolean;
+  sharesPending: boolean;
+  projectSwitchPending: boolean;
+}): UiLabRouteAccess {
+  if (input.isSuperAdmin) return 'allow';
+  if (input.projectSwitchPending) return 'wait';
+  if (!input.menuEnabled || !input.canView) return 'deny';
+  if (input.inUiUxGroup || input.isDesignDeepLink) return 'allow';
+  if (input.sharesPending) return 'wait';
+  return input.hasShares ? 'allow' : 'deny';
+}
