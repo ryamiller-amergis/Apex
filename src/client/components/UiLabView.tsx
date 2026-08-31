@@ -8,6 +8,8 @@ import type { UiLabDesignSummary } from '../../shared/types/uiLab';
 import styles from './UiLabView.module.css';
 import { UiLabCanvas } from './UiLabCanvas';
 
+const SIDEBAR_COLLAPSED_KEY = 'apex-ui-lab-sidebar-collapsed';
+
 function formatRelative(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
   if (diff < 60_000) return 'just now';
@@ -42,7 +44,7 @@ const Composer: React.FC<ComposerProps> = ({ project, onCreated, onCancel }) => 
 
   return (
     <div className={styles.composerWrapper}>
-      <form className={styles.composer} onSubmit={handleSubmit}>
+      <form className={styles.composer} onSubmit={handleSubmit} data-testid="ui-lab-composer-form">
         <h2 className={styles.composerHeading}>New UI Design</h2>
         <p className={styles.composerSub}>
           Describe the screen or component you want to create. The design system, colors, and MaxView components will be applied automatically.
@@ -57,6 +59,7 @@ const Composer: React.FC<ComposerProps> = ({ project, onCreated, onCancel }) => 
             onChange={(e) => setTitle(e.target.value)}
             autoFocus
             required
+            data-testid="ui-lab-title-input"
           />
         </div>
         <div className={styles.composerField}>
@@ -68,6 +71,7 @@ const Composer: React.FC<ComposerProps> = ({ project, onCreated, onCancel }) => 
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             required
+            data-testid="ui-lab-prompt-input"
           />
         </div>
         <div className={styles.composerField}>
@@ -80,11 +84,12 @@ const Composer: React.FC<ComposerProps> = ({ project, onCreated, onCancel }) => 
             placeholder="e.g. /settings/profile"
             value={targetRoute}
             onChange={(e) => setTargetRoute(e.target.value)}
+            data-testid="ui-lab-route-input"
           />
         </div>
         <div className={styles.composerActions}>
           {onCancel && (
-            <button type="button" className={styles.cancelBtn} onClick={onCancel}>
+            <button type="button" className={styles.cancelBtn} onClick={onCancel} data-testid="ui-lab-composer-cancel-btn">
               Cancel
             </button>
           )}
@@ -92,6 +97,7 @@ const Composer: React.FC<ComposerProps> = ({ project, onCreated, onCancel }) => 
             type="submit"
             className={styles.generateBtn}
             disabled={create.isPending || !title.trim() || !prompt.trim()}
+            data-testid="ui-lab-composer-submit-btn"
           >
             {create.isPending ? 'Creating…' : 'Generate Design'}
           </button>
@@ -124,6 +130,21 @@ export const UiLabView: React.FC<UiLabViewProps> = ({
 
   const [selectedId, setSelectedId] = useState<string | null>(initialDesignId);
   const [showComposer, setShowComposer] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const toggleSidebar = () => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next)); } catch { /* noop */ }
+      return next;
+    });
+  };
 
   React.useEffect(() => {
     if (initialDesignId) setSelectedId(initialDesignId);
@@ -159,48 +180,85 @@ export const UiLabView: React.FC<UiLabViewProps> = ({
 
   return (
     <div className={styles.root} data-testid="ui-lab-workspace">
-      <div className={styles.sidebar}>
-        <div className={styles.sidebarHeader}>
-          <h2 className={styles.sidebarTitle}>UI Lab</h2>
-          {can('ui-lab:manage') && (
+      <div className={`${styles.sidebar}${sidebarCollapsed ? ` ${styles.sidebarCollapsed}` : ''}`}>
+        {sidebarCollapsed ? (
+          <div className={styles.sidebarStrip}>
             <button
-              className={styles.newBtn}
-              onClick={() => { setShowComposer(true); setSelectedId(null); }}
+              type="button"
+              className={styles.sidebarStripBtn}
+              onClick={toggleSidebar}
+              title="Show design list"
+              aria-label="Show design list"
+              aria-expanded={false}
+              data-testid="ui-lab-sidebar-expand"
             >
-              + New
+              ›
             </button>
-          )}
-        </div>
-
-        <div className={styles.designList}>
-          {isLoading && (
-            <p className={styles.emptyList}>Loading…</p>
-          )}
-          {!isLoading && designs.length === 0 && (
-            <p className={styles.emptyList}>
-              No designs yet.{can('ui-lab:manage') ? '\n\nClick "+ New" to create your first design.' : ''}
-            </p>
-          )}
-          {designs.map((d: UiLabDesignSummary) => (
-            <div
-              key={d.id}
-              className={`${styles.designItem} ${d.id === selectedId ? styles.active : ''}`}
-              onClick={() => { setSelectedId(d.id); setShowComposer(false); }}
-            >
-              <div>
-                <div className={`${styles.statusDot} ${styles[d.status]}`} style={{ marginTop: 6 }} />
-              </div>
-              <div className={styles.designItemInfo}>
-                <div className={styles.designItemTitle}>{d.title}</div>
-                <div className={styles.designItemPrompt}>{d.prompt}</div>
-                <div className={styles.designItemMeta}>
-                  {d.targetRoute && <span>{d.targetRoute}</span>}
-                  <span>{formatRelative(d.createdAt)}</span>
-                </div>
+            <span className={styles.sidebarStripLabel}>Designs</span>
+            {designs.length > 0 && (
+              <span className={styles.sidebarStripBadge}>{designs.length}</span>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className={styles.sidebarHeader}>
+              <h2 className={styles.sidebarTitle}>UI Lab</h2>
+              <div className={styles.sidebarHeaderActions}>
+                {can('ui-lab:manage') && (
+                  <button
+                    className={styles.newBtn}
+                    onClick={() => { setShowComposer(true); setSelectedId(null); }}
+                    data-testid="ui-lab-new-design-btn"
+                  >
+                    + New
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className={styles.sidebarCollapseBtn}
+                  onClick={toggleSidebar}
+                  title="Collapse design list"
+                  aria-label="Collapse design list"
+                  aria-expanded
+                  data-testid="ui-lab-sidebar-collapse"
+                >
+                  ‹
+                </button>
               </div>
             </div>
-          ))}
-        </div>
+
+            <div className={styles.designList}>
+              {isLoading && (
+                <p className={styles.emptyList}>Loading…</p>
+              )}
+              {!isLoading && designs.length === 0 && (
+                <p className={styles.emptyList}>
+                  No designs yet.{can('ui-lab:manage') ? '\n\nClick "+ New" to create your first design.' : ''}
+                </p>
+              )}
+              {designs.map((d: UiLabDesignSummary) => (
+                <div
+                  key={d.id}
+                  className={`${styles.designItem} ${d.id === selectedId ? styles.active : ''}`}
+                  onClick={() => { setSelectedId(d.id); setShowComposer(false); }}
+                  data-testid={`ui-lab-design-item-${d.id}`}
+                >
+                  <div>
+                    <div className={`${styles.statusDot} ${styles[d.status]}`} style={{ marginTop: 6 }} />
+                  </div>
+                  <div className={styles.designItemInfo}>
+                    <div className={styles.designItemTitle}>{d.title}</div>
+                    <div className={styles.designItemPrompt}>{d.prompt}</div>
+                    <div className={styles.designItemMeta}>
+                      {d.targetRoute && <span>{d.targetRoute}</span>}
+                      <span>{formatRelative(d.createdAt)}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
       </div>
 
       {showComposer ? (
@@ -227,7 +285,11 @@ export const UiLabView: React.FC<UiLabViewProps> = ({
                 <p style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 20 }}>
                   Generate interactive UI designs powered by the MaxView design system.
                 </p>
-                <button className={styles.generateBtn} onClick={() => setShowComposer(true)}>
+                <button
+                  className={styles.generateBtn}
+                  onClick={() => setShowComposer(true)}
+                  data-testid="ui-lab-create-first-design-btn"
+                >
                   + Create your first design
                 </button>
               </>
