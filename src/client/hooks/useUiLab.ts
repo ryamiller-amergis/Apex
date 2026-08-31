@@ -4,9 +4,12 @@ import type {
   UiLabDesign,
   UiLabDesignSummary,
   UiLabComment,
+  UiLabShare,
+  UiLabShareTarget,
   CreateUiLabDesignRequest,
   RegenerateUiLabDesignRequest,
   AddUiLabCommentRequest,
+  CreateUiLabShareRequest,
   UiLabStreamChunk,
 } from '../../shared/types/uiLab';
 
@@ -101,7 +104,7 @@ export function useDeleteUiLabDesign(project: string | null) {
 
 export function useSaveUiLabHtml(designId: string | null) {
   const qc = useQueryClient();
-  return useMutation<void, Error, string>({
+  return useMutation<UiLabDesign, Error, string>({
     mutationFn: (html) =>
       apiFetch(`/api/ui-lab/${designId}/html`, {
         method: 'PATCH',
@@ -110,6 +113,76 @@ export function useSaveUiLabHtml(designId: string | null) {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['ui-lab', 'design', designId] });
+      qc.invalidateQueries({ queryKey: ['ui-lab', 'designs'] });
+    },
+  });
+}
+
+// ── Share management ─────────────────────────────────────────────────────────
+
+export function uiLabSharesQueryKey(designId: string) {
+  return ['ui-lab', 'shares', designId] as const;
+}
+
+export function uiLabShareTargetsQueryKey(designId: string, query: string) {
+  return ['ui-lab', 'share-targets', designId, query] as const;
+}
+
+export function useUiLabShares(designId: string | null, enabled = true) {
+  return useQuery<UiLabShare[]>({
+    queryKey: uiLabSharesQueryKey(designId ?? ''),
+    queryFn: () => apiFetch(`/api/ui-lab/${designId}/shares`),
+    enabled: Boolean(designId && enabled),
+    retry: false,
+  });
+}
+
+export function useUiLabShareTargets(
+  designId: string | null,
+  query: string,
+  enabled = true,
+) {
+  return useQuery<UiLabShareTarget[]>({
+    queryKey: uiLabShareTargetsQueryKey(designId ?? '', query),
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (query.trim()) params.set('q', query.trim());
+      const qs = params.toString();
+      return apiFetch(`/api/ui-lab/${designId}/share-targets${qs ? `?${qs}` : ''}`);
+    },
+    enabled: Boolean(designId && enabled),
+    retry: false,
+  });
+}
+
+export function useCreateUiLabShare(designId: string | null) {
+  const qc = useQueryClient();
+  return useMutation<UiLabShare, Error, CreateUiLabShareRequest>({
+    mutationFn: (body) =>
+      apiFetch(`/api/ui-lab/${designId}/shares`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      if (!designId) return;
+      void qc.invalidateQueries({ queryKey: uiLabSharesQueryKey(designId) });
+      void qc.invalidateQueries({ queryKey: ['ui-lab', 'share-targets', designId] });
+    },
+  });
+}
+
+export function useRevokeUiLabShare(designId: string | null) {
+  const qc = useQueryClient();
+  return useMutation<void, Error, string>({
+    mutationFn: (granteeId) =>
+      apiFetch(`/api/ui-lab/${designId}/shares/${encodeURIComponent(granteeId)}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: () => {
+      if (!designId) return;
+      void qc.invalidateQueries({ queryKey: uiLabSharesQueryKey(designId) });
+      void qc.invalidateQueries({ queryKey: ['ui-lab', 'share-targets', designId] });
     },
   });
 }

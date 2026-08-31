@@ -293,6 +293,16 @@ function App() {
     changeProject(project);
   }, [location.pathname, location.search, selectedProject, availableProjects, changeProject]);
 
+  // Deep-link from UI Lab share notifications: /ui-lab/:id?project=…
+  useEffect(() => {
+    const match = /^\/ui-lab\/([^/?#]+)/.exec(location.pathname);
+    if (!match) return;
+    const project = new URLSearchParams(location.search).get('project');
+    if (!project || project === selectedProject) return;
+    if (!availableProjects.includes(project)) return;
+    changeProject(project);
+  }, [location.pathname, location.search, selectedProject, availableProjects, changeProject]);
+
   const showBetaAnnouncement = useFeatureFlag('beta-to-prod-announcement', selectedProject);
   const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
   const agentHomeFlag = homeFlags['agent-home'] ?? false;
@@ -435,7 +445,16 @@ function App() {
     if (currentView === 'standup-manage' && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:manage')))      navigate(fallback);
     if (currentView === 'standup-summary' && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:participate'))) navigate(fallback);
     if (currentView === 'feature-requests' && !isSuperAdmin && (!effectiveEnabledViews.includes('feature-requests') || !can('feature-requests:view'))) navigate(fallback);
-    if (currentView === 'ui-lab'        && !isSuperAdmin && (!effectiveEnabledViews.includes('ui-lab') || !can('ui-lab:view') || !isInAnyGroup(['UI/UX']))) navigate(fallback);
+    // UI Lab workspace requires UI/UX; a deep-linked design (`/ui-lab/:id`) allows
+    // named viewers with ui-lab:view — server enforces live share access.
+    if (currentView === 'ui-lab') {
+      const uiLabDesignDeepLink = /^\/ui-lab\/[^/]+/.test(location.pathname);
+      const canOpenUiLabWorkspace = isSuperAdmin
+        || (effectiveEnabledViews.includes('ui-lab') && can('ui-lab:view') && isInAnyGroup(['UI/UX']));
+      const canOpenSharedUiLab = isSuperAdmin
+        || (effectiveEnabledViews.includes('ui-lab') && can('ui-lab:view') && uiLabDesignDeepLink);
+      if (!canOpenUiLabWorkspace && !canOpenSharedUiLab) navigate(fallback);
+    }
     if (currentView === 'pdf-tools'     && !isSuperAdmin && (!effectiveEnabledViews.includes('pdf-tools') || !can('pdf-assembly:use'))) navigate(fallback);
     if (currentView === 'design-module' && !isSuperAdmin && (!effectiveEnabledViews.includes('design-module') || !can('design-module:view'))) navigate(fallback);
     if (currentView === 'load-tests'    && !isSuperAdmin && (!effectiveEnabledViews.includes('load-tests')    || !can('load-test:view')))    navigate(fallback);
@@ -450,7 +469,7 @@ function App() {
         navigate(firstAccessible ? `/planning/${firstAccessible}` : fallback);
       }
     }
-  }, [currentView, planningTab, permissionsLoaded, menuConfigReady, homeFlagsLoading, canAccessHome, can, isInAnyGroup, isSuperAdmin, isRestricted, effectiveEnabledViews, selectedProject, workBoardEnabled, navigate]);
+  }, [currentView, planningTab, permissionsLoaded, menuConfigReady, homeFlagsLoading, canAccessHome, can, isInAnyGroup, isSuperAdmin, isRestricted, effectiveEnabledViews, selectedProject, workBoardEnabled, navigate, location.pathname]);
 
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
@@ -1059,7 +1078,18 @@ function App() {
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
                 <div className="ui-lab-view" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-                  <UiLabView project={selectedProject} />
+                  <UiLabView
+                    project={selectedProject}
+                    initialDesignId={(() => {
+                      const match = /^\/ui-lab\/([^/?#]+)/.exec(location.pathname);
+                      return match ? decodeURIComponent(match[1]) : null;
+                    })()}
+                    sharedMode={
+                      /^\/ui-lab\/[^/?#]+/.test(location.pathname)
+                      && !isSuperAdmin
+                      && !isInAnyGroup(['UI/UX'])
+                    }
+                  />
                 </div>
               </Suspense>
             </ErrorBoundary>

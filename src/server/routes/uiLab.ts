@@ -5,7 +5,6 @@ import { isSuperAdminRequest } from '../utils/superAdmin';
 import { getMenuConfig } from '../services/menuSettingsService';
 import {
   listDesigns,
-  getDesign,
   getDesignProject,
   getCommentProject,
   createDesign,
@@ -17,11 +16,21 @@ import {
   addComment,
   resolveComment,
   reopenComment,
+  resolveDesignAccess,
+  requireManageAccess,
+  listDesignShares,
+  listDesignShareTargets,
+  createDesignShare,
+  revokeDesignShare,
+  UiLabForbiddenError,
+  UiLabNotFoundError,
+  UiLabValidationError,
 } from '../services/uiLabService';
 import type {
   CreateUiLabDesignRequest,
   RegenerateUiLabDesignRequest,
   AddUiLabCommentRequest,
+  CreateUiLabShareRequest,
 } from '../../shared/types/uiLab';
 
 const router = Router();
@@ -67,6 +76,39 @@ function requireUiLabEnabled(resolveProject: ProjectResolver): RequestHandler {
   };
 }
 
+/**
+ * Permissions resolve per project, but the record-scoped routes below carry no
+ * project param, so `requirePermission` would fall back to global roles and
+ * reject a user whose UI Lab access comes from a project-scoped role. Resolve
+ * the owning project from the record first so the middleware scopes to the same
+ * project the service layer authorizes against.
+ */
+function withRecordProject(resolveProject: ProjectResolver): RequestHandler {
+  return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const project = await resolveProject(req);
+      if (project) {
+        req.headers['x-apex-project'] = project;
+      }
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
+}
+
+function handleServiceError(err: unknown, res: Response, next: NextFunction): void {
+  if (
+    err instanceof UiLabForbiddenError
+    || err instanceof UiLabNotFoundError
+    || err instanceof UiLabValidationError
+  ) {
+    res.status(err.status).json({ error: err.message });
+    return;
+  }
+  next(err);
+}
+
 const requireUiUxGroup = requireGroupMembership('UI/UX');
 
 const uiLabEnabledFromQuery = requireUiLabEnabled((req) => req.query.project as string | undefined);
@@ -76,7 +118,10 @@ const uiLabEnabledFromBody = requireUiLabEnabled(
 const uiLabEnabledFromDesignId = requireUiLabEnabled((req) => getDesignProject(req.params.id));
 const uiLabEnabledFromCommentId = requireUiLabEnabled((req) => getCommentProject(req.params.commentId));
 
-// GET / — list designs for a project
+const projectFromDesignId = withRecordProject((req) => getDesignProject(req.params.id));
+const projectFromCommentId = withRecordProject((req) => getCommentProject(req.params.commentId));
+
+// GET / — list designs for a project (UI/UX workspace only)
 router.get('/', requirePermission('ui-lab:view'), requireUiUxGroup, uiLabEnabledFromQuery, async (req, res, next) => {
   try {
     const project = req.query.project as string | undefined;
@@ -111,48 +156,63 @@ router.post('/', requirePermission('ui-lab:manage'), requireUiUxGroup, uiLabEnab
   }
 });
 
-// GET /:id — get a single design (full HTML)
-router.get('/:id', requirePermission('ui-lab:view'), requireUiUxGroup, uiLabEnabledFromDesignId, async (req, res, next) => {
+// GET /:id — get a single design (workspace OR named share)
+router.get('/:id', projectFromDesignId, requirePermission('ui-lab:view'), uiLabEnabledFromDesignId, async (req, res, next) => {
   try {
-    const design = await getDesign(req.params.id);
-    if (!design) {
-      res.status(404).json({ error: 'Not found' });
-      return;
-    }
+    const userId = getUserId(req);
+    const { design } = await resolveDesignAccess(req.params.id, userId, {
+      isSuperAdmin: isSuperAdminRequest(req),
+    });
     res.json(design);
   } catch (err) {
-    next(err);
+    handleServiceError(err, res, next);
   }
 });
 
 // DELETE /:id
-router.delete('/:id', requirePermission('ui-lab:manage'), requireUiUxGroup, uiLabEnabledFromDesignId, async (req, res, next) => {
+router.delete('/:id', projectFromDesignId, requirePermission('ui-lab:manage'), requireUiUxGroup, uiLabEnabledFromDesignId, async (req, res, next) => {
   try {
+    const userId = getUserId(req);
+    await requireManageAccess(req.params.id, userId, { isSuperAdmin: isSuperAdminRequest(req) });
     await deleteDesign(req.params.id);
     res.status(204).send();
   } catch (err) {
-    next(err);
+    handleServiceError(err, res, next);
   }
 });
 
-// PATCH /:id/html — manual HTML edit (from BoundaryEditor)
-router.patch('/:id/html', requirePermission('ui-lab:manage'), requireUiUxGroup, uiLabEnabledFromDesignId, async (req, res, next) => {
+// PATCH /:id/html — manual HTML edit (from BoundaryEditor); managers only
+router.patch('/:id/html', projectFromDesignId, requirePermission('ui-lab:manage'), requireUiUxGroup, uiLabEnabledFromDesignId, async (req, res, next) => {
   try {
+    const userId = getUserId(req);
+    await requireManageAccess(req.params.id, userId, { isSuperAdmin: isSuperAdminRequest(req) });
     const { html } = req.body as { html?: string };
     if (typeof html !== 'string') {
       res.status(400).json({ error: 'html string is required' });
       return;
     }
-    await saveHtml(req.params.id, html);
-    res.json({ ok: true });
+    const updated = await saveHtml(req.params.id, html);
+    res.json(updated);
   } catch (err) {
-    next(err);
+    handleServiceError(err, res, next);
   }
 });
 
-// GET /:id/stream — SSE endpoint for initial generation
-router.get('/:id/stream', requirePermission('ui-lab:view'), requireUiUxGroup, uiLabEnabledFromDesignId, async (req, res) => {
+// GET /:id/stream — SSE endpoint for initial generation (managers only)
+router.get('/:id/stream', projectFromDesignId, requirePermission('ui-lab:manage'), requireUiUxGroup, uiLabEnabledFromDesignId, async (req, res) => {
   const { id } = req.params;
+  const userId = getUserId(req);
+
+  try {
+    await requireManageAccess(id, userId, { isSuperAdmin: isSuperAdminRequest(req) });
+  } catch (err) {
+    const status = err instanceof UiLabForbiddenError || err instanceof UiLabNotFoundError
+      ? err.status
+      : 500;
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(status).json({ error: message });
+    return;
+  }
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -177,13 +237,25 @@ router.get('/:id/stream', requirePermission('ui-lab:view'), requireUiUxGroup, ui
   }
 });
 
-// POST /:id/regenerate — SSE-capable regeneration (whole design or scoped element)
-router.post('/:id/regenerate', requirePermission('ui-lab:manage'), requireUiUxGroup, uiLabEnabledFromDesignId, async (req, res) => {
+// POST /:id/regenerate — SSE-capable regeneration (managers only)
+router.post('/:id/regenerate', projectFromDesignId, requirePermission('ui-lab:manage'), requireUiUxGroup, uiLabEnabledFromDesignId, async (req, res) => {
   const { id } = req.params;
   const body = req.body as RegenerateUiLabDesignRequest;
+  const userId = getUserId(req);
 
   if (!body.feedback) {
     res.status(400).json({ error: 'feedback is required' });
+    return;
+  }
+
+  try {
+    await requireManageAccess(id, userId, { isSuperAdmin: isSuperAdminRequest(req) });
+  } catch (err) {
+    const status = err instanceof UiLabForbiddenError || err instanceof UiLabNotFoundError
+      ? err.status
+      : 500;
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(status).json({ error: message });
     return;
   }
 
@@ -210,20 +282,23 @@ router.post('/:id/regenerate', requirePermission('ui-lab:manage'), requireUiUxGr
   }
 });
 
-// GET /:id/comments
-router.get('/:id/comments', requirePermission('ui-lab:view'), requireUiUxGroup, uiLabEnabledFromDesignId, async (req, res, next) => {
+// GET /:id/comments — workspace OR named share
+router.get('/:id/comments', projectFromDesignId, requirePermission('ui-lab:view'), uiLabEnabledFromDesignId, async (req, res, next) => {
   try {
+    const userId = getUserId(req);
+    await resolveDesignAccess(req.params.id, userId, { isSuperAdmin: isSuperAdminRequest(req) });
     const comments = await listComments(req.params.id);
     res.json(comments);
   } catch (err) {
-    next(err);
+    handleServiceError(err, res, next);
   }
 });
 
-// POST /:id/comments
-router.post('/:id/comments', requirePermission('ui-lab:manage'), requireUiUxGroup, uiLabEnabledFromDesignId, async (req, res, next) => {
+// POST /:id/comments — any authorized viewer (workspace or shared) can comment
+router.post('/:id/comments', projectFromDesignId, requirePermission('ui-lab:view'), uiLabEnabledFromDesignId, async (req, res, next) => {
   try {
     const userId = getUserId(req);
+    await resolveDesignAccess(req.params.id, userId, { isSuperAdmin: isSuperAdminRequest(req) });
     const body = req.body as AddUiLabCommentRequest;
     if (!body.text || body.version == null) {
       res.status(400).json({ error: 'text and version are required' });
@@ -232,14 +307,20 @@ router.post('/:id/comments', requirePermission('ui-lab:manage'), requireUiUxGrou
     const comment = await addComment(req.params.id, userId, body);
     res.status(201).json(comment);
   } catch (err) {
-    next(err);
+    handleServiceError(err, res, next);
   }
 });
 
-// POST /comments/:commentId/resolve
-router.post('/comments/:commentId/resolve', requirePermission('ui-lab:manage'), requireUiUxGroup, uiLabEnabledFromCommentId, async (req, res, next) => {
+// POST /comments/:commentId/resolve — managers only
+router.post('/comments/:commentId/resolve', projectFromCommentId, requirePermission('ui-lab:manage'), requireUiUxGroup, uiLabEnabledFromCommentId, async (req, res, next) => {
   try {
     const userId = getUserId(req);
+    const project = await getCommentProject(req.params.commentId);
+    if (!project) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+    // Comment resolve is workspace-manage gated via middleware; design-level check is via group+permission.
     await resolveComment(req.params.commentId, userId);
     res.json({ ok: true });
   } catch (err) {
@@ -247,13 +328,65 @@ router.post('/comments/:commentId/resolve', requirePermission('ui-lab:manage'), 
   }
 });
 
-// POST /comments/:commentId/reopen
-router.post('/comments/:commentId/reopen', requirePermission('ui-lab:manage'), requireUiUxGroup, uiLabEnabledFromCommentId, async (req, res, next) => {
+// POST /comments/:commentId/reopen — managers only
+router.post('/comments/:commentId/reopen', projectFromCommentId, requirePermission('ui-lab:manage'), requireUiUxGroup, uiLabEnabledFromCommentId, async (req, res, next) => {
   try {
     await reopenComment(req.params.commentId);
     res.json({ ok: true });
   } catch (err) {
     next(err);
+  }
+});
+
+// ── Share management (managers / super admins) ───────────────────────────────
+
+router.get('/:id/shares', projectFromDesignId, requirePermission('ui-lab:manage'), requireUiUxGroup, uiLabEnabledFromDesignId, async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const shares = await listDesignShares(req.params.id, userId, {
+      isSuperAdmin: isSuperAdminRequest(req),
+    });
+    res.json(shares);
+  } catch (err) {
+    handleServiceError(err, res, next);
+  }
+});
+
+router.get('/:id/share-targets', projectFromDesignId, requirePermission('ui-lab:manage'), requireUiUxGroup, uiLabEnabledFromDesignId, async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const query = typeof req.query.q === 'string' ? req.query.q : '';
+    const targets = await listDesignShareTargets(req.params.id, query, userId, {
+      isSuperAdmin: isSuperAdminRequest(req),
+    });
+    res.json(targets);
+  } catch (err) {
+    handleServiceError(err, res, next);
+  }
+});
+
+router.post('/:id/shares', projectFromDesignId, requirePermission('ui-lab:manage'), requireUiUxGroup, uiLabEnabledFromDesignId, async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const body = req.body as CreateUiLabShareRequest;
+    const share = await createDesignShare(req.params.id, body?.granteeId, userId, {
+      isSuperAdmin: isSuperAdminRequest(req),
+    });
+    res.status(201).json(share);
+  } catch (err) {
+    handleServiceError(err, res, next);
+  }
+});
+
+router.delete('/:id/shares/:granteeId', projectFromDesignId, requirePermission('ui-lab:manage'), requireUiUxGroup, uiLabEnabledFromDesignId, async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    await revokeDesignShare(req.params.id, req.params.granteeId, userId, {
+      isSuperAdmin: isSuperAdminRequest(req),
+    });
+    res.status(204).send();
+  } catch (err) {
+    handleServiceError(err, res, next);
   }
 });
 
