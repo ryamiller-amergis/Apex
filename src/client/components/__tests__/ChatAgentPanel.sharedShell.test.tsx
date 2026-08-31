@@ -78,6 +78,14 @@ const thread: ChatThread = {
 };
 
 describe('ChatAgentPanel shared Home shell', () => {
+  beforeEach(() => {
+    global.fetch = jest.fn();
+  });
+
+  afterEach(() => {
+    (global as unknown as { fetch?: typeof fetch }).fetch = undefined;
+  });
+
   it('TBI-006 DoD-1 shows Home-only pills and the top three recent threads', () => {
     render(
       <ChatAgentPanel
