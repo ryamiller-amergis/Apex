@@ -12,6 +12,11 @@ const mockCan = jest.fn((key: string) => key === 'adr:delete' || key === 'adr:ed
 let mockUserId = 'owner-1';
 let mockIsSuperAdmin = false;
 let mockAssignments: Array<{ approverUserId: string; status: 'pending' | 'approved' | 'revision_requested' }> = [];
+let mockAssignmentsError = false;
+let mockReviewConfig: {
+  approvalMode?: 'any_one' | 'all_required';
+  approvalModes?: { adr?: 'any_one' | 'all_required' };
+} | null = null;
 let mockStreamState: {
   messages: Array<{ id: string; role: 'agent' | 'user'; text: string }>;
   streamingText: string;
@@ -62,7 +67,7 @@ jest.mock('../../hooks/useChatThreads', () => ({
 }));
 
 jest.mock('../../hooks/useProjectSkillConfig', () => ({
-  useProjectSkillConfig: () => ({ data: null }),
+  useProjectSkillConfig: () => ({ data: mockReviewConfig }),
   useGlobalDefaultModel: () => ({ data: { value: 'composer-2' } }),
   useAvailableModels: () => ({ data: [] }),
 }));
@@ -90,7 +95,7 @@ jest.mock('../../hooks/useSpeechInput', () => ({
 
 jest.mock('../../hooks/useAdrs', () => ({
   useAdr: jest.fn(),
-  useAdrAssignments: () => ({ data: mockAssignments, isLoading: false }),
+  useAdrAssignments: () => ({ data: mockAssignments, isLoading: false, isError: mockAssignmentsError }),
   useAdrComments: () => ({ data: [] }),
   useAdrOwnerApproval: () => ({ data: null }),
   useAssignAdrReviewers: () => ({ mutate: jest.fn(), isPending: false }),
@@ -182,6 +187,8 @@ describe('AdrChatView — delete', () => {
     mockUserId = 'owner-1';
     mockIsSuperAdmin = false;
     mockAssignments = [];
+    mockAssignmentsError = false;
+    mockReviewConfig = null;
     createCommentMutateAsync.mockResolvedValue(undefined);
     mockStreamState = { messages: [], streamingText: '', status: 'idle' };
     mockCan.mockImplementation((key: string) => key === 'adr:delete' || key === 'adr:edit' || key === 'adr:review');
@@ -296,6 +303,40 @@ describe('AdrChatView — delete', () => {
 
     expect(screen.getByTestId('adr-approve-btn')).toBeInTheDocument();
     expect(screen.getByTestId('adr-request-revision-btn')).toBeInTheDocument();
+  });
+
+  it('does not infer owner-only review when assignment loading fails', () => {
+    mockUserId = 'viewer-1';
+    mockAssignmentsError = true;
+    (useAdr as jest.Mock).mockReturnValue({
+      data: { ...sampleAdr, content: '# ADR', status: 'proposed' },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderAdrView();
+
+    expect(screen.queryByRole('button', { name: 'Accept ADR' })).not.toBeInTheDocument();
+  });
+
+  it('uses the ADR approval mode when deciding whether owner approval is ready', () => {
+    mockAssignments = [
+      { approverUserId: 'reviewer-1', status: 'approved' },
+      { approverUserId: 'reviewer-2', status: 'pending' },
+    ];
+    mockReviewConfig = {
+      approvalMode: 'any_one',
+      approvalModes: { adr: 'all_required' },
+    };
+    (useAdr as jest.Mock).mockReturnValue({
+      data: { ...sampleAdr, content: '# ADR', status: 'proposed' },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderAdrView();
+
+    expect(screen.getByRole('button', { name: 'Accept ADR' })).toBeDisabled();
   });
 
   it('PBI-007 AC-1 surfaces owner-only comment failure without losing the typed comment', async () => {

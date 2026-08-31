@@ -383,7 +383,11 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const { data: adr, isLoading, isError } = useAdr(id);
   const { data: reviewConfig } = useProjectSkillConfig(adr?.project);
   const { data: models = [], isLoading: modelsLoading } = useAvailableModels();
-  const { data: assignments = [], isLoading: assignmentsLoading } = useAdrAssignments(id);
+  const {
+    data: assignments = [],
+    isLoading: assignmentsLoading,
+    isError: assignmentsError,
+  } = useAdrAssignments(id);
   const { data: reviewComments = [] } = useAdrComments(id);
   const { data: ownerApproval } = useAdrOwnerApproval(id);
   const {
@@ -560,13 +564,15 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const unresolvedCount = reviewComments.filter((comment) => comment.status === 'open').length;
   const currentAssignment = assignments.find((assignment) => assignment.approverUserId === userId);
   const isAssignedReviewer = !!currentAssignment;
-  const ownerOnly = !assignmentsLoading && assignments.length === 0;
-  const approvalMode = reviewConfig?.approvalMode ?? 'any_one';
-  const reviewerApprovalComplete = assignments.length === 0
-    ? true
-    : approvalMode === 'all_required'
-      ? assignments.every((assignment) => assignment.status === 'approved')
-      : assignments.some((assignment) => assignment.status === 'approved');
+  const ownerOnly = !assignmentsLoading && !assignmentsError && assignments.length === 0;
+  const approvalMode = reviewConfig?.approvalModes?.adr ?? reviewConfig?.approvalMode ?? 'any_one';
+  const reviewerApprovalComplete = assignmentsLoading || assignmentsError
+    ? false
+    : assignments.length === 0
+      ? true
+      : approvalMode === 'all_required'
+        ? assignments.every((assignment) => assignment.status === 'approved')
+        : assignments.some((assignment) => assignment.status === 'approved');
   const canReviewAdr = can('adr:review') && isAssignedReviewer && !isAuthor && adr.status === 'proposed';
   const showCommentLayer = adr.status === 'proposed' || adr.status === 'accepted';
   const canActAsOwner = isAuthor || (ownerOnly && isSuperAdmin);

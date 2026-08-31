@@ -3117,7 +3117,10 @@ router.post('/:interviewId/prds', requirePermission('interviews:manage'), async 
 // ── Owner Approval (two-stage) ────────────────────────────────────────────────
 
 import { getOwnerApproval, isDocumentOwner, recordOwnerApproval } from '../services/ownerApprovalService';
-import { triggerDesignDocForPrototype } from '../services/designPrototypeService';
+import {
+  getUnresolvedCommentCount as getUnresolvedPrototypeCommentCount,
+  triggerDesignDocForPrototype,
+} from '../services/designPrototypeService';
 import type { OwnerApproveRequest, OwnerApprovalDocumentType } from '../../shared/types/approvals';
 
 router.get('/prds/:prdId/owner-approval', requirePermission('interviews:view'), async (req, res, next) => {
@@ -3272,7 +3275,7 @@ router.post('/prds/:prdId/design-prototypes/owner-approve', requirePermission('d
       res.status(403).json({ error: 'Only the document owner can give final approval' });
       return;
     }
-    if (status === 'approved' && await getUnresolvedCount(prototypeId, 'design_prototype') > 0) {
+    if (status === 'approved' && await getUnresolvedPrototypeCommentCount(prototypeId) > 0) {
       res.status(409).json({ error: 'Resolve all review comments before approving the prototype' });
       return;
     }

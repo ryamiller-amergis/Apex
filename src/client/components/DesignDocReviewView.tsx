@@ -1184,7 +1184,11 @@ export const DesignDocReviewView: React.FC = () => {
   // Restore React-owned text before this render's commit (tab/split remounts).
   unwrapCommentMarks(tabContentSplitRef.current);
 
-  const { data: assignments = [], isLoading: assignmentsLoading } = useDocumentAssignments(id, 'design_doc');
+  const {
+    data: assignments = [],
+    isLoading: assignmentsLoading,
+    isError: assignmentsError,
+  } = useDocumentAssignments(id, 'design_doc');
   useDesignDocOwnerApproval(id);
   const ownerApproveMutation = useDesignDocOwnerApprove(id);
 
@@ -1816,7 +1820,7 @@ export const DesignDocReviewView: React.FC = () => {
 
   const isAuthor = doc.authorId === userId;
   const isOwner = doc.ownerId === userId;
-  const ownerOnly = !assignmentsLoading && assignments.length === 0;
+  const ownerOnly = !assignmentsLoading && !assignmentsError && assignments.length === 0;
   const isOwnerActor = (doc.ownerId ? isOwner : isAuthor) || isSuperAdmin;
   const validationThreshold = doc.validationScoreThreshold ?? 90;
   const scoreBelowThreshold =

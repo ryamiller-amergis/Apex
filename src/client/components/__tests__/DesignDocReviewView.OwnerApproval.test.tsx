@@ -210,6 +210,26 @@ describe('Owner Approval in DesignDocReviewView', () => {
     expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
   });
 
+  it('does not infer owner-only review when assignment loading fails', () => {
+    mockUseAppShell.mockReturnValue({
+      can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',
+      userId: 'user-owner',
+      isAdmin: false,
+      isSuperAdmin: false,
+      groups: [],
+    });
+    mockUseDesignDoc.mockReturnValue({
+      data: { ...baseDoc, status: 'pending_review' },
+      isLoading: false,
+      isError: false,
+    });
+    mockUseDocumentAssignments.mockReturnValue({ data: [], isLoading: false, isError: true });
+
+    renderView();
+
+    expect(screen.queryByRole('button', { name: 'Approve as Owner' })).not.toBeInTheDocument();
+  });
+
   it('PBI-006 AC-1 keeps the unresolved-comment reason visible for owner-only approval', () => {
     mockUseAppShell.mockReturnValue({
       can: (key: string) => key === 'interviews:manage' || key === 'design-docs:review',

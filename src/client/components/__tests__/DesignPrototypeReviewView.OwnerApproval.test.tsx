@@ -80,6 +80,35 @@ describe('PBI-006 Design Prototype owner-only approval', () => {
     expect(screen.getByPlaceholderText('Add a comment...')).toBeInTheDocument();
   });
 
+  it('does not infer owner-only review when assignment loading fails', () => {
+    mockUsePrototypeAssignments.mockReturnValue({ data: [], isLoading: false, isError: true });
+
+    render(<MemoryRouter initialEntries={['/backlog/design-prototype/prd-1']}><DesignPrototypeReviewView /></MemoryRouter>);
+
+    expect(screen.queryByRole('button', { name: 'Approve as Owner' })).not.toBeInTheDocument();
+  });
+
+  it('does not fall back to the PRD owner when no prototype owner is assigned', () => {
+    mockUseInterview.mockReturnValue({ data: {} });
+
+    render(<MemoryRouter initialEntries={['/backlog/design-prototype/prd-1']}><DesignPrototypeReviewView /></MemoryRouter>);
+
+    expect(screen.getByRole('button', { name: 'Approve as Owner' })).toBeDisabled();
+  });
+
+  it('hides the comment controls without interviews:manage permission', () => {
+    mockUseAppShell.mockReturnValue({
+      can: () => false,
+      userId: 'owner-1',
+      isAdmin: false,
+      isSuperAdmin: false,
+    });
+
+    render(<MemoryRouter initialEntries={['/backlog/design-prototype/prd-1']}><DesignPrototypeReviewView /></MemoryRouter>);
+
+    expect(screen.queryByPlaceholderText('Add a comment...')).not.toBeInTheDocument();
+  });
+
   it('AC-3 disables owner approval for a Project Admin who is not Platform Admin', () => {
     mockUseAppShell.mockReturnValue({
       can: () => true,

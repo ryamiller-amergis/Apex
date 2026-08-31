@@ -57,6 +57,7 @@ jest.mock('../services/designPrototypeService', () => {
   const actual = jest.requireActual('../services/designPrototypeService') as typeof import('../services/designPrototypeService');
   return {
     ...actual,
+    getUnresolvedCommentCount: jest.fn().mockResolvedValue(0),
     triggerDesignDocForPrototype: jest.fn().mockResolvedValue(undefined),
   };
 });
@@ -275,6 +276,9 @@ const { resolveReviewerAvailability: mockResolveReviewerAvailability } = jest.re
 const { getUnresolvedCount: mockGetUnresolvedCount } = jest.requireMock(
   '../services/reviewCommentService',
 ) as { getUnresolvedCount: jest.Mock };
+const { getUnresolvedCommentCount: mockGetUnresolvedPrototypeCommentCount } = jest.requireMock(
+  '../services/designPrototypeService',
+) as { getUnresolvedCommentCount: jest.Mock };
 
 // autoStartValidation is called with `.catch()` in the route, so it must return a Promise.
 mockAutoStartValidation.mockResolvedValue(undefined);
@@ -1653,6 +1657,7 @@ describe('POST /api/interviews/prds/:prdId/design-prototypes/owner-approve', () 
     mockIsAdminUser.mockResolvedValue(false);
     mockIsDocumentOwner.mockResolvedValue(true);
     mockRecordOwnerApproval.mockResolvedValue({ status: 'approved' });
+    mockGetUnresolvedPrototypeCommentCount.mockResolvedValue(0);
   });
 
   it('returns 400 when prototypeId is missing', async () => {
@@ -1716,6 +1721,21 @@ describe('POST /api/interviews/prds/:prdId/design-prototypes/owner-approve', () 
     // Approval is recorded keyed to the prototypeId, not the prdId.
     expect(mockRecordOwnerApproval).toHaveBeenCalledWith('proto-1', 'design_prototype', 'user-test', 'approved', undefined);
     expect(mockDb.update).toHaveBeenCalled();
+  });
+
+  it('blocks approval when the prototype has unresolved comments', async () => {
+    mockDb.query.designPrototypes = {
+      findFirst: jest.fn().mockResolvedValue({ id: 'proto-1', featureIndex: 0, status: 'reviewer_approved' }),
+    };
+    mockGetUnresolvedPrototypeCommentCount.mockResolvedValue(1);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/design-prototypes/owner-approve')
+      .send({ status: 'approved', prototypeId: 'proto-1' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/Resolve all review comments/);
+    expect(mockRecordOwnerApproval).not.toHaveBeenCalled();
   });
 
   it('transitions prototype to revision_requested on revision', async () => {

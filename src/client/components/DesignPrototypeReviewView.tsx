@@ -50,12 +50,16 @@ const DesignPrototypeReviewView: React.FC = () => {
   const prdId = location.pathname.split('/').pop() ?? '';
 
   const { data: prototypes = [], isLoading: isLoadingList } = usePrototypesForPrd(prdId);
-  const { data: prototypeAssignments = [], isLoading: assignmentsLoading } = usePrototypeAssignments(prdId);
+  const {
+    data: prototypeAssignments = [],
+    isLoading: assignmentsLoading,
+    isError: assignmentsError,
+  } = usePrototypeAssignments(prdId);
   const { data: relatedDesignDocs = [] } = useDesignDocsByPrd(prdId);
   const { data: prdData } = usePrd(prdId);
   const { data: interviewData } = useInterview(prdData?.interviewId ?? null);
   const ownerApproveProto = useOwnerApprove(prdId, 'design_prototype');
-  const prototypeOwnerId = interviewData?.designPrototypeOwnerId ?? prdData?.ownerId ?? prdData?.authorId;
+  const prototypeOwnerId = interviewData?.designPrototypeOwnerId;
   const isDesignPrototypeOwner = prototypeOwnerId === userId;
   const [selectedIndex, setSelectedIndex] = useState(0);
 
@@ -212,7 +216,7 @@ const DesignPrototypeReviewView: React.FC = () => {
 
   // Only designated design-prototype approvers (or admins) may approve/reject.
   const isAssignedApprover = prototypeAssignments.some(a => a.approverUserId === userId);
-  const ownerOnly = !assignmentsLoading && prototypeAssignments.length === 0;
+  const ownerOnly = !assignmentsLoading && !assignmentsError && prototypeAssignments.length === 0;
   const isOwnerActor = isDesignPrototypeOwner || isSuperAdmin;
   const canReview = !ownerOnly && can('design-prototypes:review') && (isAssignedApprover || isAdmin);
   const isReviewable = selectedProto?.status === 'pending_review';
@@ -653,7 +657,7 @@ const DesignPrototypeReviewView: React.FC = () => {
               )}
 
               {/* Comment bar */}
-              {selectedProto && selectedProto.status !== 'generating' && selectedProto.status !== 'regenerating' && selectedProto.status !== 'generation_failed' && (
+              {selectedProto && selectedProto.status !== 'generating' && selectedProto.status !== 'regenerating' && selectedProto.status !== 'generation_failed' && can('interviews:manage') && (
                 <div className={styles.actionsBar}>
                   <div className={styles.actionsLeft}>
                     <input

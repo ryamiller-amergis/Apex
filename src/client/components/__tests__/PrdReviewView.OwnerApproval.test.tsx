@@ -33,6 +33,7 @@ const mockUseOwnerApprove = jest.fn();
 const mockUseInterview = jest.fn();
 const mockUseActiveUsers = jest.fn();
 const mockUseDocumentAssignments = jest.fn();
+const mockUseProjectSkillConfig = jest.fn();
 
 jest.mock('../../hooks/useInterviews', () => ({
   usePrd: (...args: unknown[]) => mockUsePrd(...args),
@@ -83,7 +84,7 @@ jest.mock('../../hooks/useInterviews', () => ({
 }));
 
 jest.mock('../../hooks/useProjectSkillConfig', () => ({
-  useProjectSkillConfig: jest.fn(() => ({ data: { approvalMode: 'any_one' } })),
+  useProjectSkillConfig: (...args: unknown[]) => mockUseProjectSkillConfig(...args),
 }));
 
 jest.mock('../../hooks/useReviewComments', () => ({
@@ -187,6 +188,7 @@ beforeEach(() => {
   mockUseInterview.mockReturnValue({ data: null });
   mockUseActiveUsers.mockReturnValue({ data: [] });
   mockUseDocumentAssignments.mockReturnValue({ data: [] });
+  mockUseProjectSkillConfig.mockReturnValue({ data: { approvalMode: 'any_one' } });
 });
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -290,6 +292,67 @@ describe('Owner Approval in PrdReviewView', () => {
 
     const approveButton = screen.getByRole('button', { name: 'Approve as Owner' });
     expect(approveButton).toBeEnabled();
+  });
+
+  it('does not enable one-step owner approval when assignment loading fails', () => {
+    mockUseAppShell.mockReturnValue({ can: () => true, userId: 'user-owner', isAdmin: false });
+    mockUseDocumentAssignments.mockImplementation((_id: unknown, documentType: unknown) =>
+      documentType === 'prd'
+        ? { data: [], isLoading: false, isError: true }
+        : { data: [], isLoading: false, isError: false },
+    );
+
+    renderView();
+
+    expect(screen.getByRole('button', { name: 'Approve as Owner' })).toBeDisabled();
+  });
+
+  it('uses the PRD approval mode instead of the legacy project-wide mode', () => {
+    mockUseAppShell.mockReturnValue({ can: () => true, userId: 'user-owner', isAdmin: false });
+    mockUseProjectSkillConfig.mockReturnValue({
+      data: {
+        approvalMode: 'any_one',
+        approvalModes: { prd: 'all_required' },
+      },
+    });
+    mockUseDocumentAssignments.mockImplementation((_id: unknown, documentType: unknown) =>
+      documentType === 'prd'
+        ? {
+            data: [
+              { approverUserId: 'reviewer-1', status: 'approved' },
+              { approverUserId: 'reviewer-2', status: 'pending' },
+            ],
+            isLoading: false,
+            isError: false,
+          }
+        : { data: [], isLoading: false, isError: false },
+    );
+
+    renderView();
+
+    expect(screen.getByRole('button', { name: 'Approve as Owner' })).toBeDisabled();
+  });
+
+  it('shows owner-only QA approval only to the test-case owner', () => {
+    mockUseAppShell.mockReturnValue({ can: () => true, userId: 'qa-owner', isAdmin: false, isSuperAdmin: false });
+    mockUseInterview.mockReturnValue({
+      data: { id: 'interview-1', testCaseOwnerId: 'qa-owner' },
+    });
+
+    renderView();
+
+    expect(screen.getByTestId('approve-qa-owner-btn')).toBeInTheDocument();
+  });
+
+  it('does not show owner-only QA approval to the PRD owner', () => {
+    mockUseAppShell.mockReturnValue({ can: () => true, userId: 'user-owner', isAdmin: false, isSuperAdmin: false });
+    mockUseInterview.mockReturnValue({
+      data: { id: 'interview-1', testCaseOwnerId: 'qa-owner' },
+    });
+
+    renderView();
+
+    expect(screen.queryByTestId('approve-qa-owner-btn')).not.toBeInTheDocument();
   });
 
   it('shows "Pending Review" label when status=pending_review and user is NOT owner', () => {
