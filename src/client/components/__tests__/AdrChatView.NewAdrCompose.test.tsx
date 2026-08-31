@@ -29,6 +29,8 @@ jest.mock('react-router-dom', () => ({
 const startChat = jest.fn();
 const createAdr = jest.fn();
 const clearAttachments = jest.fn();
+const retryAvailability = jest.fn();
+const mockUseReviewerAvailability = jest.fn();
 const mockUseProjectRepositoryReadiness = useProjectRepositoryReadiness as jest.MockedFunction<
   typeof useProjectRepositoryReadiness
 >;
@@ -57,6 +59,10 @@ jest.mock('../../hooks/useProjectSkillConfig', () => ({
 
 jest.mock('../../hooks/useAdrs', () => ({
   useCreateAdr: () => ({ mutateAsync: createAdr, isPending: false }),
+}));
+
+jest.mock('../../hooks/useReviewerAvailability', () => ({
+  useReviewerAvailability: (...args: unknown[]) => mockUseReviewerAvailability(...args),
 }));
 
 jest.mock('../../hooks/useChatAttachments', () => ({
@@ -117,6 +123,14 @@ describe('NewAdrCompose', () => {
     startChat.mockResolvedValue({ threadId: 'thread-1' });
     createAdr.mockResolvedValue({ adrId: 'adr-1', threadId: 'thread-1' });
     global.fetch = jest.fn().mockResolvedValue({ ok: true }) as jest.Mock;
+    mockUseReviewerAvailability.mockReturnValue({
+      data: {
+        modules: [{ documentType: 'adr', available: true, candidateCount: 1 }],
+      },
+      isLoading: false,
+      isError: false,
+      refetch: retryAvailability,
+    });
     mockUseProjectRepositoryReadiness.mockReturnValue({
       isReady: true,
       message: null,
@@ -127,7 +141,7 @@ describe('NewAdrCompose', () => {
     });
   });
 
-  it('opens reviewer selection and sends reviewers plus attachments', async () => {
+  it('PBI-005 AC-0 opens required reviewer selection and sends reviewers plus attachments', async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
@@ -158,6 +172,90 @@ describe('NewAdrCompose', () => {
       }),
     );
     expect(clearAttachments).toHaveBeenCalled();
+    expect(mockUseReviewerAvailability).toHaveBeenCalledWith('Apex', 'adr');
+  });
+
+  it('PBI-005 AC-1 preserves the draft and offers retry when availability fails', () => {
+    mockUseReviewerAvailability.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      refetch: retryAvailability,
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/adr/new']}><AdrChatView /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Keep this title' } });
+    fireEvent.change(screen.getByPlaceholderText(/describe what is being built/i), {
+      target: { value: 'Keep this decision context.' },
+    });
+
+    expect(screen.getByTestId('adr-reviewer-availability-error')).toHaveAttribute('role', 'alert');
+    fireEvent.click(screen.getByTestId('adr-reviewer-availability-retry'));
+    expect(retryAvailability).toHaveBeenCalled();
+    expect(screen.getByDisplayValue('Keep this title')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Keep this decision context.')).toBeInTheDocument();
+    expect(createAdr).not.toHaveBeenCalled();
+  });
+
+  it('PBI-005 AC-2 creates an owner-only ADR without opening the picker', async () => {
+    mockUseReviewerAvailability.mockReturnValue({
+      data: {
+        modules: [{ documentType: 'adr', available: false, candidateCount: 0 }],
+      },
+      isLoading: false,
+      isError: false,
+      refetch: retryAvailability,
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/adr/new']}><AdrChatView /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Owner-only ADR' } });
+    fireEvent.change(screen.getByPlaceholderText(/describe what is being built/i), {
+      target: { value: 'No configured reviewers.' },
+    });
+    fireEvent.click(screen.getByTestId('create-adr-no-reviewers'));
+
+    await waitFor(() => expect(createAdr).toHaveBeenCalledWith(expect.objectContaining({
+      reviewerIds: [],
+      title: 'Owner-only ADR',
+    })));
+    expect(screen.queryByRole('button', { name: 'Confirm reviewers' })).not.toBeInTheDocument();
+  });
+
+  it('PBI-005 loading does not create or classify reviewer availability', () => {
+    mockUseReviewerAvailability.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+      refetch: retryAvailability,
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/adr/new']}><AdrChatView /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Loading ADR' } });
+    fireEvent.change(screen.getByPlaceholderText(/describe what is being built/i), {
+      target: { value: 'Wait for availability.' },
+    });
+
+    expect(screen.getByRole('button', { name: 'Start ADR' })).toBeDisabled();
+    expect(createAdr).not.toHaveBeenCalled();
   });
 
   it('disables start and shows an error when the project repository is not cloned', () => {

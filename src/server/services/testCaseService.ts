@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { agentRuns, chatThreads, interviews, prds, testCases } from '../db/schema';
+import { chatThreads, interviews, prds, testCases } from '../db/schema';
 import type {
   TestCaseCoverageSummary,
   TestCaseRecord,
@@ -18,6 +18,10 @@ import {
   updateThreadKickoffContext,
 } from './chatAgentService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
+import {
+  canThisInstanceFailGeneration,
+  isThreadRunAlive,
+} from './agentRunReaperService';
 import { resolveSkillConfig } from './projectSettingsService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import {
@@ -957,28 +961,41 @@ export function startTestCaseWatcher(
       return;
     }
 
-    // Background lane keeps the App Service thread idle while the job is
-    // queued/dispatched/running. Only treat idle as "finished without output"
-    // once there is no in-flight agent run for this thread.
-    const inFlightRun = await db.query.agentRuns.findFirst({
-      where: and(
-        eq(agentRuns.threadId, chatThreadId),
-        inArray(agentRuns.status, ['queued', 'dispatched', 'running']),
-      ),
-      columns: { id: true },
-    });
-    if (inFlightRun) {
-      return;
-    }
-
-    if (attempts > WATCHER_MAX_ATTEMPTS || isThreadIdle(chatThreadId)) {
+    if (attempts > WATCHER_MAX_ATTEMPTS) {
       clearInterval(interval);
       activeTestCaseWatchers.delete(testCaseId);
       console.warn(
-        `[testCaseWatcher] No test-case output produced — marking failed (testCaseId=${testCaseId}, threadId=${chatThreadId})`
+        `[testCaseWatcher] Timed out waiting for test-case output — marking failed (testCaseId=${testCaseId}, threadId=${chatThreadId})`
       );
       await markTestCaseFailed(testCaseId, row.prdId, chatThreadId);
+      return;
     }
+
+    // Background lane keeps the App Service thread idle while the job is
+    // queued/dispatched/running, so idle alone never means "finished".
+    const agentFinished =
+      isThreadIdle(chatThreadId) && !(await isThreadRunAlive(chatThreadId));
+    if (!agentFinished) return;
+
+    // Requires a terminal agent_runs row owned by this instance (or an orphan
+    // past its grace). Without it, keep polling: the recovery sweep starts a
+    // watcher while triggerTestCaseGeneration is still routing, and back then
+    // an idle thread with no run row yet looked identical to "finished without
+    // output" — which failed the row and deleted the workspace out from under
+    // the worker that was about to run. Timeout above is the backstop.
+    if (!(await canThisInstanceFailGeneration(chatThreadId))) {
+      console.warn(
+        `[testCaseWatcher] Waiting — not run owner or no terminal run yet (testCaseId=${testCaseId}, threadId=${chatThreadId})`
+      );
+      return;
+    }
+
+    clearInterval(interval);
+    activeTestCaseWatchers.delete(testCaseId);
+    console.warn(
+      `[testCaseWatcher] No test-case output produced — marking failed (testCaseId=${testCaseId}, threadId=${chatThreadId})`
+    );
+    await markTestCaseFailed(testCaseId, row.prdId, chatThreadId);
   }, WATCHER_INTERVAL_MS);
 
   activeTestCaseWatchers.set(testCaseId, interval);

@@ -95,14 +95,14 @@ export async function resolveDocumentOwnerId(
     case 'prd': {
       const prdRow = await db.query.prds.findFirst({
         where: eq(prds.id, documentId),
-        columns: { interviewId: true },
+        columns: { interviewId: true, authorId: true },
       });
       if (!prdRow?.interviewId) return null;
       const interviewRow = await db.query.interviews.findFirst({
         where: eq(interviews.id, prdRow.interviewId),
         columns: { prdOwnerId: true },
       });
-      return interviewRow?.prdOwnerId ?? null;
+      return interviewRow?.prdOwnerId ?? prdRow.authorId ?? null;
     }
     case 'test_case': {
       const prdRow = await db.query.prds.findFirst({

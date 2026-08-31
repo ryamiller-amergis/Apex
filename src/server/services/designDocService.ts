@@ -22,7 +22,7 @@ import { resolveSkillConfig, getSkillSettingsName } from './projectSettingsServi
 import { getDefaultModel } from './appSettingsService';
 import { getPrd } from './prdService';
 import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
-import { collectValidationGaps } from '../../shared/utils/validationReport';
+import { collectValidationGaps, normalizeValidationScorecard } from '../../shared/utils/validationReport';
 import {
   propagatePipelineGrounding,
   readActiveTargetProvenance,
@@ -526,20 +526,7 @@ export async function reviewDesignDoc(
 
   const admin = await isAdminUser(reviewerId);
 
-  const skillConfig = await resolveSkillConfig({ project: row.project, settingsId: row.skillSettingsId ?? undefined });
-  if (skillConfig?.designDocValidationSkillPath) {
-    const threshold = skillConfig.designDocValidationScoreThreshold ?? DEFAULT_DESIGN_DOC_VALIDATION_THRESHOLD;
-    const scoreOk =
-      row.validationScore !== null &&
-      row.validationScore !== undefined &&
-      row.validationScore >= threshold;
-    const hasOverride = !!(row.validationOverride as DesignDocValidationOverride | null);
-    if (!scoreOk && !hasOverride) {
-      const err = new Error(`Validation score must be >= ${threshold} to approve. Current score: ${row.validationScore ?? 'not scored'}`);
-      (err as any).status = 409;
-      throw err;
-    }
-  }
+  await assertDesignDocApprovalReady(id, row);
 
   const unresolvedCount = await getUnresolvedCount(id, 'design_doc');
   if (unresolvedCount > 0) {
@@ -573,6 +560,31 @@ export async function reviewDesignDoc(
       updatedAt: new Date().toISOString(),
     })
     .where(eq(designDocs.id, id));
+}
+
+export async function assertDesignDocApprovalReady(
+  id: string,
+  existingRow?: typeof designDocs.$inferSelect,
+): Promise<void> {
+  const row = existingRow ?? await db.query.designDocs.findFirst({ where: eq(designDocs.id, id) });
+  if (!row) throw notFound('Design doc not found');
+  const skillConfig = await resolveSkillConfig({
+    project: row.project,
+    settingsId: row.skillSettingsId ?? undefined,
+  });
+  if (!skillConfig?.designDocValidationSkillPath) return;
+
+  const threshold = skillConfig.designDocValidationScoreThreshold ?? DEFAULT_DESIGN_DOC_VALIDATION_THRESHOLD;
+  const scoreOk =
+    row.validationScore !== null &&
+    row.validationScore !== undefined &&
+    row.validationScore >= threshold;
+  const hasOverride = !!(row.validationOverride as DesignDocValidationOverride | null);
+  if (!scoreOk && !hasOverride) {
+    const err = new Error(`Validation score must be >= ${threshold} to approve. Current score: ${row.validationScore ?? 'not scored'}`);
+    (err as any).status = 409;
+    throw err;
+  }
 }
 
 export async function syncDesignDocContent(
@@ -1575,7 +1587,15 @@ export function startValidationWatcher(designDocId: string, validationThreadId: 
         return;
       }
 
-      const scorecard = JSON.parse(scorecardRaw) as ValidationScorecard;
+      const scorecard = normalizeValidationScorecard(JSON.parse(scorecardRaw));
+      if (!scorecard) {
+        console.warn(`[validationWatcher] Scorecard carries no usable overall score — setting to pending_review (designDocId=${designDocId})`);
+        await db.update(designDocs)
+          .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
+          .where(and(eq(designDocs.id, designDocId), eq(designDocs.status, 'validating')));
+        cleanupWorkspace(validationThreadId);
+        return;
+      }
       const reportMd = readOutputValidationScorecardMd(validationThreadId) ?? undefined;
       await syncValidationResult(designDocId, scorecard, reportMd);
       console.log(`[validationWatcher] Scorecard synced — score=${scorecard.overall_score} is_ready=${scorecard.is_ready} (designDocId=${designDocId})`);

@@ -22,12 +22,11 @@ import {
   HttpMethod,
   type DaprInvokerCallbackContent,
 } from '@dapr/dapr';
-import { DefaultAzureCredential } from '@azure/identity';
 // Side-effect: initialize Application Insights when the connection string is set.
 import '../telemetry';
+import { getAiRunnerCallbackToken } from '../aiRunsCallbackToken';
 import { createAiRunsCallbackClient } from '../aiRunsWorker/callbackClient';
 import { openGroundedReader } from '../aiRunsWorker/workspace';
-import { resolveStaticAiRunnerCallbackToken } from '../aiRunnerCallbackAuthConfig';
 import { interactiveLiveBus } from '../interactiveLiveBus';
 import type { RepoReader } from '../../../shared/types/repoReader';
 import { acquireInteractiveCursorAgent } from './interactiveCursorExecution';
@@ -173,41 +172,6 @@ export async function registerInteractiveDispatchHandler(
   );
 }
 
-async function getCallbackToken(): Promise<string> {
-  const staticToken = resolveStaticAiRunnerCallbackToken();
-  const audience = process.env.AI_RUNS_CALLBACK_TOKEN_AUDIENCE?.trim();
-
-  // Prefer managed identity whenever an audience is configured. The Apex App
-  // Service rejects static callback tokens in production (unless explicitly
-  // opted in via AI_RUNS_ALLOW_STATIC_CALLBACK_TOKEN), so a stale or
-  // re-provisioned AI_RUNS_RUNNER_CALLBACK_TOKEN must never take precedence
-  // over MI — otherwise the actor's first callback (getBootstrap) 401s and the
-  // turn silently fails. The static token remains a dev/local fallback (no
-  // audience configured, or MI unavailable in this environment).
-  if (audience) {
-    const scope = audience.endsWith('/.default')
-      ? audience
-      : `${audience}/.default`;
-    try {
-      const token = await new DefaultAzureCredential().getToken(scope);
-      if (token?.token) return token.token;
-      if (!staticToken) {
-        throw new Error('Failed to acquire AI runner callback token');
-      }
-      // Empty MI token but a static token exists — fall through to it.
-    } catch (error) {
-      if (!staticToken) throw error;
-      // MI unavailable but a static token exists — fall back to it (dev/local).
-    }
-  }
-
-  if (staticToken) return staticToken;
-
-  throw new Error(
-    'AI_RUNS_CALLBACK_TOKEN_AUDIENCE is required for managed-identity callbacks',
-  );
-}
-
 export async function main(): Promise<void> {
   const callbackBaseUrl =
     process.env.APEX_CALLBACK_URL?.trim() ||
@@ -223,7 +187,7 @@ export async function main(): Promise<void> {
 
   const callback = createAiRunsCallbackClient({
     callbackBaseUrl,
-    getToken: getCallbackToken,
+    getToken: getAiRunnerCallbackToken,
   });
 
   // Single shared logic core: thread-keyed warm checkout + live Agent cache.

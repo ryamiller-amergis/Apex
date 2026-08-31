@@ -276,6 +276,37 @@ describe('useUpsertProjectSkillConfig', () => {
     expect(sentBody).toEqual({ friendlyName: 'Main', skillRepo: 'org/new-skills', skillBranch: 'release' });
   });
 
+  it('PBI-002 AC-0 sends independent module approval modes without changing sibling values', async () => {
+    mockFetchOk(skillConfig);
+    const { wrapper } = createWrapper();
+    const approvalModes = {
+      prd: 'all_required' as const,
+      design_doc: 'any_one' as const,
+      design_prototype: 'any_one' as const,
+      test_case: 'all_required' as const,
+      adr: 'any_one' as const,
+    };
+
+    const { result } = renderHook(() => useUpsertProjectSkillConfig(), { wrapper });
+    await act(async () => {
+      result.current.mutate({
+        id: 'uuid-123',
+        project: 'proj-alpha',
+        body: {
+          friendlyName: 'Main',
+          skillRepo: 'org/new-skills',
+          skillBranch: 'release',
+          approvalModes,
+        },
+      });
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    const sentBody = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
+    expect(sentBody.approvalModes).toEqual(approvalModes);
+    expect(sentBody.approvalModes.prd).toBe('all_required');
+  });
+
   it('surfaces errors from the API', async () => {
     mockFetchError(400);
     const { wrapper } = createWrapper();
@@ -455,7 +486,7 @@ describe('useProjectApprovers', () => {
 describe('useSetProjectApprovers', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('PUTs design doc and PRD approver lists', async () => {
+  it('PBI-001 AC-0 PUTs ADR users and groups with the existing approver lists', async () => {
     mockFetchOk({ designDoc: [approver], prd: [] });
     const { wrapper } = createWrapper();
 
@@ -469,6 +500,8 @@ describe('useSetProjectApprovers', () => {
         designPrototypeApprovers: [],
         testCaseApprovers: ['user-2'],
         testCaseApproverGroups: ['group-qa'],
+        adrApprovers: ['architect-1', 'architect-2'],
+        adrApproverGroups: ['group-architecture'],
       });
     });
 
@@ -482,6 +515,8 @@ describe('useSetProjectApprovers', () => {
       designPrototypeApprovers: [],
       testCaseApprovers: ['user-2'],
       testCaseApproverGroups: ['group-qa'],
+      adrApprovers: ['architect-1', 'architect-2'],
+      adrApproverGroups: ['group-architecture'],
     });
   });
 });

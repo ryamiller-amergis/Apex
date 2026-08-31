@@ -1,4 +1,8 @@
-import type { ApprovalMode } from './approvals';
+import type {
+  ApprovalMode,
+  ModuleApprovalModes,
+  ReviewerDocumentType,
+} from './approvals';
 import type { GroupWithMembers } from './groups';
 
 export type SkillProvider = 'ado' | 'github';
@@ -198,11 +202,15 @@ export interface ProjectSkillConfig {
   prototypeWebReferencesEnabled?: boolean;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
+  /** Legacy project-wide mode. Retained for compatibility with the pre-per-module read path. */
   approvalMode?: ApprovalMode;
+  /** Per-module approval modes; takes precedence over `approvalMode` when present. */
+  approvalModes?: ModuleApprovalModes;
   designDocApproverCount?: number;
   prdApproverCount?: number;
   designPrototypeApproverCount?: number;
   testCaseApproverCount?: number;
+  adrApproverCount?: number;
   uiLabBedrockModelId?: string | null;
   uiLabBedrockMaxTokens?: number | null;
   uiLabBedrockTimeoutMs?: number | null;
@@ -295,6 +303,8 @@ export interface UpsertProjectSkillConfigRequest {
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;
+  /** Modes to write, keyed by module. Omitted modules keep their stored mode. */
+  approvalModes?: Partial<ModuleApprovalModes>;
   uiLabBedrockModelId?: string | null;
   uiLabBedrockMaxTokens?: number | null;
   uiLabBedrockTimeoutMs?: number | null;
@@ -318,7 +328,7 @@ export interface ProjectApprover {
   id: string;
   settingsId: string;
   userId: string;
-  documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case';
+  documentType: ReviewerDocumentType;
   displayName: string | null;
   email: string | null;
   assignedBy: string | null;
@@ -337,15 +347,14 @@ export interface SetApproversRequest {
   designPrototypeApproverGroups?: string[];
   testCaseApprovers: string[];
   testCaseApproverGroups?: string[];
+  /** Optional for clients predating ADR pools; omit both ADR fields to leave the stored ADR pool unchanged. */
+  adrApprovers?: string[];
+  adrApproverGroups?: string[];
 }
 
 export interface ApproverPoolResponse {
   individuals: ProjectApprover[];
-  groups: Array<
-    GroupWithMembers & {
-      documentType: 'design_doc' | 'prd' | 'design_prototype' | 'test_case';
-    }
-  >;
+  groups: Array<GroupWithMembers & { documentType: ReviewerDocumentType }>;
 }
 
 export interface ProjectSkillConfigResponse {
@@ -398,6 +407,7 @@ export interface ProjectSkillConfigResponse {
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   approvalMode?: ApprovalMode;
+  approvalModes?: ModuleApprovalModes;
   loadTestGenerationSkillPath?: string | null;
   loadTestGenerationModel?: string | null;
   designModuleSkillPath?: string | null;

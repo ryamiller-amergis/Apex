@@ -469,6 +469,11 @@
   line-height: 1.5;
 }
 
+.noReviewersLabel {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
 .skillDescription {
   font-size: 11px;
   color: var(--text-muted);

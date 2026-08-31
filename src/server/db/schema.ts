@@ -876,6 +876,26 @@ export const projectApproverGroupsRelations = relations(projectApproverGroups, (
   }),
 }));
 
+// Approval mode per reviewable module. The project-wide
+// project_skill_settings.approval_mode column is retained for the in-flight
+// completion read path and for older app builds.
+export const projectApprovalModes = pgTable('project_approval_modes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  settingsId: uuid('settings_id').notNull().references(() => projectSkillSettings.id, { onDelete: 'cascade' }),
+  documentType: text('document_type').notNull(),
+  mode: text('mode').$type<ApprovalMode>().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  uniq: unique().on(t.settingsId, t.documentType),
+}));
+
+export const projectApprovalModesRelations = relations(projectApprovalModes, ({ one }) => ({
+  projectSkillSetting: one(projectSkillSettings, {
+    fields: [projectApprovalModes.settingsId],
+    references: [projectSkillSettings.id],
+  }),
+}));
+
 // ── Document Approver Assignments ─────────────────────────────────────────────
 
 export const documentApproverAssignments = pgTable('document_approver_assignments', {

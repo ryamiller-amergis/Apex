@@ -239,6 +239,12 @@ export interface ValidationScorecard {
   generated_at: string;
   review_phase: 'initial' | 'final';
   overall_score: number;
+  /**
+   * Alternate prd-spec-review shape: per-file and overall percentages nested
+   * here with no top-level `overall_score`. Read via
+   * `resolveScorecardOverallScore`, not directly.
+   */
+  scores?: Record<string, unknown>;
   ready_threshold: number;
   is_ready: boolean;
   verdict: 'ready' | 'gaps' | 'significant_gaps';

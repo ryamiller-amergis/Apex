@@ -190,6 +190,15 @@ router.post('/:id/reopen', requirePermission('admin:roles'), async (req, res, ne
 router.post('/:id/review', requirePermission('design-prototypes:review'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
+    const prototype = await getPrototype(req.params.id);
+    if (!prototype) {
+      res.status(404).json({ error: 'Prototype not found' });
+      return;
+    }
+    if ((await getAssignments(prototype.prdId, 'design_prototype')).length === 0) {
+      res.status(409).json({ error: 'Reviewer actions are unavailable for owner-only documents' });
+      return;
+    }
     const body = req.body as ReviewDesignPrototypeRequest;
     await reviewPrototype(req.params.id, userId, body.action, body.comment);
     res.json({ ok: true });

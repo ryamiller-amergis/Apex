@@ -5,6 +5,7 @@ import { eq } from 'drizzle-orm';
 import { AGENT_SKILL_ROOT, skillPathFor } from '../../shared/skillPaths';
 import { requirePermission } from '../middleware/rbac';
 import { getUserId } from '../utils/requestUser';
+import { isSuperAdminRequest } from '../utils/superAdmin';
 import { db } from '../db/drizzle';
 import { adrs as adrsTable, chatThreads } from '../db/schema';
 import {
@@ -25,8 +26,8 @@ import { createThread, getThread, updateThreadKickoffContext } from '../services
 import { resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import type { AdrStatus } from '../../shared/types/adr';
-import { listGroupsWithMembers } from '../services/groupService';
 import {
+  getAvailableApproverPool,
   getAssignments,
   isApprovalComplete,
   isAssignedApprover,
@@ -34,7 +35,7 @@ import {
   reassignApprovers,
   recordApproverResponse,
 } from '../services/documentApprovalService';
-import { getOwnerApproval, recordOwnerApproval } from '../services/ownerApprovalService';
+import { getOwnerApproval, isDocumentOwner, recordOwnerApproval } from '../services/ownerApprovalService';
 import { getComments, getUnresolvedCount } from '../services/reviewCommentService';
 import { createNotification } from '../services/notificationService';
 import { fixAdrContentWithBedrock, regenerateMarkdownRegionWithBedrock, BedrockModelTruncatedError } from '../services/bedrockService';
@@ -45,6 +46,7 @@ import {
   ProjectRepositoryNotReady,
 } from '../services/projectRepositoryReadinessService';
 import { propagatePipelineGrounding } from '../services/runGroundingService';
+import { resolveReviewerAvailability } from '../services/reviewerAvailabilityService';
 
 const router = Router();
 
@@ -66,16 +68,34 @@ router.get('/reviewer-candidates', requirePermission('adr:create'), async (req, 
       res.status(400).json({ error: 'project is required' });
       return;
     }
-    const groups = await listGroupsWithMembers(project);
-    const developerGroup = groups.find((group) => group.name === 'Developer');
-    const ownerId = getUserId(req);
-    res.json((developerGroup?.members ?? [])
-      .filter((member) => member.userId !== ownerId)
-      .map((member) => ({
-        id: member.userId,
-        displayName: member.displayName ?? member.email ?? member.userId,
-        email: member.email,
-      })));
+    const pool = await getAvailableApproverPool(project, 'adr');
+    const candidates = new Map<string, { id: string; displayName: string; email: string | null }>();
+    const addCandidate = (userId: string, displayName: string | null, email: string | null) => {
+      if (candidates.has(userId)) return;
+      candidates.set(userId, { id: userId, displayName: displayName ?? email ?? userId, email });
+    };
+    for (const individual of pool.individuals) {
+      addCandidate(individual.userId, individual.displayName, individual.email);
+    }
+    for (const group of pool.groups) {
+      for (const member of group.members) {
+        addCandidate(member.userId, member.displayName, member.email);
+      }
+    }
+    res.json([...candidates.values()]);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/reviewer-availability', requirePermission('adr:create'), async (req, res, next) => {
+  try {
+    const project = typeof req.query.project === 'string' ? req.query.project.trim() : '';
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    res.json(await resolveReviewerAvailability(project, ['adr']));
   } catch (error) {
     next(error);
   }
@@ -306,16 +326,16 @@ router.put('/:id/assignments', requirePermission('adr:edit'), async (req, res, n
       res.status(409).json({ error: 'Reviewers can only be updated while the ADR is proposed' });
       return;
     }
+    if ((await getAssignments(req.params.id, 'adr')).length === 0) {
+      res.status(409).json({ error: 'Reviewers cannot be assigned after owner-only review starts' });
+      return;
+    }
     const { reviewerIds } = req.body as { reviewerIds?: string[] };
     if (!Array.isArray(reviewerIds) || reviewerIds.some((id) => typeof id !== 'string')) {
       res.status(400).json({ error: 'reviewerIds must be an array of user IDs' });
       return;
     }
     const uniqueReviewerIds = [...new Set(reviewerIds)];
-    if (uniqueReviewerIds.includes(userId)) {
-      res.status(400).json({ error: 'The ADR owner cannot also be assigned as a reviewer' });
-      return;
-    }
     const removedReviewerIds = adr.reviewerIds.filter((id) => !uniqueReviewerIds.includes(id));
     await reassignApprovers(req.params.id, 'adr', uniqueReviewerIds, userId);
     await removeApproverAssignments(req.params.id, 'adr', removedReviewerIds);
@@ -339,6 +359,10 @@ router.post('/:id/review', requirePermission('adr:review'), async (req, res, nex
     }
     if (adr.status !== 'proposed') {
       res.status(409).json({ error: 'Only proposed ADRs can be reviewed' });
+      return;
+    }
+    if ((await getAssignments(adr.id, 'adr')).length === 0) {
+      res.status(409).json({ error: 'Reviewer actions are unavailable for owner-only documents' });
       return;
     }
     const assigned = await isAssignedApprover(adr.id, 'adr', userId);
@@ -388,7 +412,9 @@ router.post('/:id/owner-approve', requirePermission('adr:review'), async (req, r
       res.status(404).json({ error: 'ADR not found' });
       return;
     }
-    if (adr.authorId !== userId) {
+    const ownerOnly = (await getAssignments(adr.id, 'adr')).length === 0;
+    const isOwner = await isDocumentOwner(adr.id, 'adr', userId);
+    if (!isOwner && !(ownerOnly && isSuperAdminRequest(req))) {
       res.status(403).json({ error: 'Only the ADR owner can give final approval' });
       return;
     }
@@ -401,8 +427,16 @@ router.post('/:id/owner-approve', requirePermission('adr:review'), async (req, r
       res.status(400).json({ error: 'status must be approved or revision_requested' });
       return;
     }
+    if (status === 'approved' && await getUnresolvedCount(adr.id, 'adr') > 0) {
+      res.status(409).json({ error: 'Resolve all review comments before approving the ADR' });
+      return;
+    }
     if (status === 'approved') {
-      await updateAdrStatus(adr.id, userId, 'accepted');
+      if (!isOwner && ownerOnly && isSuperAdminRequest(req)) {
+        await updateAdrStatus(adr.id, userId, 'accepted', { allowNonAuthor: true });
+      } else {
+        await updateAdrStatus(adr.id, userId, 'accepted');
+      }
     } else {
       await recordOwnerApproval(adr.id, 'adr', userId, status, comment);
     }

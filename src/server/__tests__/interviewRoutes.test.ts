@@ -32,6 +32,13 @@ jest.mock('../services/chatAgentService', () => ({
 
 jest.mock('../services/designDocService');
 jest.mock('../services/documentApprovalService');
+jest.mock('../services/reviewerAvailabilityService', () => ({
+  resolveReviewerAvailability: jest.fn(),
+}));
+jest.mock('../services/reviewCommentService', () => ({
+  getComments: jest.fn(),
+  getUnresolvedCount: jest.fn().mockResolvedValue(0),
+}));
 jest.mock('../services/ownerApprovalService', () => ({
   getOwnerApproval: jest.fn(),
   isDocumentOwner: jest.fn(),
@@ -40,6 +47,9 @@ jest.mock('../services/ownerApprovalService', () => ({
 jest.mock('../utils/rbacHelpers', () => ({
   isAdminUser: jest.fn().mockResolvedValue(false),
 }));
+jest.mock('../utils/superAdmin', () => ({
+  isSuperAdminRequest: jest.fn().mockReturnValue(false),
+}));
 jest.mock('../services/designPlanService', () => ({
   generateDesignPlan: jest.fn().mockResolvedValue(undefined),
 }));
@@ -47,6 +57,7 @@ jest.mock('../services/designPrototypeService', () => {
   const actual = jest.requireActual('../services/designPrototypeService') as typeof import('../services/designPrototypeService');
   return {
     ...actual,
+    getUnresolvedCommentCount: jest.fn().mockResolvedValue(0),
     triggerDesignDocForPrototype: jest.fn().mockResolvedValue(undefined),
   };
 });
@@ -212,6 +223,7 @@ const {
   autoStartValidation: mockAutoStartValidation,
   syncValidationResult: mockSyncValidationResult,
   overrideDesignDocValidation: mockOverrideDesignDocValidation,
+  assertDesignDocApprovalReady: mockAssertDesignDocApprovalReady,
 } = jest.requireMock('../services/designDocService') as {
   createDesignDoc: jest.Mock;
   startDesignDocWatcher: jest.Mock;
@@ -229,6 +241,7 @@ const {
   autoStartValidation: jest.Mock;
   syncValidationResult: jest.Mock;
   overrideDesignDocValidation: jest.Mock;
+  assertDesignDocApprovalReady: jest.Mock;
 };
 
 const {
@@ -254,9 +267,22 @@ const {
 const { isAdminUser: mockIsAdminUser } = jest.requireMock('../utils/rbacHelpers') as {
   isAdminUser: jest.Mock;
 };
+const { isSuperAdminRequest: mockIsSuperAdminRequest } = jest.requireMock('../utils/superAdmin') as {
+  isSuperAdminRequest: jest.Mock;
+};
+const { resolveReviewerAvailability: mockResolveReviewerAvailability } = jest.requireMock(
+  '../services/reviewerAvailabilityService',
+) as { resolveReviewerAvailability: jest.Mock };
+const { getUnresolvedCount: mockGetUnresolvedCount } = jest.requireMock(
+  '../services/reviewCommentService',
+) as { getUnresolvedCount: jest.Mock };
+const { getUnresolvedCommentCount: mockGetUnresolvedPrototypeCommentCount } = jest.requireMock(
+  '../services/designPrototypeService',
+) as { getUnresolvedCommentCount: jest.Mock };
 
 // autoStartValidation is called with `.catch()` in the route, so it must return a Promise.
 mockAutoStartValidation.mockResolvedValue(undefined);
+mockGetAssignments.mockResolvedValue([{ id: 'existing-assignment', status: 'pending' }]);
 
 const {
   getTestCases: mockGetTestCases,
@@ -305,6 +331,54 @@ function buildApp() {
   });
   return app;
 }
+
+describe('GET /api/interviews/reviewer-availability', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('TBI-003 DoD-2 / PBI-004 AC-2 returns all module availability unchanged', async () => {
+    const payload = {
+      project: 'proj-alpha',
+      modules: [
+        { documentType: 'prd', available: false, candidateCount: 0 },
+        { documentType: 'design_doc', available: false, candidateCount: 0 },
+        { documentType: 'design_prototype', available: false, candidateCount: 0 },
+        { documentType: 'test_case', available: false, candidateCount: 0 },
+      ],
+    };
+    mockResolveReviewerAvailability.mockResolvedValue(payload);
+
+    const res = await request(buildApp())
+      .get('/api/interviews/reviewer-availability?project=proj-alpha');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(payload);
+    expect(mockResolveReviewerAvailability).toHaveBeenCalledWith('proj-alpha', [
+      'prd',
+      'design_doc',
+      'design_prototype',
+      'test_case',
+    ]);
+  });
+
+  it('PBI-004 AC-1 forwards resolver failures through error middleware', async () => {
+    mockResolveReviewerAvailability.mockRejectedValue(
+      Object.assign(new Error('directory unavailable'), { status: 503 }),
+    );
+
+    const res = await request(buildApp())
+      .get('/api/interviews/reviewer-availability?project=proj-alpha');
+
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({ error: 'directory unavailable' });
+  });
+
+  it('TBI-003 DoD-2 rejects a missing project', async () => {
+    const res = await request(buildApp()).get('/api/interviews/reviewer-availability');
+
+    expect(res.status).toBe(400);
+    expect(mockResolveReviewerAvailability).not.toHaveBeenCalled();
+  });
+});
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
 
@@ -1371,6 +1445,8 @@ describe('POST /api/interviews/prds/:prdId/owner-approve', () => {
     mockIsApprovalComplete.mockResolvedValue({ complete: true, mode: 'any_one' });
     mockGetAssignments.mockResolvedValue([{ status: 'approved' }]);
     mockRecordOwnerApproval.mockResolvedValue({ status: 'approved' });
+    mockGetUnresolvedCount.mockResolvedValue(0);
+    mockIsSuperAdminRequest.mockReturnValue(false);
   });
 
   it('returns 200 when owner approves a pending_review PRD after reviewers complete', async () => {
@@ -1451,6 +1527,35 @@ describe('POST /api/interviews/prds/:prdId/owner-approve', () => {
     expect(res.body.error).toMatch(/Only the document owner/);
   });
 
+  it('PBI-006 AC-3 rejects a Project Admin on an owner-only PRD', async () => {
+    mockIsDocumentOwner.mockResolvedValue(false);
+    mockIsAdminUser.mockResolvedValue(true);
+    mockGetAssignments.mockResolvedValue([]);
+    mockPrdService.getPrd.mockResolvedValue({ ...prd, status: 'pending_review' });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/owner-approve')
+      .send({ status: 'approved' });
+
+    expect(res.status).toBe(403);
+    expect(mockRecordOwnerApproval).not.toHaveBeenCalled();
+  });
+
+  it('BR-004 lets Platform Admin bypass owner identity but not unresolved comments', async () => {
+    mockIsDocumentOwner.mockResolvedValue(false);
+    mockIsSuperAdminRequest.mockReturnValue(true);
+    mockGetAssignments.mockResolvedValue([]);
+    mockGetUnresolvedCount.mockResolvedValue(1);
+    mockPrdService.getPrd.mockResolvedValue({ ...prd, status: 'pending_review' });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/owner-approve')
+      .send({ status: 'approved' });
+
+    expect(res.status).toBe(409);
+    expect(mockRecordOwnerApproval).not.toHaveBeenCalled();
+  });
+
   it('returns 409 when PRD is not in pending_review', async () => {
     mockPrdService.getPrd.mockResolvedValue({ ...prd, status: 'draft' });
 
@@ -1472,6 +1577,10 @@ describe('POST /api/interviews/design-docs/:id/owner-approve', () => {
     mockIsDocumentOwner.mockResolvedValue(true);
     mockRecordOwnerApproval.mockResolvedValue({ status: 'approved' });
     mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'dd-1', status: 'reviewer_approved' });
+    mockGetAssignments.mockResolvedValue([{ status: 'approved' }]);
+    mockGetUnresolvedCount.mockResolvedValue(0);
+    mockAssertDesignDocApprovalReady.mockResolvedValue(undefined);
+    mockIsSuperAdminRequest.mockReturnValue(false);
   });
 
   it('returns 200 when owner approves a reviewer_approved design doc', async () => {
@@ -1485,15 +1594,46 @@ describe('POST /api/interviews/design-docs/:id/owner-approve', () => {
     expect(mockDb.update).toHaveBeenCalled();
   });
 
-  it('returns 409 when design doc is still pending_review', async () => {
+  it('PBI-006 AC-0 directly approves an owner-only pending_review design doc', async () => {
     mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'dd-1', status: 'pending_review' });
+    mockGetAssignments.mockResolvedValue([]);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/design-docs/dd-1/owner-approve')
+      .send({ status: 'approved' });
+
+    expect(res.status).toBe(200);
+    expect(mockAssertDesignDocApprovalReady).toHaveBeenCalledWith('dd-1');
+    expect(mockRecordOwnerApproval).toHaveBeenCalled();
+  });
+
+  it('PBI-006 AC-1 blocks direct owner-only approval with unresolved comments', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'dd-1', status: 'pending_review' });
+    mockGetAssignments.mockResolvedValue([]);
+    mockGetUnresolvedCount.mockResolvedValue(2);
 
     const res = await request(buildApp())
       .post('/api/interviews/design-docs/dd-1/owner-approve')
       .send({ status: 'approved' });
 
     expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/Reviewers must approve the design doc/);
+    expect(mockRecordOwnerApproval).not.toHaveBeenCalled();
+  });
+
+  it('BR-005 does not let Platform Admin bypass design-doc validation', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'dd-1', status: 'pending_review' });
+    mockGetAssignments.mockResolvedValue([]);
+    mockIsDocumentOwner.mockResolvedValue(false);
+    mockIsSuperAdminRequest.mockReturnValue(true);
+    mockAssertDesignDocApprovalReady.mockRejectedValue(
+      Object.assign(new Error('Validation score must be >= 80'), { status: 409 }),
+    );
+
+    const res = await request(buildApp())
+      .post('/api/interviews/design-docs/dd-1/owner-approve')
+      .send({ status: 'approved' });
+
+    expect(res.status).toBe(409);
     expect(mockRecordOwnerApproval).not.toHaveBeenCalled();
   });
 
@@ -1517,6 +1657,7 @@ describe('POST /api/interviews/prds/:prdId/design-prototypes/owner-approve', () 
     mockIsAdminUser.mockResolvedValue(false);
     mockIsDocumentOwner.mockResolvedValue(true);
     mockRecordOwnerApproval.mockResolvedValue({ status: 'approved' });
+    mockGetUnresolvedPrototypeCommentCount.mockResolvedValue(0);
   });
 
   it('returns 400 when prototypeId is missing', async () => {
@@ -1580,6 +1721,21 @@ describe('POST /api/interviews/prds/:prdId/design-prototypes/owner-approve', () 
     // Approval is recorded keyed to the prototypeId, not the prdId.
     expect(mockRecordOwnerApproval).toHaveBeenCalledWith('proto-1', 'design_prototype', 'user-test', 'approved', undefined);
     expect(mockDb.update).toHaveBeenCalled();
+  });
+
+  it('blocks approval when the prototype has unresolved comments', async () => {
+    mockDb.query.designPrototypes = {
+      findFirst: jest.fn().mockResolvedValue({ id: 'proto-1', featureIndex: 0, status: 'reviewer_approved' }),
+    };
+    mockGetUnresolvedPrototypeCommentCount.mockResolvedValue(1);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/design-prototypes/owner-approve')
+      .send({ status: 'approved', prototypeId: 'proto-1' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/Resolve all review comments/);
+    expect(mockRecordOwnerApproval).not.toHaveBeenCalled();
   });
 
   it('transitions prototype to revision_requested on revision', async () => {
@@ -1774,7 +1930,11 @@ describe('GET /api/interviews/available-approvers/:project/:documentType', () =>
 // ── PUT /api/interviews/prds/:prdId/assignments ───────────────────────────────
 
 describe('PUT /api/interviews/prds/:prdId/assignments', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetAssignments.mockResolvedValue([{ id: 'existing' }]);
+    mockPrdService.getPrd.mockResolvedValue({ ...prd, ownerId: 'user-test' });
+  });
 
   it('returns 200 with updated assignments', async () => {
     const assignments = [
@@ -1821,12 +1981,26 @@ describe('PUT /api/interviews/prds/:prdId/assignments', () => {
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ error: 'approverUserIds is required and must be an array' });
   });
+
+  it('TBI-004 DoD-1 rejects owner-only PRD reassignment before mutation', async () => {
+    mockGetAssignments.mockResolvedValue([]);
+
+    const res = await request(buildApp())
+      .put('/api/interviews/prds/prd-1/assignments')
+      .send({ approverUserIds: ['u1'] });
+
+    expect(res.status).toBe(409);
+    expect(mockReassignApprovers).not.toHaveBeenCalled();
+  });
 });
 
 // ── PUT /api/interviews/design-docs/:id/assignments ───────────────────────────
 
 describe('PUT /api/interviews/design-docs/:id/assignments', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetAssignments.mockResolvedValue([{ id: 'existing' }]);
+  });
 
   it('returns 200 with updated assignments', async () => {
     const assignments = [
@@ -1850,6 +2024,17 @@ describe('PUT /api/interviews/design-docs/:id/assignments', () => {
 
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ error: 'approverUserIds is required and must be an array' });
+    expect(mockReassignApprovers).not.toHaveBeenCalled();
+  });
+
+  it('TBI-004 DoD-1 rejects owner-only design-doc reassignment before mutation', async () => {
+    mockGetAssignments.mockResolvedValue([]);
+
+    const res = await request(buildApp())
+      .put('/api/interviews/design-docs/dd-1/assignments')
+      .send({ approverUserIds: ['u2'] });
+
+    expect(res.status).toBe(409);
     expect(mockReassignApprovers).not.toHaveBeenCalled();
   });
 });
