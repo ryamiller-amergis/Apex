@@ -731,7 +731,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                 type="button"
                 className={styles.quickPill}
                 onClick={() => setInput(label)}
-                {...{ 'data-testid': `chat-agent-quick-start-${label.toLowerCase().replaceAll(' ', '-')}` }}
+                {...{ 'data-testid': `chat-agent-quick-start-${label.toLowerCase().replace(/ /g, '-')}` }}
               >
                 {label}
               </button>

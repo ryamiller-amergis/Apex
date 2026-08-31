@@ -5,8 +5,8 @@ import { ChatAgentPanel } from '../ChatAgentPanel';
 const mockRetryLast = jest.fn();
 
 jest.mock('../../hooks/useAgentChatSession', () => ({
-  useAgentChatSession: () => ({
-    messages: [],
+  useAgentChatSession: (_threadId: string | null, options?: { initialMessages?: ChatThread['messages'] }) => ({
+    messages: options?.initialMessages ?? [],
     streamingText: '',
     isConnected: true,
     prdReady: false,
@@ -69,12 +69,14 @@ jest.mock('../agentChat', () => {
 
 const thread: ChatThread = {
   id: 'thread-1',
-  title: 'Existing conversation',
+  userId: 'user-1',
   status: 'idle',
   messages: [{ id: 'message-1', role: 'agent', text: 'Saved transcript', ts: '2026-08-31T10:00:00Z' }],
   kickoff: { project: 'Apex', repo: 'Apex', branch: 'main', model: 'auto' },
+  workspaceDir: '/tmp/thread-1',
+  flagged: false,
   createdAt: '2026-08-31T10:00:00Z',
-  updatedAt: '2026-08-31T10:00:00Z',
+  lastActivityAt: '2026-08-31T10:00:00Z',
 };
 
 describe('ChatAgentPanel shared Home shell', () => {
