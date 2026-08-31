@@ -67,14 +67,21 @@ const CommentPanel: React.FC<CommentPanelProps> = ({
   const resolved = comments.filter((c) => c.resolved);
 
   return (
-    <div className={styles.commentPanel}>
+    <div className={styles.commentPanel} data-testid="ui-lab-comment-panel">
       <div className={styles.commentPanelHeader}>
         <span className={styles.commentPanelTitle}>
           Comments {open.length > 0 ? `(${open.length})` : ''}
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {pinMode && <span style={{ fontSize: 11, color: 'var(--accent-color)' }}>Click canvas to pin</span>}
-          <button className={styles.commentPanelCloseBtn} onClick={onCollapse} title="Collapse comments">›</button>
+          <button
+            className={styles.commentPanelCloseBtn}
+            onClick={onCollapse}
+            title="Collapse comments"
+            data-testid="ui-lab-comments-collapse-btn"
+          >
+            ›
+          </button>
         </div>
       </div>
 
@@ -98,6 +105,7 @@ const CommentPanel: React.FC<CommentPanelProps> = ({
                 <button
                   className={styles.commentResolveBtn}
                   onClick={() => resolveComment.mutate({ commentId: c.id, reopen: c.resolved })}
+                  data-testid={`ui-lab-comment-resolve-btn-${c.id}`}
                 >
                   {c.resolved ? 'Reopen' : 'Resolve'}
                 </button>
@@ -108,7 +116,7 @@ const CommentPanel: React.FC<CommentPanelProps> = ({
       </div>
 
       {canComment && (
-        <form className={styles.commentInput} onSubmit={handleSubmit}>
+        <form className={styles.commentInput} onSubmit={handleSubmit} data-testid="ui-lab-comment-form">
           {pendingPin && (
             <div style={{ fontSize: 11, color: 'var(--accent-color)', marginBottom: 4 }}>
               Pinned at ({Math.round(pendingPin.x)}%, {Math.round(pendingPin.y)}%)
@@ -120,11 +128,13 @@ const CommentPanel: React.FC<CommentPanelProps> = ({
             value={text}
             onChange={(e) => setText(e.target.value)}
             rows={3}
+            data-testid="ui-lab-comment-input"
           />
           <button
             type="submit"
             className={styles.commentSubmitBtn}
             disabled={!text.trim() || addComment.isPending}
+            data-testid="ui-lab-comment-submit-btn"
           >
             {addComment.isPending ? '…' : 'Comment'}
           </button>
@@ -307,6 +317,7 @@ export const UiLabCanvas: React.FC<UiLabCanvasProps> = ({
               onClick={() => { setPinMode((p) => !p); setPendingPin(null); }}
               disabled={isActive || !html || viewSource}
               title="Pin a comment on the canvas"
+              data-testid="ui-lab-pin-btn"
             >
               📌 Pin
             </button>
@@ -315,6 +326,7 @@ export const UiLabCanvas: React.FC<UiLabCanvasProps> = ({
             className={`${styles.headerBtn} ${showComments ? styles.active : ''}`}
             onClick={() => setShowComments((s) => !s)}
             title="Toggle comment panel"
+            data-testid="ui-lab-comments-toggle-btn"
           >
             💬 Comments {comments.filter((c) => !c.resolved).length > 0 ? `(${comments.filter((c) => !c.resolved).length})` : ''}
           </button>
@@ -334,6 +346,7 @@ export const UiLabCanvas: React.FC<UiLabCanvasProps> = ({
               onClick={handleDelete}
               disabled={deleteDesign.isPending}
               title="Delete this design"
+              data-testid="ui-lab-delete-btn"
             >
               Delete
             </button>
@@ -341,7 +354,7 @@ export const UiLabCanvas: React.FC<UiLabCanvasProps> = ({
         </div>
       </div>
 
-      {isViewingHistory ? (
+      {isViewingHistory && (
         <div className={styles.historyBanner}>
           <span>
             Viewing <strong>v{viewingVersion}</strong>
@@ -352,40 +365,11 @@ export const UiLabCanvas: React.FC<UiLabCanvasProps> = ({
           <button
             className={styles.historyBannerReturnBtn}
             onClick={() => setViewingVersion(null)}
+            data-testid="ui-lab-history-return-btn"
           >
             ← Return to current (v{design.version})
           </button>
         </div>
-      ) : (
-        caps.canRegenerate && html && design.status !== 'generation_failed' && (
-          <div className={styles.feedbackBar}>
-            {scopedSelector && (
-              <>
-                <span className={styles.scopedEditBadge} title={scopedSelector}>
-                  Scoped: {scopedSelector}
-                </span>
-                <button className={styles.clearScopeBtn} onClick={() => { setScopedSelector(null); setScopedHtml(null); }}>✕</button>
-              </>
-            )}
-            <textarea
-              className={styles.feedbackInput}
-              placeholder={scopedSelector ? 'Describe changes for selected element…' : 'Describe changes across the whole design, or select a region to scope your edit…'}
-              value={feedback}
-              onChange={(e) => setFeedback(e.target.value)}
-              rows={2}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleRegenerate();
-              }}
-            />
-            <button
-              className={styles.feedbackSendBtn}
-              onClick={handleRegenerate}
-              disabled={!feedback.trim() || isActive}
-            >
-              {isActive ? '…' : '↑ Apply'}
-            </button>
-          </div>
-        )
       )}
 
       {viewHtml && (
@@ -394,6 +378,7 @@ export const UiLabCanvas: React.FC<UiLabCanvasProps> = ({
             type="button"
             className={`${styles.viewToggleBtn}${!viewSource ? ` ${styles.viewToggleBtnActive}` : ''}`}
             onClick={() => setViewSource(false)}
+            data-testid="ui-lab-view-preview"
           >
             Preview
           </button>
@@ -435,6 +420,7 @@ export const UiLabCanvas: React.FC<UiLabCanvasProps> = ({
               <button
                 className={styles.retryBtn}
                 onClick={() => stream.startStream(designId, 'generate')}
+                data-testid="ui-lab-retry-btn"
               >
                 Retry
               </button>
@@ -458,6 +444,7 @@ export const UiLabCanvas: React.FC<UiLabCanvasProps> = ({
                 ref={overlayRef}
                 className={`${styles.pinOverlay} ${pinMode ? styles.pinModeActive : ''}`}
                 onClick={handlePinClick}
+                data-testid="ui-lab-pin-overlay"
               >
                 {comments.filter((c) => c.pinX != null && c.pinY != null).map((c, i) => (
                   <div
@@ -476,6 +463,7 @@ export const UiLabCanvas: React.FC<UiLabCanvasProps> = ({
 
         <div className={`${styles.commentPanelWrap}${!showComments ? ` ${styles.commentPanelWrapCollapsed}` : ''}`}>
           {showComments ? (
+            // data-testid-exempt — the panel root carries ui-lab-comment-panel
             <CommentPanel
               designId={designId}
               version={design.version}
@@ -492,6 +480,7 @@ export const UiLabCanvas: React.FC<UiLabCanvasProps> = ({
                 className={styles.commentPanelStripBtn}
                 onClick={() => setShowComments(true)}
                 title="Show comments"
+                data-testid="ui-lab-comments-expand-btn"
               >
                 ‹
               </button>
@@ -506,7 +495,46 @@ export const UiLabCanvas: React.FC<UiLabCanvasProps> = ({
         </div>
       </div>
 
+      {!isViewingHistory && caps.canRegenerate && html && design.status !== 'generation_failed' && (
+        <div className={styles.feedbackBar} data-testid="ui-lab-feedback-bar">
+          {scopedSelector && (
+            <>
+              <span className={styles.scopedEditBadge} title={scopedSelector}>
+                Scoped: {scopedSelector}
+              </span>
+              <button
+                className={styles.clearScopeBtn}
+                onClick={() => { setScopedSelector(null); setScopedHtml(null); }}
+                data-testid="ui-lab-clear-scope-btn"
+              >
+                ✕
+              </button>
+            </>
+          )}
+          <textarea
+            className={styles.feedbackInput}
+            placeholder={scopedSelector ? 'Describe changes for selected element…' : 'Describe changes across the whole design, or select a region to scope your edit…'}
+            value={feedback}
+            onChange={(e) => setFeedback(e.target.value)}
+            rows={2}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleRegenerate();
+            }}
+            data-testid="ui-lab-feedback-input"
+          />
+          <button
+            className={styles.feedbackSendBtn}
+            onClick={handleRegenerate}
+            disabled={!feedback.trim() || isActive}
+            data-testid="ui-lab-feedback-send-btn"
+          >
+            {isActive ? '…' : '↑ Apply'}
+          </button>
+        </div>
+      )}
+
       {showShare && caps.canShare && (
+        // data-testid-exempt — the dialog root carries share-ui-lab-dialog
         <ShareUiLabDialog
           designId={designId}
           designTitle={design.title}
