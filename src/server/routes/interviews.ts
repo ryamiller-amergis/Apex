@@ -100,6 +100,7 @@ import {
   triggerTestCaseGeneration,
 } from '../services/testCaseService';
 import { generateFallbackReport as generateFallbackValidationReport } from '../services/documentValidationService';
+import { normalizeValidationScorecard } from '../../shared/utils/validationReport';
 import { isProjectRepositoryCheckoutReadinessEnabled } from '../services/featureFlagService';
 import {
   assertResolvedProjectRepositoryReady,
@@ -2027,8 +2028,8 @@ router.post('/design-docs/:id/validation/refresh', requirePermission('interviews
     if (!doc.validationThreadId) { res.status(400).json({ error: 'No validation thread exists' }); return; }
 
     const scorecardRaw = readOutputValidationScorecard(doc.validationThreadId);
-    if (scorecardRaw) {
-      const scorecard = JSON.parse(scorecardRaw);
+    const scorecard = scorecardRaw ? normalizeValidationScorecard(JSON.parse(scorecardRaw)) : null;
+    if (scorecard) {
       const reportMd = readOutputValidationScorecardMd(doc.validationThreadId) ?? undefined;
       await syncValidationResult(req.params.id, scorecard, reportMd);
       res.json({ ok: true, score: scorecard.overall_score, is_ready: scorecard.is_ready });

@@ -81,6 +81,7 @@ import {
   triggerTestCaseGeneration,
 } from './testCaseService';
 import type { ValidationScorecard } from '../../shared/types/interview';
+import { normalizeValidationScorecard } from '../../shared/utils/validationReport';
 import type {
   ChatThreadSearchResult,
   ChatThreadSummary,
@@ -3433,7 +3434,10 @@ async function syncOutputToDbFromWorkspace(
           cleanupWorkspaceDir(workspaceDir);
           return;
         }
-        const scorecard = JSON.parse(scorecardRaw) as ValidationScorecard;
+        const scorecard = normalizeValidationScorecard(JSON.parse(scorecardRaw));
+        if (!scorecard) {
+          throw new Error('Validation scorecard carries no usable overall score');
+        }
         const reportMd = readOutputValidationScorecardMd(threadId) ?? undefined;
         await syncValidationResult(ddValRow.id, scorecard, reportMd);
         console.log(
@@ -3519,7 +3523,10 @@ async function syncOutputToDbFromWorkspace(
           cleanupWorkspaceDir(workspaceDir);
           return;
         }
-        const scorecard = JSON.parse(scorecardRaw) as ValidationScorecard;
+        const scorecard = normalizeValidationScorecard(JSON.parse(scorecardRaw));
+        if (!scorecard) {
+          throw new Error('PRD validation scorecard carries no usable overall score');
+        }
         const reportMd = readOutputValidationScorecardMd(threadId) ?? undefined;
         const { generateFallbackReport } =
           await import('./documentValidationService');
