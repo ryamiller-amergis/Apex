@@ -1,6 +1,6 @@
 import { db } from '../db/drizzle';
-import { uiLabDesigns, uiLabComments } from '../db/schema';
-import { eq, desc } from 'drizzle-orm';
+import { uiLabDesigns, uiLabComments, uiLabDesignShares } from '../db/schema';
+import { and, eq, desc } from 'drizzle-orm';
 import { sanitizeMockHtml } from '../utils/htmlSanitizer';
 import { generateUiLabDesign, editUiLabDesign, extractHtml } from './uiLabBedrockService';
 import { getSkillConfig } from './projectSettingsService';
@@ -100,6 +100,44 @@ export async function listDesigns(project: string): Promise<UiLabDesignSummary[]
     })
     .from(uiLabDesigns)
     .where(eq(uiLabDesigns.project, project))
+    .orderBy(desc(uiLabDesigns.createdAt));
+
+  return rows as unknown as UiLabDesignSummary[];
+}
+
+/**
+ * Designs in `project` that were explicitly shared with `actorUserId`.
+ *
+ * Returns an empty list for a non-member so the caller cannot enumerate designs
+ * in a project they were removed from — the same membership rule
+ * `resolveDesignAccess` applies to shared access.
+ */
+export async function listSharedDesigns(
+  project: string,
+  actorUserId: string,
+): Promise<UiLabDesignSummary[]> {
+  if (!(await shareRepo.isCurrentProjectMember(project, actorUserId))) return [];
+
+  const rows = await db
+    .select({
+      id: uiLabDesigns.id,
+      project: uiLabDesigns.project,
+      authorId: uiLabDesigns.authorId,
+      title: uiLabDesigns.title,
+      prompt: uiLabDesigns.prompt,
+      targetRoute: uiLabDesigns.targetRoute,
+      status: uiLabDesigns.status,
+      version: uiLabDesigns.version,
+      generationError: uiLabDesigns.generationError,
+      createdAt: uiLabDesigns.createdAt,
+      updatedAt: uiLabDesigns.updatedAt,
+    })
+    .from(uiLabDesignShares)
+    .innerJoin(uiLabDesigns, eq(uiLabDesignShares.designId, uiLabDesigns.id))
+    .where(and(
+      eq(uiLabDesignShares.granteeId, actorUserId),
+      eq(uiLabDesigns.project, project),
+    ))
     .orderBy(desc(uiLabDesigns.createdAt));
 
   return rows as unknown as UiLabDesignSummary[];

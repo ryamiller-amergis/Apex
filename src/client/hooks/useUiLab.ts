@@ -43,6 +43,23 @@ export function useUiLabDesigns(project: string | null) {
   });
 }
 
+// ── Designs shared with the current user (named viewers) ─────────────────────
+
+/**
+ * Pass a null project for users who already have workspace access — they read
+ * the full project list instead and should not trigger this request.
+ */
+export function useUiLabSharedDesigns(project: string | null) {
+  return useQuery<UiLabDesignSummary[]>({
+    queryKey: ['ui-lab', 'shared-designs', project],
+    queryFn: () =>
+      apiFetch(`/api/ui-lab/shared-with-me?project=${encodeURIComponent(project!)}`),
+    enabled: !!project,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
 // ── Single design (auto-polls while active) ───────────────────────────────────
 
 export function useUiLabDesign(id: string | null) {

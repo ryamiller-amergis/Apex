@@ -23,12 +23,23 @@ const designs: UiLabDesignSummary[] = [
   } as UiLabDesignSummary,
 ];
 
+const sharedDesigns: UiLabDesignSummary[] = [
+  { ...designs[0], id: 'd2', title: 'shared audit log' } as UiLabDesignSummary,
+];
+
 jest.mock('../../hooks/useAppShell', () => ({
   useAppShell: () => ({ can: () => true }),
 }));
 
 jest.mock('../../hooks/useUiLab', () => ({
-  useUiLabDesigns: () => ({ data: designs, isLoading: false }),
+  useUiLabDesigns: (project: string | null) => ({
+    data: project ? designs : [],
+    isLoading: false,
+  }),
+  useUiLabSharedDesigns: (project: string | null) => ({
+    data: project ? sharedDesigns : [],
+    isLoading: false,
+  }),
   useCreateUiLabDesign: () => ({ mutateAsync: jest.fn(), isPending: false, isError: false, error: null }),
 }));
 
@@ -65,5 +76,30 @@ describe('UiLabView — collapsible design list', () => {
     expect(screen.getByText('to do list')).toBeInTheDocument();
     expect(screen.getByTestId('ui-lab-sidebar-collapse')).toBeInTheDocument();
     expect(localStorage.getItem(SIDEBAR_COLLAPSED_KEY)).toBe('false');
+  });
+});
+
+describe('UiLabView — shared-with-me list', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it('lists only shared designs and offers no way to create one', () => {
+    render(<UiLabView project="Apex" hasWorkspaceAccess={false} />);
+
+    expect(screen.getByText('Shared with me')).toBeInTheDocument();
+    expect(screen.getByText('shared audit log')).toBeInTheDocument();
+    expect(screen.queryByText('to do list')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('ui-lab-new-design-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('ui-lab-create-first-design-btn')).not.toBeInTheDocument();
+  });
+
+  it('lists the whole project and allows creating for workspace members', () => {
+    render(<UiLabView project="Apex" />);
+
+    expect(screen.getByText('UI Lab')).toBeInTheDocument();
+    expect(screen.getByText('to do list')).toBeInTheDocument();
+    expect(screen.queryByText('shared audit log')).not.toBeInTheDocument();
+    expect(screen.getByTestId('ui-lab-new-design-btn')).toBeInTheDocument();
   });
 });

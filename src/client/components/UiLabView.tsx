@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useAppShell } from '../hooks/useAppShell';
 import {
   useUiLabDesigns,
+  useUiLabSharedDesigns,
   useCreateUiLabDesign,
 } from '../hooks/useUiLab';
 import type { UiLabDesignSummary } from '../../shared/types/uiLab';
@@ -118,15 +119,25 @@ interface UiLabViewProps {
   initialDesignId?: string | null;
   /** When true, render only the shared canvas (no project design list). */
   sharedMode?: boolean;
+  /**
+   * False for named viewers, who see only the designs shared with them and
+   * cannot create new ones.
+   */
+  hasWorkspaceAccess?: boolean;
 }
 
 export const UiLabView: React.FC<UiLabViewProps> = ({
   project,
   initialDesignId = null,
   sharedMode = false,
+  hasWorkspaceAccess = true,
 }) => {
   const { can } = useAppShell();
-  const { data: designs = [], isLoading } = useUiLabDesigns(sharedMode ? null : project);
+  const listProject = sharedMode ? null : project;
+  const workspaceQuery = useUiLabDesigns(hasWorkspaceAccess ? listProject : null);
+  const sharedQuery = useUiLabSharedDesigns(hasWorkspaceAccess ? null : listProject);
+  const { data: designs = [], isLoading } = hasWorkspaceAccess ? workspaceQuery : sharedQuery;
+  const canCreate = hasWorkspaceAccess && can('ui-lab:manage');
 
   const [selectedId, setSelectedId] = useState<string | null>(initialDesignId);
   const [showComposer, setShowComposer] = useState(false);
@@ -194,7 +205,9 @@ export const UiLabView: React.FC<UiLabViewProps> = ({
             >
               ›
             </button>
-            <span className={styles.sidebarStripLabel}>Designs</span>
+            <span className={styles.sidebarStripLabel}>
+              {hasWorkspaceAccess ? 'Designs' : 'Shared'}
+            </span>
             {designs.length > 0 && (
               <span className={styles.sidebarStripBadge}>{designs.length}</span>
             )}
@@ -202,9 +215,11 @@ export const UiLabView: React.FC<UiLabViewProps> = ({
         ) : (
           <>
             <div className={styles.sidebarHeader}>
-              <h2 className={styles.sidebarTitle}>UI Lab</h2>
+              <h2 className={styles.sidebarTitle}>
+                {hasWorkspaceAccess ? 'UI Lab' : 'Shared with me'}
+              </h2>
               <div className={styles.sidebarHeaderActions}>
-                {can('ui-lab:manage') && (
+                {canCreate && (
                   <button
                     className={styles.newBtn}
                     onClick={() => { setShowComposer(true); setSelectedId(null); }}
@@ -233,7 +248,9 @@ export const UiLabView: React.FC<UiLabViewProps> = ({
               )}
               {!isLoading && designs.length === 0 && (
                 <p className={styles.emptyList}>
-                  No designs yet.{can('ui-lab:manage') ? '\n\nClick "+ New" to create your first design.' : ''}
+                  {hasWorkspaceAccess
+                    ? `No designs yet.${canCreate ? '\n\nClick "+ New" to create your first design.' : ''}`
+                    : 'No designs have been shared with you in this project yet.'}
                 </p>
               )}
               {designs.map((d: UiLabDesignSummary) => (
@@ -272,12 +289,13 @@ export const UiLabView: React.FC<UiLabViewProps> = ({
           key={selectedId}
           designId={selectedId}
           project={project}
+          sharedMode={!hasWorkspaceAccess}
           onDeleted={handleDeleted}
         />
       ) : (
         <div className={styles.composerWrapper}>
           <div style={{ textAlign: 'center' }}>
-            {can('ui-lab:manage') ? (
+            {canCreate ? (
               <>
                 <p style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>
                   Your design canvas

@@ -5,6 +5,7 @@ import { isSuperAdminRequest } from '../utils/superAdmin';
 import { getMenuConfig } from '../services/menuSettingsService';
 import {
   listDesigns,
+  listSharedDesigns,
   getDesignProject,
   getCommentProject,
   createDesign,
@@ -133,6 +134,23 @@ router.get('/', requirePermission('ui-lab:view'), requireUiUxGroup, uiLabEnabled
     res.json(designs);
   } catch (err) {
     next(err);
+  }
+});
+
+// GET /shared-with-me — designs shared with the caller. No UI/UX gate: this is
+// the entry point for named viewers, who never see the workspace list. Declared
+// before `/:id` so the literal path is not captured as a design id.
+router.get('/shared-with-me', requirePermission('ui-lab:view'), uiLabEnabledFromQuery, async (req, res, next) => {
+  try {
+    const project = req.query.project as string | undefined;
+    if (!project) {
+      res.status(400).json({ error: 'project query param is required' });
+      return;
+    }
+    const designs = await listSharedDesigns(project, getUserId(req));
+    res.json(designs);
+  } catch (err) {
+    handleServiceError(err, res, next);
   }
 });
 

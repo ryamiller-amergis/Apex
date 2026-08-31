@@ -25,6 +25,7 @@ import { useProjectMenuConfig } from './hooks/useProjectMenuConfig';
 import { useProjectRepoConfigs } from './hooks/useProjectRepoConfigs';
 import { useProjectSkillConfig } from './hooks/useProjectSkillConfig';
 import { useChatThread, useSkillRepos, useStartChat } from './hooks/useChatThreads';
+import { useUiLabSharedDesigns } from './hooks/useUiLab';
 import { RepoSelector } from './components/RepoSelector';
 import { DEFAULT_MODEL_ID } from './config/models';
 import { FeatureFlagDemo } from './components/FeatureFlagDemo';
@@ -336,6 +337,18 @@ function App() {
   const menuConfigReady = isRestricted || !menuConfigLoading;
   const restrictedSkipRef = useRef(false);
 
+  // UI Lab members read the whole project list; everyone else only reaches
+  // designs shared with them, which is also what earns them the nav item.
+  const uiLabWorkspaceAccess = isSuperAdmin || isInAnyGroup(['UI/UX']);
+  const uiLabSharesProject = !uiLabWorkspaceAccess
+    && selectedProject
+    && effectiveEnabledViews.includes('ui-lab')
+    && can('ui-lab:view')
+    ? selectedProject
+    : null;
+  const { data: uiLabSharedDesigns = [] } = useUiLabSharedDesigns(uiLabSharesProject);
+  const hasUiLabShares = uiLabSharedDesigns.length > 0;
+
   // Bind restricted users to the internal Apex project token (project-less UX).
   useEffect(() => {
     if (!permissionsLoaded || !isRestricted) return;
@@ -445,14 +458,17 @@ function App() {
     if (currentView === 'standup-manage' && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:manage')))      navigate(fallback);
     if (currentView === 'standup-summary' && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:participate'))) navigate(fallback);
     if (currentView === 'feature-requests' && !isSuperAdmin && (!effectiveEnabledViews.includes('feature-requests') || !can('feature-requests:view'))) navigate(fallback);
-    // UI Lab workspace requires UI/UX; a deep-linked design (`/ui-lab/:id`) allows
-    // named viewers with ui-lab:view — server enforces live share access.
+    // UI Lab workspace requires UI/UX. Named viewers reach it two ways: a
+    // deep-linked design (`/ui-lab/:id`), or the shared list once something has
+    // been shared with them. The server enforces live share access either way.
     if (currentView === 'ui-lab') {
       const uiLabDesignDeepLink = /^\/ui-lab\/[^/]+/.test(location.pathname);
       const canOpenUiLabWorkspace = isSuperAdmin
         || (effectiveEnabledViews.includes('ui-lab') && can('ui-lab:view') && isInAnyGroup(['UI/UX']));
       const canOpenSharedUiLab = isSuperAdmin
-        || (effectiveEnabledViews.includes('ui-lab') && can('ui-lab:view') && uiLabDesignDeepLink);
+        || (effectiveEnabledViews.includes('ui-lab')
+          && can('ui-lab:view')
+          && (uiLabDesignDeepLink || hasUiLabShares));
       if (!canOpenUiLabWorkspace && !canOpenSharedUiLab) navigate(fallback);
     }
     if (currentView === 'pdf-tools'     && !isSuperAdmin && (!effectiveEnabledViews.includes('pdf-tools') || !can('pdf-assembly:use'))) navigate(fallback);
@@ -469,7 +485,7 @@ function App() {
         navigate(firstAccessible ? `/planning/${firstAccessible}` : fallback);
       }
     }
-  }, [currentView, planningTab, permissionsLoaded, menuConfigReady, homeFlagsLoading, canAccessHome, can, isInAnyGroup, isSuperAdmin, isRestricted, effectiveEnabledViews, selectedProject, workBoardEnabled, navigate, location.pathname]);
+  }, [currentView, planningTab, permissionsLoaded, menuConfigReady, homeFlagsLoading, canAccessHome, can, isInAnyGroup, isSuperAdmin, isRestricted, effectiveEnabledViews, selectedProject, workBoardEnabled, hasUiLabShares, navigate, location.pathname]);
 
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
@@ -689,6 +705,7 @@ function App() {
             isInAnyGroup={isInAnyGroup}
             menuEnabledViews={effectiveEnabledViews}
             isSuperAdmin={isSuperAdmin}
+            hasUiLabShares={hasUiLabShares}
             selectedProject={selectedProject}
             canAccessHome={canAccessHome}
             onNavigateHome={() => navigate('/home')}
@@ -737,6 +754,7 @@ function App() {
             isInAnyGroup={isInAnyGroup}
             menuEnabledViews={effectiveEnabledViews}
             isSuperAdmin={isSuperAdmin}
+            hasUiLabShares={hasUiLabShares}
             selectedProject={isRestricted ? undefined : selectedProject}
             hideProjectChrome={isRestricted}
             canAccessHome={canAccessHome}
@@ -1086,9 +1104,9 @@ function App() {
                     })()}
                     sharedMode={
                       /^\/ui-lab\/[^/?#]+/.test(location.pathname)
-                      && !isSuperAdmin
-                      && !isInAnyGroup(['UI/UX'])
+                      && !uiLabWorkspaceAccess
                     }
+                    hasWorkspaceAccess={uiLabWorkspaceAccess}
                   />
                 </div>
               </Suspense>

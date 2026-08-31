@@ -28,6 +28,8 @@ interface AppSidebarProps {
   isInAnyGroup?: (groups: string[]) => boolean;
   menuEnabledViews?: string[];
   isSuperAdmin?: boolean;
+  /** True when designs have been shared with the user, who is otherwise not a UI Lab member. */
+  hasUiLabShares?: boolean;
   selectedProject?: string;
   canAccessHome?: boolean;
   onNavigateHome: () => void;
@@ -198,6 +200,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   isInAnyGroup,
   menuEnabledViews = [],
   isSuperAdmin = false,
+  hasUiLabShares = false,
   canAccessHome = true,
   onNavigateHome,
   onNavigateCalendar,
@@ -292,7 +295,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
     if (item.view === 'ui-lab') {
       if (!isSuperAdmin && !menuEnabledViews.includes('ui-lab')) return false;
       if (!isSuperAdmin && !can('ui-lab:view')) return false;
-      return isSuperAdmin || (isInAnyGroup?.(['UI/UX']) ?? false);
+      return isSuperAdmin || (isInAnyGroup?.(['UI/UX']) ?? false) || hasUiLabShares;
     }
     if (!isSuperAdmin && !menuEnabledViews.includes(item.view)) return false;
     if (!isSuperAdmin && item.permission !== null && !can(item.permission)) return false;
