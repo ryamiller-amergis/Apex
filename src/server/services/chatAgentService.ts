@@ -3436,14 +3436,30 @@ async function syncOutputToDbFromWorkspace(
         }
         const scorecard = normalizeValidationScorecard(JSON.parse(scorecardRaw));
         if (!scorecard) {
-          throw new Error('Validation scorecard carries no usable overall score');
+          await db
+            .update(designDocs)
+            .set({
+              status: 'pending_review',
+              updatedAt: new Date().toISOString(),
+            })
+            .where(
+              and(
+                eq(designDocs.id, ddValRow.id),
+                eq(designDocs.status, 'validating')
+              )
+            );
+          console.warn(
+            `[chat] post-run: validation scorecard carries no usable overall score — moved to pending_review (designDocId=${ddValRow.id})`
+          );
+          fullySynced = true;
+        } else {
+          const reportMd = readOutputValidationScorecardMd(threadId) ?? undefined;
+          await syncValidationResult(ddValRow.id, scorecard, reportMd);
+          console.log(
+            `[chat] post-run: synced validation scorecard to DB (designDocId=${ddValRow.id})`
+          );
+          fullySynced = true;
         }
-        const reportMd = readOutputValidationScorecardMd(threadId) ?? undefined;
-        await syncValidationResult(ddValRow.id, scorecard, reportMd);
-        console.log(
-          `[chat] post-run: synced validation scorecard to DB (designDocId=${ddValRow.id})`
-        );
-        fullySynced = true;
       } catch (err) {
         console.error(
           `[chat] post-run: failed to parse validation scorecard`,
@@ -3525,28 +3541,38 @@ async function syncOutputToDbFromWorkspace(
         }
         const scorecard = normalizeValidationScorecard(JSON.parse(scorecardRaw));
         if (!scorecard) {
-          throw new Error('PRD validation scorecard carries no usable overall score');
+          await db
+            .update(prds)
+            .set({ status: 'draft', updatedAt: new Date().toISOString() })
+            .where(
+              and(eq(prds.id, prdValRow.id), eq(prds.status, 'validating'))
+            );
+          console.warn(
+            `[chat] post-run: PRD validation scorecard carries no usable overall score — reset to draft (prdId=${prdValRow.id})`
+          );
+          fullySynced = true;
+        } else {
+          const reportMd = readOutputValidationScorecardMd(threadId) ?? undefined;
+          const { generateFallbackReport } =
+            await import('./documentValidationService');
+          const effectiveReportMd = reportMd ?? generateFallbackReport(scorecard);
+          const newStatus = scorecard.is_ready ? 'pending_review' : 'draft';
+          await db
+            .update(prds)
+            .set({
+              validationScore: Math.round(scorecard.overall_score),
+              validationScorecard: scorecard,
+              validationPhase: scorecard.review_phase,
+              validationReportMd: effectiveReportMd,
+              status: newStatus,
+              updatedAt: new Date().toISOString(),
+            })
+            .where(eq(prds.id, prdValRow.id));
+          console.log(
+            `[chat] post-run: synced PRD validation scorecard to DB (prdId=${prdValRow.id})`
+          );
+          fullySynced = true;
         }
-        const reportMd = readOutputValidationScorecardMd(threadId) ?? undefined;
-        const { generateFallbackReport } =
-          await import('./documentValidationService');
-        const effectiveReportMd = reportMd ?? generateFallbackReport(scorecard);
-        const newStatus = scorecard.is_ready ? 'pending_review' : 'draft';
-        await db
-          .update(prds)
-          .set({
-            validationScore: Math.round(scorecard.overall_score),
-            validationScorecard: scorecard,
-            validationPhase: scorecard.review_phase,
-            validationReportMd: effectiveReportMd,
-            status: newStatus,
-            updatedAt: new Date().toISOString(),
-          })
-          .where(eq(prds.id, prdValRow.id));
-        console.log(
-          `[chat] post-run: synced PRD validation scorecard to DB (prdId=${prdValRow.id})`
-        );
-        fullySynced = true;
       } catch (err) {
         console.error(
           `[chat] post-run: failed to parse PRD validation scorecard`,

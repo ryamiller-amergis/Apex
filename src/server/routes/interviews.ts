@@ -2043,6 +2043,14 @@ router.post('/design-docs/:id/validation/refresh', requirePermission('interviews
     }
 
     if (doc.status === 'validating') {
+      if (scorecardRaw) {
+        await db
+          .update(designDocsTable)
+          .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
+          .where(and(eq(designDocsTable.id, req.params.id), eq(designDocsTable.status, 'validating')));
+        res.json({ ok: true, score: null, is_ready: false });
+        return;
+      }
       res.json({ ok: true, still_validating: true, score: null, is_ready: false });
       return;
     }
