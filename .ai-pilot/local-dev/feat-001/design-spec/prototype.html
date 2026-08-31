@@ -1,0 +1,1702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Home — Pipeline Status Dashboard</title>
+<style>
+:root {
+  --brand-primary: #2747D9;
+  --brand-primary-light: #7C8CFF;
+  --brand-navy: #050506;
+  --brand-surface: #EEF2FF;
+  --brand-text-inverse: #F9FAFB;
+  --bg-primary: #F8FAFF;
+  --bg-secondary: #EEF2FF;
+  --bg-tertiary: #E0E7FF;
+  --text-primary: #111827;
+  --text-secondary: #4B5563;
+  --text-muted: #6B7280;
+  --border-color: #D6DDF7;
+  --border-color-light: #E5E9FF;
+  --accent-color: #2747D9;
+  --accent-hover: #1C33A6;
+  --on-accent: #ffffff;
+  --success-color: #16A34A;
+  --success-hover: #15803D;
+  --on-success: #0b1220;
+  --error-color: #d32f2f;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.14);
+  --glow-accent: none;
+  --glow-accent-strong: none;
+  --glow-text: none;
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+/* ── APP HEADER ── */
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  height: 56px;
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border-color);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  gap: 0;
+}
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-primary);
+  text-decoration: none;
+  margin-right: 32px;
+  flex-shrink: 0;
+}
+.header-brand-mark {
+  width: 28px;
+  height: 28px;
+  background: var(--accent-color);
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--on-accent);
+}
+.header-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  overflow: hidden;
+}
+.header-nav a {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-decoration: none;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.header-nav a:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+.header-nav a.active { color: var(--accent-color); background: var(--bg-tertiary); }
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.header-icon-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.15s;
+}
+.header-icon-btn:hover { background: var(--bg-tertiary); }
+.notif-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 16px;
+  height: 16px;
+  background: var(--error-color);
+  color: var(--on-accent);
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.avatar-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--accent-color);
+  color: var(--on-accent);
+  font-size: 12px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── STATE SECTION HEADERS ── */
+.state-section {
+  border-top: 3px solid transparent;
+}
+.state-label {
+  position: sticky;
+  top: 56px;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 24px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.state-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.state-default .state-label { background: #f0fdf4; color: #16a34a; }
+.state-default .state-dot { background: #16a34a; }
+.state-empty .state-label { background: #f8fafc; color: #64748b; }
+.state-empty .state-dot { background: #64748b; }
+.state-error .state-label { background: #fef2f2; color: #dc2626; }
+.state-error .state-dot { background: #dc2626; }
+.state-loading .state-label { background: #eff6ff; color: #3b82f6; }
+.state-loading .state-dot { background: #3b82f6; }
+
+/* ── PAGE CONTENT ── */
+.page-content {
+  padding: 24px 24px 0 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+/* ── AGENT HOME: EXISTING ── */
+.home-header {
+  text-align: center;
+  padding: 32px 0 24px;
+}
+.home-logo {
+  width: 40px;
+  height: 40px;
+  background: var(--accent-color);
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--on-accent);
+  margin-bottom: 8px;
+}
+.home-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.home-subtitle {
+  font-size: 13px;
+  color: var(--accent-color);
+  font-weight: 500;
+  margin-top: 2px;
+}
+.home-prompt-label {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-top: 20px;
+  margin-bottom: 16px;
+}
+.chat-input-area {
+  background: #fff;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px 10px;
+  box-shadow: var(--shadow-sm);
+  max-width: 720px;
+  margin: 0 auto;
+}
+.chat-input {
+  width: 100%;
+  border: none;
+  outline: none;
+  font-family: var(--font);
+  font-size: 14px;
+  color: var(--text-muted);
+  background: transparent;
+  resize: none;
+  min-height: 48px;
+}
+.chat-input-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+.chat-icon-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.chat-icon-btn:hover { background: var(--bg-tertiary); }
+.chat-send-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent-color);
+  color: var(--on-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.chat-hint {
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 8px;
+  max-width: 720px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.history-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: #fff;
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  padding: 5px 12px;
+  cursor: pointer;
+  margin-bottom: 20px;
+}
+.history-btn:hover { background: var(--bg-secondary); }
+
+/* ── NEW FEATURE ANNOTATION ── */
+.new-feature-wrapper {
+  border: 2px dashed var(--accent-color);
+  border-radius: var(--radius-lg);
+  padding: 8px;
+  margin: 24px 0 32px 0;
+  position: relative;
+}
+.new-feature-label {
+  position: absolute;
+  top: -10px;
+  left: 12px;
+  background: var(--accent-color);
+  color: var(--on-accent);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+/* ── STATUS DASHBOARD GRID ── */
+.status-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 12px;
+  padding: 0 0 0 4px;
+}
+.status-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  grid-template-rows: auto auto;
+  gap: 12px;
+}
+.status-grid.row2 {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+/* ── STAT CARD BASE ── */
+.stat-card {
+  background: #fff;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.stat-card.clickable {
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.stat-card.clickable:hover { background: var(--bg-tertiary); }
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.card-title-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--accent-color);
+  flex-shrink: 0;
+}
+.card-timestamp {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* ── PIPELINE CARD ── */
+.pipeline-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-color-light);
+}
+.pipeline-group:last-child { border-bottom: none; padding-bottom: 0; }
+.pipeline-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.pipeline-group-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-tertiary);
+  color: var(--accent-color);
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 10px;
+  padding: 1px 7px;
+  min-width: 22px;
+}
+.count-badge.error { background: #fef2f2; color: var(--error-color); }
+.count-badge.success-bg { background: #dcfce7; color: var(--success-color); }
+
+.view-all-link {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent-color);
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.view-all-link:hover { text-decoration: underline; }
+
+.pipeline-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 2px;
+}
+.pipeline-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 4px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.pipeline-item:hover { background: var(--bg-secondary); }
+.pipeline-item-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+}
+.pipeline-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pipeline-item-age {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.pipeline-empty-line {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 2px 4px;
+}
+
+/* ── KPI CARD ── */
+.kpi-mini-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.kpi-block {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+}
+.kpi-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kpi-value {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+.kpi-value.em-dash { color: var(--text-muted); }
+.kpi-caption {
+  font-size: 10px;
+  color: var(--text-muted);
+  line-height: 1.3;
+}
+.kpi-error-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--error-color);
+  font-weight: 500;
+}
+.kpi-error-line svg { flex-shrink: 0; }
+
+/* ── MY WORK CARD ── */
+.mywork-inner {
+  display: flex;
+  gap: 12px;
+}
+.mywork-left {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mywork-right {
+  flex: 0 0 auto;
+  width: 120px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  text-align: center;
+}
+.mywork-kpi-row {
+  display: flex;
+  gap: 8px;
+}
+.mywork-kpi {
+  flex: 1;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  text-align: center;
+}
+.mywork-kpi-num {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.1;
+}
+.mywork-kpi-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  margin-top: 2px;
+}
+.mywork-cycle-num {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+.mywork-cycle-label { font-size: 11px; color: var(--text-secondary); font-weight: 500; }
+.mywork-cycle-sublabel { font-size: 10px; color: var(--text-muted); }
+
+/* ── BUGS CARD ── */
+.bugs-total-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 20px;
+  padding: 4px 12px 4px 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--error-color);
+}
+.bugs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.bug-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 4px;
+  border-bottom: 1px solid var(--border-color-light);
+  font-size: 12px;
+}
+.bug-row:last-child { border-bottom: none; }
+.bug-row:hover { background: var(--bg-secondary); border-radius: var(--radius-sm); }
+.bug-pbi-id {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.bug-pbi-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
+.bug-count-badge {
+  background: #fef2f2;
+  color: var(--error-color);
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 10px;
+  padding: 1px 7px;
+  white-space: nowrap;
+}
+
+/* ── DEVPROD CARD ── */
+.devprod-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 0;
+  text-align: center;
+}
+.devprod-value {
+  font-size: 40px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1;
+}
+.devprod-value.em-dash { color: var(--text-muted); font-size: 36px; }
+.devprod-unit {
+  font-size: 14px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.devprod-caption {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.devprod-nav-hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--accent-color);
+  font-weight: 500;
+  margin-top: 4px;
+}
+
+/* ── INLINE ERROR STATE ── */
+.inline-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 16px;
+  text-align: center;
+}
+.inline-error-icon { color: var(--error-color); }
+.inline-error-text { font-size: 13px; color: var(--text-secondary); }
+.btn-retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 6px 14px;
+  cursor: pointer;
+  font-family: var(--font);
+  transition: background 0.15s, border-color 0.15s;
+}
+.btn-retry:hover { background: var(--bg-secondary); border-color: var(--accent-color); }
+
+/* ── SKELETON LOADER ── */
+@keyframes shimmer {
+  0% { background-position: -600px 0; }
+  100% { background-position: 600px 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, #e2e8f0 25%, #eef2ff 50%, #e2e8f0 75%);
+  background-size: 600px 100%;
+  animation: shimmer 1.6s infinite linear;
+  border-radius: var(--radius-sm);
+}
+.skel-line { height: 12px; margin-bottom: 6px; }
+.skel-line.tall { height: 40px; }
+.skel-line.medium { height: 20px; }
+.skel-card {
+  background: #fff;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 16px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ── INLINE EMPTY STATE ── */
+.inline-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 16px;
+  text-align: center;
+}
+.inline-empty-icon { color: var(--text-muted); }
+.inline-empty-text { font-size: 13px; color: var(--text-muted); }
+
+/* ── DIVIDER BETWEEN STATES ── */
+.state-divider {
+  height: 24px;
+  background: transparent;
+}
+
+/* ── LAYOUT HELPERS ── */
+.grid-row-1 {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.grid-row-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+}
+.col-span-2 { grid-column: span 2; }
+
+.page-bottom-pad { height: 32px; }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- STATE:DEFAULT:START -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="state-section state-default">
+  <div class="state-label">
+    <span class="state-dot"></span>
+    Default State — Pipeline Status Dashboard (Populated Data)
+  </div>
+
+  <!-- APP HEADER -->
+  <header class="app-header">
+    <a href="#" class="header-brand" onclick="return false;">
+      <div class="header-brand-mark">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      </div>
+      Apex
+    </a>
+    <nav class="header-nav">
+      <a href="#" class="active" onclick="return false;">Home</a>
+      <a href="#" onclick="return false;">Calendar</a>
+      <a href="#" onclick="return false;">Planning</a>
+      <a href="#" onclick="return false;">Cloud Cost</a>
+      <a href="#" onclick="return false;">AI Cost</a>
+      <a href="#" onclick="return false;">Interview</a>
+      <a href="#" onclick="return false;">ADR</a>
+      <a href="#" onclick="return false;">My Work</a>
+      <a href="#" onclick="return false;">Standup</a>
+    </nav>
+    <div class="header-right">
+      <button class="header-icon-btn" aria-label="Notifications">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+        <span class="notif-badge">4</span>
+      </button>
+      <div class="avatar-btn" role="img" aria-label="User menu">JD</div>
+    </div>
+  </header>
+
+  <!-- PAGE CONTENT -->
+  <div class="page-content">
+    <!-- EXISTING: Agent Home UI -->
+    <div class="home-header">
+      <div class="home-logo">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      </div>
+      <div class="home-title">Apex</div>
+      <div class="home-subtitle">Build higher, faster.</div>
+      <div class="home-prompt-label">What would you like to work on?</div>
+      <div class="chat-input-area">
+        <textarea class="chat-input" placeholder="Let Apex know what you need..." rows="2"></textarea>
+        <div class="chat-input-footer">
+          <button class="chat-icon-btn" aria-label="Attach file">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5a2.5 2.5 0 015 0v10.5c0 .83-.67 1.5-1.5 1.5s-1.5-.67-1.5-1.5V6H9v9.5a2.5 2.5 0 005 0V5c0-2.21-1.79-4-4-4S6 2.79 6 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1z"/></svg>
+          </button>
+          <button class="chat-icon-btn" aria-label="Voice input">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 15c1.66 0 3-1.34 3-3V6c0-1.66-1.34-3-3-3S9 4.34 9 6v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V6zm6.91 6c-.49 0-.9.36-.98.85C16.52 15.2 14.47 17 12 17s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V21c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z"/></svg>
+          </button>
+          <button class="chat-send-btn" aria-label="Send message">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="chat-hint">Enter to send · Shift+Enter for new line</div>
+    </div>
+
+    <div style="display:flex; justify-content:center; margin-bottom:24px;">
+      <button class="history-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.95-2.05L6.7 18.3A8.94 8.94 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
+        History
+      </button>
+    </div>
+
+    <!-- NEW FEATURE: Pipeline Status Dashboard -->
+    <!-- NEW_FEATURE:START -->
+    <div class="new-feature-wrapper">
+      <span class="new-feature-label">NEW: Pipeline Status Dashboard</span>
+
+      <div style="padding: 8px 4px 4px;">
+        <div class="status-section-title">Project Status</div>
+
+        <!-- ROW 1: Incomplete Pipeline (BA - wide) + Artifact Cycle Time (Manager - narrow) -->
+        <div class="grid-row-1">
+
+          <!-- Incomplete Pipeline Card (BA) -->
+          <div class="stat-card">
+            <div class="card-header">
+              <span class="card-title">
+                <svg class="card-title-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+                Incomplete Pipeline
+              </span>
+              <span class="card-timestamp">Updated 2 min ago</span>
+            </div>
+
+            <!-- Interview group -->
+            <div class="pipeline-group">
+              <div class="pipeline-group-header">
+                <span class="pipeline-group-label">
+                  Interview
+                  <span class="count-badge">3</span>
+                </span>
+                <a href="#" class="view-all-link" onclick="return false;">View all</a>
+              </div>
+              <div class="pipeline-items">
+                <div class="pipeline-item"><span class="pipeline-item-dot"></span><span class="pipeline-item-name">Payment Gateway Redesign Interview</span><span class="pipeline-item-age">8d ago</span></div>
+                <div class="pipeline-item"><span class="pipeline-item-dot"></span><span class="pipeline-item-name">Onboarding Flow Revamp</span><span class="pipeline-item-age">5d ago</span></div>
+                <div class="pipeline-item"><span class="pipeline-item-dot"></span><span class="pipeline-item-name">Notification Preferences Feature</span><span class="pipeline-item-age">2d ago</span></div>
+              </div>
+            </div>
+
+            <!-- PRD group -->
+            <div class="pipeline-group">
+              <div class="pipeline-group-header">
+                <span class="pipeline-group-label">
+                  PRD
+                  <span class="count-badge">5</span>
+                </span>
+                <a href="#" class="view-all-link" onclick="return false;">View all</a>
+              </div>
+              <div class="pipeline-items">
+                <div class="pipeline-item"><span class="pipeline-item-dot"></span><span class="pipeline-item-name">Pipeline Status Dashboard PRD</span><span class="pipeline-item-age">12d ago</span></div>
+                <div class="pipeline-item"><span class="pipeline-item-dot"></span><span class="pipeline-item-name">ADR Enhancement PRD</span><span class="pipeline-item-age">9d ago</span></div>
+                <div class="pipeline-item"><span class="pipeline-item-dot"></span><span class="pipeline-item-name">Calendar Sync Integration</span><span class="pipeline-item-age">6d ago</span></div>
+              </div>
+            </div>
+
+            <!-- Test Case group -->
+            <div class="pipeline-group">
+              <div class="pipeline-group-header">
+                <span class="pipeline-group-label">
+                  Test Case
+                  <span class="count-badge">2</span>
+                </span>
+                <a href="#" class="view-all-link" onclick="return false;">View all</a>
+              </div>
+              <div class="pipeline-items">
+                <div class="pipeline-item"><span class="pipeline-item-dot"></span><span class="pipeline-item-name">Auth Flow Test Suite</span><span class="pipeline-item-age">4d ago</span></div>
+                <div class="pipeline-item"><span class="pipeline-item-dot"></span><span class="pipeline-item-name">Cost Analytics Regression</span><span class="pipeline-item-age">1d ago</span></div>
+              </div>
+            </div>
+
+            <!-- Design Prototype group -->
+            <div class="pipeline-group">
+              <div class="pipeline-group-header">
+                <span class="pipeline-group-label">
+                  Design Prototype
+                  <span class="count-badge">4</span>
+                </span>
+                <a href="#" class="view-all-link" onclick="return false;">View all</a>
+              </div>
+              <div class="pipeline-items">
+                <div class="pipeline-item"><span class="pipeline-item-dot"></span><span class="pipeline-item-name">Home Dashboard Prototype v2</span><span class="pipeline-item-age">15d ago</span></div>
+                <div class="pipeline-item"><span class="pipeline-item-dot"></span><span class="pipeline-item-name">Standup Flow Prototype</span><span class="pipeline-item-age">7d ago</span></div>
+                <div class="pipeline-item"><span class="pipeline-item-dot"></span><span class="pipeline-item-name">ADR Review Prototype</span><span class="pipeline-item-age">3d ago</span></div>
+              </div>
+            </div>
+
+            <!-- Design Doc group -->
+            <div class="pipeline-group">
+              <div class="pipeline-group-header">
+                <span class="pipeline-group-label">
+                  Design Doc
+                  <span class="count-badge">1</span>
+                </span>
+                <a href="#" class="view-all-link" onclick="return false;">View all</a>
+              </div>
+              <div class="pipeline-items">
+                <div class="pipeline-item"><span class="pipeline-item-dot"></span><span class="pipeline-item-name">Cloud Cost Design Spec</span><span class="pipeline-item-age">11d ago</span></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Artifact Cycle Time Card (Manager) -->
+          <div class="stat-card">
+            <div class="card-header">
+              <span class="card-title">
+                <svg class="card-title-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zm4.24 16L11 13.5V7h1.5v5.99l4.77 2.88-1.04 1.63z"/></svg>
+                Artifact Cycle Time
+              </span>
+              <span class="card-timestamp">Last 90 days</span>
+            </div>
+            <div class="kpi-mini-grid" style="grid-template-columns: repeat(2,1fr);">
+              <div class="kpi-block">
+                <span class="kpi-label">Interview</span>
+                <span class="kpi-value">4.2</span>
+                <span class="kpi-caption">median days</span>
+              </div>
+              <div class="kpi-block">
+                <span class="kpi-label">PRD</span>
+                <span class="kpi-value">7.8</span>
+                <span class="kpi-caption">median days</span>
+              </div>
+              <div class="kpi-block">
+                <span class="kpi-label">Test Case</span>
+                <span class="kpi-value">3.1</span>
+                <span class="kpi-caption">median days</span>
+              </div>
+              <div class="kpi-block">
+                <span class="kpi-label">Prototype</span>
+                <span class="kpi-value">5.6</span>
+                <span class="kpi-caption">median days</span>
+              </div>
+              <div class="kpi-block" style="grid-column: span 2;">
+                <span class="kpi-label">Design Doc</span>
+                <span class="kpi-value">9.3</span>
+                <span class="kpi-caption">median days</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ROW 2: My Work (Dev) + Open Bugs (QA) + Dev-to-Prod (Admin) -->
+        <div class="grid-row-2">
+
+          <!-- My Work Card (Developer) -->
+          <div class="stat-card">
+            <div class="card-header">
+              <span class="card-title">
+                <svg class="card-title-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M20 6h-2.18c.07-.44.18-.88.18-1.36C18 2.07 15.96 0 13.5 0c-1.23 0-2.34.5-3.17 1.3L9 3.62 7.67 1.3A4.43 4.43 0 004.5 0C2.04 0 0 2.07 0 4.64c0 .48.11.92.18 1.36H0c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h20c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-2 16H4V8h16v14z"/></svg>
+                My Work
+              </span>
+              <span class="card-timestamp">90-day</span>
+            </div>
+            <div class="mywork-inner">
+              <div class="mywork-left">
+                <div class="mywork-kpi-row">
+                  <div class="mywork-kpi">
+                    <div class="mywork-kpi-num">6</div>
+                    <div class="mywork-kpi-label">Ready</div>
+                  </div>
+                  <div class="mywork-kpi">
+                    <div class="mywork-kpi-num">3</div>
+                    <div class="mywork-kpi-label">In Progress</div>
+                  </div>
+                </div>
+              </div>
+              <div class="mywork-right">
+                <div class="mywork-cycle-num">6.4</div>
+                <div class="mywork-cycle-label">days avg</div>
+                <div class="mywork-cycle-sublabel">Cycle time · 90-day</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Open Bugs on PBIs Card (QA) -->
+          <div class="stat-card">
+            <div class="card-header">
+              <span class="card-title">
+                <svg class="card-title-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="color:var(--error-color)"><path d="M20 8h-2.81c-.45-.78-1.07-1.45-1.82-1.96L17 4.41 15.59 3l-2.17 2.17C12.96 5.06 12.49 5 12 5s-.96.06-1.41.17L8.41 3 7 4.41l1.62 1.63C7.88 6.55 7.26 7.22 6.81 8H4v2h2.09c-.05.33-.09.66-.09 1v1H4v2h2v1c0 .34.04.67.09 1H4v2h2.81c1.04 1.79 2.97 3 5.19 3s4.15-1.21 5.19-3H20v-2h-2.09c.05-.33.09-.66.09-1v-1h2v-2h-2v-1c0-.34-.04-.67-.09-1H20V8zm-4 4v3c0 .34-.06.67-.14 1H8.14C8.06 15.67 8 15.34 8 15v-5c0-.34.06-.67.14-1h7.72c.08.33.14.66.14 1v2z"/></svg>
+                Open Bugs on PBIs
+              </span>
+              <span class="bugs-total-badge">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+                14 bugs total
+              </span>
+            </div>
+            <div class="bugs-list">
+              <div class="bug-row"><span class="bug-pbi-id">#2041</span><span class="bug-pbi-name">Payment flow checkout crash on mobile</span><span class="bug-count-badge">4</span></div>
+              <div class="bug-row"><span class="bug-pbi-id">#2038</span><span class="bug-pbi-name">Auth token refresh race condition</span><span class="bug-count-badge">3</span></div>
+              <div class="bug-row"><span class="bug-pbi-id">#2034</span><span class="bug-pbi-name">Cost dashboard CSV export truncates rows</span><span class="bug-count-badge">2</span></div>
+              <div class="bug-row"><span class="bug-pbi-id">#2029</span><span class="bug-pbi-name">Standup timezone offset incorrect</span><span class="bug-count-badge">2</span></div>
+              <div class="bug-row"><span class="bug-pbi-id">#2021</span><span class="bug-pbi-name">Notification preferences not persisting</span><span class="bug-count-badge">2</span></div>
+              <div class="bug-row"><span class="bug-pbi-id">#2018</span><span class="bug-pbi-name">ADR creation fails with special chars</span><span class="bug-count-badge">1</span></div>
+            </div>
+          </div>
+
+          <!-- Developer-to-Production Card (Admin) -->
+          <div class="stat-card clickable" onclick="return false;" role="link" aria-label="Navigate to Releases">
+            <div class="card-header">
+              <span class="card-title">
+                <svg class="card-title-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9.37 5.51A7.35 7.35 0 0016.52 12a7.35 7.35 0 00-7.15 6.49A7.43 7.43 0 014.57 12a7.43 7.43 0 014.8-6.49zM12 2C6.49 2 2 6.49 2 12s4.49 10 10 10 10-4.49 10-10S17.51 2 12 2zm3.63 14.07A5.34 5.34 0 0114.5 12a5.35 5.35 0 011.13-3.31l.4-.61A7.94 7.94 0 0118 12a7.94 7.94 0 01-1.97 3.91l-.4-.61v.77z"/></svg>
+                Dev → Production
+              </span>
+              <span class="card-timestamp">Last 90 days</span>
+            </div>
+            <div class="devprod-inner">
+              <div class="devprod-value">11.4</div>
+              <div class="devprod-unit">days (median)</div>
+              <div class="devprod-caption">Developer start → production deployment</div>
+              <div class="devprod-nav-hint">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
+                View Releases
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+    <!-- NEW_FEATURE:END -->
+
+    <div class="page-bottom-pad"></div>
+  </div>
+</div>
+<!-- STATE:DEFAULT:END -->
+
+<div class="state-divider"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- STATE:EMPTY:START -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="state-section state-empty">
+  <div class="state-label">
+    <span class="state-dot"></span>
+    Empty State — Pipeline Status Dashboard (No Data)
+  </div>
+
+  <header class="app-header">
+    <a href="#" class="header-brand" onclick="return false;">
+      <div class="header-brand-mark">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      </div>
+      Apex
+    </a>
+    <nav class="header-nav">
+      <a href="#" class="active" onclick="return false;">Home</a>
+      <a href="#" onclick="return false;">Calendar</a>
+      <a href="#" onclick="return false;">Planning</a>
+      <a href="#" onclick="return false;">Cloud Cost</a>
+      <a href="#" onclick="return false;">AI Cost</a>
+      <a href="#" onclick="return false;">Interview</a>
+      <a href="#" onclick="return false;">ADR</a>
+      <a href="#" onclick="return false;">My Work</a>
+      <a href="#" onclick="return false;">Standup</a>
+    </nav>
+    <div class="header-right">
+      <button class="header-icon-btn" aria-label="Notifications">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+        <span class="notif-badge">4</span>
+      </button>
+      <div class="avatar-btn" aria-label="User menu">JD</div>
+    </div>
+  </header>
+
+  <div class="page-content">
+    <div class="home-header">
+      <div class="home-logo">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      </div>
+      <div class="home-title">Apex</div>
+      <div class="home-subtitle">Build higher, faster.</div>
+      <div class="home-prompt-label">What would you like to work on?</div>
+      <div class="chat-input-area">
+        <textarea class="chat-input" placeholder="Let Apex know what you need..." rows="2"></textarea>
+        <div class="chat-input-footer">
+          <button class="chat-icon-btn" aria-label="Attach file">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5a2.5 2.5 0 015 0v10.5c0 .83-.67 1.5-1.5 1.5s-1.5-.67-1.5-1.5V6H9v9.5a2.5 2.5 0 005 0V5c0-2.21-1.79-4-4-4S6 2.79 6 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1z"/></svg>
+          </button>
+          <button class="chat-icon-btn" aria-label="Voice input">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 15c1.66 0 3-1.34 3-3V6c0-1.66-1.34-3-3-3S9 4.34 9 6v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V6zm6.91 6c-.49 0-.9.36-.98.85C16.52 15.2 14.47 17 12 17s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V21c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z"/></svg>
+          </button>
+          <button class="chat-send-btn" aria-label="Send message">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="chat-hint">Enter to send · Shift+Enter for new line</div>
+    </div>
+
+    <div style="display:flex; justify-content:center; margin-bottom:24px;">
+      <button class="history-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.95-2.05L6.7 18.3A8.94 8.94 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
+        History
+      </button>
+    </div>
+
+    <!-- NEW FEATURE: Empty State -->
+    <!-- NEW_FEATURE:START -->
+    <div class="new-feature-wrapper">
+      <span class="new-feature-label">NEW: Pipeline Status Dashboard</span>
+      <div style="padding: 8px 4px 4px;">
+        <div class="status-section-title">Project Status</div>
+
+        <div class="grid-row-1">
+          <!-- Incomplete Pipeline — empty groups -->
+          <div class="stat-card">
+            <div class="card-header">
+              <span class="card-title">
+                <svg class="card-title-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+                Incomplete Pipeline
+              </span>
+              <span class="card-timestamp">Updated just now</span>
+            </div>
+            <!-- Each group shows empty-state line -->
+            <div class="pipeline-group">
+              <div class="pipeline-group-header">
+                <span class="pipeline-group-label">Interview <span class="count-badge">0</span></span>
+                <a href="#" class="view-all-link" onclick="return false;">View all</a>
+              </div>
+              <div class="pipeline-empty-line">No incomplete interviews in this project.</div>
+            </div>
+            <div class="pipeline-group">
+              <div class="pipeline-group-header">
+                <span class="pipeline-group-label">PRD <span class="count-badge">0</span></span>
+                <a href="#" class="view-all-link" onclick="return false;">View all</a>
+              </div>
+              <div class="pipeline-empty-line">No incomplete PRDs in this project.</div>
+            </div>
+            <div class="pipeline-group">
+              <div class="pipeline-group-header">
+                <span class="pipeline-group-label">Test Case <span class="count-badge">0</span></span>
+                <a href="#" class="view-all-link" onclick="return false;">View all</a>
+              </div>
+              <div class="pipeline-empty-line">No incomplete test cases.</div>
+            </div>
+            <div class="pipeline-group">
+              <div class="pipeline-group-header">
+                <span class="pipeline-group-label">Design Prototype <span class="count-badge">0</span></span>
+                <a href="#" class="view-all-link" onclick="return false;">View all</a>
+              </div>
+              <div class="pipeline-empty-line">No incomplete prototypes.</div>
+            </div>
+            <div class="pipeline-group">
+              <div class="pipeline-group-header">
+                <span class="pipeline-group-label">Design Doc <span class="count-badge">0</span></span>
+                <a href="#" class="view-all-link" onclick="return false;">View all</a>
+              </div>
+              <div class="pipeline-empty-line">No incomplete design docs.</div>
+            </div>
+          </div>
+
+          <!-- Artifact Cycle Time — no data -->
+          <div class="stat-card">
+            <div class="card-header">
+              <span class="card-title">
+                <svg class="card-title-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zm4.24 16L11 13.5V7h1.5v5.99l4.77 2.88-1.04 1.63z"/></svg>
+                Artifact Cycle Time
+              </span>
+              <span class="card-timestamp">Last 90 days</span>
+            </div>
+            <div class="kpi-mini-grid" style="grid-template-columns: repeat(2,1fr);">
+              <div class="kpi-block">
+                <span class="kpi-label">Interview</span>
+                <span class="kpi-value em-dash">—</span>
+                <span class="kpi-caption">No completed items in last 90 days</span>
+              </div>
+              <div class="kpi-block">
+                <span class="kpi-label">PRD</span>
+                <span class="kpi-value em-dash">—</span>
+                <span class="kpi-caption">No completed items in last 90 days</span>
+              </div>
+              <div class="kpi-block">
+                <span class="kpi-label">Test Case</span>
+                <span class="kpi-value em-dash">—</span>
+                <span class="kpi-caption">No completed items in last 90 days</span>
+              </div>
+              <div class="kpi-block">
+                <span class="kpi-label">Prototype</span>
+                <span class="kpi-value em-dash">—</span>
+                <span class="kpi-caption">No completed items in last 90 days</span>
+              </div>
+              <div class="kpi-block" style="grid-column: span 2;">
+                <span class="kpi-label">Design Doc</span>
+                <span class="kpi-value em-dash">—</span>
+                <span class="kpi-caption">No completed items in last 90 days</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-row-2">
+          <!-- My Work — no items -->
+          <div class="stat-card">
+            <div class="card-header">
+              <span class="card-title">
+                <svg class="card-title-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M20 6h-2.18c.07-.44.18-.88.18-1.36C18 2.07 15.96 0 13.5 0c-1.23 0-2.34.5-3.17 1.3L9 3.62 7.67 1.3A4.43 4.43 0 004.5 0C2.04 0 0 2.07 0 4.64c0 .48.11.92.18 1.36H0c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h20c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-2 16H4V8h16v14z"/></svg>
+                My Work
+              </span>
+              <span class="card-timestamp">90-day</span>
+            </div>
+            <div class="mywork-inner">
+              <div class="mywork-left">
+                <div class="mywork-kpi-row">
+                  <div class="mywork-kpi">
+                    <div class="mywork-kpi-num">0</div>
+                    <div class="mywork-kpi-label">Ready</div>
+                  </div>
+                  <div class="mywork-kpi">
+                    <div class="mywork-kpi-num">0</div>
+                    <div class="mywork-kpi-label">In Progress</div>
+                  </div>
+                </div>
+              </div>
+              <div class="mywork-right">
+                <div class="mywork-cycle-num" style="color:var(--text-muted);">—</div>
+                <div class="mywork-cycle-label">days avg</div>
+                <div class="mywork-cycle-sublabel">No completed items · 90-day</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Open Bugs — no bugs -->
+          <div class="stat-card">
+            <div class="card-header">
+              <span class="card-title">
+                <svg class="card-title-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="color:var(--error-color)"><path d="M20 8h-2.81c-.45-.78-1.07-1.45-1.82-1.96L17 4.41 15.59 3l-2.17 2.17C12.96 5.06 12.49 5 12 5s-.96.06-1.41.17L8.41 3 7 4.41l1.62 1.63C7.88 6.55 7.26 7.22 6.81 8H4v2h2.09c-.05.33-.09.66-.09 1v1H4v2h2v1c0 .34.04.67.09 1H4v2h2.81c1.04 1.79 2.97 3 5.19 3s4.15-1.21 5.19-3H20v-2h-2.09c.05-.33.09-.66.09-1v-1h2v-2h-2v-1c0-.34-.04-.67-.09-1H20V8z"/></svg>
+                Open Bugs on PBIs
+              </span>
+            </div>
+            <div class="inline-empty">
+              <div class="inline-empty-icon">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+              </div>
+              <div class="inline-empty-text">No open bugs on any PBIs.<br>All looking good!</div>
+            </div>
+          </div>
+
+          <!-- Dev-to-Prod — no data -->
+          <div class="stat-card clickable" onclick="return false;" role="link" aria-label="Navigate to Releases">
+            <div class="card-header">
+              <span class="card-title">
+                <svg class="card-title-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9.37 5.51A7.35 7.35 0 0016.52 12a7.35 7.35 0 00-7.15 6.49A7.43 7.43 0 014.57 12a7.43 7.43 0 014.8-6.49zM12 2C6.49 2 2 6.49 2 12s4.49 10 10 10 10-4.49 10-10S17.51 2 12 2z"/></svg>
+                Dev → Production
+              </span>
+              <span class="card-timestamp">Last 90 days</span>
+            </div>
+            <div class="devprod-inner">
+              <div class="devprod-value em-dash">—</div>
+              <div class="devprod-unit" style="color:var(--text-muted);">No data</div>
+              <div class="devprod-caption">No linked releases reached production in the last 90 days</div>
+              <div class="devprod-nav-hint">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
+                View Releases
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- NEW_FEATURE:END -->
+    <div class="page-bottom-pad"></div>
+  </div>
+</div>
+<!-- STATE:EMPTY:END -->
+
+<div class="state-divider"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- STATE:ERROR:START -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="state-section state-error">
+  <div class="state-label">
+    <span class="state-dot"></span>
+    Error State — Pipeline Status Dashboard (Load Failures)
+  </div>
+
+  <header class="app-header">
+    <a href="#" class="header-brand" onclick="return false;">
+      <div class="header-brand-mark">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      </div>
+      Apex
+    </a>
+    <nav class="header-nav">
+      <a href="#" class="active" onclick="return false;">Home</a>
+      <a href="#" onclick="return false;">Calendar</a>
+      <a href="#" onclick="return false;">Planning</a>
+      <a href="#" onclick="return false;">Cloud Cost</a>
+      <a href="#" onclick="return false;">AI Cost</a>
+      <a href="#" onclick="return false;">Interview</a>
+      <a href="#" onclick="return false;">ADR</a>
+      <a href="#" onclick="return false;">My Work</a>
+      <a href="#" onclick="return false;">Standup</a>
+    </nav>
+    <div class="header-right">
+      <button class="header-icon-btn" aria-label="Notifications">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+        <span class="notif-badge">4</span>
+      </button>
+      <div class="avatar-btn" aria-label="User menu">JD</div>
+    </div>
+  </header>
+
+  <div class="page-content">
+    <div class="home-header">
+      <div class="home-logo">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      </div>
+      <div class="home-title">Apex</div>
+      <div class="home-subtitle">Build higher, faster.</div>
+      <div class="home-prompt-label">What would you like to work on?</div>
+      <div class="chat-input-area">
+        <textarea class="chat-input" placeholder="Let Apex know what you need..." rows="2"></textarea>
+        <div class="chat-input-footer">
+          <button class="chat-icon-btn" aria-label="Attach file">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5a2.5 2.5 0 015 0v10.5c0 .83-.67 1.5-1.5 1.5s-1.5-.67-1.5-1.5V6H9v9.5a2.5 2.5 0 005 0V5c0-2.21-1.79-4-4-4S6 2.79 6 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1z"/></svg>
+          </button>
+          <button class="chat-icon-btn" aria-label="Voice input">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 15c1.66 0 3-1.34 3-3V6c0-1.66-1.34-3-3-3S9 4.34 9 6v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V6zm6.91 6c-.49 0-.9.36-.98.85C16.52 15.2 14.47 17 12 17s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V21c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z"/></svg>
+          </button>
+          <button class="chat-send-btn" aria-label="Send message">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="chat-hint">Enter to send · Shift+Enter for new line</div>
+    </div>
+
+    <div style="display:flex; justify-content:center; margin-bottom:24px;">
+      <button class="history-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.95-2.05L6.7 18.3A8.94 8.94 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
+        History
+      </button>
+    </div>
+
+    <!-- NEW FEATURE: Error State -->
+    <!-- NEW_FEATURE:START -->
+    <div class="new-feature-wrapper">
+      <span class="new-feature-label">NEW: Pipeline Status Dashboard</span>
+      <div style="padding: 8px 4px 4px;">
+        <div class="status-section-title">Project Status</div>
+
+        <div class="grid-row-1">
+          <!-- Incomplete Pipeline — error -->
+          <div class="stat-card">
+            <div class="card-header">
+              <span class="card-title">
+                <svg class="card-title-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+                Incomplete Pipeline
+              </span>
+            </div>
+            <div class="inline-error">
+              <div class="inline-error-icon">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+              </div>
+              <div class="inline-error-text">Failed to load pipeline data.<br>Check your connection and try again.</div>
+              <button class="btn-retry" onclick="return false;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+                Retry
+              </button>
+            </div>
+          </div>
+
+          <!-- Artifact Cycle Time — partial error (one KPI fails) -->
+          <div class="stat-card">
+            <div class="card-header">
+              <span class="card-title">
+                <svg class="card-title-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zm4.24 16L11 13.5V7h1.5v5.99l4.77 2.88-1.04 1.63z"/></svg>
+                Artifact Cycle Time
+              </span>
+              <span class="card-timestamp">Last 90 days</span>
+            </div>
+            <div class="kpi-mini-grid" style="grid-template-columns: repeat(2,1fr);">
+              <div class="kpi-block">
+                <span class="kpi-label">Interview</span>
+                <span class="kpi-value">4.2</span>
+                <span class="kpi-caption">median days</span>
+              </div>
+              <div class="kpi-block">
+                <span class="kpi-label">PRD</span>
+                <div class="kpi-error-line">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+                  Unavailable
+                </div>
+              </div>
+              <div class="kpi-block">
+                <span class="kpi-label">Test Case</span>
+                <span class="kpi-value">3.1</span>
+                <span class="kpi-caption">median days</span>
+              </div>
+              <div class="kpi-block">
+                <span class="kpi-label">Prototype</span>
+                <div class="kpi-error-line">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+                  Unavailable
+                </div>
+              </div>
+              <div class="kpi-block" style="grid-column: span 2;">
+                <span class="kpi-label">Design Doc</span>
+                <span class="kpi-value">9.3</span>
+                <span class="kpi-caption">median days</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-row-2">
+          <!-- My Work — error -->
+          <div class="stat-card">
+            <div class="card-header">
+              <span class="card-title">
+                <svg class="card-title-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M20 6h-2.18c.07-.44.18-.88.18-1.36C18 2.07 15.96 0 13.5 0c-1.23 0-2.34.5-3.17 1.3L9 3.62 7.67 1.3A4.43 4.43 0 004.5 0C2.04 0 0 2.07 0 4.64c0 .48.11.92.18 1.36H0c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h20c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-2 16H4V8h16v14z"/></svg>
+                My Work
+              </span>
+            </div>
+            <div class="inline-error">
+              <div class="inline-error-icon">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+              </div>
+              <div class="inline-error-text">Could not load your work items.</div>
+              <button class="btn-retry" onclick="return false;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+                Retry
+              </button>
+            </div>
+          </div>
+
+          <!-- Bugs — error -->
+          <div class="stat-card">
+            <div class="card-header">
+              <span class="card-title">
+                <svg class="card-title-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="color:var(--error-color)"><path d="M20 8h-2.81c-.45-.78-1.07-1.45-1.82-1.96L17 4.41 15.59 3l-2.17 2.17C12.96 5.06 12.49 5 12 5s-.96.06-1.41.17L8.41 3 7 4.41l1.62 1.63C7.88 6.55 7.26 7.22 6.81 8H4v2h2.09c-.05.33-.09.66-.09 1v1H4v2h2v1c0 .34.04.67.09 1H4v2h2.81c1.04 1.79 2.97 3 5.19 3s4.15-1.21 5.19-3H20v-2h-2.09c.05-.33.09-.66.09-1v-1h2v-2h-2v-1c0-.34-.04-.67-.09-1H20V8z"/></svg>
+                Open Bugs on PBIs
+              </span>
+            </div>
+            <div class="inline-error">
+              <div class="inline-error-icon">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+              </div>
+              <div class="inline-error-text">Azure DevOps query failed.<br>Unable to fetch bug data.</div>
+              <button class="btn-retry" onclick="return false;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+                Retry
+              </button>
+            </div>
+          </div>
+
+          <!-- Dev-to-Prod — error -->
+          <div class="stat-card">
+            <div class="card-header">
+              <span class="card-title">
+                <svg class="card-title-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9.37 5.51A7.35 7.35 0 0016.52 12a7.35 7.35 0 00-7.15 6.49A7.43 7.43 0 014.57 12a7.43 7.43 0 014.8-6.49zM12 2C6.49 2 2 6.49 2 12s4.49 10 10 10 10-4.49 10-10S17.51 2 12 2z"/></svg>
+                Dev → Production
+              </span>
+            </div>
+            <div class="inline-error">
+              <div class="inline-error-icon">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+              </div>
+              <div class="inline-error-text">Failed to load Releases data.</div>
+              <button class="btn-retry" onclick="return false;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+                Retry
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- NEW_FEATURE:END -->
+    <div class="page-bottom-pad"></div>
+  </div>
+</div>
+<!-- STATE:ERROR:END -->
+
+<div class="state-divider"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- STATE:LOADING:START -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="state-section state-loading">
+  <div class="state-label">
+    <span class="state-dot"></span>
+    Loading State — Pipeline Status Dashboard (Skeleton)
+  </div>
+
+  <header class="app-header">
+    <a href="#" class="header-brand" onclick="return false;">
+      <div class="header-brand-mark">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      </div>
+      Apex
+    </a>
+    <nav class="header-nav">
+      <a href="#" class="active" onclick="return false;">Home</a>
+      <a href="#" onclick="return false;">Calendar</a>
+      <a href="#" onclick="return false;">Planning</a>
+      <a href="#" onclick="return false;">Cloud Cost</a>
+      <a href="#" onclick="return false;">AI Cost</a>
+      <a href="#" onclick="return false;">Interview</a>
+      <a href="#" onclick="return false;">ADR</a>
+      <a href="#" onclick="return false;">My Work</a>
+      <a href="#" onclick="return false;">Standup</a>
+    </nav>
+    <div class="header-right">
+      <button class="header-icon-btn" aria-label="Notifications">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+        <span class="notif-badge">4</span>
+      </button>
+      <div class="avatar-btn" aria-label="User menu">JD</div>
+    </div>
+  </header>
+
+  <div class="page-content">
+    <div class="home-header">
+      <div class="home-logo">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      </div>
+      <div class="home-title">Apex</div>
+      <div class="home-subtitle">Build higher, faster.</div>
+      <div class="home-prompt-label">What would you like to work on?</div>
+      <div class="chat-input-area">
+        <textarea class="chat-input" placeholder="Let Apex know what you need..." rows="2"></textarea>
+        <div class="chat-input-footer">
+          <button class="chat-icon-btn" aria-label="Attach file">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5a2.5 2.5 0 015 0v10.5c0 .83-.67 1.5-1.5 1.5s-1.5-.67-1.5-1.5V6H9v9.5a2.5 2.5 0 005 0V5c0-2.21-1.79-4-4-4S6 2.79 6 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1z"/></svg>
+          </button>
+          <button class="chat-icon-btn" aria-label="Voice input">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 15c1.66 0 3-1.34 3-3V6c0-1.66-1.34-3-3-3S9 4.34 9 6v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V6zm6.91 6c-.49 0-.9.36-.98.85C16.52 15.2 14.47 17 12 17s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V21c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z"/></svg>
+          </button>
+          <button class="chat-send-btn" aria-label="Send message">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="chat-hint">Enter to send · Shift+Enter for new line</div>
+    </div>
+
+    <div style="display:flex; justify-content:center; margin-bottom:24px;">
+      <button class="history-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.95-2.05L6.7 18.3A8.94 8.94 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
+        History
+      </button>
+    </div>
+
+    <!-- NEW FEATURE: Loading/Skeleton State -->
+    <!-- NEW_FEATURE:START -->
+    <div class="new-feature-wrapper">
+      <span class="new-feature-label">NEW: Pipeline Status Dashboard</span>
+      <div style="padding: 8px 4px 4px;">
+        <div class="status-section-title">Project Status</div>
+
+        <div class="grid-row-1">
+          <!-- Incomplete Pipeline skeleton -->
+          <div class="skel-card" style="min-height: 320px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+              <div class="skeleton skel-line" style="width:160px;"></div>
+              <div class="skeleton skel-line" style="width:80px;"></div>
+            </div>
+            <div class="skeleton skel-line" style="width:100%;"></div>
+            <div class="skeleton skel-line" style="width:85%;"></div>
+            <div class="skeleton skel-line" style="width:92%;"></div>
+            <div class="skeleton skel-line" style="width:78%;"></div>
+            <div class="skeleton skel-line" style="width:100%;"></div>
+            <div class="skeleton skel-line" style="width:70%;"></div>
+            <div class="skeleton skel-line" style="width:88%;"></div>
+            <div class="skeleton skel-line" style="width:95%;"></div>
+            <div class="skeleton skel-line" style="width:60%;"></div>
+            <div class="skeleton skel-line" style="width:82%;"></div>
+            <div class="skeleton skel-line" style="width:75%;"></div>
+            <div class="skeleton skel-line" style="width:90%;"></div>
+          </div>
+
+          <!-- Artifact Cycle Time skeleton -->
+          <div class="skel-card">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+              <div class="skeleton skel-line" style="width:140px;"></div>
+              <div class="skeleton skel-line" style="width:70px;"></div>
+            </div>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px;">
+              <div style="background:var(--bg-secondary); border-radius:var(--radius-sm); padding:10px;">
+                <div class="skeleton skel-line" style="width:60%;"></div>
+                <div class="skeleton skel-line tall" style="width:50%;"></div>
+                <div class="skeleton skel-line" style="width:80%;"></div>
+              </div>
+              <div style="background:var(--bg-secondary); border-radius:var(--radius-sm); padding:10px;">
+                <div class="skeleton skel-line" style="width:60%;"></div>
+                <div class="skeleton skel-line tall" style="width:50%;"></div>
+                <div class="skeleton skel-line" style="width:80%;"></div>
+              </div>
+              <div style="background:var(--bg-secondary); border-radius:var(--radius-sm); padding:10px;">
+                <div class="skeleton skel-line" style="width:60%;"></div>
+                <div class="skeleton skel-line tall" style="width:50%;"></div>
+                <div class="skeleton skel-line" style="width:80%;"></div>
+              </div>
+              <div style="background:var(--bg-secondary); border-radius:var(--radius-sm); padding:10px;">
+                <div class="skeleton skel-line" style="width:60%;"></div>
+                <div class="skeleton skel-line tall" style="width:50%;"></div>
+                <div class="skeleton skel-line" style="width:80%;"></div>
+              </div>
+              <div style="grid-column:span 2; background:var(--bg-secondary); border-radius:var(--radius-sm); padding:10px;">
+                <div class="skeleton skel-line" style="width:60%;"></div>
+                <div class="skeleton skel-line tall" style="width:35%;"></div>
+                <div class="skeleton skel-line" style="width:70%;"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-row-2">
+          <!-- My Work skeleton -->
+          <div class="skel-card">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+              <div class="skeleton skel-line" style="width:80px;"></div>
+            </div>
+            <div style="display:flex; gap:12px;">
+              <div style="flex:1; display:flex; gap:8px;">
+                <div style="flex:1; background:var(--bg-secondary); border-radius:var(--radius-sm); padding:10px;">
+                  <div class="skeleton skel-line" style="width:40%; height:28px; margin-bottom:6px;"></div>
+                  <div class="skeleton skel-line" style="width:60%;"></div>
+                </div>
+                <div style="flex:1; background:var(--bg-secondary); border-radius:var(--radius-sm); padding:10px;">
+                  <div class="skeleton skel-line" style="width:40%; height:28px; margin-bottom:6px;"></div>
+                  <div class="skeleton skel-line" style="width:60%;"></div>
+                </div>
+              </div>
+              <div style="width:110px; background:var(--bg-secondary); border-radius:var(--radius-sm); padding:10px; display:flex; flex-direction:column; gap:6px; align-items:center;">
+                <div class="skeleton skel-line" style="width:50%; height:22px;"></div>
+                <div class="skeleton skel-line" style="width:70%;"></div>
+                <div class="skeleton skel-line" style="width:90%;"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Open Bugs skeleton -->
+          <div class="skel-card">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+              <div class="skeleton skel-line" style="width:130px;"></div>
+            </div>
+            <div class="skeleton skel-line medium" style="width:110px; border-radius:20px;"></div>
+            <div class="skeleton skel-line" style="width:100%;"></div>
+            <div class="skeleton skel-line" style="width:92%;"></div>
+            <div class="skeleton skel-line" style="width:85%;"></div>
+            <div class="skeleton skel-line" style="width:95%;"></div>
+            <div class="skeleton skel-line" style="width:78%;"></div>
+          </div>
+
+          <!-- Dev-to-Prod skeleton -->
+          <div class="skel-card" style="align-items:center; justify-content:center;">
+            <div style="display:flex; justify-content:space-between; width:100%; margin-bottom:4px;">
+              <div class="skeleton skel-line" style="width:120px;"></div>
+            </div>
+            <div style="display:flex; flex-direction:column; align-items:center; gap:10px; padding:12px 0; width:100%;">
+              <div class="skeleton skel-line" style="width:80px; height:44px; border-radius:var(--radius);"></div>
+              <div class="skeleton skel-line" style="width:100px;"></div>
+              <div class="skeleton skel-line" style="width:160px;"></div>
+              <div class="skeleton skel-line" style="width:80px;"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- NEW_FEATURE:END -->
+    <div class="page-bottom-pad"></div>
+  </div>
+</div>
+<!-- STATE:LOADING:END -->
+
+<script>
+  // Prevent all anchor clicks from navigating
+  document.querySelectorAll('a[href="#"]').forEach(function(a) {
+    a.addEventListener('click', function(e) { e.preventDefault(); });
+  });
+
+  // Prevent retry buttons from doing anything
+  document.querySelectorAll('.btn-retry').forEach(function(btn) {
+    btn.addEventListener('click', function(e) { e.preventDefault(); });
+  });
+
+  // Dev-to-prod card hover visual feedback only
+  document.querySelectorAll('.stat-card.clickable').forEach(function(card) {
+    card.addEventListener('click', function(e) { e.preventDefault(); });
+  });
+</script>
+</body>
+</html>
