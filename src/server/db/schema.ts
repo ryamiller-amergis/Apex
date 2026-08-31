@@ -42,6 +42,7 @@ import type { DesignPlanFeature, DesignPlanHistoryEntry } from '../../shared/typ
 import type { QuickSkillPill, QuickMcpPill, InterviewSkillOption, PrototypeEngine } from '../../shared/types/projectSettings';
 import type { ApprovalMode, OwnerApprovalStatus } from '../../shared/types/approvals';
 import type { MenuItemKey } from '../../shared/types/menuSettings';
+import type { ArtifactDoneEventType } from '../../shared/types/homeDashboard';
 import type { ProjectAccessRequestStatus } from '../../shared/types/platformAdmin';
 import type { FlagLifecycle, FlagRuleType, FlagAuditAction } from '../../shared/types/featureFlags';
 import type { WorkItemType } from '../../shared/types/featureRequest';
@@ -2632,4 +2633,24 @@ export const traceEventsRelations = relations(traceEvents, ({ one }) => ({
     fields: [traceEvents.actorUserId],
     references: [appUsers.oid],
   }),
+}));
+
+// ── Artifact done events (frozen cycle-time end instants) ─────────────────────
+
+// Insert-once per (artifactType, artifactId). No foreign key: artifactId points
+// at interviews, prds, test_cases, design_prototypes, or design_docs depending
+// on artifactType.
+export const artifactDoneEvents = pgTable('artifact_done_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  artifactType: text('artifact_type').$type<ArtifactDoneEventType>().notNull(),
+  artifactId: uuid('artifact_id').notNull(),
+  doneAt: timestamp('done_at', { withTimezone: true, mode: 'string' }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  artifactUniq: unique('artifact_done_events_artifact_type_artifact_id_key').on(t.artifactType, t.artifactId),
+  typeDoneAtIdx: index('idx_artifact_done_events_type_done_at').on(t.artifactType, t.doneAt),
+  artifactTypeCheck: check(
+    'artifact_done_events_artifact_type_check',
+    sql`${t.artifactType} IN ('interview', 'prd', 'test_case', 'design_prototype', 'design_doc')`,
+  ),
 }));

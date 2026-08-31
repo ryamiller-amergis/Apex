@@ -230,6 +230,29 @@ export class AzureDevOpsService {
   }
 
   /**
+   * Run a link WIQL query without discarding source/target pairs.
+   * Rollups use these edges to distinguish hierarchy children from Related or
+   * Duplicate links without issuing one hierarchy request per parent.
+   */
+  async queryWorkItemLinksByWiql(wiql: string): Promise<Array<{
+    sourceId: number;
+    targetId: number;
+  }>> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const result = await witApi.queryByWiql({ query: wiql }, { project: this.project });
+      return (result.workItemRelations ?? [])
+        .filter((relation) =>
+          typeof relation.source?.id === 'number'
+          && typeof relation.target?.id === 'number')
+        .map((relation) => ({
+          sourceId: relation.source!.id!,
+          targetId: relation.target!.id!,
+        }));
+    });
+  }
+
+  /**
    * Return revision history for a work item so callers can inspect field changes over time.
    */
   async getWorkItemRevisionHistory(workItemId: number, limit = 100): Promise<Array<{

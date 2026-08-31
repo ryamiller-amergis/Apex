@@ -81,6 +81,28 @@ describe('AzureDevOpsService', () => {
     });
   });
 
+  describe('queryWorkItemLinksByWiql', () => {
+    it('preserves source and target IDs and ignores incomplete relation rows', async () => {
+      mockWitApi.queryByWiql.mockResolvedValue({
+        workItemRelations: [
+          { source: { id: 10 }, target: { id: 101 } },
+          { source: { id: 20 }, target: { id: 102 } },
+          { source: { id: 30 } },
+        ],
+      });
+      const service = new AzureDevOpsService();
+
+      await expect(service.queryWorkItemLinksByWiql('SELECT links')).resolves.toEqual([
+        { sourceId: 10, targetId: 101 },
+        { sourceId: 20, targetId: 102 },
+      ]);
+      expect(mockWitApi.queryByWiql).toHaveBeenCalledWith(
+        { query: 'SELECT links' },
+        { project: 'TestProject' },
+      );
+    });
+  });
+
   describe('getWorkItems', () => {
     it('should fetch work items without date range', async () => {
       const service = new AzureDevOpsService();

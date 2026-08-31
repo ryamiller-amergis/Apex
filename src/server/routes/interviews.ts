@@ -36,6 +36,7 @@ import type {
   LinkCandidateType,
 } from '../../shared/types/interviewLinks';
 import { getActiveUsers } from '../services/rbacService';
+import { recordArtifactDoneEvent } from '../services/artifactDoneEventService';
 import {
   createPrd,
   createPrdAdoWorkItems,
@@ -2323,10 +2324,17 @@ router.post('/design-docs/:id/owner-approve', requirePermission('design-docs:rev
     await recordOwnerApproval(docId, 'design_doc', userId, status, comment);
 
     if (status === 'approved') {
+      const approvedAt = new Date().toISOString();
       await db.update(designDocsTable).set({
         status: 'approved',
-        updatedAt: new Date().toISOString(),
+        updatedAt: approvedAt,
       }).where(eq(designDocsTable.id, docId));
+
+      try {
+        await recordArtifactDoneEvent('design_doc', docId, approvedAt);
+      } catch (err) {
+        console.error(`[owner-approve] Failed to record design doc done event (docId=${docId})`, err);
+      }
     } else {
       await db.update(designDocsTable).set({
         status: 'revision_requested',
@@ -3186,10 +3194,17 @@ router.post('/prds/:prdId/owner-approve', requirePermission('prds:review'), asyn
     await recordOwnerApproval(prdId, 'prd', userId, status, comment);
 
     if (status === 'approved') {
+      const approvedAt = new Date().toISOString();
       await db.update(prdsTable).set({
         status: 'approved',
-        updatedAt: new Date().toISOString(),
+        updatedAt: approvedAt,
       }).where(eq(prdsTable.id, prdId));
+
+      try {
+        await recordArtifactDoneEvent('prd', prdId, approvedAt);
+      } catch (err) {
+        console.error(`[owner-approve] Failed to record PRD done event (prdId=${prdId})`, err);
+      }
 
       // Re-fetch so prototypeStageEnabled includes skill-option resolution / stale-false heal.
       const approvedPrd = await getPrd(prdId);
@@ -3293,10 +3308,17 @@ router.post('/prds/:prdId/design-prototypes/owner-approve', requirePermission('d
     await recordOwnerApproval(prototypeId, 'design_prototype', userId, status, comment);
 
     if (status === 'approved') {
+      const approvedAt = new Date().toISOString();
       await db.update(designPrototypesTable).set({
         status: 'approved',
-        updatedAt: new Date().toISOString(),
+        updatedAt: approvedAt,
       }).where(eq(designPrototypesTable.id, prototypeId));
+
+      try {
+        await recordArtifactDoneEvent('design_prototype', prototypeId, approvedAt);
+      } catch (err) {
+        console.error(`[owner-approve] Failed to record prototype done event (prototypeId=${prototypeId})`, err);
+      }
 
       triggerDesignDocForPrototype(prototypeId, proto.featureIndex).catch(err => {
         console.error(`[ownerApproval] triggerDesignDocForPrototype failed (prototypeId=${prototypeId})`, err);

@@ -44,6 +44,9 @@ jest.mock('../services/ownerApprovalService', () => ({
   isDocumentOwner: jest.fn(),
   recordOwnerApproval: jest.fn(),
 }));
+jest.mock('../services/artifactDoneEventService', () => ({
+  recordArtifactDoneEvent: jest.fn().mockResolvedValue(undefined),
+}));
 jest.mock('../utils/rbacHelpers', () => ({
   isAdminUser: jest.fn().mockResolvedValue(false),
 }));
