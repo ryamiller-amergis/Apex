@@ -17,7 +17,7 @@ import { PlanningTabs, type PlanningTab } from './components/PlanningTabs';
 import { ApexLoader } from './components/ApexLoader';
 import { ProjectSelector } from './components/ProjectSelector';
 import { AgentHome } from './components/AgentHome';
-import { ChatAgentPanel } from './components/ChatAgentPanel';
+import { ChatAgentPanel, type StartPanelChatOptions } from './components/ChatAgentPanel';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { ToastContainer } from './components/ToastContainer';
 import { useAppShell } from './hooks/useAppShell';
@@ -213,13 +213,6 @@ function App() {
   const planningTabSegment = location.pathname.startsWith('/planning')
     ? location.pathname.split('/')[2]
     : undefined;
-
-  // Close the slide-out panel when landing on the home view — the full-page
-  // AgentHome already provides the complete chat experience there.
-  // Adjust during render (same pattern as AppHeader) to avoid set-state-in-effect.
-  if (currentView === 'home' && chatOpen) {
-    setChatOpen(false);
-  }
 
   useEffect(() => {
     const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
@@ -463,8 +456,8 @@ function App() {
     [activeSkillConfig, skillRepos, selectedProject],
   );
 
-  const handleStartPanelChat = useCallback(async () => {
-    if (!can('chat:view')) return;
+  const handleStartPanelChat = useCallback(async (options?: StartPanelChatOptions) => {
+    if (!can('chat:view') || !can('chat:create')) return;
     setChatOpen(true);
     if (!panelRepo || startChat.isPending) return;
     setActiveThreadId(null);
@@ -475,15 +468,37 @@ function App() {
           repo: panelRepo.name,
           branch: panelRepo.defaultBranch ?? 'main',
           skillProvider: activeSkillConfig?.skillProvider ?? undefined,
-          model: DEFAULT_MODEL_ID,
+          model: options?.model ?? DEFAULT_MODEL_ID,
           skillSettingsId: selectedSkillSettingsId ?? undefined,
+          skillPath: options?.quickSkill?.skillPath,
+          pillLabel: options?.quickSkill?.label ?? options?.mcpPill?.label,
+          pillDescription: options?.quickSkill?.description ?? options?.mcpPill?.description,
+          pillBypassScopePolicy: options?.quickSkill?.bypassScopePolicy,
+          ...(options?.mcpPill ? { mcpPill: options.mcpPill } : {}),
         },
+        skipAutoKickoff: Boolean(options?.initialMessage),
       });
       setActiveThreadId(result.threadId);
+      if (options?.initialMessage) {
+        await fetch(`/api/chat/threads/${result.threadId}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            text: options.initialMessage,
+            model: options.model ?? DEFAULT_MODEL_ID,
+          }),
+        });
+      }
     } catch {
       // Error shown inside the panel
     }
   }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig]);
+
+  useEffect(() => {
+    if (currentView !== 'home' || !activeThreadId || !selectedProject) return;
+    sessionStorage.setItem(`agentHomeThreadId:${selectedProject}`, activeThreadId);
+  }, [activeThreadId, currentView, selectedProject]);
 
   if (isAuthenticated === null) return <div className="app-loading"><ApexLoader size={80} /></div>;
   if (!isAuthenticated) return <Login />;
@@ -772,7 +787,15 @@ function App() {
               <ErrorBoundary FallbackComponent={ViewErrorFallback}>
                 {/* Top-level split: demo component gated by "example-flag-demo" flag */}
                 <FeatureFlagDemo project={selectedProject} />
-                <AgentHome selectedProject={selectedProject} selectedSkillSettingsId={selectedSkillSettingsId} isAdmin={isSuperAdmin || isAdmin || (groups ?? []).includes('Manager') || (groups ?? []).includes('Product-Owner')} />
+                <AgentHome
+                  selectedProject={selectedProject}
+                  selectedSkillSettingsId={selectedSkillSettingsId}
+                  isAdmin={isSuperAdmin || isAdmin || (groups ?? []).includes('Manager') || (groups ?? []).includes('Product-Owner')}
+                  isChatOpen={chatOpen}
+                  canOpenChat={can('chat:view') && can('chat:create')}
+                  onOpenChatPanel={() => setChatOpen((open) => !open)}
+                  onRestoreThread={setActiveThreadId}
+                />
               </ErrorBoundary>
             </div>
           ) : currentView === 'home' ? (
@@ -1309,6 +1332,8 @@ function App() {
           canStartNewChat={!!panelRepo && !isLoadingSkillRepos && !startChat.isPending}
           isStartingNewChat={startChat.isPending}
           newChatError={startChat.error?.message}
+          launchedFromHome={currentView === 'home'}
+          selectedSkillSettingsId={selectedSkillSettingsId}
         />
       </NotificationWrapper>
       </DndProvider>

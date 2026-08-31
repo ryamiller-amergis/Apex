@@ -188,6 +188,120 @@
   flex: 1;
 }
 
+.quickPills,
+.recentThreads {
+  flex-shrink: 0;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-color-light);
+  background: var(--bg-primary);
+}
+
+.quickPills h3,
+.recentThreads h3 {
+  margin: 0 0 6px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.pillRow,
+.quickStarts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pillRow + h3 {
+  margin-top: 8px;
+}
+
+.quickPill,
+.seeAll,
+.recentThread {
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.quickPill {
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 12px;
+}
+
+.quickPill:hover,
+.quickPillSelected {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.quickPillSelected {
+  background: var(--bg-tertiary);
+}
+
+.recentHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.seeAll {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-color);
+  font-size: 11px;
+}
+
+.recentThread {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  border: 0;
+  border-top: 1px solid var(--border-color-light);
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+}
+
+.recentThread span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recentThread time,
+.recentThreads p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.connectionError {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 32px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.connectionError h3,
+.connectionError p {
+  margin: 0;
+}
+
 /* ── Empty / new thread pane ── */
 .emptyPane {
   flex: 1;

@@ -12,7 +12,9 @@ interface OpenBugsOnPbisTileProps {
 export const OpenBugsOnPbisTile: React.FC<OpenBugsOnPbisTileProps> = ({ result, onRetry }) => {
   if (!result) return null;
 
-  const hasError = result.status === 'error' || !result.data;
+  const data = result.data ?? result.lastKnownData ?? null;
+  const isStale = result.status === 'error' && Boolean(result.lastKnownData);
+  const hasError = !data;
 
   return (
     <article
@@ -22,10 +24,24 @@ export const OpenBugsOnPbisTile: React.FC<OpenBugsOnPbisTileProps> = ({ result, 
     >
       <header className={styles.header}>
         <h3 id="home-dashboard-bugs-title" className={styles.title}>Open Bugs on PBIs</h3>
-        {!hasError && result.data ? (
-          <span className={styles['bug-total']}>{result.data.totalOpenBugs} bugs total</span>
+        {!hasError && data ? (
+          <span className={styles['bug-total']}>{data.totalOpenBugs} bugs total</span>
         ) : null}
       </header>
+
+      {isStale && (
+        <div className={styles.stale} role="status">
+          <span>Last known data · refresh unavailable</span>
+          <button
+            type="button"
+            className={styles.retry}
+            onClick={onRetry}
+            {...{ 'data-testid': 'home-dashboard-bugs-retry' }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       {hasError ? (
         <div className={styles.error} role="alert">
@@ -40,7 +56,7 @@ export const OpenBugsOnPbisTile: React.FC<OpenBugsOnPbisTileProps> = ({ result, 
             Retry
           </button>
         </div>
-      ) : result.data?.rows.length === 0 ? (
+      ) : data?.rows.length === 0 ? (
         <div className={styles.empty}>
           <p>No open bugs on any PBIs.</p>
           <a
@@ -55,7 +71,7 @@ export const OpenBugsOnPbisTile: React.FC<OpenBugsOnPbisTileProps> = ({ result, 
       ) : (
         <>
           <ul className={`${styles.list} ${styles['bugs-list']}`}>
-            {result.data?.rows.slice(0, MAX_ROWS).map((row) => (
+            {data?.rows.slice(0, MAX_ROWS).map((row) => (
               <li key={row.pbiId} className={styles['bug-row']}>
                 <a
                   className={styles['row-link']}

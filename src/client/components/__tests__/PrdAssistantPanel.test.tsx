@@ -94,6 +94,7 @@ describe('Visibility', () => {
   it('renders the panel when open={true}', () => {
     renderPanel({ open: true, existingThreadId: 'thread-123' });
     expect(screen.getByText('Apex Assistant')).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: 'PRD assistant panel' })).toBeInTheDocument();
   });
 });
 

@@ -10,7 +10,9 @@ interface DevToProductionTileProps {
 export const DevToProductionTile: React.FC<DevToProductionTileProps> = ({ result, onRetry }) => {
   if (!result) return null;
 
-  const hasError = result.status === 'error' || !result.data;
+  const data = result.data ?? result.lastKnownData ?? null;
+  const isStale = result.status === 'error' && Boolean(result.lastKnownData);
+  const hasError = !data;
 
   if (hasError) {
     return (
@@ -38,20 +40,14 @@ export const DevToProductionTile: React.FC<DevToProductionTileProps> = ({ result
     );
   }
 
-  const data = result.data;
   if (!data) return null;
 
   const accessibleLabel = data.medianDays === null
     ? 'Developer to production: unavailable; no completed items in the last 90 days. View Releases'
     : `Developer to production: ${data.medianDays} days median in the last 90 days. View Releases`;
 
-  return (
-    <a
-      className={`${styles.card} ${styles['card-link']}`}
-      href="/planning/releases"
-      aria-label={accessibleLabel}
-      {...{ 'data-testid': 'home-dashboard-devprod-card' }}
-    >
+  const cardContent = (
+    <>
       <header className={styles.header}>
         <h3 className={styles.title}>Dev → Production</h3>
         <span className={styles.scope}>Last 90 days</span>
@@ -70,6 +66,46 @@ export const DevToProductionTile: React.FC<DevToProductionTileProps> = ({ result
         </span>
         <span className={styles['nav-hint']}>View Releases ›</span>
       </div>
+    </>
+  );
+
+  if (isStale) {
+    return (
+      <article
+        className={styles.card}
+        aria-label={accessibleLabel}
+        {...{ 'data-testid': 'home-dashboard-devprod-card' }}
+      >
+      <a
+        className={styles['stale-card-link']}
+        href="/planning/releases"
+        {...{ 'data-testid': 'home-dashboard-devprod-link' }}
+      >
+          {cardContent}
+        </a>
+        <div className={styles.stale} role="status">
+          <span>Last known data · refresh unavailable</span>
+          <button
+            type="button"
+            className={styles.retry}
+            onClick={onRetry}
+            {...{ 'data-testid': 'home-dashboard-devprod-retry' }}
+          >
+            Retry
+          </button>
+        </div>
+      </article>
+    );
+  }
+
+  return (
+    <a
+      className={`${styles.card} ${styles['card-link']}`}
+      href="/planning/releases"
+      aria-label={accessibleLabel}
+      {...{ 'data-testid': 'home-dashboard-devprod-card' }}
+    >
+      {cardContent}
     </a>
   );
 };

@@ -190,6 +190,19 @@ describe('OpenBugsOnPbisTile', () => {
     rerender(<OpenBugsOnPbisTile result={null} onRetry={retry} />);
     expect(screen.queryByTestId('home-dashboard-bugs-card')).not.toBeInTheDocument();
   });
+
+  it('PBI-004 AC-1 renders last-known bug data as stale with Retry', () => {
+    render(
+      <OpenBugsOnPbisTile
+        result={{ status: 'error', data: null, lastKnownData: bugsData, message: 'Azure DevOps unavailable' }}
+        onRetry={retry}
+      />,
+    );
+    expect(screen.getByText('24 bugs total')).toBeInTheDocument();
+    expect(screen.getByText(/Last known data/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('home-dashboard-bugs-retry'));
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('DevToProductionTile', () => {
@@ -206,6 +219,19 @@ describe('DevToProductionTile', () => {
     expect(retry).toHaveBeenCalledTimes(1);
     rerender(<DevToProductionTile result={null} onRetry={retry} />);
     expect(screen.queryByTestId('home-dashboard-devprod-card')).not.toBeInTheDocument();
+  });
+
+  it('PBI-005 AC-1 renders the last-known delivery median as stale with Retry', () => {
+    render(
+      <DevToProductionTile
+        result={{ status: 'error', data: null, lastKnownData: devProdData, message: 'Releases unavailable' }}
+        onRetry={retry}
+      />,
+    );
+    expect(screen.getByText('11.4')).toBeInTheDocument();
+    expect(screen.getByText(/Last known data/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('home-dashboard-devprod-retry'));
+    expect(retry).toHaveBeenCalledTimes(1);
   });
 });
 

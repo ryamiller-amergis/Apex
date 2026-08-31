@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
-import { AgentComposer } from './agentChat';
+import { AgentComposer, AgentPanelShell } from './agentChat';
 import styles from './PrdAssistantPanel.module.css';
 
 export interface PrdAssistantPanelProps {
@@ -191,23 +191,16 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
         </div>
       )}
 
-      <div className={styles.panel} style={{ width: panelWidth }}>
-        <div
-          className={`${styles.resizeHandle} ${isDragging ? styles.resizeHandleDragging : ''}`}
-          onMouseDown={handleResizeMouseDown}
-          role="separator"
-          aria-label="Resize panel"
-          aria-orientation="vertical"
-        />
-
-        <div className={styles.header}>
-          <div className={styles.headerLeft}>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-            </svg>
-            <span className={styles.title}>Apex Assistant</span>
-          </div>
-          <div className={styles.headerActions}>
+      <div {...{ 'data-testid': 'prd-assistant-panel' }}>
+        <AgentPanelShell
+          title="Apex Assistant"
+          ariaLabel="PRD assistant panel"
+          onClose={onClose}
+          closeAriaLabel="Close assistant"
+          closeTestId="prd-assistant-close-btn"
+          width={panelWidth}
+          onResizeMouseDown={handleResizeMouseDown}
+          actions={(
             <button
               className={styles.iconBtn}
               onClick={() => setShowNewConvConfirm(true)}
@@ -220,21 +213,29 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
                 <path d="M13 3v4H9" /><path d="M13 7A6 6 0 1 1 9.5 2.5" />
               </svg>
             </button>
-            <button
-              className={styles.closeBtn}
-              onClick={onClose}
-              type="button"
-              aria-label="Close assistant"
-              {...{ 'data-testid': 'prd-assistant-close-btn' }}
-            >
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-                <path d="M1 1l12 12M13 1L1 13" />
-              </svg>
-            </button>
-          </div>
-        </div>
-
-        <div className={styles.messages}>
+          )}
+          composer={(
+            <AgentComposer
+              className={styles.composerEmbed}
+              value={input}
+              onChange={setInput}
+              onSend={() => void handleSend()}
+              onCancel={isRunning ? () => void session.cancel() : undefined}
+              disabled={isRunning || isSending || isCreating || !threadId}
+              isRunning={isRunning}
+              isSending={isSending}
+              placeholder={
+                isCreating ? 'Starting assistant…' :
+                isRunning ? 'Agent is thinking…' :
+                'Ask about this PRD… (Enter to send)'
+              }
+              testIdPrefix="prd-assistant"
+              textareaRef={textareaRef}
+              {...{ 'data-testid': 'prd-assistant-composer' }}
+            />
+          )}
+        >
+          <div className={styles.messages}>
           <div className={styles.messageList}>
             {isCreating && (
               <div className={styles.initializing}>
@@ -280,26 +281,8 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
             )}
             <div ref={messagesEndRef} />
           </div>
-        </div>
-
-        <AgentComposer
-          className={styles.composerEmbed}
-          value={input}
-          onChange={setInput}
-          onSend={() => void handleSend()}
-          onCancel={isRunning ? () => void session.cancel() : undefined}
-          disabled={isRunning || isSending || isCreating || !threadId}
-          isRunning={isRunning}
-          isSending={isSending}
-          placeholder={
-            isCreating ? 'Starting assistant…' :
-            isRunning ? 'Agent is thinking…' :
-            'Ask about this PRD… (Enter to send)'
-          }
-          testIdPrefix="prd-assistant"
-          textareaRef={textareaRef}
-          {...{ 'data-testid': 'prd-assistant-composer' }}
-        />
+          </div>
+        </AgentPanelShell>
       </div>
     </>
   );

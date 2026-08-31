@@ -3,11 +3,11 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import {
-  useCloseThread,
+  useChatThreadList,
   useSkillList,
 } from '../hooks/useChatThreads';
 import { DEFAULT_MODEL_ID, modelBadge } from '../config/models';
-import { useAvailableModels, useGlobalDefaultModel } from '../hooks/useProjectSkillConfig';
+import { useAvailableModels, useGlobalDefaultModel, useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
 import { useChatAttachments } from '../hooks/useChatAttachments';
 import type {
   ChatAttachment,
@@ -16,9 +16,10 @@ import type {
   SelectChatThreadHandler,
   SelectChatThreadOptions,
 } from '../../shared/types/chat';
+import type { QuickMcpPill, QuickSkillPill } from '../../shared/types/projectSettings';
 import { PRDPreviewDrawer } from './PRDPreviewDrawer';
 import { ThreadHistorySidebar } from './ThreadHistorySidebar';
-import { AgentComposer } from './agentChat';
+import { AgentComposer, AgentPanelShell } from './agentChat';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { useFocusChatMessage } from '../hooks/useFocusChatMessage';
@@ -292,12 +293,21 @@ interface ChatAgentPanelProps {
   thread: ChatThread | null;
   isOpen: boolean;
   onClose: () => void;
-  onNewChat: () => void | Promise<void>;
+  onNewChat: (options?: StartPanelChatOptions) => void | Promise<void>;
   onSelectThread?: SelectChatThreadHandler;
   canStartNewChat?: boolean;
   isStartingNewChat?: boolean;
   newChatError?: string;
   selectedProject?: string;
+  selectedSkillSettingsId?: string | null;
+  launchedFromHome?: boolean;
+}
+
+export interface StartPanelChatOptions {
+  model?: string;
+  quickSkill?: QuickSkillPill;
+  mcpPill?: QuickMcpPill;
+  initialMessage?: string;
 }
 
 export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
@@ -310,6 +320,8 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   isStartingNewChat = false,
   newChatError,
   selectedProject,
+  selectedSkillSettingsId,
+  launchedFromHome = false,
 }) => {
   const [input, setInput] = useState('');
   const [showHistory, setShowHistory] = useState(false);
@@ -321,6 +333,8 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   const [selectedModel, setSelectedModel] = useState<string>(
     thread?.kickoff.model ?? DEFAULT_MODEL_ID,
   );
+  const [selectedQuickSkill, setSelectedQuickSkill] = useState<QuickSkillPill | null>(null);
+  const [selectedMcpPill, setSelectedMcpPill] = useState<QuickMcpPill | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -351,10 +365,16 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   });
   const { messages, streamingText, isConnected, prdReady, isRunning, status, progressLabel, showTypingIndicator } = session;
 
-  const closeThread = useCloseThread();
-
   const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
   const { data: globalDefaultModel } = useGlobalDefaultModel();
+  const { data: skillConfig } = useProjectSkillConfig(
+    launchedFromHome ? selectedProject ?? null : null,
+    selectedSkillSettingsId,
+  );
+  const { data: recentThreads = [] } = useChatThreadList(
+    3,
+    launchedFromHome ? selectedProject : null,
+  );
 
   // Skills for the current thread (used by the / picker)
   const { data: threadSkills = [] } = useSkillList(
@@ -532,8 +552,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     }
   };
 
-  const handleClose = async () => {
-    if (thread) await closeThread.mutateAsync(thread.id).catch(() => {});
+  const handleClose = () => {
     onClose();
   };
 
@@ -557,38 +576,35 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     : visibleMessages.length === 0 ? 'Starting skill…'
     : 'Ready';
 
+  const quickSkillPills = skillConfig?.quickSkillPills ?? [];
+  const quickMcpPills = skillConfig?.quickMcpPills ?? [];
+
+  const startFromEmptyComposer = async () => {
+    const message = input.trim();
+    if (!message && !selectedQuickSkill && !selectedMcpPill) return;
+    await onNewChat({
+      model: selectedModel,
+      quickSkill: selectedQuickSkill ?? undefined,
+      mcpPill: selectedMcpPill ?? undefined,
+      initialMessage: message || undefined,
+    });
+    setInput('');
+    setSelectedQuickSkill(null);
+    setSelectedMcpPill(null);
+  };
+
   if (!isOpen) return null;
 
   return (
-    <div
-      className={styles.panel}
-      style={{ width: panelWidth }}
-      role="complementary"
-      aria-label="Agent chat panel"
-    >
-      {/* Resize handle */}
-      {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions -- drag resize */}
-      <div className={styles.resizeHandle} onMouseDown={onResizeMouseDown} title="Drag to resize" />
-
-      {/* Header */}
-      <div className={styles.header}>
-        <div className={styles.headerLeft}>
-          <div className={styles.headerIcon}>AI</div>
-          <div>
-            <div className={styles.headerTitle}>
-              {thread ? `${thread.kickoff.repo} · Agent Chat` : 'Agent Chat'}
-            </div>
-            {thread && (
-              <div className={styles.headerMeta}>
-                {thread.kickoff.skillPath
-                  ? thread.kickoff.skillPath.split('/').pop()?.replace('SKILL.md', '') ?? 'skill'
-                  : 'free chat'}
-                {' · '}{thread.kickoff.project}
-              </div>
-            )}
-          </div>
-        </div>
-        <div className={styles.headerActions}>
+    <AgentPanelShell
+      title="Agent Chat"
+      ariaLabel="Agent chat panel"
+      onClose={handleClose}
+      closeTestId="chat-agent-close-btn"
+      width={panelWidth}
+      onResizeMouseDown={onResizeMouseDown}
+      actions={(
+        <>
           {onSelectThread && (
             <button
               className={styles.iconBtn}
@@ -601,32 +617,96 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
           )}
           <button
             className={styles.iconBtn}
-            onClick={onNewChat}
+            onClick={() => { void onNewChat(); }}
             title="New chat"
             disabled={!canStartNewChat || isStartingNewChat || isRunning}
             {...{ 'data-testid': 'chat-agent-new-chat-btn' }}
           >
             {isStartingNewChat ? 'Starting…' : '+ New'}
           </button>
-          <button
-            className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
-            onClick={handleClose}
-            title="Close panel"
-            {...{ 'data-testid': 'chat-agent-close-btn' }}
-          >
-            ✕
-          </button>
-        </div>
-      </div>
-
-      {/* Status bar */}
-      {thread && (
+        </>
+      )}
+      status={thread ? (
         <div className={styles.statusBar}>
           <span className={`${styles.statusDot} ${statusDotClass}`} />
           <span className={styles.statusText}>{statusLabel}</span>
-          <span className={styles.connBadge}>{isConnected ? '● live' : '○ reconnecting'}</span>
+          <span className={styles.connBadge}>{isConnected ? '● live' : '○ Disconnected'}</span>
         </div>
-      )}
+      ) : undefined}
+      before={launchedFromHome ? (
+        <>
+          <section className={styles.quickPills} aria-label="Home chat shortcuts">
+            {quickSkillPills.length > 0 && <h3>Skills</h3>}
+            <div className={styles.pillRow}>
+              {quickSkillPills.map((pill) => (
+                <button
+                  key={pill.skillPath}
+                  type="button"
+                  className={`${styles.quickPill} ${selectedQuickSkill?.skillPath === pill.skillPath ? styles.quickPillSelected : ''}`}
+                  onClick={() => {
+                    const selected = selectedQuickSkill?.skillPath === pill.skillPath ? null : pill;
+                    setSelectedQuickSkill(selected);
+                    setSelectedMcpPill(null);
+                    setSelectedModel(selected?.model ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID);
+                  }}
+                  {...{ 'data-testid': `chat-agent-skill-pill-${pill.skillPath}` }}
+                >
+                  {pill.label}
+                </button>
+              ))}
+            </div>
+            {quickMcpPills.length > 0 && <h3>MCP Servers</h3>}
+            <div className={styles.pillRow}>
+              {quickMcpPills.map((pill) => (
+                <button
+                  key={pill.mcpServerName}
+                  type="button"
+                  className={`${styles.quickPill} ${selectedMcpPill?.mcpServerName === pill.mcpServerName ? styles.quickPillSelected : ''}`}
+                  onClick={() => {
+                    const selected = selectedMcpPill?.mcpServerName === pill.mcpServerName ? null : pill;
+                    setSelectedMcpPill(selected);
+                    setSelectedQuickSkill(null);
+                    setSelectedModel(selected?.model ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID);
+                  }}
+                  {...{ 'data-testid': `chat-agent-mcp-pill-${pill.mcpServerName}` }}
+                >
+                  {pill.label}
+                </button>
+              ))}
+            </div>
+          </section>
+          <section className={styles.recentThreads} aria-label="Recent Threads">
+            <div className={styles.recentHeader}>
+              <h3>Recent Threads</h3>
+              {onSelectThread && (
+                <button
+                  type="button"
+                  className={styles.seeAll}
+                  onClick={() => setShowHistory(true)}
+                  {...{ 'data-testid': 'chat-agent-recent-see-all' }}
+                >
+                  See all
+                </button>
+              )}
+            </div>
+            {recentThreads.length === 0 ? (
+              <p>No threads yet.</p>
+            ) : recentThreads.slice(0, 3).map((recent) => (
+              <button
+                key={recent.id}
+                type="button"
+                className={styles.recentThread}
+                onClick={() => handleSelectThreadFromHistory(recent.id)}
+                {...{ 'data-testid': `chat-agent-recent-thread-${recent.id}` }}
+              >
+                <span>{recent.title}</span>
+                <time dateTime={recent.lastActivityAt}>{new Date(recent.lastActivityAt).toLocaleDateString()}</time>
+              </button>
+            ))}
+          </section>
+        </>
+      ) : undefined}
+    >
 
       {showHistory && onSelectThread ? (
         <ThreadHistorySidebar
@@ -638,19 +718,69 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
           className={styles.historySidebarInPanel}
         />
       ) : !thread ? (
-        <div className={styles.emptyPane}>
+        <>
+          <div className={styles.emptyPane}>
           <span className={styles.emptyIcon}>AI</span>
-          <h3 className={styles.emptyTitle}>No active chat</h3>
-          <p className={styles.emptyHint}>Start a free-form session in this project's default repo. Type <kbd className={styles.kbdHint}>/</kbd> in chat to invoke a skill.</p>
+          <h3 className={styles.emptyTitle}>No conversation yet</h3>
+          <p className={styles.emptyHint}>Select a skill above or type your first message to start a new thread with Apex.</p>
           {newChatError && <p className={styles.emptyError}>{newChatError}</p>}
-          <button
-            className={styles.btnPrimary}
-            onClick={onNewChat}
+          <div className={styles.quickStarts}>
+            {['Write a PRD', 'Review my code', 'Plan a sprint'].map((label) => (
+              <button
+                key={label}
+                type="button"
+                className={styles.quickPill}
+                onClick={() => setInput(label)}
+                {...{ 'data-testid': `chat-agent-quick-start-${label.toLowerCase().replaceAll(' ', '-')}` }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          </div>
+          <AgentComposer
+            className={styles.composerEmbed}
+            value={input}
+            onChange={setInput}
+            onSend={() => { void startFromEmptyComposer(); }}
             disabled={!canStartNewChat || isStartingNewChat}
-          >
-            {isStartingNewChat ? 'Starting…' : 'Start free chat'}
-          </button>
-        </div>
+            isSending={isStartingNewChat}
+            canSend={Boolean(input.trim() || selectedQuickSkill || selectedMcpPill)}
+            placeholder="Start a new conversation…"
+            testIdPrefix="chat-agent"
+            model={selectedModel}
+            models={availableModels}
+            modelsLoading={modelsLoading}
+            onModelChange={setSelectedModel}
+            {...{ 'data-testid': 'chat-agent-composer' }}
+          />
+        </>
+      ) : !isConnected ? (
+        <>
+          <div className={styles.connectionError} role="alert">
+            <span className={styles.emptyIcon}>!</span>
+            <h3>Unable to connect</h3>
+            <p>The chat session could not be established. Check your connection and retry.</p>
+            <button
+              type="button"
+              className={styles.btnPrimary}
+              onClick={() => { void session.retryLast(); }}
+              {...{ 'data-testid': 'chat-agent-retry-connection' }}
+            >
+              Retry Connection
+            </button>
+          </div>
+          <AgentComposer
+            className={styles.composerEmbed}
+            value={input}
+            onChange={setInput}
+            onSend={() => undefined}
+            disabled
+            placeholder="Reconnecting…"
+            testIdPrefix="chat-agent"
+            {...{ 'data-testid': 'chat-agent-composer' }}
+          />
+        </>
       ) : (
         <>
           <div className={styles.messages}>
@@ -683,6 +813,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                         onClick={() => doSend(lastUserText)}
                         disabled={isRunning}
                         type="button"
+                        {...{ 'data-testid': 'chat-agent-message-retry-btn' }}
                       >
                         ↺ Try again
                       </button>
@@ -851,6 +982,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
           />
 
           {showPrdPreview && (
+            // data-testid-exempt — PRDPreviewDrawer owns its interactive test ids
             <PRDPreviewDrawer
               threadId={thread.id}
               title={`${thread.kickoff.repo} PRD`}
@@ -859,6 +991,6 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
           )}
         </>
       )}
-    </div>
+    </AgentPanelShell>
   );
 };

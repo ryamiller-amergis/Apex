@@ -32,7 +32,7 @@ import {
 } from '../hooks/useInterviews';
 import { ProposedDesignDocChangesReview } from './ProposedDesignDocChangesReview';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
-import { AgentComposer } from './agentChat';
+import { AgentComposer, AgentPanelShell } from './agentChat';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
 import { ReviewReasonModal } from './ReviewReasonModal';
@@ -494,6 +494,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
         role="dialog"
         aria-modal="true"
         aria-labelledby="new-conv-confirm-title"
+        {...{ 'data-testid': 'design-doc-assistant-new-confirm-dialog' }}
       >
         <div className={styles.confirmCard}>
           <div className={styles.confirmIconWrap} aria-hidden="true">
@@ -504,7 +505,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
           <h2 className={styles.confirmTitle} id="new-conv-confirm-title">Start new conversation?</h2>
           <p className={styles.confirmBody}>The current thread will be cleared and a fresh session with Apex will begin.</p>
           <div className={styles.confirmActions}>
-            <button className={styles.confirmBtnCancel} onClick={() => setShowNewConvConfirm(false)} type="button">Cancel</button>
+            <button className={styles.confirmBtnCancel} onClick={() => setShowNewConvConfirm(false)} type="button" {...{ 'data-testid': 'design-doc-assistant-new-confirm-cancel' }}>Cancel</button>
             <button
               className={styles.confirmBtnConfirm}
               onClick={async () => {
@@ -531,6 +532,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
                 }
               }}
               type="button"
+              {...{ 'data-testid': 'design-doc-assistant-new-confirm-start' }}
             >
               Start new
             </button>
@@ -538,43 +540,54 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
         </div>
       </div>
     )}
-    <div className={styles.assistantPanel} style={{ width: panelWidth }}>
-      <div
-        className={`${styles.assistantResizeHandle} ${isDragging ? styles.assistantResizeHandleDragging : ''}`}
-        onMouseDown={handleResizeMouseDown}
-        role="separator"
-        aria-label="Resize panel"
-        aria-orientation="vertical"
-      />
-      <div className={styles.assistantPanelHeader}>
-        <div className={styles.assistantPanelHeaderLeft}>
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-          </svg>
-          <span className={styles.assistantPanelTitle}>Apex Assistant</span>
-        </div>
-        <div className={styles.assistantPanelHeaderActions}>
-          {!readOnly && canCreateThread && (
+    <div {...{ 'data-testid': 'design-doc-assistant-panel' }}>
+      <AgentPanelShell
+        title="Apex Assistant"
+        ariaLabel="Design document assistant panel"
+        onClose={onClose}
+        closeAriaLabel="Close assistant"
+        closeTestId="design-doc-assistant-close-btn"
+        width={panelWidth}
+        onResizeMouseDown={handleResizeMouseDown}
+        actions={!readOnly && canCreateThread ? (
           <button
             className={styles.assistantPanelIconBtn}
             onClick={() => setShowNewConvConfirm(true)}
             type="button"
             title="New conversation"
             aria-label="New conversation"
+            {...{ 'data-testid': 'design-doc-assistant-new-btn' }}
           >
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M13 3v4H9" /><path d="M13 7A6 6 0 1 1 9.5 2.5" />
             </svg>
           </button>
-          )}
-          <button className={styles.assistantPanelClose} onClick={onClose} type="button" aria-label="Close assistant">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-              <path d="M1 1l12 12M13 1L1 13" />
-            </svg>
-          </button>
-        </div>
-      </div>
-
+        ) : undefined}
+        composer={!readOnly ? (
+          <AgentComposer
+            className={styles.composerEmbed}
+            value={input}
+            onChange={setInput}
+            onSend={() => void handleSend()}
+            onCancel={isRunning ? () => void session.cancel() : undefined}
+            disabled={isRunning || isSending || isCreating || !threadId}
+            isRunning={isRunning}
+            isSending={isSending}
+            placeholder={
+              isCreating ? 'Starting assistant…' :
+              isRunning ? 'Agent is thinking…' :
+              'Ask about this design doc… (Enter to send)'
+            }
+            testIdPrefix="design-doc-assistant"
+            {...{ 'data-testid': 'design-doc-assistant-composer' }}
+            textareaRef={textareaRef}
+          />
+        ) : (
+          <div className={styles.qaMessageBubbleSystem} style={{ margin: '0 12px 12px' }}>
+            Assistant is read-only — you can view the conversation but cannot send messages.
+          </div>
+        )}
+      >
       <div className={styles.assistantMessages}>
         <div className={styles.assistantMessageList}>
           {isCreating && (
@@ -622,31 +635,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
           <div ref={messagesEndRef} />
         </div>
       </div>
-
-      {!readOnly ? (
-        <AgentComposer
-          className={styles.composerEmbed}
-          value={input}
-          onChange={setInput}
-          onSend={() => void handleSend()}
-          onCancel={isRunning ? () => void session.cancel() : undefined}
-          disabled={isRunning || isSending || isCreating || !threadId}
-          isRunning={isRunning}
-          isSending={isSending}
-          placeholder={
-            isCreating ? 'Starting assistant…' :
-            isRunning ? 'Agent is thinking…' :
-            'Ask about this design doc… (Enter to send)'
-          }
-          testIdPrefix="design-doc-assistant"
-          {...{ 'data-testid': 'design-doc-assistant-composer' }}
-          textareaRef={textareaRef}
-        />
-      ) : (
-        <div className={styles.qaMessageBubbleSystem} style={{ margin: '0 12px 12px' }}>
-          Assistant is read-only — you can view the conversation but cannot send messages.
-        </div>
-      )}
+      </AgentPanelShell>
     </div>
     </>
   );

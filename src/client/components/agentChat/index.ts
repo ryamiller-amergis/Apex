@@ -1,6 +1,7 @@
 export { AgentMessage } from './AgentMessage';
 export { AgentTranscript } from './AgentTranscript';
 export { AgentComposer } from './AgentComposer';
+export { AgentPanelShell } from './AgentPanelShell';
 export { AgentTypingIndicator } from './AgentTypingIndicator';
 export { AgentPreparationState } from './AgentPreparationState';
 export { AgentRetryBanner } from './AgentRetryBanner';

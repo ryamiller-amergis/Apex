@@ -8,6 +8,47 @@
   background: var(--bg-primary);
 }
 
+.dashboardPage {
+  position: relative;
+  min-height: 100%;
+  overflow-y: auto;
+  padding: 24px;
+  background: var(--bg-primary);
+}
+
+.rightEdgeToggle {
+  position: fixed;
+  top: 50%;
+  right: 0;
+  z-index: 850;
+  display: flex;
+  min-width: 44px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 8px 0 0 8px;
+  background: var(--accent-color);
+  box-shadow: var(--shadow-md);
+  color: var(--on-accent);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.rightEdgeToggle:hover,
+.rightEdgeToggle:focus-visible {
+  padding-right: 12px;
+  background: var(--accent-hover);
+}
+
+.toggleLabel {
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .mainCol {
   display: flex;
   flex-direction: column;
