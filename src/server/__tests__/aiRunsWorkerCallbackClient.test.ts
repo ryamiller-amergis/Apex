@@ -78,4 +78,88 @@ describe('aiRunsWorker callback client', () => {
       kind: 'heartbeat',
     })).rejects.toBeInstanceOf(AiRunCallbackError);
   });
+
+  it('retries ingest once on 401 AI_RUNNER_UNAUTHORIZED with a refreshed token', async () => {
+    const getToken = jest.fn()
+      .mockResolvedValueOnce('stale-jwt')
+      .mockResolvedValueOnce('fresh-jwt');
+    const fetchImpl = jest.fn()
+      .mockResolvedValueOnce(response(401, { code: 'AI_RUNNER_UNAUTHORIZED' }))
+      .mockResolvedValueOnce(response(200, { accepted: true }));
+    const client = createAiRunsCallbackClient({
+      callbackBaseUrl: 'https://apex.example',
+      getToken,
+      fetchImpl: fetchImpl as never,
+    });
+
+    await expect(client.postIngest('project-1', 'run-1', {
+      dispatchMessageId: 'dispatch-current',
+      kind: 'heartbeat',
+    })).resolves.toEqual({ accepted: true });
+
+    expect(getToken).toHaveBeenNthCalledWith(1, undefined);
+    expect(getToken).toHaveBeenNthCalledWith(2, { forceRefresh: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      1,
+      expect.any(String),
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer stale-jwt' }),
+      }),
+    );
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      2,
+      expect.any(String),
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer fresh-jwt' }),
+      }),
+    );
+  });
+
+  it('throws AiRunCallbackError when the 401 retry also returns AI_RUNNER_UNAUTHORIZED', async () => {
+    const getToken = jest.fn()
+      .mockResolvedValueOnce('stale-jwt')
+      .mockResolvedValueOnce('fresh-jwt');
+    const fetchImpl = jest.fn().mockResolvedValue(
+      response(401, { code: 'AI_RUNNER_UNAUTHORIZED' }),
+    );
+    const client = createAiRunsCallbackClient({
+      callbackBaseUrl: 'https://apex.example',
+      getToken,
+      fetchImpl: fetchImpl as never,
+    });
+
+    await expect(client.postIngest('project-1', 'run-1', {
+      dispatchMessageId: 'dispatch-current',
+      kind: 'heartbeat',
+    })).rejects.toMatchObject({
+      name: 'AiRunCallbackError',
+      status: 401,
+      code: 'AI_RUNNER_UNAUTHORIZED',
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry 403 AI_RUNNER_FORBIDDEN', async () => {
+    const getToken = jest.fn().mockResolvedValue('token');
+    const fetchImpl = jest.fn().mockResolvedValue(response(403, {
+      code: 'AI_RUNNER_FORBIDDEN',
+    }));
+    const client = createAiRunsCallbackClient({
+      callbackBaseUrl: 'https://apex.example',
+      getToken,
+      fetchImpl: fetchImpl as never,
+    });
+
+    await expect(client.postIngest('project-1', 'run-1', {
+      dispatchMessageId: 'dispatch-current',
+      kind: 'heartbeat',
+    })).rejects.toMatchObject({
+      name: 'AiRunCallbackError',
+      status: 403,
+      code: 'AI_RUNNER_FORBIDDEN',
+    });
+    expect(getToken).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
 });

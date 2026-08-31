@@ -48,15 +48,12 @@ jest.mock('../services/projectSettingsService', () => {
       return pool.map((a: any) => a.userId);
     }),
     getApproverPoolForProject: jest.fn().mockResolvedValue({ individuals: [], groups: [] }),
+    getApprovalModeForProject: jest.fn().mockResolvedValue('any_one'),
   };
 });
 
 jest.mock('../services/notificationService', () => ({
   createNotification: jest.fn().mockResolvedValue({}),
-}));
-
-jest.mock('../services/groupService', () => ({
-  listGroupsWithMembers: jest.fn().mockResolvedValue([]),
 }));
 
 import {
@@ -66,23 +63,28 @@ import {
   isApprovalComplete,
   isAssignedApprover,
   getAvailableApprovers,
+  getAvailableApproverPool,
   propagateDesignDocApprovers,
   reassignApprovers,
   notifyApproversDocumentReady,
 } from '../services/documentApprovalService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
-const { getApproversForDocumentByProject: mockGetApproversForDocument } = jest.requireMock(
-  '../services/projectSettingsService',
-) as { getApproversForDocumentByProject: jest.Mock };
+const {
+  getApproversForDocumentByProject: mockGetApproversForDocument,
+  getApproverUserIdsForProject: mockGetApproverUserIdsForProject,
+  getApproverPoolForProject: mockGetApproverPoolForProject,
+  getApprovalModeForProject: mockGetApprovalModeForProject,
+} = jest.requireMock('../services/projectSettingsService') as {
+  getApproversForDocumentByProject: jest.Mock;
+  getApproverUserIdsForProject: jest.Mock;
+  getApproverPoolForProject: jest.Mock;
+  getApprovalModeForProject: jest.Mock;
+};
 
 const { createNotification: mockCreateNotification } = jest.requireMock(
   '../services/notificationService',
 ) as { createNotification: jest.Mock };
-const { listGroupsWithMembers: mockListGroupsWithMembers } = jest.requireMock(
-  '../services/groupService',
-) as { listGroupsWithMembers: jest.Mock };
-
 // ── Helpers ─────────────────────────────────────────────────────────────────────
 
 /** Builds a mock select chain for getAssignments: select → from → innerJoin → where */
@@ -349,15 +351,56 @@ describe('recordApproverResponse', () => {
 // ── isApprovalComplete ──────────────────────────────────────────────────────────
 
 describe('isApprovalComplete', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockDb.select.mockReset();
+    mockGetApprovalModeForProject.mockResolvedValue('any_one');
+  });
+
+  it('TBI-001 DoD-1 resolves the mode through the per-module accessor for the document type', async () => {
+    mockGetApprovalModeForProject.mockResolvedValue('all_required');
+    mockDb.select.mockReturnValueOnce(makeAssignmentSelectChain([
+      makeAssignmentRow({ id: 'a1', documentType: 'design_doc', status: 'approved' }),
+      makeAssignmentRow({ id: 'a2', documentType: 'design_doc', approverUserId: 'u2', status: 'pending' }),
+    ]));
+
+    const result = await isApprovalComplete('dd-1', 'design_doc', 'proj');
+
+    expect(mockGetApprovalModeForProject).toHaveBeenCalledWith('proj', 'design_doc');
+    expect(result).toEqual({ complete: false, mode: 'all_required' });
+  });
+
+  it('PBI-002 AC-0 / VT-05 a design_doc set to any_one does not relax an all_required prd', async () => {
+    const modesByModule: Record<string, string> = {
+      prd: 'all_required',
+      design_doc: 'any_one',
+    };
+    mockGetApprovalModeForProject.mockImplementation(
+      async (_project: string, documentType: string) => modesByModule[documentType],
+    );
+
+    mockDb.select.mockReturnValueOnce(makeAssignmentSelectChain([
+      makeAssignmentRow({ id: 'a1', status: 'approved' }),
+      makeAssignmentRow({ id: 'a2', approverUserId: 'u2', status: 'pending' }),
+    ]));
+    const prdResult = await isApprovalComplete('prd-1', 'prd', 'proj');
+
+    mockDb.select.mockReturnValueOnce(makeAssignmentSelectChain([
+      makeAssignmentRow({ id: 'b1', documentType: 'design_doc', status: 'approved' }),
+      makeAssignmentRow({ id: 'b2', documentType: 'design_doc', approverUserId: 'u2', status: 'pending' }),
+    ]));
+    const designDocResult = await isApprovalComplete('dd-1', 'design_doc', 'proj');
+
+    expect(prdResult).toEqual({ complete: false, mode: 'all_required' });
+    expect(designDocResult).toEqual({ complete: true, mode: 'any_one' });
+  });
 
   it('returns complete=true for any_one mode when at least one approved', async () => {
-    mockDb.select
-      .mockReturnValueOnce(makeLimitSelectChain([{ approvalMode: 'any_one' }]))
-      .mockReturnValueOnce(makeAssignmentSelectChain([
-        makeAssignmentRow({ id: 'a1', status: 'approved' }),
-        makeAssignmentRow({ id: 'a2', approverUserId: 'u2', status: 'pending' }),
-      ]));
+    mockGetApprovalModeForProject.mockResolvedValue('any_one');
+    mockDb.select.mockReturnValueOnce(makeAssignmentSelectChain([
+      makeAssignmentRow({ id: 'a1', status: 'approved' }),
+      makeAssignmentRow({ id: 'a2', approverUserId: 'u2', status: 'pending' }),
+    ]));
 
     const result = await isApprovalComplete('prd-1', 'prd', 'proj');
 
@@ -365,11 +408,10 @@ describe('isApprovalComplete', () => {
   });
 
   it('returns complete=false for any_one mode when none approved', async () => {
-    mockDb.select
-      .mockReturnValueOnce(makeLimitSelectChain([{ approvalMode: 'any_one' }]))
-      .mockReturnValueOnce(makeAssignmentSelectChain([
-        makeAssignmentRow({ status: 'pending' }),
-      ]));
+    mockGetApprovalModeForProject.mockResolvedValue('any_one');
+    mockDb.select.mockReturnValueOnce(makeAssignmentSelectChain([
+      makeAssignmentRow({ status: 'pending' }),
+    ]));
 
     const result = await isApprovalComplete('prd-1', 'prd', 'proj');
 
@@ -377,12 +419,11 @@ describe('isApprovalComplete', () => {
   });
 
   it('returns complete=true for all_required when all approved', async () => {
-    mockDb.select
-      .mockReturnValueOnce(makeLimitSelectChain([{ approvalMode: 'all_required' }]))
-      .mockReturnValueOnce(makeAssignmentSelectChain([
-        makeAssignmentRow({ id: 'a1', status: 'approved' }),
-        makeAssignmentRow({ id: 'a2', approverUserId: 'u2', status: 'approved' }),
-      ]));
+    mockGetApprovalModeForProject.mockResolvedValue('all_required');
+    mockDb.select.mockReturnValueOnce(makeAssignmentSelectChain([
+      makeAssignmentRow({ id: 'a1', status: 'approved' }),
+      makeAssignmentRow({ id: 'a2', approverUserId: 'u2', status: 'approved' }),
+    ]));
 
     const result = await isApprovalComplete('prd-1', 'prd', 'proj');
 
@@ -390,12 +431,11 @@ describe('isApprovalComplete', () => {
   });
 
   it('returns complete=false for all_required when some pending', async () => {
-    mockDb.select
-      .mockReturnValueOnce(makeLimitSelectChain([{ approvalMode: 'all_required' }]))
-      .mockReturnValueOnce(makeAssignmentSelectChain([
-        makeAssignmentRow({ id: 'a1', status: 'approved' }),
-        makeAssignmentRow({ id: 'a2', approverUserId: 'u2', status: 'pending' }),
-      ]));
+    mockGetApprovalModeForProject.mockResolvedValue('all_required');
+    mockDb.select.mockReturnValueOnce(makeAssignmentSelectChain([
+      makeAssignmentRow({ id: 'a1', status: 'approved' }),
+      makeAssignmentRow({ id: 'a2', approverUserId: 'u2', status: 'pending' }),
+    ]));
 
     const result = await isApprovalComplete('prd-1', 'prd', 'proj');
 
@@ -403,25 +443,66 @@ describe('isApprovalComplete', () => {
   });
 
   it('returns complete=true when no assignments exist (no threshold to meet)', async () => {
-    mockDb.select
-      .mockReturnValueOnce(makeLimitSelectChain([{ approvalMode: 'any_one' }]))
-      .mockReturnValueOnce(makeAssignmentSelectChain([]));
+    mockGetApprovalModeForProject.mockResolvedValue('any_one');
+    mockDb.select.mockReturnValueOnce(makeAssignmentSelectChain([]));
+
+    const result = await isApprovalComplete('prd-1', 'prd', 'proj');
+
+    expect(result).toEqual({ complete: true, mode: 'any_one', reason: 'owner-only' });
+  });
+
+  it('VT-13 / PBI-006 AC-0 a design_doc with zero assignments completes the reviewer phase as owner-only with the per-module mode still reported', async () => {
+    mockGetApprovalModeForProject.mockResolvedValue('all_required');
+    mockDb.select.mockReturnValueOnce(makeAssignmentSelectChain([]));
+
+    const result = await isApprovalComplete('dd-1', 'design_doc', 'proj');
+
+    expect(mockGetApprovalModeForProject).toHaveBeenCalledWith('proj', 'design_doc');
+    expect(result).toEqual({ complete: true, mode: 'all_required', reason: 'owner-only' });
+  });
+
+  it('VT-13 does not mark an any_one or all_required result with the owner-only reason when assignments exist', async () => {
+    mockGetApprovalModeForProject.mockResolvedValue('any_one');
+    mockDb.select.mockReturnValueOnce(makeAssignmentSelectChain([
+      makeAssignmentRow({ documentType: 'design_doc', status: 'approved' }),
+    ]));
+
+    const anyOneResult = await isApprovalComplete('dd-1', 'design_doc', 'proj');
+
+    mockGetApprovalModeForProject.mockResolvedValue('all_required');
+    mockDb.select.mockReturnValueOnce(makeAssignmentSelectChain([
+      makeAssignmentRow({ id: 'a1', documentType: 'design_doc', status: 'approved' }),
+      makeAssignmentRow({ id: 'a2', documentType: 'design_doc', approverUserId: 'u2', status: 'approved' }),
+    ]));
+
+    const allRequiredResult = await isApprovalComplete('dd-1', 'design_doc', 'proj');
+
+    expect(anyOneResult).toEqual({ complete: true, mode: 'any_one' });
+    expect(allRequiredResult).toEqual({ complete: true, mode: 'all_required' });
+  });
+
+  it('defaults to any_one when the accessor finds no stored mode', async () => {
+    mockGetApprovalModeForProject.mockResolvedValue('any_one');
+    mockDb.select.mockReturnValueOnce(makeAssignmentSelectChain([
+      makeAssignmentRow({ status: 'approved' }),
+    ]));
 
     const result = await isApprovalComplete('prd-1', 'prd', 'proj');
 
     expect(result).toEqual({ complete: true, mode: 'any_one' });
   });
 
-  it('defaults to any_one when no project settings found', async () => {
-    mockDb.select
-      .mockReturnValueOnce(makeLimitSelectChain([]))
-      .mockReturnValueOnce(makeAssignmentSelectChain([
-        makeAssignmentRow({ status: 'approved' }),
-      ]));
+  it('TBI-001 DoD-0 resolves the adr module mode through the same accessor', async () => {
+    mockGetApprovalModeForProject.mockResolvedValue('all_required');
+    mockDb.select.mockReturnValueOnce(makeAssignmentSelectChain([
+      makeAssignmentRow({ id: 'a1', documentId: 'adr-1', documentType: 'adr', status: 'approved' }),
+      makeAssignmentRow({ id: 'a2', documentId: 'adr-1', documentType: 'adr', approverUserId: 'u2', status: 'approved' }),
+    ]));
 
-    const result = await isApprovalComplete('prd-1', 'prd', 'proj');
+    const result = await isApprovalComplete('adr-1', 'adr', 'proj');
 
-    expect(result).toEqual({ complete: true, mode: 'any_one' });
+    expect(mockGetApprovalModeForProject).toHaveBeenCalledWith('proj', 'adr');
+    expect(result).toEqual({ complete: true, mode: 'all_required' });
   });
 });
 
@@ -473,6 +554,48 @@ describe('getAvailableApprovers', () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].userId).toBe('u2');
+  });
+
+  it('VT-15 resolves ADR and non-ADR candidates through the unchanged module-specific accessor', async () => {
+    mockGetApproversForDocument
+      .mockResolvedValueOnce([{ userId: 'adr-u1', displayName: 'ADR Reviewer' }])
+      .mockResolvedValueOnce([{ userId: 'prd-u1', displayName: 'PRD Reviewer' }]);
+
+    await expect(getAvailableApprovers('proj', 'adr')).resolves.toEqual([
+      expect.objectContaining({ userId: 'adr-u1' }),
+    ]);
+    await expect(getAvailableApprovers('proj', 'prd')).resolves.toEqual([
+      expect.objectContaining({ userId: 'prd-u1' }),
+    ]);
+    expect(mockGetApproversForDocument.mock.calls).toEqual([
+      ['proj', 'adr'],
+      ['proj', 'prd'],
+    ]);
+  });
+
+  it('TBI-002 DoD-1 returns the configured ADR pool with owner excluded from each source', async () => {
+    mockGetApproverPoolForProject.mockResolvedValue({
+      individuals: [
+        { userId: 'owner-1', displayName: 'Owner' },
+        { userId: 'u1', displayName: 'Individual' },
+      ],
+      groups: [{
+        groupId: 'g1',
+        groupName: 'Architects',
+        members: [
+          { userId: 'owner-1', displayName: 'Owner' },
+          { userId: 'u2', displayName: 'Group Member' },
+        ],
+      }],
+    });
+
+    await expect(getAvailableApproverPool('proj', 'adr', 'owner-1')).resolves.toEqual({
+      individuals: [expect.objectContaining({ userId: 'u1' })],
+      groups: [expect.objectContaining({
+        members: [expect.objectContaining({ userId: 'u2' })],
+      })],
+    });
+    expect(mockGetApproverPoolForProject).toHaveBeenCalledWith('proj', 'adr');
   });
 });
 
@@ -654,7 +777,7 @@ describe('reassignApprovers', () => {
     }));
   });
 
-  it('notifies a newly assigned ADR reviewer from the Developer group', async () => {
+  it('TBI-002 DoD-2 assigns and notifies a newly configured ADR pool reviewer', async () => {
     mockDb.select
       .mockReturnValueOnce(makeWhereSelectChain([]))
       .mockReturnValueOnce(makeLimitSelectChain([{ project: 'Apex' }]))
@@ -667,11 +790,8 @@ describe('reassignApprovers', () => {
           approverUserId: 'dev-1',
         }),
       ]));
-    mockListGroupsWithMembers.mockResolvedValue([
-      {
-        name: 'Developer',
-        members: [{ userId: 'dev-1', displayName: 'Dev One' }],
-      },
+    mockGetApproversForDocument.mockResolvedValue([
+      { userId: 'dev-1', displayName: 'Configured Reviewer' },
     ]);
     const onConflictMock = jest.fn().mockResolvedValue(undefined);
     const valuesMock = jest.fn().mockReturnValue({ onConflictDoNothing: onConflictMock });
@@ -686,6 +806,7 @@ describe('reassignApprovers', () => {
       body: 'Review requested for: Choose event transport',
       link: '/adr/adr-1',
     }));
+    expect(mockGetApproverUserIdsForProject).toHaveBeenCalledWith('Apex', 'adr');
   });
 });
 
@@ -697,7 +818,7 @@ describe('notifyApproversDocumentReady', () => {
     mockDb.select.mockReset();
   });
 
-  it('sends a notification to each pending approver when document is ready', async () => {
+  it('TBI-006 DoD-2 keeps later-lifecycle ready-to-approve notifications on type user-action', async () => {
     mockDb.select
       .mockReturnValueOnce(makeAssignmentSelectChain([
         makeAssignmentRow({ approverUserId: 'approver-1', status: 'pending' }),

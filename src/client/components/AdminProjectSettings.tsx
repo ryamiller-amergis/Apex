@@ -9,7 +9,7 @@ import {
   useSetProjectApprovers,
 } from '../hooks/useProjectSkillConfig';
 import type { ProjectSkillConfig, UpsertProjectSkillConfigRequest, QuickSkillPill, QuickMcpPill, QuickMcpPillHttp, QuickMcpPillStdio, SkillProvider, InterviewSkillOption, PrototypeEngine, ProjectRepositoryReadiness } from '../../shared/types/projectSettings';
-import type { ApprovalMode } from '../../shared/types/approvals';
+import type { ApprovalMode, ModuleApprovalModes, ReviewerDocumentType } from '../../shared/types/approvals';
 import { useSkillRepos, useSkillBranches, useSkillList } from '../hooks/useChatThreads';
 import { useUsers } from '../hooks/useRbac';
 import { useGroupsWithMembers } from '../hooks/useGroups';
@@ -980,6 +980,7 @@ interface EditState {
   quickSkillPills: QuickSkillPill[];
   quickMcpPills: QuickMcpPill[];
   approvalMode: ApprovalMode;
+  approvalModes: ModuleApprovalModes;
   isNew: boolean;
 }
 
@@ -1016,7 +1017,15 @@ const emptyEdit = (): EditState => ({
   uiLabRegenBedrockModelId: '',
   uiLabRegenBedrockMaxTokens: 16000,
   uiLabBedrockTemperature: 0,
-  quickSkillPills: [], quickMcpPills: [], approvalMode: 'any_one', isNew: true,
+  quickSkillPills: [], quickMcpPills: [], approvalMode: 'any_one',
+  approvalModes: {
+    prd: 'any_one',
+    design_doc: 'any_one',
+    design_prototype: 'any_one',
+    test_case: 'any_one',
+    adr: 'any_one',
+  },
+  isNew: true,
   interviewSkillOptions: [], prototypeStageEnabled: true,
   interviewWebResearchEnabled: false, interviewWebMcp: null, prototypeEngine: 'bedrock',
   prototypeDesignSystemPath: '', screenInventoryPath: '', prototypeWebReferencesEnabled: false,
@@ -1329,6 +1338,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
   const [designPrototypeApproverGroupIds, setDesignPrototypeApproverGroupIds] = useState<string[]>([]);
   const [testCaseApproverIds, setTestCaseApproverIds] = useState<string[]>([]);
   const [testCaseApproverGroupIds, setTestCaseApproverGroupIds] = useState<string[]>([]);
+  const [adrApproverIds, setAdrApproverIds] = useState<string[]>([]);
+  const [adrApproverGroupIds, setAdrApproverGroupIds] = useState<string[]>([]);
 
   // ── Data queries dependent on edit state ───────────────────────────────
   const { data: repos = [], isLoading: isLoadingRepos } = useSkillRepos(edit?.project || null, edit?.skillProvider);
@@ -1343,7 +1354,11 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     edit?.skillBranch || undefined,
     edit?.skillProvider,
   );
-  const { data: approversData } = useProjectApprovers(edit?.id || null);
+  const {
+    data: approversData,
+    isSuccess: approversLoadedSuccessfully,
+    isError: approversLoadFailed,
+  } = useProjectApprovers(edit?.id || null);
   const setApprovers = useSetProjectApprovers();
   const { data: allGroupsWithMembers = [] } = useGroupsWithMembers(selectedProject);
 
@@ -1385,6 +1400,12 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     );
     setTestCaseApproverGroupIds(
       approverGroups.filter((g) => g.documentType === 'test_case').map((g) => g.groupId),
+    );
+    setAdrApproverIds(
+      approvers.filter((a) => a.documentType === 'adr').map((a) => a.userId),
+    );
+    setAdrApproverGroupIds(
+      approverGroups.filter((g) => g.documentType === 'adr').map((g) => g.groupId),
     );
   }, [approversData, edit?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1496,6 +1517,13 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       quickSkillPills: config.quickSkillPills ?? [],
       quickMcpPills: config.quickMcpPills ?? [],
       approvalMode: config.approvalMode ?? 'any_one',
+      approvalModes: config.approvalModes ?? {
+        prd: config.approvalMode ?? 'any_one',
+        design_doc: config.approvalMode ?? 'any_one',
+        design_prototype: config.approvalMode ?? 'any_one',
+        test_case: config.approvalMode ?? 'any_one',
+        adr: 'any_one',
+      },
       interviewSkillOptions: config.interviewSkillOptions ?? [],
       prototypeStageEnabled: config.prototypeStageEnabled !== false,
       interviewWebResearchEnabled: config.interviewWebResearchEnabled ?? false,
@@ -1604,7 +1632,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         prototypeDesignSystemPath: edit.prototypeDesignSystemPath || null,
         screenInventoryPath: edit.screenInventoryPath || null,
         prototypeWebReferencesEnabled: edit.prototypeWebReferencesEnabled,
-        approvalMode: edit.approvalMode,
+        approvalMode: edit.approvalModes.prd,
+        approvalModes: edit.approvalModes,
       };
 
       const savedConfig = await upsert.mutateAsync({
@@ -1618,9 +1647,11 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         designDocApproverIds.length > 0 ||
         prdApproverIds.length > 0 || designPrototypeApproverIds.length > 0 ||
         testCaseApproverIds.length > 0 ||
+        adrApproverIds.length > 0 ||
         designDocApproverGroupIds.length > 0 ||
         prdApproverGroupIds.length > 0 || designPrototypeApproverGroupIds.length > 0 ||
         testCaseApproverGroupIds.length > 0 ||
+        adrApproverGroupIds.length > 0 ||
         (approversData && (approversData.approvers.length > 0 || approversData.approverGroups.length > 0));
       if (hasApprovers) {
         try {
@@ -1634,10 +1665,11 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
             designPrototypeApproverGroups: designPrototypeApproverGroupIds,
             testCaseApprovers: testCaseApproverIds,
             testCaseApproverGroups: testCaseApproverGroupIds,
+            adrApprovers: adrApproverIds,
+            adrApproverGroups: adrApproverGroupIds,
           });
         } catch (approverErr) {
-          // Repo config already saved — close the form and surface a follow-up warning.
-          setEdit(null);
+          // Keep the editor and selections visible so the reviewer save can be retried.
           setFormError(
             approverErr instanceof Error
               ? `Repo config saved, but reviewers failed to save: ${approverErr.message}`
@@ -1672,7 +1704,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     const prdCount = config.prdApproverCount ?? 0;
     const dpCount = config.designPrototypeApproverCount ?? 0;
     const tcCount = config.testCaseApproverCount ?? 0;
-    if (ddCount === 0 && prdCount === 0 && dpCount === 0 && tcCount === 0) {
+    const adrCount = config.adrApproverCount ?? 0;
+    if (ddCount === 0 && prdCount === 0 && dpCount === 0 && tcCount === 0 && adrCount === 0) {
       return <span className={`${styles.approverBadge} ${styles.approverBadgeEmpty}`}>No reviewers</span>;
     }
     const parts: string[] = [];
@@ -1680,17 +1713,99 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     if (dpCount > 0) parts.push(`${dpCount} design prototype`);
     if (prdCount > 0) parts.push(`${prdCount} PRD`);
     if (tcCount > 0) parts.push(`${tcCount} QA`);
+    if (adrCount > 0) parts.push(`${adrCount} ADR`);
     return <span className={styles.approverBadge}>{parts.join(' · ')}</span>;
   };
 
+  const renderApprovalMode = (
+    module: ReviewerDocumentType,
+    label: string,
+    userIds: string[],
+    groupIds: string[],
+  ) => {
+    const poolIsConfigured = userIds.length > 0 || groupIds.length > 0;
+    const showNoReviewers = approversLoadedSuccessfully && !poolIsConfigured;
+    if (showNoReviewers) {
+      return (
+        <p
+          className={styles.accordionHelp}
+          aria-live="polite"
+          {...{ 'data-testid': `ps-no-reviewers-helper-${module}` }}
+        >
+          <strong className={styles.noReviewersLabel}>No Reviewers</strong>
+          {' — documents will be approved by their owner'}
+        </p>
+      );
+    }
+
+    const mode = edit?.approvalModes[module] ?? 'any_one';
+    const groupLabelId = `ps-approval-mode-${module}-label`;
+    return (
+      <div
+        className={styles.approvalModeSection}
+        role="radiogroup"
+        aria-labelledby={groupLabelId}
+        aria-describedby={approversLoadFailed ? `ps-approval-mode-${module}-load-note` : undefined}
+        {...{ 'data-testid': `ps-approval-mode-${module}` }}
+      >
+        <p id={groupLabelId} className={styles.approverSubTitle}>{label} Approval Mode</p>
+        {approversLoadFailed && (
+          <span id={`ps-approval-mode-${module}-load-note`} className={styles.accordionHelp}>
+            Reviewer configuration could not be refreshed. Showing the last-known approval mode.
+          </span>
+        )}
+        <div className={styles.approvalModeOptions}>
+          {(['any_one', 'all_required'] as const).map((option) => {
+            const optionId = `ps-approval-mode-${module}-${option.replace('_', '-')}`;
+            const optionLabel = option === 'any_one' ? 'Any One' : 'All Required';
+            return (
+              <label
+                key={option}
+                htmlFor={optionId}
+                className={`${styles.approvalModeOption} ${mode === option ? styles.approvalModeOptionSelected : ''}`}
+              >
+                <input
+                  id={optionId}
+                  type="radio"
+                  name={`approvalMode-${module}`}
+                  value={option}
+                  checked={mode === option}
+                  onChange={() => setEdit((prev) => prev ? {
+                    ...prev,
+                    approvalModes: { ...prev.approvalModes, [module]: option },
+                  } : prev)}
+                  disabled={upsert.isPending}
+                  className={styles.approvalModeRadio}
+                  {...{ 'data-testid': optionId }}
+                />
+                <div>
+                  <span className={styles.approvalModeLabel}>{optionLabel}</span>
+                  <span className={styles.approvalModeDesc}>
+                    {option === 'any_one'
+                      ? 'Document is approved when any assigned reviewer approves'
+                      : 'All assigned reviewers must approve the document'}
+                  </span>
+                </div>
+              </label>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
   const renderApproverSection = (
+    module: ReviewerDocumentType,
     title: string,
     userIds: string[],
     setUserIds: React.Dispatch<React.SetStateAction<string[]>>,
     groupIds: string[],
     setGroupIds: React.Dispatch<React.SetStateAction<string[]>>,
   ) => (
-    <div className={styles.approverSubSection}>
+    <div
+      className={styles.approverSubSection}
+      {...{ 'data-testid': `ps-${module}-approver-pool` }}
+    >
       <p className={styles.approverSubTitle}>{title}</p>
       <GroupAwarePeoplePicker
         groups={groupsWithMembers}
@@ -1702,6 +1817,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         disabled={upsert.isPending}
         placeholder="Search groups or people to add…"
       />
+      {renderApprovalMode(module, title, userIds, groupIds)}
     </div>
   );
 
@@ -2356,8 +2472,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
             <AccordionSection
               title="Reviewers"
               hint={
-                (designDocApproverIds.length + prdApproverIds.length + designDocApproverGroupIds.length + prdApproverGroupIds.length + designPrototypeApproverIds.length + testCaseApproverIds.length + testCaseApproverGroupIds.length) > 0
-                  ? `${designDocApproverIds.length + prdApproverIds.length + designPrototypeApproverIds.length + testCaseApproverIds.length} people, ${designDocApproverGroupIds.length + prdApproverGroupIds.length + designPrototypeApproverGroupIds.length + testCaseApproverGroupIds.length} groups`
+                (designDocApproverIds.length + prdApproverIds.length + designDocApproverGroupIds.length + prdApproverGroupIds.length + designPrototypeApproverIds.length + testCaseApproverIds.length + testCaseApproverGroupIds.length + adrApproverIds.length + adrApproverGroupIds.length) > 0
+                  ? `${designDocApproverIds.length + prdApproverIds.length + designPrototypeApproverIds.length + testCaseApproverIds.length + adrApproverIds.length} people, ${designDocApproverGroupIds.length + prdApproverGroupIds.length + designPrototypeApproverGroupIds.length + testCaseApproverGroupIds.length + adrApproverGroupIds.length} groups`
                   : undefined
               }
               expanded={expandedSections.approvers}
@@ -2367,48 +2483,11 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                 Designate who can review documents for this project. Users must also have the appropriate review permission.
               </p>
 
-              <div className={styles.approvalModeSection} {...{ 'data-testid': 'ps-approval-mode' }}>
-                <p className={styles.approverSubTitle}>Approval Mode</p>
-                <div className={styles.approvalModeOptions}>
-                  <label className={`${styles.approvalModeOption} ${edit.approvalMode === 'any_one' ? styles.approvalModeOptionSelected : ''}`}>
-                    <input
-                      type="radio"
-                      name="approvalMode"
-                      value="any_one"
-                      checked={edit.approvalMode === 'any_one'}
-                      onChange={() => setEdit((prev) => prev ? { ...prev, approvalMode: 'any_one' } : prev)}
-                      disabled={upsert.isPending}
-                      className={styles.approvalModeRadio}
-                      {...{ 'data-testid': 'ps-approval-mode-any-one' }}
-                    />
-                    <div>
-                      <span className={styles.approvalModeLabel}>Any One</span>
-                      <span className={styles.approvalModeDesc}>Document is approved when any assigned reviewer approves</span>
-                    </div>
-                  </label>
-                  <label className={`${styles.approvalModeOption} ${edit.approvalMode === 'all_required' ? styles.approvalModeOptionSelected : ''}`}>
-                    <input
-                      type="radio"
-                      name="approvalMode"
-                      value="all_required"
-                      checked={edit.approvalMode === 'all_required'}
-                      onChange={() => setEdit((prev) => prev ? { ...prev, approvalMode: 'all_required' } : prev)}
-                      disabled={upsert.isPending}
-                      className={styles.approvalModeRadio}
-                      {...{ 'data-testid': 'ps-approval-mode-all-required' }}
-                    />
-                    <div>
-                      <span className={styles.approvalModeLabel}>All Required</span>
-                      <span className={styles.approvalModeDesc}>All assigned reviewers must approve the document</span>
-                    </div>
-                  </label>
-                </div>
-              </div>
-
-              {renderApproverSection('Design Doc Reviewers', designDocApproverIds, setDesignDocApproverIds, designDocApproverGroupIds, setDesignDocApproverGroupIds)}
-              {renderApproverSection('PRD Reviewers', prdApproverIds, setPrdApproverIds, prdApproverGroupIds, setPrdApproverGroupIds)}
-              {renderApproverSection('Design Prototype Reviewers', designPrototypeApproverIds, setDesignPrototypeApproverIds, designPrototypeApproverGroupIds, setDesignPrototypeApproverGroupIds)}
-              {renderApproverSection('QA Reviewers', testCaseApproverIds, setTestCaseApproverIds, testCaseApproverGroupIds, setTestCaseApproverGroupIds)}
+              {renderApproverSection('design_doc', 'Design Doc Reviewers', designDocApproverIds, setDesignDocApproverIds, designDocApproverGroupIds, setDesignDocApproverGroupIds)}
+              {renderApproverSection('prd', 'PRD Reviewers', prdApproverIds, setPrdApproverIds, prdApproverGroupIds, setPrdApproverGroupIds)}
+              {renderApproverSection('design_prototype', 'Design Prototype Reviewers', designPrototypeApproverIds, setDesignPrototypeApproverIds, designPrototypeApproverGroupIds, setDesignPrototypeApproverGroupIds)}
+              {renderApproverSection('test_case', 'QA Reviewers', testCaseApproverIds, setTestCaseApproverIds, testCaseApproverGroupIds, setTestCaseApproverGroupIds)}
+              {renderApproverSection('adr', 'Architecture Decision Record Reviewers', adrApproverIds, setAdrApproverIds, adrApproverGroupIds, setAdrApproverGroupIds)}
             </AccordionSection>
 
             {/* Section 6: Quick Skill Pills */}

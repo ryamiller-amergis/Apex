@@ -6,7 +6,7 @@
  */
 import { DefaultAzureCredential } from '@azure/identity';
 import type { DispatchMessage } from '../../../shared/types/agentRunAdmission';
-import { resolveStaticAiRunnerCallbackToken } from '../aiRunnerCallbackAuthConfig';
+import { getAiRunnerCallbackToken } from '../aiRunsCallbackToken';
 import { createAiRunsCallbackClient } from './callbackClient';
 import { createLocalCursorExecution } from './cursorExecution';
 import { createAiRunsWorker } from './worker';
@@ -104,34 +104,6 @@ export async function loadAiRunsDispatchMessage(): Promise<DispatchMessage> {
   });
 }
 
-async function getCallbackToken(): Promise<string> {
-  // Match interactive actor host: prefer MI JWT when audience is configured,
-  // fall back to the static bridge token when MI is unavailable (DEV allowlist).
-  const staticToken = resolveStaticAiRunnerCallbackToken();
-  const audience = process.env.AI_RUNS_CALLBACK_TOKEN_AUDIENCE?.trim();
-
-  if (audience) {
-    const scope = audience.endsWith('/.default')
-      ? audience
-      : `${audience}/.default`;
-    try {
-      const token = await new DefaultAzureCredential().getToken(scope);
-      if (token?.token) return token.token;
-      if (!staticToken) {
-        throw new Error('Failed to acquire AI runner callback token');
-      }
-    } catch (error) {
-      if (!staticToken) throw error;
-    }
-  }
-
-  if (staticToken) return staticToken;
-
-  throw new Error(
-    'AI_RUNS_CALLBACK_TOKEN_AUDIENCE is required for managed-identity callbacks',
-  );
-}
-
 export async function main(): Promise<void> {
   const dispatch = await loadAiRunsDispatchMessage();
   const callbackBaseUrl =
@@ -144,7 +116,7 @@ export async function main(): Promise<void> {
 
   const callback = createAiRunsCallbackClient({
     callbackBaseUrl,
-    getToken: getCallbackToken,
+    getToken: getAiRunnerCallbackToken,
   });
   const worker = createAiRunsWorker({
     getBootstrap: (message) => callback.getBootstrap(message),

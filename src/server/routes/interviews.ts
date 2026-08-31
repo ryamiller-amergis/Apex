@@ -10,7 +10,7 @@ import { isSuperAdminRequest } from '../utils/superAdmin';
 import { db } from '../db/drizzle';
 import { eq, and, isNull, sql } from 'drizzle-orm';
 import { designDocs as designDocsTable, chatThreads as chatThreadsTable, prds as prdsTable, reviewComments as reviewCommentsTable, designPrototypes as designPrototypesTable, interviews as interviewsTable, documentApproverAssignments } from '../db/schema';
-import { getComments } from '../services/reviewCommentService';
+import { getComments, getUnresolvedCount } from '../services/reviewCommentService';
 import { fixPrdContentWithBedrock, fixPrdBacklogWithBedrock, fixDesignDocSectionWithBedrock, regeneratePrdContentRegionWithBedrock, regeneratePrdBacklogItemWithBedrock, regenerateMarkdownRegionWithBedrock, BedrockModelTruncatedError } from '../services/bedrockService';
 import {
   createInterview,
@@ -68,6 +68,7 @@ import {
 } from '../services/prdService';
 import {
   acceptFixValidation,
+  assertDesignDocApprovalReady,
   cancelValidation,
   createDesignDoc,
   deleteDesignDoc,
@@ -107,8 +108,27 @@ import {
 } from '../services/projectRepositoryReadinessService';
 import type { InterviewStatus, PrdStatus, ReviewPrdRequest, DesignDocStatus, ReviewDesignDocRequest } from '../../shared/types/interview';
 import type { PipelinePinPolicy } from '../../shared/types/runGrounding';
+import { resolveReviewerAvailability } from '../services/reviewerAvailabilityService';
 
 const router = Router();
+
+router.get('/reviewer-availability', requirePermission('interviews:create'), async (req, res, next) => {
+  try {
+    const project = typeof req.query.project === 'string' ? req.query.project.trim() : '';
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    res.json(await resolveReviewerAvailability(project, [
+      'prd',
+      'design_doc',
+      'design_prototype',
+      'test_case',
+    ]));
+  } catch (err) {
+    next(err);
+  }
+});
 
 function parsePinPolicy(value: unknown): PipelinePinPolicy {
   return value === 'latest' ? 'latest' : 'inherit';
@@ -440,6 +460,10 @@ router.post('/prds/:prdId/reopen', requirePermission('admin:roles'), async (req,
 router.post('/prds/:prdId/review', requirePermission('prds:review'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
+    if ((await getAssignments(req.params.prdId, 'prd')).length === 0) {
+      res.status(409).json({ error: 'Reviewer actions are unavailable for owner-only documents' });
+      return;
+    }
     const body = req.body as ReviewPrdRequest;
     const { approved } = await reviewPrd(req.params.prdId, userId, body);
 
@@ -462,6 +486,10 @@ router.post('/prds/:prdId/test-cases/review', requirePermission('prds:review'), 
   try {
     const userId = getUserId(req);
     const { prdId } = req.params;
+    if ((await getAssignments(prdId, 'test_case')).length === 0) {
+      res.status(409).json({ error: 'Reviewer actions are unavailable for owner-only documents' });
+      return;
+    }
 
     let assigned = await isAssignedApprover(prdId, 'test_case', userId);
     const admin = await isAdminUser(userId);
@@ -1599,6 +1627,10 @@ router.post('/design-docs/:id/withdraw', requirePermission('interviews:manage'),
 router.post('/design-docs/:id/review', requirePermission('design-docs:review'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
+    if ((await getAssignments(req.params.id, 'design_doc')).length === 0) {
+      res.status(409).json({ error: 'Reviewer actions are unavailable for owner-only documents' });
+      return;
+    }
     const body = req.body as ReviewDesignDocRequest;
     await reviewDesignDoc(req.params.id, userId, body);
     res.json({ ok: true });
@@ -2177,6 +2209,15 @@ router.put('/prds/:prdId/assignments', requirePermission('interviews:manage'), a
       res.status(400).json({ error: 'approverUserIds is required and must be an array' });
       return;
     }
+    if ((await getAssignments(req.params.prdId, 'prd')).length === 0) {
+      res.status(409).json({ error: 'Reviewers cannot be assigned after owner-only review starts' });
+      return;
+    }
+    if (Array.isArray(qaApproverIds)
+      && (await getAssignments(req.params.prdId, 'test_case')).length === 0) {
+      res.status(409).json({ error: 'QA reviewers cannot be assigned after owner-only review starts' });
+      return;
+    }
     const userId = getUserId(req);
     const prd = await getPrd(req.params.prdId);
     if (!prd) {
@@ -2208,6 +2249,10 @@ router.put('/design-docs/:id/assignments', requirePermission('admin:roles'), asy
       res.status(400).json({ error: 'approverUserIds is required and must be an array' });
       return;
     }
+    if ((await getAssignments(req.params.id, 'design_doc')).length === 0) {
+      res.status(409).json({ error: 'Reviewers cannot be assigned after owner-only review starts' });
+      return;
+    }
     const userId = getUserId(req);
     const assignments = await reassignApprovers(req.params.id, 'design_doc', approverUserIds, userId);
     res.json(assignments);
@@ -2232,10 +2277,16 @@ router.post('/design-docs/:id/owner-approve', requirePermission('design-docs:rev
     const userId = getUserId(req);
     const docId = req.params.id;
     const { status, comment } = req.body as OwnerApproveRequest;
+    if (status !== 'approved' && status !== 'revision_requested') {
+      res.status(400).json({ error: 'status must be approved or revision_requested' });
+      return;
+    }
 
     const admin = await isAdminUser(userId);
     const isOwner = await isDocumentOwner(docId, 'design_doc', userId);
-    if (!isOwner && !admin) {
+    const ownerOnly = (await getAssignments(docId, 'design_doc')).length === 0;
+    const identityBypass = ownerOnly ? isSuperAdminRequest(req) : admin;
+    if (!isOwner && !identityBypass) {
       res.status(403).json({ error: 'Only the document owner can give final approval' });
       return;
     }
@@ -2248,9 +2299,16 @@ router.post('/design-docs/:id/owner-approve', requirePermission('design-docs:rev
       res.status(404).json({ error: 'Design doc not found' });
       return;
     }
-    if (doc.status !== 'reviewer_approved') {
+    if (doc.status !== 'reviewer_approved' && !(ownerOnly && doc.status === 'pending_review')) {
       res.status(409).json({ error: 'Reviewers must approve the design doc before the owner can give final approval' });
       return;
+    }
+    if (status === 'approved') {
+      if (await getUnresolvedCount(docId, 'design_doc') > 0) {
+        res.status(409).json({ error: 'Resolve all review comments before approving the design doc' });
+        return;
+      }
+      await assertDesignDocApprovalReady(docId);
     }
 
     await recordOwnerApproval(docId, 'design_doc', userId, status, comment);
@@ -3059,7 +3117,10 @@ router.post('/:interviewId/prds', requirePermission('interviews:manage'), async 
 // ── Owner Approval (two-stage) ────────────────────────────────────────────────
 
 import { getOwnerApproval, isDocumentOwner, recordOwnerApproval } from '../services/ownerApprovalService';
-import { triggerDesignDocForPrototype } from '../services/designPrototypeService';
+import {
+  getUnresolvedCommentCount as getUnresolvedPrototypeCommentCount,
+  triggerDesignDocForPrototype,
+} from '../services/designPrototypeService';
 import type { OwnerApproveRequest, OwnerApprovalDocumentType } from '../../shared/types/approvals';
 
 router.get('/prds/:prdId/owner-approval', requirePermission('interviews:view'), async (req, res, next) => {
@@ -3077,10 +3138,17 @@ router.post('/prds/:prdId/owner-approve', requirePermission('prds:review'), asyn
     const userId = getUserId(req);
     const { prdId } = req.params;
     const { status, comment } = req.body as OwnerApproveRequest;
+    if (status !== 'approved' && status !== 'revision_requested') {
+      res.status(400).json({ error: 'status must be approved or revision_requested' });
+      return;
+    }
 
     const admin = await isAdminUser(userId);
     const isOwner = await isDocumentOwner(prdId, 'prd', userId);
-    if (!isOwner && !admin) {
+    const existingAssignments = await getAssignments(prdId, 'prd');
+    const ownerOnly = existingAssignments.length === 0;
+    const identityBypass = ownerOnly ? isSuperAdminRequest(req) : admin;
+    if (!isOwner && !identityBypass) {
       res.status(403).json({ error: 'Only the document owner can give final approval' });
       return;
     }
@@ -3092,22 +3160,17 @@ router.post('/prds/:prdId/owner-approve', requirePermission('prds:review'), asyn
       return;
     }
 
-    if (status === 'approved' && !admin) {
+    if (status === 'approved') {
+      if (await getUnresolvedCount(prdId, 'prd') > 0) {
+        res.status(409).json({ error: 'Resolve all review comments before approving the PRD' });
+        return;
+      }
+    }
+    if (status === 'approved' && !admin && !isSuperAdminRequest(req)) {
       const { complete } = await isApprovalComplete(prdId, 'prd', prd.project);
       if (!complete) {
         res.status(409).json({ error: 'Reviewers must approve the PRD before the owner can give final approval' });
         return;
-      }
-      const existingAssignments = await getAssignments(prdId, 'prd');
-      if (existingAssignments.length === 0 && prd.interviewId) {
-        const interview = await db.select({ prdApproverIds: interviewsTable.prdApproverIds })
-          .from(interviewsTable)
-          .where(eq(interviewsTable.id, prd.interviewId))
-          .limit(1);
-        if (interview[0]?.prdApproverIds && interview[0].prdApproverIds.length > 0) {
-          res.status(409).json({ error: 'Reviewers must approve the PRD before the owner can give final approval' });
-          return;
-        }
       }
     }
 
@@ -3149,11 +3212,20 @@ router.post('/prds/:prdId/test-cases/owner-approve', requirePermission('prds:rev
     const userId = getUserId(req);
     const { prdId } = req.params;
     const { status, comment } = req.body as OwnerApproveRequest;
+    if (status !== 'approved' && status !== 'revision_requested') {
+      res.status(400).json({ error: 'status must be approved or revision_requested' });
+      return;
+    }
 
     const admin = await isAdminUser(userId);
     const isOwner = await isDocumentOwner(prdId, 'test_case', userId);
-    if (!isOwner && !admin) {
+    const ownerOnly = (await getAssignments(prdId, 'test_case')).length === 0;
+    if (!isOwner && !(ownerOnly ? isSuperAdminRequest(req) : admin)) {
       res.status(403).json({ error: 'Only the document owner can give final approval' });
+      return;
+    }
+    if (status === 'approved' && await getUnresolvedCount(prdId, 'test_case') > 0) {
+      res.status(409).json({ error: 'Resolve all review comments before approving test cases' });
       return;
     }
 
@@ -3169,6 +3241,10 @@ router.post('/prds/:prdId/design-prototypes/owner-approve', requirePermission('d
     const userId = getUserId(req);
     const { prdId } = req.params;
     const { status, comment, prototypeId } = req.body as OwnerApproveRequest;
+    if (status !== 'approved' && status !== 'revision_requested') {
+      res.status(400).json({ error: 'status must be approved or revision_requested' });
+      return;
+    }
 
     if (!prototypeId) {
       res.status(400).json({ error: 'prototypeId is required' });
@@ -3186,7 +3262,8 @@ router.post('/prds/:prdId/design-prototypes/owner-approve', requirePermission('d
       return;
     }
 
-    if (proto.status !== 'reviewer_approved') {
+    const ownerOnly = (await getAssignments(prdId, 'design_prototype')).length === 0;
+    if (proto.status !== 'reviewer_approved' && !(ownerOnly && proto.status === 'pending_review')) {
       res.status(409).json({ error: `Cannot owner-approve a prototype in status '${proto.status}' — must be reviewer_approved` });
       return;
     }
@@ -3194,8 +3271,12 @@ router.post('/prds/:prdId/design-prototypes/owner-approve', requirePermission('d
     // Ownership check — resolves through prototype → PRD → interview.
     const admin = await isAdminUser(userId);
     const isOwner = await isDocumentOwner(prototypeId, 'design_prototype', userId);
-    if (!isOwner && !admin) {
+    if (!isOwner && !(ownerOnly ? isSuperAdminRequest(req) : admin)) {
       res.status(403).json({ error: 'Only the document owner can give final approval' });
+      return;
+    }
+    if (status === 'approved' && await getUnresolvedPrototypeCommentCount(prototypeId) > 0) {
+      res.status(409).json({ error: 'Resolve all review comments before approving the prototype' });
       return;
     }
 

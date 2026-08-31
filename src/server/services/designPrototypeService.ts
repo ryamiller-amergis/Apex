@@ -1,4 +1,4 @@
-import { eq, and, asc, desc, inArray, lt, type SQL } from 'drizzle-orm';
+import { eq, and, asc, count, desc, inArray, lt, type SQL } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { designPrototypes, designPrototypeComments, designPlans, designDocs, prds, documentApproverAssignments } from '../db/schema';
 import type { DesignPlanFeature } from '../../shared/types/designPlan';
@@ -1139,6 +1139,20 @@ export async function listComments(prototypeId: string): Promise<DesignPrototype
     resolvedBy: r.resolvedBy,
     createdAt: r.createdAt,
   }));
+}
+
+export async function getUnresolvedCommentCount(prototypeId: string): Promise<number> {
+  const [result] = await db
+    .select({ value: count() })
+    .from(designPrototypeComments)
+    .where(
+      and(
+        eq(designPrototypeComments.prototypeId, prototypeId),
+        eq(designPrototypeComments.resolved, false),
+      ),
+    );
+
+  return Number(result?.value ?? 0);
 }
 
 export async function addComment(

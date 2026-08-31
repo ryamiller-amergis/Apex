@@ -244,4 +244,154 @@ test.describe('Interview flow — Project settings @interview-flow @pipeline', (
       expect(page.url()).not.toMatch(/error/i);
     }
   });
+
+  test('PBI-001 AC-0 / PBI-002 AC-0 Given configured pools, when modes change, then ADR and sibling modes save independently', async ({
+    page,
+    loginAsPersona,
+    e2eApi,
+  }) => {
+    const config = await SeedApi.seedProjectSettings(e2eApi, {
+      project: E2E_PROJECT,
+      friendlyName: 'ADR and Module Modes',
+      isDefault: true,
+      approvalMode: 'all_required',
+      prdApprovers: [PERSONA_OIDS.ba],
+      designDocApprovers: [PERSONA_OIDS.developer],
+      adrApprovers: [PERSONA_OIDS.qa],
+    });
+    await stubAdoProjects(page);
+    await stubAllAiTraffic(page);
+    await loginAsPersona('manager');
+
+    const settings = new AdminProjectSettingsPage(page);
+    await settings.goto();
+    await settings.editConfig(config.id);
+    await settings.openReviewers();
+
+    await expect(settings.approverPool('adr')).toContainText('QA Dev User');
+    await expect(settings.approvalModeOption('prd', 'all_required')).toBeChecked();
+    await settings.approvalModeOption('design_doc', 'any_one').check({ force: true });
+    await expect(settings.approvalModeOption('design_doc', 'any_one')).toBeChecked();
+    await expect(settings.approvalModeOption('prd', 'all_required')).toBeChecked();
+
+    const configSave = page.waitForRequest((request) =>
+      request.method() === 'PUT'
+      && request.url().endsWith(`/api/admin/project-settings/${config.id}`),
+    );
+    const reviewerSave = page.waitForRequest((request) =>
+      request.method() === 'PUT'
+      && request.url().endsWith(`/api/admin/project-settings/${config.id}/approvers`),
+    );
+    await settings.save();
+
+    expect((await configSave).postDataJSON()).toEqual(expect.objectContaining({
+      approvalModes: expect.objectContaining({
+        prd: 'all_required',
+        design_doc: 'any_one',
+        adr: 'any_one',
+      }),
+    }));
+    expect((await reviewerSave).postDataJSON()).toEqual(expect.objectContaining({
+      adrApprovers: [PERSONA_OIDS.qa],
+    }));
+  });
+
+  test('VT-09 / PBI-003 AC-0 Given empty QA pool, when settings open, then No Reviewers replaces mode', async ({
+    page,
+    loginAsPersona,
+    e2eApi,
+  }) => {
+    const config = await SeedApi.seedProjectSettings(e2eApi, {
+      project: E2E_PROJECT,
+      friendlyName: 'Empty QA Pool VT-09',
+      isDefault: true,
+      approvalMode: 'all_required',
+    });
+    await stubAdoProjects(page);
+    await stubAllAiTraffic(page);
+    await loginAsPersona('manager');
+
+    const settings = new AdminProjectSettingsPage(page);
+    await settings.goto();
+    await settings.editConfig(config.id);
+    await settings.openReviewers();
+
+    await expect(settings.approvalMode('test_case')).toHaveCount(0);
+    await expect(settings.noReviewersHelper('test_case')).toHaveText('No Reviewers');
+  });
+
+  test('VT-10 / PBI-003 AC-1 Given approvers fetch fails, when settings open, then last-known mode remains', async ({
+    page,
+    loginAsPersona,
+    e2eApi,
+  }) => {
+    const config = await SeedApi.seedProjectSettings(e2eApi, {
+      project: E2E_PROJECT,
+      friendlyName: 'Pool Failure VT-10',
+      isDefault: true,
+      approvalMode: 'all_required',
+    });
+    await page.route(
+      `**/api/admin/project-settings/${config.id}/approvers`,
+      (route) => route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Injected approver load failure' }),
+      }),
+    );
+    await stubAdoProjects(page);
+    await stubAllAiTraffic(page);
+    await loginAsPersona('manager');
+
+    const settings = new AdminProjectSettingsPage(page);
+    await settings.goto();
+    await settings.editConfig(config.id);
+    await settings.openReviewers();
+
+    await expect(settings.approvalMode('test_case')).toBeVisible();
+    await expect(settings.noReviewersHelper('test_case')).toHaveCount(0);
+    await expect(settings.approvalModeOption('test_case', 'all_required')).toBeChecked();
+  });
+
+  test('VT-11 / PBI-003 AC-2 Given empty QA pool, when first reviewer is saved, then mode appears without reload', async ({
+    page,
+    loginAsPersona,
+    e2eApi,
+  }) => {
+    const config = await SeedApi.seedProjectSettings(e2eApi, {
+      project: E2E_PROJECT,
+      friendlyName: 'Add QA Reviewer VT-11',
+      isDefault: true,
+      approvalMode: 'all_required',
+    });
+    await stubAdoProjects(page);
+    await stubAllAiTraffic(page);
+    await loginAsPersona('manager');
+
+    const settings = new AdminProjectSettingsPage(page);
+    await settings.goto();
+    await settings.editConfig(config.id);
+    await settings.openReviewers();
+    await expect(settings.noReviewersHelper('test_case')).toBeVisible();
+
+    let navigations = 0;
+    page.on('framenavigated', (frame) => {
+      if (frame === page.mainFrame()) navigations += 1;
+    });
+    await settings.addApprover('test_case', 'QA Dev User');
+
+    await expect(settings.approvalMode('test_case')).toBeVisible();
+    await expect(settings.noReviewersHelper('test_case')).toHaveCount(0);
+
+    const reviewerSave = page.waitForRequest((request) =>
+      request.method() === 'PUT'
+      && request.url().endsWith(`/api/admin/project-settings/${config.id}/approvers`),
+    );
+    await settings.save();
+    const request = await reviewerSave;
+    expect(request.postDataJSON()).toEqual(expect.objectContaining({
+      testCaseApprovers: [PERSONA_OIDS.qa],
+    }));
+    expect(navigations).toBe(0);
+  });
 });
