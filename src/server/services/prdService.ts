@@ -25,6 +25,7 @@ import { extractFeatures } from '../services/designPrototypeService';
 import { stampAdoIds } from '../../shared/utils/backlogTransform';
 import { derivePrdReadiness } from '../../shared/utils/prdReadiness';
 import { buildOverrideHistory } from '../../shared/utils/validationOverride';
+import { normalizeValidationScorecard } from '../../shared/utils/validationReport';
 import { BACKLOG_USER_TYPE_CONVENTIONS_MD } from '../../shared/utils/backlogUserTypeConventions';
 import {
   hashPrdValidationContent,
@@ -2018,7 +2019,14 @@ export async function syncPrdValidationResult(prdId: string): Promise<{ score: n
     return null;
   }
 
-  const scorecard = JSON.parse(scorecardRaw) as ValidationScorecard;
+  const scorecard = normalizeValidationScorecard(JSON.parse(scorecardRaw));
+  if (!scorecard) {
+    console.warn(`[prd] Scorecard carries no usable overall score (prdId=${prdId})`);
+    await db.update(prds)
+      .set({ status: 'draft', updatedAt: new Date().toISOString() })
+      .where(and(eq(prds.id, prdId), eq(prds.status, 'validating')));
+    return null;
+  }
   const stamped: ValidationScorecard = {
     ...scorecard,
     contentHash: hashPrdValidationContent(prd.content, prd.backlogJson),

@@ -4,6 +4,8 @@ import {
   designDocFeatureSectionScore,
   normalizeCrossCuttingCheck,
   normalizeValidationGap,
+  normalizeValidationScorecard,
+  resolveScorecardOverallScore,
 } from '../../../shared/utils/validationReport';
 import type { ValidationScorecard } from '../../../shared/types/interview';
 
@@ -342,5 +344,55 @@ describe('designDocFeatureSectionScore', () => {
         'design_score',
       ),
     ).toBe(96);
+  });
+});
+
+describe('resolveScorecardOverallScore', () => {
+  it('prefers the canonical top-level overall_score', () => {
+    expect(resolveScorecardOverallScore({ overall_score: 94, scores: { overall: 12 } })).toBe(94);
+  });
+
+  it('falls back to scores.overall when overall_score is absent', () => {
+    expect(
+      resolveScorecardOverallScore({
+        scores: { prd: { percentage: 97.33 }, backlog: { percentage: 95 }, overall: 96.17 },
+      }),
+    ).toBeCloseTo(96.17);
+  });
+
+  it('averages per-file percentages when no overall is reported', () => {
+    expect(
+      resolveScorecardOverallScore({
+        scores: { prd: { percentage: 90 }, backlog: { percentage: 80 } },
+      }),
+    ).toBe(85);
+  });
+
+  it('returns null when no finite score is present', () => {
+    expect(resolveScorecardOverallScore({ verdict: 'ready' })).toBeNull();
+    expect(resolveScorecardOverallScore({ overall_score: 'n/a' })).toBeNull();
+    expect(resolveScorecardOverallScore({ scores: { overall: null } })).toBeNull();
+    expect(resolveScorecardOverallScore(null)).toBeNull();
+  });
+});
+
+describe('normalizeValidationScorecard', () => {
+  it('stamps a canonical overall_score onto the nested prd-spec-review shape', () => {
+    const normalized = normalizeValidationScorecard({
+      review_phase: 'initial',
+      is_ready: true,
+      verdict: 'Ready',
+      scores: { prd: { percentage: 97.33 }, backlog: { percentage: 95 }, overall: 96.17 },
+    });
+
+    expect(normalized?.overall_score).toBeCloseTo(96.17);
+    expect(Math.round(normalized!.overall_score)).toBe(96);
+    expect(normalized?.is_ready).toBe(true);
+  });
+
+  it('rejects a scorecard with no usable score rather than yielding NaN', () => {
+    const normalized = normalizeValidationScorecard({ review_phase: 'initial', is_ready: true });
+
+    expect(normalized).toBeNull();
   });
 });

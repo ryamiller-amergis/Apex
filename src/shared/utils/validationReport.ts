@@ -66,6 +66,47 @@ export function collectValidationGaps(
   return fromRoot;
 }
 
+/**
+ * Resolve the overall percentage from a scorecard, tolerating the alternate
+ * shape where the skill nests percentages under `scores` instead of writing a
+ * top-level `overall_score`. Returns null when no finite percentage is present.
+ */
+export function resolveScorecardOverallScore(raw: unknown): number | null {
+  const record = asRecord(raw);
+  if (!record) return null;
+
+  const direct = finiteNumber(record.overall_score);
+  if (direct !== null) return direct;
+
+  const scores = asRecord(record.scores);
+  if (!scores) return null;
+
+  const overall = finiteNumber(scores.overall)
+    ?? finiteNumber(asRecord(scores.overall)?.percentage);
+  if (overall !== null) return overall;
+
+  const parts = Object.entries(scores)
+    .filter(([key]) => key !== 'overall')
+    .map(([, value]) => finiteNumber(value) ?? finiteNumber(asRecord(value)?.percentage))
+    .filter((value): value is number => value !== null);
+  if (parts.length === 0) return null;
+  return parts.reduce((sum, value) => sum + value, 0) / parts.length;
+}
+
+/**
+ * Parse-site guard for agent-written scorecards. Returns the scorecard with a
+ * canonical finite `overall_score`, or null when no usable score can be
+ * resolved — `validation_score` is an integer column, so an unresolved score
+ * must be rejected rather than rounded into NaN.
+ */
+export function normalizeValidationScorecard(raw: unknown): ValidationScorecard | null {
+  const record = asRecord(raw);
+  if (!record) return null;
+  const overallScore = resolveScorecardOverallScore(record);
+  if (overallScore === null) return null;
+  return { ...(record as unknown as ValidationScorecard), overall_score: overallScore };
+}
+
 /** Section % for design-doc scorecards (canonical fields or nested score_pct). */
 export function designDocFeatureSectionScore(
   feature: Record<string, unknown> | null | undefined,
@@ -102,6 +143,11 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function finiteNumber(value: unknown): number | null {
+  const num = typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
+  return typeof num === 'number' && Number.isFinite(num) ? num : null;
 }
 
 function cleanText(value: string): string {

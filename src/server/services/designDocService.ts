@@ -22,7 +22,7 @@ import { resolveSkillConfig, getSkillSettingsName } from './projectSettingsServi
 import { getDefaultModel } from './appSettingsService';
 import { getPrd } from './prdService';
 import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
-import { collectValidationGaps } from '../../shared/utils/validationReport';
+import { collectValidationGaps, normalizeValidationScorecard } from '../../shared/utils/validationReport';
 import {
   propagatePipelineGrounding,
   readActiveTargetProvenance,
@@ -1587,7 +1587,15 @@ export function startValidationWatcher(designDocId: string, validationThreadId: 
         return;
       }
 
-      const scorecard = JSON.parse(scorecardRaw) as ValidationScorecard;
+      const scorecard = normalizeValidationScorecard(JSON.parse(scorecardRaw));
+      if (!scorecard) {
+        console.warn(`[validationWatcher] Scorecard carries no usable overall score — setting to pending_review (designDocId=${designDocId})`);
+        await db.update(designDocs)
+          .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
+          .where(and(eq(designDocs.id, designDocId), eq(designDocs.status, 'validating')));
+        cleanupWorkspace(validationThreadId);
+        return;
+      }
       const reportMd = readOutputValidationScorecardMd(validationThreadId) ?? undefined;
       await syncValidationResult(designDocId, scorecard, reportMd);
       console.log(`[validationWatcher] Scorecard synced — score=${scorecard.overall_score} is_ready=${scorecard.is_ready} (designDocId=${designDocId})`);

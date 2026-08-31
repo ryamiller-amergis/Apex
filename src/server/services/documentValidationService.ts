@@ -3,7 +3,7 @@ import { eq, and } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { chatThreads } from '../db/schema';
 import type { ValidationScorecard } from '../../shared/types/interview';
-import { buildPassingValidationReasonsMarkdown, collectValidationGaps, normalizeCrossCuttingCheck } from '../../shared/utils/validationReport';
+import { buildPassingValidationReasonsMarkdown, collectValidationGaps, normalizeCrossCuttingCheck, normalizeValidationScorecard } from '../../shared/utils/validationReport';
 import { readOutputValidationScorecard, readOutputValidationScorecardMd, isThreadIdle, createThread as createChatThread, cancelRun, sendMessage, prepareBackgroundWorkflowTurn, hydrateThread } from './chatAgentService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
 import { isThreadRunAlive, canThisInstanceFailGeneration } from './agentRunReaperService';
@@ -230,7 +230,13 @@ export function startDocumentValidationWatcher(
         return;
       }
 
-      const scorecard = JSON.parse(scorecardRaw) as ValidationScorecard;
+      const scorecard = normalizeValidationScorecard(JSON.parse(scorecardRaw));
+      if (!scorecard) {
+        console.warn(`[documentValidationWatcher] Scorecard carries no usable overall score — resetting (documentId=${documentId})`);
+        await adapter.updateDbForValidationError();
+        cleanupWorkspace(validationThreadId);
+        return;
+      }
       const reportMd = readOutputValidationScorecardMd(validationThreadId) ?? generateFallbackReport(scorecard);
       await adapter.updateDbForValidationResult(scorecard, reportMd);
       console.log(`[documentValidationWatcher] Scorecard synced — score=${scorecard.overall_score} is_ready=${scorecard.is_ready} (documentId=${documentId})`);
