@@ -251,6 +251,8 @@ jobs:
           # Mark sticky slot settings (these stay with their slot during swap)
           # LT_APEX_CALLBACK_BASE_URL must be sticky so staging dispatches callback
           # to the staging host and production keeps the production host.
+          # DATABASE_URL must be sticky so a staging→production swap cannot put
+          # an older GitHub secret host back onto the live site after a DB cutover.
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
@@ -258,14 +260,17 @@ jobs:
             --slot-settings \
               AZURE_REDIRECT_URL="${STAGING_REDIRECT_URL}" \
               APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}" \
+              DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net" \
               APEX_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net"
 
           # Production slot sticky callback + shared MI runner auth (not swapped away).
+          # DATABASE_URL sticky on production so swap cannot move the live host.
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
             --slot-settings \
+              DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net" \
               APEX_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net"
 
