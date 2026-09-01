@@ -1421,14 +1421,45 @@ export const uiLabComments = pgTable('ui_lab_comments', {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
 
+export const uiLabDesignShares = pgTable('ui_lab_design_shares', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  designId: uuid('design_id').notNull().references(() => uiLabDesigns.id, { onDelete: 'cascade' }),
+  granteeId: text('grantee_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  createdBy: text('created_by').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  designGranteeUq: unique('ui_lab_design_shares_design_id_grantee_id_key').on(
+    t.designId,
+    t.granteeId,
+  ),
+  granteeIdx: index('idx_ui_lab_design_shares_grantee').on(t.granteeId, t.designId),
+  designIdx: index('idx_ui_lab_design_shares_design').on(t.designId, t.createdAt),
+}));
+
 export const uiLabDesignsRelations = relations(uiLabDesigns, ({ many }) => ({
   comments: many(uiLabComments),
+  shares: many(uiLabDesignShares),
 }));
 
 export const uiLabCommentsRelations = relations(uiLabComments, ({ one }) => ({
   design: one(uiLabDesigns, {
     fields: [uiLabComments.designId],
     references: [uiLabDesigns.id],
+  }),
+}));
+
+export const uiLabDesignSharesRelations = relations(uiLabDesignShares, ({ one }) => ({
+  design: one(uiLabDesigns, {
+    fields: [uiLabDesignShares.designId],
+    references: [uiLabDesigns.id],
+  }),
+  grantee: one(appUsers, {
+    fields: [uiLabDesignShares.granteeId],
+    references: [appUsers.oid],
+  }),
+  creator: one(appUsers, {
+    fields: [uiLabDesignShares.createdBy],
+    references: [appUsers.oid],
   }),
 }));
 

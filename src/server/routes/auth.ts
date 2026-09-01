@@ -5,6 +5,7 @@ import { DEV_MOCK_USER_BY_ID, DEV_MOCK_USERS } from '../../shared/constants/devM
 import type { DevMockPersonaId } from '../../shared/constants/devMockUsers';
 import { upsertAppUser } from '../services/rbacService';
 import { resolvePendingAssignments } from '../services/pendingAssignmentService';
+import { sanitizeAuthReturnTo } from '../../shared/utils/authReturnTo';
 
 const router = express.Router();
 
@@ -130,11 +131,20 @@ router.get('/login', (req, res, next) => {
     console.warn('[auth] Azure AD is not configured — /login is unavailable. Use dev-login in non-production environments.');
     return res.redirect('/auth/login-failed');
   }
+  const returnTo = sanitizeAuthReturnTo(req.query.returnTo);
+  const session = req.session as { returnTo?: string } | undefined;
+  if (session) {
+    if (returnTo) {
+      session.returnTo = returnTo;
+    } else {
+      delete session.returnTo;
+    }
+  }
   const strategyName = resolveStrategyName(req);
   console.log(`Login route hit, initiating OAuth flow via "${strategyName}" (host: ${req.get('host')})`);
-  passport.authenticate(strategyName, { 
+  passport.authenticate(strategyName, {
     failureRedirect: '/auth/login-failed',
-    failureMessage: true 
+    failureMessage: true
   })(req, res, next);
 });
 
@@ -155,7 +165,12 @@ router.get(
         console.error('Authentication failed - no user:', info);
         return res.redirect('/auth/login-failed');
       }
-      req.logIn(user, (loginErr) => {
+      // Capture before logIn: Passport 0.7 regenerates the session and drops
+      // prior fields unless keepSessionInfo is set. The snapshot covers both.
+      const pendingReturnTo = sanitizeAuthReturnTo(
+        (req.session as { returnTo?: string } | undefined)?.returnTo,
+      );
+      req.logIn(user, { session: true, keepSessionInfo: true }, (loginErr) => {
         if (loginErr) {
           console.error('Login error:', loginErr);
           return res.redirect('/auth/login-failed');
@@ -182,10 +197,14 @@ router.get(
           user.profile?.oid ?? '',
           userEmail,
         ).catch((err) => console.error('resolvePendingAssignments failed:', err));
-        // Redirect to the Vite dev server (or root in production)
-        const redirectUrl = process.env.NODE_ENV === 'production' 
-          ? '/' 
-          : 'http://localhost:3000/';
+        const session = req.session as { returnTo?: string } | undefined;
+        const sessionReturnTo = sanitizeAuthReturnTo(session?.returnTo) ?? pendingReturnTo;
+        if (session) delete session.returnTo;
+        // Redirect to the Vite dev server (or root in production), preserving a
+        // validated internal return path when one was supplied at login.
+        const redirectUrl = process.env.NODE_ENV === 'production'
+          ? (sessionReturnTo ?? '/')
+          : `http://localhost:3000${sessionReturnTo ?? '/'}`;
         return res.redirect(redirectUrl);
       });
     })(req, res, next);
@@ -312,7 +331,8 @@ if (process.env.NODE_ENV !== 'production') {
         mockUser.profile.oid,
         mockUser.profile.upn
       ).catch((e) => console.error('resolvePendingAssignments failed:', e));
-      res.json({ ok: true, persona: personaUser.id });
+      const redirectTo = sanitizeAuthReturnTo(req.body?.returnTo) ?? '/';
+      res.json({ ok: true, persona: personaUser.id, redirectTo });
     });
   });
 }

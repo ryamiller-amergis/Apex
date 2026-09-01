@@ -36,7 +36,6 @@ const SUPER_ADMIN_EMAILS_BY_ENV: Record<AppEnvironment, string[]> = {
   local: [
     'ryamiller@amergis.com',
     'anedunur@amergis.com',
-    'laleduy@amergis.com',
   ],
   dev: [
     'ryamiller@amergis.com',

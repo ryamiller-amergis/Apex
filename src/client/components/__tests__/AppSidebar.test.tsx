@@ -165,6 +165,36 @@ describe('AppSidebar — desktop navigation', () => {
     );
     expect(screen.queryByRole('button', { name: 'UI Lab' })).not.toBeInTheDocument();
   });
+
+  it('shows UI Lab outside the UI/UX group when designs have been shared with the user', () => {
+    const can = (key: string) => key === 'ui-lab:view';
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={can}
+        menuEnabledViews={['ui-lab']}
+        isInAnyGroup={() => false}
+        hasUiLabShares
+        onNavigateUiLab={jest.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'UI Lab' })).toBeInTheDocument();
+  });
+
+  it('hides UI Lab for a share holder when ui-lab is off for the project', () => {
+    const can = (key: string) => key === 'ui-lab:view';
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={can}
+        menuEnabledViews={[]}
+        isInAnyGroup={() => false}
+        hasUiLabShares
+        onNavigateUiLab={jest.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'UI Lab' })).not.toBeInTheDocument();
+  });
 });
 
 describe('AppSidebar — Work Board flag', () => {

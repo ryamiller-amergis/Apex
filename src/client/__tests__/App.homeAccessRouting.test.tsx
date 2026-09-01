@@ -41,6 +41,10 @@ jest.mock('../hooks/useProjectSkillConfig', () => ({
   useProjectSkillConfig: jest.fn().mockReturnValue({ data: null }),
 }));
 
+jest.mock('../hooks/useUiLab', () => ({
+  useUiLabSharedDesigns: jest.fn().mockReturnValue({ data: [], isLoading: false }),
+}));
+
 jest.mock('../components/AppHeader', () => ({
   AppHeader: () => <div data-testid="app-header" />,
 }));

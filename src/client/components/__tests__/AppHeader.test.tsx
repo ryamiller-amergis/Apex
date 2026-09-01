@@ -175,6 +175,34 @@ describe('AppHeader — UI Lab admin-gated behavior', () => {
     render(<AppHeader {...baseProps} can={(_k) => false} isSuperAdmin menuEnabledViews={[]} isInAnyGroup={() => false} />);
     expect(screen.getByRole('button', { name: 'UI Lab' })).toBeInTheDocument();
   });
+
+  it('renders UI Lab outside the UI/UX group when designs have been shared with the user', () => {
+    const can = (key: string) => key === 'ui-lab:view';
+    render(
+      <AppHeader
+        {...baseProps}
+        can={can}
+        menuEnabledViews={['ui-lab']}
+        isInAnyGroup={() => false}
+        hasUiLabShares
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'UI Lab' })).toBeInTheDocument();
+  });
+
+  it('does NOT render UI Lab for a share holder when ui-lab is off for the project', () => {
+    const can = (key: string) => key === 'ui-lab:view';
+    render(
+      <AppHeader
+        {...baseProps}
+        can={can}
+        menuEnabledViews={[]}
+        isInAnyGroup={() => false}
+        hasUiLabShares
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'UI Lab' })).not.toBeInTheDocument();
+  });
 });
 
 // ── Work Board: super admin always; otherwise menu-enabled + work-board:view ──
