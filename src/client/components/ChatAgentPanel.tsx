@@ -30,6 +30,10 @@ const MAX_WIDTH_RATIO = 0.92;
 const DEFAULT_WIDTH = 580;
 const LS_WIDTH_KEY = 'chatPanelWidth';
 
+function testIdSegment(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
 function loadStoredWidth(): number {
   try {
     const v = localStorage.getItem(LS_WIDTH_KEY);
@@ -649,7 +653,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                     setSelectedMcpPill(null);
                     setSelectedModel(selected?.model ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID);
                   }}
-                  {...{ 'data-testid': `chat-agent-skill-pill-${pill.skillPath}` }}
+                  {...{ 'data-testid': `chat-agent-skill-pill-${testIdSegment(pill.skillPath)}` }}
                 >
                   {pill.label}
                 </button>
@@ -668,7 +672,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                     setSelectedQuickSkill(null);
                     setSelectedModel(selected?.model ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID);
                   }}
-                  {...{ 'data-testid': `chat-agent-mcp-pill-${pill.mcpServerName}` }}
+                  {...{ 'data-testid': `chat-agent-mcp-pill-${testIdSegment(pill.mcpServerName)}` }}
                 >
                   {pill.label}
                 </button>
