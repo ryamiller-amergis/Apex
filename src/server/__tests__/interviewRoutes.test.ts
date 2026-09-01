@@ -378,6 +378,18 @@ describe('GET /api/interviews/reviewer-availability', () => {
     expect(res.status).toBe(400);
     expect(mockResolveReviewerAvailability).not.toHaveBeenCalled();
   });
+
+  it('gates reviewer availability on interviews:manage, the same key used to create interviews', () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), 'src/server/routes/interviews.ts'),
+      'utf8',
+    );
+
+    expect(source).toContain(
+      "router.get('/reviewer-availability', requirePermission('interviews:manage')",
+    );
+    expect(source).not.toContain("requirePermission('interviews:create')");
+  });
 });
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────

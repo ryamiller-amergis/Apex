@@ -113,7 +113,7 @@ import { resolveReviewerAvailability } from '../services/reviewerAvailabilitySer
 
 const router = Router();
 
-router.get('/reviewer-availability', requirePermission('interviews:create'), async (req, res, next) => {
+router.get('/reviewer-availability', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const project = typeof req.query.project === 'string' ? req.query.project.trim() : '';
     if (!project) {
