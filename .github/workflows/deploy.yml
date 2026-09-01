@@ -251,8 +251,8 @@ jobs:
           # Mark sticky slot settings (these stay with their slot during swap)
           # LT_APEX_CALLBACK_BASE_URL must be sticky so staging dispatches callback
           # to the staging host and production keeps the production host.
-          # DATABASE_URL must be sticky so a staging→production swap cannot put
-          # an older GitHub secret host back onto the live site after a DB cutover.
+          # Staging DATABASE_URL tracks secrets.DATABASE_URL (set above) and is
+          # sticky so a swap cannot move it onto production.
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
@@ -265,12 +265,22 @@ jobs:
               APEX_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net"
 
           # Production slot sticky callback + shared MI runner auth (not swapped away).
-          # DATABASE_URL sticky on production so swap cannot move the live host.
+          # Re-mark the *existing* production DATABASE_URL as sticky — do not write
+          # secrets.DATABASE_URL here, or every deploy would overwrite a portal
+          # cutover with a stale GitHub secret (Aug 25 failure mode).
+          PROD_DATABASE_URL=$(az webapp config appsettings list \
+            --name ${{ env.APP_SERVICE_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
+            --query "[?name=='DATABASE_URL'].value | [0]" -o tsv)
+          if [ -z "$PROD_DATABASE_URL" ]; then
+            echo "ERROR: production DATABASE_URL is empty; refusing to clear it" >&2
+            exit 1
+          fi
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
             --slot-settings \
-              DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+              DATABASE_URL="$PROD_DATABASE_URL" \
               LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net" \
               APEX_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net"
 
