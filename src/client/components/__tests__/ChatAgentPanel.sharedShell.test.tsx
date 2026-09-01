@@ -114,6 +114,7 @@ describe('ChatAgentPanel shared Home shell', () => {
         isOpen
         onClose={jest.fn()}
         onNewChat={jest.fn()}
+        onSelectThread={jest.fn()}
         launchedFromHome
         selectedProject="Apex"
       />,
