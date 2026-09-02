@@ -700,6 +700,7 @@ export async function fetchPinnedCommit(
   if (!COMMIT_SHA_RE.test(normalized)) return false;
   const cacheDir = getRepoCacheDir(options);
   if (!cacheExists(cacheDir)) return false;
+  writeRepoCacheIdentity(cacheDir, options);
   if (await commitExistsInCache(cacheDir, normalized)) {
     markRepoCacheUsed(cacheDir);
     return true;
@@ -746,6 +747,7 @@ export async function fetchPinnedCommit(
         );
         await assertOwned();
         const got = await commitExistsInCache(cacheDir, normalized, signal);
+        writeRepoCacheIdentity(cacheDir, options);
         if (got) markRepoCacheUsed(cacheDir);
         console.log(
           `[repo-cache] phase=pin-fetch-${got ? 'complete' : 'miss'} repo=${repoLabel} ` +

@@ -31,7 +31,6 @@ jest.mock('../services/telemetry', () => ({ trackEvent: jest.fn() }));
 import type { RunGrounding } from '../../shared/types/runGrounding';
 import {
   REPO_CACHE_MIN_IDLE_MS,
-  REPO_CACHE_ORPHAN_IDLE_MS,
   createRepoCacheEvictionService,
 } from '../services/repoCacheEvictionService';
 import {
@@ -219,25 +218,44 @@ describe('repoCacheEvictionService', () => {
     expect(fs.existsSync(dir)).toBe(true);
   });
 
-  it('holds a mirror without an identity sidecar until the orphan window passes', async () => {
+  it('never deletes a mirror without an identity sidecar', async () => {
     const dir = makeMirror({
       identity: null,
       branch: 'main',
       bytes: 4 * MB,
-      idleMs: REPO_CACHE_ORPHAN_IDLE_MS / 2,
+      idleMs: REPO_CACHE_MIN_IDLE_MS * 100,
     });
 
-    const stillHeld = await service({ maxBytes: MB }).evictOverBudget();
-    expect(stillHeld.evicted).toBe(0);
+    const result = await service({ maxBytes: MB }).evictOverBudget();
+
+    expect(result.evicted).toBe(0);
+    expect(result.protected).toBe(1);
     expect(fs.existsSync(dir)).toBe(true);
+    expect(grantLease).not.toHaveBeenCalled();
+  });
 
-    const laterStamp = new Date(NOW - REPO_CACHE_ORPHAN_IDLE_MS * 2);
-    fs.utimesSync(path.join(dir, 'apex-last-used'), laterStamp, laterStamp);
+  it('skips eviction when active groundings cannot be listed', async () => {
+    const dir = makeMirror({
+      identity: ADO_MAXVIEW,
+      branch: 'main',
+      bytes: 4 * MB,
+      idleMs: REPO_CACHE_MIN_IDLE_MS * 10,
+    });
+    const eviction = createRepoCacheEvictionService({
+      dataRoot: DATA_ROOT,
+      maxBytes: MB,
+      now: () => NOW,
+      listActiveGroundings: async () => {
+        throw new Error('database unavailable');
+      },
+      withLease: grantLease as never,
+      telemetry: jest.fn(),
+    });
 
-    const evicted = await service({ maxBytes: MB }).evictOverBudget();
-    expect(evicted.evicted).toBe(1);
-    expect(fs.existsSync(dir)).toBe(false);
-    // No sidecar means no lease key, so deletion happens unguarded.
+    const result = await eviction.evictOverBudget();
+
+    expect(result.evicted).toBe(0);
+    expect(fs.existsSync(dir)).toBe(true);
     expect(grantLease).not.toHaveBeenCalled();
   });
 

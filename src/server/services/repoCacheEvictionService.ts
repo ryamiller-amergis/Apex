@@ -22,12 +22,6 @@ import { trackEvent } from './telemetry';
 export const REPO_CACHE_MIN_IDLE_MS = 30 * 60 * 1000;
 
 /**
- * Mirrors predating the identity sidecar cannot be deleted under their own
- * lease. Give them a full day of inactivity before removing them unguarded.
- */
-export const REPO_CACHE_ORPHAN_IDLE_MS = 24 * 60 * 60 * 1000;
-
-/**
  * App Service Basic gives the whole app one 10 GiB share, shared with deploy
  * packages (Kudu keeps two at ~0.7 GiB each) and grounding workspaces, sessions
  * and logs (~0.35 GiB). Holding 1.5 GiB back for the next deploy upload leaves
@@ -144,8 +138,18 @@ export function createRepoCacheEvictionService(
       }
 
       // A mirror backing an active grounding is never a candidate, however
-      // large or stale it looks.
-      const active = await listActiveGroundings().catch(() => []);
+      // large or stale it looks. If that list cannot be loaded, skip eviction
+      // rather than treating every mirror as unused.
+      let active;
+      try {
+        active = await listActiveGroundings();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[repo-cache] skipping eviction; could not list active groundings: ${message}`,
+        );
+        return result;
+      }
       const protectedDirs = new Set(
         active.map((grounding) =>
           getRepoCacheDir(groundingCacheOptions(grounding)),
@@ -171,10 +175,9 @@ export function createRepoCacheEvictionService(
 
         const idleMs = now() - lastUsedMs;
         const identity = readRepoCacheIdentity(dir);
-        const minIdleMs = identity
-          ? REPO_CACHE_MIN_IDLE_MS
-          : REPO_CACHE_ORPHAN_IDLE_MS;
-        if (protectedDirs.has(dir) || idleMs <= minIdleMs) {
+        // No sidecar means no lease key. Leave the mirror until a fetch writes
+        // identity; unguarded delete can remove a cache a live fetch still owns.
+        if (!identity || protectedDirs.has(dir) || idleMs <= REPO_CACHE_MIN_IDLE_MS) {
           result.protected += 1;
           continue;
         }
@@ -239,11 +242,7 @@ async function removeMirror(
   candidate: MirrorCandidate,
   withLease: typeof withRepoCacheLease,
 ): Promise<boolean> {
-  if (!candidate.identity) {
-    // No sidecar, so no lease key. Only reached after a full day idle.
-    await fsp.rm(candidate.dir, { recursive: true, force: true });
-    return true;
-  }
+  if (!candidate.identity) return false;
   const leaseKey = getRepoCacheLeaseKey(candidate.identity);
   try {
     await withLease(
