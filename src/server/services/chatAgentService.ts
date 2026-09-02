@@ -142,6 +142,7 @@ import {
   sanitizeCursorTerminalDetail,
   ThinkingPhaseCoalescer,
   type CursorExecutionRun,
+  type CursorTokenUsage,
 } from './cursorExecutionCore';
 import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
 import type { RepositoryPreparationTarget } from './repositoryPreparationService';
@@ -4722,6 +4723,9 @@ export async function sendMessage(
   let mcpDeadlineController: McpToolDeadlineController | null = null;
   let unsubscribeAbort: (() => void) | null = null;
   let heldLocalAgentSlot = false;
+  // Retained across attempts and visible to the error handler so a run that
+  // ultimately fails still reports the tokens it burned, rather than zeros.
+  let lastRunUsage: CursorTokenUsage | undefined;
 
   try {
     await acquireLocalAgentSlot(threadId);
@@ -5449,6 +5453,7 @@ export async function sendMessage(
 
       if (!executionResult) continue;
       agentTextBuffer = executionResult.text;
+      lastRunUsage = executionResult.usage ?? lastRunUsage;
       const result = executionResult.waitResult;
 
       if (result.status === 'error') {
@@ -5599,8 +5604,11 @@ export async function sendMessage(
         const kickoff =
           state.thread.kickoff ??
           ({} as import('../../shared/types/chat').ChatThreadKickoff);
-        const inputEst = estimateTokens(text ?? '');
-        const outputEst = estimateTokens(agentTextBuffer ?? '');
+        // Real counts cover the whole prompt the model read — system prompt,
+        // skill, grounding docs, replayed history, tool output. The chars/4
+        // estimate covers only the two visible messages, so it undercounts
+        // heavily; use it only when the runtime reported nothing.
+        const usage = lastRunUsage;
         void recordCursorChatUsage({
           kickoff,
           modelId: resolvedModel,
@@ -5609,8 +5617,11 @@ export async function sendMessage(
           workItemId:
             kickoff.workItemId != null ? String(kickoff.workItemId) : undefined,
           userId: state.thread.userId ?? undefined,
-          inputTokens: inputEst,
-          outputTokens: outputEst,
+          inputTokens: usage?.inputTokens ?? estimateTokens(text ?? ''),
+          outputTokens: usage?.outputTokens ?? estimateTokens(agentTextBuffer ?? ''),
+          cacheReadTokens: usage?.cacheReadTokens,
+          cacheWriteTokens: usage?.cacheWriteTokens,
+          tokenSource: usage ? 'exact' : 'estimated',
           durationMs: Date.now() - runStartedAtMs,
           status: 'success',
         }).catch(() => {});
@@ -5856,8 +5867,11 @@ export async function sendMessage(
         threadId,
         runId: agentRunId ?? undefined,
         userId: state.thread?.userId ?? undefined,
-        inputTokens: 0,
-        outputTokens: 0,
+        inputTokens: lastRunUsage?.inputTokens ?? 0,
+        outputTokens: lastRunUsage?.outputTokens ?? 0,
+        cacheReadTokens: lastRunUsage?.cacheReadTokens,
+        cacheWriteTokens: lastRunUsage?.cacheWriteTokens,
+        tokenSource: lastRunUsage ? 'exact' : 'estimated',
         durationMs: Date.now() - runStartedAtMs,
         status: 'error',
       }).catch(() => {});

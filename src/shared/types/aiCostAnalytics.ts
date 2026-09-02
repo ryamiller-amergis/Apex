@@ -244,6 +244,7 @@ export interface EntityUsageRun {
   modelId: string;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
   durationMs: number | null;
   costUsd: number;
   createdAt: string;

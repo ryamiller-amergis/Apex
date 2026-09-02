@@ -107,3 +107,102 @@ describe('TBI-004 shared Cursor execution core', () => {
     expect(Object.isFrozen(snapshot)).toBe(true);
   });
 });
+
+describe('cursor execution core token usage', () => {
+  async function execute(run: CursorExecutionRun) {
+    let sequence = 0;
+    return executeCursorExecutionCore({
+      snapshot,
+      run,
+      context: { runId: 'run-1', sourceInstance: 'usage-test' },
+      sink: { publish: () => {} },
+      nextSequence: () => ++sequence,
+      createEventId: () => `event-${sequence}`,
+      now: () => '2026-08-06T12:00:00.000Z',
+    });
+  }
+
+  function runWith(opts: {
+    streamUsage?: unknown[];
+    waitUsage?: unknown;
+  }): CursorExecutionRun {
+    return {
+      supports: (capability) => capability === 'stream',
+      stream: async function* () {
+        yield {
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: 'ok' }] },
+        };
+        for (const usage of opts.streamUsage ?? []) {
+          yield { type: 'usage', agent_id: 'a', run_id: 'run-1', usage };
+        }
+      },
+      wait: jest.fn().mockResolvedValue({
+        status: 'completed',
+        result: 'ok',
+        ...(opts.waitUsage !== undefined ? { usage: opts.waitUsage } : {}),
+      }),
+    };
+  }
+
+  it('prefers the cumulative usage reported by wait()', async () => {
+    const result = await execute(
+      runWith({
+        waitUsage: {
+          inputTokens: 42_000,
+          outputTokens: 900,
+          cacheReadTokens: 118_000,
+          cacheWriteTokens: 3_000,
+          totalTokens: 163_900,
+        },
+        streamUsage: [
+          { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        ],
+      }),
+    );
+
+    expect(result.usage).toEqual({
+      inputTokens: 42_000,
+      outputTokens: 900,
+      cacheReadTokens: 118_000,
+      cacheWriteTokens: 3_000,
+    });
+  });
+
+  it('sums per-turn usage events when wait() carries none', async () => {
+    const result = await execute(
+      runWith({
+        streamUsage: [
+          { inputTokens: 20_000, outputTokens: 400, cacheReadTokens: 5_000, cacheWriteTokens: 100 },
+          { inputTokens: 22_000, outputTokens: 500, cacheReadTokens: 6_000, cacheWriteTokens: 200 },
+        ],
+      }),
+    );
+
+    expect(result.usage).toEqual({
+      inputTokens: 42_000,
+      outputTokens: 900,
+      cacheReadTokens: 11_000,
+      cacheWriteTokens: 300,
+    });
+  });
+
+  it('reports no usage when the runtime never sends any', async () => {
+    const result = await execute(runWith({}));
+    expect(result.usage).toBeUndefined();
+  });
+
+  it('treats an all-zero usage payload as no usage', async () => {
+    const result = await execute(
+      runWith({
+        waitUsage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      }),
+    );
+    expect(result.usage).toBeUndefined();
+  });
+});

@@ -25,6 +25,7 @@ const rollup: EntityUsageRollup = {
       modelId: 'composer-2.5',
       inputTokens: 1000,
       outputTokens: 200,
+      cacheReadTokens: 0,
       durationMs: 60000,
       costUsd: 0.01,
       createdAt: '2026-09-01T00:00:00.000Z',
@@ -33,6 +34,7 @@ const rollup: EntityUsageRollup = {
       modelId: 'composer-2.5-fast',
       inputTokens: 200,
       outputTokens: 100,
+      cacheReadTokens: 0,
       durationMs: 65000,
       costUsd: 0.0023,
       createdAt: '2026-09-01T00:01:00.000Z',
@@ -78,5 +80,54 @@ describe('ArtifactUsageStrip', () => {
     fireEvent.click(screen.getByTestId('artifact-usage-toggle'));
     expect(screen.getByTestId('artifact-usage-runs')).toBeInTheDocument();
     expect(screen.getByTestId('artifact-usage-run-0')).toHaveTextContent('composer-2.5');
+  });
+
+  it('expands and collapses the run list from the Runs metric', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => rollup,
+    }) as unknown as typeof fetch;
+    wrap(<ArtifactUsageStrip endpoint="/api/interviews/1/usage" visible />);
+    const toggle = await screen.findByTestId('artifact-usage-toggle');
+    expect(toggle).toHaveTextContent('Runs');
+    expect(toggle).toHaveTextContent('2');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId('artifact-usage-runs')).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(toggle);
+    expect(screen.queryByTestId('artifact-usage-runs')).not.toBeInTheDocument();
+  });
+
+  it('counts cache reads in each run row so the rows sum to the header total', async () => {
+    const cached: EntityUsageRollup = {
+      ...rollup,
+      inputTokens: 1200,
+      outputTokens: 300,
+      cacheReadTokens: 8500,
+      totalTokens: 10000,
+      interactions: 1,
+      runs: [
+        {
+          modelId: 'composer-2.5',
+          inputTokens: 1200,
+          outputTokens: 300,
+          cacheReadTokens: 8500,
+          durationMs: 60000,
+          costUsd: 0.01,
+          createdAt: '2026-09-01T00:00:00.000Z',
+        },
+      ],
+    };
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => cached,
+    }) as unknown as typeof fetch;
+    wrap(<ArtifactUsageStrip endpoint="/api/interviews/1/usage" visible />);
+    const strip = await screen.findByTestId('artifact-usage-strip');
+    expect(strip).toHaveTextContent('10.0k');
+    fireEvent.click(screen.getByTestId('artifact-usage-toggle'));
+    expect(screen.getByTestId('artifact-usage-run-0')).toHaveTextContent('10.0k tokens');
   });
 });

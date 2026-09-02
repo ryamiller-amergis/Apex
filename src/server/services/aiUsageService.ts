@@ -10,7 +10,12 @@
 import { db } from '../db/drizzle';
 import { adrs, aiPricing, aiUsageEvents, designDocs, interviews, prds } from '../db/schema';
 import { and, desc, eq, gt, isNull, lte, or } from 'drizzle-orm';
-import type { RecordUsageInput, AiFeature, AiUsageStatus } from '../../shared/types/aiCostAnalytics';
+import type {
+  RecordUsageInput,
+  AiFeature,
+  AiTokenSource,
+  AiUsageStatus,
+} from '../../shared/types/aiCostAnalytics';
 
 // Estimate: ~4 chars per token (GPT-4 heuristic, good enough for allocation)
 const CHARS_PER_TOKEN = 4;
@@ -204,15 +209,22 @@ export async function recordCursorChatUsage(opts: {
   workItemId?: string;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  /** 'exact' when the runtime reported usage; defaults to the chars/4 estimate. */
+  tokenSource?: AiTokenSource;
   durationMs: number;
   status: AiUsageStatus;
 }): Promise<void> {
   const entity = await resolveUsageEntityFromThread(opts.threadId);
+  const tokenSource = opts.tokenSource ?? 'estimated';
   const costUsd = await computeCost({
     provider: 'cursor',
     modelId: opts.modelId,
     inputTokens: opts.inputTokens,
     outputTokens: opts.outputTokens,
+    cacheReadTokens: opts.cacheReadTokens,
+    cacheWriteTokens: opts.cacheWriteTokens,
   });
   recordAiUsage({
     provider: 'cursor',
@@ -228,9 +240,13 @@ export async function recordCursorChatUsage(opts: {
     entityId: entity?.entityId,
     inputTokens: opts.inputTokens,
     outputTokens: opts.outputTokens,
-    tokenSource: 'estimated',
+    cacheReadTokens: opts.cacheReadTokens,
+    cacheWriteTokens: opts.cacheWriteTokens,
+    tokenSource,
     costUsd,
-    costSource: 'estimated',
+    // Priced from real token counts against the pricing catalog, so the cost
+    // is computed rather than a guess derived from a guess.
+    costSource: tokenSource === 'exact' ? 'computed' : 'estimated',
     durationMs: opts.durationMs,
     status: opts.status,
   });

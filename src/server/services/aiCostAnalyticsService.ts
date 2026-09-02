@@ -558,6 +558,7 @@ export async function getEntityUsageRollup(opts: {
       modelId: row.modelId,
       inputTokens: row.inputTokens ?? 0,
       outputTokens: row.outputTokens ?? 0,
+      cacheReadTokens: row.cacheReadTokens ?? 0,
       durationMs: row.durationMs ?? null,
       costUsd: parseFloat(row.costUsd ?? '0'),
       createdAt: row.createdAt,

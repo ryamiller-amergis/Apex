@@ -32,21 +32,37 @@
   font-style: italic;
 }
 
-.toggle {
-  margin-left: auto;
+.metricToggle {
   background: transparent;
-  border: 1px solid var(--border-color);
-  color: var(--text-secondary);
+  border: none;
   border-radius: 6px;
-  padding: 2px 8px;
-  font-size: 11px;
+  margin: -2px -6px;
+  padding: 2px 6px;
+  font: inherit;
+  color: inherit;
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
-.toggle:hover {
-  border-color: var(--accent-color);
-  color: var(--text-primary);
+.metricToggle:hover {
+  background: var(--bg-tertiary);
+}
+
+.metricToggle:hover .label,
+.metricToggle:hover .chevron {
+  color: var(--accent-color);
+}
+
+.chevron {
+  width: 11px;
+  height: 11px;
+  align-self: center;
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+}
+
+.chevronOpen {
+  transform: rotate(180deg);
 }
 
 .runs {

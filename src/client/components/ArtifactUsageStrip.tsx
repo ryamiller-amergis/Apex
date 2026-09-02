@@ -60,24 +60,40 @@ export const ArtifactUsageStrip: React.FC<ArtifactUsageStripProps> = ({ endpoint
         <span className={styles.label}>Cost</span>
         <span className={styles.value}>{formatUsageCost(rollup.costUsd)}</span>
       </span>
-      <span className={styles.metric}>
-        <span className={styles.label}>Runs</span>
-        <span className={styles.value}>{rollup.interactions}</span>
-      </span>
+      {rollup.runs.length > 0 ? (
+        <button
+          type="button"
+          className={`${styles.metric} ${styles.metricToggle}`}
+          onClick={() => setExpanded((open) => !open)}
+          aria-expanded={expanded}
+          title={expanded ? 'Hide run breakdown' : 'Show run breakdown'}
+          {...{ 'data-testid': 'artifact-usage-toggle' }}
+        >
+          <span className={styles.label}>Runs</span>
+          <span className={styles.value}>{rollup.interactions}</span>
+          <svg
+            className={`${styles.chevron} ${expanded ? styles.chevronOpen : ''}`}
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M4 6l4 4 4-4" />
+          </svg>
+        </button>
+      ) : (
+        <span className={styles.metric}>
+          <span className={styles.label}>Runs</span>
+          <span className={styles.value}>{rollup.interactions}</span>
+        </span>
+      )}
       {rollup.incomplete && (
         <span className={styles.incomplete} {...{ 'data-testid': 'artifact-usage-incomplete' }}>
           Cost pending
         </span>
-      )}
-      {rollup.runs.length > 0 && (
-        <button
-          type="button"
-          className={styles.toggle}
-          onClick={() => setExpanded((open) => !open)}
-          {...{ 'data-testid': 'artifact-usage-toggle' }}
-        >
-          {expanded ? 'Hide runs' : 'Show runs'}
-        </button>
       )}
       {expanded && (
         <ul className={styles.runs} {...{ 'data-testid': 'artifact-usage-runs' }}>
@@ -87,7 +103,8 @@ export const ArtifactUsageStrip: React.FC<ArtifactUsageStripProps> = ({ endpoint
               className={styles.run}
               {...{ 'data-testid': `artifact-usage-run-${index}` }}
             >
-              {run.modelId} · {formatUsageTokens(run.inputTokens + run.outputTokens)} tokens
+              {run.modelId} ·{' '}
+              {formatUsageTokens(run.inputTokens + run.outputTokens + run.cacheReadTokens)} tokens
               {run.durationMs != null ? ` · ${formatUsageDuration(run.durationMs)}` : ''}
               {` · ${formatUsageCost(run.costUsd)}`}
             </li>

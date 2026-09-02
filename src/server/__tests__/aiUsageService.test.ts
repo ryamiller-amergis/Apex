@@ -220,5 +220,34 @@ describe('aiUsageService', () => {
         }),
       );
     });
+
+    it('marks runtime-reported counts as exact and prices cache tokens', async () => {
+      interviewFindFirst.mockResolvedValue({ id: 'int-9' });
+      pricingLimit.mockResolvedValue([pricingRow('composer-2.5')]);
+
+      await recordCursorChatUsage({
+        kickoff: { skillPath: '.cursor/skills/grill-with-docs/SKILL.md', project: 'Apex' },
+        modelId: 'composer-2.5',
+        threadId: 'thread-9',
+        inputTokens: 42_000,
+        outputTokens: 900,
+        cacheReadTokens: 118_000,
+        cacheWriteTokens: 3_000,
+        tokenSource: 'exact',
+        durationMs: 4200,
+        status: 'success',
+      });
+
+      expect(insertValues).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inputTokens: 42_000,
+          outputTokens: 900,
+          cacheReadTokens: 118_000,
+          cacheWriteTokens: 3_000,
+          tokenSource: 'exact',
+          costSource: 'computed',
+        }),
+      );
+    });
   });
 });
