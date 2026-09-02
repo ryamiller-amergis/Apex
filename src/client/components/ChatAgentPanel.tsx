@@ -765,34 +765,17 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             {...{ 'data-testid': 'chat-agent-composer' }}
           />
         </>
-      ) : !isConnected ? (
-        <>
-          <div className={styles.connectionError} role="alert">
-            <span className={styles.emptyIcon}>!</span>
-            <h3>Unable to connect</h3>
-            <p>The chat session could not be established. Check your connection and retry.</p>
-            <button
-              type="button"
-              className={styles.btnPrimary}
-              onClick={() => { void session.retryLast(); }}
-              {...{ 'data-testid': 'chat-agent-retry-connection' }}
-            >
-              Retry Connection
-            </button>
-          </div>
-          <AgentComposer
-            className={styles.composerEmbed}
-            value={input}
-            onChange={setInput}
-            onSend={() => undefined}
-            disabled
-            placeholder="Reconnecting…"
-            testIdPrefix="chat-agent"
-            {...{ 'data-testid': 'chat-agent-composer' }}
-          />
-        </>
       ) : (
         <>
+          {!isConnected && (
+            <div
+              className={styles.connectionError}
+              role="status"
+              {...{ 'data-testid': 'chat-agent-connection-banner' }}
+            >
+              Live connection interrupted. Your conversation is still here; reconnecting…
+            </div>
+          )}
           <div className={styles.messages}>
             {hasEmptyTranscript && (
               <div

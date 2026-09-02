@@ -226,13 +226,15 @@ describe('ChatAgentPanel shared Home shell', () => {
     expect(screen.getByText('Starting skill…')).toBeInTheDocument();
   });
 
-  it('PBI-006 AC-1 renders a disconnected state and retries the connection', () => {
+  it('PBI-006 AC-1 keeps the transcript visible while disconnected', () => {
     mockSessionOverrides = { isConnected: false };
     render(<ChatAgentPanel thread={thread} isOpen onClose={jest.fn()} onNewChat={jest.fn()} />);
 
     expect(screen.getByText('○ Disconnected')).toBeInTheDocument();
-    expect(screen.getByText('Unable to connect')).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('chat-agent-retry-connection'));
-    expect(mockRetryLast).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('chat-agent-connection-banner')).toBeInTheDocument();
+    expect(screen.getByText('Saved transcript')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-agent-composer-mock')).toBeInTheDocument();
+    expect(screen.queryByTestId('chat-agent-retry-connection')).not.toBeInTheDocument();
+    expect(mockRetryLast).not.toHaveBeenCalled();
   });
 });

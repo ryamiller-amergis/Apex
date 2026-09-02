@@ -285,21 +285,15 @@
 }
 
 .connectionError {
-  display: flex;
-  min-height: 0;
-  flex: 1;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 32px;
+  flex-shrink: 0;
+  margin: 8px 12px 0;
+  padding: 10px 14px;
+  border: 1px solid var(--error-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
   color: var(--text-secondary);
+  font-size: 13px;
   text-align: center;
-}
-
-.connectionError h3,
-.connectionError p {
-  margin: 0;
 }
 
 /* ── Empty / new thread pane ── */
