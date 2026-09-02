@@ -1,0 +1,99 @@
+import React, { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { fetchEntityUsage } from '../hooks/useArtifactUsage';
+import type { EntityUsageRollup } from '../../shared/types/aiCostAnalytics';
+import styles from './ArtifactUsageStrip.module.css';
+
+export function formatUsageTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
+export function formatUsageDuration(ms: number): string {
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remMin = minutes % 60;
+  return remMin ? `${hours}h ${remMin}m` : `${hours}h`;
+}
+
+export function formatUsageCost(usd: number): string {
+  if (usd <= 0) return '$0';
+  if (usd < 0.01) return `$${usd.toFixed(4)}`;
+  if (usd < 1) return `$${usd.toFixed(4)}`;
+  return `$${usd.toFixed(2)}`;
+}
+
+interface ArtifactUsageStripProps {
+  endpoint: string;
+  visible: boolean;
+}
+
+export const ArtifactUsageStrip: React.FC<ArtifactUsageStripProps> = ({ endpoint, visible }) => {
+  const [expanded, setExpanded] = useState(false);
+  const query = useQuery<EntityUsageRollup>({
+    queryKey: ['artifact-usage', endpoint],
+    queryFn: () => fetchEntityUsage(endpoint),
+    enabled: visible && Boolean(endpoint),
+    staleTime: 30_000,
+  });
+
+  if (!visible) return null;
+  const rollup = query.data;
+  if (!rollup || rollup.interactions === 0) return null;
+
+  return (
+    <div className={styles.strip} {...{ 'data-testid': 'artifact-usage-strip' }}>
+      <span className={styles.metric}>
+        <span className={styles.label}>Tokens</span>
+        <span className={styles.value}>{formatUsageTokens(rollup.totalTokens)}</span>
+      </span>
+      <span className={styles.metric}>
+        <span className={styles.label}>Time</span>
+        <span className={styles.value}>{formatUsageDuration(rollup.durationMs)}</span>
+      </span>
+      <span className={styles.metric}>
+        <span className={styles.label}>Cost</span>
+        <span className={styles.value}>{formatUsageCost(rollup.costUsd)}</span>
+      </span>
+      <span className={styles.metric}>
+        <span className={styles.label}>Runs</span>
+        <span className={styles.value}>{rollup.interactions}</span>
+      </span>
+      {rollup.incomplete && (
+        <span className={styles.incomplete} {...{ 'data-testid': 'artifact-usage-incomplete' }}>
+          Cost pending
+        </span>
+      )}
+      {rollup.runs.length > 0 && (
+        <button
+          type="button"
+          className={styles.toggle}
+          onClick={() => setExpanded((open) => !open)}
+          {...{ 'data-testid': 'artifact-usage-toggle' }}
+        >
+          {expanded ? 'Hide runs' : 'Show runs'}
+        </button>
+      )}
+      {expanded && (
+        <ul className={styles.runs} {...{ 'data-testid': 'artifact-usage-runs' }}>
+          {rollup.runs.map((run, index) => (
+            <li
+              key={`${run.modelId}-${run.createdAt}-${index}`}
+              className={styles.run}
+              {...{ 'data-testid': `artifact-usage-run-${index}` }}
+            >
+              {run.modelId} · {formatUsageTokens(run.inputTokens + run.outputTokens)} tokens
+              {run.durationMs != null ? ` · ${formatUsageDuration(run.durationMs)}` : ''}
+              {` · ${formatUsageCost(run.costUsd)}`}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+};

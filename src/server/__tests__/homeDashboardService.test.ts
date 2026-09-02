@@ -18,6 +18,7 @@ const pipeline: IncompletePipelineData = {
       route: '/backlog/interview/iv-1',
       updatedAt: '2026-08-01T00:00:00.000Z',
       ageDays: 30,
+      reason: 'No PRD generated',
     }],
     viewAllHref: '/backlog?tab=interviews',
   }],
@@ -60,6 +61,12 @@ function dependencies(
         changedAt: '2026-08-30T00:00:00.000Z',
         openDefectCount: 2,
       }],
+    }),
+    getBugToPbiRatio: jest.fn().mockResolvedValue({
+      bugCount: 8,
+      pbiCount: 20,
+      ratio: 0.4,
+      windowDays: 90,
     }),
     getDeliveryCycleTime: jest.fn().mockResolvedValue({
       medianCycleTimeDays: 8,
@@ -113,11 +120,21 @@ describe('HomeDashboardService', () => {
       status: 'ok',
       data: { medianDays: 8, sampleSize: 1, windowDays: 90 },
     });
+    expect(result.bugToPbiRatio).toEqual({
+      status: 'ok',
+      data: { bugCount: 8, pbiCount: 20, ratio: 0.4, windowDays: 90 },
+    });
     expect(deps.getMyWorkSummary).toHaveBeenCalledWith({
       userId: 'user-1',
       project: 'Alpha',
+      scope: 'team',
     });
-    expect(deps.trackEvent).toHaveBeenCalledTimes(5);
+    expect(deps.getBugToPbiRatio).toHaveBeenCalledWith({
+      userId: 'user-1',
+      project: 'Alpha',
+      scope: 'team',
+    });
+    expect(deps.trackEvent).toHaveBeenCalledTimes(6);
   });
 
   it('TBI-001 DoD-1 / VT-06 omits unauthorized tiles and never calls their sources', async () => {
@@ -138,12 +155,14 @@ describe('HomeDashboardService', () => {
       artifactCycleTime: null,
       myWork: null,
       openBugsOnPbis: null,
+      bugToPbiRatio: null,
       devToProduction: null,
     });
     expect(deps.getIncompletePipeline).not.toHaveBeenCalled();
     expect(deps.getArtifactCycleTime).not.toHaveBeenCalled();
     expect(deps.getMyWorkSummary).not.toHaveBeenCalled();
     expect(deps.getDefectRollup).not.toHaveBeenCalled();
+    expect(deps.getBugToPbiRatio).not.toHaveBeenCalled();
     expect(deps.getDeliveryCycleTime).not.toHaveBeenCalled();
   });
 
@@ -163,6 +182,7 @@ describe('HomeDashboardService', () => {
     expect(result.artifactCycleTime).toBeNull();
     expect(result.myWork).toBeNull();
     expect(result.openBugsOnPbis?.status).toBe('ok');
+    expect(result.bugToPbiRatio?.status).toBe('ok');
     expect(result.devToProduction?.status).toBe('ok');
     expect(deps.getIncompletePipeline).not.toHaveBeenCalled();
     expect(deps.getArtifactCycleTime).not.toHaveBeenCalled();
@@ -223,6 +243,7 @@ describe('HomeDashboardService', () => {
     expect(result.artifactCycleTime).toBeNull();
     expect(result.myWork).toBeNull();
     expect(result.openBugsOnPbis?.status).toBe('ok');
+    expect(result.bugToPbiRatio?.status).toBe('ok');
     expect(result.devToProduction?.status).toBe('ok');
     expect(deps.getIncompletePipeline).not.toHaveBeenCalled();
     expect(deps.getArtifactCycleTime).not.toHaveBeenCalled();
@@ -323,6 +344,12 @@ describe('HomeDashboardService', () => {
         medianCycleTimeDays: null,
         releases: [],
       }),
+      getBugToPbiRatio: jest.fn().mockResolvedValue({
+        bugCount: 0,
+        pbiCount: 0,
+        ratio: null,
+        windowDays: 90,
+      }),
     });
 
     const result = await createHomeDashboardService(deps).getDashboard({
@@ -332,6 +359,7 @@ describe('HomeDashboardService', () => {
     });
 
     expect(Object.values(result).map((tile) => tile?.status)).toEqual([
+      'empty',
       'empty',
       'empty',
       'empty',

@@ -3,8 +3,8 @@
  *
  * Every Postgres read stays inside the artifact services that already own it
  * (`interviewService`, `prdService`, `testCaseService`, `designPrototypeService`,
- * `designDocService`, `ownerApprovalService`). This module is a thin merge layer
- * that applies the stall rules and shapes rows for the tile.
+ * `designDocService`). This module is a thin merge layer that applies the stall
+ * rules and shapes rows for the tile.
  *
  * Source errors are not caught here — the composing dashboard service turns a
  * rejection into a per-tile error result so one bad source cannot blank the page.
@@ -17,14 +17,12 @@ import type {
 } from '../../shared/types/homeDashboard';
 import type { DesignDocSummary, InterviewSummary } from '../../shared/types/interview';
 import type { DesignPrototypeSummary } from '../../shared/types/designPrototype';
-import type { OwnerApprovalDocumentType } from '../../shared/types/approvals';
 import { resolvePrototypeStageEnabled } from '../../shared/utils/prototypeStage';
 import { listInterviews } from './interviewService';
 import { listPrds } from './prdService';
 import { listLatestTestCaseSummariesForPrds } from './testCaseService';
 import { listPrototypes } from './designPrototypeService';
 import { listDesignDocs } from './designDocService';
-import { getOwnerApproval } from './ownerApprovalService';
 import { getSkillConfig } from './projectSettingsService';
 
 /** BR-006: a group reports the full project count but ships at most this many rows. */
@@ -39,7 +37,7 @@ function ageDays(updatedAt: string, now: number): number {
 }
 
 function toRow(
-  input: { id: string; name: string; route: string; updatedAt: string },
+  input: { id: string; name: string; route: string; updatedAt: string; reason: string },
   now: number,
 ): PipelineGroupRow {
   return {
@@ -48,7 +46,28 @@ function toRow(
     route: input.route,
     updatedAt: input.updatedAt,
     ageDays: ageDays(input.updatedAt, now),
+    reason: input.reason,
   };
+}
+
+/**
+ * Row wording for the review statuses PRDs, Design Docs, and Prototypes share.
+ * Phrased as the stage being waited on rather than echoing the artifact's badge,
+ * so a row never reads "Complete" inside a tile titled Incomplete Pipeline.
+ */
+const REVIEW_STATUS_REASON: Record<string, string> = {
+  generating: 'Generating',
+  generation_failed: 'Generation failed',
+  regenerating: 'Regenerating',
+  validating: 'Validating',
+  draft: 'Draft — not submitted for review',
+  pending_review: 'Awaiting reviewers',
+  reviewer_approved: 'Awaiting owner approval',
+  revision_requested: 'Revision requested',
+};
+
+function reviewReason(status: string): string {
+  return REVIEW_STATUS_REASON[status] ?? 'In progress';
 }
 
 /** BR-006: stalest first, count everything, cap the rows. */
@@ -70,23 +89,18 @@ function toGroup(
   };
 }
 
-/** BR-002: only the owner's final approval completes a document. */
-async function isOwnerApproved(
-  documentId: string,
-  documentType: OwnerApprovalDocumentType,
-): Promise<boolean> {
-  const approval = await getOwnerApproval(documentId, documentType);
-  return approval?.status === 'approved';
-}
-
-async function filterAwaitingOwner<T extends { id: string }>(
-  items: T[],
-  documentType: OwnerApprovalDocumentType,
-): Promise<T[]> {
-  const approved = await Promise.all(
-    items.map((item) => isOwnerApproved(item.id, documentType)),
-  );
-  return items.filter((_, i) => !approved[i]);
+/**
+ * BR-002: a document still owes work until it reaches `approved`.
+ *
+ * The artifact's own status is the authority here, not a `document_owner_approvals`
+ * row. That table logs the owner's decision and is not written on every path that
+ * approves something: prototypes auto-approved for a skipped feature are inserted
+ * straight at `approved`, and documents approved before the two-stage owner flow
+ * shipped have no row at all. Keying off the row made those artifacts stall in the
+ * tile forever while the Backlog showed them as Approved.
+ */
+function awaitingApproval<T extends { status: string }>(items: T[]): T[] {
+  return items.filter((item) => item.status !== 'approved');
 }
 
 /** BR-004: a Design Doc for the same PRD feature retires the Prototype row. */
@@ -145,18 +159,22 @@ export async function getIncompletePipeline(
           name: iv.title,
           route: `/backlog/interview/${iv.id}`,
           updatedAt: iv.updatedAt,
+          // A complete Interview is listed only because it never produced a PRD,
+          // which is the one case where the artifact badge and the tile disagree.
+          reason: iv.status === 'complete' ? 'No PRD generated' : 'Interview in progress',
         },
         now,
       ),
     );
 
-  const prdRows = (await filterAwaitingOwner(prds, 'prd')).map((prd) =>
+  const prdRows = awaitingApproval(prds).map((prd) =>
     toRow(
       {
         id: prd.id,
         name: prd.title,
         route: `/backlog/prd/${prd.id}`,
         updatedAt: prd.updatedAt,
+        reason: reviewReason(prd.status),
       },
       now,
     ),
@@ -178,17 +196,20 @@ export async function getIncompletePipeline(
           name: prd.title,
           route: `/backlog/prd/${prd.id}`,
           updatedAt: suite?.updatedAt ?? prd.updatedAt,
+          reason: !suite
+            ? 'No test suite generated'
+            : suite.status === 'failed'
+              ? 'Generation failed'
+              : 'Generating',
         },
         now,
       );
     });
 
-  // BR-002 + BR-004: awaiting owner approval, or approved with no Design Doc yet.
-  const prototypesAwaitingOwner = await filterAwaitingOwner(prototypes, 'design_prototype');
-  const awaitingOwnerIds = new Set(prototypesAwaitingOwner.map((proto) => proto.id));
+  // BR-002 + BR-004: awaiting approval, or approved with no Design Doc yet.
   const prototypeRows = prototypes
     .filter(
-      (proto) => awaitingOwnerIds.has(proto.id) || !hasDesignDocForFeature(proto, designDocs),
+      (proto) => proto.status !== 'approved' || !hasDesignDocForFeature(proto, designDocs),
     )
     .map((proto) =>
       toRow(
@@ -197,18 +218,22 @@ export async function getIncompletePipeline(
           name: proto.featureName,
           route: `/backlog/design-prototypes/${proto.prdId}`,
           updatedAt: proto.updatedAt,
+          // BR-004: an approved Prototype is listed only for the missing Design Doc.
+          reason:
+            proto.status === 'approved' ? 'No design doc yet' : reviewReason(proto.status),
         },
         now,
       ),
     );
 
-  const designDocRows = (await filterAwaitingOwner(designDocs, 'design_doc')).map((doc) =>
+  const designDocRows = awaitingApproval(designDocs).map((doc) =>
     toRow(
       {
         id: doc.id,
         name: doc.title,
         route: `/backlog/design-doc/${doc.id}`,
         updatedAt: doc.updatedAt,
+        reason: reviewReason(doc.status),
       },
       now,
     ),

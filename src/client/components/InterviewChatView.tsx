@@ -44,6 +44,7 @@ import {
 } from './LinkedContextPicker';
 import { AgentComposer } from './agentChat';
 import { ApexLoader } from './ApexLoader';
+import { ArtifactUsageStrip } from './ArtifactUsageStrip';
 import styles from './InterviewChatView.module.css';
 
 function badgeClass(status: InterviewStatus): string {
@@ -1365,6 +1366,10 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 </>
               )}
             </div>
+            <ArtifactUsageStrip
+              endpoint={`/api/interviews/${interview.id}/usage`}
+              visible={interview.status === 'complete'}
+            />
             {(interview.prdOwnerName || interview.designDocOwnerName || interview.designPrototypeOwnerName) && (
               <div className={styles.ownerChips} {...{ 'data-testid': 'interview-owner-chips' }}>
                 {interview.prdOwnerName && (

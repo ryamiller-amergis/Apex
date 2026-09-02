@@ -1403,6 +1403,25 @@ router.get('/releases/:epicId/related-items', async (req: Request, res: Response
   }
 });
 
+// GET /api/releases/:epicId/cycle-time — last In Progress → last Done/Closed for related items
+router.get('/releases/:epicId/cycle-time', async (req: Request, res: Response) => {
+  try {
+    const epicId = parseInt(req.params.epicId, 10);
+    const { project, areaPath } = req.query as { project?: string; areaPath?: string };
+
+    if (isNaN(epicId)) {
+      return res.status(400).json({ error: 'Invalid epic ID' });
+    }
+
+    const adoService = new AzureDevOpsService(project, areaPath);
+    const cycleTime = await adoService.getRelatedItemsCycleTime(epicId);
+    res.json(cycleTime);
+  } catch (error: any) {
+    console.error('Error fetching related items cycle time:', error);
+    res.status(500).json({ error: 'Failed to fetch related items cycle time' });
+  }
+});
+
 // DELETE /api/releases/:epicId - Delete a release epic
 router.delete('/releases/:epicId', async (req: Request, res: Response) => {
   try {

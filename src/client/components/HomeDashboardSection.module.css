@@ -4,12 +4,59 @@
 }
 
 .heading {
-  margin: 0 0 12px 4px;
+  margin: 0 0 0 4px;
   color: var(--text-secondary);
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+.skeleton-heading {
+  margin-bottom: 12px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.scope-toggle {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+}
+
+.scope-button {
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.scope-button:hover {
+  color: var(--text-primary);
+}
+
+.scope-button.active {
+  background: var(--accent-color);
+  color: var(--bg-primary);
+  box-shadow: var(--glow-accent);
+}
+
+.scope-button:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
 }
 
 .primary-row,
@@ -24,7 +71,7 @@
 }
 
 .secondary-row {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 @media (max-width: 900px) {

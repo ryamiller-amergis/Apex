@@ -14,7 +14,11 @@ describe('DefectRollupService', () => {
       { id: 102, fields: { 'System.WorkItemType': 'Bug', 'System.State': 'Resolved' } },
       { id: 103, fields: { 'System.WorkItemType': 'Bug', 'System.State': 'New' } },
     ]);
-    const service = new DefectRollupService({ queryLinks, getItems });
+    const service = new DefectRollupService({
+      queryLinks,
+      getItems,
+      queryWorkItemIds: jest.fn(),
+    });
 
     await expect(service.getRollup({ project: 'Apex' })).resolves.toEqual({
       projectOpenDefectCount: 2,
@@ -29,6 +33,7 @@ describe('DefectRollupService', () => {
   test('TBI-004 VT-15 excludes closed states and non-child Related/Duplicate links', async () => {
     const service = new DefectRollupService({
       queryLinks: jest.fn().mockResolvedValue([{ sourceId: 10, targetId: 101 }]),
+      queryWorkItemIds: jest.fn(),
       getItems: jest.fn().mockResolvedValue([
         { id: 10, fields: { 'System.WorkItemType': 'Product Backlog Item', 'System.Title': 'PBI', 'System.ChangedDate': '2026-08-01T00:00:00Z' } },
         { id: 101, fields: { 'System.WorkItemType': 'Bug', 'System.State': 'Removed' } },
@@ -36,9 +41,11 @@ describe('DefectRollupService', () => {
       ]),
     });
 
+    // A PBI whose bugs are all closed has no open defect, so it is not a row on
+    // an "Open Bugs on PBIs" list.
     await expect(service.getRollup({ project: 'Apex' })).resolves.toEqual({
       projectOpenDefectCount: 0,
-      pbiRows: [{ pbiId: 10, title: 'PBI', changedAt: '2026-08-01T00:00:00Z', openDefectCount: 0 }],
+      pbiRows: [],
     });
   });
 
@@ -50,6 +57,7 @@ describe('DefectRollupService', () => {
     ]);
     const service = new DefectRollupService({
       queryLinks: jest.fn().mockResolvedValue(links),
+      queryWorkItemIds: jest.fn(),
       getItems: jest.fn().mockResolvedValue(items),
     });
     const result = await service.getRollup({ project: 'Apex' });
@@ -59,11 +67,95 @@ describe('DefectRollupService', () => {
 
     const empty = new DefectRollupService({
       queryLinks: jest.fn().mockResolvedValue([]),
+      queryWorkItemIds: jest.fn(),
       getItems: jest.fn(),
     });
     await expect(empty.getRollup({ project: 'Apex' })).resolves.toEqual({
       projectOpenDefectCount: 0,
       pbiRows: [],
     });
+  });
+
+  test('Mine scope asks ADO for PBIs assigned to the user at any revision', async () => {
+    const queryLinks = jest.fn().mockResolvedValue([]);
+    const service = new DefectRollupService({
+      queryLinks,
+      queryWorkItemIds: jest.fn(),
+      getItems: jest.fn(),
+    });
+
+    await service.getRollup({
+      project: "Team's Project",
+      assignee: "dev.o'neil@example.com",
+    });
+
+    expect(queryLinks.mock.calls[0][0]).toContain(
+      "[Source].[System.AssignedTo] EVER 'dev.o''neil@example.com'",
+    );
+  });
+
+  test('bug-to-PBI ratio is child bugs created in 90 days over PBIs created in 90 days', async () => {
+    const queryWorkItemIds = jest.fn().mockResolvedValue([1, 2, 3, 4, 5]);
+    const queryLinks = jest.fn().mockResolvedValue([
+      { sourceId: 1, targetId: 101 },
+      { sourceId: 1, targetId: 102 },
+      { sourceId: 2, targetId: 101 },
+    ]);
+    const service = new DefectRollupService({
+      queryLinks,
+      queryWorkItemIds,
+      getItems: jest.fn(),
+    });
+
+    await expect(service.getBugToPbiRatio({
+      project: 'MaxView',
+      now: new Date('2026-09-01T12:00:00.000Z'),
+    })).resolves.toEqual({
+      bugCount: 2,
+      pbiCount: 5,
+      ratio: 0.4,
+      windowDays: 90,
+    });
+    expect(queryWorkItemIds.mock.calls[0][0]).toContain("[System.CreatedDate] >= '2026-06-03'");
+    expect(queryLinks.mock.calls[0][0]).toContain("[Target].[System.CreatedDate] >= '2026-06-03'");
+    expect(queryWorkItemIds.mock.calls[0][0]).not.toContain('AssignedTo');
+  });
+
+  test('bug-to-PBI ratio is null when no PBIs were created in the window', async () => {
+    const service = new DefectRollupService({
+      queryLinks: jest.fn().mockResolvedValue([{ sourceId: 1, targetId: 101 }]),
+      queryWorkItemIds: jest.fn().mockResolvedValue([]),
+      getItems: jest.fn(),
+    });
+
+    await expect(service.getBugToPbiRatio({ project: 'MaxView' })).resolves.toEqual({
+      bugCount: 1,
+      pbiCount: 0,
+      ratio: null,
+      windowDays: 90,
+    });
+  });
+
+  test('Mine bug-to-PBI ratio scopes PBIs and child bugs to the assignee', async () => {
+    const queryWorkItemIds = jest.fn().mockResolvedValue([7]);
+    const queryLinks = jest.fn().mockResolvedValue([{ sourceId: 7, targetId: 70 }]);
+    const service = new DefectRollupService({
+      queryLinks,
+      queryWorkItemIds,
+      getItems: jest.fn(),
+    });
+
+    await service.getBugToPbiRatio({
+      project: "Team's Project",
+      assignee: "dev.o'neil@example.com",
+      now: new Date('2026-09-01T00:00:00.000Z'),
+    });
+
+    expect(queryWorkItemIds.mock.calls[0][0]).toContain(
+      "[System.AssignedTo] EVER 'dev.o''neil@example.com'",
+    );
+    expect(queryLinks.mock.calls[0][0]).toContain(
+      "[Source].[System.AssignedTo] EVER 'dev.o''neil@example.com'",
+    );
   });
 });

@@ -18,6 +18,8 @@ export interface DeliveryItem {
   nativeDevStartedAt?: string | null;
   /** ADO item's first revision in In Progress or Active. */
   adoFirstInProgressAt?: string | null;
+  /** Observed completion used when no deployment tracker record exists. */
+  observedProductionAt?: string | null;
 }
 
 export interface DeploymentRecord {
@@ -77,15 +79,21 @@ export class DeliveryCycleTimeService {
         .filter(Boolean))];
       if (releaseNames.length === 0) continue;
 
-      const productionCandidates = await Promise.all(releaseNames.map(async (releaseName) => {
-        const latest = await this.dependencies.getLatestDeploymentsByRelease(
-          releaseName,
-          input.project,
-        );
-        const deployedAt = latest.production?.deployedAt;
-        const deployedMs = deployedAt ? Date.parse(deployedAt) : Number.NaN;
-        return { releaseName, deployedAt, deployedMs };
-      }));
+      const productionCandidates = item.observedProductionAt
+        ? [{
+          releaseName: releaseNames[0],
+          deployedAt: item.observedProductionAt,
+          deployedMs: Date.parse(item.observedProductionAt),
+        }]
+        : await Promise.all(releaseNames.map(async (releaseName) => {
+          const latest = await this.dependencies.getLatestDeploymentsByRelease(
+            releaseName,
+            input.project,
+          );
+          const deployedAt = latest.production?.deployedAt;
+          const deployedMs = deployedAt ? Date.parse(deployedAt) : Number.NaN;
+          return { releaseName, deployedAt, deployedMs };
+        }));
       const firstProduction = productionCandidates
         .filter((candidate) =>
           candidate.deployedAt
@@ -173,16 +181,67 @@ export function createProductionDeliveryCycleTimeService(): DeliveryCycleTimeSer
       }
 
       const ado = new AzureDevOpsService(project);
+      // ADO's ChangedDate field uses date precision in WIQL and rejects ISO
+      // timestamps that include a time component.
+      const sinceDate = since.slice(0, 10);
       const result = await ado.queryWorkItemsByWiql({
         wiql: [
           'SELECT [System.Id] FROM WorkItems',
           `WHERE [System.TeamProject] = '${escapeWiql(project)}'`,
           "AND [System.Tags] CONTAINS 'Release:'",
-          `AND [System.ChangedDate] >= '${since}'`,
+          `AND [System.ChangedDate] >= '${sinceDate}'`,
         ].join(' '),
         fields: ['System.Id', 'System.Tags'],
         maxResults: 500,
       });
+      if (result.items.length === 0) {
+        // MaxView's Releases tab is backed by ReleaseVersion Epics rather than
+        // Release:<name> work-item tags and Apex deployment records. Use completed
+        // related work items so the KPI reflects delivery flow, not how long the
+        // release Epic remained open.
+        const releaseResult = await ado.queryWorkItemsByWiql({
+          wiql: [
+            'SELECT [System.Id] FROM WorkItems',
+            `WHERE [System.TeamProject] = '${escapeWiql(project)}'`,
+            "AND [System.WorkItemType] = 'Epic'",
+            "AND [System.Tags] CONTAINS 'ReleaseVersion'",
+            "AND [System.State] IN ('Done', 'Closed')",
+            `AND [System.ChangedDate] >= '${sinceDate}'`,
+          ].join(' '),
+          fields: [
+            'System.Id',
+            'System.Title',
+            'System.State',
+            'System.ChangedDate',
+            'Microsoft.VSTS.Scheduling.StartDate',
+          ],
+          maxResults: 200,
+        });
+
+        const deliveryItems: DeliveryItem[] = [];
+        const batchSize = 3;
+        for (let i = 0; i < releaseResult.items.length; i += batchSize) {
+          const batch = await Promise.all(
+            releaseResult.items.slice(i, i + batchSize).map(async (release) => {
+              const releaseName = String(release.fields['System.Title'] ?? '');
+              const cycleTime = await ado.getRelatedItemsCycleTime(release.id);
+              return cycleTime.items
+                .filter((item) =>
+                  item.cycleTimeDays != null
+                  && item.lastInProgressAt
+                  && item.lastDoneAt)
+                .map((item): DeliveryItem => ({
+                  id: item.id,
+                  releaseTags: [`${RELEASE_PREFIX}${releaseName}`],
+                  adoFirstInProgressAt: item.lastInProgressAt,
+                  observedProductionAt: item.lastDoneAt,
+                }));
+            }),
+          );
+          deliveryItems.push(...batch.flat());
+        }
+        return deliveryItems;
+      }
       const sessionRows = result.items.length === 0
         ? []
         : await db

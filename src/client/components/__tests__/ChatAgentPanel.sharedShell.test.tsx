@@ -191,6 +191,41 @@ describe('ChatAgentPanel shared Home shell', () => {
     }));
   });
 
+  it('explains an empty transcript instead of rendering a blank pane', () => {
+    const emptyThread: ChatThread = {
+      ...thread,
+      messages: [{ id: 'kickoff', role: 'user', text: 'Begin.', ts: '2026-08-31T10:00:00Z' }],
+    };
+    render(<ChatAgentPanel thread={emptyThread} isOpen onClose={jest.fn()} onNewChat={jest.fn()} />);
+
+    expect(screen.getByTestId('chat-agent-empty-transcript')).toBeInTheDocument();
+    expect(screen.getByText('No messages in this conversation')).toBeInTheDocument();
+    expect(screen.getByText('No messages')).toBeInTheDocument();
+    expect(screen.queryByText('Starting skill…')).not.toBeInTheDocument();
+  });
+
+  it('surfaces the failed run behind an empty transcript', () => {
+    const failedThread: ChatThread = {
+      ...thread,
+      messages: [],
+      lastError: 'Worker lost (heartbeat expired)',
+    };
+    render(<ChatAgentPanel thread={failedThread} isOpen onClose={jest.fn()} onNewChat={jest.fn()} />);
+
+    expect(
+      screen.getByText(/The last agent run did not finish: Worker lost \(heartbeat expired\)/),
+    ).toBeInTheDocument();
+  });
+
+  it('keeps the starting-skill status while a new thread is still working', () => {
+    mockSessionOverrides = { showTypingIndicator: true };
+    const startingThread: ChatThread = { ...thread, messages: [] };
+    render(<ChatAgentPanel thread={startingThread} isOpen onClose={jest.fn()} onNewChat={jest.fn()} />);
+
+    expect(screen.queryByTestId('chat-agent-empty-transcript')).not.toBeInTheDocument();
+    expect(screen.getByText('Starting skill…')).toBeInTheDocument();
+  });
+
   it('PBI-006 AC-1 renders a disconnected state and retries the connection', () => {
     mockSessionOverrides = { isConnected: false };
     render(<ChatAgentPanel thread={thread} isOpen onClose={jest.fn()} onNewChat={jest.fn()} />);

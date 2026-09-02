@@ -23,6 +23,7 @@ export type AiFeature =
   | 'home-chat'
   | 'ai-cost-insights'
   | 'calendar-work-item-assistant'
+  | 'adr'
   | 'other';
 
 export interface RecordUsageInput {
@@ -237,4 +238,27 @@ export interface ProjectComparison {
   projects: ProjectComparisonProject[];
   featureRankings: ProjectComparisonFeatureRanking[];
   period: { from: string; to: string };
+}
+
+export interface EntityUsageRun {
+  modelId: string;
+  inputTokens: number;
+  outputTokens: number;
+  durationMs: number | null;
+  costUsd: number;
+  createdAt: string;
+}
+
+export interface EntityUsageRollup {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  totalTokens: number;
+  costUsd: number;
+  costSource: AiCostSource;
+  durationMs: number;
+  interactions: number;
+  models: string[];
+  incomplete: boolean;
+  runs: EntityUsageRun[];
 }

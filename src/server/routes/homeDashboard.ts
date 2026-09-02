@@ -3,6 +3,7 @@ import { requirePermission, requireProjectAccess, resolveRequestProject } from '
 import { getHomeDashboard } from '../services/homeDashboardService';
 import { getUserId } from '../utils/requestUser';
 import { isSuperAdminRequest } from '../utils/superAdmin';
+import type { HomeDashboardScope } from '../../shared/types/homeDashboard';
 
 const router = Router();
 
@@ -22,10 +23,12 @@ router.get(
       return;
     }
     try {
+      const scope: HomeDashboardScope = req.query.scope === 'mine' ? 'mine' : 'team';
       const payload = await getHomeDashboard({
         userId: getUserId(req),
         project,
         isSuperAdmin: isSuperAdminRequest(req),
+        scope,
       });
       res.json(payload);
     } catch (err) {

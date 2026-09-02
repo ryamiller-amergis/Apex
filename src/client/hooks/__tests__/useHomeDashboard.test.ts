@@ -7,8 +7,9 @@ const payload = {
   incompletePipeline: null,
   artifactCycleTime: null,
   myWork: null,
-  openBugsOnPbis: null,
-  devToProduction: null,
+      openBugsOnPbis: null,
+      bugToPbiRatio: null,
+      devToProduction: null,
 };
 
 const createWrapper = (client: QueryClient) => ({ children }: { children: ReactNode }) =>
@@ -36,10 +37,10 @@ describe('useHomeDashboard', () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(global.fetch).toHaveBeenCalledWith(
-      '/api/home-dashboard?project=Apex%20%26%20Co',
+      '/api/home-dashboard?project=Apex%20%26%20Co&scope=team',
       { credentials: 'include' },
     );
-    expect(client.getQueryData(['home-dashboard', 'Apex & Co'])).toEqual(payload);
+    expect(client.getQueryData(['home-dashboard', 'Apex & Co', 'team'])).toEqual(payload);
   });
 
   it('DoD-0 stays disabled without a project', () => {

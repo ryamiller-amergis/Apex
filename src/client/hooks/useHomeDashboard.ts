@@ -1,9 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
-import type { HomeDashboardPayload } from '../../shared/types/homeDashboard';
+import type {
+  HomeDashboardPayload,
+  HomeDashboardScope,
+} from '../../shared/types/homeDashboard';
 
-async function fetchHomeDashboard(project: string): Promise<HomeDashboardPayload> {
+async function fetchHomeDashboard(
+  project: string,
+  scope: HomeDashboardScope,
+): Promise<HomeDashboardPayload> {
   const response = await fetch(
-    `/api/home-dashboard?project=${encodeURIComponent(project)}`,
+    `/api/home-dashboard?project=${encodeURIComponent(project)}&scope=${scope}`,
     { credentials: 'include' },
   );
   if (!response.ok) {
@@ -13,10 +19,13 @@ async function fetchHomeDashboard(project: string): Promise<HomeDashboardPayload
   return response.json() as Promise<HomeDashboardPayload>;
 }
 
-export function useHomeDashboard(project: string | null | undefined) {
+export function useHomeDashboard(
+  project: string | null | undefined,
+  scope: HomeDashboardScope = 'team',
+) {
   return useQuery<HomeDashboardPayload>({
-    queryKey: ['home-dashboard', project],
-    queryFn: () => fetchHomeDashboard(project!),
+    queryKey: ['home-dashboard', project, scope],
+    queryFn: () => fetchHomeDashboard(project!, scope),
     enabled: Boolean(project),
     retry: 1,
     refetchOnWindowFocus: true,

@@ -14,7 +14,6 @@ jest.mock('../services/testCaseService', () => ({
 }));
 jest.mock('../services/designPrototypeService', () => ({ listPrototypes: jest.fn() }));
 jest.mock('../services/designDocService', () => ({ listDesignDocs: jest.fn() }));
-jest.mock('../services/ownerApprovalService', () => ({ getOwnerApproval: jest.fn() }));
 jest.mock('../services/projectSettingsService', () => ({ getSkillConfig: jest.fn() }));
 
 import { getIncompletePipeline } from '../services/pipelineArtifactStatusService';
@@ -25,10 +24,6 @@ import type {
   TestCaseSummary,
 } from '../../shared/types/interview';
 import type { DesignPrototypeSummary } from '../../shared/types/designPrototype';
-import type {
-  OwnerApprovalDocumentType,
-  OwnerApprovalStatus,
-} from '../../shared/types/approvals';
 import type { IncompletePipelineData, PipelineGroup } from '../../shared/types/homeDashboard';
 
 const { listInterviews } = jest.requireMock('../services/interviewService') as {
@@ -43,9 +38,6 @@ const { listPrototypes } = jest.requireMock('../services/designPrototypeService'
 };
 const { listDesignDocs } = jest.requireMock('../services/designDocService') as {
   listDesignDocs: jest.Mock;
-};
-const { getOwnerApproval } = jest.requireMock('../services/ownerApprovalService') as {
-  getOwnerApproval: jest.Mock;
 };
 const { getSkillConfig } = jest.requireMock('../services/projectSettingsService') as {
   getSkillConfig: jest.Mock;
@@ -122,26 +114,6 @@ const designDoc = (
   ...over,
 });
 
-/** Seeds `getOwnerApproval` from a `${documentType}:${documentId}` → status map. */
-function seedOwnerApprovals(statuses: Record<string, OwnerApprovalStatus>): void {
-  getOwnerApproval.mockImplementation(
-    async (documentId: string, documentType: OwnerApprovalDocumentType) => {
-      const status = statuses[`${documentType}:${documentId}`];
-      if (!status) return null;
-      return {
-        id: `approval-${documentType}-${documentId}`,
-        documentId,
-        documentType,
-        ownerUserId: 'owner-1',
-        status,
-        comment: null,
-        respondedAt: status === 'pending' ? null : daysAgo(1),
-        createdAt: daysAgo(2),
-      };
-    },
-  );
-}
-
 const groupOf = (data: IncompletePipelineData, key: PipelineGroup['key']): PipelineGroup => {
   const group = data.groups.find((g) => g.key === key);
   if (!group) throw new Error(`expected a "${key}" group in the payload`);
@@ -162,7 +134,6 @@ describe('pipelineArtifactStatusService.getIncompletePipeline', () => {
     listLatestTestCaseSummariesForPrds.mockResolvedValue(new Map<string, TestCaseSummary>());
     listPrototypes.mockResolvedValue([]);
     listDesignDocs.mockResolvedValue([]);
-    getOwnerApproval.mockResolvedValue(null);
     getSkillConfig.mockResolvedValue({ prototypeStageEnabled: true });
   });
 
@@ -187,8 +158,40 @@ describe('pipelineArtifactStatusService.getIncompletePipeline', () => {
         route: '/backlog/interview/int-1',
         updatedAt: daysAgo(6),
         ageDays: 6,
+        reason: 'Interview in progress',
       },
     ]);
+  });
+
+  it('BR-001 explains a complete Interview as a missing PRD, not as in progress', async () => {
+    listInterviews.mockResolvedValue([
+      interview({ id: 'int-dead-end', status: 'complete', prdCount: 0 }),
+      interview({ id: 'int-live', status: 'in_progress' }),
+    ]);
+
+    const rows = groupOf(await getIncompletePipeline(PROJECT), 'interview').rows;
+
+    expect(rows.find((r) => r.id === 'int-dead-end')?.reason).toBe('No PRD generated');
+    expect(rows.find((r) => r.id === 'int-live')?.reason).toBe('Interview in progress');
+  });
+
+  it('states the awaited stage for each artifact type', async () => {
+    listPrds.mockResolvedValue([
+      prd({ id: 'prd-1', status: 'reviewer_approved' }),
+    ]);
+    listPrototypes.mockResolvedValue([
+      prototype({ id: 'proto-1', prdId: 'prd-1', status: 'approved', featureIndex: 0 }),
+    ]);
+    listDesignDocs.mockResolvedValue([
+      designDoc({ id: 'doc-1', prdId: 'prd-1', featureIndex: 9, status: 'revision_requested' }),
+    ]);
+
+    const data = await getIncompletePipeline(PROJECT);
+
+    expect(groupOf(data, 'prd').rows[0].reason).toBe('Awaiting owner approval');
+    expect(groupOf(data, 'testCase').rows[0].reason).toBe('No test suite generated');
+    expect(groupOf(data, 'prototype').rows[0].reason).toBe('No design doc yet');
+    expect(groupOf(data, 'designDoc').rows[0].reason).toBe('Revision requested');
   });
 
   it('PBI-001 AC-0 / BR-001 keeps a complete Interview with no PRD and drops one that has a PRD', async () => {
@@ -220,10 +223,6 @@ describe('pipelineArtifactStatusService.getIncompletePipeline', () => {
       prd({ id: 'prd-reviewer-only', status: 'reviewer_approved', testCasesRequired: false }),
       prd({ id: 'prd-owner-signed', status: 'approved', testCasesRequired: false }),
     ]);
-    seedOwnerApprovals({
-      'prd:prd-reviewer-only': 'pending',
-      'prd:prd-owner-signed': 'approved',
-    });
 
     const group = groupOf(await getIncompletePipeline(PROJECT), 'prd');
 
@@ -237,10 +236,6 @@ describe('pipelineArtifactStatusService.getIncompletePipeline', () => {
       designDoc({ id: 'doc-reviewer-only', prdId: 'prd-1', status: 'reviewer_approved' }),
       designDoc({ id: 'doc-owner-signed', prdId: 'prd-1', status: 'approved' }),
     ]);
-    seedOwnerApprovals({
-      'design_doc:doc-reviewer-only': 'revision_requested',
-      'design_doc:doc-owner-signed': 'approved',
-    });
 
     const group = groupOf(await getIncompletePipeline(PROJECT), 'designDoc');
 
@@ -304,7 +299,6 @@ describe('pipelineArtifactStatusService.getIncompletePipeline', () => {
     listPrototypes.mockResolvedValue([
       prototype({ id: 'proto-approved', prdId: 'prd-1', status: 'approved', featureIndex: 2 }),
     ]);
-    seedOwnerApprovals({ 'design_prototype:proto-approved': 'approved' });
 
     const group = groupOf(await getIncompletePipeline(PROJECT), 'prototype');
 
@@ -321,16 +315,31 @@ describe('pipelineArtifactStatusService.getIncompletePipeline', () => {
     listDesignDocs.mockResolvedValue([
       designDoc({ id: 'doc-1', prdId: 'prd-1', featureIndex: 2, status: 'approved' }),
     ]);
-    seedOwnerApprovals({
-      'design_prototype:proto-documented': 'approved',
-      'design_prototype:proto-undocumented': 'approved',
-      'design_doc:doc-1': 'approved',
-    });
 
     const group = groupOf(await getIncompletePipeline(PROJECT), 'prototype');
 
     expect(group.count).toBe(1);
     expect(group.rows.map((r) => r.id)).toEqual(['proto-undocumented']);
+  });
+
+  it('BR-002 drops approved artifacts that never recorded an owner-approval row', async () => {
+    // Prototypes auto-approved for a skipped feature, and anything approved before
+    // the two-stage owner flow shipped, reach `approved` with no approval record.
+    listPrds.mockResolvedValue([
+      prd({ id: 'prd-legacy', status: 'approved', testCasesRequired: false }),
+    ]);
+    listDesignDocs.mockResolvedValue([
+      designDoc({ id: 'doc-legacy', prdId: 'prd-legacy', featureIndex: 0, status: 'approved' }),
+    ]);
+    listPrototypes.mockResolvedValue([
+      prototype({ id: 'proto-auto', prdId: 'prd-legacy', featureIndex: 0, status: 'approved' }),
+    ]);
+
+    const data = await getIncompletePipeline(PROJECT);
+
+    expect(groupOf(data, 'prd').count).toBe(0);
+    expect(groupOf(data, 'designDoc').count).toBe(0);
+    expect(groupOf(data, 'prototype').count).toBe(0);
   });
 
   it('PBI-001 AC-0 / BR-005 hides the Prototype group when every project Interview has prototypes disabled', async () => {

@@ -11,6 +11,7 @@ jest.mock('../../hooks/useHomeDashboard', () => ({
       artifactCycleTime: null,
       myWork: null,
       openBugsOnPbis: null,
+      bugToPbiRatio: null,
       devToProduction: null,
     },
     isLoading: false,
@@ -52,7 +53,7 @@ describe('AgentHome dashboard and chat toggle', () => {
     expect(screen.queryByTestId('home-chat-toggle-btn')).not.toBeInTheDocument();
   });
 
-  it('BR-015 absorbs a saved Home thread into App-level identity on first load', () => {
+  it('does not reopen a saved Home thread after a page refresh', () => {
     sessionStorage.setItem('agentHomeThreadId:Apex', 'thread-saved');
     const onRestoreThread = jest.fn();
     const onOpenChatPanel = jest.fn();
@@ -66,6 +67,25 @@ describe('AgentHome dashboard and chat toggle', () => {
       { wrapper },
     );
     expect(onRestoreThread).toHaveBeenCalledWith('thread-saved');
+    expect(onOpenChatPanel).not.toHaveBeenCalled();
+  });
+
+  it('opens chat for an explicit Home thread deep link', () => {
+    const onRestoreThread = jest.fn();
+    const onOpenChatPanel = jest.fn();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter initialEntries={['/home?thread=thread-linked']}>
+          <AgentHome
+            selectedProject="Apex"
+            canOpenChat
+            onRestoreThread={onRestoreThread}
+            onOpenChatPanel={onOpenChatPanel}
+          />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(onRestoreThread).toHaveBeenCalledWith('thread-linked');
     expect(onOpenChatPanel).toHaveBeenCalledTimes(1);
   });
 });

@@ -356,6 +356,44 @@
   line-height: 1.4;
 }
 
+.transcriptEmpty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px 16px;
+  text-align: center;
+}
+
+.transcriptEmptyTitle {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.transcriptEmptyHint {
+  margin: 0;
+  max-width: 280px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.transcriptEmptyError {
+  margin: 0;
+  max-width: 280px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--error-color) 35%, var(--border-color));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--error-color) 8%, var(--bg-secondary));
+  color: var(--error-color);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .systemMsg {
   text-align: center;
   font-size: 0.78rem;

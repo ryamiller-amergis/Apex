@@ -1,6 +1,10 @@
 import React from 'react';
-import type { HomeDashboardPayload } from '../../shared/types/homeDashboard';
+import type {
+  HomeDashboardPayload,
+  HomeDashboardScope,
+} from '../../shared/types/homeDashboard';
 import { ArtifactCycleTimeTile } from './ArtifactCycleTimeTile';
+import { BugToPbiRatioTile } from './BugToPbiRatioTile';
 import { DevToProductionTile } from './DevToProductionTile';
 import { IncompletePipelineTile } from './IncompletePipelineTile';
 import { MyWorkTile } from './MyWorkTile';
@@ -12,6 +16,7 @@ const SKELETON_CARDS = [
   { testId: 'home-dashboard-cycle-time-card', label: 'Artifact Cycle Time loading' },
   { testId: 'home-dashboard-my-work-card', label: 'My Work loading' },
   { testId: 'home-dashboard-bugs-card', label: 'Open Bugs on PBIs loading' },
+  { testId: 'home-dashboard-bug-ratio-card', label: 'Bug Ratio to PBI loading' },
   { testId: 'home-dashboard-devprod-card', label: 'Dev to Production loading' },
 ] as const;
 
@@ -19,6 +24,9 @@ interface HomeDashboardSectionProps {
   payload?: HomeDashboardPayload;
   isLoading?: boolean;
   onRetry: () => void;
+  scope?: HomeDashboardScope;
+  onScopeChange?: (scope: HomeDashboardScope) => void;
+  onSelectBugPbi?: (pbiId: string) => void;
 }
 
 const DashboardSkeleton: React.FC = () => (
@@ -28,7 +36,12 @@ const DashboardSkeleton: React.FC = () => (
     aria-busy="true"
     {...{ 'data-testid': 'home-dashboard-root' }}
   >
-    <h2 id="home-dashboard-heading" className={styles.heading}>Project Status</h2>
+    <h2
+      id="home-dashboard-heading"
+      className={`${styles.heading} ${styles['skeleton-heading']}`}
+    >
+      Project Status
+    </h2>
     <div className={styles['primary-row']}>
       {SKELETON_CARDS.slice(0, 2).map((card) => (
         <article
@@ -64,6 +77,9 @@ export const HomeDashboardSection: React.FC<HomeDashboardSectionProps> = ({
   payload,
   isLoading = false,
   onRetry,
+  scope = 'team',
+  onScopeChange,
+  onSelectBugPbi,
 }) => {
   if (isLoading || payload === undefined) {
     return <DashboardSkeleton />;
@@ -75,14 +91,41 @@ export const HomeDashboardSection: React.FC<HomeDashboardSectionProps> = ({
       aria-labelledby="home-dashboard-heading"
       {...{ 'data-testid': 'home-dashboard-root' }}
     >
-      <h2 id="home-dashboard-heading" className={styles.heading}>Project Status</h2>
+      <div className={styles.toolbar}>
+        <h2 id="home-dashboard-heading" className={styles.heading}>Project Status</h2>
+        {onScopeChange && (
+          <div className={styles['scope-toggle']} role="group" aria-label="Dashboard scope">
+            {(['mine', 'team'] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                className={`${styles['scope-button']} ${scope === option ? styles.active : ''}`}
+                aria-pressed={scope === option}
+                onClick={() => onScopeChange(option)}
+                {...{ 'data-testid': `home-dashboard-scope-${option}` }}
+              >
+                {option === 'mine' ? 'Mine' : 'Team'}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
       <div className={styles['primary-row']}>
         <IncompletePipelineTile result={payload.incompletePipeline} onRetry={onRetry} />
         <ArtifactCycleTimeTile result={payload.artifactCycleTime} onRetry={onRetry} />
       </div>
       <div className={styles['secondary-row']}>
-        <MyWorkTile result={payload.myWork} onRetry={onRetry} />
-        <OpenBugsOnPbisTile result={payload.openBugsOnPbis} onRetry={onRetry} />
+        <MyWorkTile result={payload.myWork} onRetry={onRetry} scope={scope} />
+        <OpenBugsOnPbisTile
+          result={payload.openBugsOnPbis}
+          onRetry={onRetry}
+          onSelectPbi={onSelectBugPbi}
+        />
+        <BugToPbiRatioTile
+          result={payload.bugToPbiRatio}
+          onRetry={onRetry}
+          scope={scope}
+        />
         <DevToProductionTile result={payload.devToProduction} onRetry={onRetry} />
       </div>
     </section>

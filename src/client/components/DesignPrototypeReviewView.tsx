@@ -20,6 +20,7 @@ import {
 import { useDesignDocsByPrd, usePrd, useInterview, useOwnerApprove } from '../hooks/useInterviews';
 import { UiMockPreview } from './UiMockPreview';
 import { ReviewReasonModal } from './ReviewReasonModal';
+import { ArtifactUsageStrip } from './ArtifactUsageStrip';
 import {
   designPrototypeStatusLabel,
   DESIGN_PROTOTYPE_STATE_NAMES,
@@ -408,6 +409,12 @@ const DesignPrototypeReviewView: React.FC = () => {
           </span>
           {selectedProto?.model && (
             <span className={styles.modelText}>Model: {selectedProto.model}</span>
+          )}
+          {selectedProto && (
+            <ArtifactUsageStrip
+              endpoint={`/api/design-prototypes/${selectedProto.id}/usage`}
+              visible={selectedProto.status !== 'generating' && selectedProto.status !== 'regenerating'}
+            />
           )}
           {can('interviews:manage') && (
             <button

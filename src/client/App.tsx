@@ -35,6 +35,7 @@ import { resolveAccessibleRoute } from './utils/accessibleRoute';
 import { setInteractiveWsEnabled } from './utils/threadEventStream';
 import { IS_BETA_RELEASE } from './config/release';
 import { RESTRICTED_ACCESS_PROJECT } from '../shared/types/restrictedAccess';
+import type { WorkItem } from './types/workitem';
 import './App.css';
 
 // Lazy-loaded views for code splitting
@@ -130,6 +131,7 @@ function App() {
 
   const [chatOpen, setChatOpen] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [homeSelectedItem, setHomeSelectedItem] = useState<WorkItem | null>(null);
   const [pendingProject, setPendingProject] = useState<string | null>(null);
   const [calendarAssistantOpen, setCalendarAssistantOpen] = useState(false);
   const [calendarAssistantAnchor, setCalendarAssistantAnchor] = useState<{
@@ -213,6 +215,13 @@ function App() {
   const planningTabSegment = location.pathname.startsWith('/planning')
     ? location.pathname.split('/')[2]
     : undefined;
+
+  useEffect(() => {
+    if (currentView !== 'home') {
+      setChatOpen(false);
+      setHomeSelectedItem(null);
+    }
+  }, [currentView]);
 
   useEffect(() => {
     const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
@@ -760,7 +769,7 @@ function App() {
             onOpenChangelog={() => setShowChangelog(true)}
             onThemeChange={setThemeMode}
             onLogout={handleLogout}
-            onOpenAgentChat={currentView !== 'home' ? () => setChatOpen(true) : undefined}
+            onOpenAgentChat={undefined}
           />
           {hasUnreadChangelog && (
             <div className="changelog-banner-row">
@@ -789,13 +798,35 @@ function App() {
                 <FeatureFlagDemo project={selectedProject} />
                 <AgentHome
                   selectedProject={selectedProject}
+                  selectedAreaPath={selectedAreaPath}
                   selectedSkillSettingsId={selectedSkillSettingsId}
                   isAdmin={isSuperAdmin || isAdmin || (groups ?? []).includes('Manager') || (groups ?? []).includes('Product-Owner')}
                   isChatOpen={chatOpen}
                   canOpenChat={can('chat:view') && can('chat:create')}
                   onOpenChatPanel={() => setChatOpen((open) => !open)}
                   onRestoreThread={setActiveThreadId}
+                  onSelectWorkItem={(workItem) => {
+                    setChatOpen(false);
+                    setHomeSelectedItem(workItem);
+                  }}
                 />
+                {homeSelectedItem && currentView === 'home' && (
+                  <Suspense fallback={null}>
+                    {/* data-testid-exempt — DetailsPanel owns its panel chrome; no data-testid prop */}
+                    <DetailsPanel
+                      workItem={homeSelectedItem}
+                      onClose={() => setHomeSelectedItem(null)}
+                      onUpdateDueDate={handleDueDateChange}
+                      allWorkItems={workItems}
+                      onUpdateField={handleFieldUpdate}
+                      isSaving={isSaving}
+                      project={selectedProject}
+                      areaPath={selectedAreaPath}
+                      onSelectItem={setHomeSelectedItem}
+                      onOpenAssistant={handleOpenCalendarAssistant}
+                    />
+                  </Suspense>
+                )}
               </ErrorBoundary>
             </div>
           ) : currentView === 'home' ? (
@@ -806,7 +837,7 @@ function App() {
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
                 {error && !isLoading && (
-                  <div className="work-items-inline-error" role="status" data-testid="work-items-inline-error">
+                  <div className="work-items-inline-error" role="status" {...{ 'data-testid': 'work-items-inline-error' }}>
                     <span>
                       Calendar work items couldn&apos;t be refreshed
                       {workItems.length > 0 ? ' — showing the last loaded data.' : '.'}
@@ -816,7 +847,7 @@ function App() {
                       className="work-items-inline-error-retry"
                       onClick={() => { void refetchWorkItems(); }}
                       disabled={isFetchingWorkItems}
-                      data-testid="work-items-retry"
+                      {...{ 'data-testid': 'work-items-retry' }}
                     >
                       {isFetchingWorkItems ? 'Retrying…' : 'Retry'}
                     </button>
@@ -1192,7 +1223,7 @@ function App() {
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <div className="planning-view">
                 {error && !isLoading && (
-                  <div className="work-items-inline-error" role="status" data-testid="work-items-inline-error">
+                  <div className="work-items-inline-error" role="status" {...{ 'data-testid': 'work-items-inline-error' }}>
                     <span>
                       Planning work items couldn&apos;t be refreshed
                       {workItems.length > 0 ? ' — showing the last loaded data.' : '.'}
@@ -1202,7 +1233,7 @@ function App() {
                       className="work-items-inline-error-retry"
                       onClick={() => { void refetchWorkItems(); }}
                       disabled={isFetchingWorkItems}
-                      data-testid="work-items-retry"
+                      {...{ 'data-testid': 'work-items-retry' }}
                     >
                       {isFetchingWorkItems ? 'Retrying…' : 'Retry'}
                     </button>
@@ -1324,7 +1355,7 @@ function App() {
         {/* data-testid-exempt — ChatAgentPanel API has no data-testid prop */}
         <ChatAgentPanel
           thread={activeThread}
-          isOpen={chatOpen}
+          isOpen={currentView === 'home' && chatOpen}
           onClose={() => setChatOpen(false)}
           onNewChat={handleStartPanelChat}
           onSelectThread={(id) => setActiveThreadId(id || null)}

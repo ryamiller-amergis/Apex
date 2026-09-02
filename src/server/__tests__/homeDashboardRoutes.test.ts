@@ -67,6 +67,7 @@ const payload: HomeDashboardPayload = {
   artifactCycleTime: null,
   myWork: null,
   openBugsOnPbis: null,
+  bugToPbiRatio: null,
   devToProduction: {
     status: 'empty',
     data: { medianDays: null, sampleSize: 0, windowDays: 90 },
@@ -91,6 +92,7 @@ describe('GET /api/home-dashboard', () => {
       userId: 'user-1',
       project: 'proj-alpha',
       isSuperAdmin: false,
+      scope: 'team',
     });
   });
 
@@ -102,6 +104,17 @@ describe('GET /api/home-dashboard', () => {
     expect(res.body.myWork).toBeNull();
     expect(res.body.openBugsOnPbis).toBeNull();
     expect(res.body.incompletePipeline).toEqual(payload.incompletePipeline);
+  });
+
+  it('forwards an explicit Mine scope', async () => {
+    const res = await request(buildApp()).get(
+      '/api/home-dashboard?project=proj-alpha&scope=mine',
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockGetHomeDashboard).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: 'mine' }),
+    );
   });
 
   it('TBI-001 DoD-1 forwards super-admin state when the caller is a platform admin', async () => {

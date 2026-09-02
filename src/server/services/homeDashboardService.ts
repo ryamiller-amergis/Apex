@@ -1,7 +1,9 @@
 import type {
   ArtifactCycleTimeData,
+  BugToPbiRatioData,
   DevToProductionData,
   HomeDashboardPayload,
+  HomeDashboardScope,
   IncompletePipelineData,
   MyWorkData,
   OpenBugsOnPbisData,
@@ -13,6 +15,7 @@ import type { ProjectMenuConfig } from '../../shared/types/menuSettings';
 import { getMedians } from './artifactCycleTimeService';
 import {
   createProductionDefectRollupService,
+  type BugToPbiRatio,
   type DefectRollup,
 } from './defectRollupService';
 import {
@@ -41,8 +44,21 @@ export interface HomeDashboardDependencies {
   getUserGroupNames(userId: string): Promise<string[]>;
   getIncompletePipeline(project: string): Promise<IncompletePipelineData>;
   getArtifactCycleTime(project: string): Promise<ArtifactCycleTimeData>;
-  getMyWorkSummary(input: { userId: string; project: string }): Promise<MyWorkSummary>;
-  getDefectRollup(input: { project: string }): Promise<DefectRollup>;
+  getMyWorkSummary(input: {
+    userId: string;
+    project: string;
+    scope: HomeDashboardScope;
+  }): Promise<MyWorkSummary>;
+  getDefectRollup(input: {
+    userId: string;
+    project: string;
+    scope: HomeDashboardScope;
+  }): Promise<DefectRollup>;
+  getBugToPbiRatio(input: {
+    userId: string;
+    project: string;
+    scope: HomeDashboardScope;
+  }): Promise<BugToPbiRatio>;
   getDeliveryCycleTime(input: { project: string }): Promise<DeliveryCycleTime>;
   trackEvent(
     name: string,
@@ -60,6 +76,7 @@ export interface HomeDashboardInput {
   userId: string;
   project: string;
   isSuperAdmin: boolean;
+  scope?: HomeDashboardScope;
 }
 
 interface CacheEntry<T> {
@@ -69,9 +86,20 @@ interface CacheEntry<T> {
 
 type DashboardTile = keyof HomeDashboardPayload;
 
-function errorMessage(timedOut: boolean): string {
-  if (timedOut) return 'The data source timed out. Retry to refresh this tile.';
-  return 'The data source failed. Retry to refresh this tile.';
+/** What each tile reads, so a failure names the missing source instead of "the data source". */
+const TILE_SOURCE: Record<DashboardTile, string> = {
+  incompletePipeline: 'pipeline artifacts',
+  artifactCycleTime: 'artifact cycle times',
+  myWork: 'your assigned work items',
+  openBugsOnPbis: 'bug data from Azure DevOps',
+  bugToPbiRatio: 'bug and PBI counts from Azure DevOps',
+  devToProduction: 'release and deployment data',
+};
+
+function errorMessage(tile: DashboardTile, timedOut: boolean): string {
+  const source = TILE_SOURCE[tile];
+  if (timedOut) return `Timed out loading ${source}. Retry to refresh this tile.`;
+  return `Could not load ${source}. Retry to refresh this tile.`;
 }
 
 function timeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -106,6 +134,7 @@ export class HomeDashboardService {
 
   async getDashboard(input: HomeDashboardInput): Promise<HomeDashboardPayload> {
     if (!input.userId || !input.project) throw new Error('userId and project are required');
+    const scope = input.scope ?? 'team';
 
     const permissions = await this.dependencies.getUserPermissions(input.userId, input.project);
     const [menuConfig, groupNames] = await Promise.all([
@@ -151,6 +180,7 @@ export class HomeDashboardService {
         async () => this.mapMyWork(await this.dependencies.getMyWorkSummary({
           userId: input.userId,
           project: input.project,
+          scope,
         })),
         (data) => data.ready === 0
           && data.inProgress === 0
@@ -163,11 +193,27 @@ export class HomeDashboardService {
         'openBugsOnPbis',
         input.project,
         async () => this.mapDefects(await this.dependencies.getDefectRollup({
+          userId: input.userId,
           project: input.project,
+          scope,
         })),
         (data) => data.totalOpenBugs === 0,
         this.remoteTimeoutMs,
-        `${input.project}:openBugsOnPbis`,
+        `${input.project}:${scope === 'mine' ? input.userId : 'team'}:openBugsOnPbis`,
+      )
+      : Promise.resolve(null);
+    const bugToPbiRatio = permissions.has('calendar:view')
+      ? this.loadTile(
+        'bugToPbiRatio',
+        input.project,
+        async () => this.mapBugRatio(await this.dependencies.getBugToPbiRatio({
+          userId: input.userId,
+          project: input.project,
+          scope,
+        })),
+        (data) => data.pbiCount === 0,
+        this.remoteTimeoutMs,
+        `${input.project}:${scope === 'mine' ? input.userId : 'team'}:bugToPbiRatio`,
       )
       : Promise.resolve(null);
     const devToProduction = permissions.has('planning:releases')
@@ -183,12 +229,20 @@ export class HomeDashboardService {
       )
       : Promise.resolve(null);
 
-    const [pipelineResult, cycleTimeResult, myWorkResult, defectsResult, deliveryResult] =
+    const [
+      pipelineResult,
+      cycleTimeResult,
+      myWorkResult,
+      defectsResult,
+      bugRatioResult,
+      deliveryResult,
+    ] =
       await Promise.all([
         incompletePipeline,
         artifactCycleTime,
         myWork,
         openBugsOnPbis,
+        bugToPbiRatio,
         devToProduction,
       ]);
 
@@ -197,6 +251,7 @@ export class HomeDashboardService {
       artifactCycleTime: cycleTimeResult,
       myWork: myWorkResult,
       openBugsOnPbis: defectsResult,
+      bugToPbiRatio: bugRatioResult,
       devToProduction: deliveryResult,
     };
   }
@@ -216,6 +271,13 @@ export class HomeDashboardService {
       result = { status: isEmpty(data) ? 'empty' : 'ok', data };
       if (cacheKey) this.updateCache(cacheKey, data);
     } catch (error) {
+      const timedOut = error instanceof Error && error.message === 'HOME_DASHBOARD_TIMEOUT';
+      // This catch is the only place the rejection is observed, so without a log
+      // the tile's failure reason never reaches the server output.
+      console.error(
+        `[homeDashboard] ${tile} failed (project=${project}, timedOut=${timedOut}):`,
+        error,
+      );
       const cached = cacheKey
         ? this.cache.get(cacheKey) as CacheEntry<T> | undefined
         : undefined;
@@ -223,9 +285,7 @@ export class HomeDashboardService {
         status: 'error',
         data: null,
         ...(cached ? { lastKnownData: cached.data } : {}),
-        message: errorMessage(
-          error instanceof Error && error.message === 'HOME_DASHBOARD_TIMEOUT',
-        ),
+        message: errorMessage(tile, timedOut),
       };
     }
 
@@ -278,6 +338,15 @@ export class HomeDashboardService {
       windowDays: WINDOW_DAYS,
     };
   }
+
+  private mapBugRatio(ratio: BugToPbiRatio): BugToPbiRatioData {
+    return {
+      bugCount: ratio.bugCount,
+      pbiCount: ratio.pbiCount,
+      ratio: ratio.ratio,
+      windowDays: WINDOW_DAYS,
+    };
+  }
 }
 
 export function createHomeDashboardService(
@@ -299,6 +368,7 @@ const productionService = createHomeDashboardService({
   getArtifactCycleTime: getMedians,
   getMyWorkSummary: (input) => productionMyWork.getSummary(input),
   getDefectRollup: (input) => productionDefects.getRollup(input),
+  getBugToPbiRatio: (input) => productionDefects.getBugToPbiRatio(input),
   getDeliveryCycleTime: (input) => productionDelivery.getCycleTime(input),
   trackEvent,
 });

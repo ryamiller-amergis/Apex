@@ -1,13 +1,23 @@
 import React from 'react';
-import type { MyWorkData, TileResult } from '../../shared/types/homeDashboard';
+import type {
+  HomeDashboardScope,
+  MyWorkData,
+  TileResult,
+} from '../../shared/types/homeDashboard';
+import { HomeTileInfo } from './HomeTileInfo';
 import styles from './HomeDashboardTiles.module.css';
 
 interface MyWorkTileProps {
   result: TileResult<MyWorkData> | null;
   onRetry: () => void;
+  scope?: HomeDashboardScope;
 }
 
-export const MyWorkTile: React.FC<MyWorkTileProps> = ({ result, onRetry }) => {
+export const MyWorkTile: React.FC<MyWorkTileProps> = ({
+  result,
+  onRetry,
+  scope = 'mine',
+}) => {
   if (!result) return null;
 
   const hasError = result.status === 'error' || !result.data;
@@ -41,6 +51,7 @@ export const MyWorkTile: React.FC<MyWorkTileProps> = ({ result, onRetry }) => {
   const data = result.data;
   if (!data) return null;
 
+  const isEmpty = result.status === 'empty';
   const cycleLabel = data.cycleTime.medianDays === null
     ? 'Median cycle time: unavailable; no completed items in the last 90 days'
     : `Median cycle time: ${data.cycleTime.medianDays} days in the last 90 days`;
@@ -53,8 +64,25 @@ export const MyWorkTile: React.FC<MyWorkTileProps> = ({ result, onRetry }) => {
       {...{ 'data-testid': 'home-dashboard-my-work-card' }}
     >
       <header className={styles.header}>
-        <h3 className={styles.title}>My Work</h3>
-        <span className={styles.scope}>90-day</span>
+        <div className={styles['title-group']}>
+          <h3 className={styles.title}>My Work</h3>
+          <HomeTileInfo title="My Work" data-testid="home-dashboard-my-work-info">
+            <p>
+              Work items in Ready or In Progress, plus the design docs feeding them,
+              over the last 90 days.
+            </p>
+            <p>
+              <strong>Mine</strong> shows items assigned to you in Azure DevOps and
+              design docs you own. <strong>Team</strong> shows the whole project.
+            </p>
+            <p>
+              An item appears once it is assigned and moved to Ready or In Progress.
+            </p>
+          </HomeTileInfo>
+        </div>
+        <span className={styles.scope}>
+          {scope === 'mine' ? 'Mine' : 'Team'} · 90-day
+        </span>
       </header>
       <div className={styles['my-work']}>
         <div className={styles['count-grid']}>
@@ -79,6 +107,13 @@ export const MyWorkTile: React.FC<MyWorkTileProps> = ({ result, onRetry }) => {
           </span>
         </div>
       </div>
+      {isEmpty && (
+        <p className={styles['empty-hint']}>
+          {scope === 'mine'
+            ? 'For Apex work, you must be the Design Doc owner. For ADO work, the item must be assigned to you.'
+            : 'Team work appears when an approved feature is ready or development starts.'}
+        </p>
+      )}
     </a>
   );
 };

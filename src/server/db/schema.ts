@@ -1697,6 +1697,8 @@ export const aiUsageEvents = pgTable('ai_usage_events', {
   featureIdx: index('idx_ai_usage_events_feature').on(t.feature),
   modelIdx: index('idx_ai_usage_events_model').on(t.modelId),
   projectCreatedIdx: index('idx_ai_usage_events_project_created').on(t.project, t.createdAt),
+  entityIdx: index('idx_ai_usage_events_entity').on(t.entityType, t.entityId),
+  threadIdx: index('idx_ai_usage_events_thread_id').on(t.threadId),
 }));
 
 export const cursorUsageEvents = pgTable('cursor_usage_events', {

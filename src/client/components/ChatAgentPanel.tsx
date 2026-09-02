@@ -573,10 +573,16 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     m.toolName !== '_reasoning' && m.toolName !== '_thinking'
   );
 
+  // A selected thread can legitimately hold nothing to show: the kickoff prompt
+  // is hidden, and a run that never produced a reply persists no agent message.
+  const hasEmptyTranscript =
+    visibleMessages.length === 0 && !showTypingIndicator && !streamingText;
+
   const statusLabel =
     status === 'running' ? 'Agent is thinking…'
     : status === 'error' ? 'Error occurred'
     : status === 'closed' ? 'Thread closed'
+    : hasEmptyTranscript ? 'No messages'
     : visibleMessages.length === 0 ? 'Starting skill…'
     : 'Ready';
 
@@ -788,6 +794,24 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
       ) : (
         <>
           <div className={styles.messages}>
+            {hasEmptyTranscript && (
+              <div
+                className={styles.transcriptEmpty}
+                {...{ 'data-testid': 'chat-agent-empty-transcript' }}
+              >
+                <h3 className={styles.transcriptEmptyTitle}>No messages in this conversation</h3>
+                {thread.lastError ? (
+                  <p className={styles.transcriptEmptyError} role="status">
+                    The last agent run did not finish: {thread.lastError}
+                  </p>
+                ) : null}
+                <p className={styles.transcriptEmptyHint}>
+                  {status === 'closed'
+                    ? 'This thread is closed, so nothing was saved to it.'
+                    : 'Send a message to start it.'}
+                </p>
+              </div>
+            )}
             {visibleMessages.map((msg, idx) => {
               const highlighted = highlightedMessageId === msg.id;
               if (msg.role === 'tool') return <ToolCallBubble key={msg.id} msg={msg} highlighted={highlighted} />;

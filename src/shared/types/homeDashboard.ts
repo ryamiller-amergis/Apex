@@ -14,6 +14,7 @@ export type ArtifactDoneEventType =
   | 'design_doc';
 
 export type TileStatus = 'ok' | 'empty' | 'error';
+export type HomeDashboardScope = 'mine' | 'team';
 
 export interface TileResult<T> {
   status: TileStatus;
@@ -30,6 +31,12 @@ export interface PipelineGroupRow {
   route: string;
   updatedAt: string;
   ageDays: number;
+  /**
+   * Why this row is still in the pipeline, e.g. "No PRD generated". An artifact's
+   * own badge can read Complete while the pipeline stalled behind it, so every row
+   * has to say which stage it is waiting on.
+   */
+  reason: string;
 }
 
 export interface PipelineGroup {
@@ -91,10 +98,22 @@ export interface DevToProductionData {
   windowDays: 90;
 }
 
+/** Bugs created in the window per PBI created in the same window. */
+export interface BugToPbiRatioData {
+  /** Unique child Bugs created in the window. */
+  bugCount: number;
+  /** Unique PBIs / User Stories created in the window. */
+  pbiCount: number;
+  /** `bugCount / pbiCount`, one decimal. Null when no PBIs were created. */
+  ratio: number | null;
+  windowDays: 90;
+}
+
 export interface HomeDashboardPayload {
   incompletePipeline: TileResult<IncompletePipelineData> | null;
   artifactCycleTime: TileResult<ArtifactCycleTimeData> | null;
   myWork: TileResult<MyWorkData> | null;
   openBugsOnPbis: TileResult<OpenBugsOnPbisData> | null;
+  bugToPbiRatio: TileResult<BugToPbiRatioData> | null;
   devToProduction: TileResult<DevToProductionData> | null;
 }

@@ -5,6 +5,11 @@ import { WorkItem, CycleTimeData, DueDateChange, DeveloperDueDateStats, DueDateH
 import type { AiCodeWorkItemAdoptionSummary } from '../types/aiCapabilityLadder';
 import { retryWithBackoff } from '../utils/retry';
 import { APEX_ORIGIN_TAG } from '../../shared/types/devWorkbench';
+import type { RelatedItemCycleTime, RelatedItemsCycleTimeResponse } from '../../shared/types/relatedItemCycleTime';
+import {
+  computeLastEnterInProgressToDone,
+  summarizeRelatedItemCycleTimes,
+} from './relatedItemCycleTime';
 
 /**
  * Ensures the canonical APEX origin tag is present in a tag list without
@@ -3004,6 +3009,62 @@ export class AzureDevOpsService {
         description: wi.fields?.['System.Description'],
       }));
     });
+  }
+
+  /**
+   * Cycle time for related work items: last enter In Progress → last enter Done/Closed.
+   * Distinct from calculateCycleTime (first In Progress → first Ready For Test).
+   */
+  async getRelatedItemsCycleTime(epicId: number): Promise<RelatedItemsCycleTimeResponse> {
+    const related = await this.getRelatedItems(epicId);
+    const witApi = await this.connection.getWorkItemTrackingApi();
+
+    const readItem = async (wi: WorkItem): Promise<RelatedItemCycleTime> => {
+      const base = {
+        id: wi.id,
+        title: wi.title,
+        workItemType: wi.workItemType,
+        state: wi.state,
+        workItem: wi,
+      };
+
+      try {
+        const revisions = await witApi.getRevisions(
+          wi.id,
+          undefined,
+          undefined,
+          undefined,
+          this.project,
+        );
+        const cycle = computeLastEnterInProgressToDone(revisions ?? []);
+        return {
+          ...base,
+          lastInProgressAt: cycle.lastInProgressAt,
+          lastDoneAt: cycle.lastDoneAt,
+          cycleTimeDays: cycle.cycleTimeDays,
+          incompleteReason: cycle.incompleteReason,
+        };
+      } catch (error) {
+        console.error(`[getRelatedItemsCycleTime] Failed revisions for ${wi.id}:`, error);
+        return {
+          ...base,
+          lastInProgressAt: null,
+          lastDoneAt: null,
+          cycleTimeDays: null,
+          incompleteReason: 'missing_done',
+        };
+      }
+    };
+
+    // Same batch size as calculateCycleTimeForItems — revision reads are the slow part.
+    const batchSize = 3;
+    const items: RelatedItemCycleTime[] = [];
+    for (let i = 0; i < related.length; i += batchSize) {
+      const batch = await Promise.all(related.slice(i, i + batchSize).map(readItem));
+      items.push(...batch);
+    }
+
+    return summarizeRelatedItemCycleTimes(items);
   }
 
   /**

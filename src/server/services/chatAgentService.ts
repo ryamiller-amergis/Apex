@@ -25,9 +25,8 @@ import type {
 } from '../../shared/types/chat';
 import { isAzureWwwroot, resolveDataRoot } from '../utils/dataDir';
 import {
-  recordAiUsage,
+  recordCursorChatUsage,
   estimateTokens,
-  resolveFeatureFromKickoff,
 } from './aiUsageService';
 import {
   upsertThread as pgUpsertThread,
@@ -5602,12 +5601,9 @@ export async function sendMessage(
           ({} as import('../../shared/types/chat').ChatThreadKickoff);
         const inputEst = estimateTokens(text ?? '');
         const outputEst = estimateTokens(agentTextBuffer ?? '');
-        recordAiUsage({
-          provider: 'cursor',
+        void recordCursorChatUsage({
+          kickoff,
           modelId: resolvedModel,
-          feature: resolveFeatureFromKickoff(kickoff),
-          project: kickoff.project ?? 'unknown',
-          skillPath: kickoff.skillPath ?? undefined,
           threadId,
           runId: agentRunId ?? undefined,
           workItemId:
@@ -5615,11 +5611,9 @@ export async function sendMessage(
           userId: state.thread.userId ?? undefined,
           inputTokens: inputEst,
           outputTokens: outputEst,
-          tokenSource: 'estimated',
-          costUsd: 0,
-          costSource: 'estimated',
+          durationMs: Date.now() - runStartedAtMs,
           status: 'success',
-        });
+        }).catch(() => {});
       }
 
       break;
@@ -5856,22 +5850,17 @@ export async function sendMessage(
       const kickoff =
         state.thread?.kickoff ??
         ({} as import('../../shared/types/chat').ChatThreadKickoff);
-      recordAiUsage({
-        provider: 'cursor',
+      void recordCursorChatUsage({
+        kickoff,
         modelId: resolvedModel,
-        feature: resolveFeatureFromKickoff(kickoff),
-        project: kickoff.project ?? 'unknown',
-        skillPath: kickoff.skillPath ?? undefined,
         threadId,
         runId: agentRunId ?? undefined,
         userId: state.thread?.userId ?? undefined,
         inputTokens: 0,
         outputTokens: 0,
-        tokenSource: 'estimated',
-        costUsd: 0,
-        costSource: 'estimated',
+        durationMs: Date.now() - runStartedAtMs,
         status: 'error',
-      });
+      }).catch(() => {});
     }
 
     if (agentRunId) {

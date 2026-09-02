@@ -38,6 +38,7 @@ const emptyPayload = {
     },
   },
   openBugsOnPbis: { status: 'empty', data: { totalOpenBugs: 0, rows: [] } },
+  bugToPbiRatio: { status: 'empty', data: { bugCount: 0, pbiCount: 0, ratio: null, windowDays: 90 } },
   devToProduction: { status: 'empty', data: { medianDays: null, sampleSize: 0, windowDays: 90 } },
 };
 
@@ -97,6 +98,7 @@ test.describe('Home dashboard and slide-out chat', () => {
         body: JSON.stringify({
           ...emptyPayload,
           openBugsOnPbis: null,
+          bugToPbiRatio: null,
           devToProduction: null,
         }),
       });

@@ -36,6 +36,7 @@ import { AgentComposer, AgentPanelShell } from './agentChat';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
 import { ReviewReasonModal } from './ReviewReasonModal';
+import { ArtifactUsageStrip } from './ArtifactUsageStrip';
 import { ValidationOverrideAudit } from './ValidationOverrideAudit';
 import { AnnotationLayer, unwrapCommentMarks } from './AnnotationLayer';
 import { ReviewCommentSidebar } from './ReviewCommentSidebar';
@@ -2078,6 +2079,10 @@ export const DesignDocReviewView: React.FC = () => {
                 <span className={styles.repoBadge}>{doc.skillSettingsName}</span>
               )}
             </div>
+            <ArtifactUsageStrip
+              endpoint={`/api/interviews/design-docs/${doc.id}/usage`}
+              visible={doc.status !== 'generating'}
+            />
             {sourcePrd && (
               <div className={styles.parentLinks}>
                 <button

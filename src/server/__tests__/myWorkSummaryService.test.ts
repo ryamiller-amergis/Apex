@@ -25,7 +25,11 @@ describe('MyWorkSummaryService', () => {
       medianCompletionDays: 15,
       sampleSize: 2,
     });
-    expect(service.dependencies.listNativeFeatures).toHaveBeenCalledWith({ userId: 'me', project: 'Apex' });
+    expect(service.dependencies.listNativeFeatures).toHaveBeenCalledWith({
+      userId: 'me',
+      project: 'Apex',
+      scope: 'team',
+    });
   });
 
   test('PBI-003 AC-0 VT-11 maps ADO Ready/In Progress/done states and computes median', async () => {
@@ -46,7 +50,12 @@ describe('MyWorkSummaryService', () => {
       medianCompletionDays: 5,
       sampleSize: 2,
     });
-    expect(service.dependencies.listAdoWork).toHaveBeenCalledWith({ userId: 'me', project: 'Other', since: '2026-06-02T12:00:00.000Z' });
+    expect(service.dependencies.listAdoWork).toHaveBeenCalledWith({
+      userId: 'me',
+      project: 'Other',
+      since: '2026-06-02T12:00:00.000Z',
+      scope: 'team',
+    });
   });
 
   test('PBI-003 AC-2 VT-24 keeps counts and returns null when there are no completions', async () => {
