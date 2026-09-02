@@ -10,12 +10,12 @@
     "termsOfUseUrl": "https://app-scrum-dev.azurewebsites.net/terms"
   },
   "name": {
-    "short": "APEX Bot - Dev",
-    "full": "APEX Bot Notifications - Dev"
+    "short": "APEX Bot",
+    "full": "APEX Bot Notifications"
   },
   "description": {
     "short": "Get APEX dev-environment notifications in Teams",
-    "full": "Sends real-time notifications from the APEX development environment directly to your Teams chat when you are assigned to interviews or reviews. This is the non-production bot — install it alongside APEX Bot if you test against dev."
+    "full": "Sends real-time notifications from the APEX development environment directly to your Teams chat when you are assigned to interviews or reviews. This is the non-production bot — install it alongside APEX if you test against dev."
   },
   "icons": {
     "color": "color.png",

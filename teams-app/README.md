@@ -10,10 +10,10 @@ time, because the two Teams app packages use different app IDs.
 
 | | Production | Development |
 |---|---|---|
-| Teams display name | `APEX Bot` | `APEX Bot - Dev` |
+| Teams display name | `APEX` | `APEX Bot` |
 | Manifest | `prod/manifest.json` | `dev/manifest.json` |
 | Teams app ID | `2f0071fc-b6cd-45a5-ae0d-f3bdfa0271c6` | `1d3382ad-f82f-4ea2-9cfe-56f2fbbb539f` |
-| Bot app ID | _see Part A — not yet created_ | `1d3382ad-f82f-4ea2-9cfe-56f2fbbb539f` |
+| Bot app ID | `2cc05d99-fad4-4eb9-a9e6-0b926684f5dd` | `1d3382ad-f82f-4ea2-9cfe-56f2fbbb539f` |
 | Messaging endpoint | `https://apex.amergis.com/api/messages` | `https://app-scrum-dev.azurewebsites.net/api/messages` |
 | App Service | `app-apex-prd` (`rg-apex-prd-app`) | `app-scrum-dev` |
 | Icon | Blue | Amber, with a `DEV` band |
@@ -37,11 +37,16 @@ Keep a scratch note open — steps A1 and A2 produce two values you need later:
 | Prod bot **app ID** | A1 | A3, A6, A7 |
 | Prod bot **client secret** | A2 | A6 only |
 
+> **Status:** A1, A2, and A7 are done — the registration exists with app ID
+> `2cc05d99-fad4-4eb9-a9e6-0b926684f5dd` and its secret has been generated. A3 through A6
+> remain. The steps are kept below so the bot can be rebuilt from scratch if needed.
+
 ### A1. Create the Entra app registration
 
 1. Go to the [Azure Portal](https://portal.azure.com) → **Microsoft Entra ID** → **App registrations**.
 2. Click **+ New registration**.
-3. **Name:** `APEX Bot`
+3. **Name:** `APEX` — this is the Entra registration name, visible only in the Azure portal.
+   It is independent of the `name.short` in the manifest, which is what Teams users see.
 4. **Supported account types:** *Accounts in this organizational directory only (Single tenant)*.
    This must be single-tenant to match `MicrosoftAppType: 'SingleTenant'` in `teamsBotService.ts`.
 5. Leave **Redirect URI** empty — the bot authenticates with a client secret, not a redirect flow.
@@ -128,26 +133,27 @@ These settings are safe to manage by hand — `infra/main.tf` declares
 remove them, and `deploy.yml` sets app settings with merge semantics rather than replacing the
 whole map.
 
-### A7. Fill in the manifest
+### A7. Fill in the manifest — already done
 
-Replace the `REPLACE_WITH_PROD_BOT_APP_ID` placeholder in `prod/manifest.json` with the
-Application (client) ID from A1, and commit it. The bot app ID is not a secret; the client
-secret is, and never belongs in this repo.
+`prod/manifest.json` carries `botId: 2cc05d99-fad4-4eb9-a9e6-0b926684f5dd`. If the prod bot is
+ever rebuilt against a different app registration, update that field to match.
+
+The bot app ID is not a secret. The client secret is, and never belongs in this repo — it lives
+only in the `TEAMS_BOT_APP_PASSWORD` app setting from A6.
 
 ---
 
 ## Part B — Build the app packages
 
-### B1. Generate the icons
+### B1. Icons
 
-Icons are not committed and must be generated before zipping.
+Both icon pairs are committed alongside their manifests — `prod/` has the blue set and `dev/`
+has the amber set with the `DEV` band — so you can skip straight to zipping.
 
-1. Open `create-icons.html` in Chrome or Edge.
-2. Under **Production**, download `color.png` and `outline.png`, then move both into `prod/`.
-3. Under **Development**, download `color.png` and `outline.png`, then move both into `dev/`.
-
-Move each pair before downloading the next, otherwise the browser saves the second pair as
-`color (1).png`.
+Only if you change the artwork: open `create-icons.html` in Chrome or Edge, download the
+**Production** pair and move it into `prod/`, then download the **Development** pair and move
+it into `dev/`. Move each pair before downloading the next, otherwise the browser saves the
+second pair as `color (1).png`.
 
 ### B2. Zip
 
@@ -162,8 +168,13 @@ Compress-Archive -Path teams-app\dev\*  -DestinationPath teams-app-dev.zip  -For
 Verify the contents:
 
 ```powershell
-[System.IO.Compression.ZipFile]::OpenRead((Resolve-Path teams-app-prod.zip)).Entries | Select-Object Name
+$zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path teams-app-prod.zip))
+$zip.Entries | Select-Object Name
+$zip.Dispose()
 ```
+
+Dispose the handle. Leaving it open locks the file, and the next `Compress-Archive -Force`
+fails with "the process cannot access the file".
 
 Each zip should contain exactly `manifest.json`, `color.png`, and `outline.png`.
 
@@ -173,19 +184,23 @@ Each zip should contain exactly `manifest.json`, `color.png`, and `outline.png`.
 
 Both bots are distributed through the Teams org catalog, not per-user sideloading.
 
-Do the dev rename **first**, so there is never a moment where two catalog entries are both
-called "APEX Bot".
+Production is published as **APEX**; dev keeps the name it already has, **APEX Bot**. Because
+the two names differ, the order of C1 and C2 does not matter.
 
-### C1. Rename the already-deployed dev app
+### C1. Refresh the already-deployed dev app
 
-Nothing about the running dev bot changes. Leave its app registration, client secret,
-messaging endpoint, Teams channel, and the `TEAMS_BOT_APP_ID` / `TEAMS_BOT_APP_PASSWORD`
-settings on `app-scrum-dev` exactly as they are. Because the bot app ID is unchanged, every
-conversation reference already stored in the dev database stays valid — existing users keep
-receiving dev notifications through the rename without reinstalling anything.
+**The dev app is not renamed.** It is already called `APEX Bot` in the catalog and stays that
+way. Nothing about the running dev bot changes either — leave its app registration, client
+secret, messaging endpoint, Teams channel, and the `TEAMS_BOT_APP_ID` /
+`TEAMS_BOT_APP_PASSWORD` settings on `app-scrum-dev` exactly as they are. The bot app ID is
+unchanged, so every conversation reference already stored in the dev database stays valid and
+existing users keep receiving dev notifications without reinstalling anything.
 
-The only change that matters is the catalog listing, because the name shown in a user's Teams
-chat list comes from the manifest's `name.short`, not from anything in Azure.
+What does change is the artwork and description: dev picks up the amber `DEV` icon and an
+accent color that tell it apart from production at a glance. With prod named `APEX` and dev
+named `APEX Bot`, the icon is the clearest signal of which environment a card came from, so
+this step is worth doing rather than skipping.
+
 `dev/manifest.json` keeps the original Teams app ID and bumps `version` to `1.0.2`, so this is
 an **update in place**.
 
@@ -194,12 +209,13 @@ an **update in place**.
 3. Open the app and use **Update** — *not* **Upload new app** — then select `teams-app-dev.zip`.
    Uploading it as a new app would either be rejected as a duplicate app ID or create a second
    parallel listing.
-4. Confirm the listing now reads **APEX Bot - Dev**.
+4. Confirm the listing still reads **APEX Bot** and now shows the amber icon.
 
-#### Optional — matching renames in Azure
+#### Optional — Azure display names
 
 Neither of these affects what users see in Teams; they only stop the portal from being
-confusing once a second bot exists.
+confusing once a second bot exists. The dev Azure Bot resource and its Entra app registration
+can be suffixed with `- Dev` so they are not mistaken for the production pair.
 
 **Azure Bot resource display name.** Open the dev bot resource → **Settings** →
 **Configuration**, set **Display Name** to `APEX Bot - Dev`, and click **Apply**. The resource
@@ -215,7 +231,7 @@ registration with that same app ID, then **Branding & properties** → set **Nam
 
 1. In **Teams apps → Manage apps**, click **Actions → Upload new app** and select
    `teams-app-prod.zip`. This one *is* a new app — it carries a different Teams app ID.
-2. Once uploaded, find **APEX Bot** in the list and set its **Status** to **Allowed**.
+2. Once uploaded, find **APEX** in the list and set its **Status** to **Allowed**.
 3. Publishing to the catalog makes the app available; it does not install it. Either let
    users add it themselves from **Apps → Built for your org**, or push it out via
    **Teams apps → Setup policies** by adding it to the **Installed apps** list on the
@@ -231,12 +247,16 @@ org-wide setup policy.
 
 ### C3. Verify
 
-1. In Teams, confirm both **APEX Bot** and **APEX Bot - Dev** appear as separate chats.
+1. In Teams, confirm **APEX** and **APEX Bot** appear as two separate chats, with the blue and
+   amber icons respectively.
 2. Trigger a notification in prod (for example, assign yourself as a reviewer) and confirm
-   the card arrives from **APEX Bot** and that its **View** button opens an
+   the card arrives from **APEX** and that its **View** button opens an
    `apex.amergis.com` URL.
-3. Repeat against dev and confirm the card arrives from **APEX Bot - Dev** with an
+3. Repeat against dev and confirm the card arrives from **APEX Bot** with an
    `app-scrum-dev.azurewebsites.net` URL.
+
+The **View** link target is the reliable way to tell the two apart if you are unsure which
+environment a card came from.
 
 If a card never arrives, check the App Service log stream for
 `[teamsBotService] Failed to send Teams notification`.
@@ -263,9 +283,9 @@ notifications are unaffected.
 
 | File | Description |
 |---|---|
-| `prod/manifest.json` | Production Teams manifest (`APEX Bot`) |
-| `dev/manifest.json` | Development Teams manifest (`APEX Bot - Dev`) |
-| `create-icons.html` | Browser-based generator for both icon sets |
+| `prod/manifest.json` | Production Teams manifest (`APEX`) |
+| `dev/manifest.json` | Development Teams manifest (`APEX Bot`) |
+| `prod/color.png`, `prod/outline.png` | Production icons — blue |
+| `dev/color.png`, `dev/outline.png` | Development icons — amber with a `DEV` band |
+| `create-icons.html` | Browser-based generator, only needed to change the artwork |
 | `README.md` | This file |
-| `prod/color.png`, `prod/outline.png` | Generated, not committed |
-| `dev/color.png`, `dev/outline.png` | Generated, not committed |
