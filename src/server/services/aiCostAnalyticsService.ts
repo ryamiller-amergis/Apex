@@ -541,7 +541,7 @@ export async function getEntityUsageRollup(opts: {
     createdTimes.length >= 2 ? Math.max(0, Math.max(...createdTimes) - Math.min(...createdTimes)) : 0;
   const durationMs = recordedDuration > 0 ? recordedDuration : elapsedFallback;
   const models = [...new Set(events.map((row) => row.modelId).filter(Boolean))];
-  const onlyEstimatedTokens = events.every((row) => row.tokenSource === 'estimated');
+  const onlyEstimatedCost = events.every((row) => row.costSource === 'estimated');
 
   return {
     inputTokens,
@@ -553,7 +553,7 @@ export async function getEntityUsageRollup(opts: {
     durationMs,
     interactions: events.length,
     models,
-    incomplete: costUsd === 0 && onlyEstimatedTokens && inputTokens + outputTokens + cacheReadTokens > 0,
+    incomplete: costUsd === 0 && onlyEstimatedCost && inputTokens + outputTokens + cacheReadTokens > 0,
     runs: events.map((row) => ({
       modelId: row.modelId,
       inputTokens: row.inputTokens ?? 0,

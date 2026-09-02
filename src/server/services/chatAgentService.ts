@@ -5311,6 +5311,7 @@ export async function sendMessage(
       } catch (streamErr) {
         firstEventDeadline?.clear();
         if (streamErr instanceof CursorExecutionWaitError) {
+          lastRunUsage = streamErr.usage ?? lastRunUsage;
           throw streamErr.cause;
         }
 

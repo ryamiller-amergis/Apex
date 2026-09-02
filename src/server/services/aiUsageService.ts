@@ -244,9 +244,9 @@ export async function recordCursorChatUsage(opts: {
     cacheWriteTokens: opts.cacheWriteTokens,
     tokenSource,
     costUsd,
-    // Priced from real token counts against the pricing catalog, so the cost
-    // is computed rather than a guess derived from a guess.
-    costSource: tokenSource === 'exact' ? 'computed' : 'estimated',
+    // Exact tokens are computed only when the catalog produced a price.
+    // A catalog miss stays estimated so the usage strip can show Cost pending.
+    costSource: tokenSource === 'exact' && costUsd > 0 ? 'computed' : 'estimated',
     durationMs: opts.durationMs,
     status: opts.status,
   });

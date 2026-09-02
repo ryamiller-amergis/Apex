@@ -80,7 +80,10 @@ export interface CursorExecutionWaitResult {
 }
 
 export class CursorExecutionWaitError extends Error {
-  constructor(public readonly cause: unknown) {
+  constructor(
+    public readonly cause: unknown,
+    public readonly usage?: CursorTokenUsage,
+  ) {
     super(cause instanceof Error ? cause.message : 'Cursor run wait failed');
     this.name = 'CursorExecutionWaitError';
   }
@@ -511,7 +514,7 @@ export async function executeCursorExecutionCore(
   try {
     waitResult = await run.wait();
   } catch (error) {
-    throw new CursorExecutionWaitError(error);
+    throw new CursorExecutionWaitError(error, streamedUsage);
   }
   return {
     text: textBuffer,

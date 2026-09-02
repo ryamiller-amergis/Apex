@@ -249,5 +249,28 @@ describe('aiUsageService', () => {
         }),
       );
     });
+
+    it('keeps cost estimated when exact tokens have no catalog row', async () => {
+      pricingLimit.mockResolvedValue([]);
+
+      await recordCursorChatUsage({
+        kickoff: { skillPath: '.cursor/skills/grill-with-docs/SKILL.md', project: 'Apex' },
+        modelId: 'unknown-cursor-model',
+        threadId: 'thread-9',
+        inputTokens: 42_000,
+        outputTokens: 900,
+        tokenSource: 'exact',
+        durationMs: 4200,
+        status: 'success',
+      });
+
+      expect(insertValues).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tokenSource: 'exact',
+          costUsd: '0.00000000',
+          costSource: 'estimated',
+        }),
+      );
+    });
   });
 });

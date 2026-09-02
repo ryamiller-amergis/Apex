@@ -114,4 +114,25 @@ describe('getEntityUsageRollup', () => {
     expect(rollup.interactions).toBe(0);
     expect(rollup.incomplete).toBe(false);
   });
+
+  it('marks cost pending when exact tokens have no catalog price', async () => {
+    whereMock.mockResolvedValue([
+      {
+        modelId: 'unknown-cursor-model',
+        inputTokens: 42_000,
+        outputTokens: 900,
+        cacheReadTokens: 0,
+        costUsd: '0',
+        costSource: 'estimated',
+        durationMs: 4200,
+        tokenSource: 'exact',
+        createdAt: '2026-09-01T00:00:00.000Z',
+      },
+    ]);
+
+    const rollup = await getEntityUsageRollup({ entityType: 'interview', entityId: 'int-1' });
+    expect(rollup.incomplete).toBe(true);
+    expect(rollup.costUsd).toBe(0);
+    expect(rollup.inputTokens).toBe(42_000);
+  });
 });

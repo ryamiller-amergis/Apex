@@ -1,6 +1,7 @@
 import type { AgentRunEventEnvelope } from '../../shared/types/chat';
 import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
 import {
+  CursorExecutionWaitError,
   executeCursorExecutionCore,
   type CursorExecutionRun,
 } from '../services/cursorExecutionCore';
@@ -204,5 +205,40 @@ describe('cursor execution core token usage', () => {
       }),
     );
     expect(result.usage).toBeUndefined();
+  });
+
+  it('keeps streamed usage on the wait() error so failed runs can still record tokens', async () => {
+    const run: CursorExecutionRun = {
+      supports: (capability) => capability === 'stream',
+      stream: async function* () {
+        yield {
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: 'ok' }] },
+        };
+        yield {
+          type: 'usage',
+          usage: {
+            inputTokens: 42_000,
+            outputTokens: 900,
+            cacheReadTokens: 118_000,
+            cacheWriteTokens: 3_000,
+          },
+        };
+      },
+      wait: jest.fn().mockRejectedValue(new Error('run wait failed')),
+    };
+
+    try {
+      await execute(run);
+      throw new Error('expected wait() to reject');
+    } catch (error) {
+      expect(error).toBeInstanceOf(CursorExecutionWaitError);
+      expect((error as CursorExecutionWaitError).usage).toEqual({
+        inputTokens: 42_000,
+        outputTokens: 900,
+        cacheReadTokens: 118_000,
+        cacheWriteTokens: 3_000,
+      });
+    }
   });
 });
