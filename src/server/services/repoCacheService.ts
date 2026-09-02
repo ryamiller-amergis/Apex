@@ -34,6 +34,13 @@ export interface RepoCacheOptions {
   branch: string;
 }
 
+/** The part of a cache key that identifies the mirror, without a branch. */
+export interface RepoCacheIdentity {
+  provider: SkillProvider;
+  project: string;
+  repo: string;
+}
+
 export interface GitRemote {
   url: string;
   env: Record<string, string>;
@@ -59,7 +66,7 @@ function safeSlug(value: string): string {
 
 const ALL_HEADS_REFSPEC = '+refs/heads/*:refs/heads/*';
 
-function cacheIdentity(options: RepoCacheOptions): string {
+function cacheIdentity(options: RepoCacheOptions | RepoCacheIdentity): string {
   return [options.provider, options.project, options.repo].join('\0');
 }
 
@@ -87,7 +94,9 @@ function cacheDirForIdentity(
   return path.join(REPO_CACHE_BASE, `${readable}-${hash}.git`);
 }
 
-export function getRepoCacheLeaseKey(options: RepoCacheOptions): string {
+export function getRepoCacheLeaseKey(
+  options: RepoCacheOptions | RepoCacheIdentity,
+): string {
   return `repo-cache:${crypto
     .createHash('sha256')
     .update(cacheIdentity(options))
@@ -279,6 +288,68 @@ async function verifyCacheConnectivity(
   return baseSha;
 }
 
+function identityPath(cacheDir: string): string {
+  return path.join(cacheDir, 'apex-cache-identity.json');
+}
+
+function lastUsedPath(cacheDir: string): string {
+  return path.join(cacheDir, 'apex-last-used');
+}
+
+/**
+ * Records which repository a mirror directory belongs to. The directory name
+ * only carries a hash, so without this an eviction sweep cannot take the
+ * mirror's own lease before deleting it.
+ */
+export function writeRepoCacheIdentity(
+  cacheDir: string,
+  options: RepoCacheOptions,
+): void {
+  const identity: RepoCacheIdentity = {
+    provider: options.provider,
+    project: options.project,
+    repo: options.repo,
+  };
+  try {
+    fs.writeFileSync(identityPath(cacheDir), JSON.stringify(identity), 'utf-8');
+  } catch {
+    // Best effort. Eviction falls back to treating the mirror as an orphan.
+  }
+}
+
+export function readRepoCacheIdentity(cacheDir: string): RepoCacheIdentity | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(identityPath(cacheDir), 'utf-8'));
+    if (
+      typeof parsed?.provider !== 'string'
+      || typeof parsed?.project !== 'string'
+      || typeof parsed?.repo !== 'string'
+    ) {
+      return null;
+    }
+    return parsed as RepoCacheIdentity;
+  } catch {
+    return null;
+  }
+}
+
+/** Bumps the LRU timestamp the eviction sweep orders mirrors by. */
+export function markRepoCacheUsed(cacheDir: string): void {
+  try {
+    fs.writeFileSync(lastUsedPath(cacheDir), `${Date.now()}\n`, 'utf-8');
+  } catch {
+    // Best effort. Eviction falls back to the directory mtime.
+  }
+}
+
+export function readRepoCacheLastUsed(cacheDir: string): number | null {
+  try {
+    return fs.statSync(lastUsedPath(cacheDir)).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
 function repairMarkerPath(cacheDir: string): string {
   return path.join(cacheDir, 'apex-repair-complete');
 }
@@ -396,6 +467,8 @@ async function populateColdCache(
     );
     const baseSha = await verifyCacheConnectivity(tempDir, options.branch, abortSignal);
     writeRepairMarker(tempDir, baseSha);
+    writeRepoCacheIdentity(tempDir, options);
+    markRepoCacheUsed(tempDir);
     await assertLeaseOwned();
     abortSignal.throwIfAborted();
     fs.renameSync(tempDir, cacheDir);
@@ -504,6 +577,9 @@ async function refreshWarmMirrorUnderLease(
   await assertOwned();
   abortSignal.throwIfAborted();
   writeRefreshMarker(cacheDir);
+  // Backfills the sidecar on mirrors cloned before eviction existed.
+  writeRepoCacheIdentity(cacheDir, options);
+  markRepoCacheUsed(cacheDir);
   console.log(
     `[repo-cache] ${stale ? 'verified stale' : 'ready'} ${options.provider}/${options.repo}@${options.branch} ` +
     `sha=${baseSha.slice(0, 12)} durationMs=${Date.now() - startedAt}`,
@@ -536,6 +612,7 @@ export async function refreshRepoCacheUnderLease(
     await assertOwned();
     abortSignal.throwIfAborted();
     writeRefreshMarker(cacheDir);
+    markRepoCacheUsed(cacheDir);
     console.log(
       `[repo-cache] ready ${options.provider}/${options.repo}@${options.branch} ` +
       `sha=${baseSha.slice(0, 12)} durationMs=${Date.now() - startedAt}`,
@@ -623,7 +700,10 @@ export async function fetchPinnedCommit(
   if (!COMMIT_SHA_RE.test(normalized)) return false;
   const cacheDir = getRepoCacheDir(options);
   if (!cacheExists(cacheDir)) return false;
-  if (await commitExistsInCache(cacheDir, normalized)) return true;
+  if (await commitExistsInCache(cacheDir, normalized)) {
+    markRepoCacheUsed(cacheDir);
+    return true;
+  }
 
   const key = `pin:${cacheIdentity(options)}:${normalized}`;
   const existing = inFlightPinFetches.get(key);
@@ -666,6 +746,7 @@ export async function fetchPinnedCommit(
         );
         await assertOwned();
         const got = await commitExistsInCache(cacheDir, normalized, signal);
+        if (got) markRepoCacheUsed(cacheDir);
         console.log(
           `[repo-cache] phase=pin-fetch-${got ? 'complete' : 'miss'} repo=${repoLabel} ` +
             `sha=${normalized.slice(0, 12)} durationMs=${Date.now() - startedAt}`,
