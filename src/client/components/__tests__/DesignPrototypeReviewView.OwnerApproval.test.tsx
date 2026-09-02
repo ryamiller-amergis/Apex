@@ -1,5 +1,7 @@
+import type { ReactNode } from 'react';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import DesignPrototypeReviewView from '../DesignPrototypeReviewView';
 
 const mockUseAppShell = jest.fn();
@@ -58,6 +60,16 @@ jest.mock('../UiMockPreview', () => ({
 }));
 jest.mock('../ReviewReasonModal', () => ({ ReviewReasonModal: () => null }));
 
+function renderView() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const Wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={['/backlog/design-prototype/prd-1']}>{children}</MemoryRouter>
+    </QueryClientProvider>
+  );
+  return render(<DesignPrototypeReviewView />, { wrapper: Wrapper });
+}
+
 describe('PBI-006 Design Prototype owner-only approval', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -73,7 +85,7 @@ describe('PBI-006 Design Prototype owner-only approval', () => {
   });
 
   it('AC-0 offers one-step approval and omits revision for the owner', () => {
-    render(<MemoryRouter initialEntries={['/backlog/design-prototype/prd-1']}><DesignPrototypeReviewView /></MemoryRouter>);
+    renderView();
 
     expect(screen.getByRole('button', { name: 'Approve as Owner' })).toBeEnabled();
     expect(screen.queryByRole('button', { name: /Request (Changes|Revision)/ })).not.toBeInTheDocument();
@@ -83,7 +95,7 @@ describe('PBI-006 Design Prototype owner-only approval', () => {
   it('does not infer owner-only review when assignment loading fails', () => {
     mockUsePrototypeAssignments.mockReturnValue({ data: [], isLoading: false, isError: true });
 
-    render(<MemoryRouter initialEntries={['/backlog/design-prototype/prd-1']}><DesignPrototypeReviewView /></MemoryRouter>);
+    renderView();
 
     expect(screen.queryByRole('button', { name: 'Approve as Owner' })).not.toBeInTheDocument();
   });
@@ -91,7 +103,7 @@ describe('PBI-006 Design Prototype owner-only approval', () => {
   it('does not fall back to the PRD owner when no prototype owner is assigned', () => {
     mockUseInterview.mockReturnValue({ data: {} });
 
-    render(<MemoryRouter initialEntries={['/backlog/design-prototype/prd-1']}><DesignPrototypeReviewView /></MemoryRouter>);
+    renderView();
 
     expect(screen.getByRole('button', { name: 'Approve as Owner' })).toBeDisabled();
   });
@@ -104,7 +116,7 @@ describe('PBI-006 Design Prototype owner-only approval', () => {
       isSuperAdmin: false,
     });
 
-    render(<MemoryRouter initialEntries={['/backlog/design-prototype/prd-1']}><DesignPrototypeReviewView /></MemoryRouter>);
+    renderView();
 
     expect(screen.queryByPlaceholderText('Add a comment...')).not.toBeInTheDocument();
   });
@@ -117,7 +129,7 @@ describe('PBI-006 Design Prototype owner-only approval', () => {
       isSuperAdmin: false,
     });
 
-    render(<MemoryRouter initialEntries={['/backlog/design-prototype/prd-1']}><DesignPrototypeReviewView /></MemoryRouter>);
+    renderView();
 
     const approve = screen.getByRole('button', { name: 'Approve as Owner' });
     expect(approve).toBeDisabled();

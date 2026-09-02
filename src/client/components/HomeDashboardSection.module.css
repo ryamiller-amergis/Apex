@@ -50,7 +50,7 @@
 
 .scope-button.active {
   background: var(--accent-color);
-  color: var(--bg-primary);
+  color: var(--on-accent);
   box-shadow: var(--glow-accent);
 }
 
