@@ -501,4 +501,41 @@ describe('repoCacheService', () => {
     expect(fetchArgs).not.toContain('origin');
     expect(fetchArgs?.some((arg) => arg.includes('refs/heads/*'))).toBe(false);
   });
+
+  it('writes pin-fetch identity only after taking the cache lease', async () => {
+    mockFs.existsSync.mockReturnValue(true);
+    mockGit.mockResolvedValue('');
+    const order: string[] = [];
+    const originalLease = mockWithLease.getMockImplementation();
+    mockWithLease.mockImplementation(
+      async (
+        _key: string,
+        operation: (lease: { signal: AbortSignal; assertOwned: () => Promise<void> }) => Promise<unknown>,
+      ) => {
+        order.push('lease');
+        return operation({
+          signal: new AbortController().signal,
+          assertOwned: jest.fn().mockResolvedValue(undefined),
+        });
+      },
+    );
+    mockFs.writeFileSync.mockImplementation((file: fs.PathOrFileDescriptor) => {
+      if (String(file).includes('apex-cache-identity.json')) order.push('identity');
+    });
+
+    try {
+      await expect(fetchPinnedCommit({
+        provider: 'ado',
+        project: 'MaxView',
+        repo: 'MaxView',
+        branch: 'development',
+      }, 'a'.repeat(40))).resolves.toBe(true);
+
+      expect(order[0]).toBe('lease');
+      expect(order).toContain('identity');
+    } finally {
+      if (originalLease) mockWithLease.mockImplementation(originalLease);
+      mockFs.writeFileSync.mockReset();
+    }
+  });
 });

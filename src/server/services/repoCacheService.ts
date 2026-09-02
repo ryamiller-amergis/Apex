@@ -700,9 +700,26 @@ export async function fetchPinnedCommit(
   if (!COMMIT_SHA_RE.test(normalized)) return false;
   const cacheDir = getRepoCacheDir(options);
   if (!cacheExists(cacheDir)) return false;
-  writeRepoCacheIdentity(cacheDir, options);
   if (await commitExistsInCache(cacheDir, normalized)) {
-    markRepoCacheUsed(cacheDir);
+    try {
+      await withRepoCacheLease(
+        getRepoCacheLeaseKey(options),
+        async () => {
+          writeRepoCacheIdentity(cacheDir, options);
+          markRepoCacheUsed(cacheDir);
+        },
+        { waitMs: 0 },
+      );
+    } catch (error) {
+      // Fetch already holds the lease. Do not write identity unguarded.
+      if (
+        !(error instanceof Error)
+        || !error.message.startsWith('Timed out waiting for repository cache lease:')
+      ) {
+        throw error;
+      }
+      markRepoCacheUsed(cacheDir);
+    }
     return true;
   }
 
@@ -713,7 +730,11 @@ export async function fetchPinnedCommit(
   const work = withRepoCacheLease(
     getRepoCacheLeaseKey(options),
     async ({ signal, assertOwned }) => {
-      if (await commitExistsInCache(cacheDir, normalized, signal)) return true;
+      writeRepoCacheIdentity(cacheDir, options);
+      if (await commitExistsInCache(cacheDir, normalized, signal)) {
+        markRepoCacheUsed(cacheDir);
+        return true;
+      }
       const remote = resolveGitRemote(
         options.provider,
         options.project,
