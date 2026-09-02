@@ -23,6 +23,10 @@ import {
   nightlyIdleReGroundService,
   type NightlyIdleReGroundResult,
 } from './nightlyIdleReGroundService';
+import {
+  repoCacheEvictionService,
+  type RepoCacheEvictionService,
+} from './repoCacheEvictionService';
 import { withRepoCacheLease } from './repoCacheLeaseService';
 
 export const GROUNDING_MAINTENANCE_INTERVAL_MS = 5 * 60 * 1000;
@@ -33,6 +37,10 @@ export interface GroundingMaintenanceSchedulerDependencies {
   preWarmService?: Pick<GroundingPreWarmService, 'preWarm' | 'sweep'>;
   evictionService?: Pick<GroundingEvictionService, 'evictIdle'>;
   sharedReadCheckoutService?: Pick<SharedReadCheckoutService, 'evictIdle'>;
+  repoCacheEvictionService?: Pick<
+    RepoCacheEvictionService,
+    'evictOverBudget'
+  >;
   stalenessService?: Pick<GroundingStalenessService, 'evaluateActive'>;
   nightlyIdleReGround?: {
     runIfDue: () => Promise<NightlyIdleReGroundResult>;
@@ -65,6 +73,10 @@ export class GroundingMaintenanceScheduler {
     SharedReadCheckoutService,
     'evictIdle'
   >;
+  private readonly repoCacheEvictionService: Pick<
+    RepoCacheEvictionService,
+    'evictOverBudget'
+  >;
   private readonly stalenessService: Pick<
     GroundingStalenessService,
     'evaluateActive'
@@ -91,6 +103,8 @@ export class GroundingMaintenanceScheduler {
       dependencies.evictionService ?? groundingEvictionService;
     this.sharedReadCheckoutService =
       dependencies.sharedReadCheckoutService ?? sharedReadCheckoutService;
+    this.repoCacheEvictionService =
+      dependencies.repoCacheEvictionService ?? repoCacheEvictionService;
     this.stalenessService =
       dependencies.stalenessService ?? groundingStalenessService;
     this.nightlyIdleReGround =
@@ -165,6 +179,9 @@ export class GroundingMaintenanceScheduler {
           await this.stalenessService.evaluateActive();
           await this.evictionService.evictIdle();
           await this.sharedReadCheckoutService.evictIdle();
+          // Runs after the workspace sweeps so freed checkouts count against
+          // the share before mirrors are considered for deletion.
+          await this.repoCacheEvictionService.evictOverBudget();
           await this.nightlyIdleReGround.runIfDue();
         }, leaseWindowMs);
       } catch (error) {
