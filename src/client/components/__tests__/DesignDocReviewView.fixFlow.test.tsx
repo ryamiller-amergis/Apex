@@ -106,6 +106,7 @@ jest.mock('../AnnotationLayer', () => ({
   unwrapCommentMarks: jest.fn(),
 }));
 jest.mock('../ReviewCommentSidebar', () => ({ ReviewCommentSidebar: () => null }));
+jest.mock('../ArtifactUsageStrip', () => ({ ArtifactUsageStrip: () => null }));
 jest.mock('../ProposedDesignDocChangesReview', () => ({
   ProposedDesignDocChangesReview: () => null,
 }));
