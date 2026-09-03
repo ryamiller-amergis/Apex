@@ -11,6 +11,16 @@ import { db } from '../db/drizzle';
 import { eq, and, isNull, sql } from 'drizzle-orm';
 import { designDocs as designDocsTable, chatThreads as chatThreadsTable, prds as prdsTable, reviewComments as reviewCommentsTable, designPrototypes as designPrototypesTable, interviews as interviewsTable, documentApproverAssignments } from '../db/schema';
 import { getComments, getUnresolvedCount } from '../services/reviewCommentService';
+import { getEntityUsageRollup } from '../services/aiCostAnalyticsService';
+import {
+  designDocPendingUsageSteps,
+  designDocUsageCtx,
+  designDocUsageThreadLabels,
+  prdPendingUsageSteps,
+  prdReviewUsageCtx,
+  prdUsageThreadLabels,
+  uniqueThreadIds,
+} from '../services/artifactUsageContext';
 import { fixPrdContentWithBedrock, fixPrdBacklogWithBedrock, fixDesignDocSectionWithBedrock, regeneratePrdContentRegionWithBedrock, regeneratePrdBacklogItemWithBedrock, regenerateMarkdownRegionWithBedrock, BedrockModelTruncatedError } from '../services/bedrockService';
 import {
   createInterview,
@@ -36,6 +46,7 @@ import type {
   LinkCandidateType,
 } from '../../shared/types/interviewLinks';
 import { getActiveUsers } from '../services/rbacService';
+import { recordArtifactDoneEvent } from '../services/artifactDoneEventService';
 import {
   createPrd,
   createPrdAdoWorkItems,
@@ -277,6 +288,31 @@ router.get('/prds', requirePermission('interviews:view'), async (req, res, next)
     const authorFilter = req.query.author === 'me' ? userId : undefined;
     const list = await listPrds({ userId: authorFilter, status, ...(project ? { project } : {}) });
     res.json(list);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/prds/:prdId/usage', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const prd = await getPrd(req.params.prdId);
+    if (!prd) {
+      res.status(404).json({ error: 'PRD not found' });
+      return;
+    }
+    const rollup = await getEntityUsageRollup({
+      entityType: 'prd',
+      entityId: prd.id,
+      threadIds: uniqueThreadIds(
+        prd.chatThreadId,
+        prd.prdAssistantThreadId,
+        prd.validationThreadId,
+        prd.latestTestCase?.chatThreadId,
+      ),
+      threadLabels: prdUsageThreadLabels(prd),
+      pendingSteps: prdPendingUsageSteps(prd),
+    });
+    res.json(rollup);
   } catch (err) {
     next(err);
   }
@@ -1100,6 +1136,7 @@ router.post('/prds/:prdId/regenerate-proposed-section', requirePermission('inter
         String(body.feedback).trim(),
         bedrockModelId,
         bedrockMaxTokens,
+        prdReviewUsageCtx(prd.project, prdId, getUserId(req)),
       );
       await db
         .update(prdsTable)
@@ -1132,6 +1169,7 @@ router.post('/prds/:prdId/regenerate-proposed-section', requirePermission('inter
       String(body.feedback).trim(),
       bedrockModelId,
       bedrockMaxTokens,
+      prdReviewUsageCtx(prd.project, prdId, getUserId(req)),
     );
     if (revisedBacklog == null) {
       res.status(422).json({ error: 'Model returned invalid backlog JSON' });
@@ -1225,6 +1263,7 @@ router.post('/prds/:prdId/fix-with-ai', requirePermission('interviews:manage'), 
         prdComments.map(mapComment),
         bedrockModelId,
         bedrockMaxTokens,
+        prdReviewUsageCtx(prd.project, prd.id, getUserId(req)),
       );
       updates['proposedContent'] = fixedContent;
     }
@@ -1235,6 +1274,7 @@ router.post('/prds/:prdId/fix-with-ai', requirePermission('interviews:manage'), 
         backlogComments.map(mapComment),
         bedrockModelId,
         bedrockMaxTokens,
+        prdReviewUsageCtx(prd.project, prd.id, getUserId(req)),
       );
       if (fixedBacklog != null) {
         updates['proposedBacklogJson'] = fixedBacklog;
@@ -1303,6 +1343,7 @@ router.post('/prds/:prdId/fix-comment-with-ai', requirePermission('interviews:ma
           [mapped],
           bedrockModelId,
           bedrockMaxTokens,
+          prdReviewUsageCtx(prd.project, prd.id, getUserId(req)),
         );
       } else if (comment.sectionKey === 'backlog') {
         const fixedBacklog = await fixPrdBacklogWithBedrock(
@@ -1310,6 +1351,7 @@ router.post('/prds/:prdId/fix-comment-with-ai', requirePermission('interviews:ma
           [mapped],
           bedrockModelId,
           bedrockMaxTokens,
+          prdReviewUsageCtx(prd.project, prd.id, getUserId(req)),
         );
         if (fixedBacklog != null) {
           updates['proposedBacklogJson'] = fixedBacklog;
@@ -1549,6 +1591,26 @@ router.get('/design-docs', requirePermission('interviews:view'), async (req, res
       ...(project ? { project } : {}),
     });
     res.json(list);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/design-docs/:id/usage', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const doc = await getDesignDoc(req.params.id);
+    if (!doc) {
+      res.status(404).json({ error: 'Design doc not found' });
+      return;
+    }
+    const rollup = await getEntityUsageRollup({
+      entityType: 'design-doc',
+      entityId: doc.id,
+      threadIds: uniqueThreadIds(doc.chatThreadId, doc.docAssistantThreadId, doc.validationThreadId),
+      threadLabels: designDocUsageThreadLabels(doc),
+      pendingSteps: designDocPendingUsageSteps(doc),
+    });
+    res.json(rollup);
   } catch (err) {
     next(err);
   }
@@ -2335,10 +2397,17 @@ router.post('/design-docs/:id/owner-approve', requirePermission('design-docs:rev
     await recordOwnerApproval(docId, 'design_doc', userId, status, comment);
 
     if (status === 'approved') {
+      const approvedAt = new Date().toISOString();
       await db.update(designDocsTable).set({
         status: 'approved',
-        updatedAt: new Date().toISOString(),
+        updatedAt: approvedAt,
       }).where(eq(designDocsTable.id, docId));
+
+      try {
+        await recordArtifactDoneEvent('design_doc', docId, approvedAt);
+      } catch (err) {
+        console.error(`[owner-approve] Failed to record design doc done event (docId=${docId})`, err);
+      }
     } else {
       await db.update(designDocsTable).set({
         status: 'revision_requested',
@@ -2397,6 +2466,7 @@ router.post('/design-docs/:id/fix-with-ai', requirePermission('interviews:manage
         designComments.map(mapComment),
         bedrockModelId,
         bedrockMaxTokens,
+        designDocUsageCtx(doc.project, doc.id, getUserId(req)),
       );
       updates['proposedDesignContent'] = fixed;
     }
@@ -2408,6 +2478,7 @@ router.post('/design-docs/:id/fix-with-ai', requirePermission('interviews:manage
         techSpecComments.map(mapComment),
         bedrockModelId,
         bedrockMaxTokens,
+        designDocUsageCtx(doc.project, doc.id, getUserId(req)),
       );
       updates['proposedTechSpecContent'] = fixed;
     }
@@ -2419,6 +2490,7 @@ router.post('/design-docs/:id/fix-with-ai', requirePermission('interviews:manage
         assumptionsComments.map(mapComment),
         bedrockModelId,
         bedrockMaxTokens,
+        designDocUsageCtx(doc.project, doc.id, getUserId(req)),
       );
       updates['proposedAssumptionsContent'] = fixed;
     }
@@ -2487,6 +2559,7 @@ router.post('/design-docs/:id/fix-comment-with-ai', requirePermission('interview
           [mapped],
           bedrockModelId,
           bedrockMaxTokens,
+          designDocUsageCtx(doc.project, doc.id, getUserId(req)),
         );
       } else if (sectionKey === 'tech_spec') {
         updates['proposedTechSpecContent'] = await fixDesignDocSectionWithBedrock(
@@ -2495,6 +2568,7 @@ router.post('/design-docs/:id/fix-comment-with-ai', requirePermission('interview
           [mapped],
           bedrockModelId,
           bedrockMaxTokens,
+          designDocUsageCtx(doc.project, doc.id, getUserId(req)),
         );
       } else if (sectionKey === 'assumptions') {
         updates['proposedAssumptionsContent'] = await fixDesignDocSectionWithBedrock(
@@ -2503,6 +2577,7 @@ router.post('/design-docs/:id/fix-comment-with-ai', requirePermission('interview
           [mapped],
           bedrockModelId,
           bedrockMaxTokens,
+          designDocUsageCtx(doc.project, doc.id, getUserId(req)),
         );
       } else {
         await db
@@ -2726,6 +2801,7 @@ router.post('/design-docs/:id/regenerate-proposed-section', requirePermission('i
       String(body.feedback).trim(),
       projectConfig?.prdReviewBedrockModelId ?? null,
       projectConfig?.prdReviewBedrockMaxTokens ?? null,
+      designDocUsageCtx(doc.project, doc.id, getUserId(req)),
     );
 
     const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
@@ -3016,6 +3092,24 @@ router.delete(
   },
 );
 
+router.get('/:id/usage', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const interview = await getInterview(req.params.id);
+    if (!interview) {
+      res.status(404).json({ error: 'Interview not found' });
+      return;
+    }
+    const rollup = await getEntityUsageRollup({
+      entityType: 'interview',
+      entityId: interview.id,
+      threadIds: uniqueThreadIds(interview.chatThreadId),
+    });
+    res.json(rollup);
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/:id', requirePermission('interviews:view'), async (req, res, next) => {
   try {
     const interview = await getInterview(req.params.id);
@@ -3198,10 +3292,17 @@ router.post('/prds/:prdId/owner-approve', requirePermission('prds:review'), asyn
     await recordOwnerApproval(prdId, 'prd', userId, status, comment);
 
     if (status === 'approved') {
+      const approvedAt = new Date().toISOString();
       await db.update(prdsTable).set({
         status: 'approved',
-        updatedAt: new Date().toISOString(),
+        updatedAt: approvedAt,
       }).where(eq(prdsTable.id, prdId));
+
+      try {
+        await recordArtifactDoneEvent('prd', prdId, approvedAt);
+      } catch (err) {
+        console.error(`[owner-approve] Failed to record PRD done event (prdId=${prdId})`, err);
+      }
 
       // Re-fetch so prototypeStageEnabled includes skill-option resolution / stale-false heal.
       const approvedPrd = await getPrd(prdId);
@@ -3305,10 +3406,17 @@ router.post('/prds/:prdId/design-prototypes/owner-approve', requirePermission('d
     await recordOwnerApproval(prototypeId, 'design_prototype', userId, status, comment);
 
     if (status === 'approved') {
+      const approvedAt = new Date().toISOString();
       await db.update(designPrototypesTable).set({
         status: 'approved',
-        updatedAt: new Date().toISOString(),
+        updatedAt: approvedAt,
       }).where(eq(designPrototypesTable.id, prototypeId));
+
+      try {
+        await recordArtifactDoneEvent('design_prototype', prototypeId, approvedAt);
+      } catch (err) {
+        console.error(`[owner-approve] Failed to record prototype done event (prototypeId=${prototypeId})`, err);
+      }
 
       triggerDesignDocForPrototype(prototypeId, proto.featureIndex).catch(err => {
         console.error(`[ownerApproval] triggerDesignDocForPrototype failed (prototypeId=${prototypeId})`, err);

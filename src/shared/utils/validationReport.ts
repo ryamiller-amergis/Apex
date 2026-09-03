@@ -79,19 +79,82 @@ export function resolveScorecardOverallScore(raw: unknown): number | null {
   if (direct !== null) return direct;
 
   const scores = asRecord(record.scores);
-  if (!scores) return null;
+  if (scores) {
+    const overall = finiteNumber(scores.overall)
+      ?? finiteNumber(asRecord(scores.overall)?.percentage);
+    if (overall !== null) return overall;
 
-  const overall = finiteNumber(scores.overall)
-    ?? finiteNumber(asRecord(scores.overall)?.percentage);
-  if (overall !== null) return overall;
+    const parts = Object.entries(scores)
+      .filter(([key]) => key !== 'overall')
+      .map(([, value]) => finiteNumber(value) ?? finiteNumber(asRecord(value)?.percentage))
+      .filter((value): value is number => value !== null);
+    if (parts.length > 0) {
+      return parts.reduce((sum, value) => sum + value, 0) / parts.length;
+    }
+  }
 
-  const parts = Object.entries(scores)
-    .filter(([key]) => key !== 'overall')
-    .map(([, value]) => finiteNumber(value) ?? finiteNumber(asRecord(value)?.percentage))
+  const files = Array.isArray(record.files) ? record.files : [];
+  const fileScores = files
+    .map((file) => finiteNumber(asRecord(file)?.score))
     .filter((value): value is number => value !== null);
-  if (parts.length === 0) return null;
-  return parts.reduce((sum, value) => sum + value, 0) / parts.length;
+  if (fileScores.length > 0) {
+    return fileScores.reduce((sum, value) => sum + value, 0) / fileScores.length;
+  }
+
+  return null;
 }
+
+/** Last-resort scorecard so a finished run always has something the UI can show. */
+export function buildUnusableValidationScorecard(description: string): ValidationScorecard {
+  return {
+    slug: 'validation-unusable',
+    generated_at: new Date().toISOString(),
+    review_phase: 'initial',
+    overall_score: 0,
+    ready_threshold: 90,
+    is_ready: false,
+    verdict: 'significant_gaps',
+    gaps: [
+      {
+        id: 'validation-unusable-scorecard',
+        file: 'review-scorecard.json',
+        section: 'Scorecard',
+        score: 0,
+        description,
+        what_3_looks_like:
+          'A scorecard with overall_score (or files[].score) so Apex can display a result.',
+        resolution: 'pending',
+      },
+    ],
+  };
+}
+
+/**
+ * Parse an agent-written scorecard file. Always returns a scorecard so callers
+ * can persist a result even when JSON is missing a usable overall score.
+ */
+export function parseAgentValidationScorecard(raw: string): ValidationScorecard {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    const normalized = normalizeValidationScorecard(parsed);
+    const record = asRecord(parsed);
+    if (normalized) return normalized;
+    const keys = record ? Object.keys(record).slice(0, 24).join(',') : typeof parsed;
+    console.warn(`[validation] Unusable scorecard shape keys=${keys}`);
+    return buildUnusableValidationScorecard(
+      `Validation finished but the scorecard had no usable overall score (keys: ${keys || 'none'}). Re-run validation.`,
+    );
+  } catch {
+    return buildUnusableValidationScorecard(
+      'Validation finished but the scorecard file was not valid JSON. Re-run validation.',
+    );
+  }
+}
+
+export const NO_SCORECARD_REASON =
+  'Validation finished without writing a scorecard. Re-run validation.';
+export const VALIDATION_TIMEOUT_REASON =
+  'Validation timed out before a scorecard was available. Re-run validation.';
 
 /**
  * Parse-site guard for agent-written scorecards. Returns the scorecard with a

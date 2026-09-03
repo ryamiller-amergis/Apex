@@ -61,36 +61,6 @@ jest.mock('../services/pgNotifyService', () => ({
 
 jest.mock('../services/featureFlagService', () => ({
   isFeatureEnabled: jest.fn().mockResolvedValue(false),
-  isProjectRepositoryCheckoutReadinessEnabled: jest.fn().mockResolvedValue(false),
-}));
-
-jest.mock('../services/projectRepositoryReadinessService', () => ({
-  assertResolvedProjectRepositoryReady: jest.fn().mockResolvedValue({
-    skillSettingsId: 'cfg-1',
-    status: 'ready',
-    sha: 'abc',
-    error: null,
-    startedAt: null,
-    completedAt: null,
-    filesystemReady: true,
-  }),
-  ProjectRepositoryNotReady: class ProjectRepositoryNotReady extends Error {
-    readonly code = 'PROJECT_REPOSITORY_NOT_READY';
-    readonly httpStatus = 409;
-    readonly readinessStatus: string;
-    constructor(readiness: { status: string }) {
-      super('A project administrator must clone this repository before repository-dependent AI work can run.');
-      this.name = 'ProjectRepositoryNotReady';
-      this.readinessStatus = readiness.status;
-    }
-    toJSON() {
-      return {
-        code: 'PROJECT_REPOSITORY_NOT_READY',
-        message: this.message,
-        status: this.readinessStatus,
-      };
-    }
-  },
 }));
 
 jest.mock('../utils/requestUser', () => ({
@@ -113,14 +83,7 @@ import chatRouter, {
   shouldForwardPgRunEvent,
 } from '../routes/chat';
 import * as chatAgentService from '../services/chatAgentService';
-import {
-  isFeatureEnabled,
-  isProjectRepositoryCheckoutReadinessEnabled,
-} from '../services/featureFlagService';
-import {
-  assertResolvedProjectRepositoryReady,
-  ProjectRepositoryNotReady,
-} from '../services/projectRepositoryReadinessService';
+import { isFeatureEnabled } from '../services/featureFlagService';
 import type {
   AgentRunEventEnvelope,
   ChatThread,
@@ -129,12 +92,6 @@ import type {
 } from '../../shared/types/chat';
 
 const mockChatService = chatAgentService as jest.Mocked<typeof chatAgentService>;
-const mockIsReadinessEnabled = isProjectRepositoryCheckoutReadinessEnabled as jest.MockedFunction<
-  typeof isProjectRepositoryCheckoutReadinessEnabled
->;
-const mockAssertResolvedReady = assertResolvedProjectRepositoryReady as jest.MockedFunction<
-  typeof assertResolvedProjectRepositoryReady
->;
 
 // ── App factory ────────────────────────────────────────────────────────────────
 
@@ -724,15 +681,14 @@ describe('POST /api/chat/threads/:id/messages — stale running self-heal', () =
   });
 });
 
-describe('VT-18 — project-repository-checkout-readiness blocks chat send', () => {
-  const threadId = 'not-ready-thread-id';
+describe('POST /api/chat/threads/:id/messages — cached grounding delegation', () => {
+  const threadId = 'cached-grounding-thread-id';
   const idleThread = {
     id: threadId,
     userId: 'user-1',
     kickoff: {
       project: 'Apex',
       repo: 'AI-Pilot',
-      skillSettingsId: 'cfg-blocked',
       skillPath: '/.cursor/skills/app-knowledge/SKILL.md',
     },
     messages: [],
@@ -751,40 +707,32 @@ describe('VT-18 — project-repository-checkout-readiness blocks chat send', () 
       access: 'owner',
     });
     mockCanWriteThread.mockResolvedValue(true);
-    (mockChatService.isRepositoryReadingChatCaller as jest.Mock).mockReturnValue(true);
-    (mockChatService.resolveGroundingCallerKey as jest.Mock).mockReturnValue('agent-home');
-    mockIsReadinessEnabled.mockResolvedValue(true);
+    mockChatService.sendMessage.mockResolvedValue(undefined);
   });
 
-  it('returns 409 PROJECT_REPOSITORY_NOT_READY and does not sendMessage', async () => {
-    mockAssertResolvedReady.mockRejectedValue(
-      new ProjectRepositoryNotReady({
-        skillSettingsId: 'cfg-blocked',
-        status: 'not_cloned',
-        sha: null,
-        error: null,
-        startedAt: null,
-        completedAt: null,
-        filesystemReady: false,
-      }),
-    );
-
+  it('accepts the turn and passes its selected skill to repository grounding', async () => {
     const res = await request(buildApp())
       .post(`/api/chat/threads/${threadId}/messages`)
-      .send({ text: 'Hello agent' });
+      .send({
+        text: 'Summarize the sprint',
+        skill: {
+          name: 'Scrum Assistant',
+          path: '/.cursor/skills/scrum-assistant/SKILL.md',
+        },
+      });
 
-    expect(res.status).toBe(409);
-    expect(res.body).toEqual({
-      code: 'PROJECT_REPOSITORY_NOT_READY',
-      message:
-        'A project administrator must clone this repository before repository-dependent AI work can run.',
-      status: 'not_cloned',
-    });
-    expect(mockAssertResolvedReady).toHaveBeenCalledWith({
-      project: 'Apex',
-      settingsId: 'cfg-blocked',
-      surface: 'agent-home',
-    });
-    expect(mockChatService.sendMessage).not.toHaveBeenCalled();
+    expect(res.status).toBe(202);
+    expect(mockChatService.sendMessage).toHaveBeenCalledWith(
+      threadId,
+      'Summarize the sprint',
+      undefined,
+      [],
+      {
+        turnSkill: {
+          name: 'Scrum Assistant',
+          path: '/.cursor/skills/scrum-assistant/SKILL.md',
+        },
+      },
+    );
   });
 });

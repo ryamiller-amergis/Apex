@@ -55,6 +55,7 @@ jest.mock('../services/testCaseService', () => ({
 }));
 jest.mock('../services/aiUsageService', () => ({
   recordAiUsage: jest.fn(),
+  recordCursorChatUsage: jest.fn().mockResolvedValue(undefined),
   estimateTokens: jest.fn().mockReturnValue(0),
   resolveFeatureFromKickoff: jest.fn().mockReturnValue('chat'),
 }));

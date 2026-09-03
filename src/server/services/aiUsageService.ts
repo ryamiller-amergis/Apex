@@ -8,15 +8,28 @@
  * a USD cost figure. Falls back to 0 when the model has no pricing entry.
  */
 import { db } from '../db/drizzle';
-import { aiPricing, aiUsageEvents } from '../db/schema';
-import { and, eq, isNull, lte, or } from 'drizzle-orm';
-import type { RecordUsageInput, AiFeature } from '../../shared/types/aiCostAnalytics';
+import { adrs, aiPricing, aiUsageEvents, designDocs, interviews, prds } from '../db/schema';
+import { and, desc, eq, gt, isNull, lte, or } from 'drizzle-orm';
+import type {
+  RecordUsageInput,
+  AiFeature,
+  AiTokenSource,
+  AiUsageStatus,
+} from '../../shared/types/aiCostAnalytics';
 
 // Estimate: ~4 chars per token (GPT-4 heuristic, good enough for allocation)
 const CHARS_PER_TOKEN = 4;
 
 export function estimateTokens(text: string): number {
   return Math.max(1, Math.ceil(text.length / CHARS_PER_TOKEN));
+}
+
+/** Exact model id, then one hyphen-suffix strip (e.g. composer-2.5-fast → composer-2.5). */
+export function modelIdPricingCandidates(modelId: string): string[] {
+  const candidates = [modelId];
+  const lastHyphen = modelId.lastIndexOf('-');
+  if (lastHyphen > 0) candidates.push(modelId.slice(0, lastHyphen));
+  return candidates;
 }
 
 /** Map kickoff mode/assistantType/skillPath to an AiFeature label. */
@@ -32,14 +45,19 @@ export function resolveFeatureFromKickoff(kickoff: {
   if (standupSessionId || mode === 'standup-participant' || mode === 'standup-facilitator') return 'standup';
   if (mode === 'development') return 'my-work';
 
+  if (assistantType === 'adr') return 'adr';
   if (assistantType === 'prd') return 'prd';
   if (assistantType === 'design-doc') return 'design-doc';
   if (assistantType === 'calendar-work-item') return 'calendar-work-item-assistant';
 
   if (skillPath) {
     const lower = skillPath.toLowerCase();
+    if (lower.includes('adr-interview') || lower.includes('adr-finalize') || lower.includes('adr-assistant')) {
+      return 'adr';
+    }
+    if (lower.includes('to-prd')) return 'prd';
+    if (lower.includes('prd-spec-review')) return 'prd-review';
     if (lower.includes('grill') || lower.includes('interview') || lower.includes('kick-off')) return 'interview';
-    if (lower.includes('to-prd') || lower.includes('prd-spec-review')) return 'prd-review';
     if (lower.includes('prd-design-spec') || lower.includes('design-spec-review')) return 'design-doc';
     if (lower.includes('design-doc-validation') || lower.includes('document-validation')) return 'design-doc-validation';
     if (lower.includes('create-test-case')) return 'test-case';
@@ -50,34 +68,77 @@ export function resolveFeatureFromKickoff(kickoff: {
   return 'other';
 }
 
+export async function resolveUsageEntityFromThread(
+  threadId: string,
+): Promise<{ entityType: string; entityId: string } | null> {
+  const interview = await db.query.interviews.findFirst({
+    where: eq(interviews.chatThreadId, threadId),
+    columns: { id: true },
+  });
+  if (interview) return { entityType: 'interview', entityId: interview.id };
+
+  const prd = await db.query.prds.findFirst({
+    where: or(
+      eq(prds.chatThreadId, threadId),
+      eq(prds.prdAssistantThreadId, threadId),
+      eq(prds.validationThreadId, threadId),
+    ),
+    columns: { id: true },
+  });
+  if (prd) return { entityType: 'prd', entityId: prd.id };
+
+  const adr = await db.query.adrs.findFirst({
+    where: or(eq(adrs.chatThreadId, threadId), eq(adrs.adrAssistantThreadId, threadId)),
+    columns: { id: true },
+  });
+  if (adr) return { entityType: 'adr', entityId: adr.id };
+
+  const doc = await db.query.designDocs.findFirst({
+    where: or(
+      eq(designDocs.chatThreadId, threadId),
+      eq(designDocs.docAssistantThreadId, threadId),
+      eq(designDocs.validationThreadId, threadId),
+    ),
+    columns: { id: true },
+  });
+  if (doc) return { entityType: 'design-doc', entityId: doc.id };
+
+  return null;
+}
+
 /** Look up price for a model at a specific time (most recent effective row). */
-async function lookupPricing(provider: string, modelId: string, at: Date): Promise<{
+export async function lookupPricing(provider: string, modelId: string, at: Date): Promise<{
   inputPerMtok: number;
   outputPerMtok: number;
   cacheReadPerMtok: number;
   cacheWritePerMtok: number;
 } | null> {
   const atStr = at.toISOString();
-  const rows = await db
-    .select()
-    .from(aiPricing)
-    .where(
+  for (const candidate of modelIdPricingCandidates(modelId)) {
+    const rows = await db
+      .select()
+      .from(aiPricing)
+      .where(
         and(
-        eq(aiPricing.provider, provider),
-        eq(aiPricing.modelId, modelId),
-        lte(aiPricing.effectiveFrom, atStr),
-        or(isNull(aiPricing.effectiveTo), lte(aiPricing.effectiveTo, atStr)),
-      ),
-    )
-    .limit(1);
+          eq(aiPricing.provider, provider),
+          eq(aiPricing.modelId, candidate),
+          lte(aiPricing.effectiveFrom, atStr),
+          or(isNull(aiPricing.effectiveTo), gt(aiPricing.effectiveTo, atStr)),
+        ),
+      )
+      .orderBy(desc(aiPricing.effectiveFrom))
+      .limit(1);
 
-  if (!rows[0]) return null;
-  return {
-    inputPerMtok: parseFloat(rows[0].inputPricePerMtok),
-    outputPerMtok: parseFloat(rows[0].outputPricePerMtok),
-    cacheReadPerMtok: parseFloat(rows[0].cacheReadPricePerMtok),
-    cacheWritePerMtok: parseFloat(rows[0].cacheWritePricePerMtok),
-  };
+    if (rows[0]) {
+      return {
+        inputPerMtok: parseFloat(rows[0].inputPricePerMtok),
+        outputPerMtok: parseFloat(rows[0].outputPricePerMtok),
+        cacheReadPerMtok: parseFloat(rows[0].cacheReadPricePerMtok),
+        cacheWritePerMtok: parseFloat(rows[0].cacheWritePricePerMtok),
+      };
+    }
+  }
+  return null;
 }
 
 /** Compute cost in USD from token counts and the pricing catalog. */
@@ -130,4 +191,63 @@ export function recordAiUsage(input: RecordUsageInput): void {
     .catch((err) => {
       console.error('[aiUsageService] Failed to record usage event:', err);
     });
+}
+
+export async function recordCursorChatUsage(opts: {
+  kickoff: {
+    mode?: string;
+    assistantType?: string;
+    skillPath?: string;
+    standupSessionId?: string;
+    pillLabel?: string;
+    project?: string;
+  };
+  modelId: string;
+  threadId: string;
+  runId?: string;
+  userId?: string;
+  workItemId?: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  /** 'exact' when the runtime reported usage; defaults to the chars/4 estimate. */
+  tokenSource?: AiTokenSource;
+  durationMs: number;
+  status: AiUsageStatus;
+}): Promise<void> {
+  const entity = await resolveUsageEntityFromThread(opts.threadId);
+  const tokenSource = opts.tokenSource ?? 'estimated';
+  const costUsd = await computeCost({
+    provider: 'cursor',
+    modelId: opts.modelId,
+    inputTokens: opts.inputTokens,
+    outputTokens: opts.outputTokens,
+    cacheReadTokens: opts.cacheReadTokens,
+    cacheWriteTokens: opts.cacheWriteTokens,
+  });
+  recordAiUsage({
+    provider: 'cursor',
+    modelId: opts.modelId,
+    feature: resolveFeatureFromKickoff(opts.kickoff),
+    project: opts.kickoff.project ?? 'unknown',
+    skillPath: opts.kickoff.skillPath,
+    threadId: opts.threadId,
+    runId: opts.runId,
+    workItemId: opts.workItemId,
+    userId: opts.userId,
+    entityType: entity?.entityType,
+    entityId: entity?.entityId,
+    inputTokens: opts.inputTokens,
+    outputTokens: opts.outputTokens,
+    cacheReadTokens: opts.cacheReadTokens,
+    cacheWriteTokens: opts.cacheWriteTokens,
+    tokenSource,
+    costUsd,
+    // Exact tokens are computed only when the catalog produced a price.
+    // A catalog miss stays estimated so the usage strip can show Cost pending.
+    costSource: tokenSource === 'exact' && costUsd > 0 ? 'computed' : 'estimated',
+    durationMs: opts.durationMs,
+    status: opts.status,
+  });
 }

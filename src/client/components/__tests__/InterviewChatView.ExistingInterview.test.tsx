@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { InterviewChatView } from '../InterviewChatView';
 import type { Interview, PrdSummary } from '../../../shared/types/interview';
 import type { ChatThreadStatus } from '../../../shared/types/chat';
@@ -50,7 +51,7 @@ jest.mock('../../hooks/useProjectSkillConfig', () => ({
   })),
 }));
 
-// Flag-off / ready stub — these suites render without QueryClientProvider.
+// Flag-off / ready stub.
 jest.mock('../../hooks/useProjectRepositoryReadiness', () => ({
   useProjectRepositoryReadiness: jest.fn(() => ({
     isReady: true,
@@ -270,20 +271,55 @@ const idleStream = {
 
 // ── Render helper ──────────────────────────────────────────────────────────────
 
+let queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+function interviewTree(interviewId = 'iv-1', state?: Record<string, unknown>) {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter
+        initialEntries={[{
+          pathname: `/backlog/interview/${interviewId}`,
+          state,
+        }]}
+      >
+        <InterviewChatView />
+      </MemoryRouter>
+    </QueryClientProvider>
+  );
+}
+
 function renderExistingInterview(
   interviewId = 'iv-1',
   state?: Record<string, unknown>,
 ) {
-  return render(
-    <MemoryRouter
-      initialEntries={[{
-        pathname: `/backlog/interview/${interviewId}`,
-        state,
-      }]}
-    >
-      <InterviewChatView />
-    </MemoryRouter>,
-  );
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(interviewTree(interviewId, state));
+}
+
+// The usage strip queries `/api/interviews/:id/usage`, so the stub has to answer
+// with a rollup shape rather than the generic `{ ok: true }` body.
+const emptyUsageRollup = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  totalTokens: 0,
+  costUsd: 0,
+  costSource: 'reported',
+  durationMs: 0,
+  interactions: 0,
+  models: [],
+  incomplete: false,
+  runs: [],
+};
+
+function stubGlobalFetch() {
+  global.fetch = jest.fn((input: unknown) => {
+    const url = String(input);
+    return Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve(url.endsWith('/usage') ? emptyUsageRollup : { ok: true }),
+    });
+  }) as unknown as jest.Mock;
 }
 
 // ── Setup ──────────────────────────────────────────────────────────────────────
@@ -308,10 +344,7 @@ beforeEach(() => {
     userId: 'user-1',
     isAdmin: false,
   });
-  global.fetch = jest.fn().mockResolvedValue({
-    ok: true,
-    json: () => Promise.resolve({ ok: true }),
-  }) as jest.Mock;
+  stubGlobalFetch();
 });
 
 describe('PBI-004 Interview grounding status embed', () => {
@@ -878,11 +911,7 @@ describe('ExistingInterviewView — processing state after send', () => {
         },
       ],
     });
-    view.rerender(
-      <MemoryRouter initialEntries={['/backlog/interview/iv-1']}>
-        <InterviewChatView />
-      </MemoryRouter>,
-    );
+    view.rerender(interviewTree());
 
     await waitFor(() => {
       expect(screen.getByTestId('interview-message-input')).toBeEnabled();
@@ -961,11 +990,7 @@ describe('ExistingInterviewView — processing state after send', () => {
 
     const view = renderExistingInterview();
     const renderCurrentStream = () => {
-      view.rerender(
-        <MemoryRouter initialEntries={['/backlog/interview/iv-1']}>
-          <InterviewChatView />
-        </MemoryRouter>,
-      );
+      view.rerender(interviewTree());
     };
 
     expect(screen.getByTestId('interview-message-input')).toBeDisabled();
@@ -1014,10 +1039,7 @@ describe('ExistingInterviewView — handleGeneratePrd model resolution', () => {
       isPending: false,
     });
 
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ ok: true }),
-    }) as jest.Mock;
+    stubGlobalFetch();
   });
 
   it('passes skillConfig.prdModel to the startChat kickoff when set', async () => {
@@ -1126,10 +1148,7 @@ describe('ExistingInterviewView — Generate PRD button disabled when PRD exists
       userId: 'user-1',
       isAdmin: false,
     });
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ ok: true }),
-    }) as jest.Mock;
+    stubGlobalFetch();
   });
 
   it('enables the Generate PRD button when the interview has no PRDs', () => {

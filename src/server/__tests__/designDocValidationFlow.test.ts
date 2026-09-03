@@ -933,10 +933,18 @@ describe('dismissDesignDocFixSession', () => {
 
 describe('startValidationWatcher', () => {
   const TICK = 5001; // slightly over VALIDATION_WATCHER_INTERVAL_MS (5000ms)
+  const reaper = jest.requireMock('../services/agentRunReaperService') as {
+    isThreadRunAlive: jest.Mock;
+    canThisInstanceFailGeneration: jest.Mock;
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
+    // clearAllMocks keeps implementations, so restore the reaper defaults that
+    // individual tests override — otherwise a live-run stub leaks forward.
+    reaper.isThreadRunAlive.mockResolvedValue(false);
+    reaper.canThisInstanceFailGeneration.mockResolvedValue(true);
     // Ensure chatThreads.findFirst (used by cleanupWorkspace) returns nothing
     mockDb.query.chatThreads.findFirst.mockResolvedValue(null);
   });
@@ -991,10 +999,6 @@ describe('startValidationWatcher', () => {
   });
 
   it('does not reset when idle but another instance still owns the run', async () => {
-    const reaper = jest.requireMock('../services/agentRunReaperService') as {
-      isThreadRunAlive: jest.Mock;
-      canThisInstanceFailGeneration: jest.Mock;
-    };
     agentSvc.readOutputValidationScorecard.mockReturnValue(null);
     agentSvc.isThreadIdle.mockReturnValue(true);
     reaper.isThreadRunAlive.mockResolvedValue(true);

@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useMemo, useEffect, useReducer, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { PrdAssistantPanel } from './PrdAssistantPanel';
+import { ArtifactUsageStrip } from './ArtifactUsageStrip';
 import { useLocation, useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -1890,6 +1891,13 @@ export const PrdReviewView: React.FC = () => {
                     </span>
                   );
                 }
+                if (prd.validationThreadId) {
+                  return (
+                    <span className={`${styles.validationBadge} ${styles.badgeError}`}>
+                      ✗ Could not score
+                    </span>
+                  );
+                }
                 if (!hasAllArtifacts && prd.validationScore == null) {
                   return (
                     <span className={`${styles.validationBadge} ${styles.badgeUnavailable}`}>
@@ -1937,6 +1945,10 @@ export const PrdReviewView: React.FC = () => {
                 prototypeStageEnabled={prototypeStageEnabled}
               {...{ 'data-testid': 'prd-workflow-summary' }}/>
             </div>
+            <ArtifactUsageStrip
+              endpoint={`/api/interviews/prds/${prd.id}/usage`}
+              visible
+            />
             {sourceInterview && (
               <div className={styles.parentLinks}>
                 <button

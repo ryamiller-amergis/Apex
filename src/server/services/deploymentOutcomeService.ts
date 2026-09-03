@@ -212,8 +212,10 @@ function buildFilterConditions(filters?: OutcomeFilters) {
     );
   }
   if (filters?.endDate) {
+    // endDate is a calendar day, so the bound is the start of the next day —
+    // `<= '2026-09-01'` would drop everything recorded during Sep 1.
     conditions.push(
-      sql`COALESCE(${deploymentOutcomes.deployedAt}, ${deploymentOutcomes.reportedAt}) <= ${filters.endDate}`,
+      sql`COALESCE(${deploymentOutcomes.deployedAt}, ${deploymentOutcomes.reportedAt}) < (${filters.endDate}::date + INTERVAL '1 day')`,
     );
   }
   if (filters?.result) {

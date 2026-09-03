@@ -160,6 +160,7 @@ describe('Branding — Ask Apex / Apex Assistant', () => {
     renderView();
     fireEvent.click(screen.getByRole('button', { name: /Ask Apex/i }));
     expect(screen.getByText('Apex Assistant')).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: 'Design document assistant panel' })).toBeInTheDocument();
   });
 
   it('does NOT show "AI Assistant" as the panel title', () => {

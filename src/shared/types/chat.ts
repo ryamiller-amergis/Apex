@@ -429,6 +429,11 @@ export interface StartChatResponse {
   threadId: string;
 }
 
+export interface ChatTurnSkill {
+  name: string;
+  path: string;
+}
+
 export interface SendMessageRequest {
   text: string;
   /** Optional model override for this turn. If different from the thread's current model,
@@ -436,4 +441,6 @@ export interface SendMessageRequest {
   model?: string;
   /** Text file contents uploaded by the user as additional turn context. */
   attachments?: ChatAttachment[];
+  /** Skill selected for this turn. The visible user message remains unchanged. */
+  skill?: ChatTurnSkill;
 }
