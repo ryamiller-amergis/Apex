@@ -25,6 +25,8 @@ import { useProjectMenuConfig } from './hooks/useProjectMenuConfig';
 import { useProjectRepoConfigs } from './hooks/useProjectRepoConfigs';
 import { useProjectSkillConfig } from './hooks/useProjectSkillConfig';
 import { useChatThread, useSkillRepos, useStartChat } from './hooks/useChatThreads';
+import { useUiLabSharedDesigns } from './hooks/useUiLab';
+import { resolveUiLabRouteAccess } from '../shared/types/uiLab';
 import { RepoSelector } from './components/RepoSelector';
 import { DEFAULT_MODEL_ID } from './config/models';
 import { FeatureFlagDemo } from './components/FeatureFlagDemo';
@@ -295,6 +297,16 @@ function App() {
     changeProject(project);
   }, [location.pathname, location.search, selectedProject, availableProjects, changeProject]);
 
+  // Deep-link from UI Lab share notifications: /ui-lab/:id?project=…
+  useEffect(() => {
+    const match = /^\/ui-lab\/([^/?#]+)/.exec(location.pathname);
+    if (!match) return;
+    const project = new URLSearchParams(location.search).get('project');
+    if (!project || project === selectedProject) return;
+    if (!availableProjects.includes(project)) return;
+    changeProject(project);
+  }, [location.pathname, location.search, selectedProject, availableProjects, changeProject]);
+
   const showBetaAnnouncement = useFeatureFlag('beta-to-prod-announcement', selectedProject);
   const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
   const agentHomeFlag = homeFlags['agent-home'] ?? false;
@@ -327,6 +339,18 @@ function App() {
   const effectiveEnabledViews = isRestricted ? restrictedModules : enabledViews;
   const menuConfigReady = isRestricted || !menuConfigLoading;
   const restrictedSkipRef = useRef(false);
+
+  // UI Lab members read the whole project list; everyone else only reaches
+  // designs shared with them, which is also what earns them the nav item.
+  const uiLabWorkspaceAccess = isSuperAdmin || isInAnyGroup(['UI/UX']);
+  const uiLabSharesProject = !uiLabWorkspaceAccess
+    && selectedProject
+    && effectiveEnabledViews.includes('ui-lab')
+    && can('ui-lab:view')
+    ? selectedProject
+    : null;
+  const { data: uiLabSharedDesigns, isLoading: uiLabSharesLoading } = useUiLabSharedDesigns(uiLabSharesProject);
+  const hasUiLabShares = (uiLabSharedDesigns?.length ?? 0) > 0;
 
   // Bind restricted users to the internal Apex project token (project-less UX).
   useEffect(() => {
@@ -437,7 +461,32 @@ function App() {
     if (currentView === 'standup-manage' && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:manage')))      navigate(fallback);
     if (currentView === 'standup-summary' && !isSuperAdmin && (!effectiveEnabledViews.includes('standup') || !can('standup:participate'))) navigate(fallback);
     if (currentView === 'feature-requests' && !isSuperAdmin && (!effectiveEnabledViews.includes('feature-requests') || !can('feature-requests:view'))) navigate(fallback);
-    if (currentView === 'ui-lab'        && !isSuperAdmin && (!effectiveEnabledViews.includes('ui-lab') || !can('ui-lab:view') || !isInAnyGroup(['UI/UX']))) navigate(fallback);
+    // UI Lab workspace requires UI/UX. Named viewers reach it two ways: a
+    // deep-linked design (`/ui-lab/:id`), or the shared list once something has
+    // been shared with them. The server enforces live share access either way.
+    // Wait when the link's ?project= has not been applied yet, or when the
+    // shared-with-me list is still loading — both used to bounce viewers off.
+    if (currentView === 'ui-lab') {
+      const uiLabDesignDeepLink = /^\/ui-lab\/[^/]+/.test(location.pathname);
+      const uiLabLinkProject = new URLSearchParams(location.search).get('project');
+      const projectSwitchPending = Boolean(
+        uiLabDesignDeepLink
+        && uiLabLinkProject
+        && uiLabLinkProject !== selectedProject
+        && availableProjects.includes(uiLabLinkProject),
+      );
+      const access = resolveUiLabRouteAccess({
+        isSuperAdmin,
+        menuEnabled: effectiveEnabledViews.includes('ui-lab'),
+        canView: can('ui-lab:view'),
+        inUiUxGroup: isInAnyGroup(['UI/UX']),
+        isDesignDeepLink: uiLabDesignDeepLink,
+        hasShares: hasUiLabShares,
+        sharesPending: Boolean(uiLabSharesProject) && uiLabSharesLoading,
+        projectSwitchPending,
+      });
+      if (access === 'deny') navigate(fallback);
+    }
     if (currentView === 'pdf-tools'     && !isSuperAdmin && (!effectiveEnabledViews.includes('pdf-tools') || !can('pdf-assembly:use'))) navigate(fallback);
     if (currentView === 'design-module' && !isSuperAdmin && (!effectiveEnabledViews.includes('design-module') || !can('design-module:view'))) navigate(fallback);
     if (currentView === 'load-tests'    && !isSuperAdmin && (!effectiveEnabledViews.includes('load-tests')    || !can('load-test:view')))    navigate(fallback);
@@ -452,7 +501,7 @@ function App() {
         navigate(firstAccessible ? `/planning/${firstAccessible}` : fallback);
       }
     }
-  }, [currentView, planningTab, permissionsLoaded, menuConfigReady, homeFlagsLoading, canAccessHome, can, isInAnyGroup, isSuperAdmin, isRestricted, effectiveEnabledViews, selectedProject, workBoardEnabled, navigate]);
+  }, [currentView, planningTab, permissionsLoaded, menuConfigReady, homeFlagsLoading, canAccessHome, can, isInAnyGroup, isSuperAdmin, isRestricted, effectiveEnabledViews, selectedProject, availableProjects, workBoardEnabled, hasUiLabShares, uiLabSharesLoading, uiLabSharesProject, navigate, location.pathname, location.search]);
 
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
@@ -694,6 +743,7 @@ function App() {
             isInAnyGroup={isInAnyGroup}
             menuEnabledViews={effectiveEnabledViews}
             isSuperAdmin={isSuperAdmin}
+            hasUiLabShares={hasUiLabShares}
             selectedProject={selectedProject}
             canAccessHome={canAccessHome}
             onNavigateHome={() => navigate('/home')}
@@ -742,6 +792,7 @@ function App() {
             isInAnyGroup={isInAnyGroup}
             menuEnabledViews={effectiveEnabledViews}
             isSuperAdmin={isSuperAdmin}
+            hasUiLabShares={hasUiLabShares}
             selectedProject={isRestricted ? undefined : selectedProject}
             hideProjectChrome={isRestricted}
             canAccessHome={canAccessHome}
@@ -1113,7 +1164,18 @@ function App() {
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
                 <div className="ui-lab-view" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-                  <UiLabView project={selectedProject} />
+                  <UiLabView
+                    project={selectedProject}
+                    initialDesignId={(() => {
+                      const match = /^\/ui-lab\/([^/?#]+)/.exec(location.pathname);
+                      return match ? decodeURIComponent(match[1]) : null;
+                    })()}
+                    sharedMode={
+                      /^\/ui-lab\/[^/?#]+/.test(location.pathname)
+                      && !uiLabWorkspaceAccess
+                    }
+                    hasWorkspaceAccess={uiLabWorkspaceAccess}
+                  />
                 </div>
               </Suspense>
             </ErrorBoundary>

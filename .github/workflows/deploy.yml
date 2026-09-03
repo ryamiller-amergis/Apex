@@ -131,6 +131,34 @@ jobs:
           echo "AZURE_CLIENT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientId')" >> $GITHUB_ENV
           echo "AZURE_CLIENT_SECRET=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientSecret')" >> $GITHUB_ENV
 
+      # Migrations and staging settings use secrets.DATABASE_URL. Production keeps its
+      # own sticky value. Fail before slot configure/swap if those hosts diverge so we
+      # never migrate one DB then promote code onto another.
+      - name: Verify GitHub DATABASE_URL matches production
+        env:
+          SECRET_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          host_of() {
+            printf '%s' "$1" | sed -E 's#.*@([^/:?]+).*#\1#'
+          }
+          PROD_URL=$(az webapp config appsettings list \
+            --name "${{ env.APP_SERVICE_NAME }}" \
+            --resource-group "${{ env.RESOURCE_GROUP_NAME }}" \
+            --query "[?name=='DATABASE_URL'].value | [0]" -o tsv)
+          if [ -z "$PROD_URL" ] || [ -z "$SECRET_DATABASE_URL" ]; then
+            echo "ERROR: DATABASE_URL missing on production App Service or in GitHub secrets" >&2
+            exit 1
+          fi
+          PROD_HOST=$(host_of "$PROD_URL")
+          SECRET_HOST=$(host_of "$SECRET_DATABASE_URL")
+          echo "production_db_host=$PROD_HOST"
+          echo "github_secret_db_host=$SECRET_HOST"
+          if [ "$PROD_HOST" != "$SECRET_HOST" ]; then
+            echo "ERROR: production DATABASE_URL host ($PROD_HOST) does not match GitHub secrets.DATABASE_URL host ($SECRET_HOST)." >&2
+            echo "Update the GitHub environment DATABASE_URL secret to match production before deploying." >&2
+            exit 1
+          fi
+
       - name: Configure staging slot settings
         env:
           STAGING_REDIRECT_URL: https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net/auth/callback
@@ -251,6 +279,8 @@ jobs:
           # Mark sticky slot settings (these stay with their slot during swap)
           # LT_APEX_CALLBACK_BASE_URL must be sticky so staging dispatches callback
           # to the staging host and production keeps the production host.
+          # Staging DATABASE_URL tracks secrets.DATABASE_URL (set above) and is
+          # sticky so a swap cannot move it onto production.
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
@@ -258,14 +288,27 @@ jobs:
             --slot-settings \
               AZURE_REDIRECT_URL="${STAGING_REDIRECT_URL}" \
               APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}" \
+              DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net" \
               APEX_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net"
 
           # Production slot sticky callback + shared MI runner auth (not swapped away).
+          # Re-mark the *existing* production DATABASE_URL as sticky — do not write
+          # secrets.DATABASE_URL here, or every deploy would overwrite a portal
+          # cutover with a stale GitHub secret (Aug 25 failure mode).
+          PROD_DATABASE_URL=$(az webapp config appsettings list \
+            --name ${{ env.APP_SERVICE_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
+            --query "[?name=='DATABASE_URL'].value | [0]" -o tsv)
+          if [ -z "$PROD_DATABASE_URL" ]; then
+            echo "ERROR: production DATABASE_URL is empty; refusing to clear it" >&2
+            exit 1
+          fi
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
             --slot-settings \
+              DATABASE_URL="$PROD_DATABASE_URL" \
               LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net" \
               APEX_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net"
 

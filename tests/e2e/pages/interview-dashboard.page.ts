@@ -18,7 +18,7 @@ export class InterviewDashboardPage {
   async waitForReady(): Promise<void> {
     await dismissOverlays(this.page);
     await this.page.waitForSelector(
-      '[data-testid="interviews-dashboard"], h1, h2',
+      '[data-testid="interviews-dashboard"]',
       { timeout: 10_000 },
     );
   }

@@ -1,7 +1,7 @@
 {
   "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
   "manifestVersion": "1.16",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "id": "1d3382ad-f82f-4ea2-9cfe-56f2fbbb539f",
   "developer": {
     "name": "Amergis",
@@ -14,14 +14,14 @@
     "full": "APEX Bot Notifications"
   },
   "description": {
-    "short": "Get APEX app notifications in Teams",
-    "full": "Sends real-time notifications from the APEX app directly to your Teams chat when you are assigned to interviews or reviews."
+    "short": "Get APEX dev-environment notifications in Teams",
+    "full": "Sends real-time notifications from the APEX development environment directly to your Teams chat when you are assigned to interviews or reviews. This is the non-production bot — install it alongside APEX if you test against dev."
   },
   "icons": {
     "color": "color.png",
     "outline": "outline.png"
   },
-  "accentColor": "#6264A7",
+  "accentColor": "#D97706",
   "bots": [
     {
       "botId": "1d3382ad-f82f-4ea2-9cfe-56f2fbbb539f",
