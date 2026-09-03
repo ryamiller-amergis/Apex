@@ -37,6 +37,7 @@ describe('AzureDevOpsService', () => {
       getWorkItem: jest.fn(),
       updateWorkItem: jest.fn(),
       createWorkItem: jest.fn(),
+      getComments: jest.fn(),
     };
 
     // Mock Core API
@@ -419,6 +420,62 @@ describe('AzureDevOpsService', () => {
 
       const result = await service.healthCheck();
       expect(result).toBe(false);
+    });
+  });
+
+  describe('getWorkItemCommentCount', () => {
+    it('returns success count when ADO reports comments via totalCount', async () => {
+      mockWitApi.getComments.mockResolvedValue({ totalCount: 3, comments: [{ id: 1 }] });
+      const service = new AzureDevOpsService();
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await expect(service.getWorkItemCommentCount(12345)).resolves.toEqual({
+        status: 'success',
+        count: 3,
+      });
+
+      expect(mockWitApi.getComments).toHaveBeenCalledWith('TestProject', 12345);
+      expect(warnSpy).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+
+    it('returns unavailable when comment count is zero', async () => {
+      mockWitApi.getComments.mockResolvedValue({ totalCount: 0, comments: [] });
+      const service = new AzureDevOpsService();
+
+      await expect(service.getWorkItemCommentCount(12345)).resolves.toEqual({
+        status: 'unavailable',
+      });
+    });
+
+    it('returns unavailable and logs warning when ADO returns HTTP error', async () => {
+      mockWitApi.getComments.mockRejectedValue(new Error('500 Internal Server Error'));
+      const service = new AzureDevOpsService();
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await expect(service.getWorkItemCommentCount(12345)).resolves.toEqual({
+        status: 'unavailable',
+      });
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[CommentCountBadge] ADO comment count fetch failed',
+        expect.objectContaining({
+          workItemId: 12345,
+          errorSummary: '500 Internal Server Error',
+          feature: 'CommentCountBadge',
+        }),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('falls back to comments array length when totalCount is absent', async () => {
+      mockWitApi.getComments.mockResolvedValue({ comments: [{ id: 1 }, { id: 2 }] });
+      const service = new AzureDevOpsService();
+
+      await expect(service.getWorkItemCommentCount(99)).resolves.toEqual({
+        status: 'success',
+        count: 2,
+      });
     });
   });
 
