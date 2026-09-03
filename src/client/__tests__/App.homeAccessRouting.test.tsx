@@ -62,9 +62,14 @@ jest.mock('../components/AgentHome', () => ({
 }));
 
 jest.mock('../components/ChatAgentPanel', () => ({
-  ChatAgentPanel: (props: { isOpen?: boolean }) => {
+  ChatAgentPanel: (props: { isOpen?: boolean; onNewChat?: () => Promise<void> }) => {
     mockChatPanelProps = props;
-    return props.isOpen ? <div data-testid="chat-agent-panel-open">Chat open</div> : null;
+    return props.isOpen ? (
+      <div data-testid="chat-agent-panel-open">
+        Chat open
+        <button type="button" onClick={() => { void props.onNewChat?.(); }}>Panel new</button>
+      </div>
+    ) : null;
   },
 }));
 
@@ -105,7 +110,11 @@ let mockAgentHomeProps: {
   canOpenChat?: boolean;
   onOpenChatPanel?: () => void;
 } = {};
-let mockChatPanelProps: { isOpen?: boolean } = {};
+let mockChatPanelProps: {
+  isOpen?: boolean;
+  onNewChat?: () => Promise<void>;
+} = {};
+const mockStartChatMutateAsync = jest.fn();
 
 function makeAppShell(overrides: Record<string, unknown> = {}) {
   return {
@@ -164,7 +173,10 @@ function setupBase(flagsOverride: Record<string, boolean> = {}) {
   (useProjectMenuConfig as jest.Mock).mockReturnValue({ enabledViews: [], isLoading: false });
   (useChatThread as jest.Mock).mockReturnValue({ data: null });
   (useSkillRepos as jest.Mock).mockReturnValue({ data: [], isLoading: false });
-  (useStartChat as jest.Mock).mockReturnValue({ mutateAsync: jest.fn(), isPending: false });
+  (useStartChat as jest.Mock).mockReturnValue({
+    mutateAsync: mockStartChatMutateAsync,
+    isPending: false,
+  });
   mockedUseFeatureFlags.mockReturnValue({
     flags: { 'agent-home': true, ...flagsOverride },
     isLoading: false,
@@ -223,6 +235,18 @@ describe('App — Home access with permission + flag both enabled (default)', ()
     expect(mockChatPanelProps.isOpen).toBe(false);
     fireEvent.click(screen.getByRole('button', { name: 'Toggle chat' }));
     expect(await screen.findByTestId('chat-agent-panel-open')).toBeInTheDocument();
+  });
+
+  it('resets to the empty composer without creating or auto-starting a thread', async () => {
+    (useAppShell as jest.Mock).mockReturnValue(makeAppShell({
+      can: (key: string) => ['home:view', 'chat:view', 'chat:create'].includes(key),
+    }));
+    renderApp('/home');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Toggle chat' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Panel new' }));
+
+    expect(mockStartChatMutateAsync).not.toHaveBeenCalled();
   });
 });
 

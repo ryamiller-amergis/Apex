@@ -517,10 +517,11 @@ function App() {
   const handleStartPanelChat = useCallback(async (options?: StartPanelChatOptions) => {
     if (!can('chat:view') || !can('chat:create')) return;
     setChatOpen(true);
-    if (!panelRepo || startChat.isPending) return;
     if (!options) {
       setActiveThreadId(null);
+      return;
     }
+    if (!panelRepo || startChat.isPending) return;
     try {
       const result = await startChat.mutateAsync({
         kickoff: {
@@ -536,7 +537,7 @@ function App() {
           pillBypassScopePolicy: options?.quickSkill?.bypassScopePolicy ?? undefined,
           ...(options?.mcpPill ? { mcpPill: options.mcpPill } : {}),
         },
-        skipAutoKickoff: Boolean(options?.initialMessage),
+        skipAutoKickoff: true,
       });
       setActiveThreadId(result.threadId);
       if (options?.initialMessage) {
