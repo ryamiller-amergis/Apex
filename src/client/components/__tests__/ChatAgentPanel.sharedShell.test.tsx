@@ -3,6 +3,7 @@ import type { ChatThread } from '../../../shared/types/chat';
 import { ChatAgentPanel } from '../ChatAgentPanel';
 
 const mockRetryLast = jest.fn();
+const mockSend = jest.fn();
 let mockSessionOverrides: Record<string, unknown> = {};
 
 jest.mock('../../hooks/useAgentChatSession', () => ({
@@ -15,7 +16,7 @@ jest.mock('../../hooks/useAgentChatSession', () => ({
     status: 'idle',
     progressLabel: null,
     showTypingIndicator: false,
-    send: jest.fn(),
+    send: mockSend,
     cancel: jest.fn(),
     retryLast: mockRetryLast,
     ...mockSessionOverrides,
@@ -109,6 +110,7 @@ describe('ChatAgentPanel shared Home shell', () => {
     global.fetch = jest.fn();
     mockSessionOverrides = {};
     mockRetryLast.mockClear();
+    mockSend.mockClear();
   });
 
   afterEach(() => {
@@ -239,6 +241,36 @@ describe('ChatAgentPanel shared Home shell', () => {
       'Generate a PRD from interview notes',
     );
     expect(screen.getByTestId('chat-run-spinner')).toBeInTheDocument();
+  });
+
+  it('lets an active Home conversation select a skill for its next message', () => {
+    render(
+      <ChatAgentPanel
+        thread={thread}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+        launchedFromHome
+        selectedProject="Apex"
+      />,
+    );
+
+    const skillPill = screen.getByTestId('chat-agent-skill-pill-to-prd');
+    expect(skillPill).toBeEnabled();
+    fireEvent.click(skillPill);
+    expect(skillPill).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText(/Write PRD selected for the next message/)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId('chat-agent-message-input'), {
+      target: { value: 'Summarize the requirements' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send mock' }));
+
+    expect(mockSend).toHaveBeenCalledWith('Summarize the requirements', {
+      model: 'auto',
+      attachments: [],
+      skill: { name: 'Write PRD', path: '/to-prd' },
+    });
   });
 
   it('explains an empty transcript instead of rendering a blank pane', () => {

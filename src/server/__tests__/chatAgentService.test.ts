@@ -179,6 +179,7 @@ import {
   resolveDocumentAssistantType,
   buildBackgroundWorkflowPrompt,
   buildInitialPrompt,
+  buildTurnPrompt,
   prepareBackgroundWorkflowTurn,
   prepareRepositoryReadRuntime,
   subscribeToThread,
@@ -194,6 +195,20 @@ import type {
   GroundingProfileId,
   RepoReader,
 } from '../../shared/types/repoReader';
+
+describe('turn skill prompts', () => {
+  it('keeps the user request separate while directing the agent to load the selected skill', () => {
+    expect(
+      buildTurnPrompt('Summarize the sprint', {
+        name: 'Scrum Assistant',
+        path: '/.cursor/skills/scrum-assistant/SKILL.md',
+      }),
+    ).toBe(
+      'Run skill: Scrum Assistant (`/.cursor/skills/scrum-assistant/SKILL.md`)\n'
+      + '\nUser request:\nSummarize the sprint',
+    );
+  });
+});
 
 const { deleteThread: mockPgDeleteThread, upsertThread: mockPgUpsertThread } =
   jest.requireMock('../services/chatThreadRepository') as {

@@ -14,6 +14,7 @@ import type {
   ChatAttachmentMeta,
   ChatThread,
   ChatMessage,
+  ChatTurnSkill,
   ChatThreadKickoff,
   AgentRunEventEnvelope,
   AgentRunPhase,
@@ -3973,6 +3974,21 @@ interface InteractiveDispatchAttempt {
   bypassReason?: string;
 }
 
+interface ChatSendOptions {
+  hidden?: boolean;
+  turnSkill?: ChatTurnSkill;
+}
+
+export function buildTurnPrompt(text: string, turnSkill?: ChatTurnSkill): string {
+  if (!turnSkill) return text;
+  return [
+    `Run skill: ${turnSkill.name} (\`${turnSkill.path}\`)`,
+    '',
+    'User request:',
+    text,
+  ].join('\n');
+}
+
 /** Bound interactive prep so a grounding hang cannot swallow the fire-and-forget turn. */
 function resolveInteractiveDispatchAttemptTimeoutMs(): number {
   const raw = Number.parseInt(
@@ -3999,7 +4015,7 @@ async function tryDispatchInteractiveTurn(
   text: string,
   modelOverride?: string,
   attachments: ChatAttachment[] = [],
-  options?: { hidden?: boolean }
+  options?: ChatSendOptions
 ): Promise<InteractiveDispatchAttempt> {
   // Inert unless the actor host dispatch URL is configured (cloud only).
   if (!process.env[INTERACTIVE_DISPATCH_URL_ENV]?.trim()) {
@@ -4143,7 +4159,7 @@ async function tryDispatchInteractiveTurn(
         : null;
       const prompt = await buildNewAgentTurnPrompt(
         state.thread.kickoff,
-        text,
+        buildTurnPrompt(text, options?.turnSkill),
         false,
         recoveryContext,
         {
@@ -4158,7 +4174,8 @@ async function tryDispatchInteractiveTurn(
         }
       );
       if (timedOut) return bypass('timeout-abort');
-      const skillPath = state.thread.kickoff.skillPath ?? '';
+      const skillPath =
+        options?.turnSkill?.path ?? state.thread.kickoff.skillPath ?? '';
       const snapshot: ExecutionSnapshot = {
         prompt,
         model: resolveModelId(modelOverride ?? state.thread.kickoff.model),
@@ -4357,7 +4374,7 @@ export async function sendMessage(
   text: string,
   modelOverride?: string,
   attachments: ChatAttachment[] = [],
-  options?: { hidden?: boolean }
+  options?: ChatSendOptions
 ): Promise<void> {
   const sendStartedAt = Date.now();
   console.log('[chat] sendMessage.start', {
@@ -4532,7 +4549,10 @@ export async function sendMessage(
     turnId,
     attachments
   );
-  const promptText = buildPromptWithAttachments(text, attachmentMeta);
+  const promptText = buildPromptWithAttachments(
+    buildTurnPrompt(text, options?.turnSkill),
+    attachmentMeta
+  );
   const priorMessages = interactiveAttempt.persistedUserMessage
     ? state.thread.messages.filter(
         (message) => message.id !== interactiveAttempt.persistedUserMessage?.id

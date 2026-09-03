@@ -4,6 +4,7 @@ import type {
   AgentRunPhase,
   ChatAttachment,
   ChatMessage,
+  ChatTurnSkill,
   ChatThreadStatus,
 } from '../../shared/types/chat';
 import type {
@@ -74,6 +75,7 @@ export interface AgentChatSessionOptions {
 export interface SendOptions {
   attachments?: ChatAttachment[];
   model?: string;
+  skill?: ChatTurnSkill;
 }
 
 export interface AgentChatSession {
@@ -452,6 +454,7 @@ export function useAgentChatSession(
           body: JSON.stringify({
             text,
             ...(opts.model ? { model: opts.model } : {}),
+            ...(opts.skill ? { skill: opts.skill } : {}),
             ...(opts.attachments?.length
               ? { attachments: opts.attachments }
               : {}),

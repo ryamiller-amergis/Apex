@@ -339,6 +339,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     thread?.kickoff.model ?? DEFAULT_MODEL_ID,
   );
   const [selectedQuickSkill, setSelectedQuickSkill] = useState<QuickSkillPill | null>(null);
+  const [queuedQuickSkill, setQueuedQuickSkill] = useState<QuickSkillPill | null>(null);
   const [selectedMcpPill, setSelectedMcpPill] = useState<QuickMcpPill | null>(null);
   const [pendingOutgoing, setPendingOutgoing] = useState<string | null>(null);
 
@@ -517,14 +518,25 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   const doSend = useCallback(async (text: string, messageAttachments: ChatAttachment[] = []) => {
     const trimmedText = text.trim();
     if ((!trimmedText && messageAttachments.length === 0) || isRunning || !sessionThreadId) return;
+    const turnSkill = queuedQuickSkill
+      ? { name: queuedQuickSkill.label, path: queuedQuickSkill.skillPath }
+      : undefined;
     setInput('');
     setSkillPickerOpen(false);
+    setQueuedQuickSkill(null);
     await session.send(
       trimmedText || 'Please use the attached files as additional context.',
-      { model: selectedModel, attachments: messageAttachments },
+      { model: selectedModel, attachments: messageAttachments, skill: turnSkill },
     );
     if (messageAttachments.length > 0) clearAttachments();
-  }, [isRunning, sessionThreadId, session, selectedModel, clearAttachments]);
+  }, [
+    isRunning,
+    sessionThreadId,
+    queuedQuickSkill,
+    session,
+    selectedModel,
+    clearAttachments,
+  ]);
 
   const selectSkill = useCallback((skill: { name: string; path: string }) => {
     const msg = `Run skill: ${skill.name} (\`${skill.path}\`)`;
@@ -627,17 +639,22 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     return thread?.kickoff.mcpPill ?? null;
   }, [selectedMcpPill, thread]);
 
+  const displayedQuickSkill =
+    inConversation
+      ? queuedQuickSkill ?? (isBootstrappingConversation ? resolvedQuickSkill : null)
+      : resolvedQuickSkill;
+
   const selectedPillDescription = useMemo(() => {
-    if (resolvedQuickSkill) {
-      return resolvedQuickSkill.description
-        ?? homeSkills.find((s) => s.path === resolvedQuickSkill.skillPath)?.description
-        ?? `Skill: ${resolvedQuickSkill.label}`;
+    if (displayedQuickSkill) {
+      return displayedQuickSkill.description
+        ?? homeSkills.find((s) => s.path === displayedQuickSkill.skillPath)?.description
+        ?? `Skill: ${displayedQuickSkill.label}`;
     }
     if (resolvedMcpPill) {
       return resolvedMcpPill.description ?? `MCP: ${resolvedMcpPill.label}`;
     }
     return null;
-  }, [resolvedQuickSkill, resolvedMcpPill, homeSkills]);
+  }, [displayedQuickSkill, resolvedMcpPill, homeSkills]);
 
   useEffect(() => {
     if (newChatError) {
@@ -661,6 +678,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   useEffect(() => {
     if (wasInConversationRef.current && !inConversation && !isStartingNewChat) {
       setSelectedQuickSkill(null);
+      setQueuedQuickSkill(null);
       setSelectedMcpPill(null);
     }
     wasInConversationRef.current = inConversation;
@@ -670,12 +688,14 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     const message = input.trim();
     if (!message) return;
     if (needsSkillSelection) return;
+    const quickSkill = selectedQuickSkill;
+    const mcpPill = selectedMcpPill;
     setPendingOutgoing(message);
     setInput('');
     await onNewChat({
       model: selectedModel,
-      quickSkill: selectedQuickSkill ?? undefined,
-      mcpPill: selectedMcpPill ?? undefined,
+      quickSkill: quickSkill ?? undefined,
+      mcpPill: mcpPill ?? undefined,
       initialMessage: message || undefined,
     });
   };
@@ -732,19 +752,25 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                 <button
                   key={pill.skillPath}
                   type="button"
-                  className={`${styles.quickPill} ${resolvedQuickSkill?.skillPath === pill.skillPath ? styles.quickPillSelected : ''}`}
+                  className={`${styles.quickPill} ${displayedQuickSkill?.skillPath === pill.skillPath ? styles.quickPillSelected : ''}`}
                   onClick={() => {
-                    if (inConversation) return;
-                    const selected = selectedQuickSkill?.skillPath === pill.skillPath ? null : pill;
-                    setSelectedQuickSkill(selected);
+                    if (isRunning || status === 'closed') return;
+                    const currentSelection = inConversation ? queuedQuickSkill : selectedQuickSkill;
+                    const selected = currentSelection?.skillPath === pill.skillPath ? null : pill;
+                    if (inConversation) {
+                      setQueuedQuickSkill(selected);
+                    } else {
+                      setSelectedQuickSkill(selected);
+                    }
                     setSelectedMcpPill(null);
                     setSelectedModel(selected?.model ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID);
                     if (selected) {
                       requestAnimationFrame(() => textareaRef.current?.focus());
                     }
                   }}
-                  disabled={inConversation}
-                  aria-pressed={resolvedQuickSkill?.skillPath === pill.skillPath}
+                  disabled={isRunning || status === 'closed'}
+                  aria-pressed={displayedQuickSkill?.skillPath === pill.skillPath}
+                  title={inConversation ? `Use ${pill.label} for the next message` : undefined}
                   {...{ 'data-testid': `chat-agent-skill-pill-${testIdSegment(pill.skillPath)}` }}
                 >
                   {pill.label}
@@ -1035,7 +1061,13 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             disabled={status === 'closed'}
             isRunning={isRunning}
             isBusy={isRunning || status === 'closed'}
-            placeholder={isRunning ? 'Agent is thinking…' : 'Message agent · type / to invoke a skill…'}
+            placeholder={
+              isRunning
+                ? 'Agent is thinking…'
+                : queuedQuickSkill
+                  ? `Ask using ${queuedQuickSkill.label}…`
+                  : 'Message agent · type / to invoke a skill…'
+            }
             testIdPrefix="chat-agent"
             {...{ 'data-testid': 'chat-agent-composer' }}
             allowEmptySend
@@ -1086,6 +1118,9 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             after={(
               <div className={styles.inputHint}>
                 <span className={styles.modelBadge}>{modelBadge(selectedModel)}</span>
+                {queuedQuickSkill
+                  ? `${queuedQuickSkill.label} selected for the next message · `
+                  : null}
                 Enter to send · Shift+Enter for newline · <kbd className={styles.kbdHint}>/</kbd> invoke skill
               </div>
             )}
