@@ -77,3 +77,8 @@
   list-style: disc;
   margin: 2px 0;
 }
+
+.runLabel {
+  color: var(--text-secondary);
+  font-weight: 600;
+}

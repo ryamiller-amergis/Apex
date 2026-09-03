@@ -33,6 +33,9 @@ interface ArtifactUsageStripProps {
   visible: boolean;
 }
 
+const RUNS_HELP =
+  'Each finished agent call is one run. Generate, test cases, and validation can use different models — expand for the per-run model and cost.';
+
 export const ArtifactUsageStrip: React.FC<ArtifactUsageStripProps> = ({ endpoint, visible }) => {
   const [expanded, setExpanded] = useState(false);
   const query = useQuery<EntityUsageRollup>({
@@ -40,11 +43,14 @@ export const ArtifactUsageStrip: React.FC<ArtifactUsageStripProps> = ({ endpoint
     queryFn: () => fetchEntityUsage(endpoint),
     enabled: visible && Boolean(endpoint),
     staleTime: 30_000,
+    refetchInterval: (q) => ((q.state.data?.pendingSteps?.length ?? 0) > 0 ? 5_000 : false),
   });
 
   if (!visible) return null;
   const rollup = query.data;
   if (!rollup || rollup.interactions === 0) return null;
+  const pendingSteps = rollup.pendingSteps ?? [];
+  const pendingNote = pendingSteps.length > 0 ? `${pendingSteps.join(', ')} in progress` : null;
 
   return (
     <div className={styles.strip} {...{ 'data-testid': 'artifact-usage-strip' }}>
@@ -66,7 +72,7 @@ export const ArtifactUsageStrip: React.FC<ArtifactUsageStripProps> = ({ endpoint
           className={`${styles.metric} ${styles.metricToggle}`}
           onClick={() => setExpanded((open) => !open)}
           aria-expanded={expanded}
-          title={expanded ? 'Hide run breakdown' : 'Show run breakdown'}
+          title={expanded ? 'Hide run breakdown' : RUNS_HELP}
           {...{ 'data-testid': 'artifact-usage-toggle' }}
         >
           <span className={styles.label}>Runs</span>
@@ -85,9 +91,14 @@ export const ArtifactUsageStrip: React.FC<ArtifactUsageStripProps> = ({ endpoint
           </svg>
         </button>
       ) : (
-        <span className={styles.metric}>
+        <span className={styles.metric} title={RUNS_HELP}>
           <span className={styles.label}>Runs</span>
           <span className={styles.value}>{rollup.interactions}</span>
+        </span>
+      )}
+      {pendingNote && (
+        <span className={styles.incomplete} {...{ 'data-testid': 'artifact-usage-pending' }}>
+          {pendingNote}
         </span>
       )}
       {rollup.incomplete && (
@@ -99,10 +110,12 @@ export const ArtifactUsageStrip: React.FC<ArtifactUsageStripProps> = ({ endpoint
         <ul className={styles.runs} {...{ 'data-testid': 'artifact-usage-runs' }}>
           {rollup.runs.map((run, index) => (
             <li
-              key={`${run.modelId}-${run.createdAt}-${index}`}
+              key={`${run.label}-${run.modelId}-${run.createdAt}-${index}`}
               className={styles.run}
               {...{ 'data-testid': `artifact-usage-run-${index}` }}
             >
+              <span className={styles.runLabel}>{run.label || 'Agent run'}</span>
+              {' · '}
               {run.modelId} ·{' '}
               {formatUsageTokens(run.inputTokens + run.outputTokens + run.cacheReadTokens)} tokens
               {run.durationMs != null ? ` · ${formatUsageDuration(run.durationMs)}` : ''}

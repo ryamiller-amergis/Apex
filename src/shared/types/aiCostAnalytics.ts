@@ -241,6 +241,7 @@ export interface ProjectComparison {
 }
 
 export interface EntityUsageRun {
+  label: string;
   modelId: string;
   inputTokens: number;
   outputTokens: number;
@@ -261,5 +262,6 @@ export interface EntityUsageRollup {
   interactions: number;
   models: string[];
   incomplete: boolean;
+  pendingSteps: string[];
   runs: EntityUsageRun[];
 }

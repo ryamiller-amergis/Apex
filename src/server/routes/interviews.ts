@@ -12,7 +12,15 @@ import { eq, and, isNull, sql } from 'drizzle-orm';
 import { designDocs as designDocsTable, chatThreads as chatThreadsTable, prds as prdsTable, reviewComments as reviewCommentsTable, designPrototypes as designPrototypesTable, interviews as interviewsTable, documentApproverAssignments } from '../db/schema';
 import { getComments, getUnresolvedCount } from '../services/reviewCommentService';
 import { getEntityUsageRollup } from '../services/aiCostAnalyticsService';
-import { designDocUsageCtx, prdReviewUsageCtx, uniqueThreadIds } from '../services/artifactUsageContext';
+import {
+  designDocPendingUsageSteps,
+  designDocUsageCtx,
+  designDocUsageThreadLabels,
+  prdPendingUsageSteps,
+  prdReviewUsageCtx,
+  prdUsageThreadLabels,
+  uniqueThreadIds,
+} from '../services/artifactUsageContext';
 import { fixPrdContentWithBedrock, fixPrdBacklogWithBedrock, fixDesignDocSectionWithBedrock, regeneratePrdContentRegionWithBedrock, regeneratePrdBacklogItemWithBedrock, regenerateMarkdownRegionWithBedrock, BedrockModelTruncatedError } from '../services/bedrockService';
 import {
   createInterview,
@@ -294,7 +302,14 @@ router.get('/prds/:prdId/usage', requirePermission('interviews:view'), async (re
     const rollup = await getEntityUsageRollup({
       entityType: 'prd',
       entityId: prd.id,
-      threadIds: uniqueThreadIds(prd.chatThreadId, prd.prdAssistantThreadId, prd.validationThreadId),
+      threadIds: uniqueThreadIds(
+        prd.chatThreadId,
+        prd.prdAssistantThreadId,
+        prd.validationThreadId,
+        prd.latestTestCase?.chatThreadId,
+      ),
+      threadLabels: prdUsageThreadLabels(prd),
+      pendingSteps: prdPendingUsageSteps(prd),
     });
     res.json(rollup);
   } catch (err) {
@@ -1591,6 +1606,8 @@ router.get('/design-docs/:id/usage', requirePermission('interviews:view'), async
       entityType: 'design-doc',
       entityId: doc.id,
       threadIds: uniqueThreadIds(doc.chatThreadId, doc.docAssistantThreadId, doc.validationThreadId),
+      threadLabels: designDocUsageThreadLabels(doc),
+      pendingSteps: designDocPendingUsageSteps(doc),
     });
     res.json(rollup);
   } catch (err) {

@@ -18,6 +18,7 @@ import type {
   EntityUsageRollup,
   AiCostSource,
 } from '../../shared/types/aiCostAnalytics';
+import { labelUsageRun } from './artifactUsageContext';
 
 interface DateFilter {
   from: string;
@@ -498,7 +499,10 @@ export async function getEntityUsageRollup(opts: {
   entityType: string;
   entityId: string;
   threadIds?: string[];
+  threadLabels?: Record<string, string>;
+  pendingSteps?: string[];
 }): Promise<EntityUsageRollup> {
+  const pendingSteps = opts.pendingSteps ?? [];
   const empty: EntityUsageRollup = {
     inputTokens: 0,
     outputTokens: 0,
@@ -510,6 +514,7 @@ export async function getEntityUsageRollup(opts: {
     interactions: 0,
     models: [],
     incomplete: false,
+    pendingSteps,
     runs: [],
   };
 
@@ -542,6 +547,12 @@ export async function getEntityUsageRollup(opts: {
   const durationMs = recordedDuration > 0 ? recordedDuration : elapsedFallback;
   const models = [...new Set(events.map((row) => row.modelId).filter(Boolean))];
   const onlyEstimatedCost = events.every((row) => row.costSource === 'estimated');
+  const ordered = [...events].sort((a, b) => {
+    const aMs = Date.parse(a.createdAt);
+    const bMs = Date.parse(b.createdAt);
+    if (Number.isFinite(aMs) && Number.isFinite(bMs) && aMs !== bMs) return aMs - bMs;
+    return 0;
+  });
 
   return {
     inputTokens,
@@ -554,7 +565,14 @@ export async function getEntityUsageRollup(opts: {
     interactions: events.length,
     models,
     incomplete: costUsd === 0 && onlyEstimatedCost && inputTokens + outputTokens + cacheReadTokens > 0,
-    runs: events.map((row) => ({
+    pendingSteps,
+    runs: ordered.map((row) => ({
+      label: labelUsageRun({
+        threadId: row.threadId,
+        feature: row.feature,
+        skillPath: row.skillPath,
+        threadLabels: opts.threadLabels,
+      }),
       modelId: row.modelId,
       inputTokens: row.inputTokens ?? 0,
       outputTokens: row.outputTokens ?? 0,

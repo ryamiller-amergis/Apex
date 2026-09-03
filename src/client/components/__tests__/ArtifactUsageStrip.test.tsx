@@ -20,8 +20,10 @@ const rollup: EntityUsageRollup = {
   interactions: 2,
   models: ['composer-2.5'],
   incomplete: false,
+  pendingSteps: [],
   runs: [
     {
+      label: 'Generate',
       modelId: 'composer-2.5',
       inputTokens: 1000,
       outputTokens: 200,
@@ -31,6 +33,7 @@ const rollup: EntityUsageRollup = {
       createdAt: '2026-09-01T00:00:00.000Z',
     },
     {
+      label: 'Validation',
       modelId: 'composer-2.5-fast',
       inputTokens: 200,
       outputTokens: 100,
@@ -79,7 +82,9 @@ describe('ArtifactUsageStrip', () => {
     expect(strip).toHaveTextContent('2');
     fireEvent.click(screen.getByTestId('artifact-usage-toggle'));
     expect(screen.getByTestId('artifact-usage-runs')).toBeInTheDocument();
+    expect(screen.getByTestId('artifact-usage-run-0')).toHaveTextContent('Generate');
     expect(screen.getByTestId('artifact-usage-run-0')).toHaveTextContent('composer-2.5');
+    expect(screen.getByTestId('artifact-usage-run-1')).toHaveTextContent('Validation');
   });
 
   it('expands and collapses the run list from the Runs metric', async () => {
@@ -110,6 +115,7 @@ describe('ArtifactUsageStrip', () => {
       interactions: 1,
       runs: [
         {
+          label: 'Generate',
           modelId: 'composer-2.5',
           inputTokens: 1200,
           outputTokens: 300,
@@ -129,5 +135,17 @@ describe('ArtifactUsageStrip', () => {
     expect(strip).toHaveTextContent('10.0k');
     fireEvent.click(screen.getByTestId('artifact-usage-toggle'));
     expect(screen.getByTestId('artifact-usage-run-0')).toHaveTextContent('10.0k tokens');
+  });
+
+  it('shows in-progress steps without treating them as cost-pending', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ...rollup, pendingSteps: ['Validation'] }),
+    }) as unknown as typeof fetch;
+    wrap(<ArtifactUsageStrip endpoint="/api/interviews/prds/1/usage" visible />);
+    expect(await screen.findByTestId('artifact-usage-pending')).toHaveTextContent(
+      'Validation in progress',
+    );
+    expect(screen.queryByTestId('artifact-usage-incomplete')).not.toBeInTheDocument();
   });
 });

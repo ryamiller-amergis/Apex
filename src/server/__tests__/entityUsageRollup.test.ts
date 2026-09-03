@@ -41,6 +41,8 @@ describe('getEntityUsageRollup', () => {
         entityType: 'interview',
         entityId: 'int-1',
         threadId: 't-new',
+        feature: 'interview',
+        skillPath: '.cursor/skills/grill-with-docs/SKILL.md',
       },
       {
         modelId: 'composer-2.5-fast',
@@ -74,7 +76,9 @@ describe('getEntityUsageRollup', () => {
     expect(rollup.interactions).toBe(2);
     expect(rollup.models).toEqual(expect.arrayContaining(['composer-2.5', 'composer-2.5-fast']));
     expect(rollup.incomplete).toBe(false);
+    expect(rollup.pendingSteps).toEqual([]);
     expect(rollup.runs).toHaveLength(2);
+    expect(rollup.runs[0].label).toBe('Interview');
   });
 
   it('falls back to first-to-last elapsed time when durations are missing', async () => {
@@ -113,6 +117,58 @@ describe('getEntityUsageRollup', () => {
     const rollup = await getEntityUsageRollup({ entityType: 'design-prototype', entityId: 'p-1' });
     expect(rollup.interactions).toBe(0);
     expect(rollup.incomplete).toBe(false);
+  });
+
+  it('labels PRD workflow threads and keeps pending later steps', async () => {
+    whereMock.mockResolvedValue([
+      {
+        modelId: 'composer-2.5',
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheReadTokens: 0,
+        costUsd: '0.40',
+        costSource: 'computed',
+        durationMs: 1000,
+        tokenSource: 'exact',
+        createdAt: '2026-09-01T00:00:00.000Z',
+        threadId: 'gen-1',
+        feature: 'prd',
+        skillPath: '.cursor/skills/to-prd/SKILL.md',
+      },
+      {
+        modelId: 'gpt-4o-mini',
+        inputTokens: 50,
+        outputTokens: 10,
+        cacheReadTokens: 0,
+        costUsd: '0.02',
+        costSource: 'computed',
+        durationMs: 800,
+        tokenSource: 'exact',
+        createdAt: '2026-09-01T00:02:00.000Z',
+        threadId: 'tc-1',
+        feature: 'test-case',
+        skillPath: '.cursor/skills/create-test-case/SKILL.md',
+      },
+    ]);
+
+    const rollup = await getEntityUsageRollup({
+      entityType: 'prd',
+      entityId: 'prd-1',
+      threadIds: ['gen-1', 'tc-1', 'val-1'],
+      threadLabels: {
+        'gen-1': 'Generate',
+        'tc-1': 'Test cases',
+        'val-1': 'Validation',
+      },
+      pendingSteps: ['Validation'],
+    });
+
+    expect(rollup.runs.map((run) => `${run.label}:${run.modelId}`)).toEqual([
+      'Generate:composer-2.5',
+      'Test cases:gpt-4o-mini',
+    ]);
+    expect(rollup.pendingSteps).toEqual(['Validation']);
+    expect(rollup.costUsd).toBeCloseTo(0.42);
   });
 
   it('marks cost pending when exact tokens have no catalog price', async () => {

@@ -1,8 +1,13 @@
 import {
   adrUsageCtx,
+  designDocPendingUsageSteps,
   designDocUsageCtx,
+  designDocUsageThreadLabels,
   designPlanUsageCtx,
+  labelUsageRun,
+  prdPendingUsageSteps,
   prdReviewUsageCtx,
+  prdUsageThreadLabels,
   prototypeUsageCtx,
   uniqueThreadIds,
 } from '../services/artifactUsageContext';
@@ -50,5 +55,60 @@ describe('artifactUsageContext', () => {
 
   it('dedupes thread ids', () => {
     expect(uniqueThreadIds('a', null, 'a', undefined, 'b')).toEqual(['a', 'b']);
+  });
+
+  it('labels PRD threads including test-case generation', () => {
+    expect(
+      prdUsageThreadLabels({
+        chatThreadId: 'gen',
+        prdAssistantThreadId: 'asst',
+        validationThreadId: 'val',
+        latestTestCase: { chatThreadId: 'tc' },
+      }),
+    ).toEqual({
+      gen: 'Generate',
+      tc: 'Test cases',
+      val: 'Validation',
+      asst: 'Assistant',
+    });
+  });
+
+  it('marks PRD test-case and validation steps pending independently', () => {
+    expect(
+      prdPendingUsageSteps({
+        status: 'validating',
+        testCasesRequired: true,
+        latestTestCase: { status: 'generating' },
+      }),
+    ).toEqual(['Test cases', 'Validation']);
+    expect(prdPendingUsageSteps({ status: 'pending_review', testCasesRequired: false })).toEqual([]);
+  });
+
+  it('labels design-doc generate vs validation threads', () => {
+    expect(
+      designDocUsageThreadLabels({
+        chatThreadId: 'gen',
+        docAssistantThreadId: 'asst',
+        validationThreadId: 'val',
+      }),
+    ).toEqual({
+      gen: 'Generate',
+      val: 'Validation',
+      asst: 'Assistant',
+    });
+    expect(designDocPendingUsageSteps({ status: 'validating' })).toEqual(['Validation']);
+    expect(designDocPendingUsageSteps({ status: 'draft' })).toEqual([]);
+  });
+
+  it('prefers thread labels over feature when steps use different models', () => {
+    expect(
+      labelUsageRun({
+        threadId: 'val',
+        feature: 'prd',
+        threadLabels: { val: 'Validation' },
+      }),
+    ).toBe('Validation');
+    expect(labelUsageRun({ feature: 'test-case' })).toBe('Test cases');
+    expect(labelUsageRun({ skillPath: '.cursor/skills/to-prd/SKILL.md' })).toBe('Generate');
   });
 });
