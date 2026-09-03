@@ -110,6 +110,7 @@ export async function autoStartDocumentValidation(adapter: DocumentValidationAda
     onFailure: () => persistUnusableValidationResult(
       adapter,
       'Validation could not start. Re-run validation.',
+      thread.id,
     ),
   });
 }
@@ -206,7 +207,7 @@ export function startDocumentValidationWatcher(
     if (attempts > VALIDATION_WATCHER_MAX_ATTEMPTS) {
       finish();
       console.warn(`[documentValidationWatcher] Timed out (documentId=${documentId})`);
-      await persistUnusableValidationResult(adapter, VALIDATION_TIMEOUT_REASON);
+      await persistUnusableValidationResult(adapter, VALIDATION_TIMEOUT_REASON, validationThreadId);
       return;
     }
 
@@ -225,7 +226,7 @@ export function startDocumentValidationWatcher(
       ) {
         finish();
         console.warn(`[documentValidationWatcher] Agent completed without scorecard (documentId=${documentId})`);
-        await persistUnusableValidationResult(adapter, NO_SCORECARD_REASON);
+        await persistUnusableValidationResult(adapter, NO_SCORECARD_REASON, validationThreadId);
       }
       return;
     }
@@ -251,7 +252,7 @@ export function startDocumentValidationWatcher(
       }
     } catch (err) {
       console.error(`[documentValidationWatcher] Failed to parse/sync scorecard (documentId=${documentId})`, err);
-      await persistUnusableValidationResult(adapter, NO_SCORECARD_REASON);
+      await persistUnusableValidationResult(adapter, NO_SCORECARD_REASON, validationThreadId);
     }
   }, VALIDATION_WATCHER_INTERVAL_MS);
 
@@ -273,7 +274,12 @@ export async function cancelDocumentValidation(
 export async function persistUnusableValidationResult(
   adapter: DocumentValidationAdapter,
   reason: string,
+  validationThreadId?: string | null,
 ): Promise<void> {
+  if (validationThreadId) {
+    const isCurrent = await adapter.isCurrentValidationThread(validationThreadId);
+    if (!isCurrent) return;
+  }
   const scorecard = buildUnusableValidationScorecard(reason);
   await adapter.updateDbForValidationResult(scorecard, generateFallbackReport(scorecard));
 }

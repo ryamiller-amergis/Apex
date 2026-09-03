@@ -1873,6 +1873,11 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
         }
         return;
       }
+      // Post-run sync may already have written a real score and left status
+      // pending_review/draft. Do not overwrite that result with a later write.
+      if (current?.status !== 'validating') {
+        return;
+      }
       const newStatus: PrdStatus = scorecard.is_ready ? 'pending_review' : 'draft';
       const kickoff = newStatus === 'pending_review'
         ? await applyKickoffApproversForReview(prd.id, prd.interviewId, prd.authorId)
@@ -1926,9 +1931,9 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
     isCurrentValidationThread: async (threadId: string) => {
       const current = await db.query.prds.findFirst({
         where: eq(prds.id, prd.id),
-        columns: { validationThreadId: true },
+        columns: { validationThreadId: true, status: true },
       });
-      return current?.validationThreadId === threadId;
+      return current?.validationThreadId === threadId && current?.status === 'validating';
     },
   };
   return adapter;

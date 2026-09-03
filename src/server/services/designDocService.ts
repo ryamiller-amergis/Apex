@@ -1456,6 +1456,7 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
         await persistUnusableDesignDocValidation(
           designDocId,
           'Validation could not start. Re-run validation.',
+          thread.id,
         );
       },
     );
@@ -1519,8 +1520,31 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
 const VALIDATION_WATCHER_INTERVAL_MS = 5_000;
 const VALIDATION_WATCHER_MAX_ATTEMPTS = 720;
 
-async function persistUnusableDesignDocValidation(designDocId: string, reason: string): Promise<void> {
-  await syncValidationResult(designDocId, buildUnusableValidationScorecard(reason));
+async function persistUnusableDesignDocValidation(
+  designDocId: string,
+  reason: string,
+  validationThreadId?: string | null,
+): Promise<void> {
+  const scorecard = buildUnusableValidationScorecard(reason);
+  const reportMd = generateFallbackReport(scorecard);
+  const conditions = [
+    eq(designDocs.id, designDocId),
+    eq(designDocs.status, 'validating'),
+  ];
+  if (validationThreadId) {
+    conditions.push(eq(designDocs.validationThreadId, validationThreadId));
+  }
+  await db
+    .update(designDocs)
+    .set({
+      validationScore: Math.round(scorecard.overall_score),
+      validationScorecard: scorecard,
+      validationPhase: scorecard.review_phase,
+      validationReportMd: reportMd,
+      status: 'pending_review',
+      updatedAt: new Date().toISOString(),
+    })
+    .where(and(...conditions));
 }
 
 export function startValidationWatcher(designDocId: string, validationThreadId: string): void {
@@ -1546,7 +1570,7 @@ export function startValidationWatcher(designDocId: string, validationThreadId: 
     if (attempts > VALIDATION_WATCHER_MAX_ATTEMPTS) {
       finish();
       console.warn(`[validationWatcher] Timed out (designDocId=${designDocId})`);
-      await persistUnusableDesignDocValidation(designDocId, VALIDATION_TIMEOUT_REASON);
+      await persistUnusableDesignDocValidation(designDocId, VALIDATION_TIMEOUT_REASON, validationThreadId);
       return;
     }
 
@@ -1563,7 +1587,7 @@ export function startValidationWatcher(designDocId: string, validationThreadId: 
       ) {
         finish();
         console.warn(`[validationWatcher] Agent completed/errored without scorecard (designDocId=${designDocId} threadId=${validationThreadId})`);
-        await persistUnusableDesignDocValidation(designDocId, NO_SCORECARD_REASON);
+        await persistUnusableDesignDocValidation(designDocId, NO_SCORECARD_REASON, validationThreadId);
       }
       return;
     }
@@ -1588,7 +1612,7 @@ export function startValidationWatcher(designDocId: string, validationThreadId: 
       cleanupWorkspace(validationThreadId);
     } catch (err) {
       console.error(`[validationWatcher] Failed to parse/sync scorecard (designDocId=${designDocId})`, err);
-      await persistUnusableDesignDocValidation(designDocId, NO_SCORECARD_REASON);
+      await persistUnusableDesignDocValidation(designDocId, NO_SCORECARD_REASON, validationThreadId);
     }
   }, VALIDATION_WATCHER_INTERVAL_MS);
 
