@@ -136,53 +136,6 @@ export function shouldShowAgentTypingIndicator(input: {
   return input.lastVisibleRole !== 'agent';
 }
 
-const PENDING_THINKING_TTL_MS = 2 * 60 * 60 * 1000;
-
-function pendingThinkingStorageKey(threadId: string): string {
-  return `apex:pending-agent-thinking:${threadId}`;
-}
-
-function readPendingAgentThinking(threadId: string | null): boolean {
-  if (!threadId || typeof window === 'undefined') return false;
-  try {
-    const raw = window.sessionStorage.getItem(pendingThinkingStorageKey(threadId));
-    if (!raw) return false;
-    const parsed = JSON.parse(raw) as { startedAt?: number };
-    if (typeof parsed.startedAt !== 'number') {
-      window.sessionStorage.removeItem(pendingThinkingStorageKey(threadId));
-      return false;
-    }
-    if (Date.now() - parsed.startedAt > PENDING_THINKING_TTL_MS) {
-      window.sessionStorage.removeItem(pendingThinkingStorageKey(threadId));
-      return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function writePendingAgentThinking(threadId: string | null): void {
-  if (!threadId || typeof window === 'undefined') return;
-  try {
-    window.sessionStorage.setItem(
-      pendingThinkingStorageKey(threadId),
-      JSON.stringify({ startedAt: Date.now() }),
-    );
-  } catch {
-    /* ignore quota / private mode */
-  }
-}
-
-function clearPendingAgentThinking(threadId: string | null): void {
-  if (!threadId || typeof window === 'undefined') return;
-  try {
-    window.sessionStorage.removeItem(pendingThinkingStorageKey(threadId));
-  } catch {
-    /* ignore */
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Hook
 // ---------------------------------------------------------------------------
@@ -234,6 +187,7 @@ export function useAgentChatSession(
   // --- Local state ---
   const [isSending, setIsSending] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
+  const [isStopConfirmed, setIsStopConfirmed] = useState(false);
   const [isAwaitingAgentResponse, setIsAwaitingAgentResponse] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [optimisticUserMessage, setOptimisticUserMessage] =
@@ -246,7 +200,7 @@ export function useAgentChatSession(
   const skipThinkingRestoreRef = useRef(false);
 
   // Derived
-  const isRunning = status === 'running';
+  const isRunning = status === 'running' && !isStopConfirmed;
   const hasPersistedOptimisticEcho = Boolean(
     optimisticUserMessage &&
     messages.some(
@@ -298,15 +252,13 @@ export function useAgentChatSession(
     pendingMessageIdsRef.current = new Set(messages.map((m) => m.id));
     pendingObservedRunningRef.current = false;
     setIsAwaitingAgentResponse(true);
-    writePendingAgentThinking(threadId);
-  }, [messages, threadId]);
+  }, [messages]);
 
   const clearAwaitingAgentResponse = useCallback(() => {
     pendingMessageIdsRef.current.clear();
     pendingObservedRunningRef.current = false;
     setIsAwaitingAgentResponse(false);
-    clearPendingAgentThinking(threadId);
-  }, [threadId]);
+  }, []);
 
   // Clear when an agent reply lands or the thread errors/closes — not when a
   // refresh snapshot briefly looks idle while the turn is still in flight.
@@ -340,6 +292,7 @@ export function useAgentChatSession(
     skipThinkingRestoreRef.current = false;
     setOptimisticUserMessage(null);
     setIsCancelling(false);
+    setIsStopConfirmed(false);
     pendingMessageIdsRef.current.clear();
     pendingObservedRunningRef.current = false;
     setIsAwaitingAgentResponse(false);
@@ -349,25 +302,21 @@ export function useAgentChatSession(
   useEffect(() => {
     if (!threadId || isAwaitingAgentResponse || skipThinkingRestoreRef.current) return;
 
-    if (lastVisibleRole === 'agent') {
-      clearPendingAgentThinking(threadId);
-      return;
-    }
-
+    if (lastVisibleRole === 'agent') return;
     if (lastVisibleRole !== 'user') return;
 
+    // History is a snapshot, not a new turn. Restore the waiting indicator only
+    // when the persisted thread identifies a run that is still active.
     const shouldResume =
-      isRunning ||
-      initialStatus === 'running' ||
-      Boolean(initialActiveRunId) ||
-      readPendingAgentThinking(threadId);
+      isRunning &&
+      initialStatus === 'running' &&
+      Boolean(initialActiveRunId);
 
     if (!shouldResume) return;
 
     pendingMessageIdsRef.current = new Set(messages.map((m) => m.id));
     pendingObservedRunningRef.current = false;
     setIsAwaitingAgentResponse(true);
-    writePendingAgentThinking(threadId);
   }, [
     initialActiveRunId,
     initialStatus,
@@ -379,34 +328,16 @@ export function useAgentChatSession(
   ]);
 
   useEffect(() => {
-    if (!threadId) return;
-    if (lastVisibleRole === 'agent' || status === 'error' || status === 'closed') {
-      clearPendingAgentThinking(threadId);
-      return;
-    }
-    if (
-      !isCancelling &&
-      (isRunning || isAwaitingAgentResponse) &&
-      lastVisibleRole === 'user'
-    ) {
-      writePendingAgentThinking(threadId);
-    }
-  }, [
-    isAwaitingAgentResponse,
-    isCancelling,
-    isRunning,
-    lastVisibleRole,
-    status,
-    threadId,
-  ]);
-
-  useEffect(() => {
     if (hasPersistedOptimisticEcho) setOptimisticUserMessage(null);
   }, [hasPersistedOptimisticEcho]);
 
   useEffect(() => {
     if (isCancelling && !isRunning) setIsCancelling(false);
   }, [isCancelling, isRunning]);
+
+  useEffect(() => {
+    if (status !== 'running') setIsStopConfirmed(false);
+  }, [status]);
 
   // --- Send ---
   const send = useCallback(
@@ -422,6 +353,7 @@ export function useAgentChatSession(
       }
 
       setSendError(null);
+      setIsStopConfirmed(false);
       setIsSending(true);
       optimisticBaselineIdsRef.current = new Set(
         messages.map((message) => message.id)
@@ -516,16 +448,37 @@ export function useAgentChatSession(
   const cancel = useCallback(async () => {
     if (!threadId || isCancelling) return;
     const endpoint = cancelEndpoint ?? `/api/chat/threads/${threadId}/cancel`;
+    setSendError(null);
     setIsCancelling(true);
     skipThinkingRestoreRef.current = true;
-    clearAwaitingAgentResponse();
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
         credentials: 'include',
       });
-      if (!response.ok) setIsCancelling(false);
-    } catch {
+      if (!response.ok) {
+        let message = 'Failed to stop the agent. Please try again.';
+        try {
+          const body = await response.json();
+          if (body?.error) message = body.error;
+        } catch {
+          /* use default */
+        }
+        setSendError(message);
+        setIsCancelling(false);
+      } else {
+        // The endpoint returns only after the server has persisted the idle
+        // thread state. Do not leave the composer blocked on a delayed stream.
+        clearAwaitingAgentResponse();
+        setIsStopConfirmed(true);
+        setIsCancelling(false);
+      }
+    } catch (error) {
+      setSendError(
+        error instanceof Error
+          ? error.message
+          : 'Failed to stop the agent. Please try again.'
+      );
       setIsCancelling(false);
     }
   }, [threadId, cancelEndpoint, isCancelling, clearAwaitingAgentResponse]);

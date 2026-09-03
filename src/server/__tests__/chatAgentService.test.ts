@@ -157,6 +157,7 @@ jest.mock('../services/agentRunReaperService', () => ({
 
 import {
   createThread,
+  CANCELLABLE_AGENT_RUN_STATUSES,
   sendMessage,
   closeThread,
   permanentlyDeleteThread,
@@ -180,6 +181,7 @@ import {
   buildBackgroundWorkflowPrompt,
   buildInitialPrompt,
   buildTurnPrompt,
+  interactivePromptRequiresInProcessMcp,
   prepareBackgroundWorkflowTurn,
   prepareRepositoryReadRuntime,
   subscribeToThread,
@@ -207,6 +209,29 @@ describe('turn skill prompts', () => {
       'Run skill: Scrum Assistant (`/.cursor/skills/scrum-assistant/SKILL.md`)\n'
       + '\nUser request:\nSummarize the sprint',
     );
+  });
+
+  it('routes only MCP-dependent skill content away from the interactive actor', () => {
+    expect(
+      interactivePromptRequiresInProcessMcp(
+        'Use query_work_items to inspect the current sprint.',
+      ),
+    ).toBe(true);
+    expect(
+      interactivePromptRequiresInProcessMcp(
+        'Inspect the repository with get_skill_file and search_repo_code.',
+      ),
+    ).toBe(false);
+  });
+});
+
+describe('run cancellation', () => {
+  it('includes actor-dispatched runs in the cancellable statuses', () => {
+    expect(CANCELLABLE_AGENT_RUN_STATUSES).toEqual([
+      'queued',
+      'dispatched',
+      'running',
+    ]);
   });
 });
 
@@ -1819,6 +1844,95 @@ describe('document assistant MCP wiring', () => {
     }
   });
 
+  it('keeps only MCP-dependent turn skills on the in-process path', async () => {
+    const originalFetch = global.fetch;
+    process.env.AI_RUNS_INTERACTIVE_DISPATCH_URL =
+      'https://interactive.test';
+    process.env.CURSOR_API_KEY = 'test-key';
+    mockIsFeatureEnabled.mockImplementation(
+      async (key: string) => key === 'ai-runs-interactive'
+    );
+    mockInteractiveWorkflowRoute.mockClear();
+    global.fetch = jest.fn() as unknown as typeof fetch;
+
+    const stopAfterAgent = new Error('stop after agent setup');
+    const { retryWithBackoff: mockRetryWithBackoff } = jest.requireMock(
+      '../utils/retry'
+    ) as {
+      retryWithBackoff: jest.Mock;
+    };
+    mockRetryWithBackoff.mockRejectedValue(stopAfterAgent);
+    const repoReader: RepoReader = {
+      identity: {
+        provider: 'github',
+        project: 'Apex',
+        repo: 'AI-Pilot',
+        sha: 'interactive-sha',
+      },
+      readFile: jest.fn().mockResolvedValue(
+        '# Scrum Assistant\n\nUse `query_work_items` to inspect sprint work.'
+      ),
+      listDir: jest.fn().mockResolvedValue([]),
+      searchCode: jest.fn().mockResolvedValue([]),
+    };
+    mockCallerGroundingStart.mockResolvedValue({
+      mode: 'local',
+      cwd: '/tmp/interactive-checkout',
+      profileId: 'interactive-profile' as GroundingProfileId,
+      resolvedSha: 'interactive-sha',
+      nativeReads: true,
+      workingTree: true,
+      release: jest.fn().mockResolvedValue(undefined),
+    });
+    mockResolveConnectionProfile.mockResolvedValue(repoReader);
+    mockCallerGroundingSelectionToBinding.mockReturnValue({
+      mode: 'local',
+      sha: 'interactive-sha',
+    });
+    mockEvaluateBindingContinuity.mockReturnValue({
+      decision: 'recreate',
+      reason: 'legacy-binding-missing',
+    });
+
+    const thread = await createThread('developer-1', baseKickoff(), {
+      skipAutoKickoff: true,
+    });
+
+    try {
+      await sendMessage(
+        thread.id,
+        'Which item changed most recently?',
+        undefined,
+        [],
+        {
+          turnSkill: {
+            name: 'Scrum Assistant',
+            path: '/.cursor/skills/scrum-assistant/SKILL.md',
+          },
+        }
+      );
+      expect(repoReader.readFile).toHaveBeenCalledWith(
+        '.cursor/skills/scrum-assistant/SKILL.md'
+      );
+      expect(mockInteractiveWorkflowRoute).not.toHaveBeenCalled();
+      expect(global.fetch).not.toHaveBeenCalled();
+      expect(mockRetryWithBackoff).toHaveBeenCalled();
+    } finally {
+      global.fetch = originalFetch;
+      delete process.env.AI_RUNS_INTERACTIVE_DISPATCH_URL;
+      delete process.env.CURSOR_API_KEY;
+      mockIsFeatureEnabled.mockReset();
+      mockIsFeatureEnabled.mockResolvedValue(false);
+      mockInteractiveWorkflowRoute.mockReset();
+      await closeThread(thread.id);
+      mockCallerGroundingStart.mockReset();
+      mockResolveConnectionProfile.mockReset();
+      mockCallerGroundingSelectionToBinding.mockReset();
+      mockEvaluateBindingContinuity.mockReset();
+      mockRetryWithBackoff.mockReset();
+    }
+  });
+
   it('AC-0 skips shared repository grounding for calendar-only assistants', () => {
     // Given the calendar assistant builds only its restricted calendar MCP server.
     const kickoff = baseKickoff({
@@ -1996,6 +2110,23 @@ describe('document assistant MCP wiring', () => {
 
     expect(servers['github-repo']).toBeDefined();
     expect(servers['ado-skills']).toBeUndefined();
+  });
+
+  it('mounts ADO operations only when a skill declares that capability', () => {
+    const servers = buildMcpServers(
+      baseKickoff(),
+      'http://localhost:3001/mcp/ado-skills',
+      {
+        nativeReads: true,
+        enableRepoBrowse: false,
+        requireAdoTools: true,
+      }
+    );
+
+    expect(servers['github-repo']).toBeUndefined();
+    expect(servers['ado-skills']).toEqual({
+      url: 'http://localhost:3001/mcp/ado-skills?enableRepoBrowse=false',
+    });
   });
 
   it('still mounts only ado-skills for ADO-backed document assistants', () => {
