@@ -51,6 +51,7 @@ import { parseAgentMessage, type ChoiceBlock } from '../utils/parseAgentMessage'
 import type { ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
 import styles from './InterviewChatView.module.css';
 import { ApexLoader } from './ApexLoader';
+import { ArtifactUsageStrip } from './ArtifactUsageStrip';
 
 function formatElapsed(milliseconds: number): string {
   const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
@@ -638,6 +639,10 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
             <div className={styles.titleMeta}>
               {adr.project} · {adr.repo} · {adr.status.replace('_', ' ')} · Owner: {adr.ownerName} · Reviewers: {reviewerNames} · Model: {adr.model ?? 'Default'}
             </div>
+            <ArtifactUsageStrip
+              endpoint={`/api/adr/${adr.id}/usage`}
+              visible={adr.status !== 'in_progress'}
+            />
           </div>
         </div>
         <div className={styles.actions}>

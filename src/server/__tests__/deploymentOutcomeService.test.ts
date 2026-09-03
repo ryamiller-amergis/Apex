@@ -63,6 +63,19 @@ const sampleOutcome: DeploymentOutcome = {
   reportedAt: now,
 };
 
+/** Flatten a Drizzle SQL node to its literal text so filter shape can be asserted. */
+function sqlToText(node: unknown): string {
+  if (node == null) return '';
+  if (typeof node === 'string') return node;
+  if (Array.isArray(node)) return node.map(sqlToText).join(' ');
+
+  const chunk = node as { value?: unknown; queryChunks?: unknown };
+  if (Array.isArray(chunk.value)) return chunk.value.join(' ');
+  if (typeof chunk.value === 'string') return chunk.value;
+  if (chunk.queryChunks) return sqlToText(chunk.queryChunks);
+  return '';
+}
+
 const sampleInput: CreateOutcomeInput = {
   deploymentId: 'deploy-1',
   releaseVersion: '2026.06.1',
@@ -222,6 +235,16 @@ describe('deploymentOutcomeService', () => {
 
       expect(mockWhere).toHaveBeenCalled();
       expect(result).toEqual([sampleOutcome]);
+    });
+
+    it('includes the whole end day in the date range', async () => {
+      mockOrderBy.mockResolvedValue([sampleOutcome]);
+
+      await getAllOutcomes({ endDate: '2026-09-01' });
+
+      const condition = sqlToText(mockWhere.mock.calls[0][0]);
+      expect(condition).toContain("INTERVAL '1 day'");
+      expect(condition).not.toMatch(/<=\s*$/);
     });
   });
 

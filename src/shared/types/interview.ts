@@ -31,6 +31,8 @@ export interface InterviewSummary {
   designDocApproverIds?: string[];
   designPrototypeApproverIds?: string[];
   testCaseApproverIds?: string[];
+  /** Kick-off snapshot; resolved with project skill config via `resolvePrototypeStageEnabled`. */
+  prototypeStageEnabled?: boolean;
   createdAt: string;
   updatedAt: string;
 }

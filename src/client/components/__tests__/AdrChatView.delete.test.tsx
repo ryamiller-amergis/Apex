@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AdrChatView } from '../AdrChatView';
 import type { AgentRunPhase } from '../../../shared/types/chat';
 import type { Adr } from '../../../shared/types/adr';
@@ -173,12 +174,17 @@ const sampleAdr: Adr = {
   updatedAt: '2026-07-17T00:00:00Z',
 };
 
-function renderAdrView() {
-  return render(
-    <MemoryRouter initialEntries={['/adr/adr-1']}>
-      <AdrChatView />
-    </MemoryRouter>,
+function makeWrapper(initialEntries: Parameters<typeof MemoryRouter>[0]['initialEntries']) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={initialEntries}>{children}</MemoryRouter>
+    </QueryClientProvider>
   );
+}
+
+function renderAdrView() {
+  return render(<AdrChatView />, { wrapper: makeWrapper(['/adr/adr-1']) });
 }
 
 describe('AdrChatView — delete', () => {
@@ -403,16 +409,12 @@ describe('AdrChatView — delete', () => {
       status: 'idle',
     };
 
-    render(
-      <MemoryRouter
-        initialEntries={[{
-          pathname: '/adr/adr-1',
-          state: { kickoffPrompt: 'Should we use Service Bus or Event Hub?' },
-        }]}
-      >
-        <AdrChatView />
-      </MemoryRouter>,
-    );
+    render(<AdrChatView />, {
+      wrapper: makeWrapper([{
+        pathname: '/adr/adr-1',
+        state: { kickoffPrompt: 'Should we use Service Bus or Event Hub?' },
+      }]),
+    });
 
     expect(screen.getByText('Should we use Service Bus or Event Hub?')).toBeInTheDocument();
     expect(screen.getByTestId('adr-preparation-state')).toHaveTextContent(

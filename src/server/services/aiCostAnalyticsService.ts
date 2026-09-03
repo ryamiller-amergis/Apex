@@ -4,7 +4,7 @@
  */
 import { db } from '../db/drizzle';
 import { aiUsageEvents, cursorUsageEvents, aiPricing } from '../db/schema';
-import { and, eq, gte, lte, sql, desc, asc } from 'drizzle-orm';
+import { and, eq, gte, inArray, lte, or, sql, desc, asc } from 'drizzle-orm';
 import type {
   AiCostSummary,
   AiCostTimeseriesPoint,
@@ -15,7 +15,10 @@ import type {
   AiCostReconciliation,
   AiPricingRow,
   ProjectComparison,
+  EntityUsageRollup,
+  AiCostSource,
 } from '../../shared/types/aiCostAnalytics';
+import { labelUsageRun } from './artifactUsageContext';
 
 interface DateFilter {
   from: string;
@@ -474,5 +477,110 @@ export async function getProjectComparison(f: Omit<DateFilter, 'project' | 'feat
     .sort((a, b) => b.totalCostUsd - a.totalCostUsd);
 
   return { projects, featureRankings, period: { from: f.from, to: f.to } };
+}
+
+const COST_SOURCE_RANK: Record<AiCostSource, number> = {
+  allocated: 3,
+  computed: 2,
+  estimated: 1,
+};
+
+function bestCostSource(sources: string[]): AiCostSource {
+  let best: AiCostSource = 'estimated';
+  for (const source of sources) {
+    if (source === 'allocated' || source === 'computed' || source === 'estimated') {
+      if (COST_SOURCE_RANK[source] > COST_SOURCE_RANK[best]) best = source;
+    }
+  }
+  return best;
+}
+
+export async function getEntityUsageRollup(opts: {
+  entityType: string;
+  entityId: string;
+  threadIds?: string[];
+  threadLabels?: Record<string, string>;
+  pendingSteps?: string[];
+}): Promise<EntityUsageRollup> {
+  const pendingSteps = opts.pendingSteps ?? [];
+  const empty: EntityUsageRollup = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    totalTokens: 0,
+    costUsd: 0,
+    costSource: 'estimated',
+    durationMs: 0,
+    interactions: 0,
+    models: [],
+    incomplete: false,
+    pendingSteps,
+    runs: [],
+  };
+
+  const threadIds = (opts.threadIds ?? []).filter(Boolean);
+  const entityMatch = and(
+    eq(aiUsageEvents.entityType, opts.entityType),
+    eq(aiUsageEvents.entityId, opts.entityId),
+  );
+  const clause = threadIds.length > 0
+    ? or(entityMatch, inArray(aiUsageEvents.threadId, threadIds))
+    : entityMatch;
+
+  const events = await db
+    .select()
+    .from(aiUsageEvents)
+    .where(clause);
+
+  if (events.length === 0) return empty;
+
+  const inputTokens = events.reduce((sum, row) => sum + (row.inputTokens ?? 0), 0);
+  const outputTokens = events.reduce((sum, row) => sum + (row.outputTokens ?? 0), 0);
+  const cacheReadTokens = events.reduce((sum, row) => sum + (row.cacheReadTokens ?? 0), 0);
+  const costUsd = events.reduce((sum, row) => sum + parseFloat(row.costUsd ?? '0'), 0);
+  const recordedDuration = events.reduce((sum, row) => sum + (row.durationMs ?? 0), 0);
+  const createdTimes = events
+    .map((row) => Date.parse(row.createdAt))
+    .filter((ms) => Number.isFinite(ms));
+  const elapsedFallback =
+    createdTimes.length >= 2 ? Math.max(0, Math.max(...createdTimes) - Math.min(...createdTimes)) : 0;
+  const durationMs = recordedDuration > 0 ? recordedDuration : elapsedFallback;
+  const models = [...new Set(events.map((row) => row.modelId).filter(Boolean))];
+  const onlyEstimatedCost = events.every((row) => row.costSource === 'estimated');
+  const ordered = [...events].sort((a, b) => {
+    const aMs = Date.parse(a.createdAt);
+    const bMs = Date.parse(b.createdAt);
+    if (Number.isFinite(aMs) && Number.isFinite(bMs) && aMs !== bMs) return aMs - bMs;
+    return 0;
+  });
+
+  return {
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    totalTokens: inputTokens + outputTokens + cacheReadTokens,
+    costUsd,
+    costSource: bestCostSource(events.map((row) => row.costSource)),
+    durationMs,
+    interactions: events.length,
+    models,
+    incomplete: costUsd === 0 && onlyEstimatedCost && inputTokens + outputTokens + cacheReadTokens > 0,
+    pendingSteps,
+    runs: ordered.map((row) => ({
+      label: labelUsageRun({
+        threadId: row.threadId,
+        feature: row.feature,
+        skillPath: row.skillPath,
+        threadLabels: opts.threadLabels,
+      }),
+      modelId: row.modelId,
+      inputTokens: row.inputTokens ?? 0,
+      outputTokens: row.outputTokens ?? 0,
+      cacheReadTokens: row.cacheReadTokens ?? 0,
+      durationMs: row.durationMs ?? null,
+      costUsd: parseFloat(row.costUsd ?? '0'),
+      createdAt: row.createdAt,
+    })),
+  };
 }
 

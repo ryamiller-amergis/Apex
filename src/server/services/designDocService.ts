@@ -22,7 +22,7 @@ import { resolveSkillConfig, getSkillSettingsName } from './projectSettingsServi
 import { getDefaultModel } from './appSettingsService';
 import { getPrd } from './prdService';
 import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
-import { collectValidationGaps, normalizeValidationScorecard } from '../../shared/utils/validationReport';
+import { collectValidationGaps, parseAgentValidationScorecard, buildUnusableValidationScorecard, NO_SCORECARD_REASON, VALIDATION_TIMEOUT_REASON } from '../../shared/utils/validationReport';
 import {
   propagatePipelineGrounding,
   readActiveTargetProvenance,
@@ -1453,12 +1453,11 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
     await runGroundingService.persistThenMarkTerminalInactive(
       destinationRun,
       async () => {
-        await db.update(designDocs)
-          .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
-          .where(and(
-            eq(designDocs.id, designDocId),
-            eq(designDocs.status, 'validating'),
-          ));
+        await persistUnusableDesignDocValidation(
+          designDocId,
+          'Validation could not start. Re-run validation.',
+          thread.id,
+        );
       },
     );
   };
@@ -1521,6 +1520,33 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
 const VALIDATION_WATCHER_INTERVAL_MS = 5_000;
 const VALIDATION_WATCHER_MAX_ATTEMPTS = 720;
 
+async function persistUnusableDesignDocValidation(
+  designDocId: string,
+  reason: string,
+  validationThreadId?: string | null,
+): Promise<void> {
+  const scorecard = buildUnusableValidationScorecard(reason);
+  const reportMd = generateFallbackReport(scorecard);
+  const conditions = [
+    eq(designDocs.id, designDocId),
+    eq(designDocs.status, 'validating'),
+  ];
+  if (validationThreadId) {
+    conditions.push(eq(designDocs.validationThreadId, validationThreadId));
+  }
+  await db
+    .update(designDocs)
+    .set({
+      validationScore: Math.round(scorecard.overall_score),
+      validationScorecard: scorecard,
+      validationPhase: scorecard.review_phase,
+      validationReportMd: reportMd,
+      status: 'pending_review',
+      updatedAt: new Date().toISOString(),
+    })
+    .where(and(...conditions));
+}
+
 export function startValidationWatcher(designDocId: string, validationThreadId: string): void {
   stopValidationWatcher(designDocId);
   let attempts = 0;
@@ -1533,50 +1559,42 @@ export function startValidationWatcher(designDocId: string, validationThreadId: 
     );
   });
 
+  const finish = (): void => {
+    clearInterval(interval);
+    activeValidationWatchers.delete(designDocId);
+  };
+
   const interval = setInterval(async () => {
     attempts += 1;
 
     if (attempts > VALIDATION_WATCHER_MAX_ATTEMPTS) {
-      clearInterval(interval);
-      activeValidationWatchers.delete(designDocId);
+      finish();
       console.warn(`[validationWatcher] Timed out (designDocId=${designDocId})`);
-      await db.update(designDocs)
-        .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
-        .where(and(eq(designDocs.id, designDocId), eq(designDocs.status, 'validating')));
+      await persistUnusableDesignDocValidation(designDocId, VALIDATION_TIMEOUT_REASON, validationThreadId);
       return;
     }
 
+    if (await isThreadRunAlive(validationThreadId)) {
+      return;
+    }
 
     const scorecardRaw = readOutputValidationScorecard(validationThreadId);
 
     if (!scorecardRaw) {
-      // If the agent has completed or errored without producing a scorecard,
-      // reset so the user can re-run. Require a terminal local/owned run —
-      // isThreadIdle alone is unsafe under multi-instance (and also true in the
-      // brief window before sendMessage claims the run).
-      // The `status = 'validating'` WHERE guard prevents downgrading an already-scored doc.
       if (
         isThreadIdle(validationThreadId)
-        && !(await isThreadRunAlive(validationThreadId))
         && (await canThisInstanceFailGeneration(validationThreadId))
       ) {
-        clearInterval(interval);
-        activeValidationWatchers.delete(designDocId);
-        console.warn(`[validationWatcher] Agent completed/errored without scorecard — setting to pending_review (designDocId=${designDocId} threadId=${validationThreadId})`);
-        await db.update(designDocs)
-          .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
-          .where(and(eq(designDocs.id, designDocId), eq(designDocs.status, 'validating')));
+        finish();
+        console.warn(`[validationWatcher] Agent completed/errored without scorecard (designDocId=${designDocId} threadId=${validationThreadId})`);
+        await persistUnusableDesignDocValidation(designDocId, NO_SCORECARD_REASON, validationThreadId);
       }
       return;
     }
 
-    clearInterval(interval);
-    activeValidationWatchers.delete(designDocId);
+    finish();
 
     try {
-      // Guard: verify this watcher's thread is still the active validation thread.
-      // A newer autoStartValidation call may have replaced validationThreadId,
-      // in which case this result is stale and must be discarded.
       const currentDoc = await db.query.designDocs.findFirst({
         where: eq(designDocs.id, designDocId),
         columns: { validationThreadId: true },
@@ -1587,21 +1605,14 @@ export function startValidationWatcher(designDocId: string, validationThreadId: 
         return;
       }
 
-      const scorecard = normalizeValidationScorecard(JSON.parse(scorecardRaw));
-      if (!scorecard) {
-        console.warn(`[validationWatcher] Scorecard carries no usable overall score — setting to pending_review (designDocId=${designDocId})`);
-        await db.update(designDocs)
-          .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
-          .where(and(eq(designDocs.id, designDocId), eq(designDocs.status, 'validating')));
-        cleanupWorkspace(validationThreadId);
-        return;
-      }
+      const scorecard = parseAgentValidationScorecard(scorecardRaw);
       const reportMd = readOutputValidationScorecardMd(validationThreadId) ?? undefined;
       await syncValidationResult(designDocId, scorecard, reportMd);
       console.log(`[validationWatcher] Scorecard synced — score=${scorecard.overall_score} is_ready=${scorecard.is_ready} (designDocId=${designDocId})`);
       cleanupWorkspace(validationThreadId);
     } catch (err) {
       console.error(`[validationWatcher] Failed to parse/sync scorecard (designDocId=${designDocId})`, err);
+      await persistUnusableDesignDocValidation(designDocId, NO_SCORECARD_REASON, validationThreadId);
     }
   }, VALIDATION_WATCHER_INTERVAL_MS);
 

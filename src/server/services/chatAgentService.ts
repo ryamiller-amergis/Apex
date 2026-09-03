@@ -25,9 +25,8 @@ import type {
 } from '../../shared/types/chat';
 import { isAzureWwwroot, resolveDataRoot } from '../utils/dataDir';
 import {
-  recordAiUsage,
+  recordCursorChatUsage,
   estimateTokens,
-  resolveFeatureFromKickoff,
 } from './aiUsageService';
 import {
   upsertThread as pgUpsertThread,
@@ -81,7 +80,7 @@ import {
   triggerTestCaseGeneration,
 } from './testCaseService';
 import type { ValidationScorecard } from '../../shared/types/interview';
-import { normalizeValidationScorecard } from '../../shared/utils/validationReport';
+import { parseAgentValidationScorecard, buildUnusableValidationScorecard, NO_SCORECARD_REASON } from '../../shared/utils/validationReport';
 import type {
   ChatThreadSearchResult,
   ChatThreadSummary,
@@ -143,6 +142,7 @@ import {
   sanitizeCursorTerminalDetail,
   ThinkingPhaseCoalescer,
   type CursorExecutionRun,
+  type CursorTokenUsage,
 } from './cursorExecutionCore';
 import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
 import type { RepositoryPreparationTarget } from './repositoryPreparationService';
@@ -3434,37 +3434,23 @@ async function syncOutputToDbFromWorkspace(
           cleanupWorkspaceDir(workspaceDir);
           return;
         }
-        const scorecard = normalizeValidationScorecard(JSON.parse(scorecardRaw));
-        if (!scorecard) {
-          await db
-            .update(designDocs)
-            .set({
-              status: 'pending_review',
-              updatedAt: new Date().toISOString(),
-            })
-            .where(
-              and(
-                eq(designDocs.id, ddValRow.id),
-                eq(designDocs.status, 'validating')
-              )
-            );
-          console.warn(
-            `[chat] post-run: validation scorecard carries no usable overall score — moved to pending_review (designDocId=${ddValRow.id})`
-          );
-          fullySynced = true;
-        } else {
-          const reportMd = readOutputValidationScorecardMd(threadId) ?? undefined;
-          await syncValidationResult(ddValRow.id, scorecard, reportMd);
-          console.log(
-            `[chat] post-run: synced validation scorecard to DB (designDocId=${ddValRow.id})`
-          );
-          fullySynced = true;
-        }
+        const scorecard = parseAgentValidationScorecard(scorecardRaw);
+        const reportMd = readOutputValidationScorecardMd(threadId) ?? undefined;
+        await syncValidationResult(ddValRow.id, scorecard, reportMd);
+        console.log(
+          `[chat] post-run: synced validation scorecard to DB (designDocId=${ddValRow.id})`
+        );
+        fullySynced = true;
       } catch (err) {
         console.error(
           `[chat] post-run: failed to parse validation scorecard`,
           err
         );
+        await syncValidationResult(
+          ddValRow.id,
+          buildUnusableValidationScorecard(NO_SCORECARD_REASON),
+        );
+        fullySynced = true;
       }
     } else {
       // Agent completed but wrote no scorecard file.
@@ -3480,15 +3466,12 @@ async function syncOutputToDbFromWorkspace(
         freshDoc?.validationThreadId === threadId &&
         freshDoc?.status === 'validating'
       ) {
-        await db
-          .update(designDocs)
-          .set({
-            status: 'pending_review',
-            updatedAt: new Date().toISOString(),
-          })
-          .where(eq(designDocs.id, ddValRow.id));
+        await syncValidationResult(
+          ddValRow.id,
+          buildUnusableValidationScorecard(NO_SCORECARD_REASON),
+        );
         console.warn(
-          `[chat] post-run: validation agent wrote no scorecard — moved to pending_review (designDocId=${ddValRow.id})`
+          `[chat] post-run: validation agent wrote no scorecard (designDocId=${ddValRow.id})`
         );
       }
       fullySynced = true; // workspace can be cleaned
@@ -3539,45 +3522,47 @@ async function syncOutputToDbFromWorkspace(
           cleanupWorkspaceDir(workspaceDir);
           return;
         }
-        const scorecard = normalizeValidationScorecard(JSON.parse(scorecardRaw));
-        if (!scorecard) {
-          await db
-            .update(prds)
-            .set({ status: 'draft', updatedAt: new Date().toISOString() })
-            .where(
-              and(eq(prds.id, prdValRow.id), eq(prds.status, 'validating'))
-            );
-          console.warn(
-            `[chat] post-run: PRD validation scorecard carries no usable overall score — reset to draft (prdId=${prdValRow.id})`
-          );
-          fullySynced = true;
-        } else {
-          const reportMd = readOutputValidationScorecardMd(threadId) ?? undefined;
-          const { generateFallbackReport } =
-            await import('./documentValidationService');
-          const effectiveReportMd = reportMd ?? generateFallbackReport(scorecard);
-          const newStatus = scorecard.is_ready ? 'pending_review' : 'draft';
-          await db
-            .update(prds)
-            .set({
-              validationScore: Math.round(scorecard.overall_score),
-              validationScorecard: scorecard,
-              validationPhase: scorecard.review_phase,
-              validationReportMd: effectiveReportMd,
-              status: newStatus,
-              updatedAt: new Date().toISOString(),
-            })
-            .where(eq(prds.id, prdValRow.id));
-          console.log(
-            `[chat] post-run: synced PRD validation scorecard to DB (prdId=${prdValRow.id})`
-          );
-          fullySynced = true;
-        }
+        const scorecard = parseAgentValidationScorecard(scorecardRaw);
+        const reportMd = readOutputValidationScorecardMd(threadId) ?? undefined;
+        const { generateFallbackReport } =
+          await import('./documentValidationService');
+        const effectiveReportMd = reportMd ?? generateFallbackReport(scorecard);
+        const newStatus = scorecard.is_ready ? 'pending_review' : 'draft';
+        await db
+          .update(prds)
+          .set({
+            validationScore: Math.round(scorecard.overall_score),
+            validationScorecard: scorecard,
+            validationPhase: scorecard.review_phase,
+            validationReportMd: effectiveReportMd,
+            status: newStatus,
+            updatedAt: new Date().toISOString(),
+          })
+          .where(eq(prds.id, prdValRow.id));
+        console.log(
+          `[chat] post-run: synced PRD validation scorecard to DB (prdId=${prdValRow.id})`
+        );
+        fullySynced = true;
       } catch (err) {
         console.error(
           `[chat] post-run: failed to parse PRD validation scorecard`,
           err
         );
+        const { generateFallbackReport } =
+          await import('./documentValidationService');
+        const scorecard = buildUnusableValidationScorecard(NO_SCORECARD_REASON);
+        await db
+          .update(prds)
+          .set({
+            validationScore: 0,
+            validationScorecard: scorecard,
+            validationPhase: scorecard.review_phase,
+            validationReportMd: generateFallbackReport(scorecard),
+            status: 'draft',
+            updatedAt: new Date().toISOString(),
+          })
+          .where(and(eq(prds.id, prdValRow.id), eq(prds.status, 'validating')));
+        fullySynced = true;
       }
     } else {
       const freshPrd = await db.query.prds.findFirst({
@@ -3588,12 +3573,22 @@ async function syncOutputToDbFromWorkspace(
         freshPrd?.validationThreadId === threadId &&
         freshPrd?.status === 'validating'
       ) {
+        const { generateFallbackReport } =
+          await import('./documentValidationService');
+        const scorecard = buildUnusableValidationScorecard(NO_SCORECARD_REASON);
         await db
           .update(prds)
-          .set({ status: 'draft', updatedAt: new Date().toISOString() })
+          .set({
+            validationScore: 0,
+            validationScorecard: scorecard,
+            validationPhase: scorecard.review_phase,
+            validationReportMd: generateFallbackReport(scorecard),
+            status: 'draft',
+            updatedAt: new Date().toISOString(),
+          })
           .where(eq(prds.id, prdValRow.id));
         console.warn(
-          `[chat] post-run: PRD validation agent wrote no scorecard, reset to draft (prdId=${prdValRow.id})`
+          `[chat] post-run: PRD validation agent wrote no scorecard (prdId=${prdValRow.id})`
         );
       }
       fullySynced = true;
@@ -4723,6 +4718,9 @@ export async function sendMessage(
   let mcpDeadlineController: McpToolDeadlineController | null = null;
   let unsubscribeAbort: (() => void) | null = null;
   let heldLocalAgentSlot = false;
+  // Retained across attempts and visible to the error handler so a run that
+  // ultimately fails still reports the tokens it burned, rather than zeros.
+  let lastRunUsage: CursorTokenUsage | undefined;
 
   try {
     await acquireLocalAgentSlot(threadId);
@@ -5308,6 +5306,7 @@ export async function sendMessage(
       } catch (streamErr) {
         firstEventDeadline?.clear();
         if (streamErr instanceof CursorExecutionWaitError) {
+          lastRunUsage = streamErr.usage ?? lastRunUsage;
           throw streamErr.cause;
         }
 
@@ -5450,6 +5449,7 @@ export async function sendMessage(
 
       if (!executionResult) continue;
       agentTextBuffer = executionResult.text;
+      lastRunUsage = executionResult.usage ?? lastRunUsage;
       const result = executionResult.waitResult;
 
       if (result.status === 'error') {
@@ -5600,26 +5600,27 @@ export async function sendMessage(
         const kickoff =
           state.thread.kickoff ??
           ({} as import('../../shared/types/chat').ChatThreadKickoff);
-        const inputEst = estimateTokens(text ?? '');
-        const outputEst = estimateTokens(agentTextBuffer ?? '');
-        recordAiUsage({
-          provider: 'cursor',
+        // Real counts cover the whole prompt the model read — system prompt,
+        // skill, grounding docs, replayed history, tool output. The chars/4
+        // estimate covers only the two visible messages, so it undercounts
+        // heavily; use it only when the runtime reported nothing.
+        const usage = lastRunUsage;
+        void recordCursorChatUsage({
+          kickoff,
           modelId: resolvedModel,
-          feature: resolveFeatureFromKickoff(kickoff),
-          project: kickoff.project ?? 'unknown',
-          skillPath: kickoff.skillPath ?? undefined,
           threadId,
           runId: agentRunId ?? undefined,
           workItemId:
             kickoff.workItemId != null ? String(kickoff.workItemId) : undefined,
           userId: state.thread.userId ?? undefined,
-          inputTokens: inputEst,
-          outputTokens: outputEst,
-          tokenSource: 'estimated',
-          costUsd: 0,
-          costSource: 'estimated',
+          inputTokens: usage?.inputTokens ?? estimateTokens(text ?? ''),
+          outputTokens: usage?.outputTokens ?? estimateTokens(agentTextBuffer ?? ''),
+          cacheReadTokens: usage?.cacheReadTokens,
+          cacheWriteTokens: usage?.cacheWriteTokens,
+          tokenSource: usage ? 'exact' : 'estimated',
+          durationMs: Date.now() - runStartedAtMs,
           status: 'success',
-        });
+        }).catch(() => {});
       }
 
       break;
@@ -5856,22 +5857,20 @@ export async function sendMessage(
       const kickoff =
         state.thread?.kickoff ??
         ({} as import('../../shared/types/chat').ChatThreadKickoff);
-      recordAiUsage({
-        provider: 'cursor',
+      void recordCursorChatUsage({
+        kickoff,
         modelId: resolvedModel,
-        feature: resolveFeatureFromKickoff(kickoff),
-        project: kickoff.project ?? 'unknown',
-        skillPath: kickoff.skillPath ?? undefined,
         threadId,
         runId: agentRunId ?? undefined,
         userId: state.thread?.userId ?? undefined,
-        inputTokens: 0,
-        outputTokens: 0,
-        tokenSource: 'estimated',
-        costUsd: 0,
-        costSource: 'estimated',
+        inputTokens: lastRunUsage?.inputTokens ?? 0,
+        outputTokens: lastRunUsage?.outputTokens ?? 0,
+        cacheReadTokens: lastRunUsage?.cacheReadTokens,
+        cacheWriteTokens: lastRunUsage?.cacheWriteTokens,
+        tokenSource: lastRunUsage ? 'exact' : 'estimated',
+        durationMs: Date.now() - runStartedAtMs,
         status: 'error',
-      });
+      }).catch(() => {});
     }
 
     if (agentRunId) {

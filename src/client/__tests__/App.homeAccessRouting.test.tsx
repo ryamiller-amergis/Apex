@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import App from '../App';
 import { useAppShell } from '../hooks/useAppShell';
@@ -50,11 +50,22 @@ jest.mock('../components/AppHeader', () => ({
 }));
 
 jest.mock('../components/AgentHome', () => ({
-  AgentHome: () => <div data-testid="agent-home">Agent Home Content</div>,
+  AgentHome: (props: { canOpenChat?: boolean; onOpenChatPanel?: () => void }) => {
+    mockAgentHomeProps = props;
+    return (
+      <div data-testid="agent-home">
+        Agent Home Content
+        <button type="button" onClick={props.onOpenChatPanel}>Toggle chat</button>
+      </div>
+    );
+  },
 }));
 
 jest.mock('../components/ChatAgentPanel', () => ({
-  ChatAgentPanel: () => null,
+  ChatAgentPanel: (props: { isOpen?: boolean }) => {
+    mockChatPanelProps = props;
+    return props.isOpen ? <div data-testid="chat-agent-panel-open">Chat open</div> : null;
+  },
 }));
 
 jest.mock('../components/Changelog', () => ({
@@ -90,6 +101,11 @@ jest.mock('react-dnd-html5-backend', () => ({
 }));
 
 const mockedUseFeatureFlags = useFeatureFlags as jest.MockedFunction<typeof useFeatureFlags>;
+let mockAgentHomeProps: {
+  canOpenChat?: boolean;
+  onOpenChatPanel?: () => void;
+} = {};
+let mockChatPanelProps: { isOpen?: boolean } = {};
 
 function makeAppShell(overrides: Record<string, unknown> = {}) {
   return {
@@ -184,6 +200,8 @@ function renderApp(path: string) {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockAgentHomeProps = {};
+  mockChatPanelProps = {};
 });
 
 describe('App — Home access with permission + flag both enabled (default)', () => {
@@ -192,6 +210,19 @@ describe('App — Home access with permission + flag both enabled (default)', ()
   it('renders AgentHome at /home when both controls are enabled', async () => {
     renderApp('/home');
     expect(await screen.findByTestId('agent-home')).toBeInTheDocument();
+  });
+
+  it('PBI-006 AC-0 opens the shared chat panel from the Home toggle', async () => {
+    (useAppShell as jest.Mock).mockReturnValue(makeAppShell({
+      can: (key: string) => ['home:view', 'chat:view', 'chat:create'].includes(key),
+    }));
+    renderApp('/home');
+
+    expect(await screen.findByTestId('agent-home')).toBeInTheDocument();
+    expect(mockAgentHomeProps.canOpenChat).toBe(true);
+    expect(mockChatPanelProps.isOpen).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle chat' }));
+    expect(await screen.findByTestId('chat-agent-panel-open')).toBeInTheDocument();
   });
 });
 

@@ -7,6 +7,7 @@ import { cancelRun, markAsInterviewThread } from './chatAgentService';
 import { createNotification } from './notificationService';
 import { getSkillSettingsName } from './projectSettingsService';
 import { runGroundingService } from './runGroundingService';
+import { recordArtifactDoneEvent } from './artifactDoneEventService';
 
 const VALID_INTERVIEW_STATUSES: InterviewStatus[] = ['in_progress', 'complete', 'archived'];
 
@@ -196,6 +197,7 @@ export async function listInterviews(
       designDocApproverIds: interviews.designDocApproverIds,
       designPrototypeApproverIds: interviews.designPrototypeApproverIds,
       testCaseApproverIds: interviews.testCaseApproverIds,
+      prototypeStageEnabled: interviews.prototypeStageEnabled,
       createdAt: interviews.createdAt,
       updatedAt: interviews.updatedAt,
     })
@@ -234,6 +236,7 @@ export async function listInterviews(
     designDocApproverIds: row.designDocApproverIds ?? undefined,
     designPrototypeApproverIds: row.designPrototypeApproverIds ?? undefined,
     testCaseApproverIds: row.testCaseApproverIds ?? undefined,
+    prototypeStageEnabled: row.prototypeStageEnabled,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }));
@@ -314,10 +317,11 @@ export async function updateInterviewStatus(
     throw err;
   }
 
+  const transitionAt = new Date().toISOString();
   const persistStatus = () =>
     db
       .update(interviews)
-      .set({ status: newStatus, updatedAt: new Date().toISOString() })
+      .set({ status: newStatus, updatedAt: transitionAt })
       .where(eq(interviews.id, id));
 
   if (newStatus === 'complete' || newStatus === 'archived') {
@@ -329,6 +333,13 @@ export async function updateInterviewStatus(
       },
       persistStatus,
     );
+    if (newStatus === 'complete') {
+      try {
+        await recordArtifactDoneEvent('interview', id, transitionAt);
+      } catch (err) {
+        console.error(`[interview] Failed to record done event (interviewId=${id})`, err);
+      }
+    }
     return;
   }
 

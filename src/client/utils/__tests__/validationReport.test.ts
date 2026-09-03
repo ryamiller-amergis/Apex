@@ -1,10 +1,12 @@
 import {
   buildPassingValidationReasonsMarkdown,
+  buildUnusableValidationScorecard,
   collectValidationGaps,
   designDocFeatureSectionScore,
   normalizeCrossCuttingCheck,
   normalizeValidationGap,
   normalizeValidationScorecard,
+  parseAgentValidationScorecard,
   resolveScorecardOverallScore,
 } from '../../../shared/utils/validationReport';
 import type { ValidationScorecard } from '../../../shared/types/interview';
@@ -368,6 +370,14 @@ describe('resolveScorecardOverallScore', () => {
     ).toBe(85);
   });
 
+  it('averages files[].score when scores and overall_score are absent', () => {
+    expect(
+      resolveScorecardOverallScore({
+        files: [{ file: 'prd', score: 80 }, { file: 'backlog', score: 90 }],
+      }),
+    ).toBe(85);
+  });
+
   it('returns null when no finite score is present', () => {
     expect(resolveScorecardOverallScore({ verdict: 'ready' })).toBeNull();
     expect(resolveScorecardOverallScore({ overall_score: 'n/a' })).toBeNull();
@@ -394,5 +404,36 @@ describe('normalizeValidationScorecard', () => {
     const normalized = normalizeValidationScorecard({ review_phase: 'initial', is_ready: true });
 
     expect(normalized).toBeNull();
+  });
+});
+
+describe('parseAgentValidationScorecard', () => {
+  it('returns a 0% system scorecard when JSON is unusable', () => {
+    const parsed = parseAgentValidationScorecard('{"verdict":"ready"}');
+    expect(parsed.overall_score).toBe(0);
+    expect(parsed.is_ready).toBe(false);
+    expect(parsed.slug).toBe('validation-unusable');
+  });
+
+  it('returns a 0% system scorecard when JSON is invalid', () => {
+    const parsed = parseAgentValidationScorecard('{not json');
+    expect(parsed.overall_score).toBe(0);
+    expect(parsed.verdict).toBe('significant_gaps');
+  });
+
+  it('preserves a usable files[].score average', () => {
+    const parsed = parseAgentValidationScorecard(
+      JSON.stringify({ files: [{ file: 'prd', score: 70 }, { file: 'backlog', score: 80 }] }),
+    );
+    expect(parsed.overall_score).toBe(75);
+  });
+});
+
+describe('buildUnusableValidationScorecard', () => {
+  it('always produces a persistable 0% card', () => {
+    const card = buildUnusableValidationScorecard('Re-run validation.');
+    expect(card.overall_score).toBe(0);
+    expect(card.is_ready).toBe(false);
+    expect(card.gaps?.[0]?.description).toContain('Re-run');
   });
 });

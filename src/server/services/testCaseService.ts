@@ -24,6 +24,7 @@ import {
 } from './agentRunReaperService';
 import { resolveSkillConfig } from './projectSettingsService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
+import { recordArtifactDoneEvent } from './artifactDoneEventService';
 import {
   propagatePipelineGrounding,
   runGroundingService,
@@ -1044,15 +1045,24 @@ export async function syncTestCaseOutput(
     testCasesJson
   );
   const coverageSummary = extractCoverageSummary(testCasesJson);
+  const readyAt = new Date().toISOString();
   const updates: Partial<typeof testCases.$inferInsert> = {
     status: 'ready',
     testCasesJson: testCasesJson as any,
     testCasesMd: testCasesMd ?? null,
     coverageSummary: coverageSummary ?? null,
-    updatedAt: new Date().toISOString(),
+    updatedAt: readyAt,
   };
 
   await db.update(testCases).set(updates).where(eq(testCases.id, testCaseId));
+
+  // Frozen cycle-time end instant — insert-once, so a regeneration keeps the
+  // first suite-ready timestamp (FEAT-001 / TBI-002).
+  try {
+    await recordArtifactDoneEvent('test_case', testCaseId, readyAt);
+  } catch (err) {
+    console.error(`[testCase] Failed to record done event (testCaseId=${testCaseId})`, err);
+  }
   if (backlogWithTestCaseCounts !== null) {
     await db
       .update(prds)

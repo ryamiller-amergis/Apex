@@ -63,6 +63,48 @@ function isBedrockThrottleError(err: unknown): boolean {
   return status === 429 || (typeof status === 'number' && status >= 500 && status < 600);
 }
 
+function persistBedrockUsage(
+  usageCtx: BedrockUsageContext,
+  modelId: string,
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+  },
+  durationMs: number,
+): void {
+  computeCost({
+    provider: 'bedrock',
+    modelId,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cacheReadTokens: usage.cacheReadTokens,
+    cacheWriteTokens: usage.cacheWriteTokens,
+  })
+    .then((costUsd) => {
+      recordAiUsage({
+        provider: 'bedrock',
+        modelId,
+        feature: usageCtx.feature,
+        project: usageCtx.project,
+        entityType: usageCtx.entityType,
+        entityId: usageCtx.entityId,
+        userId: usageCtx.userId,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        cacheReadTokens: usage.cacheReadTokens,
+        cacheWriteTokens: usage.cacheWriteTokens,
+        tokenSource: 'exact',
+        costUsd,
+        costSource: 'computed',
+        durationMs,
+        status: 'success',
+      });
+    })
+    .catch(() => {});
+}
+
 const MODEL_ID =
   process.env.BEDROCK_MODEL_ID ?? 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
 
@@ -325,6 +367,7 @@ export async function generatePBIFromBedrock(
     body: JSON.stringify(payload),
   });
 
+  const startedAt = Date.now();
   const response = await client.send(command);
   const body = JSON.parse(new TextDecoder().decode(response.body)) as {
     content: Array<{ type: string; text: string }>;
@@ -334,9 +377,7 @@ export async function generatePBIFromBedrock(
   if (usageCtx) {
     const inputTokens = body.usage?.input_tokens ?? 0;
     const outputTokens = body.usage?.output_tokens ?? 0;
-    computeCost({ provider: 'bedrock', modelId: MODEL_ID, inputTokens, outputTokens })
-      .then((costUsd) => recordAiUsage({ provider: 'bedrock', modelId: MODEL_ID, feature: usageCtx.feature, project: usageCtx.project, entityType: usageCtx.entityType, entityId: usageCtx.entityId, inputTokens, outputTokens, tokenSource: 'exact', costUsd, costSource: 'computed', status: 'success' }))
-      .catch(() => {});
+    persistBedrockUsage(usageCtx, MODEL_ID, { inputTokens, outputTokens }, Date.now() - startedAt);
   }
 
   const text = body.content[0]?.text ?? '';
@@ -376,6 +417,7 @@ export async function generateFeatureFromBedrock(
     body: JSON.stringify(payload),
   });
 
+  const startedAt = Date.now();
   const response = await client.send(command);
   const body = JSON.parse(new TextDecoder().decode(response.body)) as {
     content: Array<{ type: string; text: string }>;
@@ -385,9 +427,7 @@ export async function generateFeatureFromBedrock(
   if (usageCtx) {
     const inputTokens = body.usage?.input_tokens ?? 0;
     const outputTokens = body.usage?.output_tokens ?? 0;
-    computeCost({ provider: 'bedrock', modelId: MODEL_ID, inputTokens, outputTokens })
-      .then((costUsd) => recordAiUsage({ provider: 'bedrock', modelId: MODEL_ID, feature: usageCtx.feature, project: usageCtx.project, entityType: usageCtx.entityType, entityId: usageCtx.entityId, inputTokens, outputTokens, tokenSource: 'exact', costUsd, costSource: 'computed', status: 'success' }))
-      .catch(() => {});
+    persistBedrockUsage(usageCtx, MODEL_ID, { inputTokens, outputTokens }, Date.now() - startedAt);
   }
 
   const text = body.content[0]?.text ?? '';
@@ -618,6 +658,7 @@ export async function resolveClarificationWithBedrock(
     body: JSON.stringify(payload),
   });
 
+  const startedAt = Date.now();
   const response = await client.send(command);
   const body = JSON.parse(new TextDecoder().decode(response.body)) as {
     content: Array<{ type: string; text: string }>;
@@ -627,9 +668,7 @@ export async function resolveClarificationWithBedrock(
   if (usageCtx) {
     const inputTokens = body.usage?.input_tokens ?? 0;
     const outputTokens = body.usage?.output_tokens ?? 0;
-    computeCost({ provider: 'bedrock', modelId: MODEL_ID, inputTokens, outputTokens })
-      .then((costUsd) => recordAiUsage({ provider: 'bedrock', modelId: MODEL_ID, feature: usageCtx.feature, project: usageCtx.project, entityType: usageCtx.entityType, entityId: usageCtx.entityId, inputTokens, outputTokens, tokenSource: 'exact', costUsd, costSource: 'computed', status: 'success' }))
-      .catch(() => {});
+    persistBedrockUsage(usageCtx, MODEL_ID, { inputTokens, outputTokens }, Date.now() - startedAt);
   }
 
   const text = body.content[0]?.text ?? '';
@@ -2026,6 +2065,8 @@ async function invokeModel(
     body: JSON.stringify(payload),
   });
 
+  const startedAt = Date.now();
+
   // Each attempt is bounded by MODEL_INVOKE_TIMEOUT_MS. Throttling/5xx are retried
   // with exponential backoff + jitter (Bedrock throttles concurrent large calls
   // hard); the abort-timeout and truncation are NOT retried (see predicate).
@@ -2069,31 +2110,12 @@ async function invokeModel(
 
   // Record exact usage (fire-and-forget)
   if (usageCtx) {
-    const inputTokens = body.usage?.input_tokens ?? 0;
-    const outputTokens = body.usage?.output_tokens ?? 0;
-    const cacheReadTokens = body.usage?.cache_read_input_tokens ?? 0;
-    const cacheWriteTokens = body.usage?.cache_creation_input_tokens ?? 0;
-    computeCost({ provider: 'bedrock', modelId, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens })
-      .then((costUsd) => {
-        recordAiUsage({
-          provider: 'bedrock',
-          modelId,
-          feature: usageCtx.feature,
-          project: usageCtx.project,
-          entityType: usageCtx.entityType,
-          entityId: usageCtx.entityId,
-          userId: usageCtx.userId,
-          inputTokens,
-          outputTokens,
-          cacheReadTokens,
-          cacheWriteTokens,
-          tokenSource: 'exact',
-          costUsd,
-          costSource: 'computed',
-          status: 'success',
-        });
-      })
-      .catch(() => {});
+    persistBedrockUsage(usageCtx, modelId, {
+      inputTokens: body.usage?.input_tokens ?? 0,
+      outputTokens: body.usage?.output_tokens ?? 0,
+      cacheReadTokens: body.usage?.cache_read_input_tokens ?? 0,
+      cacheWriteTokens: body.usage?.cache_creation_input_tokens ?? 0,
+    }, Date.now() - startedAt);
   }
 
   // Bedrock signals truncation via stop_reason. Surface this as a dedicated
@@ -2757,7 +2779,7 @@ ${commentLines}
     resolvedModel,
     resolvedMaxTokens,
     undefined,
-    usageCtx ?? { feature: 'other', project: 'unknown' },
+    usageCtx ?? { feature: 'adr', project: 'unknown' },
   );
   const fenced = text.match(/```(?:markdown)?\s*([\s\S]*?)\s*```/);
   return fenced ? fenced[1].trim() : text.trim();
@@ -3124,7 +3146,7 @@ export async function fixDesignDocSectionWithBedrock(
   comments: PrdComment[],
   modelId?: string | null,
   maxTokens?: number | null,
-  _usageCtx?: BedrockUsageContext,
+  usageCtx?: BedrockUsageContext,
 ): Promise<string> {
   const commentLines = formatCommentsForPrompt(comments);
 
@@ -3149,7 +3171,14 @@ ${commentLines}
 
   const resolvedModel = modelId ?? MODEL_ID;
   const resolvedMaxTokens = (maxTokens != null && maxTokens > 0) ? maxTokens : UI_MOCK_MAX_TOKENS;
-  const text = await invokeModel(prompt, undefined, resolvedModel, resolvedMaxTokens);
+  const text = await invokeModel(
+    prompt,
+    undefined,
+    resolvedModel,
+    resolvedMaxTokens,
+    undefined,
+    usageCtx ?? { feature: 'design-doc', project: 'unknown' },
+  );
 
   const fenced = text.match(/```(?:markdown)?\s*([\s\S]*?)\s*```/);
   return fenced ? fenced[1].trim() : text.trim();

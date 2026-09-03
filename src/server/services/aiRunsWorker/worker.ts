@@ -6,8 +6,11 @@ import type {
   AiRunIngestResponse,
 } from '../../../shared/types/aiRunIngest';
 import {
+  CursorExecutionWaitError,
   executeCursorExecutionCore,
+  tokenFieldsForTerminalIngest,
   type CursorExecutionResult,
+  type CursorTokenUsage,
 } from '../cursorExecutionCore';
 import type { WorkerCursorExecution } from './cursorExecution';
 import { AiRunFenceConflictError } from './callbackClient';
@@ -178,6 +181,9 @@ export function createAiRunsWorker(
         }, false);
       };
 
+      const startedAtMs = Date.now();
+      let capturedUsage: CursorTokenUsage | undefined;
+
       try {
         await post({
           dispatchMessageId: dispatch.dispatchMessageId,
@@ -239,6 +245,8 @@ export function createAiRunsWorker(
           await clearHeartbeat();
         }
 
+        capturedUsage = result.usage ?? capturedUsage;
+
         if (!isSuccessfulWait(result)) {
           throw new Error('Cursor execution did not finish successfully');
         }
@@ -252,6 +260,8 @@ export function createAiRunsWorker(
           kind: 'terminal',
           status: 'completed',
           artifactsFlushed: true,
+          durationMs: Date.now() - startedAtMs,
+          ...tokenFieldsForTerminalIngest(capturedUsage),
         });
       } catch (error) {
         if (heartbeatTimer) {
@@ -259,6 +269,10 @@ export function createAiRunsWorker(
           heartbeatTimer = undefined;
         }
         await callbackQueue;
+
+        if (error instanceof CursorExecutionWaitError) {
+          capturedUsage = error.usage ?? capturedUsage;
+        }
 
         if (fenceConflict || error instanceof AiRunFenceConflictError) {
           throw fenceConflict ?? error;
@@ -272,7 +286,9 @@ export function createAiRunsWorker(
         }
 
         await dependencies.flushArtifacts(snapshot.workspaceRef);
-        const failureDetail = formatWorkerExecutionFailure(error);
+        const failureDetail = formatWorkerExecutionFailure(
+          error instanceof CursorExecutionWaitError ? error.cause : error,
+        );
         console.error(JSON.stringify({
           event: 'AiRunsWorkerExecutionFailed',
           runId: dispatch.runId,
@@ -286,6 +302,8 @@ export function createAiRunsWorker(
           status: 'failed',
           detail: failureDetail,
           artifactsFlushed: true,
+          durationMs: Date.now() - startedAtMs,
+          ...tokenFieldsForTerminalIngest(capturedUsage),
         });
       } finally {
         if (heartbeatTimer) clearInterval(heartbeatTimer);

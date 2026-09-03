@@ -744,3 +744,91 @@ describe('aiRunIngestService durable final interactive message', () => {
     ).resolves.toMatchObject({ cancelRequested: true });
   });
 });
+
+describe('aiRunIngestService background usage recording', () => {
+  const mockRecordUsage = jest.fn().mockResolvedValue(undefined);
+
+  beforeEach(() => {
+    mockRecordUsage.mockClear();
+  });
+
+  it('records background terminal usage against the run thread', async () => {
+    mockFindFirst.mockResolvedValue(baseRow({ executionSnapshot }));
+
+    await ingest('project-1', 'run-1', {
+      dispatchMessageId: 'dispatch-current',
+      kind: 'terminal',
+      status: 'completed',
+      artifactsFlushed: true,
+      durationMs: 4200,
+      inputTokens: 42_000,
+      outputTokens: 900,
+      cacheReadTokens: 118_000,
+      cacheWriteTokens: 3_000,
+    }, {
+      consumeCompletedArtifacts: mockConsumeCompletedArtifacts,
+      recordCursorChatUsage: mockRecordUsage,
+    });
+
+    expect(mockRecordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelId: 'claude-sonnet-4-5',
+        threadId: 'thread-1',
+        runId: 'run-1',
+        inputTokens: 42_000,
+        outputTokens: 900,
+        cacheReadTokens: 118_000,
+        cacheWriteTokens: 3_000,
+        tokenSource: 'exact',
+        durationMs: 4200,
+        status: 'success',
+        kickoff: expect.objectContaining({
+          skillPath: executionSnapshot.skillPath,
+          project: 'project-1',
+        }),
+      }),
+    );
+  });
+
+  it('does not record interactive-lane usage (that path already records in-process)', async () => {
+    mockFindFirst.mockResolvedValue(baseRow({
+      executionSnapshot,
+      lane: 'ai-runs-interactive',
+    }));
+
+    await ingest('project-1', 'run-1', {
+      dispatchMessageId: 'dispatch-current',
+      kind: 'terminal',
+      status: 'completed',
+      artifactsFlushed: true,
+      durationMs: 4200,
+      inputTokens: 100,
+      outputTokens: 20,
+    }, {
+      consumeCompletedArtifacts: mockConsumeCompletedArtifacts,
+      recordCursorChatUsage: mockRecordUsage,
+    });
+
+    expect(mockRecordUsage).not.toHaveBeenCalled();
+  });
+
+  it('rejects a negative token count before mutating the run', async () => {
+    mockFindFirst.mockResolvedValue(baseRow({ executionSnapshot }));
+
+    await expect(ingest('project-1', 'run-1', {
+      dispatchMessageId: 'dispatch-current',
+      kind: 'terminal',
+      status: 'completed',
+      artifactsFlushed: true,
+      inputTokens: -1,
+    }, {
+      consumeCompletedArtifacts: mockConsumeCompletedArtifacts,
+      recordCursorChatUsage: mockRecordUsage,
+    })).rejects.toMatchObject({
+      code: 'AI_RUN_VALIDATION',
+    });
+
+    expect(mockMarkTerminal).not.toHaveBeenCalled();
+    expect(mockRecordUsage).not.toHaveBeenCalled();
+  });
+});

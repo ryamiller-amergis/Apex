@@ -29,13 +29,79 @@ export type CursorStreamEvent =
     }
   | { type: string; [key: string]: unknown };
 
+/**
+ * Token counts as reported by the Cursor runtime (`@cursor/sdk` `TokenUsage`).
+ * Structural rather than an SDK import so the worker/actor hosts stay decoupled.
+ */
+export interface CursorTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+/** Fields a worker may attach to a terminal ingest when the runtime reported usage. */
+export function tokenFieldsForTerminalIngest(
+  usage: CursorTokenUsage | undefined,
+): {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+} {
+  if (!usage) return {};
+  return {
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cacheReadTokens: usage.cacheReadTokens,
+    cacheWriteTokens: usage.cacheWriteTokens,
+  };
+}
+
+function readTokenUsage(value: unknown): CursorTokenUsage | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const raw = value as Record<string, unknown>;
+  const num = (key: string): number => (typeof raw[key] === 'number' && Number.isFinite(raw[key] as number)
+    ? Math.max(0, raw[key] as number)
+    : 0);
+  const usage: CursorTokenUsage = {
+    inputTokens: num('inputTokens'),
+    outputTokens: num('outputTokens'),
+    cacheReadTokens: num('cacheReadTokens'),
+    cacheWriteTokens: num('cacheWriteTokens'),
+  };
+  // A turn that reported nothing is indistinguishable from an all-zero payload;
+  // treat both as "no usage" so the caller can fall back to its estimate.
+  const total = usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
+  return total > 0 ? usage : undefined;
+}
+
+function addTokenUsage(
+  a: CursorTokenUsage | undefined,
+  b: CursorTokenUsage | undefined,
+): CursorTokenUsage | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    cacheReadTokens: a.cacheReadTokens + b.cacheReadTokens,
+    cacheWriteTokens: a.cacheWriteTokens + b.cacheWriteTokens,
+  };
+}
+
 export interface CursorExecutionWaitResult {
   status: string;
   result?: string;
+  /** Cumulative usage across turns; absent when the runtime reported none. */
+  usage?: unknown;
 }
 
 export class CursorExecutionWaitError extends Error {
-  constructor(public readonly cause: unknown) {
+  constructor(
+    public readonly cause: unknown,
+    public readonly usage?: CursorTokenUsage,
+  ) {
     super(cause instanceof Error ? cause.message : 'Cursor run wait failed');
     this.name = 'CursorExecutionWaitError';
   }
@@ -294,6 +360,12 @@ export interface ExecuteCursorExecutionCoreInput {
 export interface CursorExecutionResult {
   text: string;
   waitResult: CursorExecutionWaitResult;
+  /**
+   * Real token counts from the runtime, covering the full prompt the model saw
+   * (system prompt, skill, grounding, history, tool output). Absent when the
+   * runtime reported no usage — callers should fall back to an estimate.
+   */
+  usage?: CursorTokenUsage;
 }
 
 /**
@@ -320,6 +392,7 @@ export async function executeCursorExecutionCore(
   let textBuffer = '';
   let firstStreamEventSeen = false;
   let anonymousToolUseCount = 0;
+  let streamedUsage: CursorTokenUsage | undefined;
 
   const publish = async (event: SseEvent, phase?: AgentRunPhase): Promise<void> => {
     const envelope = createCursorRunEventEnvelope({
@@ -442,6 +515,13 @@ export async function executeCursorExecutionCore(
           result: summarizeCursorToolResult(toolCallEvent.result),
         }, phase);
         await hooks.onHeartbeat?.();
+      } else if (event.type === 'usage') {
+        // Emitted once per turn at turn end. Summing turns gives the run total
+        // when `wait()` does not carry a cumulative snapshot.
+        streamedUsage = addTokenUsage(
+          streamedUsage,
+          readTokenUsage((event as { usage?: unknown }).usage),
+        );
       }
     }
     await hooks.onStreamComplete?.();
@@ -452,10 +532,13 @@ export async function executeCursorExecutionCore(
   try {
     waitResult = await run.wait();
   } catch (error) {
-    throw new CursorExecutionWaitError(error);
+    throw new CursorExecutionWaitError(error, streamedUsage);
   }
   return {
     text: textBuffer,
     waitResult,
+    // `wait()` reports cumulative usage for the whole run; the summed stream
+    // events are the fallback for runtimes that only emit per-turn events.
+    usage: readTokenUsage(waitResult.usage) ?? streamedUsage,
   };
 }
