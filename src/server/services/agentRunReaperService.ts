@@ -31,6 +31,7 @@ import {
 } from './agentRunLifecycleService';
 import { recoverStaleDispatchedRuns } from './admissionGovernorService';
 import { workerTierTelemetry } from './workerTierTelemetry';
+import { INTERACTIVE_LANE } from '../../shared/types/interactiveWorkflow';
 
 const REAP_INTERVAL_MS = 60_000;
 export const RETIRE_REAP_INTERVAL_MS = 5 * 60_000;
@@ -547,6 +548,45 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
     let recoverColdStarts = false;
 
     for (const row of rows) {
+      // Interactive dispatch is acknowledged before the Dapr actor invocation
+      // finishes. A process crash can therefore bypass the host's rejection
+      // handler and leave the fenced row dispatched forever. Unlike background
+      // work, this lane has nothing to republish, so terminate it after the
+      // cold-start budget and let the user retry.
+      if (row.lane === INTERACTIVE_LANE && row.status === 'dispatched') {
+        if (
+          row.dispatchMessageId
+          && ageMs(row.dispatchedAt, nowMs) >= dispatchColdStartMs
+        ) {
+          const detail = 'Interactive agent did not start. Please retry.';
+          const terminal = await markTerminal(row.id, {
+            status: 'failed',
+            terminalReason: 'worker_lost',
+            dispatchMessageId: row.dispatchMessageId,
+            detail,
+            events: [workerHealthEvent({
+              runId: row.id,
+              threadId: row.threadId,
+              health: 'worker_lost',
+              detail,
+              timestamp: updatedAt,
+              phase: row.progressPhase,
+            })],
+          });
+          console.log(
+            `[reaper] Reaped interactive dispatch (id=${row.id}, threadId=${row.threadId}) — actor did not start`,
+          );
+          if (terminal.ok) {
+            emitWorkerTelemetry(() => {
+              workerTierTelemetry.reaperAction(
+                workerTelemetryContext(row),
+              );
+            });
+          }
+        }
+        continue;
+      }
+
       // Worker-lane rows are governed only by lifecycle/fence-aware clocks.
       // They must never fall through to the legacy AGENT_* watchdog behavior.
       if (shouldApplyWorkerLifecycle(row)) {
