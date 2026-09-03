@@ -1,5 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { AppNotification, NotificationSseEvent } from '../../shared/types/notification';
+import { shouldPlayGenerationSound } from '../../shared/types/notification';
+import { useGenerationSoundSettings } from '../hooks/useGenerationSoundSettings';
+import { playGenerationSound } from '../utils/generationSound';
 
 interface NotificationContextValue {
   unreadCount: number;
@@ -23,6 +26,8 @@ export const useNotificationContext = () => useContext(NotificationContext);
 
 const MAX_TOASTS = 3;
 const TOAST_DURATION_MS = 5_000;
+/** Two generations finishing together should chime once, not overlap. */
+const SOUND_THROTTLE_MS = 1_500;
 
 interface NotificationProviderProps {
   children: React.ReactNode;
@@ -34,6 +39,26 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({ chil
   const [isConnected, setIsConnected] = useState(false);
   const toastTimers = useRef<Map<string, number>>(new Map());
   const eventSourceRef = useRef<EventSource | null>(null);
+  const lastSoundAtRef = useRef(0);
+
+  const { data: soundPrefs } = useGenerationSoundSettings();
+  // Read through a ref so changing the preference never tears down the SSE
+  // connection — the stream must outlive settings edits.
+  const soundPrefsRef = useRef(soundPrefs);
+
+  const maybePlayGenerationSound = useCallback((notification: AppNotification) => {
+    const prefs = soundPrefsRef.current;
+    if (!prefs?.generationSoundEnabled) return;
+    if (!shouldPlayGenerationSound(notification)) return;
+    const now = Date.now();
+    if (now - lastSoundAtRef.current < SOUND_THROTTLE_MS) return;
+    lastSoundAtRef.current = now;
+    void playGenerationSound(prefs.generationSoundId);
+  }, []);
+
+  useEffect(() => {
+    soundPrefsRef.current = soundPrefs;
+  }, [soundPrefs]);
 
   useEffect(() => {
     fetch('/api/notifications/unread-count', { credentials: 'include' })
@@ -56,6 +81,8 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({ chil
           setUnreadCount((prev) => prev + 1);
 
           if (data.toast) {
+            maybePlayGenerationSound(data.notification);
+
             setToasts((prev) => {
               const next = [data.notification, ...prev];
               if (next.length > MAX_TOASTS) {
@@ -90,7 +117,7 @@ export const NotificationProvider: React.FC<NotificationProviderProps> = ({ chil
       }
       toastTimers.current.clear();
     };
-  }, []);
+  }, [maybePlayGenerationSound]);
 
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));

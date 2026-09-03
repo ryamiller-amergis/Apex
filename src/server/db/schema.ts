@@ -234,6 +234,8 @@ export const appUsers = pgTable('app_users', {
   lastSeenChangelogVersion: text('last_seen_changelog_version'),
   showChangelogOnLogin: boolean('show_changelog_on_login').notNull().default(true),
   dismissedBetaProdAnnouncement: boolean('dismissed_beta_prod_announcement').notNull().default(false),
+  generationSoundEnabled: boolean('generation_sound_enabled').notNull().default(false),
+  generationSoundId: text('generation_sound_id').notNull().default('chime'),
 });
 
 /**

@@ -4040,6 +4040,11 @@ import {
   getRestrictedAccessByEmail,
 } from '../services/restrictedAccessService';
 import { RESTRICTED_ACCESS_PROJECT } from '../../shared/types/restrictedAccess';
+import {
+  isGenerationSoundId,
+  normalizeGenerationSoundPreferences,
+} from '../../shared/types/notification';
+import type { UpdatePreferencesRequest } from '../../shared/types/rbac';
 
 router.get('/changelog', async (_req: Request, res: Response): Promise<void> => {
   try {
@@ -4084,6 +4089,12 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
     if (superAdmin && !roles.includes('admin')) {
       roles.push('admin');
     }
+    const soundPrefs = normalizeGenerationSoundPreferences({
+      generationSoundEnabled: changelogPrefs.generationSoundEnabled,
+      generationSoundId: isGenerationSoundId(changelogPrefs.generationSoundId)
+        ? changelogPrefs.generationSoundId
+        : undefined,
+    });
     res.json({
       permissions: [...permSet],
       roles,
@@ -4096,6 +4107,8 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       lastSeenChangelogVersion: whatsNew.lastSeenVersion,
       showChangelogOnLogin: whatsNew.showOnLogin,
       betaAnnouncementDismissed: changelogPrefs.dismissedBetaProdAnnouncement,
+      generationSoundEnabled: soundPrefs.generationSoundEnabled,
+      generationSoundId: soundPrefs.generationSoundId,
       whatsNew,
       restrictedAccess: restrictedActive && restricted
         ? { modules: restricted.modules, project: RESTRICTED_ACCESS_PROJECT }
@@ -4106,9 +4119,30 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
   }
 });
 
+// ── GET /api/me/preferences ───────────────────────────────────────────────────
+// Returns the authenticated user's UI preferences (generation sound, etc.).
+
+router.get('/me/preferences', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = (req.user as any)?.profile?.oid;
+    if (!userId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const prefs = await getChangelogPrefs(userId);
+    const soundPrefs = normalizeGenerationSoundPreferences({
+      generationSoundEnabled: prefs.generationSoundEnabled,
+      generationSoundId: prefs.generationSoundId,
+    });
+    res.json(soundPrefs);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // ── PATCH /api/me/preferences ─────────────────────────────────────────────────
 // Updates the authenticated user's preferences.
-// Body: { markChangelogRead?: boolean; lastSeenVersion?: string; showChangelogOnLogin?: boolean; dismissBetaAnnouncement?: boolean }
+// Body: { markChangelogRead?: boolean; lastSeenVersion?: string; showChangelogOnLogin?: boolean; dismissBetaAnnouncement?: boolean; generationSoundEnabled?: boolean; generationSoundId?: string }
 
 router.patch('/me/preferences', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -4117,12 +4151,14 @@ router.patch('/me/preferences', async (req: Request, res: Response): Promise<voi
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-    const { markChangelogRead, lastSeenVersion, showChangelogOnLogin, dismissBetaAnnouncement } = req.body as {
-      markChangelogRead?: boolean;
-      lastSeenVersion?: string;
-      showChangelogOnLogin?: boolean;
-      dismissBetaAnnouncement?: boolean;
-    };
+    const {
+      markChangelogRead,
+      lastSeenVersion,
+      showChangelogOnLogin,
+      dismissBetaAnnouncement,
+      generationSoundEnabled,
+      generationSoundId,
+    } = req.body as UpdatePreferencesRequest;
 
     let whatsNew = await evaluateWhatsNewState(userId);
 
@@ -4152,7 +4188,31 @@ router.patch('/me/preferences', async (req: Request, res: Response): Promise<voi
       await updateChangelogPrefs(userId, { dismissedBetaProdAnnouncement: true });
     }
 
-    res.json({ ok: true, whatsNew });
+    if (
+      typeof generationSoundEnabled === 'boolean'
+      || generationSoundId !== undefined
+    ) {
+      if (generationSoundId !== undefined && !isGenerationSoundId(generationSoundId)) {
+        res.status(400).json({ error: 'Invalid generationSoundId' });
+        return;
+      }
+      await updateChangelogPrefs(userId, {
+        ...(typeof generationSoundEnabled === 'boolean'
+          ? { generationSoundEnabled }
+          : {}),
+        ...(generationSoundId !== undefined
+          ? { generationSoundId }
+          : {}),
+      });
+    }
+
+    const prefs = await getChangelogPrefs(userId);
+    const soundPrefs = normalizeGenerationSoundPreferences({
+      generationSoundEnabled: prefs.generationSoundEnabled,
+      generationSoundId: prefs.generationSoundId,
+    });
+
+    res.json({ ok: true, whatsNew, ...soundPrefs });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }
