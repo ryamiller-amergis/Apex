@@ -668,10 +668,9 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
 
   const startFromEmptyComposer = async () => {
     const message = input.trim();
-    if (!message && !selectedQuickSkill && !selectedMcpPill) return;
-    if (message) {
-      setPendingOutgoing(message);
-    }
+    if (!message) return;
+    if (needsSkillSelection) return;
+    setPendingOutgoing(message);
     setInput('');
     await onNewChat({
       model: selectedModel,
@@ -740,6 +739,9 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                     setSelectedQuickSkill(selected);
                     setSelectedMcpPill(null);
                     setSelectedModel(selected?.model ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID);
+                    if (selected) {
+                      requestAnimationFrame(() => textareaRef.current?.focus());
+                    }
                   }}
                   disabled={inConversation}
                   aria-pressed={resolvedQuickSkill?.skillPath === pill.skillPath}
@@ -762,6 +764,9 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                     setSelectedMcpPill(selected);
                     setSelectedQuickSkill(null);
                     setSelectedModel(selected?.model ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID);
+                    if (selected) {
+                      requestAnimationFrame(() => textareaRef.current?.focus());
+                    }
                   }}
                   disabled={inConversation}
                   {...{ 'data-testid': `chat-agent-mcp-pill-${testIdSegment(pill.mcpServerName)}` }}
@@ -795,9 +800,15 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
           <span className={styles.emptyIcon}>AI</span>
           <h3 className={styles.emptyTitle}>No conversation yet</h3>
           <p className={styles.emptyHint}>
-            {hasHomePills
-              ? 'Select a skill above, then tell Apex what you need.'
-              : 'Type your first message to start a new thread with Apex.'}
+            {needsSkillSelection
+              ? 'Select a skill above to get started.'
+              : resolvedQuickSkill
+                ? `${resolvedQuickSkill.label} is ready — type your question below.`
+                : resolvedMcpPill
+                  ? `${resolvedMcpPill.label} is ready — type your question below.`
+                  : hasHomePills
+                    ? 'Select a skill above, then tell Apex what you need.'
+                    : 'Type your first message to start a new thread with Apex.'}
           </p>
           {newChatError && <p className={styles.emptyError}>{newChatError}</p>}
           </div>
@@ -814,12 +825,25 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
               !needsSkillSelection
               && canStartNewChat
               && !isStartingNewChat
-              && Boolean(input.trim() || selectedQuickSkill || selectedMcpPill)
+              && Boolean(input.trim())
             }
             placeholder={
               needsSkillSelection
                 ? 'Select an option above to get started'
-                : 'Let Apex know what you need…'
+                : resolvedQuickSkill
+                  ? `Ask using ${resolvedQuickSkill.label}…`
+                  : resolvedMcpPill
+                    ? `Ask using ${resolvedMcpPill.label}…`
+                    : 'Let Apex know what you need…'
+            }
+            autoFocus={!needsSkillSelection}
+            textareaRef={textareaRef}
+            after={
+              !needsSkillSelection && (resolvedQuickSkill || resolvedMcpPill) ? (
+                <p className={styles.composeArmedHint} {...{ 'data-testid': 'chat-agent-compose-armed-hint' }}>
+                  Press Enter to send your question.
+                </p>
+              ) : undefined
             }
             testIdPrefix="chat-agent"
             model={selectedModel}

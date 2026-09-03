@@ -64,15 +64,29 @@ jest.mock('../agentChat', () => {
     AgentComposer: ({
       testIdPrefix,
       model,
+      value,
+      onChange,
       onSend,
+      canSend,
+      after,
     }: {
       testIdPrefix: string;
       model?: string;
+      value?: string;
+      onChange?: (value: string) => void;
       onSend: () => void;
+      canSend?: boolean;
+      after?: React.ReactNode;
     }) => (
       <div {...{ 'data-testid': `${testIdPrefix}-composer-mock`, 'data-model': model }}>
         Composer
-        <button type="button" onClick={onSend}>Send mock</button>
+        <textarea
+          data-testid={`${testIdPrefix}-message-input`}
+          value={value ?? ''}
+          onChange={(event) => onChange?.(event.target.value)}
+        />
+        <button type="button" onClick={onSend} disabled={canSend === false}>Send mock</button>
+        {after}
       </div>
     ),
   };
@@ -179,9 +193,15 @@ describe('ChatAgentPanel shared Home shell', () => {
     expect(screen.getByTestId('chat-agent-pill-description')).toHaveTextContent(
       'Generate a PRD from interview notes',
     );
+    expect(screen.getByTestId('chat-agent-compose-armed-hint')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send mock' })).toBeDisabled();
+    fireEvent.change(screen.getByTestId('chat-agent-message-input'), {
+      target: { value: 'Turn my interview into a PRD' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Send mock' }));
     expect(onNewChat).toHaveBeenCalledWith(expect.objectContaining({
       model: 'auto',
+      initialMessage: 'Turn my interview into a PRD',
       quickSkill: expect.objectContaining({ label: 'Write PRD', skillPath: '/to-prd' }),
     }));
   });

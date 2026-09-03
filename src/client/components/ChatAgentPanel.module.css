@@ -242,6 +242,13 @@
   line-height: 1.45;
 }
 
+.composeArmedHint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
 .connectionError {
   flex-shrink: 0;
   margin: 8px 12px 0;
