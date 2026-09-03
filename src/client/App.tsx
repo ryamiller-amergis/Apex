@@ -133,6 +133,7 @@ function App() {
 
   const [chatOpen, setChatOpen] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [activeThreadProject, setActiveThreadProject] = useState<string | null>(null);
   const [homeSelectedItem, setHomeSelectedItem] = useState<WorkItem | null>(null);
   const [pendingProject, setPendingProject] = useState<string | null>(null);
   const [calendarAssistantOpen, setCalendarAssistantOpen] = useState(false);
@@ -519,6 +520,7 @@ function App() {
     setChatOpen(true);
     if (!options) {
       setActiveThreadId(null);
+      setActiveThreadProject(null);
       return;
     }
     if (!panelRepo || startChat.isPending) return;
@@ -540,6 +542,7 @@ function App() {
         skipAutoKickoff: true,
       });
       setActiveThreadId(result.threadId);
+      setActiveThreadProject(selectedProject);
       if (options?.initialMessage) {
         await fetch(`/api/chat/threads/${result.threadId}/messages`, {
           method: 'POST',
@@ -557,9 +560,41 @@ function App() {
   }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig]);
 
   useEffect(() => {
-    if (currentView !== 'home' || !activeThreadId || !selectedProject) return;
+    if (
+      currentView !== 'home'
+      || !activeThreadId
+      || activeThreadProject !== selectedProject
+      || activeThread?.id !== activeThreadId
+      || activeThread.kickoff.project !== selectedProject
+    ) return;
     sessionStorage.setItem(`agentHomeThreadId:${selectedProject}`, activeThreadId);
-  }, [activeThreadId, currentView, selectedProject]);
+  }, [
+    activeThread,
+    activeThreadId,
+    activeThreadProject,
+    currentView,
+    selectedProject,
+  ]);
+
+  useEffect(() => {
+    if (
+      !activeThreadId
+      || !activeThread
+      || activeThread.id !== activeThreadId
+      || activeThreadProject !== selectedProject
+      || activeThread.kickoff.project === selectedProject
+    ) return;
+    const storageKey = `agentHomeThreadId:${selectedProject}`;
+    if (sessionStorage.getItem(storageKey) === activeThreadId) {
+      sessionStorage.removeItem(storageKey);
+    }
+  }, [activeThread, activeThreadId, activeThreadProject, selectedProject]);
+
+  const projectScopedActiveThread =
+    activeThreadProject === selectedProject
+    && activeThread?.kickoff.project === selectedProject
+      ? activeThread
+      : null;
 
   if (isAuthenticated === null) return <div className="app-loading"><ApexLoader size={80} /></div>;
   if (!isAuthenticated) return <Login />;
@@ -858,7 +893,10 @@ function App() {
                   isChatOpen={chatOpen}
                   canOpenChat={can('chat:view') && can('chat:create')}
                   onOpenChatPanel={() => setChatOpen((open) => !open)}
-                  onRestoreThread={setActiveThreadId}
+                  onRestoreThread={(id) => {
+                    setActiveThreadId(id);
+                    setActiveThreadProject(selectedProject);
+                  }}
                   onSelectWorkItem={(workItem) => {
                     setChatOpen(false);
                     setHomeSelectedItem(workItem);
@@ -1419,13 +1457,20 @@ function App() {
 
         {/* data-testid-exempt — ChatAgentPanel API has no data-testid prop */}
         <ChatAgentPanel
-          thread={activeThread}
-          activeThreadId={activeThreadId}
-          isLoadingThread={Boolean(activeThreadId) && isFetchingActiveThread && !activeThread}
+          thread={projectScopedActiveThread}
+          activeThreadId={projectScopedActiveThread?.id ?? null}
+          isLoadingThread={
+            Boolean(activeThreadId)
+            && activeThreadProject === selectedProject
+            && (isFetchingActiveThread || !projectScopedActiveThread)
+          }
           isOpen={currentView === 'home' && chatOpen}
           onClose={() => setChatOpen(false)}
           onNewChat={handleStartPanelChat}
-          onSelectThread={(id) => setActiveThreadId(id || null)}
+          onSelectThread={(id) => {
+            setActiveThreadId(id || null);
+            setActiveThreadProject(id ? selectedProject : null);
+          }}
           selectedProject={selectedProject}
           canStartNewChat={!!panelRepo && !isLoadingSkillRepos && !startChat.isPending}
           isStartingNewChat={startChat.isPending}

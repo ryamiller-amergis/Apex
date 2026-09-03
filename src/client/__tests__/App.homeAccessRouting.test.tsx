@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import App from '../App';
 import { useAppShell } from '../hooks/useAppShell';
@@ -50,7 +50,11 @@ jest.mock('../components/AppHeader', () => ({
 }));
 
 jest.mock('../components/AgentHome', () => ({
-  AgentHome: (props: { canOpenChat?: boolean; onOpenChatPanel?: () => void }) => {
+  AgentHome: (props: {
+    canOpenChat?: boolean;
+    onOpenChatPanel?: () => void;
+    onRestoreThread?: (id: string) => void;
+  }) => {
     mockAgentHomeProps = props;
     return (
       <div data-testid="agent-home">
@@ -62,7 +66,12 @@ jest.mock('../components/AgentHome', () => ({
 }));
 
 jest.mock('../components/ChatAgentPanel', () => ({
-  ChatAgentPanel: (props: { isOpen?: boolean; onNewChat?: () => Promise<void> }) => {
+  ChatAgentPanel: (props: {
+    thread?: { id: string; kickoff: { project: string } } | null;
+    activeThreadId?: string | null;
+    isOpen?: boolean;
+    onNewChat?: () => Promise<void>;
+  }) => {
     mockChatPanelProps = props;
     return props.isOpen ? (
       <div data-testid="chat-agent-panel-open">
@@ -109,8 +118,11 @@ const mockedUseFeatureFlags = useFeatureFlags as jest.MockedFunction<typeof useF
 let mockAgentHomeProps: {
   canOpenChat?: boolean;
   onOpenChatPanel?: () => void;
+  onRestoreThread?: (id: string) => void;
 } = {};
 let mockChatPanelProps: {
+  thread?: { id: string; kickoff: { project: string } } | null;
+  activeThreadId?: string | null;
   isOpen?: boolean;
   onNewChat?: () => Promise<void>;
 } = {};
@@ -247,6 +259,48 @@ describe('App — Home access with permission + flag both enabled (default)', ()
     fireEvent.click(await screen.findByRole('button', { name: 'Panel new' }));
 
     expect(mockStartChatMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('does not show a MaxView thread after switching to Apex', async () => {
+    let selectedProject = 'MaxView';
+    (useAppShell as jest.Mock).mockImplementation(() => makeAppShell({
+      selectedProject,
+      selectedAreaPath: selectedProject,
+      availableProjects: ['MaxView', 'Apex'],
+      can: (key: string) =>
+        ['home:view', 'chat:view', 'chat:create'].includes(key),
+    }));
+    (useChatThread as jest.Mock).mockImplementation((threadId: string | null) => ({
+      data: threadId === 'max-thread'
+        ? {
+            id: 'max-thread',
+            userId: 'user-1',
+            kickoff: { project: 'MaxView', repo: 'MaxView', branch: 'main' },
+            messages: [],
+            status: 'idle',
+            workspaceDir: '',
+            flagged: false,
+            createdAt: '2026-09-03T18:00:00.000Z',
+            lastActivityAt: '2026-09-03T18:00:00.000Z',
+          }
+        : null,
+      isFetching: false,
+    }));
+    const view = renderApp('/home');
+
+    await screen.findByTestId('agent-home');
+    act(() => mockAgentHomeProps.onRestoreThread?.('max-thread'));
+    expect(mockChatPanelProps.thread?.kickoff.project).toBe('MaxView');
+
+    selectedProject = 'Apex';
+    view.rerender(
+      <MemoryRouter initialEntries={['/home']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(mockChatPanelProps.thread).toBeNull();
+    expect(mockChatPanelProps.activeThreadId).toBeNull();
   });
 });
 
