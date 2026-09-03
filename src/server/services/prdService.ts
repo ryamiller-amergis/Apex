@@ -1873,8 +1873,13 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
         }
         return;
       }
+      // Persist score/status only while still validating so a later 0%
+      // placeholder cannot clobber a completed post-run result. A usable
+      // scorecard still applies kickoff approvers, contentHash, and
+      // notifications even if post-run already left pending_review/draft.
+      const isUnusablePlaceholder = scorecard.slug === 'validation-unusable';
       const newStatus: PrdStatus = scorecard.is_ready ? 'pending_review' : 'draft';
-      const kickoff = newStatus === 'pending_review'
+      const kickoff = !isUnusablePlaceholder && newStatus === 'pending_review'
         ? await applyKickoffApproversForReview(prd.id, prd.interviewId, prd.authorId)
         : null;
       const latest = await db.query.prds.findFirst({
@@ -1888,7 +1893,7 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
           latest?.backlogJson ?? prd.backlogJson,
         ),
       };
-      await db.update(prds)
+      const written = await db.update(prds)
         .set({
           validationScore: Math.round(stamped.overall_score),
           validationScorecard: stamped,
@@ -1903,7 +1908,23 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
             : {}),
           updatedAt: new Date().toISOString(),
         })
-        .where(eq(prds.id, prd.id));
+        .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')))
+        .returning({ id: prds.id });
+      if (written.length === 0) {
+        if (isUnusablePlaceholder) return;
+        await db.update(prds)
+          .set({
+            validationScorecard: stamped,
+            ...(kickoff?.designDocApproverIds
+              ? { designDocApproverIds: kickoff.designDocApproverIds }
+              : {}),
+            ...(kickoff?.designPrototypeApproverIds
+              ? { designPrototypeApproverIds: kickoff.designPrototypeApproverIds }
+              : {}),
+            updatedAt: new Date().toISOString(),
+          })
+          .where(eq(prds.id, prd.id));
+      }
       notifyAiCompletion('prd_validation_complete', prd.id, {
         title: prd.title,
         score: Math.round(scorecard.overall_score),
