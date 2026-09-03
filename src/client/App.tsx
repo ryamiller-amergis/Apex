@@ -1,5 +1,4 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { ErrorBoundary } from 'react-error-boundary';
 import { DndProvider } from 'react-dnd';
@@ -131,7 +130,6 @@ const isPlanningTab = (value: string | undefined): value is PlanningTab => (
 function App() {
   const navigate = useNavigate();
   const location = useLocation();
-  const queryClient = useQueryClient();
 
   const [chatOpen, setChatOpen] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -551,12 +549,11 @@ function App() {
             model: options.model ?? DEFAULT_MODEL_ID,
           }),
         });
-        await queryClient.invalidateQueries({ queryKey: ['chat-thread', result.threadId] });
       }
     } catch {
       // Error shown inside the panel
     }
-  }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig, queryClient]);
+  }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig]);
 
   useEffect(() => {
     if (currentView !== 'home' || !activeThreadId || !selectedProject) return;
