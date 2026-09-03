@@ -1891,6 +1891,13 @@ export const PrdReviewView: React.FC = () => {
                     </span>
                   );
                 }
+                if (prd.validationThreadId) {
+                  return (
+                    <span className={`${styles.validationBadge} ${styles.badgeError}`}>
+                      ✗ Could not score
+                    </span>
+                  );
+                }
                 if (!hasAllArtifacts && prd.validationScore == null) {
                   return (
                     <span className={`${styles.validationBadge} ${styles.badgeUnavailable}`}>

@@ -40,6 +40,24 @@ export interface CursorTokenUsage {
   cacheWriteTokens: number;
 }
 
+/** Fields a worker may attach to a terminal ingest when the runtime reported usage. */
+export function tokenFieldsForTerminalIngest(
+  usage: CursorTokenUsage | undefined,
+): {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+} {
+  if (!usage) return {};
+  return {
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cacheReadTokens: usage.cacheReadTokens,
+    cacheWriteTokens: usage.cacheWriteTokens,
+  };
+}
+
 function readTokenUsage(value: unknown): CursorTokenUsage | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const raw = value as Record<string, unknown>;

@@ -25,7 +25,7 @@ import { extractFeatures } from '../services/designPrototypeService';
 import { stampAdoIds } from '../../shared/utils/backlogTransform';
 import { derivePrdReadiness } from '../../shared/utils/prdReadiness';
 import { buildOverrideHistory } from '../../shared/utils/validationOverride';
-import { normalizeValidationScorecard } from '../../shared/utils/validationReport';
+import { parseAgentValidationScorecard, NO_SCORECARD_REASON, VALIDATION_TIMEOUT_REASON } from '../../shared/utils/validationReport';
 import { BACKLOG_USER_TYPE_CONVENTIONS_MD } from '../../shared/utils/backlogUserTypeConventions';
 import {
   hashPrdValidationContent,
@@ -39,6 +39,7 @@ import {
   cancelDocumentValidation,
   generateFallbackReport,
   isDocumentValidationWatcherActive,
+  persistUnusableValidationResult,
   startDocumentValidationWatcher,
   stopDocumentValidationWatcher,
   type DocumentValidationAdapter,
@@ -1801,7 +1802,7 @@ export async function arePrdValidationArtifactsReady(prdId: string): Promise<boo
 }
 
 function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
-  return {
+  const adapter: DocumentValidationAdapter = {
     getDocumentId: () => prd.id,
     getProject: () => prd.project,
     getSkillSettingsId: () => prd.skillSettingsId ?? null,
@@ -1917,14 +1918,10 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
       }
     },
     updateDbForValidationTimeout: async () => {
-      await db.update(prds)
-        .set({ status: 'draft', updatedAt: new Date().toISOString() })
-        .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')));
+      await persistUnusableValidationResult(adapter, VALIDATION_TIMEOUT_REASON);
     },
     updateDbForValidationError: async () => {
-      await db.update(prds)
-        .set({ status: 'draft', updatedAt: new Date().toISOString() })
-        .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')));
+      await persistUnusableValidationResult(adapter, NO_SCORECARD_REASON);
     },
     isCurrentValidationThread: async (threadId: string) => {
       const current = await db.query.prds.findFirst({
@@ -1934,6 +1931,7 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
       return current?.validationThreadId === threadId;
     },
   };
+  return adapter;
 }
 
 export async function autoStartPrdValidation(
@@ -2019,14 +2017,7 @@ export async function syncPrdValidationResult(prdId: string): Promise<{ score: n
     return null;
   }
 
-  const scorecard = normalizeValidationScorecard(JSON.parse(scorecardRaw));
-  if (!scorecard) {
-    console.warn(`[prd] Scorecard carries no usable overall score (prdId=${prdId})`);
-    await db.update(prds)
-      .set({ status: 'draft', updatedAt: new Date().toISOString() })
-      .where(and(eq(prds.id, prdId), eq(prds.status, 'validating')));
-    return null;
-  }
+  const scorecard = parseAgentValidationScorecard(scorecardRaw);
   const stamped: ValidationScorecard = {
     ...scorecard,
     contentHash: hashPrdValidationContent(prd.content, prd.backlogJson),

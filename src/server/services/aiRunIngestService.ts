@@ -43,6 +43,8 @@ import {
 } from '../../shared/types/aiRunIngest';
 import { INTERACTIVE_LANE } from '../../shared/types/interactiveWorkflow';
 import { workerTierTelemetry } from './workerTierTelemetry';
+import { recordCursorChatUsage } from './aiUsageService';
+import type { RecordUsageInput } from '../../shared/types/aiCostAnalytics';
 
 const MAX_DETAIL_LENGTH = 500;
 const AGENT_RUN_PHASES: ReadonlySet<string> = new Set([
@@ -96,6 +98,22 @@ export interface AiRunIngestDependencies {
     threadId: string,
     message: ChatMessage,
   ) => Promise<void>;
+  recordCursorChatUsage?: (input: {
+    kickoff: {
+      skillPath?: string;
+      project?: string;
+    };
+    modelId: string;
+    threadId: string;
+    runId?: string;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+    tokenSource?: RecordUsageInput['tokenSource'];
+    durationMs: number;
+    status: RecordUsageInput['status'];
+  }) => Promise<void>;
 }
 
 async function consumeCompletedArtifacts(
@@ -118,6 +136,54 @@ async function reflectFailedGeneration(
   await (dependencies.failGeneratingArtifacts ?? failGeneratingArtifacts)(
     threadId,
   );
+}
+
+async function persistBackgroundRunUsage(
+  existing: typeof agentRuns.$inferSelect,
+  body: AiRunTerminalIngest,
+  dependencies: AiRunIngestDependencies,
+): Promise<void> {
+  if (existing.lane === INTERACTIVE_LANE) return;
+  const snapshot = existing.executionSnapshot;
+  if (!snapshot?.model || !existing.threadId) return;
+  if (
+    body.durationMs === undefined
+    && body.inputTokens === undefined
+    && body.outputTokens === undefined
+  ) {
+    return;
+  }
+  const inputTokens = body.inputTokens ?? 0;
+  const outputTokens = body.outputTokens ?? 0;
+  const hasReportedTokens = body.inputTokens !== undefined || body.outputTokens !== undefined;
+  const usageStatus = body.status === 'completed'
+    ? 'success'
+    : body.status === 'cancelled'
+      ? 'cancelled'
+      : 'error';
+  try {
+    await (dependencies.recordCursorChatUsage ?? recordCursorChatUsage)({
+      kickoff: {
+        skillPath: snapshot.skillPath,
+        project: snapshot.projectId,
+      },
+      modelId: snapshot.model,
+      threadId: existing.threadId,
+      runId: existing.id,
+      inputTokens,
+      outputTokens,
+      cacheReadTokens: body.cacheReadTokens,
+      cacheWriteTokens: body.cacheWriteTokens,
+      tokenSource: hasReportedTokens ? 'exact' : 'estimated',
+      durationMs: body.durationMs ?? 0,
+      status: usageStatus,
+    });
+  } catch (err) {
+    console.error(
+      `[aiRunIngest] Failed to record background usage (runId=${existing.id})`,
+      err,
+    );
+  }
 }
 
 /**
@@ -229,6 +295,22 @@ function validateBody(body: AiRunIngestBody): void {
         'Invalid cursorAgentId',
         'AI_RUN_VALIDATION',
       );
+    }
+    for (const field of [
+      'durationMs',
+      'inputTokens',
+      'outputTokens',
+      'cacheReadTokens',
+      'cacheWriteTokens',
+    ] as const) {
+      const value = body[field];
+      if (value === undefined) continue;
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+        throw new AiRunIngestError(
+          `${field} must be a non-negative number`,
+          'AI_RUN_VALIDATION',
+        );
+      }
     }
   }
 }
@@ -732,5 +814,6 @@ export async function ingest(
     detail: detail ?? body.status,
     events: terminalEvents,
   }));
+  await persistBackgroundRunUsage(existing, body, dependencies);
   return { run, cancelRequested: run.cancelRequested };
 }
