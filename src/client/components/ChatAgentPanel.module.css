@@ -188,16 +188,14 @@
   flex: 1;
 }
 
-.quickPills,
-.recentThreads {
+.quickPills {
   flex-shrink: 0;
   padding: 10px 16px;
   border-bottom: 1px solid var(--border-color-light);
   background: var(--bg-primary);
 }
 
-.quickPills h3,
-.recentThreads h3 {
+.quickPills h3 {
   margin: 0 0 6px;
   color: var(--text-muted);
   font-size: 10px;
@@ -206,8 +204,7 @@
   text-transform: uppercase;
 }
 
-.pillRow,
-.quickStarts {
+.pillRow {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -217,17 +214,12 @@
   margin-top: 8px;
 }
 
-.quickPill,
-.seeAll,
-.recentThread {
+.quickPill {
   border: 1px solid var(--border-color);
   background: var(--bg-secondary);
   color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.2s ease;
-}
-
-.quickPill {
   padding: 4px 10px;
   border-radius: 20px;
   font-size: 12px;
@@ -243,45 +235,11 @@
   background: var(--bg-tertiary);
 }
 
-.recentHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.seeAll {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--accent-color);
-  font-size: 11px;
-}
-
-.recentThread {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 0;
-  border: 0;
-  border-top: 1px solid var(--border-color-light);
-  background: transparent;
+.pillDescription {
+  margin: 8px 0 0;
   font-size: 12px;
-  text-align: left;
-}
-
-.recentThread span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.recentThread time,
-.recentThreads p {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.45;
 }
 
 .connectionError {

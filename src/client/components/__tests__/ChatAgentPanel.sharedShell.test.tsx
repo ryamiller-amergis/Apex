@@ -23,15 +23,9 @@ jest.mock('../../hooks/useAgentChatSession', () => ({
 }));
 
 jest.mock('../../hooks/useChatThreads', () => ({
-  useChatThreadList: () => ({
-    data: [
-      { id: 'one', title: 'First', lastActivityAt: '2026-08-31T10:00:00Z' },
-      { id: 'two', title: 'Second', lastActivityAt: '2026-08-31T09:00:00Z' },
-      { id: 'three', title: 'Third', lastActivityAt: '2026-08-31T08:00:00Z' },
-      { id: 'four', title: 'Fourth', lastActivityAt: '2026-08-31T07:00:00Z' },
-    ],
+  useSkillList: () => ({
+    data: [{ id: '1', name: 'to-prd', description: 'Generate a PRD from interview notes', path: '/to-prd' }],
   }),
-  useSkillList: () => ({ data: [] }),
 }));
 
 jest.mock('../../hooks/useProjectSkillConfig', () => ({
@@ -107,7 +101,7 @@ describe('ChatAgentPanel shared Home shell', () => {
     (global as unknown as { fetch?: typeof fetch }).fetch = undefined;
   });
 
-  it('TBI-006 DoD-1 shows Home-only pills and the top three recent threads', () => {
+  it('TBI-006 DoD-1 shows Home-only pills and opens full history from the header', () => {
     render(
       <ChatAgentPanel
         thread={null}
@@ -123,11 +117,9 @@ describe('ChatAgentPanel shared Home shell', () => {
     expect(screen.getByTestId('agent-slideout-shell')).toBeInTheDocument();
     expect(screen.getByText('Write PRD')).toBeInTheDocument();
     expect(screen.getByText('ADO')).toBeInTheDocument();
-    expect(screen.getByText('First')).toBeInTheDocument();
-    expect(screen.getByText('Third')).toBeInTheDocument();
-    expect(screen.queryByText('Fourth')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Recent Threads')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByTestId('chat-agent-recent-see-all'));
+    fireEvent.click(screen.getByTestId('chat-agent-history-btn'));
     expect(screen.getByTestId('thread-history-sidebar-mock')).toBeInTheDocument();
   });
 
@@ -184,6 +176,9 @@ describe('ChatAgentPanel shared Home shell', () => {
 
     fireEvent.click(screen.getByTestId('chat-agent-skill-pill-to-prd'));
     expect(screen.getByTestId('chat-agent-composer-mock')).toHaveAttribute('data-model', 'auto');
+    expect(screen.getByTestId('chat-agent-pill-description')).toHaveTextContent(
+      'Generate a PRD from interview notes',
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Send mock' }));
     expect(onNewChat).toHaveBeenCalledWith(expect.objectContaining({
       model: 'auto',

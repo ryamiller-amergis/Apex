@@ -2,10 +2,7 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
-import {
-  useChatThreadList,
-  useSkillList,
-} from '../hooks/useChatThreads';
+import { useSkillList } from '../hooks/useChatThreads';
 import { DEFAULT_MODEL_ID, modelBadge } from '../config/models';
 import { useAvailableModels, useGlobalDefaultModel, useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
 import { useChatAttachments } from '../hooks/useChatAttachments';
@@ -375,12 +372,15 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     launchedFromHome ? selectedProject ?? null : null,
     selectedSkillSettingsId,
   );
-  const { data: recentThreads = [] } = useChatThreadList(
-    3,
-    launchedFromHome ? selectedProject : null,
-  );
+  const isHomeCompose = launchedFromHome && !thread;
 
-  // Skills for the current thread (used by the / picker)
+  // Skills for Home compose (pill descriptions) and the / picker on active threads
+  const { data: homeSkills = [] } = useSkillList(
+    isHomeCompose ? selectedProject ?? null : null,
+    isHomeCompose ? skillConfig?.skillRepo ?? null : null,
+    skillConfig?.skillBranch,
+    skillConfig?.skillProvider ?? undefined,
+  );
   const { data: threadSkills = [] } = useSkillList(
     thread?.kickoff.project ?? null,
     thread?.kickoff.repo ?? null,
@@ -588,6 +588,20 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
 
   const quickSkillPills = skillConfig?.quickSkillPills ?? [];
   const quickMcpPills = skillConfig?.quickMcpPills ?? [];
+  const hasHomePills = quickSkillPills.length > 0 || quickMcpPills.length > 0;
+  const needsSkillSelection = isHomeCompose && hasHomePills && !selectedQuickSkill && !selectedMcpPill;
+
+  const selectedPillDescription = useMemo(() => {
+    if (selectedQuickSkill) {
+      return selectedQuickSkill.description
+        ?? homeSkills.find((s) => s.path === selectedQuickSkill.skillPath)?.description
+        ?? `Skill: ${selectedQuickSkill.label}`;
+    }
+    if (selectedMcpPill) {
+      return selectedMcpPill.description ?? `MCP: ${selectedMcpPill.label}`;
+    }
+    return null;
+  }, [selectedQuickSkill, selectedMcpPill, homeSkills]);
 
   const startFromEmptyComposer = async () => {
     const message = input.trim();
@@ -684,35 +698,11 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                 </button>
               ))}
             </div>
-          </section>
-          <section className={styles.recentThreads} aria-label="Recent Threads">
-            <div className={styles.recentHeader}>
-              <h3>Recent Threads</h3>
-              {onSelectThread && (
-                <button
-                  type="button"
-                  className={styles.seeAll}
-                  onClick={() => setShowHistory(true)}
-                  {...{ 'data-testid': 'chat-agent-recent-see-all' }}
-                >
-                  See all
-                </button>
-              )}
-            </div>
-            {recentThreads.length === 0 ? (
-              <p>No threads yet.</p>
-            ) : recentThreads.slice(0, 3).map((recent) => (
-              <button
-                key={recent.id}
-                type="button"
-                className={styles.recentThread}
-                onClick={() => handleSelectThreadFromHistory(recent.id)}
-                {...{ 'data-testid': `chat-agent-recent-thread-${recent.id}` }}
-              >
-                <span>{recent.title}</span>
-                <time dateTime={recent.lastActivityAt}>{new Date(recent.lastActivityAt).toLocaleDateString()}</time>
-              </button>
-            ))}
+            {selectedPillDescription && (
+              <p className={styles.pillDescription} {...{ 'data-testid': 'chat-agent-pill-description' }}>
+                {selectedPillDescription}
+              </p>
+            )}
           </section>
         </>
       ) : undefined}
@@ -732,31 +722,33 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
           <div className={styles.emptyPane}>
           <span className={styles.emptyIcon}>AI</span>
           <h3 className={styles.emptyTitle}>No conversation yet</h3>
-          <p className={styles.emptyHint}>Select a skill above or type your first message to start a new thread with Apex.</p>
+          <p className={styles.emptyHint}>
+            {hasHomePills
+              ? 'Select a skill above, then tell Apex what you need.'
+              : 'Type your first message to start a new thread with Apex.'}
+          </p>
           {newChatError && <p className={styles.emptyError}>{newChatError}</p>}
-          <div className={styles.quickStarts}>
-            {['Write a PRD', 'Review my code', 'Plan a sprint'].map((label) => (
-              <button
-                key={label}
-                type="button"
-                className={styles.quickPill}
-                onClick={() => setInput(label)}
-                {...{ 'data-testid': `chat-agent-quick-start-${label.toLowerCase().replace(/ /g, '-')}` }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
           </div>
           <AgentComposer
             className={styles.composerEmbed}
             value={input}
             onChange={setInput}
             onSend={() => { void startFromEmptyComposer(); }}
-            disabled={!canStartNewChat || isStartingNewChat}
+            disabled={needsSkillSelection || !canStartNewChat || isStartingNewChat}
             isSending={isStartingNewChat}
-            canSend={Boolean(input.trim() || selectedQuickSkill || selectedMcpPill)}
-            placeholder="Start a new conversation…"
+            isBusy={needsSkillSelection || isStartingNewChat}
+            shellDisabled={needsSkillSelection || !canStartNewChat}
+            canSend={
+              !needsSkillSelection
+              && canStartNewChat
+              && !isStartingNewChat
+              && Boolean(input.trim() || selectedQuickSkill || selectedMcpPill)
+            }
+            placeholder={
+              needsSkillSelection
+                ? 'Select an option above to get started'
+                : 'Let Apex know what you need…'
+            }
             testIdPrefix="chat-agent"
             model={selectedModel}
             models={availableModels}
