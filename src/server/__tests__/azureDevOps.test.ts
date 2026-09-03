@@ -14,6 +14,7 @@ describe('AzureDevOpsService', () => {
   let mockConnection: any;
   let mockWitApi: any;
   let mockCoreApi: any;
+  let mockGitApi: any;
   
   const originalEnv = process.env;
 
@@ -33,6 +34,7 @@ describe('AzureDevOpsService', () => {
     mockWitApi = {
       queryByWiql: jest.fn(),
       getWorkItems: jest.fn(),
+      getWorkItem: jest.fn(),
       getRevisions: jest.fn(),
       updateWorkItem: jest.fn(),
       createWorkItem: jest.fn(),
@@ -43,10 +45,15 @@ describe('AzureDevOpsService', () => {
       getProject: jest.fn(),
     };
 
+    mockGitApi = {
+      getPullRequest: jest.fn(),
+    };
+
     // Mock Connection
     mockConnection = {
       getWorkItemTrackingApi: jest.fn().mockResolvedValue(mockWitApi),
       getCoreApi: jest.fn().mockResolvedValue(mockCoreApi),
+      getGitApi: jest.fn().mockResolvedValue(mockGitApi),
     };
 
     // Mock WebApi constructor
@@ -820,6 +827,138 @@ describe('AzureDevOpsService', () => {
 
       // No tags provided and not a Feature → no System.Tags op at all.
       expect(tagsFromLastCreate()).toBeUndefined();
+    });
+  });
+
+  describe('linkWorkItemToPullRequest (PBI-009 AC-2 / TBI-008 DoD-1)', () => {
+    it('adds the native Azure Repos artifact relation', async () => {
+      const service = new AzureDevOpsService('MaxView');
+      mockGitApi.getPullRequest.mockResolvedValue({
+        artifactId: 'vstfs:///Git/PullRequestId/project-id/repo-id/42',
+      });
+      mockWitApi.getWorkItem.mockResolvedValue({ relations: [] });
+
+      await service.linkWorkItemToPullRequest('MaxView', 'MaxView', 42, 123);
+
+      expect(mockGitApi.getPullRequest).toHaveBeenCalledWith('MaxView', 42, 'MaxView');
+      expect(mockWitApi.updateWorkItem).toHaveBeenCalledWith(
+        [],
+        [{
+          op: 'add',
+          path: '/relations/-',
+          value: {
+            rel: 'ArtifactLink',
+            url: 'vstfs:///Git/PullRequestId/project-id/repo-id/42',
+            attributes: { name: 'Pull Request' },
+          },
+        }],
+        123,
+        'MaxView',
+      );
+    });
+
+    it('does not add a duplicate native relation', async () => {
+      const artifactId = 'vstfs:///Git/PullRequestId/project-id/repo-id/42';
+      const service = new AzureDevOpsService('MaxView');
+      mockGitApi.getPullRequest.mockResolvedValue({ artifactId });
+      mockWitApi.getWorkItem.mockResolvedValue({
+        relations: [{ rel: 'ArtifactLink', url: artifactId, attributes: { name: 'Pull Request' } }],
+      });
+
+      await service.linkWorkItemToPullRequest('MaxView', 'MaxView', 42, 123);
+
+      expect(mockWitApi.updateWorkItem).not.toHaveBeenCalled();
+    });
+
+    it('constructs the artifact id when the PR response omits it', async () => {
+      const service = new AzureDevOpsService('MaxView');
+      mockGitApi.getPullRequest.mockResolvedValue({
+        repository: { id: 'repo-id', project: { id: 'project-id' } },
+      });
+      mockWitApi.getWorkItem.mockResolvedValue({ relations: [] });
+
+      await service.linkWorkItemToPullRequest('MaxView', 'MaxView', 42, 123);
+
+      expect(mockWitApi.updateWorkItem).toHaveBeenCalledWith(
+        [],
+        [expect.objectContaining({
+          value: expect.objectContaining({
+            url: 'vstfs:///Git/PullRequestId/project-id/repo-id/42',
+          }),
+        })],
+        123,
+        'MaxView',
+      );
+    });
+  });
+
+  describe('getPullRequestStatus (VT-01 / TBI-006 DoD-1)', () => {
+    it('maps a completed Azure Repos PR to merged', async () => {
+      // Arrange
+      const service = new AzureDevOpsService('MaxView');
+      mockGitApi.getPullRequest.mockResolvedValue({ status: 'completed' });
+
+      // Act
+      const status = await service.getPullRequestStatus('MaxView', 'MaxView', 42);
+
+      // Assert
+      expect(status).toBe('merged');
+      expect(mockGitApi.getPullRequest).toHaveBeenCalledWith('MaxView', 42, 'MaxView');
+    });
+
+    it('maps an active Azure Repos PR to open', async () => {
+      // Arrange
+      const service = new AzureDevOpsService('MaxView');
+      mockGitApi.getPullRequest.mockResolvedValue({ status: 'active' });
+
+      // Act
+      const status = await service.getPullRequestStatus('MaxView', 'MaxView', 42);
+
+      // Assert
+      expect(status).toBe('open');
+    });
+
+    it('maps an abandoned (closed without merge) Azure Repos PR to open', async () => {
+      // Arrange
+      const service = new AzureDevOpsService('MaxView');
+      mockGitApi.getPullRequest.mockResolvedValue({ status: 'abandoned' });
+
+      // Act
+      const status = await service.getPullRequestStatus('MaxView', 'MaxView', 42);
+
+      // Assert
+      expect(status).toBe('open');
+    });
+
+    it('maps the numeric PullRequestStatus enum the SDK returns at runtime', async () => {
+      // Arrange — azure-devops-node-api deserializes status into PullRequestStatus
+      // (notSet=0, active=1, abandoned=2, completed=3).
+      const service = new AzureDevOpsService('MaxView');
+
+      // Act
+      mockGitApi.getPullRequest.mockResolvedValue({ status: 3 });
+      const completed = await service.getPullRequestStatus('MaxView', 'MaxView', 42);
+      mockGitApi.getPullRequest.mockResolvedValue({ status: 1 });
+      const active = await service.getPullRequestStatus('MaxView', 'MaxView', 42);
+      mockGitApi.getPullRequest.mockResolvedValue({ status: 2 });
+      const abandoned = await service.getPullRequestStatus('MaxView', 'MaxView', 42);
+
+      // Assert
+      expect(completed).toBe('merged');
+      expect(active).toBe('open');
+      expect(abandoned).toBe('open');
+    });
+
+    it('maps an unknown or missing status to open', async () => {
+      // Arrange
+      const service = new AzureDevOpsService('MaxView');
+      mockGitApi.getPullRequest.mockResolvedValue({});
+
+      // Act
+      const status = await service.getPullRequestStatus('MaxView', 'MaxView', 42);
+
+      // Assert
+      expect(status).toBe('open');
     });
   });
 });

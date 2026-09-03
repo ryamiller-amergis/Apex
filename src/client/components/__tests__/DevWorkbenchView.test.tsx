@@ -7,6 +7,9 @@ const mockStartMutateAsync = jest.fn();
 const mockCloseMutateAsync = jest.fn();
 const mockCompleteMutateAsync = jest.fn();
 const mockStartLocalMutateAsync = jest.fn();
+const mockStartCloudMutateAsync = jest.fn();
+const mockCancelCloudMutateAsync = jest.fn();
+const mockUseFeatureFlag = jest.fn().mockReturnValue(false);
 
 jest.mock('react-router-dom', () => ({
   ...jest.requireActual('react-router-dom'),
@@ -24,6 +27,10 @@ jest.mock('../../hooks/useDevWorkbench', () => ({
   useCloseDevSession: jest.fn(),
   useCompleteFeature: jest.fn(),
   useStartLocalFeature: jest.fn(),
+  useStartCloudAgentRun: jest.fn(),
+  useCloudAgentRun: jest.fn(),
+  useDevSession: jest.fn(),
+  useCancelCloudAgentRun: jest.fn(),
 }));
 
 jest.mock('../../hooks/useApexBacklog', () => ({
@@ -36,6 +43,11 @@ jest.mock('../../hooks/useProjectMenuConfig', () => ({
 
 jest.mock('../../hooks/useApexWorkItems', () => ({
   useAssignedBoardItems: jest.fn(),
+}));
+
+jest.mock('../../hooks/useFeatureFlags', () => ({
+  useFeatureFlag: (...args: unknown[]) => mockUseFeatureFlag(...args),
+  useFeatureFlags: jest.fn().mockReturnValue({ flags: {}, isLoading: false }),
 }));
 
 jest.mock('../StartLocalDevModal', () => ({
@@ -65,11 +77,20 @@ import {
   useCloseDevSession,
   useCompleteFeature,
   useStartLocalFeature,
+  useStartCloudAgentRun,
+  useCloudAgentRun,
+  useDevSession,
+  useCancelCloudAgentRun,
 } from '../../hooks/useDevWorkbench';
 import { useApexBacklogFeatures } from '../../hooks/useApexBacklog';
 import { useProjectMenuConfig } from '../../hooks/useProjectMenuConfig';
 import { useAssignedBoardItems } from '../../hooks/useApexWorkItems';
-import type { ActiveDevSession, ApexBacklogGroup } from '../../../shared/types/devWorkbench';
+import type {
+  ActiveDevSession,
+  ApexBacklogGroup,
+  CloudAgentRunSummary,
+  LeftoverWorkSummary,
+} from '../../../shared/types/devWorkbench';
 
 const workItems = [
   {
@@ -99,6 +120,65 @@ function renderView() {
   );
 }
 
+function cloudRun(
+  status: CloudAgentRunSummary['status'],
+  overrides: Partial<CloudAgentRunSummary> = {},
+): CloudAgentRunSummary {
+  return {
+    runId: 'run-1',
+    status,
+    prUrl: null,
+    prStatus: 'none',
+    finishedWithoutPr: false,
+    terminalReason: null,
+    checkResults: null,
+    failingChecks: [],
+    lastError: null,
+    ...overrides,
+  };
+}
+
+function mockCloudSession(
+  run: CloudAgentRunSummary,
+  leftoverWork: LeftoverWorkSummary | null = null,
+) {
+  (useActiveSessions as jest.Mock).mockReturnValue({
+    data: [{
+      id: 'cloud-session',
+      workItemId: 42,
+      status: 'in_progress',
+      chatThreadId: null,
+      branchName: null,
+      prUrl: run.prUrl,
+      createdAt: '2026-09-01T00:00:00Z',
+      cloudAgentRun: run,
+      leftoverWork,
+    }],
+  });
+  (useCloudAgentRun as jest.Mock).mockReturnValue({ data: run, error: null });
+  (useDevSession as jest.Mock).mockReturnValue({
+    data: {
+      id: 'cloud-session',
+      cloudAgentRun: run,
+      leftoverWork,
+    },
+  });
+}
+
+/** The assigned-work row for one item, so row-scoped nodes are queried per row. */
+function workItemRow(itemId: number): HTMLElement {
+  const row = screen.getByText(`#${itemId}`).closest('.item');
+  if (!(row instanceof HTMLElement)) throw new Error(`No work item row for item ${itemId}`);
+  return row;
+}
+
+/** The cloud run controls for one row, so row-scoped nodes are queried per row. */
+function cloudRunControls(itemId: number): HTMLElement {
+  const controls = screen.getByTestId(`my-work-cloud-run-status-${itemId}`).parentElement;
+  if (!controls) throw new Error(`No cloud run controls for item ${itemId}`);
+  return controls;
+}
+
 describe('DevWorkbenchView', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -126,6 +206,22 @@ describe('DevWorkbenchView', () => {
       isPending: false,
       error: null,
     });
+    (useStartCloudAgentRun as jest.Mock).mockReturnValue({
+      mutateAsync: mockStartCloudMutateAsync,
+      isPending: false,
+      error: null,
+    });
+    (useCloudAgentRun as jest.Mock).mockReturnValue({
+      data: null,
+      error: null,
+    });
+    (useDevSession as jest.Mock).mockReturnValue({ data: undefined });
+    (useCancelCloudAgentRun as jest.Mock).mockReturnValue({
+      mutateAsync: mockCancelCloudMutateAsync,
+      isPending: false,
+      error: null,
+    });
+    mockUseFeatureFlag.mockReturnValue(false);
     (useApexBacklogFeatures as jest.Mock).mockReturnValue({
       data: undefined,
       isLoading: false,
@@ -189,96 +285,504 @@ describe('DevWorkbenchView', () => {
     expect(screen.getByText(/no active work items assigned to you/i)).toBeInTheDocument();
   });
 
-  it('starts a development session and navigates to the session view', async () => {
-    mockStartMutateAsync.mockResolvedValue({ sessionId: 'session-1' });
+  it('PBI-002 VT flag-off: hides cloud controls and keeps local development available', () => {
+    renderView();
+    expect(screen.queryByRole('button', { name: /^Start cloud agent$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Start Development$/i })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /^Start Local Development$/i })).toHaveLength(2);
+  });
+
+  it('PBI-002 AC-1 / VT-12: disables cloud agent start and visibly exposes the server reason', () => {
+    const reason = 'Skill settings are incomplete: skillRepo is not set.';
+    mockUseFeatureFlag.mockReturnValue(true);
+    (useAssignedWorkItems as jest.Mock).mockReturnValue({
+      data: [{
+        ...workItems[0],
+        cloudAgentEligibility: { allowed: false, reason },
+      }],
+      isLoading: false,
+      error: null,
+    });
 
     renderView();
-    fireEvent.click(screen.getAllByRole('button', { name: /start development/i })[0]);
+
+    const button = screen.getByRole('button', { name: /^Start cloud agent$/i });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute('aria-describedby', 'my-work-start-cloud-dev-reason-42');
+    expect(screen.getByTestId('my-work-start-cloud-dev-reason-42')).toHaveTextContent(reason);
+  });
+
+  it('PBI-002 AC-0: shows enabled cloud start beside local development', async () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockStartCloudMutateAsync.mockResolvedValue({ sessionId: 'cloud-session', runId: 'run-1' });
+    (useAssignedWorkItems as jest.Mock).mockReturnValue({
+      data: [{
+        ...workItems[0],
+        cloudAgentEligibility: { allowed: true },
+      }],
+      isLoading: false,
+      error: null,
+    });
+
+    renderView();
+    expect(screen.queryByRole('button', { name: /^Start Development$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Start Local Development$/i })).toBeInTheDocument();
+    const cloudStart = screen.getByTestId('my-work-start-cloud-dev-btn');
+    expect(cloudStart).toBeEnabled();
+    fireEvent.click(cloudStart);
 
     await waitFor(() => {
-      expect(mockStartMutateAsync).toHaveBeenCalledWith({ workItemId: 42, project: 'MaxView' });
-      expect(mockNavigate).toHaveBeenCalledWith('/my-work/session/session-1');
+      expect(mockStartCloudMutateAsync).toHaveBeenCalledWith({
+        workItemId: 42,
+        project: 'MaxView',
+      });
+      expect(screen.getByTestId('my-work-cloud-run-status-42')).toHaveTextContent('Queued');
+      expect(screen.getByTestId('my-work-cancel-cloud-run-42')).toBeInTheDocument();
+    });
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['queued', 'Queued'],
+    ['dispatched', 'Starting'],
+    ['running', 'Running'],
+  ] as const)(
+    'PBI-003 AC-0 / PBI-004 AC-2: renders %s as %s with the same Cancel operation',
+    async (status, label) => {
+      mockUseFeatureFlag.mockReturnValue(true);
+      mockCloudSession(cloudRun(status));
+      mockCancelCloudMutateAsync.mockResolvedValue({ ok: true, status: 'cancelled' });
+
+      renderView();
+
+      const statusRegion = screen.getByTestId('my-work-cloud-run-status-42');
+      expect(statusRegion).toHaveTextContent(label);
+      expect(statusRegion.parentElement).toHaveAttribute('aria-live', 'polite');
+      expect(screen.queryByTestId('my-work-resume-cloud-run-42')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('my-work-cancel-cloud-run-42'));
+
+      await waitFor(() => {
+        expect(mockCancelCloudMutateAsync).toHaveBeenCalledWith('cloud-session');
+        expect(screen.getByTestId('my-work-cloud-run-status-42')).toHaveTextContent('Cancelled');
+        expect(screen.getByTestId('my-work-resume-cloud-run-42')).toBeInTheDocument();
+      });
+    },
+  );
+
+  it('a cloud-only session keeps local controls available without the legacy start action', () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockCloudSession(cloudRun('running'));
+
+    renderView();
+
+    expect(within(workItemRow(42)).queryByRole('button', { name: 'Start Development' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resume Session' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Close Session' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Start Local Development' })).toHaveLength(2);
+    expect(screen.getByTestId('my-work-cancel-cloud-run-42')).toBeInTheDocument();
+  });
+
+  it('opens cloud run details from the integrated status control', () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockCloudSession(cloudRun('running'));
+
+    renderView();
+    fireEvent.click(screen.getByRole('button', { name: /view cloud agent run details: running/i }));
+
+    expect(screen.getByTestId('my-work-cloud-run-drawer-42')).toBeInTheDocument();
+    expect(screen.getByText('Activity')).toBeInTheDocument();
+    expect(screen.getByText(/streaming events become available/i)).toBeInTheDocument();
+  });
+
+  it('TBI-004 DoD-3: keeps an actual legacy session beside a live cloud run', () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    const running = cloudRun('running');
+    (useActiveSessions as jest.Mock).mockReturnValue({
+      data: [
+        {
+          id: 'cloud-session',
+          workItemId: 42,
+          status: 'in_progress',
+          chatThreadId: null,
+          branchName: null,
+          prUrl: null,
+          createdAt: '2026-09-02T00:00:00Z',
+          cloudAgentRun: running,
+        },
+        {
+          id: 'legacy-session',
+          workItemId: 42,
+          status: 'in_progress',
+          chatThreadId: 'thread-1',
+          branchName: 'feature/42',
+          prUrl: null,
+          createdAt: '2026-09-01T00:00:00Z',
+        },
+      ],
+    });
+    (useCloudAgentRun as jest.Mock).mockReturnValue({ data: running, error: null });
+
+    renderView();
+
+    expect(screen.getByRole('button', { name: 'Resume Session' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close Session' })).toBeInTheDocument();
+    expect(screen.getByTestId('my-work-cancel-cloud-run-42')).toBeInTheDocument();
+  });
+
+  it('PBI-004 AC-0: disables Cancel and labels it Cancelling... while pending', () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockCloudSession(cloudRun('running'));
+    (useCancelCloudAgentRun as jest.Mock).mockReturnValue({
+      mutateAsync: mockCancelCloudMutateAsync,
+      isPending: true,
+      error: null,
+    });
+
+    renderView();
+
+    const cancel = screen.getByTestId('my-work-cancel-cloud-run-42');
+    expect(cancel).toBeDisabled();
+    expect(cancel).toHaveTextContent('Cancelling...');
+  });
+
+  it('PBI-005 AC-0: renders a stable accessible PR link and Resume for completion', () => {
+    const prUrl = 'https://github.com/example/apex/pull/42';
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockCloudSession(cloudRun('completed', { prUrl }));
+
+    renderView();
+
+    expect(screen.getByTestId('my-work-cloud-run-status-42')).toHaveTextContent('Completed');
+    expect(screen.getByTestId('my-work-cloud-run-pr-42')).toHaveAttribute('href', prUrl);
+    expect(within(cloudRunControls(42)).getByRole('link', { name: 'View PR' })).toBeInTheDocument();
+    expect(screen.getByTestId('my-work-resume-cloud-run-42')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['open', 'Open'],
+    ['merged', 'Merged'],
+  ] as const)(
+    'PBI-007 AC-0 / accessibility: shows %s PR status as text beside the PR link',
+    (prStatus, label) => {
+      const prUrl = 'https://github.com/example/apex/pull/42';
+      mockUseFeatureFlag.mockReturnValue(true);
+      mockCloudSession(cloudRun('completed', { prUrl, prStatus }));
+
+      renderView();
+
+      const status = within(cloudRunControls(42)).getByTestId('my-work-row-pr-status');
+      expect(status).toHaveTextContent(label);
+      const prLink = screen.getByTestId('my-work-cloud-run-pr-42');
+      expect(prLink.parentElement).toContainElement(status);
+      expect(status.closest('[aria-live="polite"]')).not.toBeNull();
+    },
+  );
+
+  it('PBI-007 AC-0 / accessibility: renders no PR status text when the PR status is none', () => {
+    const prUrl = 'https://github.com/example/apex/pull/42';
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockCloudSession(cloudRun('completed', { prUrl, prStatus: 'none' }));
+
+    renderView();
+
+    expect(screen.getByTestId('my-work-cloud-run-pr-42')).toBeInTheDocument();
+    expect(screen.queryByTestId('my-work-row-pr-status')).not.toBeInTheDocument();
+  });
+
+  it('PBI-007 AC-0 / accessibility: renders no PR status text when the run has no PR URL', () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockCloudSession(cloudRun('completed', { prUrl: null, prStatus: 'open' }));
+
+    renderView();
+
+    expect(screen.queryByTestId('my-work-row-pr-status')).not.toBeInTheDocument();
+  });
+
+  it('PBI-008 AC-0: shows failing checks alongside the PR link from polled session detail', () => {
+    const prUrl = 'https://github.com/example/apex/pull/42';
+    const run = cloudRun('completed', { prUrl });
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockCloudSession(run, {
+      failingChecks: [],
+      missingPr: false,
+      incompleteAcceptanceCriteria: [],
+    });
+    (useDevSession as jest.Mock).mockReturnValue({
+      data: {
+        id: 'cloud-session',
+        cloudAgentRun: run,
+        leftoverWork: {
+          failingChecks: ['unit'],
+          missingPr: false,
+          incompleteAcceptanceCriteria: [],
+        },
+      },
+    });
+
+    renderView();
+
+    const liveRegion = screen.getByTestId('my-work-cloud-run-status-42').parentElement!;
+    expect(liveRegion).toHaveAttribute('aria-live', 'polite');
+    expect(within(liveRegion).getByRole('link', { name: 'View PR' })).toHaveAttribute('href', prUrl);
+    expect(within(liveRegion).getByTestId('my-work-leftover-work-cloud-session'))
+      .toHaveTextContent('Failing check: unit');
+  });
+
+  it('PBI-008 AC-1: shows missing PR as leftover text from the active-session fallback', () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockCloudSession(cloudRun('completed', { finishedWithoutPr: true }), {
+      failingChecks: [],
+      missingPr: true,
+      incompleteAcceptanceCriteria: [],
+    });
+    (useDevSession as jest.Mock).mockReturnValue({ data: undefined });
+
+    renderView();
+
+    expect(screen.queryByTestId('my-work-cloud-run-pr-42')).not.toBeInTheDocument();
+    expect(screen.getByTestId('my-work-leftover-work-cloud-session'))
+      .toHaveTextContent('No pull request was opened — no PR yet');
+  });
+
+  it.each<[string, LeftoverWorkSummary | null]>([
+    ['null', null],
+    ['clean', {
+      failingChecks: [],
+      missingPr: false,
+      incompleteAcceptanceCriteria: [],
+    }],
+  ])('PBI-008 AC-2: %s leftover summary renders no list', (_label, leftoverWork) => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockCloudSession(cloudRun('completed'), leftoverWork);
+
+    renderView();
+
+    expect(screen.queryByTestId('my-work-leftover-work-cloud-session')).not.toBeInTheDocument();
+  });
+
+  it('PBI-008 AC-2: a clean polled detail clears stale active-session leftover work', () => {
+    const run = cloudRun('completed');
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockCloudSession(run, {
+      failingChecks: ['unit'],
+      missingPr: false,
+      incompleteAcceptanceCriteria: [],
+    });
+    (useDevSession as jest.Mock).mockReturnValue({
+      data: {
+        id: 'cloud-session',
+        cloudAgentRun: run,
+        leftoverWork: null,
+      },
+    });
+
+    renderView();
+
+    expect(screen.queryByTestId('my-work-leftover-work-cloud-session')).not.toBeInTheDocument();
+  });
+
+  it('PBI-008 VT flag-off: hides leftover work with all cloud controls', () => {
+    mockUseFeatureFlag.mockReturnValue(false);
+    mockCloudSession(cloudRun('completed'), {
+      failingChecks: ['e2e'],
+      missingPr: true,
+      incompleteAcceptanceCriteria: [],
+    });
+
+    renderView();
+
+    expect(screen.queryByTestId('my-work-leftover-work-cloud-session')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('my-work-cloud-run-status-42')).not.toBeInTheDocument();
+  });
+
+  it('PBI-005 AC-2 / PBI-006 AC-2: stays terminal and states the exact no-PR copy once', () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockCloudSession(cloudRun('completed', { finishedWithoutPr: true }));
+
+    renderView();
+
+    const controls = cloudRunControls(42);
+    expect(screen.getByTestId('my-work-cloud-run-status-42')).toHaveTextContent('Finished');
+    expect(within(controls).getByTestId('current-run-checks-no-pr'))
+      .toHaveTextContent('Run finished, no PR yet');
+    expect(within(controls).getAllByText('Run finished, no PR yet')).toHaveLength(1);
+    expect(screen.queryByTestId('my-work-cloud-run-pr-42')).not.toBeInTheDocument();
+    expect(within(controls).queryByText(/passed/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId('my-work-resume-cloud-run-42')).toBeInTheDocument();
+  });
+
+  it('PBI-006 AC-1 / TBI-005 DoD-1: names failing suites beside the PR link and stays Completed', () => {
+    const prUrl = 'https://github.com/example/apex/pull/42';
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockCloudSession(cloudRun('completed', {
+      prUrl,
+      checkResults: [
+        { kind: 'unit', outcome: 'failed' },
+        { kind: 'e2e', outcome: 'passed' },
+        { kind: 'wcag', outcome: 'failed' },
+      ],
+      failingChecks: ['unit', 'wcag'],
+    }));
+
+    renderView();
+
+    const controls = cloudRunControls(42);
+    expect(screen.getByTestId('my-work-cloud-run-status-42')).toHaveTextContent('Completed');
+    const prLink = screen.getByTestId('my-work-cloud-run-pr-42');
+    expect(prLink).toHaveAttribute('href', prUrl);
+    expect(prLink.parentElement)
+      .toContainElement(within(controls).getByTestId('current-run-checks-summary'));
+
+    const failing = within(controls).getByTestId('current-run-checks-failing');
+    expect(within(failing).getByText('Unit checks failed')).toBeInTheDocument();
+    expect(within(failing).getByText('WCAG checks failed')).toBeInTheDocument();
+    expect(within(failing).queryByText('E2E checks failed')).not.toBeInTheDocument();
+    expect(screen.getByTestId('my-work-resume-cloud-run-42')).toBeInTheDocument();
+  });
+
+  it('PBI-006 AC-0: shows the PR link with no failure indicator when every check passed', () => {
+    const prUrl = 'https://github.com/example/apex/pull/42';
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockCloudSession(cloudRun('completed', {
+      prUrl,
+      checkResults: [
+        { kind: 'unit', outcome: 'passed' },
+        { kind: 'e2e', outcome: 'passed' },
+        { kind: 'wcag', outcome: 'passed' },
+      ],
+      failingChecks: [],
+    }));
+
+    renderView();
+
+    const controls = cloudRunControls(42);
+    expect(screen.getByTestId('my-work-cloud-run-pr-42')).toHaveAttribute('href', prUrl);
+    expect(within(controls).queryByTestId('current-run-checks-summary')).not.toBeInTheDocument();
+    expect(within(controls).queryByTestId('current-run-checks-failing')).not.toBeInTheDocument();
+  });
+
+  it.each(['queue_ttl', 'cloud_agent_timeout'] as const)(
+    'PBI-003 AC-2 / PBI-005 AC-1: maps %s to Timed out and Resume',
+    (terminalReason) => {
+      mockUseFeatureFlag.mockReturnValue(true);
+      mockCloudSession(cloudRun('failed', { terminalReason }));
+
+      renderView();
+
+      expect(screen.getByTestId('my-work-cloud-run-status-42')).toHaveTextContent('Timed out');
+      expect(screen.getByTestId('my-work-resume-cloud-run-42')).toBeInTheDocument();
+    },
+  );
+
+  it('TBI-004 DoD-2: renders other failures as Failed and offers Resume', () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockCloudSession(cloudRun('failed', { terminalReason: 'worker_lost' }));
+
+    renderView();
+
+    expect(screen.getByTestId('my-work-cloud-run-status-42')).toHaveTextContent('Failed');
+    expect(screen.getByTestId('my-work-resume-cloud-run-42')).toBeInTheDocument();
+  });
+
+  it('shows launch failure detail when the run failed before dispatch', () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    const message = 'Service-account validation for Azure DevOps repositories is not yet implemented';
+    mockCloudSession(cloudRun('failed', { lastError: message }));
+
+    renderView();
+
+    expect(screen.getByTestId('my-work-cloud-run-status-42')).toHaveTextContent('Failed');
+    expect(screen.getByTestId('my-work-cloud-run-error-42')).toHaveTextContent(message);
+    expect(screen.getByTestId('my-work-resume-cloud-run-42')).toBeInTheDocument();
+  });
+
+  it('PBI-004 AC-0: renders Cancelled and offers Resume', () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockCloudSession(cloudRun('cancelled'));
+
+    renderView();
+
+    expect(screen.getByTestId('my-work-cloud-run-status-42')).toHaveTextContent('Cancelled');
+    expect(screen.getByTestId('my-work-resume-cloud-run-42')).toBeInTheDocument();
+  });
+
+  it('PBI-005 AC-1: Resume starts a new run for the same work item and project', async () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockCloudSession(cloudRun('failed', { terminalReason: 'progress_timeout' }));
+    mockStartCloudMutateAsync.mockResolvedValue({ sessionId: 'cloud-session', runId: 'run-2' });
+
+    renderView();
+    fireEvent.click(screen.getByTestId('my-work-resume-cloud-run-42'));
+
+    await waitFor(() => {
+      expect(mockStartCloudMutateAsync).toHaveBeenCalledWith({
+        workItemId: 42,
+        project: 'MaxView',
+      });
     });
   });
 
-  it('disables Start Development for work items not in an allowed state', () => {
+  it('PBI-003 AC-1: retains the last good Running state across a poll error', () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    const running = cloudRun('running');
+    mockCloudSession(running);
+    (useCloudAgentRun as jest.Mock).mockReturnValue({
+      data: running,
+      error: new Error('Transient poll failure'),
+    });
+
+    renderView();
+
+    expect(screen.getByTestId('my-work-cloud-run-status-42')).toHaveTextContent('Running');
+    expect(screen.getByTestId('my-work-cancel-cloud-run-42')).toBeInTheDocument();
+  });
+
+  it('PBI-004 AC-1/AC-3: shows a cancel rejection inline and retains current status', async () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockCloudSession(cloudRun('running'));
+    mockCancelCloudMutateAsync.mockRejectedValue(new Error('Run is already terminal.'));
+
+    renderView();
+    fireEvent.click(screen.getByTestId('my-work-cancel-cloud-run-42'));
+
+    expect(await screen.findByText('Run is already terminal.')).toBeInTheDocument();
+    expect(screen.getByTestId('my-work-cloud-run-status-42')).toHaveTextContent('Running');
+    expect(screen.getByTestId('my-work-cancel-cloud-run-42')).toBeInTheDocument();
+  });
+
+  it('PBI-002 AC-2/AC-3: shows start rejection inline without creating a visible run', async () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockStartCloudMutateAsync.mockRejectedValue(new Error('A live run already exists.'));
     (useAssignedWorkItems as jest.Mock).mockReturnValue({
-      data: [{
-        id: 7, title: 'In review', workItemType: 'Feature',
-        state: 'In Pull Request', assignedTo: 'jane@example.com', project: 'MaxView', tags: 'apex',
-      }],
+      data: [{ ...workItems[0], cloudAgentEligibility: { allowed: true } }],
+      isLoading: false,
+      error: null,
+    });
+
+    renderView();
+    fireEvent.click(screen.getByTestId('my-work-start-cloud-dev-btn'));
+
+    expect(await screen.findByText('A live run already exists.')).toBeInTheDocument();
+    expect(screen.queryByTestId('my-work-cloud-run-status-42')).not.toBeInTheDocument();
+    expect(screen.getByTestId('my-work-start-cloud-dev-btn')).toBeInTheDocument();
+  });
+
+  it('TBI-004 DoD-3: does not render cloud controls on app-native My Work', () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    (useAppShell as jest.Mock).mockReturnValue({
+      selectedProject: 'Apex',
+      isSuperAdmin: false,
+      usesBoardWorkItems: false,
+    });
+    (useApexBacklogFeatures as jest.Mock).mockReturnValue({
+      data: [],
       isLoading: false,
       error: null,
     });
 
     renderView();
 
-    expect(screen.getByRole('button', { name: /start development/i })).toBeDisabled();
-  });
-
-  it('enables Start Development for an APEX Feature in an allowed state (Committed)', () => {
-    (useAssignedWorkItems as jest.Mock).mockReturnValue({
-      data: [{
-        id: 8, title: 'Ready to code', workItemType: 'Feature',
-        state: 'Committed', assignedTo: 'jane@example.com', project: 'MaxView', tags: 'apex; wave-2',
-      }],
-      isLoading: false,
-      error: null,
-    });
-
-    renderView();
-
-    expect(screen.getByRole('button', { name: /start development/i })).not.toBeDisabled();
-  });
-
-  it('disables Start Development for a Feature without the apex tag (non-admin)', () => {
-    (useAssignedWorkItems as jest.Mock).mockReturnValue({
-      data: [{
-        id: 9, title: 'Legacy feature', workItemType: 'Feature',
-        state: 'Committed', assignedTo: 'jane@example.com', project: 'MaxView', tags: 'wave-1',
-      }],
-      isLoading: false,
-      error: null,
-    });
-
-    renderView();
-
-    const btn = screen.getByRole('button', { name: /start development/i });
-    expect(btn).toBeDisabled();
-    expect(btn).toHaveAttribute('title', expect.stringMatching(/APEX-generated Features/i));
-  });
-
-  it('disables Start Development for a PBI even when tagged apex and startable (non-admin)', () => {
-    (useAssignedWorkItems as jest.Mock).mockReturnValue({
-      data: [{
-        id: 10, title: 'A PBI', workItemType: 'Product Backlog Item',
-        state: 'Committed', assignedTo: 'jane@example.com', project: 'MaxView', tags: 'apex',
-      }],
-      isLoading: false,
-      error: null,
-    });
-
-    renderView();
-
-    const btn = screen.getByRole('button', { name: /start development/i });
-    expect(btn).toBeDisabled();
-    expect(btn).toHaveAttribute('title', expect.stringMatching(/only available on Features/i));
-  });
-
-  it('enables Start Development on any type for super admins (Bug in an allowed state)', () => {
-    (useAppShell as jest.Mock).mockReturnValue({ selectedProject: 'MaxView', isSuperAdmin: true });
-    (useAssignedWorkItems as jest.Mock).mockReturnValue({
-      data: [{
-        id: 11, title: 'Admin bug', workItemType: 'Bug',
-        state: 'Active', assignedTo: 'jane@example.com', project: 'MaxView',
-      }],
-      isLoading: false,
-      error: null,
-    });
-
-    renderView();
-
-    expect(screen.getByRole('button', { name: /start development/i })).not.toBeDisabled();
+    expect(screen.queryByRole('button', { name: /^Start cloud agent$/i })).not.toBeInTheDocument();
   });
 
   it('shows resume and close actions for work items with an active session', () => {

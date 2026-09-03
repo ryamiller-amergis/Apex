@@ -250,6 +250,11 @@ function mapRow(row: typeof agentRuns.$inferSelect): AgentRunLifecycleRow {
     timeoutAt: row.timeoutAt ?? null,
     ownerInstance: row.ownerInstance ?? null,
     updatedAt: row.updatedAt,
+    devSessionId: row.devSessionId ?? null,
+    workflowClass: row.workflowClass ?? null,
+    cloudAgentIdentity: row.cloudAgentIdentity ?? null,
+    cloudAgentManaged: row.cloudAgentManaged ?? false,
+    checkResults: row.checkResults ?? null,
   };
 }
 

@@ -10,6 +10,8 @@ export interface AssignedWorkItem {
   url?: string;
   /** Raw ADO System.Tags value (semicolon-separated). */
   tags?: string;
+  /** Server-derived Cloud Agent start eligibility. Absent when the flag is off. */
+  cloudAgentEligibility?: CloudAgentEligibility;
 }
 
 /**
@@ -113,6 +115,59 @@ export function evaluateDevStartEligibility(
   return { allowed: true };
 }
 
+export interface CloudAgentEligibility {
+  allowed: boolean;
+  reason?: string;
+}
+
+/** Host-agnostic PR lifecycle for My Work; closed-unmerged maps to open. */
+export type HostAgnosticPrStatus = 'none' | 'open' | 'merged';
+
+export interface CloudAgentRunSummary {
+  runId: string;
+  status: import('./agentRunLifecycle').AgentRunStatus;
+  prUrl: string | null;
+  prStatus: HostAgnosticPrStatus;
+  finishedWithoutPr: boolean;
+  terminalReason: import('./agentRunLifecycle').AgentRunTerminalReason | null;
+  /** Suite-level outcomes the run reported; null when it reported nothing. */
+  checkResults: import('./agentRunLifecycle').RunCheckResult[] | null;
+  /** Kinds that failed, derived server-side so the client never re-derives it. */
+  failingChecks: import('./agentRunLifecycle').RunCheckKind[];
+  /** Launch or terminal failure detail when status is failed; null otherwise. */
+  lastError: string | null;
+}
+
+export interface LeftoverWorkSummary {
+  /** Names/labels of unit/e2e/WCAG checks the finished run reported as failing (FEAT-003 data). */
+  failingChecks: string[];
+  /** True when the run finished without a PR URL at all (BR-004 / FEAT-002 data). */
+  missingPr: boolean;
+  /** Free-text acceptance criteria the Cloud Agent self-reported as not addressed. Always an array when stored. */
+  incompleteAcceptanceCriteria: string[];
+}
+
+export function isLeftoverWorkClean(
+  summary: LeftoverWorkSummary | null | undefined,
+): boolean {
+  if (!summary) return true;
+  return (
+    summary.failingChecks.length === 0
+    && !summary.missingPr
+    && summary.incompleteAcceptanceCriteria.length === 0
+  );
+}
+
+export interface StartCloudAgentRunRequest {
+  workItemId: number;
+  project: string;
+}
+
+export interface StartCloudAgentRunResponse {
+  sessionId: string;
+  runId: string;
+}
+
 export interface BacklogFeatureItem {
   featureId: string;
   featureTitle: string;
@@ -204,6 +259,9 @@ export interface DevSessionDetail {
   createdAt: string;
   prdId?: string | null;
   featureId?: string | null;
+  cloudAgentRun?: CloudAgentRunSummary | null;
+  /** Present on current My Work session responses; optional for legacy callers and fixtures. */
+  leftoverWork?: LeftoverWorkSummary | null;
 }
 
 export interface ConflictedFile {
@@ -242,6 +300,9 @@ export interface ActiveDevSession {
   updatedAt?: string | null;
   prdId?: string | null;
   featureId?: string | null;
+  cloudAgentRun?: CloudAgentRunSummary | null;
+  /** Present on current My Work session responses; optional for legacy callers and fixtures. */
+  leftoverWork?: LeftoverWorkSummary | null;
 }
 
 /** Normalized PBI/TBI child of a single Apex feature for the context viewer. */

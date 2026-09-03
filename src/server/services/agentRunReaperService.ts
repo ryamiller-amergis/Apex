@@ -547,6 +547,44 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
     let recoverColdStarts = false;
 
     for (const row of rows) {
+      if (row.lane === 'cloud-agent') {
+        const expired = Boolean(row.timeoutAt && Date.parse(row.timeoutAt) <= nowMs);
+        if (!expired) continue;
+
+        const managed = Boolean(row.cloudAgentManaged);
+        const terminalReason = managed ? 'cloud_agent_timeout' : 'queue_ttl';
+        const detail = managed
+          ? 'Cloud Agent run exceeded configured hard limit'
+          : 'Cloud Agent start exceeded the pre-identity queue TTL';
+        const errorEvent = {
+          eventId: randomUUID(),
+          threadId: row.threadId,
+          runId: row.id,
+          sourceInstance: WATCHDOG_SOURCE_INSTANCE,
+          sequence: nextRunEventSequence(row.id, WATCHDOG_SOURCE_INSTANCE),
+          timestamp: updatedAt,
+          type: 'error' as const,
+          phase: 'completion' as const,
+          status: 'failed' as const,
+          detail,
+          event: { type: 'error' as const, error: detail },
+        };
+        const won = await finalizeReconciledAgentRun({
+          runId: row.id,
+          threadId: row.threadId,
+          status: 'failed',
+          terminalReason,
+          detail,
+          events: [errorEvent],
+        });
+        if (won) {
+          console.log(
+            `[reaper] Reaped cloud-agent run (id=${row.id}, managed=${managed}) — ${terminalReason}`,
+          );
+        }
+        continue;
+      }
+
       // Worker-lane rows are governed only by lifecycle/fence-aware clocks.
       // They must never fall through to the legacy AGENT_* watchdog behavior.
       if (shouldApplyWorkerLifecycle(row)) {

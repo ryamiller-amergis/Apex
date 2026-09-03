@@ -1,0 +1,16 @@
+.list {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  margin: 0;
+  padding: 0 0 0 1.1em;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  list-style: disc;
+}
+
+.item {
+  color: var(--text-secondary);
+}

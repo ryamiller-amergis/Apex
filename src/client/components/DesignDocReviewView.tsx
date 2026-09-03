@@ -28,6 +28,7 @@ import {
   useDesignDocOwnerApproval,
   useDesignDocOwnerApprove,
   useRetryGenerateDesignDoc,
+  useCancelGenerateDesignDoc,
   useOverrideDesignDocValidation,
 } from '../hooks/useInterviews';
 import { ProposedDesignDocChangesReview } from './ProposedDesignDocChangesReview';
@@ -1193,6 +1194,7 @@ export const DesignDocReviewView: React.FC = () => {
   const ownerApproveMutation = useDesignDocOwnerApprove(id);
 
   const retryGenerate = useRetryGenerateDesignDoc();
+  const cancelGenerate = useCancelGenerateDesignDoc();
 
   const isGenerating = !!doc && doc.status === 'generating' && (
     doc.designContent === '' || doc.techSpecContent === '' || doc.assumptionsContent === ''
@@ -2470,6 +2472,27 @@ export const DesignDocReviewView: React.FC = () => {
               <div className={styles.bannerSub}>
                 This may take a few minutes. You can navigate away and return.
               </div>
+              {canManageAuthorActions && (
+                <button
+                  className={styles.failureBannerBtnSecondary}
+                  onClick={() => id && cancelGenerate.mutate(id)}
+                  disabled={cancelGenerate.isPending}
+                  type="button"
+                  title="Stop the agent and keep whatever it has written so far"
+                  {...{ 'data-testid': 'dd-cancel-generation-btn' }}
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <circle cx="8" cy="8" r="6" />
+                    <rect x="5.75" y="5.75" width="4.5" height="4.5" rx="0.75" />
+                  </svg>
+                  {cancelGenerate.isPending ? 'Stopping…' : 'Stop & Keep Draft'}
+                </button>
+              )}
+              {cancelGenerate.isError && (
+                <div className={styles.bannerSub} role="alert">
+                  {cancelGenerate.error.message || 'Failed to stop generation'}
+                </div>
+              )}
             </div>
           </div>
         </>

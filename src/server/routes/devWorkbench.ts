@@ -8,6 +8,7 @@ import { getSkillConfig } from '../services/projectSettingsService';
 import { adoWriteForRequest, isAdoUserAuthError } from '../services/adoFactory';
 import { createThread } from '../services/chatAgentService';
 import * as githubCatalog from '../services/skillCatalogGitHub';
+import { buildWorkItemReferenceText } from '../services/workItemPrLinkService';
 import {
   checkoutDefaultBranch,
   checkoutFeatureBranch,
@@ -38,7 +39,7 @@ import {
   activateDevSession,
   touchDevSessionSetup,
 } from '../services/devSessionSetupService';
-import { getUserId } from '../utils/requestUser';
+import { getUserId, getUserEmail } from '../utils/requestUser';
 import type {
   StartDevSessionRequest,
   ApexBacklogGroup,
@@ -53,6 +54,38 @@ import type { ProjectSkillConfig, SkillProvider } from '../../shared/types/proje
 import { logMyWorkSession } from '../services/myWorkSessionLogger';
 import { buildLocalDevContext } from '../services/localDevContextService';
 import { getApexFeatureContext } from '../services/devWorkbenchFeatureContextService';
+import {
+  attachCloudAgentEligibility,
+  cancelCloudAgentRun,
+  CloudAgentConflictError,
+  CloudAgentEligibilityError,
+  getCloudAgentRunStatus,
+  startCloudAgentRun,
+} from '../services/cloudAgentService';
+import { MY_WORK_CLOUD_AGENT_FLAG } from '../../shared/types/featureFlags';
+
+/** ADO System.AssignedTo may be an identity object or a plain display-name string. */
+function assignedToDisplayName(raw: unknown): string | null {
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    return trimmed || null;
+  }
+  if (raw && typeof raw === 'object') {
+    const identity = raw as { displayName?: unknown; uniqueName?: unknown };
+    if (typeof identity.displayName === 'string' && identity.displayName.trim()) {
+      return identity.displayName.trim();
+    }
+    if (typeof identity.uniqueName === 'string' && identity.uniqueName.trim()) {
+      return identity.uniqueName.trim();
+    }
+  }
+  return null;
+}
+
+function sameAssignedToCaller(assignedTo: string | null, callerDisplayName: string): boolean {
+  if (!assignedTo) return false;
+  return assignedTo.toLowerCase() === callerDisplayName.trim().toLowerCase();
+}
 
 const router = Router();
 
@@ -80,8 +113,14 @@ router.get('/workitems', async (req: Request, res: Response) => {
 
     const adoService = new AzureDevOpsService(project);
     const items = await adoService.getWorkItemsAssignedToUser(displayName, project, { activeOnly: true });
+    const userId = getUserId(req);
+    const withEligibility = await attachCloudAgentEligibility(items, {
+      userId,
+      project,
+      isSuperAdmin: isSuperAdminRequest(req),
+    });
 
-    res.json(items);
+    res.json(withEligibility);
   } catch (err) {
     console.error('[dev-workbench] getWorkItems failed:', (err as Error).message);
     res.status(500).json({ error: 'Failed to fetch assigned work items' });
@@ -748,6 +787,134 @@ router.post('/start', async (req: Request, res: Response) => {
   }
 });
 
+// POST /cloud-agent/start — enqueue a Cloud Agent implementation run
+router.post('/cloud-agent/start', async (req: Request, res: Response) => {
+  try {
+    const { workItemId, project } = req.body as { workItemId?: number; project?: string };
+    if (!project || !workItemId) {
+      res.status(400).json({ error: 'workItemId and project are required' });
+      return;
+    }
+    const userId = getUserId(req);
+    const userEmail = getUserEmail(req);
+    const enabled = await isFeatureEnabled(MY_WORK_CLOUD_AGENT_FLAG, { userId, project });
+    // @feature-flag:my-work-cloud-agent start winner=enabled
+    if (!enabled) {
+      // @feature-flag:my-work-cloud-agent disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:my-work-cloud-agent disabled-end
+    }
+
+    // @feature-flag:my-work-cloud-agent enabled-start
+    if (isAppNativeRequirementsProject(project)) {
+      res.status(403).json({
+        error: 'Cloud Development is only available on Azure DevOps-configured projects.',
+      });
+      return;
+    }
+
+    const displayName = (req.user as any)?.profile?.displayName as string | undefined;
+    if (!displayName) {
+      res.status(400).json({ error: 'Could not determine user display name' });
+      return;
+    }
+    if (!userEmail) {
+      res.status(400).json({ error: 'Could not determine user email' });
+      return;
+    }
+
+    const stateService = new AzureDevOpsService(project);
+    const wiResult = await stateService.queryWorkItemsByWiql({
+      wiql: `SELECT [System.Id],[System.State],[System.WorkItemType],[System.Tags],[System.AssignedTo] FROM WorkItems WHERE [System.Id] = ${workItemId}`,
+      fields: ['System.Id', 'System.State', 'System.WorkItemType', 'System.Tags', 'System.AssignedTo'],
+    });
+    const fields = wiResult.items[0]?.fields;
+    if (!fields) {
+      res.status(404).json({ error: 'Work item not found' });
+      return;
+    }
+
+    const assignedTo = assignedToDisplayName(fields['System.AssignedTo']);
+    if (!sameAssignedToCaller(assignedTo, displayName)) {
+      res.status(403).json({
+        error: 'You can only start Cloud Development on work items assigned to you.',
+      });
+      return;
+    }
+
+    const result = await startCloudAgentRun({
+      userId,
+      userEmail,
+      project,
+      workItemId,
+      isSuperAdmin: isSuperAdminRequest(req),
+      item: {
+        state: (fields['System.State'] ?? '') as string,
+        workItemType: (fields['System.WorkItemType'] ?? '') as string,
+        tags: (fields['System.Tags'] ?? '') as string,
+      },
+    });
+    res.json(result);
+    // @feature-flag:my-work-cloud-agent enabled-end
+    // @feature-flag:my-work-cloud-agent end
+  } catch (err) {
+    if (err instanceof CloudAgentEligibilityError) {
+      res.status(403).json({ error: err.reason });
+      return;
+    }
+    if (err instanceof CloudAgentConflictError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
+    console.error('[dev-workbench] cloud-agent start failed:', (err as Error).message);
+    res.status(500).json({ error: 'Failed to start Cloud Development' });
+  }
+});
+
+// POST /sessions/:id/cloud-agent/cancel
+router.post('/sessions/:id/cloud-agent/cancel', async (req: Request, res: Response) => {
+  try {
+    const sessionId = req.params.id;
+    const userId = getUserId(req);
+    const session = await db.query.devSessions.findFirst({
+      where: and(eq(devSessions.id, sessionId), eq(devSessions.authorId, userId)),
+    });
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    const enabled = await isFeatureEnabled(MY_WORK_CLOUD_AGENT_FLAG, {
+      userId,
+      project: session.project,
+    });
+    // @feature-flag:my-work-cloud-agent start winner=enabled
+    if (!enabled) {
+      // @feature-flag:my-work-cloud-agent disabled-start
+      res.status(404).json({ error: 'Not found' });
+      return;
+      // @feature-flag:my-work-cloud-agent disabled-end
+    }
+    // @feature-flag:my-work-cloud-agent enabled-start
+    const result = await cancelCloudAgentRun(sessionId, userId);
+    res.json(result);
+    // @feature-flag:my-work-cloud-agent enabled-end
+    // @feature-flag:my-work-cloud-agent end
+  } catch (err) {
+    const status = (err as Error & { status?: number }).status;
+    if (status === 404) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    if (err instanceof CloudAgentConflictError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
+    console.error('[dev-workbench] cloud-agent cancel failed:', (err as Error).message);
+    res.status(500).json({ error: 'Failed to cancel Cloud Development' });
+  }
+});
+
 // GET /sessions — active sessions for the current user
 router.get('/sessions', async (req: Request, res: Response) => {
   try {
@@ -772,12 +939,18 @@ router.get('/sessions', async (req: Request, res: Response) => {
         updatedAt: devSessions.updatedAt,
         prdId: devSessions.prdId,
         featureId: devSessions.featureId,
+        leftoverWork: devSessions.leftoverWork,
       })
       .from(devSessions)
       .where(and(...conditions))
       .orderBy(desc(devSessions.createdAt));
 
-    res.json(rows);
+    const withRuns = await Promise.all(rows.map(async (row) => ({
+      ...row,
+      cloudAgentRun: await getCloudAgentRunStatus(row.id, userId),
+    })));
+
+    res.json(withRuns);
   } catch (err) {
     console.error('[dev-workbench] getSessions failed:', (err as Error).message);
     res.status(500).json({ error: 'Failed to fetch sessions' });
@@ -814,6 +987,8 @@ router.get('/sessions/:id', async (req: Request, res: Response) => {
       createdAt: session.createdAt,
       prdId: session.prdId,
       featureId: session.featureId,
+      cloudAgentRun: await getCloudAgentRunStatus(session.id, userId),
+      leftoverWork: session.leftoverWork ?? null,
     });
   } catch (err) {
     console.error('[dev-workbench] getSession failed:', (err as Error).message);
@@ -1450,7 +1625,7 @@ async function createSessionPr(
   let prUrl: string | null = null;
   try {
     const description = workItemId
-      ? `Automated implementation via APEX dev workbench.\n\nWork item: AB#${workItemId}`
+      ? `Automated implementation via APEX dev workbench.\n\nWork item: ${buildWorkItemReferenceText(workItemId)}`
       : `Automated implementation via APEX dev workbench.`;
     const title = `[APEX] ${branchName.replace('feature/', '')}`;
 

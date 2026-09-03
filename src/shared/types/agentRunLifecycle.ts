@@ -17,8 +17,14 @@ export type AgentRunStatus =
  * Run lane for dispatched runs; NULL = legacy in-process.
  * - `background`: bounded ephemeral worker lane on the ai-runs-background Service Bus queue.
  * - `ai-runs-interactive`: warm Dapr virtual-actor lane on ACA (FEAT-007); never Service Bus.
+ * - `cloud-agent`: vendor-executed Cloud Agent implementation run; never an Apex worker lane.
  */
-export type AgentRunLane = 'background' | 'ai-runs-interactive';
+export type AgentRunLane = 'background' | 'ai-runs-interactive' | 'cloud-agent';
+
+/**
+ * Closed workflow classification on agent_runs. NULL preserves legacy generation rows.
+ */
+export type AgentRunWorkflowClass = 'generation' | 'implementation';
 
 /**
  * Closed terminal-reason set stored alongside domain status
@@ -28,9 +34,24 @@ export type AgentRunTerminalReason =
   | 'worker_lost'
   | 'progress_timeout'
   | 'queue_ttl'
-  | 'forced_cancel';
+  | 'forced_cancel'
+  | 'cloud_agent_timeout';
 
 export type AgentRunCancelState = 'requested' | 'acknowledged' | 'completed';
+
+/** Pre-PR quality check reported by a Cloud Agent run (FEAT-003 TBI-005). */
+export type RunCheckKind = 'unit' | 'e2e' | 'wcag';
+
+export type RunCheckOutcome = 'passed' | 'failed';
+
+/**
+ * One suite-level check outcome captured when a run reaches a terminal state.
+ * Suite granularity only — no raw test output, stack traces, or log excerpts.
+ */
+export interface RunCheckResult {
+  kind: RunCheckKind;
+  outcome: RunCheckOutcome;
+}
 
 /** Frozen at enqueue; never mutated (PBI-001 AC-d). */
 export interface ExecutionSnapshot {
@@ -85,6 +106,7 @@ export const AGENT_RUN_TERMINAL_REASONS: ReadonlySet<AgentRunTerminalReason> = n
   'progress_timeout',
   'queue_ttl',
   'forced_cancel',
+  'cloud_agent_timeout',
 ]);
 
 export function isAgentRunTerminalStatus(status: string): status is Extract<

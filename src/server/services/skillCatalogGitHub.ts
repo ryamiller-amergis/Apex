@@ -85,6 +85,11 @@ export interface GitHubRepo {
   htmlUrl: string;
 }
 
+export interface GitHubPullRequest {
+  title: string;
+  body: string;
+}
+
 interface GitHubTreeItem {
   path: string;
   mode: string;
@@ -275,6 +280,50 @@ export async function createPullRequest(opts: {
 
   const pr = (await response.json()) as { html_url: string };
   return pr.html_url;
+}
+
+function resolvePullRequestPath(
+  repo: string,
+  prNumber: number,
+  org?: string,
+): string {
+  const slash = repo.indexOf('/');
+  const resolvedOrg = org || (slash > 0 ? repo.slice(0, slash) : getDefaultOrg());
+  const resolvedRepo = slash > 0 ? repo.slice(slash + 1) : repo;
+  if (!resolvedOrg) throw new Error('GitHub org is required');
+  if (!resolvedRepo) throw new Error('GitHub repository is required');
+
+  return `/repos/${encodeURIComponent(resolvedOrg)}/${encodeURIComponent(resolvedRepo)}/pulls/${prNumber}`;
+}
+
+export async function getPullRequest(
+  repo: string,
+  prNumber: number,
+  org?: string,
+): Promise<GitHubPullRequest> {
+  const pr = await ghFetch<{ title?: string | null; body?: string | null }>(
+    resolvePullRequestPath(repo, prNumber, org),
+  );
+  return {
+    title: pr.title ?? '',
+    body: pr.body ?? '',
+  };
+}
+
+/**
+ * Host-agnostic PR status for the shared work-item PR link.
+ * Only a merged PR reports 'merged'; every other GitHub state — including a
+ * closed PR that was never merged — reports 'open'.
+ */
+export async function getPullRequestStatus(
+  repo: string,
+  prNumber: number,
+  org?: string,
+): Promise<'open' | 'merged'> {
+  const pr = await ghFetch<{ state?: string | null; merged?: boolean | null }>(
+    resolvePullRequestPath(repo, prNumber, org),
+  );
+  return pr.merged === true ? 'merged' : 'open';
 }
 
 export async function listBranches(

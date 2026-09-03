@@ -67,7 +67,7 @@ import {
   shouldApplyWorkerLifecycle,
   isLegalAgentRunTransition,
 } from '../services/agentRunLifecycleService';
-import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
+import type { ExecutionSnapshot, RunCheckResult } from '../../shared/types/agentRunLifecycle';
 import {
   AGENT_RUN_STATUS_LABELS,
   isAgentRunTerminalReason,
@@ -96,6 +96,7 @@ function baseRow(overrides: Record<string, unknown> = {}) {
     dispatchedAt: null,
     dispatchMessageId: null,
     executionSnapshot: { ...snapshot },
+    checkResults: null,
     cancelRequested: false,
     cancelState: null,
     terminalReason: null,
@@ -168,6 +169,7 @@ describe('shared status vocabulary (TBI-001 / PBI-001 a11y NFR)', () => {
 describe('transition table (TBI-001 DoD-1 / VT-01 / VT-02)', () => {
   it('allows the happy-path edges queued→dispatched→running→completed', () => {
     expect(isLegalAgentRunTransition('queued', 'dispatched')).toBe(true);
+    expect(isLegalAgentRunTransition('queued', 'failed')).toBe(true);
     expect(isLegalAgentRunTransition('dispatched', 'running')).toBe(true);
     expect(isLegalAgentRunTransition('running', 'completed')).toBe(true);
     expect(isLegalAgentRunTransition('running', 'failed')).toBe(true);
@@ -573,6 +575,28 @@ describe('legacy partitioning (PBI-001 AC-2 / VT-03 / DoD-3)', () => {
     expect(shouldApplyWorkerLifecycle({ lane: 'background', dispatchMessageId: null })).toBe(true);
   });
 
+  it('VT-10: cloud-agent lanes skip worker lifecycle and background admission', async () => {
+    expect(shouldApplyWorkerLifecycle({ lane: 'cloud-agent', dispatchMessageId: 'cursor-run' })).toBe(false);
+    await enqueue({
+      threadId: 'thread-1',
+      projectId: 'proj-1',
+      snapshot,
+      timeoutAt: '2026-08-05T14:00:00.000Z',
+      runId: 'run-cloud',
+      lane: 'cloud-agent',
+      workflowClass: 'implementation',
+      devSessionId: '11111111-1111-4111-8111-111111111111',
+    });
+    expect(mockInsertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lane: 'cloud-agent',
+        workflowClass: 'implementation',
+        devSessionId: '11111111-1111-4111-8111-111111111111',
+      }),
+    );
+    expect(mockRunAdmissionCycle).not.toHaveBeenCalled();
+  });
+
   it('AC-2 / VT-03: worker-aware transition helpers do not backfill legacy rows', async () => {
     mockFindFirst.mockResolvedValue(
       baseRow({
@@ -659,5 +683,211 @@ describe('requestCancel (BR-002)', () => {
     expect(JSON.stringify(mockWorkerCancellation.mock.calls)).not.toMatch(
       /prompt=confidential|private\\\\workspace|snapshot|CURSOR_API_KEY/i,
     );
+  });
+});
+
+describe('check result capture (TBI-005 DoD-0; PBI-006 AC-0/AC-1; TBI-005 NFR)', () => {
+  const passed = (kind: RunCheckResult['kind']): RunCheckResult => ({ kind, outcome: 'passed' });
+  const failed = (kind: RunCheckResult['kind']): RunCheckResult => ({ kind, outcome: 'failed' });
+  const allPassed: RunCheckResult[] = [passed('unit'), passed('e2e'), passed('wcag')];
+  const mixed: RunCheckResult[] = [passed('unit'), failed('e2e'), failed('wcag')];
+
+  it('TBI-005 DoD-0 / PBI-006 AC-0: Given a run reports all three suites passed, when the first terminal write wins, then the results are captured on the row', async () => {
+    mockFindFirst
+      .mockResolvedValueOnce(baseRow({ status: 'running', dispatchMessageId: 'D1' }))
+      .mockResolvedValueOnce(baseRow({ status: 'completed', dispatchMessageId: 'D1' }));
+    mockUpdateReturning.mockResolvedValueOnce([
+      baseRow({ status: 'completed', dispatchMessageId: 'D1', checkResults: allPassed }),
+    ]);
+    const completionHandler = jest.fn().mockResolvedValue(true);
+
+    const result = await markTerminal('run-1', {
+      status: 'completed',
+      dispatchMessageId: 'D1',
+      checkResults: allPassed,
+      completionHandler,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.run.status).toBe('completed');
+      expect(result.run.checkResults).toEqual(allPassed);
+    }
+    expect(mockUpdateSet).toHaveBeenCalledWith(
+      expect.objectContaining({ checkResults: allPassed }),
+    );
+    // Capture happens only after the durable terminal write (TBI-005 NFR).
+    expect(completionHandler.mock.invocationCallOrder[0])
+      .toBeLessThan(mockUpdateSet.mock.invocationCallOrder[0]);
+  });
+
+  it('TBI-005 DoD-0 / PBI-006 AC-1: Given a run reports failing suites, when markTerminal wins, then the failed kinds are captured verbatim', async () => {
+    mockFindFirst
+      .mockResolvedValueOnce(baseRow({ status: 'running', dispatchMessageId: 'D1' }))
+      .mockResolvedValueOnce(baseRow({ status: 'completed', dispatchMessageId: 'D1' }));
+    mockUpdateReturning.mockResolvedValueOnce([
+      baseRow({ status: 'completed', dispatchMessageId: 'D1', checkResults: mixed }),
+    ]);
+
+    const result = await markTerminal('run-1', {
+      status: 'completed',
+      dispatchMessageId: 'D1',
+      checkResults: mixed,
+      completionHandler: jest.fn().mockResolvedValue(true),
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.run.checkResults).toEqual(mixed);
+    }
+  });
+
+  it('TBI-005 DoD-0: Given a run reports nothing, when markTerminal wins, then no check write is attempted and results stay null', async () => {
+    mockFindFirst
+      .mockResolvedValueOnce(baseRow({ status: 'running', dispatchMessageId: 'D1' }))
+      .mockResolvedValueOnce(baseRow({ status: 'completed', dispatchMessageId: 'D1' }));
+
+    const result = await markTerminal('run-1', {
+      status: 'completed',
+      dispatchMessageId: 'D1',
+      completionHandler: jest.fn().mockResolvedValue(true),
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.run.checkResults).toBeNull();
+    }
+    expect(mockUpdateSet).not.toHaveBeenCalled();
+  });
+
+  it('TBI-005 DoD-0: Given results were already captured, when a same-status retry reports different results, then the first write wins', async () => {
+    mockFindFirst.mockResolvedValue(
+      baseRow({ status: 'completed', dispatchMessageId: 'D1', checkResults: allPassed }),
+    );
+    const completionHandler = jest.fn().mockResolvedValue(true);
+
+    const result = await markTerminal('run-1', {
+      status: 'completed',
+      dispatchMessageId: 'D1',
+      checkResults: mixed,
+      completionHandler,
+      deactivateGrounding: jest.fn().mockResolvedValue(undefined),
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.run.checkResults).toEqual(allPassed);
+    }
+    expect(completionHandler).not.toHaveBeenCalled();
+    expect(mockUpdateSet).not.toHaveBeenCalled();
+  });
+
+  it('TBI-005 DoD-0: Given a first capture was missed, when a same-status retry reports results, then the null-guarded write fills them and the refreshed row is returned', async () => {
+    mockFindFirst.mockResolvedValue(
+      baseRow({ status: 'completed', dispatchMessageId: 'D1', checkResults: null }),
+    );
+    mockUpdateReturning.mockResolvedValueOnce([
+      baseRow({ status: 'completed', dispatchMessageId: 'D1', checkResults: mixed }),
+    ]);
+    const completionHandler = jest.fn().mockResolvedValue(true);
+
+    const result = await markTerminal('run-1', {
+      status: 'completed',
+      dispatchMessageId: 'D1',
+      checkResults: mixed,
+      completionHandler,
+      deactivateGrounding: jest.fn().mockResolvedValue(undefined),
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.run.status).toBe('completed');
+      expect(result.run.checkResults).toEqual(mixed);
+    }
+    expect(completionHandler).not.toHaveBeenCalled();
+    expect(mockUpdateSet).toHaveBeenCalledWith(
+      expect.objectContaining({ checkResults: mixed }),
+    );
+  });
+
+  it('TBI-005 DoD-0: Given a concurrent writer already captured results, when the guarded write matches zero rows, then the terminal result still succeeds', async () => {
+    mockFindFirst.mockResolvedValue(
+      baseRow({ status: 'completed', dispatchMessageId: 'D1', checkResults: null }),
+    );
+    mockUpdateReturning.mockResolvedValueOnce([]);
+
+    const result = await markTerminal('run-1', {
+      status: 'completed',
+      dispatchMessageId: 'D1',
+      checkResults: mixed,
+      completionHandler: jest.fn().mockResolvedValue(true),
+      deactivateGrounding: jest.fn().mockResolvedValue(undefined),
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      ok: true,
+      run: expect.objectContaining({ status: 'completed' }),
+    }));
+  });
+
+  it('TBI-005 NFR: Given the check write throws, when markTerminal returns, then the terminal completion still succeeds', async () => {
+    mockFindFirst
+      .mockResolvedValueOnce(baseRow({ status: 'running', dispatchMessageId: 'D1' }))
+      .mockResolvedValueOnce(baseRow({ status: 'completed', dispatchMessageId: 'D1' }));
+    mockUpdateReturning.mockRejectedValueOnce(new Error('check_results write failed'));
+
+    const result = await markTerminal('run-1', {
+      status: 'completed',
+      dispatchMessageId: 'D1',
+      checkResults: mixed,
+      completionHandler: jest.fn().mockResolvedValue(true),
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      ok: true,
+      run: expect.objectContaining({ status: 'completed' }),
+    }));
+    expect(mockRunAdmissionCycle).toHaveBeenCalledWith('slot-release');
+  });
+
+  it('TBI-005 security: Given a check write fails, when the failure is logged, then no outcome content is emitted', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockFindFirst
+      .mockResolvedValueOnce(baseRow({ status: 'running', dispatchMessageId: 'D1' }))
+      .mockResolvedValueOnce(baseRow({ status: 'completed', dispatchMessageId: 'D1' }));
+    mockUpdateReturning.mockRejectedValueOnce(new Error('check_results write failed'));
+
+    await markTerminal('run-1', {
+      status: 'completed',
+      dispatchMessageId: 'D1',
+      checkResults: mixed,
+      completionHandler: jest.fn().mockResolvedValue(true),
+    });
+
+    expect(errorSpy).toHaveBeenCalled();
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toMatch(/wcag|outcome|passed|failed/i);
+    errorSpy.mockRestore();
+  });
+
+  it('TBI-005 DoD-2 / PBI-006 AC-2: Given a run finishes without a PR, when markTerminal captures results, then the run is still terminal', async () => {
+    mockFindFirst
+      .mockResolvedValueOnce(baseRow({ status: 'running', dispatchMessageId: 'D1' }))
+      .mockResolvedValueOnce(baseRow({ status: 'completed', dispatchMessageId: 'D1' }));
+    mockUpdateReturning.mockResolvedValueOnce([
+      baseRow({ status: 'completed', dispatchMessageId: 'D1', checkResults: allPassed }),
+    ]);
+
+    const result = await markTerminal('run-1', {
+      status: 'completed',
+      dispatchMessageId: 'D1',
+      checkResults: allPassed,
+      completionHandler: jest.fn().mockResolvedValue(true),
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.run.status).toBe('completed');
+      expect(result.run.checkResults).toEqual(allPassed);
+    }
   });
 });

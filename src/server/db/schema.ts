@@ -32,12 +32,14 @@ import type {
   AgentRunLane,
   AgentRunStatus,
   AgentRunTerminalReason,
+  AgentRunWorkflowClass,
   ExecutionSnapshot,
+  RunCheckResult,
 } from '../../shared/types/agentRunLifecycle';
 import type { ContentSnapshot, DesignDocValidationOverride, PrdReadinessOverride, PrdValidationBaseline, TestCaseCoverageSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { DesignPrototypeHistoryEntry } from '../../shared/types/designPrototype';
 import type { UiLabHistoryEntry } from '../../shared/types/uiLab';
-import type { DevSessionSetupPhase } from '../../shared/types/devWorkbench';
+import type { DevSessionSetupPhase, LeftoverWorkSummary } from '../../shared/types/devWorkbench';
 import type { DesignPlanFeature, DesignPlanHistoryEntry } from '../../shared/types/designPlan';
 import type { QuickSkillPill, QuickMcpPill, InterviewSkillOption, PrototypeEngine } from '../../shared/types/projectSettings';
 import type { ApprovalMode, OwnerApprovalStatus } from '../../shared/types/approvals';
@@ -169,7 +171,18 @@ export const devSessions = pgTable('dev_sessions', {
   branchPushed: boolean('branch_pushed').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
-});
+  // Soft pointer to agent_runs.id (text). No FK — avoids a circular reference
+  // with agent_runs.dev_session_id.
+  currentRunId: text('current_run_id'),
+  currentRunPrUrl: text('current_run_pr_url'),
+  currentRunPrStatus: text('current_run_pr_status').$type<'none' | 'open' | 'merged'>().default('none'),
+  leftoverWork: jsonb('leftover_work').$type<LeftoverWorkSummary>(),
+}, (t) => ({
+  currentRunPrStatusCheck: check(
+    'dev_sessions_current_run_pr_status_check',
+    sql`${t.currentRunPrStatus} IS NULL OR ${t.currentRunPrStatus} IN ('none', 'open', 'merged')`,
+  ),
+}));
 
 export const devSessionsRelations = relations(devSessions, ({ one }) => ({
   chatThread: one(chatThreads, {
@@ -1622,6 +1635,13 @@ export const agentRuns = pgTable('agent_runs', {
   cancelRequested: boolean('cancel_requested').notNull().default(false),
   cancelState: text('cancel_state').$type<AgentRunCancelState>(),
   terminalReason: text('terminal_reason').$type<AgentRunTerminalReason>(),
+  devSessionId: uuid('dev_session_id').references(() => devSessions.id, { onDelete: 'set null' }),
+  workflowClass: text('workflow_class').$type<AgentRunWorkflowClass>(),
+  cloudAgentIdentity: text('cloud_agent_identity'),
+  cloudAgentManaged: boolean('cloud_agent_managed').notNull().default(false),
+  // FEAT-003 TBI-005: suite-level unit/e2e/WCAG outcomes reported at terminal write time.
+  // NULL means the run reported nothing; never gates PR creation or run completion.
+  checkResults: jsonb('check_results').$type<RunCheckResult[]>(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
@@ -1645,12 +1665,23 @@ export const agentRuns = pgTable('agent_runs', {
     .where(sql`${t.lane} = 'background' AND ${t.status} = 'queued'`),
   laneCheck: check(
     'agent_runs_lane_check',
-    sql`${t.lane} IS NULL OR ${t.lane} IN ('background', 'ai-runs-interactive')`,
+    sql`${t.lane} IS NULL OR ${t.lane} IN ('background', 'ai-runs-interactive', 'cloud-agent')`,
   ),
   terminalReasonCheck: check(
     'agent_runs_terminal_reason_check',
-    sql`${t.terminalReason} IS NULL OR ${t.terminalReason} IN ('worker_lost', 'progress_timeout', 'queue_ttl', 'forced_cancel')`,
+    sql`${t.terminalReason} IS NULL OR ${t.terminalReason} IN ('worker_lost', 'progress_timeout', 'queue_ttl', 'forced_cancel', 'cloud_agent_timeout')`,
   ),
+  workflowClassCheck: check(
+    'agent_runs_workflow_class_check',
+    sql`${t.workflowClass} IS NULL OR ${t.workflowClass} IN ('generation', 'implementation')`,
+  ),
+  cloudAgentManagedIdentityCheck: check(
+    'agent_runs_cloud_agent_managed_identity_check',
+    sql`${t.cloudAgentManaged} = false OR ${t.cloudAgentIdentity} IS NOT NULL`,
+  ),
+  oneLiveImplementationPerSession: uniqueIndex('uq_agent_runs_one_live_per_session')
+    .on(t.devSessionId)
+    .where(sql`${t.workflowClass} = 'implementation' AND ${t.status} IN ('queued', 'dispatched', 'running') AND ${t.devSessionId} IS NOT NULL`),
   nonTerminalTimeoutCheck: check(
     'agent_runs_non_terminal_timeout_at_check',
     sql`${t.status} NOT IN ('queued', 'running') OR ${t.timeoutAt} IS NOT NULL`,

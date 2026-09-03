@@ -65,6 +65,7 @@ function setupMocks() {
       status: 'in_progress',
       setupError: null,
       createdAt: '2026-06-01T00:00:00Z',
+      leftoverWork: null,
     },
   });
 
@@ -131,12 +132,42 @@ describe('DevSessionView — diff expand/collapse', () => {
   it('renders changed files collapsed by default', () => {
     renderSessionView();
 
+    expect(screen.queryByTestId('my-work-leftover-work-session-1')).not.toBeInTheDocument();
     expect(screen.getByText('src/a.ts')).toBeInTheDocument();
     expect(screen.getByText('src/b.ts')).toBeInTheDocument();
     expect(screen.queryByText('added in file a')).not.toBeInTheDocument();
     expect(screen.queryByText('added in file b')).not.toBeInTheDocument();
     expect(within(getFileHeader('src/a.ts')).getByText('▶')).toBeInTheDocument();
     expect(within(getFileHeader('src/b.ts')).getByText('▶')).toBeInTheDocument();
+  });
+
+  it('renders the session leftover-work outcome without changing the diff panel', () => {
+    (useDevSession as jest.Mock).mockReturnValue({
+      data: {
+        id: 'session-1',
+        workItemId: 42,
+        chatThreadId: 'thread-1',
+        branchName: 'feature/42',
+        status: 'completed',
+        setupError: null,
+        createdAt: '2026-06-01T00:00:00Z',
+        leftoverWork: {
+          failingChecks: ['wcag'],
+          missingPr: true,
+          incompleteAcceptanceCriteria: ['Keyboard path remains incomplete'],
+        },
+      },
+    });
+
+    renderSessionView();
+
+    const leftover = screen.getByTestId('my-work-leftover-work-session-1');
+    expect(leftover).toHaveTextContent('Failing check: wcag');
+    expect(leftover).toHaveTextContent('No pull request was opened — no PR yet');
+    expect(leftover).toHaveTextContent(
+      'Incomplete acceptance criterion: Keyboard path remains incomplete',
+    );
+    expect(screen.getByText('src/a.ts')).toBeInTheDocument();
   });
 
   it('expands and collapses an individual file when its header is clicked', () => {

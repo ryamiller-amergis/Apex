@@ -72,6 +72,7 @@ import {
   cancelValidation,
   createDesignDoc,
   deleteDesignDoc,
+  finalizeSingleFeatureDoc,
   generateFallbackReport,
   getDesignDoc,
   listDesignDocs,
@@ -88,7 +89,7 @@ import {
   overrideDesignDocValidation,
   syncValidationResult,
 } from '../services/designDocService';
-import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, updateThreadKickoffContext, sendMessage } from '../services/chatAgentService';
+import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, cancelRun, createThread, updateThreadKickoffContext, sendMessage } from '../services/chatAgentService';
 import { propagatePipelineGrounding } from '../services/runGroundingService';
 import { getApproverPoolForProject, resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
@@ -1670,6 +1671,29 @@ router.post('/design-docs/:id/sync', requirePermission('interviews:manage'), asy
 
     await syncDesignDocContent(req.params.id, syncOpts);
     res.json({ ok: true, designContent, techSpecContent, assumptionsContent });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /design-docs/:id/cancel-generate — stop a running generation and keep whatever the agent wrote
+router.post('/design-docs/:id/cancel-generate', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const doc = await getDesignDoc(req.params.id);
+    if (!doc) { res.status(404).json({ error: 'Design doc not found' }); return; }
+    if (doc.status !== 'generating') {
+      res.status(409).json({ error: `Design doc is not generating (status '${doc.status}')` });
+      return;
+    }
+    if (!doc.chatThreadId) { res.status(400).json({ error: 'Design doc has no associated chat thread' }); return; }
+
+    await cancelRun(doc.chatThreadId);
+    // Finalize inline rather than waiting for the watcher tick — the watcher can
+    // lag well past its 5s interval while the agent run congests the event loop.
+    // Promotes to pending_review/validating when all three files exist, otherwise
+    // marks generation_failed so the Retry Generation banner appears.
+    const finalized = await finalizeSingleFeatureDoc(doc.id, doc.chatThreadId, doc.project);
+    res.json({ ok: true, finalized });
   } catch (err) {
     next(err);
   }

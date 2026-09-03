@@ -742,6 +742,20 @@ export function useSyncDesignDoc() {
   });
 }
 
+export function useCancelGenerateDesignDoc() {
+  const qc = useQueryClient();
+  return useMutation<{ ok: boolean; finalized: boolean }, Error, string>({
+    mutationFn: (designDocId) =>
+      apiFetch(`/api/interviews/design-docs/${designDocId}/cancel-generate`, {
+        method: 'POST',
+      }),
+    onSuccess: (_data, designDocId) => {
+      qc.invalidateQueries({ queryKey: ['design-doc', designDocId] });
+      qc.invalidateQueries({ queryKey: ['design-docs'] });
+    },
+  });
+}
+
 export function useRetryGenerateDesignDoc() {
   const qc = useQueryClient();
   return useMutation<{ ok: boolean; threadId: string }, Error, string>({

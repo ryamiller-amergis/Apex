@@ -5,6 +5,7 @@ import request from 'supertest';
 import express from 'express';
 import devWorkbenchRouter from '../routes/devWorkbench';
 import { AzureDevOpsService } from '../services/azureDevOps';
+import type { CloudAgentRunSummary } from '../../shared/types/devWorkbench';
 
 let mockPermissionGranted = true;
 let mockGroupMembershipGranted = true;
@@ -113,6 +114,37 @@ jest.mock('../services/devWorkbenchFeatureContextService', () => ({
   getApexFeatureContext: (...args: unknown[]) => mockGetApexFeatureContext(...args),
 }));
 
+const mockAttachCloudAgentEligibility = jest.fn(async (items: unknown[]) => items);
+const mockGetCloudAgentRunStatus = jest.fn().mockResolvedValue(null);
+const mockStartCloudAgentRun = jest.fn();
+const mockCancelCloudAgentRun = jest.fn();
+
+jest.mock('../services/cloudAgentService', () => {
+  class CloudAgentEligibilityError extends Error {
+    readonly statusCode = 403;
+    constructor(public readonly reason: string) {
+      super(reason);
+      this.name = 'CloudAgentEligibilityError';
+    }
+  }
+  class CloudAgentConflictError extends Error {
+    readonly statusCode = 409;
+    constructor(message = 'A Cloud Agent run is already in progress on this work item.') {
+      super(message);
+      this.name = 'CloudAgentConflictError';
+    }
+  }
+  return {
+    attachCloudAgentEligibility: (items: unknown[]) => mockAttachCloudAgentEligibility(items),
+    getCloudAgentRunStatus: (sessionId: string, userId: string) =>
+      mockGetCloudAgentRunStatus(sessionId, userId),
+    startCloudAgentRun: (input: unknown) => mockStartCloudAgentRun(input),
+    cancelCloudAgentRun: (sessionId: unknown) => mockCancelCloudAgentRun(sessionId),
+    CloudAgentEligibilityError,
+    CloudAgentConflictError,
+  };
+});
+
 const mockFindFirst = jest.fn();
 const mockSelectWhere = jest.fn();
 const mockInsertValues = jest.fn().mockResolvedValue(undefined);
@@ -149,6 +181,26 @@ function buildApp(profile: Record<string, unknown> = { displayName: 'Jane Develo
   });
   app.use('/api/dev-workbench', devWorkbenchRouter);
   return app;
+}
+
+const CLOUD_PR_URL = 'https://github.com/example/apex/pull/4210';
+
+/**
+ * Completed Cloud Agent run whose PR is still open — the projection the session
+ * reads carry for PBI-007 AC-0 / AC-2.
+ */
+function cloudRunWithOpenPr(): CloudAgentRunSummary {
+  return {
+    runId: 'run-pr-open',
+    status: 'completed',
+    prUrl: CLOUD_PR_URL,
+    prStatus: 'open',
+    finishedWithoutPr: false,
+    terminalReason: null,
+    checkResults: null,
+    failingChecks: [],
+    lastError: null,
+  };
 }
 
 describe('dev-workbench routes — access gates', () => {
@@ -242,6 +294,181 @@ describe('GET /api/dev-workbench/workitems', () => {
 
     expect(res.status).toBe(500);
     expect(res.body.error).toMatch(/failed to fetch/i);
+  });
+});
+
+describe('POST /api/dev-workbench/cloud-agent/start', () => {
+  const { isFeatureEnabled } = jest.requireMock('../services/featureFlagService') as {
+    isFeatureEnabled: jest.Mock;
+  };
+  const { CloudAgentEligibilityError, CloudAgentConflictError } = jest.requireMock(
+    '../services/cloudAgentService',
+  ) as {
+    CloudAgentEligibilityError: new (reason: string) => Error;
+    CloudAgentConflictError: new (message?: string) => Error;
+  };
+
+  const callerProfile = {
+    displayName: 'Jane Developer',
+    upn: 'jane@example.com',
+  };
+  const callerAssignedTo = { displayName: 'Jane Developer', uniqueName: 'jane@example.com' };
+
+  function mockWorkItemLookup(fields: Record<string, unknown>) {
+    MockAzureDevOpsService.mockImplementation(() => ({
+      queryWorkItemsByWiql: jest.fn().mockResolvedValue({
+        items: [{
+          id: 42,
+          fields: {
+            'System.State': 'Committed',
+            'System.WorkItemType': 'Feature',
+            'System.Tags': 'apex',
+            'System.AssignedTo': callerAssignedTo,
+            ...fields,
+          },
+        }],
+      }),
+    }) as unknown as AzureDevOpsService);
+  }
+
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    mockGroupMembershipGranted = true;
+    jest.clearAllMocks();
+    isFeatureEnabled.mockResolvedValue(true);
+    mockStartCloudAgentRun.mockReset();
+    mockStartCloudAgentRun.mockResolvedValue({ sessionId: 'session-cloud', runId: 'run-cloud' });
+  });
+
+  it('returns 404 when the Cloud Agent flag is off', async () => {
+    isFeatureEnabled.mockResolvedValue(false);
+
+    const res = await request(buildApp())
+      .post('/api/dev-workbench/cloud-agent/start')
+      .send({ workItemId: 42, project: 'MaxView' });
+
+    expect(res.status).toBe(404);
+    expect(mockStartCloudAgentRun).not.toHaveBeenCalled();
+  });
+
+  it('returns 403 with the same eligibility reason shown on the row', async () => {
+    const reason = 'Skill settings are incomplete: skillRepo is not set.';
+    mockWorkItemLookup({});
+    mockStartCloudAgentRun.mockRejectedValueOnce(new CloudAgentEligibilityError(reason));
+
+    const res = await request(buildApp(callerProfile))
+      .post('/api/dev-workbench/cloud-agent/start')
+      .send({ workItemId: 42, project: 'MaxView' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe(reason);
+  });
+
+  it('returns 409 when a live Cloud Agent run already exists', async () => {
+    mockWorkItemLookup({});
+    mockStartCloudAgentRun.mockRejectedValueOnce(new CloudAgentConflictError());
+
+    const res = await request(buildApp(callerProfile))
+      .post('/api/dev-workbench/cloud-agent/start')
+      .send({ workItemId: 42, project: 'MaxView' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/already in progress/i);
+  });
+
+  it('PBI-002 AC-3 / VT-04 rejects Start on another developer\'s work item and creates no run', async () => {
+    mockWorkItemLookup({
+      'System.AssignedTo': { displayName: 'Other Developer', uniqueName: 'other@example.com' },
+    });
+
+    const res = await request(buildApp(callerProfile))
+      .post('/api/dev-workbench/cloud-agent/start')
+      .send({ workItemId: 42, project: 'MaxView' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/assigned to you/i);
+    expect(mockStartCloudAgentRun).not.toHaveBeenCalled();
+  });
+
+  it('returns 200 with sessionId and runId', async () => {
+    mockWorkItemLookup({
+      'System.AssignedTo': callerAssignedTo,
+    });
+
+    const res = await request(buildApp(callerProfile))
+      .post('/api/dev-workbench/cloud-agent/start')
+      .send({ workItemId: 42, project: 'MaxView' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ sessionId: 'session-cloud', runId: 'run-cloud' });
+    expect(mockStartCloudAgentRun).toHaveBeenCalledWith(expect.objectContaining({
+      userEmail: 'jane@example.com',
+    }));
+    expect(mockStartCloudAgentRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns 400 when user email is missing from the session', async () => {
+    mockWorkItemLookup({
+      'System.AssignedTo': callerAssignedTo,
+    });
+
+    const res = await request(buildApp({ displayName: 'Jane Developer' }))
+      .post('/api/dev-workbench/cloud-agent/start')
+      .send({ workItemId: 42, project: 'MaxView' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/email/i);
+    expect(mockStartCloudAgentRun).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/dev-workbench/sessions/:id/cloud-agent/cancel', () => {
+  const { isFeatureEnabled } = jest.requireMock('../services/featureFlagService') as {
+    isFeatureEnabled: jest.Mock;
+  };
+  const { CloudAgentConflictError } = jest.requireMock('../services/cloudAgentService') as {
+    CloudAgentConflictError: new (message?: string) => Error;
+  };
+
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    mockGroupMembershipGranted = true;
+    jest.clearAllMocks();
+    isFeatureEnabled.mockResolvedValue(true);
+  });
+
+  it('returns 404 for a session the caller does not own', async () => {
+    mockFindFirst.mockResolvedValue(undefined);
+
+    const res = await request(buildApp()).post(
+      '/api/dev-workbench/sessions/foreign/cloud-agent/cancel',
+    );
+
+    expect(res.status).toBe(404);
+    expect(mockCancelCloudAgentRun).not.toHaveBeenCalled();
+  });
+
+  it('returns 409 when the run is already terminal', async () => {
+    mockFindFirst.mockResolvedValue({ id: 'session-1', authorId: 'user-1', project: 'MaxView' });
+    mockCancelCloudAgentRun.mockRejectedValueOnce(new CloudAgentConflictError('Run is already terminal'));
+
+    const res = await request(buildApp()).post(
+      '/api/dev-workbench/sessions/session-1/cloud-agent/cancel',
+    );
+
+    expect(res.status).toBe(409);
+  });
+
+  it('returns 200 with the resulting status', async () => {
+    mockFindFirst.mockResolvedValue({ id: 'session-1', authorId: 'user-1', project: 'MaxView' });
+    mockCancelCloudAgentRun.mockResolvedValue({ ok: true, status: 'cancelled' });
+
+    const res = await request(buildApp()).post(
+      '/api/dev-workbench/sessions/session-1/cloud-agent/cancel',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, status: 'cancelled' });
   });
 });
 
@@ -508,16 +735,47 @@ describe('GET /api/dev-workbench/sessions', () => {
         branchName: 'feature/10',
         status: 'in_progress',
         createdAt: '2026-06-01T00:00:00Z',
+        leftoverWork: {
+          failingChecks: ['e2e'],
+          missingPr: false,
+          incompleteAcceptanceCriteria: [],
+        },
       },
     ]);
   });
 
-  it('returns active sessions for the current user', async () => {
+  it('PBI-008 AC-3: returns author-scoped active sessions with leftoverWork', async () => {
     const res = await request(buildApp()).get('/api/dev-workbench/sessions?project=MaxView');
 
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(1);
-    expect(res.body[0]).toMatchObject({ id: 'session-1', workItemId: 10 });
+    expect(res.body[0]).toMatchObject({
+      id: 'session-1',
+      workItemId: 10,
+      leftoverWork: {
+        failingChecks: ['e2e'],
+        missingPr: false,
+        incompleteAcceptanceCriteria: [],
+      },
+    });
+    expect(mockGetCloudAgentRunStatus).toHaveBeenCalledWith('session-1', 'user-1');
+  });
+
+  it('PBI-007 AC-0 / AC-2 / VT-05: carries the run PR URL and host-agnostic prStatus inside cloudAgentRun', async () => {
+    mockGetCloudAgentRunStatus.mockResolvedValueOnce(cloudRunWithOpenPr());
+
+    const res = await request(buildApp()).get('/api/dev-workbench/sessions?project=MaxView');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].cloudAgentRun).toMatchObject({
+      runId: 'run-pr-open',
+      status: 'completed',
+      prUrl: CLOUD_PR_URL,
+      prStatus: 'open',
+    });
+    // The status rides on the existing projection — no sibling session field and
+    // no second endpoint for the row to call.
+    expect(res.body[0].prStatus).toBeUndefined();
   });
 
   it('returns 500 when the query fails', async () => {
@@ -551,7 +809,7 @@ describe('GET /api/dev-workbench/sessions/:id', () => {
     jest.clearAllMocks();
   });
 
-  it('returns session detail when found', async () => {
+  it('PBI-008 AC-3: returns session detail with leftoverWork for its author', async () => {
     mockFindFirst.mockResolvedValue({
       id: 'session-1',
       workItemId: 10,
@@ -563,6 +821,11 @@ describe('GET /api/dev-workbench/sessions/:id', () => {
       setupDetail: 'Dependencies are ready',
       setupProgressAt: '2026-06-01T00:00:05Z',
       createdAt: '2026-06-01T00:00:00Z',
+      leftoverWork: {
+        failingChecks: [],
+        missingPr: true,
+        incompleteAcceptanceCriteria: ['AC-5'],
+      },
     });
 
     const res = await request(buildApp()).get('/api/dev-workbench/sessions/session-1');
@@ -574,16 +837,58 @@ describe('GET /api/dev-workbench/sessions/:id', () => {
       setupPhase: 'dependencies_ready',
       setupDetail: 'Dependencies are ready',
       setupProgressAt: '2026-06-01T00:00:05Z',
+      leftoverWork: {
+        failingChecks: [],
+        missingPr: true,
+        incompleteAcceptanceCriteria: ['AC-5'],
+      },
     });
+    expect(mockGetCloudAgentRunStatus).toHaveBeenCalledWith('session-1', 'user-1');
   });
 
-  it('returns 404 when session is not found', async () => {
+  it('PBI-007 AC-0 / AC-2 / VT-05: carries the run PR URL and host-agnostic prStatus inside cloudAgentRun', async () => {
+    mockFindFirst.mockResolvedValue({
+      id: 'session-1',
+      workItemId: 10,
+      chatThreadId: 'thread-1',
+      branchName: 'feature/10',
+      status: 'in_progress',
+      setupError: null,
+      setupPhase: null,
+      setupDetail: null,
+      setupProgressAt: null,
+      createdAt: '2026-06-01T00:00:00Z',
+      leftoverWork: null,
+    });
+    mockGetCloudAgentRunStatus.mockResolvedValueOnce(cloudRunWithOpenPr());
+
+    const res = await request(buildApp()).get('/api/dev-workbench/sessions/session-1');
+
+    expect(res.status).toBe(200);
+    expect(res.body.cloudAgentRun).toMatchObject({
+      runId: 'run-pr-open',
+      status: 'completed',
+      prUrl: CLOUD_PR_URL,
+      prStatus: 'open',
+    });
+    // Same projection the list read serializes — the row polls this one payload.
+    expect(res.body.prStatus).toBeUndefined();
+  });
+
+  it('PBI-006 AC-3 / PBI-007 AC-3 / PBI-008 AC-3 / VT-06: returns 404 for another author without projecting run outcomes or PR status', async () => {
+    // The lookup is scoped by `authorId`, so another developer's session id
+    // resolves to nothing for this caller.
     mockFindFirst.mockResolvedValue(undefined);
 
-    const res = await request(buildApp()).get('/api/dev-workbench/sessions/missing');
+    const res = await request(buildApp()).get('/api/dev-workbench/sessions/other-author-session');
 
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/not found/i);
+    expect(Object.keys(res.body)).toEqual(['error']);
+    expect(res.text).not.toMatch(/prStatus|prUrl|cloudAgentRun/);
+    // The PR-status projection is never even computed for a session the caller
+    // does not own.
+    expect(mockGetCloudAgentRunStatus).not.toHaveBeenCalled();
   });
 });
 

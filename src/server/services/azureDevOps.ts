@@ -1,6 +1,7 @@
 import { Readable } from 'stream';
 import * as azdev from 'azure-devops-node-api';
 import { WorkItemExpand } from 'azure-devops-node-api/interfaces/WorkItemTrackingInterfaces';
+import { PullRequestStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { WorkItem, CycleTimeData, DueDateChange, DeveloperDueDateStats, DueDateHitRateStats, Release, ReleaseMetrics, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, AIWorkItemMetric, AIWorkItemHealthSummary, DesignDocKickoffStats } from '../types/workitem';
 import type { AiCodeWorkItemAdoptionSummary } from '../types/aiCapabilityLadder';
 import { retryWithBackoff } from '../utils/retry';
@@ -5993,6 +5994,85 @@ export class AzureDevOpsService {
       ],
       workItemId,
     );
+  }
+
+  /**
+   * Adds Azure Repos' native PR artifact relation to an existing ADO work item.
+   * The relation is idempotent because Cloud Agent completion can be observed
+   * more than once by status polling or a future webhook receiver.
+   */
+  async linkWorkItemToPullRequest(
+    project: string,
+    repo: string,
+    pullRequestId: number,
+    workItemId: number,
+  ): Promise<void> {
+    const gitApi = await this.connection.getGitApi();
+    const pr = await gitApi.getPullRequest(repo, pullRequestId, project);
+    const projectId = pr.repository?.project?.id;
+    const repositoryId = pr.repository?.id;
+    const artifactId = pr.artifactId
+      ?? (
+        projectId && repositoryId
+          ? `vstfs:///Git/PullRequestId/${projectId}/${repositoryId}/${pullRequestId}`
+          : null
+      );
+    if (!artifactId) {
+      throw new Error('ADO pull request returned no artifact identity');
+    }
+
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    const workItem = await witApi.getWorkItem(
+      workItemId,
+      undefined,
+      undefined,
+      WorkItemExpand.Relations,
+      project,
+    );
+    const normalizedArtifactId = decodeURIComponent(artifactId).toLowerCase();
+    const alreadyLinked = workItem.relations?.some((relation) => (
+      relation.rel === 'ArtifactLink'
+      && decodeURIComponent(relation.url ?? '').toLowerCase() === normalizedArtifactId
+    ));
+    if (alreadyLinked) return;
+
+    await witApi.updateWorkItem(
+      [],
+      [
+        {
+          op: 'add',
+          path: '/relations/-',
+          value: {
+            rel: 'ArtifactLink',
+            url: artifactId,
+            attributes: { name: 'Pull Request' },
+          },
+        },
+      ],
+      workItemId,
+      project,
+    );
+  }
+
+  /**
+   * Reads an Azure Repos pull request and reduces it to the host-agnostic PR
+   * status shared with the GitHub path. Only a completed PR counts as merged;
+   * an abandoned PR (closed without merge) stays 'open' so a developer can
+   * still see the run's PR on their My Work row.
+   */
+  async getPullRequestStatus(
+    repo: string,
+    project: string,
+    pullRequestId: number,
+  ): Promise<'open' | 'merged'> {
+    const gitApi = await this.connection.getGitApi();
+    const pr = await gitApi.getPullRequest(repo, pullRequestId, project);
+    // The SDK deserializes status into the PullRequestStatus enum, but raw REST
+    // payloads carry the string form.
+    const status: unknown = pr?.status;
+    const completed = status === PullRequestStatus.Completed
+      || (typeof status === 'string' && status.toLowerCase() === 'completed');
+    return completed ? 'merged' : 'open';
   }
 
   /**

@@ -1359,3 +1359,62 @@ describe('canThisInstanceFailGeneration', () => {
     await expect(canThisInstanceFailGeneration('thread-1')).resolves.toBe(true);
   });
 });
+
+describe('reapOrphanedRuns — cloud-agent lane (VT-09)', () => {
+  beforeEach(() => {
+    mockFindMany.mockReset();
+    mockMarkTerminal.mockReset();
+    mockUpdateSet.mockClear();
+    (finalizeReconciledAgentRun as jest.Mock).mockClear().mockResolvedValue(true);
+  });
+
+  it('reaps unmanaged pre-identity stalls as queue_ttl and skips heartbeat clocks', async () => {
+    mockFindMany.mockResolvedValue([{
+      id: 'run-cloud-queue',
+      threadId: 'session-1',
+      status: 'queued',
+      lane: 'cloud-agent',
+      cloudAgentManaged: false,
+      timeoutAt: timestamp(1),
+      cancelRequested: false,
+    }]);
+
+    await reapOrphanedRuns({ now: () => now, config });
+
+    expect(finalizeReconciledAgentRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: 'run-cloud-queue',
+        status: 'failed',
+        terminalReason: 'queue_ttl',
+      }),
+    );
+    expect(mockMarkTerminal).not.toHaveBeenCalled();
+    expect(mockUpdateSet).not.toHaveBeenCalled();
+  });
+
+  it('reaps managed Cloud Agent runs past timeoutAt as cloud_agent_timeout', async () => {
+    mockFindMany.mockResolvedValue([{
+      id: 'run-cloud-hard',
+      threadId: 'session-1',
+      status: 'running',
+      lane: 'cloud-agent',
+      cloudAgentManaged: true,
+      cloudAgentIdentity: 'bc-1',
+      timeoutAt: timestamp(1),
+      heartbeatAt: timestamp(90_001),
+      progressAt: timestamp(10 * 60_000),
+      cancelRequested: false,
+    }]);
+
+    await reapOrphanedRuns({ now: () => now, config });
+
+    expect(finalizeReconciledAgentRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: 'run-cloud-hard',
+        status: 'failed',
+        terminalReason: 'cloud_agent_timeout',
+      }),
+    );
+    expect(mockMarkTerminal).not.toHaveBeenCalled();
+  });
+});
