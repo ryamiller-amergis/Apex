@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { ErrorBoundary } from 'react-error-boundary';
 import { DndProvider } from 'react-dnd';
@@ -130,6 +131,7 @@ const isPlanningTab = (value: string | undefined): value is PlanningTab => (
 function App() {
   const navigate = useNavigate();
   const location = useLocation();
+  const queryClient = useQueryClient();
 
   const [chatOpen, setChatOpen] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -162,7 +164,7 @@ function App() {
       return next;
     });
   }, []);
-  const { data: activeThread = null } = useChatThread(activeThreadId);
+  const { data: activeThread = null, isFetching: isFetchingActiveThread } = useChatThread(activeThreadId);
 
   type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests' | 'diagrams' | 'work-board' | 'not-found';
   const currentView: CurrentView =
@@ -518,7 +520,9 @@ function App() {
     if (!can('chat:view') || !can('chat:create')) return;
     setChatOpen(true);
     if (!panelRepo || startChat.isPending) return;
-    setActiveThreadId(null);
+    if (!options) {
+      setActiveThreadId(null);
+    }
     try {
       const result = await startChat.mutateAsync({
         kickoff: {
@@ -527,7 +531,7 @@ function App() {
           branch: panelRepo.defaultBranch ?? 'main',
           skillProvider: activeSkillConfig?.skillProvider ?? undefined,
           model: options?.model ?? DEFAULT_MODEL_ID,
-          skillSettingsId: selectedSkillSettingsId ?? undefined,
+          skillSettingsId: activeSkillConfig?.id ?? selectedSkillSettingsId ?? undefined,
           skillPath: options?.quickSkill?.skillPath,
           pillLabel: options?.quickSkill?.label ?? options?.mcpPill?.label,
           pillDescription: options?.quickSkill?.description ?? options?.mcpPill?.description ?? undefined,
@@ -547,11 +551,12 @@ function App() {
             model: options.model ?? DEFAULT_MODEL_ID,
           }),
         });
+        await queryClient.invalidateQueries({ queryKey: ['chat-thread', result.threadId] });
       }
     } catch {
       // Error shown inside the panel
     }
-  }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig]);
+  }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig, queryClient]);
 
   useEffect(() => {
     if (currentView !== 'home' || !activeThreadId || !selectedProject) return;
@@ -1417,6 +1422,8 @@ function App() {
         {/* data-testid-exempt — ChatAgentPanel API has no data-testid prop */}
         <ChatAgentPanel
           thread={activeThread}
+          activeThreadId={activeThreadId}
+          isLoadingThread={Boolean(activeThreadId) && isFetchingActiveThread && !activeThread}
           isOpen={currentView === 'home' && chatOpen}
           onClose={() => setChatOpen(false)}
           onNewChat={handleStartPanelChat}

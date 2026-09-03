@@ -292,6 +292,8 @@ function UserBubble({ msg, highlighted }: { msg: ChatMessage; highlighted?: bool
 
 interface ChatAgentPanelProps {
   thread: ChatThread | null;
+  activeThreadId?: string | null;
+  isLoadingThread?: boolean;
   isOpen: boolean;
   onClose: () => void;
   onNewChat: (options?: StartPanelChatOptions) => void | Promise<void>;
@@ -313,6 +315,8 @@ export interface StartPanelChatOptions {
 
 export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   thread,
+  activeThreadId = null,
+  isLoadingThread = false,
   isOpen,
   onClose,
   onNewChat,
@@ -336,6 +340,10 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   );
   const [selectedQuickSkill, setSelectedQuickSkill] = useState<QuickSkillPill | null>(null);
   const [selectedMcpPill, setSelectedMcpPill] = useState<QuickMcpPill | null>(null);
+  const [pendingOutgoing, setPendingOutgoing] = useState<string | null>(null);
+
+  const sessionThreadId = thread?.id ?? activeThreadId ?? null;
+  const inConversation = Boolean(sessionThreadId) || Boolean(pendingOutgoing);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -345,6 +353,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   const dragStartX = useRef(0);
   const dragStartWidth = useRef(0);
   const prdAutoOpenedRef = useRef(false);
+  const wasInConversationRef = useRef(false);
 
   const {
     attachments,
@@ -354,7 +363,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     clearAttachments,
   } = useChatAttachments();
 
-  const session = useAgentChatSession(thread?.id ?? null, {
+  const session = useAgentChatSession(sessionThreadId, {
     initialMessages: thread?.messages,
     initialStatus: thread?.status,
     initialActiveRunId: thread?.activeRunId,
@@ -372,12 +381,12 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     launchedFromHome ? selectedProject ?? null : null,
     selectedSkillSettingsId,
   );
-  const isHomeCompose = launchedFromHome && !thread;
+  const isHomeCompose = launchedFromHome && !inConversation;
 
-  // Skills for Home compose (pill descriptions) and the / picker on active threads
+  // Skills for Home pill descriptions and the / picker on active threads
   const { data: homeSkills = [] } = useSkillList(
-    isHomeCompose ? selectedProject ?? null : null,
-    isHomeCompose ? skillConfig?.skillRepo ?? null : null,
+    launchedFromHome ? selectedProject ?? null : null,
+    launchedFromHome ? skillConfig?.skillRepo ?? null : null,
     skillConfig?.skillBranch,
     skillConfig?.skillProvider ?? undefined,
   );
@@ -507,7 +516,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
 
   const doSend = useCallback(async (text: string, messageAttachments: ChatAttachment[] = []) => {
     const trimmedText = text.trim();
-    if ((!trimmedText && messageAttachments.length === 0) || isRunning || !thread) return;
+    if ((!trimmedText && messageAttachments.length === 0) || isRunning || !sessionThreadId) return;
     setInput('');
     setSkillPickerOpen(false);
     await session.send(
@@ -515,7 +524,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
       { model: selectedModel, attachments: messageAttachments },
     );
     if (messageAttachments.length > 0) clearAttachments();
-  }, [isRunning, thread, session, selectedModel, clearAttachments]);
+  }, [isRunning, sessionThreadId, session, selectedModel, clearAttachments]);
 
   const selectSkill = useCallback((skill: { name: string; path: string }) => {
     const msg = `Run skill: ${skill.name} (\`${skill.path}\`)`;
@@ -562,26 +571,36 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
 
   // ── Derived ──────────────────────────────────────────────────────────────────
 
-  const statusDotClass =
-    status === 'running' ? styles.statusDotRunning
-    : status === 'error' ? styles.statusDotError
-    : status === 'closed' ? styles.statusDotClosed
-    : styles.statusDotIdle;
-
   const visibleMessages = messages.filter((m) =>
     !(m.role === 'user' && m.text === 'Begin.') &&
     m.toolName !== '_reasoning' && m.toolName !== '_thinking'
   );
 
+  const isBootstrappingConversation =
+    inConversation
+    && (isStartingNewChat || isLoadingThread || Boolean(pendingOutgoing));
+
+  const statusDotClass =
+    status === 'running' || isBootstrappingConversation ? styles.statusDotRunning
+    : status === 'error' ? styles.statusDotError
+    : status === 'closed' ? styles.statusDotClosed
+    : styles.statusDotIdle;
+
   // A selected thread can legitimately hold nothing to show: the kickoff prompt
   // is hidden, and a run that never produced a reply persists no agent message.
   const hasEmptyTranscript =
-    visibleMessages.length === 0 && !showTypingIndicator && !streamingText;
+    visibleMessages.length === 0
+    && !pendingOutgoing
+    && !showTypingIndicator
+    && !streamingText
+    && !isStartingNewChat
+    && !(isLoadingThread && inConversation);
 
   const statusLabel =
     status === 'running' ? 'Agent is thinking…'
     : status === 'error' ? 'Error occurred'
     : status === 'closed' ? 'Thread closed'
+    : isBootstrappingConversation ? 'Agent is thinking…'
     : hasEmptyTranscript ? 'No messages'
     : visibleMessages.length === 0 ? 'Starting skill…'
     : 'Ready';
@@ -591,31 +610,79 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   const hasHomePills = quickSkillPills.length > 0 || quickMcpPills.length > 0;
   const needsSkillSelection = isHomeCompose && hasHomePills && !selectedQuickSkill && !selectedMcpPill;
 
+  const resolvedQuickSkill = useMemo((): QuickSkillPill | null => {
+    if (selectedQuickSkill) return selectedQuickSkill;
+    const skillPath = thread?.kickoff.skillPath;
+    if (!skillPath) return null;
+    return quickSkillPills.find((pill) => pill.skillPath === skillPath) ?? {
+      label: thread.kickoff.pillLabel ?? skillPath,
+      skillPath,
+      description: thread.kickoff.pillDescription ?? null,
+      model: thread.kickoff.model,
+    };
+  }, [selectedQuickSkill, thread, quickSkillPills]);
+
+  const resolvedMcpPill = useMemo((): QuickMcpPill | null => {
+    if (selectedMcpPill) return selectedMcpPill;
+    return thread?.kickoff.mcpPill ?? null;
+  }, [selectedMcpPill, thread]);
+
   const selectedPillDescription = useMemo(() => {
-    if (selectedQuickSkill) {
-      return selectedQuickSkill.description
-        ?? homeSkills.find((s) => s.path === selectedQuickSkill.skillPath)?.description
-        ?? `Skill: ${selectedQuickSkill.label}`;
+    if (resolvedQuickSkill) {
+      return resolvedQuickSkill.description
+        ?? homeSkills.find((s) => s.path === resolvedQuickSkill.skillPath)?.description
+        ?? `Skill: ${resolvedQuickSkill.label}`;
     }
-    if (selectedMcpPill) {
-      return selectedMcpPill.description ?? `MCP: ${selectedMcpPill.label}`;
+    if (resolvedMcpPill) {
+      return resolvedMcpPill.description ?? `MCP: ${resolvedMcpPill.label}`;
     }
     return null;
-  }, [selectedQuickSkill, selectedMcpPill, homeSkills]);
+  }, [resolvedQuickSkill, resolvedMcpPill, homeSkills]);
+
+  useEffect(() => {
+    if (newChatError) {
+      setPendingOutgoing(null);
+    }
+  }, [newChatError]);
+
+  useEffect(() => {
+    if (!pendingOutgoing) return;
+    if (visibleMessages.some((message) => message.role === 'user' && message.text === pendingOutgoing)) {
+      setPendingOutgoing(null);
+    }
+  }, [pendingOutgoing, visibleMessages]);
+
+  useEffect(() => {
+    if (!sessionThreadId) {
+      setPendingOutgoing(null);
+    }
+  }, [sessionThreadId]);
+
+  useEffect(() => {
+    if (wasInConversationRef.current && !inConversation && !isStartingNewChat) {
+      setSelectedQuickSkill(null);
+      setSelectedMcpPill(null);
+    }
+    wasInConversationRef.current = inConversation;
+  }, [inConversation, isStartingNewChat]);
 
   const startFromEmptyComposer = async () => {
     const message = input.trim();
     if (!message && !selectedQuickSkill && !selectedMcpPill) return;
+    if (message) {
+      setPendingOutgoing(message);
+    }
+    setInput('');
     await onNewChat({
       model: selectedModel,
       quickSkill: selectedQuickSkill ?? undefined,
       mcpPill: selectedMcpPill ?? undefined,
       initialMessage: message || undefined,
     });
-    setInput('');
-    setSelectedQuickSkill(null);
-    setSelectedMcpPill(null);
   };
+
+  const showStartupTyping = isBootstrappingConversation
+    && (Boolean(pendingOutgoing) || isStartingNewChat || isLoadingThread);
 
   if (!isOpen) return null;
 
@@ -650,7 +717,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
           </button>
         </>
       )}
-      status={thread ? (
+      status={inConversation ? (
         <div className={styles.statusBar}>
           <span className={`${styles.statusDot} ${statusDotClass}`} />
           <span className={styles.statusText}>{statusLabel}</span>
@@ -666,13 +733,16 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                 <button
                   key={pill.skillPath}
                   type="button"
-                  className={`${styles.quickPill} ${selectedQuickSkill?.skillPath === pill.skillPath ? styles.quickPillSelected : ''}`}
+                  className={`${styles.quickPill} ${resolvedQuickSkill?.skillPath === pill.skillPath ? styles.quickPillSelected : ''}`}
                   onClick={() => {
+                    if (inConversation) return;
                     const selected = selectedQuickSkill?.skillPath === pill.skillPath ? null : pill;
                     setSelectedQuickSkill(selected);
                     setSelectedMcpPill(null);
                     setSelectedModel(selected?.model ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID);
                   }}
+                  disabled={inConversation}
+                  aria-pressed={resolvedQuickSkill?.skillPath === pill.skillPath}
                   {...{ 'data-testid': `chat-agent-skill-pill-${testIdSegment(pill.skillPath)}` }}
                 >
                   {pill.label}
@@ -685,13 +755,15 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                 <button
                   key={pill.mcpServerName}
                   type="button"
-                  className={`${styles.quickPill} ${selectedMcpPill?.mcpServerName === pill.mcpServerName ? styles.quickPillSelected : ''}`}
+                  className={`${styles.quickPill} ${resolvedMcpPill?.mcpServerName === pill.mcpServerName ? styles.quickPillSelected : ''}`}
                   onClick={() => {
+                    if (inConversation) return;
                     const selected = selectedMcpPill?.mcpServerName === pill.mcpServerName ? null : pill;
                     setSelectedMcpPill(selected);
                     setSelectedQuickSkill(null);
                     setSelectedModel(selected?.model ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID);
                   }}
+                  disabled={inConversation}
                   {...{ 'data-testid': `chat-agent-mcp-pill-${testIdSegment(pill.mcpServerName)}` }}
                 >
                   {pill.label}
@@ -710,14 +782,14 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
 
       {showHistory && onSelectThread ? (
         <ThreadHistorySidebar
-          activeThreadId={thread?.id ?? null}
+          activeThreadId={sessionThreadId}
           onSelectThread={handleSelectThreadFromHistory}
-          onDeleteThread={(id) => { if (id === thread?.id) onSelectThread(''); }}
+          onDeleteThread={(id) => { if (id === sessionThreadId) onSelectThread(''); }}
           onClose={() => setShowHistory(false)}
           project={selectedProject}
           className={styles.historySidebarInPanel}
         />
-      ) : !thread ? (
+      ) : !inConversation ? (
         <>
           <div className={styles.emptyPane}>
           <span className={styles.emptyIcon}>AI</span>
@@ -775,7 +847,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                 {...{ 'data-testid': 'chat-agent-empty-transcript' }}
               >
                 <h3 className={styles.transcriptEmptyTitle}>No messages in this conversation</h3>
-                {thread.lastError ? (
+                {thread?.lastError ? (
                   <p className={styles.transcriptEmptyError} role="status">
                     The last agent run did not finish: {thread.lastError}
                   </p>
@@ -786,6 +858,17 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                     : 'Send a message to start it.'}
                 </p>
               </div>
+            )}
+            {pendingOutgoing
+              && !visibleMessages.some((message) => message.role === 'user' && message.text === pendingOutgoing) && (
+              <UserBubble
+                msg={{
+                  id: 'pending-outgoing',
+                  role: 'user',
+                  text: pendingOutgoing,
+                  ts: new Date().toISOString(),
+                }}
+              />
             )}
             {visibleMessages.map((msg, idx) => {
               const highlighted = highlightedMessageId === msg.id;
@@ -850,7 +933,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             })}
 
             {/* Loading spinner — shown while waiting for first tokens */}
-            {showTypingIndicator && (
+            {(showTypingIndicator || showStartupTyping) && (
               <div
                 className={styles.message}
                 role="status"
@@ -868,12 +951,12 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                     <span className={styles.typingDot} />
                     <span className={styles.typingDot} />
                   </div>
-                  {progressLabel && (
+                  {(progressLabel || showStartupTyping) && (
                     <p
                       className={styles.progressLabel}
                       {...{ 'data-testid': 'chat-agent-progress-label' }}
                     >
-                      {progressLabel}
+                      {progressLabel ?? 'Starting skill…'}
                     </p>
                   )}
                 </div>
@@ -984,7 +1067,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             )}
           />
 
-          {showPrdPreview && (
+          {showPrdPreview && thread && (
             // data-testid-exempt — PRDPreviewDrawer owns its interactive test ids
             <PRDPreviewDrawer
               threadId={thread.id}

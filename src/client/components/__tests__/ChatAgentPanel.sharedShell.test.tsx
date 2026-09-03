@@ -186,6 +186,41 @@ describe('ChatAgentPanel shared Home shell', () => {
     }));
   });
 
+  it('keeps the Home skill context while a new thread is bootstrapping', () => {
+    const bootstrappingThread: ChatThread = {
+      ...thread,
+      id: 'thread-bootstrapping',
+      messages: [],
+      kickoff: {
+        ...thread.kickoff,
+        skillPath: '/to-prd',
+        pillLabel: 'Write PRD',
+        pillDescription: 'Generate a PRD from interview notes',
+      },
+    };
+    render(
+      <ChatAgentPanel
+        thread={bootstrappingThread}
+        activeThreadId="thread-bootstrapping"
+        isLoadingThread
+        isStartingNewChat
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+        launchedFromHome
+        selectedProject="Apex"
+      />,
+    );
+
+    expect(screen.queryByText('No conversation yet')).not.toBeInTheDocument();
+    expect(screen.getByText('Agent is thinking…')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-agent-skill-pill-to-prd')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('chat-agent-pill-description')).toHaveTextContent(
+      'Generate a PRD from interview notes',
+    );
+    expect(screen.getByTestId('chat-run-spinner')).toBeInTheDocument();
+  });
+
   it('explains an empty transcript instead of rendering a blank pane', () => {
     const emptyThread: ChatThread = {
       ...thread,
