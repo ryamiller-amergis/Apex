@@ -3,6 +3,7 @@ import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   useAssignedWorkItems,
+  useWorkItemCommentCount,
   useStartDevSession,
   useActiveSessions,
   useCloseDevSession,
@@ -87,6 +88,35 @@ describe('useAssignedWorkItems', () => {
 
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(result.current.error?.message).toBe('Failed to fetch assigned work items');
+  });
+});
+
+describe('useWorkItemCommentCount', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('fetches comment count for a work item', async () => {
+    mockFetchOk({ count: 3 });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useWorkItemCommentCount(42, 'MaxView'), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toEqual({ count: 3 });
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/dev-workbench/workitems/42/comment-count?project=MaxView',
+      expect.objectContaining({ credentials: 'include' }),
+    );
+  });
+
+  it('does not fetch when project is null', () => {
+    global.fetch = jest.fn() as jest.Mock;
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useWorkItemCommentCount(42, null), { wrapper });
+
+    expect(result.current.fetchStatus).toBe('idle');
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 });
 
