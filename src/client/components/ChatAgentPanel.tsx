@@ -374,7 +374,22 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
       && m.toolName !== '_reasoning'
       && m.toolName !== '_thinking',
   });
-  const { messages, streamingText, isConnected, prdReady, isRunning, status, progressLabel, showTypingIndicator } = session;
+  const {
+    messages,
+    streamingText,
+    isConnected,
+    hasConnectionError,
+    prdReady,
+    isRunning,
+    isSending,
+    isCancelling,
+    isAwaitingAgentResponse,
+    isInteractionBusy,
+    status,
+    progressLabel,
+    showTypingIndicator,
+    sendError,
+  } = session;
 
   const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
   const { data: globalDefaultModel } = useGlobalDefaultModel();
@@ -588,12 +603,16 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     m.toolName !== '_reasoning' && m.toolName !== '_thinking'
   );
 
-  const isBootstrappingConversation =
+  const isStartingConversation =
     inConversation
-    && (isStartingNewChat || isLoadingThread || Boolean(pendingOutgoing));
+    && (isStartingNewChat || Boolean(pendingOutgoing));
+  const isLoadingConversation =
+    inConversation && isLoadingThread && !isStartingConversation;
+  const canStop =
+    isRunning || isSending || isAwaitingAgentResponse;
 
   const statusDotClass =
-    status === 'running' || isBootstrappingConversation ? styles.statusDotRunning
+    isRunning || isStartingConversation ? styles.statusDotRunning
     : status === 'error' ? styles.statusDotError
     : status === 'closed' ? styles.statusDotClosed
     : styles.statusDotIdle;
@@ -609,10 +628,11 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     && !(isLoadingThread && inConversation);
 
   const statusLabel =
-    status === 'running' ? 'Agent is thinking…'
+    isRunning ? 'Agent is thinking…'
     : status === 'error' ? 'Error occurred'
     : status === 'closed' ? 'Thread closed'
-    : isBootstrappingConversation ? 'Agent is thinking…'
+    : isStartingConversation ? 'Agent is thinking…'
+    : isLoadingConversation ? 'Loading conversation…'
     : hasEmptyTranscript ? 'No messages'
     : visibleMessages.length === 0 ? 'Starting skill…'
     : 'Ready';
@@ -641,7 +661,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
 
   const displayedQuickSkill =
     inConversation
-      ? queuedQuickSkill ?? (isBootstrappingConversation ? resolvedQuickSkill : null)
+      ? queuedQuickSkill ?? (isStartingConversation ? resolvedQuickSkill : null)
       : resolvedQuickSkill;
 
   const selectedPillDescription = useMemo(() => {
@@ -700,8 +720,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     });
   };
 
-  const showStartupTyping = isBootstrappingConversation
-    && (Boolean(pendingOutgoing) || isStartingNewChat || isLoadingThread);
+  const showStartupTyping = isStartingConversation;
 
   if (!isOpen) return null;
 
@@ -740,7 +759,13 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
         <div className={styles.statusBar}>
           <span className={`${styles.statusDot} ${statusDotClass}`} />
           <span className={styles.statusText}>{statusLabel}</span>
-          <span className={styles.connBadge}>{isConnected ? '● live' : '○ Disconnected'}</span>
+          <span className={styles.connBadge}>
+            {isConnected
+              ? '● live'
+              : hasConnectionError
+                ? '○ Disconnected'
+                : '○ Connecting…'}
+          </span>
         </div>
       ) : undefined}
       before={launchedFromHome ? (
@@ -881,7 +906,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
         </>
       ) : (
         <>
-          {!isConnected && (
+          {hasConnectionError && (
             <div
               className={styles.connectionError}
               role="status"
@@ -891,6 +916,17 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             </div>
           )}
           <div className={styles.messages}>
+            {isLoadingConversation && (
+              <div
+                className={styles.transcriptEmpty}
+                role="status"
+                {...{ 'data-testid': 'chat-agent-history-loading' }}
+              >
+                <p className={styles.transcriptEmptyHint}>
+                  Loading conversation…
+                </p>
+              </div>
+            )}
             {hasEmptyTranscript && (
               <div
                 className={styles.transcriptEmpty}
@@ -1047,6 +1083,12 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             </div>
           )}
 
+          {sendError && (
+            <p className={styles.emptyError} role="alert">
+              {sendError}
+            </p>
+          )}
+
           <AgentComposer
             className={styles.composerEmbed}
             value={input}
@@ -1059,8 +1101,9 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             onSend={() => void doSend(input, attachments)}
             onCancel={() => void session.cancel()}
             disabled={status === 'closed'}
-            isRunning={isRunning}
-            isBusy={isRunning || status === 'closed'}
+            isRunning={canStop}
+            isCancelling={isCancelling}
+            isBusy={isInteractionBusy || status === 'closed'}
             placeholder={
               isRunning
                 ? 'Agent is thinking…'

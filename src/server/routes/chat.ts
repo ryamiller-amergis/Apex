@@ -458,14 +458,6 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
     sendEvent({ type: 'message', message: msg });
   }
 
-  // Send current status after the message replay so the client can render
-  // the full history before seeing the running/idle indicator. Prefer the
-  // hydrated status since it reflects the normalized in-memory state.
-  sendEvent(buildStreamStatusEvent(
-    hydrated?.status ?? thread.status,
-    eventDrivenTermination,
-  ));
-
   unsubscribe = subscribeToThread(req.params.id, sendLocalEvent);
 
   // Cross-worker: also subscribe via Postgres LISTEN/NOTIFY so tokens from
@@ -483,6 +475,14 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
     return [];
   });
   for (const envelope of replayEvents) sendEnvelope(envelope);
+
+  // Historical phase/done events must not override the current thread state.
+  // Send the authoritative snapshot after replay, then drain events that
+  // arrived live while replay was in progress.
+  sendEvent(buildStreamStatusEvent(
+    hydrated?.status ?? thread.status,
+    eventDrivenTermination,
+  ));
   replaying = false;
   pendingLiveEvents
     .sort((left, right) => left.timestamp.localeCompare(right.timestamp) || left.sequence - right.sequence)

@@ -74,6 +74,8 @@ interface ChatStreamState {
   toolProgress: ToolProgress[];
   status: ChatThreadStatus;
   isConnected: boolean;
+  /** True only after the current stream reports a connection failure. */
+  hasConnectionError: boolean;
   /** Client-observed timestamp of the latest semantic run progress event. */
   lastProgressAt: number | null;
   phaseEvents: RunPhaseProgress[];
@@ -223,6 +225,7 @@ export function useChatStream(
     options.initialStatus ?? 'idle'
   );
   const [isConnected, setIsConnected] = useState(false);
+  const [hasConnectionError, setHasConnectionError] = useState(false);
   const [lastProgressAt, setLastProgressAt] = useState<number | null>(null);
   const [phaseEvents, setPhaseEvents] = useState<RunPhaseProgress[]>([]);
   const [runHealth, setRunHealth] = useState<RunHealthProgress | null>(null);
@@ -303,6 +306,7 @@ export function useChatStream(
     setToolProgress([]);
     setStatus(initialStatusRef.current ?? 'idle');
     setIsConnected(false);
+    setHasConnectionError(false);
     setLastProgressAt(null);
     setPhaseEvents([]);
     setRunHealth(null);
@@ -625,10 +629,14 @@ export function useChatStream(
     };
 
     const stream = openThreadEventStream(threadId, {
-      onOpen: () => setIsConnected(true),
+      onOpen: () => {
+        setIsConnected(true);
+        setHasConnectionError(false);
+      },
       onError: () => {
         // SSE auto-reconnects; the WS backend reconnects with ordinal resume.
         setIsConnected(false);
+        setHasConnectionError(true);
       },
       onMessage: handleMessage,
     });
@@ -793,6 +801,7 @@ export function useChatStream(
     toolProgress,
     status,
     isConnected,
+    hasConnectionError,
     lastProgressAt,
     phaseEvents,
     runHealth,

@@ -62,6 +62,20 @@ export const DEFAULT_WALKTHROUGH_GENERATION_SKILL_PATH =
 /** Max ranked catalog candidates injected into kickoff / start response. */
 export const DEFAULT_GENERATION_ANCHOR_RANK_LIMIT = 12;
 
+/**
+ * Max authoring-catalog anchors listed in kickoff context.
+ *
+ * The catalog grows without bound as anchors are approved (1000+ rows after a
+ * classifier sync). Emitting all of them made kickoff-context.md hundreds of KB,
+ * so the agent burned its whole policy timeout reading it and never wrote a
+ * proposal. Proposal keys are still validated against the full catalog on parse.
+ */
+export const DEFAULT_GENERATION_AUTHORING_CATALOG_LIMIT = 120;
+
+/** Per-anchor evidence caps inside the kickoff catalog listing. */
+const KICKOFF_CATALOG_SOURCE_LOCATIONS_PER_ANCHOR = 2;
+const KICKOFF_CATALOG_TAGS_PER_ANCHOR = 8;
+
 const APEX_REPOSITORY_PROJECT = 'Apex';
 const OUTPUT_RELATIVE_PATH = ['.ai-pilot', 'output', 'walkthrough-generation.json'];
 
@@ -388,24 +402,73 @@ export async function rankAnchorMatchesForAiDraftStep(
   };
 }
 
-async function resolveGenerationAnchorRanking(
+interface GenerationCatalogContext {
+  ranking: WalkthroughGenerationAnchorRanking;
+  /** Relevance-ordered anchor keys used to cap the kickoff catalog listing. */
+  kickoffCatalogKeys: string[];
+}
+
+async function resolveGenerationCatalogContext(
   request: GenerateWalkthroughAiDraftRequest,
-): Promise<WalkthroughGenerationAnchorRanking> {
+): Promise<GenerationCatalogContext> {
   try {
     const records = await loadApprovedActiveCatalogAnchors();
-    return buildWalkthroughGenerationAnchorRanking(records, request);
+    return {
+      ranking: buildWalkthroughGenerationAnchorRanking(records, request),
+      kickoffCatalogKeys: rankWalkthroughAnchorsByTags(
+        records,
+        buildGenerationAnchorRankingQuery(request),
+        { limit: DEFAULT_GENERATION_AUTHORING_CATALOG_LIMIT },
+      ).map((candidate) => candidate.anchorKey),
+    };
   } catch {
-    return emptyAnchorRanking();
+    return { ranking: emptyAnchorRanking(), kickoffCatalogKeys: [] };
   }
+}
+
+/**
+ * Pick the anchors listed in kickoff context: relevance-ordered first, then
+ * catalog order to fill the cap.
+ */
+export function selectKickoffCatalogAnchors(
+  authoringAnchors: readonly WalkthroughAnchorRegistryEntry[],
+  relevanceOrderedKeys: readonly string[],
+  limit = DEFAULT_GENERATION_AUTHORING_CATALOG_LIMIT,
+): readonly WalkthroughAnchorRegistryEntry[] {
+  if (authoringAnchors.length <= limit) return authoringAnchors;
+
+  const byKey = new Map(authoringAnchors.map((entry) => [entry.key, entry] as const));
+  const picked: WalkthroughAnchorRegistryEntry[] = [];
+  const seen = new Set<string>();
+
+  for (const key of relevanceOrderedKeys) {
+    if (picked.length >= limit) return picked;
+    const entry = byKey.get(key);
+    if (!entry || seen.has(key)) continue;
+    picked.push(entry);
+    seen.add(key);
+  }
+  for (const entry of authoringAnchors) {
+    if (picked.length >= limit) break;
+    if (seen.has(entry.key)) continue;
+    picked.push(entry);
+    seen.add(entry.key);
+  }
+  return picked;
 }
 
 function buildKickoffContext(
   request: GenerateWalkthroughAiDraftRequest,
   anchorRanking: WalkthroughGenerationAnchorRanking,
   authoringAnchors: readonly WalkthroughAnchorRegistryEntry[],
+  relevanceOrderedKeys: readonly string[] = [],
 ): string {
   const routes = listWalkthroughRoutes();
   const assets = listPublicWalkthroughAssetPaths();
+  const catalogForKickoff = selectKickoffCatalogAnchors(
+    authoringAnchors,
+    relevanceOrderedKeys,
+  );
 
   const lines = [
     `# Walkthrough Generation Request`,
@@ -424,18 +487,25 @@ function buildKickoffContext(
     '',
     '## Authoring Catalog Anchors (approved + active allow-list)',
     '',
+    catalogForKickoff.length < authoringAnchors.length
+      ? `Showing the ${catalogForKickoff.length} anchors most relevant to this intent, out of ${authoringAnchors.length} approved + active anchors. Only use \`key\` values from this list; if none fit a step, use a centered step instead.`
+      : 'Only use `key` values from this list; if none fit a step, use a centered step instead.',
+    '',
     'For each candidate, use `testId` and `sourceLocations` to inspect the actual target in the repository. Detect targets rendered only after a modal, menu, tab, disclosure, or other conditional action. Use existing `openerAnchorKeys` in order; if a hidden target has no valid opener chain, prefer a visible alternative or a centered step rather than assuming it will appear.',
     '',
     JSON.stringify(
-      authoringAnchors.map((a) => ({
+      catalogForKickoff.map((a) => ({
         key: a.key,
         testId: a.testId,
         label: a.label,
         targetRoute: a.targetRoute,
         allowedPlacements: a.allowedPlacements,
-        smartTags: a.smartTags ?? [],
+        smartTags: (a.smartTags ?? []).slice(0, KICKOFF_CATALOG_TAGS_PER_ANCHOR),
         openerAnchorKeys: a.openerAnchorKeys ?? [],
-        sourceLocations: a.sourceLocations ?? [],
+        sourceLocations: (a.sourceLocations ?? []).slice(
+          0,
+          KICKOFF_CATALOG_SOURCE_LOCATIONS_PER_ANCHOR,
+        ),
       })),
       null,
       2,
@@ -506,10 +576,11 @@ export async function startGeneration(
     skillConfig?.developmentModel ||
     globalModel;
 
-  const [anchorRanking, authoringAnchors] = await Promise.all([
-    resolveGenerationAnchorRanking(request),
+  const [catalogContext, authoringAnchors] = await Promise.all([
+    resolveGenerationCatalogContext(request),
     loadAuthoringCatalogForGeneration(),
   ]);
+  const anchorRanking = catalogContext.ranking;
 
   const thread = await createChatThread(
     userId,
@@ -519,7 +590,12 @@ export async function startGeneration(
       branch: repositoryConnection.branch,
       skillProvider: repositoryConnection.skillProvider,
       skillPath,
-      freeformContext: buildKickoffContext(request, anchorRanking, authoringAnchors),
+      freeformContext: buildKickoffContext(
+        request,
+        anchorRanking,
+        authoringAnchors,
+        catalogContext.kickoffCatalogKeys,
+      ),
       model,
     },
     { skipAutoKickoff: true },
@@ -602,14 +678,14 @@ export async function getGenerationResult(
     return { status: 'cancelled' };
   }
 
-  if (generationInFlight.has(threadId)) {
-    return { status: 'pending', provenance };
-  }
-
   if (!row.workspaceDir) {
     return { status: 'pending', provenance };
   }
 
+  // Read the proposal before consulting run state. Agents keep the kickoff
+  // sendMessage promise open (summarizing, extra tool calls) well after writing
+  // the output file, and waiting for that burned the whole client-side timeout
+  // on runs that had already succeeded.
   const raw = readOutput(row.workspaceDir);
   if (!raw) {
     // Kickoff sendMessage is async; keep pending until it settles or the agent runs.

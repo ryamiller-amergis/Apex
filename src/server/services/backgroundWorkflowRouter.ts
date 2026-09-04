@@ -48,6 +48,7 @@ const SHARED_READ_WORKFLOW_CLASSES: ReadonlySet<BackgroundWorkflowClass> = new S
  */
 const SCRATCH_ONLY_WORKFLOW_CLASSES: ReadonlySet<BackgroundWorkflowClass> = new Set([
   'validation',
+  'walkthrough-smart-tagging',
 ]);
 
 export interface RecoverableBackgroundWorkflowFailure {

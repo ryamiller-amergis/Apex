@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   WALKTHROUGH_ANCHOR_SOURCE_KINDS,
   type WalkthroughAnchorRegistryRecord,
@@ -20,6 +20,13 @@ import styles from './WalkthroughAnchorManagement.module.css';
 
 /** Catalog rows always allow all coachmark sides; preferred side is per walkthrough step. */
 const ALL_PLACEMENTS: WalkthroughRegistryPlacement[] = [...WALKTHROUGH_REGISTRY_PLACEMENTS];
+
+/**
+ * Rows rendered per section before "Show more". Each row mounts ~9 form controls plus a
+ * route select with every curated route, so rendering a full classifier batch (hundreds of
+ * rows) at once locks up the browser.
+ */
+export const SYNC_REVIEW_PAGE_SIZE = 25;
 
 export interface WalkthroughAnchorSyncDraft
   extends Omit<WalkthroughAnchorRegistryRecord, 'allowedPlacements' | 'smartTags'> {
@@ -49,8 +56,8 @@ export interface WalkthroughAnchorSyncReviewModalProps {
   enrichmentMessage?: string | null;
   onSkipWaitingForAi?: () => void;
   /**
-   * Re-run Sync + next AI batch while keeping this modal open.
-   * Batch size comes from the chooser in this modal.
+   * Queue background AI refine for uncertain rows while keeping this modal open.
+   * Click-only: never re-runs the Sync scan. Batch size comes from the chooser here.
    */
   onRunNextAiBatch?: (batchSize: SmartTaggingBatchSize) => void;
   nextAiBatchPending?: boolean;
@@ -67,13 +74,15 @@ function toDraft(record: WalkthroughAnchorRegistryRecord): WalkthroughAnchorSync
   };
 }
 
-type ProvenanceBadge = 'Scanner only' | 'Awaiting AI' | 'AI enriched';
+type ProvenanceBadge = 'Scanner only' | 'Awaiting AI' | 'Classifier' | 'AI refined';
 
 function provenanceBadge(
   draft: WalkthroughAnchorSyncDraft,
   enrichmentRunning: boolean,
 ): ProvenanceBadge {
-  if (hasRealAiProvenance(draft)) return 'AI enriched';
+  if (hasRealAiProvenance(draft)) {
+    return draft.aiProvenance?.model === 'anchor-classifier' ? 'Classifier' : 'AI refined';
+  }
   if (enrichmentRunning) return 'Awaiting AI';
   if (draft.smartTags.length === 0 && !draft.aiProvenance?.rationale?.trim()) {
     return 'Scanner only';
@@ -89,15 +98,16 @@ function sectionForDraft(
 ): SyncReviewSectionId {
   if (draft.reviewStatus === 'approved') return 'approved';
   if (draft.reviewStatus === 'rejected') return 'rejected';
-  if (provenanceBadge(draft, enrichmentRunning) === 'AI enriched') return 'ready';
+  const badge = provenanceBadge(draft, enrichmentRunning);
+  if (badge === 'Classifier' || badge === 'AI refined') return 'ready';
   return 'needs_ai';
 }
 
 const SECTION_ORDER: SyncReviewSectionId[] = ['ready', 'needs_ai', 'approved', 'rejected'];
 
 const SECTION_LABELS: Record<SyncReviewSectionId, string> = {
-  ready: 'Ready for review (AI enriched)',
-  needs_ai: 'Still need AI / scanner only',
+  ready: 'Ready for review',
+  needs_ai: 'Uncertain / still need AI',
   approved: 'Approved (not saved yet)',
   rejected: 'Rejected (not saved yet)',
 };
@@ -160,7 +170,7 @@ export function mergeSyncReviewDraftsFromCandidates(
 }
 
 function badgeClass(badge: ProvenanceBadge): string {
-  if (badge === 'AI enriched') return styles.provenanceAi;
+  if (badge === 'AI refined' || badge === 'Classifier') return styles.provenanceAi;
   if (badge === 'Awaiting AI') return styles.provenanceAwaiting;
   return styles.provenanceScanner;
 }
@@ -185,7 +195,7 @@ interface SyncDraftRowProps {
   ) => void;
 }
 
-const SyncDraftRow: React.FC<SyncDraftRowProps> = ({
+const SyncDraftRowBase: React.FC<SyncDraftRowProps> = ({
   draft,
   selected,
   enrichmentRunning,
@@ -358,6 +368,9 @@ const SyncDraftRow: React.FC<SyncDraftRowProps> = ({
   );
 };
 
+/** Memoized so editing one row does not re-render every other rendered row. */
+const SyncDraftRow = React.memo(SyncDraftRowBase);
+
 export const WalkthroughAnchorSyncReviewModal: React.FC<
   WalkthroughAnchorSyncReviewModalProps
 > = ({
@@ -381,6 +394,14 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [showWorkflowInfo, setShowWorkflowInfo] = useState(false);
+  const [visibleCounts, setVisibleCounts] = useState<Record<SyncReviewSectionId, number>>(
+    () => ({
+      ready: SYNC_REVIEW_PAGE_SIZE,
+      needs_ai: SYNC_REVIEW_PAGE_SIZE,
+      approved: SYNC_REVIEW_PAGE_SIZE,
+      rejected: SYNC_REVIEW_PAGE_SIZE,
+    }),
+  );
   const [localBatchSize, setLocalBatchSize] = useState<SmartTaggingBatchSize>(
     batchSizeProp ?? SMART_TAGGING_BATCH_SIZE_DEFAULT,
   );
@@ -431,13 +452,20 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
     return map;
   }, [drafts, enrichmentRunning]);
 
-  const toggleSelected = (id: string) => {
+  const toggleSelected = useCallback((id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
+  }, []);
+
+  const showMoreInSection = (sectionId: SyncReviewSectionId) => {
+    setVisibleCounts((prev) => ({
+      ...prev,
+      [sectionId]: prev[sectionId] + SYNC_REVIEW_PAGE_SIZE,
+    }));
   };
 
   const selectSection = (sectionId: SyncReviewSectionId) => {
@@ -449,13 +477,16 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
     setSelectedIds(new Set());
   };
 
-  const updateDraft = <K extends keyof WalkthroughAnchorSyncDraft>(
-    id: string,
-    key: K,
-    value: WalkthroughAnchorSyncDraft[K],
-  ) => {
-    setDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, [key]: value } : d)));
-  };
+  const updateDraft = useCallback(
+    <K extends keyof WalkthroughAnchorSyncDraft>(
+      id: string,
+      key: K,
+      value: WalkthroughAnchorSyncDraft[K],
+    ) => {
+      setDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, [key]: value } : d)));
+    },
+    [],
+  );
 
   const setReviewStatusForIds = (ids: string[], status: WalkthroughAnchorReviewStatus) => {
     const idSet = new Set(ids);
@@ -500,13 +531,12 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
     onRejectSelected?.(ids);
   };
 
-  const saveDisabled = saving || enrichmentRunning;
+  const saveDisabled = saving;
   const decidedDrafts = drafts.filter(
     (d) => d.reviewStatus === 'approved' || d.reviewStatus === 'rejected',
   );
 
   const handleSave = async () => {
-    if (enrichmentRunning) return;
     if (decidedDrafts.length === 0) {
       setSaveError('Mark at least one row Approve or Reject before saving.');
       return;
@@ -533,7 +563,7 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
     }
   };
 
-  const routes = listWalkthroughRoutes();
+  const routes = useMemo(() => listWalkthroughRoutes(), []);
   const aiEnrichedCount = sections.ready.length;
   const needsAiCount = sections.needs_ai.length;
   const showNextBatch =
@@ -577,9 +607,9 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
               </div>
             </div>
             <p className={styles.modalHint}>
-              AI tags in batches of {batchSize}. Select all only selects that section (Ready ≈ this
-              batch), not every pending row. Approve/Reject → Save removes decided rows so you can
-              keep tagging.
+              Classifier tags the full pending set on Sync. AI batch size only queues optional
+              background refine of uncertain rows. Approve ready decides every Ready row, then Save
+              removes decided rows.
             </p>
           </div>
           <button
@@ -609,14 +639,14 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
             <p>
               <strong>What Sync does:</strong>
               <br />
-              Scans the Apex client for coachable UI surfaces and creates <em>pending</em> catalog
-              rows. Tags/routes stay empty until AI (or you) fills them.
+              Scans the Apex client for coachable UI surfaces and classifies pending catalog rows
+              in-process (tags, route, confidence).
             </p>
             <p>
-              <strong>What AI smart-tagging does:</strong>
-              <br />A Cursor agent reviews up to <em>{batchSize}</em> pending candidates per batch.
-              Use <em>Tag next AI batch</em> until scanner-only rows are gone (or you approve/reject
-              them). Unsaved AI results are kept when the next batch finishes.
+              <strong>What optional background AI does:</strong>
+              <br />
+              Only low-confidence leftovers can be queued to the AI-runs worker. The size chooser
+              (10 / 20 / 50 / All) limits that refine — not classifier persist. Save stays enabled.
             </p>
             <p>
               <strong>Sections &amp; select all:</strong>
@@ -642,7 +672,7 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
           <div className={styles.batchSizeOptions}>
             {SMART_TAGGING_BATCH_SIZE_OPTIONS.map((size) => (
               <button
-                key={size}
+                key={String(size)}
                 type="button"
                 className={
                   batchSize === size
@@ -653,7 +683,7 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
                 onClick={() => setBatchSize(size)}
                 {...{ 'data-testid': `walkthrough-anchor-sync-batch-size-${size}` }}
               >
-                {size}
+                {size === 'all' ? `All (${needsAiCount})` : size}
               </button>
             ))}
           </div>
@@ -663,7 +693,7 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
           <div {...{ 'data-testid': 'walkthrough-anchor-sync-enrichment-running' }}>
             <p className={styles.warningText}>
               {enrichmentMessage ??
-                'AI smart-tagging is running on this batch (tags, route, rationale). Save is disabled until it finishes.'}
+                'Background AI refine is running on uncertain rows. Save stays enabled.'}
             </p>
             {onSkipWaitingForAi && (
               <button
@@ -691,7 +721,9 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
                 onClick={() => onRunNextAiBatch?.(batchSize)}
                 {...{ 'data-testid': 'walkthrough-anchor-sync-next-batch' }}
               >
-                {nextAiBatchPending ? 'Starting next AI batch…' : `Tag next AI batch (${batchSize})`}
+                {nextAiBatchPending
+                  ? 'Queuing background AI…'
+                  : `Refine uncertain with AI (${batchSize === 'all' ? `All (${needsAiCount})` : batchSize})`}
               </button>
             )}
           </div>
@@ -711,8 +743,8 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
                 {...{ 'data-testid': 'walkthrough-anchor-sync-next-batch' }}
               >
                 {nextAiBatchPending
-                  ? 'Starting next AI batch…'
-                  : `Retry / tag next AI batch (${batchSize})`}
+                  ? 'Queuing background AI…'
+                  : `Retry refine (${batchSize === 'all' ? `All (${needsAiCount})` : batchSize})`}
               </button>
             )}
           </div>
@@ -720,8 +752,8 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
         {enrichmentStatus === 'idle' && drafts.length > 0 && (
           <div {...{ 'data-testid': 'walkthrough-anchor-sync-enrichment-idle' }}>
             <p className={styles.hint}>
-              {needsAiCount} still need AI · {aiEnrichedCount} ready for review. Empty tags/route
-              mean AI has not run on those rows yet.
+              {needsAiCount} uncertain · {aiEnrichedCount} ready for review. Use Refine uncertain
+              with AI only if you want the background worker to revisit leftovers.
             </p>
             {showNextBatch && (
               <button
@@ -731,7 +763,9 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
                 onClick={() => onRunNextAiBatch?.(batchSize)}
                 {...{ 'data-testid': 'walkthrough-anchor-sync-next-batch' }}
               >
-                {nextAiBatchPending ? 'Starting next AI batch…' : `Tag next AI batch (${batchSize})`}
+                {nextAiBatchPending
+                  ? 'Queuing background AI…'
+                  : `Refine uncertain with AI (${batchSize === 'all' ? `All (${needsAiCount})` : batchSize})`}
               </button>
             )}
           </div>
@@ -794,6 +828,8 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
               {SECTION_ORDER.map((sectionId) => {
                 const sectionDrafts = sections[sectionId];
                 if (sectionDrafts.length === 0) return null;
+                const visibleCount = Math.min(visibleCounts[sectionId], sectionDrafts.length);
+                const hiddenCount = sectionDrafts.length - visibleCount;
                 return (
                   <section
                     key={sectionId}
@@ -816,7 +852,7 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
                         Select all in section
                       </button>
                     </div>
-                    {sectionDrafts.map((draft) => (
+                    {sectionDrafts.slice(0, visibleCount).map((draft) => (
                       <SyncDraftRow
                         key={draft.id}
                         draft={draft}
@@ -827,6 +863,28 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
                         onUpdate={updateDraft}
                       />
                     ))}
+                    {hiddenCount > 0 && (
+                      <div
+                        className={styles.syncPagerRow}
+                        {...{ 'data-testid': `walkthrough-anchor-sync-pager-${sectionId}` }}
+                      >
+                        <span className={styles.hint}>
+                          Showing {visibleCount} of {sectionDrafts.length} rows. Approve ready,
+                          Reject ready, and Select all in section still cover all{' '}
+                          {sectionDrafts.length}.
+                        </span>
+                        <button
+                          type="button"
+                          className={styles.buttonGhost}
+                          onClick={() => showMoreInSection(sectionId)}
+                          {...{
+                            'data-testid': `walkthrough-anchor-sync-show-more-${sectionId}`,
+                          }}
+                        >
+                          Show {Math.min(SYNC_REVIEW_PAGE_SIZE, hiddenCount)} more
+                        </button>
+                      </div>
+                    )}
                   </section>
                 );
               })}
@@ -859,19 +917,13 @@ export const WalkthroughAnchorSyncReviewModal: React.FC<
             onClick={() => void handleSave()}
             disabled={saveDisabled || decidedDrafts.length === 0}
             title={
-              enrichmentRunning
-                ? 'Wait for AI smart-tagging to finish before saving'
-                : decidedDrafts.length === 0
-                  ? 'Approve or reject at least one row before saving'
-                  : `Save ${decidedDrafts.length} decided row(s) and remove them from this list`
+              decidedDrafts.length === 0
+                ? 'Approve or reject at least one row before saving'
+                : `Save ${decidedDrafts.length} decided row(s) and remove them from this list`
             }
             {...{ 'data-testid': 'walkthrough-anchor-sync-save' }}
           >
-            {saving
-              ? 'Saving…'
-              : enrichmentRunning
-                ? 'Waiting for AI…'
-                : `Save decided (${decidedDrafts.length})`}
+            {saving ? 'Saving…' : `Save decided (${decidedDrafts.length})`}
           </button>
         </div>
       </div>

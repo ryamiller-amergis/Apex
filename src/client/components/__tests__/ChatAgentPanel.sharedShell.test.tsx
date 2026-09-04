@@ -11,11 +11,17 @@ jest.mock('../../hooks/useAgentChatSession', () => ({
     messages: options?.initialMessages ?? [],
     streamingText: '',
     isConnected: true,
+    hasConnectionError: false,
     prdReady: false,
     isRunning: false,
+    isSending: false,
+    isCancelling: false,
+    isAwaitingAgentResponse: false,
+    isInteractionBusy: false,
     status: 'idle',
     progressLabel: null,
     showTypingIndicator: false,
+    sendError: null,
     send: mockSend,
     cancel: jest.fn(),
     retryLast: mockRetryLast,
@@ -68,7 +74,10 @@ jest.mock('../agentChat', () => {
       value,
       onChange,
       onSend,
+      onCancel,
       canSend,
+      isRunning,
+      isCancelling,
       after,
     }: {
       testIdPrefix: string;
@@ -76,7 +85,10 @@ jest.mock('../agentChat', () => {
       value?: string;
       onChange?: (value: string) => void;
       onSend: () => void;
+      onCancel?: () => void;
       canSend?: boolean;
+      isRunning?: boolean;
+      isCancelling?: boolean;
       after?: React.ReactNode;
     }) => (
       <div {...{ 'data-testid': `${testIdPrefix}-composer-mock`, 'data-model': model }}>
@@ -87,6 +99,11 @@ jest.mock('../agentChat', () => {
           onChange={(event) => onChange?.(event.target.value)}
         />
         <button type="button" onClick={onSend} disabled={canSend === false}>Send mock</button>
+        {isRunning && onCancel && (
+          <button type="button" onClick={onCancel} disabled={isCancelling}>
+            {isCancelling ? 'Stopping…' : 'Stop'}
+          </button>
+        )}
         {after}
       </div>
     ),
@@ -175,6 +192,87 @@ describe('ChatAgentPanel shared Home shell', () => {
     render(<ChatAgentPanel thread={thread} isOpen onClose={jest.fn()} onNewChat={onNewChat} />);
     fireEvent.click(screen.getByTestId('chat-agent-new-chat-btn'));
     expect(onNewChat).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows immediate stopping feedback after Stop is requested', () => {
+    mockSessionOverrides = {
+      isRunning: true,
+      isCancelling: true,
+      status: 'running',
+    };
+    render(
+      <ChatAgentPanel
+        thread={{ ...thread, status: 'running', activeRunId: 'run-1' }}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Stopping…' })).toBeDisabled();
+  });
+
+  it('shows Stop while a sent turn is waiting for running status', () => {
+    mockSessionOverrides = {
+      isRunning: false,
+      isAwaitingAgentResponse: true,
+      isInteractionBusy: true,
+      showTypingIndicator: true,
+      status: 'idle',
+    };
+    render(
+      <ChatAgentPanel
+        thread={thread}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
+    expect(screen.getByTestId('chat-run-spinner')).toBeInTheDocument();
+  });
+
+  it('labels history loading without showing agent thinking', () => {
+    render(
+      <ChatAgentPanel
+        thread={null}
+        activeThreadId="thread-history"
+        isLoadingThread
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('chat-agent-history-loading')).toHaveTextContent(
+      'Loading conversation…',
+    );
+    expect(screen.queryByTestId('chat-run-spinner')).not.toBeInTheDocument();
+    expect(screen.queryByText('Agent is thinking…')).not.toBeInTheDocument();
+  });
+
+  it('shows a saved agent response as ready even if raw status is still running', () => {
+    mockSessionOverrides = {
+      isRunning: false,
+      isSending: false,
+      isAwaitingAgentResponse: false,
+      isInteractionBusy: false,
+      showTypingIndicator: false,
+      status: 'running',
+    };
+    render(
+      <ChatAgentPanel
+        thread={{ ...thread, status: 'running', activeRunId: 'run-finishing' }}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Ready')).toBeInTheDocument();
+    expect(screen.queryByText('Agent is thinking…')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
   });
 
   it('TBI-006 DoD-1 applies a Home skill pill model and kickoff metadata', () => {
@@ -309,7 +407,10 @@ describe('ChatAgentPanel shared Home shell', () => {
   });
 
   it('PBI-006 AC-1 keeps the transcript visible while disconnected', () => {
-    mockSessionOverrides = { isConnected: false };
+    mockSessionOverrides = {
+      isConnected: false,
+      hasConnectionError: true,
+    };
     render(<ChatAgentPanel thread={thread} isOpen onClose={jest.fn()} onNewChat={jest.fn()} />);
 
     expect(screen.getByText('○ Disconnected')).toBeInTheDocument();
@@ -318,5 +419,16 @@ describe('ChatAgentPanel shared Home shell', () => {
     expect(screen.getByTestId('chat-agent-composer-mock')).toBeInTheDocument();
     expect(screen.queryByTestId('chat-agent-retry-connection')).not.toBeInTheDocument();
     expect(mockRetryLast).not.toHaveBeenCalled();
+  });
+
+  it('shows connecting without an interruption warning before first open', () => {
+    mockSessionOverrides = {
+      isConnected: false,
+      hasConnectionError: false,
+    };
+    render(<ChatAgentPanel thread={thread} isOpen onClose={jest.fn()} onNewChat={jest.fn()} />);
+
+    expect(screen.getByText('○ Connecting…')).toBeInTheDocument();
+    expect(screen.queryByTestId('chat-agent-connection-banner')).not.toBeInTheDocument();
   });
 });
