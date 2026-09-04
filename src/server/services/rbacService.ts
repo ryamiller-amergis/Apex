@@ -359,12 +359,16 @@ export async function getChangelogPrefs(userId: string): Promise<{
   lastSeenVersion: string | null;
   showOnLogin: boolean;
   dismissedBetaProdAnnouncement: boolean;
+  generationSoundEnabled: boolean;
+  generationSoundId: string;
 }> {
   const user = await db.query.appUsers.findFirst({ where: eq(appUsers.oid, userId) });
   return {
     lastSeenVersion: user?.lastSeenChangelogVersion ?? null,
     showOnLogin: user?.showChangelogOnLogin ?? true,
     dismissedBetaProdAnnouncement: user?.dismissedBetaProdAnnouncement ?? false,
+    generationSoundEnabled: user?.generationSoundEnabled ?? false,
+    generationSoundId: user?.generationSoundId ?? 'chime',
   };
 }
 
@@ -372,12 +376,20 @@ export async function getChangelogPrefs(userId: string): Promise<{
 
 export async function updateChangelogPrefs(
   userId: string,
-  updates: { lastSeenChangelogVersion?: string; showChangelogOnLogin?: boolean; dismissedBetaProdAnnouncement?: boolean },
+  updates: {
+    lastSeenChangelogVersion?: string;
+    showChangelogOnLogin?: boolean;
+    dismissedBetaProdAnnouncement?: boolean;
+    generationSoundEnabled?: boolean;
+    generationSoundId?: string;
+  },
 ): Promise<void> {
   const set: Partial<typeof appUsers.$inferInsert> = {};
   if (updates.lastSeenChangelogVersion !== undefined) set.lastSeenChangelogVersion = updates.lastSeenChangelogVersion;
   if (updates.showChangelogOnLogin !== undefined) set.showChangelogOnLogin = updates.showChangelogOnLogin;
   if (updates.dismissedBetaProdAnnouncement !== undefined) set.dismissedBetaProdAnnouncement = updates.dismissedBetaProdAnnouncement;
+  if (updates.generationSoundEnabled !== undefined) set.generationSoundEnabled = updates.generationSoundEnabled;
+  if (updates.generationSoundId !== undefined) set.generationSoundId = updates.generationSoundId;
   if (Object.keys(set).length === 0) return;
   await db.update(appUsers).set(set).where(eq(appUsers.oid, userId));
 }

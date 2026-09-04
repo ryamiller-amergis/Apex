@@ -83,6 +83,7 @@ import {
   cancelValidation,
   createDesignDoc,
   deleteDesignDoc,
+  dismissDesignDocFixSession,
   generateFallbackReport,
   getDesignDoc,
   listDesignDocs,
@@ -2230,6 +2231,17 @@ router.post('/design-docs/:id/fix-validation', requirePermission('interviews:man
 router.post('/design-docs/:id/fix-validation/accept', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     await acceptFixValidation(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /design-docs/:id/fix-session/dismiss — clear fixBaseline, keep content, no re-validate
+router.post('/design-docs/:id/fix-session/dismiss', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    await dismissDesignDocFixSession(req.params.id, userId);
     res.json({ ok: true });
   } catch (err) {
     next(err);

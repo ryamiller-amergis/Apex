@@ -1431,6 +1431,8 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
       validationScorecard: null,
       validationReportMd: null,
       validationPhase: null,
+      // Drop leftover Fix-with-Apex baseline so the review UI cannot reopen over validation.
+      fixBaseline: null,
       ...(newStatus ? { status: newStatus } : {}),
       updatedAt: new Date().toISOString(),
     })
@@ -2098,6 +2100,28 @@ export async function acceptFixValidation(designDocId: string): Promise<void> {
   );
 
   await autoStartValidation(designDocId);
+}
+
+/**
+ * Clear a Fix-with-Apex session without restoring baseline or re-validating.
+ * Keeps current live content so Retry / Re-run Validation can proceed cleanly.
+ */
+export async function dismissDesignDocFixSession(
+  designDocId: string,
+  requestingUserId: string,
+): Promise<void> {
+  const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, designDocId) });
+  if (!row) throw notFound('Design doc not found');
+  await assertAuthorOrOwnerOrAdmin(row, requestingUserId, 'dismiss fix session');
+
+  if (!row.fixBaseline) throw conflict('No active fix session to dismiss');
+
+  await db.update(designDocs)
+    .set({
+      fixBaseline: null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(designDocs.id, designDocId));
 }
 
 // Ensure assertValidStatus is used (suppress unused warning)

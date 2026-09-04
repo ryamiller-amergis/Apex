@@ -135,4 +135,47 @@ describe('requireAiRunnerAuth', () => {
 
     expect(res.status).toBe(200);
   });
+
+  it('retries once when JWKS fetch fails transiently', async () => {
+    process.env.AZURE_TENANT_ID = 'tenant-1';
+    process.env.AI_RUNS_CALLBACK_TOKEN_AUDIENCE = 'api://apex';
+    process.env.AI_RUNS_RUNNER_ALLOWED_CLIENT_IDS = 'runner-client-1';
+    const fixture = createManagedIdentityFixture(['AiRun.Runner']);
+    global.fetch = jest.fn()
+      .mockRejectedValueOnce(new TypeError('network timeout'))
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => fixture.jwks,
+      }) as unknown as typeof fetch;
+
+    const res = await request(buildApp())
+      .get('/secure')
+      .set('Authorization', `Bearer ${fixture.token}`);
+
+    expect(res.status).toBe(200);
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes JWKS when key is missing from cache response', async () => {
+    process.env.AZURE_TENANT_ID = 'tenant-1';
+    process.env.AI_RUNS_CALLBACK_TOKEN_AUDIENCE = 'api://apex';
+    process.env.AI_RUNS_RUNNER_ALLOWED_CLIENT_IDS = 'runner-client-1';
+    const fixture = createManagedIdentityFixture(['AiRun.Runner']);
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ keys: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => fixture.jwks,
+      }) as unknown as typeof fetch;
+
+    const res = await request(buildApp())
+      .get('/secure')
+      .set('Authorization', `Bearer ${fixture.token}`);
+
+    expect(res.status).toBe(200);
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
 });

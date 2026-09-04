@@ -120,6 +120,7 @@ import {
   autoStartValidation,
   triggerFixValidation,
   acceptFixValidation,
+  dismissDesignDocFixSession,
   startValidationWatcher,
   isValidationWatcherActive,
   syncValidationResult,
@@ -880,6 +881,51 @@ describe('acceptFixValidation', () => {
     await acceptFixValidation('doc-1');
 
     expect(agentSvc.createThread).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── dismissDesignDocFixSession ────────────────────────────────────────────────
+
+describe('dismissDesignDocFixSession', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('throws 404 when the design doc does not exist', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(null);
+    await expect(dismissDesignDocFixSession('doc-missing', 'user-1')).rejects.toMatchObject({
+      status: 404,
+    });
+  });
+
+  it('throws 409 when there is no active fix session', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(makeDocRow({ fixBaseline: null }));
+    await expect(dismissDesignDocFixSession('doc-1', 'user-1')).rejects.toMatchObject({
+      status: 409,
+    });
+  });
+
+  it('clears fixBaseline without starting validation', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue(
+      makeDocRow({
+        fixBaseline: {
+          design: 'a',
+          techSpec: 'b',
+          assumptions: 'c',
+          capturedAt: '2026-01-01T00:00:00Z',
+        },
+      }),
+    );
+    const updateChain = makeUpdateChain();
+    mockDb.update.mockReturnValue(updateChain);
+
+    await dismissDesignDocFixSession('doc-1', 'user-1');
+
+    const clearBaselineCall = updateChain.set.mock.calls.find(
+      (call: any[]) => call[0].fixBaseline === null,
+    );
+    expect(clearBaselineCall).toBeTruthy();
+    expect(agentSvc.createThread).not.toHaveBeenCalled();
   });
 });
 

@@ -48,6 +48,7 @@ jest.mock('../../hooks/useInterviews', () => ({
   useDesignDocsByPrd: jest.fn(() => ({ data: [] })),
   useFixValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useAcceptFixValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useDismissDesignDocFixSession: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useRevertDesignDocSection: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useOverrideDesignDocValidation: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useFixDesignDocWithAi: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
