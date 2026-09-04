@@ -393,6 +393,8 @@ export interface WalkthroughAnchorSmartTaggingCandidateInput {
 export interface WalkthroughAnchorSmartTaggingStartResponse {
   threadId: string;
   candidateTestIds: string[];
+  /** All worker threads started for this request (server chunks All leftovers). */
+  threadIds?: string[];
 }
 
 export type WalkthroughAnchorSmartTaggingStatus =
@@ -426,6 +428,8 @@ export function clampSmartTaggingBatchSize(value: number | 'all' | undefined): n
   const n =
     typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : 20;
   if (n === 10 || n === 20 || n === 50) return n;
+  // Counts above the 10/20/50 presets come from All leftover totals — do not clip to 50.
+  if (n > SMART_TAGGING_CANDIDATE_BATCH_MAX) return Number.POSITIVE_INFINITY;
   return Math.min(SMART_TAGGING_CANDIDATE_BATCH_MAX, Math.max(1, n));
 }
 
@@ -542,9 +546,69 @@ export interface ChunkedSmartTaggingProgress {
   updatedCount: number;
 }
 
+async function pollSmartTaggingThreadUntilTerminal(
+  threadId: string,
+  options?: {
+    signal?: AbortSignal;
+    pollIntervalMs?: number;
+    maxAttempts?: number;
+    candidateCount?: number;
+    onProgress?: (info: {
+      attempt: number;
+      maxAttempts: number;
+      elapsedMs: number;
+      threadId: string;
+    }) => void;
+  },
+): Promise<WalkthroughAnchorSmartTaggingStatusResponse> {
+  const interval = options?.pollIntervalMs ?? SMART_TAGGING_POLL_MS;
+  const maxAttempts =
+    options?.maxAttempts ??
+    resolveSmartTaggingPollMaxAttempts(options?.candidateCount ?? 1);
+  const startedAt = Date.now();
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (options?.signal?.aborted) {
+      throw new DOMException('Aborted', 'AbortError');
+    }
+    options?.onProgress?.({
+      attempt: attempt + 1,
+      maxAttempts,
+      elapsedMs: Date.now() - startedAt,
+      threadId,
+    });
+    const status = await registryFetch<WalkthroughAnchorSmartTaggingStatusResponse>(
+      `/api/platform-admin/walkthroughs/anchor-registry/smart-tagging/status/${encodeURIComponent(threadId)}`,
+      { signal: options?.signal },
+    );
+    if (status.status !== 'pending') {
+      return status;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const timer = window.setTimeout(() => resolve(), interval);
+      options?.signal?.addEventListener(
+        'abort',
+        () => {
+          window.clearTimeout(timer);
+          reject(new DOMException('Aborted', 'AbortError'));
+        },
+        { once: true },
+      );
+    });
+  }
+
+  const waitedMin = Math.round((Date.now() - startedAt) / 60_000);
+  return {
+    status: 'failed',
+    error: 'Smart-tagging timed out',
+    warning: `An AI batch is still running server-side after ~${waitedMin} min (client stopped waiting). The agent keeps working, so tags may appear if you Sync again once it finishes. You can edit and Save now.`,
+  };
+}
+
 /**
  * Start smart-tagging for an explicit candidate set and poll until terminal.
- * Low-level primitive: one Cursor thread per call. Throws on abort.
+ * Low-level primitive: one Cursor thread per call (or every server-started
+ * sibling thread when All leftovers were chunked). Throws on abort.
  */
 async function startAndPollSmartTaggingCandidates(
   candidates: readonly WalkthroughAnchorSmartTaggingCandidateInput[],
@@ -579,47 +643,38 @@ async function startAndPollSmartTaggingCandidates(
     },
   );
 
-  const interval = options?.pollIntervalMs ?? SMART_TAGGING_POLL_MS;
-  const maxAttempts =
-    options?.maxAttempts ?? resolveSmartTaggingPollMaxAttempts(candidates.length);
-  const startedAt = Date.now();
+  const threadIds =
+    started.threadIds?.length ? [...new Set(started.threadIds)] : [started.threadId];
+  const pollOptions = {
+    signal: options?.signal,
+    pollIntervalMs: options?.pollIntervalMs,
+    maxAttempts: options?.maxAttempts,
+    candidateCount: candidates.length,
+    onProgress: options?.onProgress,
+  };
 
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    if (options?.signal?.aborted) {
-      throw new DOMException('Aborted', 'AbortError');
-    }
-    options?.onProgress?.({
-      attempt: attempt + 1,
-      maxAttempts,
-      elapsedMs: Date.now() - startedAt,
-      threadId: started.threadId,
-    });
-    const status = await registryFetch<WalkthroughAnchorSmartTaggingStatusResponse>(
-      `/api/platform-admin/walkthroughs/anchor-registry/smart-tagging/status/${encodeURIComponent(started.threadId)}`,
-      { signal: options?.signal },
-    );
-    if (status.status !== 'pending') {
-      return status;
-    }
-    await new Promise<void>((resolve, reject) => {
-      const timer = window.setTimeout(() => resolve(), interval);
-      options?.signal?.addEventListener(
-        'abort',
-        () => {
-          window.clearTimeout(timer);
-          reject(new DOMException('Aborted', 'AbortError'));
-        },
-        { once: true },
-      );
-    });
+  if (threadIds.length === 1) {
+    return pollSmartTaggingThreadUntilTerminal(threadIds[0], pollOptions);
   }
 
-  const waitedMin = Math.round((Date.now() - startedAt) / 60_000);
-  return {
-    status: 'failed',
-    error: 'Smart-tagging timed out',
-    warning: `An AI batch is still running server-side after ~${waitedMin} min (client stopped waiting). The agent keeps working, so tags may appear if you Sync again once it finishes. You can edit and Save now.`,
-  };
+  const statuses = await Promise.all(
+    threadIds.map((threadId) =>
+      pollSmartTaggingThreadUntilTerminal(threadId, {
+        ...pollOptions,
+        onProgress: undefined,
+      }),
+    ),
+  );
+  const mergedUpdatedById = new Map<string, WalkthroughAnchorRegistryRecord>();
+  for (const status of statuses) {
+    if (status.status === 'ready' && status.updated) {
+      for (const row of status.updated) mergedUpdatedById.set(row.id, row);
+    }
+  }
+  return aggregateChunkedSmartTaggingStatuses(
+    statuses,
+    Array.from(mergedUpdatedById.values()),
+  );
 }
 
 /**
@@ -727,12 +782,9 @@ export async function runChunkedAnchorSmartTagging(
   });
   if (candidates.length === 0) return null;
 
-  const requested = clampSmartTaggingBatchSize(options?.batchSize);
   const chunks = chunkSmartTaggingCandidates(
     candidates,
-    requested === Number.POSITIVE_INFINITY
-      ? Math.max(candidates.length, 1)
-      : options?.chunkSize ?? SMART_TAGGING_CHUNK_SIZE,
+    options?.chunkSize ?? SMART_TAGGING_CHUNK_SIZE,
   );
 
   const startedAt = Date.now();

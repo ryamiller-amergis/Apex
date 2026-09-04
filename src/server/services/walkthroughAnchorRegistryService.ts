@@ -108,9 +108,11 @@ interface PersistClassifyContext {
   ownersByPath: Map<string, string[]>;
 }
 
-async function loadPersistClassifyContext(): Promise<PersistClassifyContext | null> {
+async function loadPersistClassifyContext(
+  repositoryRoot = process.cwd()
+): Promise<PersistClassifyContext | null> {
   try {
-    const files = loadClientSourceFiles({ repositoryRoot: process.cwd() });
+    const files = loadClientSourceFiles({ repositoryRoot });
     if (files.length === 0) return null;
     const pageModules = await listApplicableWalkthroughPageModules();
     const pageEntryComponents = listWalkthroughPageEntryComponents(pageModules);
@@ -802,9 +804,12 @@ function shouldStampMissing(
  */
 export async function persistSyncExtractionResult(
   extraction: WalkthroughAnchorSyncExtractionResult,
-  actor: Actor
+  actor: Actor,
+  options?: { repositoryRoot?: string }
 ): Promise<WalkthroughAnchorSyncPersistenceSummary> {
-  const classifyContext = await loadPersistClassifyContext();
+  const classifyContext = await loadPersistClassifyContext(
+    options?.repositoryRoot
+  );
   return db.transaction(async (tx) => {
     const liveRows = await tx.query.walkthroughAnchorRegistry.findMany({
       where: isNull(walkthroughAnchorRegistry.deletedAt),
@@ -1017,7 +1022,9 @@ export async function syncExtractAndPersistAnchors(
   const extraction = await syncExtractWalkthroughAnchors(extractInput);
 
   // Persist all discoveries before any AI enrichment (Track B owns tagging).
-  const persistence = await persistSyncExtractionResult(extraction, actor);
+  const persistence = await persistSyncExtractionResult(extraction, actor, {
+    repositoryRoot,
+  });
 
   return {
     discoveries: extraction.discoveries,

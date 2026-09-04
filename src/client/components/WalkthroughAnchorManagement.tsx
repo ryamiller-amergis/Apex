@@ -1137,19 +1137,20 @@ export const WalkthroughAnchorManagement: React.FC<WalkthroughAnchorManagementPr
       );
       return;
     }
-    const numericBatch =
-      options.batchSize === 'all' ? pendingIds.length : options.batchSize;
-    const batchSize = Math.min(numericBatch, pendingIds.length);
-    const remainingAfterBatch = Math.max(0, pendingIds.length - batchSize);
+    const queuedCount =
+      options.batchSize === 'all'
+        ? pendingIds.length
+        : Math.min(options.batchSize, pendingIds.length);
+    const remainingAfterBatch = Math.max(0, pendingIds.length - queuedCount);
     setEnrichmentStatus('running');
     setEnrichmentMessage(
-      `Background AI refine queued: ${batchSize} of ${pendingIds.length} uncertain row(s). Save stays enabled.`,
+      `Background AI refine queued: ${queuedCount} of ${pendingIds.length} uncertain row(s). Save stays enabled.`,
     );
     void runChunkedAnchorSmartTagging(result, {
       signal: abort.signal,
       model: anchorSmartTaggingModel.trim() || undefined,
       skillPath: anchorSmartTaggingSkillPath.trim() || undefined,
-      batchSize,
+      batchSize: options.batchSize,
       excludeIds: options.excludeIds,
       onProgress: ({ elapsedMs, totalChunks, completedChunks, runningChunks, updatedCount }) => {
         if (abort.signal.aborted) return;
@@ -1163,7 +1164,7 @@ export const WalkthroughAnchorManagement: React.FC<WalkthroughAnchorManagementPr
             ? ` — batch ${completedChunks}/${totalChunks} done (${runningChunks} running), ${updatedCount} tagged so far`
             : '';
         setEnrichmentMessage(
-          `AI smart-tagging running: ${batchSize} anchor(s) of ${pendingIds.length} awaiting AI${chunkLabel}. Elapsed ${elapsedLabel}.`,
+          `AI smart-tagging running: ${queuedCount} anchor(s) of ${pendingIds.length} awaiting AI${chunkLabel}. Elapsed ${elapsedLabel}.`,
         );
       },
     })
