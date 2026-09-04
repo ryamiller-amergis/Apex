@@ -119,7 +119,7 @@ export const OpenBugsOnPbisTile: React.FC<OpenBugsOnPbisTileProps> = ({
             ))}
           </ul>
           <a
-            className={styles['view-all']}
+            className={`${styles['view-all']} ${styles['view-all-footer']}`}
             href="/calendar"
             aria-label="View all open bugs on PBIs"
             {...{ 'data-testid': 'home-dashboard-bugs-view-all' }}
