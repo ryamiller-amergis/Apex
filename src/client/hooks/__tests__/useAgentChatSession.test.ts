@@ -386,7 +386,7 @@ describe('useAgentChatSession', () => {
     );
   });
 
-  it('hides typing once an agent reply is on screen while the run is still finishing', () => {
+  it('unlocks input once an agent reply is on screen while terminal status catches up', () => {
     currentStreamReturn = {
       ...mockStreamReturn,
       status: 'running',
@@ -396,7 +396,8 @@ describe('useAgentChatSession', () => {
       ],
     };
     const { result } = renderHook(() => useAgentChatSession('thread-1'));
-    expect(result.current.isRunning).toBe(true);
+    expect(result.current.isRunning).toBe(false);
+    expect(result.current.isInteractionBusy).toBe(false);
     expect(result.current.showTypingIndicator).toBe(false);
   });
 

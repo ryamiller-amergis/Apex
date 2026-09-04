@@ -611,7 +611,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     isRunning || isSending || isAwaitingAgentResponse;
 
   const statusDotClass =
-    status === 'running' || isStartingConversation ? styles.statusDotRunning
+    isRunning || isStartingConversation ? styles.statusDotRunning
     : status === 'error' ? styles.statusDotError
     : status === 'closed' ? styles.statusDotClosed
     : styles.statusDotIdle;
@@ -627,7 +627,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     && !(isLoadingThread && inConversation);
 
   const statusLabel =
-    status === 'running' ? 'Agent is thinking…'
+    isRunning ? 'Agent is thinking…'
     : status === 'error' ? 'Error occurred'
     : status === 'closed' ? 'Thread closed'
     : isStartingConversation ? 'Agent is thinking…'

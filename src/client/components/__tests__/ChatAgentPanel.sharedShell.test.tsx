@@ -251,6 +251,29 @@ describe('ChatAgentPanel shared Home shell', () => {
     expect(screen.queryByText('Agent is thinking…')).not.toBeInTheDocument();
   });
 
+  it('shows a saved agent response as ready even if raw status is still running', () => {
+    mockSessionOverrides = {
+      isRunning: false,
+      isSending: false,
+      isAwaitingAgentResponse: false,
+      isInteractionBusy: false,
+      showTypingIndicator: false,
+      status: 'running',
+    };
+    render(
+      <ChatAgentPanel
+        thread={{ ...thread, status: 'running', activeRunId: 'run-finishing' }}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Ready')).toBeInTheDocument();
+    expect(screen.queryByText('Agent is thinking…')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
+  });
+
   it('TBI-006 DoD-1 applies a Home skill pill model and kickoff metadata', () => {
     const onNewChat = jest.fn();
     render(

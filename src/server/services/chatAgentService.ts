@@ -3977,6 +3977,25 @@ export function interactivePromptRequiresInProcessMcp(prompt: string): boolean {
   );
 }
 
+const ADO_OPERATIONAL_SKILL_MARKERS = [
+  'scrum-assistant',
+  'scrum-master-health',
+  'daily-standup',
+] as const;
+
+export function skillRequiresAdoOperations(
+  skillPath: string | null | undefined,
+  skillName?: string | null
+): boolean {
+  const normalized = `${skillPath ?? ''} ${skillName ?? ''}`
+    .replace(/\\/g, '/')
+    .toLowerCase()
+    .replace(/\s+/g, '-');
+  return ADO_OPERATIONAL_SKILL_MARKERS.some((marker) =>
+    normalized.includes(marker)
+  );
+}
+
 export function resolveInteractiveWorkflowClass(
   state: ThreadState
 ): InteractiveWorkflowClass {
@@ -4156,6 +4175,11 @@ async function tryDispatchInteractiveTurn(
       if (wasCancelled()) return bypass('cancel-requested');
       const turnSkillPath =
         options?.turnSkill?.path ?? state.thread.kickoff.skillPath;
+      const turnSkillName =
+        options?.turnSkill?.name ?? state.thread.kickoff.pillLabel;
+      if (skillRequiresAdoOperations(turnSkillPath, turnSkillName)) {
+        return bypass('ado-skill-capability');
+      }
       // Walkthrough smart-tagging / generation / discovery (and similar
       // file-output skills) inject kickoff context into thread.workspaceDir and
       // poll that same tree for `.ai-pilot/output/*`. Actor dispatch uses the
@@ -4785,6 +4809,10 @@ export async function sendMessage(
     state.thread.kickoff.assistantType === 'calendar-work-item'
       ? (state.thread.kickoff.calendarAssistantSessionId ?? undefined)
       : undefined;
+  const turnRequiresAdoOperations = skillRequiresAdoOperations(
+    options?.turnSkill?.path ?? state.thread.kickoff.skillPath,
+    options?.turnSkill?.name ?? state.thread.kickoff.pillLabel
+  );
   const repositoryRuntime = await prepareRepositoryReadRuntime({
     grounding,
     kickoff: state.thread.kickoff,
@@ -4794,6 +4822,7 @@ export async function sendMessage(
     calendarSessionId,
     restrictRepoSearch: state.isInterviewThread,
     requireAdoTools:
+      turnRequiresAdoOperations ||
       interactiveAttempt.bypassReason === 'mcp-tools-required',
   });
 

@@ -200,7 +200,7 @@ export function useAgentChatSession(
   const skipThinkingRestoreRef = useRef(false);
 
   // Derived
-  const isRunning = status === 'running' && !isStopConfirmed;
+  const streamIsRunning = status === 'running';
   const hasPersistedOptimisticEcho = Boolean(
     optimisticUserMessage &&
     messages.some(
@@ -215,6 +215,14 @@ export function useAgentChatSession(
       ? [...messages, optimisticUserMessage]
       : messages;
   const visibleMessages = displayedMessages.filter(visibleMessageFilter);
+  const lastVisibleRole = visibleMessages[visibleMessages.length - 1]?.role;
+  // A persisted agent message is the completed response for this turn. The
+  // terminal status event can arrive a little later, especially through the
+  // actor lane; do not keep answers and the composer locked during that gap.
+  const isWaitingForUser =
+    lastVisibleRole === 'agent' && !streamingText && !thinkingText;
+  const isRunning =
+    streamIsRunning && !isStopConfirmed && !isWaitingForUser;
 
   // Preparation state (opt-in)
   const isEmptyInProgress =
@@ -245,8 +253,6 @@ export function useAgentChatSession(
   });
 
   // --- Awaiting-agent-response tracking ---
-  const lastVisibleRole = visibleMessages[visibleMessages.length - 1]?.role;
-
   const beginAwaitingAgentResponse = useCallback(() => {
     skipThinkingRestoreRef.current = false;
     pendingMessageIdsRef.current = new Set(messages.map((m) => m.id));

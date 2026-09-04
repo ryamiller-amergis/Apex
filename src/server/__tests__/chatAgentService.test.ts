@@ -182,6 +182,7 @@ import {
   buildInitialPrompt,
   buildTurnPrompt,
   interactivePromptRequiresInProcessMcp,
+  skillRequiresAdoOperations,
   prepareBackgroundWorkflowTurn,
   prepareRepositoryReadRuntime,
   subscribeToThread,
@@ -220,6 +221,21 @@ describe('turn skill prompts', () => {
     expect(
       interactivePromptRequiresInProcessMcp(
         'Inspect the repository with get_skill_file and search_repo_code.',
+      ),
+    ).toBe(false);
+  });
+
+  it('recognizes only configured ADO-operational skill identities', () => {
+    expect(
+      skillRequiresAdoOperations(
+        '/.cursor/skills/scrum-master-health/SKILL.md',
+        'Scrum Assistant',
+      ),
+    ).toBe(true);
+    expect(
+      skillRequiresAdoOperations(
+        '/.cursor/skills/app-knowledge/SKILL.md',
+        'App Knowledge',
       ),
     ).toBe(false);
   });
@@ -1870,7 +1886,7 @@ describe('document assistant MCP wiring', () => {
         sha: 'interactive-sha',
       },
       readFile: jest.fn().mockResolvedValue(
-        '# Scrum Assistant\n\nUse `query_work_items` to inspect sprint work.'
+        '# Board Insights\n\nUse `query_work_items` to inspect sprint work.'
       ),
       listDir: jest.fn().mockResolvedValue([]),
       searchCode: jest.fn().mockResolvedValue([]),
@@ -1906,13 +1922,13 @@ describe('document assistant MCP wiring', () => {
         [],
         {
           turnSkill: {
-            name: 'Scrum Assistant',
-            path: '/.cursor/skills/scrum-assistant/SKILL.md',
+            name: 'Board Insights',
+            path: '/.cursor/skills/board-insights/SKILL.md',
           },
         }
       );
       expect(repoReader.readFile).toHaveBeenCalledWith(
-        '.cursor/skills/scrum-assistant/SKILL.md'
+        '.cursor/skills/board-insights/SKILL.md'
       );
       expect(mockInteractiveWorkflowRoute).not.toHaveBeenCalled();
       expect(global.fetch).not.toHaveBeenCalled();
