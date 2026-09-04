@@ -424,6 +424,35 @@ describe('walkthroughAnchorSmartTaggingService', () => {
       expect(result.status).toBe('pending');
     });
 
+    it('names background routing as the cause when the batch was never dispatched to a worker', async () => {
+      const mockedRoute = routeBackgroundWorkflow as jest.MockedFunction<
+        typeof routeBackgroundWorkflow
+      >;
+      mockedRoute.mockResolvedValueOnce({
+        route: 'in-process',
+        reason: 'flag-disabled',
+      });
+      await startAndClearInFlight();
+      mockedDb.query.chatThreads.findFirst.mockResolvedValue({
+        userId: USER_ID,
+        workspaceDir: '/tmp/ws',
+        status: 'idle',
+      });
+      mockFs.existsSync.mockReturnValue(false);
+      mockedIsThreadIdle.mockReturnValue(true);
+
+      const result = await getSmartTaggingResult(THREAD_ID, USER_ID);
+
+      expect(result.status).toBe('failed');
+      expect(result.error).toContain('flag-disabled');
+      expect(result.error).toMatch(/ai-runs-background/);
+      expect(result.error).not.toMatch(/Agent completed/);
+      expect(result.warning).toMatch(/remain pending and reviewable/i);
+      expect(
+        mockedRegistry.applySmartTagSuggestionsToPending
+      ).not.toHaveBeenCalled();
+    });
+
     it('on AI failure leaves rows reviewable with warning (no persist)', async () => {
       await startAndClearInFlight();
       mockedDb.query.chatThreads.findFirst.mockResolvedValue({

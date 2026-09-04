@@ -157,6 +157,13 @@ const candidateTestIdsByThread = new Map<string, string[]>();
 const appliedThreads = new Set<string>();
 const updatedByThread = new Map<string, WalkthroughAnchorRegistryRecord[]>();
 const mergeWatchers = new Set<ReturnType<typeof setInterval>>();
+/**
+ * Threads whose batch was never handed to a worker: the router chose the
+ * in-process path, and this service deliberately has no in-process executor.
+ * Without this, an undispatched thread just sits idle and gets reported as
+ * "agent completed without output", which blames the agent for never running.
+ */
+const undispatchedThreads = new Map<string, string>();
 
 export function _getSmartTaggingInFlightForTests(): ReadonlySet<string> {
   return taggingInFlight;
@@ -169,6 +176,7 @@ export function _resetForTests(): void {
   candidateTestIdsByThread.clear();
   appliedThreads.clear();
   updatedByThread.clear();
+  undispatchedThreads.clear();
   for (const timer of mergeWatchers) {
     clearInterval(timer);
   }
@@ -700,11 +708,12 @@ async function startOneSmartTaggingChunk(
   cancelledThreads.delete(thread.id);
   appliedThreads.delete(thread.id);
   updatedByThread.delete(thread.id);
+  undispatchedThreads.delete(thread.id);
   taggingInFlight.add(thread.id);
   provenanceByThread.set(thread.id, provenance);
   candidateTestIdsByThread.set(thread.id, candidateTestIds);
 
-  await routeBackgroundWorkflow({
+  const decision = await routeBackgroundWorkflow({
     userId,
     workflowClass: 'walkthrough-smart-tagging',
     destinationRun: {
@@ -717,10 +726,15 @@ async function startOneSmartTaggingChunk(
     runInProcess: () => {
       // Do not spawn in-process Cursor on the App Service.
     },
-    reportRecoverablePreparationFailure: async () => {
+    reportRecoverablePreparationFailure: async (failure) => {
       taggingInFlight.delete(thread.id);
+      undispatchedThreads.set(thread.id, failure.reason);
     },
   });
+
+  if (decision.route === 'in-process') {
+    undispatchedThreads.set(thread.id, decision.reason ?? 'in-process');
+  }
 
   void (async () => {
     await new Promise<void>((resolve) => {
@@ -829,6 +843,13 @@ export async function getSmartTaggingResult(
   // a usable result.
   const raw = readOutput(row.workspaceDir);
   if (!raw) {
+    const undispatchedReason = undispatchedThreads.get(threadId);
+    if (undispatchedReason) {
+      return failedResponse(
+        provenance,
+        `Background AI never started this batch (routing: ${undispatchedReason}). Enable the ai-runs-background feature flag for this project, or keep the classifier tags and review these rows manually.`
+      );
+    }
     if (taggingInFlight.has(threadId)) {
       return { status: 'pending', provenance };
     }
