@@ -408,6 +408,7 @@ describe('background workflow routing', () => {
       'design-doc',
       'validation',
       'test-cases',
+      'walkthrough-smart-tagging',
     ];
     const evaluations: Array<{ project: string; caller?: string }> = [];
     const dependencies = makeDependencies({
@@ -457,6 +458,7 @@ describe('background workflow routing', () => {
       'worker',
       'worker',
       'in-process',
+      'worker',
       'worker',
     ]);
   });
