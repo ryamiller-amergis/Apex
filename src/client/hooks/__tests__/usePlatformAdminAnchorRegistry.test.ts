@@ -484,6 +484,37 @@ describe('usePlatformAdminAnchorRegistry', () => {
     ).toBeGreaterThanOrEqual(1);
   });
 
+  it('treats high-confidence classifier provenance as review-ready', () => {
+    const classified = makeRecord({
+      id: 'clf-1',
+      testId: 'clf-1',
+      smartTags: ['ado', 'create', 'error'],
+      aiProvenance: {
+        provider: 'cursor',
+        model: 'anchor-classifier',
+        skillPath: '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+        generatedAt: '2026-01-01T00:00:00.000Z',
+        confidence: 0.9,
+        rationale: 'classifier',
+      },
+    });
+    expect(hasRealAiProvenance(classified)).toBe(true);
+    const low = makeRecord({
+      id: 'clf-low',
+      testId: 'clf-low',
+      smartTags: ['header', 'all-users', 'discover'],
+      aiProvenance: {
+        provider: 'cursor',
+        model: 'anchor-classifier',
+        skillPath: '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+        generatedAt: '2026-01-01T00:00:00.000Z',
+        confidence: 0.4,
+        rationale: 'no owner',
+      },
+    });
+    expect(hasRealAiProvenance(low)).toBe(false);
+  });
+
   it('does not overwrite open AI-enriched rows when merging next sync or AI results', () => {
     const openAi = makeRecord({
       id: 'ai-1',

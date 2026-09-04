@@ -238,8 +238,10 @@ describe('createFromCandidate', () => {
       })
     );
     const inserted = values.mock.calls[0][0];
-    expect(inserted.smartTags).toEqual([]);
-    expect(inserted.aiProvenance).toBeNull();
+    expect(inserted.smartTags.length).toBeGreaterThanOrEqual(3);
+    expect(inserted.aiProvenance).toEqual(
+      expect.objectContaining({ model: 'anchor-classifier' })
+    );
     expect(inserted.label).toBeTruthy();
     expect(inserted.allowedPlacements).toEqual([
       'top',
@@ -397,8 +399,17 @@ describe('persistSyncExtractionResult', () => {
       isActive: false,
       sourceHash: newDiscovery.sourceHash,
       sourceKind: 'data_testid',
-      smartTags: [],
-      aiProvenance: null,
+      smartTags: ['menu', 'button', 'all-users'],
+      aiProvenance: {
+        provider: 'cursor',
+        model: 'anchor-classifier',
+        skillPath: '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+        generatedAt: '2026-07-30T12:00:00.000Z',
+        confidence: 0.9,
+        rationale: 'classifier',
+        runId: null,
+        threadId: null,
+      },
       sourceLocations: newDiscovery.sourceLocations,
     });
     const refreshedRow = {
@@ -478,7 +489,7 @@ describe('persistSyncExtractionResult', () => {
     expect(summary.refreshed[0].missingSince).toBeNull();
     expect(summary.markedMissing).toHaveLength(1);
     expect(summary.markedMissing[0].testId).toBe('old-reject');
-    expect(summary.newCandidateIdsForSmartTagging).toEqual([createdRow.id]);
+    expect(summary.newCandidateIdsForSmartTagging).toEqual([]);
     expect(summary.reviewCandidates).toEqual([
       expect.objectContaining({
         id: createdRow.id,
@@ -551,8 +562,17 @@ describe('persistSyncExtractionResult', () => {
       ...pendingTagged,
       lastSeenAt: '2026-07-30T12:00:00.000Z',
       sourceHash: 'pending-hash',
-      smartTags: [],
-      aiProvenance: null,
+      smartTags: ['ado', 'create', 'error', 'all-users'],
+      aiProvenance: {
+        provider: 'cursor',
+        model: 'anchor-classifier',
+        skillPath: '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+        generatedAt: '2026-07-30T12:00:00.000Z',
+        confidence: 0.9,
+        rationale: 'classifier',
+        runId: null,
+        threadId: null,
+      },
       allowedPlacements: ['top', 'right', 'bottom', 'left'],
     };
     const approvedRefreshed = {
@@ -606,12 +626,10 @@ describe('persistSyncExtractionResult', () => {
         id: pendingTagged.id,
         testId: 'ado-create-error',
         reviewStatus: 'pending',
-        smartTags: [],
-        aiProvenance: null,
+        smartTags: ['ado', 'create', 'error', 'all-users'],
       }),
     ]);
-    // Cleared heuristic pending is reviewable and re-queued for AI.
-    expect(summary.newCandidateIdsForSmartTagging).toEqual([pendingTagged.id]);
+    expect(summary.newCandidateIdsForSmartTagging).toEqual([]);
   });
 });
 
@@ -653,8 +671,17 @@ describe('syncExtractAndPersistAnchors', () => {
       testId: 'fresh-menu-button',
       reviewStatus: 'pending',
       isActive: false,
-      smartTags: [],
-      aiProvenance: null,
+      smartTags: ['menu', 'button', 'all-users'],
+      aiProvenance: {
+        provider: 'cursor',
+        model: 'anchor-classifier',
+        skillPath: '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+        generatedAt: '2026-07-30T12:00:00.000Z',
+        confidence: 0.9,
+        rationale: 'classifier',
+        runId: null,
+        threadId: null,
+      },
       sourceLocations: [
         { filePath: 'src/client/components/UserMenu.tsx', line: 12 },
       ],
@@ -680,9 +707,7 @@ describe('syncExtractAndPersistAnchors', () => {
     );
     expect(result.newCandidates).toHaveLength(1);
     expect(result.persistence.created).toHaveLength(1);
-    expect(result.persistence.newCandidateIdsForSmartTagging).toEqual([
-      createdRow.id,
-    ]);
+    expect(result.persistence.newCandidateIdsForSmartTagging).toEqual([]);
     // AI smart-tagging is Track B — sync must not invoke it; only expose IDs.
     expect(result.persistence).toHaveProperty('newCandidateIdsForSmartTagging');
   });

@@ -27,6 +27,31 @@ jest.mock('../services/chatAgentService', () => ({
   cancelRun: jest.fn(),
   isThreadIdle: jest.fn(),
   isThreadLoaded: jest.fn(),
+  sendMessage: jest.fn(),
+  prepareBackgroundWorkflowTurn: jest.fn().mockResolvedValue({
+    prompt: 'Begin.',
+    model: 'claude-sonnet-4',
+    skillPath: '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+    projectId: 'Apex',
+    threadWorkspacePath: '/tmp/thread',
+    repository: {
+      provider: 'github',
+      project: 'Apex',
+      repo: 'org/repo',
+      branch: 'main',
+    },
+  }),
+}));
+
+jest.mock('../services/backgroundWorkflowRouter', () => ({
+  routeBackgroundWorkflow: jest.fn(async (input: { runInProcess: () => void }) => {
+    input.runInProcess();
+    return { route: 'worker', workspacePath: '/tmp/thread', runId: 'run-1' };
+  }),
+}));
+
+jest.mock('../services/notificationService', () => ({
+  createNotification: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('../services/projectSettingsService', () => ({
@@ -68,7 +93,9 @@ import {
   cancelRun,
   isThreadIdle,
   isThreadLoaded,
+  sendMessage,
 } from '../services/chatAgentService';
+import { routeBackgroundWorkflow } from '../services/backgroundWorkflowRouter';
 import { resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import * as walkthroughAnchorRegistryService from '../services/walkthroughAnchorRegistryService';
@@ -211,7 +238,8 @@ describe('walkthroughAnchorSmartTaggingService', () => {
           skillPath: DEFAULT_WALKTHROUGH_ANCHOR_SMART_TAGGING_SKILL_PATH,
           model: 'claude-sonnet-4',
           freeformContext: expect.stringContaining('new-candidate'),
-        })
+        }),
+        { skipAutoKickoff: true }
       );
       const ctx = mockedCreateThread.mock.calls[0][1].freeformContext as string;
       expect(ctx).toContain('## Accessible Page Modules');
@@ -228,6 +256,33 @@ describe('walkthroughAnchorSmartTaggingService', () => {
       expect(ctx).toContain('Use `suggestedLabel`');
       expect(ctx).toContain('Never emit a `label` field');
       expect(ctx).toContain('Never emit `tooltip`');
+    });
+
+    it('DoD-1 / DoD-2: enqueues walkthrough-smart-tagging in the background and never sends an in-process Cursor message', async () => {
+      await startSmartTagging({ candidates: [{ testId: 'new-candidate' }] }, USER_ID);
+
+      expect(routeBackgroundWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowClass: 'walkthrough-smart-tagging',
+          threadId: THREAD_ID,
+        }),
+      );
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('DoD-1: chunks All leftovers internally at 50 per worker thread', async () => {
+      const candidates = Array.from({ length: 51 }, (_, i) => ({
+        testId: `anchor-${i}`,
+      }));
+      mockedCreateThread
+        .mockResolvedValueOnce({ id: 'thread-a' } as ChatThread)
+        .mockResolvedValueOnce({ id: 'thread-b' } as ChatThread);
+
+      const result = await startSmartTagging({ candidates }, USER_ID);
+
+      expect(result.candidateTestIds).toHaveLength(51);
+      expect(mockedCreateThread).toHaveBeenCalledTimes(2);
+      expect(routeBackgroundWorkflow).toHaveBeenCalledTimes(2);
     });
 
     it('filters out approved/rejected catalog rows (only newly discovered)', async () => {

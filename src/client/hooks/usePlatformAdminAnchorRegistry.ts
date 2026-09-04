@@ -415,17 +415,21 @@ export interface WalkthroughAnchorSmartTaggingStatusResponse {
  * hundreds of anchors; AI tagging of all of them never completes).
  */
 export const SMART_TAGGING_CANDIDATE_BATCH_MAX = 50;
-export const SMART_TAGGING_BATCH_SIZE_OPTIONS = [10, 20, 50] as const;
+export const SMART_TAGGING_BATCH_SIZE_OPTIONS = [10, 20, 50, 'all'] as const;
 export type SmartTaggingBatchSize = (typeof SMART_TAGGING_BATCH_SIZE_OPTIONS)[number];
 export const SMART_TAGGING_BATCH_SIZE_DEFAULT: SmartTaggingBatchSize = 20;
 
-export function clampSmartTaggingBatchSize(value: number | undefined): number {
-  const n = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : SMART_TAGGING_BATCH_SIZE_DEFAULT;
-  if (SMART_TAGGING_BATCH_SIZE_OPTIONS.includes(n as SmartTaggingBatchSize)) return n;
+export function clampSmartTaggingBatchSize(value: number | 'all' | undefined): number {
+  if (value === 'all' || value === Number.POSITIVE_INFINITY) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const n =
+    typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : 20;
+  if (n === 10 || n === 20 || n === 50) return n;
   return Math.min(SMART_TAGGING_CANDIDATE_BATCH_MAX, Math.max(1, n));
 }
 
-/** True when a catalog row already carries real AI smart-tag metadata. */
+/** True when a catalog row is review-ready (classifier band or AI refined). */
 export function hasRealAiProvenance(row: {
   smartTags?: readonly string[] | null;
   aiProvenance?: WalkthroughAnchorRegistryRecord['aiProvenance'];
@@ -433,13 +437,18 @@ export function hasRealAiProvenance(row: {
   const model = row.aiProvenance?.model?.trim();
   if (!model || model === 'sync-heuristic') return false;
   const tags = row.smartTags ?? [];
-  return tags.length > 0 || !!row.aiProvenance?.rationale?.trim();
+  const hasContent = tags.length > 0 || !!row.aiProvenance?.rationale?.trim();
+  if (!hasContent) return false;
+  if (model === 'anchor-classifier') {
+    return (row.aiProvenance?.confidence ?? 0) >= 0.55;
+  }
+  return true;
 }
 
 export function buildSmartTaggingCandidatesFromSync(
   result: WalkthroughAnchorRegistrySyncResult | null | undefined,
   options?: {
-    batchSize?: number;
+    batchSize?: number | 'all';
     /** Skip rows already AI-enriched in the open review list. */
     excludeIds?: ReadonlySet<string> | readonly string[];
   },
@@ -661,7 +670,7 @@ export async function startAndPollAnchorSmartTagging(
     signal?: AbortSignal;
     pollIntervalMs?: number;
     maxAttempts?: number;
-    batchSize?: number;
+    batchSize?: number | 'all';
     excludeIds?: ReadonlySet<string> | readonly string[];
     /** Override Cursor model (empty or omitted uses server default). */
     model?: string;
@@ -703,7 +712,7 @@ export async function runChunkedAnchorSmartTagging(
   options?: {
     signal?: AbortSignal;
     pollIntervalMs?: number;
-    batchSize?: number;
+    batchSize?: number | 'all';
     excludeIds?: ReadonlySet<string> | readonly string[];
     chunkSize?: number;
     maxParallelChunks?: number;
@@ -718,9 +727,12 @@ export async function runChunkedAnchorSmartTagging(
   });
   if (candidates.length === 0) return null;
 
+  const requested = clampSmartTaggingBatchSize(options?.batchSize);
   const chunks = chunkSmartTaggingCandidates(
     candidates,
-    options?.chunkSize ?? SMART_TAGGING_CHUNK_SIZE,
+    requested === Number.POSITIVE_INFINITY
+      ? Math.max(candidates.length, 1)
+      : options?.chunkSize ?? SMART_TAGGING_CHUNK_SIZE,
   );
 
   const startedAt = Date.now();

@@ -15,7 +15,10 @@ import {
   cancelRun as cancelChatRun,
   isThreadIdle,
   isThreadLoaded,
+  prepareBackgroundWorkflowTurn,
 } from './chatAgentService';
+import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
+import { createNotification } from './notificationService';
 import { resolveSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
 import { getWalkthroughAiOptions } from './walkthroughAiOptionsService';
@@ -153,6 +156,7 @@ const provenanceByThread = new Map<
 const candidateTestIdsByThread = new Map<string, string[]>();
 const appliedThreads = new Set<string>();
 const updatedByThread = new Map<string, WalkthroughAnchorRegistryRecord[]>();
+const mergeWatchers = new Set<ReturnType<typeof setInterval>>();
 
 export function _getSmartTaggingInFlightForTests(): ReadonlySet<string> {
   return taggingInFlight;
@@ -165,6 +169,10 @@ export function _resetForTests(): void {
   candidateTestIdsByThread.clear();
   appliedThreads.clear();
   updatedByThread.clear();
+  for (const timer of mergeWatchers) {
+    clearInterval(timer);
+  }
+  mergeWatchers.clear();
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -276,7 +284,6 @@ function normalizeCandidates(
           )
         : undefined,
     });
-    if (out.length >= SMART_TAGGING_CANDIDATE_BATCH_MAX) break;
   }
 
   if (out.length === 0) {
@@ -626,6 +633,108 @@ function failedResponse(
   };
 }
 
+function chunkCandidates(
+  candidates: WalkthroughAnchorSmartTaggingCandidateInput[],
+  size: number
+): WalkthroughAnchorSmartTaggingCandidateInput[][] {
+  const chunks: WalkthroughAnchorSmartTaggingCandidateInput[][] = [];
+  for (let i = 0; i < candidates.length; i += size) {
+    chunks.push(candidates.slice(i, i + size));
+  }
+  return chunks;
+}
+
+function watchSmartTaggingMerge(threadId: string, userId: string): void {
+  const timer = setInterval(() => {
+    void getSmartTaggingResult(threadId, userId)
+      .then((result) => {
+        if (result.status !== 'pending') {
+          clearInterval(timer);
+          mergeWatchers.delete(timer);
+        }
+      })
+      .catch(() => {
+        clearInterval(timer);
+        mergeWatchers.delete(timer);
+      });
+  }, 4000);
+  timer.unref?.();
+  mergeWatchers.add(timer);
+}
+
+async function startOneSmartTaggingChunk(
+  candidates: WalkthroughAnchorSmartTaggingCandidateInput[],
+  userId: string,
+  skillPath: string,
+  model: string,
+  repositoryConnection: RepositoryConnection,
+  evidenceByTestId: Map<string, WalkthroughAnchorSmartTaggingOwningPageEntry[]>
+): Promise<WalkthroughAnchorSmartTaggingStartResponse> {
+  const freeformContext = await buildKickoffContext(candidates, evidenceByTestId);
+
+  const thread = await createChatThread(
+    userId,
+    {
+      project: APEX_REPOSITORY_PROJECT,
+      repo: repositoryConnection.repo,
+      branch: repositoryConnection.branch,
+      skillProvider: repositoryConnection.skillProvider,
+      skillPath,
+      freeformContext,
+      model,
+    },
+    { skipAutoKickoff: true }
+  );
+
+  const provenance: WalkthroughAnchorSmartTaggingProvenance = {
+    provider: 'cursor',
+    model,
+    skillPath,
+    generatedAt: new Date().toISOString(),
+    threadId: thread.id,
+    runId: null,
+  };
+
+  const candidateTestIds = candidates.map((c) => c.testId);
+
+  cancelledThreads.delete(thread.id);
+  appliedThreads.delete(thread.id);
+  updatedByThread.delete(thread.id);
+  taggingInFlight.add(thread.id);
+  provenanceByThread.set(thread.id, provenance);
+  candidateTestIdsByThread.set(thread.id, candidateTestIds);
+
+  await routeBackgroundWorkflow({
+    userId,
+    workflowClass: 'walkthrough-smart-tagging',
+    destinationRun: {
+      runType: 'chat',
+      runId: thread.id,
+      project: APEX_REPOSITORY_PROJECT,
+    },
+    threadId: thread.id,
+    prepareWorker: () => prepareBackgroundWorkflowTurn(thread.id, 'Begin.'),
+    runInProcess: () => {
+      // Do not spawn in-process Cursor on the App Service.
+    },
+    reportRecoverablePreparationFailure: async () => {
+      taggingInFlight.delete(thread.id);
+    },
+  });
+
+  void (async () => {
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 500);
+      timer.unref?.();
+    });
+    taggingInFlight.delete(thread.id);
+  })();
+
+  watchSmartTaggingMerge(thread.id, userId);
+
+  return { threadId: thread.id, provenance, candidateTestIds };
+}
+
 // ── startSmartTagging ────────────────────────────────────────────────────────
 
 export async function startSmartTagging(
@@ -665,54 +774,37 @@ export async function startSmartTagging(
     skillConfig?.developmentModel ||
     globalModel;
 
-  // Pre-resolve repository evidence (code snippets + owning page module/route)
-  // so the agent classifies from supplied evidence instead of browsing the repo
-  // over MCP — the dominant cost/failure source on small App Service SKUs.
   const { candidates: enrichedCandidates, evidenceByTestId } =
     await enrichCandidatesWithRepositoryEvidence(candidates);
 
-  const freeformContext = await buildKickoffContext(
+  const chunks = chunkCandidates(
     enrichedCandidates,
-    evidenceByTestId
+    SMART_TAGGING_CANDIDATE_BATCH_MAX
   );
+  let first: WalkthroughAnchorSmartTaggingStartResponse | null = null;
+  for (const chunk of chunks) {
+    const started = await startOneSmartTaggingChunk(
+      chunk,
+      userId,
+      skillPath,
+      model,
+      repositoryConnection,
+      evidenceByTestId
+    );
+    if (!first) first = started;
+  }
 
-  const thread = await createChatThread(userId, {
-    project: APEX_REPOSITORY_PROJECT,
-    repo: repositoryConnection.repo,
-    branch: repositoryConnection.branch,
-    skillProvider: repositoryConnection.skillProvider,
-    skillPath,
-    freeformContext,
-    model,
-  });
+  if (!first) {
+    throw new WalkthroughAnchorSmartTaggingOrchestrationError(
+      'INVALID_REQUEST',
+      'candidates must include at least one non-empty testId'
+    );
+  }
 
-  const provenance: WalkthroughAnchorSmartTaggingProvenance = {
-    provider: 'cursor',
-    model,
-    skillPath,
-    generatedAt: new Date().toISOString(),
-    threadId: thread.id,
-    runId: null,
+  return {
+    ...first,
+    candidateTestIds: enrichedCandidates.map((c) => c.testId),
   };
-
-  const candidateTestIds = candidates.map((c) => c.testId);
-
-  cancelledThreads.delete(thread.id);
-  appliedThreads.delete(thread.id);
-  updatedByThread.delete(thread.id);
-  taggingInFlight.add(thread.id);
-  provenanceByThread.set(thread.id, provenance);
-  candidateTestIdsByThread.set(thread.id, candidateTestIds);
-
-  void (async () => {
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 500);
-      timer.unref?.();
-    });
-    taggingInFlight.delete(thread.id);
-  })();
-
-  return { threadId: thread.id, provenance, candidateTestIds };
 }
 
 // ── getSmartTaggingResult ────────────────────────────────────────────────────
@@ -728,16 +820,18 @@ export async function getSmartTaggingResult(
     return { status: 'cancelled', provenance };
   }
 
-  if (taggingInFlight.has(threadId)) {
-    return { status: 'pending', provenance };
-  }
-
   if (!row.workspaceDir) {
     return { status: 'pending', provenance };
   }
 
+  // Output wins over run state: agents hold the kickoff sendMessage promise open
+  // after writing the file, and waiting for it stalls callers that already have
+  // a usable result.
   const raw = readOutput(row.workspaceDir);
   if (!raw) {
+    if (taggingInFlight.has(threadId)) {
+      return { status: 'pending', provenance };
+    }
     if (isThreadIdle(threadId)) {
       return failedResponse(
         provenance,
@@ -807,6 +901,17 @@ export async function getSmartTaggingResult(
         );
       appliedThreads.add(threadId);
       updatedByThread.set(threadId, updated);
+      void createNotification(userId, {
+        type: 'ai',
+        title: 'Walkthrough tags refined',
+        body: 'Background AI finished refining uncertain walkthrough anchors.',
+        link: '/platform-admin',
+      }).catch((err) => {
+        console.warn(
+          '[walkthroughAnchorSmartTagging] notify failed:',
+          err instanceof Error ? err.message : String(err)
+        );
+      });
     } catch (err) {
       // Persist failure should not discard scan state; surface as failed+warning.
       const message =
