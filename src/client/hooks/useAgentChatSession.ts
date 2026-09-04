@@ -94,6 +94,7 @@ export interface AgentChatSession {
   isRetrying: boolean;
   retryReason: string | null;
   isConnected: boolean;
+  hasConnectionError: boolean;
   lastProgressAt: number | null;
 
   // --- Derived status flags ---
@@ -172,6 +173,7 @@ export function useAgentChatSession(
     toolProgress,
     status,
     isConnected,
+    hasConnectionError,
     lastProgressAt,
     phaseEvents,
     runHealth,
@@ -508,6 +510,7 @@ export function useAgentChatSession(
     isRetrying,
     retryReason,
     isConnected,
+    hasConnectionError,
     lastProgressAt,
 
     // Status flags

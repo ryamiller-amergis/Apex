@@ -16,6 +16,7 @@ interface MockStreamReturn {
   toolProgress: ToolProgress[];
   status: ChatThreadStatus;
   isConnected: boolean;
+  hasConnectionError: boolean;
   lastProgressAt: number | null;
   phaseEvents: RunPhaseProgress[];
   runHealth: RunHealthProgress | null;
@@ -35,6 +36,7 @@ const mockStreamReturn: MockStreamReturn = {
   toolProgress: [],
   status: 'idle',
   isConnected: true,
+  hasConnectionError: false,
   lastProgressAt: null,
   phaseEvents: [],
   runHealth: null,

@@ -11,6 +11,7 @@ jest.mock('../../hooks/useAgentChatSession', () => ({
     messages: options?.initialMessages ?? [],
     streamingText: '',
     isConnected: true,
+    hasConnectionError: false,
     prdReady: false,
     isRunning: false,
     isSending: false,
@@ -406,7 +407,10 @@ describe('ChatAgentPanel shared Home shell', () => {
   });
 
   it('PBI-006 AC-1 keeps the transcript visible while disconnected', () => {
-    mockSessionOverrides = { isConnected: false };
+    mockSessionOverrides = {
+      isConnected: false,
+      hasConnectionError: true,
+    };
     render(<ChatAgentPanel thread={thread} isOpen onClose={jest.fn()} onNewChat={jest.fn()} />);
 
     expect(screen.getByText('○ Disconnected')).toBeInTheDocument();
@@ -415,5 +419,16 @@ describe('ChatAgentPanel shared Home shell', () => {
     expect(screen.getByTestId('chat-agent-composer-mock')).toBeInTheDocument();
     expect(screen.queryByTestId('chat-agent-retry-connection')).not.toBeInTheDocument();
     expect(mockRetryLast).not.toHaveBeenCalled();
+  });
+
+  it('shows connecting without an interruption warning before first open', () => {
+    mockSessionOverrides = {
+      isConnected: false,
+      hasConnectionError: false,
+    };
+    render(<ChatAgentPanel thread={thread} isOpen onClose={jest.fn()} onNewChat={jest.fn()} />);
+
+    expect(screen.getByText('○ Connecting…')).toBeInTheDocument();
+    expect(screen.queryByTestId('chat-agent-connection-banner')).not.toBeInTheDocument();
   });
 });

@@ -378,6 +378,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     messages,
     streamingText,
     isConnected,
+    hasConnectionError,
     prdReady,
     isRunning,
     isSending,
@@ -758,7 +759,13 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
         <div className={styles.statusBar}>
           <span className={`${styles.statusDot} ${statusDotClass}`} />
           <span className={styles.statusText}>{statusLabel}</span>
-          <span className={styles.connBadge}>{isConnected ? '● live' : '○ Disconnected'}</span>
+          <span className={styles.connBadge}>
+            {isConnected
+              ? '● live'
+              : hasConnectionError
+                ? '○ Disconnected'
+                : '○ Connecting…'}
+          </span>
         </div>
       ) : undefined}
       before={launchedFromHome ? (
@@ -899,7 +906,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
         </>
       ) : (
         <>
-          {!isConnected && (
+          {hasConnectionError && (
             <div
               className={styles.connectionError}
               role="status"
