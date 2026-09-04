@@ -44,10 +44,16 @@ jest.mock('../services/chatAgentService', () => ({
 }));
 
 jest.mock('../services/backgroundWorkflowRouter', () => ({
-  routeBackgroundWorkflow: jest.fn(async (input: { runInProcess: () => void }) => {
-    input.runInProcess();
+  routeBackgroundWorkflow: jest.fn(async () => {
     return { route: 'worker', workspacePath: '/tmp/thread', runId: 'run-1' };
   }),
+}));
+
+jest.mock('../services/agentRunReaperService', () => ({
+  isThreadRunAlive: jest.fn().mockResolvedValue(false),
+  getLatestThreadRun: jest.fn().mockResolvedValue(null),
+  isTerminalAgentRunStatus: (status: string) =>
+    status === 'completed' || status === 'failed' || status === 'cancelled',
 }));
 
 jest.mock('../services/notificationService', () => ({
@@ -96,6 +102,10 @@ import {
   sendMessage,
 } from '../services/chatAgentService';
 import { routeBackgroundWorkflow } from '../services/backgroundWorkflowRouter';
+import {
+  getLatestThreadRun,
+  isThreadRunAlive,
+} from '../services/agentRunReaperService';
 import { resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import * as walkthroughAnchorRegistryService from '../services/walkthroughAnchorRegistryService';
@@ -123,6 +133,12 @@ const mockedIsThreadIdle = isThreadIdle as jest.MockedFunction<
 >;
 const mockedIsThreadLoaded = isThreadLoaded as jest.MockedFunction<
   typeof isThreadLoaded
+>;
+const mockedIsThreadRunAlive = isThreadRunAlive as jest.MockedFunction<
+  typeof isThreadRunAlive
+>;
+const mockedGetLatestThreadRun = getLatestThreadRun as jest.MockedFunction<
+  typeof getLatestThreadRun
 >;
 const mockedResolveSkillConfig = resolveSkillConfig as jest.MockedFunction<
   typeof resolveSkillConfig
@@ -187,6 +203,8 @@ beforeEach(() => {
   mockedRegistry.applySmartTagSuggestionsToPending.mockResolvedValue([]);
   mockedIsThreadIdle.mockReturnValue(false);
   mockedIsThreadLoaded.mockReturnValue(true);
+  mockedIsThreadRunAlive.mockResolvedValue(false);
+  mockedGetLatestThreadRun.mockResolvedValue(null);
   mockFs.existsSync.mockReturnValue(true);
   mockFs.readFileSync.mockReturnValue(VALID_SMART_TAG_OUTPUT);
 });
@@ -194,10 +212,7 @@ beforeEach(() => {
 async function startAndClearInFlight(
   candidates = [{ testId: 'new-candidate' }]
 ): Promise<void> {
-  jest.useFakeTimers();
   await startSmartTagging({ candidates }, USER_ID);
-  await jest.advanceTimersByTimeAsync(500);
-  jest.useRealTimers();
 }
 
 describe('walkthroughAnchorSmartTaggingService', () => {
@@ -268,6 +283,17 @@ describe('walkthroughAnchorSmartTaggingService', () => {
         }),
       );
       expect(sendMessage).not.toHaveBeenCalled();
+      const routed = (routeBackgroundWorkflow as jest.Mock).mock.calls[0][0] as {
+        runInProcess: () => Promise<void> | void;
+      };
+      await routed.runInProcess();
+      expect(sendMessage).toHaveBeenCalledWith(
+        THREAD_ID,
+        'Begin.',
+        undefined,
+        [],
+        { hidden: true }
+      );
     });
 
     it('DoD-1: chunks All leftovers internally at 50 per worker thread', async () => {
@@ -281,6 +307,8 @@ describe('walkthroughAnchorSmartTaggingService', () => {
       const result = await startSmartTagging({ candidates }, USER_ID);
 
       expect(result.candidateTestIds).toHaveLength(51);
+      expect(result.threadId).toBe('thread-a');
+      expect(result.threadIds).toEqual(['thread-a', 'thread-b']);
       expect(mockedCreateThread).toHaveBeenCalledTimes(2);
       expect(routeBackgroundWorkflow).toHaveBeenCalledTimes(2);
     });
@@ -424,6 +452,25 @@ describe('walkthroughAnchorSmartTaggingService', () => {
       expect(result.status).toBe('pending');
     });
 
+    it('stays pending while a background refine has no output yet (idle in-process thread)', async () => {
+      await startAndClearInFlight();
+      mockedDb.query.chatThreads.findFirst.mockResolvedValue({
+        userId: USER_ID,
+        workspaceDir: '/tmp/ws',
+        status: 'idle',
+      });
+      mockFs.existsSync.mockReturnValue(false);
+      mockedIsThreadIdle.mockReturnValue(true);
+      mockedIsThreadLoaded.mockReturnValue(true);
+      mockedGetLatestThreadRun.mockResolvedValue(null);
+
+      const result = await getSmartTaggingResult(THREAD_ID, USER_ID);
+      expect(result.status).toBe('pending');
+      expect(
+        mockedRegistry.applySmartTagSuggestionsToPending
+      ).not.toHaveBeenCalled();
+    });
+
     it('on AI failure leaves rows reviewable with warning (no persist)', async () => {
       await startAndClearInFlight();
       mockedDb.query.chatThreads.findFirst.mockResolvedValue({
@@ -433,6 +480,11 @@ describe('walkthroughAnchorSmartTaggingService', () => {
       });
       mockFs.existsSync.mockReturnValue(false);
       mockedIsThreadIdle.mockReturnValue(true);
+      mockedGetLatestThreadRun.mockResolvedValue({
+        status: 'completed',
+        ownerInstance: null,
+        updatedAt: '2026-07-30T00:00:00.000Z',
+      });
 
       const result = await getSmartTaggingResult(THREAD_ID, USER_ID);
       expect(result.status).toBe('failed');

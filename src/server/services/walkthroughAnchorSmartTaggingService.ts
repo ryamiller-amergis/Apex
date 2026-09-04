@@ -16,8 +16,14 @@ import {
   isThreadIdle,
   isThreadLoaded,
   prepareBackgroundWorkflowTurn,
+  sendMessage,
 } from './chatAgentService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
+import {
+  getLatestThreadRun,
+  isTerminalAgentRunStatus,
+  isThreadRunAlive,
+} from './agentRunReaperService';
 import { createNotification } from './notificationService';
 import { resolveSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
@@ -115,6 +121,8 @@ export interface WalkthroughAnchorSmartTaggingStartResponse {
   provenance: WalkthroughAnchorSmartTaggingProvenance;
   /** Deduped newly discovered test IDs sent to the agent. */
   candidateTestIds: string[];
+  /** Every worker thread started for this request (All leftovers chunk at 50). */
+  threadIds: string[];
 }
 
 export interface WalkthroughAnchorSmartTaggingResultResponse {
@@ -714,25 +722,16 @@ async function startOneSmartTaggingChunk(
     },
     threadId: thread.id,
     prepareWorker: () => prepareBackgroundWorkflowTurn(thread.id, 'Begin.'),
-    runInProcess: () => {
-      // Do not spawn in-process Cursor on the App Service.
-    },
+    runInProcess: () =>
+      sendMessage(thread.id, 'Begin.', undefined, [], { hidden: true }),
     reportRecoverablePreparationFailure: async () => {
       taggingInFlight.delete(thread.id);
     },
   });
 
-  void (async () => {
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 500);
-      timer.unref?.();
-    });
-    taggingInFlight.delete(thread.id);
-  })();
-
   watchSmartTaggingMerge(thread.id, userId);
 
-  return { threadId: thread.id, provenance, candidateTestIds };
+  return { threadId: thread.id, provenance, candidateTestIds, threadIds: [thread.id] };
 }
 
 // ── startSmartTagging ────────────────────────────────────────────────────────
@@ -781,19 +780,21 @@ export async function startSmartTagging(
     enrichedCandidates,
     SMART_TAGGING_CANDIDATE_BATCH_MAX
   );
-  let first: WalkthroughAnchorSmartTaggingStartResponse | null = null;
+  const startedChunks: WalkthroughAnchorSmartTaggingStartResponse[] = [];
   for (const chunk of chunks) {
-    const started = await startOneSmartTaggingChunk(
-      chunk,
-      userId,
-      skillPath,
-      model,
-      repositoryConnection,
-      evidenceByTestId
+    startedChunks.push(
+      await startOneSmartTaggingChunk(
+        chunk,
+        userId,
+        skillPath,
+        model,
+        repositoryConnection,
+        evidenceByTestId
+      )
     );
-    if (!first) first = started;
   }
 
+  const first = startedChunks[0];
   if (!first) {
     throw new WalkthroughAnchorSmartTaggingOrchestrationError(
       'INVALID_REQUEST',
@@ -803,6 +804,7 @@ export async function startSmartTagging(
 
   return {
     ...first,
+    threadIds: startedChunks.map((started) => started.threadId),
     candidateTestIds: enrichedCandidates.map((c) => c.testId),
   };
 }
@@ -817,6 +819,7 @@ export async function getSmartTaggingResult(
   const provenance = provenanceByThread.get(threadId);
 
   if (cancelledThreads.has(threadId)) {
+    taggingInFlight.delete(threadId);
     return { status: 'cancelled', provenance };
   }
 
@@ -829,10 +832,21 @@ export async function getSmartTaggingResult(
   // a usable result.
   const raw = readOutput(row.workspaceDir);
   if (!raw) {
-    if (taggingInFlight.has(threadId)) {
+    if (await isThreadRunAlive(threadId)) {
+      return { status: 'pending', provenance };
+    }
+    const latest = await getLatestThreadRun(threadId);
+    if (latest && !isTerminalAgentRunStatus(latest.status)) {
+      return { status: 'pending', provenance };
+    }
+    // skipAutoKickoff leaves the in-process thread idle; a background worker
+    // (or in-process sendMessage fallback) may still be starting. Stay pending
+    // until a run row exists or the in-memory agent is gone.
+    if (taggingInFlight.has(threadId) && !latest && isThreadLoaded(threadId)) {
       return { status: 'pending', provenance };
     }
     if (isThreadIdle(threadId)) {
+      taggingInFlight.delete(threadId);
       return failedResponse(
         provenance,
         'Agent completed without generating smart-tagging output.'
@@ -842,6 +856,7 @@ export async function getSmartTaggingResult(
     // "running". isThreadIdle() returns false for missing threads, which used
     // to leave the Sync UI polling forever.
     if (!isThreadLoaded(threadId)) {
+      taggingInFlight.delete(threadId);
       return failedResponse(
         provenance,
         'Smart-tagging agent is no longer running (server may have restarted). Use Tag next AI batch to retry.'
@@ -858,6 +873,7 @@ export async function getSmartTaggingResult(
       err instanceof WalkthroughAnchorSmartTaggingError
         ? err.message
         : 'Smart-tagging output is not valid JSON.';
+    taggingInFlight.delete(threadId);
     return failedResponse(provenance, message);
   }
 
@@ -918,10 +934,12 @@ export async function getSmartTaggingResult(
         err instanceof Error
           ? err.message
           : 'Failed to persist smart-tag suggestions.';
+      taggingInFlight.delete(threadId);
       return failedResponse(provenance, message);
     }
   }
 
+  taggingInFlight.delete(threadId);
   return {
     status: 'ready',
     rawJson: raw,
