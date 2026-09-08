@@ -224,7 +224,6 @@ export async function recordCursorChatUsage(opts: {
   const costUsd = await computeCost({
     provider: 'cursor',
     modelId: opts.modelId,
-    effort: opts.kickoff.effort,
     inputTokens: opts.inputTokens,
     outputTokens: opts.outputTokens,
     cacheReadTokens: opts.cacheReadTokens,
@@ -233,6 +232,7 @@ export async function recordCursorChatUsage(opts: {
   recordAiUsage({
     provider: 'cursor',
     modelId: opts.modelId,
+    effort: opts.kickoff.effort,
     feature: resolveFeatureFromKickoff(opts.kickoff),
     project: opts.kickoff.project ?? 'unknown',
     skillPath: opts.kickoff.skillPath,

@@ -531,6 +531,31 @@ describe('POST /api/interviews', () => {
     );
   });
 
+  it('PBI-003 AC-0 / VT-01 snapshots persisted kickoff effort instead of request effort', async () => {
+    const { getThreadAsync } = jest.requireMock('../services/chatAgentService') as {
+      getThreadAsync: jest.Mock;
+    };
+    getThreadAsync.mockResolvedValueOnce({ kickoff: { effort: 'medium' } });
+    mockInterviewService.createInterview.mockResolvedValue({
+      interviewId: 'interview-effort',
+      threadId: 'thread-x',
+    });
+
+    const res = await request(buildApp())
+      .post('/api/interviews')
+      .send({
+        project: 'proj',
+        repo: 'org/repo',
+        chatThreadId: 'thread-x',
+        effort: 'high',
+      });
+
+    expect(res.status).toBe(201);
+    expect(mockInterviewService.createInterview).toHaveBeenCalledWith(
+      expect.objectContaining({ effort: 'medium' }),
+    );
+  });
+
   it('returns 400 when project is missing', async () => {
     const res = await request(buildApp())
       .post('/api/interviews')

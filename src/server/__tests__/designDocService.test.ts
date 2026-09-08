@@ -256,6 +256,7 @@ describe('createDesignDoc', () => {
       userId: 'user-1',
       chatThreadId: 'thread-abc',
       title: 'My Design Doc',
+      effort: 'high',
     });
 
     expect(result).toEqual({ designDocId: 'doc-new' });
@@ -265,6 +266,7 @@ describe('createDesignDoc', () => {
         authorId: 'user-1',
         chatThreadId: 'thread-abc',
         title: 'My Design Doc',
+        effort: 'high',
         status: 'generating',
         designContent: '',
         techSpecContent: '',

@@ -359,7 +359,7 @@ interface EventsTableProps {
   filters: AiCostFilters;
 }
 
-const EventsTable: React.FC<EventsTableProps> = ({ filters }) => {
+export const EventsTable: React.FC<EventsTableProps> = ({ filters }) => {
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 20;
   const { data, isLoading } = useAiCostEvents(filters, page, PAGE_SIZE);
