@@ -11,14 +11,6 @@ jest.mock('../services/repoCacheService', () => ({
   }),
 }));
 
-const mockMintCursorUserSubToken = jest.fn();
-const mockFetchCursorApiKeyInfo = jest.fn();
-
-jest.mock('../services/cursorSubTokenService', () => ({
-  mintCursorUserSubToken: (...args: unknown[]) => mockMintCursorUserSubToken(...args),
-  fetchCursorApiKeyInfo: (...args: unknown[]) => mockFetchCursorApiKeyInfo(...args),
-}));
-
 jest.mock('@cursor/sdk', () => ({
   Agent: {
     create: jest.fn(),
@@ -31,6 +23,8 @@ import { Agent } from '@cursor/sdk';
 import {
   buildCloudRepoUrl,
   launchCloudAgent,
+  normalizeCloudAgentActivity,
+  resolveCloudAgentLaunchTarget,
   resolveLaunchApiKey,
   toCloudRepoUrl,
 } from '../services/cursorCloudAgentClient';
@@ -38,27 +32,14 @@ import {
 describe('cursorCloudAgentClient', () => {
   const previousKey = process.env.CURSOR_API_KEY;
   const previousOverride = process.env.OTHER_CURSOR_KEY;
+  const previousTestRepo = process.env.CLOUD_AGENT_TEST_GITHUB_REPO;
+  const previousTestBranch = process.env.CLOUD_AGENT_TEST_GITHUB_BRANCH;
 
   beforeEach(() => {
     jest.clearAllMocks();
+    delete process.env.CLOUD_AGENT_TEST_GITHUB_REPO;
+    delete process.env.CLOUD_AGENT_TEST_GITHUB_BRANCH;
     process.env.CURSOR_API_KEY = 'test-cursor-key';
-    mockMintCursorUserSubToken.mockResolvedValue({
-      accessToken: 'user-scoped-token',
-      expiresAt: '2026-09-03T15:00:00.000Z',
-      userId: 42,
-      teamId: 7,
-    });
-    mockFetchCursorApiKeyInfo.mockImplementation(async (key: string) => {
-      if (key === 'test-cursor-key') {
-        return { apiKeyName: 'Service Account', createdAt: '2026-01-01T00:00:00.000Z' };
-      }
-      return {
-        apiKeyName: 'Sub-token',
-        userId: 42,
-        userEmail: 'dev@example.com',
-        createdAt: '2026-01-01T00:00:00.000Z',
-      };
-    });
   });
 
   afterAll(() => {
@@ -66,12 +47,38 @@ describe('cursorCloudAgentClient', () => {
     else process.env.CURSOR_API_KEY = previousKey;
     if (previousOverride === undefined) delete process.env.OTHER_CURSOR_KEY;
     else process.env.OTHER_CURSOR_KEY = previousOverride;
+    if (previousTestRepo === undefined) delete process.env.CLOUD_AGENT_TEST_GITHUB_REPO;
+    else process.env.CLOUD_AGENT_TEST_GITHUB_REPO = previousTestRepo;
+    if (previousTestBranch === undefined) delete process.env.CLOUD_AGENT_TEST_GITHUB_BRANCH;
+    else process.env.CLOUD_AGENT_TEST_GITHUB_BRANCH = previousTestBranch;
   });
 
-  it('builds a GitHub HTTPS URL without a .git suffix', () => {
-    expect(buildCloudRepoUrl('github', 'Apex', 'amergis/apex')).toBe(
-      'https://github.com/amergis/apex',
-    );
+  it('overrides ADO launch target when CLOUD_AGENT_TEST_GITHUB_REPO is set', () => {
+    process.env.CLOUD_AGENT_TEST_GITHUB_REPO = 'amergis/Apex';
+    process.env.CLOUD_AGENT_TEST_GITHUB_BRANCH = 'main';
+    expect(resolveCloudAgentLaunchTarget({
+      skillProvider: 'ado',
+      skillRepo: 'MaxView',
+      skillBranch: 'development',
+    })).toEqual({
+      skillProvider: 'github',
+      skillRepo: 'amergis/Apex',
+      skillBranch: 'main',
+      testOverride: 'github:amergis/Apex',
+    });
+  });
+
+  it('builds a GitHub HTTPS URL without a .git suffix or local token', () => {
+    const previousToken = process.env.GITHUB_TOKEN;
+    delete process.env.GITHUB_TOKEN;
+    try {
+      expect(buildCloudRepoUrl('github', 'Apex', 'amergis/apex')).toBe(
+        'https://github.com/amergis/apex',
+      );
+    } finally {
+      if (previousToken === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = previousToken;
+    }
   });
 
   it('builds an Azure DevOps _git URL without credentials', () => {
@@ -84,7 +91,45 @@ describe('cursorCloudAgentClient', () => {
     expect(toCloudRepoUrl('https://github.com/org/repo.git')).toBe('https://github.com/org/repo');
   });
 
-  it('uses CURSOR_API_KEY for GitHub launches', async () => {
+  it('normalizes assistant text without exposing non-text blocks', () => {
+    expect(normalizeCloudAgentActivity({
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'text', text: 'Updated the route.' },
+          { type: 'tool_use', name: 'edit', input: { secret: 'not-for-the-client' } },
+        ],
+      },
+    }, 3)).toEqual([{
+      id: '3:assistant:0',
+      kind: 'assistant',
+      title: 'Agent update',
+      detail: 'Updated the route.',
+    }]);
+  });
+
+  it('normalizes tool lifecycle without sending arguments or results', () => {
+    const result = normalizeCloudAgentActivity({
+      type: 'tool_call',
+      call_id: 'call-1',
+      name: 'read_file',
+      status: 'completed',
+      args: { path: '/secret' },
+      result: 'file contents',
+    }, 4);
+
+    expect(result).toEqual([{
+      id: '4:tool:call-1:completed',
+      kind: 'tool',
+      title: 'read file',
+      detail: 'Completed',
+      status: 'completed',
+    }]);
+    expect(JSON.stringify(result)).not.toContain('/secret');
+    expect(JSON.stringify(result)).not.toContain('file contents');
+  });
+
+  it('uses CURSOR_API_KEY for GitHub and ADO launches', async () => {
     process.env.OTHER_CURSOR_KEY = 'project-override-key';
     await expect(resolveLaunchApiKey({
       project: 'Apex',
@@ -94,10 +139,7 @@ describe('cursorCloudAgentClient', () => {
       skillRepo: 'amergis/apex',
       skillBranch: 'main',
     })).resolves.toBe('test-cursor-key');
-    expect(mockMintCursorUserSubToken).not.toHaveBeenCalled();
-  });
 
-  it('mints a user sub-token for ADO launches', async () => {
     await expect(resolveLaunchApiKey({
       project: 'MaxView',
       prompt: 'x',
@@ -105,24 +147,28 @@ describe('cursorCloudAgentClient', () => {
       skillProvider: 'ado',
       skillRepo: 'MaxView',
       skillBranch: 'development',
-      userEmail: 'dev@example.com',
-    })).resolves.toBe('user-scoped-token');
+    })).resolves.toBe('test-cursor-key');
+  });
 
-    expect(mockMintCursorUserSubToken).toHaveBeenCalledWith({
-      serviceAccountApiKey: 'test-cursor-key',
-      forUserEmail: 'dev@example.com',
+  it('uses GitHub service-account auth when test override is set', async () => {
+    process.env.CLOUD_AGENT_TEST_GITHUB_REPO = 'amergis/Apex';
+    (Agent.create as jest.Mock).mockResolvedValue({
+      agentId: 'bc-agent-1',
+      send: jest.fn().mockResolvedValue({ id: 'run-cursor-1' }),
     });
-  });
 
-  it('requires userEmail for ADO launches', async () => {
-    await expect(resolveLaunchApiKey({
+    await launchCloudAgent({
       project: 'MaxView',
-      prompt: 'x',
+      prompt: 'Implement the feature',
       model: 'composer-2.5',
       skillProvider: 'ado',
       skillRepo: 'MaxView',
       skillBranch: 'development',
-    })).rejects.toThrow(/User email is required/);
+    });
+
+    const createArg = (Agent.create as jest.Mock).mock.calls[0][0];
+    expect(createArg.apiKey).toBe('test-cursor-key');
+    expect(createArg.cloud.repos[0].url).toBe('https://github.com/amergis/Apex');
   });
 
   it('returns only vendor ids from launch — never the API key or clone secret', async () => {
@@ -138,11 +184,10 @@ describe('cursorCloudAgentClient', () => {
       skillProvider: 'ado',
       skillRepo: 'MaxView',
       skillBranch: 'main',
-      userEmail: 'dev@example.com',
     });
 
     expect(result).toEqual({ cloudAgentId: 'bc-agent-1', cursorRunId: 'run-cursor-1' });
-    expect(JSON.stringify(result)).not.toMatch(/test-cursor-key|user-scoped-token|ado-pat|gh-token/i);
+    expect(JSON.stringify(result)).not.toMatch(/test-cursor-key|ado-pat|gh-token/i);
     const createArg = (Agent.create as jest.Mock).mock.calls[0][0];
     expect(createArg.cloud).toEqual({
       repos: [{ url: 'https://dev.azure.com/amergis/MaxView/_git/MaxView', startingRef: 'main' }],

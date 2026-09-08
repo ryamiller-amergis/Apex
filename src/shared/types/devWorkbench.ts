@@ -138,6 +138,23 @@ export interface CloudAgentRunSummary {
   lastError: string | null;
 }
 
+export type CloudAgentActivityKind = 'assistant' | 'thinking' | 'tool' | 'status' | 'task';
+
+/** User-safe Cloud Agent SDK event streamed into the My Work run drawer. */
+export interface CloudAgentActivityEvent {
+  /** Stable within one replayed run stream so the client can remove reconnect duplicates. */
+  id: string;
+  kind: CloudAgentActivityKind;
+  title: string;
+  detail?: string;
+  status?: 'running' | 'completed' | 'failed' | 'cancelled';
+}
+
+export type CloudAgentActivityStreamEvent =
+  | { type: 'activity'; event: CloudAgentActivityEvent }
+  | { type: 'stream_end' }
+  | { type: 'stream_error'; error: string };
+
 export interface LeftoverWorkSummary {
   /** Names/labels of unit/e2e/WCAG checks the finished run reported as failing (FEAT-003 data). */
   failingChecks: string[];

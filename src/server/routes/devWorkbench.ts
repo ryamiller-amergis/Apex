@@ -39,7 +39,7 @@ import {
   activateDevSession,
   touchDevSessionSetup,
 } from '../services/devSessionSetupService';
-import { getUserId, getUserEmail } from '../utils/requestUser';
+import { getUserId } from '../utils/requestUser';
 import type {
   StartDevSessionRequest,
   ApexBacklogGroup,
@@ -59,10 +59,12 @@ import {
   cancelCloudAgentRun,
   CloudAgentConflictError,
   CloudAgentEligibilityError,
+  getCloudAgentActivityStream,
   getCloudAgentRunStatus,
   startCloudAgentRun,
 } from '../services/cloudAgentService';
 import { MY_WORK_CLOUD_AGENT_FLAG } from '../../shared/types/featureFlags';
+import { startSseHeartbeat, writeSseEvent } from '../utils/sseResponse';
 
 /** ADO System.AssignedTo may be an identity object or a plain display-name string. */
 function assignedToDisplayName(raw: unknown): string | null {
@@ -796,7 +798,6 @@ router.post('/cloud-agent/start', async (req: Request, res: Response) => {
       return;
     }
     const userId = getUserId(req);
-    const userEmail = getUserEmail(req);
     const enabled = await isFeatureEnabled(MY_WORK_CLOUD_AGENT_FLAG, { userId, project });
     // @feature-flag:my-work-cloud-agent start winner=enabled
     if (!enabled) {
@@ -817,10 +818,6 @@ router.post('/cloud-agent/start', async (req: Request, res: Response) => {
     const displayName = (req.user as any)?.profile?.displayName as string | undefined;
     if (!displayName) {
       res.status(400).json({ error: 'Could not determine user display name' });
-      return;
-    }
-    if (!userEmail) {
-      res.status(400).json({ error: 'Could not determine user email' });
       return;
     }
 
@@ -845,7 +842,6 @@ router.post('/cloud-agent/start', async (req: Request, res: Response) => {
 
     const result = await startCloudAgentRun({
       userId,
-      userEmail,
       project,
       workItemId,
       isSuperAdmin: isSuperAdminRequest(req),
@@ -869,6 +865,59 @@ router.post('/cloud-agent/start', async (req: Request, res: Response) => {
     }
     console.error('[dev-workbench] cloud-agent start failed:', (err as Error).message);
     res.status(500).json({ error: 'Failed to start Cloud Development' });
+  }
+});
+
+// GET /sessions/:id/cloud-agent/stream — replay and follow the Cursor SDK run stream
+router.get('/sessions/:id/cloud-agent/stream', async (req: Request, res: Response) => {
+  let iterator: AsyncIterator<unknown> | null = null;
+  let stopHeartbeat: (() => void) | null = null;
+  let closed = false;
+
+  req.on('close', () => {
+    closed = true;
+    stopHeartbeat?.();
+    void iterator?.return?.();
+  });
+
+  try {
+    const expectedRunId = typeof req.query.runId === 'string' ? req.query.runId : undefined;
+    const stream = await getCloudAgentActivityStream(
+      req.params.id,
+      getUserId(req),
+      expectedRunId,
+    );
+    iterator = stream[Symbol.asyncIterator]();
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+    stopHeartbeat = startSseHeartbeat(res);
+
+    while (!closed) {
+      const next = await iterator.next();
+      if (next.done) break;
+      if (!writeSseEvent(res, { type: 'activity', event: next.value })) break;
+    }
+    if (!closed) {
+      writeSseEvent(res, { type: 'stream_end' });
+      res.end();
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Cloud Agent activity stream failed';
+    if (res.headersSent) {
+      writeSseEvent(res, { type: 'stream_error', error: message });
+      res.end();
+    } else {
+      const status = (err as Error & { status?: number }).status ?? 500;
+      res.status(status).json({
+        error: status === 500 ? 'Failed to stream Cloud Agent activity' : message,
+      });
+    }
+  } finally {
+    stopHeartbeat?.();
   }
 });
 

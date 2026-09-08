@@ -28,6 +28,7 @@ jest.mock('../../hooks/useDevWorkbench', () => ({
   useCompleteFeature: jest.fn(),
   useStartLocalFeature: jest.fn(),
   useStartCloudAgentRun: jest.fn(),
+  useCloudAgentActivityStream: jest.fn(),
   useCloudAgentRun: jest.fn(),
   useDevSession: jest.fn(),
   useCancelCloudAgentRun: jest.fn(),
@@ -78,6 +79,7 @@ import {
   useCompleteFeature,
   useStartLocalFeature,
   useStartCloudAgentRun,
+  useCloudAgentActivityStream,
   useCloudAgentRun,
   useDevSession,
   useCancelCloudAgentRun,
@@ -213,6 +215,11 @@ describe('DevWorkbenchView', () => {
     });
     (useCloudAgentRun as jest.Mock).mockReturnValue({
       data: null,
+      error: null,
+    });
+    (useCloudAgentActivityStream as jest.Mock).mockReturnValue({
+      events: [],
+      isConnected: false,
       error: null,
     });
     (useDevSession as jest.Mock).mockReturnValue({ data: undefined });
@@ -391,7 +398,40 @@ describe('DevWorkbenchView', () => {
 
     expect(screen.getByTestId('my-work-cloud-run-drawer-42')).toBeInTheDocument();
     expect(screen.getByText('Activity')).toBeInTheDocument();
-    expect(screen.getByText(/streaming events become available/i)).toBeInTheDocument();
+    expect(screen.getByText(/live agent updates and tool activity/i)).toBeInTheDocument();
+  });
+
+  it('streams agent updates and tool activity into the cloud run drawer', () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockCloudSession(cloudRun('running'));
+    (useCloudAgentActivityStream as jest.Mock).mockReturnValue({
+      isConnected: true,
+      error: null,
+      events: [
+        {
+          id: '1:assistant:0',
+          kind: 'assistant',
+          title: 'Agent update',
+          detail: 'I found the affected route and am updating it.',
+        },
+        {
+          id: '2:tool:edit:completed',
+          kind: 'tool',
+          title: 'edit',
+          detail: 'Completed',
+          status: 'completed',
+        },
+      ],
+    });
+
+    renderView();
+    fireEvent.click(screen.getByRole('button', { name: /view cloud agent run details: running/i }));
+
+    const activity = screen.getByTestId('my-work-cloud-run-activity-42');
+    expect(within(activity).getByText('I found the affected route and am updating it.'))
+      .toBeInTheDocument();
+    expect(within(activity).getByText('edit · Completed')).toBeInTheDocument();
+    expect(screen.getByText('Live')).toBeInTheDocument();
   });
 
   it('TBI-004 DoD-3: keeps an actual legacy session beside a live cloud run', () => {

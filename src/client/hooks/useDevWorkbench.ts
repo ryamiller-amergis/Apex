@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
 import type {
   AssignedWorkItem,
   StartDevSessionResponse,
@@ -11,6 +12,8 @@ import type {
   StartDevSessionRequest,
   StartCloudAgentRunRequest,
   StartCloudAgentRunResponse,
+  CloudAgentActivityEvent,
+  CloudAgentActivityStreamEvent,
   CloudAgentRunSummary,
 } from '../../shared/types/devWorkbench';
 import type { AgentRunStatus } from '../../shared/types/agentRunLifecycle';
@@ -80,6 +83,61 @@ export function useCloudAgentRun(sessionId: string | null) {
     select: (session) => session.cloudAgentRun ?? null,
     refetchInterval: (query) => cloudAgentRunRefetchInterval(query.state.data?.cloudAgentRun),
   });
+}
+
+export function useCloudAgentActivityStream(
+  sessionId: string | null,
+  runId: string | null,
+  enabled: boolean,
+) {
+  const [events, setEvents] = useState<CloudAgentActivityEvent[]>([]);
+  const [isConnected, setIsConnected] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setEvents([]);
+    setIsConnected(false);
+    setError(null);
+    if (!sessionId || !runId || !enabled) return;
+
+    const source = new EventSource(
+      `/api/dev-workbench/sessions/${encodeURIComponent(sessionId)}/cloud-agent/stream?runId=${encodeURIComponent(runId)}`,
+      { withCredentials: true },
+    );
+    const seen = new Set<string>();
+
+    source.onopen = () => {
+      setIsConnected(true);
+      setError(null);
+    };
+    source.onmessage = (message) => {
+      try {
+        const payload = JSON.parse(message.data) as CloudAgentActivityStreamEvent;
+        if (payload.type === 'activity') {
+          if (seen.has(payload.event.id)) return;
+          seen.add(payload.event.id);
+          setEvents((current) => [...current, payload.event].slice(-500));
+        } else if (payload.type === 'stream_end') {
+          setIsConnected(false);
+          source.close();
+        } else if (payload.type === 'stream_error') {
+          setError(payload.error);
+          setIsConnected(false);
+          source.close();
+        }
+      } catch {
+        setError('Received an invalid Cloud Agent activity event.');
+      }
+    };
+    source.onerror = () => {
+      setIsConnected(false);
+      setError('Activity stream disconnected. Reconnecting…');
+    };
+
+    return () => source.close();
+  }, [enabled, runId, sessionId]);
+
+  return { events, isConnected, error };
 }
 
 export function useStartCloudAgentRun() {

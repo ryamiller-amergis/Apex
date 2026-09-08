@@ -57,6 +57,7 @@ jest.mock('../services/agentRunReaperService', () => ({
 jest.mock('../services/cursorCloudAgentClient', () => ({
   launchCloudAgent: jest.fn(),
   getCloudAgentRun: jest.fn(),
+  streamCloudAgentRun: jest.fn(),
   cancelCursorCloudAgentRun: (...args: unknown[]) => mockVendorCancel(...args),
 }));
 jest.mock('../services/workItemPrLinkService', () => ({
@@ -70,6 +71,7 @@ import {
   cancelCloudAgentRun,
   CloudAgentConflictError,
   evaluateCloudAgentEligibility,
+  getCloudAgentActivityStream,
   getCloudAgentRunStatus,
   startCloudAgentRun,
   type CloudAgentServiceDeps,
@@ -213,6 +215,7 @@ function makeDeps(overrides: Partial<CloudAgentServiceDeps> = {}): CloudAgentSer
     getSkillConfig: jest.fn().mockResolvedValue(null),
     launchCloudAgent: jest.fn(),
     getCloudAgentRun: jest.fn(),
+    streamCloudAgentRun: jest.fn(),
     cancelCursorCloudAgentRun: mockVendorCancel,
     linkWorkItemToPullRequest: mockLinkWorkItemToPullRequest,
     addAdoWorkItemHyperlink: mockAddAdoWorkItemHyperlink,
@@ -225,6 +228,64 @@ function makeDeps(overrides: Partial<CloudAgentServiceDeps> = {}): CloudAgentSer
     ...overrides,
   } as unknown as CloudAgentServiceDeps;
 }
+
+describe('getCloudAgentActivityStream', () => {
+  it('opens the vendor stream with the stored agent and run identities', async () => {
+    mockDevSessionFindFirst.mockResolvedValue(session());
+    mockAgentRunFindFirst.mockResolvedValue(run());
+    const stream = (async function* () {
+      yield {
+        id: '1:status:RUNNING',
+        kind: 'status' as const,
+        title: 'Cloud agent running',
+      };
+    })();
+    const streamCloudAgentRun = jest.fn().mockReturnValue(stream);
+
+    await expect(getCloudAgentActivityStream(
+      SESSION_ID,
+      USER_ID,
+      RUN_ID,
+      makeDeps({ streamCloudAgentRun }),
+    )).resolves.toBe(stream);
+    expect(streamCloudAgentRun).toHaveBeenCalledWith({
+      project: 'MaxView',
+      cloudAgentId: 'bc-agent-1',
+      cursorRunId: 'cursor-run-1',
+    });
+  });
+
+  it('does not expose a stream for another user or a replaced run', async () => {
+    mockDevSessionFindFirst.mockResolvedValueOnce(undefined);
+
+    await expect(getCloudAgentActivityStream(
+      SESSION_ID,
+      'other-user',
+      RUN_ID,
+      makeDeps(),
+    )).rejects.toMatchObject({ status: 404 });
+
+    mockDevSessionFindFirst.mockResolvedValueOnce(session({ currentRunId: 'run-2' }));
+    await expect(getCloudAgentActivityStream(
+      SESSION_ID,
+      USER_ID,
+      RUN_ID,
+      makeDeps(),
+    )).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('requires the cloud identity before opening the stream', async () => {
+    mockDevSessionFindFirst.mockResolvedValue(session());
+    mockAgentRunFindFirst.mockResolvedValue(run({ cloudAgentIdentity: null }));
+
+    await expect(getCloudAgentActivityStream(
+      SESSION_ID,
+      USER_ID,
+      RUN_ID,
+      makeDeps(),
+    )).rejects.toMatchObject({ status: 409 });
+  });
+});
 
 describe('startCloudAgentRun Resume prompt (TBI-007 DoD-1)', () => {
   it('appends prior leftover work to the dispatched snapshot, clears it at enqueue, and keeps the API response unchanged', async () => {
@@ -280,7 +341,6 @@ describe('startCloudAgentRun Resume prompt (TBI-007 DoD-1)', () => {
 
     const result = await startCloudAgentRun({
       userId: USER_ID,
-      userEmail: 'dev@example.com',
       project: 'MaxView',
       workItemId: 42,
       isSuperAdmin: false,

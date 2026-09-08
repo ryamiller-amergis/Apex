@@ -116,6 +116,7 @@ jest.mock('../services/devWorkbenchFeatureContextService', () => ({
 
 const mockAttachCloudAgentEligibility = jest.fn(async (items: unknown[]) => items);
 const mockGetCloudAgentRunStatus = jest.fn().mockResolvedValue(null);
+const mockGetCloudAgentActivityStream = jest.fn();
 const mockStartCloudAgentRun = jest.fn();
 const mockCancelCloudAgentRun = jest.fn();
 
@@ -138,6 +139,8 @@ jest.mock('../services/cloudAgentService', () => {
     attachCloudAgentEligibility: (items: unknown[]) => mockAttachCloudAgentEligibility(items),
     getCloudAgentRunStatus: (sessionId: string, userId: string) =>
       mockGetCloudAgentRunStatus(sessionId, userId),
+    getCloudAgentActivityStream: (...args: unknown[]) =>
+      mockGetCloudAgentActivityStream(...args),
     startCloudAgentRun: (input: unknown) => mockStartCloudAgentRun(input),
     cancelCloudAgentRun: (sessionId: unknown) => mockCancelCloudAgentRun(sessionId),
     CloudAgentEligibilityError,
@@ -402,23 +405,55 @@ describe('POST /api/dev-workbench/cloud-agent/start', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ sessionId: 'session-cloud', runId: 'run-cloud' });
     expect(mockStartCloudAgentRun).toHaveBeenCalledWith(expect.objectContaining({
-      userEmail: 'jane@example.com',
+      userId: expect.any(String),
+      project: 'MaxView',
     }));
     expect(mockStartCloudAgentRun).toHaveBeenCalledTimes(1);
   });
+});
 
-  it('returns 400 when user email is missing from the session', async () => {
-    mockWorkItemLookup({
-      'System.AssignedTo': callerAssignedTo,
-    });
+describe('GET /api/dev-workbench/sessions/:id/cloud-agent/stream', () => {
+  beforeEach(() => {
+    mockGetCloudAgentActivityStream.mockReset();
+  });
 
-    const res = await request(buildApp({ displayName: 'Jane Developer' }))
-      .post('/api/dev-workbench/cloud-agent/start')
-      .send({ workItemId: 42, project: 'MaxView' });
+  it('streams normalized Cloud Agent activity and the terminal frame', async () => {
+    mockGetCloudAgentActivityStream.mockResolvedValue((async function* () {
+      yield {
+        id: '1:assistant:0',
+        kind: 'assistant',
+        title: 'Agent update',
+        detail: 'Updating the route.',
+      };
+    })());
 
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/email/i);
-    expect(mockStartCloudAgentRun).not.toHaveBeenCalled();
+    const res = await request(buildApp()).get(
+      '/api/dev-workbench/sessions/session-1/cloud-agent/stream?runId=run-1',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/event-stream/);
+    expect(res.text).toContain('"type":"activity"');
+    expect(res.text).toContain('"detail":"Updating the route."');
+    expect(res.text).toContain('"type":"stream_end"');
+    expect(mockGetCloudAgentActivityStream).toHaveBeenCalledWith(
+      'session-1',
+      'user-1',
+      'run-1',
+    );
+  });
+
+  it('returns the service status before opening the SSE response', async () => {
+    mockGetCloudAgentActivityStream.mockRejectedValue(
+      Object.assign(new Error('Cloud Agent run not found'), { status: 404 }),
+    );
+
+    const res = await request(buildApp()).get(
+      '/api/dev-workbench/sessions/missing/cloud-agent/stream',
+    );
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Cloud Agent run not found' });
   });
 });
 

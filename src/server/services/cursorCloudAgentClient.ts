@@ -7,7 +7,7 @@ import { writeFileSync } from 'fs';
 import path from 'path';
 import { Agent } from '@cursor/sdk';
 import type { SkillProvider } from '../../shared/types/projectSettings';
-import { fetchCursorApiKeyInfo, mintCursorUserSubToken } from './cursorSubTokenService';
+import type { CloudAgentActivityEvent } from '../../shared/types/devWorkbench';
 import { resolveGitRemote } from './repoCacheService';
 
 export interface LaunchCloudAgentInput {
@@ -17,8 +17,6 @@ export interface LaunchCloudAgentInput {
   skillProvider: SkillProvider;
   skillRepo: string;
   skillBranch: string;
-  /** Required for ADO — mints a user-scoped Cursor token for repo access. */
-  userEmail?: string;
 }
 
 export interface LaunchCloudAgentResult {
@@ -32,6 +30,137 @@ export interface CloudAgentRunObservation {
   resultText: string | null;
 }
 
+function activityStatus(value: unknown): CloudAgentActivityEvent['status'] | undefined {
+  if (typeof value !== 'string') return undefined;
+  switch (value.toLowerCase()) {
+    case 'creating':
+    case 'running':
+      return 'running';
+    case 'finished':
+    case 'completed':
+      return 'completed';
+    case 'error':
+    case 'failed':
+      return 'failed';
+    case 'cancelled':
+    case 'canceled':
+      return 'cancelled';
+    default:
+      return undefined;
+  }
+}
+
+function displayToolName(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim()) return 'Tool';
+  return value.trim().replace(/[_-]+/g, ' ');
+}
+
+/** Convert one vendor event into the small, user-safe drawer event contract. */
+export function normalizeCloudAgentActivity(
+  raw: unknown,
+  sequence: number,
+): CloudAgentActivityEvent[] {
+  if (!raw || typeof raw !== 'object') return [];
+  const event = raw as Record<string, unknown>;
+  const type = event.type;
+
+  if (type === 'assistant') {
+    const message = event.message;
+    if (!message || typeof message !== 'object') return [];
+    const content = (message as { content?: unknown }).content;
+    if (!Array.isArray(content)) return [];
+    return content.flatMap((block, blockIndex) => {
+      if (
+        !block
+        || typeof block !== 'object'
+        || (block as { type?: unknown }).type !== 'text'
+        || typeof (block as { text?: unknown }).text !== 'string'
+      ) {
+        return [];
+      }
+      const text = (block as { text: string }).text.trim();
+      return text
+        ? [{
+            id: `${sequence}:assistant:${blockIndex}`,
+            kind: 'assistant' as const,
+            title: 'Agent update',
+            detail: text.slice(0, 12_000),
+          }]
+        : [];
+    });
+  }
+
+  if (type === 'thinking') {
+    return [{
+      id: `${sequence}:thinking`,
+      kind: 'thinking',
+      title: 'Analyzing',
+      status: 'running',
+    }];
+  }
+
+  if (type === 'tool_call') {
+    const status = activityStatus(event.status) ?? 'running';
+    const name = displayToolName(event.name);
+    return [{
+      id: `${sequence}:tool:${String(event.call_id ?? name)}:${status}`,
+      kind: 'tool',
+      title: name,
+      detail: status === 'running'
+        ? 'Started'
+        : status === 'completed'
+          ? 'Completed'
+          : status === 'failed'
+            ? 'Failed'
+            : 'Cancelled',
+      status,
+    }];
+  }
+
+  if (type === 'task') {
+    const detail = typeof event.text === 'string' ? event.text.trim().slice(0, 4_000) : '';
+    return [{
+      id: `${sequence}:task`,
+      kind: 'task',
+      title: typeof event.status === 'string' && event.status.trim()
+        ? event.status.trim()
+        : 'Task update',
+      ...(detail ? { detail } : {}),
+      status: activityStatus(event.status),
+    }];
+  }
+
+  if (type === 'status') {
+    const status = activityStatus(event.status);
+    const detail = typeof event.message === 'string' ? event.message.trim().slice(0, 2_000) : '';
+    return [{
+      id: `${sequence}:status:${String(event.status ?? 'unknown')}`,
+      kind: 'status',
+      title: status === 'completed'
+        ? 'Run completed'
+        : status === 'failed'
+          ? 'Run failed'
+          : status === 'cancelled'
+            ? 'Run cancelled'
+            : 'Cloud agent running',
+      ...(detail ? { detail } : {}),
+      status,
+    }];
+  }
+
+  if (type === 'request') {
+    return [{
+      id: `${sequence}:request:${String(event.request_id ?? 'unknown')}`,
+      kind: 'status',
+      title: 'Agent needs input',
+      detail: 'Open the run in Cursor to respond.',
+      status: 'running',
+    }];
+  }
+
+  return [];
+}
+
 /** Cloud agents always use the team service-account key from CURSOR_API_KEY. */
 export async function resolveCursorApiKey(_project: string): Promise<string> {
   const apiKey = process.env.CURSOR_API_KEY?.trim();
@@ -39,61 +168,68 @@ export async function resolveCursorApiKey(_project: string): Promise<string> {
   return apiKey;
 }
 
+export interface CloudAgentLaunchTarget {
+  skillProvider: SkillProvider;
+  skillRepo: string;
+  skillBranch: string;
+  testOverride: string | null;
+}
+
 /**
- * ADO launches use a 1-hour user-scoped sub-token so Cursor validates repo
- * access like the UI (connected Azure DevOps user). GitHub keeps the service account.
+ * Dev-only: CLOUD_AGENT_TEST_GITHUB_REPO=org/repo forces GitHub for launch
+ * (service-account path). Work item / prompt stay unchanged.
  */
+export function resolveCloudAgentLaunchTarget(
+  input: Pick<LaunchCloudAgentInput, 'skillProvider' | 'skillRepo' | 'skillBranch'>,
+): CloudAgentLaunchTarget {
+  const testRepo = process.env.CLOUD_AGENT_TEST_GITHUB_REPO?.trim();
+  if (testRepo) {
+    return {
+      skillProvider: 'github',
+      skillRepo: testRepo,
+      skillBranch: process.env.CLOUD_AGENT_TEST_GITHUB_BRANCH?.trim() || 'main',
+      testOverride: `github:${testRepo}`,
+    };
+  }
+  return {
+    skillProvider: input.skillProvider,
+    skillRepo: input.skillRepo,
+    skillBranch: input.skillBranch,
+    testOverride: null,
+  };
+}
+
+/** Cloud Agent launches always use the team service-account key. */
 export async function resolveLaunchApiKey(input: LaunchCloudAgentInput): Promise<string> {
-  const serviceAccountKey = await resolveCursorApiKey(input.project);
-  if (input.skillProvider !== 'ado') {
-    return serviceAccountKey;
-  }
-  const userEmail = input.userEmail?.trim();
-  if (!userEmail) {
-    throw new Error(
-      'User email is required to launch Cloud Development on Azure DevOps repositories.',
-    );
-  }
-  const minted = await mintCursorUserSubToken({
-    serviceAccountApiKey: serviceAccountKey,
-    forUserEmail: userEmail,
-  });
-  const [serviceAccountInfo, subTokenInfo] = await Promise.all([
-    fetchCursorApiKeyInfo(serviceAccountKey).catch(() => null),
-    fetchCursorApiKeyInfo(minted.accessToken),
-  ]);
-  console.log('[cloud-agent] sub-token minted', JSON.stringify({
-    forUserEmail: userEmail,
-    cursorUserId: minted.userId,
-    teamId: minted.teamId,
-    expiresAt: minted.expiresAt,
-    serviceAccountKeyName: serviceAccountInfo?.apiKeyName ?? null,
-    serviceAccountLooksUserScoped: Boolean(serviceAccountInfo?.userEmail),
-    subTokenMeUserEmail: subTokenInfo.userEmail ?? null,
-    subTokenMeUserId: subTokenInfo.userId ?? null,
-  }));
-  if (serviceAccountInfo?.userEmail) {
-    throw new Error(
-      'CURSOR_API_KEY is a personal user API key. Cloud Agent ADO launches need an agent-scoped team service account key to mint user sub-tokens.',
-    );
-  }
-  if (!subTokenInfo.userEmail) {
-    throw new Error(
-      'Cursor sub-token is not user-scoped (GET /v1/me returned no userEmail). Check CURSOR_API_KEY is an agent-scoped service account and the Apex user is an active Cursor team member.',
-    );
-  }
-  return minted.accessToken;
+  return resolveCursorApiKey(input.project);
 }
 
 export function toCloudRepoUrl(remoteUrl: string): string {
   return remoteUrl.replace(/\.git$/i, '');
 }
 
+function buildGitHubCloudRepoUrl(skillRepo: string): string {
+  const slash = skillRepo.indexOf('/');
+  const configuredOrg = process.env.GITHUB_ORG?.trim() || '';
+  const org = slash > 0 ? skillRepo.slice(0, slash).trim() : configuredOrg;
+  const repository = slash > 0 ? skillRepo.slice(slash + 1).trim() : skillRepo.trim();
+  if (!org || !repository) {
+    throw new Error(
+      'GitHub repo must be owner/name (e.g. amergis/Apex) or set GITHUB_ORG for repo-only values.',
+    );
+  }
+  return `https://github.com/${encodeURIComponent(org)}/${encodeURIComponent(repository)}`;
+}
+
+/** Public HTTPS URL for Cursor — no local clone credentials. */
 export function buildCloudRepoUrl(
   skillProvider: SkillProvider,
   project: string,
   skillRepo: string,
 ): string {
+  if (skillProvider === 'github') {
+    return buildGitHubCloudRepoUrl(skillRepo);
+  }
   const remote = resolveGitRemote(skillProvider, project, skillRepo);
   return toCloudRepoUrl(remote.url);
 }
@@ -120,7 +256,7 @@ function resolveCloudEnvironment(
 ): { type: 'cloud'; name: string } | undefined {
   const fromEnv = process.env.CLOUD_AGENT_CURSOR_ENV_NAME?.trim();
   if (!fromEnv) return undefined;
-  // ADO auth uses user sub-tokens + explicit repos; named envs use team ADO service principal.
+  // Named envs carry repo/branch config; skip them for ADO unless explicitly enabled.
   if (skillProvider === 'ado' && process.env.CLOUD_AGENT_ADO_USE_NAMED_ENV !== 'true') {
     return undefined;
   }
@@ -152,9 +288,18 @@ function buildCloudCreateOptions(input: {
 export async function launchCloudAgent(
   input: LaunchCloudAgentInput,
 ): Promise<LaunchCloudAgentResult> {
-  const apiKey = await resolveLaunchApiKey(input);
-  const authMode = input.skillProvider === 'ado' ? 'user-sub-token' : 'service-account';
-  const cloud = buildCloudCreateOptions(input);
+  const target = resolveCloudAgentLaunchTarget(input);
+  const effectiveInput: LaunchCloudAgentInput = { ...input, ...target };
+  if (target.testOverride) {
+    console.log('[cloud-agent] test github override', JSON.stringify({
+      override: target.testOverride,
+      branch: target.skillBranch,
+      configuredProvider: input.skillProvider,
+      configuredRepo: input.skillRepo,
+    }));
+  }
+  const apiKey = await resolveLaunchApiKey(effectiveInput);
+  const cloud = buildCloudCreateOptions(effectiveInput);
   const createInput = {
     apiKey,
     model: { id: input.model },
@@ -164,11 +309,11 @@ export async function launchCloudAgent(
   if (process.env.CLOUD_AGENT_DRY_RUN === 'true') {
     logDryRunPayload({
       project: input.project,
-      skillProvider: input.skillProvider,
-      skillRepo: input.skillRepo,
-      skillBranch: input.skillBranch,
-      userEmail: input.userEmail ?? null,
-      authMode,
+      skillProvider: effectiveInput.skillProvider,
+      skillRepo: effectiveInput.skillRepo,
+      skillBranch: effectiveInput.skillBranch,
+      testOverride: target.testOverride,
+      authMode: 'service-account',
       cloudEnv: cloud.env ?? null,
       repoMode: cloud.repos ? 'explicit' : 'named-environment',
       agentCreate: { ...createInput, apiKey: apiKey ? `set (${apiKey.length} chars)` : 'missing' },
@@ -202,6 +347,29 @@ export async function getCloudAgentRun(input: {
     prUrl: firstPrUrl(run.git),
     resultText: typeof run.result === 'string' ? run.result : null,
   };
+}
+
+export async function* streamCloudAgentRun(input: {
+  project: string;
+  cloudAgentId: string;
+  cursorRunId: string;
+}): AsyncGenerator<CloudAgentActivityEvent> {
+  const apiKey = await resolveCursorApiKey(input.project);
+  const run = await Agent.getRun(input.cursorRunId, {
+    runtime: 'cloud',
+    agentId: input.cloudAgentId,
+    apiKey,
+  });
+  if (!run.supports('stream')) {
+    throw new Error(run.unsupportedReason('stream') || 'Cloud Agent activity stream is unavailable.');
+  }
+
+  let sequence = 0;
+  for await (const event of run.stream()) {
+    for (const activity of normalizeCloudAgentActivity(event, sequence++)) {
+      yield activity;
+    }
+  }
 }
 
 export async function cancelCursorCloudAgentRun(input: {

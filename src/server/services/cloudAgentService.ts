@@ -40,8 +40,10 @@ import {
   cancelCursorCloudAgentRun,
   getCloudAgentRun,
   launchCloudAgent,
+  streamCloudAgentRun,
   type LaunchCloudAgentResult,
 } from './cursorCloudAgentClient';
+import type { CloudAgentActivityEvent } from '../../shared/types/devWorkbench';
 import {
   buildWorkItemReferenceText,
   linkWorkItemToPullRequest,
@@ -181,6 +183,7 @@ export interface CloudAgentServiceDeps {
   getSkillConfig: typeof getSkillConfig;
   launchCloudAgent: typeof launchCloudAgent;
   getCloudAgentRun: typeof getCloudAgentRun;
+  streamCloudAgentRun: typeof streamCloudAgentRun;
   cancelCursorCloudAgentRun: typeof cancelCursorCloudAgentRun;
   linkWorkItemToPullRequest: typeof linkWorkItemToPullRequest;
   addAdoWorkItemHyperlink: (
@@ -206,6 +209,7 @@ const defaultDeps: CloudAgentServiceDeps = {
   getSkillConfig,
   launchCloudAgent,
   getCloudAgentRun,
+  streamCloudAgentRun,
   cancelCursorCloudAgentRun,
   linkWorkItemToPullRequest,
   addAdoWorkItemHyperlink: async (project, workItemId, prUrl, comment) => {
@@ -316,7 +320,6 @@ async function loadLiveRunWorkItemIds(userId: string, project: string): Promise<
 
 export interface StartCloudAgentRunInput {
   userId: string;
-  userEmail: string;
   project: string;
   workItemId: number;
   isSuperAdmin: boolean;
@@ -506,7 +509,6 @@ async function dispatchLaunch(
       skillProvider: (skillConfig.skillProvider ?? 'ado') as SkillProvider,
       skillRepo: skillConfig.skillRepo,
       skillBranch: skillConfig.skillBranch,
-      userEmail: input.userEmail,
     });
   } catch (err) {
     const detail = err instanceof Error ? err.message : 'Cloud Agent launch failed';
@@ -869,6 +871,51 @@ export async function getCloudAgentRunStatus(
     prUrl,
     prStatus,
   );
+}
+
+export async function getCloudAgentActivityStream(
+  sessionId: string,
+  userId: string,
+  expectedRunId?: string,
+  deps: CloudAgentServiceDeps = defaultDeps,
+): Promise<AsyncIterable<CloudAgentActivityEvent>> {
+  const session = await db.query.devSessions.findFirst({
+    where: and(eq(devSessions.id, sessionId), eq(devSessions.authorId, userId)),
+  });
+  if (!session) {
+    throw Object.assign(new Error('Cloud Agent run not found'), { status: 404 });
+  }
+  const enabled = await deps.isFeatureEnabled(MY_WORK_CLOUD_AGENT_FLAG, {
+    userId,
+    project: session.project,
+  });
+  if (!enabled) {
+    throw Object.assign(new Error('Cloud Agent run not found'), { status: 404 });
+  }
+  if (!session.currentRunId) {
+    throw Object.assign(new Error('Cloud Agent run not found'), { status: 404 });
+  }
+  if (expectedRunId && session.currentRunId !== expectedRunId) {
+    throw Object.assign(new Error('Cloud Agent run changed'), { status: 409 });
+  }
+
+  const run = await db.query.agentRuns.findFirst({
+    where: eq(agentRuns.id, session.currentRunId),
+  });
+  if (
+    !run
+    || run.lane !== 'cloud-agent'
+    || !run.cloudAgentIdentity
+    || !run.dispatchMessageId
+  ) {
+    throw Object.assign(new Error('Cloud Agent run is not ready to stream'), { status: 409 });
+  }
+
+  return deps.streamCloudAgentRun({
+    project: session.project,
+    cloudAgentId: run.cloudAgentIdentity,
+    cursorRunId: run.dispatchMessageId,
+  });
 }
 
 const CANCEL_DETAIL = 'Cancelled by user';

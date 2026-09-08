@@ -1094,6 +1094,12 @@
 }
 
 .run-activity-stream {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
   padding: 16px;
 }
 
@@ -1113,8 +1119,26 @@
   box-shadow: var(--glow-accent);
 }
 
+.run-activity-event[data-kind='thinking'] > i,
+.run-activity-event[data-kind='tool'] > i {
+  background: var(--text-muted);
+  box-shadow: none;
+}
+
+.run-activity-event[data-status='completed'] > i {
+  background: var(--success-color);
+  box-shadow: none;
+}
+
+.run-activity-event[data-status='failed'] > i,
+.run-activity-event[data-status='cancelled'] > i {
+  background: var(--error-color);
+  box-shadow: none;
+}
+
 .run-activity-event div {
   display: flex;
+  min-width: 0;
   flex-direction: column;
   gap: 4px;
 }
@@ -1125,6 +1149,15 @@
 }
 
 .run-activity-event span {
+  color: var(--text-muted);
+  font-size: 0.6875rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.run-activity-error {
+  margin: 0;
   color: var(--text-muted);
   font-size: 0.6875rem;
   line-height: 1.45;

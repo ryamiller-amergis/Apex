@@ -6,6 +6,7 @@ import {
   useAssignedWorkItems,
   useCloseDevSession,
   useCompleteFeature,
+  useCloudAgentActivityStream,
   useCloudAgentRun,
   useDevSession,
   useCancelCloudAgentRun,
@@ -23,6 +24,7 @@ import type {
   BacklogFeatureItem,
   ActiveDevSession,
   ApexBacklogGroup,
+  CloudAgentActivityEvent,
   CloudAgentRunSummary,
 } from '../../shared/types/devWorkbench';
 import { isAppNativeRequirementsProject } from '../../shared/types/devWorkbench';
@@ -232,6 +234,11 @@ const CopyableId: React.FC<{
   );
 };
 
+function activityTitle(event: CloudAgentActivityEvent): string {
+  if (event.kind !== 'tool' || !event.detail) return event.title;
+  return `${event.title} · ${event.detail}`;
+}
+
 const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
   item,
   run,
@@ -239,6 +246,13 @@ const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
   isLive,
   onClose,
 }) => {
+  const activity = useCloudAgentActivityStream(
+    sessionId,
+    run.runId,
+    run.status !== 'queued',
+  );
+  const activityRef = useRef<HTMLDivElement | null>(null);
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
@@ -246,6 +260,11 @@ const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onClose]);
+
+  useEffect(() => {
+    const element = activityRef.current;
+    if (element) element.scrollTop = element.scrollHeight;
+  }, [activity.events]);
 
   return (
     <>
@@ -314,24 +333,53 @@ const CloudRunDrawer: React.FC<CloudRunDrawerProps> = ({
             <div className={styles['run-activity-heading']}>
               <div>
                 <h3 id={`cloud-run-activity-${item.id}`}>Activity</h3>
-                <p>Run output will appear here as streaming events become available.</p>
+                <p>Live agent updates and tool activity.</p>
               </div>
-              {isLive ? <span className={styles['live-indicator']}>Live</span> : null}
+              {isLive ? (
+                <span className={styles['live-indicator']}>
+                  {activity.isConnected ? 'Live' : 'Connecting'}
+                </span>
+              ) : null}
             </div>
-            <div className={styles['run-activity-stream']}>
-              <div className={styles['run-activity-event']}>
-                <i aria-hidden="true" />
-                <div>
-                  <strong>{cloudRunStatusText(run)}</strong>
-                  <span>
-                    {run.status === 'failed' && run.lastError
-                      ? run.lastError
-                      : isLive
-                        ? 'The cloud agent is working. Status updates refresh automatically.'
-                        : 'This run has finished. Detailed logs were not captured for this run.'}
-                  </span>
+            <div
+              ref={activityRef}
+              className={styles['run-activity-stream']}
+              aria-live="polite"
+              data-testid={`my-work-cloud-run-activity-${item.id}`}
+            >
+              {activity.events.length > 0 ? activity.events.map((event) => (
+                <div
+                  key={event.id}
+                  className={styles['run-activity-event']}
+                  data-kind={event.kind}
+                  data-status={event.status}
+                >
+                  <i aria-hidden="true" />
+                  <div>
+                    <strong>{activityTitle(event)}</strong>
+                    {event.kind !== 'tool' && event.detail ? <span>{event.detail}</span> : null}
+                  </div>
                 </div>
-              </div>
+              )) : (
+                <div className={styles['run-activity-event']}>
+                  <i aria-hidden="true" />
+                  <div>
+                    <strong>{cloudRunStatusText(run)}</strong>
+                    <span>
+                      {run.status === 'failed' && run.lastError
+                        ? run.lastError
+                        : run.status === 'queued'
+                          ? 'Waiting for the cloud agent to start.'
+                          : 'Connecting to the cloud agent activity stream…'}
+                    </span>
+                  </div>
+                </div>
+              )}
+              {activity.error ? (
+                <p className={styles['run-activity-error']} role="status">
+                  {activity.error}
+                </p>
+              ) : null}
             </div>
           </section>
 
