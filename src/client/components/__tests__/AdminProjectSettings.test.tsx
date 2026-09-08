@@ -178,6 +178,79 @@ describe('AdminProjectSettings — Design Module skill', () => {
   });
 });
 
+describe('AdminProjectSettings — effort overrides', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    setupMocks();
+    (useAllProjectSkillConfigs as jest.Mock).mockReturnValue({
+      data: [projectConfig],
+      isLoading: false,
+      isError: false,
+    });
+  });
+
+  it('renders default, stage, and standalone ADR effort controls', () => {
+    render(<AdminProjectSettings selectedProject="Apex" />);
+
+    fireEvent.click(screen.getByTestId('ps-config-edit-settings-1'));
+    expect(screen.getByTestId('ps-defaultEffort')).toBeVisible();
+    expect(screen.getByTestId('ps-stage-effort-interviewEffort')).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: /Document Pipeline — ADR/i }));
+    expect(screen.getByTestId('ps-adrEffort')).toBeVisible();
+  });
+
+  it.each(['low', 'medium', 'high'] as const)(
+    'PBI-001 AC-0 saves the accepted %s interview effort override',
+    async (effort) => {
+    const mutateAsync = jest.fn().mockResolvedValue(projectConfig);
+    (useUpsertProjectSkillConfig as jest.Mock).mockReturnValue({
+      mutate: jest.fn(),
+      mutateAsync,
+      isPending: false,
+      error: null,
+    });
+
+    render(<AdminProjectSettings selectedProject="Apex" />);
+    fireEvent.click(screen.getByTestId('ps-config-edit-settings-1'));
+    fireEvent.change(screen.getByTestId('ps-stage-effort-interviewEffort'), {
+      target: { value: effort },
+    });
+    fireEvent.click(screen.getByTestId('ps-form-save'));
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+      body: expect.objectContaining({ interviewEffort: effort }),
+    })));
+    },
+  );
+
+  it('PBI-001 AC-2 maps Inherit to null after replacing High', async () => {
+    const mutateAsync = jest.fn().mockResolvedValue(projectConfig);
+    (useUpsertProjectSkillConfig as jest.Mock).mockReturnValue({
+      mutate: jest.fn(),
+      mutateAsync,
+      isPending: false,
+      error: null,
+    });
+    (useAllProjectSkillConfigs as jest.Mock).mockReturnValue({
+      data: [{ ...projectConfig, interviewEffort: 'high' }],
+      isLoading: false,
+      isError: false,
+    });
+
+    render(<AdminProjectSettings selectedProject="Apex" />);
+    fireEvent.click(screen.getByTestId('ps-config-edit-settings-1'));
+    const effortSelect = screen.getByTestId('ps-stage-effort-interviewEffort');
+    expect(effortSelect).toHaveValue('high');
+    fireEvent.change(effortSelect, { target: { value: '' } });
+    fireEvent.click(screen.getByTestId('ps-form-save'));
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+      body: expect.objectContaining({ interviewEffort: null }),
+    })));
+  });
+});
+
 describe('AdminProjectSettings — reviewer pools and module approval modes', () => {
   beforeEach(() => {
     jest.clearAllMocks();

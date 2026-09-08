@@ -561,6 +561,119 @@ describe('upsertSkillConfig', () => {
   });
 });
 
+// ── upsertSkillConfig — per-skill effort levels (FEAT-002) ────────────────────────
+
+const EFFORT_FIELDS = [
+  'interviewEffort',
+  'prdEffort',
+  'adrEffort',
+  'designDocEffort',
+  'designDocAssistantEffort',
+  'designPrototypeEffort',
+  'testCaseEffort',
+  'designDocValidationEffort',
+  'prdAssistantEffort',
+  'prdValidationEffort',
+  'developmentEffort',
+  'standupEffort',
+  'featureRequestEffort',
+  'technicalEffort',
+  'issueEffort',
+  'calendarAssistantEffort',
+  'loadTestGenerationEffort',
+  'designModuleEffort',
+  'designModuleScopingEffort',
+  'defaultEffort',
+] as const;
+
+describe('upsertSkillConfig effort levels', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsCheckoutReadinessEnabled.mockResolvedValue(false);
+  });
+
+  /** Drives the INSERT branch and returns the spy that captured the written row. */
+  function mockInsertPath() {
+    const valuesMock = jest.fn().mockReturnValue({
+      returning: jest.fn().mockResolvedValue([defaultRow]),
+    });
+    const insertMock = jest.fn().mockImplementation((table) =>
+      table === projectSkillSettings
+        ? { values: valuesMock }
+        : {
+            values: jest.fn().mockReturnValue({
+              onConflictDoUpdate: jest.fn().mockResolvedValue(undefined),
+            }),
+          }
+    );
+
+    mockDb.transaction.mockImplementation(async (fn: any) =>
+      fn({
+        select: jest.fn().mockReturnValue({
+          from: jest.fn().mockReturnThis(),
+          where: jest.fn().mockReturnThis(),
+          limit: jest.fn().mockResolvedValue([]),
+        }),
+        insert: insertMock,
+        update: jest.fn().mockReturnValue({
+          set: jest.fn().mockReturnThis(),
+          where: jest.fn().mockResolvedValue(undefined),
+        }),
+      })
+    );
+
+    return valuesMock;
+  }
+
+  it('FEAT-002 PBI-001 AC-0 / TBI-004 DoD-0 persists a selected effort level', async () => {
+    const valuesMock = mockInsertPath();
+
+    await upsertSkillConfig(makeUpsertInput({ interviewEffort: 'medium' }));
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ interviewEffort: 'medium' })
+    );
+  });
+
+  it('FEAT-002 PBI-001 AC-2 / TBI-004 DoD-3 persists null when a level is cleared to Inherit', async () => {
+    const valuesMock = mockInsertPath();
+
+    await upsertSkillConfig(
+      makeUpsertInput({ prdEffort: null, designDocEffort: 'high' })
+    );
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ prdEffort: null, designDocEffort: 'high' })
+    );
+  });
+
+  it('FEAT-002 TBI-004 DoD-0 persists all twenty effort fields', async () => {
+    const valuesMock = mockInsertPath();
+    const supplied = Object.fromEntries(
+      EFFORT_FIELDS.map((field, index) => [
+        field,
+        (['low', 'medium', 'high'] as const)[index % 3],
+      ])
+    );
+
+    await upsertSkillConfig(makeUpsertInput(supplied));
+
+    expect(valuesMock).toHaveBeenCalledWith(expect.objectContaining(supplied));
+  });
+
+  it('FEAT-002 TBI-004 DoD-3 writes null for every omitted effort field', async () => {
+    const valuesMock = mockInsertPath();
+
+    await upsertSkillConfig(makeUpsertInput());
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining(
+        Object.fromEntries(EFFORT_FIELDS.map((field) => [field, null]))
+      )
+    );
+  });
+});
+
 // ── deleteSkillConfig — delete-last guard + default promotion ─────────────────────
 
 describe('deleteSkillConfig', () => {

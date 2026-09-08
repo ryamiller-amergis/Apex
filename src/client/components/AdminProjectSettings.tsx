@@ -10,6 +10,7 @@ import {
 } from '../hooks/useProjectSkillConfig';
 import type { ProjectSkillConfig, UpsertProjectSkillConfigRequest, QuickSkillPill, QuickMcpPill, QuickMcpPillHttp, QuickMcpPillStdio, SkillProvider, InterviewSkillOption, PrototypeEngine, ProjectRepositoryReadiness } from '../../shared/types/projectSettings';
 import type { ApprovalMode, ModuleApprovalModes, ReviewerDocumentType } from '../../shared/types/approvals';
+import type { EffortLevel } from '../../shared/types/effort';
 import { useSkillRepos, useSkillBranches, useSkillList } from '../hooks/useChatThreads';
 import { useUsers } from '../hooks/useRbac';
 import { useGroupsWithMembers } from '../hooks/useGroups';
@@ -294,6 +295,23 @@ type ModelKey =
   | 'designModuleModel'
   | 'designModuleScopingModel';
 
+type EffortKey =
+  | 'interviewEffort'
+  | 'prdEffort'
+  | 'designDocEffort'
+  | 'designDocAssistantEffort'
+  | 'testCaseEffort'
+  | 'designDocValidationEffort'
+  | 'prdValidationEffort'
+  | 'developmentEffort'
+  | 'standupEffort'
+  | 'featureRequestEffort'
+  | 'technicalEffort'
+  | 'issueEffort'
+  | 'loadTestGenerationEffort'
+  | 'designModuleEffort'
+  | 'designModuleScopingEffort';
+
 interface PipelineStageDef {
   id: string;
   label: string;
@@ -302,6 +320,8 @@ interface PipelineStageDef {
   emptyLabel: string;
   /** When set, stage card shows a model override next to the skill. */
   modelKey?: ModelKey;
+  /** When set, stage card shows an effort override next to the model. */
+  effortKey?: EffortKey;
   optional?: boolean;
   /** Nest the interview skill-options editor under this stage. */
   interviewOptions?: boolean;
@@ -319,6 +339,7 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     skillKey: 'interviewSkillPath',
     emptyLabel: 'None (use default)',
     modelKey: 'interviewModel',
+    effortKey: 'interviewEffort',
     interviewOptions: true,
   },
   {
@@ -328,6 +349,7 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     skillKey: 'prdSkillPath',
     emptyLabel: 'None (use default)',
     modelKey: 'prdModel',
+    effortKey: 'prdEffort',
   },
   {
     id: 'prd-validation',
@@ -336,6 +358,7 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     skillKey: 'prdValidationSkillPath',
     emptyLabel: 'None (skip PRD validation)',
     modelKey: 'prdValidationModel',
+    effortKey: 'prdValidationEffort',
     optional: true,
     prdValidationThreshold: true,
   },
@@ -346,6 +369,7 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     skillKey: 'designDocSkillPath',
     emptyLabel: 'None (use default)',
     modelKey: 'designDocModel',
+    effortKey: 'designDocEffort',
   },
   {
     id: 'design-assistant',
@@ -354,6 +378,7 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     skillKey: 'designDocAssistantSkillPath',
     emptyLabel: 'None (use default model, no skill)',
     modelKey: 'designDocAssistantModel',
+    effortKey: 'designDocAssistantEffort',
     optional: true,
   },
   {
@@ -363,6 +388,7 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     skillKey: 'designDocValidationSkillPath',
     emptyLabel: 'None (skip validation phase)',
     modelKey: 'designDocValidationModel',
+    effortKey: 'designDocValidationEffort',
     optional: true,
     designDocValidationThreshold: true,
   },
@@ -373,6 +399,7 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     skillKey: 'testCaseSkillPath',
     emptyLabel: 'None (skip test-case generation)',
     modelKey: 'testCaseModel',
+    effortKey: 'testCaseEffort',
     optional: true,
   },
   {
@@ -382,6 +409,7 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     skillKey: 'developmentSkillPath',
     emptyLabel: 'None (use default behavior)',
     modelKey: 'developmentModel',
+    effortKey: 'developmentEffort',
     optional: true,
   },
 ];
@@ -419,6 +447,7 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     skillKey: 'standupSkillPath',
     emptyLabel: 'None (use built-in default)',
     modelKey: 'standupModel',
+    effortKey: 'standupEffort',
   },
   {
     id: 'feature-request',
@@ -427,6 +456,7 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     skillKey: 'featureRequestSkillPath',
     emptyLabel: 'None (use default)',
     modelKey: 'featureRequestModel',
+    effortKey: 'featureRequestEffort',
   },
   {
     id: 'technical',
@@ -435,6 +465,7 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     skillKey: 'technicalSkillPath',
     emptyLabel: 'None (analysis unavailable)',
     modelKey: 'technicalModel',
+    effortKey: 'technicalEffort',
   },
   {
     id: 'issue',
@@ -443,6 +474,7 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     skillKey: 'issueSkillPath',
     emptyLabel: 'None (analysis unavailable)',
     modelKey: 'issueModel',
+    effortKey: 'issueEffort',
   },
   {
     id: 'load-test',
@@ -451,6 +483,7 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     skillKey: 'loadTestGenerationSkillPath',
     emptyLabel: 'Default (.cursor/skills/k6-load-test-generation/SKILL.md)',
     modelKey: 'loadTestGenerationModel',
+    effortKey: 'loadTestGenerationEffort',
   },
   {
     id: 'design-module',
@@ -459,6 +492,7 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     skillKey: 'designModuleSkillPath',
     emptyLabel: 'Default (.agents/skills/design-module-doc/SKILL.md)',
     modelKey: 'designModuleModel',
+    effortKey: 'designModuleEffort',
   },
   {
     id: 'design-module-scoping',
@@ -467,6 +501,7 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     skillKey: 'designModuleScopingSkillPath',
     emptyLabel: 'Default (.cursor/skills/design-module-scoping/SKILL.md)',
     modelKey: 'designModuleScopingModel',
+    effortKey: 'designModuleScopingEffort',
   },
 ];
 
@@ -952,6 +987,26 @@ interface EditState {
   designModuleModel: string;
   designModuleScopingModel: string;
   defaultModel: string;
+  interviewEffort: EffortLevel | '';
+  prdEffort: EffortLevel | '';
+  adrEffort: EffortLevel | '';
+  designDocEffort: EffortLevel | '';
+  designDocAssistantEffort: EffortLevel | '';
+  designPrototypeEffort: EffortLevel | '';
+  testCaseEffort: EffortLevel | '';
+  designDocValidationEffort: EffortLevel | '';
+  prdAssistantEffort: EffortLevel | '';
+  prdValidationEffort: EffortLevel | '';
+  developmentEffort: EffortLevel | '';
+  standupEffort: EffortLevel | '';
+  featureRequestEffort: EffortLevel | '';
+  technicalEffort: EffortLevel | '';
+  issueEffort: EffortLevel | '';
+  calendarAssistantEffort: EffortLevel | '';
+  loadTestGenerationEffort: EffortLevel | '';
+  designModuleEffort: EffortLevel | '';
+  designModuleScopingEffort: EffortLevel | '';
+  defaultEffort: EffortLevel | '';
   prdReviewBedrockModelId: string;
   prdReviewBedrockMaxTokens: number;
   designPrototypeBedrockModelId: string;
@@ -1000,6 +1055,13 @@ const emptyEdit = (): EditState => ({
   technicalModel: '', issueModel: '', loadTestGenerationModel: '', designModuleModel: '',
   designModuleScopingModel: '',
   defaultModel: '',
+  interviewEffort: '', prdEffort: '', adrEffort: '', designDocEffort: '',
+  designDocAssistantEffort: '', designPrototypeEffort: '', testCaseEffort: '',
+  designDocValidationEffort: '', prdAssistantEffort: '', prdValidationEffort: '',
+  developmentEffort: '', standupEffort: '', featureRequestEffort: '',
+  technicalEffort: '', issueEffort: '', calendarAssistantEffort: '',
+  loadTestGenerationEffort: '', designModuleEffort: '', designModuleScopingEffort: '',
+  defaultEffort: '',
   prdReviewBedrockModelId: '',
   prdReviewBedrockMaxTokens: 16000,
   designPrototypeBedrockModelId: '',
@@ -1060,6 +1122,7 @@ const PipelineStageCard: React.FC<PipelineStageCardProps> = ({
 }) => {
   const skillValue = edit[stage.skillKey];
   const modelValue = stage.modelKey ? edit[stage.modelKey] : '';
+  const effortValue = stage.effortKey ? edit[stage.effortKey] : '';
   const defaultModelLabel = edit.defaultModel
     ? availableModels.find((m) => m.id === edit.defaultModel)?.displayName ?? edit.defaultModel
     : 'system default (composer-2)';
@@ -1132,16 +1195,58 @@ const PipelineStageCard: React.FC<PipelineStageCardProps> = ({
                   )}
                 </div>
               )}
+              {stage.effortKey && (
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor={`ps-${stage.effortKey}`}>Effort override</label>
+                  <select
+                    id={`ps-${stage.effortKey}`}
+                    className={styles.select}
+                    value={effortValue}
+                    onChange={(e) => onEditChange({
+                      [stage.effortKey!]: e.target.value as EffortLevel | '',
+                    })}
+                    disabled={disabled}
+                   {...{ 'data-testid': `ps-stage-effort-${stage.effortKey}` }}>
+                    <option value="">Inherit (project default)</option>
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
+                </div>
+              )}
             </div>
           )}
           {stage.interviewOptions && (
-            <InterviewOptionsEditor
-              options={edit.interviewSkillOptions}
-              skillList={skillList}
-              availableModels={availableModels}
-              disabled={disabled}
-              skillsDisabled={skillsDisabled}
-              onChange={(options) => onEditChange({ interviewSkillOptions: options })} {...{ 'data-testid': 'ps-interview-options-editor' }} />
+            <>
+              {stage.effortKey && (
+                <div className={styles.stageFieldSingle}>
+                  <div className={styles.field}>
+                    <label className={styles.label} htmlFor={`ps-${stage.effortKey}`}>Effort override</label>
+                    <select
+                      id={`ps-${stage.effortKey}`}
+                      className={styles.select}
+                      value={effortValue}
+                      onChange={(e) => onEditChange({
+                        [stage.effortKey!]: e.target.value as EffortLevel | '',
+                      })}
+                      disabled={disabled}
+                     {...{ 'data-testid': `ps-stage-effort-${stage.effortKey}` }}>
+                      <option value="">Inherit (project default)</option>
+                      <option value="low">Low</option>
+                      <option value="medium">Medium</option>
+                      <option value="high">High</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+              <InterviewOptionsEditor
+                options={edit.interviewSkillOptions}
+                skillList={skillList}
+                availableModels={availableModels}
+                disabled={disabled}
+                skillsDisabled={skillsDisabled}
+                onChange={(options) => onEditChange({ interviewSkillOptions: options })} {...{ 'data-testid': 'ps-interview-options-editor' }} />
+            </>
           )}
           {stage.prdValidationThreshold && (
             <div className={styles.field} style={{ marginTop: '12px' }}>
@@ -1497,6 +1602,26 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       designModuleModel: config.designModuleModel ?? '',
       designModuleScopingModel: config.designModuleScopingModel ?? '',
       defaultModel: config.defaultModel ?? '',
+      interviewEffort: config.interviewEffort ?? '',
+      prdEffort: config.prdEffort ?? '',
+      adrEffort: config.adrEffort ?? '',
+      designDocEffort: config.designDocEffort ?? '',
+      designDocAssistantEffort: config.designDocAssistantEffort ?? '',
+      designPrototypeEffort: config.designPrototypeEffort ?? '',
+      testCaseEffort: config.testCaseEffort ?? '',
+      designDocValidationEffort: config.designDocValidationEffort ?? '',
+      prdAssistantEffort: config.prdAssistantEffort ?? '',
+      prdValidationEffort: config.prdValidationEffort ?? '',
+      developmentEffort: config.developmentEffort ?? '',
+      standupEffort: config.standupEffort ?? '',
+      featureRequestEffort: config.featureRequestEffort ?? '',
+      technicalEffort: config.technicalEffort ?? '',
+      issueEffort: config.issueEffort ?? '',
+      calendarAssistantEffort: config.calendarAssistantEffort ?? '',
+      loadTestGenerationEffort: config.loadTestGenerationEffort ?? '',
+      designModuleEffort: config.designModuleEffort ?? '',
+      designModuleScopingEffort: config.designModuleScopingEffort ?? '',
+      defaultEffort: config.defaultEffort ?? '',
       prdReviewBedrockModelId: config.prdReviewBedrockModelId ?? '',
       prdReviewBedrockMaxTokens: config.prdReviewBedrockMaxTokens ?? 16000,
       designPrototypeBedrockModelId: config.designPrototypeBedrockModelId ?? '',
@@ -1602,6 +1727,26 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         designModuleModel: edit.designModuleModel || null,
         designModuleScopingModel: edit.designModuleScopingModel || null,
         defaultModel: edit.defaultModel || null,
+        interviewEffort: edit.interviewEffort || null,
+        prdEffort: edit.prdEffort || null,
+        adrEffort: edit.adrEffort || null,
+        designDocEffort: edit.designDocEffort || null,
+        designDocAssistantEffort: edit.designDocAssistantEffort || null,
+        designPrototypeEffort: edit.designPrototypeEffort || null,
+        testCaseEffort: edit.testCaseEffort || null,
+        designDocValidationEffort: edit.designDocValidationEffort || null,
+        prdAssistantEffort: edit.prdAssistantEffort || null,
+        prdValidationEffort: edit.prdValidationEffort || null,
+        developmentEffort: edit.developmentEffort || null,
+        standupEffort: edit.standupEffort || null,
+        featureRequestEffort: edit.featureRequestEffort || null,
+        technicalEffort: edit.technicalEffort || null,
+        issueEffort: edit.issueEffort || null,
+        calendarAssistantEffort: edit.calendarAssistantEffort || null,
+        loadTestGenerationEffort: edit.loadTestGenerationEffort || null,
+        designModuleEffort: edit.designModuleEffort || null,
+        designModuleScopingEffort: edit.designModuleScopingEffort || null,
+        defaultEffort: edit.defaultEffort || null,
         prdReviewBedrockModelId: edit.prdReviewBedrockModelId || null,
         prdReviewBedrockMaxTokens: edit.prdReviewBedrockMaxTokens || null,
         designPrototypeBedrockModelId: edit.designPrototypeBedrockModelId || null,
@@ -1847,9 +1992,9 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
           <div className={styles.formCard}>
             <p className={styles.formTitle}>{edit.isNew ? 'Add Repo Config' : `Edit: ${edit.friendlyName || edit.project}`}</p>
 
-            {/* Section 1: Repository & Branch */}
+            {/* Section 1: Repository & Defaults */}
             <AccordionSection
-              title="Repository & Branch"
+              title="Repository & Defaults"
               expanded={expandedSections.repo}
               onToggle={() => toggleSection('repo')}
             >
@@ -1939,21 +2084,41 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                 </div>
               </div>
 
-              <div className={styles.field}>
-                <label className={styles.label} htmlFor="ps-defaultModel">Default Model</label>
-                <select
-                  id="ps-defaultModel"
-                  className={styles.select}
-                  value={edit.defaultModel}
-                  onChange={(e) => setEdit((prev) => prev ? { ...prev, defaultModel: e.target.value } : prev)}
-                  disabled={upsert.isPending || isLoadingModels}
-                 {...{ 'data-testid': 'ps-defaultModel' }}>
-                  <option value="">Use system default (composer-2)</option>
-                  {availableModels.map((m) => (
-                    <option key={m.id} value={m.id}>{m.displayName}</option>
-                  ))}
-                </select>
-                <span className={styles.modelDefault}>Fallback model for all pipeline stages without a specific override</span>
+              <div className={styles.formGrid}>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-defaultModel">Default Model</label>
+                  <select
+                    id="ps-defaultModel"
+                    className={styles.select}
+                    value={edit.defaultModel}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, defaultModel: e.target.value } : prev)}
+                    disabled={upsert.isPending || isLoadingModels}
+                   {...{ 'data-testid': 'ps-defaultModel' }}>
+                    <option value="">Use system default (composer-2)</option>
+                    {availableModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.displayName}</option>
+                    ))}
+                  </select>
+                  <span className={styles.modelDefault}>Fallback model for all pipeline stages without a specific override</span>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-defaultEffort">Default Effort</label>
+                  <select
+                    id="ps-defaultEffort"
+                    className={styles.select}
+                    value={edit.defaultEffort}
+                    onChange={(e) => patchEdit({
+                      defaultEffort: e.target.value as EffortLevel | '',
+                    })}
+                    disabled={upsert.isPending}
+                   {...{ 'data-testid': 'ps-defaultEffort' }}>
+                    <option value="">Use Cursor SDK default</option>
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
+                  <span className={styles.modelDefault}>Fallback effort for stages without a specific override</span>
+                </div>
               </div>
 
               <div className={styles.field} style={{ marginTop: '12px' }}>
@@ -2056,6 +2221,23 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                         : 'system default (composer-2)'}
                     </span>
                   )}
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-adrEffort">ADR effort override</label>
+                  <select
+                    id="ps-adrEffort"
+                    className={styles.select}
+                    value={edit.adrEffort}
+                    onChange={(e) => patchEdit({
+                      adrEffort: e.target.value as EffortLevel | '',
+                    })}
+                    disabled={upsert.isPending}
+                   {...{ 'data-testid': 'ps-adrEffort' }}>
+                    <option value="">Inherit (project default)</option>
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
                 </div>
               </div>
               <div className={styles.stageList}>
