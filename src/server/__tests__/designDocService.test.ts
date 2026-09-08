@@ -1827,7 +1827,7 @@ describe('startSingleFeatureDesignDocWatcher — routing context injection', () 
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
     mockDb.update.mockReturnValue({ set: setMock });
 
-    mockCreateThread.mockResolvedValue({ id: 'thread-new' });
+    mockCreateThread.mockResolvedValue({ id: 'thread-new', kickoff: {} });
   }
 
   beforeEach(() => {

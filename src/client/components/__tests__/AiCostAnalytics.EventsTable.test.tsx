@@ -1,4 +1,3 @@
-import React from 'react';
 import { render, screen, within } from '@testing-library/react';
 import { EventsTable } from '../AiCostAnalytics';
 import { useAiCostEvents } from '../../hooks/useAiCostAnalytics';
@@ -6,6 +5,9 @@ import type { AiCostEvent } from '../../../shared/types/aiCostAnalytics';
 
 jest.mock('../../hooks/useAiCostAnalytics', () => ({
   useAiCostEvents: jest.fn(),
+}));
+jest.mock('../../hooks/useAppShell', () => ({
+  useAppShell: jest.fn(),
 }));
 
 const mockUseAiCostEvents = useAiCostEvents as jest.MockedFunction<typeof useAiCostEvents>;

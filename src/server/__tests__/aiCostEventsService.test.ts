@@ -1,7 +1,6 @@
 import { getEvents } from '../services/aiCostAnalyticsService';
 
 const offsetMock = jest.fn();
-const executeMock = jest.fn();
 
 jest.mock('../db/drizzle', () => ({
   db: {
@@ -12,7 +11,7 @@ jest.mock('../db/drizzle', () => ({
       limit: jest.fn().mockReturnThis(),
       offset: offsetMock,
     })),
-    execute: executeMock,
+    execute: jest.fn(),
   },
 }));
 
@@ -27,6 +26,10 @@ jest.mock('../db/schema', () => ({
   cursorUsageEvents: {},
   aiPricing: {},
 }));
+
+const { execute: executeMock } = jest.requireMock('../db/drizzle').db as {
+  execute: jest.Mock;
+};
 
 describe('getEvents effort mapping', () => {
   beforeEach(() => {

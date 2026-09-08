@@ -25,7 +25,7 @@ jest.mock('../services/chatAgentService', () => ({
   readOutputAssumptions: jest.fn().mockReturnValue(null),
   readOutputValidationScorecard: jest.fn().mockReturnValue(null),
   readOutputValidationScorecardMd: jest.fn().mockReturnValue(null),
-  createThread: jest.fn().mockResolvedValue({ id: 'thread-mock' }),
+  createThread: jest.fn().mockResolvedValue({ id: 'thread-mock', kickoff: {} }),
   sendMessage: jest.fn().mockResolvedValue(undefined),
   getThreadAsync: jest.fn().mockResolvedValue(null),
 }));
