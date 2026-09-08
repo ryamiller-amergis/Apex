@@ -100,7 +100,7 @@ import {
   overrideDesignDocValidation,
   syncValidationResult,
 } from '../services/designDocService';
-import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, updateThreadKickoffContext, sendMessage } from '../services/chatAgentService';
+import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, getThreadAsync, updateThreadKickoffContext, sendMessage } from '../services/chatAgentService';
 import { propagatePipelineGrounding } from '../services/runGroundingService';
 import { getApproverPoolForProject, resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
@@ -236,7 +236,8 @@ router.post('/', requirePermission('interviews:manage'), requireGroupMembership(
     }
     // @feature-flag:project-repository-checkout-readiness end
 
-    const result = await createInterview({ userId, project, repo, title, chatThreadId, model, skillSettingsId, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds, prototypeStageEnabled, testCasesEnabled });
+    const sourceThread = await getThreadAsync(chatThreadId);
+    const result = await createInterview({ userId, project, repo, title, chatThreadId, model, effort: sourceThread?.kickoff.effort, skillSettingsId, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds, prototypeStageEnabled, testCasesEnabled });
     res.status(201).json(result);
   } catch (err) {
     console.error('[interviews] POST / failed:', err);
@@ -763,6 +764,7 @@ async function startDesignDocsForApprovedPrd(
         featureIndex,
         title: featureTitle,
         model,
+        effort: thread.kickoff.effort,
         skillSettingsId: prd.skillSettingsId ?? null,
       });
 
@@ -3203,6 +3205,7 @@ router.post('/:interviewId/prds', requirePermission('interviews:manage'), async 
       chatThreadId,
       title,
       model,
+      effort: (await getThreadAsync(chatThreadId))?.kickoff.effort,
       skillSettingsId: interview.skillSettingsId ?? null,
     });
     // Return immediately so the client can navigate to the generating skeleton.

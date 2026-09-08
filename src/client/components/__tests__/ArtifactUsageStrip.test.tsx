@@ -25,6 +25,7 @@ const rollup: EntityUsageRollup = {
     {
       label: 'Generate',
       modelId: 'composer-2.5',
+      effort: 'high',
       inputTokens: 1000,
       outputTokens: 200,
       cacheReadTokens: 0,
@@ -35,6 +36,7 @@ const rollup: EntityUsageRollup = {
     {
       label: 'Validation',
       modelId: 'composer-2.5-fast',
+      effort: null,
       inputTokens: 200,
       outputTokens: 100,
       cacheReadTokens: 0,
@@ -84,7 +86,9 @@ describe('ArtifactUsageStrip', () => {
     expect(screen.getByTestId('artifact-usage-runs')).toBeInTheDocument();
     expect(screen.getByTestId('artifact-usage-run-0')).toHaveTextContent('Generate');
     expect(screen.getByTestId('artifact-usage-run-0')).toHaveTextContent('composer-2.5');
+    expect(screen.getByTestId('artifact-usage-run-0')).toHaveTextContent('High');
     expect(screen.getByTestId('artifact-usage-run-1')).toHaveTextContent('Validation');
+    expect(screen.getByTestId('artifact-usage-run-1')).not.toHaveTextContent(/Low|Medium|High/);
   });
 
   it('expands and collapses the run list from the Runs metric', async () => {
@@ -117,6 +121,7 @@ describe('ArtifactUsageStrip', () => {
         {
           label: 'Generate',
           modelId: 'composer-2.5',
+          effort: null,
           inputTokens: 1200,
           outputTokens: 300,
           cacheReadTokens: 8500,

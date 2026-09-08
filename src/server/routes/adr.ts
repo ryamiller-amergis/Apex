@@ -22,7 +22,7 @@ import {
   updateAdrStatus,
   updateAdrTitle,
 } from '../services/adrService';
-import { createThread, getThread, updateThreadKickoffContext } from '../services/chatAgentService';
+import { createThread, getThread, getThreadAsync, updateThreadKickoffContext } from '../services/chatAgentService';
 import { resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import type { AdrStatus } from '../../shared/types/adr';
@@ -147,6 +147,7 @@ router.post('/', requirePermission('adr:create'), async (req, res, next) => {
       // @feature-flag:project-repository-checkout-readiness enabled-end
     }
     // @feature-flag:project-repository-checkout-readiness end
+    const sourceThread = await getThreadAsync(chatThreadId);
     const result = await createAdr({
       userId,
       project,
@@ -154,6 +155,7 @@ router.post('/', requirePermission('adr:create'), async (req, res, next) => {
       title: title.trim(),
       chatThreadId,
       model,
+      effort: sourceThread?.kickoff.effort,
       skillSettingsId,
       reviewerIds,
     });
