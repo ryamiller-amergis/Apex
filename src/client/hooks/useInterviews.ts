@@ -866,6 +866,22 @@ export function useAcceptFixValidation() {
   });
 }
 
+export function useDismissDesignDocFixSession() {
+  const qc = useQueryClient();
+  return useMutation<{ ok: boolean }, Error, string>({
+    mutationFn: (docId) =>
+      apiFetch(`/api/interviews/design-docs/${docId}/fix-session/dismiss`, {
+        method: 'POST',
+      }),
+    onSuccess: (_data, docId) => {
+      qc.setQueryData(['design-doc', docId], (old: { fixBaseline?: unknown } | undefined) =>
+        old ? { ...old, fixBaseline: null } : old,
+      );
+      void qc.invalidateQueries({ queryKey: ['design-doc', docId] });
+    },
+  });
+}
+
 export function useRevertDesignDocSection() {
   const qc = useQueryClient();
   return useMutation<

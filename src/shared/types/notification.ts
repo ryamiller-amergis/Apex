@@ -46,3 +46,64 @@ export interface UpsertNotificationPreferenceRequest {
 export interface TeamsNotificationConfig {
   enabledTypes: NotificationType[];
 }
+
+/** Built-in completion alert sounds for AI generation toasts. */
+export type GenerationSoundId = 'chime' | 'bell' | 'pop';
+
+export const GENERATION_SOUND_OPTIONS: ReadonlyArray<{
+  id: GenerationSoundId;
+  label: string;
+}> = [
+  { id: 'chime', label: 'Chime' },
+  { id: 'bell', label: 'Bell' },
+  { id: 'pop', label: 'Pop' },
+] as const;
+
+export const DEFAULT_GENERATION_SOUND_ID: GenerationSoundId = 'chime';
+
+/** Off by default so existing users are not surprised by new audio. */
+export const DEFAULT_GENERATION_SOUND_ENABLED = false;
+
+export interface GenerationSoundPreferences {
+  generationSoundEnabled: boolean;
+  generationSoundId: GenerationSoundId;
+}
+
+/** Titles emitted by aiCompletionNotifier for scoped generation-complete events. */
+export const GENERATION_SOUND_NOTIFICATION_TITLES = [
+  'PRD generation complete',
+  'Design doc generated',
+  'Design prototype ready',
+] as const;
+
+export function isGenerationSoundId(value: unknown): value is GenerationSoundId {
+  return value === 'chime' || value === 'bell' || value === 'pop';
+}
+
+export function normalizeGenerationSoundPreferences(
+  input?: Partial<{
+    generationSoundEnabled: boolean;
+    generationSoundId: string;
+  }> | null,
+): GenerationSoundPreferences {
+  return {
+    generationSoundEnabled:
+      typeof input?.generationSoundEnabled === 'boolean'
+        ? input.generationSoundEnabled
+        : DEFAULT_GENERATION_SOUND_ENABLED,
+    generationSoundId: isGenerationSoundId(input?.generationSoundId)
+      ? input.generationSoundId
+      : DEFAULT_GENERATION_SOUND_ID,
+  };
+}
+
+/** True when an in-app AI toast should play a generation completion sound. */
+export function shouldPlayGenerationSound(notification: {
+  type: NotificationType;
+  title: string;
+}): boolean {
+  if (notification.type !== 'ai') return false;
+  return (GENERATION_SOUND_NOTIFICATION_TITLES as readonly string[]).includes(
+    notification.title,
+  );
+}

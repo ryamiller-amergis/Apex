@@ -29,6 +29,25 @@ type JwksCache = {
 };
 
 type ManagedIdentityResult = 'authorized' | 'forbidden' | 'invalid';
+type ManagedIdentityReason =
+  | 'authorized'
+  | 'config_missing'
+  | 'jwt_format_invalid'
+  | 'jwt_decode_failed'
+  | 'jwt_alg_invalid'
+  | 'jwt_expired'
+  | 'tenant_mismatch'
+  | 'audience_mismatch'
+  | 'client_not_allowlisted'
+  | 'jwks_fetch_failed'
+  | 'jwks_key_missing'
+  | 'signature_invalid'
+  | 'role_missing';
+type ManagedIdentityEvaluation = {
+  result: ManagedIdentityResult;
+  reason: ManagedIdentityReason;
+  transient: boolean;
+};
 
 const jwksByTenant = new Map<string, JwksCache>();
 
@@ -84,9 +103,9 @@ function staticTokenMatches(actual: string, expected: string): boolean {
     && timingSafeEqual(actualBytes, expectedBytes);
 }
 
-async function fetchJwks(tenantId: string): Promise<Jwk[]> {
+async function fetchJwks(tenantId: string, forceRefresh = false): Promise<Jwk[]> {
   const cached = jwksByTenant.get(tenantId);
-  if (cached && Date.now() - cached.fetchedAtMs < JWKS_TTL_MS) {
+  if (!forceRefresh && cached && Date.now() - cached.fetchedAtMs < JWKS_TTL_MS) {
     return cached.keys;
   }
 
@@ -138,16 +157,40 @@ function hasRequiredRole(claim: unknown): boolean {
   return roles.includes(REQUIRED_ROLE);
 }
 
-async function verifyManagedIdentityJwt(token: string): Promise<ManagedIdentityResult> {
+function isTransientJwksFetchError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const status = Number(
+    (error as { status?: unknown; statusCode?: unknown }).statusCode
+      ?? (error as { status?: unknown; statusCode?: unknown }).status,
+  );
+  if (Number.isFinite(status)) {
+    if (status === 408 || status === 429) return true;
+    if (status >= 500) return true;
+  }
+  if (error instanceof TypeError) return true;
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return (
+    message.includes('timeout')
+    || message.includes('temporarily unavailable')
+    || message.includes('network')
+  );
+}
+
+async function verifyManagedIdentityJwt(
+  token: string,
+): Promise<ManagedIdentityEvaluation> {
   const tenantId = process.env.AZURE_TENANT_ID?.trim();
   const audiences = resolveAudienceCandidates();
   const allowedClients = resolveAllowedClientIds();
   if (!tenantId || audiences.length === 0 || allowedClients.length === 0) {
-    return 'invalid';
+    return { result: 'invalid', reason: 'config_missing', transient: false };
   }
 
   const parts = token.split('.');
-  if (parts.length !== 3) return 'invalid';
+  if (parts.length !== 3) {
+    return { result: 'invalid', reason: 'jwt_format_invalid', transient: false };
+  }
 
   let header: Record<string, unknown>;
   let payload: Record<string, unknown>;
@@ -155,31 +198,98 @@ async function verifyManagedIdentityJwt(token: string): Promise<ManagedIdentityR
     header = decodeJwtPart(parts[0]);
     payload = decodeJwtPart(parts[1]);
   } catch {
-    return 'invalid';
+    return { result: 'invalid', reason: 'jwt_decode_failed', transient: false };
   }
 
-  if (header.alg !== 'RS256') return 'invalid';
+  if (header.alg !== 'RS256') {
+    return { result: 'invalid', reason: 'jwt_alg_invalid', transient: false };
+  }
   const expiresAt = Number(payload.exp);
-  if (!Number.isFinite(expiresAt) || expiresAt * 1000 <= Date.now()) return 'invalid';
+  if (!Number.isFinite(expiresAt) || expiresAt * 1000 <= Date.now()) {
+    return { result: 'invalid', reason: 'jwt_expired', transient: false };
+  }
   const tokenTenant = String(payload.tid || '');
-  if (tokenTenant && tokenTenant !== tenantId) return 'invalid';
-  if (!audienceMatches(payload.aud, audiences)) return 'invalid';
+  if (tokenTenant && tokenTenant !== tenantId) {
+    return { result: 'invalid', reason: 'tenant_mismatch', transient: false };
+  }
+  if (!audienceMatches(payload.aud, audiences)) {
+    return { result: 'invalid', reason: 'audience_mismatch', transient: false };
+  }
 
   const appId = String(payload.appid || payload.azp || '');
-  if (!appId || !allowedClients.includes(appId)) return 'invalid';
+  if (!appId || !allowedClients.includes(appId)) {
+    return {
+      result: 'invalid',
+      reason: 'client_not_allowlisted',
+      transient: false,
+    };
+  }
 
-  const keys = await fetchJwks(tenantId);
   const kid = typeof header.kid === 'string' ? header.kid : undefined;
-  const candidates = kid ? keys.filter((key) => key.kid === kid) : keys;
-  const signatureValid = candidates.some((key) => {
-    try {
-      return verifyRs256(token, key);
-    } catch {
-      return false;
+  const evaluateSignature = (keys: Jwk[]): ManagedIdentityEvaluation | null => {
+    const candidates = kid ? keys.filter((key) => key.kid === kid) : keys;
+    if (candidates.length === 0) {
+      return { result: 'invalid', reason: 'jwks_key_missing', transient: true };
     }
-  });
-  if (!signatureValid) return 'invalid';
-  return hasRequiredRole(payload.roles) ? 'authorized' : 'forbidden';
+    const signatureValid = candidates.some((key) => {
+      try {
+        return verifyRs256(token, key);
+      } catch {
+        return false;
+      }
+    });
+    if (!signatureValid) {
+      return { result: 'invalid', reason: 'signature_invalid', transient: true };
+    }
+    if (!hasRequiredRole(payload.roles)) {
+      return { result: 'forbidden', reason: 'role_missing', transient: false };
+    }
+    return { result: 'authorized', reason: 'authorized', transient: false };
+  };
+
+  let keys: Jwk[];
+  try {
+    keys = await fetchJwks(tenantId);
+  } catch (error) {
+    return {
+      result: 'invalid',
+      reason: 'jwks_fetch_failed',
+      transient: isTransientJwksFetchError(error),
+    };
+  }
+
+  let evaluation = evaluateSignature(keys);
+  if (evaluation && evaluation.result === 'authorized') return evaluation;
+  if (evaluation && !evaluation.transient) return evaluation;
+
+  try {
+    const refreshedKeys = await fetchJwks(tenantId, true);
+    evaluation = evaluateSignature(refreshedKeys);
+  } catch (error) {
+    return {
+      result: 'invalid',
+      reason: 'jwks_fetch_failed',
+      transient: isTransientJwksFetchError(error),
+    };
+  }
+  if (evaluation) return evaluation;
+  return { result: 'invalid', reason: 'signature_invalid', transient: true };
+}
+
+async function delay(ms: number): Promise<void> {
+  if (process.env.NODE_ENV === 'test') return;
+  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function logAiRunnerAuthRejection(details: {
+  reason: string;
+  transient?: boolean;
+}): void {
+  console.warn(JSON.stringify({
+    event: 'AiRunnerAuthRejected',
+    reason: details.reason,
+    transient: details.transient === true,
+  }));
 }
 
 export function requireAiRunnerAuth(
@@ -199,6 +309,7 @@ export function requireAiRunnerAuth(
 
     const token = parseBearer(req.header(AI_RUNNER_AUTH_HEADER));
     if (!token) {
+      logAiRunnerAuthRejection({ reason: 'missing_bearer' });
       res.status(401).json({
         error: 'Invalid AI runner identity',
         code: 'AI_RUNNER_UNAUTHORIZED',
@@ -211,22 +322,39 @@ export function requireAiRunnerAuth(
       next();
       return;
     }
+    if (staticExpected) {
+      logAiRunnerAuthRejection({ reason: 'static_token_mismatch' });
+    }
 
     try {
-      const result = await verifyManagedIdentityJwt(token);
-      if (result === 'authorized') {
+      let evaluation = await verifyManagedIdentityJwt(token);
+      if (
+        evaluation.result === 'invalid'
+        && evaluation.transient
+        && evaluation.reason === 'jwks_fetch_failed'
+      ) {
+        await delay(75);
+        evaluation = await verifyManagedIdentityJwt(token);
+      }
+      if (evaluation.result === 'authorized') {
         next();
         return;
       }
-      if (result === 'forbidden') {
+      if (evaluation.result === 'forbidden') {
+        logAiRunnerAuthRejection({ reason: evaluation.reason });
         res.status(403).json({
           error: `AI runner identity lacks ${REQUIRED_ROLE}`,
           code: 'AI_RUNNER_FORBIDDEN',
         });
         return;
       }
+      logAiRunnerAuthRejection({
+        reason: evaluation.reason,
+        transient: evaluation.transient,
+      });
     } catch {
       // Authentication failures intentionally collapse to the same 401 response.
+      logAiRunnerAuthRejection({ reason: 'verification_exception', transient: true });
     }
 
     res.status(401).json({
