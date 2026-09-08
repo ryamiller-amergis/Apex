@@ -536,6 +536,7 @@ describe('VT-15 — ADR finalize inherits interview grounding', () => {
     expect(createThread).toHaveBeenCalledWith(
       'reviewer-1',
       expect.objectContaining({
+        agentModule: 'adr',
         skillSettingsId: 'adr-skill-settings',
       }),
       expect.any(Object),

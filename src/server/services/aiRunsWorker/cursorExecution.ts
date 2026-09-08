@@ -4,6 +4,7 @@ import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle'
 import type { RepoReader } from '../../../shared/types/repoReader';
 import type { CursorExecutionRun } from '../cursorExecutionCore';
 import { createNativeReadTools } from '../nativeReadToolAdapter';
+import { buildCursorModelSelection } from '../agentEffortResolver';
 
 export type WorkerCursorExecutionRun = CursorExecutionRun & {
   cancel?(): Promise<void>;
@@ -37,7 +38,7 @@ export async function createLocalCursorExecution(
 
   const agent = await Agent.create({
     apiKey,
-    model: { id: snapshot.model },
+    model: buildCursorModelSelection(snapshot.model, snapshot.effort),
     local,
     // The worker never resolves live repository MCP servers.
     mcpServers: {},

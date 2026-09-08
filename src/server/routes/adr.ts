@@ -279,6 +279,7 @@ router.post('/:id/generate', requirePermission('adr:edit'), async (req, res, nex
     const model = skillConfig?.adrModel ?? adr.model ?? await getDefaultModel();
     const thread = await createThread(userId, {
       project: adr.project,
+      agentModule: 'adr',
       repo: skillConfig?.skillRepo ?? adr.repo,
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider,
@@ -547,6 +548,7 @@ router.post('/:id/assistant-thread', requirePermission('adr:view'), requirePermi
     const model = skillConfig?.adrModel ?? adr.model ?? await getDefaultModel();
     const thread = await createThread(userId, {
       project: adr.project,
+      agentModule: 'adr',
       repo: skillConfig?.skillRepo ?? adr.repo,
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider,

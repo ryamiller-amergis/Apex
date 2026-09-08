@@ -4468,6 +4468,7 @@ router.post(
 
         const thread = await createThread(userId, {
           project,
+          agentModule: 'calendarAssistant',
           repo: skillConfig?.skillRepo ?? project,
           branch: skillConfig?.skillBranch ?? 'main',
           skillProvider: (skillConfig?.skillProvider as any) ?? 'ado',

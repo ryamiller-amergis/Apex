@@ -110,6 +110,11 @@ jest.mock('../services/skillCatalogFacade', () => ({
   getSkillFile: jest.fn().mockResolvedValue('# Frozen skill content'),
 }));
 
+const mockResolveSkillConfig = jest.fn().mockResolvedValue(null);
+jest.mock('../services/projectSettingsService', () => ({
+  resolveSkillConfig: (...args: unknown[]) => mockResolveSkillConfig(...args),
+}));
+
 const mockEnqueueAgentRun = jest.fn();
 jest.mock('../services/agentRunLifecycleService', () => ({
   enqueue: mockEnqueueAgentRun,
@@ -1281,6 +1286,31 @@ function baseKickoff(
     ...overrides,
   };
 }
+
+describe('thread kickoff effort resolution', () => {
+  afterEach(() => {
+    mockResolveSkillConfig.mockReset();
+    mockResolveSkillConfig.mockResolvedValue(null);
+  });
+
+  it('AC-0 / VT-05: freezes server-resolved module effort on the thread', async () => {
+    mockResolveSkillConfig.mockResolvedValue({
+      id: 'settings-1',
+      project: 'Apex',
+      interviewEffort: 'medium',
+      defaultEffort: 'low',
+    });
+
+    const thread = await createThread(
+      'user-1',
+      baseKickoff({ agentModule: 'interview', effort: 'high' }),
+      { skipAutoKickoff: true },
+    );
+
+    expect(thread.kickoff.effort).toBe('medium');
+    await closeThread(thread.id);
+  });
+});
 
 describe('document assistant MCP wiring', () => {
   it.each([

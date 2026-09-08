@@ -1248,6 +1248,7 @@ export async function startSingleFeatureDesignDocWatcher(
     prd.authorId,
     {
       project: prd.project,
+      agentModule: 'designDoc',
       repo: skillConfig?.skillRepo ?? prd.project,
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider ?? undefined,

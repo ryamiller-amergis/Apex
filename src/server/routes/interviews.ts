@@ -740,6 +740,7 @@ async function startDesignDocsForApprovedPrd(
         userId,
         {
           project: prd.project,
+          agentModule: 'designDoc',
           repo: skillConfig?.skillRepo ?? prd.project,
           branch: skillConfig?.skillBranch ?? 'main',
           skillProvider: skillConfig?.skillProvider ?? undefined,
@@ -990,6 +991,7 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
 
     const thread = await createThread(userId, {
       project: prd.project,
+      agentModule: 'prdAssistant',
       repo: skillConfig?.skillRepo ?? prd.project,
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider ?? undefined,
@@ -1872,6 +1874,7 @@ router.post('/design-docs/:id/retry-generate', requirePermission('interviews:man
     // Create with auto-kickoff disabled — persist DB state first, then fire the agent.
     const thread = await createThread(userId, {
       project: doc.project,
+      agentModule: 'designDoc',
       repo: skillConfig?.skillRepo ?? doc.project,
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider ?? undefined,
@@ -2023,6 +2026,7 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
 
     const thread = await createThread(userId, {
       project: doc.project,
+      agentModule: 'designDocAssistant',
       repo: skillConfig?.skillRepo ?? doc.project,
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider ?? undefined,
