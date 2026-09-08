@@ -1487,6 +1487,7 @@ describe('POST /api/interviews/prds/:prdId/owner-approve', () => {
     mockRecordOwnerApproval.mockResolvedValue({ status: 'approved' });
     mockGetUnresolvedCount.mockResolvedValue(0);
     mockIsSuperAdminRequest.mockReturnValue(false);
+    mockCreateThread.mockResolvedValue({ id: 'thread-mock', kickoff: {} });
   });
 
   it('returns 200 when owner approves a pending_review PRD after reviewers complete', async () => {
