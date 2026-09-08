@@ -65,7 +65,7 @@ describe('getEvents effort mapping', () => {
     const result = await getEvents(
       { from: '2026-09-01T00:00:00.000Z', to: '2026-09-09T00:00:00.000Z' },
       1,
-      20,
+      20
     );
 
     expect(result.events[0].effort).toBe('low');

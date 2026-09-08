@@ -1,9 +1,6 @@
 import type { EffortLevel } from '../../shared/types/effort';
 import { isEffortLevel } from '../../shared/types/effort';
-import type {
-  AgentModuleId,
-  ChatThreadKickoff,
-} from '../../shared/types/chat';
+import type { AgentModuleId, ChatThreadKickoff } from '../../shared/types/chat';
 import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 
 const MODULE_EFFORT_KEYS = {
@@ -34,7 +31,7 @@ export function isAgentModuleId(value: unknown): value is AgentModuleId {
 
 export function deriveAgentModule(
   kickoff: ChatThreadKickoff,
-  skillConfig: ProjectSkillConfig | null,
+  skillConfig: ProjectSkillConfig | null
 ): AgentModuleId | undefined {
   if (kickoff.mode === 'development') return 'development';
   if (kickoff.mode?.startsWith('standup-')) return 'standup';
@@ -53,9 +50,9 @@ export function deriveAgentModule(
   if (!kickoff.skillPath || !skillConfig) return undefined;
   if (kickoff.skillPath === skillConfig.adrInterviewSkillPath) return 'adr';
   if (
-    kickoff.skillPath === skillConfig.interviewSkillPath
-    || skillConfig.interviewSkillOptions?.some(
-      (option) => option.path === kickoff.skillPath,
+    kickoff.skillPath === skillConfig.interviewSkillPath ||
+    skillConfig.interviewSkillOptions?.some(
+      (option) => option.path === kickoff.skillPath
     )
   ) {
     return 'interview';
@@ -65,24 +62,26 @@ export function deriveAgentModule(
 
 export function resolveSelectedEffort(
   kickoff: ChatThreadKickoff,
-  skillConfig: ProjectSkillConfig | null,
+  skillConfig: ProjectSkillConfig | null
 ): EffortLevel | undefined {
   if (!skillConfig) return undefined;
 
   const interviewOption = skillConfig.interviewSkillOptions?.find(
-    (option) => option.path === kickoff.skillPath,
+    (option) => option.path === kickoff.skillPath
   );
   if (isEffortLevel(interviewOption?.effort)) return interviewOption.effort;
 
   const skillPill = skillConfig.quickSkillPills?.find(
-    (pill) => pill.skillPath === kickoff.skillPath
-      && (!kickoff.pillLabel || pill.label === kickoff.pillLabel),
+    (pill) =>
+      pill.skillPath === kickoff.skillPath &&
+      (!kickoff.pillLabel || pill.label === kickoff.pillLabel)
   );
   if (isEffortLevel(skillPill?.effort)) return skillPill.effort;
 
   const mcpPill = skillConfig.quickMcpPills?.find(
-    (pill) => pill.mcpServerName === kickoff.mcpPill?.mcpServerName
-      && (!kickoff.pillLabel || pill.label === kickoff.pillLabel),
+    (pill) =>
+      pill.mcpServerName === kickoff.mcpPill?.mcpServerName &&
+      (!kickoff.pillLabel || pill.label === kickoff.pillLabel)
   );
   return isEffortLevel(mcpPill?.effort) ? mcpPill.effort : undefined;
 }
@@ -107,7 +106,7 @@ export function resolveEffort(input: {
 
 export function buildCursorModelSelection(
   model: string,
-  effort?: EffortLevel,
+  effort?: EffortLevel
 ): {
   id: string;
   params?: Array<{ id: 'effort'; value: EffortLevel }>;

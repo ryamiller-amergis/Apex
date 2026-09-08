@@ -10,7 +10,9 @@ jest.mock('../../hooks/useAppShell', () => ({
   useAppShell: jest.fn(),
 }));
 
-const mockUseAiCostEvents = useAiCostEvents as jest.MockedFunction<typeof useAiCostEvents>;
+const mockUseAiCostEvents = useAiCostEvents as jest.MockedFunction<
+  typeof useAiCostEvents
+>;
 
 function event(id: string, effort: AiCostEvent['effort']): AiCostEvent {
   return {
@@ -53,6 +55,8 @@ describe('AiCostAnalytics EventsTable effort display', () => {
     expect(screen.getByRole('columnheader', { name: 'Effort' })).toBeVisible();
     const rows = screen.getAllByRole('row');
     expect(within(rows[1]).getByText('Low')).toBeVisible();
-    expect(within(rows[2]).queryByText(/Low|Medium|High/)).not.toBeInTheDocument();
+    expect(
+      within(rows[2]).queryByText(/Low|Medium|High/)
+    ).not.toBeInTheDocument();
   });
 });

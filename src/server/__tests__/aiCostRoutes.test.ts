@@ -30,7 +30,9 @@ jest.mock('../db/drizzle', () => ({
   db: {},
 }));
 
-const mockGetUserPermissions = getUserPermissions as jest.MockedFunction<typeof getUserPermissions>;
+const mockGetUserPermissions = getUserPermissions as jest.MockedFunction<
+  typeof getUserPermissions
+>;
 const mockGetEvents = getEvents as jest.MockedFunction<typeof getEvents>;
 
 describe('AI cost route authorization', () => {
