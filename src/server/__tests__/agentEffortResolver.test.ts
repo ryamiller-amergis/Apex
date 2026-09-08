@@ -195,4 +195,84 @@ describe('agentEffortResolver', () => {
       )
     ).toBe('adr');
   });
+
+  it('derives remaining module identities from configured skill paths', () => {
+    const skillConfig = config({
+      prdAssistantSkillPath: '.cursor/skills/prd-assistant/SKILL.md',
+      prdValidationSkillPath: '.cursor/skills/prd-spec-review/SKILL.md',
+      featureRequestSkillPath: '.cursor/skills/feature-request-analysis/SKILL.md',
+      technicalSkillPath: '.cursor/skills/technical-analysis/SKILL.md',
+      issueSkillPath: '.cursor/skills/issue-analysis/SKILL.md',
+      designPrototypeSkillPath: '.cursor/skills/design-prototype/SKILL.md',
+      testCaseSkillPath: '.cursor/skills/create-test-case/SKILL.md',
+      loadTestGenerationSkillPath: '.cursor/skills/k6-load-test-generation/SKILL.md',
+      designModuleScopingSkillPath: '.cursor/skills/design-module-scoping/SKILL.md',
+      designDocValidationSkillPath: '.cursor/skills/design-doc-validation/SKILL.md',
+    });
+    const kickoff = {
+      project: 'Apex',
+      repo: 'org/apex',
+    } satisfies ChatThreadKickoff;
+
+    expect(
+      deriveAgentModule(
+        { ...kickoff, skillPath: skillConfig.prdAssistantSkillPath! },
+        skillConfig
+      )
+    ).toBe('prdAssistant');
+    expect(
+      deriveAgentModule(
+        { ...kickoff, skillPath: skillConfig.prdValidationSkillPath! },
+        skillConfig
+      )
+    ).toBe('prdValidation');
+    expect(
+      deriveAgentModule(
+        { ...kickoff, skillPath: skillConfig.featureRequestSkillPath! },
+        skillConfig
+      )
+    ).toBe('featureRequest');
+    expect(
+      deriveAgentModule(
+        { ...kickoff, skillPath: skillConfig.technicalSkillPath! },
+        skillConfig
+      )
+    ).toBe('technical');
+    expect(
+      deriveAgentModule(
+        { ...kickoff, skillPath: skillConfig.issueSkillPath! },
+        skillConfig
+      )
+    ).toBe('issue');
+    expect(
+      deriveAgentModule(
+        { ...kickoff, skillPath: skillConfig.designPrototypeSkillPath! },
+        skillConfig
+      )
+    ).toBe('designPrototype');
+    expect(
+      deriveAgentModule(
+        { ...kickoff, skillPath: skillConfig.testCaseSkillPath! },
+        skillConfig
+      )
+    ).toBe('testCase');
+    expect(
+      deriveAgentModule(
+        { ...kickoff, skillPath: skillConfig.loadTestGenerationSkillPath! },
+        skillConfig
+      )
+    ).toBe('loadTestGeneration');
+    expect(
+      deriveAgentModule(
+        { ...kickoff, skillPath: skillConfig.designModuleScopingSkillPath! },
+        skillConfig
+      )
+    ).toBe('designModuleScoping');
+    expect(
+      deriveAgentModule(
+        { ...kickoff, skillPath: skillConfig.designDocValidationSkillPath! },
+        skillConfig
+      )
+    ).toBe('designDocValidation');
+  });
 });

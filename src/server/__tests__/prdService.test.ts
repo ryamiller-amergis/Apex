@@ -2104,8 +2104,10 @@ describe('PRD validation lifecycle', () => {
     expect(mockCreateThread).toHaveBeenCalledWith(
       'user-1',
       expect.objectContaining({
+        agentModule: 'prdAssistant',
         skillPath: '.cursor/skills/prd-assistant/SKILL.md',
         model: 'assistant-model',
+        assistantType: 'prd',
       }),
       { skipAutoKickoff: true },
     );
@@ -2339,8 +2341,10 @@ describe('triggerFixCoverageGaps', () => {
     expect(mockCreateThread).toHaveBeenCalledWith(
       'user-1',
       expect.objectContaining({
+        agentModule: 'prdAssistant',
         skillPath: '.cursor/skills/prd-assistant/SKILL.md',
         model: 'assistant-model',
+        assistantType: 'prd',
       }),
       { skipAutoKickoff: true },
     );

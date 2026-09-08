@@ -1416,6 +1416,7 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
   // watcher later resets to pending_review with no score.
   const thread = await createChatThread(doc.authorId, {
     project: doc.project,
+    agentModule: 'designDocValidation',
     repo: skillConfig.skillRepo,
     branch: skillConfig.skillBranch ?? 'main',
     skillProvider: skillConfig.skillProvider ?? undefined,
@@ -1909,6 +1910,7 @@ export async function triggerFixValidation(
 
     const thread = await createChatThread(userId, {
       project: doc.project,
+      agentModule: 'designDocAssistant',
       repo: skillConfig?.skillRepo ?? doc.project,
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider ?? undefined,

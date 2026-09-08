@@ -9,6 +9,7 @@ import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
 import { isThreadRunAlive, canThisInstanceFailGeneration } from './agentRunReaperService';
 import { getSkillConfig, resolveSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
+import { deriveAgentModule } from './agentEffortResolver';
 import {
   propagatePipelineGrounding,
   runGroundingService,
@@ -83,11 +84,20 @@ export async function autoStartDocumentValidation(adapter: DocumentValidationAda
     '',
     adapter.buildValidationContext(skillConfig),
   ].join('\n');
+  const agentModule = deriveAgentModule(
+    {
+      project,
+      repo: skillConfig.skillRepo,
+      skillPath,
+    },
+    skillConfig
+  );
 
   // skipAutoKickoff: attach validationThreadId + watcher BEFORE the agent starts
   // so post-run sync can find the owning document when the run completes.
   const thread = await createChatThread(adapter.getAuthorId(), {
     project,
+    ...(agentModule ? { agentModule } : {}),
     repo: skillConfig.skillRepo,
     branch: skillConfig.skillBranch ?? 'main',
     skillProvider: skillConfig.skillProvider ?? undefined,

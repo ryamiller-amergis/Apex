@@ -25,6 +25,30 @@ const MODULE_EFFORT_KEYS = {
   designModuleScoping: 'designModuleScopingEffort',
 } as const satisfies Record<AgentModuleId, keyof ProjectSkillConfig>;
 
+const SKILL_PATH_MODULES = [
+  ['adrFinalizeSkillPath', 'adr'],
+  ['adrAssistantSkillPath', 'adr'],
+  ['prdSkillPath', 'prd'],
+  ['prdAssistantSkillPath', 'prdAssistant'],
+  ['prdValidationSkillPath', 'prdValidation'],
+  ['designDocSkillPath', 'designDoc'],
+  ['designDocAssistantSkillPath', 'designDocAssistant'],
+  ['designPrototypeSkillPath', 'designPrototype'],
+  ['testCaseSkillPath', 'testCase'],
+  ['designDocValidationSkillPath', 'designDocValidation'],
+  ['developmentSkillPath', 'development'],
+  ['standupSkillPath', 'standup'],
+  ['featureRequestSkillPath', 'featureRequest'],
+  ['technicalSkillPath', 'technical'],
+  ['issueSkillPath', 'issue'],
+  ['calendarAssistantSkillPath', 'calendarAssistant'],
+  ['loadTestGenerationSkillPath', 'loadTestGeneration'],
+  ['designModuleSkillPath', 'designModule'],
+  ['designModuleScopingSkillPath', 'designModuleScoping'],
+] as const satisfies ReadonlyArray<
+  readonly [keyof ProjectSkillConfig, AgentModuleId]
+>;
+
 export function isAgentModuleId(value: unknown): value is AgentModuleId {
   return typeof value === 'string' && value in MODULE_EFFORT_KEYS;
 }
@@ -56,6 +80,13 @@ export function deriveAgentModule(
     )
   ) {
     return 'interview';
+  }
+
+  for (const [key, moduleId] of SKILL_PATH_MODULES) {
+    const configured = skillConfig[key];
+    if (typeof configured === 'string' && configured === kickoff.skillPath) {
+      return moduleId;
+    }
   }
   return undefined;
 }

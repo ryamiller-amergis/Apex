@@ -149,6 +149,7 @@ import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
 import type { RepositoryPreparationTarget } from './repositoryPreparationService';
 import {
   buildCursorModelSelection,
+  deriveAgentModule,
   resolveEffort,
   resolveSelectedEffort,
 } from './agentEffortResolver';
@@ -2933,16 +2934,22 @@ export async function createThread(
     project: enrichedKickoff.project,
     settingsId: enrichedKickoff.skillSettingsId ?? undefined,
   });
+  const agentModule =
+    enrichedKickoff.agentModule ??
+    deriveAgentModule(enrichedKickoff, skillConfig);
+  const kickoffWithModule = agentModule
+    ? { ...enrichedKickoff, agentModule }
+    : enrichedKickoff;
   const effort = resolveEffort({
-    kickoff: enrichedKickoff,
+    kickoff: kickoffWithModule,
     skillConfig,
-    selectedEffort: resolveSelectedEffort(enrichedKickoff, skillConfig),
+    selectedEffort: resolveSelectedEffort(kickoffWithModule, skillConfig),
   });
 
   // Resolve branch
   const branch = enrichedKickoff.branch ?? 'main';
   const resolvedKickoff = {
-    ...enrichedKickoff,
+    ...kickoffWithModule,
     branch,
     effort,
     dependenciesPrepared:

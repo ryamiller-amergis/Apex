@@ -1310,6 +1310,26 @@ describe('thread kickoff effort resolution', () => {
     expect(thread.kickoff.effort).toBe('medium');
     await closeThread(thread.id);
   });
+
+  it('derives module identity and effort when the caller omits agentModule', async () => {
+    mockResolveSkillConfig.mockResolvedValue({
+      id: 'settings-1',
+      project: 'Apex',
+      prdAssistantSkillPath: '.cursor/skills/prd-assistant/SKILL.md',
+      prdAssistantEffort: 'high',
+      defaultEffort: 'low',
+    });
+
+    const thread = await createThread(
+      'user-1',
+      baseKickoff({ skillPath: '.cursor/skills/prd-assistant/SKILL.md' }),
+      { skipAutoKickoff: true },
+    );
+
+    expect(thread.kickoff.agentModule).toBe('prdAssistant');
+    expect(thread.kickoff.effort).toBe('high');
+    await closeThread(thread.id);
+  });
 });
 
 describe('document assistant MCP wiring', () => {
