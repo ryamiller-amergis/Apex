@@ -53,6 +53,19 @@ describe('AgentHome dashboard and chat toggle', () => {
     expect(screen.queryByTestId('home-chat-toggle-btn')).not.toBeInTheDocument();
   });
 
+  it('hides the toggle while the chat panel is open', () => {
+    render(
+      <AgentHome
+        selectedProject="Apex"
+        canOpenChat
+        isChatOpen
+        onOpenChatPanel={jest.fn()}
+      />,
+      { wrapper },
+    );
+    expect(screen.queryByTestId('home-chat-toggle-btn')).not.toBeInTheDocument();
+  });
+
   it('does not reopen a saved Home thread after a page refresh', () => {
     sessionStorage.setItem('agentHomeThreadId:Apex', 'thread-saved');
     const onRestoreThread = jest.fn();
