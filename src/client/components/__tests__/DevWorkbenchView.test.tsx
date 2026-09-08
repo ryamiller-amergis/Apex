@@ -24,6 +24,7 @@ jest.mock('../../hooks/useDevWorkbench', () => ({
   useCloseDevSession: jest.fn(),
   useCompleteFeature: jest.fn(),
   useStartLocalFeature: jest.fn(),
+  useWorkItemCommentCount: jest.fn(() => ({ data: undefined, isError: false, error: null })),
 }));
 
 jest.mock('../../hooks/useApexBacklog', () => ({
