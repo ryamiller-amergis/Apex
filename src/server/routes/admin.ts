@@ -18,6 +18,7 @@ import type {
   AssignProjectRoleRequest,
 } from '../../shared/types/rbac';
 import type { UpsertProjectSkillConfigRequest, SetApproversRequest } from '../../shared/types/projectSettings';
+import { isEffortLevel } from '../../shared/types/effort';
 import type { ApprovalMode, ModuleApprovalModes } from '../../shared/types/approvals';
 import type { CreateGroupRequest, UpdateGroupRequest, SetGroupMembersRequest } from '../../shared/types/groups';
 import type { NotificationType } from '../../shared/types/notification';
@@ -64,6 +65,19 @@ function validateApprovalModeRequest(body: UpsertProjectSkillConfigRequest): {
     modes.prd = body.approvalMode as ApprovalMode;
   }
   return { modes };
+}
+
+/**
+ * Every settings key ending in `Effort` must be a shared EffortLevel or null
+ * (null means "inherit"). Returns the first offending key, if any.
+ */
+function validateEffortFields(body: UpsertProjectSkillConfigRequest): string | undefined {
+  for (const [key, value] of Object.entries(body)) {
+    if (!key.endsWith('Effort')) continue;
+    if (value === null || isEffortLevel(value)) continue;
+    return `Invalid ${key}: must be low, medium, high, or null`;
+  }
+  return undefined;
 }
 
 const router = Router();
@@ -382,6 +396,11 @@ router.post('/project-settings', async (req: Request, res: Response): Promise<vo
       res.status(400).json({ error: 'project, friendlyName, skillRepo, and skillBranch are required' });
       return;
     }
+    const effortError = validateEffortFields(body);
+    if (effortError) {
+      res.status(400).json({ error: effortError });
+      return;
+    }
     const approvalUpdate = validateApprovalModeRequest(body);
     if (approvalUpdate.error) {
       res.status(400).json({ error: approvalUpdate.error });
@@ -415,6 +434,11 @@ router.put('/project-settings/:id', async (req: Request, res: Response): Promise
     const body = req.body as UpsertProjectSkillConfigRequest & { project: string };
     if (!body.skillRepo || !body.skillBranch) {
       res.status(400).json({ error: 'skillRepo and skillBranch are required' });
+      return;
+    }
+    const effortError = validateEffortFields(body);
+    if (effortError) {
+      res.status(400).json({ error: effortError });
       return;
     }
     const approvalUpdate = validateApprovalModeRequest(body);

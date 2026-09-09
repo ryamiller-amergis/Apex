@@ -118,6 +118,7 @@ describe('createInterview', () => {
       repo: 'org/repo',
       title: 'Sprint Planning',
       chatThreadId: 'thread-abc',
+      effort: 'medium',
     });
 
     expect(result).toEqual({ interviewId: 'interview-new', threadId: 'thread-abc' });
@@ -129,6 +130,7 @@ describe('createInterview', () => {
         repo: 'org/repo',
         title: 'Sprint Planning',
         chatThreadId: 'thread-abc',
+        effort: 'medium',
         status: 'in_progress',
       }),
     );

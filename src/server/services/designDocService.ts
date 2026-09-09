@@ -8,6 +8,7 @@ import { designDocs, appUsers, chatThreads, prds, interviews, designPrototypes, 
 const authorUser = alias(appUsers, 'author_user');
 const designDocOwnerUser = alias(appUsers, 'design_doc_owner_user');
 import type { ContentSnapshot, DesignDoc, DesignDocStatus, DesignDocSummary, DesignDocValidationOverride, ReviewDesignDocRequest, ValidationScorecard, ValidationScorecardGap } from '../../shared/types/interview';
+import type { EffortLevel } from '../../shared/types/effort';
 import type { PipelinePinPolicy, RunRef } from '../../shared/types/runGrounding';
 import { stampGroundingProvenance } from '../../shared/utils/groundingProvenance';
 import { buildOverrideHistory } from '../../shared/utils/validationOverride';
@@ -170,6 +171,7 @@ export async function createDesignDoc(opts: {
   title?: string;
   status?: DesignDocStatus;
   model?: string;
+  effort?: EffortLevel;
   skillSettingsId?: string | null;
 }): Promise<{ designDocId: string }> {
   const status = opts.status ?? 'generating';
@@ -184,6 +186,7 @@ export async function createDesignDoc(opts: {
       authorId: opts.userId,
       title: opts.title ?? 'Untitled Design Doc',
       model: opts.model ?? null,
+      effort: opts.effort ?? null,
       skillSettingsId: opts.skillSettingsId ?? null,
       designContent: '',
       techSpecContent: '',
@@ -681,7 +684,7 @@ export async function syncPerFeatureDesignDocs(
 
   const seedModelRow = await db.query.designDocs.findFirst({
     where: eq(designDocs.id, seedId),
-    columns: { model: true, skillSettingsId: true },
+    columns: { model: true, effort: true, skillSettingsId: true },
   });
   const seedModel = seedModelRow?.model ?? null;
   const skillConfig = await resolveSkillConfig({ project, settingsId: seedModelRow?.skillSettingsId ?? undefined });
@@ -710,6 +713,7 @@ export async function syncPerFeatureDesignDocs(
         authorId,
         title,
         model: seedModel,
+        effort: seedModelRow?.effort ?? null,
         skillSettingsId: seedModelRow?.skillSettingsId ?? null,
         designContent: feat.design,
         techSpecContent: stripPrototypeArtifactsFromTechSpec(feat.techSpec),
@@ -790,7 +794,7 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
     // If syncOutputToDb already processed this run (it nulls seed's chatThreadId), just cleanup
     const seedDoc = await db.query.designDocs.findFirst({
       where: eq(designDocs.id, seedDocId),
-      columns: { id: true, chatThreadId: true, prdId: true, project: true, authorId: true, model: true, skillSettingsId: true, status: true },
+      columns: { id: true, chatThreadId: true, prdId: true, project: true, authorId: true, model: true, effort: true, skillSettingsId: true, status: true },
     });
     if (!seedDoc || !seedDoc.chatThreadId || (seedDoc.status && seedDoc.status !== 'generating')) {
       clearInterval(interval);
@@ -847,6 +851,7 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
               authorId: seedDoc.authorId,
               title: humanizeSlug(feat.slug),
               model: seedDoc.model ?? null,
+              effort: seedDoc.effort ?? null,
               skillSettingsId: seedDoc.skillSettingsId ?? null,
               designContent: feat.design,
               techSpecContent: stripPrototypeArtifactsFromTechSpec(feat.techSpec),
@@ -1248,6 +1253,7 @@ export async function startSingleFeatureDesignDocWatcher(
     prd.authorId,
     {
       project: prd.project,
+      agentModule: 'designDoc',
       repo: skillConfig?.skillRepo ?? prd.project,
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider ?? undefined,
@@ -1268,6 +1274,7 @@ export async function startSingleFeatureDesignDocWatcher(
     featureIndex,
     title: featureName,
     model,
+    effort: thread.kickoff.effort,
     skillSettingsId: prd.skillSettingsId ?? null,
   });
 
@@ -1358,6 +1365,7 @@ function rowToSummary(
     ownerName: effectiveOwnerName,
     title: row.title,
     model: row.model ?? undefined,
+    effort: row.effort ?? undefined,
     skillSettingsId: row.skillSettingsId ?? null,
     skillSettingsName: skillSettingsName ?? null,
     generationError: row.generationError ?? null,
@@ -1408,6 +1416,7 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
   // watcher later resets to pending_review with no score.
   const thread = await createChatThread(doc.authorId, {
     project: doc.project,
+    agentModule: 'designDocValidation',
     repo: skillConfig.skillRepo,
     branch: skillConfig.skillBranch ?? 'main',
     skillProvider: skillConfig.skillProvider ?? undefined,
@@ -1901,6 +1910,7 @@ export async function triggerFixValidation(
 
     const thread = await createChatThread(userId, {
       project: doc.project,
+      agentModule: 'designDocAssistant',
       repo: skillConfig?.skillRepo ?? doc.project,
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider ?? undefined,

@@ -72,6 +72,7 @@ import { ApexMaterializeModal } from './ApexMaterializeModal';
 import { CreateAdoItemsModal } from './CreateAdoItemsModal';
 import { ApexFixRunningBanner } from './ApexFixRunningBanner';
 import type { PrdStatus, PrdValidationBaseline, TestCaseCoverageSummary, Prd } from '../../shared/types/interview';
+import { effortLabel } from '../../shared/utils/effort';
 import {
   isPrdFixFlowOwningAccept,
   isPrdSingleCommentFixPending,
@@ -1938,6 +1939,12 @@ export const PrdReviewView: React.FC = () => {
                 <span className={styles.metaItem}>
                   <span className={styles.metaLabel}>Model:</span>
                   <span className={styles.metaValue}>{prd.model}</span>
+                </span>
+              )}
+              {prd.effort && (
+                <span className={styles.metaItem}>
+                  <span className={styles.metaLabel}>Effort:</span>
+                  <span className={styles.metaValue}>{effortLabel(prd.effort)}</span>
                 </span>
               )}
               <WorkflowSummaryBadge

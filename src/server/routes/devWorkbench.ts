@@ -570,6 +570,7 @@ router.post('/start', async (req: Request, res: Response) => {
           }
           const thread = await createThread(userId, {
             project,
+            agentModule: 'development',
             repo,
             branch: branchName,
             skillBranch: baseBranch,
@@ -673,6 +674,7 @@ router.post('/start', async (req: Request, res: Response) => {
           }
           const thread = await createThread(userId, {
             project,
+            agentModule: 'development',
             repo,
             branch: branchName,
             skillBranch: baseBranch,

@@ -127,6 +127,29 @@ const { getSkillConfig: mockGetSkillConfig } = jest.requireMock(
   '../services/projectSettingsService',
 ) as { getSkillConfig: jest.Mock };
 
+const EFFORT_FIELDS = [
+  'interviewEffort',
+  'prdEffort',
+  'adrEffort',
+  'designDocEffort',
+  'designDocAssistantEffort',
+  'designPrototypeEffort',
+  'testCaseEffort',
+  'designDocValidationEffort',
+  'prdAssistantEffort',
+  'prdValidationEffort',
+  'developmentEffort',
+  'standupEffort',
+  'featureRequestEffort',
+  'technicalEffort',
+  'issueEffort',
+  'calendarAssistantEffort',
+  'loadTestGenerationEffort',
+  'designModuleEffort',
+  'designModuleScopingEffort',
+  'defaultEffort',
+] as const;
+
 // ── GET /api/skill-config ──────────────────────────────────────────────────────
 
 describe('GET /api/skill-config', () => {
@@ -238,6 +261,58 @@ describe('GET /api/skill-config', () => {
       issueSkillPath: '.cursor/skills/issue-analysis/SKILL.md',
       issueModel: 'claude-opus-4-6',
     });
+  });
+
+  it('FEAT-002 TBI-004 DoD-1 returns every effort field as null when the config has none', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      project: 'MaxView',
+      skillRepo: 'MaxView',
+      skillBranch: 'main',
+      // effort fields intentionally omitted — should map to null
+    });
+
+    const res = await request(buildApp()).get('/api/skill-config?project=MaxView');
+
+    expect(res.status).toBe(200);
+    for (const field of EFFORT_FIELDS) {
+      expect(res.body).toHaveProperty(field, null);
+    }
+  });
+
+  it('FEAT-002 TBI-004 DoD-1 returns the stored value for every effort field', async () => {
+    const efforts = Object.fromEntries(
+      EFFORT_FIELDS.map((field, index) => [
+        field,
+        (['low', 'medium', 'high'] as const)[index % 3],
+      ]),
+    );
+    mockGetSkillConfig.mockResolvedValue({
+      project: 'MaxView',
+      skillRepo: 'MaxView',
+      skillBranch: 'main',
+      ...efforts,
+    });
+
+    const res = await request(buildApp()).get('/api/skill-config?project=MaxView');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject(efforts);
+  });
+
+  it('FEAT-002 PBI-001 AC-2 returns null for an effort cleared to Inherit', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      project: 'MaxView',
+      skillRepo: 'MaxView',
+      skillBranch: 'main',
+      interviewEffort: null,
+      prdEffort: 'high',
+    });
+
+    const res = await request(buildApp()).get('/api/skill-config?project=MaxView');
+
+    expect(res.status).toBe(200);
+    expect(res.body.interviewEffort).toBeNull();
+    expect(res.body.prdEffort).toBe('high');
   });
 
   it('calls getSkillConfig with the project name from the query', async () => {

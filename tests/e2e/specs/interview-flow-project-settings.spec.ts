@@ -245,6 +245,50 @@ test.describe('Interview flow — Project settings @interview-flow @pipeline', (
     }
   });
 
+  test('PBI-001 AC-0 saves and reloads Medium interview effort', async ({
+    page,
+    loginAsPersona,
+    e2eApi,
+  }) => {
+    const config = await SeedApi.seedProjectSettings(e2eApi, {
+      project: E2E_PROJECT,
+      friendlyName: 'Medium Interview Effort',
+      isDefault: true,
+    });
+    await stubAdoProjects(page);
+    await stubAllAiTraffic(page);
+    await loginAsPersona('manager');
+    await page.addInitScript((project) => {
+      localStorage.setItem('selectedProject', project);
+    }, E2E_PROJECT);
+
+    const settings = new AdminProjectSettingsPage(page);
+    await settings.goto();
+    // DEFERRED: Playwright env unavailable — local personas do not have admin:roles.
+    test.skip(
+      !page.url().includes('/admin/project-settings'),
+      'DEFERRED: Playwright env unavailable — no Project Admin persona',
+    );
+    await settings.editConfig(config.id);
+
+    const interviewEffort = page.getByTestId('ps-stage-effort-interviewEffort');
+    await interviewEffort.selectOption('medium');
+    await expect(interviewEffort).toHaveValue('medium');
+
+    const configSave = page.waitForRequest((request) =>
+      request.method() === 'PUT'
+      && request.url().endsWith(`/api/admin/project-settings/${config.id}`),
+    );
+    await settings.save();
+    expect((await configSave).postDataJSON()).toEqual(expect.objectContaining({
+      interviewEffort: 'medium',
+    }));
+
+    await settings.goto();
+    await settings.editConfig(config.id);
+    await expect(page.getByTestId('ps-stage-effort-interviewEffort')).toHaveValue('medium');
+  });
+
   test('PBI-001 AC-0 / PBI-002 AC-0 Given configured pools, when modes change, then ADR and sibling modes save independently', async ({
     page,
     loginAsPersona,

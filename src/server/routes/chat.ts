@@ -49,6 +49,8 @@ import {
 import { getMyWorkSessionContext, logMyWorkSession } from '../services/myWorkSessionLogger';
 import { isFeatureEnabled } from '../services/featureFlagService';
 import { trackEvent } from '../services/telemetry';
+import { deriveAgentModule } from '../services/agentEffortResolver';
+import { resolveSkillConfig } from '../services/projectSettingsService';
 
 const router = Router();
 
@@ -326,7 +328,20 @@ router.post('/threads', async (req: Request, res: Response) => {
 
   try {
     const userId = getUserId(req);
-    const kickoff = body.kickoff;
+    const {
+      effort: _clientEffort,
+      agentModule: _clientAgentModule,
+      ...clientKickoff
+    } = body.kickoff;
+    const skillConfig = await resolveSkillConfig({
+      project: clientKickoff.project,
+      settingsId: clientKickoff.skillSettingsId ?? undefined,
+    });
+    const agentModule = deriveAgentModule(clientKickoff, skillConfig);
+    const kickoff = {
+      ...clientKickoff,
+      ...(agentModule ? { agentModule } : {}),
+    };
     const thread = await createThread(userId, kickoff, {
       skipAutoKickoff: Boolean(body.skipAutoKickoff),
     });

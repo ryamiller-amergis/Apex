@@ -39,6 +39,7 @@ import {
 } from '../hooks/useAiCostAnalytics';
 import { useAppShell } from '../hooks/useAppShell';
 import type { AiCostTimeseriesPoint, AiCostForecast } from '../../shared/types/aiCostAnalytics';
+import { effortLabel } from '../../shared/utils/effort';
 
 // ── Feature display names ─────────────────────────────────────────────────────
 
@@ -358,7 +359,7 @@ interface EventsTableProps {
   filters: AiCostFilters;
 }
 
-const EventsTable: React.FC<EventsTableProps> = ({ filters }) => {
+export const EventsTable: React.FC<EventsTableProps> = ({ filters }) => {
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 20;
   const { data, isLoading } = useAiCostEvents(filters, page, PAGE_SIZE);
@@ -373,6 +374,7 @@ const EventsTable: React.FC<EventsTableProps> = ({ filters }) => {
           <tr>
             <th>Feature</th>
             <th>Model</th>
+            <th>Effort</th>
             <th>Provider</th>
             <th>Tokens (in/out)</th>
             <th>Cost</th>
@@ -385,6 +387,7 @@ const EventsTable: React.FC<EventsTableProps> = ({ filters }) => {
             <tr key={e.id}>
               <td><span className={styles.featureChip} style={{ background: `${getFeatureColor(e.feature)}18`, color: getFeatureColor(e.feature) }}>{featureLabel(e.feature)}</span></td>
               <td><span className={styles.modelChip} title={e.modelId}>{e.modelId.replace(/^us\.anthropic\./, '').replace(/-\d+v\d+:\d+$/, '')}</span></td>
+              <td>{e.effort ? effortLabel(e.effort) : null}</td>
               <td><span className={styles.modelChip}>{e.provider}</span></td>
               <td className={styles.tokenCell}>{formatTokens(e.inputTokens)} / {formatTokens(e.outputTokens)}</td>
               <td className={styles.costCell}>{formatCost(e.costUsd)}</td>

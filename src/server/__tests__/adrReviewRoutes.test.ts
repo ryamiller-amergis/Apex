@@ -39,6 +39,7 @@ jest.mock('../services/adrService', () => ({
 jest.mock('../services/chatAgentService', () => ({
   createThread: jest.fn(),
   getThread: jest.fn(),
+  getThreadAsync: jest.fn(),
   updateThreadKickoffContext: jest.fn(),
 }));
 
@@ -108,7 +109,7 @@ jest.mock('../services/runGroundingService', () => ({
   }),
 }));
 
-import { deleteAdr, getAdr, updateAdrStatus } from '../services/adrService';
+import { createAdr, deleteAdr, getAdr, updateAdrStatus } from '../services/adrService';
 import {
   getAvailableApproverPool,
   getAssignments,
@@ -144,6 +145,38 @@ function buildApp() {
   app.use('/', adrRouter);
   return app;
 }
+
+describe('POST ADR effort snapshot', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    const { getThreadAsync } = jest.requireMock('../services/chatAgentService') as {
+      getThreadAsync: jest.Mock;
+    };
+    getThreadAsync.mockResolvedValue({
+      kickoff: { effort: 'medium' },
+    });
+    (createAdr as jest.Mock).mockResolvedValue({
+      adrId: 'adr-new',
+      threadId: 'thread-1',
+    });
+  });
+
+  it('VT-01 ignores request effort and uses persisted thread kickoff effort', async () => {
+    const response = await request(buildApp()).post('/').send({
+      project: 'Apex',
+      repo: 'Apex',
+      title: 'Choose event transport',
+      chatThreadId: 'thread-1',
+      model: 'composer-2.5',
+      effort: 'high',
+    });
+
+    expect(response.status).toBe(201);
+    expect(createAdr).toHaveBeenCalledWith(expect.objectContaining({
+      effort: 'medium',
+    }));
+  });
+});
 
 describe('GET ADR reviewer availability', () => {
   beforeEach(() => jest.clearAllMocks());
@@ -536,6 +569,7 @@ describe('VT-15 — ADR finalize inherits interview grounding', () => {
     expect(createThread).toHaveBeenCalledWith(
       'reviewer-1',
       expect.objectContaining({
+        agentModule: 'adr',
         skillSettingsId: 'adr-skill-settings',
       }),
       expect.any(Object),
