@@ -16,6 +16,10 @@
   background: var(--bg-primary);
 }
 
+.dashboardPageWithChatToggle {
+  padding-right: 64px;
+}
+
 .dashboardError {
   margin: 0 0 24px;
   padding: 8px 12px;
@@ -25,8 +29,8 @@
   font-size: 12px;
 }
 
-/* Chat launcher docked to the right edge. Styled as app chrome — a surface
-   tab that reads as part of the shell rather than a floating widget. */
+/* Chat launcher docked to the right edge. Accent fill keeps it readable
+   against the dashboard instead of blending into page chrome. */
 .rightEdgeToggle {
   position: fixed;
   top: 50%;
@@ -34,19 +38,19 @@
   z-index: 850;
   display: flex;
   flex-direction: column;
-  min-width: 44px;
+  min-width: 52px;
   min-height: 44px;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 14px 12px;
+  gap: 10px;
+  padding: 18px 14px;
   transform: translateY(-50%);
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--accent-color);
   border-right: 0;
-  border-radius: 10px 0 0 10px;
-  background: var(--bg-secondary);
-  box-shadow: -2px 0 12px var(--shadow-sm);
-  color: var(--text-secondary);
+  border-radius: 12px 0 0 12px;
+  background: color-mix(in srgb, var(--accent-color) 16%, var(--bg-secondary));
+  box-shadow: -4px 0 18px var(--shadow-md), var(--glow-accent);
+  color: var(--accent-color);
   cursor: pointer;
   transition:
     background 0.2s ease,
@@ -56,38 +60,33 @@
 }
 
 .rightEdgeToggle:hover {
-  border-color: var(--accent-color);
-  background: var(--bg-tertiary);
-  box-shadow: -4px 0 18px var(--shadow-md);
-  color: var(--accent-color);
+  border-color: var(--accent-hover);
+  background: color-mix(in srgb, var(--accent-color) 26%, var(--bg-secondary));
+  box-shadow: -6px 0 22px var(--shadow-md), var(--glow-accent-strong);
+  color: var(--accent-hover);
 }
 
 .rightEdgeToggle:focus-visible {
   outline: 2px solid var(--accent-color);
   outline-offset: 2px;
-  color: var(--accent-color);
+  color: var(--accent-hover);
 }
 
 .rightEdgeToggle:active {
-  box-shadow: -1px 0 6px var(--shadow-sm);
+  box-shadow: -2px 0 8px var(--shadow-sm);
 }
 
 .toggleIcon {
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
   flex-shrink: 0;
-  color: var(--accent-color);
-}
-
-.rightEdgeToggle:hover .toggleIcon,
-.rightEdgeToggle:focus-visible .toggleIcon {
   color: inherit;
 }
 
 .toggleLabel {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   writing-mode: vertical-rl;
 }
@@ -1459,6 +1458,15 @@
 /* ── Mobile responsive ────────────────────────────────────── */
 
 @media (max-width: 768px) {
+  .dashboardPageWithChatToggle {
+    padding-right: 56px;
+  }
+
+  .rightEdgeToggle {
+    min-width: 48px;
+    padding: 16px 12px;
+  }
+
   .page {
     flex-direction: column;
   }

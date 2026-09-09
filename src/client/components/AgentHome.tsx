@@ -60,8 +60,13 @@ export const AgentHome: React.FC<AgentHomeProps> = ({
     if (threadFromUrl) onOpenChatPanel?.();
   }, [onOpenChatPanel, onRestoreThread, searchParams, selectedProject]);
 
+  const showChatToggle = canOpenChat && Boolean(onOpenChatPanel) && !isChatOpen;
+
   return (
-    <main className={styles.dashboardPage} {...{ 'data-testid': 'agent-home-dashboard' }}>
+    <main
+      className={`${styles.dashboardPage} ${showChatToggle ? styles.dashboardPageWithChatToggle : ''}`}
+      {...{ 'data-testid': 'agent-home-dashboard' }}
+    >
       <HomeDashboardSection
         payload={dashboard.data}
         isLoading={dashboard.isLoading}
@@ -75,13 +80,13 @@ export const AgentHome: React.FC<AgentHomeProps> = ({
           Could not open that PBI. Retry from the Open Bugs list.
         </div>
       )}
-      {canOpenChat && onOpenChatPanel && (
+      {showChatToggle && (
         <button
           type="button"
           className={styles.rightEdgeToggle}
           onClick={onOpenChatPanel}
-          aria-label={isChatOpen ? 'Chat panel is open' : 'Open chat panel'}
-          aria-expanded={isChatOpen}
+          aria-label="Open chat panel"
+          aria-expanded={false}
           {...{ 'data-testid': 'home-chat-toggle-btn' }}
         >
           <svg className={styles.toggleIcon} viewBox="0 0 20 20" aria-hidden="true" focusable="false">

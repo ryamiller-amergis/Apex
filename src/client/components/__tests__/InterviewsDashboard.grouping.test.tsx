@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { InterviewsDashboard } from '../InterviewsDashboard';
 import type { DesignDocSummary } from '../../../shared/types/interview';
@@ -95,72 +95,103 @@ function renderDashboard(path = '/') {
   );
 }
 
-describe('InterviewsDashboard uniform cards', () => {
+function seedCalendarWriteup() {
+  (useDesignDocList as jest.Mock).mockReturnValue({
+    data: [
+      makeDoc(),
+      makeDoc({
+        id: 'dd-2',
+        prdId: 'prd-cal',
+        prdTitle: 'Calendar widget on home screen',
+        title: 'Calendar feature 1',
+        status: 'pending_review',
+        featureIndex: 0,
+      }),
+      makeDoc({
+        id: 'dd-3',
+        prdId: 'prd-cal',
+        prdTitle: 'Calendar widget on home screen',
+        title: 'Calendar feature 2',
+        status: 'pending_review',
+        featureIndex: 1,
+      }),
+    ],
+    isLoading: false,
+  });
+  (useDesignPrototypeList as jest.Mock).mockReturnValue({
+    data: [
+      makeProto(),
+      makeProto({
+        id: 'proto-2',
+        prdId: 'prd-cal',
+        prdTitle: 'Calendar widget on home screen',
+        featureName: 'Calendar widget',
+        featureIndex: 0,
+        status: 'approved',
+      }),
+      makeProto({
+        id: 'proto-3',
+        prdId: 'prd-cal',
+        prdTitle: 'Calendar widget on home screen',
+        featureName: 'Calendar detail',
+        featureIndex: 1,
+        status: 'pending_review',
+      }),
+    ],
+    isLoading: false,
+  });
+}
+
+describe('InterviewsDashboard design grouping', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  it('renders every design doc as a card, including multi-doc write-ups', () => {
-    (useDesignDocList as jest.Mock).mockReturnValue({
-      data: [
-        makeDoc(),
-        makeDoc({
-          id: 'dd-2',
-          prdId: 'prd-cal',
-          prdTitle: 'Calendar widget on home screen',
-          title: 'Calendar feature 1',
-          status: 'pending_review',
-        }),
-        makeDoc({
-          id: 'dd-3',
-          prdId: 'prd-cal',
-          prdTitle: 'Calendar widget on home screen',
-          title: 'Calendar feature 2',
-          status: 'pending_review',
-        }),
-      ],
-      isLoading: false,
-    });
+  it('groups design docs and prototypes under one expandable PRD row', () => {
+    seedCalendarWriteup();
+    renderDashboard('/backlog?tab=designs');
 
-    renderDashboard('/backlog?tab=design-docs');
+    expect(screen.getByTestId('tab-designs')).toBeInTheDocument();
+    expect(screen.getAllByTestId('design-prd-group')).toHaveLength(2);
+    expect(screen.getByText('Calendar widget on home screen')).toBeInTheDocument();
+    expect(screen.getByText('2 docs · 2 prototypes')).toBeInTheDocument();
+    expect(screen.queryByText('Calendar feature 1')).not.toBeInTheDocument();
 
-    expect(screen.queryByTestId('design-doc-group')).not.toBeInTheDocument();
-    expect(screen.getAllByTestId('design-doc-card')).toHaveLength(3);
-    expect(screen.getByText('Agent Home delivery pipeline entry')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('design-prd-group-toggle-prd-cal'));
+
     expect(screen.getByText('Calendar feature 1')).toBeInTheDocument();
     expect(screen.getByText('Calendar feature 2')).toBeInTheDocument();
+    expect(screen.getByText('Calendar widget')).toBeInTheDocument();
+    expect(screen.getByText('Calendar detail')).toBeInTheDocument();
+    expect(screen.getAllByTestId('design-doc-card')).toHaveLength(2);
+    expect(screen.getAllByTestId('design-prototype-card')).toHaveLength(2);
   });
 
-  it('renders every prototype as a card, including multi-prototype write-ups', () => {
+  it('opens the Designs tab from the legacy design-docs URL', () => {
+    seedCalendarWriteup();
+    renderDashboard('/backlog?tab=design-docs');
+    expect(screen.getAllByTestId('design-prd-group')).toHaveLength(2);
+  });
+
+  it('opens the Designs tab from the legacy design-prototypes URL', () => {
+    seedCalendarWriteup();
+    renderDashboard('/backlog?tab=design-prototypes');
+    expect(screen.getAllByTestId('design-prd-group')).toHaveLength(2);
+  });
+
+  it('auto-expands when only one PRD has designs', () => {
+    (useDesignDocList as jest.Mock).mockReturnValue({
+      data: [makeDoc({ title: 'Only doc' })],
+      isLoading: false,
+    });
     (useDesignPrototypeList as jest.Mock).mockReturnValue({
-      data: [
-        makeProto(),
-        makeProto({
-          id: 'proto-2',
-          prdId: 'prd-todo',
-          prdTitle: 'To do list on users profile page',
-          featureName: 'Todo list',
-          featureIndex: 0,
-          status: 'pending_review',
-        }),
-        makeProto({
-          id: 'proto-3',
-          prdId: 'prd-todo',
-          prdTitle: 'To do list on users profile page',
-          featureName: 'Todo detail',
-          featureIndex: 1,
-          status: 'pending_review',
-        }),
-      ],
+      data: [makeProto({ featureName: 'Only proto' })],
       isLoading: false,
     });
 
-    renderDashboard('/backlog?tab=design-prototypes');
+    renderDashboard('/backlog?tab=designs');
 
-    expect(screen.queryByTestId('design-prototype-group')).not.toBeInTheDocument();
-    expect(screen.getAllByTestId('design-prototype-card')).toHaveLength(3);
-    expect(screen.getByText('Pipeline strip')).toBeInTheDocument();
-    expect(screen.getByText('Todo list')).toBeInTheDocument();
-    expect(screen.getByText('Todo detail')).toBeInTheDocument();
+    expect(screen.getByText('Only doc')).toBeInTheDocument();
+    expect(screen.getByText('Only proto')).toBeInTheDocument();
   });
 });
