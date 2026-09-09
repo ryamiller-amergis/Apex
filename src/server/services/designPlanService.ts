@@ -4,6 +4,7 @@ import { db } from '../db/drizzle';
 import { designPlans, prds } from '../db/schema';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { isAssignedApprover } from './documentApprovalService';
+import { designPlanUsageCtx } from './artifactUsageContext';
 import { extractFeatures, extractPbiRequirements } from './designPrototypeService';
 import type {
   DesignPlan,
@@ -112,7 +113,16 @@ async function runPlanGeneration(prdId: string): Promise<void> {
       console.warn(`[designPlanService] resolvePrototypeContext failed for "${prd.project}": ${err.message} — using MaxView design plan context`);
     }
 
-    const features = await generateDesignPlanForPrd(input, modelId, maxTokens);
+    const planRow = await db.query.designPlans.findFirst({
+      where: eq(designPlans.prdId, prdId),
+      columns: { id: true },
+    });
+    const features = await generateDesignPlanForPrd(
+      input,
+      modelId,
+      maxTokens,
+      designPlanUsageCtx(prd.project, planRow?.id ?? prdId),
+    );
 
     const now = new Date().toISOString();
     const historyEntry: DesignPlanHistoryEntry = { version: 1, features, editedBy: 'system', createdAt: now };

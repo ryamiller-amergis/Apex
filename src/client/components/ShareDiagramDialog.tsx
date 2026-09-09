@@ -338,7 +338,7 @@ export const ShareDiagramDialog: React.FC<ShareDiagramDialogProps> = ({
           </p>
         )}
 
-        <div className={styles.addForm}>
+        <div className={styles.addForm} {...{ 'data-testid': 'share-add-form' }}>
           <ShareTargetPicker
             targets={targetsQuery.data ?? []}
             isLoading={targetsQuery.isLoading}
@@ -366,7 +366,7 @@ export const ShareDiagramDialog: React.FC<ShareDiagramDialogProps> = ({
           </button>
         </div>
 
-        <div>
+        <div {...{ 'data-testid': 'share-grant-section' }}>
           <h3 className={styles.subtitle}>People with access</h3>
           {sharesQuery.isLoading ? (
             <>

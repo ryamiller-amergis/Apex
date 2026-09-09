@@ -22,7 +22,7 @@ import {
   updateAdrStatus,
   updateAdrTitle,
 } from '../services/adrService';
-import { createThread, getThread, updateThreadKickoffContext } from '../services/chatAgentService';
+import { createThread, getThread, getThreadAsync, updateThreadKickoffContext } from '../services/chatAgentService';
 import { resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import type { AdrStatus } from '../../shared/types/adr';
@@ -39,6 +39,8 @@ import { getOwnerApproval, isDocumentOwner, recordOwnerApproval } from '../servi
 import { getComments, getUnresolvedCount } from '../services/reviewCommentService';
 import { createNotification } from '../services/notificationService';
 import { fixAdrContentWithBedrock, regenerateMarkdownRegionWithBedrock, BedrockModelTruncatedError } from '../services/bedrockService';
+import { adrUsageCtx, uniqueThreadIds } from '../services/artifactUsageContext';
+import { getEntityUsageRollup } from '../services/aiCostAnalyticsService';
 import type { OwnerApproveRequest } from '../../shared/types/approvals';
 import { isProjectRepositoryCheckoutReadinessEnabled } from '../services/featureFlagService';
 import {
@@ -145,6 +147,7 @@ router.post('/', requirePermission('adr:create'), async (req, res, next) => {
       // @feature-flag:project-repository-checkout-readiness enabled-end
     }
     // @feature-flag:project-repository-checkout-readiness end
+    const sourceThread = await getThreadAsync(chatThreadId);
     const result = await createAdr({
       userId,
       project,
@@ -152,10 +155,29 @@ router.post('/', requirePermission('adr:create'), async (req, res, next) => {
       title: title.trim(),
       chatThreadId,
       model,
+      effort: sourceThread?.kickoff.effort,
       skillSettingsId,
       reviewerIds,
     });
     res.status(201).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/:id/usage', requirePermission('adr:view'), async (req, res, next) => {
+  try {
+    const adr = await getAdr(req.params.id);
+    if (!adr) {
+      res.status(404).json({ error: 'ADR not found' });
+      return;
+    }
+    const rollup = await getEntityUsageRollup({
+      entityType: 'adr',
+      entityId: adr.id,
+      threadIds: uniqueThreadIds(adr.chatThreadId, adr.adrAssistantThreadId),
+    });
+    res.json(rollup);
   } catch (error) {
     next(error);
   }
@@ -259,6 +281,7 @@ router.post('/:id/generate', requirePermission('adr:edit'), async (req, res, nex
     const model = skillConfig?.adrModel ?? adr.model ?? await getDefaultModel();
     const thread = await createThread(userId, {
       project: adr.project,
+      agentModule: 'adr',
       repo: skillConfig?.skillRepo ?? adr.repo,
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider,
@@ -527,6 +550,7 @@ router.post('/:id/assistant-thread', requirePermission('adr:view'), requirePermi
     const model = skillConfig?.adrModel ?? adr.model ?? await getDefaultModel();
     const thread = await createThread(userId, {
       project: adr.project,
+      agentModule: 'adr',
       repo: skillConfig?.skillRepo ?? adr.repo,
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider,
@@ -588,7 +612,7 @@ router.post('/:id/fix-with-ai', requirePermission('adr:edit'), async (req, res, 
       })),
       projectConfig?.prdReviewBedrockModelId,
       projectConfig?.prdReviewBedrockMaxTokens,
-      { feature: 'other', project: adr.project, entityType: 'adr', entityId: adr.id, userId },
+      adrUsageCtx(adr.project, adr.id, userId),
     );
     await stageAdrReviewFix(adr.id, userId, fixedContent, null);
     res.json({ ok: true });
@@ -646,7 +670,7 @@ router.post('/:id/fix-comment-with-ai', requirePermission('adr:edit'), async (re
       }],
       projectConfig?.prdReviewBedrockModelId,
       projectConfig?.prdReviewBedrockMaxTokens,
-      { feature: 'other', project: adr.project, entityType: 'adr', entityId: adr.id, userId },
+      adrUsageCtx(adr.project, adr.id, userId),
     );
     await stageAdrReviewFix(adr.id, userId, fixedContent, comment.id);
     res.json({ ok: true });
@@ -716,7 +740,7 @@ router.post('/:id/regenerate-proposed-section', requirePermission('adr:view'), r
       String(body.feedback).trim(),
       projectConfig?.prdReviewBedrockModelId,
       projectConfig?.prdReviewBedrockMaxTokens,
-      { feature: 'other', project: adr.project, entityType: 'adr', entityId: adr.id, userId },
+      adrUsageCtx(adr.project, adr.id, userId),
     );
     await stageAdrReviewFix(adr.id, userId, revised, adr.fixCommentId ?? null);
     const updated = await getAdr(adr.id);

@@ -1403,6 +1403,25 @@ router.get('/releases/:epicId/related-items', async (req: Request, res: Response
   }
 });
 
+// GET /api/releases/:epicId/cycle-time — last In Progress → last Done/Closed for related items
+router.get('/releases/:epicId/cycle-time', async (req: Request, res: Response) => {
+  try {
+    const epicId = parseInt(req.params.epicId, 10);
+    const { project, areaPath } = req.query as { project?: string; areaPath?: string };
+
+    if (isNaN(epicId)) {
+      return res.status(400).json({ error: 'Invalid epic ID' });
+    }
+
+    const adoService = new AzureDevOpsService(project, areaPath);
+    const cycleTime = await adoService.getRelatedItemsCycleTime(epicId);
+    res.json(cycleTime);
+  } catch (error: any) {
+    console.error('Error fetching related items cycle time:', error);
+    res.status(500).json({ error: 'Failed to fetch related items cycle time' });
+  }
+});
+
 // DELETE /api/releases/:epicId - Delete a release epic
 router.delete('/releases/:epicId', async (req: Request, res: Response) => {
   try {
@@ -4040,6 +4059,11 @@ import {
   getRestrictedAccessByEmail,
 } from '../services/restrictedAccessService';
 import { RESTRICTED_ACCESS_PROJECT } from '../../shared/types/restrictedAccess';
+import {
+  isGenerationSoundId,
+  normalizeGenerationSoundPreferences,
+} from '../../shared/types/notification';
+import type { UpdatePreferencesRequest } from '../../shared/types/rbac';
 
 router.get('/changelog', async (_req: Request, res: Response): Promise<void> => {
   try {
@@ -4084,6 +4108,12 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
     if (superAdmin && !roles.includes('admin')) {
       roles.push('admin');
     }
+    const soundPrefs = normalizeGenerationSoundPreferences({
+      generationSoundEnabled: changelogPrefs.generationSoundEnabled,
+      generationSoundId: isGenerationSoundId(changelogPrefs.generationSoundId)
+        ? changelogPrefs.generationSoundId
+        : undefined,
+    });
     res.json({
       permissions: [...permSet],
       roles,
@@ -4096,6 +4126,8 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
       lastSeenChangelogVersion: whatsNew.lastSeenVersion,
       showChangelogOnLogin: whatsNew.showOnLogin,
       betaAnnouncementDismissed: changelogPrefs.dismissedBetaProdAnnouncement,
+      generationSoundEnabled: soundPrefs.generationSoundEnabled,
+      generationSoundId: soundPrefs.generationSoundId,
       whatsNew,
       restrictedAccess: restrictedActive && restricted
         ? { modules: restricted.modules, project: RESTRICTED_ACCESS_PROJECT }
@@ -4106,9 +4138,30 @@ router.get('/me/permissions', attachPermissions, async (req: Request, res: Respo
   }
 });
 
+// ── GET /api/me/preferences ───────────────────────────────────────────────────
+// Returns the authenticated user's UI preferences (generation sound, etc.).
+
+router.get('/me/preferences', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = (req.user as any)?.profile?.oid;
+    if (!userId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const prefs = await getChangelogPrefs(userId);
+    const soundPrefs = normalizeGenerationSoundPreferences({
+      generationSoundEnabled: prefs.generationSoundEnabled,
+      generationSoundId: prefs.generationSoundId,
+    });
+    res.json(soundPrefs);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // ── PATCH /api/me/preferences ─────────────────────────────────────────────────
 // Updates the authenticated user's preferences.
-// Body: { markChangelogRead?: boolean; lastSeenVersion?: string; showChangelogOnLogin?: boolean; dismissBetaAnnouncement?: boolean }
+// Body: { markChangelogRead?: boolean; lastSeenVersion?: string; showChangelogOnLogin?: boolean; dismissBetaAnnouncement?: boolean; generationSoundEnabled?: boolean; generationSoundId?: string }
 
 router.patch('/me/preferences', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -4117,12 +4170,14 @@ router.patch('/me/preferences', async (req: Request, res: Response): Promise<voi
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-    const { markChangelogRead, lastSeenVersion, showChangelogOnLogin, dismissBetaAnnouncement } = req.body as {
-      markChangelogRead?: boolean;
-      lastSeenVersion?: string;
-      showChangelogOnLogin?: boolean;
-      dismissBetaAnnouncement?: boolean;
-    };
+    const {
+      markChangelogRead,
+      lastSeenVersion,
+      showChangelogOnLogin,
+      dismissBetaAnnouncement,
+      generationSoundEnabled,
+      generationSoundId,
+    } = req.body as UpdatePreferencesRequest;
 
     let whatsNew = await evaluateWhatsNewState(userId);
 
@@ -4152,7 +4207,31 @@ router.patch('/me/preferences', async (req: Request, res: Response): Promise<voi
       await updateChangelogPrefs(userId, { dismissedBetaProdAnnouncement: true });
     }
 
-    res.json({ ok: true, whatsNew });
+    if (
+      typeof generationSoundEnabled === 'boolean'
+      || generationSoundId !== undefined
+    ) {
+      if (generationSoundId !== undefined && !isGenerationSoundId(generationSoundId)) {
+        res.status(400).json({ error: 'Invalid generationSoundId' });
+        return;
+      }
+      await updateChangelogPrefs(userId, {
+        ...(typeof generationSoundEnabled === 'boolean'
+          ? { generationSoundEnabled }
+          : {}),
+        ...(generationSoundId !== undefined
+          ? { generationSoundId }
+          : {}),
+      });
+    }
+
+    const prefs = await getChangelogPrefs(userId);
+    const soundPrefs = normalizeGenerationSoundPreferences({
+      generationSoundEnabled: prefs.generationSoundEnabled,
+      generationSoundId: prefs.generationSoundId,
+    });
+
+    res.json({ ok: true, whatsNew, ...soundPrefs });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -4252,6 +4331,26 @@ router.get('/skill-config', async (req: Request, res: Response) => {
       prototypeWebReferencesEnabled: config.prototypeWebReferencesEnabled ?? false,
       quickSkillPills: config.quickSkillPills ?? null,
       quickMcpPills: config.quickMcpPills ?? null,
+      interviewEffort: config.interviewEffort ?? null,
+      prdEffort: config.prdEffort ?? null,
+      adrEffort: config.adrEffort ?? null,
+      designDocEffort: config.designDocEffort ?? null,
+      designDocAssistantEffort: config.designDocAssistantEffort ?? null,
+      designPrototypeEffort: config.designPrototypeEffort ?? null,
+      testCaseEffort: config.testCaseEffort ?? null,
+      designDocValidationEffort: config.designDocValidationEffort ?? null,
+      prdAssistantEffort: config.prdAssistantEffort ?? null,
+      prdValidationEffort: config.prdValidationEffort ?? null,
+      developmentEffort: config.developmentEffort ?? null,
+      standupEffort: config.standupEffort ?? null,
+      featureRequestEffort: config.featureRequestEffort ?? null,
+      technicalEffort: config.technicalEffort ?? null,
+      issueEffort: config.issueEffort ?? null,
+      calendarAssistantEffort: config.calendarAssistantEffort ?? null,
+      loadTestGenerationEffort: config.loadTestGenerationEffort ?? null,
+      designModuleEffort: config.designModuleEffort ?? null,
+      designModuleScopingEffort: config.designModuleScopingEffort ?? null,
+      defaultEffort: config.defaultEffort ?? null,
     });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
@@ -4369,6 +4468,7 @@ router.post(
 
         const thread = await createThread(userId, {
           project,
+          agentModule: 'calendarAssistant',
           repo: skillConfig?.skillRepo ?? project,
           branch: skillConfig?.skillBranch ?? 'main',
           skillProvider: (skillConfig?.skillProvider as any) ?? 'ado',

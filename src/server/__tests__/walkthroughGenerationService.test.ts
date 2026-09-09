@@ -107,6 +107,7 @@ import {
   cancelGeneration,
   DEFAULT_WALKTHROUGH_GENERATION_SKILL_PATH,
   DEFAULT_GENERATION_ANCHOR_RANK_LIMIT,
+  DEFAULT_GENERATION_AUTHORING_CATALOG_LIMIT,
   WALKTHROUGH_GENERATION_KICKOFF_MESSAGE,
   buildGenerationAnchorRankingQuery,
   buildWalkthroughGenerationAnchorRanking,
@@ -541,6 +542,45 @@ describe('walkthroughGenerationService', () => {
       expect(freeform).toContain('None — choose from ranked recommendations during staged review');
     });
 
+    it('caps the kickoff catalog listing once the catalog grows past the limit', async () => {
+      const baseline = baselineCatalog();
+      const bulk = Array.from({ length: 900 }, (_, i) => ({
+        ...baseline[0],
+        id: `bulk-${i}`,
+        anchorKey: `bulk-anchor-${i}`,
+        testId: `bulk-anchor-${i}`,
+        label: `Bulk Anchor ${i}`,
+        smartTags: ['bulk', 'button', 'all-users'],
+      }));
+      mockCatalogPage([...baseline, ...bulk]);
+      mockedListAuthoringAnchorEntries.mockResolvedValue(
+        [...baseline, ...bulk].map((record) => ({
+          key: record.anchorKey,
+          testId: record.testId,
+          label: record.label,
+          targetRoute: record.approvedRoute ?? record.suggestedRoute,
+          allowedPlacements: record.allowedPlacements,
+          smartTags: record.smartTags,
+          openerAnchorKeys: record.openerAnchorKeys ?? [],
+          sourceLocations: record.sourceLocations,
+        })) as WalkthroughAnchorRegistryEntry[],
+      );
+
+      await startGeneration({ projectId: PROJECT_ID, intent: 'profile bio' }, USER_ID);
+
+      const freeform = mockedCreateThread.mock.calls[0][1].freeformContext as string;
+      const catalogSection = freeform.slice(
+        freeform.indexOf('## Authoring Catalog Anchors'),
+      );
+      const listedKeys = catalogSection.match(/"key": "/g) ?? [];
+      expect(listedKeys).toHaveLength(DEFAULT_GENERATION_AUTHORING_CATALOG_LIMIT);
+      expect(freeform).toContain(
+        `Showing the ${DEFAULT_GENERATION_AUTHORING_CATALOG_LIMIT} anchors most relevant to this intent, out of ${baseline.length + bulk.length} approved + active anchors.`,
+      );
+      // Kickoff context must stay small enough for the agent to read inside its policy timeout.
+      expect(freeform.length).toBeLessThan(150_000);
+    });
+
     it('continues generation when catalog ranking load fails', async () => {
       mockedListAnchors.mockRejectedValue(new Error('catalog unavailable'));
 
@@ -796,6 +836,36 @@ describe('walkthroughGenerationService', () => {
       const result = await getGenerationResult(THREAD_ID, USER_ID);
       expect(result.status).toBe('failed');
       expect(result.error).toContain('mcp:search_repo_code exceeded owner deadline');
+    });
+
+    it('returns ready as soon as output exists, even while the agent turn is still running', async () => {
+      let resolveSend!: () => void;
+      mockedSendMessage.mockReturnValue(
+        new Promise<void>((resolve) => {
+          resolveSend = resolve;
+        }) as never,
+      );
+
+      await startGeneration(
+        { projectId: PROJECT_ID, intent: 'Create a tour of the profile page' },
+        USER_ID,
+      );
+
+      mockedDb.query.chatThreads.findFirst.mockResolvedValue({
+        userId: USER_ID,
+        workspaceDir: '/tmp/ws',
+        status: 'running',
+        lastError: null,
+      });
+      mockFs.existsSync.mockReturnValue(true);
+      mockFs.readFileSync.mockReturnValue(VALID_OUTPUT);
+      mockedIsThreadIdle.mockReturnValue(false);
+
+      const result = await getGenerationResult(THREAD_ID, USER_ID);
+      expect(result.status).toBe('ready');
+      expect(result.proposal).toBeDefined();
+
+      resolveSend();
     });
 
     it('stays pending while kickoff sendMessage is still in flight', async () => {

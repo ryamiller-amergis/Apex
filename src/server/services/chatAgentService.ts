@@ -14,6 +14,7 @@ import type {
   ChatAttachmentMeta,
   ChatThread,
   ChatMessage,
+  ChatTurnSkill,
   ChatThreadKickoff,
   AgentRunEventEnvelope,
   AgentRunPhase,
@@ -25,9 +26,8 @@ import type {
 } from '../../shared/types/chat';
 import { isAzureWwwroot, resolveDataRoot } from '../utils/dataDir';
 import {
-  recordAiUsage,
+  recordCursorChatUsage,
   estimateTokens,
-  resolveFeatureFromKickoff,
 } from './aiUsageService';
 import {
   upsertThread as pgUpsertThread,
@@ -81,7 +81,7 @@ import {
   triggerTestCaseGeneration,
 } from './testCaseService';
 import type { ValidationScorecard } from '../../shared/types/interview';
-import { normalizeValidationScorecard } from '../../shared/utils/validationReport';
+import { parseAgentValidationScorecard, buildUnusableValidationScorecard, NO_SCORECARD_REASON } from '../../shared/utils/validationReport';
 import type {
   ChatThreadSearchResult,
   ChatThreadSummary,
@@ -143,9 +143,16 @@ import {
   sanitizeCursorTerminalDetail,
   ThinkingPhaseCoalescer,
   type CursorExecutionRun,
+  type CursorTokenUsage,
 } from './cursorExecutionCore';
 import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
 import type { RepositoryPreparationTarget } from './repositoryPreparationService';
+import {
+  buildCursorModelSelection,
+  deriveAgentModule,
+  resolveEffort,
+  resolveSelectedEffort,
+} from './agentEffortResolver';
 
 export { ThinkingPhaseCoalescer } from './cursorExecutionCore';
 
@@ -196,6 +203,8 @@ interface ThreadState {
   bindingContinuity: BindingContinuityDecision | null;
   /** Server-local checkout used only while this process owns the profile. */
   groundingWorkspaceDir: string | null;
+  /** Incremented by Stop so turn preparation can detect cancellation across awaits. */
+  cancellationEpoch: number;
 }
 
 const threads = new Map<string, ThreadState>();
@@ -638,6 +647,8 @@ export function buildMcpServers(
     restrictRepoSearch?: boolean;
     groundingProfileId?: GroundingProfileId;
     enableRepoBrowse?: boolean;
+    /** Mount ADO operational tools for a skill even when its repo is on GitHub. */
+    requireAdoTools?: boolean;
     /**
      * When native (in-process) repository reads are engaged, the provider
      * repo-read MCP servers are redundant. In that case we DE-MOUNT any server
@@ -695,7 +706,11 @@ export function buildMcpServers(
   // for ADO callers so work-item and wiki tools remain available, while
   // enableRepoBrowse=false strips the redundant repository-read surface.
   const documentAssistant = Boolean(resolveDocumentAssistantType(kickoff));
-  if (kickoff.skillProvider !== 'github' || documentAssistant) {
+  if (
+    kickoff.skillProvider !== 'github' ||
+    documentAssistant ||
+    options?.requireAdoTools
+  ) {
     const profilePath = options?.groundingProfileId
       ? `/grounding/${options.groundingProfileId}`
       : '';
@@ -775,6 +790,7 @@ export async function prepareRepositoryReadRuntime(options: {
   maxviewEnabled?: boolean;
   calendarSessionId?: string;
   restrictRepoSearch?: boolean;
+  requireAdoTools?: boolean;
 }): Promise<RepositoryReadRuntime> {
   const requestedNative =
     options.grounding.mode === 'local' && options.grounding.nativeReads;
@@ -827,6 +843,7 @@ export async function prepareRepositoryReadRuntime(options: {
     groundingProfileId,
     enableRepoBrowse: !nativeReads && !suppressProviderRepoMcp,
     nativeReads: nativeReads || suppressProviderRepoMcp,
+    requireAdoTools: options.requireAdoTools,
   });
   const local: LocalAgentOptions = {
     cwd: options.sandboxCwd,
@@ -2119,6 +2136,7 @@ async function buildNewAgentTurnPrompt(
 export interface PreparedBackgroundWorkflowTurn {
   prompt: string;
   model: string;
+  effort?: import('../../shared/types/effort').EffortLevel;
   skillPath: string;
   projectId: string;
   threadWorkspacePath: string;
@@ -2189,6 +2207,7 @@ export async function prepareBackgroundWorkflowTurn(
       groundingProvenance,
     }),
     model: resolveModelId(kickoff.model),
+    effort: kickoff.effort,
     skillPath: kickoff.skillPath ?? '',
     projectId: kickoff.project,
     threadWorkspacePath: state.thread.workspaceDir,
@@ -2375,6 +2394,7 @@ function makeStartupDeadlineError(
 }
 
 const AGENT_DISPOSAL_TIMEOUT_MS = 10_000;
+const AGENT_RUN_CANCEL_TIMEOUT_MS = 3_000;
 
 export function sanitizeTerminalDetail(detail: string): string {
   return sanitizeCursorTerminalDetail(detail);
@@ -2439,11 +2459,17 @@ async function cancelSdkRunBestEffort(
         opts: { runtime: 'local'; cwd: string }
       ) => Promise<AgentRunHandle>;
     };
-    const run = await (Agent as AgentWithGetRun).getRun(runId, {
-      runtime: 'local',
-      cwd: state.thread.workspaceDir,
-    });
-    if (run.supports('cancel')) await run.cancel();
+    await raceWithTimeout(
+      'Cursor SDK run cancellation',
+      AGENT_RUN_CANCEL_TIMEOUT_MS,
+      async () => {
+        const run = await (Agent as AgentWithGetRun).getRun(runId, {
+          runtime: 'local',
+          cwd: state.thread.workspaceDir,
+        });
+        if (run.supports('cancel')) await run.cancel();
+      }
+    );
   } catch {
     // Best-effort — dispose below is the hard guarantee.
   }
@@ -2818,6 +2844,7 @@ async function ensureThreadState(
     resolvedGroundingBinding: null,
     bindingContinuity: null,
     groundingWorkspaceDir: null,
+    cancellationEpoch: 0,
   };
   threads.set(threadId, state);
   resetIdleTimer(state);
@@ -2902,12 +2929,29 @@ export async function createThread(
 
   // Opt interview threads into live web research (web MCP + scope carve-out) when the project enables it.
   const enrichedKickoff = await enrichKickoffForInterviewWebResearch(kickoff);
+  const { resolveSkillConfig } = await import('./projectSettingsService');
+  const skillConfig = await resolveSkillConfig({
+    project: enrichedKickoff.project,
+    settingsId: enrichedKickoff.skillSettingsId ?? undefined,
+  });
+  const agentModule =
+    enrichedKickoff.agentModule ??
+    deriveAgentModule(enrichedKickoff, skillConfig);
+  const kickoffWithModule = agentModule
+    ? { ...enrichedKickoff, agentModule }
+    : enrichedKickoff;
+  const effort = resolveEffort({
+    kickoff: kickoffWithModule,
+    skillConfig,
+    selectedEffort: resolveSelectedEffort(kickoffWithModule, skillConfig),
+  });
 
   // Resolve branch
   const branch = enrichedKickoff.branch ?? 'main';
   const resolvedKickoff = {
-    ...enrichedKickoff,
+    ...kickoffWithModule,
     branch,
+    effort,
     dependenciesPrepared:
       options?.dependenciesPrepared ?? enrichedKickoff.dependenciesPrepared,
   };
@@ -2941,6 +2985,7 @@ export async function createThread(
     resolvedGroundingBinding: null,
     bindingContinuity: null,
     groundingWorkspaceDir: null,
+    cancellationEpoch: 0,
   };
 
   threads.set(threadId, state);
@@ -3434,37 +3479,23 @@ async function syncOutputToDbFromWorkspace(
           cleanupWorkspaceDir(workspaceDir);
           return;
         }
-        const scorecard = normalizeValidationScorecard(JSON.parse(scorecardRaw));
-        if (!scorecard) {
-          await db
-            .update(designDocs)
-            .set({
-              status: 'pending_review',
-              updatedAt: new Date().toISOString(),
-            })
-            .where(
-              and(
-                eq(designDocs.id, ddValRow.id),
-                eq(designDocs.status, 'validating')
-              )
-            );
-          console.warn(
-            `[chat] post-run: validation scorecard carries no usable overall score — moved to pending_review (designDocId=${ddValRow.id})`
-          );
-          fullySynced = true;
-        } else {
-          const reportMd = readOutputValidationScorecardMd(threadId) ?? undefined;
-          await syncValidationResult(ddValRow.id, scorecard, reportMd);
-          console.log(
-            `[chat] post-run: synced validation scorecard to DB (designDocId=${ddValRow.id})`
-          );
-          fullySynced = true;
-        }
+        const scorecard = parseAgentValidationScorecard(scorecardRaw);
+        const reportMd = readOutputValidationScorecardMd(threadId) ?? undefined;
+        await syncValidationResult(ddValRow.id, scorecard, reportMd);
+        console.log(
+          `[chat] post-run: synced validation scorecard to DB (designDocId=${ddValRow.id})`
+        );
+        fullySynced = true;
       } catch (err) {
         console.error(
           `[chat] post-run: failed to parse validation scorecard`,
           err
         );
+        await syncValidationResult(
+          ddValRow.id,
+          buildUnusableValidationScorecard(NO_SCORECARD_REASON),
+        );
+        fullySynced = true;
       }
     } else {
       // Agent completed but wrote no scorecard file.
@@ -3480,15 +3511,12 @@ async function syncOutputToDbFromWorkspace(
         freshDoc?.validationThreadId === threadId &&
         freshDoc?.status === 'validating'
       ) {
-        await db
-          .update(designDocs)
-          .set({
-            status: 'pending_review',
-            updatedAt: new Date().toISOString(),
-          })
-          .where(eq(designDocs.id, ddValRow.id));
+        await syncValidationResult(
+          ddValRow.id,
+          buildUnusableValidationScorecard(NO_SCORECARD_REASON),
+        );
         console.warn(
-          `[chat] post-run: validation agent wrote no scorecard — moved to pending_review (designDocId=${ddValRow.id})`
+          `[chat] post-run: validation agent wrote no scorecard (designDocId=${ddValRow.id})`
         );
       }
       fullySynced = true; // workspace can be cleaned
@@ -3539,45 +3567,47 @@ async function syncOutputToDbFromWorkspace(
           cleanupWorkspaceDir(workspaceDir);
           return;
         }
-        const scorecard = normalizeValidationScorecard(JSON.parse(scorecardRaw));
-        if (!scorecard) {
-          await db
-            .update(prds)
-            .set({ status: 'draft', updatedAt: new Date().toISOString() })
-            .where(
-              and(eq(prds.id, prdValRow.id), eq(prds.status, 'validating'))
-            );
-          console.warn(
-            `[chat] post-run: PRD validation scorecard carries no usable overall score — reset to draft (prdId=${prdValRow.id})`
-          );
-          fullySynced = true;
-        } else {
-          const reportMd = readOutputValidationScorecardMd(threadId) ?? undefined;
-          const { generateFallbackReport } =
-            await import('./documentValidationService');
-          const effectiveReportMd = reportMd ?? generateFallbackReport(scorecard);
-          const newStatus = scorecard.is_ready ? 'pending_review' : 'draft';
-          await db
-            .update(prds)
-            .set({
-              validationScore: Math.round(scorecard.overall_score),
-              validationScorecard: scorecard,
-              validationPhase: scorecard.review_phase,
-              validationReportMd: effectiveReportMd,
-              status: newStatus,
-              updatedAt: new Date().toISOString(),
-            })
-            .where(eq(prds.id, prdValRow.id));
-          console.log(
-            `[chat] post-run: synced PRD validation scorecard to DB (prdId=${prdValRow.id})`
-          );
-          fullySynced = true;
-        }
+        const scorecard = parseAgentValidationScorecard(scorecardRaw);
+        const reportMd = readOutputValidationScorecardMd(threadId) ?? undefined;
+        const { generateFallbackReport } =
+          await import('./documentValidationService');
+        const effectiveReportMd = reportMd ?? generateFallbackReport(scorecard);
+        const newStatus = scorecard.is_ready ? 'pending_review' : 'draft';
+        await db
+          .update(prds)
+          .set({
+            validationScore: Math.round(scorecard.overall_score),
+            validationScorecard: scorecard,
+            validationPhase: scorecard.review_phase,
+            validationReportMd: effectiveReportMd,
+            status: newStatus,
+            updatedAt: new Date().toISOString(),
+          })
+          .where(eq(prds.id, prdValRow.id));
+        console.log(
+          `[chat] post-run: synced PRD validation scorecard to DB (prdId=${prdValRow.id})`
+        );
+        fullySynced = true;
       } catch (err) {
         console.error(
           `[chat] post-run: failed to parse PRD validation scorecard`,
           err
         );
+        const { generateFallbackReport } =
+          await import('./documentValidationService');
+        const scorecard = buildUnusableValidationScorecard(NO_SCORECARD_REASON);
+        await db
+          .update(prds)
+          .set({
+            validationScore: 0,
+            validationScorecard: scorecard,
+            validationPhase: scorecard.review_phase,
+            validationReportMd: generateFallbackReport(scorecard),
+            status: 'draft',
+            updatedAt: new Date().toISOString(),
+          })
+          .where(and(eq(prds.id, prdValRow.id), eq(prds.status, 'validating')));
+        fullySynced = true;
       }
     } else {
       const freshPrd = await db.query.prds.findFirst({
@@ -3588,12 +3618,22 @@ async function syncOutputToDbFromWorkspace(
         freshPrd?.validationThreadId === threadId &&
         freshPrd?.status === 'validating'
       ) {
+        const { generateFallbackReport } =
+          await import('./documentValidationService');
+        const scorecard = buildUnusableValidationScorecard(NO_SCORECARD_REASON);
         await db
           .update(prds)
-          .set({ status: 'draft', updatedAt: new Date().toISOString() })
+          .set({
+            validationScore: 0,
+            validationScorecard: scorecard,
+            validationPhase: scorecard.review_phase,
+            validationReportMd: generateFallbackReport(scorecard),
+            status: 'draft',
+            updatedAt: new Date().toISOString(),
+          })
           .where(eq(prds.id, prdValRow.id));
         console.warn(
-          `[chat] post-run: PRD validation agent wrote no scorecard, reset to draft (prdId=${prdValRow.id})`
+          `[chat] post-run: PRD validation agent wrote no scorecard (prdId=${prdValRow.id})`
         );
       }
       fullySynced = true;
@@ -3927,6 +3967,60 @@ export function isInteractiveWorkspaceBoundSkill(
   );
 }
 
+/**
+ * The interactive actor currently exposes only pinned repository read tools.
+ * Route a turn in-process when its fully prepared prompt requires an MCP-only
+ * operation. Matching named tools keeps repository-only skills interactive
+ * while allowing skills to declare their dependency in their own SKILL.md.
+ */
+const INTERACTIVE_UNAVAILABLE_MCP_MARKERS = [
+  'ado-skills',
+  'update_design_doc',
+  'update_prd',
+  'update_adr',
+  'resolve_prd_comment',
+  'add_test_case',
+  'list_wikis',
+  'list_wiki_pages',
+  'get_wiki_page',
+  'query_work_items',
+  'get_work_item_history',
+  'get_work_item_comment_history',
+  'create_work_items',
+  'update_work_item',
+  'add_work_item_comment',
+  'get_standup_session',
+  'create_standup_followup',
+  'complete_standup_session',
+  'propose_work_item_changes',
+] as const;
+
+export function interactivePromptRequiresInProcessMcp(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  return INTERACTIVE_UNAVAILABLE_MCP_MARKERS.some((marker) =>
+    normalized.includes(marker)
+  );
+}
+
+const ADO_OPERATIONAL_SKILL_MARKERS = [
+  'scrum-assistant',
+  'scrum-master-health',
+  'daily-standup',
+] as const;
+
+export function skillRequiresAdoOperations(
+  skillPath: string | null | undefined,
+  skillName?: string | null
+): boolean {
+  const normalized = `${skillPath ?? ''} ${skillName ?? ''}`
+    .replace(/\\/g, '/')
+    .toLowerCase()
+    .replace(/\s+/g, '-');
+  return ADO_OPERATIONAL_SKILL_MARKERS.some((marker) =>
+    normalized.includes(marker)
+  );
+}
+
 export function resolveInteractiveWorkflowClass(
   state: ThreadState
 ): InteractiveWorkflowClass {
@@ -3978,6 +4072,21 @@ interface InteractiveDispatchAttempt {
   bypassReason?: string;
 }
 
+interface ChatSendOptions {
+  hidden?: boolean;
+  turnSkill?: ChatTurnSkill;
+}
+
+export function buildTurnPrompt(text: string, turnSkill?: ChatTurnSkill): string {
+  if (!turnSkill) return text;
+  return [
+    `Run skill: ${turnSkill.name} (\`${turnSkill.path}\`)`,
+    '',
+    'User request:',
+    text,
+  ].join('\n');
+}
+
 /** Bound interactive prep so a grounding hang cannot swallow the fire-and-forget turn. */
 function resolveInteractiveDispatchAttemptTimeoutMs(): number {
   const raw = Number.parseInt(
@@ -4004,7 +4113,8 @@ async function tryDispatchInteractiveTurn(
   text: string,
   modelOverride?: string,
   attachments: ChatAttachment[] = [],
-  options?: { hidden?: boolean }
+  options?: ChatSendOptions,
+  expectedCancellationEpoch = 0
 ): Promise<InteractiveDispatchAttempt> {
   // Inert unless the actor host dispatch URL is configured (cloud only).
   if (!process.env[INTERACTIVE_DISPATCH_URL_ENV]?.trim()) {
@@ -4085,13 +4195,28 @@ async function tryDispatchInteractiveTurn(
       if (!state || state.thread.status === 'running') {
         return bypass(!state ? 'thread-missing' : 'thread-already-running');
       }
+      const wasCancelled = () =>
+        state.cancellationEpoch !== expectedCancellationEpoch;
+      if (wasCancelled()) return bypass('cancel-requested');
+      const turnSkillPath =
+        options?.turnSkill?.path ?? state.thread.kickoff.skillPath;
+      const turnSkillName =
+        options?.turnSkill?.name ?? state.thread.kickoff.pillLabel;
+      if (skillRequiresAdoOperations(turnSkillPath, turnSkillName)) {
+        return bypass('ado-skill-capability');
+      }
       // Walkthrough smart-tagging / generation / discovery (and similar
       // file-output skills) inject kickoff context into thread.workspaceDir and
       // poll that same tree for `.ai-pilot/output/*`. Actor dispatch uses the
       // shared grounding checkout instead, so candidates never arrive and the
       // status poller never finds the artifact (prod Sync review failure).
-      if (isInteractiveWorkspaceBoundSkill(state.thread.kickoff.skillPath)) {
+      if (isInteractiveWorkspaceBoundSkill(turnSkillPath)) {
         return bypass('workspace-bound-skill');
+      }
+      // Custom MCP pills are arbitrary by design and cannot execute in the
+      // actor while its MCP map is intentionally empty.
+      if (state.thread.kickoff.mcpPill) {
+        return bypass('custom-mcp-pill');
       }
       const userId = state.thread.userId;
       const project = state.thread.kickoff.project;
@@ -4113,6 +4238,7 @@ async function tryDispatchInteractiveTurn(
         return bypass('flag-evaluation-error');
       }
       if (timedOut) return bypass('timeout-abort');
+      if (wasCancelled()) return bypass('cancel-requested');
       if (!interactiveEnabled) {
         return bypass('flag-disabled');
       }
@@ -4120,6 +4246,7 @@ async function tryDispatchInteractiveTurn(
       markStage('ground-turn');
       const grounding = await ensureThreadGrounding(state);
       if (timedOut) return bypass('timeout-abort');
+      if (wasCancelled()) return bypass('cancel-requested');
       if (grounding.mode !== 'local' || !grounding.nativeReads) {
         return bypass(
           grounding.mode !== 'local'
@@ -4135,6 +4262,7 @@ async function tryDispatchInteractiveTurn(
           grounding.profileId
         );
       if (timedOut) return bypass('timeout-abort');
+      if (wasCancelled()) return bypass('cancel-requested');
       if (
         !isExactGroundingReader(repoReader, grounding, state.thread.kickoff)
       ) {
@@ -4143,12 +4271,19 @@ async function tryDispatchInteractiveTurn(
       state.groundingWorkspaceDir = grounding.cwd;
 
       markStage('prepare-turn');
+      const turnKickoff = options?.turnSkill
+        ? {
+            ...state.thread.kickoff,
+            skillPath: turnSkillPath?.replace(/^\//, ''),
+            pillLabel: options.turnSkill.name,
+          }
+        : state.thread.kickoff;
       const recoveryContext = state.isInterviewThread
         ? buildAgentRecoveryContext(state.thread.messages)
         : null;
       const prompt = await buildNewAgentTurnPrompt(
-        state.thread.kickoff,
-        text,
+        turnKickoff,
+        buildTurnPrompt(text, options?.turnSkill),
         false,
         recoveryContext,
         {
@@ -4163,10 +4298,15 @@ async function tryDispatchInteractiveTurn(
         }
       );
       if (timedOut) return bypass('timeout-abort');
-      const skillPath = state.thread.kickoff.skillPath ?? '';
+      if (wasCancelled()) return bypass('cancel-requested');
+      if (interactivePromptRequiresInProcessMcp(prompt)) {
+        return bypass('mcp-tools-required');
+      }
+      const skillPath = turnSkillPath ?? '';
       const snapshot: ExecutionSnapshot = {
         prompt,
         model: resolveModelId(modelOverride ?? state.thread.kickoff.model),
+        effort: state.thread.kickoff.effort,
         workspaceRef: grounding.cwd,
         workflowClass,
         skillPath,
@@ -4199,6 +4339,14 @@ async function tryDispatchInteractiveTurn(
         queuedRunId = undefined;
         return bypass('timeout-abort');
       }
+      if (wasCancelled()) {
+        await db
+          .delete(agentRuns)
+          .where(eq(agentRuns.id, enqueued.runId))
+          .catch(() => {});
+        queuedRunId = undefined;
+        return bypass('cancel-requested');
+      }
 
       markStage('route');
       const decision = await interactiveWorkflowRouter.route({
@@ -4208,6 +4356,9 @@ async function tryDispatchInteractiveTurn(
         threadId,
         runId: enqueued.runId,
         dispatchToActor: async (d) => {
+          if (wasCancelled()) {
+            throw new Error('Interactive dispatch cancelled before actor post');
+          }
           if (timedOut) {
             throw new Error('Interactive dispatch timed out before actor post');
           }
@@ -4362,7 +4513,7 @@ export async function sendMessage(
   text: string,
   modelOverride?: string,
   attachments: ChatAttachment[] = [],
-  options?: { hidden?: boolean }
+  options?: ChatSendOptions
 ): Promise<void> {
   const sendStartedAt = Date.now();
   console.log('[chat] sendMessage.start', {
@@ -4375,6 +4526,11 @@ export async function sendMessage(
     attachmentCount: String(attachments.length),
     hidden: String(Boolean(options?.hidden)),
   });
+  const state = await ensureThreadState(threadId);
+  if (!state) throw new Error(`Thread ${threadId} not found`);
+  const expectedCancellationEpoch = state.cancellationEpoch;
+  const turnWasCancelled = () =>
+    state.cancellationEpoch !== expectedCancellationEpoch;
 
   // @feature-flag:ai-runs-interactive start winner=disabled
   // FEAT-007: offload the turn to the warm Dapr actor lane when enabled + admitted.
@@ -4384,7 +4540,8 @@ export async function sendMessage(
     text,
     modelOverride,
     attachments,
-    options
+    options,
+    expectedCancellationEpoch
   );
   trackEvent(
     'chat.send.interactive_result',
@@ -4404,10 +4561,9 @@ export async function sendMessage(
   if (interactiveAttempt.dispatched) {
     return;
   }
+  if (turnWasCancelled()) return;
   // @feature-flag:ai-runs-interactive end
 
-  const state = await ensureThreadState(threadId);
-  if (!state) throw new Error(`Thread ${threadId} not found`);
   const myWorkContext = state.isDevSession
     ? await getMyWorkSessionContext(threadId).catch(() => null)
     : null;
@@ -4458,6 +4614,7 @@ export async function sendMessage(
   } catch {
     // Non-fatal — fall back to shared key
   }
+  if (turnWasCancelled()) return;
 
   // If the caller wants a different model, dispose the current agent so it
   // will be recreated (or resumed) with the new model on this turn.
@@ -4537,7 +4694,10 @@ export async function sendMessage(
     turnId,
     attachments
   );
-  const promptText = buildPromptWithAttachments(text, attachmentMeta);
+  const promptText = buildPromptWithAttachments(
+    buildTurnPrompt(text, options?.turnSkill),
+    attachmentMeta
+  );
   const priorMessages = interactiveAttempt.persistedUserMessage
     ? state.thread.messages.filter(
         (message) => message.id !== interactiveAttempt.persistedUserMessage?.id
@@ -4566,6 +4726,10 @@ export async function sendMessage(
     messageLength: userMsg.text.length,
     attachmentCount: attachmentMeta.length,
   });
+  if (turnWasCancelled()) {
+    await cancelRun(threadId);
+    return;
+  }
 
   // ── Grounding + agent lifecycle (may be slow after idle) ────────────────
   const mcpServerUrl = `http://localhost:${process.env.PORT ?? 3001}/mcp/ado-skills`;
@@ -4594,6 +4758,10 @@ export async function sendMessage(
       .where(eq(agentRuns.id, provisionalRunId))
       .catch(() => {});
     throw error;
+  }
+  if (turnWasCancelled()) {
+    await cancelRun(threadId);
+    return;
   }
   const groundingCaller = resolveGroundingCallerKey(state.thread.kickoff);
   const lifecycleTelemetryContext = {
@@ -4667,6 +4835,10 @@ export async function sendMessage(
     state.thread.kickoff.assistantType === 'calendar-work-item'
       ? (state.thread.kickoff.calendarAssistantSessionId ?? undefined)
       : undefined;
+  const turnRequiresAdoOperations = skillRequiresAdoOperations(
+    options?.turnSkill?.path ?? state.thread.kickoff.skillPath,
+    options?.turnSkill?.name ?? state.thread.kickoff.pillLabel
+  );
   const repositoryRuntime = await prepareRepositoryReadRuntime({
     grounding,
     kickoff: state.thread.kickoff,
@@ -4675,6 +4847,9 @@ export async function sendMessage(
     maxviewEnabled,
     calendarSessionId,
     restrictRepoSearch: state.isInterviewThread,
+    requireAdoTools:
+      turnRequiresAdoOperations ||
+      interactiveAttempt.bypassReason === 'mcp-tools-required',
   });
 
   // FEAT-003: live linked-context materialization (fail-open; never blocks the turn).
@@ -4723,6 +4898,9 @@ export async function sendMessage(
   let mcpDeadlineController: McpToolDeadlineController | null = null;
   let unsubscribeAbort: (() => void) | null = null;
   let heldLocalAgentSlot = false;
+  // Retained across attempts and visible to the error handler so a run that
+  // ultimately fails still reports the tokens it burned, rather than zeros.
+  let lastRunUsage: CursorTokenUsage | undefined;
 
   try {
     await acquireLocalAgentSlot(threadId);
@@ -4766,7 +4944,10 @@ export async function sendMessage(
             () =>
               Agent.resume(priorCursorAgentId!, {
                 apiKey,
-                model: { id: resolvedModel },
+                model: buildCursorModelSelection(
+                  resolvedModel,
+                  state.thread.kickoff.effort,
+                ),
                 local: localAgentOptions,
                 mcpServers,
                 agents: { 'code-reviewer': codeReviewerAgent },
@@ -4780,7 +4961,10 @@ export async function sendMessage(
             () =>
               Agent.create({
                 apiKey,
-                model: { id: resolvedModel },
+                model: buildCursorModelSelection(
+                  resolvedModel,
+                  state.thread.kickoff.effort,
+                ),
                 local: localAgentOptions,
                 mcpServers,
                 agents: { 'code-reviewer': codeReviewerAgent },
@@ -4854,7 +5038,12 @@ export async function sendMessage(
       });
     }
     // Send the prompt (retry up to 2x on transient errors)
-    const run = await retryWithBackoff(() => agent.send(prompt), {
+    const run = await retryWithBackoff(() => {
+      if (turnWasCancelled()) {
+        throw makeCancelledError('Run cancelled during preparation');
+      }
+      return agent.send(prompt);
+    }, {
       ...sdkRetryOpts,
       maxRetries: 2,
     });
@@ -5197,6 +5386,7 @@ export async function sendMessage(
         const executionSnapshot: Readonly<ExecutionSnapshot> = Object.freeze({
           prompt,
           model: resolvedModel,
+          effort: state.thread.kickoff.effort,
           workspaceRef: agentWorkspaceDir,
           workflowClass:
             state.thread.kickoff.assistantType ??
@@ -5308,6 +5498,7 @@ export async function sendMessage(
       } catch (streamErr) {
         firstEventDeadline?.clear();
         if (streamErr instanceof CursorExecutionWaitError) {
+          lastRunUsage = streamErr.usage ?? lastRunUsage;
           throw streamErr.cause;
         }
 
@@ -5361,13 +5552,19 @@ export async function sendMessage(
               () =>
                 Agent.create({
                   apiKey,
-                  model: { id: resolvedModel },
+                  model: buildCursorModelSelection(
+                    resolvedModel,
+                    state.thread.kickoff.effort,
+                  ),
                   local: localAgentOptions,
                   mcpServers,
                   agents: { 'code-reviewer': codeReviewerAgent },
                 }),
               sdkRetryOpts
             );
+            if (turnWasCancelled()) {
+              throw makeCancelledError('Run cancelled before retry');
+            }
             currentRun = await state.agent.send(prompt);
             state.thread.cursorAgentId =
               state.agent.agentId ?? state.thread.cursorAgentId;
@@ -5433,13 +5630,19 @@ export async function sendMessage(
                 resumePinnedTurnAgent(() =>
                   Agent.resume(state.thread.cursorAgentId!, {
                     apiKey,
-                    model: { id: resolvedModel },
+                    model: buildCursorModelSelection(
+                      resolvedModel,
+                      state.thread.kickoff.effort,
+                    ),
                     local: localAgentOptions,
                     mcpServers,
                   })
                 ),
               sdkRetryOpts
             );
+            if (turnWasCancelled()) {
+              throw makeCancelledError('Run cancelled before retry');
+            }
             currentRun = await state.agent.send(prompt);
             state.thread.activeRunId = getRunId(currentRun);
             continue;
@@ -5450,6 +5653,7 @@ export async function sendMessage(
 
       if (!executionResult) continue;
       agentTextBuffer = executionResult.text;
+      lastRunUsage = executionResult.usage ?? lastRunUsage;
       const result = executionResult.waitResult;
 
       if (result.status === 'error') {
@@ -5479,13 +5683,19 @@ export async function sendMessage(
                 resumePinnedTurnAgent(() =>
                   Agent.resume(state.thread.cursorAgentId!, {
                     apiKey,
-                    model: { id: resolvedModel },
+                    model: buildCursorModelSelection(
+                      resolvedModel,
+                      state.thread.kickoff.effort,
+                    ),
                     local: localAgentOptions,
                     mcpServers,
                   })
                 ),
               sdkRetryOpts
             );
+            if (turnWasCancelled()) {
+              throw makeCancelledError('Run cancelled before retry');
+            }
             currentRun = await state.agent.send(prompt);
             state.thread.activeRunId = getRunId(currentRun);
             continue;
@@ -5600,26 +5810,27 @@ export async function sendMessage(
         const kickoff =
           state.thread.kickoff ??
           ({} as import('../../shared/types/chat').ChatThreadKickoff);
-        const inputEst = estimateTokens(text ?? '');
-        const outputEst = estimateTokens(agentTextBuffer ?? '');
-        recordAiUsage({
-          provider: 'cursor',
+        // Real counts cover the whole prompt the model read — system prompt,
+        // skill, grounding docs, replayed history, tool output. The chars/4
+        // estimate covers only the two visible messages, so it undercounts
+        // heavily; use it only when the runtime reported nothing.
+        const usage = lastRunUsage;
+        void recordCursorChatUsage({
+          kickoff,
           modelId: resolvedModel,
-          feature: resolveFeatureFromKickoff(kickoff),
-          project: kickoff.project ?? 'unknown',
-          skillPath: kickoff.skillPath ?? undefined,
           threadId,
           runId: agentRunId ?? undefined,
           workItemId:
             kickoff.workItemId != null ? String(kickoff.workItemId) : undefined,
           userId: state.thread.userId ?? undefined,
-          inputTokens: inputEst,
-          outputTokens: outputEst,
-          tokenSource: 'estimated',
-          costUsd: 0,
-          costSource: 'estimated',
+          inputTokens: usage?.inputTokens ?? estimateTokens(text ?? ''),
+          outputTokens: usage?.outputTokens ?? estimateTokens(agentTextBuffer ?? ''),
+          cacheReadTokens: usage?.cacheReadTokens,
+          cacheWriteTokens: usage?.cacheWriteTokens,
+          tokenSource: usage ? 'exact' : 'estimated',
+          durationMs: Date.now() - runStartedAtMs,
           status: 'success',
-        });
+        }).catch(() => {});
       }
 
       break;
@@ -5856,22 +6067,20 @@ export async function sendMessage(
       const kickoff =
         state.thread?.kickoff ??
         ({} as import('../../shared/types/chat').ChatThreadKickoff);
-      recordAiUsage({
-        provider: 'cursor',
+      void recordCursorChatUsage({
+        kickoff,
         modelId: resolvedModel,
-        feature: resolveFeatureFromKickoff(kickoff),
-        project: kickoff.project ?? 'unknown',
-        skillPath: kickoff.skillPath ?? undefined,
         threadId,
         runId: agentRunId ?? undefined,
         userId: state.thread?.userId ?? undefined,
-        inputTokens: 0,
-        outputTokens: 0,
-        tokenSource: 'estimated',
-        costUsd: 0,
-        costSource: 'estimated',
+        inputTokens: lastRunUsage?.inputTokens ?? 0,
+        outputTokens: lastRunUsage?.outputTokens ?? 0,
+        cacheReadTokens: lastRunUsage?.cacheReadTokens,
+        cacheWriteTokens: lastRunUsage?.cacheWriteTokens,
+        tokenSource: lastRunUsage ? 'exact' : 'estimated',
+        durationMs: Date.now() - runStartedAtMs,
         status: 'error',
-      });
+      }).catch(() => {});
     }
 
     if (agentRunId) {
@@ -6009,9 +6218,16 @@ export async function recoverStaleRunningThread(
   return 'idle';
 }
 
+export const CANCELLABLE_AGENT_RUN_STATUSES = [
+  'queued',
+  'dispatched',
+  'running',
+] as const;
+
 export async function cancelRun(threadId: string): Promise<void> {
   const state = await ensureThreadState(threadId);
   if (!state) return;
+  state.cancellationEpoch += 1;
 
   let activeRunId = state.thread.activeRunId;
   if (!activeRunId) {
@@ -6019,7 +6235,7 @@ export async function cancelRun(threadId: string): Promise<void> {
     const latest = await db.query.agentRuns.findFirst({
       where: and(
         eq(agentRuns.threadId, threadId),
-        inArray(agentRuns.status, ['queued', 'running'])
+        inArray(agentRuns.status, [...CANCELLABLE_AGENT_RUN_STATUSES])
       ),
       orderBy: [desc(agentRuns.createdAt)],
       columns: { id: true },
@@ -6099,7 +6315,7 @@ export async function cancelRun(threadId: string): Promise<void> {
       .where(
         and(
           eq(agentRuns.id, activeRunId),
-          inArray(agentRuns.status, ['queued', 'running'])
+          inArray(agentRuns.status, [...CANCELLABLE_AGENT_RUN_STATUSES])
         )
       )
       .returning({ id: agentRuns.id })
@@ -6131,10 +6347,10 @@ export async function cancelRun(threadId: string): Promise<void> {
 
   state.thread.status = 'idle';
   state.thread.activeRunId = undefined;
-  if (!eventDrivenTerminationEnabled) {
-    broadcast(state, { type: 'status', status: 'idle' });
-    broadcast(state, { type: 'done' });
-  }
+  // Notify same-instance subscribers immediately in both termination modes.
+  // The durable cancel envelope remains the cross-instance source of truth.
+  broadcast(state, { type: 'status', status: 'idle' });
+  broadcast(state, { type: 'done', runId: activeRunId });
   clearRunEventSequence(activeRunId);
   lastTokenProgressWriteAt.delete(activeRunId);
   eventDrivenRunIds.delete(activeRunId);

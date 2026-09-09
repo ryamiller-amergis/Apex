@@ -20,11 +20,13 @@ import {
 import { useDesignDocsByPrd, usePrd, useInterview, useOwnerApprove } from '../hooks/useInterviews';
 import { UiMockPreview } from './UiMockPreview';
 import { ReviewReasonModal } from './ReviewReasonModal';
+import { ArtifactUsageStrip } from './ArtifactUsageStrip';
 import {
   designPrototypeStatusLabel,
   DESIGN_PROTOTYPE_STATE_NAMES,
 } from '../../shared/types/designPrototype';
 import type { DesignPrototypeSummary, DesignPrototypeStateName } from '../../shared/types/designPrototype';
+import { effortLabel } from '../../shared/utils/effort';
 import type { UiMock } from '../../shared/types/backlog';
 import DesignTokenInspector from './DesignTokenInspector';
 const BoundaryEditor = lazy(() => import('./BoundaryEditor'));
@@ -408,6 +410,15 @@ const DesignPrototypeReviewView: React.FC = () => {
           </span>
           {selectedProto?.model && (
             <span className={styles.modelText}>Model: {selectedProto.model}</span>
+          )}
+          {selectedProto?.effort && (
+            <span className={styles.modelText}>Effort: {effortLabel(selectedProto.effort)}</span>
+          )}
+          {selectedProto && (
+            <ArtifactUsageStrip
+              endpoint={`/api/design-prototypes/${selectedProto.id}/usage`}
+              visible={selectedProto.status !== 'generating' && selectedProto.status !== 'regenerating'}
+            />
           )}
           {can('interviews:manage') && (
             <button

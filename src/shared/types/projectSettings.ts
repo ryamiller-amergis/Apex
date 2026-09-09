@@ -3,6 +3,7 @@ import type {
   ModuleApprovalModes,
   ReviewerDocumentType,
 } from './approvals';
+import type { EffortLevel } from './effort';
 import type { GroupWithMembers } from './groups';
 
 export type SkillProvider = 'ado' | 'github';
@@ -68,6 +69,7 @@ interface QuickMcpPillBase {
   /** Unique key used as the MCP server name in the Cursor SDK mcpServers map */
   mcpServerName: string;
   model?: string | null;
+  effort?: EffortLevel | null;
   /** Injected into the agent system prompt so the agent knows what the MCP is for */
   systemPromptHint?: string | null;
 }
@@ -100,6 +102,7 @@ export interface QuickSkillPill {
   label: string;
   skillPath: string;
   model?: string | null;
+  effort?: EffortLevel | null;
   /** Plain-English description shown to users when the pill is selected */
   description?: string | null;
   /** When true, the scope guardrail is skipped for this skill's sessions */
@@ -111,6 +114,7 @@ export interface InterviewSkillOption {
   friendlyName: string;
   /** Model override for this interview skill; null/undefined uses project default. */
   model?: string | null;
+  effort?: EffortLevel | null;
   /**
    * When unset, defaults to true (prototypes are generated) for that interview option.
    * Project-level prototypeStageEnabled is only used when no interview skill option is selected.
@@ -120,7 +124,30 @@ export interface InterviewSkillOption {
   wantsTestCases?: boolean;
 }
 
-export interface ProjectSkillConfig {
+export interface ProjectEffortSettings {
+  interviewEffort?: EffortLevel | null;
+  prdEffort?: EffortLevel | null;
+  adrEffort?: EffortLevel | null;
+  designDocEffort?: EffortLevel | null;
+  designDocAssistantEffort?: EffortLevel | null;
+  designPrototypeEffort?: EffortLevel | null;
+  testCaseEffort?: EffortLevel | null;
+  designDocValidationEffort?: EffortLevel | null;
+  prdAssistantEffort?: EffortLevel | null;
+  prdValidationEffort?: EffortLevel | null;
+  developmentEffort?: EffortLevel | null;
+  standupEffort?: EffortLevel | null;
+  featureRequestEffort?: EffortLevel | null;
+  technicalEffort?: EffortLevel | null;
+  issueEffort?: EffortLevel | null;
+  calendarAssistantEffort?: EffortLevel | null;
+  loadTestGenerationEffort?: EffortLevel | null;
+  designModuleEffort?: EffortLevel | null;
+  designModuleScopingEffort?: EffortLevel | null;
+  defaultEffort?: EffortLevel | null;
+}
+
+export interface ProjectSkillConfig extends ProjectEffortSettings {
   id: string;
   project: string;
   friendlyName: string;
@@ -240,7 +267,7 @@ export interface ProjectSkillConfig {
   updatedAt?: string;
 }
 
-export interface UpsertProjectSkillConfigRequest {
+export interface UpsertProjectSkillConfigRequest extends ProjectEffortSettings {
   friendlyName: string;
   isDefault?: boolean;
   skillProvider?: SkillProvider;
@@ -357,7 +384,7 @@ export interface ApproverPoolResponse {
   groups: Array<GroupWithMembers & { documentType: ReviewerDocumentType }>;
 }
 
-export interface ProjectSkillConfigResponse {
+export interface ProjectSkillConfigResponse extends ProjectEffortSettings {
   id: string;
   project: string;
   friendlyName: string;

@@ -41,6 +41,8 @@ describe('evaluateWhatsNewState', () => {
       lastSeenVersion: '1.4.2',
       showOnLogin: true,
       dismissedBetaProdAnnouncement: false,
+      generationSoundEnabled: false,
+      generationSoundId: 'chime',
     });
 
     await expect(evaluateWhatsNewState('user-1')).resolves.toEqual({
@@ -59,6 +61,8 @@ describe('evaluateWhatsNewState', () => {
       lastSeenVersion: '1.4.3',
       showOnLogin: true,
       dismissedBetaProdAnnouncement: false,
+      generationSoundEnabled: false,
+      generationSoundId: 'chime',
     });
     await expect(evaluateWhatsNewState('user-1')).resolves.toMatchObject({
       unread: false,
@@ -70,6 +74,8 @@ describe('evaluateWhatsNewState', () => {
       lastSeenVersion: '1.5.0',
       showOnLogin: true,
       dismissedBetaProdAnnouncement: false,
+      generationSoundEnabled: false,
+      generationSoundId: 'chime',
     });
     await expect(evaluateWhatsNewState('user-1')).resolves.toMatchObject({
       unread: false,
@@ -84,6 +90,8 @@ describe('evaluateWhatsNewState', () => {
       lastSeenVersion: '1.4.2',
       showOnLogin: true,
       dismissedBetaProdAnnouncement: false,
+      generationSoundEnabled: false,
+      generationSoundId: 'chime',
     });
 
     await expect(evaluateWhatsNewState('user-1')).resolves.toEqual({
@@ -102,6 +110,8 @@ describe('evaluateWhatsNewState', () => {
       lastSeenVersion: null,
       showOnLogin: true,
       dismissedBetaProdAnnouncement: false,
+      generationSoundEnabled: false,
+      generationSoundId: 'chime',
     });
 
     await expect(evaluateWhatsNewState('user-1')).resolves.toMatchObject({
@@ -120,6 +130,8 @@ describe('evaluateWhatsNewState', () => {
       lastSeenVersion: '1.0.0',
       showOnLogin: false,
       dismissedBetaProdAnnouncement: false,
+      generationSoundEnabled: false,
+      generationSoundId: 'chime',
     });
 
     await expect(evaluateWhatsNewState('user-1')).resolves.toMatchObject({
@@ -135,6 +147,8 @@ describe('evaluateWhatsNewState', () => {
       lastSeenVersion: 'not-semver',
       showOnLogin: true,
       dismissedBetaProdAnnouncement: false,
+      generationSoundEnabled: false,
+      generationSoundId: 'chime',
     });
 
     await expect(evaluateWhatsNewState('user-1')).resolves.toMatchObject({
@@ -151,6 +165,8 @@ describe('acknowledgeWhatsNew', () => {
       lastSeenVersion: '2.0.1',
       showOnLogin: true,
       dismissedBetaProdAnnouncement: false,
+      generationSoundEnabled: false,
+      generationSoundId: 'chime',
     });
 
     const state = await acknowledgeWhatsNew('user-1', '2.0.1');

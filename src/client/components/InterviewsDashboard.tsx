@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAppShell } from '../hooks/useAppShell';
 import {
@@ -26,7 +26,23 @@ import { useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import styles from './InterviewsDashboard.module.css';
 
-type TabId = 'interviews' | 'prds' | 'design-prototypes' | 'design-docs';
+type TabId = 'interviews' | 'prds' | 'designs';
+
+type DesignStatusFilter =
+  | 'generating'
+  | 'generation_failed'
+  | 'draft'
+  | 'pending_review'
+  | 'approved'
+  | 'revision_requested';
+
+function tabFromSearch(rawTab: string | null): TabId {
+  if (rawTab === 'prds') return 'prds';
+  if (rawTab === 'designs' || rawTab === 'design-prototypes' || rawTab === 'design-docs') {
+    return 'designs';
+  }
+  return 'interviews';
+}
 
 const INTERVIEW_FILTERS: { label: string; value: InterviewStatus | undefined }[] = [
   { label: 'All', value: undefined },
@@ -43,7 +59,7 @@ const PRD_FILTERS: { label: string; value: PrdStatus | undefined }[] = [
   { label: 'Revision Requested', value: 'revision_requested' },
 ];
 
-const DESIGN_DOC_FILTERS: { label: string; value: DesignDocStatus | undefined }[] = [
+const DESIGN_FILTERS: { label: string; value: DesignStatusFilter | undefined }[] = [
   { label: 'All', value: undefined },
   { label: 'Generating', value: 'generating' },
   { label: 'Failed', value: 'generation_failed' },
@@ -119,14 +135,49 @@ function designDocStatusLabel(status: DesignDocStatus): string {
   }
 }
 
-const PROTOTYPE_FILTERS: { label: string; value: DesignPrototypeStatus | undefined }[] = [
-  { label: 'All', value: undefined },
-  { label: 'Generating', value: 'generating' },
-  { label: 'Pending Review', value: 'pending_review' },
-  { label: 'Approved', value: 'approved' },
-  { label: 'Revision Requested', value: 'revision_requested' },
-  { label: 'Failed', value: 'generation_failed' },
-];
+function docMatchesStatus(status: DesignDocStatus, filter?: DesignStatusFilter): boolean {
+  if (!filter) return true;
+  switch (filter) {
+    case 'generating':
+      return status === 'generating' || status === 'validating';
+    case 'generation_failed':
+      return status === 'generation_failed';
+    case 'draft':
+      return status === 'draft';
+    case 'pending_review':
+      return status === 'pending_review' || status === 'reviewer_approved';
+    case 'approved':
+      return status === 'approved';
+    case 'revision_requested':
+      return status === 'revision_requested';
+    default: {
+      const _exhaustive: never = filter;
+      return _exhaustive;
+    }
+  }
+}
+
+function protoMatchesStatus(status: DesignPrototypeStatus, filter?: DesignStatusFilter): boolean {
+  if (!filter) return true;
+  switch (filter) {
+    case 'generating':
+      return status === 'generating' || status === 'regenerating';
+    case 'generation_failed':
+      return status === 'generation_failed';
+    case 'draft':
+      return false;
+    case 'pending_review':
+      return status === 'pending_review' || status === 'reviewer_approved';
+    case 'approved':
+      return status === 'approved';
+    case 'revision_requested':
+      return status === 'revision_requested';
+    default: {
+      const _exhaustive: never = filter;
+      return _exhaustive;
+    }
+  }
+}
 
 function prototypeBadgeClass(status: DesignPrototypeStatus): string {
   switch (status) {
@@ -154,6 +205,76 @@ function prototypeStatusLabel(status: DesignPrototypeStatus): string {
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+interface DesignPrdGroup {
+  prdId: string;
+  prdTitle: string;
+  docs: DesignDocSummary[];
+  prototypes: DesignPrototypeSummary[];
+}
+
+function groupDesignsByPrd(
+  docs: DesignDocSummary[],
+  prototypes: DesignPrototypeSummary[],
+): DesignPrdGroup[] {
+  const groups = new Map<string, DesignPrdGroup>();
+
+  const ensureGroup = (prdId: string, prdTitle?: string): DesignPrdGroup => {
+    const existing = groups.get(prdId);
+    if (existing) {
+      if (prdTitle && existing.prdTitle === 'Untitled PRD') existing.prdTitle = prdTitle;
+      return existing;
+    }
+    const created: DesignPrdGroup = {
+      prdId,
+      prdTitle: prdTitle || 'Untitled PRD',
+      docs: [],
+      prototypes: [],
+    };
+    groups.set(prdId, created);
+    return created;
+  };
+
+  for (const doc of docs) {
+    ensureGroup(doc.prdId, doc.prdTitle).docs.push(doc);
+  }
+  for (const proto of prototypes) {
+    ensureGroup(proto.prdId, proto.prdTitle).prototypes.push(proto);
+  }
+
+  for (const group of groups.values()) {
+    group.docs.sort((a, b) => (a.featureIndex ?? 0) - (b.featureIndex ?? 0) || a.title.localeCompare(b.title));
+    group.prototypes.sort((a, b) => a.featureIndex - b.featureIndex || a.featureName.localeCompare(b.featureName));
+  }
+
+  return [...groups.values()].sort((a, b) => a.prdTitle.localeCompare(b.prdTitle));
+}
+
+function filterDesignGroup(
+  group: DesignPrdGroup,
+  search: string,
+  statusFilter?: DesignStatusFilter,
+): DesignPrdGroup | null {
+  const query = search.trim().toLowerCase();
+  const docs = group.docs.filter((doc) => docMatchesStatus(doc.status, statusFilter));
+  const prototypes = group.prototypes.filter((proto) => protoMatchesStatus(proto.status, statusFilter));
+  if (!query) {
+    if (docs.length === 0 && prototypes.length === 0) return null;
+    return { ...group, docs, prototypes };
+  }
+
+  const titleHit = group.prdTitle.toLowerCase().includes(query);
+  const filteredDocs = docs.filter((doc) => titleHit || doc.title.toLowerCase().includes(query));
+  const filteredProtos = prototypes.filter((proto) => (
+    titleHit || proto.featureName.toLowerCase().includes(query)
+  ));
+  if (filteredDocs.length === 0 && filteredProtos.length === 0) return null;
+  return { ...group, docs: filteredDocs, prototypes: filteredProtos };
+}
+
+function countLabel(count: number, singular: string, plural: string): string {
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 
 
@@ -281,26 +402,40 @@ const PrdCard: React.FC<PrdCardProps> = ({ prd, canDelete, onDelete }) => {
   );
 };
 
-interface DesignDocCardProps {
+interface DesignDocRowProps {
   doc: DesignDocSummary;
   canDelete: boolean;
   onDelete: (doc: DesignDocSummary) => void;
-  'data-testid'?: string;
 }
 
-const DesignDocCard: React.FC<DesignDocCardProps> = ({ doc, canDelete, onDelete }) => {
+const DesignDocRow: React.FC<DesignDocRowProps> = ({ doc, canDelete, onDelete }) => {
   const navigate = useNavigate();
   return (
     <div
-      className={styles.card}
+      className={styles.childRow}
+      role="button"
+      tabIndex={0}
       {...{ 'data-testid': 'design-doc-card' }}
       onClick={() => navigate(`/backlog/design-doc/${doc.id}`)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          navigate(`/backlog/design-doc/${doc.id}`);
+        }
+      }}
     >
-      <div className={styles.cardHeader}>
-        <h3 className={styles.cardTitle}>{doc.title}</h3>
+      <div className={styles.childRowMain}>
+        <span className={styles.childKind}>Doc</span>
+        <span className={styles.childTitle}>{doc.title}</span>
+      </div>
+      <div className={styles.childRowMeta}>
+        <span className={`${styles.badge} ${designDocBadgeClass(doc.status)}`}>
+          {designDocStatusLabel(doc.status)}
+        </span>
+        <span className={styles.cardDate}>{formatDate(doc.createdAt)}</span>
         {canDelete && (
           <button
-            className={styles.cardDeleteBtn}
+            className={styles.childDeleteBtn}
             title="Delete design doc"
             type="button"
             {...{ 'data-testid': `delete-design-doc-${doc.id}-btn` }}
@@ -316,49 +451,44 @@ const DesignDocCard: React.FC<DesignDocCardProps> = ({ doc, canDelete, onDelete 
           </button>
         )}
       </div>
-      <div className={styles.cardFooter}>
-        <span className={`${styles.badge} ${designDocBadgeClass(doc.status)}`}>
-          {designDocStatusLabel(doc.status)}
-        </span>
-        <div className={styles.cardFooterRight}>
-          {doc.prdTitle && (
-            <span className={styles.cardPrdBadge} title={doc.prdTitle}>
-              {doc.prdTitle.length > 25 ? `${doc.prdTitle.slice(0, 25)}…` : doc.prdTitle}
-            </span>
-          )}
-          {doc.skillSettingsName && (
-            <span className={styles.repoBadge}>{doc.skillSettingsName}</span>
-          )}
-          {doc.reviewerId && (
-            <span className={styles.cardPrdBadge}>Reviewer assigned</span>
-          )}
-          <span className={styles.cardDate}>{formatDate(doc.createdAt)}</span>
-        </div>
-      </div>
     </div>
   );
 };
 
-interface DesignPrototypeCardProps {
+interface DesignPrototypeRowProps {
   proto: DesignPrototypeSummary;
   canDelete: boolean;
   onDelete: (proto: DesignPrototypeSummary) => void;
-  'data-testid'?: string;
 }
 
-const DesignPrototypeCard: React.FC<DesignPrototypeCardProps> = ({ proto, canDelete, onDelete }) => {
+const DesignPrototypeRow: React.FC<DesignPrototypeRowProps> = ({ proto, canDelete, onDelete }) => {
   const navigate = useNavigate();
   return (
     <div
-      className={styles.card}
+      className={styles.childRow}
+      role="button"
+      tabIndex={0}
       {...{ 'data-testid': 'design-prototype-card' }}
       onClick={() => navigate(`/backlog/design-prototypes/${proto.prdId}`)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          navigate(`/backlog/design-prototypes/${proto.prdId}`);
+        }
+      }}
     >
-      <div className={styles.cardHeader}>
-        <h3 className={styles.cardTitle}>{proto.featureName}</h3>
+      <div className={styles.childRowMain}>
+        <span className={styles.childKind}>Prototype</span>
+        <span className={styles.childTitle}>{proto.featureName}</span>
+      </div>
+      <div className={styles.childRowMeta}>
+        <span className={`${styles.badge} ${prototypeBadgeClass(proto.status)}`}>
+          {prototypeStatusLabel(proto.status)}
+        </span>
+        <span className={styles.cardDate}>{formatDate(proto.updatedAt)}</span>
         {canDelete && (
           <button
-            className={styles.cardDeleteBtn}
+            className={styles.childDeleteBtn}
             title="Delete prototype"
             type="button"
             {...{ 'data-testid': `delete-prototype-${proto.id}-btn` }}
@@ -374,20 +504,78 @@ const DesignPrototypeCard: React.FC<DesignPrototypeCardProps> = ({ proto, canDel
           </button>
         )}
       </div>
-      <div className={styles.cardFooter}>
-        <span className={`${styles.badge} ${prototypeBadgeClass(proto.status)}`}>
-          {prototypeStatusLabel(proto.status)}
-        </span>
-        <div className={styles.cardFooterRight}>
-          {proto.prdTitle && (
-            <span className={styles.cardPrdBadge} title={proto.prdTitle}>
-              {proto.prdTitle.length > 25 ? `${proto.prdTitle.slice(0, 25)}…` : proto.prdTitle}
-            </span>
-          )}
-          <span className={styles.cardDate}>{formatDate(proto.updatedAt)}</span>
-        </div>
-      </div>
     </div>
+  );
+};
+
+interface DesignPrdGroupCardProps {
+  group: DesignPrdGroup;
+  expanded: boolean;
+  onToggle: () => void;
+  canDelete: boolean;
+  onDeleteDoc: (doc: DesignDocSummary) => void;
+  onDeletePrototype: (proto: DesignPrototypeSummary) => void;
+}
+
+const DesignPrdGroupCard: React.FC<DesignPrdGroupCardProps> = ({
+  group,
+  expanded,
+  onToggle,
+  canDelete,
+  onDeleteDoc,
+  onDeletePrototype,
+}) => {
+  const countParts = [
+    group.docs.length > 0 ? countLabel(group.docs.length, 'doc', 'docs') : null,
+    group.prototypes.length > 0 ? countLabel(group.prototypes.length, 'prototype', 'prototypes') : null,
+  ].filter((part): part is string => part !== null);
+
+  return (
+    <section className={styles.group} {...{ 'data-testid': 'design-prd-group' }}>
+      <button
+        className={styles.groupHeader}
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        {...{ 'data-testid': `design-prd-group-toggle-${group.prdId}` }}
+      >
+        <span className={`${styles.groupChevron} ${expanded ? styles.groupChevronOpen : ''}`} aria-hidden="true">
+          ▶
+        </span>
+        <span className={styles.groupTitle}>{group.prdTitle}</span>
+        <span className={styles.groupCounts}>{countParts.join(' · ')}</span>
+      </button>
+      {expanded && (
+        <div className={styles.groupBody} {...{ 'data-testid': `design-prd-group-body-${group.prdId}` }}>
+          {group.docs.length > 0 && (
+            <div className={styles.groupSection}>
+              <h3 className={styles.groupSectionLabel}>Design docs</h3>
+              {group.docs.map((doc) => (
+                <DesignDocRow
+                  key={doc.id}
+                  doc={doc}
+                  canDelete={canDelete}
+                  onDelete={onDeleteDoc}
+                />
+              ))}
+            </div>
+          )}
+          {group.prototypes.length > 0 && (
+            <div className={styles.groupSection}>
+              <h3 className={styles.groupSectionLabel}>Prototypes</h3>
+              {group.prototypes.map((proto) => (
+                <DesignPrototypeRow
+                  key={proto.id}
+                  proto={proto}
+                  canDelete={canDelete}
+                  onDelete={onDeletePrototype}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </section>
   );
 };
 
@@ -398,23 +586,15 @@ export const InterviewsDashboard: React.FC = () => {
   const [searchParams] = useSearchParams();
   const { can, isInAnyGroup, selectedProject, permissionsLoaded } = useAppShell();
 
-  const rawTab = searchParams.get('tab');
-  const initialTab: TabId =
-    rawTab === 'prds' ? 'prds' :
-    rawTab === 'design-prototypes' ? 'design-prototypes' :
-    rawTab === 'design-docs' ? 'design-docs' :
-    'interviews';
-
-  const [activeTab, setActiveTab] = useState<TabId>(initialTab);
+  const [activeTab, setActiveTab] = useState<TabId>(() => tabFromSearch(searchParams.get('tab')));
   const [ownerFilter, setOwnerFilter] = useState<OwnerFilter>('all');
   const [interviewFilter, setInterviewFilter] = useState<InterviewStatus | undefined>(undefined);
   const [prdFilter, setPrdFilter] = useState<PrdStatus | undefined>(undefined);
-  const [protoFilter, setProtoFilter] = useState<DesignPrototypeStatus | undefined>(undefined);
-  const [designDocFilter, setDesignDocFilter] = useState<DesignDocStatus | undefined>(undefined);
+  const [designFilter, setDesignFilter] = useState<DesignStatusFilter | undefined>(undefined);
   const [interviewSearch, setInterviewSearch] = useState('');
   const [prdSearch, setPrdSearch] = useState('');
-  const [protoSearch, setProtoSearch] = useState('');
-  const [designDocSearch, setDesignDocSearch] = useState('');
+  const [designSearch, setDesignSearch] = useState('');
+  const [openDesignPrds, setOpenDesignPrds] = useState<Set<string>>(() => new Set());
 
   const [pendingDeleteInterview, setPendingDeleteInterview] = useState<InterviewSummary | null>(null);
   const [pendingDeletePrd, setPendingDeletePrd] = useState<PrdSummary | null>(null);
@@ -439,12 +619,10 @@ export const InterviewsDashboard: React.FC = () => {
     ...(authorParam ? { author: authorParam } : {}),
   });
   const { data: prototypes = [], isLoading: protoLoading } = useDesignPrototypeList({
-    ...(protoFilter ? { status: protoFilter } : {}),
     ...(selectedProject ? { project: selectedProject } : {}),
     ...(authorParam ? { author: authorParam } : {}),
   });
   const { data: designDocs = [], isLoading: docLoading } = useDesignDocList({
-    ...(designDocFilter ? { status: designDocFilter } : {}),
     ...(selectedProject ? { project: selectedProject } : {}),
     ...(authorParam ? { author: authorParam } : {}),
   });
@@ -466,17 +644,35 @@ export const InterviewsDashboard: React.FC = () => {
     ? prds.filter((prd) => prd.title.toLowerCase().includes(prdSearch.toLowerCase()))
     : prds;
 
-  const filteredPrototypes = protoSearch.trim()
-    ? prototypes.filter((p) =>
-        p.featureName.toLowerCase().includes(protoSearch.toLowerCase()) ||
-        (p.prdTitle ?? '').toLowerCase().includes(protoSearch.toLowerCase()))
-    : prototypes;
+  const visiblePrototypes = prototypeEnabled ? prototypes : [];
 
-  const filteredDesignDocs = designDocSearch.trim()
-    ? designDocs.filter((doc) =>
-        doc.title.toLowerCase().includes(designDocSearch.toLowerCase()) ||
-        (doc.prdTitle ?? '').toLowerCase().includes(designDocSearch.toLowerCase()))
-    : designDocs;
+  const designGroups = useMemo(
+    () => groupDesignsByPrd(designDocs, visiblePrototypes)
+      .map((group) => filterDesignGroup(group, designSearch, designFilter))
+      .filter((group): group is DesignPrdGroup => group !== null),
+    [designDocs, visiblePrototypes, designSearch, designFilter],
+  );
+
+  const singleGroupId = designGroups.length === 1 ? designGroups[0].prdId : null;
+  useEffect(() => {
+    if (!singleGroupId) return;
+    setOpenDesignPrds((prev) => {
+      if (prev.has(singleGroupId)) return prev;
+      const next = new Set(prev);
+      next.add(singleGroupId);
+      return next;
+    });
+  }, [singleGroupId]);
+
+  const isDesignGroupOpen = (prdId: string): boolean => openDesignPrds.has(prdId);
+  const toggleDesignGroup = (prdId: string) => {
+    setOpenDesignPrds((prev) => {
+      const next = new Set(prev);
+      if (next.has(prdId)) next.delete(prdId);
+      else next.add(prdId);
+      return next;
+    });
+  };
 
   return (
     <div className={styles.dashboard} {...{ 'data-testid': 'interviews-dashboard' }}>
@@ -514,23 +710,13 @@ export const InterviewsDashboard: React.FC = () => {
         >
           PRDs ({prds.length})
         </button>
-        {prototypeEnabled && (
-          <button
-            className={`${styles.tab} ${activeTab === 'design-prototypes' ? styles.active : ''}`}
-            onClick={() => setActiveTab('design-prototypes')}
-            type="button"
-            {...{ 'data-testid': 'tab-design-prototypes' }}
-          >
-            Design Prototypes ({prototypes.length})
-          </button>
-        )}
         <button
-          className={`${styles.tab} ${activeTab === 'design-docs' ? styles.active : ''}`}
-          onClick={() => setActiveTab('design-docs')}
+          className={`${styles.tab} ${activeTab === 'designs' ? styles.active : ''}`}
+          onClick={() => setActiveTab('designs')}
           type="button"
-          {...{ 'data-testid': 'tab-design-docs' }}
+          {...{ 'data-testid': 'tab-designs' }}
         >
-          Design Docs ({designDocs.length})
+          Designs ({designGroups.length})
         </button>
       </div>
 
@@ -687,17 +873,17 @@ export const InterviewsDashboard: React.FC = () => {
         </>
       )}
 
-      {prototypeEnabled && activeTab === 'design-prototypes' && (
+      {activeTab === 'designs' && (
         <>
           <div className={styles.filtersRow}>
             <div className={styles.filters}>
-              {PROTOTYPE_FILTERS.map((f) => (
+              {DESIGN_FILTERS.map((f) => (
                 <button
                   key={f.label}
-                  className={`${styles.filterPill} ${protoFilter === f.value ? styles.active : ''}`}
-                  onClick={() => setProtoFilter(f.value)}
+                  className={`${styles.filterPill} ${designFilter === f.value ? styles.active : ''}`}
+                  onClick={() => setDesignFilter(f.value)}
                   type="button"
-                  {...{ 'data-testid': `prototype-filter-${(f.value ?? 'all').replace(/_/g, '-')}` }}
+                  {...{ 'data-testid': `design-filter-${(f.value ?? 'all').replace(/_/g, '-')}` }}
                 >
                   {f.label}
                 </button>
@@ -711,87 +897,19 @@ export const InterviewsDashboard: React.FC = () => {
               <input
                 className={styles.searchInput}
                 type="search"
-                placeholder="Search prototypes…"
-                value={protoSearch}
-                onChange={(e) => setProtoSearch(e.target.value)}
-                {...{ 'data-testid': 'prototype-search' }}
+                placeholder="Search designs…"
+                value={designSearch}
+                onChange={(e) => setDesignSearch(e.target.value)}
+                {...{ 'data-testid': 'design-search' }}
               />
             </div>
           </div>
-          {protoLoading ? (
+          {docLoading || protoLoading ? (
             <div className={styles.emptyState}>Loading…</div>
-          ) : filteredPrototypes.length === 0 ? (
+          ) : designGroups.length === 0 ? (
             <div className={styles.emptyState}>
-              {protoSearch.trim() ? (
-                <p className={styles.emptyStateText}>No prototypes match &ldquo;{protoSearch}&rdquo;</p>
-              ) : (
-                <>
-                  <div className={styles.emptyStateIconWrap}>
-                    <svg viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="4" y="4" width="32" height="32" rx="4" />
-                      <rect x="10" y="10" width="8" height="8" rx="1" />
-                      <rect x="22" y="10" width="8" height="3" rx="1" />
-                      <rect x="22" y="16" width="8" height="2" rx="1" />
-                      <rect x="10" y="22" width="20" height="8" rx="1" />
-                    </svg>
-                  </div>
-                  <p className={styles.emptyStateText}>No design prototypes yet. Approve a PRD to generate prototypes.</p>
-                </>
-              )}
-            </div>
-          ) : (
-            <div className={styles.grid}>
-              {filteredPrototypes.map((proto) => (
-                <DesignPrototypeCard
-                  key={proto.id}
-                  proto={proto}
-                  canDelete={canManage}
-                  onDelete={setPendingDeletePrototype}
-                  {...{ 'data-testid': 'design-prototype-card' }}
-                />
-              ))}
-            </div>
-          )}
-        </>
-      )}
-
-      {activeTab === 'design-docs' && (
-        <>
-          <div className={styles.filtersRow}>
-            <div className={styles.filters}>
-              {DESIGN_DOC_FILTERS.map((f) => (
-                <button
-                  key={f.label}
-                  className={`${styles.filterPill} ${designDocFilter === f.value ? styles.active : ''}`}
-                  onClick={() => setDesignDocFilter(f.value)}
-                  type="button"
-                  {...{ 'data-testid': `design-doc-filter-${(f.value ?? 'all').replace(/_/g, '-')}` }}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
-            <div className={styles.searchWrap}>
-              <svg className={styles.searchIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="6.5" cy="6.5" r="4.5" />
-                <line x1="10" y1="10" x2="14" y2="14" />
-              </svg>
-              <input
-                className={styles.searchInput}
-                type="search"
-                placeholder="Search design docs…"
-                value={designDocSearch}
-                onChange={(e) => setDesignDocSearch(e.target.value)}
-                {...{ 'data-testid': 'design-doc-search' }}
-              />
-            </div>
-          </div>
-          {docLoading ? (
-            <div className={styles.emptyState}>Loading…</div>
-          ) : filteredDesignDocs.length === 0 ? (
-            <div className={styles.emptyState}>
-              {designDocSearch.trim() ? (
-                <p className={styles.emptyStateText}>No design docs match &ldquo;{designDocSearch}&rdquo;</p>
+              {designSearch.trim() ? (
+                <p className={styles.emptyStateText}>No designs match &ldquo;{designSearch}&rdquo;</p>
               ) : (
                 <>
                   <div className={styles.emptyStateIconWrap}>
@@ -800,24 +918,25 @@ export const InterviewsDashboard: React.FC = () => {
                       <line x1="12" x2="28" y1="11" y2="11" />
                       <line x1="12" x2="28" y1="18" y2="18" />
                       <line x1="12" x2="20" y1="25" y2="25" />
-                      <circle cx="28" cy="30" r="6" />
-                      <line x1="26" x2="30" y1="30" y2="30" />
-                      <line x1="28" x2="28" y1="28" y2="32" />
                     </svg>
                   </div>
-                  <p className={styles.emptyStateText}>No design docs yet. Generate one from an approved PRD.</p>
+                  <p className={styles.emptyStateText}>
+                    No designs yet. Generate a prototype or design doc from an approved PRD.
+                  </p>
                 </>
               )}
             </div>
           ) : (
-            <div className={styles.grid}>
-              {filteredDesignDocs.map((doc) => (
-                <DesignDocCard
-                  key={doc.id}
-                  doc={doc}
+            <div className={styles.groupList}>
+              {designGroups.map((group) => (
+                <DesignPrdGroupCard
+                  key={group.prdId}
+                  group={group}
+                  expanded={isDesignGroupOpen(group.prdId)}
+                  onToggle={() => toggleDesignGroup(group.prdId)}
                   canDelete={canManage}
-                  onDelete={setPendingDeleteDesignDoc}
-                  {...{ 'data-testid': 'design-doc-card' }}
+                  onDeleteDoc={setPendingDeleteDesignDoc}
+                  onDeletePrototype={setPendingDeletePrototype}
                 />
               ))}
             </div>

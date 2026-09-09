@@ -63,6 +63,7 @@ describe('useChatStream', () => {
   it('starts disconnected and idle when given a threadId', () => {
     const { result } = renderHook(() => useChatStream('thread-1'));
     expect(result.current.isConnected).toBe(false);
+    expect(result.current.hasConnectionError).toBe(false);
     expect(result.current.status).toBe('idle');
     expect(result.current.messages).toEqual([]);
     expect(result.current.streamingText).toBe('');
@@ -80,6 +81,7 @@ describe('useChatStream', () => {
     const { result } = renderHook(() => useChatStream('t1'));
     act(() => lastES!.emitOpen());
     expect(result.current.isConnected).toBe(true);
+    expect(result.current.hasConnectionError).toBe(false);
   });
 
   it('sets isConnected=false on error event', () => {
@@ -88,6 +90,10 @@ describe('useChatStream', () => {
     expect(result.current.isConnected).toBe(true);
     act(() => lastES!.emitError());
     expect(result.current.isConnected).toBe(false);
+    expect(result.current.hasConnectionError).toBe(true);
+    act(() => lastES!.emitOpen());
+    expect(result.current.isConnected).toBe(true);
+    expect(result.current.hasConnectionError).toBe(false);
   });
 
   it('PBI-002 AC-0 does not poll run status after event-driven stream disconnect', () => {

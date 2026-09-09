@@ -10,6 +10,17 @@ const target: PreWarmTarget = {
   branch: 'main',
 };
 
+function stubRepoCacheEviction() {
+  return jest.fn().mockResolvedValue({
+    scanned: 0,
+    evicted: 0,
+    protected: 0,
+    bytesBefore: 0,
+    bytesAfter: 0,
+    maxBytes: 0,
+  });
+}
+
 describe('TBI-007 groundingMaintenanceScheduler', () => {
   beforeEach(() => {
     jest.useFakeTimers();
@@ -27,6 +38,7 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
     const sharedEvictIdle = jest
       .fn()
       .mockResolvedValue({ scanned: 0, evicted: 0, protected: 0 });
+    const evictOverBudget = stubRepoCacheEviction();
     const evaluateActive = jest.fn().mockResolvedValue([]);
     const runIfDue = jest.fn().mockResolvedValue({
       due: false,
@@ -47,6 +59,7 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
       preWarmService: { sweep, preWarm },
       evictionService: { evictIdle },
       sharedReadCheckoutService: { evictIdle: sharedEvictIdle },
+      repoCacheEvictionService: { evictOverBudget },
       stalenessService: { evaluateActive },
       nightlyIdleReGround: { runIfDue },
       runLeaderSweep,
@@ -71,6 +84,8 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
     expect(evictIdle).toHaveBeenCalledTimes(2);
     // The shared read-only checkout sweep runs as a second eviction pass.
     expect(sharedEvictIdle).toHaveBeenCalledTimes(2);
+    // The bare-mirror budget sweep runs as a third.
+    expect(evictOverBudget).toHaveBeenCalledTimes(2);
     expect(preWarm).toHaveBeenCalledWith(target);
     expect(evaluateActive).toHaveBeenCalledWith(target);
     expect(evaluateActive).toHaveBeenCalledWith();
@@ -97,6 +112,7 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
       },
       evictionService: { evictIdle },
       sharedReadCheckoutService: { evictIdle: sharedEvictIdle },
+      repoCacheEvictionService: { evictOverBudget: stubRepoCacheEviction() },
       stalenessService: { evaluateActive },
       nightlyIdleReGround: {
         runIfDue: jest.fn().mockResolvedValue({

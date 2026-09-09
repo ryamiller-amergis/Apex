@@ -16,6 +16,7 @@ import {
   useBulkUpdateAnchors,
   useCreateManualAnchor,
   usePersistAnchorSyncReviewDrafts,
+  runChunkedAnchorSmartTagging,
   useSoftDeleteAnchor,
   useSyncAnchorRegistry,
   useUpdateAnchorRegistry,
@@ -77,6 +78,7 @@ const mockUseBulkUpdateAnchors = useBulkUpdateAnchors as jest.Mock;
 const mockUsePersistAnchorSyncReviewDrafts = usePersistAnchorSyncReviewDrafts as jest.Mock;
 const mockUseSoftDeleteAnchor = useSoftDeleteAnchor as jest.Mock;
 const mockUseSyncAnchorRegistry = useSyncAnchorRegistry as jest.Mock;
+const mockRunChunkedAnchorSmartTagging = runChunkedAnchorSmartTagging as jest.Mock;
 
 function mutationStub(overrides: Record<string, unknown> = {}) {
   return {
@@ -437,6 +439,57 @@ describe('WalkthroughAnchorManagement', () => {
     // Modal stays open after save so the next AI batch can continue; decided rows leave the list.
     expect(screen.getByTestId('walkthrough-anchor-sync-modal')).toBeInTheDocument();
     expect(screen.getByTestId('walkthrough-anchor-sync-empty')).toBeInTheDocument();
+  });
+
+  it('never starts background AI on Sync; only the refine click queues it', async () => {
+    const user = userEvent.setup();
+    const scannerOnly = MOCK_WALKTHROUGH_ANCHOR_SYNC_CANDIDATES.map((candidate, i) => ({
+      ...candidate,
+      id: `scanner-only-${i}`,
+      smartTags: [] as string[],
+      aiProvenance: null,
+    }));
+    stubHooks();
+    const syncAsync = jest.fn().mockResolvedValue({
+      discoveries: [],
+      newCandidates: [],
+      existingMatches: [],
+      missingWarnings: [],
+      duplicates: [],
+      unsupportedDynamicPatterns: [],
+      diagnostics: {
+        provider: 'local',
+        rootPath: '.',
+        filesScanned: 0,
+        filesSkipped: 0,
+        bytesRead: 0,
+        durationMs: 0,
+        truncatedFiles: [],
+        errors: [],
+      },
+      persistence: {
+        created: scannerOnly,
+        refreshed: [],
+        markedMissing: [],
+        reviewCandidates: scannerOnly,
+        newCandidateIdsForSmartTagging: scannerOnly.map((c) => c.id),
+      },
+    });
+    mockUseSyncAnchorRegistry.mockReturnValue(mutationStub({ mutateAsync: syncAsync }));
+    mockRunChunkedAnchorSmartTagging.mockClear();
+
+    render(<WalkthroughAnchorManagement />);
+
+    await user.click(screen.getByTestId('walkthrough-anchor-sync'));
+    await waitFor(() =>
+      expect(screen.getByTestId('walkthrough-anchor-sync-modal')).toBeInTheDocument(),
+    );
+    expect(mockRunChunkedAnchorSmartTagging).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId('walkthrough-anchor-sync-next-batch'));
+    await waitFor(() => expect(mockRunChunkedAnchorSmartTagging).toHaveBeenCalledTimes(1));
+    // Refine reuses the last sync result instead of re-running the scan.
+    expect(syncAsync).toHaveBeenCalledTimes(1);
   });
 
   it('uses syncCandidates prop override without calling sync API', async () => {

@@ -31,13 +31,20 @@ import type {
   ChatThreadStatus,
   SseEvent,
 } from '../../shared/types/chat';
-import { replayRunEvents as defaultReplayRunEvents } from './pgNotifyService';
+import {
+  replayRunEvents as defaultReplayRunEvents,
+  subscribeRunEvents as defaultSubscribeRunEvents,
+} from './pgNotifyService';
 import { interactiveLiveBus } from './interactiveLiveBus';
 import {
   getThread as defaultGetThread,
   subscribeToThread as defaultSubscribeToThread,
 } from './chatAgentService';
-import { eventForRunEnvelope as defaultEventForRunEnvelope } from '../routes/chat';
+import {
+  buildStreamStatusEvent,
+  eventForRunEnvelope as defaultEventForRunEnvelope,
+} from '../routes/chat';
+import { isFeatureEnabled } from './featureFlagService';
 
 /** Minimal socket contract satisfied by a `ws` WebSocket (and test fakes). */
 export interface InteractiveGatewaySocket {
@@ -58,6 +65,7 @@ export interface InteractiveGatewayFrame {
 export interface InteractiveThreadSnapshot {
   messages: ChatMessage[];
   status: ChatThreadStatus;
+  eventDrivenTermination: boolean;
 }
 
 export interface AttachInteractiveThreadOptions {
@@ -72,15 +80,25 @@ export interface AttachInteractiveThreadOptions {
 
 export interface InteractiveGatewayDependencies {
   loadThreadSnapshot: (
-    threadId: string,
+    threadId: string
   ) => Promise<InteractiveThreadSnapshot | null>;
   replayRunEvents: (
     threadId: string,
-    lastEventId?: string,
+    lastEventId?: string
   ) => Promise<AgentRunEventEnvelope[]>;
+  /**
+   * Subscribe to durable run events as they are committed. This closes the
+   * replay/live race when Redis is unavailable: final messages and terminal
+   * events still reach an already-connected socket without requiring a
+   * reconnect.
+   */
+  subscribeDurableEvents: (
+    threadId: string,
+    callback: (envelope: AgentRunEventEnvelope) => void
+  ) => () => void;
   subscribeToThread: (
     threadId: string,
-    callback: (event: SseEvent, envelope?: AgentRunEventEnvelope) => void,
+    callback: (event: SseEvent, envelope?: AgentRunEventEnvelope) => void
   ) => () => void;
   /**
    * Subscribe to the thread's live run-event fan-out (Redis). The actor tier
@@ -90,7 +108,7 @@ export interface InteractiveGatewayDependencies {
    */
   subscribeLiveEvents: (
     threadId: string,
-    callback: (envelope: AgentRunEventEnvelope) => void,
+    callback: (envelope: AgentRunEventEnvelope) => void
   ) => () => void;
   eventForRunEnvelope: (envelope: AgentRunEventEnvelope) => SseEvent;
 }
@@ -98,11 +116,22 @@ export interface InteractiveGatewayDependencies {
 const defaultDependencies: InteractiveGatewayDependencies = {
   loadThreadSnapshot: async (threadId) => {
     const thread = await defaultGetThread(threadId);
-    return thread
-      ? { messages: thread.messages, status: thread.status }
-      : null;
+    if (!thread) return null;
+    const project = thread.kickoff?.project;
+    const eventDrivenTermination = project
+      ? await isFeatureEnabled('event-driven-run-termination', {
+          userId: thread.userId,
+          project,
+        }).catch(() => false)
+      : false;
+    return {
+      messages: thread.messages,
+      status: thread.status,
+      eventDrivenTermination,
+    };
   },
   replayRunEvents: defaultReplayRunEvents,
+  subscribeDurableEvents: defaultSubscribeRunEvents,
   subscribeToThread: defaultSubscribeToThread,
   subscribeLiveEvents: (threadId, callback) =>
     interactiveLiveBus.subscribe(threadId, callback),
@@ -118,7 +147,7 @@ export async function attachInteractiveThreadStream(
   socket: InteractiveGatewaySocket,
   threadId: string,
   options: AttachInteractiveThreadOptions = {},
-  dependencies: InteractiveGatewayDependencies = defaultDependencies,
+  dependencies: InteractiveGatewayDependencies = defaultDependencies
 ): Promise<() => void> {
   void options.localInstance; // retained for API compatibility; unused live-path filter
   const sentEventIds = new Set<string>();
@@ -132,10 +161,7 @@ export async function attachInteractiveThreadStream(
     arrival: number;
   }> = [];
 
-  const sendEvent = (
-    event: SseEvent,
-    eventId = '',
-  ): void => {
+  const sendEvent = (event: SseEvent, eventId = ''): void => {
     if (detached) return;
     if (event.type === 'message') {
       if (sentMessageIds.has(event.message.id)) return;
@@ -154,15 +180,12 @@ export async function attachInteractiveThreadStream(
     // De-dupe by durable ordinal across replay + both live sources (VT-04).
     if (sentEventIds.has(envelope.eventId)) return;
     sentEventIds.add(envelope.eventId);
-    sendEvent(
-      dependencies.eventForRunEnvelope(envelope),
-      envelope.eventId,
-    );
+    sendEvent(dependencies.eventForRunEnvelope(envelope), envelope.eventId);
   };
 
   const queueOrSend = (
     event: SseEvent,
-    envelope?: AgentRunEventEnvelope,
+    envelope?: AgentRunEventEnvelope
   ): void => {
     if (replaying) {
       pendingLiveEvents.push({
@@ -181,7 +204,13 @@ export async function attachInteractiveThreadStream(
   // replay window (mirrors the SSE route ordering).
   const unsubscribeThread = dependencies.subscribeToThread(
     threadId,
-    (event, envelope) => queueOrSend(event, envelope),
+    (event, envelope) => queueOrSend(event, envelope)
+  );
+  const unsubscribeDurable = dependencies.subscribeDurableEvents(
+    threadId,
+    (envelope) => {
+      queueOrSend(dependencies.eventForRunEnvelope(envelope), envelope);
+    }
   );
   // Live push from the ACA actor tier over Redis. No same-instance filter: the
   // actor runs in a different process, so every live envelope is forwarded and
@@ -190,13 +219,14 @@ export async function attachInteractiveThreadStream(
     threadId,
     (envelope) => {
       queueOrSend(dependencies.eventForRunEnvelope(envelope), envelope);
-    },
+    }
   );
 
   const detach = (): void => {
     if (detached) return;
     detached = true;
     unsubscribeThread();
+    unsubscribeDurable();
     unsubscribeLive();
   };
   socket.onClose(detach);
@@ -211,7 +241,12 @@ export async function attachInteractiveThreadStream(
       for (const message of snapshot.messages) {
         sendEvent({ type: 'message', message });
       }
-      sendEvent({ type: 'status', status: snapshot.status });
+      sendEvent(
+        buildStreamStatusEvent(
+          snapshot.status,
+          snapshot.eventDrivenTermination
+        )
+      );
     }
   } catch {
     // A failed snapshot does not prevent durable/live streaming.
@@ -219,7 +254,10 @@ export async function attachInteractiveThreadStream(
 
   let replayEvents: AgentRunEventEnvelope[] = [];
   try {
-    replayEvents = await dependencies.replayRunEvents(threadId, options.lastEventId);
+    replayEvents = await dependencies.replayRunEvents(
+      threadId,
+      options.lastEventId
+    );
   } catch {
     replayEvents = [];
   }
@@ -228,12 +266,11 @@ export async function attachInteractiveThreadStream(
   // Flush live events buffered during replay, ordered so replay precedes live.
   replaying = false;
   pendingLiveEvents
-    .sort(
-      (left, right) =>
-        left.envelope && right.envelope
-          ? left.envelope.timestamp.localeCompare(right.envelope.timestamp)
-            || left.envelope.sequence - right.envelope.sequence
-          : left.arrival - right.arrival,
+    .sort((left, right) =>
+      left.envelope && right.envelope
+        ? left.envelope.timestamp.localeCompare(right.envelope.timestamp) ||
+          left.envelope.sequence - right.envelope.sequence
+        : left.arrival - right.arrival
     )
     .forEach(({ event, envelope }) => {
       if (envelope) sendEnvelope(envelope);

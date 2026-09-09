@@ -1,14 +1,15 @@
 import fs from 'fs';
-import { eq, and } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { chatThreads } from '../db/schema';
 import type { ValidationScorecard } from '../../shared/types/interview';
-import { buildPassingValidationReasonsMarkdown, collectValidationGaps, normalizeCrossCuttingCheck, normalizeValidationScorecard } from '../../shared/utils/validationReport';
+import { buildPassingValidationReasonsMarkdown, collectValidationGaps, buildUnusableValidationScorecard, parseAgentValidationScorecard, NO_SCORECARD_REASON, VALIDATION_TIMEOUT_REASON, normalizeCrossCuttingCheck } from '../../shared/utils/validationReport';
 import { readOutputValidationScorecard, readOutputValidationScorecardMd, isThreadIdle, createThread as createChatThread, cancelRun, sendMessage, prepareBackgroundWorkflowTurn, hydrateThread } from './chatAgentService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
 import { isThreadRunAlive, canThisInstanceFailGeneration } from './agentRunReaperService';
 import { getSkillConfig, resolveSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
+import { deriveAgentModule } from './agentEffortResolver';
 import {
   propagatePipelineGrounding,
   runGroundingService,
@@ -83,11 +84,20 @@ export async function autoStartDocumentValidation(adapter: DocumentValidationAda
     '',
     adapter.buildValidationContext(skillConfig),
   ].join('\n');
+  const agentModule = deriveAgentModule(
+    {
+      project,
+      repo: skillConfig.skillRepo,
+      skillPath,
+    },
+    skillConfig
+  );
 
   // skipAutoKickoff: attach validationThreadId + watcher BEFORE the agent starts
   // so post-run sync can find the owning document when the run completes.
   const thread = await createChatThread(adapter.getAuthorId(), {
     project,
+    ...(agentModule ? { agentModule } : {}),
     repo: skillConfig.skillRepo,
     branch: skillConfig.skillBranch ?? 'main',
     skillProvider: skillConfig.skillProvider ?? undefined,
@@ -107,7 +117,11 @@ export async function autoStartDocumentValidation(adapter: DocumentValidationAda
     threadId: thread.id,
     documentId: adapter.getDocumentId(),
     sourceThreadId: adapter.getSourceThreadId?.(),
-    onFailure: () => adapter.updateDbForValidationError(),
+    onFailure: () => persistUnusableValidationResult(
+      adapter,
+      'Validation could not start. Re-run validation.',
+      thread.id,
+    ),
   });
 }
 
@@ -192,14 +206,24 @@ export function startDocumentValidationWatcher(
     );
   });
 
+  const finish = (): void => {
+    clearInterval(interval);
+    activeValidationWatchers.delete(documentId);
+  };
+
   const interval = setInterval(async () => {
     attempts += 1;
 
     if (attempts > VALIDATION_WATCHER_MAX_ATTEMPTS) {
-      clearInterval(interval);
-      activeValidationWatchers.delete(documentId);
+      finish();
       console.warn(`[documentValidationWatcher] Timed out (documentId=${documentId})`);
-      await adapter.updateDbForValidationTimeout();
+      await persistUnusableValidationResult(adapter, VALIDATION_TIMEOUT_REASON, validationThreadId);
+      return;
+    }
+
+    // A scorecard file can appear while a later edit is still writing. Wait
+    // until the agent is idle before ingesting or deleting the workspace.
+    if (await isThreadRunAlive(validationThreadId)) {
       return;
     }
 
@@ -208,19 +232,16 @@ export function startDocumentValidationWatcher(
     if (!scorecardRaw) {
       if (
         isThreadIdle(validationThreadId)
-        && !(await isThreadRunAlive(validationThreadId))
         && (await canThisInstanceFailGeneration(validationThreadId))
       ) {
-        clearInterval(interval);
-        activeValidationWatchers.delete(documentId);
-        console.warn(`[documentValidationWatcher] Agent completed without scorecard — resetting (documentId=${documentId})`);
-        await adapter.updateDbForValidationError();
+        finish();
+        console.warn(`[documentValidationWatcher] Agent completed without scorecard (documentId=${documentId})`);
+        await persistUnusableValidationResult(adapter, NO_SCORECARD_REASON, validationThreadId);
       }
       return;
     }
 
-    clearInterval(interval);
-    activeValidationWatchers.delete(documentId);
+    finish();
 
     try {
       const isCurrent = await adapter.isCurrentValidationThread(validationThreadId);
@@ -230,13 +251,7 @@ export function startDocumentValidationWatcher(
         return;
       }
 
-      const scorecard = normalizeValidationScorecard(JSON.parse(scorecardRaw));
-      if (!scorecard) {
-        console.warn(`[documentValidationWatcher] Scorecard carries no usable overall score — resetting (documentId=${documentId})`);
-        await adapter.updateDbForValidationError();
-        cleanupWorkspace(validationThreadId);
-        return;
-      }
+      const scorecard = parseAgentValidationScorecard(scorecardRaw);
       const reportMd = readOutputValidationScorecardMd(validationThreadId) ?? generateFallbackReport(scorecard);
       await adapter.updateDbForValidationResult(scorecard, reportMd);
       console.log(`[documentValidationWatcher] Scorecard synced — score=${scorecard.overall_score} is_ready=${scorecard.is_ready} (documentId=${documentId})`);
@@ -247,6 +262,7 @@ export function startDocumentValidationWatcher(
       }
     } catch (err) {
       console.error(`[documentValidationWatcher] Failed to parse/sync scorecard (documentId=${documentId})`, err);
+      await persistUnusableValidationResult(adapter, NO_SCORECARD_REASON, validationThreadId);
     }
   }, VALIDATION_WATCHER_INTERVAL_MS);
 
@@ -263,6 +279,19 @@ export async function cancelDocumentValidation(
       console.warn(`[cancelDocumentValidation] Could not cancel agent run for thread ${validationThreadId}:`, err.message);
     });
   }
+}
+
+export async function persistUnusableValidationResult(
+  adapter: DocumentValidationAdapter,
+  reason: string,
+  validationThreadId?: string | null,
+): Promise<void> {
+  if (validationThreadId) {
+    const isCurrent = await adapter.isCurrentValidationThread(validationThreadId);
+    if (!isCurrent) return;
+  }
+  const scorecard = buildUnusableValidationScorecard(reason);
+  await adapter.updateDbForValidationResult(scorecard, generateFallbackReport(scorecard));
 }
 
 export function generateFallbackReport(scorecard: ValidationScorecard): string {

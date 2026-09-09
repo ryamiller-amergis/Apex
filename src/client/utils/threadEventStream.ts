@@ -36,6 +36,11 @@ export interface OpenThreadEventStreamOptions {
   transport?: ThreadStreamTransport;
   /** Reconnect backoff for the WS backend (ms). */
   reconnectDelayMs?: number;
+  /**
+   * Consecutive WS failures before switching this stream to SSE. Defaults to
+   * three; set to 0 to keep retrying WS indefinitely.
+   */
+  wsFailuresBeforeSseFallback?: number;
   /** Injectable factories for tests. */
   eventSourceFactory?: (url: string) => EventSource;
   webSocketFactory?: (url: string) => WebSocket;
@@ -78,8 +83,9 @@ export function isInteractiveWsEnabled(): boolean {
 
 /** Publish the interactive transport preference and notify open chat streams. */
 export function setInteractiveWsEnabled(enabled: boolean): void {
-  (globalThis as { __APEX_INTERACTIVE_WS__?: boolean }).__APEX_INTERACTIVE_WS__ =
-    enabled;
+  (
+    globalThis as { __APEX_INTERACTIVE_WS__?: boolean }
+  ).__APEX_INTERACTIVE_WS__ = enabled;
   try {
     globalThis.dispatchEvent?.(new Event(INTERACTIVE_WS_CHANGED_EVENT));
   } catch {
@@ -95,20 +101,23 @@ function wsStreamUrl(threadId: string, lastEventId?: string): string {
   const loc = globalThis.location;
   const protocol = loc && loc.protocol === 'https:' ? 'wss:' : 'ws:';
   const host = loc?.host ?? 'localhost';
-  const query = lastEventId ? `?lastEventId=${encodeURIComponent(lastEventId)}` : '';
+  const query = lastEventId
+    ? `?lastEventId=${encodeURIComponent(lastEventId)}`
+    : '';
   return `${protocol}//${host}/api/interactive/threads/${encodeURIComponent(
-    threadId,
+    threadId
   )}/stream${query}`;
 }
 
 function openSse(
   sseUrl: string,
   handlers: ThreadStreamHandlers,
-  options: OpenInteractiveStreamOptions,
+  options: OpenInteractiveStreamOptions
 ): ThreadStreamHandle {
   const factory =
     options.eventSourceFactory ??
-    ((url: string) => new EventSource(url, { withCredentials: true } as EventSourceInit));
+    ((url: string) =>
+      new EventSource(url, { withCredentials: true } as EventSourceInit));
   const source = factory(sseUrl);
   source.addEventListener('open', () => handlers.onOpen?.());
   source.addEventListener('error', () => handlers.onError?.());
@@ -123,7 +132,7 @@ function openSse(
 function openWs(
   wsUrlFor: (lastEventId?: string) => string,
   handlers: ThreadStreamHandlers,
-  options: OpenInteractiveStreamOptions,
+  options: OpenInteractiveStreamOptions
 ): ThreadStreamHandle {
   const factory =
     options.webSocketFactory ?? ((url: string) => new WebSocket(url));
@@ -137,8 +146,14 @@ function openWs(
   const connect = (): void => {
     if (closed) return;
     socket = factory(wsUrlFor(lastEventId));
+    let failureReported = false;
+    const reportFailure = (): void => {
+      if (failureReported) return;
+      failureReported = true;
+      handlers.onError?.();
+    };
     socket.onopen = () => handlers.onOpen?.();
-    socket.onerror = () => handlers.onError?.();
+    socket.onerror = reportFailure;
     socket.onmessage = (event: MessageEvent) => {
       let frame: GatewayFrame;
       try {
@@ -151,7 +166,7 @@ function openWs(
       handlers.onMessage(JSON.stringify(frame.data), frame.id ?? '');
     };
     socket.onclose = () => {
-      handlers.onError?.();
+      reportFailure();
       if (closed) return;
       reconnectTimer = setTimeout(connect, reconnectDelayMs);
     };
@@ -169,6 +184,49 @@ function openWs(
 }
 
 /**
+ * Prefer the low-latency WS gateway, but stop leaving the UI disconnected when
+ * that route is unhealthy. SSE shares the same durable replay contract and can
+ * still deliver the final message and terminal state while WS/Redis recovers.
+ */
+function openWsWithSseFallback(
+  handlers: ThreadStreamHandlers,
+  options: OpenInteractiveStreamOptions
+): ThreadStreamHandle {
+  const failureLimit = Math.max(0, options.wsFailuresBeforeSseFallback ?? 3);
+  let failures = 0;
+  let closed = false;
+  let usingSse = false;
+  let active: ThreadStreamHandle | null = null;
+
+  const switchToSse = (): void => {
+    if (closed || usingSse) return;
+    usingSse = true;
+    active?.close();
+    active = openSse(options.sseUrl, handlers, options);
+  };
+
+  active = openWs(
+    options.wsUrlFor!,
+    {
+      ...handlers,
+      onError: () => {
+        handlers.onError?.();
+        failures += 1;
+        if (failureLimit > 0 && failures >= failureLimit) switchToSse();
+      },
+    },
+    options
+  );
+
+  return {
+    close: () => {
+      closed = true;
+      active?.close();
+    },
+  };
+}
+
+/**
  * Open a normalized interactive stream from explicit SSE/WS URLs. Returns a
  * handle whose `close()` tears down the transport (and cancels WS reconnects).
  * WS is used only when enabled AND a `wsUrlFor` builder is provided, so
@@ -176,7 +234,7 @@ function openWs(
  */
 export function openInteractiveStream(
   handlers: ThreadStreamHandlers,
-  options: OpenInteractiveStreamOptions,
+  options: OpenInteractiveStreamOptions
 ): ThreadStreamHandle {
   const transport: ThreadStreamTransport = options.transport ?? 'auto';
   const wsEligible = Boolean(options.wsUrlFor);
@@ -184,7 +242,7 @@ export function openInteractiveStream(
     wsEligible &&
     (transport === 'ws' || (transport === 'auto' && isInteractiveWsEnabled()));
   return useWs
-    ? openWs(options.wsUrlFor!, handlers, options)
+    ? openWsWithSseFallback(handlers, options)
     : openSse(options.sseUrl, handlers, options);
 }
 
@@ -196,7 +254,7 @@ export function openInteractiveStream(
 export function openThreadEventStream(
   threadId: string,
   handlers: ThreadStreamHandlers,
-  options: OpenThreadEventStreamOptions = {},
+  options: OpenThreadEventStreamOptions = {}
 ): ThreadStreamHandle {
   return openInteractiveStream(handlers, {
     ...options,

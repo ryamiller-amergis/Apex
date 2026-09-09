@@ -1,0 +1,541 @@
+{
+  "epics": [
+    {
+      "title": "Per-Module Agent Effort Defaults",
+      "features": [
+        {
+          "id": "FEAT-001",
+          "items": [
+            {
+              "id": "TBI-001",
+              "type": "TBI",
+              "title": "Add shared effort allow-list type and per-module effort columns to project_skill_settings",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Define a closed effort union (low, medium, high, or null meaning inherit) shared by client and server, mirroring the existing model-ID union. Add one nullable effort column per existing *Model stage on project_skill_settings (interview, prd, adr, design doc, design doc assistant, design prototype, test case, design doc validation, prd assistant, prd validation, development, standup, feature request, technical, issue, calendar assistant, load test generation, design module, design module scoping), plus a project-wide default effort column. Add optional effort fields to the shared skill-option and pill shapes (InterviewSkillOption, QuickSkillPill, QuickMcpPill).",
+              "parallelGroup": null,
+              "definitionOfDone": [
+                "Migration adds one nullable effort column per existing *Model stage plus defaultEffort to project_skill_settings",
+                "Drizzle schema.ts updated with matching columns and a shared effort type",
+                "Shared TypeScript union for low/medium/high/null is exported and used by both client and server",
+                "Optional effort field added to InterviewSkillOption, QuickSkillPill, and QuickMcpPill shared types"
+              ],
+              "technicalDependencies": [
+                "Migration + matching Drizzle schema.ts columns, following the same nullable-TEXT pattern already used for the *Model columns"
+              ],
+              "nonFunctionalRequirements": [
+                "Columns are nullable with no backfill; existing rows resolve to inherit/omit until an admin sets a value",
+                "No new index — effort is not filtered in WHERE clauses at this stage"
+              ]
+            },
+            {
+              "id": "TBI-002",
+              "type": "TBI",
+              "title": "Add nullable effort snapshot column to artifact audit tables",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-001"
+              ],
+              "description": "Add a nullable effort TEXT column to interviews, prds, adrs, and design_docs, and to design_prototypes for the agent-engine path — mirroring the existing model column already present on each of those tables.",
+              "parallelGroup": null,
+              "definitionOfDone": [
+                "Migration adds a nullable effort column to interviews, prds, adrs, and design_docs",
+                "Migration adds a nullable effort column to design_prototypes for the agent-engine path",
+                "Drizzle schema.ts updated with the new columns on all five tables"
+              ],
+              "technicalDependencies": [
+                "Uses the same shared effort type introduced in TBI-001"
+              ],
+              "nonFunctionalRequirements": [
+                "Nullable with no backfill, matching the existing model-column precedent on these tables"
+              ]
+            },
+            {
+              "id": "TBI-003",
+              "type": "TBI",
+              "title": "Add nullable effort column to ai_usage_events",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-001"
+              ],
+              "description": "Add a nullable effort TEXT column to ai_usage_events so every usage/cost row can record the effort that actually ran, including for stages that have no dedicated artifact table.",
+              "parallelGroup": null,
+              "definitionOfDone": [
+                "Migration adds a nullable effort column to ai_usage_events",
+                "Drizzle schema.ts updated with the new column",
+                "Column accepts null for stages/events where effort was not resolved"
+              ],
+              "technicalDependencies": [
+                "Uses the same shared effort type introduced in TBI-001"
+              ],
+              "nonFunctionalRequirements": [
+                "Nullable, no backfill, no new index — mirrors the existing model_id column precedent"
+              ]
+            }
+          ],
+          "title": "Effort Data Model & Shared Allow-List Foundations",
+          "priority": "Must Have",
+          "dependsOn": [],
+          "userTypes": [
+            "Project Admin",
+            "Developer"
+          ],
+          "outOfScope": [
+            "Populating any effort value — this feature only adds the columns and shared type; defaults remain null until the admin settings feature ships a UI to set them"
+          ],
+          "description": "Establishes the shared low/medium/high effort allow-list and the nullable effort columns on Project Admin's settings, artifact audit tables, and usage events that the admin configuration, kickoff resolution, and audit/cost display features all build on. This is technical groundwork performed by Developer, unlocking the Project Admin-facing controls delivered in later features.",
+          "dependencies": [
+            "None — this is the first feature in the epic"
+          ],
+          "affectedPersonas": [
+            "Project Admin",
+            "Developer"
+          ]
+        },
+        {
+          "id": "FEAT-002",
+          "items": [
+            {
+              "id": "PBI-001",
+              "type": "PBI",
+              "title": "Set a default effort level per agent module in Project Settings",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-004"
+              ],
+              "userStory": {
+                "iWant": "set a default effort level (Low, Medium, High, or Inherit) for each Cursor-backed agent module next to its existing model override",
+                "soThat": "every run of that module uses the reasoning effort I choose without anyone picking it per run",
+                "persona": "Project Admin"
+              },
+              "userTypes": [
+                "Project Admin"
+              ],
+              "outOfScope": [
+                "Per-user or per-interview effort overrides — this is a project-wide, per-module default only"
+              ],
+              "businessRules": [
+                "BR-001: Only Project Admin (admin:roles) may write effort defaults",
+                "BR-003: Only low, medium, high, or null are valid effort values"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "The module's effort default is persisted and the card shows Medium next to the existing model selection",
+                  "when": "I select Medium as that module's effort and save",
+                  "given": "I am a Project Admin viewing a module's settings card in Project Settings"
+                },
+                {
+                  "then": "The save request is rejected with a 400 error and no value is persisted",
+                  "when": "I submit an effort value outside low, medium, high, or Inherit",
+                  "given": "I am a Project Admin"
+                },
+                {
+                  "then": "The stored value becomes null and that module falls back to the project default effort, then to the Cursor SDK default",
+                  "when": "I change it back to Inherit and save",
+                  "given": "A module's effort was previously set to High"
+                },
+                {
+                  "then": "The request is denied and no effort default is changed",
+                  "when": "I attempt to call the project-settings write endpoint with an effort value",
+                  "given": "I am a user without admin:roles for the project"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Write endpoint requires admin:roles; effort values are validated against the closed allow-list before persisting",
+                "performance": "Settings read/write stays in the current admin settings response-time range (sub-1-second), matching the existing model-override path",
+                "accessibility": "The effort selector is keyboard-navigable and screen-reader labeled, matching the adjacent model dropdown"
+              }
+            },
+            {
+              "id": "TBI-004",
+              "type": "TBI",
+              "title": "Extend project-settings admin API and UI with per-module effort fields",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Extend the existing project-settings write endpoint and skill-config read endpoint to accept and return the per-module effort fields and defaultEffort added in FEAT-001, validating writes against the closed allow-list and returning 400 on any other value. Extend the Admin Project Settings UI with one effort dropdown per module next to its existing model dropdown, including an explicit Inherit option, saved through the same form submission as the model field.",
+              "parallelGroup": null,
+              "definitionOfDone": [
+                "Admin project-settings write endpoint accepts per-module *Effort fields and defaultEffort, validates against the allow-list, and returns 400 on invalid values",
+                "Skill-config read endpoint returns the effort fields so the UI and other clients can display current defaults",
+                "Admin Project Settings UI shows an effort dropdown with an Inherit option next to every existing module model dropdown",
+                "Unit tests cover accepted values, rejected values, and Inherit (null) round-tripping through save and read"
+              ],
+              "technicalDependencies": [
+                "Depends on the effort columns and shared allow-list type delivered in FEAT-001 (cross-feature dependency tracked at the feature level)"
+              ],
+              "nonFunctionalRequirements": [
+                "Admin write/read stays within the existing settings response-time envelope",
+                "No new RBAC permission key — reuses the existing admin:roles write gate"
+              ]
+            }
+          ],
+          "title": "Admin Per-Module Effort Defaults",
+          "priority": "Must Have",
+          "dependsOn": [
+            "FEAT-001"
+          ],
+          "userTypes": [
+            "Project Admin"
+          ],
+          "outOfScope": [
+            "A runtime effort picker at kickoff — Project Admin defaults only, no override at interview or chat start"
+          ],
+          "description": "Project Admins configure a default effort level next to each existing model override in Project Settings, for every Cursor-backed module, using the same admin write path already gated by admin:roles.",
+          "dependencies": [
+            "Requires the effort columns and shared allow-list from FEAT-001"
+          ],
+          "affectedPersonas": [
+            "Project Admin"
+          ]
+        },
+        {
+          "id": "FEAT-003",
+          "items": [
+            {
+              "id": "PBI-002",
+              "type": "PBI",
+              "title": "Automatically run each agent module at its configured effort level",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-005"
+              ],
+              "userStory": {
+                "iWant": "start an interview that automatically runs at the effort level a Project Admin already configured for the Interview module",
+                "soThat": "I get consistent, predictable agent behavior without having to pick a reasoning effort myself",
+                "persona": "BA"
+              },
+              "userTypes": [
+                "BA"
+              ],
+              "outOfScope": [
+                "A user-visible effort selector at kickoff — resolution is silent and admin-defined"
+              ],
+              "businessRules": [
+                "BR-002: Server resolves effort in order pill/option → module override → project default → omit, ignoring client-supplied effort",
+                "BR-005: Unknown or corrupted stored effort values are treated as unset and omitted rather than failing the run"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "The interview's agent kickoff is sent to the Cursor SDK with effort High",
+                  "when": "A BA starts a new interview",
+                  "given": "A Project Admin has set the Interview module's effort to High"
+                },
+                {
+                  "then": "The client-supplied value is ignored and the module's configured Low effort is used instead",
+                  "when": "The server processes that kickoff",
+                  "given": "A malicious or buggy client sends effort: \"high\" on a kickoff request for a module configured with effort Low"
+                },
+                {
+                  "then": "No effort argument is passed to the Cursor SDK and the SDK's own default effort applies",
+                  "when": "That module starts a run",
+                  "given": "A module has no configured effort override and no project default effort set"
+                },
+                {
+                  "then": "The unrecognized value is treated as unset, no effort argument is passed, and the run proceeds normally instead of failing",
+                  "when": "A module resolves effort for a new run",
+                  "given": "A project_skill_settings row has a corrupted or unrecognized effort value from a legacy or manual edit"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Any client-supplied effort value on kickoff, create, or send-message requests is ignored; only the server-resolved value reaches the Cursor SDK",
+                "performance": "Effort resolution adds no user-visible delay to kickoff beyond today's model pass-through",
+                "accessibility": "Not applicable — this is a server-side resolution with no new UI surface"
+              }
+            },
+            {
+              "id": "TBI-005",
+              "type": "TBI",
+              "title": "Introduce server-set agentModule identity and effort resolution in the kickoff/config-resolution service",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Add a server-set module identifier to the kickoff object that each calling service (Interview, PRD, ADR, Design Doc, Standup, Feature Request, and the rest, plus the Agent Home skill-pill handler) builds — never supplied or overridable by the browser. Extend the kickoff/config-resolution service to resolve effort using that identifier in the order pill/option effort → that module's effort override → project defaultEffort → omit, and pass the resolved value to the Cursor SDK alongside model. Ignore any client-supplied effort field on kickoff, on SendMessageRequest turns, and on artifact-create request bodies.",
+              "parallelGroup": null,
+              "definitionOfDone": [
+                "Every calling service that builds a kickoff sets a server-only module identifier that the browser cannot supply or override",
+                "The kickoff/config-resolution service resolves effort via pill/option → module override → project default → omit, and passes the result to the Cursor SDK",
+                "Client-supplied effort on kickoff, SendMessageRequest, and artifact-create bodies is ignored",
+                "Unit tests cover at least two representative modules (e.g. Interview and ADR) proving resolution and client-value rejection"
+              ],
+              "technicalDependencies": [
+                "Depends on the effort columns and shared allow-list type delivered in FEAT-001 (cross-feature dependency tracked at the feature level)"
+              ],
+              "nonFunctionalRequirements": [
+                "Resolution executes on the existing kickoff/create request path with no added round trip",
+                "Unrecognized or corrupted stored effort values must not raise an error — treat as unset and omit"
+              ]
+            }
+          ],
+          "route": "/home",
+          "title": "Server-Authoritative Effort Resolution at Kickoff",
+          "priority": "Must Have",
+          "dependsOn": [
+            "FEAT-001"
+          ],
+          "userTypes": [
+            "BA",
+            "Product-Owner",
+            "Manager",
+            "Developer",
+            "Authenticated User"
+          ],
+          "outOfScope": [
+            "Trusting or accepting a client-supplied effort value on kickoff, create, or send-message requests"
+          ],
+          "description": "When BA, Product-Owner, Manager, Developer, or Authenticated User members start an agent module — Interview, ADR, Development, PRD, Design Doc, Standup, Feature Request, and the rest — the server resolves that module's configured default effort and passes it to the Cursor SDK, without any runtime picker and without trusting a client-supplied effort value.",
+          "dependencies": [
+            "Requires the effort columns and shared allow-list from FEAT-001"
+          ],
+          "affectedPersonas": [
+            "BA",
+            "Product-Owner",
+            "Manager",
+            "Developer",
+            "Authenticated User"
+          ],
+          "personaBehaviors": [
+            {
+              "behavior": "Server resolves the module's configured default effort at kickoff and passes it to the Cursor SDK automatically; no runtime picker, no client-supplied effort override",
+              "userTypes": [
+                "BA",
+                "Product-Owner",
+                "Manager",
+                "Developer",
+                "Authenticated User"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "FEAT-004",
+          "items": [
+            {
+              "id": "PBI-003",
+              "type": "PBI",
+              "title": "See the effort level that ran on an artifact and in cost history",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-006"
+              ],
+              "userStory": {
+                "iWant": "see the effort level next to the model on an artifact header when I open an Interview, PRD, Design Doc, or Design Prototype, and in AI Cost Analytics when I have analytics:ai-cost:view permission",
+                "soThat": "I can tell which reasoning effort produced a given artifact or cost row",
+                "persona": "Authenticated User"
+              },
+              "userTypes": [
+                "BA",
+                "Product-Owner",
+                "Manager",
+                "Developer",
+                "Authenticated User"
+              ],
+              "outOfScope": [
+                "Filtering or grouping cost history by effort — display only, no new query capability"
+              ],
+              "businessRules": [
+                "BR-004: Effort is snapshotted once at kickoff and stays fixed for the rest of an in-flight thread even if the admin default later changes"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "The header shows Medium next to the snapshotted model",
+                  "when": "I open that interview's header",
+                  "given": "An interview was created after a Project Admin set the Interview module's effort to Medium"
+                },
+                {
+                  "then": "No effort label is shown and no error appears — the header renders exactly as it did before",
+                  "when": "I open that interview's header",
+                  "given": "An interview was created before this feature shipped and has no stored effort value"
+                },
+                {
+                  "then": "The thread's artifact header and any new usage-event rows for that thread still show Medium, not High",
+                  "when": "A Project Admin changes the Interview module's default to High and I send another message in that same thread",
+                  "given": "An interview thread is in progress with effort snapshotted as Medium"
+                },
+                {
+                  "then": "I am denied access and cannot see any effort values on cost rows",
+                  "when": "I call the AI cost/usage API",
+                  "given": "I am a user without analytics:ai-cost:view"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Effort on cost rows is visible only to users with analytics:ai-cost:view; effort on an artifact header is visible to whoever can already open that artifact",
+                "performance": "Displaying effort adds no additional query beyond the existing model-display read path",
+                "accessibility": "The effort label reuses the existing meta-label/meta-value pattern already used for model, inheriting its accessibility treatment"
+              }
+            },
+            {
+              "id": "TBI-006",
+              "type": "TBI",
+              "title": "Persist resolved effort snapshot on artifact create paths and usage events; render next to model in existing views",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Extend the Interview, PRD, ADR, Design Doc, and agent-engine Design Prototype create paths to snapshot the resolved effort on the artifact row at creation time, using the same value passed to the Cursor SDK for that run. Extend the usage/cost recording service to include the resolved effort on every ai_usage_events row it writes. Extend the existing artifact header components and AI Cost Analytics views to render effort next to the already-displayed model, showing nothing when the value is null.",
+              "parallelGroup": null,
+              "definitionOfDone": [
+                "Interview, PRD, ADR, Design Doc, and agent-engine Design Prototype create paths snapshot resolved effort on the artifact row",
+                "Usage/cost recording service writes resolved effort onto every ai_usage_events row",
+                "Existing artifact header components show effort next to model when present",
+                "AI Cost Analytics event rows/detail show effort next to model when present",
+                "Tests confirm null effort renders as absent with no error in both artifact headers and cost views"
+              ],
+              "technicalDependencies": [
+                "Depends on the resolved effort value produced by FEAT-003's kickoff/config-resolution service and the columns from FEAT-001 (cross-feature dependencies tracked at the feature level)"
+              ],
+              "nonFunctionalRequirements": [
+                "No new endpoints — reuses existing artifact-create and usage-event-write paths",
+                "Null effort renders as absent, not as an error or placeholder string"
+              ]
+            }
+          ],
+          "title": "Effort Snapshot on Audit & Cost History",
+          "priority": "Must Have",
+          "dependsOn": [
+            "FEAT-001",
+            "FEAT-002",
+            "FEAT-003"
+          ],
+          "userTypes": [
+            "BA",
+            "Product-Owner",
+            "Manager",
+            "Developer",
+            "Authenticated User"
+          ],
+          "outOfScope": [
+            "A new AI Cost Analytics view or dashboard filter by effort — effort is shown inline on existing rows/headers only"
+          ],
+          "description": "Anyone who can open an Interview, PRD, Design Doc, or Design Prototype sees the effort level that actually ran next to the model on the artifact header. Users with analytics:ai-cost:view see effort next to model in AI Cost Analytics — the same way model is already shown, using the value snapshotted at kickoff.",
+          "dependencies": [
+            "Requires the resolved effort value produced by FEAT-003 and the columns from FEAT-001; most useful once FEAT-002 lets admins set non-null values"
+          ],
+          "affectedPersonas": [
+            "BA",
+            "Product-Owner",
+            "Manager",
+            "Developer",
+            "Authenticated User"
+          ],
+          "personaBehaviors": [
+            {
+              "behavior": "Sees the snapshotted effort level next to the model on artifact headers when opening an Interview, PRD, Design Doc, or Design Prototype they already have access to",
+              "userTypes": [
+                "BA",
+                "Product-Owner",
+                "Manager",
+                "Developer",
+                "Authenticated User"
+              ]
+            },
+            {
+              "behavior": "Sees effort next to model on AI Cost Analytics event rows and detail when holding analytics:ai-cost:view permission (not tied to a specific persona)",
+              "userTypes": [
+                "BA",
+                "Product-Owner",
+                "Manager",
+                "Developer",
+                "Authenticated User"
+              ]
+            }
+          ]
+        }
+      ],
+      "priority": "Must Have",
+      "outOfScope": [
+        "Runtime effort picker for end users (interview start, Agent Home, or any kickoff surface)",
+        "Effort support for Bedrock-only stages (PRD review, Design Prototype/UI Lab Bedrock generation, Design Plan) — those keep max-tokens/timeout/temperature",
+        "New skill files or new SSE event types for effort-aware runs",
+        "Backfilling effort onto historical artifacts or usage events created before this feature ships"
+      ],
+      "assumptions": [
+        "The Cursor SDK effort argument accepts exactly low, medium, and high; if the SDK's real allow-list differs, the shared effort type must be corrected to match before release",
+        "ADR already snapshots model on its artifact row, so ADR is included in the artifact-snapshot scope alongside Interview, PRD, Design Doc, and Design Prototype",
+        "Design Prototype gets an effort default only for the agent-engine path; the Bedrock-engine prototype path keeps its existing knobs"
+      ],
+      "description": "Project Admins can already choose an AI model per Cursor-backed agent module in Project Settings, but there is no matching control for reasoning effort, so every module always runs at the Cursor SDK's default effort and nobody can tell after the fact which effort produced a given artifact or cost row. This epic extends the existing model-override path with a sibling effort default per module, resolved server-side at kickoff and snapshotted on artifacts and usage events the same way model already is.",
+      "dependencies": [
+        "None"
+      ],
+      "successMetrics": [
+        "100% of Cursor SDK-backed module runs snapshot the effort value that actually ran (or null) on the artifact/usage-event record",
+        "Project Admins can configure a default effort for every existing model-override stage from the same Project Settings screen, with zero new pages"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "Project Admin",
+      "type": "Admin",
+      "description": "Per-project administrator who configures per-module effort defaults in Project Settings and views AI cost/audit history"
+    },
+    {
+      "name": "BA",
+      "type": "Internal",
+      "description": "Business analyst who starts design interviews and benefits from the interview module's configured effort running automatically"
+    },
+    {
+      "name": "Product-Owner",
+      "type": "Internal",
+      "description": "Product owner who starts design interviews and benefits from the interview module's configured effort running automatically"
+    },
+    {
+      "name": "Manager",
+      "type": "Internal",
+      "description": "Manager who starts design interviews and benefits from the interview module's configured effort running automatically"
+    },
+    {
+      "name": "Developer",
+      "type": "Technical",
+      "description": "Developer who starts ADR and Development agent sessions and benefits from the configured module effort running automatically"
+    },
+    {
+      "name": "Authenticated User",
+      "type": "Internal",
+      "description": "Any logged-in Apex user who starts Agent Home chat or Feature Request sessions and benefits from the configured module effort running automatically"
+    }
+  ],
+  "businessRules": [
+    {
+      "id": "BR-001",
+      "rule": "Only a Project Admin (admin:roles) may set or change a module's default effort; the write happens on the existing project-settings PUT endpoint",
+      "appliesTo": "Set a default effort level per agent module in Project Settings (PBI)"
+    },
+    {
+      "id": "BR-002",
+      "rule": "The server resolves effort server-side in this order — pill/option effort, then that module's own effort override, then the project default effort, then omit — and ignores any effort value a client supplies on kickoff, create, or send-message requests",
+      "appliesTo": "Automatically run each agent module at its configured effort level (PBI)"
+    },
+    {
+      "id": "BR-003",
+      "rule": "Only low, medium, or high (or null, meaning inherit) are valid effort values; the admin write endpoint rejects any other string with a 400 error",
+      "appliesTo": "Set a default effort level per agent module in Project Settings (PBI)"
+    },
+    {
+      "id": "BR-004",
+      "rule": "Effort is resolved and snapshotted once at kickoff; later turns in the same thread reuse that snapshot even if a Project Admin changes the module's default afterward",
+      "appliesTo": "See the effort level that ran on an artifact and in cost history (PBI)"
+    },
+    {
+      "id": "BR-005",
+      "rule": "An unknown or corrupted stored effort value at run time is treated as unset and the effort argument is omitted rather than failing the run",
+      "appliesTo": "Automatically run each agent module at its configured effort level (PBI)"
+    }
+  ],
+  "assumptionsMade": [
+    "The Cursor SDK effort argument accepts exactly low, medium, and high; if the SDK's actual allow-list differs, the shared effort type must be corrected to match before this ships.",
+    "ADR already snapshots model on its artifact row in the current schema, so ADR is included in the artifact-snapshot scope alongside Interview, PRD, Design Doc, and Design Prototype.",
+    "Design Prototype gets an effort default only for the agent-engine path (prototypeEngine = agent); the Bedrock-engine prototype path is out of scope and keeps its existing knobs.",
+    "Stages with no dedicated artifact-audit column (Standup, Feature Request, Technical, Issue, Calendar Assistant, Load Test Generation, Design Module, Design Module Scoping) still get a usage-event effort column; there is no artifact row for those to snapshot onto.",
+    "No feature flag key is needed because Project Settings writes are already gated by admin:roles and a null/Inherit default preserves today's behavior until a Project Admin opts in."
+  ],
+  "implementationPhases": [
+    {
+      "epics": [
+        "Per-Module Agent Effort Defaults"
+      ],
+      "phase": 1,
+      "rationale": "This PRD scopes a single epic. Internal sequencing across its four features is captured through feature-level dependsOn (FEAT-002 and FEAT-003 depend on FEAT-001's data model; FEAT-004 depends on FEAT-001, FEAT-002, and FEAT-003), so no cross-epic phase ordering is needed."
+    }
+  ]
+}

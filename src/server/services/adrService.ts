@@ -9,6 +9,7 @@ import {
   reviewComments,
 } from '../db/schema';
 import type { Adr, AdrStatus, AdrSummary } from '../../shared/types/adr';
+import type { EffortLevel } from '../../shared/types/effort';
 import { cancelRun, markAsInterviewThread, readOutputAdr, hydrateThread } from './chatAgentService';
 import { getApproverUserIdsForProject, getSkillSettingsName } from './projectSettingsService';
 import { assignApprovers, isApprovalComplete } from './documentApprovalService';
@@ -97,6 +98,7 @@ async function withSettingsName(
       displayName: displayNameById.get(id) ?? id,
     })),
     model: row.model ?? undefined,
+    effort: row.effort ?? undefined,
     skillSettingsId: row.skillSettingsId ?? null,
     skillSettingsName: await getSkillSettingsName(row.skillSettingsId),
     status: mapStatus(row.status),
@@ -112,6 +114,7 @@ export async function createAdr(opts: {
   title: string;
   chatThreadId: string;
   model?: string;
+  effort?: EffortLevel;
   skillSettingsId?: string | null;
   reviewerIds?: string[];
 }): Promise<{ adrId: string; threadId: string }> {
@@ -137,6 +140,7 @@ export async function createAdr(opts: {
     project: opts.project,
     repo: opts.repo,
     model: opts.model ?? null,
+    effort: opts.effort ?? null,
     skillSettingsId: opts.skillSettingsId ?? null,
     status: 'in_progress',
   }).returning({ id: adrs.id });

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import App from '../App';
 import { useAppShell } from '../hooks/useAppShell';
@@ -50,11 +50,36 @@ jest.mock('../components/AppHeader', () => ({
 }));
 
 jest.mock('../components/AgentHome', () => ({
-  AgentHome: () => <div data-testid="agent-home">Agent Home Content</div>,
+  AgentHome: (props: {
+    canOpenChat?: boolean;
+    onOpenChatPanel?: () => void;
+    onRestoreThread?: (id: string) => void;
+  }) => {
+    mockAgentHomeProps = props;
+    return (
+      <div data-testid="agent-home">
+        Agent Home Content
+        <button type="button" onClick={props.onOpenChatPanel}>Toggle chat</button>
+      </div>
+    );
+  },
 }));
 
 jest.mock('../components/ChatAgentPanel', () => ({
-  ChatAgentPanel: () => null,
+  ChatAgentPanel: (props: {
+    thread?: { id: string; kickoff: { project: string } } | null;
+    activeThreadId?: string | null;
+    isOpen?: boolean;
+    onNewChat?: () => Promise<void>;
+  }) => {
+    mockChatPanelProps = props;
+    return props.isOpen ? (
+      <div data-testid="chat-agent-panel-open">
+        Chat open
+        <button type="button" onClick={() => { void props.onNewChat?.(); }}>Panel new</button>
+      </div>
+    ) : null;
+  },
 }));
 
 jest.mock('../components/Changelog', () => ({
@@ -90,6 +115,18 @@ jest.mock('react-dnd-html5-backend', () => ({
 }));
 
 const mockedUseFeatureFlags = useFeatureFlags as jest.MockedFunction<typeof useFeatureFlags>;
+let mockAgentHomeProps: {
+  canOpenChat?: boolean;
+  onOpenChatPanel?: () => void;
+  onRestoreThread?: (id: string) => void;
+} = {};
+let mockChatPanelProps: {
+  thread?: { id: string; kickoff: { project: string } } | null;
+  activeThreadId?: string | null;
+  isOpen?: boolean;
+  onNewChat?: () => Promise<void>;
+} = {};
+const mockStartChatMutateAsync = jest.fn();
 
 function makeAppShell(overrides: Record<string, unknown> = {}) {
   return {
@@ -148,7 +185,10 @@ function setupBase(flagsOverride: Record<string, boolean> = {}) {
   (useProjectMenuConfig as jest.Mock).mockReturnValue({ enabledViews: [], isLoading: false });
   (useChatThread as jest.Mock).mockReturnValue({ data: null });
   (useSkillRepos as jest.Mock).mockReturnValue({ data: [], isLoading: false });
-  (useStartChat as jest.Mock).mockReturnValue({ mutateAsync: jest.fn(), isPending: false });
+  (useStartChat as jest.Mock).mockReturnValue({
+    mutateAsync: mockStartChatMutateAsync,
+    isPending: false,
+  });
   mockedUseFeatureFlags.mockReturnValue({
     flags: { 'agent-home': true, ...flagsOverride },
     isLoading: false,
@@ -184,6 +224,8 @@ function renderApp(path: string) {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockAgentHomeProps = {};
+  mockChatPanelProps = {};
 });
 
 describe('App — Home access with permission + flag both enabled (default)', () => {
@@ -192,6 +234,73 @@ describe('App — Home access with permission + flag both enabled (default)', ()
   it('renders AgentHome at /home when both controls are enabled', async () => {
     renderApp('/home');
     expect(await screen.findByTestId('agent-home')).toBeInTheDocument();
+  });
+
+  it('PBI-006 AC-0 opens the shared chat panel from the Home toggle', async () => {
+    (useAppShell as jest.Mock).mockReturnValue(makeAppShell({
+      can: (key: string) => ['home:view', 'chat:view', 'chat:create'].includes(key),
+    }));
+    renderApp('/home');
+
+    expect(await screen.findByTestId('agent-home')).toBeInTheDocument();
+    expect(mockAgentHomeProps.canOpenChat).toBe(true);
+    expect(mockChatPanelProps.isOpen).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle chat' }));
+    expect(await screen.findByTestId('chat-agent-panel-open')).toBeInTheDocument();
+  });
+
+  it('resets to the empty composer without creating or auto-starting a thread', async () => {
+    (useAppShell as jest.Mock).mockReturnValue(makeAppShell({
+      can: (key: string) => ['home:view', 'chat:view', 'chat:create'].includes(key),
+    }));
+    renderApp('/home');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Toggle chat' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Panel new' }));
+
+    expect(mockStartChatMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('does not show a MaxView thread after switching to Apex', async () => {
+    let selectedProject = 'MaxView';
+    (useAppShell as jest.Mock).mockImplementation(() => makeAppShell({
+      selectedProject,
+      selectedAreaPath: selectedProject,
+      availableProjects: ['MaxView', 'Apex'],
+      can: (key: string) =>
+        ['home:view', 'chat:view', 'chat:create'].includes(key),
+    }));
+    (useChatThread as jest.Mock).mockImplementation((threadId: string | null) => ({
+      data: threadId === 'max-thread'
+        ? {
+            id: 'max-thread',
+            userId: 'user-1',
+            kickoff: { project: 'MaxView', repo: 'MaxView', branch: 'main' },
+            messages: [],
+            status: 'idle',
+            workspaceDir: '',
+            flagged: false,
+            createdAt: '2026-09-03T18:00:00.000Z',
+            lastActivityAt: '2026-09-03T18:00:00.000Z',
+          }
+        : null,
+      isFetching: false,
+    }));
+    const view = renderApp('/home');
+
+    await screen.findByTestId('agent-home');
+    act(() => mockAgentHomeProps.onRestoreThread?.('max-thread'));
+    expect(mockChatPanelProps.thread?.kickoff.project).toBe('MaxView');
+
+    selectedProject = 'Apex';
+    view.rerender(
+      <MemoryRouter initialEntries={['/home']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(mockChatPanelProps.thread).toBeNull();
+    expect(mockChatPanelProps.activeThreadId).toBeNull();
   });
 });
 

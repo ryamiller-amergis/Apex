@@ -1,0 +1,115 @@
+.shell {
+  position: fixed;
+  inset: 0 0 0 auto;
+  z-index: 900;
+  display: flex;
+  min-width: 320px;
+  max-width: 92vw;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-md);
+  animation: slide-in 0.3s ease;
+}
+
+@keyframes slide-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+.resize-handle {
+  position: absolute;
+  inset: 0 auto 0 -4px;
+  z-index: 10;
+  width: 8px;
+  cursor: ew-resize;
+}
+
+.resize-handle:hover {
+  background: color-mix(in srgb, var(--accent-color) 35%, transparent);
+}
+
+.header {
+  display: flex;
+  min-height: 48px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px 8px 16px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.title {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.close {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.close:hover,
+.close:focus-visible {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.overlay-mode-marker {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .shell {
+    inset: 0;
+    width: 100% !important;
+    min-width: 0;
+    max-width: none;
+    border-left: 0;
+    box-shadow: none;
+  }
+
+  .resize-handle {
+    display: none;
+  }
+
+  .overlay-mode-marker {
+    display: block;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+  }
+}

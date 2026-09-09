@@ -275,6 +275,31 @@ describe('usePlatformAdminAnchorRegistry', () => {
     expect(buildSmartTaggingCandidatesFromSync(syncPayload)).toHaveLength(20);
     expect(buildSmartTaggingCandidatesFromSync(syncPayload, { batchSize: 10 })).toHaveLength(10);
     expect(buildSmartTaggingCandidatesFromSync(syncPayload, { batchSize: 50 })).toHaveLength(30);
+    expect(buildSmartTaggingCandidatesFromSync(syncPayload, { batchSize: 'all' })).toHaveLength(30);
+  });
+
+  it('does not clip All leftovers to the 50-row preset cap', () => {
+    const created = Array.from({ length: 60 }, (_, i) =>
+      makeRecord({ id: `id-${i}`, testId: `test-${i}` }),
+    );
+    const syncPayload = {
+      discoveries: [],
+      newCandidates: [],
+      existingMatches: [],
+      missingWarnings: [],
+      duplicates: [],
+      unsupportedDynamicPatterns: [],
+      diagnostics: emptySyncDiagnostics,
+      persistence: {
+        created,
+        refreshed: [],
+        markedMissing: [],
+        reviewCandidates: created,
+        newCandidateIdsForSmartTagging: created.map((r) => r.id),
+      },
+    };
+    expect(buildSmartTaggingCandidatesFromSync(syncPayload, { batchSize: 'all' })).toHaveLength(60);
+    expect(buildSmartTaggingCandidatesFromSync(syncPayload, { batchSize: 60 })).toHaveLength(60);
   });
 
   it('scales the smart-tagging poll window with the batch size', () => {
@@ -362,6 +387,41 @@ describe('usePlatformAdminAnchorRegistry', () => {
       expect([...startedCounts].sort((a, b) => b - a)).toEqual([10, 10, 5]);
       expect(status?.status).toBe('ready');
       expect(status?.updated).toHaveLength(25);
+    });
+
+    it('fans All leftovers into 10-anchor chunks instead of one capped request', async () => {
+      let threadSeq = 0;
+      const startedCounts: number[] = [];
+
+      (global.fetch as jest.Mock) = jest.fn((url: string, init?: RequestInit) => {
+        if (url.includes('/smart-tagging/start')) {
+          const body = JSON.parse((init?.body as string) ?? '{}');
+          const testIds = (body.candidates ?? []).map((c: { testId: string }) => c.testId);
+          startedCounts.push(testIds.length);
+          const threadId = `thread-${threadSeq++}`;
+          return Promise.resolve(
+            jsonResponse({
+              threadId,
+              threadIds: [threadId],
+              provenance: { provider: 'cursor', model: 'm' },
+              candidateTestIds: testIds,
+            }),
+          );
+        }
+        return Promise.resolve(
+          jsonResponse({ status: 'ready', updated: [] }),
+        );
+      });
+
+      const status = await runChunkedAnchorSmartTagging(buildSyncResult(51), {
+        batchSize: 'all',
+        pollIntervalMs: 1,
+      });
+
+      expect(startedCounts.reduce((sum, n) => sum + n, 0)).toBe(51);
+      expect(Math.max(...startedCounts)).toBeLessThanOrEqual(10);
+      expect(startedCounts).toHaveLength(6);
+      expect(status?.status).toBe('ready');
     });
 
     it('returns ready with a warning when some chunks fail but others succeed', async () => {
@@ -482,6 +542,37 @@ describe('usePlatformAdminAnchorRegistry', () => {
           String(c[0]).includes('/anchor-registry/bulk') && c[1]?.method === 'POST',
       ).length,
     ).toBeGreaterThanOrEqual(1);
+  });
+
+  it('treats high-confidence classifier provenance as review-ready', () => {
+    const classified = makeRecord({
+      id: 'clf-1',
+      testId: 'clf-1',
+      smartTags: ['ado', 'create', 'error'],
+      aiProvenance: {
+        provider: 'cursor',
+        model: 'anchor-classifier',
+        skillPath: '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+        generatedAt: '2026-01-01T00:00:00.000Z',
+        confidence: 0.9,
+        rationale: 'classifier',
+      },
+    });
+    expect(hasRealAiProvenance(classified)).toBe(true);
+    const low = makeRecord({
+      id: 'clf-low',
+      testId: 'clf-low',
+      smartTags: ['header', 'all-users', 'discover'],
+      aiProvenance: {
+        provider: 'cursor',
+        model: 'anchor-classifier',
+        skillPath: '.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md',
+        generatedAt: '2026-01-01T00:00:00.000Z',
+        confidence: 0.4,
+        rationale: 'no owner',
+      },
+    });
+    expect(hasRealAiProvenance(low)).toBe(false);
   });
 
   it('does not overwrite open AI-enriched rows when merging next sync or AI results', () => {

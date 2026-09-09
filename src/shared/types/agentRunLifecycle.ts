@@ -3,6 +3,7 @@
  * Human-readable labels are rendered downstream in FEAT-006 (TBI-008).
  */
 
+import type { EffortLevel } from './effort';
 import type { SkillProvider } from './projectSettings';
 
 export type AgentRunStatus =
@@ -57,6 +58,8 @@ export interface RunCheckResult {
 export interface ExecutionSnapshot {
   prompt: string;
   model: string;
+  /** Reasoning effort frozen at thread kickoff; omitted to use the SDK/model default. */
+  effort?: EffortLevel;
   /**
    * Writable Agent cwd (`.ai-pilot` scratch/outputs). For PRD/design-doc this is
    * the thin thread workspace — not a full repo clone.

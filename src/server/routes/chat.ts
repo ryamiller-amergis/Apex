@@ -12,8 +12,6 @@ import {
   isPrdReady,
   getThread,
   recoverStaleRunningThread,
-  isRepositoryReadingChatCaller,
-  resolveGroundingCallerKey,
 } from '../services/chatAgentService';
 import { db } from '../db/drizzle';
 import { eq, desc } from 'drizzle-orm';
@@ -26,6 +24,7 @@ import type {
   AgentRunStatusResponse,
   AgentRunPhase,
   ChatAttachment,
+  ChatTurnSkill,
   ChatThread,
   ChatThreadStatus,
   SseEvent,
@@ -48,15 +47,10 @@ import {
   type AgentRunHealthSnapshot,
 } from '../services/agentRunReaperService';
 import { getMyWorkSessionContext, logMyWorkSession } from '../services/myWorkSessionLogger';
-import {
-  isFeatureEnabled,
-  isProjectRepositoryCheckoutReadinessEnabled,
-} from '../services/featureFlagService';
-import {
-  assertResolvedProjectRepositoryReady,
-  ProjectRepositoryNotReady,
-} from '../services/projectRepositoryReadinessService';
+import { isFeatureEnabled } from '../services/featureFlagService';
 import { trackEvent } from '../services/telemetry';
+import { deriveAgentModule } from '../services/agentEffortResolver';
+import { resolveSkillConfig } from '../services/projectSettingsService';
 
 const router = Router();
 
@@ -270,6 +264,20 @@ function readAttachments(raw: unknown): ChatAttachment[] {
   });
 }
 
+function readTurnSkill(raw: unknown): ChatTurnSkill | undefined {
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== 'object') {
+    throw new HttpError('skill must contain a name and path', 400);
+  }
+  const candidate = raw as Partial<ChatTurnSkill>;
+  const name = typeof candidate.name === 'string' ? candidate.name.trim() : '';
+  const path = typeof candidate.path === 'string' ? candidate.path.trim() : '';
+  if (!name || !path || name.length > 120 || path.length > 500 || path.includes('\0')) {
+    throw new HttpError('skill must contain a valid name and path', 400);
+  }
+  return { name, path };
+}
+
 /**
  * GET /api/chat/threads
  * List thread summaries for the current user.
@@ -308,7 +316,8 @@ router.get('/threads', async (req: Request, res: Response) => {
 
 /**
  * POST /api/chat/threads
- * Start a new chat thread (clones the repo, injects context).
+ * Start a new chat thread. Repository grounding resolves from the cached,
+ * SHA-pinned checkout when the first turn begins.
  * Body: StartChatRequest
  */
 router.post('/threads', async (req: Request, res: Response) => {
@@ -319,37 +328,20 @@ router.post('/threads', async (req: Request, res: Response) => {
 
   try {
     const userId = getUserId(req);
-    const kickoff = body.kickoff;
-    const isDevSession = kickoff.mode === 'development';
-    if (isRepositoryReadingChatCaller(kickoff, isDevSession)) {
-      const project = kickoff.project;
-      const surface = resolveGroundingCallerKey(kickoff);
-      const enabled = await isProjectRepositoryCheckoutReadinessEnabled({
-        userId,
-        project,
-        caller: surface,
-      });
-      // @feature-flag:project-repository-checkout-readiness start winner=enabled
-      if (enabled) {
-        // @feature-flag:project-repository-checkout-readiness enabled-start
-        try {
-          await assertResolvedProjectRepositoryReady({
-            project,
-            settingsId: kickoff.skillSettingsId,
-            surface,
-          });
-        } catch (e) {
-          if (e instanceof ProjectRepositoryNotReady) {
-            res.status(409).json(e.toJSON());
-            return;
-          }
-          throw e;
-        }
-        // @feature-flag:project-repository-checkout-readiness enabled-end
-      }
-      // @feature-flag:project-repository-checkout-readiness end
-    }
-
+    const {
+      effort: _clientEffort,
+      agentModule: _clientAgentModule,
+      ...clientKickoff
+    } = body.kickoff;
+    const skillConfig = await resolveSkillConfig({
+      project: clientKickoff.project,
+      settingsId: clientKickoff.skillSettingsId ?? undefined,
+    });
+    const agentModule = deriveAgentModule(clientKickoff, skillConfig);
+    const kickoff = {
+      ...clientKickoff,
+      ...(agentModule ? { agentModule } : {}),
+    };
     const thread = await createThread(userId, kickoff, {
       skipAutoKickoff: Boolean(body.skipAutoKickoff),
     });
@@ -481,14 +473,6 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
     sendEvent({ type: 'message', message: msg });
   }
 
-  // Send current status after the message replay so the client can render
-  // the full history before seeing the running/idle indicator. Prefer the
-  // hydrated status since it reflects the normalized in-memory state.
-  sendEvent(buildStreamStatusEvent(
-    hydrated?.status ?? thread.status,
-    eventDrivenTermination,
-  ));
-
   unsubscribe = subscribeToThread(req.params.id, sendLocalEvent);
 
   // Cross-worker: also subscribe via Postgres LISTEN/NOTIFY so tokens from
@@ -506,6 +490,14 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
     return [];
   });
   for (const envelope of replayEvents) sendEnvelope(envelope);
+
+  // Historical phase/done events must not override the current thread state.
+  // Send the authoritative snapshot after replay, then drain events that
+  // arrived live while replay was in progress.
+  sendEvent(buildStreamStatusEvent(
+    hydrated?.status ?? thread.status,
+    eventDrivenTermination,
+  ));
   replaying = false;
   pendingLiveEvents
     .sort((left, right) => left.timestamp.localeCompare(right.timestamp) || left.sequence - right.sequence)
@@ -542,8 +534,10 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
 router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, res: Response) => {
   const body = req.body as Partial<SendMessageRequest>;
   let attachments: ChatAttachment[];
+  let turnSkill: ChatTurnSkill | undefined;
   try {
     attachments = readAttachments(body.attachments);
+    turnSkill = readTurnSkill(body.skill);
   } catch (err: unknown) {
     return res.status(errorStatus(err, 400)).json({ error: errorMessage(err) });
   }
@@ -560,37 +554,6 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
     // Dead run cleared — accept the message.
   }
 
-  const isDevSession = thread.kickoff?.mode === 'development';
-  if (thread.kickoff && isRepositoryReadingChatCaller(thread.kickoff, isDevSession)) {
-    const userId = getUserId(req);
-    const project = thread.kickoff.project;
-    const surface = resolveGroundingCallerKey(thread.kickoff);
-    const enabled = await isProjectRepositoryCheckoutReadinessEnabled({
-      userId,
-      project,
-      caller: surface,
-    });
-    // @feature-flag:project-repository-checkout-readiness start winner=enabled
-    if (enabled) {
-      // @feature-flag:project-repository-checkout-readiness enabled-start
-      try {
-        await assertResolvedProjectRepositoryReady({
-          project,
-          settingsId: thread.kickoff.skillSettingsId,
-          surface,
-        });
-      } catch (e) {
-        if (e instanceof ProjectRepositoryNotReady) {
-          res.status(409).json(e.toJSON());
-          return;
-        }
-        throw e;
-      }
-      // @feature-flag:project-repository-checkout-readiness enabled-end
-    }
-    // @feature-flag:project-repository-checkout-readiness end
-  }
-
   // Fire-and-forget: response streams via SSE/WS; 202 returns immediately.
   // Breadcrumb BEFORE the async turn so a hang inside sendMessage is still visible.
   const threadId = req.params.id;
@@ -603,7 +566,9 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
     attachmentCount: String(attachments.length),
   });
   res.status(202).json({ ok: true });
-  sendMessage(threadId, body.text ?? '', body.model, attachments).catch((err: unknown) => {
+  sendMessage(threadId, body.text ?? '', body.model, attachments, {
+    turnSkill,
+  }).catch((err: unknown) => {
     console.error(`[chat] sendMessage error for thread ${threadId}:`, errorMessage(err));
     trackEvent('chat.send.failed', {
       threadId,

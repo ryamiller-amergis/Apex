@@ -143,6 +143,39 @@ describe('aiRunsWorker host', () => {
         kind: 'terminal',
         status: 'completed',
         artifactsFlushed: true,
+        durationMs: expect.any(Number),
+      }),
+    );
+  });
+
+  it('forwards runtime token counts on the completed terminal', async () => {
+    const run = createRun();
+    (run.wait as jest.Mock).mockResolvedValue({
+      status: 'finished',
+      result: 'done',
+      usage: {
+        inputTokens: 42_000,
+        outputTokens: 900,
+        cacheReadTokens: 118_000,
+        cacheWriteTokens: 3_000,
+      },
+    });
+    const ctx = setup({ run });
+
+    await ctx.worker.execute(dispatch);
+
+    expect(ctx.postIngest).toHaveBeenLastCalledWith(
+      'project-1',
+      'run-1',
+      expect.objectContaining({
+        kind: 'terminal',
+        status: 'completed',
+        artifactsFlushed: true,
+        inputTokens: 42_000,
+        outputTokens: 900,
+        cacheReadTokens: 118_000,
+        cacheWriteTokens: 3_000,
+        durationMs: expect.any(Number),
       }),
     );
   });
@@ -171,6 +204,7 @@ describe('aiRunsWorker host', () => {
         status: 'failed',
         artifactsFlushed: true,
         detail: 'Worker execution failed: execution failed',
+        durationMs: expect.any(Number),
       }),
     );
   });

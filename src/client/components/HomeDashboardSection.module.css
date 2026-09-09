@@ -1,0 +1,135 @@
+/* The dashboard shares the page with a chat panel that can open and resize, so
+   tile layout keys off this element's own width rather than the viewport. */
+.section {
+  container-type: inline-size;
+  width: 100%;
+  margin: 24px 0 32px;
+}
+
+.heading {
+  margin: 0 0 0 4px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.skeleton-heading {
+  margin-bottom: 12px;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-bottom: 12px;
+}
+
+.scope-toggle {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+}
+
+.scope-button {
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.scope-button:hover {
+  color: var(--text-primary);
+}
+
+.scope-button.active {
+  background: var(--accent-color);
+  color: var(--on-accent);
+  box-shadow: var(--glow-accent);
+}
+
+.scope-button:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+/* Single column is the floor: every tile stays readable no matter how narrow the
+   dashboard gets. Columns are added back as the container earns the room. */
+.primary-row,
+.secondary-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 12px;
+}
+
+.primary-row {
+  margin-bottom: 12px;
+}
+
+@container (min-width: 560px) {
+  .secondary-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 860px) {
+  .primary-row {
+    grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+  }
+}
+
+@container (min-width: 1180px) {
+  .secondary-row {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .primary-row,
+  .secondary-row {
+    gap: 16px;
+  }
+
+  .primary-row {
+    margin-bottom: 16px;
+  }
+}
+
+@keyframes shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+.skeleton-card {
+  min-width: 0;
+  min-height: 160px;
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.skeleton-line {
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--bg-tertiary) 25%, var(--bg-secondary) 50%, var(--bg-tertiary) 75%);
+  background-size: 400px 100%;
+  animation: shimmer 1.6s infinite linear;
+}
+
+.skeleton-line-wide { width: 70%; }
+.skeleton-line-medium { width: 50%; }
+.skeleton-line-short { width: 35%; }

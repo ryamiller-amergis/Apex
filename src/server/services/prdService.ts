@@ -8,6 +8,7 @@ const authorUser = alias(appUsers, 'author_user');
 const prdOwnerUser = alias(appUsers, 'prd_owner_user');
 import type { Prd, PrdStatus, PrdSummary, PrdValidationBaseline, PrdReadinessOverride, ReviewPrdRequest, TestCaseSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { CreatePrdAdoItemsRequest, CreatePrdAdoItemsResponse, SelectedBacklogEpic, SelectedBacklogFeature, SelectedBacklogPBI, GlobalBusinessRule, DependencyGraphNode } from '../../shared/types/interview';
+import type { EffortLevel } from '../../shared/types/effort';
 import { readOutputPrd, readOutputBacklog, sendMessage, createThread as createChatThread, cancelRun, prepareBackgroundWorkflowTurn, isThreadIdle, hydrateThread } from './chatAgentService';
 import { isThreadRunAlive } from './agentRunReaperService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
@@ -25,7 +26,7 @@ import { extractFeatures } from '../services/designPrototypeService';
 import { stampAdoIds } from '../../shared/utils/backlogTransform';
 import { derivePrdReadiness } from '../../shared/utils/prdReadiness';
 import { buildOverrideHistory } from '../../shared/utils/validationOverride';
-import { normalizeValidationScorecard } from '../../shared/utils/validationReport';
+import { parseAgentValidationScorecard, NO_SCORECARD_REASON, VALIDATION_TIMEOUT_REASON } from '../../shared/utils/validationReport';
 import { BACKLOG_USER_TYPE_CONVENTIONS_MD } from '../../shared/utils/backlogUserTypeConventions';
 import {
   hashPrdValidationContent,
@@ -39,6 +40,7 @@ import {
   cancelDocumentValidation,
   generateFallbackReport,
   isDocumentValidationWatcherActive,
+  persistUnusableValidationResult,
   startDocumentValidationWatcher,
   stopDocumentValidationWatcher,
   type DocumentValidationAdapter,
@@ -186,6 +188,7 @@ export async function createPrd(opts: {
   chatThreadId: string;
   title?: string;
   model?: string;
+  effort?: EffortLevel;
   skillSettingsId?: string | null;
 }): Promise<{ prdId: string; threadId: string }> {
   // Insert only — never await grounding/materialization here. Interview "Generate
@@ -201,6 +204,7 @@ export async function createPrd(opts: {
       authorId: opts.userId,
       title: opts.title ?? 'Untitled PRD',
       model: opts.model ?? null,
+      effort: opts.effort ?? null,
       skillSettingsId: opts.skillSettingsId ?? null,
       content: '',
       status: 'generating',
@@ -1031,6 +1035,7 @@ function rowToPrdSummary(
     project: row.project,
     title: row.title,
     model: row.model ?? undefined,
+    effort: row.effort ?? undefined,
     skillSettingsId: row.skillSettingsId ?? null,
     skillSettingsName: skillSettingsName ?? null,
     status: row.status as PrdStatus,
@@ -1801,7 +1806,7 @@ export async function arePrdValidationArtifactsReady(prdId: string): Promise<boo
 }
 
 function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
-  return {
+  const adapter: DocumentValidationAdapter = {
     getDocumentId: () => prd.id,
     getProject: () => prd.project,
     getSkillSettingsId: () => prd.skillSettingsId ?? null,
@@ -1872,8 +1877,13 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
         }
         return;
       }
+      // Persist score/status only while still validating so a later 0%
+      // placeholder cannot clobber a completed post-run result. A usable
+      // scorecard still applies kickoff approvers, contentHash, and
+      // notifications even if post-run already left pending_review/draft.
+      const isUnusablePlaceholder = scorecard.slug === 'validation-unusable';
       const newStatus: PrdStatus = scorecard.is_ready ? 'pending_review' : 'draft';
-      const kickoff = newStatus === 'pending_review'
+      const kickoff = !isUnusablePlaceholder && newStatus === 'pending_review'
         ? await applyKickoffApproversForReview(prd.id, prd.interviewId, prd.authorId)
         : null;
       const latest = await db.query.prds.findFirst({
@@ -1887,7 +1897,7 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
           latest?.backlogJson ?? prd.backlogJson,
         ),
       };
-      await db.update(prds)
+      const written = await db.update(prds)
         .set({
           validationScore: Math.round(stamped.overall_score),
           validationScorecard: stamped,
@@ -1902,7 +1912,23 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
             : {}),
           updatedAt: new Date().toISOString(),
         })
-        .where(eq(prds.id, prd.id));
+        .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')))
+        .returning({ id: prds.id });
+      if (written.length === 0) {
+        if (isUnusablePlaceholder) return;
+        await db.update(prds)
+          .set({
+            validationScorecard: stamped,
+            ...(kickoff?.designDocApproverIds
+              ? { designDocApproverIds: kickoff.designDocApproverIds }
+              : {}),
+            ...(kickoff?.designPrototypeApproverIds
+              ? { designPrototypeApproverIds: kickoff.designPrototypeApproverIds }
+              : {}),
+            updatedAt: new Date().toISOString(),
+          })
+          .where(eq(prds.id, prd.id));
+      }
       notifyAiCompletion('prd_validation_complete', prd.id, {
         title: prd.title,
         score: Math.round(scorecard.overall_score),
@@ -1917,14 +1943,10 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
       }
     },
     updateDbForValidationTimeout: async () => {
-      await db.update(prds)
-        .set({ status: 'draft', updatedAt: new Date().toISOString() })
-        .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')));
+      await persistUnusableValidationResult(adapter, VALIDATION_TIMEOUT_REASON);
     },
     updateDbForValidationError: async () => {
-      await db.update(prds)
-        .set({ status: 'draft', updatedAt: new Date().toISOString() })
-        .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')));
+      await persistUnusableValidationResult(adapter, NO_SCORECARD_REASON);
     },
     isCurrentValidationThread: async (threadId: string) => {
       const current = await db.query.prds.findFirst({
@@ -1934,6 +1956,7 @@ function createPrdValidationAdapter(prd: Prd): DocumentValidationAdapter {
       return current?.validationThreadId === threadId;
     },
   };
+  return adapter;
 }
 
 export async function autoStartPrdValidation(
@@ -2019,14 +2042,7 @@ export async function syncPrdValidationResult(prdId: string): Promise<{ score: n
     return null;
   }
 
-  const scorecard = normalizeValidationScorecard(JSON.parse(scorecardRaw));
-  if (!scorecard) {
-    console.warn(`[prd] Scorecard carries no usable overall score (prdId=${prdId})`);
-    await db.update(prds)
-      .set({ status: 'draft', updatedAt: new Date().toISOString() })
-      .where(and(eq(prds.id, prdId), eq(prds.status, 'validating')));
-    return null;
-  }
+  const scorecard = parseAgentValidationScorecard(scorecardRaw);
   const stamped: ValidationScorecard = {
     ...scorecard,
     contentHash: hashPrdValidationContent(prd.content, prd.backlogJson),
@@ -2130,12 +2146,14 @@ export async function triggerFixPrdValidation(
 
     const thread = await createChatThread(userId, {
       project: prd.project,
+      agentModule: 'prdAssistant',
       repo: skillConfig?.skillRepo ?? prd.project,
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider ?? undefined,
       skillPath: skillConfig?.prdAssistantSkillPath ?? undefined,
       freeformContext: context,
       model,
+      assistantType: 'prd',
       skillSettingsId: prd.skillSettingsId ?? skillConfig?.id ?? null,
     }, { skipAutoKickoff: true });
 
@@ -2350,12 +2368,14 @@ export async function triggerFixCoverageGaps(
 
     const thread = await createChatThread(userId, {
       project: prd.project,
+      agentModule: 'prdAssistant',
       repo: skillConfig?.skillRepo ?? prd.project,
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider ?? undefined,
       skillPath: skillConfig?.prdAssistantSkillPath ?? undefined,
       freeformContext: context,
       model,
+      assistantType: 'prd',
       skillSettingsId: prd.skillSettingsId ?? skillConfig?.id ?? null,
     }, { skipAutoKickoff: true });
 

@@ -356,15 +356,18 @@ export async function getAnchorDiscoveryResult(
   if (cancelledThreads.has(threadId)) {
     return { status: 'cancelled' };
   }
-  if (discoveryInFlight.has(threadId)) {
-    return { status: 'pending', provenance };
-  }
   if (!row.workspaceDir) {
     return { status: 'pending', provenance };
   }
 
+  // Output wins over run state: agents hold the kickoff sendMessage promise open
+  // after writing the file, and waiting for it stalls callers that already have
+  // a usable result.
   const raw = readOutput(row.workspaceDir);
   if (!raw) {
+    if (discoveryInFlight.has(threadId)) {
+      return { status: 'pending', provenance };
+    }
     if (isThreadIdle(threadId)) {
       return {
         status: 'failed',

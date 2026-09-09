@@ -6,6 +6,7 @@ import type {
   OutcomeFilters,
   OutcomeSummary,
 } from '../../shared/types/deploymentOutcome';
+import type { RelatedItemsCycleTimeResponse } from '../../shared/types/relatedItemCycleTime';
 
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: 'include', ...options });
@@ -189,4 +190,51 @@ export function useExportOutcomeReport() {
 
     return res.json() as Promise<DeploymentOutcome[]>;
   };
+}
+
+export interface ReleaseEpicSummary {
+  id: number;
+  version: string;
+  status?: string;
+  startDate?: string;
+  targetDate?: string;
+}
+
+export function useReleaseEpics(project?: string, areaPath?: string) {
+  return useQuery<ReleaseEpicSummary[]>({
+    queryKey: ['release-epics-summary', project, areaPath],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (project) params.set('project', project);
+      if (areaPath) params.set('areaPath', areaPath);
+      const qs = params.toString();
+      const epics = await apiFetch<ReleaseEpicSummary[]>(
+        `/api/releases/epics${qs ? `?${qs}` : ''}`,
+      );
+      return epics.filter((epic) => Boolean(epic.version));
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+export function useReleaseRelatedCycleTime(
+  epicId: number | undefined,
+  project: string | undefined,
+  areaPath: string | undefined,
+  enabled: boolean,
+) {
+  return useQuery<RelatedItemsCycleTimeResponse>({
+    queryKey: ['release-related-cycle-time', epicId, project, areaPath],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (project) params.set('project', project);
+      if (areaPath) params.set('areaPath', areaPath);
+      const qs = params.toString();
+      return apiFetch<RelatedItemsCycleTimeResponse>(
+        `/api/releases/${epicId}/cycle-time${qs ? `?${qs}` : ''}`,
+      );
+    },
+    enabled: Boolean(enabled && epicId != null),
+    staleTime: 60_000,
+  });
 }

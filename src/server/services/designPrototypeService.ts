@@ -7,6 +7,7 @@ import { sanitizeMockHtml } from '../utils/htmlSanitizer';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { isAssignedApprover } from './documentApprovalService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
+import { prototypeUsageCtx } from './artifactUsageContext';
 import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
 import { resolveUserStoryIWant } from '../../shared/utils/userStory';
 import type {
@@ -202,6 +203,7 @@ function toSummary(row: typeof designPrototypes.$inferSelect): DesignPrototypeSu
     authorId: row.authorId,
     authorName: resolveUserName(row.authorId),
     model: row.model ?? undefined,
+    effort: row.effort ?? undefined,
     status: row.status as DesignPrototypeSummary['status'],
     mockVersion: row.mockVersion,
     reviewerId: row.reviewerId ?? undefined,
@@ -566,7 +568,7 @@ async function generateSinglePrototype(
       plan: planFeatureToInput(planFeature),
       prototypeContext,
       webReferences,
-    }, modelId, maxTokens, timeoutMs);
+    }, modelId, maxTokens, timeoutMs, prototypeUsageCtx(project, prototypeId));
 
     const html = sanitizeMockHtml(rawHtml);
 
@@ -724,7 +726,7 @@ export async function regeneratePrototype(
       targetStates,
       prototypeTimeoutMs,
       regenScreenshot,
-      undefined,
+      prototypeUsageCtx(prd?.project, prototypeId),
       regenProtoContext,
       regenWebReferences,
     );

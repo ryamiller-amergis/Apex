@@ -518,6 +518,46 @@ describe('reapOrphanedRuns', () => {
     });
   });
 
+  it('fails an interactive dispatch when no actor starts before the cold-start deadline', async () => {
+    mockFindMany.mockResolvedValue([{
+      id: 'run-interactive-stuck',
+      threadId: 'thread-interactive',
+      status: 'dispatched',
+      lane: 'ai-runs-interactive',
+      dispatchMessageId: 'dispatch-interactive',
+      dispatchedAt: timestamp(5 * 60_000 + 1),
+      updatedAt: timestamp(5 * 60_000 + 1),
+      progressPhase: 'dispatched',
+      cancelRequested: false,
+      eventDriven: true,
+    }]);
+
+    await reapOrphanedRuns({ now: () => now, config });
+
+    expect(mockMarkTerminal).toHaveBeenCalledWith(
+      'run-interactive-stuck',
+      expect.objectContaining({
+        status: 'failed',
+        terminalReason: 'worker_lost',
+        dispatchMessageId: 'dispatch-interactive',
+        detail: 'Interactive agent did not start. Please retry.',
+        events: [
+          expect.objectContaining({
+            runId: 'run-interactive-stuck',
+            threadId: 'thread-interactive',
+            type: 'health',
+            status: 'failed',
+            event: expect.objectContaining({
+              type: 'health',
+              health: 'worker_lost',
+            }),
+          }),
+        ],
+      }),
+    );
+    expect(mockRecoverStaleDispatchedRuns).not.toHaveBeenCalled();
+  });
+
   it('TBI-005 DoD-3 leaves dispatched rows under the cold-start clock untouched', async () => {
     mockFindMany.mockResolvedValue([{
       id: 'run-starting',

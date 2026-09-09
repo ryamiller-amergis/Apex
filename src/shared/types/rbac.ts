@@ -1,6 +1,7 @@
 // ── Core entity types — mirror the DB schema exactly ──────────────────────────
 
 import type { MenuItemKey } from './menuSettings';
+import type { GenerationSoundId } from './notification';
 import type { WhatsNewState } from './whatsNew';
 
 export interface AppUser {
@@ -104,6 +105,10 @@ export interface MyPermissionsResponse {
   /** @deprecated Prefer `whatsNew.showOnLogin`. */
   showChangelogOnLogin: boolean;
   betaAnnouncementDismissed: boolean;
+  /** Play a sound when PRD / design-doc / prototype generation toasts arrive. */
+  generationSoundEnabled: boolean;
+  /** Selected built-in generation completion sound. */
+  generationSoundId: GenerationSoundId;
   /** Unified What's New evaluation (FEAT-006). Optional during compatibility window. */
   whatsNew?: WhatsNewState;
   /**
@@ -117,10 +122,12 @@ export interface MyPermissionsResponse {
 }
 
 export interface UpdatePreferencesRequest {
-  /** Legacy adapter — server resolves to the current valid bundled version. */
+  /** Legacy adapter — server resolves to the current valid bundled release when supplied. */
   markChangelogRead?: boolean;
   /** Must equal the current valid bundled release when supplied. */
   lastSeenVersion?: string;
   showChangelogOnLogin?: boolean;
   dismissBetaAnnouncement?: boolean;
+  generationSoundEnabled?: boolean;
+  generationSoundId?: GenerationSoundId;
 }

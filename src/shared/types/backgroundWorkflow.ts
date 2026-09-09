@@ -2,7 +2,8 @@ export type BackgroundWorkflowClass =
   | 'prd'
   | 'design-doc'
   | 'validation'
-  | 'test-cases';
+  | 'test-cases'
+  | 'walkthrough-smart-tagging';
 
 export type WorkflowRouteDecision =
   | { route: 'worker'; workspacePath: string; runId: string }

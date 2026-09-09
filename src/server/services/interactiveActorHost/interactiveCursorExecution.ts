@@ -17,6 +17,7 @@ import type {
 } from '../aiRunsWorker/cursorExecution';
 import type { RepoReader } from '../../../shared/types/repoReader';
 import { createNativeReadTools } from '../nativeReadToolAdapter';
+import { buildCursorModelSelection } from '../agentEffortResolver';
 
 /**
  * The remote agent is gone — reaped after an idle gap, or not visible under the
@@ -59,7 +60,7 @@ export async function acquireInteractiveCursorAgent(
   // resolves live repository MCP servers.
   const agentOptions = {
     apiKey,
-    model: { id: snapshot.model },
+    model: buildCursorModelSelection(snapshot.model, snapshot.effort),
     local,
     mcpServers: {},
   };

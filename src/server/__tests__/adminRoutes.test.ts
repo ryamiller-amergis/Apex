@@ -850,6 +850,162 @@ describe('PUT /api/admin/project-settings/:project', () => {
   });
 });
 
+// ── Per-skill effort levels on project settings (FEAT-002) ────────────────────
+
+describe('project-settings effort levels', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  const savedConfig = {
+    id: 'cfg-1',
+    project: 'proj-alpha',
+    friendlyName: 'Primary',
+    isDefault: true,
+    skillRepo: 'org/repo',
+    skillBranch: 'main',
+    updatedBy: 'admin-oid',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-05-18T00:00:00Z',
+    interviewEffort: 'medium' as const,
+  };
+
+  const createBody = {
+    project: 'proj-alpha',
+    friendlyName: 'Primary',
+    skillRepo: 'org/repo',
+    skillBranch: 'main',
+  };
+
+  it('FEAT-002 PBI-001 AC-0 / TBI-004 DoD-0 PUT forwards a selected effort level and echoes it back', async () => {
+    mockProjectSettings.upsertSkillConfig.mockResolvedValue(savedConfig);
+
+    const res = await request(buildApp())
+      .put('/api/admin/project-settings/proj-alpha')
+      .send({ skillRepo: 'org/repo', skillBranch: 'main', interviewEffort: 'medium' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ interviewEffort: 'medium' });
+    expect(mockProjectSettings.upsertSkillConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'proj-alpha', interviewEffort: 'medium' }),
+    );
+  });
+
+  it('FEAT-002 PBI-001 AC-0 / TBI-004 DoD-0 POST forwards a selected effort level', async () => {
+    mockProjectSettings.upsertSkillConfig.mockResolvedValue(savedConfig);
+
+    const res = await request(buildApp())
+      .post('/api/admin/project-settings')
+      .send({ ...createBody, designDocEffort: 'high' });
+
+    expect(res.status).toBe(201);
+    expect(mockProjectSettings.upsertSkillConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ designDocEffort: 'high' }),
+    );
+  });
+
+  it('FEAT-002 PBI-001 AC-2 PUT forwards null when a level is cleared to Inherit', async () => {
+    mockProjectSettings.upsertSkillConfig.mockResolvedValue({
+      ...savedConfig,
+      interviewEffort: null,
+    });
+
+    const res = await request(buildApp())
+      .put('/api/admin/project-settings/proj-alpha')
+      .send({ skillRepo: 'org/repo', skillBranch: 'main', interviewEffort: null });
+
+    expect(res.status).toBe(200);
+    expect(res.body.interviewEffort).toBeNull();
+    expect(mockProjectSettings.upsertSkillConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ interviewEffort: null }),
+    );
+  });
+
+  it.each([
+    ['string outside the allow-list', 'urgent'],
+    ['uppercase variant', 'Medium'],
+    ['non-string value', 3],
+    ['boolean value', true],
+  ])(
+    'FEAT-002 PBI-001 AC-1 / TBI-004 DoD-3 PUT rejects a %s before the service is called',
+    async (_label, value) => {
+      const res = await request(buildApp())
+        .put('/api/admin/project-settings/proj-alpha')
+        .send({ skillRepo: 'org/repo', skillBranch: 'main', prdEffort: value });
+
+      expect(res.status).toBe(400);
+      expect(mockProjectSettings.upsertSkillConfig).not.toHaveBeenCalled();
+    },
+  );
+
+  it('FEAT-002 PBI-001 AC-1 / TBI-004 DoD-3 POST rejects an invalid effort before the service is called', async () => {
+    const res = await request(buildApp())
+      .post('/api/admin/project-settings')
+      .send({ ...createBody, defaultEffort: 'extreme' });
+
+    expect(res.status).toBe(400);
+    expect(mockProjectSettings.upsertSkillConfig).not.toHaveBeenCalled();
+  });
+
+  it('FEAT-002 PBI-001 AC-1 rejects the whole payload when one of several efforts is invalid', async () => {
+    const res = await request(buildApp())
+      .put('/api/admin/project-settings/proj-alpha')
+      .send({
+        skillRepo: 'org/repo',
+        skillBranch: 'main',
+        interviewEffort: 'low',
+        standupEffort: 'sometimes',
+      });
+
+    expect(res.status).toBe(400);
+    expect(mockProjectSettings.upsertSkillConfig).not.toHaveBeenCalled();
+  });
+
+  it('FEAT-002 PBI-001 AC-3 / BR-001 denies an effort change without admin:roles and writes nothing', async () => {
+    mockPermissions = new Set();
+
+    const res = await request(buildApp('non-admin'))
+      .put('/api/admin/project-settings/proj-alpha')
+      .send({ skillRepo: 'org/repo', skillBranch: 'main', interviewEffort: 'high' });
+
+    expect(res.status).toBe(403);
+    expect(mockProjectSettings.upsertSkillConfig).not.toHaveBeenCalled();
+  });
+
+  it('FEAT-002 TBI-004 DoD-0 forwards all twenty effort fields', async () => {
+    mockProjectSettings.upsertSkillConfig.mockResolvedValue(savedConfig);
+    const efforts = {
+      interviewEffort: 'low',
+      prdEffort: 'medium',
+      adrEffort: 'high',
+      designDocEffort: 'low',
+      designDocAssistantEffort: 'medium',
+      designPrototypeEffort: 'high',
+      testCaseEffort: 'low',
+      designDocValidationEffort: 'medium',
+      prdAssistantEffort: 'high',
+      prdValidationEffort: null,
+      developmentEffort: 'medium',
+      standupEffort: 'high',
+      featureRequestEffort: 'low',
+      technicalEffort: 'medium',
+      issueEffort: 'high',
+      calendarAssistantEffort: 'low',
+      loadTestGenerationEffort: 'medium',
+      designModuleEffort: 'high',
+      designModuleScopingEffort: null,
+      defaultEffort: 'medium',
+    };
+
+    const res = await request(buildApp())
+      .put('/api/admin/project-settings/proj-alpha')
+      .send({ skillRepo: 'org/repo', skillBranch: 'main', ...efforts });
+
+    expect(res.status).toBe(200);
+    expect(mockProjectSettings.upsertSkillConfig).toHaveBeenCalledWith(
+      expect.objectContaining(efforts),
+    );
+  });
+});
+
 // ── DELETE /api/admin/project-settings/:project ───────────────────────────────
 
 describe('DELETE /api/admin/project-settings/:project', () => {

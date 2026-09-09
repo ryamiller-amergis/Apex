@@ -42,8 +42,10 @@ import type { UiLabHistoryEntry } from '../../shared/types/uiLab';
 import type { DevSessionSetupPhase, LeftoverWorkSummary } from '../../shared/types/devWorkbench';
 import type { DesignPlanFeature, DesignPlanHistoryEntry } from '../../shared/types/designPlan';
 import type { QuickSkillPill, QuickMcpPill, InterviewSkillOption, PrototypeEngine } from '../../shared/types/projectSettings';
+import type { EffortLevel } from '../../shared/types/effort';
 import type { ApprovalMode, OwnerApprovalStatus } from '../../shared/types/approvals';
 import type { MenuItemKey } from '../../shared/types/menuSettings';
+import type { ArtifactDoneEventType } from '../../shared/types/homeDashboard';
 import type { ProjectAccessRequestStatus } from '../../shared/types/platformAdmin';
 import type { FlagLifecycle, FlagRuleType, FlagAuditAction } from '../../shared/types/featureFlags';
 import type { WorkItemType } from '../../shared/types/featureRequest';
@@ -247,6 +249,8 @@ export const appUsers = pgTable('app_users', {
   lastSeenChangelogVersion: text('last_seen_changelog_version'),
   showChangelogOnLogin: boolean('show_changelog_on_login').notNull().default(true),
   dismissedBetaProdAnnouncement: boolean('dismissed_beta_prod_announcement').notNull().default(false),
+  generationSoundEnabled: boolean('generation_sound_enabled').notNull().default(false),
+  generationSoundId: text('generation_sound_id').notNull().default('chime'),
 });
 
 /**
@@ -472,6 +476,7 @@ export const interviews = pgTable('interviews', {
   project: text('project').notNull(),
   repo: text('repo').notNull(),
   model: text('model'),
+  effort: text('effort').$type<EffortLevel>(),
   prdOwnerId: text('prd_owner_id').references(() => appUsers.oid, { onDelete: 'set null' }),
   designDocOwnerId: text('design_doc_owner_id').references(() => appUsers.oid, { onDelete: 'set null' }),
   designPrototypeOwnerId: text('design_prototype_owner_id').references(() => appUsers.oid, { onDelete: 'set null' }),
@@ -522,6 +527,7 @@ export const adrs = pgTable('adrs', {
   project: text('project').notNull(),
   repo: text('repo').notNull(),
   model: text('model'),
+  effort: text('effort').$type<EffortLevel>(),
   skillSettingsId: uuid('skill_settings_id').references(() => projectSkillSettings.id, { onDelete: 'set null' }),
   status: text('status').notNull().default('in_progress'),
   content: text('content').notNull().default(''),
@@ -540,6 +546,7 @@ export const prds = pgTable('prds', {
   project: text('project').notNull(),
   title: text('title').notNull().default('Untitled PRD'),
   model: text('model'),
+  effort: text('effort').$type<EffortLevel>(),
   content: text('content').notNull().default(''),
   backlogJson: jsonb('backlog_json'),
   status: text('status').notNull().default('draft'),
@@ -596,6 +603,7 @@ export const designDocs = pgTable('design_docs', {
   authorId: text('author_id').notNull(),
   title: text('title').notNull().default('Untitled Design Doc'),
   model: text('model'),
+  effort: text('effort').$type<EffortLevel>(),
   designContent: text('design_content').notNull().default(''),
   techSpecContent: text('tech_spec_content').notNull().default(''),
   assumptionsContent: text('assumptions_content').notNull().default(''),
@@ -759,19 +767,30 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   designPrototypeSkillPath: text('design_prototype_skill_path'),
   testCaseSkillPath: text('test_case_skill_path'),
   interviewModel: text('interview_model'),
+  interviewEffort: text('interview_effort').$type<EffortLevel>(),
   prdModel: text('prd_model'),
+  prdEffort: text('prd_effort').$type<EffortLevel>(),
   adrModel: text('adr_model'),
+  adrEffort: text('adr_effort').$type<EffortLevel>(),
   designDocModel: text('design_doc_model'),
+  designDocEffort: text('design_doc_effort').$type<EffortLevel>(),
   designDocAssistantModel: text('design_doc_assistant_model'),
+  designDocAssistantEffort: text('design_doc_assistant_effort').$type<EffortLevel>(),
   designPrototypeModel: text('design_prototype_model'),
+  designPrototypeEffort: text('design_prototype_effort').$type<EffortLevel>(),
   testCaseModel: text('test_case_model'),
+  testCaseEffort: text('test_case_effort').$type<EffortLevel>(),
   designDocValidationSkillPath: text('design_doc_validation_skill_path'),
   designDocValidationModel: text('design_doc_validation_model'),
+  designDocValidationEffort: text('design_doc_validation_effort').$type<EffortLevel>(),
   prdAssistantSkillPath: text('prd_assistant_skill_path'),
   prdAssistantModel: text('prd_assistant_model'),
+  prdAssistantEffort: text('prd_assistant_effort').$type<EffortLevel>(),
   prdValidationSkillPath: text('prd_validation_skill_path'),
   prdValidationModel: text('prd_validation_model'),
+  prdValidationEffort: text('prd_validation_effort').$type<EffortLevel>(),
   defaultModel: text('default_model'),
+  defaultEffort: text('default_effort').$type<EffortLevel>(),
   prdReviewBedrockModelId: text('prd_review_bedrock_model_id'),
   prdReviewBedrockMaxTokens: integer('prd_review_bedrock_max_tokens'),
   designPrototypeBedrockModelId: text('design_prototype_bedrock_model_id'),
@@ -792,14 +811,19 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   uiLabSkillPath: text('ui_lab_skill_path'),
   developmentSkillPath: text('development_skill_path'),
   developmentModel: text('development_model'),
+  developmentEffort: text('development_effort').$type<EffortLevel>(),
   standupSkillPath: text('standup_skill_path'),
   standupModel: text('standup_model'),
+  standupEffort: text('standup_effort').$type<EffortLevel>(),
   featureRequestSkillPath: text('feature_request_skill_path'),
   featureRequestModel: text('feature_request_model'),
+  featureRequestEffort: text('feature_request_effort').$type<EffortLevel>(),
   technicalSkillPath: text('technical_skill_path'),
   technicalModel: text('technical_model'),
+  technicalEffort: text('technical_effort').$type<EffortLevel>(),
   issueSkillPath: text('issue_skill_path'),
   issueModel: text('issue_model'),
+  issueEffort: text('issue_effort').$type<EffortLevel>(),
   skillProvider: text('skill_provider').notNull().default('ado'),
   interviewSkillOptions: jsonb('interview_skill_options').$type<InterviewSkillOption[]>(),
   prototypeStageEnabled: boolean('prototype_stage_enabled').notNull().default(true),
@@ -816,12 +840,16 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   cursorServiceAccountId: text('cursor_service_account_id'),
   calendarAssistantSkillPath: text('calendar_assistant_skill_path'),
   calendarAssistantModel: text('calendar_assistant_model'),
+  calendarAssistantEffort: text('calendar_assistant_effort').$type<EffortLevel>(),
   loadTestGenerationSkillPath: text('load_test_generation_skill_path'),
   loadTestGenerationModel: text('load_test_generation_model'),
+  loadTestGenerationEffort: text('load_test_generation_effort').$type<EffortLevel>(),
   designModuleSkillPath: text('design_module_skill_path'),
   designModuleModel: text('design_module_model'),
+  designModuleEffort: text('design_module_effort').$type<EffortLevel>(),
   designModuleScopingSkillPath: text('design_module_scoping_skill_path'),
   designModuleScopingModel: text('design_module_scoping_model'),
+  designModuleScopingEffort: text('design_module_scoping_effort').$type<EffortLevel>(),
   /** Admin-managed checkout readiness for this skill-settings repository identity. */
   repositoryCheckoutStatus: text('repository_checkout_status').notNull().default('not_cloned'),
   repositoryCheckoutSha: text('repository_checkout_sha'),
@@ -1133,6 +1161,7 @@ export const designPrototypes = pgTable('design_prototypes', {
   featureIndex: integer('feature_index').notNull(),
   authorId: text('author_id').notNull(),
   model: text('model'),
+  effort: text('effort').$type<EffortLevel>(),
   status: text('status').notNull().default('generating'),
   mockHtml: text('mock_html'),
   mockVersion: integer('mock_version').notNull().default(1),
@@ -1732,6 +1761,7 @@ export const aiUsageEvents = pgTable('ai_usage_events', {
   id: uuid('id').primaryKey().defaultRandom(),
   provider: text('provider').notNull(),
   modelId: text('model_id').notNull(),
+  effort: text('effort').$type<EffortLevel>(),
   feature: text('feature').notNull(),
   project: text('project').notNull(),
   skillPath: text('skill_path'),
@@ -1758,6 +1788,8 @@ export const aiUsageEvents = pgTable('ai_usage_events', {
   featureIdx: index('idx_ai_usage_events_feature').on(t.feature),
   modelIdx: index('idx_ai_usage_events_model').on(t.modelId),
   projectCreatedIdx: index('idx_ai_usage_events_project_created').on(t.project, t.createdAt),
+  entityIdx: index('idx_ai_usage_events_entity').on(t.entityType, t.entityId),
+  threadIdx: index('idx_ai_usage_events_thread_id').on(t.threadId),
 }));
 
 export const cursorUsageEvents = pgTable('cursor_usage_events', {
@@ -2694,4 +2726,24 @@ export const traceEventsRelations = relations(traceEvents, ({ one }) => ({
     fields: [traceEvents.actorUserId],
     references: [appUsers.oid],
   }),
+}));
+
+// ── Artifact done events (frozen cycle-time end instants) ─────────────────────
+
+// Insert-once per (artifactType, artifactId). No foreign key: artifactId points
+// at interviews, prds, test_cases, design_prototypes, or design_docs depending
+// on artifactType.
+export const artifactDoneEvents = pgTable('artifact_done_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  artifactType: text('artifact_type').$type<ArtifactDoneEventType>().notNull(),
+  artifactId: uuid('artifact_id').notNull(),
+  doneAt: timestamp('done_at', { withTimezone: true, mode: 'string' }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  artifactUniq: unique('artifact_done_events_artifact_type_artifact_id_key').on(t.artifactType, t.artifactId),
+  typeDoneAtIdx: index('idx_artifact_done_events_type_done_at').on(t.artifactType, t.doneAt),
+  artifactTypeCheck: check(
+    'artifact_done_events_artifact_type_check',
+    sql`${t.artifactType} IN ('interview', 'prd', 'test_case', 'design_prototype', 'design_doc')`,
+  ),
 }));

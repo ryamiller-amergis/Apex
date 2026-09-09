@@ -1,0 +1,935 @@
+{
+  "epics": [
+    {
+      "title": "Cloud Agent Launch & Control Plane",
+      "features": [
+        {
+          "id": "FEAT-001",
+          "items": [
+            {
+              "id": "TBI-001",
+              "type": "TBI",
+              "title": "Extend session and run persistence for Cloud Agent runs",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Add a once-written run-identity field and a managed flag to the existing run table so a launched Cloud Agent run stops counting against the generation-worker admission limit and stops being subject to the generation heartbeat/progress reaper clocks once identity is captured. Add a closed workflow classification distinguishing a pre-identity implementation run from a generation run. Add a current-run pointer and any remaining host-agnostic PR/status fields to the existing session table. No new control-plane table is introduced.",
+              "parallelGroup": null,
+              "definitionOfDone": [
+                "Migration adds the run-identity, managed-flag, and workflow-classification fields to the run table without altering existing generation-run behavior",
+                "Migration adds a current-run pointer and host-agnostic PR/status fields to the session table",
+                "Existing generation workflows (PRD, design doc, validation, test cases) continue to pass their existing admission and reaper tests unchanged"
+              ],
+              "technicalDependencies": [
+                "Existing agent run control-plane module",
+                "Existing session table and its author-scoped read/write pattern"
+              ],
+              "nonFunctionalRequirements": [
+                "Migration is additive and nullable so existing generation runs are unaffected",
+                "The once-written run-identity field is enforced at the data layer, not application logic alone"
+              ]
+            },
+            {
+              "id": "TBI-002",
+              "type": "TBI",
+              "title": "Implement the Cloud Agent service",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-001"
+              ],
+              "description": "Deep module owning eligibility evaluation (flag, ADO-configured project, complete project skill settings, existing Start-Development eligibility, no live run on the session), one-live-run-per-session enforcement, host-agnostic launch dispatch to whichever code host the project is configured for, and start/status/cancel operations. Delegates all durable state transitions to the existing agent run control-plane module. Execution-vendor identity and credentials stay internal to this module.",
+              "parallelGroup": null,
+              "definitionOfDone": [
+                "Eligibility evaluation covers flag state, ADO-configuration, skill-settings completeness, existing Start-Development eligibility, and live-run presence",
+                "Launch dispatch resolves to the correct code host (GitHub or Azure Repos) from project skill settings without any GitHub-only assumption",
+                "Start/status/cancel operations delegate durable transitions to the existing agent run control-plane module rather than a new store",
+                "Unit tests cover every eligibility combination and the one-run-per-session guard"
+              ],
+              "technicalDependencies": [
+                "TBI-001",
+                "Existing agent run control-plane module",
+                "Existing project skill settings service"
+              ],
+              "nonFunctionalRequirements": [
+                "Eligibility and one-run-per-session decisions are pure functions testable without a live Cloud Agent launch",
+                "Vendor credentials are resolved server-side only and never included in any response payload"
+              ]
+            },
+            {
+              "id": "TBI-003",
+              "type": "TBI",
+              "title": "Add vendor-neutral start/status/cancel routes",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-002"
+              ],
+              "description": "Add start, status, and cancel operations to the existing My Work API surface, gated by the same Developer-group, permission, and author-only checks already enforced on every session route today. The existing session-read response gains a current-run projection (run identifier, status, PR link if any, terminal reason if any). Start returns a conflict response while a run is non-terminal and a validation error naming the missing condition when eligibility fails.",
+              "parallelGroup": null,
+              "definitionOfDone": [
+                "Start, status (via session read), and cancel operations are reachable on the existing My Work API surface",
+                "Concurrent start/resume while a run is non-terminal returns a conflict response and creates no second run",
+                "Ineligible start attempts return a validation error naming the same missing condition shown in the disabled-button tooltip",
+                "Route-level tests cover author-only enforcement, eligibility rejection, and conflict handling"
+              ],
+              "technicalDependencies": [
+                "TBI-002",
+                "Existing My Work API surface and its author-only, Developer-group, permission gate"
+              ],
+              "nonFunctionalRequirements": [
+                "Start and cancel respond within 2 seconds at P95 (persist + enqueue or request-cancel only)",
+                "Every route re-validates author identity and eligibility server-side regardless of client-side gating"
+              ]
+            },
+            {
+              "id": "PBI-001",
+              "type": "PBI",
+              "title": "See why Cloud Development isn't available",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-002"
+              ],
+              "userStory": {
+                "iWant": "see a specific reason when Start Cloud Development is disabled on a My Work row",
+                "soThat": "I can fix missing project or skill configuration before trying to start a run",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "A new permission key for eligibility",
+                "Changes to Start Local Development's eligibility rules"
+              ],
+              "businessRules": [
+                "BR-003: Start Cloud Development requires the flag, ADO configuration, complete skill settings, existing eligibility, and no live run — the disabled reason names whichever condition fails"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "Start Cloud Development is enabled with no disabled reason shown",
+                  "when": "I view an eligible My Work row",
+                  "given": "the flag is on, the project is Azure DevOps-configured, skill settings are complete for the project's code host, and no live run exists on the session"
+                },
+                {
+                  "then": "Start Cloud Development is disabled with a tooltip naming the missing field, and a direct call is rejected with a validation error naming the same missing field",
+                  "when": "I view the row, or call the start operation directly",
+                  "given": "the project's skill repository or skill branch is not set"
+                },
+                {
+                  "then": "Start Cloud Development is not offered at all, and the existing Start Local Development / Mark Complete actions are unchanged",
+                  "when": "I view my My Work rows for that project",
+                  "given": "the project uses Apex/Amego app-native PRD requirements instead of Azure DevOps"
+                },
+                {
+                  "then": "Start and Resume are disabled, and a direct call is rejected with a conflict response",
+                  "when": "I view the row, or call the start operation directly",
+                  "given": "a live Cloud Agent run already exists on the session"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "The server re-validates eligibility on every start attempt; the disabled button is a UX convenience, never the only enforcement",
+                "performance": "Eligibility evaluation adds no additional network round trip beyond the existing session list/read",
+                "accessibility": "The disabled Start button and its reason are exposed to assistive technology via an accessible description, not color or icon alone"
+              }
+            }
+          ],
+          "title": "Cloud Agent Run Foundations",
+          "priority": "Must Have",
+          "dependsOn": [],
+          "userTypes": [
+            "Developer"
+          ],
+          "outOfScope": [
+            "A new permission key for eligibility checks",
+            "Changes to Start Local Development's existing eligibility rules"
+          ],
+          "description": "Provides the Cloud Agent service, the persistence extensions on the existing session and run tables, and the vendor-neutral start/status/cancel API surface that every Developer-facing Cloud Development action depends on.",
+          "featureFlag": {
+            "name": "my-work-cloud-agent"
+          },
+          "dependencies": [
+            "None — this is the foundational feature other features in this PRD build on"
+          ],
+          "affectedPersonas": [
+            "Developer"
+          ]
+        },
+        {
+          "id": "FEAT-002",
+          "items": [
+            {
+              "id": "PBI-002",
+              "type": "PBI",
+              "title": "Start Cloud Development on an eligible row",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-004"
+              ],
+              "userStory": {
+                "iWant": "start Cloud Development on an eligible Azure DevOps My Work row",
+                "soThat": "a Cloud Agent begins implementing the work item without me leaving My Work",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Waiting for the run to finish before returning from Start",
+                "A confirmation dialog beyond the existing row interaction pattern"
+              ],
+              "businessRules": [
+                "BR-001: exactly one live run per session",
+                "BR-002: Developer group, dev-workbench:view, self-only",
+                "BR-003: eligibility must pass before Start is offered or accepted"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "a run is enqueued and the row shows Queued with a Cancel action",
+                  "when": "I click Start Cloud Development",
+                  "given": "an eligible row with no live run"
+                },
+                {
+                  "then": "the request is rejected with a validation error naming the missing field and no run is created",
+                  "when": "a start request reaches the API directly",
+                  "given": "the flag is on but project skill settings are incomplete"
+                },
+                {
+                  "then": "it is rejected with a conflict response and only one run exists for the session",
+                  "when": "the second request is processed",
+                  "given": "I click Start Cloud Development twice in quick succession before the first response returns"
+                },
+                {
+                  "then": "the request is rejected and no run is created",
+                  "when": "I attempt to start a run against their session",
+                  "given": "a My Work row that belongs to another developer"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Start is rejected server-side for any request that is not the session's own author, even if it reaches the endpoint",
+                "performance": "Start returns within 2 seconds at P95 once the run is persisted and enqueued",
+                "accessibility": "The Start action is reachable and its state change announced the same way existing row actions are"
+              }
+            },
+            {
+              "id": "PBI-003",
+              "type": "PBI",
+              "title": "Track a live Cloud Agent run's status on the row",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-004"
+              ],
+              "userStory": {
+                "iWant": "see my Cloud Agent run's live status (queued, starting, running) on the My Work row",
+                "soThat": "I know whether my work is progressing without leaving My Work",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "A live streaming transcript of the Cloud Agent's actions"
+              ],
+              "businessRules": [
+                "BR-001: exactly one live run per session"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "the row updates from Queued to Starting to Running within the polling interval, without a page reload",
+                  "when": "the Cloud Agent begins executing",
+                  "given": "a queued run"
+                },
+                {
+                  "then": "the row shows the last known good status rather than an error state",
+                  "when": "the next poll succeeds",
+                  "given": "a single status poll fails transiently"
+                },
+                {
+                  "then": "the row shows Timed out and offers Resume",
+                  "when": "the next poll occurs",
+                  "given": "a running run reaches its configured timeout"
+                },
+                {
+                  "then": "the request is rejected and no status is returned",
+                  "when": "a client requests its status",
+                  "given": "a session that does not belong to me"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Status is returned only for sessions the requesting user authored",
+                "performance": "The row refetches status every 2-5 seconds while the run is non-terminal and stops once it is terminal",
+                "accessibility": "Status changes update the row's accessible name/label, not only its color or icon"
+              }
+            },
+            {
+              "id": "PBI-004",
+              "type": "PBI",
+              "title": "Cancel a live Cloud Agent run",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-004"
+              ],
+              "userStory": {
+                "iWant": "cancel a live Cloud Agent run from the My Work row",
+                "soThat": "I can stop a run that is no longer needed without waiting for it to finish",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Waiting for vendor-side cancellation confirmation before updating the row"
+              ],
+              "businessRules": [
+                "BR-001: exactly one live run per session",
+                "BR-002: Developer group, dev-workbench:view, self-only"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "the run moves toward a cancelled terminal state and the row shows Cancelled with a Resume action",
+                  "when": "I click Cancel",
+                  "given": "a running run"
+                },
+                {
+                  "then": "the request is rejected as a no-op and the row is unchanged",
+                  "when": "I click Cancel",
+                  "given": "the run is already terminal"
+                },
+                {
+                  "then": "the run is cancelled immediately without waiting for a worker to claim it",
+                  "when": "I click Cancel",
+                  "given": "the run is still Queued and not yet dispatched"
+                },
+                {
+                  "then": "the request is rejected and the run is unaffected",
+                  "when": "I attempt to cancel it",
+                  "given": "a run that belongs to another developer"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Cancel is rejected server-side for any request that is not the session's own author",
+                "performance": "Cancel returns within 2 seconds at P95 (request-cancel only, not confirmed vendor-side stop)",
+                "accessibility": "Cancel is reachable and labeled the same way existing row actions are"
+              }
+            },
+            {
+              "id": "PBI-005",
+              "type": "PBI",
+              "title": "Resume Cloud Development after a terminal run",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-004"
+              ],
+              "userStory": {
+                "iWant": "resume Cloud Development after a run finishes, fails, times out, or is cancelled",
+                "soThat": "I can retry without losing the row's history or being told a run succeeded when no PR exists",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Deleting or hiding the prior run's history when a new run starts"
+              ],
+              "businessRules": [
+                "BR-001: exactly one live run per session",
+                "BR-004: a run without a PR URL is shown as run finished, no PR yet"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "it shows the PR link and a Resume action",
+                  "when": "I view the row",
+                  "given": "a run finished with a PR URL"
+                },
+                {
+                  "then": "it shows \"Run finished, no PR yet\" rather than a generic success state, with a Resume action",
+                  "when": "I view the row",
+                  "given": "a run finished without a PR URL"
+                },
+                {
+                  "then": "a new run is enqueued on the same session and the prior run remains in its history",
+                  "when": "I click Resume",
+                  "given": "a run failed or timed out"
+                },
+                {
+                  "then": "the request is rejected with a conflict response and no second run is created",
+                  "when": "I click Resume",
+                  "given": "a live run still exists on the session"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Resume is rejected server-side for any request that is not the session's own author",
+                "performance": "Resume completes within the same 2-second P95 as the initial Start",
+                "accessibility": "The finished-without-PR state is announced as text, not conveyed by color alone"
+              }
+            },
+            {
+              "id": "TBI-004",
+              "type": "TBI",
+              "title": "Extend My Work row UI, hooks, and shared types for Cloud Agent runs",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Add start/cancel hooks to the existing dev-workbench hook module, sharing its existing query keys. Extend the existing session list/detail read with a current-run projection. Extend the existing row component with the queued/starting/running/finished-with-PR/finished-without-PR/failed/timed-out/cancelled state-and-action matrix. Start Local Development and the Apex/Amego app-native rows are left unchanged.",
+              "parallelGroup": null,
+              "definitionOfDone": [
+                "New hooks for start and cancel share the existing dev-workbench query key family",
+                "The session read/list response surfaces a current-run projection consumed by the row",
+                "The row renders every state in the queued/starting/running/finished-with-PR/finished-without-PR/failed/timed-out/cancelled matrix with the correct action",
+                "Start Local Development and Apex/Amego rows are verified unchanged"
+              ],
+              "technicalDependencies": [
+                "TBI-003",
+                "Existing dev-workbench hook module and its query key family",
+                "Existing My Work row component"
+              ],
+              "nonFunctionalRequirements": [
+                "Polling refetches every 2-5 seconds only while the current run is non-terminal and stops once it is terminal",
+                "Row state changes are announced to assistive technology, not conveyed by color or icon alone"
+              ]
+            }
+          ],
+          "title": "Start, Track, and Cancel Cloud Development from My Work Rows",
+          "priority": "Must Have",
+          "dependsOn": [
+            "FEAT-001"
+          ],
+          "userTypes": [
+            "Developer"
+          ],
+          "outOfScope": [
+            "A new page or route for Cloud Agent runs — this stays on the existing My Work row",
+            "Streaming the Cloud Agent's output in the row"
+          ],
+          "description": "Lets Developers start a Cloud Agent run on an eligible Azure DevOps My Work row, watch it move through queued/starting/running, cancel it while live, and resume it after any terminal outcome — including an honest \"run finished, no PR yet\" state — without leaving My Work.",
+          "featureFlag": {
+            "name": "my-work-cloud-agent"
+          },
+          "dependencies": [
+            "Cloud Agent Run Foundations (FEAT-001) for eligibility, persistence, and the start/status/cancel API"
+          ],
+          "affectedPersonas": [
+            "Developer"
+          ]
+        }
+      ],
+      "priority": "Must Have",
+      "outOfScope": [
+        "Apex/Amego app-native PRD rows in My Work",
+        "A new RBAC permission key, or any change to Start Local Development's existing behavior",
+        "A new in-app chat panel or streaming transcript for the Cloud Agent run"
+      ],
+      "assumptions": [
+        "This epic widens the accepted architecture decision's GitHub-only code-host scope to be host-agnostic (GitHub or Azure Repos), per the interview's explicit correction; the decision record itself will need a follow-up amendment",
+        "All naming stays vendor-neutral (\"Cloud Agent\"); the underlying execution vendor is an internal implementation detail",
+        "The webhook-based completion signal and post-launch reconciler named in the linked architecture decision are already-decided infrastructure this epic depends on but does not redesign"
+      ],
+      "description": "Wraps a vendor-neutral Cloud Agent behind the existing agent-run control plane so Developers can start, track, cancel, and resume implementation runs directly from Azure DevOps-configured My Work rows, for projects hosted on either GitHub or Azure Repos.",
+      "dependencies": [
+        "None"
+      ],
+      "successMetrics": [
+        "100% of Start, Resume, and Cancel actions on eligible ADO rows complete within 2 seconds at P95",
+        "Zero instances in production telemetry of two live Cloud Agent runs existing on the same My Work session at once"
+      ]
+    },
+    {
+      "title": "Cloud Agent Run Outcomes",
+      "features": [
+        {
+          "id": "FEAT-003",
+          "items": [
+            {
+              "id": "PBI-006",
+              "type": "PBI",
+              "title": "See unit/e2e/WCAG check results on a finished run",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-005"
+              ],
+              "userStory": {
+                "iWant": "see the unit, e2e, and WCAG check results for a finished Cloud Agent run",
+                "soThat": "I know what still needs attention even when a PR was opened",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Re-running an individual failed check from the row"
+              ],
+              "businessRules": [
+                "BR-005: failing checks do not block PR creation or run completion"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "the row shows the PR link with no failing-check indicator",
+                  "when": "a run finishes with a PR",
+                  "given": "all checks passed"
+                },
+                {
+                  "then": "the row shows the PR link plus the failing checks, and the PR is still present",
+                  "when": "a run finishes with a PR",
+                  "given": "one or more checks failed"
+                },
+                {
+                  "then": "it shows \"Run finished, no PR yet\" and does not claim any checks passed",
+                  "when": "I view the row",
+                  "given": "a run finishes without a PR at all"
+                },
+                {
+                  "then": "the request is rejected",
+                  "when": "a client requests its check results",
+                  "given": "a session that does not belong to me"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Check results are returned only for sessions the requesting user authored",
+                "performance": "Check results are available on the same session read that already returns the current-run projection, with no extra request",
+                "accessibility": "Failing checks are listed as text next to the PR link, not conveyed by color alone"
+              }
+            },
+            {
+              "id": "TBI-005",
+              "type": "TBI",
+              "title": "Capture and surface check results on run completion",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Extend the Cloud Agent run completion data to carry unit/e2e/WCAG outcomes alongside PR presence. The My Work row renders failing checks next to the PR link without gating PR creation or run completion on check outcome.",
+              "parallelGroup": null,
+              "definitionOfDone": [
+                "Run completion data includes unit/e2e/WCAG pass/fail outcomes",
+                "The row renders failing checks next to the PR link without altering the run's terminal state",
+                "A run with no PR still reaches a terminal state and does not claim checks passed"
+              ],
+              "technicalDependencies": [
+                "Existing Cloud Agent run completion path (FEAT-002/TBI-003)"
+              ],
+              "nonFunctionalRequirements": [
+                "Check-result capture never delays run completion or PR creation"
+              ]
+            }
+          ],
+          "route": "/profile/work-preferences/edit",
+          "title": "Pre-PR Quality Checks Visibility",
+          "priority": "Must Have",
+          "dependsOn": [
+            "FEAT-002"
+          ],
+          "userTypes": [
+            "Developer"
+          ],
+          "outOfScope": [
+            "Blocking PR creation or run completion on check outcome",
+            "A dedicated test-results viewer beyond the row's failing-check summary"
+          ],
+          "description": "Cloud Agent runs execute unit, e2e, and WCAG checks before opening a PR; Developers see those results on the finished row, alongside the PR link, without the checks blocking the PR.",
+          "featureFlag": {
+            "name": "my-work-cloud-agent"
+          },
+          "dependencies": [
+            "Start, Track, and Cancel Cloud Development from My Work Rows (FEAT-002) for the run and row this feature attaches to"
+          ],
+          "affectedPersonas": [
+            "Developer"
+          ]
+        },
+        {
+          "id": "FEAT-004",
+          "items": [
+            {
+              "id": "PBI-007",
+              "type": "PBI",
+              "title": "See host-agnostic PR status on my row",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-006"
+              ],
+              "userStory": {
+                "iWant": "see whether my Cloud Agent's PR is open or merged on the My Work row",
+                "soThat": "I know the review state without leaving Apex or checking the git host directly",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Showing individual reviewer comments from the PR"
+              ],
+              "businessRules": [
+                "BR-006: PR URL is written to the ADO work item and shown as a host-agnostic status"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "the row's status moves from open to merged",
+                  "when": "the PR is later merged",
+                  "given": "a Cloud Agent opened a PR on GitHub"
+                },
+                {
+                  "then": "the row still shows the PR link and status from the run, and the ADO write is retried rather than silently dropped",
+                  "when": "the write is attempted",
+                  "given": "the git host is temporarily unreachable when Apex tries to write the PR URL to the ADO work item"
+                },
+                {
+                  "then": "the same none/open/merged status displays using the host-appropriate lookup",
+                  "when": "I view the row",
+                  "given": "the PR was opened on Azure Repos instead of GitHub"
+                },
+                {
+                  "then": "the request is rejected",
+                  "when": "a client requests its PR status",
+                  "given": "a session that does not belong to me"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "PR status is returned only for sessions the requesting user authored",
+                "performance": "PR status is available on the same session read that already returns the current-run projection",
+                "accessibility": "PR status is shown as text (none/open/merged), not color alone"
+              }
+            },
+            {
+              "id": "TBI-006",
+              "type": "TBI",
+              "title": "Write PR URL onto the ADO work item and compute host-agnostic PR status",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "When a run's PR URL becomes available, write it onto the Azure DevOps work item using the existing ADO write path (relation or discussion). Compute a shared none/open/merged status from the GitHub or Azure Repos PR state for the row.",
+              "parallelGroup": null,
+              "definitionOfDone": [
+                "PR URL is written onto the Azure DevOps work item via the existing write path",
+                "A shared none/open/merged status is computed correctly for both GitHub and Azure Repos PR state",
+                "A transient ADO write failure is retried and does not block the row from showing the run's own PR link/status"
+              ],
+              "technicalDependencies": [
+                "Existing ADO write path used for other work-item updates",
+                "Existing Cloud Agent run completion path (FEAT-002/TBI-003)"
+              ],
+              "nonFunctionalRequirements": [
+                "The ADO write retries on transient failure rather than being dropped silently"
+              ]
+            }
+          ],
+          "route": "/profile/work-preferences/edit",
+          "title": "ADO PR Status on My Work",
+          "priority": "Must Have",
+          "dependsOn": [
+            "FEAT-002"
+          ],
+          "userTypes": [
+            "Developer"
+          ],
+          "outOfScope": [
+            "Reviewer votes, approvals, or a complete-PR action inside Apex",
+            "A full Azure DevOps PR review lifecycle"
+          ],
+          "description": "When a Cloud Agent opens a pull request, Apex writes the PR URL onto the Azure DevOps work item and the My Work row shows a host-agnostic PR status (none, open, or merged) for either GitHub or Azure Repos.",
+          "featureFlag": {
+            "name": "my-work-cloud-agent"
+          },
+          "dependencies": [
+            "Start, Track, and Cancel Cloud Development from My Work Rows (FEAT-002) for the run that produces the PR"
+          ],
+          "affectedPersonas": [
+            "Developer"
+          ]
+        },
+        {
+          "id": "FEAT-005",
+          "items": [
+            {
+              "id": "PBI-008",
+              "type": "PBI",
+              "title": "See leftover work recorded on my row after a run finishes",
+              "priority": "Should Have",
+              "dependsOn": [
+                "TBI-007"
+              ],
+              "userStory": {
+                "iWant": "see leftover work (failing checks, incomplete acceptance criteria, or a missing PR) recorded on my My Work row after a run finishes",
+                "soThat": "I know exactly what Resume needs to address without hunting through the Azure DevOps work item",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Editing the Azure DevOps acceptance criteria directly from the leftover-work summary"
+              ],
+              "businessRules": [
+                "BR-007: leftover work stays on the same row/session; no child items are auto-created"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "the failing checks are listed as leftover work alongside the PR link",
+                  "when": "I view the row",
+                  "given": "a run finishes with failing checks"
+                },
+                {
+                  "then": "\"no PR yet\" is recorded as leftover work",
+                  "when": "I view the row",
+                  "given": "a run finishes with no PR at all"
+                },
+                {
+                  "then": "no leftover work is shown",
+                  "when": "I view the row",
+                  "given": "a run finishes fully clean (PR opened, all checks passed)"
+                },
+                {
+                  "then": "the request is rejected",
+                  "when": "a client requests its leftover-work summary",
+                  "given": "a session that does not belong to me"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Leftover-work summaries are returned only for sessions the requesting user authored",
+                "performance": "Leftover-work summary is available on the same session read that already returns the current-run projection",
+                "accessibility": "Leftover work is listed as text, not conveyed by an icon or color alone"
+              }
+            },
+            {
+              "id": "TBI-007",
+              "type": "TBI",
+              "title": "Persist and surface leftover-work summary on the run and ADO work item",
+              "priority": "Should Have",
+              "dependsOn": [],
+              "description": "Record failing checks, incomplete acceptance criteria, and missing-PR outcomes as a structured summary on the run and the ADO work item. Surface it on the My Work row and through Resume. Does not create child ADO items.",
+              "parallelGroup": null,
+              "definitionOfDone": [
+                "Leftover-work summary captures failing checks, incomplete acceptance criteria, and missing-PR state",
+                "The summary is surfaced on the My Work row and consulted by Resume",
+                "No child Azure DevOps item is ever created as a side effect"
+              ],
+              "technicalDependencies": [
+                "TBI-005 check-result capture",
+                "TBI-006 PR-status computation",
+                "Existing ADO write path"
+              ],
+              "nonFunctionalRequirements": [
+                "Leftover-work persistence never creates a new Azure DevOps work item"
+              ]
+            }
+          ],
+          "route": "/profile/work-preferences/edit",
+          "title": "Remaining Work Loop-Back to My Work",
+          "priority": "Should Have",
+          "dependsOn": [
+            "FEAT-002",
+            "FEAT-003"
+          ],
+          "userTypes": [
+            "Developer"
+          ],
+          "outOfScope": [
+            "Auto-creating child bugs, tasks, or new assigned My Work rows",
+            "Assigning leftover work to anyone other than the session's own author"
+          ],
+          "description": "Leftover work from a finished run — failing checks, incomplete acceptance criteria, or a missing PR — stays recorded on the same My Work row and session so the Developer can Resume, instead of spawning new assigned items.",
+          "featureFlag": {
+            "name": "my-work-cloud-agent"
+          },
+          "dependencies": [
+            "Start, Track, and Cancel Cloud Development from My Work Rows (FEAT-002) for the run/session this attaches to",
+            "Pre-PR Quality Checks Visibility (FEAT-003) for the check-result data leftover work summarizes"
+          ],
+          "affectedPersonas": [
+            "Developer"
+          ]
+        },
+        {
+          "id": "FEAT-006",
+          "items": [
+            {
+              "id": "PBI-009",
+              "type": "PBI",
+              "title": "Have my PR automatically link to its ADO work item",
+              "priority": "Should Have",
+              "dependsOn": [
+                "TBI-008"
+              ],
+              "userStory": {
+                "iWant": "have my Cloud Agent's PR automatically reference its Azure DevOps work item regardless of code host",
+                "soThat": "traceability between the PR and the work item holds without a manual step",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Editing an existing PR's title/body after creation to add a missing reference"
+              ],
+              "businessRules": [
+                "BR-008: GitHub PRs get an AB# mention; Azure Repos PRs get a native work-item link"
+              ],
+              "parallelGroup": null,
+              "acceptanceCriteria": [
+                {
+                  "then": "the PR title or body includes the AB# work-item mention",
+                  "when": "the Cloud Agent opens a PR",
+                  "given": "the code host is GitHub"
+                },
+                {
+                  "then": "this is treated as a defect — the mention is always attempted at PR-creation time and its absence is logged",
+                  "when": "the PR is inspected",
+                  "given": "the AB# mention is missing from a PR that should have one"
+                },
+                {
+                  "then": "it uses Azure Repos' native work-item link instead of an AB# mention",
+                  "when": "the Cloud Agent opens a PR",
+                  "given": "the code host is Azure Repos"
+                },
+                {
+                  "then": "no work-item link is created, since there is no PR to link",
+                  "when": "the work item is inspected",
+                  "given": "a run that never opens a PR"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "The work-item reference exposes only the work-item identifier, not sensitive work-item content",
+                "performance": "The work-item reference is embedded at PR-creation time with no additional round trip",
+                "accessibility": "Not applicable — the work-item reference lives in PR title/body text on the git host, not in Apex UI"
+              }
+            },
+            {
+              "id": "TBI-008",
+              "type": "TBI",
+              "title": "Embed host-appropriate work-item reference at PR-creation time",
+              "priority": "Should Have",
+              "dependsOn": [],
+              "description": "When the Cloud Agent opens a PR, include the AB#{workItemId} mention in the title or body for GitHub, or the native work-item link for Azure Repos, alongside the existing PR-creation step.",
+              "parallelGroup": null,
+              "definitionOfDone": [
+                "GitHub PR creation includes the AB#{workItemId} mention in title or body",
+                "Azure Repos PR creation uses the native work-item link mechanism",
+                "A run with no PR creates no work-item link"
+              ],
+              "technicalDependencies": [
+                "Existing Cloud Agent PR-creation step (FEAT-002/TBI-003)"
+              ],
+              "nonFunctionalRequirements": [
+                "Missing work-item references are logged so they can be detected without a manual audit"
+              ]
+            }
+          ],
+          "route": "/profile/work-preferences/edit",
+          "title": "Host-Agnostic Work-Item Integrate",
+          "priority": "Should Have",
+          "dependsOn": [
+            "FEAT-002"
+          ],
+          "userTypes": [
+            "Developer"
+          ],
+          "outOfScope": [
+            "Creating GitHub Issues",
+            "Syncing comments between the git host and Azure DevOps"
+          ],
+          "description": "Cloud Agent PRs link back to their originating Azure DevOps work item using the host's native mechanism — a GitHub AB# mention or an Azure Repos native work-item link — so traceability holds for either code host.",
+          "featureFlag": {
+            "name": "my-work-cloud-agent"
+          },
+          "dependencies": [
+            "Start, Track, and Cancel Cloud Development from My Work Rows (FEAT-002) for the PR-creation step this attaches to"
+          ],
+          "affectedPersonas": [
+            "Developer"
+          ]
+        }
+      ],
+      "priority": "Must Have",
+      "outOfScope": [
+        "An in-app PR review experience, reviewer votes, or a complete-PR action",
+        "Creating GitHub Issues or syncing comments between GitHub and Azure DevOps"
+      ],
+      "assumptions": [
+        "ADO PR status (none/open/merged) is computed by reading the git host's own PR state rather than building a new Azure DevOps PR-linked work-item state machine",
+        "Remaining issues are represented as a structured leftover-work summary on the existing run and work item, not a new work-item type or Azure DevOps field"
+      ],
+      "description": "Once a Cloud Agent run exists, surfaces what happened — pre-PR check results, host-agnostic PR status, leftover work, and the PR's link back to its Azure DevOps work item — on the same My Work row and work item, for both GitHub and Azure Repos.",
+      "dependencies": [
+        "Cloud Agent Launch & Control Plane epic — every outcome here is produced by a run started there"
+      ],
+      "successMetrics": [
+        "100% of finished runs show accurate PR status, check results, and leftover-work data on their row",
+        "Zero child Azure DevOps items auto-created from a run's leftover work"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "Developer",
+      "type": "Technical",
+      "description": "Members of the Developer group who own Azure DevOps-assigned work items in My Work and launch, track, cancel, and resume Cloud Agent implementation runs against them."
+    }
+  ],
+  "businessRules": [
+    {
+      "id": "BR-001",
+      "rule": "Exactly one live Cloud Agent run may exist per My Work session at a time; Start or Resume while a run is non-terminal is rejected rather than creating a second run.",
+      "appliesTo": "Start, Track, and Cancel Cloud Development from My Work Rows (Feature)"
+    },
+    {
+      "id": "BR-002",
+      "rule": "Start, Resume, and Cancel are limited to Developer-group members with dev-workbench:view, scoped to the session's own author; no other group or role may act on another developer's session.",
+      "appliesTo": "Cloud Agent Run Foundations (Feature)"
+    },
+    {
+      "id": "BR-003",
+      "rule": "Start Cloud Development is offered only when the my-work-cloud-agent flag is on, the project is Azure DevOps-configured, project skill settings (provider, repository, branch) are fully set for either supported code host, the existing Start-Development eligibility passes, and no live run exists on the session; when any condition fails, Start stays disabled with a tooltip naming the missing condition and the API rejects a direct call with the same reason.",
+      "appliesTo": "Cloud Agent Run Foundations (Feature)"
+    },
+    {
+      "id": "BR-004",
+      "rule": "A run that completes without a PR URL is shown as \"Run finished, no PR yet,\" never as a generic completed/success state.",
+      "appliesTo": "Start, Track, and Cancel Cloud Development from My Work Rows (Feature)"
+    },
+    {
+      "id": "BR-005",
+      "rule": "Failing unit, e2e, or WCAG checks do not block PR creation or run completion; failures are shown next to the PR link rather than gating either outcome.",
+      "appliesTo": "Pre-PR Quality Checks Visibility (Feature)"
+    },
+    {
+      "id": "BR-006",
+      "rule": "When a PR URL exists, Apex writes it onto the Azure DevOps work item and shows a host-agnostic status (none, open, or merged) that resolves the same way for GitHub and Azure Repos.",
+      "appliesTo": "ADO PR Status on My Work (Feature)"
+    },
+    {
+      "id": "BR-007",
+      "rule": "Leftover work from a finished run (failing checks, incomplete acceptance criteria, missing PR) stays recorded on the same My Work row and session; this PRD does not auto-create child Azure DevOps items or new assigned rows.",
+      "appliesTo": "Remaining Work Loop-Back to My Work (Feature)"
+    },
+    {
+      "id": "BR-008",
+      "rule": "Work-item integrate is host-agnostic: GitHub PRs include an AB# work-item mention; Azure Repos PRs use the host's native work-item link. No GitHub Issues are created and no comments are synced.",
+      "appliesTo": "Host-Agnostic Work-Item Integrate (Feature)"
+    }
+  ],
+  "assumptionsMade": [
+    "This PRD widens the accepted \"Cursor Cloud Agents from My Work\" architecture decision's GitHub-only code-host scope to be host-agnostic (GitHub or Azure Repos), per the interview's explicit correction; the accepted decision record itself will need a follow-up amendment to reflect Azure Repos support before this ships.",
+    "All naming — service, API, and row copy — stays vendor-neutral (\"Cloud Agent\"); the underlying execution vendor (Cursor or a successor) is an internal implementation detail with no public name in the product.",
+    "The webhook-based completion signal and the post-launch reconciler (vendor-side cancel confirmation, hard-timeout enforcement) referenced by the linked architecture decision are treated as already-decided infrastructure this PRD depends on but does not redesign; until that reconciler is deployed, a cancelled or timed-out row may show a terminal state in Apex without a confirmed vendor-side cancel, per the architecture decision's own accepted gap.",
+    "ADO PR status (none / open / merged) is computed by reading the git host's own pull-request state rather than building a new Azure DevOps PR-linked work-item state machine.",
+    "\"Remaining issues\" are represented as a structured leftover-work summary attached to the existing run and work item, not as a new work-item type or a new Azure DevOps field.",
+    "The Cloud Agent continues to use the project's existing development model and development Skill path from Project Skill Settings; no new model or Skill picker is introduced by this PRD.",
+    "No new RBAC permission key is introduced; Developer-group membership plus dev-workbench:view, scoped to the session's author, remains the complete access gate for Start, Resume, and Cancel."
+  ],
+  "implementationPhases": [
+    {
+      "epics": [
+        "Cloud Agent Launch & Control Plane"
+      ],
+      "phase": 1,
+      "rationale": "Establishes the Cloud Agent service, the persistence extensions on the existing session and run tables, the vendor-neutral start/status/cancel API, and the My Work row start/track/cancel/resume UX that every run-outcome capability (checks, PR status, leftover work, work-item integrate) reads data from. Nothing in Phase 2 can be built or tested without a run that this phase produces."
+    },
+    {
+      "epics": [
+        "Cloud Agent Run Outcomes"
+      ],
+      "phase": 2,
+      "rationale": "Each outcome feature (pre-PR checks, ADO PR status, remaining-work loop-back, work-item integrate) reads data produced by a run started in Phase 1 (PR URL, check results, terminal state) and cannot start before that run/row capability exists. The four outcome features are otherwise independent of each other's implementation and can proceed in parallel once Phase 1 ships, subject to the feature-level dependsOn already recorded within this epic."
+    }
+  ]
+}

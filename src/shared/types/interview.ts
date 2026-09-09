@@ -1,5 +1,6 @@
 import type { PrdReadinessOverride } from '../utils/prdReadiness';
 import type { ValidationOverrideAuditEntry } from '../utils/validationOverride';
+import type { EffortLevel } from './effort';
 
 export type { PrdReadinessOverride };
 
@@ -14,6 +15,7 @@ export interface InterviewSummary {
   project: string;
   repo: string;
   model?: string;
+  effort?: EffortLevel;
   status: InterviewStatus;
   prdCount: number;
   prdOwnerId?: string;
@@ -31,6 +33,8 @@ export interface InterviewSummary {
   designDocApproverIds?: string[];
   designPrototypeApproverIds?: string[];
   testCaseApproverIds?: string[];
+  /** Kick-off snapshot; resolved with project skill config via `resolvePrototypeStageEnabled`. */
+  prototypeStageEnabled?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -52,6 +56,7 @@ export interface PrdSummary {
   project: string;
   title: string;
   model?: string;
+  effort?: EffortLevel;
   skillSettingsId?: string | null;
   skillSettingsName?: string | null;
   status: PrdStatus;
@@ -321,6 +326,7 @@ export interface DesignDocSummary {
   ownerName?: string;
   title: string;
   model?: string;
+  effort?: EffortLevel;
   skillSettingsId?: string | null;
   skillSettingsName?: string | null;
   status: DesignDocStatus;

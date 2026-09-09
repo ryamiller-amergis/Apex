@@ -9,6 +9,8 @@ import {
   useExportOutcomeReport,
   useAvailableReleaseVersions,
   useFilteredOutcomes,
+  useReleaseEpics,
+  useReleaseRelatedCycleTime,
 } from '../useDeploymentOutcomes';
 import type { DeploymentOutcome, OutcomeSummary } from '../../../shared/types/deploymentOutcome';
 
@@ -450,5 +452,77 @@ describe('useOutcomeReport (releaseVersions)', () => {
 
     const url = (global.fetch as jest.Mock).mock.calls[0][0] as string;
     expect(url).toContain('releaseVersions=v1.0.0');
+  });
+});
+
+describe('useReleaseEpics', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns release epics with ids, versions, and target dates', async () => {
+    mockFetchOk([
+      { id: 101, version: 'v1.0.0', status: 'released', targetDate: '2026-04-15' },
+      { id: 102, version: 'v1.1.0', status: 'in-progress', targetDate: '2026-05-15' },
+    ]);
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(
+      () => useReleaseEpics('MaxView', 'MaxView\\Area'),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toHaveLength(2);
+    expect(result.current.data?.[0]).toMatchObject({ id: 101, version: 'v1.0.0', targetDate: '2026-04-15' });
+    expect((global.fetch as jest.Mock).mock.calls[0][0]).toContain('/api/releases/epics');
+    expect((global.fetch as jest.Mock).mock.calls[0][0]).toContain('project=MaxView');
+  });
+
+  it('drops epics with no release version', async () => {
+    mockFetchOk([
+      { id: 101, version: 'v1.0.0' },
+      { id: 102, version: '' },
+    ]);
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useReleaseEpics('MaxView'), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual([{ id: 101, version: 'v1.0.0' }]);
+  });
+});
+
+describe('useReleaseRelatedCycleTime', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('does not fetch until enabled', () => {
+    mockFetchOk({ items: [], medianDays: null, avgDays: null, sampleSize: 0, incompleteCount: 0 });
+    const { wrapper } = createWrapper();
+
+    renderHook(
+      () => useReleaseRelatedCycleTime(101, 'MaxView', 'Area', false),
+      { wrapper },
+    );
+
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('fetches cycle-time when a row is expanded', async () => {
+    mockFetchOk({
+      items: [],
+      medianDays: 4.2,
+      avgDays: 4.2,
+      sampleSize: 1,
+      incompleteCount: 0,
+    });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(
+      () => useReleaseRelatedCycleTime(101, 'MaxView', 'Area', true),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.medianDays).toBe(4.2);
+    expect((global.fetch as jest.Mock).mock.calls[0][0]).toContain('/api/releases/101/cycle-time');
   });
 });

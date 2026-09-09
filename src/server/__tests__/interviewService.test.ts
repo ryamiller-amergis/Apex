@@ -14,6 +14,10 @@ jest.mock('../services/chatAgentService', () => ({
   cancelRun: jest.fn().mockResolvedValue(undefined),
 }));
 
+jest.mock('../services/artifactDoneEventService', () => ({
+  recordArtifactDoneEvent: jest.fn().mockResolvedValue(undefined),
+}));
+
 // ── DB mock ────────────────────────────────────────────────────────────────────
 
 jest.mock('../db/drizzle', () => {
@@ -77,6 +81,7 @@ const interviewRow = {
   project: 'proj-alpha',
   repo: 'org/repo-alpha',
   status: 'in_progress',
+  prototypeStageEnabled: true,
   createdAt: '2026-01-01T00:00:00Z',
   updatedAt: '2026-01-02T00:00:00Z',
 };
@@ -113,6 +118,7 @@ describe('createInterview', () => {
       repo: 'org/repo',
       title: 'Sprint Planning',
       chatThreadId: 'thread-abc',
+      effort: 'medium',
     });
 
     expect(result).toEqual({ interviewId: 'interview-new', threadId: 'thread-abc' });
@@ -124,6 +130,7 @@ describe('createInterview', () => {
         repo: 'org/repo',
         title: 'Sprint Planning',
         chatThreadId: 'thread-abc',
+        effort: 'medium',
         status: 'in_progress',
       }),
     );
@@ -356,6 +363,7 @@ describe('listInterviews', () => {
       project: 'proj-alpha',
       status: 'in_progress',
       prdCount: 2,
+      prototypeStageEnabled: true,
     });
   });
 

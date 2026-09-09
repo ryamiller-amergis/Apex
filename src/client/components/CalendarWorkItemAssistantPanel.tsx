@@ -10,7 +10,7 @@ import {
   useScopeSelection,
 } from '../hooks/useCalendarWorkItemAssistant';
 import { CalendarWorkItemChangesReview } from './CalendarWorkItemChangesReview';
-import { AgentComposer } from './agentChat';
+import { AgentComposer, AgentPanelShell } from './agentChat';
 import type { WorkItemHierarchyNode } from '../../shared/types/calendarWorkItemAssistant';
 import styles from './CalendarWorkItemAssistantPanel.module.css';
 
@@ -56,27 +56,9 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
   const [threadId, setThreadId] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
-  const DEFAULT_HEIGHT = Math.round(window.innerHeight * 0.72);
-  const MIN_HEIGHT = 280;
-  const MAX_HEIGHT = window.innerHeight - 40;
-
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
-  const [panelHeight, setPanelHeight] = useState(DEFAULT_HEIGHT);
-  const [minimized, setMinimized] = useState(false);
-  // Dialog position — defaults to top-right, 24 px from edges
-  const [pos, setPos] = useState<{ x: number; y: number }>(() => ({
-    x: Math.max(0, window.innerWidth - DEFAULT_WIDTH - 24),
-    y: 80,
-  }));
-  // Move-drag state
-  const [isMoving, setIsMoving] = useState(false);
-  const moveDragStartRef = useRef<{ mx: number; my: number; px: number; py: number }>({ mx: 0, my: 0, px: 0, py: 0 });
-  // Resize-drag state — direction: left | right | bottom | bottom-left | bottom-right
-  type ResizeDir = 'left' | 'right' | 'bottom' | 'bottom-left' | 'bottom-right';
-  const [resizeDir, setResizeDir] = useState<ResizeDir | null>(null);
-  const resizeDragStartRef = useRef<{ mx: number; my: number; w: number; h: number; px: number; py: number }>({
-    mx: 0, my: 0, w: DEFAULT_WIDTH, h: DEFAULT_HEIGHT, px: 0, py: 0,
-  });
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeDragStartRef = useRef({ x: 0, width: DEFAULT_WIDTH });
 
   const [showNewConvConfirm, setShowNewConvConfirm] = useState(false);
   const [showReview, setShowReview] = useState(false);
@@ -139,71 +121,26 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
     el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
   }, [input]);
 
-  // Header drag — move the dialog
-  const handleMoveMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if ((e.target as HTMLElement).closest('button')) return; // don't capture button clicks
+  const handleResizeMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     e.preventDefault();
-    moveDragStartRef.current = { mx: e.clientX, my: e.clientY, px: pos.x, py: pos.y };
-    setIsMoving(true);
-  }, [pos]);
+    resizeDragStartRef.current = { x: e.clientX, width: panelWidth };
+    setIsResizing(true);
+  }, [panelWidth]);
 
   useEffect(() => {
-    if (!isMoving) return;
+    if (!isResizing) return;
     const onMove = (e: MouseEvent) => {
-      const dx = e.clientX - moveDragStartRef.current.mx;
-      const dy = e.clientY - moveDragStartRef.current.my;
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
-      setPos({
-        x: Math.min(Math.max(0, moveDragStartRef.current.px + dx), vw - 80),
-        y: Math.min(Math.max(0, moveDragStartRef.current.py + dy), vh - 48),
-      });
+      const delta = resizeDragStartRef.current.x - e.clientX;
+      setPanelWidth(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, resizeDragStartRef.current.width + delta)));
     };
-    const onUp = () => setIsMoving(false);
+    const onUp = () => setIsResizing(false);
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
     return () => {
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
     };
-  }, [isMoving]);
-
-  // Resize handle mousedown — works for all edges/corners
-  const handleResizeMouseDown = useCallback((dir: ResizeDir) => (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    resizeDragStartRef.current = { mx: e.clientX, my: e.clientY, w: panelWidth, h: panelHeight, px: pos.x, py: pos.y };
-    setResizeDir(dir);
-  }, [panelWidth, panelHeight, pos]);
-
-  useEffect(() => {
-    if (!resizeDir) return;
-    const onMove = (e: MouseEvent) => {
-      const dx = e.clientX - resizeDragStartRef.current.mx;
-      const dy = e.clientY - resizeDragStartRef.current.my;
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { w, h, px, py: _py } = resizeDragStartRef.current;
-
-      if (resizeDir === 'left' || resizeDir === 'bottom-left') {
-        const newW = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, w - dx));
-        setPanelWidth(newW);
-        setPos(p => ({ ...p, x: Math.max(0, px + w - newW) }));
-      }
-      if (resizeDir === 'right' || resizeDir === 'bottom-right') {
-        setPanelWidth(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, w + dx)));
-      }
-      if (resizeDir === 'bottom' || resizeDir === 'bottom-left' || resizeDir === 'bottom-right') {
-        setPanelHeight(Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, h + dy)));
-      }
-    };
-    const onUp = () => setResizeDir(null);
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-    return () => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    };
-  }, [resizeDir, MAX_HEIGHT]);
+  }, [isResizing]);
 
   // Focus trap: close on Escape
   useEffect(() => {
@@ -343,33 +280,17 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
         />
       )}
 
-      <div
-        className={`${styles.panel} ${minimized ? styles.panelMinimized : ''}`}
-        style={{ width: minimized ? 'auto' : panelWidth, height: minimized ? 'auto' : panelHeight, left: pos.x, top: pos.y }}
-        role="dialog"
-        aria-label="Calendar Work-Item Assistant"
-        {...{ 'data-testid': 'calendar-assistant-panel' }}
-      >
-        {/* Edge and corner resize handles */}
-        <div className={`${styles.resizeHandle} ${styles.resizeLeft}  ${resizeDir === 'left'   ? styles.resizeActive : ''}`} onMouseDown={handleResizeMouseDown('left')}  />
-        <div className={`${styles.resizeHandle} ${styles.resizeRight} ${resizeDir === 'right'  ? styles.resizeActive : ''}`} onMouseDown={handleResizeMouseDown('right')} />
-        <div className={`${styles.resizeHandle} ${styles.resizeBottom}${resizeDir === 'bottom' ? styles.resizeActive : ''}`} onMouseDown={handleResizeMouseDown('bottom')}/>
-        <div className={`${styles.resizeHandle} ${styles.resizeBL}    ${resizeDir === 'bottom-left'  ? styles.resizeActive : ''}`} onMouseDown={handleResizeMouseDown('bottom-left')} />
-        <div className={`${styles.resizeHandle} ${styles.resizeBR}    ${resizeDir === 'bottom-right' ? styles.resizeActive : ''}`} onMouseDown={handleResizeMouseDown('bottom-right')} />
-
-
-        <div
-          className={`${styles.header} ${styles.headerDraggable}`}
-          onMouseDown={handleMoveMouseDown}
-          style={{ cursor: isMoving ? 'grabbing' : 'grab' }}
-        >
-          <div className={styles.headerLeft}>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-            </svg>
-            <span className={styles.title}>Work-Item Assistant</span>
-          </div>
-          <div className={styles.headerActions}>
+      <div {...{ 'data-testid': 'calendar-assistant-panel' }}>
+        <AgentPanelShell
+          title="Work-Item Assistant"
+          ariaLabel="Calendar Work-Item Assistant"
+          onClose={onClose}
+          closeAriaLabel="Close assistant"
+          closeTestId="calendar-assistant-close-btn"
+          width={panelWidth}
+          onResizeMouseDown={handleResizeMouseDown}
+          actions={(
+            <>
             {step === 'chat' && (
               <button
                 type="button"
@@ -395,34 +316,9 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
                 Review changes
               </button>
             )}
-            <button
-              type="button"
-              className={styles.iconBtn}
-              onClick={() => setMinimized(v => !v)}
-              title={minimized ? 'Restore' : 'Minimise'}
-              aria-label={minimized ? 'Restore assistant' : 'Minimise assistant'}
-              {...{ 'data-testid': 'calendar-assistant-minimize-btn' }}
-            >
-              <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-                {minimized
-                  ? <><path d="M2 9l5-5 5 5"/></>
-                  : <><path d="M2 5l5 5 5-5"/></>
-                }
-              </svg>
-            </button>
-            <button
-              type="button"
-              className={styles.closeBtn}
-              onClick={onClose}
-              aria-label="Close assistant"
-              {...{ 'data-testid': 'calendar-assistant-close-btn' }}
-            >
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-                <path d="M1 1l12 12M13 1L1 13" />
-              </svg>
-            </button>
-          </div>
-        </div>
+            </>
+          )}
+        >
 
         {step === 'scope' && (
           <div className={styles.scopePane}>
@@ -682,6 +578,7 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
             />
           </div>
         )}
+        </AgentPanelShell>
       </div>
     </>
   );

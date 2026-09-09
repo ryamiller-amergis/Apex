@@ -12,6 +12,7 @@ import { eq, and, asc, desc } from 'drizzle-orm';
 import * as groupService from './groupService';
 import type {
   ProjectSkillConfig,
+  ProjectEffortSettings,
   ProjectApprover,
   QuickSkillPill,
   QuickMcpPill,
@@ -138,7 +139,7 @@ export async function getSkillSettingsName(
 
 // ── Upsert / Delete ──────────────────────────────────────────────────────────
 
-export interface UpsertSkillConfigOptions {
+export interface UpsertSkillConfigOptions extends ProjectEffortSettings {
   id?: string;
   project: string;
   friendlyName: string;
@@ -308,6 +309,26 @@ export async function upsertSkillConfig(
     screenInventoryPath: opts.screenInventoryPath ?? null,
     prototypeWebReferencesEnabled: opts.prototypeWebReferencesEnabled ?? false,
     defaultModel: opts.defaultModel ?? null,
+    interviewEffort: opts.interviewEffort ?? null,
+    prdEffort: opts.prdEffort ?? null,
+    adrEffort: opts.adrEffort ?? null,
+    designDocEffort: opts.designDocEffort ?? null,
+    designDocAssistantEffort: opts.designDocAssistantEffort ?? null,
+    designPrototypeEffort: opts.designPrototypeEffort ?? null,
+    testCaseEffort: opts.testCaseEffort ?? null,
+    designDocValidationEffort: opts.designDocValidationEffort ?? null,
+    prdAssistantEffort: opts.prdAssistantEffort ?? null,
+    prdValidationEffort: opts.prdValidationEffort ?? null,
+    developmentEffort: opts.developmentEffort ?? null,
+    standupEffort: opts.standupEffort ?? null,
+    featureRequestEffort: opts.featureRequestEffort ?? null,
+    technicalEffort: opts.technicalEffort ?? null,
+    issueEffort: opts.issueEffort ?? null,
+    calendarAssistantEffort: opts.calendarAssistantEffort ?? null,
+    loadTestGenerationEffort: opts.loadTestGenerationEffort ?? null,
+    designModuleEffort: opts.designModuleEffort ?? null,
+    designModuleScopingEffort: opts.designModuleScopingEffort ?? null,
+    defaultEffort: opts.defaultEffort ?? null,
     approvalMode: approvalModeValue,
     updatedAt: now,
   };

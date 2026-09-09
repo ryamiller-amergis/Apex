@@ -17,7 +17,7 @@ import { PlanningTabs, type PlanningTab } from './components/PlanningTabs';
 import { ApexLoader } from './components/ApexLoader';
 import { ProjectSelector } from './components/ProjectSelector';
 import { AgentHome } from './components/AgentHome';
-import { ChatAgentPanel } from './components/ChatAgentPanel';
+import { ChatAgentPanel, type StartPanelChatOptions } from './components/ChatAgentPanel';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { ToastContainer } from './components/ToastContainer';
 import { useAppShell } from './hooks/useAppShell';
@@ -37,6 +37,7 @@ import { resolveAccessibleRoute } from './utils/accessibleRoute';
 import { setInteractiveWsEnabled } from './utils/threadEventStream';
 import { IS_BETA_RELEASE } from './config/release';
 import { RESTRICTED_ACCESS_PROJECT } from '../shared/types/restrictedAccess';
+import type { WorkItem } from './types/workitem';
 import './App.css';
 
 // Lazy-loaded views for code splitting
@@ -132,6 +133,8 @@ function App() {
 
   const [chatOpen, setChatOpen] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [activeThreadProject, setActiveThreadProject] = useState<string | null>(null);
+  const [homeSelectedItem, setHomeSelectedItem] = useState<WorkItem | null>(null);
   const [pendingProject, setPendingProject] = useState<string | null>(null);
   const [calendarAssistantOpen, setCalendarAssistantOpen] = useState(false);
   const [calendarAssistantAnchor, setCalendarAssistantAnchor] = useState<{
@@ -160,7 +163,7 @@ function App() {
       return next;
     });
   }, []);
-  const { data: activeThread = null } = useChatThread(activeThreadId);
+  const { data: activeThread = null, isFetching: isFetchingActiveThread } = useChatThread(activeThreadId);
 
   type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests' | 'diagrams' | 'work-board' | 'not-found';
   const currentView: CurrentView =
@@ -216,12 +219,12 @@ function App() {
     ? location.pathname.split('/')[2]
     : undefined;
 
-  // Close the slide-out panel when landing on the home view — the full-page
-  // AgentHome already provides the complete chat experience there.
-  // Adjust during render (same pattern as AppHeader) to avoid set-state-in-effect.
-  if (currentView === 'home' && chatOpen) {
-    setChatOpen(false);
-  }
+  useEffect(() => {
+    if (currentView !== 'home') {
+      setChatOpen(false);
+      setHomeSelectedItem(null);
+    }
+  }, [currentView]);
 
   useEffect(() => {
     const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
@@ -512,11 +515,15 @@ function App() {
     [activeSkillConfig, skillRepos, selectedProject],
   );
 
-  const handleStartPanelChat = useCallback(async () => {
-    if (!can('chat:view')) return;
+  const handleStartPanelChat = useCallback(async (options?: StartPanelChatOptions) => {
+    if (!can('chat:view') || !can('chat:create')) return;
     setChatOpen(true);
+    if (!options) {
+      setActiveThreadId(null);
+      setActiveThreadProject(null);
+      return;
+    }
     if (!panelRepo || startChat.isPending) return;
-    setActiveThreadId(null);
     try {
       const result = await startChat.mutateAsync({
         kickoff: {
@@ -524,15 +531,70 @@ function App() {
           repo: panelRepo.name,
           branch: panelRepo.defaultBranch ?? 'main',
           skillProvider: activeSkillConfig?.skillProvider ?? undefined,
-          model: DEFAULT_MODEL_ID,
-          skillSettingsId: selectedSkillSettingsId ?? undefined,
+          model: options?.model ?? DEFAULT_MODEL_ID,
+          skillSettingsId: activeSkillConfig?.id ?? selectedSkillSettingsId ?? undefined,
+          skillPath: options?.quickSkill?.skillPath,
+          pillLabel: options?.quickSkill?.label ?? options?.mcpPill?.label,
+          pillDescription: options?.quickSkill?.description ?? options?.mcpPill?.description ?? undefined,
+          pillBypassScopePolicy: options?.quickSkill?.bypassScopePolicy ?? undefined,
+          ...(options?.mcpPill ? { mcpPill: options.mcpPill } : {}),
         },
+        skipAutoKickoff: true,
       });
       setActiveThreadId(result.threadId);
+      setActiveThreadProject(selectedProject);
+      if (options?.initialMessage) {
+        await fetch(`/api/chat/threads/${result.threadId}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            text: options.initialMessage,
+            model: options.model ?? DEFAULT_MODEL_ID,
+          }),
+        });
+      }
     } catch {
       // Error shown inside the panel
     }
   }, [panelRepo, selectedProject, startChat, selectedSkillSettingsId, can, activeSkillConfig]);
+
+  useEffect(() => {
+    if (
+      currentView !== 'home'
+      || !activeThreadId
+      || activeThreadProject !== selectedProject
+      || activeThread?.id !== activeThreadId
+      || activeThread.kickoff.project !== selectedProject
+    ) return;
+    sessionStorage.setItem(`agentHomeThreadId:${selectedProject}`, activeThreadId);
+  }, [
+    activeThread,
+    activeThreadId,
+    activeThreadProject,
+    currentView,
+    selectedProject,
+  ]);
+
+  useEffect(() => {
+    if (
+      !activeThreadId
+      || !activeThread
+      || activeThread.id !== activeThreadId
+      || activeThreadProject !== selectedProject
+      || activeThread.kickoff.project === selectedProject
+    ) return;
+    const storageKey = `agentHomeThreadId:${selectedProject}`;
+    if (sessionStorage.getItem(storageKey) === activeThreadId) {
+      sessionStorage.removeItem(storageKey);
+    }
+  }, [activeThread, activeThreadId, activeThreadProject, selectedProject]);
+
+  const projectScopedActiveThread =
+    activeThreadProject === selectedProject
+    && activeThread?.kickoff.project === selectedProject
+      ? activeThread
+      : null;
 
   if (isAuthenticated === null) return <div className="app-loading"><ApexLoader size={80} /></div>;
   if (!isAuthenticated) return <Login />;
@@ -796,7 +858,7 @@ function App() {
             onOpenChangelog={() => setShowChangelog(true)}
             onThemeChange={setThemeMode}
             onLogout={handleLogout}
-            onOpenAgentChat={currentView !== 'home' ? () => setChatOpen(true) : undefined}
+            onOpenAgentChat={undefined}
           />
           {hasUnreadChangelog && (
             <div className="changelog-banner-row">
@@ -823,7 +885,40 @@ function App() {
               <ErrorBoundary FallbackComponent={ViewErrorFallback}>
                 {/* Top-level split: demo component gated by "example-flag-demo" flag */}
                 <FeatureFlagDemo project={selectedProject} />
-                <AgentHome selectedProject={selectedProject} selectedSkillSettingsId={selectedSkillSettingsId} isAdmin={isSuperAdmin || isAdmin || (groups ?? []).includes('Manager') || (groups ?? []).includes('Product-Owner')} />
+                <AgentHome
+                  selectedProject={selectedProject}
+                  selectedAreaPath={selectedAreaPath}
+                  selectedSkillSettingsId={selectedSkillSettingsId}
+                  isAdmin={isSuperAdmin || isAdmin || (groups ?? []).includes('Manager') || (groups ?? []).includes('Product-Owner')}
+                  isChatOpen={chatOpen}
+                  canOpenChat={can('chat:view') && can('chat:create')}
+                  onOpenChatPanel={() => setChatOpen((open) => !open)}
+                  onRestoreThread={(id) => {
+                    setActiveThreadId(id);
+                    setActiveThreadProject(selectedProject);
+                  }}
+                  onSelectWorkItem={(workItem) => {
+                    setChatOpen(false);
+                    setHomeSelectedItem(workItem);
+                  }}
+                />
+                {homeSelectedItem && currentView === 'home' && (
+                  <Suspense fallback={null}>
+                    {/* data-testid-exempt — DetailsPanel owns its panel chrome; no data-testid prop */}
+                    <DetailsPanel
+                      workItem={homeSelectedItem}
+                      onClose={() => setHomeSelectedItem(null)}
+                      onUpdateDueDate={handleDueDateChange}
+                      allWorkItems={workItems}
+                      onUpdateField={handleFieldUpdate}
+                      isSaving={isSaving}
+                      project={selectedProject}
+                      areaPath={selectedAreaPath}
+                      onSelectItem={setHomeSelectedItem}
+                      onOpenAssistant={handleOpenCalendarAssistant}
+                    />
+                  </Suspense>
+                )}
               </ErrorBoundary>
             </div>
           ) : currentView === 'home' ? (
@@ -834,7 +929,7 @@ function App() {
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
                 {error && !isLoading && (
-                  <div className="work-items-inline-error" role="status" data-testid="work-items-inline-error">
+                  <div className="work-items-inline-error" role="status" {...{ 'data-testid': 'work-items-inline-error' }}>
                     <span>
                       Calendar work items couldn&apos;t be refreshed
                       {workItems.length > 0 ? ' — showing the last loaded data.' : '.'}
@@ -844,7 +939,7 @@ function App() {
                       className="work-items-inline-error-retry"
                       onClick={() => { void refetchWorkItems(); }}
                       disabled={isFetchingWorkItems}
-                      data-testid="work-items-retry"
+                      {...{ 'data-testid': 'work-items-retry' }}
                     >
                       {isFetchingWorkItems ? 'Retrying…' : 'Retry'}
                     </button>
@@ -1231,7 +1326,7 @@ function App() {
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <div className="planning-view">
                 {error && !isLoading && (
-                  <div className="work-items-inline-error" role="status" data-testid="work-items-inline-error">
+                  <div className="work-items-inline-error" role="status" {...{ 'data-testid': 'work-items-inline-error' }}>
                     <span>
                       Planning work items couldn&apos;t be refreshed
                       {workItems.length > 0 ? ' — showing the last loaded data.' : '.'}
@@ -1241,7 +1336,7 @@ function App() {
                       className="work-items-inline-error-retry"
                       onClick={() => { void refetchWorkItems(); }}
                       disabled={isFetchingWorkItems}
-                      data-testid="work-items-retry"
+                      {...{ 'data-testid': 'work-items-retry' }}
                     >
                       {isFetchingWorkItems ? 'Retrying…' : 'Retry'}
                     </button>
@@ -1362,15 +1457,26 @@ function App() {
 
         {/* data-testid-exempt — ChatAgentPanel API has no data-testid prop */}
         <ChatAgentPanel
-          thread={activeThread}
-          isOpen={chatOpen}
+          thread={projectScopedActiveThread}
+          activeThreadId={projectScopedActiveThread?.id ?? null}
+          isLoadingThread={
+            Boolean(activeThreadId)
+            && activeThreadProject === selectedProject
+            && (isFetchingActiveThread || !projectScopedActiveThread)
+          }
+          isOpen={currentView === 'home' && chatOpen}
           onClose={() => setChatOpen(false)}
           onNewChat={handleStartPanelChat}
-          onSelectThread={(id) => setActiveThreadId(id || null)}
+          onSelectThread={(id) => {
+            setActiveThreadId(id || null);
+            setActiveThreadProject(id ? selectedProject : null);
+          }}
           selectedProject={selectedProject}
           canStartNewChat={!!panelRepo && !isLoadingSkillRepos && !startChat.isPending}
           isStartingNewChat={startChat.isPending}
           newChatError={startChat.error?.message}
+          launchedFromHome={currentView === 'home'}
+          selectedSkillSettingsId={selectedSkillSettingsId}
         />
       </NotificationWrapper>
       </DndProvider>

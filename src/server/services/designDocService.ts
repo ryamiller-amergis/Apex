@@ -8,6 +8,7 @@ import { designDocs, appUsers, chatThreads, prds, interviews, designPrototypes, 
 const authorUser = alias(appUsers, 'author_user');
 const designDocOwnerUser = alias(appUsers, 'design_doc_owner_user');
 import type { ContentSnapshot, DesignDoc, DesignDocStatus, DesignDocSummary, DesignDocValidationOverride, ReviewDesignDocRequest, ValidationScorecard, ValidationScorecardGap } from '../../shared/types/interview';
+import type { EffortLevel } from '../../shared/types/effort';
 import type { PipelinePinPolicy, RunRef } from '../../shared/types/runGrounding';
 import { stampGroundingProvenance } from '../../shared/utils/groundingProvenance';
 import { buildOverrideHistory } from '../../shared/utils/validationOverride';
@@ -22,7 +23,7 @@ import { resolveSkillConfig, getSkillSettingsName } from './projectSettingsServi
 import { getDefaultModel } from './appSettingsService';
 import { getPrd } from './prdService';
 import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
-import { collectValidationGaps, normalizeValidationScorecard } from '../../shared/utils/validationReport';
+import { collectValidationGaps, parseAgentValidationScorecard, buildUnusableValidationScorecard, NO_SCORECARD_REASON, VALIDATION_TIMEOUT_REASON } from '../../shared/utils/validationReport';
 import {
   propagatePipelineGrounding,
   readActiveTargetProvenance,
@@ -170,6 +171,7 @@ export async function createDesignDoc(opts: {
   title?: string;
   status?: DesignDocStatus;
   model?: string;
+  effort?: EffortLevel;
   skillSettingsId?: string | null;
 }): Promise<{ designDocId: string }> {
   const status = opts.status ?? 'generating';
@@ -184,6 +186,7 @@ export async function createDesignDoc(opts: {
       authorId: opts.userId,
       title: opts.title ?? 'Untitled Design Doc',
       model: opts.model ?? null,
+      effort: opts.effort ?? null,
       skillSettingsId: opts.skillSettingsId ?? null,
       designContent: '',
       techSpecContent: '',
@@ -681,7 +684,7 @@ export async function syncPerFeatureDesignDocs(
 
   const seedModelRow = await db.query.designDocs.findFirst({
     where: eq(designDocs.id, seedId),
-    columns: { model: true, skillSettingsId: true },
+    columns: { model: true, effort: true, skillSettingsId: true },
   });
   const seedModel = seedModelRow?.model ?? null;
   const skillConfig = await resolveSkillConfig({ project, settingsId: seedModelRow?.skillSettingsId ?? undefined });
@@ -710,6 +713,7 @@ export async function syncPerFeatureDesignDocs(
         authorId,
         title,
         model: seedModel,
+        effort: seedModelRow?.effort ?? null,
         skillSettingsId: seedModelRow?.skillSettingsId ?? null,
         designContent: feat.design,
         techSpecContent: stripPrototypeArtifactsFromTechSpec(feat.techSpec),
@@ -790,7 +794,7 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
     // If syncOutputToDb already processed this run (it nulls seed's chatThreadId), just cleanup
     const seedDoc = await db.query.designDocs.findFirst({
       where: eq(designDocs.id, seedDocId),
-      columns: { id: true, chatThreadId: true, prdId: true, project: true, authorId: true, model: true, skillSettingsId: true, status: true },
+      columns: { id: true, chatThreadId: true, prdId: true, project: true, authorId: true, model: true, effort: true, skillSettingsId: true, status: true },
     });
     if (!seedDoc || !seedDoc.chatThreadId || (seedDoc.status && seedDoc.status !== 'generating')) {
       clearInterval(interval);
@@ -847,6 +851,7 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
               authorId: seedDoc.authorId,
               title: humanizeSlug(feat.slug),
               model: seedDoc.model ?? null,
+              effort: seedDoc.effort ?? null,
               skillSettingsId: seedDoc.skillSettingsId ?? null,
               designContent: feat.design,
               techSpecContent: stripPrototypeArtifactsFromTechSpec(feat.techSpec),
@@ -1248,6 +1253,7 @@ export async function startSingleFeatureDesignDocWatcher(
     prd.authorId,
     {
       project: prd.project,
+      agentModule: 'designDoc',
       repo: skillConfig?.skillRepo ?? prd.project,
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider ?? undefined,
@@ -1268,6 +1274,7 @@ export async function startSingleFeatureDesignDocWatcher(
     featureIndex,
     title: featureName,
     model,
+    effort: thread.kickoff.effort,
     skillSettingsId: prd.skillSettingsId ?? null,
   });
 
@@ -1358,6 +1365,7 @@ function rowToSummary(
     ownerName: effectiveOwnerName,
     title: row.title,
     model: row.model ?? undefined,
+    effort: row.effort ?? undefined,
     skillSettingsId: row.skillSettingsId ?? null,
     skillSettingsName: skillSettingsName ?? null,
     generationError: row.generationError ?? null,
@@ -1408,6 +1416,7 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
   // watcher later resets to pending_review with no score.
   const thread = await createChatThread(doc.authorId, {
     project: doc.project,
+    agentModule: 'designDocValidation',
     repo: skillConfig.skillRepo,
     branch: skillConfig.skillBranch ?? 'main',
     skillProvider: skillConfig.skillProvider ?? undefined,
@@ -1431,6 +1440,8 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
       validationScorecard: null,
       validationReportMd: null,
       validationPhase: null,
+      // Drop leftover Fix-with-Apex baseline so the review UI cannot reopen over validation.
+      fixBaseline: null,
       ...(newStatus ? { status: newStatus } : {}),
       updatedAt: new Date().toISOString(),
     })
@@ -1453,12 +1464,11 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
     await runGroundingService.persistThenMarkTerminalInactive(
       destinationRun,
       async () => {
-        await db.update(designDocs)
-          .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
-          .where(and(
-            eq(designDocs.id, designDocId),
-            eq(designDocs.status, 'validating'),
-          ));
+        await persistUnusableDesignDocValidation(
+          designDocId,
+          'Validation could not start. Re-run validation.',
+          thread.id,
+        );
       },
     );
   };
@@ -1521,6 +1531,33 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
 const VALIDATION_WATCHER_INTERVAL_MS = 5_000;
 const VALIDATION_WATCHER_MAX_ATTEMPTS = 720;
 
+async function persistUnusableDesignDocValidation(
+  designDocId: string,
+  reason: string,
+  validationThreadId?: string | null,
+): Promise<void> {
+  const scorecard = buildUnusableValidationScorecard(reason);
+  const reportMd = generateFallbackReport(scorecard);
+  const conditions = [
+    eq(designDocs.id, designDocId),
+    eq(designDocs.status, 'validating'),
+  ];
+  if (validationThreadId) {
+    conditions.push(eq(designDocs.validationThreadId, validationThreadId));
+  }
+  await db
+    .update(designDocs)
+    .set({
+      validationScore: Math.round(scorecard.overall_score),
+      validationScorecard: scorecard,
+      validationPhase: scorecard.review_phase,
+      validationReportMd: reportMd,
+      status: 'pending_review',
+      updatedAt: new Date().toISOString(),
+    })
+    .where(and(...conditions));
+}
+
 export function startValidationWatcher(designDocId: string, validationThreadId: string): void {
   stopValidationWatcher(designDocId);
   let attempts = 0;
@@ -1533,50 +1570,42 @@ export function startValidationWatcher(designDocId: string, validationThreadId: 
     );
   });
 
+  const finish = (): void => {
+    clearInterval(interval);
+    activeValidationWatchers.delete(designDocId);
+  };
+
   const interval = setInterval(async () => {
     attempts += 1;
 
     if (attempts > VALIDATION_WATCHER_MAX_ATTEMPTS) {
-      clearInterval(interval);
-      activeValidationWatchers.delete(designDocId);
+      finish();
       console.warn(`[validationWatcher] Timed out (designDocId=${designDocId})`);
-      await db.update(designDocs)
-        .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
-        .where(and(eq(designDocs.id, designDocId), eq(designDocs.status, 'validating')));
+      await persistUnusableDesignDocValidation(designDocId, VALIDATION_TIMEOUT_REASON, validationThreadId);
       return;
     }
 
+    if (await isThreadRunAlive(validationThreadId)) {
+      return;
+    }
 
     const scorecardRaw = readOutputValidationScorecard(validationThreadId);
 
     if (!scorecardRaw) {
-      // If the agent has completed or errored without producing a scorecard,
-      // reset so the user can re-run. Require a terminal local/owned run —
-      // isThreadIdle alone is unsafe under multi-instance (and also true in the
-      // brief window before sendMessage claims the run).
-      // The `status = 'validating'` WHERE guard prevents downgrading an already-scored doc.
       if (
         isThreadIdle(validationThreadId)
-        && !(await isThreadRunAlive(validationThreadId))
         && (await canThisInstanceFailGeneration(validationThreadId))
       ) {
-        clearInterval(interval);
-        activeValidationWatchers.delete(designDocId);
-        console.warn(`[validationWatcher] Agent completed/errored without scorecard — setting to pending_review (designDocId=${designDocId} threadId=${validationThreadId})`);
-        await db.update(designDocs)
-          .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
-          .where(and(eq(designDocs.id, designDocId), eq(designDocs.status, 'validating')));
+        finish();
+        console.warn(`[validationWatcher] Agent completed/errored without scorecard (designDocId=${designDocId} threadId=${validationThreadId})`);
+        await persistUnusableDesignDocValidation(designDocId, NO_SCORECARD_REASON, validationThreadId);
       }
       return;
     }
 
-    clearInterval(interval);
-    activeValidationWatchers.delete(designDocId);
+    finish();
 
     try {
-      // Guard: verify this watcher's thread is still the active validation thread.
-      // A newer autoStartValidation call may have replaced validationThreadId,
-      // in which case this result is stale and must be discarded.
       const currentDoc = await db.query.designDocs.findFirst({
         where: eq(designDocs.id, designDocId),
         columns: { validationThreadId: true },
@@ -1587,21 +1616,14 @@ export function startValidationWatcher(designDocId: string, validationThreadId: 
         return;
       }
 
-      const scorecard = normalizeValidationScorecard(JSON.parse(scorecardRaw));
-      if (!scorecard) {
-        console.warn(`[validationWatcher] Scorecard carries no usable overall score — setting to pending_review (designDocId=${designDocId})`);
-        await db.update(designDocs)
-          .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
-          .where(and(eq(designDocs.id, designDocId), eq(designDocs.status, 'validating')));
-        cleanupWorkspace(validationThreadId);
-        return;
-      }
+      const scorecard = parseAgentValidationScorecard(scorecardRaw);
       const reportMd = readOutputValidationScorecardMd(validationThreadId) ?? undefined;
       await syncValidationResult(designDocId, scorecard, reportMd);
       console.log(`[validationWatcher] Scorecard synced — score=${scorecard.overall_score} is_ready=${scorecard.is_ready} (designDocId=${designDocId})`);
       cleanupWorkspace(validationThreadId);
     } catch (err) {
       console.error(`[validationWatcher] Failed to parse/sync scorecard (designDocId=${designDocId})`, err);
+      await persistUnusableDesignDocValidation(designDocId, NO_SCORECARD_REASON, validationThreadId);
     }
   }, VALIDATION_WATCHER_INTERVAL_MS);
 
@@ -1888,6 +1910,7 @@ export async function triggerFixValidation(
 
     const thread = await createChatThread(userId, {
       project: doc.project,
+      agentModule: 'designDocAssistant',
       repo: skillConfig?.skillRepo ?? doc.project,
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider ?? undefined,
@@ -2087,6 +2110,28 @@ export async function acceptFixValidation(designDocId: string): Promise<void> {
   );
 
   await autoStartValidation(designDocId);
+}
+
+/**
+ * Clear a Fix-with-Apex session without restoring baseline or re-validating.
+ * Keeps current live content so Retry / Re-run Validation can proceed cleanly.
+ */
+export async function dismissDesignDocFixSession(
+  designDocId: string,
+  requestingUserId: string,
+): Promise<void> {
+  const row = await db.query.designDocs.findFirst({ where: eq(designDocs.id, designDocId) });
+  if (!row) throw notFound('Design doc not found');
+  await assertAuthorOrOwnerOrAdmin(row, requestingUserId, 'dismiss fix session');
+
+  if (!row.fixBaseline) throw conflict('No active fix session to dismiss');
+
+  await db.update(designDocs)
+    .set({
+      fixBaseline: null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(designDocs.id, designDocId));
 }
 
 // Ensure assertValidStatus is used (suppress unused warning)

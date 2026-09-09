@@ -34,6 +34,7 @@ import { useGroundingResumeGate } from '../hooks/useGroundingResumeGate';
 import type { PipelinePinPolicy } from '../../shared/types/runGrounding';
 import type { InterviewStatus } from '../../shared/types/interview';
 import type { InterviewSkillOption } from '../../shared/types/projectSettings';
+import { effortLabel } from '../../shared/utils/effort';
 import { parseAgentMessage, isAgentOtherOptionText } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { trackEvent, trackException } from '../services/telemetry';
@@ -44,6 +45,7 @@ import {
 } from './LinkedContextPicker';
 import { AgentComposer } from './agentChat';
 import { ApexLoader } from './ApexLoader';
+import { ArtifactUsageStrip } from './ArtifactUsageStrip';
 import styles from './InterviewChatView.module.css';
 
 function badgeClass(status: InterviewStatus): string {
@@ -1364,7 +1366,17 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   <span>Model: {interview.model}</span>
                 </>
               )}
+              {interview.effort && (
+                <>
+                  <span className={styles.titleMetaSep}>·</span>
+                  <span>Effort: {effortLabel(interview.effort)}</span>
+                </>
+              )}
             </div>
+            <ArtifactUsageStrip
+              endpoint={`/api/interviews/${interview.id}/usage`}
+              visible={interview.status === 'complete'}
+            />
             {(interview.prdOwnerName || interview.designDocOwnerName || interview.designPrototypeOwnerName) && (
               <div className={styles.ownerChips} {...{ 'data-testid': 'interview-owner-chips' }}>
                 {interview.prdOwnerName && (

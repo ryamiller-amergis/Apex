@@ -103,6 +103,10 @@ jest.mock('../services/prdService', () => ({
   autoStartPrdValidation: jest.fn().mockResolvedValue(undefined),
 }));
 
+jest.mock('../services/artifactDoneEventService', () => ({
+  recordArtifactDoneEvent: jest.fn().mockResolvedValue(undefined),
+}));
+
 import {
   getTestCases,
   isTestCaseWatcherActive,
