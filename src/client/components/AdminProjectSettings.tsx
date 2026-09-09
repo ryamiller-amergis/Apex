@@ -10,7 +10,8 @@ import {
 } from '../hooks/useProjectSkillConfig';
 import type { ProjectSkillConfig, UpsertProjectSkillConfigRequest, QuickSkillPill, QuickMcpPill, QuickMcpPillHttp, QuickMcpPillStdio, SkillProvider, InterviewSkillOption, PrototypeEngine, ProjectRepositoryReadiness } from '../../shared/types/projectSettings';
 import type { ApprovalMode, ModuleApprovalModes, ReviewerDocumentType } from '../../shared/types/approvals';
-import type { EffortLevel } from '../../shared/types/effort';
+import { EFFORT_LEVELS, type EffortLevel } from '../../shared/types/effort';
+import { effortLabel } from '../../shared/utils/effort';
 import { useSkillRepos, useSkillBranches, useSkillList } from '../hooks/useChatThreads';
 import { useUsers } from '../hooks/useRbac';
 import { useGroupsWithMembers } from '../hooks/useGroups';
@@ -636,6 +637,17 @@ const InterviewOptionsEditor: React.FC<InterviewOptionsEditorProps> = ({
               <option key={m.id} value={m.id}>{m.displayName}</option>
             ))}
           </select>
+          <EffortSelect
+            value={opt.effort ?? ''}
+            onChange={(effort) => {
+              const next = [...options];
+              next[idx] = { ...next[idx], effort };
+              onChange(next);
+            }}
+            disabled={disabled}
+            inheritLabel="Effort: use project default"
+            testId={`ps-interview-option-effort-${idx}`}
+           {...{ 'data-testid': `ps-interview-option-effort-${idx}` }} />
         </div>
         <div className={styles.interviewOptionFlags}>
           <label className={styles.interviewOptionFlag} htmlFor={`iso-proto-${idx}`}>
@@ -670,6 +682,192 @@ const InterviewOptionsEditor: React.FC<InterviewOptionsEditorProps> = ({
   </div>
 );
 
+// ── EffortSelect ───────────────────────────────────────────────────────────────
+// Reasoning-effort override dropdown, shared by pipeline stages, quick skill
+// pills, quick MCP pills, and interview skill options so every surface offers
+// the same allow-list and the same "inherit" semantics.
+
+interface EffortSelectProps {
+  value: EffortLevel | '';
+  onChange: (effort: EffortLevel | null) => void;
+  disabled?: boolean;
+  inheritLabel?: string;
+  id?: string;
+  style?: React.CSSProperties;
+  testId: string;
+}
+
+const EffortSelect: React.FC<EffortSelectProps> = ({
+  value,
+  onChange,
+  disabled,
+  inheritLabel = 'Inherit (project default)',
+  id,
+  style,
+  testId,
+}) => (
+  <select
+    id={id}
+    className={styles.select}
+    style={style}
+    value={value}
+    onChange={(e) => onChange((e.target.value as EffortLevel | '') || null)}
+    disabled={disabled}
+   {...{ 'data-testid': testId }}>
+    <option value="">{inheritLabel}</option>
+    {EFFORT_LEVELS.map((level) => (
+      <option key={level} value={level}>{effortLabel(level)}</option>
+    ))}
+  </select>
+);
+
+/** Compact effort dropdown sized for an inline pill row. */
+const PILL_CONTROL_STYLE: React.CSSProperties = {
+  flex: '0 0 10rem',
+  height: '28px',
+  padding: '4px 8px',
+  fontSize: '12px',
+};
+
+// ── SkillPillAddForm ───────────────────────────────────────────────────────────
+
+interface SkillPillAddFormProps {
+  skillList: { id: string; path: string; name: string }[];
+  availableModels: { id: string; displayName: string }[];
+  isLoadingSkills: boolean;
+  isLoadingModels: boolean;
+  isPending: boolean;
+  hasSkillRepo: boolean;
+  onAdd: (pill: QuickSkillPill) => void;
+}
+
+const SkillPillAddForm: React.FC<SkillPillAddFormProps> = ({
+  skillList,
+  availableModels,
+  isLoadingSkills,
+  isLoadingModels,
+  isPending,
+  hasSkillRepo,
+  onAdd,
+}) => {
+  const [label, setLabel] = useState('');
+  const [skillPath, setSkillPath] = useState('');
+  const [model, setModel] = useState('');
+  const [effort, setEffort] = useState<EffortLevel | ''>('');
+  const [error, setError] = useState<string | null>(null);
+
+  const disabled = isPending || isLoadingSkills || !hasSkillRepo;
+
+  const handleAdd = () => {
+    const trimmedLabel = label.trim();
+    if (!trimmedLabel) {
+      setError('Enter a label for the pill.');
+      return;
+    }
+    if (!skillPath) {
+      setError('Select a skill for the pill.');
+      return;
+    }
+
+    onAdd({
+      label: trimmedLabel,
+      skillPath,
+      model: model || null,
+      effort: effort || null,
+    });
+    setLabel('');
+    setSkillPath('');
+    setModel('');
+    setEffort('');
+    setError(null);
+  };
+
+  return (
+    <>
+      <div className={styles.pillAddRow}>
+        <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+          <label className={styles.label} htmlFor="ps-pill-label">Label</label>
+          <input
+            id="ps-pill-label"
+            className={styles.input}
+            placeholder="e.g. Production Support"
+            value={label}
+            onChange={(e) => {
+              setLabel(e.target.value);
+              setError(null);
+            }}
+            disabled={disabled} {...{ 'data-testid': 'ps-pill-label' }} />
+        </div>
+        <div className={styles.field} style={{ flex: 1 }}>
+          <label className={styles.label} htmlFor="ps-pill-skill">Skill</label>
+          <select
+            id="ps-pill-skill"
+            className={styles.select}
+            value={skillPath}
+            onChange={(e) => {
+              setSkillPath(e.target.value);
+              setError(null);
+            }}
+            disabled={disabled}
+           {...{ 'data-testid': 'ps-pill-skill' }}>
+            <option value="">— select a skill —</option>
+            {skillList.map((s) => (
+              <option key={s.id} value={s.path}>{s.name}</option>
+            ))}
+          </select>
+        </div>
+        <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+          <label className={styles.label} htmlFor="ps-pill-model">Model</label>
+          <select
+            id="ps-pill-model"
+            className={styles.select}
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            disabled={isPending || isLoadingModels || !hasSkillRepo}
+           {...{ 'data-testid': 'ps-pill-model' }}>
+            <option value="">Use default</option>
+            {availableModels.map((m) => (
+              <option key={m.id} value={m.id}>{m.displayName}</option>
+            ))}
+          </select>
+        </div>
+        <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+          <label className={styles.label} htmlFor="ps-pill-effort">Effort</label>
+          <EffortSelect
+            id="ps-pill-effort"
+            value={effort}
+            onChange={(next) => setEffort(next ?? '')}
+            disabled={isPending || !hasSkillRepo}
+            inheritLabel="Use default"
+            testId="ps-pill-effort"
+           {...{ 'data-testid': 'ps-pill-effort' }} />
+        </div>
+        <button
+          type="button"
+          className={styles.btnAction}
+          disabled={disabled}
+          onClick={handleAdd}
+         {...{ 'data-testid': 'ps-skill-pill-add' }}>
+          Add
+        </button>
+      </div>
+      {error && (
+        <p className={styles.formError} {...{ 'data-testid': 'ps-skill-pill-add-error' }}>{error}</p>
+      )}
+      {!hasSkillRepo && (
+        <span className={styles.skillDescription} {...{ 'data-testid': 'ps-skill-pill-add-no-repo' }}>
+          Select a skill repository above before adding pills.
+        </span>
+      )}
+      {hasSkillRepo && !isLoadingSkills && skillList.length === 0 && (
+        <span className={styles.skillDescription} {...{ 'data-testid': 'ps-skill-pill-add-no-skills' }}>
+          No skills were found in this repository and branch, so there is nothing to attach a pill to.
+        </span>
+      )}
+    </>
+  );
+};
+
 // ── McpPillAddForm ─────────────────────────────────────────────────────────────
 
 interface McpPillAddFormProps {
@@ -688,6 +886,7 @@ const McpPillAddForm: React.FC<McpPillAddFormProps> = ({ availableModels, isLoad
   const [args, setArgs] = useState('-y sendgrid-mcp');
   const [envStr, setEnvStr] = useState('SENDGRID_API_KEY=${SENDGRID_API_KEY}');
   const [model, setModel] = useState('');
+  const [effort, setEffort] = useState<EffortLevel | ''>('');
   const [systemPromptHint, setSystemPromptHint] = useState('');
   const [description, setDescription] = useState('');
 
@@ -700,6 +899,7 @@ const McpPillAddForm: React.FC<McpPillAddFormProps> = ({ availableModels, isLoad
       label: trimmedLabel,
       mcpServerName: trimmedName,
       model: model || null,
+      effort: effort || null,
       systemPromptHint: systemPromptHint.trim() || null,
       description: description.trim() || null,
     };
@@ -733,6 +933,7 @@ const McpPillAddForm: React.FC<McpPillAddFormProps> = ({ availableModels, isLoad
     setArgs('-y sendgrid-mcp');
     setEnvStr('SENDGRID_API_KEY=${SENDGRID_API_KEY}');
     setModel('');
+    setEffort('');
     setSystemPromptHint('');
     setDescription('');
   };
@@ -772,6 +973,16 @@ const McpPillAddForm: React.FC<McpPillAddFormProps> = ({ availableModels, isLoad
             <option value="">Default model</option>
             {availableModels.map((m) => <option key={m.id} value={m.id}>{m.displayName}</option>)}
           </select>
+        </div>
+        <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+          <label className={styles.label}>Effort override</label>
+          <EffortSelect
+            value={effort}
+            onChange={(next) => setEffort(next ?? '')}
+            disabled={isPending}
+            inheritLabel="Default effort"
+            testId="ps-mcp-add-effort"
+           {...{ 'data-testid': 'ps-mcp-add-effort' }} />
         </div>
       </div>
 
@@ -2706,6 +2917,18 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                             <option key={m.id} value={m.id}>{m.displayName}</option>
                           ))}
                         </select>
+                        <EffortSelect
+                          style={PILL_CONTROL_STYLE}
+                          value={pill.effort ?? ''}
+                          onChange={(effort) => {
+                            const pills = [...edit.quickSkillPills];
+                            pills[idx] = { ...pills[idx], effort };
+                            setEdit((prev) => prev ? { ...prev, quickSkillPills: pills } : prev);
+                          }}
+                          disabled={upsert.isPending}
+                          inheritLabel="Default effort"
+                          testId={`ps-skill-pill-effort-${idx}`}
+                         {...{ 'data-testid': `ps-skill-pill-effort-${idx}` }} />
                         <button
                           type="button"
                           className={styles.btnAction}
@@ -2772,63 +2995,15 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                 </div>
               )}
 
-              <div className={styles.pillAddRow}>
-                <div className={styles.field} style={{ flex: '0 0 10rem' }}>
-                  <label className={styles.label} htmlFor="ps-pill-label">Label</label>
-                  <input
-                    id="ps-pill-label"
-                    className={styles.input}
-                    placeholder="e.g. Production Support"
-                    disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo} {...{ 'data-testid': 'ps-pill-label' }} />
-                </div>
-                <div className={styles.field} style={{ flex: 1 }}>
-                  <label className={styles.label} htmlFor="ps-pill-skill">Skill</label>
-                  <select
-                    id="ps-pill-skill"
-                    className={styles.select}
-                    disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
-                   {...{ 'data-testid': 'ps-pill-skill' }}>
-                    <option value="">— select a skill —</option>
-                    {skillList.map((s) => (
-                      <option key={s.id} value={s.path}>{s.name}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className={styles.field} style={{ flex: '0 0 10rem' }}>
-                  <label className={styles.label} htmlFor="ps-pill-model">Model</label>
-                  <select
-                    id="ps-pill-model"
-                    className={styles.select}
-                    disabled={upsert.isPending || isLoadingModels || !edit.skillRepo}
-                   {...{ 'data-testid': 'ps-pill-model' }}>
-                    <option value="">Use default</option>
-                    {availableModels.map((m) => (
-                      <option key={m.id} value={m.id}>{m.displayName}</option>
-                    ))}
-                  </select>
-                </div>
-                <button
-                  type="button"
-                  className={styles.btnAction}
-                  disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
-                  onClick={() => {
-                    const labelEl = document.getElementById('ps-pill-label') as HTMLInputElement | null;
-                    const skillEl = document.getElementById('ps-pill-skill') as HTMLSelectElement | null;
-                    const modelEl = document.getElementById('ps-pill-model') as HTMLSelectElement | null;
-                    if (!labelEl || !skillEl) return;
-                    const label = labelEl.value.trim();
-                    const skillPath = skillEl.value;
-                    if (!label || !skillPath) return;
-                    const pillModel = modelEl?.value || null;
-                    setEdit((prev) => prev ? { ...prev, quickSkillPills: [...prev.quickSkillPills, { label, skillPath, model: pillModel }] } : prev);
-                    labelEl.value = '';
-                    skillEl.value = '';
-                    if (modelEl) modelEl.value = '';
-                  }}
-                 {...{ 'data-testid': 'ps-skill-pill-add' }}>
-                  Add
-                </button>
-              </div>
+              <SkillPillAddForm
+                skillList={skillList}
+                availableModels={availableModels}
+                isLoadingSkills={isLoadingSkills}
+                isLoadingModels={isLoadingModels}
+                isPending={upsert.isPending}
+                hasSkillRepo={Boolean(edit.skillRepo)}
+                onAdd={(pill) => setEdit((prev) => prev ? { ...prev, quickSkillPills: [...prev.quickSkillPills, pill] } : prev)}
+               {...{ 'data-testid': 'ps-skill-pill-add-form' }} />
             </AccordionSection>
 
             {/* Section 7: Quick MCP Pills */}
@@ -2867,6 +3042,18 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                             <option key={m.id} value={m.id}>{m.displayName}</option>
                           ))}
                         </select>
+                        <EffortSelect
+                          style={PILL_CONTROL_STYLE}
+                          value={pill.effort ?? ''}
+                          onChange={(effort) => {
+                            const pills = [...edit.quickMcpPills];
+                            pills[idx] = { ...pills[idx], effort };
+                            setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
+                          }}
+                          disabled={upsert.isPending}
+                          inheritLabel="Default effort"
+                          testId={`ps-mcp-pill-effort-${idx}`}
+                         {...{ 'data-testid': `ps-mcp-pill-effort-${idx}` }} />
                         <button
                           type="button"
                           className={styles.btnAction}

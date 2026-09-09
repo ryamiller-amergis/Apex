@@ -251,6 +251,155 @@ describe('AdminProjectSettings — effort overrides', () => {
   });
 });
 
+describe('AdminProjectSettings — quick pill effort overrides', () => {
+  const pillConfig = {
+    ...projectConfig,
+    quickSkillPills: [{ label: 'Prod Support', skillPath: 'skills/prod/SKILL.md' }],
+    quickMcpPills: [{
+      label: 'SendGrid',
+      mcpServerName: 'sendgrid',
+      transport: 'stdio' as const,
+      command: 'npx',
+    }],
+    interviewSkillOptions: [{ path: 'skills/grill/SKILL.md', friendlyName: 'Feature Interview' }],
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    setupMocks();
+    (useAllProjectSkillConfigs as jest.Mock).mockReturnValue({
+      data: [pillConfig],
+      isLoading: false,
+      isError: false,
+    });
+    (useSkillList as jest.Mock).mockReturnValue({
+      data: [{ id: 'skill-1', path: 'skills/prod/SKILL.md', name: 'Production Support' }],
+      isLoading: false,
+    });
+  });
+
+  it('saves an effort override selected on an existing quick skill pill', async () => {
+    const mutateAsync = jest.fn().mockResolvedValue(pillConfig);
+    (useUpsertProjectSkillConfig as jest.Mock).mockReturnValue({
+      mutate: jest.fn(),
+      mutateAsync,
+      isPending: false,
+      error: null,
+    });
+
+    render(<AdminProjectSettings selectedProject="Apex" />);
+    fireEvent.click(screen.getByTestId('ps-config-edit-settings-1'));
+    fireEvent.change(screen.getByTestId('ps-skill-pill-effort-0'), {
+      target: { value: 'high' },
+    });
+    fireEvent.click(screen.getByTestId('ps-form-save'));
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+      body: expect.objectContaining({
+        quickSkillPills: [expect.objectContaining({ label: 'Prod Support', effort: 'high' })],
+      }),
+    })));
+  });
+
+  it('saves an effort override selected on an existing quick MCP pill', async () => {
+    const mutateAsync = jest.fn().mockResolvedValue(pillConfig);
+    (useUpsertProjectSkillConfig as jest.Mock).mockReturnValue({
+      mutate: jest.fn(),
+      mutateAsync,
+      isPending: false,
+      error: null,
+    });
+
+    render(<AdminProjectSettings selectedProject="Apex" />);
+    fireEvent.click(screen.getByTestId('ps-config-edit-settings-1'));
+    fireEvent.change(screen.getByTestId('ps-mcp-pill-effort-0'), {
+      target: { value: 'low' },
+    });
+    fireEvent.click(screen.getByTestId('ps-form-save'));
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+      body: expect.objectContaining({
+        quickMcpPills: [expect.objectContaining({ mcpServerName: 'sendgrid', effort: 'low' })],
+      }),
+    })));
+  });
+
+  it('saves an effort override selected on an interview skill option', async () => {
+    const mutateAsync = jest.fn().mockResolvedValue(pillConfig);
+    (useUpsertProjectSkillConfig as jest.Mock).mockReturnValue({
+      mutate: jest.fn(),
+      mutateAsync,
+      isPending: false,
+      error: null,
+    });
+
+    render(<AdminProjectSettings selectedProject="Apex" />);
+    fireEvent.click(screen.getByTestId('ps-config-edit-settings-1'));
+    fireEvent.change(screen.getByTestId('ps-interview-option-effort-0'), {
+      target: { value: 'medium' },
+    });
+    fireEvent.click(screen.getByTestId('ps-form-save'));
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+      body: expect.objectContaining({
+        interviewSkillOptions: [expect.objectContaining({
+          friendlyName: 'Feature Interview',
+          effort: 'medium',
+        })],
+      }),
+    })));
+  });
+
+  it('adds a new quick skill pill with the chosen model and effort', () => {
+    render(<AdminProjectSettings selectedProject="Apex" />);
+    fireEvent.click(screen.getByTestId('ps-config-edit-settings-1'));
+
+    fireEvent.change(screen.getByTestId('ps-pill-label'), {
+      target: { value: 'Incident Triage' },
+    });
+    fireEvent.change(screen.getByTestId('ps-pill-skill'), {
+      target: { value: 'skills/prod/SKILL.md' },
+    });
+    fireEvent.change(screen.getByTestId('ps-pill-effort'), {
+      target: { value: 'high' },
+    });
+    fireEvent.click(screen.getByTestId('ps-skill-pill-add'));
+
+    expect(screen.getByTestId('ps-skill-pill-effort-1')).toHaveValue('high');
+    expect(screen.getByText('Incident Triage')).toBeInTheDocument();
+    // Inputs reset so the next pill starts clean.
+    expect(screen.getByTestId('ps-pill-label')).toHaveValue('');
+    expect(screen.getByTestId('ps-pill-effort')).toHaveValue('');
+  });
+
+  it('explains why Add did nothing instead of failing silently', () => {
+    render(<AdminProjectSettings selectedProject="Apex" />);
+    fireEvent.click(screen.getByTestId('ps-config-edit-settings-1'));
+
+    fireEvent.click(screen.getByTestId('ps-skill-pill-add'));
+    expect(screen.getByTestId('ps-skill-pill-add-error')).toHaveTextContent(
+      'Enter a label for the pill.',
+    );
+
+    fireEvent.change(screen.getByTestId('ps-pill-label'), {
+      target: { value: 'Incident Triage' },
+    });
+    fireEvent.click(screen.getByTestId('ps-skill-pill-add'));
+    expect(screen.getByTestId('ps-skill-pill-add-error')).toHaveTextContent(
+      'Select a skill for the pill.',
+    );
+  });
+
+  it('reports an empty skill list rather than a dead Add button', () => {
+    (useSkillList as jest.Mock).mockReturnValue({ data: [], isLoading: false });
+
+    render(<AdminProjectSettings selectedProject="Apex" />);
+    fireEvent.click(screen.getByTestId('ps-config-edit-settings-1'));
+
+    expect(screen.getByTestId('ps-skill-pill-add-no-skills')).toBeInTheDocument();
+  });
+});
+
 describe('AdminProjectSettings — reviewer pools and module approval modes', () => {
   beforeEach(() => {
     jest.clearAllMocks();
