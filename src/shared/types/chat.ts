@@ -1,4 +1,27 @@
+import type { EffortLevel } from './effort';
+
 export type ChatMessageRole = 'user' | 'agent' | 'tool' | 'system';
+
+export type AgentModuleId =
+  | 'interview'
+  | 'prd'
+  | 'adr'
+  | 'designDoc'
+  | 'designDocAssistant'
+  | 'designPrototype'
+  | 'testCase'
+  | 'designDocValidation'
+  | 'prdAssistant'
+  | 'prdValidation'
+  | 'development'
+  | 'standup'
+  | 'featureRequest'
+  | 'technical'
+  | 'issue'
+  | 'calendarAssistant'
+  | 'loadTestGeneration'
+  | 'designModule'
+  | 'designModuleScoping';
 
 export interface ChatMessage {
   id: string;
@@ -45,6 +68,10 @@ export interface ChatThreadKickoff {
   skillPath?: string;
   /** Cursor SDK model ID to use for this thread (e.g. "claude-opus-4-6") */
   model?: string;
+  /** Server-set module identity. Client-supplied values are discarded by client-facing routes. */
+  agentModule?: AgentModuleId;
+  /** Server-resolved once at kickoff. Client-supplied values are discarded. */
+  effort?: EffortLevel;
   /** Raw transcript text pasted by the user */
   transcript?: string;
   /** Additional freeform context */

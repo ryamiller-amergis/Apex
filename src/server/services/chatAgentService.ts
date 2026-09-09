@@ -147,6 +147,12 @@ import {
 } from './cursorExecutionCore';
 import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
 import type { RepositoryPreparationTarget } from './repositoryPreparationService';
+import {
+  buildCursorModelSelection,
+  deriveAgentModule,
+  resolveEffort,
+  resolveSelectedEffort,
+} from './agentEffortResolver';
 
 export { ThinkingPhaseCoalescer } from './cursorExecutionCore';
 
@@ -2130,6 +2136,7 @@ async function buildNewAgentTurnPrompt(
 export interface PreparedBackgroundWorkflowTurn {
   prompt: string;
   model: string;
+  effort?: import('../../shared/types/effort').EffortLevel;
   skillPath: string;
   projectId: string;
   threadWorkspacePath: string;
@@ -2200,6 +2207,7 @@ export async function prepareBackgroundWorkflowTurn(
       groundingProvenance,
     }),
     model: resolveModelId(kickoff.model),
+    effort: kickoff.effort,
     skillPath: kickoff.skillPath ?? '',
     projectId: kickoff.project,
     threadWorkspacePath: state.thread.workspaceDir,
@@ -2921,12 +2929,29 @@ export async function createThread(
 
   // Opt interview threads into live web research (web MCP + scope carve-out) when the project enables it.
   const enrichedKickoff = await enrichKickoffForInterviewWebResearch(kickoff);
+  const { resolveSkillConfig } = await import('./projectSettingsService');
+  const skillConfig = await resolveSkillConfig({
+    project: enrichedKickoff.project,
+    settingsId: enrichedKickoff.skillSettingsId ?? undefined,
+  });
+  const agentModule =
+    enrichedKickoff.agentModule ??
+    deriveAgentModule(enrichedKickoff, skillConfig);
+  const kickoffWithModule = agentModule
+    ? { ...enrichedKickoff, agentModule }
+    : enrichedKickoff;
+  const effort = resolveEffort({
+    kickoff: kickoffWithModule,
+    skillConfig,
+    selectedEffort: resolveSelectedEffort(kickoffWithModule, skillConfig),
+  });
 
   // Resolve branch
   const branch = enrichedKickoff.branch ?? 'main';
   const resolvedKickoff = {
-    ...enrichedKickoff,
+    ...kickoffWithModule,
     branch,
+    effort,
     dependenciesPrepared:
       options?.dependenciesPrepared ?? enrichedKickoff.dependenciesPrepared,
   };
@@ -4281,6 +4306,7 @@ async function tryDispatchInteractiveTurn(
       const snapshot: ExecutionSnapshot = {
         prompt,
         model: resolveModelId(modelOverride ?? state.thread.kickoff.model),
+        effort: state.thread.kickoff.effort,
         workspaceRef: grounding.cwd,
         workflowClass,
         skillPath,
@@ -4918,7 +4944,10 @@ export async function sendMessage(
             () =>
               Agent.resume(priorCursorAgentId!, {
                 apiKey,
-                model: { id: resolvedModel },
+                model: buildCursorModelSelection(
+                  resolvedModel,
+                  state.thread.kickoff.effort,
+                ),
                 local: localAgentOptions,
                 mcpServers,
                 agents: { 'code-reviewer': codeReviewerAgent },
@@ -4932,7 +4961,10 @@ export async function sendMessage(
             () =>
               Agent.create({
                 apiKey,
-                model: { id: resolvedModel },
+                model: buildCursorModelSelection(
+                  resolvedModel,
+                  state.thread.kickoff.effort,
+                ),
                 local: localAgentOptions,
                 mcpServers,
                 agents: { 'code-reviewer': codeReviewerAgent },
@@ -5354,6 +5386,7 @@ export async function sendMessage(
         const executionSnapshot: Readonly<ExecutionSnapshot> = Object.freeze({
           prompt,
           model: resolvedModel,
+          effort: state.thread.kickoff.effort,
           workspaceRef: agentWorkspaceDir,
           workflowClass:
             state.thread.kickoff.assistantType ??
@@ -5519,7 +5552,10 @@ export async function sendMessage(
               () =>
                 Agent.create({
                   apiKey,
-                  model: { id: resolvedModel },
+                  model: buildCursorModelSelection(
+                    resolvedModel,
+                    state.thread.kickoff.effort,
+                  ),
                   local: localAgentOptions,
                   mcpServers,
                   agents: { 'code-reviewer': codeReviewerAgent },
@@ -5594,7 +5630,10 @@ export async function sendMessage(
                 resumePinnedTurnAgent(() =>
                   Agent.resume(state.thread.cursorAgentId!, {
                     apiKey,
-                    model: { id: resolvedModel },
+                    model: buildCursorModelSelection(
+                      resolvedModel,
+                      state.thread.kickoff.effort,
+                    ),
                     local: localAgentOptions,
                     mcpServers,
                   })
@@ -5644,7 +5683,10 @@ export async function sendMessage(
                 resumePinnedTurnAgent(() =>
                   Agent.resume(state.thread.cursorAgentId!, {
                     apiKey,
-                    model: { id: resolvedModel },
+                    model: buildCursorModelSelection(
+                      resolvedModel,
+                      state.thread.kickoff.effort,
+                    ),
                     local: localAgentOptions,
                     mcpServers,
                   })

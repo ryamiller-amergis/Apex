@@ -10,6 +10,8 @@ import {
 } from '../hooks/useProjectSkillConfig';
 import type { ProjectSkillConfig, UpsertProjectSkillConfigRequest, QuickSkillPill, QuickMcpPill, QuickMcpPillHttp, QuickMcpPillStdio, SkillProvider, InterviewSkillOption, PrototypeEngine, ProjectRepositoryReadiness } from '../../shared/types/projectSettings';
 import type { ApprovalMode, ModuleApprovalModes, ReviewerDocumentType } from '../../shared/types/approvals';
+import { EFFORT_LEVELS, type EffortLevel } from '../../shared/types/effort';
+import { effortLabel } from '../../shared/utils/effort';
 import { useSkillRepos, useSkillBranches, useSkillList } from '../hooks/useChatThreads';
 import { useUsers } from '../hooks/useRbac';
 import { useGroupsWithMembers } from '../hooks/useGroups';
@@ -294,6 +296,23 @@ type ModelKey =
   | 'designModuleModel'
   | 'designModuleScopingModel';
 
+type EffortKey =
+  | 'interviewEffort'
+  | 'prdEffort'
+  | 'designDocEffort'
+  | 'designDocAssistantEffort'
+  | 'testCaseEffort'
+  | 'designDocValidationEffort'
+  | 'prdValidationEffort'
+  | 'developmentEffort'
+  | 'standupEffort'
+  | 'featureRequestEffort'
+  | 'technicalEffort'
+  | 'issueEffort'
+  | 'loadTestGenerationEffort'
+  | 'designModuleEffort'
+  | 'designModuleScopingEffort';
+
 interface PipelineStageDef {
   id: string;
   label: string;
@@ -302,6 +321,8 @@ interface PipelineStageDef {
   emptyLabel: string;
   /** When set, stage card shows a model override next to the skill. */
   modelKey?: ModelKey;
+  /** When set, stage card shows an effort override next to the model. */
+  effortKey?: EffortKey;
   optional?: boolean;
   /** Nest the interview skill-options editor under this stage. */
   interviewOptions?: boolean;
@@ -319,6 +340,7 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     skillKey: 'interviewSkillPath',
     emptyLabel: 'None (use default)',
     modelKey: 'interviewModel',
+    effortKey: 'interviewEffort',
     interviewOptions: true,
   },
   {
@@ -328,6 +350,7 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     skillKey: 'prdSkillPath',
     emptyLabel: 'None (use default)',
     modelKey: 'prdModel',
+    effortKey: 'prdEffort',
   },
   {
     id: 'prd-validation',
@@ -336,6 +359,7 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     skillKey: 'prdValidationSkillPath',
     emptyLabel: 'None (skip PRD validation)',
     modelKey: 'prdValidationModel',
+    effortKey: 'prdValidationEffort',
     optional: true,
     prdValidationThreshold: true,
   },
@@ -346,6 +370,7 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     skillKey: 'designDocSkillPath',
     emptyLabel: 'None (use default)',
     modelKey: 'designDocModel',
+    effortKey: 'designDocEffort',
   },
   {
     id: 'design-assistant',
@@ -354,6 +379,7 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     skillKey: 'designDocAssistantSkillPath',
     emptyLabel: 'None (use default model, no skill)',
     modelKey: 'designDocAssistantModel',
+    effortKey: 'designDocAssistantEffort',
     optional: true,
   },
   {
@@ -363,6 +389,7 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     skillKey: 'designDocValidationSkillPath',
     emptyLabel: 'None (skip validation phase)',
     modelKey: 'designDocValidationModel',
+    effortKey: 'designDocValidationEffort',
     optional: true,
     designDocValidationThreshold: true,
   },
@@ -373,6 +400,7 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     skillKey: 'testCaseSkillPath',
     emptyLabel: 'None (skip test-case generation)',
     modelKey: 'testCaseModel',
+    effortKey: 'testCaseEffort',
     optional: true,
   },
   {
@@ -382,6 +410,7 @@ const FEATURE_PIPELINE_STAGES: PipelineStageDef[] = [
     skillKey: 'developmentSkillPath',
     emptyLabel: 'None (use default behavior)',
     modelKey: 'developmentModel',
+    effortKey: 'developmentEffort',
     optional: true,
   },
 ];
@@ -419,6 +448,7 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     skillKey: 'standupSkillPath',
     emptyLabel: 'None (use built-in default)',
     modelKey: 'standupModel',
+    effortKey: 'standupEffort',
   },
   {
     id: 'feature-request',
@@ -427,6 +457,7 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     skillKey: 'featureRequestSkillPath',
     emptyLabel: 'None (use default)',
     modelKey: 'featureRequestModel',
+    effortKey: 'featureRequestEffort',
   },
   {
     id: 'technical',
@@ -435,6 +466,7 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     skillKey: 'technicalSkillPath',
     emptyLabel: 'None (analysis unavailable)',
     modelKey: 'technicalModel',
+    effortKey: 'technicalEffort',
   },
   {
     id: 'issue',
@@ -443,6 +475,7 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     skillKey: 'issueSkillPath',
     emptyLabel: 'None (analysis unavailable)',
     modelKey: 'issueModel',
+    effortKey: 'issueEffort',
   },
   {
     id: 'load-test',
@@ -451,6 +484,7 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     skillKey: 'loadTestGenerationSkillPath',
     emptyLabel: 'Default (.cursor/skills/k6-load-test-generation/SKILL.md)',
     modelKey: 'loadTestGenerationModel',
+    effortKey: 'loadTestGenerationEffort',
   },
   {
     id: 'design-module',
@@ -459,6 +493,7 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     skillKey: 'designModuleSkillPath',
     emptyLabel: 'Default (.agents/skills/design-module-doc/SKILL.md)',
     modelKey: 'designModuleModel',
+    effortKey: 'designModuleEffort',
   },
   {
     id: 'design-module-scoping',
@@ -467,6 +502,7 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     skillKey: 'designModuleScopingSkillPath',
     emptyLabel: 'Default (.cursor/skills/design-module-scoping/SKILL.md)',
     modelKey: 'designModuleScopingModel',
+    effortKey: 'designModuleScopingEffort',
   },
 ];
 
@@ -601,6 +637,17 @@ const InterviewOptionsEditor: React.FC<InterviewOptionsEditorProps> = ({
               <option key={m.id} value={m.id}>{m.displayName}</option>
             ))}
           </select>
+          <EffortSelect
+            value={opt.effort ?? ''}
+            onChange={(effort) => {
+              const next = [...options];
+              next[idx] = { ...next[idx], effort };
+              onChange(next);
+            }}
+            disabled={disabled}
+            inheritLabel="Effort: use project default"
+            testId={`ps-interview-option-effort-${idx}`}
+           {...{ 'data-testid': `ps-interview-option-effort-${idx}` }} />
         </div>
         <div className={styles.interviewOptionFlags}>
           <label className={styles.interviewOptionFlag} htmlFor={`iso-proto-${idx}`}>
@@ -635,6 +682,192 @@ const InterviewOptionsEditor: React.FC<InterviewOptionsEditorProps> = ({
   </div>
 );
 
+// ── EffortSelect ───────────────────────────────────────────────────────────────
+// Reasoning-effort override dropdown, shared by pipeline stages, quick skill
+// pills, quick MCP pills, and interview skill options so every surface offers
+// the same allow-list and the same "inherit" semantics.
+
+interface EffortSelectProps {
+  value: EffortLevel | '';
+  onChange: (effort: EffortLevel | null) => void;
+  disabled?: boolean;
+  inheritLabel?: string;
+  id?: string;
+  style?: React.CSSProperties;
+  testId: string;
+}
+
+const EffortSelect: React.FC<EffortSelectProps> = ({
+  value,
+  onChange,
+  disabled,
+  inheritLabel = 'Inherit (project default)',
+  id,
+  style,
+  testId,
+}) => (
+  <select
+    id={id}
+    className={styles.select}
+    style={style}
+    value={value}
+    onChange={(e) => onChange((e.target.value as EffortLevel | '') || null)}
+    disabled={disabled}
+   {...{ 'data-testid': testId }}>
+    <option value="">{inheritLabel}</option>
+    {EFFORT_LEVELS.map((level) => (
+      <option key={level} value={level}>{effortLabel(level)}</option>
+    ))}
+  </select>
+);
+
+/** Compact effort dropdown sized for an inline pill row. */
+const PILL_CONTROL_STYLE: React.CSSProperties = {
+  flex: '0 0 10rem',
+  height: '28px',
+  padding: '4px 8px',
+  fontSize: '12px',
+};
+
+// ── SkillPillAddForm ───────────────────────────────────────────────────────────
+
+interface SkillPillAddFormProps {
+  skillList: { id: string; path: string; name: string }[];
+  availableModels: { id: string; displayName: string }[];
+  isLoadingSkills: boolean;
+  isLoadingModels: boolean;
+  isPending: boolean;
+  hasSkillRepo: boolean;
+  onAdd: (pill: QuickSkillPill) => void;
+}
+
+const SkillPillAddForm: React.FC<SkillPillAddFormProps> = ({
+  skillList,
+  availableModels,
+  isLoadingSkills,
+  isLoadingModels,
+  isPending,
+  hasSkillRepo,
+  onAdd,
+}) => {
+  const [label, setLabel] = useState('');
+  const [skillPath, setSkillPath] = useState('');
+  const [model, setModel] = useState('');
+  const [effort, setEffort] = useState<EffortLevel | ''>('');
+  const [error, setError] = useState<string | null>(null);
+
+  const disabled = isPending || isLoadingSkills || !hasSkillRepo;
+
+  const handleAdd = () => {
+    const trimmedLabel = label.trim();
+    if (!trimmedLabel) {
+      setError('Enter a label for the pill.');
+      return;
+    }
+    if (!skillPath) {
+      setError('Select a skill for the pill.');
+      return;
+    }
+
+    onAdd({
+      label: trimmedLabel,
+      skillPath,
+      model: model || null,
+      effort: effort || null,
+    });
+    setLabel('');
+    setSkillPath('');
+    setModel('');
+    setEffort('');
+    setError(null);
+  };
+
+  return (
+    <>
+      <div className={styles.pillAddRow}>
+        <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+          <label className={styles.label} htmlFor="ps-pill-label">Label</label>
+          <input
+            id="ps-pill-label"
+            className={styles.input}
+            placeholder="e.g. Production Support"
+            value={label}
+            onChange={(e) => {
+              setLabel(e.target.value);
+              setError(null);
+            }}
+            disabled={disabled} {...{ 'data-testid': 'ps-pill-label' }} />
+        </div>
+        <div className={styles.field} style={{ flex: 1 }}>
+          <label className={styles.label} htmlFor="ps-pill-skill">Skill</label>
+          <select
+            id="ps-pill-skill"
+            className={styles.select}
+            value={skillPath}
+            onChange={(e) => {
+              setSkillPath(e.target.value);
+              setError(null);
+            }}
+            disabled={disabled}
+           {...{ 'data-testid': 'ps-pill-skill' }}>
+            <option value="">— select a skill —</option>
+            {skillList.map((s) => (
+              <option key={s.id} value={s.path}>{s.name}</option>
+            ))}
+          </select>
+        </div>
+        <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+          <label className={styles.label} htmlFor="ps-pill-model">Model</label>
+          <select
+            id="ps-pill-model"
+            className={styles.select}
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            disabled={isPending || isLoadingModels || !hasSkillRepo}
+           {...{ 'data-testid': 'ps-pill-model' }}>
+            <option value="">Use default</option>
+            {availableModels.map((m) => (
+              <option key={m.id} value={m.id}>{m.displayName}</option>
+            ))}
+          </select>
+        </div>
+        <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+          <label className={styles.label} htmlFor="ps-pill-effort">Effort</label>
+          <EffortSelect
+            id="ps-pill-effort"
+            value={effort}
+            onChange={(next) => setEffort(next ?? '')}
+            disabled={isPending || !hasSkillRepo}
+            inheritLabel="Use default"
+            testId="ps-pill-effort"
+           {...{ 'data-testid': 'ps-pill-effort' }} />
+        </div>
+        <button
+          type="button"
+          className={styles.btnAction}
+          disabled={disabled}
+          onClick={handleAdd}
+         {...{ 'data-testid': 'ps-skill-pill-add' }}>
+          Add
+        </button>
+      </div>
+      {error && (
+        <p className={styles.formError} {...{ 'data-testid': 'ps-skill-pill-add-error' }}>{error}</p>
+      )}
+      {!hasSkillRepo && (
+        <span className={styles.skillDescription} {...{ 'data-testid': 'ps-skill-pill-add-no-repo' }}>
+          Select a skill repository above before adding pills.
+        </span>
+      )}
+      {hasSkillRepo && !isLoadingSkills && skillList.length === 0 && (
+        <span className={styles.skillDescription} {...{ 'data-testid': 'ps-skill-pill-add-no-skills' }}>
+          No skills were found in this repository and branch, so there is nothing to attach a pill to.
+        </span>
+      )}
+    </>
+  );
+};
+
 // ── McpPillAddForm ─────────────────────────────────────────────────────────────
 
 interface McpPillAddFormProps {
@@ -653,6 +886,7 @@ const McpPillAddForm: React.FC<McpPillAddFormProps> = ({ availableModels, isLoad
   const [args, setArgs] = useState('-y sendgrid-mcp');
   const [envStr, setEnvStr] = useState('SENDGRID_API_KEY=${SENDGRID_API_KEY}');
   const [model, setModel] = useState('');
+  const [effort, setEffort] = useState<EffortLevel | ''>('');
   const [systemPromptHint, setSystemPromptHint] = useState('');
   const [description, setDescription] = useState('');
 
@@ -665,6 +899,7 @@ const McpPillAddForm: React.FC<McpPillAddFormProps> = ({ availableModels, isLoad
       label: trimmedLabel,
       mcpServerName: trimmedName,
       model: model || null,
+      effort: effort || null,
       systemPromptHint: systemPromptHint.trim() || null,
       description: description.trim() || null,
     };
@@ -698,6 +933,7 @@ const McpPillAddForm: React.FC<McpPillAddFormProps> = ({ availableModels, isLoad
     setArgs('-y sendgrid-mcp');
     setEnvStr('SENDGRID_API_KEY=${SENDGRID_API_KEY}');
     setModel('');
+    setEffort('');
     setSystemPromptHint('');
     setDescription('');
   };
@@ -737,6 +973,16 @@ const McpPillAddForm: React.FC<McpPillAddFormProps> = ({ availableModels, isLoad
             <option value="">Default model</option>
             {availableModels.map((m) => <option key={m.id} value={m.id}>{m.displayName}</option>)}
           </select>
+        </div>
+        <div className={styles.field} style={{ flex: '0 0 10rem' }}>
+          <label className={styles.label}>Effort override</label>
+          <EffortSelect
+            value={effort}
+            onChange={(next) => setEffort(next ?? '')}
+            disabled={isPending}
+            inheritLabel="Default effort"
+            testId="ps-mcp-add-effort"
+           {...{ 'data-testid': 'ps-mcp-add-effort' }} />
         </div>
       </div>
 
@@ -952,6 +1198,26 @@ interface EditState {
   designModuleModel: string;
   designModuleScopingModel: string;
   defaultModel: string;
+  interviewEffort: EffortLevel | '';
+  prdEffort: EffortLevel | '';
+  adrEffort: EffortLevel | '';
+  designDocEffort: EffortLevel | '';
+  designDocAssistantEffort: EffortLevel | '';
+  designPrototypeEffort: EffortLevel | '';
+  testCaseEffort: EffortLevel | '';
+  designDocValidationEffort: EffortLevel | '';
+  prdAssistantEffort: EffortLevel | '';
+  prdValidationEffort: EffortLevel | '';
+  developmentEffort: EffortLevel | '';
+  standupEffort: EffortLevel | '';
+  featureRequestEffort: EffortLevel | '';
+  technicalEffort: EffortLevel | '';
+  issueEffort: EffortLevel | '';
+  calendarAssistantEffort: EffortLevel | '';
+  loadTestGenerationEffort: EffortLevel | '';
+  designModuleEffort: EffortLevel | '';
+  designModuleScopingEffort: EffortLevel | '';
+  defaultEffort: EffortLevel | '';
   prdReviewBedrockModelId: string;
   prdReviewBedrockMaxTokens: number;
   designPrototypeBedrockModelId: string;
@@ -1000,6 +1266,13 @@ const emptyEdit = (): EditState => ({
   technicalModel: '', issueModel: '', loadTestGenerationModel: '', designModuleModel: '',
   designModuleScopingModel: '',
   defaultModel: '',
+  interviewEffort: '', prdEffort: '', adrEffort: '', designDocEffort: '',
+  designDocAssistantEffort: '', designPrototypeEffort: '', testCaseEffort: '',
+  designDocValidationEffort: '', prdAssistantEffort: '', prdValidationEffort: '',
+  developmentEffort: '', standupEffort: '', featureRequestEffort: '',
+  technicalEffort: '', issueEffort: '', calendarAssistantEffort: '',
+  loadTestGenerationEffort: '', designModuleEffort: '', designModuleScopingEffort: '',
+  defaultEffort: '',
   prdReviewBedrockModelId: '',
   prdReviewBedrockMaxTokens: 16000,
   designPrototypeBedrockModelId: '',
@@ -1060,6 +1333,7 @@ const PipelineStageCard: React.FC<PipelineStageCardProps> = ({
 }) => {
   const skillValue = edit[stage.skillKey];
   const modelValue = stage.modelKey ? edit[stage.modelKey] : '';
+  const effortValue = stage.effortKey ? edit[stage.effortKey] : '';
   const defaultModelLabel = edit.defaultModel
     ? availableModels.find((m) => m.id === edit.defaultModel)?.displayName ?? edit.defaultModel
     : 'system default (composer-2)';
@@ -1132,16 +1406,58 @@ const PipelineStageCard: React.FC<PipelineStageCardProps> = ({
                   )}
                 </div>
               )}
+              {stage.effortKey && (
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor={`ps-${stage.effortKey}`}>Effort override</label>
+                  <select
+                    id={`ps-${stage.effortKey}`}
+                    className={styles.select}
+                    value={effortValue}
+                    onChange={(e) => onEditChange({
+                      [stage.effortKey!]: e.target.value as EffortLevel | '',
+                    })}
+                    disabled={disabled}
+                   {...{ 'data-testid': `ps-stage-effort-${stage.effortKey}` }}>
+                    <option value="">Inherit (project default)</option>
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
+                </div>
+              )}
             </div>
           )}
           {stage.interviewOptions && (
-            <InterviewOptionsEditor
-              options={edit.interviewSkillOptions}
-              skillList={skillList}
-              availableModels={availableModels}
-              disabled={disabled}
-              skillsDisabled={skillsDisabled}
-              onChange={(options) => onEditChange({ interviewSkillOptions: options })} {...{ 'data-testid': 'ps-interview-options-editor' }} />
+            <>
+              {stage.effortKey && (
+                <div className={styles.stageFieldSingle}>
+                  <div className={styles.field}>
+                    <label className={styles.label} htmlFor={`ps-${stage.effortKey}`}>Effort override</label>
+                    <select
+                      id={`ps-${stage.effortKey}`}
+                      className={styles.select}
+                      value={effortValue}
+                      onChange={(e) => onEditChange({
+                        [stage.effortKey!]: e.target.value as EffortLevel | '',
+                      })}
+                      disabled={disabled}
+                     {...{ 'data-testid': `ps-stage-effort-${stage.effortKey}` }}>
+                      <option value="">Inherit (project default)</option>
+                      <option value="low">Low</option>
+                      <option value="medium">Medium</option>
+                      <option value="high">High</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+              <InterviewOptionsEditor
+                options={edit.interviewSkillOptions}
+                skillList={skillList}
+                availableModels={availableModels}
+                disabled={disabled}
+                skillsDisabled={skillsDisabled}
+                onChange={(options) => onEditChange({ interviewSkillOptions: options })} {...{ 'data-testid': 'ps-interview-options-editor' }} />
+            </>
           )}
           {stage.prdValidationThreshold && (
             <div className={styles.field} style={{ marginTop: '12px' }}>
@@ -1497,6 +1813,26 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       designModuleModel: config.designModuleModel ?? '',
       designModuleScopingModel: config.designModuleScopingModel ?? '',
       defaultModel: config.defaultModel ?? '',
+      interviewEffort: config.interviewEffort ?? '',
+      prdEffort: config.prdEffort ?? '',
+      adrEffort: config.adrEffort ?? '',
+      designDocEffort: config.designDocEffort ?? '',
+      designDocAssistantEffort: config.designDocAssistantEffort ?? '',
+      designPrototypeEffort: config.designPrototypeEffort ?? '',
+      testCaseEffort: config.testCaseEffort ?? '',
+      designDocValidationEffort: config.designDocValidationEffort ?? '',
+      prdAssistantEffort: config.prdAssistantEffort ?? '',
+      prdValidationEffort: config.prdValidationEffort ?? '',
+      developmentEffort: config.developmentEffort ?? '',
+      standupEffort: config.standupEffort ?? '',
+      featureRequestEffort: config.featureRequestEffort ?? '',
+      technicalEffort: config.technicalEffort ?? '',
+      issueEffort: config.issueEffort ?? '',
+      calendarAssistantEffort: config.calendarAssistantEffort ?? '',
+      loadTestGenerationEffort: config.loadTestGenerationEffort ?? '',
+      designModuleEffort: config.designModuleEffort ?? '',
+      designModuleScopingEffort: config.designModuleScopingEffort ?? '',
+      defaultEffort: config.defaultEffort ?? '',
       prdReviewBedrockModelId: config.prdReviewBedrockModelId ?? '',
       prdReviewBedrockMaxTokens: config.prdReviewBedrockMaxTokens ?? 16000,
       designPrototypeBedrockModelId: config.designPrototypeBedrockModelId ?? '',
@@ -1602,6 +1938,26 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         designModuleModel: edit.designModuleModel || null,
         designModuleScopingModel: edit.designModuleScopingModel || null,
         defaultModel: edit.defaultModel || null,
+        interviewEffort: edit.interviewEffort || null,
+        prdEffort: edit.prdEffort || null,
+        adrEffort: edit.adrEffort || null,
+        designDocEffort: edit.designDocEffort || null,
+        designDocAssistantEffort: edit.designDocAssistantEffort || null,
+        designPrototypeEffort: edit.designPrototypeEffort || null,
+        testCaseEffort: edit.testCaseEffort || null,
+        designDocValidationEffort: edit.designDocValidationEffort || null,
+        prdAssistantEffort: edit.prdAssistantEffort || null,
+        prdValidationEffort: edit.prdValidationEffort || null,
+        developmentEffort: edit.developmentEffort || null,
+        standupEffort: edit.standupEffort || null,
+        featureRequestEffort: edit.featureRequestEffort || null,
+        technicalEffort: edit.technicalEffort || null,
+        issueEffort: edit.issueEffort || null,
+        calendarAssistantEffort: edit.calendarAssistantEffort || null,
+        loadTestGenerationEffort: edit.loadTestGenerationEffort || null,
+        designModuleEffort: edit.designModuleEffort || null,
+        designModuleScopingEffort: edit.designModuleScopingEffort || null,
+        defaultEffort: edit.defaultEffort || null,
         prdReviewBedrockModelId: edit.prdReviewBedrockModelId || null,
         prdReviewBedrockMaxTokens: edit.prdReviewBedrockMaxTokens || null,
         designPrototypeBedrockModelId: edit.designPrototypeBedrockModelId || null,
@@ -1847,9 +2203,9 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
           <div className={styles.formCard}>
             <p className={styles.formTitle}>{edit.isNew ? 'Add Repo Config' : `Edit: ${edit.friendlyName || edit.project}`}</p>
 
-            {/* Section 1: Repository & Branch */}
+            {/* Section 1: Repository & Defaults */}
             <AccordionSection
-              title="Repository & Branch"
+              title="Repository & Defaults"
               expanded={expandedSections.repo}
               onToggle={() => toggleSection('repo')}
             >
@@ -1939,21 +2295,41 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                 </div>
               </div>
 
-              <div className={styles.field}>
-                <label className={styles.label} htmlFor="ps-defaultModel">Default Model</label>
-                <select
-                  id="ps-defaultModel"
-                  className={styles.select}
-                  value={edit.defaultModel}
-                  onChange={(e) => setEdit((prev) => prev ? { ...prev, defaultModel: e.target.value } : prev)}
-                  disabled={upsert.isPending || isLoadingModels}
-                 {...{ 'data-testid': 'ps-defaultModel' }}>
-                  <option value="">Use system default (composer-2)</option>
-                  {availableModels.map((m) => (
-                    <option key={m.id} value={m.id}>{m.displayName}</option>
-                  ))}
-                </select>
-                <span className={styles.modelDefault}>Fallback model for all pipeline stages without a specific override</span>
+              <div className={styles.formGrid}>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-defaultModel">Default Model</label>
+                  <select
+                    id="ps-defaultModel"
+                    className={styles.select}
+                    value={edit.defaultModel}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, defaultModel: e.target.value } : prev)}
+                    disabled={upsert.isPending || isLoadingModels}
+                   {...{ 'data-testid': 'ps-defaultModel' }}>
+                    <option value="">Use system default (composer-2)</option>
+                    {availableModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.displayName}</option>
+                    ))}
+                  </select>
+                  <span className={styles.modelDefault}>Fallback model for all pipeline stages without a specific override</span>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-defaultEffort">Default Effort</label>
+                  <select
+                    id="ps-defaultEffort"
+                    className={styles.select}
+                    value={edit.defaultEffort}
+                    onChange={(e) => patchEdit({
+                      defaultEffort: e.target.value as EffortLevel | '',
+                    })}
+                    disabled={upsert.isPending}
+                   {...{ 'data-testid': 'ps-defaultEffort' }}>
+                    <option value="">Use Cursor SDK default</option>
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
+                  <span className={styles.modelDefault}>Fallback effort for stages without a specific override</span>
+                </div>
               </div>
 
               <div className={styles.field} style={{ marginTop: '12px' }}>
@@ -2056,6 +2432,23 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                         : 'system default (composer-2)'}
                     </span>
                   )}
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-adrEffort">ADR effort override</label>
+                  <select
+                    id="ps-adrEffort"
+                    className={styles.select}
+                    value={edit.adrEffort}
+                    onChange={(e) => patchEdit({
+                      adrEffort: e.target.value as EffortLevel | '',
+                    })}
+                    disabled={upsert.isPending}
+                   {...{ 'data-testid': 'ps-adrEffort' }}>
+                    <option value="">Inherit (project default)</option>
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
                 </div>
               </div>
               <div className={styles.stageList}>
@@ -2524,6 +2917,18 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                             <option key={m.id} value={m.id}>{m.displayName}</option>
                           ))}
                         </select>
+                        <EffortSelect
+                          style={PILL_CONTROL_STYLE}
+                          value={pill.effort ?? ''}
+                          onChange={(effort) => {
+                            const pills = [...edit.quickSkillPills];
+                            pills[idx] = { ...pills[idx], effort };
+                            setEdit((prev) => prev ? { ...prev, quickSkillPills: pills } : prev);
+                          }}
+                          disabled={upsert.isPending}
+                          inheritLabel="Default effort"
+                          testId={`ps-skill-pill-effort-${idx}`}
+                         {...{ 'data-testid': `ps-skill-pill-effort-${idx}` }} />
                         <button
                           type="button"
                           className={styles.btnAction}
@@ -2590,63 +2995,15 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                 </div>
               )}
 
-              <div className={styles.pillAddRow}>
-                <div className={styles.field} style={{ flex: '0 0 10rem' }}>
-                  <label className={styles.label} htmlFor="ps-pill-label">Label</label>
-                  <input
-                    id="ps-pill-label"
-                    className={styles.input}
-                    placeholder="e.g. Production Support"
-                    disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo} {...{ 'data-testid': 'ps-pill-label' }} />
-                </div>
-                <div className={styles.field} style={{ flex: 1 }}>
-                  <label className={styles.label} htmlFor="ps-pill-skill">Skill</label>
-                  <select
-                    id="ps-pill-skill"
-                    className={styles.select}
-                    disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
-                   {...{ 'data-testid': 'ps-pill-skill' }}>
-                    <option value="">— select a skill —</option>
-                    {skillList.map((s) => (
-                      <option key={s.id} value={s.path}>{s.name}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className={styles.field} style={{ flex: '0 0 10rem' }}>
-                  <label className={styles.label} htmlFor="ps-pill-model">Model</label>
-                  <select
-                    id="ps-pill-model"
-                    className={styles.select}
-                    disabled={upsert.isPending || isLoadingModels || !edit.skillRepo}
-                   {...{ 'data-testid': 'ps-pill-model' }}>
-                    <option value="">Use default</option>
-                    {availableModels.map((m) => (
-                      <option key={m.id} value={m.id}>{m.displayName}</option>
-                    ))}
-                  </select>
-                </div>
-                <button
-                  type="button"
-                  className={styles.btnAction}
-                  disabled={upsert.isPending || isLoadingSkills || !edit.skillRepo}
-                  onClick={() => {
-                    const labelEl = document.getElementById('ps-pill-label') as HTMLInputElement | null;
-                    const skillEl = document.getElementById('ps-pill-skill') as HTMLSelectElement | null;
-                    const modelEl = document.getElementById('ps-pill-model') as HTMLSelectElement | null;
-                    if (!labelEl || !skillEl) return;
-                    const label = labelEl.value.trim();
-                    const skillPath = skillEl.value;
-                    if (!label || !skillPath) return;
-                    const pillModel = modelEl?.value || null;
-                    setEdit((prev) => prev ? { ...prev, quickSkillPills: [...prev.quickSkillPills, { label, skillPath, model: pillModel }] } : prev);
-                    labelEl.value = '';
-                    skillEl.value = '';
-                    if (modelEl) modelEl.value = '';
-                  }}
-                 {...{ 'data-testid': 'ps-skill-pill-add' }}>
-                  Add
-                </button>
-              </div>
+              <SkillPillAddForm
+                skillList={skillList}
+                availableModels={availableModels}
+                isLoadingSkills={isLoadingSkills}
+                isLoadingModels={isLoadingModels}
+                isPending={upsert.isPending}
+                hasSkillRepo={Boolean(edit.skillRepo)}
+                onAdd={(pill) => setEdit((prev) => prev ? { ...prev, quickSkillPills: [...prev.quickSkillPills, pill] } : prev)}
+               {...{ 'data-testid': 'ps-skill-pill-add-form' }} />
             </AccordionSection>
 
             {/* Section 7: Quick MCP Pills */}
@@ -2685,6 +3042,18 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                             <option key={m.id} value={m.id}>{m.displayName}</option>
                           ))}
                         </select>
+                        <EffortSelect
+                          style={PILL_CONTROL_STYLE}
+                          value={pill.effort ?? ''}
+                          onChange={(effort) => {
+                            const pills = [...edit.quickMcpPills];
+                            pills[idx] = { ...pills[idx], effort };
+                            setEdit((prev) => prev ? { ...prev, quickMcpPills: pills } : prev);
+                          }}
+                          disabled={upsert.isPending}
+                          inheritLabel="Default effort"
+                          testId={`ps-mcp-pill-effort-${idx}`}
+                         {...{ 'data-testid': `ps-mcp-pill-effort-${idx}` }} />
                         <button
                           type="button"
                           className={styles.btnAction}

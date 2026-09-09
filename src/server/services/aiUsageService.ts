@@ -16,6 +16,7 @@ import type {
   AiTokenSource,
   AiUsageStatus,
 } from '../../shared/types/aiCostAnalytics';
+import type { EffortLevel } from '../../shared/types/effort';
 
 // Estimate: ~4 chars per token (GPT-4 heuristic, good enough for allocation)
 const CHARS_PER_TOKEN = 4;
@@ -169,6 +170,7 @@ export function recordAiUsage(input: RecordUsageInput): void {
     .values({
       provider: input.provider,
       modelId: input.modelId,
+      effort: input.effort ?? null,
       feature: input.feature,
       project: input.project,
       skillPath: input.skillPath ?? null,
@@ -201,6 +203,7 @@ export async function recordCursorChatUsage(opts: {
     standupSessionId?: string;
     pillLabel?: string;
     project?: string;
+    effort?: EffortLevel;
   };
   modelId: string;
   threadId: string;
@@ -229,6 +232,7 @@ export async function recordCursorChatUsage(opts: {
   recordAiUsage({
     provider: 'cursor',
     modelId: opts.modelId,
+    effort: opts.kickoff.effort,
     feature: resolveFeatureFromKickoff(opts.kickoff),
     project: opts.kickoff.project ?? 'unknown',
     skillPath: opts.kickoff.skillPath,

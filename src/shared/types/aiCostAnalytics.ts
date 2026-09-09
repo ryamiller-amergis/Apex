@@ -1,5 +1,7 @@
 // ── AI Cost Analytics — shared types ────────────────────────────────────────
 
+import type { EffortLevel } from './effort';
+
 export type AiProvider = 'cursor' | 'bedrock';
 export type AiTokenSource = 'exact' | 'estimated';
 export type AiCostSource = 'computed' | 'estimated' | 'allocated';
@@ -29,6 +31,7 @@ export type AiFeature =
 export interface RecordUsageInput {
   provider: AiProvider;
   modelId: string;
+  effort?: EffortLevel;
   feature: AiFeature;
   project: string;
   skillPath?: string;
@@ -112,6 +115,7 @@ export interface AiCostEvent {
   id: string;
   provider: AiProvider;
   modelId: string;
+  effort: EffortLevel | null;
   feature: string;
   project: string;
   inputTokens: number;
@@ -243,6 +247,7 @@ export interface ProjectComparison {
 export interface EntityUsageRun {
   label: string;
   modelId: string;
+  effort: EffortLevel | null;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;

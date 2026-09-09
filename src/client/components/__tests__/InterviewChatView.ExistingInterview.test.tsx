@@ -1201,6 +1201,30 @@ describe('ExistingInterviewView — Generate PRD button disabled when PRD exists
 // ── Model hydration from kickoff ───────────────────────────────────────────────
 
 describe('ExistingInterviewView — model select reflects kickoff model', () => {
+  it('AC-0 / VT-08 shows the snapshotted effort next to model', async () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ model: 'composer-2', effort: 'medium' }),
+      isLoading: false,
+      isError: false,
+    });
+
+    renderExistingInterview();
+
+    expect(await screen.findByText('Effort: Medium')).toBeVisible();
+  });
+
+  it('AC-1 / VT-09 omits the effort label for a legacy null snapshot', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ model: 'composer-2', effort: undefined }),
+      isLoading: false,
+      isError: false,
+    });
+
+    renderExistingInterview();
+
+    expect(screen.queryByText(/Effort:/)).not.toBeInTheDocument();
+  });
+
   it('shows the kickoff model in the session dropdown (not the hardcoded Composer 2 default)', async () => {
     (useInterview as jest.Mock).mockReturnValue({
       data: makeInterview({ model: 'grok-4.5' }),

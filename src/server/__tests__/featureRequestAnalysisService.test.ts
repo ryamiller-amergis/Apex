@@ -162,6 +162,7 @@ describe('autoStartFeatureRequestAnalysis', () => {
 
     expect(mockedCreateThread).toHaveBeenCalledWith('system', {
       project: 'Apex',
+      agentModule: 'featureRequest',
       repo: 'org/repo',
       branch: 'main',
       skillProvider: 'github',
@@ -198,6 +199,7 @@ describe('autoStartFeatureRequestAnalysis', () => {
     expect(mockedCreateThread).toHaveBeenCalledWith(
       'system',
       expect.objectContaining({
+        agentModule: 'technical',
         skillPath: FAKE_SKILL_CONFIG.technicalSkillPath,
         model: FAKE_SKILL_CONFIG.technicalModel,
         freeformContext: expect.stringContaining('architecture impact'),

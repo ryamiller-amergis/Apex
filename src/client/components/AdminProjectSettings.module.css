@@ -602,7 +602,7 @@
 
 .stageFieldGrid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -613,6 +613,9 @@
 }
 
 .sharedModelRow {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
   margin-bottom: 12px;
   padding: 10px 12px;
   border: 1px solid var(--border-color-light);
@@ -1095,6 +1098,7 @@
   .formGrid { grid-template-columns: 1fr; }
   .formGridThreeCol { grid-template-columns: 1fr; }
   .stageFieldGrid { grid-template-columns: 1fr; }
+  .sharedModelRow { grid-template-columns: 1fr; }
   .interviewOptionRow { flex-direction: column; align-items: stretch; }
   .interviewOptionsHeader { flex-direction: column; }
   .tableWrapper { overflow-x: auto; -webkit-overflow-scrolling: touch; }

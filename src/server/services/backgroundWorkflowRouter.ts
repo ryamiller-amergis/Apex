@@ -6,6 +6,7 @@ import type {
   WorkflowRouteDecision,
 } from '../../shared/types/backgroundWorkflow';
 import type { SkillProvider } from '../../shared/types/projectSettings';
+import type { EffortLevel } from '../../shared/types/effort';
 import type { RunGrounding, RunRef } from '../../shared/types/runGrounding';
 import { resolveAgentRunHardLimitMs } from './agentRunReaperService';
 import { enqueue } from './agentRunLifecycleService';
@@ -64,6 +65,7 @@ export interface PreparedBackgroundWorkflowWorker {
   threadWorkspacePath: string;
   prompt: string;
   model: string;
+  effort?: EffortLevel;
   skillPath: string;
   projectId: string;
 }
@@ -372,6 +374,7 @@ export function createBackgroundWorkflowRouter(
       const snapshot: ExecutionSnapshot = {
         prompt: prepared.prompt,
         model: prepared.model,
+        effort: prepared.effort,
         workspaceRef,
         workflowClass: input.workflowClass,
         skillPath: prepared.skillPath,
@@ -535,6 +538,7 @@ export function createBackgroundWorkflowRouter(
     const snapshot: ExecutionSnapshot = {
       prompt: prepared.prompt,
       model: prepared.model,
+      effort: prepared.effort,
       workspaceRef,
       ...(checkoutRef ? { checkoutRef } : {}),
       ...(mirrorRef ? { mirrorRef } : {}),

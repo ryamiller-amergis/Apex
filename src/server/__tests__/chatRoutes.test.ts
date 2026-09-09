@@ -45,6 +45,11 @@ jest.mock('../services/chatAgentService', () => ({
   resolveGroundingCallerKey: jest.fn().mockReturnValue('agent-home'),
 }));
 
+const mockResolveSkillConfig = jest.fn();
+jest.mock('../services/projectSettingsService', () => ({
+  resolveSkillConfig: (...args: unknown[]) => mockResolveSkillConfig(...args),
+}));
+
 jest.mock('../services/wikiCatalog', () => ({
   saveWikiPage: jest.fn(),
 }));
@@ -483,6 +488,7 @@ describe('POST /api/chat/threads — happy path', () => {
   beforeEach(() => {
     mockPermissionGranted = true;
     jest.clearAllMocks();
+    mockResolveSkillConfig.mockResolvedValue(null);
   });
 
   it('creates a thread and returns threadId', async () => {
@@ -515,6 +521,41 @@ describe('POST /api/chat/threads — happy path', () => {
       'user-1',
       kickoff,
       { skipAutoKickoff: true },
+    );
+  });
+
+  it('AC-1 / VT-04: discards client effort and module before deriving Interview', async () => {
+    mockResolveSkillConfig.mockResolvedValue({
+      id: 'settings-1',
+      project: 'MaxView',
+      interviewSkillPath: '/.cursor/skills/grill-with-docs/SKILL.md',
+    });
+    mockChatService.createThread.mockResolvedValue({
+      id: 'interview-thread',
+    } as ChatThread);
+
+    const res = await request(buildApp())
+      .post('/api/chat/threads')
+      .send({
+        kickoff: {
+          project: 'MaxView',
+          repo: 'MaxView',
+          skillPath: '/.cursor/skills/grill-with-docs/SKILL.md',
+          effort: 'high',
+          agentModule: 'technical',
+        },
+      });
+
+    expect(res.status).toBe(201);
+    expect(mockChatService.createThread).toHaveBeenCalledWith(
+      'user-1',
+      {
+        project: 'MaxView',
+        repo: 'MaxView',
+        skillPath: '/.cursor/skills/grill-with-docs/SKILL.md',
+        agentModule: 'interview',
+      },
+      { skipAutoKickoff: false },
     );
   });
 });

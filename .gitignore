@@ -67,7 +67,7 @@ scripts/output/
 public/apryse-webviewer/
 
 # Local AI Pilot runtime/scratch artifacts
-.ai-pilot/
+#.ai-pilot/
 data/chat-threads/
 data/dev-workspaces/
 data/repo-cache/

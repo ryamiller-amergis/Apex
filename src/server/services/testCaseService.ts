@@ -859,6 +859,7 @@ export async function triggerTestCaseGeneration(
     prdRow.authorId,
     {
       project: prdRow.project,
+      agentModule: 'testCase',
       repo: skillConfig.skillRepo,
       branch: skillConfig.skillBranch ?? 'main',
       skillProvider: skillConfig.skillProvider ?? undefined,

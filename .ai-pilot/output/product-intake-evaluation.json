@@ -1,0 +1,21 @@
+{
+  "verdict": "decline",
+  "confidence": "high",
+  "techVelocity": "stable",
+  "nativeBenefit": "high",
+  "audience": "internal",
+  "dataLeavesTenant": false,
+  "priority": "medium",
+  "risk": "medium",
+  "deliveryApproach": "full-code",
+  "recommendedLane": "none",
+  "recommendedTooling": [],
+  "hostingRecommendation": "azure-existing",
+  "operationalOwner": "Apex platform team",
+  "reuseOpportunity": "Extend the existing Apex Work Board (ApexWorkBoardView, apexWorkItemService, apexWorkItems schema/migrations, ApexMaterializeModal/MaterializeFromPrd, apexReleases, apexWorkBoardBus real-time collab, MCP board tools, optional one-way apexWorkItemImportService) - do not rebuild it",
+  "entersInterviewFlow": false,
+  "buildBuyRentSummary": "Decline as a net-new build - Apex already ships a native, ADO-independent Work Board that materializes PRD backlogs directly; the real work is promoting it to system-of-record and closing parity gaps, not building a board.",
+  "rationale": "Stable tech plus high native benefit would normally say build - which is exactly why Apex already built it: a native Work Board (apexWorkItemService + apexWorkItems schema) with its own statuses (idea/ready/in-progress/review/done), Epic/Feature/PBI/TBI/Bug hierarchy, releases, comments, attachments, a real-time collaboration bus, and direct PRD materialization via ApexMaterializeModal/MaterializeFromPrd. ADO is already an optional, idempotent one-way import (apexWorkItemImportService), so PRD items already do NOT need to flow into Azure DevOps - the one-stop-shop architecture largely exists. As written ('build a work item board'), the request duplicates a shipped capability, so it declines as a net-new build. The genuine unmet need is a positioning and parity decision, not a rebuild: declare the Apex board the system of record with ADO sync opt-in per project, and close the ADO parity gaps that block adoption - iterations/sprints and capacity, saved queries/filters as shareable views, and velocity/burndown reporting. Audience is internal so blast radius is low and data stays in-tenant; the main risk is a two-systems-of-record split-brain if some teams stay on ADO, so a coexistence/migration story is required before declaring true one-stop SDLC. Route the delta as a scoped platform-feature extension of the existing board owned by the Apex platform team - do not open a from-scratch build.",
+  "existingOverlap": "Apex Work Board - native and already ADO-independent: full board UI, PRD-to-work-item materialization, releases, real-time collaboration, and optional one-way ADO import",
+  "clarifyingQuestions": []
+}
