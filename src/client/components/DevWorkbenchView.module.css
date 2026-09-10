@@ -93,6 +93,18 @@
   text-overflow: ellipsis;
 }
 
+.title-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.title-cell .item-title {
+  flex: 1;
+  min-width: 0;
+}
+
 .item-meta {
   display: flex;
   gap: 12px;

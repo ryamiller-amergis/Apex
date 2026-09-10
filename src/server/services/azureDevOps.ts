@@ -1992,6 +1992,18 @@ export class AzureDevOpsService {
   }
 
   /**
+   * Return the number of non-deleted ADO discussion comments on a work item.
+   */
+  async getWorkItemCommentCount(workItemId: number): Promise<number> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const commentsResult = await witApi.getComments(this.project, workItemId);
+      const comments = commentsResult?.comments ?? [];
+      return comments.filter((comment) => !comment.isDeleted).length;
+    });
+  }
+
+  /**
    * Get all unique release versions from work item tags
    * Tags follow format: Release:v1.0, Release:v2.0, etc.
    */

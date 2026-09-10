@@ -53,6 +53,8 @@ import type { ProjectSkillConfig, SkillProvider } from '../../shared/types/proje
 import { logMyWorkSession } from '../services/myWorkSessionLogger';
 import { buildLocalDevContext } from '../services/localDevContextService';
 import { getApexFeatureContext } from '../services/devWorkbenchFeatureContextService';
+import { getWorkItemCommentCount } from '../services/workItemCommentCountService';
+import type { WorkItemCommentCountResponse } from '../../shared/types/workItemCommentCount';
 
 const router = Router();
 
@@ -85,6 +87,48 @@ router.get('/workitems', async (req: Request, res: Response) => {
   } catch (err) {
     console.error('[dev-workbench] getWorkItems failed:', (err as Error).message);
     res.status(500).json({ error: 'Failed to fetch assigned work items' });
+  }
+});
+
+// GET /work-items/:workItemId/comment-count?project=<project>
+router.get('/work-items/:workItemId/comment-count', async (req: Request, res: Response) => {
+  try {
+    const project = req.query.project as string;
+    const workItemId = Number.parseInt(String(req.params.workItemId), 10);
+
+    if (!project) {
+      res.status(400).json({ error: 'project query parameter is required' });
+      return;
+    }
+    if (!Number.isFinite(workItemId) || workItemId <= 0) {
+      res.status(400).json({ error: 'workItemId must be a positive integer' });
+      return;
+    }
+    if (isAppNativeRequirementsProject(project)) {
+      res.status(400).json({ error: 'This project uses app-native PRD requirements' });
+      return;
+    }
+
+    const result = await getWorkItemCommentCount(
+      {
+        createAdoService: (p) => new AzureDevOpsService(p),
+        logger: {
+          warn: (message, meta) => {
+            console.warn(message, meta);
+          },
+        },
+      },
+      project,
+      workItemId,
+    );
+
+    const body: WorkItemCommentCountResponse = {
+      count: result.status === 'success' ? result.count : null,
+    };
+    res.json(body);
+  } catch (err) {
+    console.error('[dev-workbench] comment-count failed:', (err as Error).message);
+    res.status(500).json({ error: 'Failed to fetch comment count' });
   }
 });
 
