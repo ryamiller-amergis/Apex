@@ -57,6 +57,12 @@ jest.mock('../FeatureContextModal', () => ({
   ),
 }));
 
+jest.mock('../my-work/MyWorkCommentCountBadge', () => ({
+  MyWorkCommentCountBadge: ({ workItemId, project }: { workItemId: number; project: string }) => (
+    <span data-testid={`my-work-comment-count-badge-${workItemId}`} data-project={project} />
+  ),
+}));
+
 import { useAppShell } from '../../hooks/useAppShell';
 import {
   useAssignedWorkItems,
@@ -150,6 +156,14 @@ describe('DevWorkbenchView', () => {
     expect(screen.getByText('Fix crash')).toBeInTheDocument();
     expect(screen.getByText('#42')).toBeInTheDocument();
     expect(screen.getByText('Feature')).toBeInTheDocument();
+  });
+
+  it('mounts comment count badge slot on each ADO My Work row', () => {
+    renderView();
+
+    expect(screen.getByTestId('my-work-comment-count-badge-42')).toBeInTheDocument();
+    expect(screen.getByTestId('my-work-comment-count-badge-99')).toBeInTheDocument();
+    expect(screen.getByTestId('my-work-comment-count-badge-42')).toHaveAttribute('data-project', 'MaxView');
   });
 
   it('shows a loading state while work items are loading', () => {

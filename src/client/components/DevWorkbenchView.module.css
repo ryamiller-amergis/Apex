@@ -84,6 +84,18 @@
   min-width: 0;
 }
 
+.item-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.item-title-row .item-title {
+  flex: 1;
+  min-width: 0;
+}
+
 .item-title {
   font-size: 0.9375rem;
   font-weight: 500;

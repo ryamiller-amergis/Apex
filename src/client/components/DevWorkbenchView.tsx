@@ -26,6 +26,7 @@ import {
 } from '../../shared/utils/myWorkStatus';
 import StartLocalDevModal, { type StartLocalDevTarget } from './StartLocalDevModal';
 import FeatureContextModal from './FeatureContextModal';
+import { MyWorkCommentCountBadge } from './my-work/MyWorkCommentCountBadge';
 import styles from './DevWorkbenchView.module.css';
 
 const BoardAssignedSection: React.FC<{ project: string }> = ({ project }) => {
@@ -699,7 +700,16 @@ export const DevWorkbenchView: React.FC = () => {
             return (
               <div key={item.id} className={styles.item}>
                 <div className={styles['item-info']}>
-                  <span className={styles['item-title']}>{item.title}</span>
+                  <div className={styles['item-title-row']}>
+                    <span className={styles['item-title']}>{item.title}</span>
+                    {selectedProject && (
+                      <MyWorkCommentCountBadge
+                        workItemId={item.id}
+                        project={selectedProject}
+                        {...{ 'data-testid': `my-work-comment-count-${item.id}` }}
+                      />
+                    )}
+                  </div>
                   <div className={styles['item-meta']}>
                     <span className={styles['item-id']}>#{item.id}</span>
                     <span className={styles.badge}>{item.workItemType}</span>
