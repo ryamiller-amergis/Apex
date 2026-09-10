@@ -6,6 +6,7 @@ import { useSkillList } from '../hooks/useChatThreads';
 import { DEFAULT_MODEL_ID, modelBadge } from '../config/models';
 import { useAvailableModels, useGlobalDefaultModel, useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
 import { useChatAttachments } from '../hooks/useChatAttachments';
+import { useSpeechInput } from '../hooks/useSpeechInput';
 import type {
   ChatAttachment,
   ChatThread,
@@ -311,6 +312,7 @@ export interface StartPanelChatOptions {
   quickSkill?: QuickSkillPill;
   mcpPill?: QuickMcpPill;
   initialMessage?: string;
+  attachments?: ChatAttachment[];
 }
 
 export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
@@ -363,6 +365,8 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     removeAttachment,
     clearAttachments,
   } = useChatAttachments();
+
+  const speech = useSpeechInput(useCallback((text: string) => setInput(text), []));
 
   const session = useAgentChatSession(sessionThreadId, {
     initialMessages: thread?.messages,
@@ -539,6 +543,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     setInput('');
     setSkillPickerOpen(false);
     setQueuedQuickSkill(null);
+    speech.stop();
     await session.send(
       trimmedText || 'Please use the attached files as additional context.',
       { model: selectedModel, attachments: messageAttachments, skill: turnSkill },
@@ -551,6 +556,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     session,
     selectedModel,
     clearAttachments,
+    speech,
   ]);
 
   const selectSkill = useCallback((skill: { name: string; path: string }) => {
@@ -706,17 +712,22 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
 
   const startFromEmptyComposer = async () => {
     const message = input.trim();
-    if (!message) return;
+    if (!message && attachments.length === 0) return;
     if (needsSkillSelection) return;
     const quickSkill = selectedQuickSkill;
     const mcpPill = selectedMcpPill;
-    setPendingOutgoing(message);
+    const outgoingAttachments = [...attachments];
+    const initialMessage = message || 'Please use the attached files as additional context.';
+    setPendingOutgoing(initialMessage);
     setInput('');
+    speech.stop();
+    if (outgoingAttachments.length > 0) clearAttachments();
     await onNewChat({
       model: selectedModel,
       quickSkill: quickSkill ?? undefined,
       mcpPill: mcpPill ?? undefined,
-      initialMessage: message || undefined,
+      initialMessage,
+      ...(outgoingAttachments.length > 0 ? { attachments: outgoingAttachments } : {}),
     });
   };
 
@@ -876,8 +887,29 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
               !needsSkillSelection
               && canStartNewChat
               && !isStartingNewChat
-              && Boolean(input.trim())
+              && (Boolean(input.trim()) || attachments.length > 0)
             }
+            allowEmptySend
+            attachments={attachments}
+            attachmentError={attachmentError}
+            onRemoveAttachment={removeAttachment}
+            onAttachClick={openFilePicker}
+            speech={{
+              isListening: speech.isListening,
+              isSpeechSupported: speech.isSpeechSupported,
+              speechError: speech.speechError,
+              onToggle: () => speech.toggle(input),
+            }}
+            fileInput={(
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className={styles.fileInput}
+                onChange={handleAttachmentChange}
+                disabled={isStartingNewChat || !canStartNewChat}
+              />
+            )}
             placeholder={
               needsSkillSelection
                 ? 'Select an option above to get started'
@@ -1118,6 +1150,12 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             attachmentError={attachmentError}
             onRemoveAttachment={removeAttachment}
             onAttachClick={openFilePicker}
+            speech={{
+              isListening: speech.isListening,
+              isSpeechSupported: speech.isSpeechSupported,
+              speechError: speech.speechError,
+              onToggle: () => speech.toggle(input),
+            }}
             model={selectedModel}
             models={availableModels}
             modelsLoading={modelsLoading}

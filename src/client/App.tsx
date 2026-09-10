@@ -551,6 +551,7 @@ function App() {
           body: JSON.stringify({
             text: options.initialMessage,
             model: options.model ?? DEFAULT_MODEL_ID,
+            ...(options.attachments?.length ? { attachments: options.attachments } : {}),
           }),
         });
       }
