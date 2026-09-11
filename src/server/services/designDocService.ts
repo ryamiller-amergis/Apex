@@ -637,6 +637,28 @@ const WATCHER_MAX_ATTEMPTS = 360;
 const activeDocWatchers = new Map<string, ReturnType<typeof setInterval>>();
 const activeValidationWatchers = new Map<string, ReturnType<typeof setInterval>>();
 
+/**
+ * Absolute generation deadline per doc + thread.
+ *
+ * Startup recovery restarts generation watchers on its own timer, which is far
+ * more frequent than the timeout itself. A per-watcher tick counter is reset by
+ * every restart and so never reaches the limit, leaving documents in
+ * `generating` indefinitely — the deadline has to outlive the restart.
+ *
+ * Keyed by thread as well as doc so a genuine retry (new thread) gets a fresh
+ * deadline while a recovery restart (same thread) keeps the original one. The
+ * reaper's dispatch TTL is the durable backstop across process restarts.
+ */
+const docWatcherDeadlines = new Map<string, number>();
+
+function docWatcherDeadlineKey(designDocId: string, chatThreadId: string): string {
+  return `${designDocId}:${chatThreadId}`;
+}
+
+function releaseDocWatcherDeadline(designDocId: string, chatThreadId: string): void {
+  docWatcherDeadlines.delete(docWatcherDeadlineKey(designDocId, chatThreadId));
+}
+
 function stopDocWatcher(designDocId: string): void {
   const handle = activeDocWatchers.get(designDocId);
   if (handle !== undefined) {
@@ -1040,7 +1062,13 @@ export function startSingleFeatureDocWatcher(
   project: string,
 ): void {
   stopDocWatcher(designDocId);
+
+  const deadlineKey = docWatcherDeadlineKey(designDocId, chatThreadId);
+  const deadlineAt = docWatcherDeadlines.get(deadlineKey)
+    ?? Date.now() + (WATCHER_MAX_ATTEMPTS * WATCHER_INTERVAL_MS);
+  docWatcherDeadlines.set(deadlineKey, deadlineAt);
   let attempts = 0;
+  let lastTickState = '';
 
   console.log(`[singleFeatureDocWatcher] Started — designDocId=${designDocId} threadId=${chatThreadId}`);
   void hydrateThread(chatThreadId).catch((err) => {
@@ -1053,9 +1081,10 @@ export function startSingleFeatureDocWatcher(
   const interval = setInterval(async () => {
     attempts += 1;
 
-    if (attempts > WATCHER_MAX_ATTEMPTS) {
+    if (Date.now() >= deadlineAt) {
       clearInterval(interval);
       activeDocWatchers.delete(designDocId);
+      releaseDocWatcherDeadline(designDocId, chatThreadId);
       console.warn(`[singleFeatureDocWatcher] Timed out — marking generation_failed (designDocId=${designDocId}, threadId=${chatThreadId})`);
       await runGroundingService.persistThenMarkTerminalInactive(
         { runType: 'chat', runId: chatThreadId, project },
@@ -1073,15 +1102,23 @@ export function startSingleFeatureDocWatcher(
     const filesReady = Boolean(design && techSpec && assumptions);
     const agentFinished = isThreadIdle(chatThreadId) && !(await isThreadRunAlive(chatThreadId));
 
-    console.log(
-      `[singleFeatureDocWatcher] tick #${attempts} — design=${!!design} techSpec=${!!techSpec} assumptions=${!!assumptions} agentFinished=${agentFinished} (designDocId=${designDocId})`,
-    );
+    // A doc generates for up to 30 minutes, so an unconditional 5s tick log is
+    // hundreds of lines per doc. Report transitions, plus a minute heartbeat so
+    // a wedged watcher is still visible.
+    const tickState = `${!!design}|${!!techSpec}|${!!assumptions}|${agentFinished}`;
+    if (tickState !== lastTickState || attempts % 12 === 0) {
+      lastTickState = tickState;
+      console.log(
+        `[singleFeatureDocWatcher] tick #${attempts} — design=${!!design} techSpec=${!!techSpec} assumptions=${!!assumptions} agentFinished=${agentFinished} (designDocId=${designDocId})`,
+      );
+    }
 
     // Success finalize only after the run is terminal — leftover workspace files
     // must not promote the doc while generation is still in flight.
     if (filesReady && agentFinished) {
       clearInterval(interval);
       activeDocWatchers.delete(designDocId);
+      releaseDocWatcherDeadline(designDocId, chatThreadId);
       await finalizeSingleFeatureDoc(designDocId, chatThreadId, project);
       return;
     }
@@ -1100,12 +1137,14 @@ export function startSingleFeatureDocWatcher(
         // Keep polling — do NOT clear the interval. Clearing here permanently
         // abandoned docs in `generating` when a non-owner recovery watcher saw a
         // terminal run owned by a dead instance. Orphan grace eventually lets
-        // canThisInstanceFailGeneration return true; timeout is the backstop.
+        // canThisInstanceFailGeneration return true, and the absolute deadline
+        // above is the backstop when it never does.
         console.warn(`[singleFeatureDocWatcher] Waiting — not run owner or no terminal run yet (designDocId=${designDocId})`);
         return;
       }
       clearInterval(interval);
       activeDocWatchers.delete(designDocId);
+      releaseDocWatcherDeadline(designDocId, chatThreadId);
       console.warn(`[singleFeatureDocWatcher] Agent finished without complete output — marking generation_failed (designDocId=${designDocId})`);
       await finalizeSingleFeatureDoc(designDocId, chatThreadId, project);
     }

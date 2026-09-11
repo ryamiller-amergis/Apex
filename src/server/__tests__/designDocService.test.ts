@@ -1519,6 +1519,32 @@ describe('startSingleFeatureDocWatcher', () => {
     );
   });
 
+  it('times out on the original deadline even while recovery keeps restarting the watcher', async () => {
+    // Regression: the tick counter restarted from zero on every recovery
+    // restart, so the timeout was unreachable and docs stayed in `generating`.
+    mockIsThreadRunAlive.mockResolvedValue(true);
+    mockCanFail.mockResolvedValue(false);
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    startSingleFeatureDocWatcher('doc-deadline', 'thread-deadline', 'prd-1', 'proj-alpha');
+
+    // Restart on the one-minute cadence startup recovery uses.
+    for (let minute = 0; minute < 31; minute += 1) {
+      await jest.advanceTimersByTimeAsync(60_000);
+      startSingleFeatureDocWatcher('doc-deadline', 'thread-deadline', 'prd-1', 'proj-alpha');
+    }
+    await jest.advanceTimersByTimeAsync(5_000);
+
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'generation_failed',
+        generationError: 'Generation timed out',
+      }),
+    );
+  });
+
   it('does not fail on first tick when no agent_runs row exists yet (kickoff in progress)', async () => {
     mockIsThreadRunAlive.mockResolvedValue(false);
     mockCanFail.mockResolvedValue(false);

@@ -33,6 +33,7 @@ jest.mock('../services/agentRunLifecycleService', () => {
 jest.mock('../services/admissionGovernorService', () => ({
   recoverStaleDispatchedRuns: (...args: unknown[]) =>
     mockRecoverStaleDispatchedRuns(...args),
+  resolveBackgroundDispatchTtlMs: () => 30 * 60_000,
 }));
 jest.mock('../services/workerTierTelemetry', () => ({
   workerTierTelemetry: {
@@ -68,6 +69,7 @@ const config: AgentRunHealthConfig = {
   backgroundQueueTtlMs: 30 * 60_000,
   workerHeartbeatTimeoutMs: 90_000,
   dispatchColdStartMs: 5 * 60_000,
+  dispatchTtlMs: 30 * 60_000,
   workerProgressTimeoutMs: 10 * 60_000,
   cancelGraceMs: 60_000,
   progressStaleMs: 2 * 60_000,
@@ -81,6 +83,18 @@ const now = Date.parse('2026-07-14T14:00:00.000Z');
 
 function timestamp(msAgo: number): string {
   return new Date(now - msAgo).toISOString();
+}
+
+/**
+ * Collect the string literals bound into a Drizzle filter. The table metadata
+ * in these objects is self-referential, so JSON.stringify cannot be used.
+ */
+function boundStrings(value: unknown, seen = new Set<unknown>()): string[] {
+  if (typeof value === 'string') return [value];
+  if (!value || typeof value !== 'object' || seen.has(value)) return [];
+  seen.add(value);
+  return Object.values(value as Record<string, unknown>)
+    .flatMap((entry) => boundStrings(entry, seen));
 }
 
 describe('assessAgentRunHealth', () => {
@@ -516,6 +530,53 @@ describe('reapOrphanedRuns', () => {
     expect(mockWorkerReaperAction).toHaveBeenCalledWith({
       lane: 'background',
     });
+  });
+
+  it('fails a background dispatch that outlives the dispatch TTL rather than republishing it forever', async () => {
+    // Regression: `dispatched` had no terminal path, so a worker that died
+    // before its first callback left the row re-enqueued on every sweep.
+    mockFindMany.mockResolvedValue([{
+      id: 'run-abandoned-dispatch',
+      threadId: 'thread-worker',
+      status: 'dispatched',
+      lane: 'background',
+      dispatchMessageId: 'dispatch-current',
+      dispatchedAt: timestamp(30 * 60_000 + 1),
+      updatedAt: timestamp(30 * 60_000 + 1),
+      progressPhase: null,
+      cancelRequested: false,
+    }]);
+
+    await reapOrphanedRuns({ now: () => now, config });
+
+    expect(mockMarkTerminal).toHaveBeenCalledWith(
+      'run-abandoned-dispatch',
+      expect.objectContaining({
+        status: 'failed',
+        terminalReason: 'dispatch_ttl',
+        dispatchMessageId: 'dispatch-current',
+        detail: 'Background worker never started. Please retry.',
+      }),
+    );
+    expect(mockRecoverStaleDispatchedRuns).not.toHaveBeenCalled();
+  });
+
+  it('republishes a dispatch that is past cold start but still inside the dispatch TTL', async () => {
+    mockFindMany.mockResolvedValue([{
+      id: 'run-cold-not-expired',
+      threadId: 'thread-worker',
+      status: 'dispatched',
+      lane: 'background',
+      dispatchMessageId: 'dispatch-current',
+      dispatchedAt: timestamp(30 * 60_000 - 1),
+      updatedAt: timestamp(30 * 60_000 - 1),
+      cancelRequested: false,
+    }]);
+
+    await reapOrphanedRuns({ now: () => now, config });
+
+    expect(mockRecoverStaleDispatchedRuns).toHaveBeenCalledTimes(1);
+    expect(mockMarkTerminal).not.toHaveBeenCalled();
   });
 
   it('fails an interactive dispatch when no actor starts before the cold-start deadline', async () => {
@@ -1142,6 +1203,32 @@ describe('isThreadRunAlive', () => {
     ).resolves.toBe(true);
   });
 
+  it('scans dispatched rows and treats one as alive so waiters keep waiting', async () => {
+    // Regression: omitting `dispatched` here made a run read as neither alive
+    // nor terminal, so design doc watchers concluded the agent had finished.
+    mockFindMany.mockResolvedValue([
+      {
+        id: 'run-1',
+        threadId: 'thread-1',
+        status: 'dispatched',
+        lane: 'background',
+        dispatchMessageId: 'dispatch-current',
+        createdAt: timestamp(60_000),
+        dispatchedAt: timestamp(60_000),
+        startedAt: null,
+        heartbeatAt: null,
+        timeoutAt: timestamp(-60 * 60_000),
+      },
+    ]);
+
+    await expect(
+      isThreadRunAlive('thread-1', { now: () => now, config }),
+    ).resolves.toBe(true);
+    expect(boundStrings(mockFindMany.mock.calls[0][0])).toEqual(
+      expect.arrayContaining(['queued', 'running', 'dispatched']),
+    );
+  });
+
   it('returns true for progress_stale and long_running (worker still alive)', async () => {
     mockFindMany.mockResolvedValue([
       {
@@ -1321,17 +1408,19 @@ describe('isInFlightToolProgressLabel', () => {
 describe('getLatestThreadRun', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('returns the latest run status, ownerInstance, and updatedAt', async () => {
+  it('returns the latest run status, ownerInstance, updatedAt, and timeoutAt', async () => {
     mockFindFirst.mockResolvedValue({
       status: 'completed',
       ownerInstance: 'worker-a',
       updatedAt: '2026-07-14T13:59:00.000Z',
+      timeoutAt: '2026-07-14T15:59:00.000Z',
     });
     const result = await getLatestThreadRun('thread-1');
     expect(result).toEqual({
       status: 'completed',
       ownerInstance: 'worker-a',
       updatedAt: '2026-07-14T13:59:00.000Z',
+      timeoutAt: '2026-07-14T15:59:00.000Z',
     });
   });
 
@@ -1357,6 +1446,32 @@ describe('canThisInstanceFailGeneration', () => {
       updatedAt: timestamp(0),
     });
     await expect(canThisInstanceFailGeneration('thread-1')).resolves.toBe(false);
+  });
+
+  it('returns true when a non-terminal run is past its own deadline (abandoned dispatch)', async () => {
+    // Regression: requiring a terminal status here pinned documents in
+    // `generating` forever behind a dispatch that never reached one.
+    mockFindFirst.mockResolvedValue({
+      status: 'dispatched',
+      ownerInstance: 'worker-a',
+      updatedAt: timestamp(60 * 60_000),
+      timeoutAt: timestamp(60_000),
+    });
+    await expect(
+      canThisInstanceFailGeneration('thread-1', { now: () => now }),
+    ).resolves.toBe(true);
+  });
+
+  it('returns false when a non-terminal run is still inside its deadline', async () => {
+    mockFindFirst.mockResolvedValue({
+      status: 'dispatched',
+      ownerInstance: 'worker-a',
+      updatedAt: timestamp(60_000),
+      timeoutAt: timestamp(-60 * 60_000),
+    });
+    await expect(
+      canThisInstanceFailGeneration('thread-1', { now: () => now }),
+    ).resolves.toBe(false);
   });
 
   it('returns false when a foreign owner terminal run is still within orphan grace', async () => {

@@ -523,6 +523,7 @@ describe('walkthroughAnchorSmartTaggingService', () => {
         status: 'completed',
         ownerInstance: null,
         updatedAt: '2026-07-30T00:00:00.000Z',
+        timeoutAt: null,
       });
 
       const result = await getSmartTaggingResult(THREAD_ID, USER_ID);

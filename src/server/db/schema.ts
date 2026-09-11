@@ -1678,7 +1678,7 @@ export const agentRuns = pgTable('agent_runs', {
   ),
   terminalReasonCheck: check(
     'agent_runs_terminal_reason_check',
-    sql`${t.terminalReason} IS NULL OR ${t.terminalReason} IN ('worker_lost', 'progress_timeout', 'queue_ttl', 'forced_cancel')`,
+    sql`${t.terminalReason} IS NULL OR ${t.terminalReason} IN ('worker_lost', 'progress_timeout', 'queue_ttl', 'forced_cancel', 'dispatch_ttl')`,
   ),
   nonTerminalTimeoutCheck: check(
     'agent_runs_non_terminal_timeout_at_check',

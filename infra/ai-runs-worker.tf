@@ -62,9 +62,27 @@ resource "azurerm_servicebus_queue" "ai_runs_background" {
   name         = local.ai_runs_queue_name
   namespace_id = azurerm_servicebus_namespace.ai_runs.id
 
-  # Dead-lettering for poison messages (DoD-0).
+  # The runner receives with DELETE /messages/head (receive-and-delete), so a
+  # delivery carries no lock and no delivery count. max_delivery_count
+  # therefore cannot dead-letter a poison dispatch; the reaper's dispatch TTL
+  # is what terminates a run the worker never completes. Kept for expiry
+  # dead-lettering and in case the runner moves to peek-lock.
   max_delivery_count                   = 5
   dead_lettering_on_message_expiration = true
+
+  # The admission sweep republishes a stale dispatch under its persisted
+  # dispatchMessageId (serviceBusPublisher sets it as MessageId). Duplicate
+  # detection is what collapses those repeats onto a single message. It was
+  # disabled during the 2026-09-10 stuck-dispatch incident, so each sweep minted
+  # a new message and the queue reached five figures. The window must cover the
+  # dispatch TTL (AI_RUNS_BACKGROUND_DISPATCH_TTL_MS, default 30m) so every
+  # repeat for one run falls inside it.
+  #
+  # CHANGING THIS REPLACES THE QUEUE. Drain it first: replacement discards
+  # queued messages and cycles the dependent authorization rule and role
+  # assignments.
+  requires_duplicate_detection            = true
+  duplicate_detection_history_time_window = "PT30M"
 
   # Max Service Bus lock duration (5m); SDKs renew during long runs.
   lock_duration = "PT5M"
