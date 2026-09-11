@@ -3,6 +3,13 @@ import {
   AiRunFenceConflictError,
   createAiRunsCallbackClient,
 } from '../services/aiRunsWorker';
+import type { AiRunIngestBody } from '../../shared/types/aiRunIngest';
+
+const TERMINAL_BODY: AiRunIngestBody = {
+  dispatchMessageId: 'dispatch-1',
+  kind: 'terminal',
+  status: 'completed',
+};
 
 function response(
   status: number,
@@ -106,7 +113,7 @@ describe('aiRunsWorker callback client', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it('does not retry an ingest write, so a lifecycle transition cannot be duplicated', async () => {
+  it('does not retry a heartbeat, which is latency-sensitive and cheap to lose', async () => {
     const fetchImpl = jest.fn().mockResolvedValue(response(500, { error: 'down' }));
     const client = createAiRunsCallbackClient({
       callbackBaseUrl: 'https://apex.example',
@@ -119,6 +126,75 @@ describe('aiRunsWorker callback client', () => {
       dispatchMessageId: 'dispatch-1',
       kind: 'heartbeat',
     })).rejects.toBeInstanceOf(AiRunCallbackError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a terminal report so a finished run is not recorded as a failure', async () => {
+    // The worker exits immediately after this call, so a dropped terminal
+    // leaves real work to be failed by the reaper. Replay is safe because the
+    // server treats a repeat of the same terminal status as a no-op.
+    const fetchImpl = jest.fn()
+      .mockResolvedValueOnce(response(500, { error: 'pool exhausted' }))
+      .mockResolvedValueOnce(response(503, { error: 'unavailable' }))
+      .mockResolvedValueOnce(response(200, { ok: true, cancelRequested: false }));
+    const sleepImpl = jest.fn().mockResolvedValue(undefined);
+    const client = createAiRunsCallbackClient({
+      callbackBaseUrl: 'https://apex.example',
+      getToken: jest.fn().mockResolvedValue('token'),
+      fetchImpl: fetchImpl as never,
+      sleepImpl,
+    });
+
+    await expect(client.postIngest('project-1', 'run-1', TERMINAL_BODY))
+      .resolves.toEqual({ ok: true, cancelRequested: false });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(sleepImpl.mock.calls.map(([ms]) => ms)).toEqual([500, 1000]);
+  });
+
+  it('retries a terminal report when the connection drops before any HTTP status', async () => {
+    const fetchImpl = jest.fn()
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce(response(200, { ok: true, cancelRequested: false }));
+    const client = createAiRunsCallbackClient({
+      callbackBaseUrl: 'https://apex.example',
+      getToken: jest.fn().mockResolvedValue('token'),
+      fetchImpl: fetchImpl as never,
+      sleepImpl: jest.fn().mockResolvedValue(undefined),
+    });
+
+    await expect(client.postIngest('project-1', 'run-1', TERMINAL_BODY))
+      .resolves.toEqual({ ok: true, cancelRequested: false });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives up on a terminal report that stays transient, rather than retrying forever', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue(response(500, { error: 'down' }));
+    const client = createAiRunsCallbackClient({
+      callbackBaseUrl: 'https://apex.example',
+      getToken: jest.fn().mockResolvedValue('token'),
+      fetchImpl: fetchImpl as never,
+      sleepImpl: jest.fn().mockResolvedValue(undefined),
+    });
+
+    await expect(client.postIngest('project-1', 'run-1', TERMINAL_BODY))
+      .rejects.toMatchObject({ status: 500 });
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not replay a terminal report once the dispatch fence has moved on', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue(response(409, {
+      code: 'AI_RUN_DISPATCH_MISMATCH',
+    }));
+    const client = createAiRunsCallbackClient({
+      callbackBaseUrl: 'https://apex.example',
+      getToken: jest.fn().mockResolvedValue('token'),
+      fetchImpl: fetchImpl as never,
+      sleepImpl: jest.fn().mockResolvedValue(undefined),
+    });
+
+    await expect(client.postIngest('project-1', 'run-1', TERMINAL_BODY))
+      .rejects.toBeInstanceOf(AiRunFenceConflictError);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 

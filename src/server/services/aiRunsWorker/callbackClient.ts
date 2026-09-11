@@ -49,6 +49,19 @@ const RETRYABLE_CALLBACK_STATUSES: ReadonlySet<number> = new Set([
 const MAX_CALLBACK_ATTEMPTS = 4;
 const CALLBACK_RETRY_BASE_DELAY_MS = 500;
 
+/**
+ * A fence conflict means this worker has been superseded, so a replay can only
+ * earn the same rejection. Failures that never reached HTTP (dropped socket,
+ * DNS, token fetch) carry no status and are treated as transient.
+ */
+function isRetryableCallbackFailure(error: unknown): boolean {
+  if (error instanceof AiRunFenceConflictError) return false;
+  if (error instanceof AiRunCallbackError) {
+    return RETRYABLE_CALLBACK_STATUSES.has(error.status);
+  }
+  return true;
+}
+
 async function readJson(response: Response): Promise<unknown> {
   try {
     const text = await response.text();
@@ -134,8 +147,12 @@ export function createAiRunsCallbackClient(options: {
   };
 
   /**
-   * Retry wrapper for reads only. A GET can be replayed safely; ingest writes
-   * are left alone so a retry cannot duplicate a lifecycle transition.
+   * Replays a call whose failure was unrelated to its content.
+   *
+   * Used for the bootstrap read and for terminal ingest only. Repeating a
+   * terminal is a no-op server side when the status matches, so a replay cannot
+   * double-apply the transition. Heartbeat and progress stay unretried: they
+   * are latency-sensitive and losing one costs nothing.
    */
   const requestWithRetry = async (
     url: string,
@@ -145,10 +162,12 @@ export function createAiRunsCallbackClient(options: {
       try {
         return await request(url, init);
       } catch (error) {
-        const retryable = error instanceof AiRunCallbackError
-          && !(error instanceof AiRunFenceConflictError)
-          && RETRYABLE_CALLBACK_STATUSES.has(error.status);
-        if (!retryable || attempt >= MAX_CALLBACK_ATTEMPTS) throw error;
+        if (
+          !isRetryableCallbackFailure(error)
+          || attempt >= MAX_CALLBACK_ATTEMPTS
+        ) {
+          throw error;
+        }
         await sleepImpl(CALLBACK_RETRY_BASE_DELAY_MS * (2 ** (attempt - 1)));
       }
     }
@@ -166,14 +185,18 @@ export function createAiRunsCallbackClient(options: {
     },
 
     async postIngest(projectId, runId, body) {
-      return request(
-        `${base}/api/internal/ai-runs/${encodeURIComponent(projectId)}/${encodeURIComponent(runId)}/ingest`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        },
-      ) as Promise<AiRunIngestResponse>;
+      const url = `${base}/api/internal/ai-runs/${encodeURIComponent(projectId)}/${encodeURIComponent(runId)}/ingest`;
+      const init: RequestInit = {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      };
+      // Losing a terminal report is unrecoverable: the worker exits right after
+      // it, so the run falls to the reaper and work that actually succeeded is
+      // recorded as a failure.
+      return (body.kind === 'terminal'
+        ? requestWithRetry(url, init)
+        : request(url, init)) as Promise<AiRunIngestResponse>;
     },
   };
 }
