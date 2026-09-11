@@ -35,6 +35,7 @@ import type {
 import { INTERACTIVE_LANE } from '../../../shared/types/interactiveWorkflow';
 import type { InteractiveStageName } from '../../../shared/types/workerTierOperations';
 import {
+  createCursorTurnEndMonitor,
   createCursorRunEventEnvelope,
   executeCursorExecutionCore,
   type CursorExecutionResult,
@@ -222,6 +223,7 @@ interface CachedAgentEntry {
 }
 
 function isSuccessfulWait(result: CursorExecutionResult): boolean {
+  if (result.completedOnTurnEnd) return true;
   return (
     result.waitResult.status === 'finished' ||
     result.waitResult.status === 'completed' ||
@@ -484,7 +486,10 @@ export function createInteractiveSessionActor(
       }
 
       const sendStartedAt = now();
-      activeRun = await agentHandle.send(snapshot.prompt);
+      const turnEndMonitor = createCursorTurnEndMonitor();
+      activeRun = await agentHandle.send(snapshot.prompt, {
+        onDelta: (update) => turnEndMonitor.observe(update),
+      });
       emitStage(telemetryContext, 'send', sendStartedAt);
 
       let result: CursorExecutionResult;
@@ -523,6 +528,7 @@ export function createInteractiveSessionActor(
             },
           },
           nextSequence: () => ++sequence,
+          turnEnd: turnEndMonitor.completion,
         });
       } finally {
         const tail = liveBatcher.flush();

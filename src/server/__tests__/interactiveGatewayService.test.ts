@@ -115,7 +115,7 @@ function makeDeps(
 }
 
 describe('attachInteractiveThreadStream', () => {
-  it('replays persisted user/agent messages and current status before durable events', async () => {
+  it('replays persisted messages and status without old run events on a cold idle connection', async () => {
     const userMessage = {
       id: 'user-1',
       role: 'user' as const,
@@ -152,9 +152,30 @@ describe('attachInteractiveThreadStream', () => {
         status: 'idle',
         eventDrivenTermination: true,
       },
-      { type: 'done' },
     ]);
-    expect(frames.map((frame) => frame.id)).toEqual(['', '', '', 'done-1']);
+    expect(frames.map((frame) => frame.id)).toEqual(['', '', '']);
+    expect(deps.replayRunEvents).not.toHaveBeenCalled();
+  });
+
+  it('replays the active run tail on a cold running connection', async () => {
+    const deps = makeDeps({
+      loadThreadSnapshot: jest.fn(async () => ({
+        messages: [],
+        status: 'running' as const,
+        eventDrivenTermination: true,
+        activeRunId: 'run-current',
+      })),
+    });
+    const { socket } = makeSocket();
+
+    await attachInteractiveThreadStream(socket, 't1', {}, deps);
+
+    expect(deps.replayRunEvents).toHaveBeenCalledWith(
+      't1',
+      undefined,
+      500,
+      'run-current',
+    );
   });
 
   it('forwards envelope-less live user and final agent messages', async () => {
@@ -245,7 +266,12 @@ describe('attachInteractiveThreadStream', () => {
     deps.emitLive(envelope('e3', 3));
 
     expect(frames.map((f) => f.id)).toEqual(['e1', 'e2', 'e3']);
-    expect(deps.replayRunEvents).toHaveBeenCalledWith('t1', 'e0');
+    expect(deps.replayRunEvents).toHaveBeenCalledWith(
+      't1',
+      'e0',
+      500,
+      undefined,
+    );
   });
 
   it('flushes live events buffered during replay AFTER replay, ordered by (timestamp, sequence)', async () => {
