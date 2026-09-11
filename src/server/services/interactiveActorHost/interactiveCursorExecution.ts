@@ -104,9 +104,12 @@ export async function acquireInteractiveCursorAgent(
       options?: { onDelta?(update: unknown): Promise<void> | void },
     ): Promise<WorkerCursorExecutionRun> {
       if (disposed) throw new Error('Interactive Cursor agent is disposed');
-      const run = await agent.send(prompt, {
-        onDelta: ({ update }) => options?.onDelta?.(update),
-      });
+      const onDelta = options?.onDelta;
+      const run = onDelta
+        ? await agent.send(prompt, {
+          onDelta: ({ update }) => onDelta(update),
+        })
+        : await agent.send(prompt);
       return run as unknown as WorkerCursorExecutionRun;
     },
     async dispose(): Promise<void> {
