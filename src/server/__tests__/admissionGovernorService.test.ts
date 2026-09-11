@@ -12,6 +12,7 @@ jest.mock('../services/pgNotifyService', () => ({
 import {
   createAdmissionGovernorService,
   createStaleDispatchRecoveryService,
+  resolveBackgroundDispatchTtlMs,
   resolveBackgroundInFlightLimit,
   resolveBackgroundPublishGraceMs,
   type AdmissionStore,
@@ -613,6 +614,7 @@ describe('stale dispatch republish recovery (TBI-002 DoD-4/VT-07)', () => {
       publisher: { publish },
       now: () => new Date('2026-08-05T12:00:00.000Z'),
       resolveGraceMs: () => 60_000,
+      resolveTtlMs: () => 30 * 60_000,
       batchSize: 500,
       logError: jest.fn(),
     });
@@ -621,6 +623,7 @@ describe('stale dispatch republish recovery (TBI-002 DoD-4/VT-07)', () => {
 
     expect(findStaleDispatches).toHaveBeenCalledWith(
       '2026-08-05T11:59:00.000Z',
+      '2026-08-05T11:30:00.000Z',
       100,
     );
     expect(result).toEqual({ selected: 100, published: 100, failed: 0 });
@@ -684,6 +687,96 @@ describe('stale dispatch republish recovery (TBI-002 DoD-4/VT-07)', () => {
     expect(logged).toContain('persisted-fence-1');
     expect(logged).not.toContain('CURSOR_API_KEY');
     expect(logged).not.toMatch(/snapshot|prompt|workspace|secret/i);
+  });
+
+  test('Given a dispatch older than the TTL, when recovery runs, then selection is floored so it is never republished again', async () => {
+    const findStaleDispatches = jest.fn().mockResolvedValue([]);
+    const publish = jest.fn().mockResolvedValue(undefined);
+    const recovery = createStaleDispatchRecoveryService({
+      store: { findStaleDispatches },
+      publisher: { publish },
+      now: () => new Date('2026-08-05T12:00:00.000Z'),
+      resolveGraceMs: () => 60_000,
+      resolveTtlMs: () => 30 * 60_000,
+      logError: jest.fn(),
+    });
+
+    await expect(recovery.recoverStaleDispatchedRuns()).resolves.toEqual({
+      selected: 0,
+      published: 0,
+      failed: 0,
+    });
+
+    const [dispatchedBefore, dispatchedAtOrAfter] =
+      findStaleDispatches.mock.calls[0];
+    expect(Date.parse(dispatchedAtOrAfter)).toBeLessThan(
+      Date.parse(dispatchedBefore),
+    );
+    expect(dispatchedAtOrAfter).toBe('2026-08-05T11:30:00.000Z');
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  test('Given a republish failure, when it is logged, then only the numeric broker status is reported', async () => {
+    const findStaleDispatches = jest.fn().mockResolvedValue([
+      { runId: 'run-1', dispatchMessageId: 'persisted-fence-1' },
+    ]);
+    const publish = jest.fn().mockRejectedValue(
+      new Error('Service Bus publish failed (401)'),
+    );
+    const logError = jest.fn();
+    const recovery = createStaleDispatchRecoveryService({
+      store: { findStaleDispatches },
+      publisher: { publish },
+      now: () => new Date('2026-08-05T12:00:00.000Z'),
+      resolveGraceMs: () => 60_000,
+      resolveTtlMs: () => 30 * 60_000,
+      logError,
+    });
+
+    await recovery.recoverStaleDispatchedRuns();
+
+    expect(logError).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ publishStatus: '401' }),
+    );
+    expect(JSON.stringify(logError.mock.calls)).not.toContain('Service Bus');
+  });
+
+  test('Given an unparseable broker error, when it is logged, then the status is reported as unknown', async () => {
+    const findStaleDispatches = jest.fn().mockResolvedValue([
+      { runId: 'run-1', dispatchMessageId: 'persisted-fence-1' },
+    ]);
+    const logError = jest.fn();
+    const recovery = createStaleDispatchRecoveryService({
+      store: { findStaleDispatches },
+      publisher: {
+        publish: jest.fn().mockRejectedValue(
+          new Error('token for CURSOR_API_KEY rejected'),
+        ),
+      },
+      now: () => new Date('2026-08-05T12:00:00.000Z'),
+      resolveGraceMs: () => 60_000,
+      resolveTtlMs: () => 30 * 60_000,
+      logError,
+    });
+
+    await recovery.recoverStaleDispatchedRuns();
+
+    const logged = JSON.stringify(logError.mock.calls);
+    expect(logged).toContain('unknown');
+    expect(logged).not.toContain('CURSOR_API_KEY');
+  });
+
+  test('Given invalid dispatch TTL configuration, when resolved, then it safely defaults to 30 minutes', () => {
+    expect(resolveBackgroundDispatchTtlMs(undefined)).toBe(30 * 60_000);
+    expect(resolveBackgroundDispatchTtlMs('')).toBe(30 * 60_000);
+    expect(resolveBackgroundDispatchTtlMs('0')).toBe(30 * 60_000);
+    expect(resolveBackgroundDispatchTtlMs('not-a-duration')).toBe(30 * 60_000);
+    // Below the floor and above the ceiling both fall back.
+    expect(resolveBackgroundDispatchTtlMs('1000')).toBe(30 * 60_000);
+    expect(resolveBackgroundDispatchTtlMs(String(48 * 60 * 60_000)))
+      .toBe(30 * 60_000);
+    expect(resolveBackgroundDispatchTtlMs('600000')).toBe(600_000);
   });
 
   test('DoD-4: Given invalid publish grace configuration, when resolved, then it safely defaults to 60 seconds', () => {

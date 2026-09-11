@@ -45,6 +45,83 @@ describe('aiRunsWorker callback client', () => {
     );
   });
 
+  it('retries a transient bootstrap failure so a brief API outage does not kill the worker', async () => {
+    // Regression: a single 500 from an exhausted connection pool killed the
+    // worker before its first callback, stranding the run in `dispatched`.
+    const fetchImpl = jest.fn()
+      .mockResolvedValueOnce(response(500, { error: 'pool exhausted' }))
+      .mockResolvedValueOnce(response(503, { error: 'unavailable' }))
+      .mockResolvedValueOnce(response(200, {
+        projectId: 'project-1',
+        run: { id: 'run-1' },
+      }));
+    const sleepImpl = jest.fn().mockResolvedValue(undefined);
+    const client = createAiRunsCallbackClient({
+      callbackBaseUrl: 'https://apex.example',
+      getToken: jest.fn().mockResolvedValue('token'),
+      fetchImpl: fetchImpl as never,
+      sleepImpl,
+    });
+
+    await expect(client.getBootstrap({
+      runId: 'run-1',
+      dispatchMessageId: 'dispatch-1',
+    })).resolves.toEqual({ projectId: 'project-1', run: { id: 'run-1' } });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(sleepImpl.mock.calls.map(([ms]) => ms)).toEqual([500, 1000]);
+  });
+
+  it('gives up on a bootstrap failure that stays transient, rather than retrying forever', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue(response(500, { error: 'down' }));
+    const client = createAiRunsCallbackClient({
+      callbackBaseUrl: 'https://apex.example',
+      getToken: jest.fn().mockResolvedValue('token'),
+      fetchImpl: fetchImpl as never,
+      sleepImpl: jest.fn().mockResolvedValue(undefined),
+    });
+
+    await expect(client.getBootstrap({
+      runId: 'run-1',
+      dispatchMessageId: 'dispatch-1',
+    })).rejects.toMatchObject({ status: 500 });
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not retry a bootstrap rejection that will never succeed', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue(response(409, {
+      code: 'AI_RUN_DISPATCH_MISMATCH',
+    }));
+    const client = createAiRunsCallbackClient({
+      callbackBaseUrl: 'https://apex.example',
+      getToken: jest.fn().mockResolvedValue('token'),
+      fetchImpl: fetchImpl as never,
+      sleepImpl: jest.fn().mockResolvedValue(undefined),
+    });
+
+    await expect(client.getBootstrap({
+      runId: 'run-1',
+      dispatchMessageId: 'dispatch-stale',
+    })).rejects.toBeInstanceOf(AiRunFenceConflictError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry an ingest write, so a lifecycle transition cannot be duplicated', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue(response(500, { error: 'down' }));
+    const client = createAiRunsCallbackClient({
+      callbackBaseUrl: 'https://apex.example',
+      getToken: jest.fn().mockResolvedValue('token'),
+      fetchImpl: fetchImpl as never,
+      sleepImpl: jest.fn().mockResolvedValue(undefined),
+    });
+
+    await expect(client.postIngest('project-1', 'run-1', {
+      dispatchMessageId: 'dispatch-1',
+      kind: 'heartbeat',
+    })).rejects.toBeInstanceOf(AiRunCallbackError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('TBI-004 DoD-2 / AC-3 / VT-06: classifies dispatch mismatch as a distinct fence conflict', async () => {
     const fetchImpl = jest.fn().mockResolvedValue(response(409, {
       code: 'AI_RUN_DISPATCH_MISMATCH',

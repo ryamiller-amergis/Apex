@@ -37,6 +37,18 @@ type CallbackErrorBody = {
   code?: string;
 };
 
+/**
+ * Statuses that describe an overloaded or briefly unavailable API rather than a
+ * rejected request. Retrying these matters because the worker has no other way
+ * to reach a terminal state: it dies before its first callback, leaving the run
+ * `dispatched` with nothing to report the failure.
+ */
+const RETRYABLE_CALLBACK_STATUSES: ReadonlySet<number> = new Set([
+  429, 500, 502, 503, 504,
+]);
+const MAX_CALLBACK_ATTEMPTS = 4;
+const CALLBACK_RETRY_BASE_DELAY_MS = 500;
+
 async function readJson(response: Response): Promise<unknown> {
   try {
     const text = await response.text();
@@ -75,8 +87,12 @@ export function createAiRunsCallbackClient(options: {
   callbackBaseUrl: string;
   getToken: AiRunsCallbackGetToken;
   fetchImpl?: typeof fetch;
+  /** Injectable delay so retry backoff does not slow tests down. */
+  sleepImpl?: (ms: number) => Promise<void>;
 }): AiRunsCallbackClient {
   const fetchImpl = options.fetchImpl ?? fetch;
+  const sleepImpl = options.sleepImpl
+    ?? ((ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); }));
   const base = options.callbackBaseUrl.replace(/\/+$/, '');
 
   const send = async (
@@ -117,12 +133,33 @@ export function createAiRunsCallbackClient(options: {
     return assertOk(response);
   };
 
+  /**
+   * Retry wrapper for reads only. A GET can be replayed safely; ingest writes
+   * are left alone so a retry cannot duplicate a lifecycle transition.
+   */
+  const requestWithRetry = async (
+    url: string,
+    init: RequestInit,
+  ): Promise<unknown> => {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await request(url, init);
+      } catch (error) {
+        const retryable = error instanceof AiRunCallbackError
+          && !(error instanceof AiRunFenceConflictError)
+          && RETRYABLE_CALLBACK_STATUSES.has(error.status);
+        if (!retryable || attempt >= MAX_CALLBACK_ATTEMPTS) throw error;
+        await sleepImpl(CALLBACK_RETRY_BASE_DELAY_MS * (2 ** (attempt - 1)));
+      }
+    }
+  };
+
   return {
     async getBootstrap(dispatch) {
       const query = new URLSearchParams({
         dispatchMessageId: dispatch.dispatchMessageId,
       });
-      return request(
+      return requestWithRetry(
         `${base}/api/internal/ai-runs/${encodeURIComponent(dispatch.runId)}/bootstrap?${query}`,
         { method: 'GET' },
       ) as Promise<AiRunBootstrapResponse>;
