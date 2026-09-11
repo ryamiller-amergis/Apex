@@ -162,14 +162,17 @@ resource "azurerm_container_app" "repo_read_service" {
       # which reads to the caller as the search hanging. Grep over a bare mirror
       # has to inflate blobs, so slow is normal here and must not mean unhealthy.
       # azurerm ~> 3.0 has no initial_delay on these probes; slack comes from
-      # interval_seconds * failure_count_threshold instead.
+      # interval_seconds * failure_count_threshold instead. The provider caps
+      # failure_count_threshold at 10, so the interval has to carry the slack:
+      # a threshold above 10 fails the plan outright rather than the apply.
+      # 30 * 10 keeps the intended five minutes.
       startup_probe {
         transport               = "HTTP"
         port                    = var.repo_read_service_target_port
         path                    = "/healthz"
-        interval_seconds        = 10
+        interval_seconds        = 30
         timeout                 = 5
-        failure_count_threshold = 30
+        failure_count_threshold = 10
       }
 
       liveness_probe {
