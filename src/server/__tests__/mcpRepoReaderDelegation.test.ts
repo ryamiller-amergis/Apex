@@ -41,9 +41,22 @@ const adoCatalog = {
   searchSkills: jest.fn().mockReturnValue([]),
 };
 const mockQueryWorkItemsByWiql = jest.fn().mockResolvedValue([{ id: 42 }]);
+const mockCreateWorkItemForPrd = jest.fn().mockResolvedValue({
+  id: 101,
+  url: 'https://dev.azure.com/example/Apex/_workitems/edit/101',
+});
+const mockUpdateWorkItemField = jest.fn().mockResolvedValue(undefined);
+const mockAddWorkItemComment = jest.fn().mockResolvedValue({ id: 501 });
+const mockAdoServiceForChatThread = jest.fn();
 const mockAzureDevOpsService = jest.fn().mockImplementation(() => ({
   queryWorkItemsByWiql: mockQueryWorkItemsByWiql,
+  createWorkItemForPrd: mockCreateWorkItemForPrd,
 }));
+const mockChatAdoService = {
+  createWorkItemForPrd: mockCreateWorkItemForPrd,
+  updateWorkItemField: mockUpdateWorkItemField,
+  addWorkItemComment: mockAddWorkItemComment,
+};
 const mockGetThread = jest.fn().mockResolvedValue({ userId: 'developer-1' });
 const mockAddTestCaseToPrd = jest.fn().mockResolvedValue({
   testCaseId: 'TC-1',
@@ -84,6 +97,16 @@ jest.mock('../services/testCaseService', () => ({
 jest.mock('../services/adrService', () => ({}));
 jest.mock('../services/azureDevOps', () => ({
   AzureDevOpsService: mockAzureDevOpsService,
+}));
+jest.mock('../services/chatAdoWriteAuth', () => ({
+  adoServiceForChatThread: (...args: unknown[]) =>
+    mockAdoServiceForChatThread(...args),
+  isChatAdoWriteAuthError: (error: unknown) =>
+    error instanceof Error && error.name === 'ChatAdoWriteAuthError',
+}));
+jest.mock('../services/adoFactory', () => ({
+  isAdoUserAuthError: (error: unknown) =>
+    error instanceof Error && error.name === 'AdoUserAuthError',
 }));
 jest.mock('../db/drizzle', () => ({ db: mockDb }));
 jest.mock('../db/schema', () => ({
@@ -149,6 +172,11 @@ function checkout(label: string): { root: string; sha: string } {
 }
 
 describe('PBI-005 MCP RepoReader delegation contracts', () => {
+  beforeEach(() => {
+    mockAdoServiceForChatThread.mockReset();
+    mockAdoServiceForChatThread.mockReturnValue(mockChatAdoService);
+  });
+
   it('VT-03 omits exactly ADO repo-browse tools and retains staging and non-browse tools', () => {
     // Arrange
     const enabled = asTestServer(createAdoMcpServer());
@@ -474,6 +502,144 @@ describe('PBI-005 MCP RepoReader delegation contracts', () => {
     expect(repoReader.readFile).not.toHaveBeenCalled();
     expect(repoReader.listDir).not.toHaveBeenCalled();
     expect(repoReader.searchCode).not.toHaveBeenCalled();
+  });
+
+  it('links newly created work items to an existing ADO parent by ID', async () => {
+    const server = asTestServer(createAdoMcpServer());
+    mockCreateWorkItemForPrd.mockClear();
+
+    await server.invoke('create_work_items', {
+      threadId: 'thread-1',
+      project: 'Apex',
+      items: [
+        {
+          type: 'Product Backlog Item',
+          title: 'Linked PBI',
+          parentId: 42,
+        },
+      ],
+    });
+
+    expect(mockCreateWorkItemForPrd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'Product Backlog Item',
+        title: 'Linked PBI',
+        parentId: 42,
+      }),
+    );
+  });
+
+  it('links a child to a parent created earlier in the same batch', async () => {
+    const server = asTestServer(createAdoMcpServer());
+    mockCreateWorkItemForPrd.mockClear();
+    mockCreateWorkItemForPrd
+      .mockResolvedValueOnce({
+        id: 201,
+        url: 'https://dev.azure.com/example/Apex/_workitems/edit/201',
+      })
+      .mockResolvedValueOnce({
+        id: 202,
+        url: 'https://dev.azure.com/example/Apex/_workitems/edit/202',
+      });
+
+    await server.invoke('create_work_items', {
+      threadId: 'thread-1',
+      project: 'Apex',
+      items: [
+        { type: 'Feature', title: 'Parent Feature' },
+        {
+          type: 'Product Backlog Item',
+          title: 'Child PBI',
+          parentTitle: 'Parent Feature',
+        },
+      ],
+    });
+
+    expect(mockCreateWorkItemForPrd).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        title: 'Child PBI',
+        parentId: 201,
+      }),
+    );
+  });
+
+  it('rejects an unresolved parent title instead of silently creating an unlinked item', async () => {
+    const server = asTestServer(createAdoMcpServer());
+    mockCreateWorkItemForPrd.mockClear();
+
+    const result = await server.invoke('create_work_items', {
+      threadId: 'thread-1',
+      project: 'Apex',
+      items: [
+        {
+          type: 'Product Backlog Item',
+          title: 'Unlinked PBI',
+          parentTitle: 'Existing Feature',
+        },
+      ],
+    }) as { content: Array<{ text: string }>; isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0].text).error).toContain(
+      'pass its ADO ID as parentId',
+    );
+    expect(mockCreateWorkItemForPrd).not.toHaveBeenCalled();
+  });
+
+  it('requires an authorized explicit chat turn for work-item writes', async () => {
+    const authError = new Error(
+      'Azure DevOps writes require an explicit request in the current chat turn',
+    );
+    authError.name = 'ChatAdoWriteAuthError';
+    mockAdoServiceForChatThread.mockImplementationOnce(() => {
+      throw authError;
+    });
+    const server = asTestServer(createAdoMcpServer());
+
+    const result = await server.invoke('create_work_items', {
+      threadId: 'thread-1',
+      project: 'Apex',
+      items: [{ type: 'Bug', title: 'Blocked write' }],
+    }) as { content: Array<{ text: string }>; isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error:
+        'Azure DevOps writes require an explicit request in the current chat turn',
+    });
+    expect(mockCreateWorkItemForPrd).not.toHaveBeenCalled();
+  });
+
+  it('uses generic chat authorization for update and comment tools', async () => {
+    const server = asTestServer(createAdoMcpServer());
+
+    await server.invoke('update_work_item', {
+      threadId: 'thread-1',
+      project: 'Apex',
+      workItemId: 42,
+      fields: { state: 'Active' },
+    });
+    await server.invoke('add_work_item_comment', {
+      threadId: 'thread-1',
+      project: 'Apex',
+      workItemId: 42,
+      comment: 'Investigating',
+    });
+
+    expect(mockAdoServiceForChatThread).toHaveBeenNthCalledWith(
+      1,
+      'thread-1',
+      'Apex',
+      undefined,
+    );
+    expect(mockAdoServiceForChatThread).toHaveBeenNthCalledWith(
+      2,
+      'thread-1',
+      'Apex',
+    );
+    expect(mockUpdateWorkItemField).toHaveBeenCalledWith(42, 'state', 'Active');
+    expect(mockAddWorkItemComment).toHaveBeenCalledWith(42, 'Investigating');
   });
 
   it.each([

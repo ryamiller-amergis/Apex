@@ -1,6 +1,7 @@
 import type { AgentRunEventEnvelope } from '../../shared/types/chat';
 import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
 import {
+  createCursorTurnEndMonitor,
   CursorExecutionWaitError,
   executeCursorExecutionCore,
   type CursorExecutionRun,
@@ -106,6 +107,104 @@ describe('TBI-004 shared Cursor execution core', () => {
     ]);
     expect(snapshot).toEqual(before);
     expect(Object.isFrozen(snapshot)).toBe(true);
+  });
+
+  it('aborts an exact repeated tool-call loop with actionable guidance', async () => {
+    const loopingRun: CursorExecutionRun = {
+      supports: (capability) => capability === 'stream',
+      stream: async function* () {
+        for (let index = 0; index < 4; index++) {
+          yield {
+            type: 'assistant',
+            message: {
+              content: [{
+                type: 'tool_use',
+                id: `call-${index}`,
+                name: 'list_projects',
+                input: {},
+              }],
+            },
+          };
+        }
+      },
+      wait: jest.fn().mockResolvedValue({ status: 'completed' }),
+    };
+
+    await expect(executeCursorExecutionCore({
+      snapshot,
+      run: loopingRun,
+      context: { runId: 'run-loop', sourceInstance: 'loop-test' },
+      sink: { publish: () => {} },
+      nextSequence: () => 1,
+      maxIdenticalToolCalls: 3,
+    })).rejects.toThrow(
+      'The agent repeated list_projects with the same input too many times',
+    );
+  });
+
+  it('collects all text fragments and completes on the SDK terminal status', async () => {
+    const wait = jest.fn().mockResolvedValue({ status: 'finished' });
+    const run: CursorExecutionRun = {
+      supports: (capability) => capability === 'stream',
+      stream: async function* () {
+        yield {
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: '## Home' }] },
+        };
+        yield {
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: ' page' }] },
+        };
+        yield { type: 'status', status: 'FINISHED' };
+        await new Promise<never>(() => {});
+      },
+      wait,
+    };
+
+    const result = await executeCursorExecutionCore({
+      snapshot,
+      run,
+      context: { runId: 'run-status', sourceInstance: 'status-test' },
+      sink: { publish: () => {} },
+      nextSequence: () => 1,
+    });
+
+    expect(result.text).toBe('## Home page');
+    expect(wait).toHaveBeenCalledTimes(1);
+  });
+
+  it('completes from the authoritative turn-ended delta with full text', async () => {
+    const monitor = createCursorTurnEndMonitor();
+    monitor.observe({ type: 'text-delta', text: '## Home' });
+    monitor.observe({ type: 'text-delta', text: ' page' });
+    monitor.observe({ type: 'turn-ended' });
+
+    const cancel = jest.fn().mockResolvedValue(undefined);
+    const wait = jest.fn().mockResolvedValue({ status: 'cancelled' });
+    const run: CursorExecutionRun = {
+      supports: (capability) =>
+        capability === 'stream' || capability === 'cancel',
+      stream: async function* () {
+        await new Promise<never>(() => {});
+        yield { type: 'status', status: 'RUNNING' };
+      },
+      wait,
+      cancel,
+    };
+
+    const result = await executeCursorExecutionCore({
+      snapshot,
+      run,
+      context: { runId: 'run-turn-end', sourceInstance: 'turn-end-test' },
+      sink: { publish: () => {} },
+      nextSequence: () => 1,
+      turnEnd: monitor.completion,
+    });
+
+    expect(result.text).toBe('## Home page');
+    expect(result.completedOnTurnEnd).toBe(true);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(wait).toHaveBeenCalledTimes(1);
   });
 });
 

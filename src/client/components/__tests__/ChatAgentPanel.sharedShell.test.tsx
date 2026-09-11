@@ -125,6 +125,7 @@ const thread: ChatThread = {
 describe('ChatAgentPanel shared Home shell', () => {
   beforeEach(() => {
     global.fetch = jest.fn();
+    localStorage.clear();
     mockSessionOverrides = {};
     mockRetryLast.mockClear();
     mockSend.mockClear();
@@ -132,6 +133,23 @@ describe('ChatAgentPanel shared Home shell', () => {
 
   afterEach(() => {
     (global as unknown as { fetch?: typeof fetch }).fetch = undefined;
+  });
+
+  it('opens the Home chat at the full viewport width by default', () => {
+    render(
+      <ChatAgentPanel
+        thread={null}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+        launchedFromHome
+        selectedProject="Apex"
+      />,
+    );
+
+    const shell = screen.getByTestId('agent-slideout-shell');
+    expect(shell).toHaveStyle({ width: `${window.innerWidth}px` });
+    expect(shell).toHaveClass('homePanel');
   });
 
   it('TBI-006 DoD-1 shows Home-only pills and opens full history from the header', () => {
@@ -334,14 +352,14 @@ describe('ChatAgentPanel shared Home shell', () => {
 
     expect(screen.queryByText('No conversation yet')).not.toBeInTheDocument();
     expect(screen.getByText('Agent is thinking…')).toBeInTheDocument();
-    expect(screen.getByTestId('chat-agent-skill-pill-to-prd')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByTestId('chat-agent-skill-pill-to-prd')).not.toBeInTheDocument();
     expect(screen.getByTestId('chat-agent-pill-description')).toHaveTextContent(
       'Generate a PRD from interview notes',
     );
     expect(screen.getByTestId('chat-run-spinner')).toBeInTheDocument();
   });
 
-  it('lets an active Home conversation select a skill for its next message', () => {
+  it('hides skill and MCP selection once a Home conversation is active', () => {
     render(
       <ChatAgentPanel
         thread={thread}
@@ -353,11 +371,8 @@ describe('ChatAgentPanel shared Home shell', () => {
       />,
     );
 
-    const skillPill = screen.getByTestId('chat-agent-skill-pill-to-prd');
-    expect(skillPill).toBeEnabled();
-    fireEvent.click(skillPill);
-    expect(skillPill).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByText(/Write PRD selected for the next message/)).toBeInTheDocument();
+    expect(screen.queryByTestId('chat-agent-skill-pill-to-prd')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('chat-agent-mcp-pill-ado')).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByTestId('chat-agent-message-input'), {
       target: { value: 'Summarize the requirements' },
@@ -367,8 +382,53 @@ describe('ChatAgentPanel shared Home shell', () => {
     expect(mockSend).toHaveBeenCalledWith('Summarize the requirements', {
       model: 'auto',
       attachments: [],
-      skill: { name: 'Write PRD', path: '/to-prd' },
     });
+  });
+
+  it('renders streaming output and labels token output as responding', () => {
+    mockSessionOverrides = {
+      streamingText: '**Rendered**\n\n### Live heading',
+      isRunning: true,
+      status: 'running',
+    };
+
+    render(
+      <ChatAgentPanel
+        thread={thread}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+        launchedFromHome
+        selectedProject="Apex"
+      />,
+    );
+
+    // The shared Jest setup intentionally replaces react-markdown with a text
+    // passthrough; the component integration is covered here without asserting
+    // markup that the test environment removes.
+    expect(screen.getByText(/\*\*Rendered\*\*/)).toBeInTheDocument();
+    expect(screen.getByText('Agent is responding…')).toBeInTheDocument();
+  });
+
+  it('restores a narrower width from the full-width Home panel', () => {
+    render(
+      <ChatAgentPanel
+        thread={null}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+        launchedFromHome
+        selectedProject="Apex"
+      />,
+    );
+
+    const shell = screen.getByTestId('agent-slideout-shell');
+    expect(shell).toHaveStyle({ width: `${window.innerWidth}px` });
+
+    fireEvent.click(screen.getByTestId('chat-agent-width-toggle-btn'));
+
+    expect(shell).toHaveStyle({ width: '580px' });
+    expect(localStorage.getItem('homeChatPanelWidth')).toBe('580');
   });
 
   it('explains an empty transcript instead of rendering a blank pane', () => {

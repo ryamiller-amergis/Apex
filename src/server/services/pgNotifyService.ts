@@ -410,23 +410,40 @@ export async function replayRunEvents(
   threadId: string,
   afterEventId?: string,
   limit = 500,
+  runId?: string,
 ): Promise<AgentRunEventEnvelope[]> {
   const boundedLimit = Math.max(1, Math.min(limit, 500));
-  const result = await pool.query(
-    `WITH cursor AS (
+  const result = afterEventId
+    ? await pool.query(
+      `WITH cursor AS (
        SELECT ordinal
          FROM agent_run_events
         WHERE event_id = $2::uuid
-     )
+       )
      SELECT event_id, thread_id, run_id, source_instance, sequence,
             event_timestamp, event_type, phase, status, detail, event
        FROM agent_run_events
       WHERE thread_id = $1
-        AND ordinal > COALESCE((SELECT cursor.ordinal FROM cursor), 0)
+        AND ordinal > (SELECT cursor.ordinal FROM cursor)
       ORDER BY ordinal ASC
       LIMIT $3`,
-    [threadId, afterEventId ?? null, boundedLimit],
-  );
+      [threadId, afterEventId, boundedLimit],
+    )
+    : await pool.query(
+      `SELECT event_id, thread_id, run_id, source_instance, sequence,
+              event_timestamp, event_type, phase, status, detail, event
+         FROM (
+           SELECT event_id, ordinal, thread_id, run_id, source_instance, sequence,
+                  event_timestamp, event_type, phase, status, detail, event
+             FROM agent_run_events
+            WHERE thread_id = $1
+              AND ($3::text IS NULL OR run_id = $3)
+            ORDER BY ordinal DESC
+            LIMIT $2
+         ) recent
+        ORDER BY ordinal ASC`,
+      [threadId, boundedLimit, runId ?? null],
+    );
   return result.rows.map(rowToEnvelope);
 }
 

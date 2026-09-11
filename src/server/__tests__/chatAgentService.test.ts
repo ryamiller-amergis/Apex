@@ -186,6 +186,7 @@ import {
   buildBackgroundWorkflowPrompt,
   buildInitialPrompt,
   buildTurnPrompt,
+  isExplicitAdoWriteIntent,
   interactivePromptRequiresInProcessMcp,
   skillRequiresAdoOperations,
   prepareBackgroundWorkflowTurn,
@@ -206,14 +207,21 @@ import type {
 
 describe('turn skill prompts', () => {
   it('keeps the user request separate while directing the agent to load the selected skill', () => {
-    expect(
-      buildTurnPrompt('Summarize the sprint', {
-        name: 'Scrum Assistant',
-        path: '/.cursor/skills/scrum-assistant/SKILL.md',
-      }),
-    ).toBe(
-      'Run skill: Scrum Assistant (`/.cursor/skills/scrum-assistant/SKILL.md`)\n'
-      + '\nUser request:\nSummarize the sprint',
+    const prompt = buildTurnPrompt('Summarize the sprint', {
+      name: 'Scrum Assistant',
+      path: '/.cursor/skills/scrum-assistant/SKILL.md',
+    });
+
+    expect(prompt).toContain(
+      'Run skill: Scrum Assistant (`/.cursor/skills/scrum-assistant/SKILL.md`)',
+    );
+    expect(prompt).toContain('User request:\nSummarize the sprint');
+    expect(prompt).toContain('repository checkout as read-only');
+    expect(prompt).toContain(
+      'only when the user directly requests that write in the current turn',
+    );
+    expect(prompt).toContain(
+      'Informational questions and analysis must not mutate Azure DevOps',
     );
   });
 
@@ -239,10 +247,33 @@ describe('turn skill prompts', () => {
     ).toBe(true);
     expect(
       skillRequiresAdoOperations(
+        '/.cursor/skills/scrum-helper/SKILL.md',
+        'Scrum Helper',
+      ),
+    ).toBe(true);
+    expect(
+      skillRequiresAdoOperations(
         '/.cursor/skills/app-knowledge/SKILL.md',
         'App Knowledge',
       ),
     ).toBe(false);
+  });
+
+  it.each([
+    'Create a PBI in ADO for the login failure',
+    'Please update work item 123 state to Active',
+    'Can you add a comment to Azure DevOps bug #42?',
+    'Re-parent ADO task 77 under feature 12',
+  ])('detects explicit ADO write intent independently of skill: %s', (text) => {
+    expect(isExplicitAdoWriteIntent(text)).toBe(true);
+  });
+
+  it.each([
+    'How do I create a PBI in ADO?',
+    'Explain how ADO work item comments work',
+    'Summarize the current sprint',
+  ])('does not treat informational chat as ADO write intent: %s', (text) => {
+    expect(isExplicitAdoWriteIntent(text)).toBe(false);
   });
 });
 

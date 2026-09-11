@@ -126,6 +126,17 @@ describe('pgNotifyService durable run events', () => {
     );
   });
 
+  it('replays only the newest events for an active run on a cold connection', async () => {
+    mockPoolQuery.mockResolvedValue({ rows: [] });
+
+    await replayRunEvents(envelope.threadId, undefined, 500, envelope.runId);
+
+    expect(mockPoolQuery).toHaveBeenCalledWith(
+      expect.stringContaining('ORDER BY ordinal DESC'),
+      [envelope.threadId, 500, envelope.runId]
+    );
+  });
+
   it('deduplicates repeated PostgreSQL delivery by event id', () => {
     const callback = jest.fn();
     const unsubscribe = subscribeRunEvents(envelope.threadId, callback);

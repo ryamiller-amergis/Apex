@@ -12,6 +12,7 @@ import {
   isPrdReady,
   getThread,
   recoverStaleRunningThread,
+  isExplicitAdoWriteIntent,
 } from '../services/chatAgentService';
 import { db } from '../db/drizzle';
 import { eq, desc } from 'drizzle-orm';
@@ -51,6 +52,9 @@ import { isFeatureEnabled } from '../services/featureFlagService';
 import { trackEvent } from '../services/telemetry';
 import { deriveAgentModule } from '../services/agentEffortResolver';
 import { resolveSkillConfig } from '../services/projectSettingsService';
+import { getAdoTokenForUser } from '../services/adoUserToken';
+import { registerChatAdoWriteTurn } from '../services/chatAdoWriteAuth';
+import { isSuperAdminRequest } from '../utils/superAdmin';
 
 const router = Router();
 
@@ -485,10 +489,23 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
   });
 
   const lastEventId = req.get('Last-Event-ID')?.trim() || undefined;
-  const replayEvents = await replayRunEvents(req.params.id, lastEventId).catch((err) => {
-    console.error(`[chat] run-event replay failed for thread ${req.params.id}:`, (err as Error).message);
-    return [];
-  });
+  // A cold page load already receives persisted messages and the authoritative
+  // thread status above. Replaying old tool/phase events for an idle thread
+  // makes completed work look like it started again. Only resume durable
+  // events when the browser supplied a cursor or a run is currently active.
+  const shouldReplayEvents =
+    Boolean(lastEventId) || hydrated?.status === 'running';
+  const replayEvents = shouldReplayEvents
+    ? await replayRunEvents(
+      req.params.id,
+      lastEventId,
+      500,
+      hydrated?.activeRunId,
+    ).catch((err) => {
+      console.error(`[chat] run-event replay failed for thread ${req.params.id}:`, (err as Error).message);
+      return [];
+    })
+    : [];
   for (const envelope of replayEvents) sendEnvelope(envelope);
 
   // Historical phase/done events must not override the current thread state.
@@ -554,6 +571,27 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
     // Dead run cleared — accept the message.
   }
 
+  let releaseAdoWriteTurn = () => {};
+  const explicitAdoWrite =
+    thread.kickoff.assistantType !== 'calendar-work-item' &&
+    isExplicitAdoWriteIntent(body.text ?? '');
+  if (explicitAdoWrite) {
+    try {
+      const token = await getAdoTokenForUser(req);
+      releaseAdoWriteTurn = await registerChatAdoWriteTurn({
+        threadId: req.params.id,
+        userId: getUserId(req),
+        project: thread.kickoff.project,
+        token,
+        isSuperAdmin: isSuperAdminRequest(req),
+      });
+    } catch (err: unknown) {
+      return res
+        .status(errorStatus(err, 403))
+        .json({ error: errorMessage(err) });
+    }
+  }
+
   // Fire-and-forget: response streams via SSE/WS; 202 returns immediately.
   // Breadcrumb BEFORE the async turn so a hang inside sendMessage is still visible.
   const threadId = req.params.id;
@@ -568,14 +606,16 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
   res.status(202).json({ ok: true });
   sendMessage(threadId, body.text ?? '', body.model, attachments, {
     turnSkill,
-  }).catch((err: unknown) => {
-    console.error(`[chat] sendMessage error for thread ${threadId}:`, errorMessage(err));
-    trackEvent('chat.send.failed', {
-      threadId,
-      errorType: err instanceof Error ? err.name : 'UnknownError',
-      errorMessage: errorMessage(err).slice(0, 200),
+  })
+    .finally(releaseAdoWriteTurn)
+    .catch((err: unknown) => {
+      console.error(`[chat] sendMessage error for thread ${threadId}:`, errorMessage(err));
+      trackEvent('chat.send.failed', {
+        threadId,
+        errorType: err instanceof Error ? err.name : 'UnknownError',
+        errorMessage: errorMessage(err).slice(0, 200),
+      });
     });
-  });
 });
 
 /**
