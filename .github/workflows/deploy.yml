@@ -340,18 +340,76 @@ jobs:
           # WEBSITES_CONTAINER_START_TIME_LIMIT (230s) when apt mirrors are slow,
           # which takes instances out of rotation (503 / timeouts).
           # safe.directory is handled in application code (repoCheckoutService.ts).
-          az webapp config set \
-            --name ${{ env.APP_SERVICE_NAME }} \
-            --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
-            --slot ${{ env.SLOT_NAME }} \
-            --linux-fx-version "NODE|24-lts" \
-            --startup-file 'bash -c "(command -v git >/dev/null 2>&1 || (apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git || true) &) && exec node /home/site/wwwroot/dist/server/index.js"'
+          #
+          # Write only when a value actually differs. Setting linux-fx-version
+          # or the startup file restarts the slot along with its SCM container,
+          # and Kudu aborts a ZIP deploy that begins during that restart
+          # ("Deployment has been stopped due to SCM container restart"). That
+          # is what failed the 2026-09-11 production deploy after 26 minutes,
+          # leaving a merged fix undeployed. These values are identical on
+          # nearly every run, so writing them unconditionally bought a restart,
+          # and a chance of that race, for no change at all.
+          DESIRED_FX="NODE|24-lts"
+          DESIRED_STARTUP='bash -c "(command -v git >/dev/null 2>&1 || (apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git || true) &) && exec node /home/site/wwwroot/dist/server/index.js"'
 
-          az webapp update \
+          SITE_CONFIG=$(az webapp config show \
+            --name ${{ env.APP_SERVICE_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
+            --slot ${{ env.SLOT_NAME }} -o json)
+          CURRENT_FX=$(printf '%s' "$SITE_CONFIG" | jq -r '.linuxFxVersion // ""')
+          CURRENT_STARTUP=$(printf '%s' "$SITE_CONFIG" | jq -r '.appCommandLine // ""')
+
+          if [ "$CURRENT_FX" = "$DESIRED_FX" ] && [ "$CURRENT_STARTUP" = "$DESIRED_STARTUP" ]; then
+            echo "Runtime and startup command already current — skipping (no slot restart)."
+          else
+            echo "Runtime/startup differs from desired; applying (this restarts the slot)."
+            az webapp config set \
+              --name ${{ env.APP_SERVICE_NAME }} \
+              --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
+              --slot ${{ env.SLOT_NAME }} \
+              --linux-fx-version "$DESIRED_FX" \
+              --startup-file "$DESIRED_STARTUP"
+          fi
+
+          CURRENT_AFFINITY=$(az webapp show \
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
             --slot ${{ env.SLOT_NAME }} \
-            --set clientAffinityEnabled=true
+            --query clientAffinityEnabled -o tsv)
+          if [ "$CURRENT_AFFINITY" = "true" ]; then
+            echo "clientAffinityEnabled already true — skipping."
+          else
+            az webapp update \
+              --name ${{ env.APP_SERVICE_NAME }} \
+              --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
+              --slot ${{ env.SLOT_NAME }} \
+              --set clientAffinityEnabled=true
+          fi
+
+      - name: Wait for SCM to settle before deploying
+        run: |
+          # The step above writes app settings on every run, and that alone
+          # restarts the slot's container. Kudu aborts a ZIP deploy started
+          # while SCM is restarting. Poll Kudu so the deploy begins against a
+          # live SCM rather than racing a restart it cannot see.
+          SCM_HOST="${APP_SERVICE_NAME}-${SLOT_NAME}.scm.azurewebsites.net"
+          TOKEN=$(az account get-access-token \
+            --resource https://management.azure.com \
+            --query accessToken -o tsv)
+          for attempt in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+              -H "Authorization: Bearer $TOKEN" \
+              "https://$SCM_HOST/api/settings" || true)
+            if [ "$code" = "200" ]; then
+              echo "SCM ready after ${attempt} attempt(s)."
+              exit 0
+            fi
+            echo "  SCM not ready yet (http=$code); retrying in 10s."
+            sleep 10
+          done
+          # Deploy anyway rather than failing the run outright: if SCM really is
+          # down the deploy reports it with a clearer error than this probe can.
+          echo "SCM did not report ready within ~5 minutes; deploying anyway." >&2
 
       - name: Deploy to staging slot
         uses: azure/webapps-deploy@v3
