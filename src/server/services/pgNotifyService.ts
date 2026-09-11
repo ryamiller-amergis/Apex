@@ -424,7 +424,7 @@ export async function replayRunEvents(
             event_timestamp, event_type, phase, status, detail, event
        FROM agent_run_events
       WHERE thread_id = $1
-        AND ordinal > (SELECT cursor.ordinal FROM cursor)
+        AND ordinal > COALESCE((SELECT cursor.ordinal FROM cursor), 0)
       ORDER BY ordinal ASC
       LIMIT $3`,
       [threadId, afterEventId, boundedLimit],

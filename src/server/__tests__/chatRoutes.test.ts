@@ -47,6 +47,20 @@ jest.mock('../services/chatAgentService', () => ({
     /\b(create|update|comment|re-?parent)\b/i.test(text) &&
     /\b(ado|work item|pbi|epic)\b/i.test(text),
   ),
+  skillRequiresAdoOperations: jest.fn(
+    (skillPath?: string | null, skillName?: string | null) => {
+      const normalized = `${skillPath ?? ''} ${skillName ?? ''}`
+        .replace(/\\/g, '/')
+        .toLowerCase()
+        .replace(/\s+/g, '-');
+      return [
+        'scrum-assistant',
+        'scrum-helper',
+        'scrum-master-health',
+        'daily-standup',
+      ].some((marker) => normalized.includes(marker));
+    },
+  ),
   permanentlyDeleteThread: jest.fn(),
   readOutputPrd: jest.fn().mockReturnValue(null),
   writeOutputPrd: jest.fn(),
@@ -801,6 +815,13 @@ describe('POST /api/chat/threads/:id/messages — cached grounding delegation', 
         },
       },
     );
+    expect(mockRegisterChatAdoWriteTurn).toHaveBeenCalledWith({
+      threadId,
+      userId: 'user-1',
+      project: 'Apex',
+      token: 'user-ado-token',
+      isSuperAdmin: false,
+    });
   });
 
   it('registers a per-user ADO context for an explicit App Knowledge write request', async () => {

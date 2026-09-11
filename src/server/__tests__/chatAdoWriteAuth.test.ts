@@ -2,6 +2,7 @@ const mockResolveThreadAccess = jest.fn();
 const mockCanWriteThread = jest.fn();
 const mockGetUserPermissions = jest.fn();
 const mockAdoWriteFromToken = jest.fn();
+const mockGetAdoTokenForThread = jest.fn();
 
 jest.mock('../services/threadAccessService', () => ({
   resolveThreadAccess: (...args: unknown[]) => mockResolveThreadAccess(...args),
@@ -16,7 +17,13 @@ jest.mock('../services/adoFactory', () => ({
   adoWriteFromToken: (...args: unknown[]) => mockAdoWriteFromToken(...args),
 }));
 
+jest.mock('../services/standupTokenResolver', () => ({
+  getAdoTokenForThread: (...args: unknown[]) =>
+    mockGetAdoTokenForThread(...args),
+}));
+
 import {
+  adoServiceForChatOrStandupWrite,
   adoServiceForChatThread,
   registerChatAdoWriteTurn,
 } from '../services/chatAdoWriteAuth';
@@ -33,6 +40,7 @@ describe('chat ADO write authorization', () => {
       new Set(['chat:view', 'workitems:write']),
     );
     mockAdoWriteFromToken.mockReturnValue({ kind: 'per-user-ado-service' });
+    mockGetAdoTokenForThread.mockResolvedValue(null);
   });
 
   it('binds the current user token to the authorized thread turn', async () => {
@@ -114,5 +122,27 @@ describe('chat ADO write authorization', () => {
     ).toThrow('ADO user token required');
     expect(mockAdoWriteFromToken).toHaveBeenCalledWith(null, 'Apex', undefined);
     release();
+  });
+
+  it('falls back to a standup participant token when no chat turn is registered', async () => {
+    mockGetAdoTokenForThread.mockResolvedValue('standup-participant-token');
+    mockAdoWriteFromToken.mockReturnValue({ kind: 'standup-ado-service' });
+
+    await expect(
+      adoServiceForChatOrStandupWrite('standup-thread', 'Apex', 'Apex\\Team'),
+    ).resolves.toEqual({ kind: 'standup-ado-service' });
+    expect(mockGetAdoTokenForThread).toHaveBeenCalledWith('standup-thread');
+    expect(mockAdoWriteFromToken).toHaveBeenCalledWith(
+      'standup-participant-token',
+      'Apex',
+      'Apex\\Team',
+    );
+  });
+
+  it('keeps denying home-chat writes when neither a turn nor standup token exists', async () => {
+    await expect(
+      adoServiceForChatOrStandupWrite('home-thread', 'Apex'),
+    ).rejects.toThrow('explicit request in the current chat turn');
+    expect(mockAdoWriteFromToken).not.toHaveBeenCalled();
   });
 });

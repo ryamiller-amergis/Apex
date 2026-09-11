@@ -121,7 +121,9 @@ describe('pgNotifyService durable run events', () => {
       replayRunEvents(envelope.threadId, 'prior-event-id')
     ).resolves.toEqual([envelope]);
     expect(mockPoolQuery).toHaveBeenCalledWith(
-      expect.stringContaining('cursor.ordinal'),
+      expect.stringMatching(
+        /ordinal > COALESCE\(\(SELECT cursor\.ordinal FROM cursor\), 0\)/,
+      ),
       [envelope.threadId, 'prior-event-id', 500]
     );
   });

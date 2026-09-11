@@ -1,6 +1,7 @@
 import type { AzureDevOpsService } from './azureDevOps';
 import { adoWriteFromToken } from './adoFactory';
 import { getUserPermissions } from './rbacService';
+import { getAdoTokenForThread } from './standupTokenResolver';
 import { canWriteThread, resolveThreadAccess } from './threadAccessService';
 
 const TURN_CONTEXT_TTL_MS = 2 * 60 * 60 * 1000;
@@ -106,6 +107,27 @@ export function adoServiceForChatThread(
     );
   }
   return adoWriteFromToken(context.token, project, areaPath);
+}
+
+/**
+ * Resolve credentials for MCP work-item writes. Prefer the current chat turn's
+ * authorized user token; if that turn was never registered, use a standup
+ * participant thread token when one exists. Home-chat writes without either
+ * context stay denied.
+ */
+export async function adoServiceForChatOrStandupWrite(
+  threadId: string,
+  project: string,
+  areaPath?: string,
+): Promise<AzureDevOpsService> {
+  try {
+    return adoServiceForChatThread(threadId, project, areaPath);
+  } catch (error) {
+    if (!isChatAdoWriteAuthError(error)) throw error;
+    const standupToken = await getAdoTokenForThread(threadId);
+    if (!standupToken) throw error;
+    return adoWriteFromToken(standupToken, project, areaPath);
+  }
 }
 
 export function isChatAdoWriteAuthError(

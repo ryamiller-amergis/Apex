@@ -101,6 +101,8 @@ jest.mock('../services/azureDevOps', () => ({
 jest.mock('../services/chatAdoWriteAuth', () => ({
   adoServiceForChatThread: (...args: unknown[]) =>
     mockAdoServiceForChatThread(...args),
+  adoServiceForChatOrStandupWrite: (...args: unknown[]) =>
+    mockAdoServiceForChatThread(...args),
   isChatAdoWriteAuthError: (error: unknown) =>
     error instanceof Error && error.name === 'ChatAdoWriteAuthError',
 }));

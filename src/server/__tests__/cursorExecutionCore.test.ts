@@ -206,6 +206,38 @@ describe('TBI-004 shared Cursor execution core', () => {
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(wait).toHaveBeenCalledTimes(1);
   });
+
+  it('keeps the completed answer when the runtime cannot cancel the run', async () => {
+    const monitor = createCursorTurnEndMonitor();
+    monitor.observe({ type: 'text-delta', text: '## Home page' });
+    monitor.observe({ type: 'turn-ended' });
+
+    const wait = jest.fn().mockResolvedValue({ status: 'finished' });
+    const run: CursorExecutionRun = {
+      supports: (capability) => capability === 'stream',
+      stream: async function* () {
+        await new Promise<never>(() => {});
+        yield { type: 'status', status: 'RUNNING' };
+      },
+      wait,
+    };
+
+    const result = await executeCursorExecutionCore({
+      snapshot,
+      run,
+      context: {
+        runId: 'run-turn-end-no-cancel',
+        sourceInstance: 'turn-end-test',
+      },
+      sink: { publish: () => {} },
+      nextSequence: () => 1,
+      turnEnd: monitor.completion,
+    });
+
+    expect(result.text).toBe('## Home page');
+    expect(result.completedOnTurnEnd).toBe(true);
+    expect(wait).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('cursor execution core token usage', () => {

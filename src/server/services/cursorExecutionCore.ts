@@ -558,10 +558,13 @@ export async function executeCursorExecutionCore(
         }
         streamedUsage =
           readTokenUsage(turnEndEvent.usage) ?? streamedUsage;
-        if (!run.cancel || !run.supports('cancel')) {
-          throw new Error('Cursor runtime cannot close a completed turn');
+        if (run.cancel && run.supports('cancel')) {
+          try {
+            await run.cancel();
+          } catch {
+            // Best-effort — the turn already produced the answer.
+          }
         }
-        await run.cancel();
         completedOnTurnEnd = true;
         break;
       } else if (event.type === 'assistant') {

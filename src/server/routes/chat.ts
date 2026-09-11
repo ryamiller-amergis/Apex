@@ -13,6 +13,7 @@ import {
   getThread,
   recoverStaleRunningThread,
   isExplicitAdoWriteIntent,
+  skillRequiresAdoOperations,
 } from '../services/chatAgentService';
 import { db } from '../db/drizzle';
 import { eq, desc } from 'drizzle-orm';
@@ -572,10 +573,22 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
   }
 
   let releaseAdoWriteTurn = () => {};
+  const calendarAssistant =
+    thread.kickoff.assistantType === 'calendar-work-item';
   const explicitAdoWrite =
-    thread.kickoff.assistantType !== 'calendar-work-item' &&
-    isExplicitAdoWriteIntent(body.text ?? '');
-  if (explicitAdoWrite) {
+    !calendarAssistant && isExplicitAdoWriteIntent(body.text ?? '');
+  const operationalAdoWrite =
+    !calendarAssistant &&
+    (skillRequiresAdoOperations(
+      turnSkill?.path ??
+        thread.kickoff.skillPath ??
+        thread.kickoff.standupSkillPath,
+      turnSkill?.name ?? thread.kickoff.pillLabel,
+    ) ||
+      Boolean(thread.kickoff.standupSessionId) ||
+      thread.kickoff.mode === 'standup-participant' ||
+      thread.kickoff.mode === 'standup-facilitator');
+  if (explicitAdoWrite || operationalAdoWrite) {
     try {
       const token = await getAdoTokenForUser(req);
       releaseAdoWriteTurn = await registerChatAdoWriteTurn({
@@ -586,9 +599,11 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
         isSuperAdmin: isSuperAdminRequest(req),
       });
     } catch (err: unknown) {
-      return res
-        .status(errorStatus(err, 403))
-        .json({ error: errorMessage(err) });
+      if (explicitAdoWrite) {
+        return res
+          .status(errorStatus(err, 403))
+          .json({ error: errorMessage(err) });
+      }
     }
   }
 

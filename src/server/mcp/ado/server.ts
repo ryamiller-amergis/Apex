@@ -36,7 +36,7 @@ import type { RepoReader } from '../../../shared/types/repoReader';
 import { raceWithTimeout, resolveMcpToolTimeoutMs } from '../mcpTimeout';
 import { registerBoardMcpTools } from '../board/tools';
 import {
-  adoServiceForChatThread,
+  adoServiceForChatOrStandupWrite,
   isChatAdoWriteAuthError,
 } from '../../services/chatAdoWriteAuth';
 import { isAdoUserAuthError } from '../../services/adoFactory';
@@ -948,7 +948,7 @@ export function createAdoMcpServer(options?: {
     },
     async ({ threadId, project, areaPath, wikiId, wikiPagePath, items }) => {
       try {
-        const adoService = adoServiceForChatThread(
+        const adoService = await adoServiceForChatOrStandupWrite(
           threadId,
           project,
           areaPath,
@@ -1031,7 +1031,7 @@ export function createAdoMcpServer(options?: {
     },
     async ({ threadId, project, areaPath, workItemId, fields }) => {
       try {
-        const adoService = adoServiceForChatThread(
+        const adoService = await adoServiceForChatOrStandupWrite(
           threadId,
           project,
           areaPath
@@ -1072,7 +1072,10 @@ export function createAdoMcpServer(options?: {
     },
     async ({ threadId, project, workItemId, comment }) => {
       try {
-        const adoService = adoServiceForChatThread(threadId, project);
+        const adoService = await adoServiceForChatOrStandupWrite(
+          threadId,
+          project,
+        );
         const result = await adoService.addWorkItemComment(workItemId, comment);
         console.log(
           `[MCP] add_work_item_comment: added comment ${result.id} to #${workItemId}`
