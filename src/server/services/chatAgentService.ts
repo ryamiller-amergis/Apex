@@ -137,6 +137,7 @@ import { groundingProfileResolver } from './groundingProfileResolver';
 import { createNativeReadTools } from './nativeReadToolAdapter';
 import { workerCanReadWithoutWorkingTree } from './repoRead/workerReadVisibility';
 import {
+  createCursorTurnEndMonitor,
   createCursorRunEventEnvelope,
   CursorExecutionWaitError,
   executeCursorExecutionCore,
@@ -864,9 +865,16 @@ function groundedTurnPromptOptions(
   runtime: RepositoryReadRuntime
 ) {
   const localGrounded = grounding.mode === 'local';
+  const appKnowledgeHome =
+    resolveGroundingCallerKey(state.thread.kickoff) === 'agent-home' &&
+    (state.thread.kickoff.skillPath ?? '')
+      .replace(/\\/g, '/')
+      .toLowerCase()
+      .includes('/app-knowledge/');
   return {
     preloadRepositoryContext:
-      state.isInterviewThread && grounding.mode === 'remote',
+      (state.isInterviewThread && grounding.mode === 'remote') ||
+      appKnowledgeHome,
     repoSearchEnabled: !state.isInterviewThread,
     nativeReads: runtime.nativeReads,
     forbidProviderRepoMcp: localGrounded && !runtime.nativeReads,
@@ -1315,6 +1323,14 @@ function buildFreeChatPrompt(
     );
   }
 
+  parts.push(
+    ``,
+    `# Conversational turn contract`,
+    `- Do all repository reads before writing the answer.`,
+    `- Do not narrate tool use, emit progress commentary, or continue researching after answering.`,
+    `- Emit exactly one user-facing answer for this turn. Once the answer is emitted, the turn is complete.`,
+  );
+
   return parts.join('\n');
 }
 
@@ -1692,6 +1708,16 @@ export function buildInitialPrompt(
       `Do NOT use shell commands, Python scripts, echo/cat redirection, or any other indirect method to write files.`,
       `File writes via shell/Python may silently fail in this environment.`,
       ``
+    );
+  }
+
+  if (resolveGroundingCallerKey(kickoff) === 'agent-home') {
+    parts.push(
+      `# Conversational turn contract`,
+      `- Do all repository reads before writing the answer.`,
+      `- Do not narrate tool use, emit progress commentary, or continue researching after answering.`,
+      `- Emit exactly one user-facing answer for this turn. Once the answer is emitted, the turn is complete.`,
+      ``,
     );
   }
 
@@ -4004,6 +4030,7 @@ export function interactivePromptRequiresInProcessMcp(prompt: string): boolean {
 
 const ADO_OPERATIONAL_SKILL_MARKERS = [
   'scrum-assistant',
+  'scrum-helper',
   'scrum-master-health',
   'daily-standup',
 ] as const;
@@ -4077,11 +4104,37 @@ interface ChatSendOptions {
   turnSkill?: ChatTurnSkill;
 }
 
+const ADO_WRITE_TARGET =
+  /\b(?:azure\s+devops|ado|work\s*items?|pbi|tbis?|epics?)\b|\b(?:bug|task|feature)\s*#?\d+\b|#\d+\b/i;
+const ADO_WRITE_ACTION =
+  /\b(?:create|add|update|edit|change|set|move|link|re-?parent|comment(?:\s+on)?|assign|unassign|close|resolve|activate|remove)\b/i;
+const INFORMATIONAL_REQUEST =
+  /^\s*(?:how|why|what|when|where|who|explain|describe|tell\s+me|show\s+me)\b/i;
+
+export function isExplicitAdoWriteIntent(text: string): boolean {
+  const request = text.trim();
+  if (!request || INFORMATIONAL_REQUEST.test(request)) return false;
+  if (/^\s*can\s+i\b/i.test(request)) return false;
+  return ADO_WRITE_TARGET.test(request) && ADO_WRITE_ACTION.test(request);
+}
+
+const CHAT_WRITE_POLICY_LINES = [
+  '# Repository and Azure DevOps write policy',
+  '- Treat the repository checkout as read-only. Never create, edit, delete, or move files in it.',
+  '- Create, update, comment on, link, or re-parent Azure DevOps work items only when the user directly requests that write in the current turn.',
+  '- Informational questions and analysis must not mutate Azure DevOps.',
+  '',
+] as const;
+
 export function buildTurnPrompt(text: string, turnSkill?: ChatTurnSkill): string {
-  if (!turnSkill) return text;
   return [
-    `Run skill: ${turnSkill.name} (\`${turnSkill.path}\`)`,
-    '',
+    ...CHAT_WRITE_POLICY_LINES,
+    ...(turnSkill
+      ? [
+          `Run skill: ${turnSkill.name} (\`${turnSkill.path}\`)`,
+          '',
+        ]
+      : []),
     'User request:',
     text,
   ].join('\n');
@@ -4202,6 +4255,12 @@ async function tryDispatchInteractiveTurn(
         options?.turnSkill?.path ?? state.thread.kickoff.skillPath;
       const turnSkillName =
         options?.turnSkill?.name ?? state.thread.kickoff.pillLabel;
+      if (
+        state.thread.kickoff.assistantType !== 'calendar-work-item' &&
+        isExplicitAdoWriteIntent(text)
+      ) {
+        return bypass('explicit-ado-write-intent');
+      }
       if (skillRequiresAdoOperations(turnSkillPath, turnSkillName)) {
         return bypass('ado-skill-capability');
       }
@@ -4835,10 +4894,16 @@ export async function sendMessage(
     state.thread.kickoff.assistantType === 'calendar-work-item'
       ? (state.thread.kickoff.calendarAssistantSessionId ?? undefined)
       : undefined;
+  const turnHasExplicitAdoWriteIntent =
+    !calendarSessionId && isExplicitAdoWriteIntent(text);
   const turnRequiresAdoOperations = skillRequiresAdoOperations(
     options?.turnSkill?.path ?? state.thread.kickoff.skillPath,
     options?.turnSkill?.name ?? state.thread.kickoff.pillLabel
   );
+  if (turnHasExplicitAdoWriteIntent && state.agent) {
+    await state.agent[Symbol.asyncDispose]().catch(() => {});
+    state.agent = null;
+  }
   const repositoryRuntime = await prepareRepositoryReadRuntime({
     grounding,
     kickoff: state.thread.kickoff,
@@ -4848,6 +4913,7 @@ export async function sendMessage(
     calendarSessionId,
     restrictRepoSearch: state.isInterviewThread,
     requireAdoTools:
+      turnHasExplicitAdoWriteIntent ||
       turnRequiresAdoOperations ||
       interactiveAttempt.bypassReason === 'mcp-tools-required',
   });
@@ -5037,12 +5103,23 @@ export async function sendMessage(
         acquisitionMode: agentAcquisitionMode,
       });
     }
+    let turnEndMonitor = createCursorTurnEndMonitor();
+    const sendWithTurnMonitor = (
+      target: typeof agent,
+    ) => {
+      const monitor = createCursorTurnEndMonitor();
+      turnEndMonitor = monitor;
+      return target.send(prompt, {
+        onDelta: ({ update }) => monitor.observe(update),
+      });
+    };
+
     // Send the prompt (retry up to 2x on transient errors)
     const run = await retryWithBackoff(() => {
       if (turnWasCancelled()) {
         throw makeCancelledError('Run cancelled during preparation');
       }
-      return agent.send(prompt);
+      return sendWithTurnMonitor(agent);
     }, {
       ...sdkRetryOpts,
       maxRetries: 2,
@@ -5409,6 +5486,7 @@ export async function sendMessage(
           },
           thinkingPhase,
           nextSequence: () => nextRunEventSequence(agentRunId!),
+          turnEnd: turnEndMonitor.completion,
           hooks: {
             beforeStreamEvent: throwIfAborted,
             onFirstStreamEvent: () => {
@@ -5565,7 +5643,7 @@ export async function sendMessage(
             if (turnWasCancelled()) {
               throw makeCancelledError('Run cancelled before retry');
             }
-            currentRun = await state.agent.send(prompt);
+            currentRun = await sendWithTurnMonitor(state.agent);
             state.thread.cursorAgentId =
               state.agent.agentId ?? state.thread.cursorAgentId;
             state.thread.activeRunId = getRunId(currentRun);
@@ -5643,7 +5721,7 @@ export async function sendMessage(
             if (turnWasCancelled()) {
               throw makeCancelledError('Run cancelled before retry');
             }
-            currentRun = await state.agent.send(prompt);
+            currentRun = await sendWithTurnMonitor(state.agent);
             state.thread.activeRunId = getRunId(currentRun);
             continue;
           }
@@ -5696,7 +5774,7 @@ export async function sendMessage(
             if (turnWasCancelled()) {
               throw makeCancelledError('Run cancelled before retry');
             }
-            currentRun = await state.agent.send(prompt);
+            currentRun = await sendWithTurnMonitor(state.agent);
             state.thread.activeRunId = getRunId(currentRun);
             continue;
           }

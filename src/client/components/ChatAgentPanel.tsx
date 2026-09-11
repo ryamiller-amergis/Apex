@@ -25,22 +25,24 @@ import styles from './ChatAgentPanel.module.css';
 
 const MIN_WIDTH = 340;
 const MAX_WIDTH_RATIO = 0.92;
+const HOME_MAX_WIDTH_RATIO = 1;
 const DEFAULT_WIDTH = 580;
 const LS_WIDTH_KEY = 'chatPanelWidth';
+const HOME_LS_WIDTH_KEY = 'homeChatPanelWidth';
 
 function testIdSegment(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 }
 
-function loadStoredWidth(): number {
+function loadStoredWidth(storageKey: string, defaultWidth: number): number {
   try {
-    const v = localStorage.getItem(LS_WIDTH_KEY);
+    const v = localStorage.getItem(storageKey);
     if (v) {
       const n = parseInt(v, 10);
       if (n >= MIN_WIDTH) return n;
     }
   } catch { /* ignore */ }
-  return DEFAULT_WIDTH;
+  return defaultWidth;
 }
 
 // ── Interactive choice block ───────────────────────────────────────────────────
@@ -336,12 +338,19 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   const [skillPickerOpen, setSkillPickerOpen] = useState(false);
   const [skillPickerIdx, setSkillPickerIdx] = useState(0);
   const [showPrdPreview, setShowPrdPreview] = useState(false);
-  const [panelWidth, setPanelWidth] = useState<number>(loadStoredWidth);
+  const panelWidthStorageKey = launchedFromHome ? HOME_LS_WIDTH_KEY : LS_WIDTH_KEY;
+  const [panelWidth, setPanelWidth] = useState<number>(() =>
+    loadStoredWidth(
+      panelWidthStorageKey,
+      launchedFromHome && typeof window !== 'undefined'
+        ? window.innerWidth
+        : DEFAULT_WIDTH,
+    )
+  );
   const [selectedModel, setSelectedModel] = useState<string>(
     thread?.kickoff.model ?? DEFAULT_MODEL_ID,
   );
   const [selectedQuickSkill, setSelectedQuickSkill] = useState<QuickSkillPill | null>(null);
-  const [queuedQuickSkill, setQueuedQuickSkill] = useState<QuickSkillPill | null>(null);
   const [selectedMcpPill, setSelectedMcpPill] = useState<QuickMcpPill | null>(null);
   const [pendingOutgoing, setPendingOutgoing] = useState<string | null>(null);
 
@@ -510,7 +519,10 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     const onMouseMove = (e: MouseEvent) => {
       if (!isDragging.current) return;
       const dx = dragStartX.current - e.clientX;
-      const maxWidth = Math.floor(window.innerWidth * MAX_WIDTH_RATIO);
+      const maxWidth = Math.floor(
+        window.innerWidth
+          * (launchedFromHome ? HOME_MAX_WIDTH_RATIO : MAX_WIDTH_RATIO)
+      );
       const newWidth = Math.min(Math.max(dragStartWidth.current + dx, MIN_WIDTH), maxWidth);
       setPanelWidth(newWidth);
     };
@@ -520,7 +532,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
       setPanelWidth((w) => {
-        try { localStorage.setItem(LS_WIDTH_KEY, String(w)); } catch { /* ignore */ }
+        try { localStorage.setItem(panelWidthStorageKey, String(w)); } catch { /* ignore */ }
         return w;
       });
     };
@@ -530,29 +542,35 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
     };
-  }, []);
+  }, [launchedFromHome, panelWidthStorageKey]);
+
+  const commitPanelWidth = useCallback((next: number) => {
+    setPanelWidth(next);
+    try { localStorage.setItem(panelWidthStorageKey, String(next)); } catch { /* ignore */ }
+  }, [panelWidthStorageKey]);
+
+  const isFullWidth = panelWidth >= window.innerWidth - 1;
+
+  const toggleFullWidth = useCallback(() => {
+    commitPanelWidth(isFullWidth ? DEFAULT_WIDTH : window.innerWidth);
+  }, [commitPanelWidth, isFullWidth]);
 
   // ── Actions ──────────────────────────────────────────────────────────────────
 
   const doSend = useCallback(async (text: string, messageAttachments: ChatAttachment[] = []) => {
     const trimmedText = text.trim();
     if ((!trimmedText && messageAttachments.length === 0) || isRunning || !sessionThreadId) return;
-    const turnSkill = queuedQuickSkill
-      ? { name: queuedQuickSkill.label, path: queuedQuickSkill.skillPath }
-      : undefined;
     setInput('');
     setSkillPickerOpen(false);
-    setQueuedQuickSkill(null);
     speech.stop();
     await session.send(
       trimmedText || 'Please use the attached files as additional context.',
-      { model: selectedModel, attachments: messageAttachments, skill: turnSkill },
+      { model: selectedModel, attachments: messageAttachments },
     );
     if (messageAttachments.length > 0) clearAttachments();
   }, [
     isRunning,
     sessionThreadId,
-    queuedQuickSkill,
     session,
     selectedModel,
     clearAttachments,
@@ -634,7 +652,8 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     && !(isLoadingThread && inConversation);
 
   const statusLabel =
-    isRunning ? 'Agent is thinking…'
+    streamingText ? 'Agent is responding…'
+    : isRunning ? 'Agent is thinking…'
     : status === 'error' ? 'Error occurred'
     : status === 'closed' ? 'Thread closed'
     : isStartingConversation ? 'Agent is thinking…'
@@ -665,22 +684,17 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     return thread?.kickoff.mcpPill ?? null;
   }, [selectedMcpPill, thread]);
 
-  const displayedQuickSkill =
-    inConversation
-      ? queuedQuickSkill ?? (isStartingConversation ? resolvedQuickSkill : null)
-      : resolvedQuickSkill;
-
   const selectedPillDescription = useMemo(() => {
-    if (displayedQuickSkill) {
-      return displayedQuickSkill.description
-        ?? homeSkills.find((s) => s.path === displayedQuickSkill.skillPath)?.description
-        ?? `Skill: ${displayedQuickSkill.label}`;
+    if (resolvedQuickSkill) {
+      return resolvedQuickSkill.description
+        ?? homeSkills.find((s) => s.path === resolvedQuickSkill.skillPath)?.description
+        ?? `Skill: ${resolvedQuickSkill.label}`;
     }
     if (resolvedMcpPill) {
       return resolvedMcpPill.description ?? `MCP: ${resolvedMcpPill.label}`;
     }
     return null;
-  }, [displayedQuickSkill, resolvedMcpPill, homeSkills]);
+  }, [resolvedQuickSkill, resolvedMcpPill, homeSkills]);
 
   useEffect(() => {
     if (newChatError) {
@@ -704,7 +718,6 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   useEffect(() => {
     if (wasInConversationRef.current && !inConversation && !isStartingNewChat) {
       setSelectedQuickSkill(null);
-      setQueuedQuickSkill(null);
       setSelectedMcpPill(null);
     }
     wasInConversationRef.current = inConversation;
@@ -743,8 +756,18 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
       closeTestId="chat-agent-close-btn"
       width={panelWidth}
       onResizeMouseDown={onResizeMouseDown}
+      className={launchedFromHome ? styles.homePanel : undefined}
       actions={(
         <>
+          <button
+            className={styles.iconBtn}
+            onClick={toggleFullWidth}
+            title={isFullWidth ? 'Shrink panel' : 'Expand panel to full width'}
+            aria-label={isFullWidth ? 'Shrink panel' : 'Expand panel to full width'}
+            {...{ 'data-testid': 'chat-agent-width-toggle-btn' }}
+          >
+            {isFullWidth ? '⇥⇤' : '⇤⇥'}
+          </button>
           {onSelectThread && (
             <button
               className={styles.iconBtn}
@@ -779,71 +802,67 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
           </span>
         </div>
       ) : undefined}
-      before={launchedFromHome ? (
-        <>
-          <section className={styles.quickPills} aria-label="Home chat shortcuts">
-            {quickSkillPills.length > 0 && <h3>Skills</h3>}
-            <div className={styles.pillRow}>
-              {quickSkillPills.map((pill) => (
-                <button
-                  key={pill.skillPath}
-                  type="button"
-                  className={`${styles.quickPill} ${displayedQuickSkill?.skillPath === pill.skillPath ? styles.quickPillSelected : ''}`}
-                  onClick={() => {
-                    if (isRunning || status === 'closed') return;
-                    const currentSelection = inConversation ? queuedQuickSkill : selectedQuickSkill;
-                    const selected = currentSelection?.skillPath === pill.skillPath ? null : pill;
-                    if (inConversation) {
-                      setQueuedQuickSkill(selected);
-                    } else {
-                      setSelectedQuickSkill(selected);
-                    }
-                    setSelectedMcpPill(null);
-                    setSelectedModel(selected?.model ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID);
-                    if (selected) {
-                      requestAnimationFrame(() => textareaRef.current?.focus());
-                    }
-                  }}
-                  disabled={isRunning || status === 'closed'}
-                  aria-pressed={displayedQuickSkill?.skillPath === pill.skillPath}
-                  title={inConversation ? `Use ${pill.label} for the next message` : undefined}
-                  {...{ 'data-testid': `chat-agent-skill-pill-${testIdSegment(pill.skillPath)}` }}
-                >
-                  {pill.label}
-                </button>
-              ))}
-            </div>
-            {quickMcpPills.length > 0 && <h3>MCP Servers</h3>}
-            <div className={styles.pillRow}>
-              {quickMcpPills.map((pill) => (
-                <button
-                  key={pill.mcpServerName}
-                  type="button"
-                  className={`${styles.quickPill} ${resolvedMcpPill?.mcpServerName === pill.mcpServerName ? styles.quickPillSelected : ''}`}
-                  onClick={() => {
-                    if (inConversation) return;
-                    const selected = selectedMcpPill?.mcpServerName === pill.mcpServerName ? null : pill;
-                    setSelectedMcpPill(selected);
-                    setSelectedQuickSkill(null);
-                    setSelectedModel(selected?.model ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID);
-                    if (selected) {
-                      requestAnimationFrame(() => textareaRef.current?.focus());
-                    }
-                  }}
-                  disabled={inConversation}
-                  {...{ 'data-testid': `chat-agent-mcp-pill-${testIdSegment(pill.mcpServerName)}` }}
-                >
-                  {pill.label}
-                </button>
-              ))}
-            </div>
-            {selectedPillDescription && (
-              <p className={styles.pillDescription} {...{ 'data-testid': 'chat-agent-pill-description' }}>
-                {selectedPillDescription}
-              </p>
-            )}
-          </section>
-        </>
+      before={!launchedFromHome ? undefined : isHomeCompose ? (
+        <section className={styles.quickPills} aria-label="Home chat shortcuts">
+          {quickSkillPills.length > 0 && <h3>Skills</h3>}
+          <div className={styles.pillRow}>
+            {quickSkillPills.map((pill) => (
+              <button
+                key={pill.skillPath}
+                type="button"
+                className={`${styles.quickPill} ${selectedQuickSkill?.skillPath === pill.skillPath ? styles.quickPillSelected : ''}`}
+                onClick={() => {
+                  const selected = selectedQuickSkill?.skillPath === pill.skillPath ? null : pill;
+                  setSelectedQuickSkill(selected);
+                  setSelectedMcpPill(null);
+                  setSelectedModel(selected?.model ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID);
+                  if (selected) {
+                    requestAnimationFrame(() => textareaRef.current?.focus());
+                  }
+                }}
+                aria-pressed={selectedQuickSkill?.skillPath === pill.skillPath}
+                {...{ 'data-testid': `chat-agent-skill-pill-${testIdSegment(pill.skillPath)}` }}
+              >
+                {pill.label}
+              </button>
+            ))}
+          </div>
+          {quickMcpPills.length > 0 && <h3>MCP Servers</h3>}
+          <div className={styles.pillRow}>
+            {quickMcpPills.map((pill) => (
+              <button
+                key={pill.mcpServerName}
+                type="button"
+                className={`${styles.quickPill} ${selectedMcpPill?.mcpServerName === pill.mcpServerName ? styles.quickPillSelected : ''}`}
+                onClick={() => {
+                  const selected = selectedMcpPill?.mcpServerName === pill.mcpServerName ? null : pill;
+                  setSelectedMcpPill(selected);
+                  setSelectedQuickSkill(null);
+                  setSelectedModel(selected?.model ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID);
+                  if (selected) {
+                    requestAnimationFrame(() => textareaRef.current?.focus());
+                  }
+                }}
+                {...{ 'data-testid': `chat-agent-mcp-pill-${testIdSegment(pill.mcpServerName)}` }}
+              >
+                {pill.label}
+              </button>
+            ))}
+          </div>
+          {selectedPillDescription && (
+            <p className={styles.pillDescription} {...{ 'data-testid': 'chat-agent-pill-description' }}>
+              {selectedPillDescription}
+            </p>
+          )}
+        </section>
+      ) : selectedPillDescription ? (
+        // Selection controls belong to a new chat only; an active conversation
+        // just names the skill it is already running.
+        <section className={styles.quickPills} aria-label="Active chat skill">
+          <p className={styles.pillDescription} {...{ 'data-testid': 'chat-agent-pill-description' }}>
+            {selectedPillDescription}
+          </p>
+        </section>
       ) : undefined}
     >
 
@@ -1089,8 +1108,8 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                   <span className={styles.agentLabel}>Agent</span>
                 </div>
                 <div className={styles.agentBubble}>
-                  <div className={styles.streamingBody}>
-                    {streamingText}<span className={styles.cursor} />
+                  <div className={`${styles.markdownBody} ${styles.streamingBody}`}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
                   </div>
                 </div>
               </div>
@@ -1139,9 +1158,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             placeholder={
               isRunning
                 ? 'Agent is thinking…'
-                : queuedQuickSkill
-                  ? `Ask using ${queuedQuickSkill.label}…`
-                  : 'Message agent · type / to invoke a skill…'
+                : 'Message agent · type / to invoke a skill…'
             }
             testIdPrefix="chat-agent"
             {...{ 'data-testid': 'chat-agent-composer' }}
@@ -1199,9 +1216,6 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             after={(
               <div className={styles.inputHint}>
                 <span className={styles.modelBadge}>{modelBadge(selectedModel)}</span>
-                {queuedQuickSkill
-                  ? `${queuedQuickSkill.label} selected for the next message · `
-                  : null}
                 Enter to send · Shift+Enter for newline · <kbd className={styles.kbdHint}>/</kbd> invoke skill
               </div>
             )}

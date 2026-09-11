@@ -34,6 +34,8 @@ jest.mock('../services/chatAgentService', () => ({
   writeOutputPrd: jest.fn(),
   readOutputBacklog: jest.fn().mockReturnValue(null),
   isPrdReady: jest.fn().mockReturnValue(false),
+  isExplicitAdoWriteIntent: jest.fn().mockReturnValue(false),
+  skillRequiresAdoOperations: jest.fn().mockReturnValue(false),
   isRepositoryReadingChatCaller: jest.fn().mockReturnValue(false),
   resolveGroundingCallerKey: jest.fn().mockReturnValue('agent-home'),
 }));

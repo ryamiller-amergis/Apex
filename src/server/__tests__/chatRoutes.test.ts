@@ -12,6 +12,11 @@ import express, { type NextFunction, type Request, type Response } from 'express
 // Must start with 'mock' so Jest's hoist transform allows the factory to
 // reference it before the let declaration executes.
 let mockPermissionGranted = true;
+const mockGetAdoTokenForUser = jest.fn();
+const mockReleaseAdoWriteTurn = jest.fn();
+const mockRegisterChatAdoWriteTurn = jest
+  .fn()
+  .mockResolvedValue(mockReleaseAdoWriteTurn);
 
 jest.mock('../middleware/rbac', () => ({
   requirePermission: (..._keys: string[]) =>
@@ -37,6 +42,25 @@ jest.mock('../services/chatAgentService', () => ({
   subscribeToThread: jest.fn().mockReturnValue(() => {}),
   cancelRun: jest.fn(),
   recoverStaleRunningThread: jest.fn().mockResolvedValue('idle'),
+  isExplicitAdoWriteIntent: jest.fn((text: string) =>
+    !/^\s*(how|why|what|explain|describe)\b/i.test(text) &&
+    /\b(create|update|comment|re-?parent)\b/i.test(text) &&
+    /\b(ado|work item|pbi|epic)\b/i.test(text),
+  ),
+  skillRequiresAdoOperations: jest.fn(
+    (skillPath?: string | null, skillName?: string | null) => {
+      const normalized = `${skillPath ?? ''} ${skillName ?? ''}`
+        .replace(/\\/g, '/')
+        .toLowerCase()
+        .replace(/\s+/g, '-');
+      return [
+        'scrum-assistant',
+        'scrum-helper',
+        'scrum-master-health',
+        'daily-standup',
+      ].some((marker) => normalized.includes(marker));
+    },
+  ),
   permanentlyDeleteThread: jest.fn(),
   readOutputPrd: jest.fn().mockReturnValue(null),
   writeOutputPrd: jest.fn(),
@@ -70,6 +94,20 @@ jest.mock('../services/featureFlagService', () => ({
 
 jest.mock('../utils/requestUser', () => ({
   getUserId: jest.fn().mockReturnValue('user-1'),
+}));
+
+jest.mock('../services/adoUserToken', () => ({
+  getAdoTokenForUser: (...args: unknown[]) =>
+    mockGetAdoTokenForUser(...args),
+}));
+
+jest.mock('../services/chatAdoWriteAuth', () => ({
+  registerChatAdoWriteTurn: (...args: unknown[]) =>
+    mockRegisterChatAdoWriteTurn(...args),
+}));
+
+jest.mock('../utils/superAdmin', () => ({
+  isSuperAdminRequest: jest.fn().mockReturnValue(false),
 }));
 
 const mockResolveThreadAccess = jest.fn();
@@ -749,6 +787,8 @@ describe('POST /api/chat/threads/:id/messages — cached grounding delegation', 
     });
     mockCanWriteThread.mockResolvedValue(true);
     mockChatService.sendMessage.mockResolvedValue(undefined);
+    mockGetAdoTokenForUser.mockResolvedValue('user-ado-token');
+    mockRegisterChatAdoWriteTurn.mockResolvedValue(mockReleaseAdoWriteTurn);
   });
 
   it('accepts the turn and passes its selected skill to repository grounding', async () => {
@@ -775,5 +815,53 @@ describe('POST /api/chat/threads/:id/messages — cached grounding delegation', 
         },
       },
     );
+    expect(mockRegisterChatAdoWriteTurn).toHaveBeenCalledWith({
+      threadId,
+      userId: 'user-1',
+      project: 'Apex',
+      token: 'user-ado-token',
+      isSuperAdmin: false,
+    });
+  });
+
+  it('registers a per-user ADO context for an explicit App Knowledge write request', async () => {
+    const res = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: 'Create a PBI in ADO for the login error' });
+
+    expect(res.status).toBe(202);
+    expect(mockGetAdoTokenForUser).toHaveBeenCalledTimes(1);
+    expect(mockRegisterChatAdoWriteTurn).toHaveBeenCalledWith({
+      threadId,
+      userId: 'user-1',
+      project: 'Apex',
+      token: 'user-ado-token',
+      isSuperAdmin: false,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(mockReleaseAdoWriteTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an explicit ADO write when authorization fails', async () => {
+    mockRegisterChatAdoWriteTurn.mockRejectedValueOnce(
+      Object.assign(new Error('Missing workitems permission'), { status: 403 }),
+    );
+
+    const res = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: 'Update ADO work item 123' });
+
+    expect(res.status).toBe(403);
+    expect(mockChatService.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not acquire an ADO token for informational questions', async () => {
+    const res = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: 'How do I create a PBI in ADO?' });
+
+    expect(res.status).toBe(202);
+    expect(mockGetAdoTokenForUser).not.toHaveBeenCalled();
+    expect(mockRegisterChatAdoWriteTurn).not.toHaveBeenCalled();
   });
 });

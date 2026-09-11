@@ -99,30 +99,68 @@ describe('pgNotifyService durable run events', () => {
   });
 
   it('replays durable envelopes after an SSE event id in ordinal order', async () => {
-    mockPoolQuery.mockResolvedValue({
-      rows: [
-        {
-          event_id: envelope.eventId,
-          thread_id: envelope.threadId,
-          run_id: envelope.runId,
-          source_instance: envelope.sourceInstance,
-          sequence: envelope.sequence,
-          event_timestamp: envelope.timestamp,
-          event_type: envelope.type,
-          phase: envelope.phase,
-          status: envelope.status,
-          detail: envelope.detail,
-          event: envelope.event,
-        },
-      ],
-    });
+    mockPoolQuery
+      .mockResolvedValueOnce({ rows: [{ ordinal: 12 }] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            event_id: envelope.eventId,
+            thread_id: envelope.threadId,
+            run_id: envelope.runId,
+            source_instance: envelope.sourceInstance,
+            sequence: envelope.sequence,
+            event_timestamp: envelope.timestamp,
+            event_type: envelope.type,
+            phase: envelope.phase,
+            status: envelope.status,
+            detail: envelope.detail,
+            event: envelope.event,
+          },
+        ],
+      });
 
     await expect(
       replayRunEvents(envelope.threadId, 'prior-event-id')
     ).resolves.toEqual([envelope]);
+    expect(mockPoolQuery).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining('event_id = $1::uuid'),
+      ['prior-event-id', envelope.threadId]
+    );
+    expect(mockPoolQuery).toHaveBeenNthCalledWith(
+      2,
+      expect.stringMatching(/ordinal > \$2/),
+      [envelope.threadId, 12, 500]
+    );
+  });
+
+  it('treats a missing resume cursor as a newest-first cold replay', async () => {
+    mockPoolQuery
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    await replayRunEvents(envelope.threadId, 'prior-event-id', 500, envelope.runId);
+
+    expect(mockPoolQuery).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining('event_id = $1::uuid'),
+      ['prior-event-id', envelope.threadId]
+    );
+    expect(mockPoolQuery).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('ORDER BY ordinal DESC'),
+      [envelope.threadId, 500, envelope.runId]
+    );
+  });
+
+  it('replays only the newest events for an active run on a cold connection', async () => {
+    mockPoolQuery.mockResolvedValue({ rows: [] });
+
+    await replayRunEvents(envelope.threadId, undefined, 500, envelope.runId);
+
     expect(mockPoolQuery).toHaveBeenCalledWith(
-      expect.stringContaining('cursor.ordinal'),
-      [envelope.threadId, 'prior-event-id', 500]
+      expect.stringContaining('ORDER BY ordinal DESC'),
+      [envelope.threadId, 500, envelope.runId]
     );
   });
 

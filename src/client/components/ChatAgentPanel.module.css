@@ -1,4 +1,8 @@
 /* ── Panel shell ── */
+.homePanel {
+  max-width: 100vw;
+}
+
 .panel {
   position: fixed;
   top: 0;
@@ -699,15 +703,11 @@
 }
 
 /* ── Streaming message ── */
-.streamingBody {
-  font-size: 13px;
-  color: var(--text-primary);
-  line-height: 1.65;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.cursor {
+/* Partial output is rendered through .markdownBody so it looks identical to the
+   saved message, which keeps the text from reflowing when the stream lands.
+   The caret trails the last block instead of dropping onto its own line. */
+.streamingBody > :last-child::after {
+  content: '';
   display: inline-block;
   width: 2px;
   height: 13px;
