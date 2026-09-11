@@ -139,6 +139,37 @@ describe('chat ADO write authorization', () => {
     );
   });
 
+  it('falls back to a standup participant token when the chat turn has no user token', async () => {
+    mockGetAdoTokenForThread.mockResolvedValue('standup-participant-token');
+    mockAdoWriteFromToken.mockReturnValue({ kind: 'standup-ado-service' });
+    const release = await registerChatAdoWriteTurn({
+      threadId: 'standup-null-token',
+      userId: 'user-1',
+      project: 'Apex',
+      token: null,
+    });
+
+    await expect(
+      adoServiceForChatOrStandupWrite(
+        'standup-null-token',
+        'Apex',
+        'Apex\\Team',
+      ),
+    ).resolves.toEqual({ kind: 'standup-ado-service' });
+    expect(mockGetAdoTokenForThread).toHaveBeenCalledWith('standup-null-token');
+    expect(mockAdoWriteFromToken).toHaveBeenCalledWith(
+      'standup-participant-token',
+      'Apex',
+      'Apex\\Team',
+    );
+    expect(mockAdoWriteFromToken).not.toHaveBeenCalledWith(
+      null,
+      'Apex',
+      'Apex\\Team',
+    );
+    release();
+  });
+
   it('keeps denying home-chat writes when neither a turn nor standup token exists', async () => {
     await expect(
       adoServiceForChatOrStandupWrite('home-thread', 'Apex'),

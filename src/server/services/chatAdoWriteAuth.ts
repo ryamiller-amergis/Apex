@@ -109,25 +109,37 @@ export function adoServiceForChatThread(
   return adoWriteFromToken(context.token, project, areaPath);
 }
 
+function registeredChatTurnHasToken(
+  threadId: string,
+  project: string,
+): boolean {
+  const context = turnContexts.get(threadId);
+  return Boolean(
+    context &&
+      context.expiresAt > Date.now() &&
+      context.project === project &&
+      context.token,
+  );
+}
+
 /**
  * Resolve credentials for MCP work-item writes. Prefer the current chat turn's
- * authorized user token; if that turn was never registered, use a standup
- * participant thread token when one exists. Home-chat writes without either
- * context stay denied.
+ * authorized user token; if that turn was never registered or has no token,
+ * use a standup participant thread token when one exists. Home-chat writes
+ * without either context stay denied.
  */
 export async function adoServiceForChatOrStandupWrite(
   threadId: string,
   project: string,
   areaPath?: string,
 ): Promise<AzureDevOpsService> {
-  try {
-    return adoServiceForChatThread(threadId, project, areaPath);
-  } catch (error) {
-    if (!isChatAdoWriteAuthError(error)) throw error;
+  if (!registeredChatTurnHasToken(threadId, project)) {
     const standupToken = await getAdoTokenForThread(threadId);
-    if (!standupToken) throw error;
-    return adoWriteFromToken(standupToken, project, areaPath);
+    if (standupToken) {
+      return adoWriteFromToken(standupToken, project, areaPath);
+    }
   }
+  return adoServiceForChatThread(threadId, project, areaPath);
 }
 
 export function isChatAdoWriteAuthError(
