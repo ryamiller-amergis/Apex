@@ -392,24 +392,41 @@ jobs:
           # restarts the slot's container. Kudu aborts a ZIP deploy started
           # while SCM is restarting. Poll Kudu so the deploy begins against a
           # live SCM rather than racing a restart it cannot see.
+          #
+          # A single 200 only proves SCM answers right now. A write above can
+          # queue a restart that has not begun yet, so one success can land
+          # before the very restart this step exists to wait out. Let the
+          # restart surface first, then require consecutive successes so a brief
+          # window of availability is not mistaken for a settled container.
           SCM_HOST="${APP_SERVICE_NAME}-${SLOT_NAME}.scm.azurewebsites.net"
+          SETTLE_DELAY_SECONDS=20
+          REQUIRED_STREAK=3
           TOKEN=$(az account get-access-token \
             --resource https://management.azure.com \
             --query accessToken -o tsv)
-          for attempt in $(seq 1 30); do
+          sleep "$SETTLE_DELAY_SECONDS"
+          streak=0
+          for attempt in $(seq 1 60); do
             code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
               -H "Authorization: Bearer $TOKEN" \
               "https://$SCM_HOST/api/settings" || true)
             if [ "$code" = "200" ]; then
-              echo "SCM ready after ${attempt} attempt(s)."
-              exit 0
+              streak=$((streak + 1))
+              if [ "$streak" -ge "$REQUIRED_STREAK" ]; then
+                echo "SCM settled: $REQUIRED_STREAK consecutive successes."
+                exit 0
+              fi
+            else
+              if [ "$streak" -gt 0 ]; then
+                echo "  SCM dropped out again (http=$code); streak reset."
+              fi
+              streak=0
             fi
-            echo "  SCM not ready yet (http=$code); retrying in 10s."
-            sleep 10
+            sleep 5
           done
           # Deploy anyway rather than failing the run outright: if SCM really is
           # down the deploy reports it with a clearer error than this probe can.
-          echo "SCM did not report ready within ~5 minutes; deploying anyway." >&2
+          echo "SCM did not settle within ~5 minutes; deploying anyway." >&2
 
       - name: Deploy to staging slot
         uses: azure/webapps-deploy@v3
