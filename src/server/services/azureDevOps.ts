@@ -1957,6 +1957,37 @@ export class AzureDevOpsService {
   }
 
   /**
+   * Return a positive ADO comment count for badge display, or unavailable when
+   * zero comments or the ADO request fails (callers treat unavailable as no badge).
+   */
+  async getWorkItemCommentCount(workItemId: number): Promise<
+    | { status: 'success'; count: number }
+    | { status: 'unavailable' }
+  > {
+    try {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const commentsResult = await witApi.getComments(this.project, workItemId);
+      const totalCount =
+        typeof (commentsResult as { totalCount?: number })?.totalCount === 'number'
+          ? (commentsResult as { totalCount: number }).totalCount
+          : (commentsResult?.comments ?? []).length;
+
+      if (totalCount > 0) {
+        return { status: 'success', count: totalCount };
+      }
+      return { status: 'unavailable' };
+    } catch (error) {
+      const errorSummary = error instanceof Error ? error.message : String(error);
+      console.warn('[CommentCountBadge] ADO comment count fetch failed', {
+        workItemId,
+        errorSummary,
+        feature: 'CommentCountBadge',
+      });
+      return { status: 'unavailable' };
+    }
+  }
+
+  /**
    * Return structured comment history for a work item.
    */
   async getWorkItemCommentHistory(workItemId: number, limit = 200): Promise<Array<{

@@ -12,6 +12,12 @@ export interface AssignedWorkItem {
   tags?: string;
 }
 
+/** API response for ADO work item comment count on My Work rows. */
+export interface WorkItemCommentCountResponse {
+  /** Positive integer when comments exist; null when zero or unavailable. */
+  count: number | null;
+}
+
 /**
  * ADO work-item states from which a development session may be started.
  * "Active" is the Bug equivalent of "In Progress". Any other state (e.g.

@@ -88,6 +88,41 @@ router.get('/workitems', async (req: Request, res: Response) => {
   }
 });
 
+// GET /workitems/:workItemId/comment-count?project=<project>
+router.get('/workitems/:workItemId/comment-count', async (req: Request, res: Response) => {
+  try {
+    const project = req.query.project as string;
+    if (!project) {
+      res.status(400).json({ error: 'project query parameter is required' });
+      return;
+    }
+    if (isAppNativeRequirementsProject(project)) {
+      res.status(400).json({ error: 'This project uses app-native PRD requirements' });
+      return;
+    }
+
+    const workItemId = Number.parseInt(req.params.workItemId, 10);
+    if (!Number.isFinite(workItemId) || workItemId <= 0) {
+      res.status(400).json({ error: 'Invalid work item id' });
+      return;
+    }
+
+    const adoService = new AzureDevOpsService(project);
+    const result = await adoService.getWorkItemCommentCount(workItemId);
+
+    res.json({
+      count: result.status === 'success' ? result.count : null,
+    });
+  } catch (err) {
+    console.warn('[CommentCountBadge] comment-count endpoint failed', {
+      workItemId: req.params.workItemId,
+      errorSummary: (err as Error).message,
+      feature: 'CommentCountBadge',
+    });
+    res.json({ count: null });
+  }
+});
+
 // GET /backlog-features?project=<project> — app-native PRD-sourced feature backlog
 router.get('/backlog-features', async (req: Request, res: Response) => {
   try {
