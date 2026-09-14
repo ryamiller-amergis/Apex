@@ -63,6 +63,7 @@ import {
   deleteGroup,
   setGroupMembers,
   getUserGroupNames,
+  getUserGroupIds,
 } from '../services/groupService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
@@ -404,6 +405,58 @@ describe('getUserGroupNames', () => {
     await getUserGroupNames('specific-user-oid');
 
     expect(chain.where).toHaveBeenCalled();
+  });
+});
+
+// ── getUserGroupIds (FEAT-002 TBI-003 / VT-03) ─────────────────────────────────
+
+describe('getUserGroupIds', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('FEAT-002 TBI-003 / VT-03 returns an empty array when the user is in no groups', async () => {
+    const chain = makeSelectChain([]);
+    mockDb.select.mockReturnValue(chain);
+
+    const result = await getUserGroupIds('user-xyz');
+
+    expect(result).toEqual([]);
+    expect(chain.innerJoin).toHaveBeenCalled();
+    expect(chain.where).toHaveBeenCalled();
+  });
+
+  it('FEAT-002 TBI-003 / VT-03 returns the group ids the user is a member of', async () => {
+    const chain = makeSelectChain([{ groupId: 'group-1' }, { groupId: 'group-2' }]);
+    mockDb.select.mockReturnValue(chain);
+
+    const result = await getUserGroupIds('user-abc');
+
+    expect(result).toEqual(expect.arrayContaining(['group-1', 'group-2']));
+    expect(result).toHaveLength(2);
+  });
+
+  it('FEAT-002 TBI-003 / VT-03 deduplicates repeated group ids', async () => {
+    const chain = makeSelectChain([
+      { groupId: 'group-1' },
+      { groupId: 'group-1' },
+      { groupId: 'group-2' },
+    ]);
+    mockDb.select.mockReturnValue(chain);
+
+    const result = await getUserGroupIds('user-abc');
+
+    expect(result).toEqual(expect.arrayContaining(['group-1', 'group-2']));
+    expect(result).toHaveLength(2);
+  });
+
+  it('FEAT-002 TBI-003 / VT-03 joins group rows so a deleted group never appears in live membership', async () => {
+    const chain = makeSelectChain([{ groupId: 'group-1' }]);
+    mockDb.select.mockReturnValue(chain);
+
+    const result = await getUserGroupIds('specific-user-oid');
+
+    expect(chain.innerJoin).toHaveBeenCalled();
+    expect(chain.where).toHaveBeenCalled();
+    expect(result).toEqual(['group-1']);
   });
 });
 
