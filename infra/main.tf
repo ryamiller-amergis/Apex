@@ -171,6 +171,11 @@ resource "azurerm_linux_web_app" "main" {
       "DATABASE_URL",
       var.enable_staging_slot ? "LT_APEX_CALLBACK_BASE_URL" : null,
       "DB_POOL_MAX",
+      # How long a background run may wait for a worker before it is failed as
+      # queue_ttl. Approving a PRD submits one run per feature against a lane
+      # that runs ten at a time, so the legitimate wait scales with the feature
+      # count and the default 30m expires runs no worker had reached yet.
+      "AI_RUNS_BACKGROUND_QUEUE_TTL_MS",
     ])
   }
 
