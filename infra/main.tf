@@ -151,15 +151,21 @@ resource "azurerm_linux_web_app" "main" {
   }
 
   # Keep environment-specific values with their deployment slot during swaps.
+  # Anything not listed here travels with the code when the slots swap, so a
+  # value tuned for production lands on staging and staging's lands on
+  # production. Order mirrors the order Azure returns these so the plan stays
+  # free of list-ordering churn.
   sticky_settings {
     app_setting_names = compact([
-      "AZURE_REDIRECT_URL",
-      "APPLICATIONINSIGHTS_CONNECTION_STRING",
-      var.enable_staging_slot ? "LT_APEX_CALLBACK_BASE_URL" : null,
-      # Environment-specific app base URL must stay pinned to its slot across
-      # swaps. Appended last to mirror the order Azure returns so the plan stays
-      # free of list-ordering churn.
       "APEX_URL",
+      "APPLICATIONINSIGHTS_CONNECTION_STRING",
+      "AZURE_REDIRECT_URL",
+      # Each slot carries its own connection string and its own pool ceiling.
+      # A swap that traded these would point production at staging's database
+      # and shrink its pool to staging's size.
+      "DATABASE_URL",
+      var.enable_staging_slot ? "LT_APEX_CALLBACK_BASE_URL" : null,
+      "DB_POOL_MAX",
     ])
   }
 
@@ -224,6 +230,11 @@ resource "azurerm_linux_web_app_slot" "staging" {
 
   site_config {
     always_on = true
+
+    # Azure takes an unhealthy instance out of rotation only when it has a path
+    # to probe. Without this a full apply strips the probe from the slot that
+    # pre-swap validation runs against.
+    health_check_path = "/api/health"
 
     # Same as production: keep the WebSocket upgrade enabled so a post-swap
     # staging slot serves the interactive gateway identically (and a full apply
