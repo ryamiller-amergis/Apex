@@ -4042,7 +4042,14 @@ router.post('/ai-capability-baseline/auto-capture', async (req: Request, res: Re
 
 import { attachPermissions } from '../middleware/rbac';
 import { getUserPermissions, getUserRoleNames, getChangelogPrefs, updateChangelogPrefs } from '../services/rbacService';
-import { getUserGroupNames } from '../services/groupService';
+import { getUserGroupNames, getUserGroupIds } from '../services/groupService';
+import { resolveHomePillAccess } from '../services/homePillAccessResolver';
+import type {
+  QuickMcpPill,
+  QuickMcpPillHttp,
+  QuickMcpPillStdio,
+  QuickSkillPill,
+} from '../../shared/types/projectSettings';
 import { getMenuConfig } from '../services/menuSettingsService';
 import { DEFAULT_ENABLED_MENU_VIEWS } from '../../shared/types/menuSettings';
 import {
@@ -4279,6 +4286,60 @@ router.get('/skill-settings/:id/repository-readiness', async (req: Request, res:
   }
 });
 
+// ── Public Home pill shaping (FEAT-002 TBI-004) ──────────────────────────────
+//
+// The public skill-config response must never carry pill allow-lists, so each
+// pill is rebuilt field by field instead of spread. A field added to the stored
+// pill type stays out of the public payload until it is listed here.
+
+type PublicQuickSkillPill = Omit<QuickSkillPill, 'allowedUserIds' | 'allowedGroupIds'>;
+type PublicQuickMcpPill =
+  | Omit<QuickMcpPillHttp, 'allowedUserIds' | 'allowedGroupIds'>
+  | Omit<QuickMcpPillStdio, 'allowedUserIds' | 'allowedGroupIds'>;
+
+/** Drop keys the stored pill never set, so absent stays absent rather than becoming null. */
+function omitUndefined<T extends object>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, v]) => v !== undefined),
+  ) as T;
+}
+
+function toPublicSkillPill(pill: QuickSkillPill): PublicQuickSkillPill {
+  return omitUndefined({
+    label: pill.label,
+    skillPath: pill.skillPath,
+    model: pill.model,
+    effort: pill.effort,
+    description: pill.description,
+    bypassScopePolicy: pill.bypassScopePolicy,
+  });
+}
+
+function toPublicMcpPill(pill: QuickMcpPill): PublicQuickMcpPill {
+  const shared = {
+    label: pill.label,
+    description: pill.description,
+    mcpServerName: pill.mcpServerName,
+    model: pill.model,
+    effort: pill.effort,
+    systemPromptHint: pill.systemPromptHint,
+  };
+  return pill.transport === 'stdio'
+    ? omitUndefined({
+        ...shared,
+        transport: 'stdio' as const,
+        command: pill.command,
+        args: pill.args,
+        env: pill.env,
+      })
+    : omitUndefined({
+        ...shared,
+        transport: 'http' as const,
+        url: pill.url,
+        headers: pill.headers,
+      });
+}
+
 // GET /api/skill-config?project=<name>&settingsId=<uuid> — resolve project skill settings
 router.get('/skill-config', async (req: Request, res: Response) => {
   try {
@@ -4295,6 +4356,28 @@ router.get('/skill-config', async (req: Request, res: Response) => {
       res.status(404).json({ error: 'No skill config found' });
       return;
     }
+
+    // Home pills are filtered to what this caller may see. The caller's live
+    // group IDs only change the outcome when some pill names a group, and a
+    // verified Platform Admin sees everything, so both cases skip the lookup.
+    const callerId = getUserId(req);
+    const isSuperAdmin = isSuperAdminRequest(req);
+    const anyPillNamesGroup = [
+      ...(config.quickSkillPills ?? []),
+      ...(config.quickMcpPills ?? []),
+    ].some((pill) => (pill.allowedGroupIds?.length ?? 0) > 0);
+    const callerGroupIds =
+      !isSuperAdmin && anyPillNamesGroup ? await getUserGroupIds(callerId) : [];
+    const { allowedSkillPills, allowedMcpPills } = resolveHomePillAccess({
+      skillPills: config.quickSkillPills,
+      mcpPills: config.quickMcpPills,
+      callerId,
+      callerGroupIds,
+      isSuperAdmin,
+    });
+    const configuredPillCount =
+      (config.quickSkillPills?.length ?? 0) + (config.quickMcpPills?.length ?? 0);
+
     res.json({
       id: config.id,
       project: config.project,
@@ -4329,8 +4412,9 @@ router.get('/skill-config', async (req: Request, res: Response) => {
       prototypeDesignSystemPath: config.prototypeDesignSystemPath ?? null,
       screenInventoryPath: config.screenInventoryPath ?? null,
       prototypeWebReferencesEnabled: config.prototypeWebReferencesEnabled ?? false,
-      quickSkillPills: config.quickSkillPills ?? null,
-      quickMcpPills: config.quickMcpPills ?? null,
+      quickSkillPills: allowedSkillPills.map(toPublicSkillPill),
+      quickMcpPills: allowedMcpPills.map(toPublicMcpPill),
+      homePillsConfigured: configuredPillCount > 0,
       interviewEffort: config.interviewEffort ?? null,
       prdEffort: config.prdEffort ?? null,
       adrEffort: config.adrEffort ?? null,

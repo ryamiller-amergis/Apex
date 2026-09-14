@@ -126,6 +126,20 @@ export async function getUserGroupNames(userId: string): Promise<string[]> {
   return [...new Set(rows.map(r => r.name))];
 }
 
+/**
+ * The caller's current group ID memberships. Joins `appGroups` so a membership row
+ * pointing at a deleted group is never returned — a pill allow-list referencing that
+ * group therefore grants no access.
+ */
+export async function getUserGroupIds(userId: string): Promise<string[]> {
+  const rows = await db
+    .select({ groupId: appGroupMembers.groupId })
+    .from(appGroupMembers)
+    .innerJoin(appGroups, eq(appGroupMembers.groupId, appGroups.id))
+    .where(eq(appGroupMembers.userId, userId));
+  return [...new Set(rows.map(r => r.groupId))];
+}
+
 export async function setGroupMembers(groupId: string, userIds: string[], addedBy?: string): Promise<GroupMember[]> {
   await db.transaction(async (tx) => {
     await tx.delete(appGroupMembers).where(eq(appGroupMembers.groupId, groupId));

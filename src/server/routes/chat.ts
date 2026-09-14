@@ -28,6 +28,7 @@ import type {
   ChatAttachment,
   ChatTurnSkill,
   ChatThread,
+  ChatThreadKickoff,
   ChatThreadStatus,
   SseEvent,
   SseStatusEvent,
@@ -35,6 +36,7 @@ import type {
   SendMessageRequest,
 } from '../../shared/types/chat';
 import type { ThreadAccess } from '../services/threadAccessService';
+import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import { requirePermission } from '../middleware/rbac';
 import { writeSseEvent, startSseHeartbeat } from '../utils/sseResponse';
 import {
@@ -56,6 +58,11 @@ import { resolveSkillConfig } from '../services/projectSettingsService';
 import { getAdoTokenForUser } from '../services/adoUserToken';
 import { registerChatAdoWriteTurn } from '../services/chatAdoWriteAuth';
 import { isSuperAdminRequest } from '../utils/superAdmin';
+import { getUserGroupIds } from '../services/groupService';
+import {
+  resolveThreadCreationAdmission,
+  type ThreadCreationDenialReason,
+} from '../services/homePillAccessResolver';
 
 const router = Router();
 
@@ -64,6 +71,35 @@ const MAX_CHAT_ATTACHMENTS = 5;
 const MAX_CHAT_ATTACHMENT_BYTES = 1024 * 1024;
 const MAX_CHAT_ATTACHMENT_TOTAL_BYTES = 4 * 1024 * 1024;
 const MAX_STREAM_EVENT_IDS = 2_000;
+
+/** Stable, user-readable text for each Home pill admission denial (FEAT-002 / TBI-005). */
+const THREAD_CREATION_DENIAL_MESSAGES: Record<ThreadCreationDenialReason, string> = {
+  skill_pill_not_allowed:
+    'You are not allowed to start a chat with this Home skill. Ask a project admin for access.',
+  mcp_pill_not_allowed:
+    'You are not allowed to start a chat with this Home MCP server. Ask a project admin for access.',
+  pilless_chat_not_allowed:
+    'You have no available Home skills for this project, so you cannot start a chat here. Ask a project admin for access to a Home skill or MCP server.',
+};
+
+/**
+ * True when the kickoff exactly names one of the project's configured Home quick
+ * pills. Such a kickoff is a Home start and stays subject to pill admission even
+ * when its skill path also maps to a non-Home agent module.
+ */
+function namesHomePill(
+  kickoff: Partial<ChatThreadKickoff>,
+  skillConfig: ProjectSkillConfig | null,
+): boolean {
+  const { skillPath } = kickoff;
+  const mcpServerName = kickoff.mcpPill?.mcpServerName;
+  return Boolean(
+    (skillPath
+      && skillConfig?.quickSkillPills?.some((pill) => pill.skillPath === skillPath))
+    || (mcpServerName
+      && skillConfig?.quickMcpPills?.some((pill) => pill.mcpServerName === mcpServerName)),
+  );
+}
 
 export function eventForRunEnvelope(envelope: AgentRunEventEnvelope): SseEvent {
   const event: SseEvent = envelope.event.type === 'cancel'
@@ -343,6 +379,30 @@ router.post('/threads', async (req: Request, res: Response) => {
       settingsId: clientKickoff.skillSettingsId ?? undefined,
     });
     const agentModule = deriveAgentModule(clientKickoff, skillConfig);
+
+    // Home pill admission (TBI-005) covers Home starts only: a kickoff that names
+    // a configured quick pill, or one the server cannot map to any module (Home
+    // free chat, or an unrecognized direct call). Configured Interview/ADR/PRD/
+    // assistant/development/standup workflows keep their own gates (BR-008).
+    // Runs before any persistence, so a denied kickoff leaves no thread row.
+    if (namesHomePill(clientKickoff, skillConfig) || agentModule === undefined) {
+      const isSuperAdmin = isSuperAdminRequest(req);
+      const admission = resolveThreadCreationAdmission({
+        skillPills: skillConfig?.quickSkillPills,
+        mcpPills: skillConfig?.quickMcpPills,
+        callerId: userId,
+        callerGroupIds: isSuperAdmin ? [] : await getUserGroupIds(userId),
+        isSuperAdmin,
+        skillPath: clientKickoff.skillPath,
+        mcpServerName: clientKickoff.mcpPill?.mcpServerName,
+      });
+      if (!admission.admitted) {
+        return res
+          .status(403)
+          .json({ error: THREAD_CREATION_DENIAL_MESSAGES[admission.reason] });
+      }
+    }
+
     const kickoff = {
       ...clientKickoff,
       ...(agentModule ? { agentModule } : {}),

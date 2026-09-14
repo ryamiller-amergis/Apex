@@ -29,6 +29,9 @@ const HOME_MAX_WIDTH_RATIO = 1;
 const DEFAULT_WIDTH = 580;
 const LS_WIDTH_KEY = 'chatPanelWidth';
 const HOME_LS_WIDTH_KEY = 'homeChatPanelWidth';
+const HOME_NO_ALLOWED_PILLS_MESSAGE =
+  "You don't have access to any Home skills on this project."
+  + " Ask a Project Admin to add you to a pill's allow-list.";
 
 function testIdSegment(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -406,11 +409,18 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
 
   const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
   const { data: globalDefaultModel } = useGlobalDefaultModel();
-  const { data: skillConfig } = useProjectSkillConfig(
-    launchedFromHome ? selectedProject ?? null : null,
+  const {
+    data: skillConfig,
+    isLoading: isSkillConfigLoading,
+    isError: isSkillConfigError,
+  } = useProjectSkillConfig(
+    launchedFromHome || (isOpen && !inConversation)
+      ? selectedProject ?? null
+      : null,
     selectedSkillSettingsId,
   );
   const isHomeCompose = launchedFromHome && !inConversation;
+  const isEmptyCompose = !inConversation;
 
   // Skills for Home pill descriptions and the / picker on active threads
   const { data: homeSkills = [] } = useSkillList(
@@ -667,6 +677,20 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   const hasHomePills = quickSkillPills.length > 0 || quickMcpPills.length > 0;
   const needsSkillSelection = isHomeCompose && hasHomePills && !selectedQuickSkill && !selectedMcpPill;
 
+  // The project configures Home pills, but none of them survived allow-list
+  // filtering for this caller, so there is nothing they may start a chat with.
+  // Empty compose (Home or the shared non-Home composer) POSTs a pill-less
+  // kickoff; the server admits that only when the caller may start pill-less
+  // chat, so both surfaces withhold send the same way.
+  const blockedNoAllowedPills =
+    isEmptyCompose && Boolean(skillConfig?.homePillsConfigured) && !hasHomePills;
+  // A null config is a successful "no config for this project" answer and still
+  // allows free chat. Loading and error states withhold the composer even if
+  // React Query retains stale data from an earlier successful response.
+  const skillConfigUnavailable =
+    isEmptyCompose && (isSkillConfigLoading || isSkillConfigError);
+  const homeComposeBlocked = blockedNoAllowedPills || skillConfigUnavailable;
+
   const resolvedQuickSkill = useMemo((): QuickSkillPill | null => {
     if (selectedQuickSkill) return selectedQuickSkill;
     const skillPath = thread?.kickoff.skillPath;
@@ -726,7 +750,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   const startFromEmptyComposer = async () => {
     const message = input.trim();
     if (!message && attachments.length === 0) return;
-    if (needsSkillSelection) return;
+    if (needsSkillSelection || homeComposeBlocked) return;
     const quickSkill = selectedQuickSkill;
     const mcpPill = selectedMcpPill;
     const outgoingAttachments = [...attachments];
@@ -880,17 +904,30 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
           <div className={styles.emptyPane}>
           <span className={styles.emptyIcon}>AI</span>
           <h3 className={styles.emptyTitle}>No conversation yet</h3>
-          <p className={styles.emptyHint}>
-            {needsSkillSelection
-              ? 'Select a skill above to get started.'
-              : resolvedQuickSkill
-                ? `${resolvedQuickSkill.label} is ready — type your question below.`
-                : resolvedMcpPill
-                  ? `${resolvedMcpPill.label} is ready — type your question below.`
-                  : hasHomePills
-                    ? 'Select a skill above, then tell Apex what you need.'
-                    : 'Type your first message to start a new thread with Apex.'}
-          </p>
+          {blockedNoAllowedPills ? (
+            <p
+              className={styles.emptyHint}
+              role="status"
+              aria-live="polite"
+              {...{ 'data-testid': 'chat-agent-home-blocked-notice' }}
+            >
+              {HOME_NO_ALLOWED_PILLS_MESSAGE}
+            </p>
+          ) : (
+            <p className={styles.emptyHint}>
+              {needsSkillSelection
+                ? 'Select a skill above to get started.'
+                : resolvedQuickSkill
+                  ? `${resolvedQuickSkill.label} is ready — type your question below.`
+                  : resolvedMcpPill
+                    ? `${resolvedMcpPill.label} is ready — type your question below.`
+                    : isHomeCompose && hasHomePills
+                      ? 'Select a skill above, then tell Apex what you need.'
+                      : skillConfigUnavailable
+                        ? 'Checking which Home skills you can use…'
+                        : 'Type your first message to start a new thread with Apex.'}
+            </p>
+          )}
           {newChatError && <p className={styles.emptyError}>{newChatError}</p>}
           </div>
           <AgentComposer
@@ -898,12 +935,13 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             value={input}
             onChange={setInput}
             onSend={() => { void startFromEmptyComposer(); }}
-            disabled={needsSkillSelection || !canStartNewChat || isStartingNewChat}
+            disabled={needsSkillSelection || homeComposeBlocked || !canStartNewChat || isStartingNewChat}
             isSending={isStartingNewChat}
-            isBusy={needsSkillSelection || isStartingNewChat}
-            shellDisabled={needsSkillSelection || !canStartNewChat}
+            isBusy={needsSkillSelection || skillConfigUnavailable || isStartingNewChat}
+            shellDisabled={needsSkillSelection || homeComposeBlocked || !canStartNewChat}
             canSend={
               !needsSkillSelection
+              && !homeComposeBlocked
               && canStartNewChat
               && !isStartingNewChat
               && (Boolean(input.trim()) || attachments.length > 0)
@@ -926,19 +964,23 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                 multiple
                 className={styles.fileInput}
                 onChange={handleAttachmentChange}
-                disabled={isStartingNewChat || !canStartNewChat}
+                disabled={isStartingNewChat || homeComposeBlocked || !canStartNewChat}
               />
             )}
             placeholder={
-              needsSkillSelection
-                ? 'Select an option above to get started'
-                : resolvedQuickSkill
-                  ? `Ask using ${resolvedQuickSkill.label}…`
-                  : resolvedMcpPill
-                    ? `Ask using ${resolvedMcpPill.label}…`
-                    : 'Let Apex know what you need…'
+              blockedNoAllowedPills
+                ? 'Sending is unavailable until you have access to a Home skill'
+                : skillConfigUnavailable
+                  ? 'Checking which Home skills you can use…'
+                  : needsSkillSelection
+                    ? 'Select an option above to get started'
+                    : resolvedQuickSkill
+                      ? `Ask using ${resolvedQuickSkill.label}…`
+                      : resolvedMcpPill
+                        ? `Ask using ${resolvedMcpPill.label}…`
+                        : 'Let Apex know what you need…'
             }
-            autoFocus={!needsSkillSelection}
+            autoFocus={!needsSkillSelection && !homeComposeBlocked}
             textareaRef={textareaRef}
             after={
               !needsSkillSelection && (resolvedQuickSkill || resolvedMcpPill) ? (
