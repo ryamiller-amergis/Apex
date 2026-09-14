@@ -651,8 +651,44 @@ const activeValidationWatchers = new Map<string, ReturnType<typeof setInterval>>
  */
 const docWatcherDeadlines = new Map<string, number>();
 
-function docWatcherDeadlineKey(designDocId: string, chatThreadId: string): string {
+function docThreadKey(designDocId: string, chatThreadId: string): string {
   return `${designDocId}:${chatThreadId}`;
+}
+
+function docWatcherDeadlineKey(designDocId: string, chatThreadId: string): string {
+  return docThreadKey(designDocId, chatThreadId);
+}
+
+/**
+ * Output held from the first tick on which all three files were present.
+ *
+ * The watcher declines to persist complete output while the run still looks
+ * alive, and finalizeSingleFeatureDoc re-reads the workspace when it is finally
+ * allowed to write. The recovery sweep can clear the workspace inside that gap:
+ * in production a document had all three files at 18:43:55, none at 18:44:09,
+ * and was recorded as generation_failed at 18:44:11 despite the agent having
+ * succeeded. Keeping the content means the eventual write still has something
+ * to save.
+ *
+ * In memory, so it rescues the instance that observed the files rather than a
+ * recovery watcher elsewhere that never saw them.
+ */
+const docOutputSnapshots = new Map<string, {
+  design: string;
+  techSpec: string;
+  assumptions: string;
+}>();
+
+function captureDocOutput(
+  designDocId: string,
+  chatThreadId: string,
+  output: { design: string; techSpec: string; assumptions: string },
+): void {
+  docOutputSnapshots.set(docThreadKey(designDocId, chatThreadId), output);
+}
+
+function releaseDocOutput(designDocId: string, chatThreadId: string): void {
+  docOutputSnapshots.delete(docThreadKey(designDocId, chatThreadId));
 }
 
 function releaseDocWatcherDeadline(designDocId: string, chatThreadId: string): void {
@@ -1025,9 +1061,19 @@ export async function finalizeSingleFeatureDoc(
     return false;
   }
 
-  const design = readOutputDesignDoc(chatThreadId);
-  const techSpec = readOutputTechSpec(chatThreadId);
-  const assumptions = readOutputAssumptions(chatThreadId);
+  const snapshot = docOutputSnapshots.get(docThreadKey(designDocId, chatThreadId));
+  const designOnDisk = readOutputDesignDoc(chatThreadId);
+  const techSpecOnDisk = readOutputTechSpec(chatThreadId);
+  const assumptionsOnDisk = readOutputAssumptions(chatThreadId);
+  const design = designOnDisk || snapshot?.design;
+  const techSpec = techSpecOnDisk || snapshot?.techSpec;
+  const assumptions = assumptionsOnDisk || snapshot?.assumptions;
+
+  if (snapshot && (!designOnDisk || !techSpecOnDisk || !assumptionsOnDisk)) {
+    console.warn(
+      `[finalizeSingleFeatureDoc] Workspace cleared before the write — using the captured output (designDocId=${designDocId})`,
+    );
+  }
 
   if (!design || !techSpec || !assumptions) {
     const missing = [!design && 'design', !techSpec && 'tech-spec', !assumptions && 'assumptions'].filter(Boolean).join(', ');
@@ -1044,6 +1090,7 @@ export async function finalizeSingleFeatureDoc(
               eq(designDocs.status, 'generating'),
             )),
       );
+    releaseDocOutput(designDocId, chatThreadId);
     await cleanupWorkspace(chatThreadId);
     return false;
   }
@@ -1082,6 +1129,7 @@ export async function finalizeSingleFeatureDoc(
       console.error(`[finalizeSingleFeatureDoc] autoStartValidation failed (designDocId=${designDocId})`, err);
     });
   }
+  releaseDocOutput(designDocId, chatThreadId);
   return true;
 }
 
@@ -1120,6 +1168,7 @@ export function startSingleFeatureDocWatcher(
       clearInterval(interval);
       activeDocWatchers.delete(designDocId);
       releaseDocWatcherDeadline(designDocId, chatThreadId);
+      releaseDocOutput(designDocId, chatThreadId);
       console.warn(`[singleFeatureDocWatcher] Timed out — marking generation_failed (designDocId=${designDocId}, threadId=${chatThreadId})`);
       await runGroundingService.persistThenMarkTerminalInactive(
         { runType: 'chat', runId: chatThreadId, project },
@@ -1135,6 +1184,11 @@ export function startSingleFeatureDocWatcher(
     const techSpec = readOutputTechSpec(chatThreadId);
     const assumptions = readOutputAssumptions(chatThreadId);
     const filesReady = Boolean(design && techSpec && assumptions);
+    // Capture before deciding anything. The write may not be permitted for
+    // several more ticks, and the workspace does not always survive that long.
+    if (design && techSpec && assumptions) {
+      captureDocOutput(designDocId, chatThreadId, { design, techSpec, assumptions });
+    }
     const agentFinished = isThreadIdle(chatThreadId) && !(await isThreadRunAlive(chatThreadId));
 
     // A doc generates for up to 30 minutes, so an unconditional 5s tick log is

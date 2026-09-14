@@ -1493,6 +1493,51 @@ describe('startSingleFeatureDocWatcher', () => {
     );
   });
 
+  it('saves output the recovery sweep cleared while the watcher was waiting to write', async () => {
+    // Production sequence: all three files present at 18:43:55, gone at
+    // 18:44:09, generation_failed at 18:44:11 despite the agent succeeding.
+    mockDesign.mockReturnValue('# design');
+    mockTech.mockReturnValue('# tech spec');
+    mockAssumptions.mockReturnValue('# assumptions');
+    mockIsThreadRunAlive.mockResolvedValue(true);
+    mockCanFail.mockResolvedValue(true);
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'doc-1', skillSettingsId: null });
+    mockDb.query.chatThreads = { findFirst: jest.fn().mockResolvedValue(null) };
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    startSingleFeatureDocWatcher('doc-1', 'thread-1', 'prd-1', 'proj-alpha');
+
+    // Tick one: complete output, but the run still looks alive so the watcher
+    // declines to write. This is where the content has to be captured.
+    jest.advanceTimersByTime(5_000);
+    await flushPendingWork();
+    expect(setMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'generation_failed' }),
+    );
+
+    // The sweep clears the workspace, then the run goes terminal.
+    mockDesign.mockReturnValue(null);
+    mockTech.mockReturnValue(null);
+    mockAssumptions.mockReturnValue(null);
+    mockIsThreadRunAlive.mockResolvedValue(false);
+
+    jest.advanceTimersByTime(5_000);
+    await flushPendingWork();
+
+    const written = setMock.mock.calls
+      .map(([values]) => values as Record<string, unknown>)
+      .find((values) => values.designContent !== undefined);
+    expect(written).toBeDefined();
+    expect(written?.designContent).toBe('# design');
+    expect(written?.techSpecContent).toBe('# tech spec');
+    expect(written?.assumptionsContent).toBe('# assumptions');
+    expect(setMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'generation_failed' }),
+    );
+  });
+
   it('blames the dispatch, not the agent, when the run never reached a worker', async () => {
     mockIsThreadRunAlive.mockResolvedValue(false);
     mockCanFail.mockResolvedValue(true);
