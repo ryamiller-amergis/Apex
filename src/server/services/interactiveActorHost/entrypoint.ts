@@ -24,6 +24,7 @@ import {
 } from '@dapr/dapr';
 // Side-effect: initialize Application Insights when the connection string is set.
 import '../telemetry';
+import { exitAfterFlush } from '../../utils/processExit';
 import { getAiRunnerCallbackToken } from '../aiRunsCallbackToken';
 import { createAiRunsCallbackClient } from '../aiRunsWorker/callbackClient';
 import { openGroundedReader } from '../aiRunsWorker/workspace';
@@ -312,6 +313,8 @@ export async function main(): Promise<void> {
 }
 
 if (require.main === module) {
+  // Resident service, so only the failure path exits: hanging here would leave
+  // a replica the platform still considers up but that serves nothing.
   main().catch((error) => {
     console.error(
       JSON.stringify({
@@ -319,6 +322,6 @@ if (require.main === module) {
         ...describeError(error),
       })
     );
-    process.exitCode = 1;
+    return exitAfterFlush(1);
   });
 }
