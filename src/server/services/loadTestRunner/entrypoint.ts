@@ -9,6 +9,7 @@
  */
 import { DefaultAzureCredential } from '@azure/identity';
 import type { LoadTestDispatchMessage } from '../../../shared/types/loadTest';
+import { exitAfterFlush } from '../../utils/processExit';
 import {
   createBlobArtifactUploader,
   createContainerAppsJobRunner,
@@ -149,13 +150,17 @@ export async function main(): Promise<void> {
 }
 
 if (require.main === module) {
-  main().catch((err) => {
-    console.error(
-      JSON.stringify({
-        event: 'LoadTestRunnerFatal',
-        error: err instanceof Error ? err.message : String(err),
-      }),
-    );
-    process.exitCode = 1;
-  });
+  // One-shot job: release the replica instead of waiting on a loop that the
+  // credential refresh timer keeps alive.
+  main()
+    .then(() => exitAfterFlush(0))
+    .catch((err) => {
+      console.error(
+        JSON.stringify({
+          event: 'LoadTestRunnerFatal',
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
+      return exitAfterFlush(1);
+    });
 }
