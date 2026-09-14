@@ -36,6 +36,7 @@ jest.mock('../db/drizzle', () => {
         interviews: { findFirst: jest.fn() },
         designPlans: { findFirst: jest.fn() },
         designPrototypes: { findFirst: jest.fn() },
+        agentRuns: { findFirst: jest.fn() },
       },
       insert: jest.fn().mockImplementation(makeInsertChain),
       update: jest.fn().mockImplementation(makeUpdateChain),
@@ -1445,6 +1446,15 @@ describe('startSingleFeatureDocWatcher', () => {
     jest.useRealTimers();
   });
 
+  // The fail path awaits the doc guard, the run's terminal reason, and the
+  // grounding write before the status update lands, so counting hops by hand
+  // breaks whenever one more await joins the chain.
+  async function flushPendingWork(): Promise<void> {
+    for (let hop = 0; hop < 10; hop += 1) {
+      await Promise.resolve();
+    }
+  }
+
   it('does not fail generation while agent_runs says the run is still alive', async () => {
     mockIsThreadRunAlive.mockResolvedValue(true);
     const whereMock = jest.fn().mockResolvedValue(undefined);
@@ -1476,13 +1486,34 @@ describe('startSingleFeatureDocWatcher', () => {
     startSingleFeatureDocWatcher('doc-1', 'thread-1', 'prd-1', 'proj-alpha');
 
     jest.advanceTimersByTime(5_000);
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushPendingWork();
 
     expect(setMock).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'generation_failed' }),
     );
+  });
+
+  it('blames the dispatch, not the agent, when the run never reached a worker', async () => {
+    mockIsThreadRunAlive.mockResolvedValue(false);
+    mockCanFail.mockResolvedValue(true);
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'doc-1', skillSettingsId: null });
+    mockDb.query.agentRuns.findFirst.mockResolvedValue({ terminalReason: 'dispatch_ttl' });
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+    mockDb.query.chatThreads = { findFirst: jest.fn().mockResolvedValue(null) };
+
+    startSingleFeatureDocWatcher('doc-1', 'thread-1', 'prd-1', 'proj-alpha');
+
+    jest.advanceTimersByTime(5_000);
+    await flushPendingWork();
+
+    const recorded = setMock.mock.calls
+      .map(([values]) => values as { status?: string; generationError?: string })
+      .find((values) => values.status === 'generation_failed');
+    expect(recorded?.generationError).toContain('Dispatch never reached a worker');
+    expect(recorded?.generationError).toContain('dispatch_ttl');
+    expect(recorded?.generationError).not.toContain('Missing output files');
   });
 
   it('keeps polling when canFail is false (does not abandon the watcher)', async () => {
@@ -1496,9 +1527,7 @@ describe('startSingleFeatureDocWatcher', () => {
 
     // First tick: not allowed to fail yet — must not mark failed and must keep watching
     jest.advanceTimersByTime(5_000);
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushPendingWork();
 
     expect(setMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ status: 'generation_failed' }),
@@ -1510,9 +1539,7 @@ describe('startSingleFeatureDocWatcher', () => {
     mockDb.query.chatThreads = { findFirst: jest.fn().mockResolvedValue(null) };
 
     jest.advanceTimersByTime(5_000);
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushPendingWork();
 
     expect(setMock).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'generation_failed' }),

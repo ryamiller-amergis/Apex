@@ -767,6 +767,70 @@ describe('stale dispatch republish recovery (TBI-002 DoD-4/VT-07)', () => {
     expect(logged).not.toContain('CURSOR_API_KEY');
   });
 
+  test('Given a dispatch failing every sweep, when the streak crosses the threshold, then it is reported as unrecoverable once', async () => {
+    const findStaleDispatches = jest.fn().mockResolvedValue([
+      { runId: 'run-1', dispatchMessageId: 'persisted-fence-1' },
+    ]);
+    const logError = jest.fn();
+    const recovery = createStaleDispatchRecoveryService({
+      store: { findStaleDispatches },
+      publisher: {
+        publish: jest.fn().mockRejectedValue(
+          new Error('Service Bus publish failed (401)'),
+        ),
+      },
+      now: () => new Date('2026-08-05T12:00:00.000Z'),
+      resolveGraceMs: () => 60_000,
+      resolveTtlMs: () => 30 * 60_000,
+      logError,
+    });
+
+    for (let sweep = 0; sweep < 8; sweep += 1) {
+      await recovery.recoverStaleDispatchedRuns();
+    }
+
+    const escalations = logError.mock.calls.filter(
+      ([, fields]) => (fields as Record<string, string>).status === 'republish_unrecoverable',
+    );
+    expect(escalations).toHaveLength(1);
+    expect(escalations[0][1]).toEqual(
+      expect.objectContaining({
+        runId: 'run-1',
+        publishStatus: '401',
+        consecutiveFailures: '5',
+      }),
+    );
+  });
+
+  test('Given a dispatch that recovers before the threshold, when sweeps run, then nothing is escalated', async () => {
+    const findStaleDispatches = jest.fn().mockResolvedValue([
+      { runId: 'run-1', dispatchMessageId: 'persisted-fence-1' },
+    ]);
+    const logError = jest.fn();
+    const publish = jest.fn()
+      .mockRejectedValueOnce(new Error('Service Bus publish failed (503)'))
+      .mockRejectedValueOnce(new Error('Service Bus publish failed (503)'))
+      .mockResolvedValue(undefined);
+    const recovery = createStaleDispatchRecoveryService({
+      store: { findStaleDispatches },
+      publisher: { publish },
+      now: () => new Date('2026-08-05T12:00:00.000Z'),
+      resolveGraceMs: () => 60_000,
+      resolveTtlMs: () => 30 * 60_000,
+      logError,
+    });
+
+    for (let sweep = 0; sweep < 6; sweep += 1) {
+      await recovery.recoverStaleDispatchedRuns();
+    }
+
+    expect(
+      logError.mock.calls.some(
+        ([, fields]) => (fields as Record<string, string>).status === 'republish_unrecoverable',
+      ),
+    ).toBe(false);
+  });
+
   test('Given invalid dispatch TTL configuration, when resolved, then it safely defaults to 30 minutes', () => {
     expect(resolveBackgroundDispatchTtlMs(undefined)).toBe(30 * 60_000);
     expect(resolveBackgroundDispatchTtlMs('')).toBe(30 * 60_000);

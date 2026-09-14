@@ -3,7 +3,7 @@ import path from 'path';
 import { and, desc, eq } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { db } from '../db/drizzle';
-import { designDocs, appUsers, chatThreads, prds, interviews, designPrototypes, designPlans } from '../db/schema';
+import { designDocs, appUsers, chatThreads, prds, interviews, designPrototypes, designPlans, agentRuns } from '../db/schema';
 
 const authorUser = alias(appUsers, 'author_user');
 const designDocOwnerUser = alias(appUsers, 'design_doc_owner_user');
@@ -972,6 +972,40 @@ export function isSingleFeatureDesignDocRow(row: {
   return row.designPrototypeId != null || row.featureIndex != null;
 }
 
+/**
+ * Terminal reasons recorded when a dispatch ages out before any worker claims
+ * it. No agent ever opened the workspace, so absent output files say nothing
+ * about the agent and the doc must not be reported as if one had run.
+ */
+const UNDISPATCHED_TERMINAL_REASONS: readonly string[] = ['dispatch_ttl', 'queue_ttl'];
+
+/**
+ * Explain absent output files, separating a dispatch that never ran from an
+ * agent that ran and produced nothing. Reading the same absence as an agent
+ * failure sent a production investigation after the wrong subsystem.
+ */
+async function explainMissingOutput(
+  chatThreadId: string,
+  missing: string,
+): Promise<string> {
+  try {
+    const run = await db.query.agentRuns.findFirst({
+      where: eq(agentRuns.threadId, chatThreadId),
+      orderBy: [desc(agentRuns.createdAt)],
+      columns: { terminalReason: true },
+    });
+    if (run?.terminalReason && UNDISPATCHED_TERMINAL_REASONS.includes(run.terminalReason)) {
+      return `Dispatch never reached a worker (${run.terminalReason}) — the agent did not run`;
+    }
+  } catch (err) {
+    console.warn(
+      `[finalizeSingleFeatureDoc] terminal reason lookup failed (threadId=${chatThreadId}):`,
+      (err as Error).message,
+    );
+  }
+  return `Missing output files: ${missing}`;
+}
+
 export async function finalizeSingleFeatureDoc(
   designDocId: string,
   chatThreadId: string,
@@ -997,12 +1031,13 @@ export async function finalizeSingleFeatureDoc(
 
   if (!design || !techSpec || !assumptions) {
     const missing = [!design && 'design', !techSpec && 'tech-spec', !assumptions && 'assumptions'].filter(Boolean).join(', ');
-    console.warn(`[finalizeSingleFeatureDoc] Missing output files [${missing}] — marking generation_failed (designDocId=${designDocId})`);
+    const generationError = await explainMissingOutput(chatThreadId, missing);
+    console.warn(`[finalizeSingleFeatureDoc] ${generationError} — marking generation_failed (designDocId=${designDocId})`);
     await runGroundingService.persistThenMarkTerminalInactive(
         { runType: 'chat', runId: chatThreadId, project },
         () =>
           db.update(designDocs)
-            .set({ status: 'generation_failed', generationError: `Missing output files: ${missing}`, updatedAt: new Date().toISOString() })
+            .set({ status: 'generation_failed', generationError, updatedAt: new Date().toISOString() })
             .where(and(
               eq(designDocs.id, designDocId),
               eq(designDocs.chatThreadId, chatThreadId),
@@ -1145,7 +1180,10 @@ export function startSingleFeatureDocWatcher(
       clearInterval(interval);
       activeDocWatchers.delete(designDocId);
       releaseDocWatcherDeadline(designDocId, chatThreadId);
-      console.warn(`[singleFeatureDocWatcher] Agent finished without complete output — marking generation_failed (designDocId=${designDocId})`);
+      // Says only what this tick observed: the run is terminal and the files are
+      // incomplete. finalizeSingleFeatureDoc names the cause, which may be a
+      // dispatch that never reached a worker rather than anything the agent did.
+      console.warn(`[singleFeatureDocWatcher] Run terminal without complete output — marking generation_failed (designDocId=${designDocId})`);
       await finalizeSingleFeatureDoc(designDocId, chatThreadId, project);
     }
   }, WATCHER_INTERVAL_MS);

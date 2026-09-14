@@ -36,6 +36,18 @@ const MAX_BACKGROUND_PUBLISH_GRACE_MS = 10 * 60_000;
 const DEFAULT_BACKGROUND_DISPATCH_TTL_MS = 30 * 60_000;
 const MIN_BACKGROUND_DISPATCH_TTL_MS = 60_000;
 const MAX_BACKGROUND_DISPATCH_TTL_MS = 24 * 60 * 60_000;
+
+/**
+ * Consecutive republish failures for one run before the sweep says so plainly.
+ *
+ * A single failure is routine and the next sweep usually clears it. A run that
+ * fails this many times running has a dispatch no retry is going to place, and
+ * it will keep failing until the TTL expires — roughly 180 attempts at the
+ * default grace. Those attempts previously logged one indistinguishable line
+ * each, so the only symptom anyone saw was a design doc failing for no stated
+ * reason.
+ */
+const REPUBLISH_ESCALATION_THRESHOLD = 5;
 const DEFAULT_STALE_DISPATCH_BATCH_SIZE = 100;
 const MAX_STALE_DISPATCH_BATCH_SIZE = 100;
 const BACKGROUND_LANE = 'background';
@@ -408,6 +420,12 @@ export function createStaleDispatchRecoveryService(
     ?? ((message: string, fields: Record<string, string>) => {
       console.error(message, JSON.stringify(fields));
     });
+  // Per-run failure streaks, kept across sweeps so a stuck dispatch can be
+  // named once instead of re-reported on every cycle.
+  const failureStreaks = new Map<
+    string,
+    { failures: number; escalated: boolean; lastSeenMs: number }
+  >();
 
   return {
     async recoverStaleDispatchedRuns(): Promise<StaleDispatchRecoveryResult> {
@@ -419,6 +437,15 @@ export function createStaleDispatchRecoveryService(
         floor,
         batchSize,
       );
+
+      // Selection is bounded by the dispatch TTL, so anything not seen within
+      // that span has aged out and will never be selected again.
+      const streakFloorMs = nowMs - resolveTtlMs();
+      for (const [runId, streak] of failureStreaks) {
+        if (streak.lastSeenMs < streakFloorMs) {
+          failureStreaks.delete(runId);
+        }
+      }
       const publisher = dependencies.publisher ?? getServiceBusPublisher();
       let published = 0;
       let failed = 0;
@@ -431,8 +458,22 @@ export function createStaleDispatchRecoveryService(
         try {
           await publisher.publish(message);
           published += 1;
+          failureStreaks.delete(staleDispatch.runId);
         } catch (error) {
           failed += 1;
+          const publishStatus = publishFailureStatus(error);
+          const streak = failureStreaks.get(staleDispatch.runId)
+            ?? { failures: 0, escalated: false, lastSeenMs: nowMs };
+          streak.failures += 1;
+          streak.lastSeenMs = nowMs;
+          const crossedThreshold =
+            !streak.escalated
+            && streak.failures >= REPUBLISH_ESCALATION_THRESHOLD;
+          if (crossedThreshold) {
+            streak.escalated = true;
+          }
+          failureStreaks.set(staleDispatch.runId, streak);
+
           try {
             logError('[agent-run-admission] stale dispatch republish failed', {
               runId: staleDispatch.runId,
@@ -440,8 +481,22 @@ export function createStaleDispatchRecoveryService(
               lane: BACKGROUND_LANE,
               reason: 'sweep',
               status: 'republish_failed',
-              publishStatus: publishFailureStatus(error),
+              publishStatus,
             });
+            if (crossedThreshold) {
+              logError(
+                '[agent-run-admission] stale dispatch unrecoverable',
+                {
+                  runId: staleDispatch.runId,
+                  dispatchMessageId: staleDispatch.dispatchMessageId,
+                  lane: BACKGROUND_LANE,
+                  reason: 'sweep',
+                  status: 'republish_unrecoverable',
+                  publishStatus,
+                  consecutiveFailures: String(streak.failures),
+                },
+              );
+            }
           } catch {
             // Logging must not prevent the remaining bounded batch from retrying.
           }
