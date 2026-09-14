@@ -245,6 +245,68 @@ describe('GET /api/dev-workbench/workitems', () => {
   });
 });
 
+describe('GET /api/dev-workbench/work-items/:workItemId/comment-count', () => {
+  let mockAdo: { getWorkItemCommentCount: jest.Mock };
+
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    mockGroupMembershipGranted = true;
+    jest.clearAllMocks();
+
+    mockAdo = {
+      getWorkItemCommentCount: jest.fn().mockResolvedValue(3),
+    };
+    MockAzureDevOpsService.mockImplementation(() => mockAdo as unknown as AzureDevOpsService);
+  });
+
+  it('returns positive count for authenticated developer (VT-16)', async () => {
+    const res = await request(buildApp()).get(
+      '/api/dev-workbench/work-items/42/comment-count?project=MaxView',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ count: 3 });
+    expect(mockAdo.getWorkItemCommentCount).toHaveBeenCalledWith(42);
+  });
+
+  it('returns null count when ADO reports zero comments', async () => {
+    mockAdo.getWorkItemCommentCount.mockResolvedValue(0);
+
+    const res = await request(buildApp()).get(
+      '/api/dev-workbench/work-items/42/comment-count?project=MaxView',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ count: null });
+  });
+
+  it('returns null count when ADO lookup fails', async () => {
+    mockAdo.getWorkItemCommentCount.mockRejectedValue(new Error('ADO unavailable'));
+
+    const res = await request(buildApp()).get(
+      '/api/dev-workbench/work-items/42/comment-count?project=MaxView',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ count: null });
+  });
+
+  it('returns 400 when project is missing', async () => {
+    const res = await request(buildApp()).get('/api/dev-workbench/work-items/42/comment-count');
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 403 when developer group membership is missing (VT-15)', async () => {
+    mockGroupMembershipGranted = false;
+
+    const res = await request(buildApp()).get(
+      '/api/dev-workbench/work-items/42/comment-count?project=MaxView',
+    );
+
+    expect(res.status).toBe(403);
+  });
+});
+
 describe('POST /api/dev-workbench/start', () => {
   const { bootstrapDevelopmentDependencies } = jest.requireMock('../services/dependencyBootstrapService') as {
     bootstrapDevelopmentDependencies: jest.Mock;
