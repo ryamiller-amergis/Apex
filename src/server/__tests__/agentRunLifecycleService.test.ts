@@ -402,6 +402,48 @@ describe('illegal / fenced transitions (PBI-001 AC-1 / VT-02 / VT-05 / DoD-1)', 
   });
 });
 
+describe('worker start clock', () => {
+  it('stamps started_at when a worker picks the run up, not when it was enqueued', async () => {
+    mockFindFirst.mockResolvedValue(
+      baseRow({ status: 'dispatched', dispatchMessageId: 'D1' }),
+    );
+    mockUpdateReturning.mockResolvedValueOnce([
+      baseRow({ status: 'running', dispatchMessageId: 'D1' }),
+    ]);
+
+    const result = await transition('run-1', 'running', {
+      expectedFrom: 'dispatched',
+      dispatchMessageId: 'D1',
+    });
+
+    expect(result.ok).toBe(true);
+    // The reaper charges the worker progress timeout against started_at until
+    // the worker reports progress. Leaving the enqueue time here means a run
+    // that waited longer than that timeout is reaped on the first sweep after
+    // it starts, no matter how healthy it is.
+    const [setValues] = mockUpdateSet.mock.calls[0] as [Record<string, unknown>];
+    expect(setValues.startedAt).toEqual(expect.any(String));
+    expect(setValues.startedAt).toBe(setValues.updatedAt);
+  });
+
+  it('leaves started_at alone when the run is only dispatched', async () => {
+    mockFindFirst.mockResolvedValue(baseRow({ status: 'queued' }));
+    mockUpdateReturning.mockResolvedValueOnce([
+      baseRow({ status: 'dispatched', dispatchMessageId: 'D1' }),
+    ]);
+
+    await transition('run-1', 'dispatched', {
+      expectedFrom: 'queued',
+      dispatchMessageId: 'D1',
+    });
+
+    // Dispatch hands the message to the queue; no worker has it yet.
+    const [setValues] = mockUpdateSet.mock.calls[0] as [Record<string, unknown>];
+    expect(setValues.startedAt).toBeUndefined();
+    expect(setValues.dispatchedAt).toEqual(expect.any(String));
+  });
+});
+
 describe('terminal idempotency (VT-06 / DoD-4)', () => {
   it.each(['completed', 'failed', 'cancelled'] as const)(
     'BR-008 / DoD-3: %s background terminal deactivates only after terminal finalization',

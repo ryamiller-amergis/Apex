@@ -6561,6 +6561,19 @@ function resolveOutputDir(threadId: string): string | null {
 }
 
 /**
+ * Whether output reads for this thread can tell an absent file from an
+ * unreachable workspace.
+ *
+ * Every readOutput* helper returns null for both, and a thread that has not
+ * hydrated yet has no workspace to resolve. Callers that treat null as "the
+ * agent produced nothing" must check this first or they will report a
+ * hydration gap as an agent failure.
+ */
+export function isOutputWorkspaceReadable(threadId: string): boolean {
+  return resolveOutputDir(threadId) !== null;
+}
+
+/**
  * Read the output PRD from the ephemeral workspace.
  */
 export function readOutputPrd(threadId: string): string | null {

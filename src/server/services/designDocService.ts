@@ -12,9 +12,9 @@ import type { EffortLevel } from '../../shared/types/effort';
 import type { PipelinePinPolicy, RunRef } from '../../shared/types/runGrounding';
 import { stampGroundingProvenance } from '../../shared/utils/groundingProvenance';
 import { buildOverrideHistory } from '../../shared/utils/validationOverride';
-import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, createThread as createChatThread, sendMessage, cancelRun, prepareBackgroundWorkflowTurn, hydrateThread } from './chatAgentService';
+import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, isOutputWorkspaceReadable, createThread as createChatThread, sendMessage, cancelRun, prepareBackgroundWorkflowTurn, hydrateThread } from './chatAgentService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
-import { isThreadRunAlive, canThisInstanceFailGeneration } from './agentRunReaperService';
+import { isThreadRunAlive, canThisInstanceFailGeneration, getLatestThreadRun } from './agentRunReaperService';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete, propagateDesignDocApprovers, notifyApproversDocumentReady } from './documentApprovalService';
 import { getUnresolvedCount } from './reviewCommentService';
@@ -634,22 +634,35 @@ export async function syncDesignDocContent(
 const WATCHER_INTERVAL_MS = 5_000;
 const WATCHER_MAX_ATTEMPTS = 360;
 
+/**
+ * How long the agent itself may take, excluding any wait for a worker.
+ *
+ * Concurrency is capped well below the number of docs a single PRD approval can
+ * submit, so a doc can sit in the queue for longer than it takes to generate.
+ * An absolute deadline started at approval spends that budget while the doc is
+ * still queued and expires on docs the agent never had a chance to write.
+ */
+const WATCHER_WORK_BUDGET_MS = WATCHER_MAX_ATTEMPTS * WATCHER_INTERVAL_MS;
+
+/** Statuses meaning no worker has begun, so a tick must not be charged. */
+const PRE_START_RUN_STATUSES: readonly string[] = ['queued', 'dispatched'];
+
 const activeDocWatchers = new Map<string, ReturnType<typeof setInterval>>();
 const activeValidationWatchers = new Map<string, ReturnType<typeof setInterval>>();
 
 /**
- * Absolute generation deadline per doc + thread.
+ * Working time left per doc + thread.
  *
  * Startup recovery restarts generation watchers on its own timer, which is far
- * more frequent than the timeout itself. A per-watcher tick counter is reset by
+ * more frequent than the budget itself. A per-watcher tick counter is reset by
  * every restart and so never reaches the limit, leaving documents in
- * `generating` indefinitely — the deadline has to outlive the restart.
+ * `generating` indefinitely — the remaining budget has to outlive the restart.
  *
  * Keyed by thread as well as doc so a genuine retry (new thread) gets a fresh
- * deadline while a recovery restart (same thread) keeps the original one. The
- * reaper's dispatch TTL is the durable backstop across process restarts.
+ * budget while a recovery restart (same thread) resumes the current one. The
+ * reaper's dispatch TTL bounds the queue wait this deliberately does not.
  */
-const docWatcherDeadlines = new Map<string, number>();
+const docWatcherWorkBudgets = new Map<string, number>();
 
 function docThreadKey(designDocId: string, chatThreadId: string): string {
   return `${designDocId}:${chatThreadId}`;
@@ -657,6 +670,25 @@ function docThreadKey(designDocId: string, chatThreadId: string): string {
 
 function docWatcherDeadlineKey(designDocId: string, chatThreadId: string): string {
   return docThreadKey(designDocId, chatThreadId);
+}
+
+/**
+ * Whether this tick counts against the work budget, given the latest run row.
+ *
+ * A missing row is charged: a doc whose run never materialized still has to
+ * reach a terminal state rather than hold a watcher open forever.
+ */
+async function isAgentWorking(chatThreadId: string): Promise<boolean> {
+  try {
+    const run = await getLatestThreadRun(chatThreadId);
+    return !run || !PRE_START_RUN_STATUSES.includes(run.status);
+  } catch (err) {
+    console.warn(
+      `[singleFeatureDocWatcher] run status lookup failed (threadId=${chatThreadId}):`,
+      (err as Error).message,
+    );
+    return true;
+  }
 }
 
 /**
@@ -692,7 +724,7 @@ function releaseDocOutput(designDocId: string, chatThreadId: string): void {
 }
 
 function releaseDocWatcherDeadline(designDocId: string, chatThreadId: string): void {
-  docWatcherDeadlines.delete(docWatcherDeadlineKey(designDocId, chatThreadId));
+  docWatcherWorkBudgets.delete(docWatcherDeadlineKey(designDocId, chatThreadId));
 }
 
 function stopDocWatcher(designDocId: string): void {
@@ -716,6 +748,11 @@ function stopValidationWatcher(designDocId: string): void {
 /** Returns true when a validation watcher is already running for this doc. */
 export function isValidationWatcherActive(designDocId: string): boolean {
   return activeValidationWatchers.has(designDocId);
+}
+
+/** Returns true when a generation watcher is already running for this doc. */
+export function isDocWatcherActive(designDocId: string): boolean {
+  return activeDocWatchers.has(designDocId);
 }
 
 function humanizeSlug(slug: string): string {
@@ -1039,6 +1076,9 @@ async function explainMissingOutput(
       (err as Error).message,
     );
   }
+  if (!isOutputWorkspaceReadable(chatThreadId)) {
+    return 'Workspace was unreachable when the output was collected — the agent may have written it';
+  }
   return `Missing output files: ${missing}`;
 }
 
@@ -1147,9 +1187,8 @@ export function startSingleFeatureDocWatcher(
   stopDocWatcher(designDocId);
 
   const deadlineKey = docWatcherDeadlineKey(designDocId, chatThreadId);
-  const deadlineAt = docWatcherDeadlines.get(deadlineKey)
-    ?? Date.now() + (WATCHER_MAX_ATTEMPTS * WATCHER_INTERVAL_MS);
-  docWatcherDeadlines.set(deadlineKey, deadlineAt);
+  let budgetLeftMs = docWatcherWorkBudgets.get(deadlineKey) ?? WATCHER_WORK_BUDGET_MS;
+  docWatcherWorkBudgets.set(deadlineKey, budgetLeftMs);
   let attempts = 0;
   let lastTickState = '';
 
@@ -1164,7 +1203,12 @@ export function startSingleFeatureDocWatcher(
   const interval = setInterval(async () => {
     attempts += 1;
 
-    if (Date.now() >= deadlineAt) {
+    if (await isAgentWorking(chatThreadId)) {
+      budgetLeftMs -= WATCHER_INTERVAL_MS;
+      docWatcherWorkBudgets.set(deadlineKey, budgetLeftMs);
+    }
+
+    if (budgetLeftMs <= 0) {
       clearInterval(interval);
       activeDocWatchers.delete(designDocId);
       releaseDocWatcherDeadline(designDocId, chatThreadId);
@@ -1226,8 +1270,8 @@ export function startSingleFeatureDocWatcher(
         // Keep polling — do NOT clear the interval. Clearing here permanently
         // abandoned docs in `generating` when a non-owner recovery watcher saw a
         // terminal run owned by a dead instance. Orphan grace eventually lets
-        // canThisInstanceFailGeneration return true, and the absolute deadline
-        // above is the backstop when it never does.
+        // canThisInstanceFailGeneration return true, and the work budget above
+        // is the backstop when it never does.
         console.warn(`[singleFeatureDocWatcher] Waiting — not run owner or no terminal run yet (designDocId=${designDocId})`);
         return;
       }
@@ -1723,6 +1767,18 @@ export function startValidationWatcher(designDocId: string, validationThreadId: 
     const scorecardRaw = readOutputValidationScorecard(validationThreadId);
 
     if (!scorecardRaw) {
+      // An unhydrated thread has no workspace, so the read above cannot tell an
+      // absent scorecard from an unreachable one. Hydration is retried by the
+      // recovery sweep; waiting is the only verdict that does not blame the
+      // agent for output it may well have written.
+      if (!isOutputWorkspaceReadable(validationThreadId)) {
+        if (attempts % 12 === 0) {
+          console.warn(
+            `[validationWatcher] Workspace not readable yet — waiting (designDocId=${designDocId} threadId=${validationThreadId})`,
+          );
+        }
+        return;
+      }
       if (
         isThreadIdle(validationThreadId)
         && (await canThisInstanceFailGeneration(validationThreadId))

@@ -44,6 +44,7 @@ jest.mock('../services/designDocService', () => ({
   startSingleFeatureDocWatcher: jest.fn(),
   startValidationWatcher: jest.fn(),
   isValidationWatcherActive: jest.fn(),
+  isDocWatcherActive: jest.fn(),
   routeDesignDocGenerationKickoff: jest.fn(),
 }));
 jest.mock('../services/testCaseService', () => ({
@@ -94,7 +95,11 @@ import {
 } from '../services/chatAgentService';
 import { isThreadRunAlive } from '../services/agentRunReaperService';
 import { finalizeOwnedAgentRun } from '../services/pgNotifyService';
-import { routeDesignDocGenerationKickoff } from '../services/designDocService';
+import {
+  routeDesignDocGenerationKickoff,
+  startSingleFeatureDocWatcher,
+  isDocWatcherActive,
+} from '../services/designDocService';
 import { routeTestCaseGenerationKickoff } from '../services/testCaseService';
 
 const mockedFindRunning = findRunningInterviewThreads as jest.MockedFunction<typeof findRunningInterviewThreads>;
@@ -173,6 +178,32 @@ describe('design-doc generation recovery claim', () => {
 
     expect(routeDesignDoc).not.toHaveBeenCalled();
     expect(mockUpdateReturning).not.toHaveBeenCalled();
+  });
+
+  it('leaves a watcher that is already running alone', async () => {
+    // The sweep runs every 60s and a doc generates for far longer, so adopting
+    // a live watcher tore one down and built another ~30 times per doc. That
+    // churn is how two watchers came to read the same workspace mid-write.
+    (isDocWatcherActive as jest.Mock).mockReturnValue(true);
+
+    await recoverInFlightWork();
+
+    expect(startSingleFeatureDocWatcher).not.toHaveBeenCalled();
+  });
+
+  it('adopts a doc whose watcher was lost with the process', async () => {
+    (isDocWatcherActive as jest.Mock).mockReturnValue(false);
+    // Lose the re-kick claim: this test is only about adopting the watcher.
+    mockUpdateReturning.mockResolvedValue([]);
+
+    await recoverInFlightWork();
+
+    expect(startSingleFeatureDocWatcher).toHaveBeenCalledWith(
+      'doc-1',
+      'thread-design',
+      'prd-1',
+      'Apex',
+    );
   });
 
   it('re-kicks an expired row only after winning the atomic claim', async () => {
