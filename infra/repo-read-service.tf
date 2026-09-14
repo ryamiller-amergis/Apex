@@ -5,14 +5,24 @@
 # mounted (git on SMB is the hot-path we are leaving). Blob container
 # repo-grounding remains the durable restore source.
 #
-# Gated by enable_repo_read_service (default false). Reuses the ai-runs
-# Container Apps Environment, runner identity, ACR, and Key Vault.
+# Gated by enable_repo_read_service (default false). Shares the runner
+# identity, ACR, and Key Vault with ai-runs. The Container Apps Environment
+# defaults to the ai-runs one but prod overrides it: grep over a bare mirror
+# needs a dedicated workload profile, and putting one on the shared
+# environment would price every ai-runs app into it.
 
 locals {
   repo_read_service_enabled  = var.enable_repo_read_service
   repo_read_service_app_name = coalesce(var.repo_read_service_container_app_name, "ca-apex-repo-read-${var.environment}")
   repo_read_service_data_dir = "/tmp/ai-pilot"
   repo_read_github_token     = var.github_token != null && var.github_token != ""
+
+  # container_app_environment_id is ForceNew, so pointing this at the wrong
+  # environment destroys and rebuilds the service rather than moving it.
+  repo_read_service_environment_id = coalesce(
+    var.repo_read_service_environment_id,
+    azurerm_container_app_environment.ai_runs.id,
+  )
 }
 
 resource "azurerm_role_assignment" "repo_read_service_blob_contributor" {
@@ -27,9 +37,10 @@ resource "azurerm_container_app" "repo_read_service" {
   count = local.repo_read_service_enabled ? 1 : 0
 
   name                         = local.repo_read_service_app_name
-  container_app_environment_id = azurerm_container_app_environment.ai_runs.id
+  container_app_environment_id = local.repo_read_service_environment_id
   resource_group_name          = local.app_resource_group_name
   revision_mode                = "Single"
+  workload_profile_name        = var.repo_read_service_workload_profile_name
 
   identity {
     type         = "UserAssigned"

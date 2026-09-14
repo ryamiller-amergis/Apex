@@ -64,6 +64,11 @@ resource "azurerm_linux_web_app" "main" {
   site_config {
     always_on = true
 
+    # The plan runs multiple instances, so without this a wedged instance keeps
+    # serving traffic instead of being pulled from rotation. Set live but never
+    # declared here, which meant a full apply would quietly remove it.
+    health_check_path = "/api/health"
+
     # Required for the FEAT-007 interactive WebSocket gateway (client ↔ gateway
     # upgrade). Declared explicitly so a full apply never reverts the runtime
     # enablement to the azurerm default (false), which would silently break
@@ -275,6 +280,11 @@ resource "azurerm_linux_web_app_slot" "staging" {
       site_config[0].application_stack,
       client_affinity_enabled,
       tags,
+      # Filesystem application logging is a short-lived debugging toggle that
+      # gets switched on by hand and that Azure disables again on its own.
+      # Pinning a value here would just trade one direction of drift for the
+      # other, so leave whatever is set alone.
+      logs[0].application_logs,
     ]
   }
 }

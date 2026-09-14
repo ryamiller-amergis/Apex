@@ -793,6 +793,18 @@ variable "repo_read_service_image" {
   default     = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
 }
 
+variable "repo_read_service_environment_id" {
+  description = "Container Apps Environment to host repo-read. Null reuses the ai-runs environment. Prod runs its own environment so repo-read can sit on a dedicated workload profile without giving one to every ai-runs app."
+  type        = string
+  default     = null
+}
+
+variable "repo_read_service_workload_profile_name" {
+  description = "Workload profile within the repo-read environment. Null uses Consumption. Must already exist on the target environment."
+  type        = string
+  default     = null
+}
+
 variable "repo_read_service_cpu" {
   description = "CPU cores per repo-read replica. 2.0 keeps Consumption-plan ephemeral disk at 8 GiB."
   type        = number
