@@ -564,6 +564,37 @@ describe('ChatAgentPanel shared Home shell', () => {
       expect(onNewChat).not.toHaveBeenCalled();
     });
 
+    it('blocks pill-less send from the non-Home composer when the caller cannot see configured pills', () => {
+      mockSkillConfigState = {
+        data: { quickSkillPills: [], quickMcpPills: [], homePillsConfigured: true },
+        isLoading: false,
+        isError: false,
+      };
+      const onNewChat = jest.fn();
+      render(
+        <ChatAgentPanel
+          thread={null}
+          isOpen
+          onClose={jest.fn()}
+          onNewChat={onNewChat}
+          launchedFromHome={false}
+          selectedProject="Apex"
+        />,
+      );
+
+      expect(screen.queryByLabelText('Home chat shortcuts')).not.toBeInTheDocument();
+      const notice = screen.getByTestId('chat-agent-home-blocked-notice');
+      expect(notice).toHaveTextContent(BLOCKED_MESSAGE);
+
+      fireEvent.change(screen.getByTestId('chat-agent-message-input'), {
+        target: { value: 'Let me in anyway' },
+      });
+      const send = screen.getByRole('button', { name: 'Send mock' });
+      expect(send).toBeDisabled();
+      fireEvent.click(send);
+      expect(onNewChat).not.toHaveBeenCalled();
+    });
+
     it('VT-21 / PBI-006 AC-2 keeps free chat when the project configures no Home pills', () => {
       mockSkillConfigState = {
         data: { quickSkillPills: [], quickMcpPills: [], homePillsConfigured: false },

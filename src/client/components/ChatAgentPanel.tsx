@@ -414,10 +414,13 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     isLoading: isSkillConfigLoading,
     isError: isSkillConfigError,
   } = useProjectSkillConfig(
-    launchedFromHome ? selectedProject ?? null : null,
+    launchedFromHome || (isOpen && !inConversation)
+      ? selectedProject ?? null
+      : null,
     selectedSkillSettingsId,
   );
   const isHomeCompose = launchedFromHome && !inConversation;
+  const isEmptyCompose = !inConversation;
 
   // Skills for Home pill descriptions and the / picker on active threads
   const { data: homeSkills = [] } = useSkillList(
@@ -676,13 +679,16 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
 
   // The project configures Home pills, but none of them survived allow-list
   // filtering for this caller, so there is nothing they may start a chat with.
+  // Empty compose (Home or the shared non-Home composer) POSTs a pill-less
+  // kickoff; the server admits that only when the caller may start pill-less
+  // chat, so both surfaces withhold send the same way.
   const blockedNoAllowedPills =
-    isHomeCompose && Boolean(skillConfig?.homePillsConfigured) && !hasHomePills;
+    isEmptyCompose && Boolean(skillConfig?.homePillsConfigured) && !hasHomePills;
   // A null config is a successful "no config for this project" answer and still
   // allows free chat. Loading and error states withhold the composer even if
   // React Query retains stale data from an earlier successful response.
   const skillConfigUnavailable =
-    isHomeCompose && (isSkillConfigLoading || isSkillConfigError);
+    isEmptyCompose && (isSkillConfigLoading || isSkillConfigError);
   const homeComposeBlocked = blockedNoAllowedPills || skillConfigUnavailable;
 
   const resolvedQuickSkill = useMemo((): QuickSkillPill | null => {
@@ -915,7 +921,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                   ? `${resolvedQuickSkill.label} is ready — type your question below.`
                   : resolvedMcpPill
                     ? `${resolvedMcpPill.label} is ready — type your question below.`
-                    : hasHomePills
+                    : isHomeCompose && hasHomePills
                       ? 'Select a skill above, then tell Apex what you need.'
                       : skillConfigUnavailable
                         ? 'Checking which Home skills you can use…'
