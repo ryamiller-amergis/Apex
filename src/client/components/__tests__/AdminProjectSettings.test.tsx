@@ -48,12 +48,16 @@ jest.mock('../GroupAwarePeoplePicker', () => ({
     selectedGroupIds,
     onUserIdsChange,
     onGroupIdsChange,
+    disabled = false,
+    placeholder = 'Search groups or people…',
   }: {
     groups: Array<{ id: string; name: string; members: unknown[] }>;
     selectedUserIds: string[];
     selectedGroupIds: string[];
     onUserIdsChange: (ids: string[]) => void;
     onGroupIdsChange: (ids: string[]) => void;
+    disabled?: boolean;
+    placeholder?: string;
   }) => (
     <div>
       <span>users:{selectedUserIds.join(',')}</span>
@@ -63,11 +67,33 @@ jest.mock('../GroupAwarePeoplePicker', () => ({
         .map((group) => (
           <span key={group.id}>{group.name} ({group.members.length} members)</span>
         ))}
-      <button type="button" onClick={() => onUserIdsChange([...selectedUserIds, 'user-added'])}>
+      {selectedUserIds.length === 0 && selectedGroupIds.length === 0 && (
+        <span>No groups or people selected</span>
+      )}
+      <input readOnly value="" aria-label={placeholder} disabled={disabled} />
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => onUserIdsChange([...selectedUserIds, 'user-added'])}
+      >
         Add first user
       </button>
-      <button type="button" onClick={() => onGroupIdsChange([...selectedGroupIds, 'group-empty'])}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => onGroupIdsChange([...selectedGroupIds, 'group-empty'])}
+      >
         Add empty group
+      </button>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => {
+          onUserIdsChange([]);
+          onGroupIdsChange([]);
+        }}
+      >
+        Clear selections
       </button>
     </div>
   ),
@@ -652,6 +678,306 @@ describe('AdminProjectSettings — reviewer pools and module approval modes', ()
     expect(within(screen.getByTestId('ps-adr-approver-pool')).getByText(
       'users:architect-1',
     )).toBeVisible();
+    expect(screen.getByText('Edit: Main')).toBeVisible();
+  });
+});
+
+describe('AdminProjectSettings — Home pill allow-lists', () => {
+  const skillPills = [
+    { label: 'Prod Support', skillPath: 'skills/prod/SKILL.md' },
+    { label: 'Release Notes', skillPath: 'skills/release/SKILL.md' },
+  ];
+  const mcpPills = [
+    {
+      label: 'SendGrid',
+      mcpServerName: 'sendgrid',
+      transport: 'stdio' as const,
+      command: 'npx',
+    },
+    {
+      label: 'Twilio',
+      mcpServerName: 'twilio',
+      transport: 'http' as const,
+      url: 'https://mcp.twilio.com/docs',
+    },
+  ];
+  const allowlistConfig = {
+    ...projectConfig,
+    quickSkillPills: skillPills,
+    quickMcpPills: mcpPills,
+  };
+
+  function mockConfig(config: Record<string, unknown>) {
+    (useAllProjectSkillConfigs as jest.Mock).mockReturnValue({
+      data: [config],
+      isLoading: false,
+      isError: false,
+    });
+  }
+
+  function mockUpsert(overrides: Record<string, unknown> = {}) {
+    const mutateAsync = jest.fn().mockResolvedValue(allowlistConfig);
+    (useUpsertProjectSkillConfig as jest.Mock).mockReturnValue({
+      mutate: jest.fn(),
+      mutateAsync,
+      isPending: false,
+      error: null,
+      ...overrides,
+    });
+    return mutateAsync;
+  }
+
+  function openPillEditor() {
+    fireEvent.click(screen.getByTestId('ps-config-edit-settings-1'));
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    setupMocks();
+    mockConfig(allowlistConfig);
+    (useUsers as jest.Mock).mockReturnValue({
+      data: [{ oid: 'user-added', displayName: 'Ada Lovelace', email: 'ada@example.com' }],
+    });
+    (useGroupsWithMembers as jest.Mock).mockReturnValue({
+      data: [{
+        id: 'group-empty',
+        name: 'Empty Architects',
+        description: null,
+        project: 'Apex',
+        createdAt: '2026-08-28T00:00:00Z',
+        updatedAt: '2026-08-28T00:00:00Z',
+        members: [],
+      }],
+    });
+    (useSkillList as jest.Mock).mockReturnValue({
+      data: [{ id: 'skill-1', path: 'skills/prod/SKILL.md', name: 'Production Support' }],
+      isLoading: false,
+    });
+  });
+
+  it('TBI-002 DoD-0 and DoD-1 bind a labeled allow-list picker to every skill and MCP pill row', () => {
+    render(<AdminProjectSettings selectedProject="Apex" />);
+    openPillEditor();
+
+    for (const testId of [
+      'ps-skill-pill-allowlist-0',
+      'ps-skill-pill-allowlist-1',
+      'ps-mcp-pill-allowlist-0',
+      'ps-mcp-pill-allowlist-1',
+    ]) {
+      const wrapper = screen.getByTestId(testId);
+      expect(wrapper).toBeVisible();
+      // NFR: screen-reader labeled, matching the existing pill editor fields.
+      expect(within(wrapper).getByRole('textbox', {
+        name: /Search groups or people/i,
+      })).toBeVisible();
+      // BR-001: empty allow-list copy comes straight from the picker.
+      expect(within(wrapper).getByText('No groups or people selected')).toBeVisible();
+    }
+  });
+
+  it('TBI-002 DoD-0 and DoD-1 disable every pill allow-list picker while a save is in flight', () => {
+    mockUpsert({ isPending: true });
+
+    render(<AdminProjectSettings selectedProject="Apex" />);
+    openPillEditor();
+
+    for (const testId of ['ps-skill-pill-allowlist-0', 'ps-mcp-pill-allowlist-0']) {
+      const wrapper = screen.getByTestId(testId);
+      expect(within(wrapper).getByRole('button', { name: 'Add first user' })).toBeDisabled();
+      expect(within(wrapper).getByRole('textbox', {
+        name: /Search groups or people/i,
+      })).toBeDisabled();
+    }
+  });
+
+  it('VT-04 / PBI-001 AC-0 / TBI-002 DoD-0 — Given a Project Admin editing a skill pill, When a user and a group are added, Then only that row shows the selection', () => {
+    render(<AdminProjectSettings selectedProject="Apex" />);
+    openPillEditor();
+
+    const edited = screen.getByTestId('ps-skill-pill-allowlist-0');
+    fireEvent.click(within(edited).getByRole('button', { name: 'Add first user' }));
+    fireEvent.click(within(edited).getByRole('button', { name: 'Add empty group' }));
+
+    expect(within(edited).getByText('users:user-added')).toBeVisible();
+    expect(within(edited).getByText('groups:group-empty')).toBeVisible();
+    expect(within(edited).getByText('Empty Architects (0 members)')).toBeVisible();
+
+    const untouched = screen.getByTestId('ps-skill-pill-allowlist-1');
+    expect(within(untouched).getByText('users:')).toBeInTheDocument();
+    expect(within(untouched).getByText('groups:')).toBeInTheDocument();
+  });
+
+  it('VT-06 / PBI-001 AC-0 / TBI-002 DoD-2 — Given a skill pill allow-list edit, When saved, Then the payload persists the allow-list with the existing pill attributes', async () => {
+    const mutateAsync = mockUpsert();
+
+    render(<AdminProjectSettings selectedProject="Apex" />);
+    openPillEditor();
+
+    const wrapper = screen.getByTestId('ps-skill-pill-allowlist-0');
+    fireEvent.click(within(wrapper).getByRole('button', { name: 'Add first user' }));
+    fireEvent.click(within(wrapper).getByRole('button', { name: 'Add empty group' }));
+    fireEvent.click(screen.getByTestId('ps-form-save'));
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+      body: expect.objectContaining({
+        quickSkillPills: [
+          expect.objectContaining({
+            label: 'Prod Support',
+            skillPath: 'skills/prod/SKILL.md',
+            allowedUserIds: ['user-added'],
+            allowedGroupIds: ['group-empty'],
+          }),
+          expect.objectContaining({ label: 'Release Notes' }),
+        ],
+      }),
+    })));
+  });
+
+  it('PBI-001 AC-2 / TBI-002 DoD-3 — Given a skill pill with a saved allow-list, When it is cleared and saved, Then both arrays persist as empty', async () => {
+    mockConfig({
+      ...allowlistConfig,
+      quickSkillPills: [
+        { ...skillPills[0], allowedUserIds: ['user-added'], allowedGroupIds: ['group-empty'] },
+        skillPills[1],
+      ],
+    });
+    const mutateAsync = mockUpsert();
+
+    render(<AdminProjectSettings selectedProject="Apex" />);
+    openPillEditor();
+
+    const wrapper = screen.getByTestId('ps-skill-pill-allowlist-0');
+    expect(within(wrapper).getByText('users:user-added')).toBeVisible();
+    fireEvent.click(within(wrapper).getByRole('button', { name: 'Clear selections' }));
+
+    expect(within(wrapper).getByText('No groups or people selected')).toBeVisible();
+    fireEvent.click(screen.getByTestId('ps-form-save'));
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+      body: expect.objectContaining({
+        quickSkillPills: [
+          expect.objectContaining({
+            label: 'Prod Support',
+            allowedUserIds: [],
+            allowedGroupIds: [],
+          }),
+          expect.objectContaining({ label: 'Release Notes' }),
+        ],
+      }),
+    })));
+  });
+
+  it('VT-07 / PBI-001 AC-1 — Given a skill pill allow-list edit, When the save is rejected, Then the error shows and the edited picker state stays available for retry', async () => {
+    mockUpsert({ mutateAsync: jest.fn().mockRejectedValue(new Error('Save unavailable')) });
+
+    render(<AdminProjectSettings selectedProject="Apex" />);
+    openPillEditor();
+
+    const wrapper = screen.getByTestId('ps-skill-pill-allowlist-0');
+    fireEvent.click(within(wrapper).getByRole('button', { name: 'Add first user' }));
+    fireEvent.click(screen.getByTestId('ps-form-save'));
+
+    expect(await screen.findByText('Save unavailable')).toBeVisible();
+    expect(within(screen.getByTestId('ps-skill-pill-allowlist-0')).getByText(
+      'users:user-added',
+    )).toBeVisible();
+    expect(screen.getByTestId('ps-form-save')).toBeVisible();
+    expect(screen.getByText('Edit: Main')).toBeVisible();
+  });
+
+  it('VT-05 / PBI-002 AC-0 / TBI-002 DoD-1 — Given a Project Admin editing an MCP pill, When a user and a group are added, Then only that row shows the selection', () => {
+    render(<AdminProjectSettings selectedProject="Apex" />);
+    openPillEditor();
+
+    const edited = screen.getByTestId('ps-mcp-pill-allowlist-0');
+    fireEvent.click(within(edited).getByRole('button', { name: 'Add first user' }));
+    fireEvent.click(within(edited).getByRole('button', { name: 'Add empty group' }));
+
+    expect(within(edited).getByText('users:user-added')).toBeVisible();
+    expect(within(edited).getByText('groups:group-empty')).toBeVisible();
+
+    const untouched = screen.getByTestId('ps-mcp-pill-allowlist-1');
+    expect(within(untouched).getByText('users:')).toBeInTheDocument();
+    expect(within(untouched).getByText('groups:')).toBeInTheDocument();
+  });
+
+  it('VT-06 / PBI-002 AC-0 / TBI-002 DoD-2 — Given an MCP pill allow-list edit, When saved, Then the payload persists the allow-list with the existing pill attributes', async () => {
+    const mutateAsync = mockUpsert();
+
+    render(<AdminProjectSettings selectedProject="Apex" />);
+    openPillEditor();
+
+    const wrapper = screen.getByTestId('ps-mcp-pill-allowlist-0');
+    fireEvent.click(within(wrapper).getByRole('button', { name: 'Add first user' }));
+    fireEvent.click(within(wrapper).getByRole('button', { name: 'Add empty group' }));
+    fireEvent.click(screen.getByTestId('ps-form-save'));
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+      body: expect.objectContaining({
+        quickMcpPills: [
+          expect.objectContaining({
+            mcpServerName: 'sendgrid',
+            transport: 'stdio',
+            command: 'npx',
+            allowedUserIds: ['user-added'],
+            allowedGroupIds: ['group-empty'],
+          }),
+          expect.objectContaining({ mcpServerName: 'twilio' }),
+        ],
+      }),
+    })));
+  });
+
+  it('PBI-002 AC-2 / TBI-002 DoD-3 — Given an MCP pill with a saved allow-list, When it is cleared and saved, Then both arrays persist as empty', async () => {
+    mockConfig({
+      ...allowlistConfig,
+      quickMcpPills: [
+        { ...mcpPills[0], allowedUserIds: ['user-added'], allowedGroupIds: ['group-empty'] },
+        mcpPills[1],
+      ],
+    });
+    const mutateAsync = mockUpsert();
+
+    render(<AdminProjectSettings selectedProject="Apex" />);
+    openPillEditor();
+
+    const wrapper = screen.getByTestId('ps-mcp-pill-allowlist-0');
+    expect(within(wrapper).getByText('groups:group-empty')).toBeVisible();
+    fireEvent.click(within(wrapper).getByRole('button', { name: 'Clear selections' }));
+
+    expect(within(wrapper).getByText('No groups or people selected')).toBeVisible();
+    fireEvent.click(screen.getByTestId('ps-form-save'));
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+      body: expect.objectContaining({
+        quickMcpPills: [
+          expect.objectContaining({
+            mcpServerName: 'sendgrid',
+            allowedUserIds: [],
+            allowedGroupIds: [],
+          }),
+          expect.objectContaining({ mcpServerName: 'twilio' }),
+        ],
+      }),
+    })));
+  });
+
+  it('VT-07 / PBI-002 AC-1 — Given an MCP pill allow-list edit, When the save is rejected, Then the error shows and the edited picker state stays available for retry', async () => {
+    mockUpsert({ mutateAsync: jest.fn().mockRejectedValue(new Error('Save unavailable')) });
+
+    render(<AdminProjectSettings selectedProject="Apex" />);
+    openPillEditor();
+
+    const wrapper = screen.getByTestId('ps-mcp-pill-allowlist-0');
+    fireEvent.click(within(wrapper).getByRole('button', { name: 'Add empty group' }));
+    fireEvent.click(screen.getByTestId('ps-form-save'));
+
+    expect(await screen.findByText('Save unavailable')).toBeVisible();
+    expect(within(screen.getByTestId('ps-mcp-pill-allowlist-0')).getByText(
+      'groups:group-empty',
+    )).toBeVisible();
+    expect(screen.getByTestId('ps-form-save')).toBeVisible();
     expect(screen.getByText('Edit: Main')).toBeVisible();
   });
 });

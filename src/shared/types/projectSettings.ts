@@ -72,6 +72,13 @@ interface QuickMcpPillBase {
   effort?: EffortLevel | null;
   /** Injected into the agent system prompt so the agent knows what the MCP is for */
   systemPromptHint?: string | null;
+  /**
+   * Users allowed to see and start this pill. Empty or omitted means everyone
+   * with Home access; no default is written when the field is absent.
+   */
+  allowedUserIds?: string[] | null;
+  /** Groups allowed to see and start this pill. Same empty/omitted semantics. */
+  allowedGroupIds?: string[] | null;
 }
 
 export interface QuickMcpPillHttp extends QuickMcpPillBase {
@@ -107,6 +114,13 @@ export interface QuickSkillPill {
   description?: string | null;
   /** When true, the scope guardrail is skipped for this skill's sessions */
   bypassScopePolicy?: boolean | null;
+  /**
+   * Users allowed to see and start this pill. Empty or omitted means everyone
+   * with Home access; no default is written when the field is absent.
+   */
+  allowedUserIds?: string[] | null;
+  /** Groups allowed to see and start this pill. Same empty/omitted semantics. */
+  allowedGroupIds?: string[] | null;
 }
 
 export interface InterviewSkillOption {
@@ -433,6 +447,8 @@ export interface ProjectSkillConfigResponse extends ProjectEffortSettings {
   prototypeWebReferencesEnabled?: boolean;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
+  /** True when the project has any configured Home skill/MCP pills, before caller filtering. */
+  homePillsConfigured?: boolean;
   approvalMode?: ApprovalMode;
   approvalModes?: ModuleApprovalModes;
   loadTestGenerationSkillPath?: string | null;
