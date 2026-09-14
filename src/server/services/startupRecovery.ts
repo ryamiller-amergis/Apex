@@ -21,6 +21,7 @@ import {
   startSingleFeatureDocWatcher,
   startValidationWatcher,
   isValidationWatcherActive,
+  isDocWatcherActive,
   routeDesignDocGenerationKickoff,
 } from './designDocService';
 import { startTestCaseWatcher, isTestCaseWatcherActive, routeTestCaseGenerationKickoff } from './testCaseService';
@@ -297,6 +298,12 @@ export async function recoverInFlightWork(): Promise<void> {
   });
   for (const doc of generatingDocs) {
     if (!doc.chatThreadId) continue;
+    // Restarting a live watcher tears down its interval and builds a new one on
+    // every sweep, which is far more often than a doc takes to generate. That
+    // churn is what lets two watchers observe the same workspace mid-write, so
+    // only adopt docs that are not already being watched here — as the PRD,
+    // test-case, and validation loops do.
+    if (isDocWatcherActive(doc.id)) continue;
     const ok = await hydrateThread(doc.chatThreadId);
     if (ok) {
       startSingleFeatureDocWatcher(doc.id, doc.chatThreadId, doc.prdId, doc.project);
