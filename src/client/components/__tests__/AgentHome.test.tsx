@@ -1,7 +1,7 @@
 import { type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter, useNavigate } from 'react-router-dom';
+import { MemoryRouter, useNavigate, useSearchParams } from 'react-router-dom';
 import { AgentHome } from '../AgentHome';
 
 const mockDashboardData = {
@@ -131,5 +131,38 @@ describe('AgentHome tabs', () => {
     expect(onRestoreThread).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Open thread' }));
     expect(onRestoreThread).toHaveBeenCalledWith('thread-later');
+  });
+
+  it('restores the same thread deep link after the query param leaves the URL', () => {
+    const onRestoreThread = jest.fn();
+    const ToggleThreadLink = () => {
+      const navigate = useNavigate();
+      const [searchParams] = useSearchParams();
+      const hasThread = searchParams.get('thread');
+      return (
+        <button
+          type="button"
+          onClick={() => navigate(hasThread ? '/home' : '/home?thread=thread-repeat')}
+        >
+          Toggle thread
+        </button>
+      );
+    };
+
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter initialEntries={['/home?thread=thread-repeat']}>
+          <ToggleThreadLink />
+          <AgentHome selectedProject="Apex" onRestoreThread={onRestoreThread} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(onRestoreThread).toHaveBeenCalledTimes(1);
+    expect(onRestoreThread).toHaveBeenCalledWith('thread-repeat');
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle thread' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle thread' }));
+    expect(onRestoreThread).toHaveBeenCalledTimes(2);
+    expect(onRestoreThread).toHaveBeenLastCalledWith('thread-repeat');
   });
 });

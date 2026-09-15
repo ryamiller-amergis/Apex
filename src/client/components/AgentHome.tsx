@@ -71,6 +71,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({
       return;
     }
 
+    restoredUrlThreadRef.current = null;
     if (restoredProjectRef.current === selectedProject) return;
     restoredProjectRef.current = selectedProject;
     const storedThreadId = sessionStorage.getItem(`agentHomeThreadId:${selectedProject}`);
