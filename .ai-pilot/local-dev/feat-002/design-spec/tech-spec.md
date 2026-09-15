@@ -1,6 +1,6 @@
-# Technical Specification — Admin Per-Module Effort Defaults
+# Technical Specification — Enforce Home Pill Access
 
-> **PRD slug:** `per-module-agent-effort-defaults` | **Owning layer:** `src/server/services/`, `src/server/routes/`, `src/client/components/`, `src/shared/types/` | **Surface:** Full stack
+> **PRD slug:** `home-pill-access-control` | **Owning layer:** `src/server/services/` | **Surface:** Full stack
 > **Verification builds:** `npx tsc -p tsconfig.server.json --noEmit` and `npx tsc -p tsconfig.client.json --noEmit`
 > **Open items:** See [design-doc-assumptions.md](design-doc-assumptions.md) (2 unresolved)
 > **Design doc:** [design-doc-design.md](design-doc-design.md)
@@ -9,24 +9,24 @@
 
 ## System Boundary and Owning Layer
 
-**Owning layer:** `src/server/services/projectSettingsService.ts` (write/read logic), `src/server/routes/admin.ts` + `src/server/routes/api.ts` (HTTP surface), `src/client/components/AdminProjectSettings.tsx` (UI), `src/shared/types/projectSettings.ts` (contracts).
+**Owning layer:** `src/server/services/`
 
-**Rationale:** This feature is a pure extension of the existing per-module model-override vertical slice — it adds a sibling field to every layer that field already flows through today, with **no new service, no new route, no new component, and no new database migration**. `projectSettingsService.upsertSkillConfig()` is the single write chokepoint for `project_skill_settings` (it already owns the analogous `*Model` fields plus the closed-enum `approvalMode`/`approvalModes` validation precedent this feature follows), so it owns the effort fields too. The admin router (`admin.ts`) already owns request-shape validation for this resource (see `validateApprovalModeRequest`), so it owns the new `validateEffortFields` check. `AdminProjectSettings.tsx` already owns the one authoring surface for every model override, so it owns the effort selectors.
+**Rationale:** The core of this Feature is one rule — "which pills, and whether pill-less chat, may this caller use given this project's pill configuration" — evaluated identically by two independent callers (a read path and a write path). Per TBI-003, that rule must be a pure, framework-agnostic function so both callers get the same answer without re-implementing it. `src/server/services/` is where every other pure/deep-module resolver in this codebase already lives (`agentEffortResolver.ts`, `groundingProfileResolver.ts`), and it is the layer both `src/server/routes/api.ts` and `src/server/routes/chat.ts` already import services from.
 
 **Ownership answers:**
-- New or existing Express service in `src/server/services/`? **Existing** — `projectSettingsService.ts`. `upsertSkillConfig()`'s `UpsertSkillConfigOptions` and `values` object get 20 new optional fields, wired identically to the 19 existing `*Model` fields (`opts.xEffort ?? null`).
-- New or existing route in `src/server/routes/`? **Existing** — `admin.ts` (`POST /project-settings`, `PUT /project-settings/:id`) and `api.ts` (`GET /skill-config`). No new endpoints.
-- New React component in `src/client/components/`? **No** — `AdminProjectSettings.tsx`'s `PipelineStageDef`/`PipelineStageCard` mechanism and its two standalone fields (`adrModel`, `defaultModel`) are extended in place.
-- New shared type in `src/shared/types/`? **Yes, but only additive fields** — `ProjectSkillConfig`, `UpsertProjectSkillConfigRequest`, and `ProjectSkillConfigResponse` in `src/shared/types/projectSettings.ts` each get 20 new optional `AgentEffort | null` fields. The `AgentEffort` union itself is delivered by the FEAT-001 prerequisite, not this feature.
-- Database migration needed? **No** — FEAT-001 (TBI-001) already adds the 20 nullable `TEXT` columns to `project_skill_settings`. This feature performs zero DDL and zero Drizzle schema edits.
+- New or existing Express service in `src/server/services/`? **New** — `homePillAccessResolver.ts`, a pure resolver module with no DB/HTTP calls of its own (per TBI-003's explicit NFR). Also **existing, extended** — `groupService.ts` gains one new exported function, `getUserGroupIds()`, so callers can pass live group-ID membership into the resolver (see ⚠ Unresolved item in the assumptions file).
+- New or existing route in `src/server/routes/`? **Existing, extended** — `api.ts` (`GET /skill-config`, ~line 4283) filters and strips pills and adds `homePillsConfigured`; `chat.ts` (`POST /threads`) calls the resolver's admission check before `createThread`. No new endpoints.
+- New React component in `src/client/components/`? **No** — extends the existing Home-compose branch of `ChatAgentPanel.tsx`. The blocked-state notice is a conditional JSX block alongside the existing `needsSkillSelection` gate, not a new component file.
+- New shared type in `src/shared/types/`? **Yes** — one new field, `homePillsConfigured?: boolean`, added to `ProjectSkillConfigResponse` in `src/shared/types/projectSettings.ts` (see ⚠ Unresolved item in the assumptions file for why this one field is necessary).
+- Database migration needed? **No** — FEAT-001 (dependency) already adds `allowedUserIds`/`allowedGroupIds` inside the existing JSON-backed `quick_skill_pills`/`quick_mcp_pills` columns on `project_skill_settings`. This Feature only reads and evaluates those fields; it introduces no new persisted state.
 
 ---
 
 ## Security Enforcement
 
-- **Authorization mechanism:** `router.use(requirePermission('admin:roles'))` at the top of `src/server/routes/admin.ts` already gates every route in this router, including `POST /project-settings` and `PUT /project-settings/:id`. No new middleware, no new permission key — this satisfies BR-001 and TBI-004's explicit non-functional requirement ("No new RBAC permission key — reuses the existing `admin:roles` write gate").
-- **Layer that enforces scope:** Both. RBAC (who may write) is enforced at the route/middleware layer (`requirePermission`); the closed-value-set constraint (what may be written) is enforced in the route handler before the service call, following the existing `validateApprovalModeRequest()` pattern in `admin.ts` — a new `validateEffortFields(body)` helper checks every `*Effort` key against the allow-list and returns a `{ error }` string on the first violation, exactly like `validateApprovalModeRequest` does for `approvalModes`/`approvalMode` today.
-- **Sensitive data handling:** Not applicable. Per the PRD's Security and Data Sensitivity section, effort is "operational metadata... the same class of field as the existing model identifier" — no encryption, masking, or redaction beyond what already applies to `model`.
+- **Authorization mechanism:** Pill-level enforcement is a data-scoping rule, not a new RBAC permission — it layers underneath the existing `requirePermission('chat:view')` router-wide gate on `chat.ts` and the client-side `can('chat:view') && can('chat:create')` check in `App.tsx`. The Platform Admin bypass reuses the existing `isSuperAdminRequest(req)` utility (`src/server/utils/superAdmin.ts`) — the same check `requirePermission`/`requireGroupMembership`/`requireProjectAccess` (`src/server/middleware/rbac.ts`) already short-circuit on. The resolver never re-derives admin status itself; each route resolves `isSuperAdminRequest(req)` and passes the boolean in, keeping the resolver HTTP-agnostic per TBI-003.
+- **Layer that enforces scope:** Both, at two different boundaries. **Data-exposure boundary** — `GET /api/skill-config` (`api.ts`) filters `quickSkillPills`/`quickMcpPills` to the caller's allowed subset and strips `allowedUserIds`/`allowedGroupIds` from every returned pill before the response leaves the server, so a non-admin caller can never see who else is allowed on a pill. **Mutation boundary** — `POST /api/chat/threads` (`chat.ts`) calls the resolver's admission check before `createThread()` persists a row; a denied kickoff creates nothing.
+- **Sensitive data handling:** `allowedUserIds`/`allowedGroupIds` are omitted field-by-field when the `GET /skill-config` handler maps each pill for the public response (an explicit allow-list of fields to include, not a blocklist of fields to remove, so a future field added to `QuickSkillPill`/`QuickMcpPill` does not leak by default). The admin project-settings read/write path (`admin.ts`, gated by the router-wide `requirePermission('admin:roles')`) is untouched — it continues to return and persist the full pill list including allow-list fields, exactly as FEAT-001 leaves it.
 
 ---
 
@@ -36,29 +36,32 @@
 
 | Layer | Changed | Notes |
 |-------|---------|-------|
-| Server services (`src/server/services/`) | Yes | `projectSettingsService.ts` — add `AGENT_EFFORTS`/`isAgentEffort()`, extend `UpsertSkillConfigOptions` and the `values` object in `upsertSkillConfig()` with 20 new `*Effort`/`defaultEffort` fields |
-| Server routes (`src/server/routes/`) | Yes | `admin.ts` — add `validateEffortFields()`, call from `POST /project-settings` and `PUT /project-settings/:id` before `upsertSkillConfig`; `api.ts` — add the 20 effort fields to the `GET /skill-config` response object |
-| Server middleware (`src/server/middleware/`) | No | Reuses the existing `requirePermission('admin:roles')` guard already applied to this router |
-| Client components (`src/client/components/`) | Yes | `AdminProjectSettings.tsx` — `EffortKey` type, `PipelineStageDef.effortKey`, `EditState` fields, `emptyEdit()`, `handleSave()` payload, `PipelineStageCard` 3-column render, standalone ADR/Default Effort fields |
-| Client hooks (`src/client/hooks/`) | No (pass-through only) | `useProjectSkillConfig.ts`'s upsert mutation already forwards the entire `EditState`/`UpsertProjectSkillConfigRequest` object it is given; it needs no logic change, only to pick up the widened shared type |
-| Shared types (`src/shared/types/`) | Yes | `projectSettings.ts` — 20 new optional fields on `ProjectSkillConfig`, `UpsertProjectSkillConfigRequest`, `ProjectSkillConfigResponse`. `AgentEffort` union itself comes from the FEAT-001 prerequisite |
-| Database (`migrations/`) | No | Columns already added by FEAT-001 / TBI-001 |
-| Drizzle schema (`src/server/db/schema.ts`) | No | Columns already added by FEAT-001 / TBI-001 |
+| Server services (`src/server/services/`) | Yes | New `homePillAccessResolver.ts`; `groupService.ts` gains `getUserGroupIds()` |
+| Server routes (`src/server/routes/`) | Yes | `api.ts` — `GET /skill-config` filters/strips pills, adds `homePillsConfigured`; `chat.ts` — `POST /threads` gains a pre-`createThread` admission check |
+| Server middleware (`src/server/middleware/`) | No | Reuses `isSuperAdminRequest()` directly inside the route handler; no new middleware function |
+| Client components (`src/client/components/`) | Yes | `ChatAgentPanel.tsx` — blocked-state notice and `canSend` gate in the Home-compose branch |
+| Client hooks (`src/client/hooks/`) | No | `useProjectSkillConfig.ts` picks up the new `homePillsConfigured` field automatically via its existing `ProjectSkillConfigResponse` type import |
+| Shared types (`src/shared/types/`) | Yes | `ProjectSkillConfigResponse.homePillsConfigured?: boolean` in `projectSettings.ts` |
+| Database (migrations/) | No | No schema change |
+| Drizzle schema (`src/server/db/schema.ts`) | No | No schema change |
 
 ### Per-work-item design decisions
 
-**PBI-001 — Set a default effort level per agent module in Project Settings**
-- Pattern followed: identical end-to-end flow to the existing per-module Model override — admin form field → `PUT /api/admin/project-settings/:id` → `upsertSkillConfig()` → `project_skill_settings` row → `GET /api/skill-config` for readback.
-- Key decisions: Effort gets its **own closed-set validator**, unlike Model (which accepts any string `Cursor.models.list()` returns via `modelsService.fetchAvailableModels()`, with no server-side allow-list at all today). This is a deliberate deviation from the Model precedent, required by BR-003 and AC (b)/(d): the PRD requires a 400 on any value outside `low`/`medium`/`high`/Inherit, and requires the write to be denied server-side regardless of what the client sends. Reusing the free-text Model path unmodified was rejected because it would satisfy neither requirement. The nearest and correct precedent is the existing `isApprovalMode()`/`validateApprovalModeRequest()` closed-enum check already on this same route.
+**TBI-003 — Build a pill access resolver for live allow-list evaluation**
+- Pattern followed: pure resolver module with no DB/HTTP coupling, matching `agentEffortResolver.ts`/`groundingProfileResolver.ts`.
+- Key decisions: exports two functions from `homePillAccessResolver.ts` — `resolveHomePillAccess()` (returns the allowed pill subset plus `canStartPillessChat`) and `resolveThreadCreationAdmission()` (built on top of the first, adds the kickoff-matching logic TBI-005 needs). Both take `{ skillPills, mcpPills, callerId, callerGroupIds, isSuperAdmin }` so every caller passes identical shapes. `canStartPillessChat` is computed as `(skillPills.length === 0 && mcpPills.length === 0) || (allowedSkillPills.length + allowedMcpPills.length > 0)` — directly encoding BR-005/BR-006's "zero configured pills always allows pill-less; otherwise pill-less requires being allowed on at least one" rule, and satisfying PBI-006(d)'s "evaluated on its own terms" requirement without special-casing it. A deleted/missing `allowedGroupIds` reference (PBI-003(b)) needs no special-case code: the resolver only ever asks "is any of `callerGroupIds` in this pill's `allowedGroupIds`," so a group ID that no longer exists simply never appears in a live `callerGroupIds` lookup and naturally grants no access — rejected alternative: pre-validating group existence inside the resolver, which would require the "pure function, no DB coupling" resolver to make a DB call, violating TBI-003's own NFR.
 
-**TBI-004 — Extend project-settings admin API and UI with per-module effort fields**
-- Pattern followed: `validateApprovalModeRequest()` in `admin.ts` (closed-enum validation with an early 400 return, called from both `POST` and `PUT` handlers before the service call) is the template for the new `validateEffortFields()` helper.
-- Key decisions:
-  - Extend `PipelineStageDef` with an optional `effortKey?: EffortKey` field (mirroring `modelKey?: ModelKey`), so every entry in `FEATURE_PIPELINE_STAGES` and `SIDECAR_STAGES` that already declares a `modelKey` gets a paired `effortKey` for free through the existing `PipelineStageCard` render path, without duplicating stage-card JSX.
-  - This codebase has **two established patterns** for surfacing a model override, and effort must mirror whichever pattern each field's Model counterpart already uses:
-    1. Declarative `PipelineStageDef.modelKey` + `PipelineStageCard`, used by `interviewModel`, `prdModel`, `designDocModel`, `designDocAssistantModel`, `testCaseModel`, `designDocValidationModel`, `prdValidationModel`, `developmentModel`, `standupModel`, `featureRequestModel`, `technicalModel`, `issueModel`, `loadTestGenerationModel`, `designModuleModel`, `designModuleScopingModel`.
-    2. Standalone fields rendered directly in accordion JSX outside the stage-card loop, used by `adrModel` (near `ps-adrModel`) and `defaultModel` (in the Repository & Defaults block). `designPrototypeModel`, `prdAssistantModel`, and `calendarAssistantModel` also fall outside the `ModelKey` union used by `PipelineStageDef` and must be located and mirrored the same way at implementation time.
-  - Alternative rejected: introducing a brand-new generic "field pair" abstraction that unifies both patterns. Rejected because it would touch every existing stage definition and card render for a feature whose PRD explicitly asks for a minimal, additive change ("No new settings screen") — the two-pattern mirror keeps the diff proportional to the feature.
+**TBI-004 — Filter and strip Home pills on the public skill-config read path**
+- Pattern followed: existing `GET /skill-config` handler in `api.ts` (~line 4283) already builds its response as an explicit field-by-field object literal, not a type-cast spread of the raw config row — this Feature extends that same explicit-field style for the pill fields instead of introducing a new response-shaping helper.
+- Key decisions: resolve `getUserId(req)`, `isSuperAdminRequest(req)`, and `groupService.getUserGroupIds(userId)` at the top of the handler (mirroring how `chat.ts` already resolves `getUserId(req)` per request), call `resolveHomePillAccess()`, then map each allowed pill to an explicit subset of fields (omitting `allowedUserIds`/`allowedGroupIds`) before assigning to `quickSkillPills`/`quickMcpPills` in the response object. `homePillsConfigured` is computed directly from the *unfiltered* `config.quickSkillPills`/`config.quickMcpPills` lengths (project-level fact, independent of caller) rather than from the resolver's caller-specific output, since it must be true even for a caller who is filtered down to zero pills. Rejected alternative: reusing `canStartPillessChat` for this purpose — that value is caller-specific and would be `true` for a caller with no configured pills to worry about but also `true` for a caller allowed on the project's only pill, collapsing exactly the distinction TBI-006 needs.
+
+**TBI-005 — Enforce pill access on Home thread creation**
+- Pattern followed: `POST /threads` in `chat.ts` already resolves `resolveSkillConfig({ project, settingsId })` before building the kickoff (existing code, unchanged); this Feature inserts the admission check immediately after that resolution and before the `createThread()` call, using the same early-return-with-4xx style already used by the route's existing `kickoff.project`/`kickoff.repo` validation.
+- Key decisions: `resolveThreadCreationAdmission()` takes the kickoff's `skillPath` and `mcpPill?.mcpServerName` (both already present on `ChatThreadKickoff`, `src/shared/types/chat.ts` — no kickoff shape change needed) and applies the match rule from the PRD's stated assumption: a kickoff matches a configured skill pill only on exact `skillPath` equality, matches a configured MCP pill only on exact `mcpServerName` equality, and is otherwise treated as pill-less (including an unmatched `skillPath`, per PBI-005(c)). A denied kickoff returns `403` with an explicit error message before `createThread()` runs, so no thread row is ever persisted for a denied request — satisfying TBI-005's "check runs before a new thread row is persisted" NFR without touching `createThread()` itself. Platform Admin exemption is the same `isSuperAdmin` boolean threaded through from TBI-003, not a second bypass path.
+
+**TBI-006 — Update Home composer for filtered pills and blocked-start state**
+- Pattern followed: the existing `needsSkillSelection` boolean and its wiring into `AgentComposer`'s `disabled`/`canSend`/`shellDisabled`/`placeholder` props in `ChatAgentPanel.tsx` (the empty-composer branch) is the direct template for the new gate — this Feature adds a sibling boolean rather than a new mechanism.
+- Key decisions: add `blockedNoAllowedPills = isHomeCompose && Boolean(skillConfig?.homePillsConfigured) && quickSkillPills.length === 0 && quickMcpPills.length === 0`, and fold it into the existing `canSend`/`disabled`/`shellDisabled` expressions alongside `needsSkillSelection` (the two are mutually exclusive by construction — `needsSkillSelection` requires `hasHomePills` to be true, `blockedNoAllowedPills` requires the filtered pills to be empty). When the `skill-config` query is loading or has errored, `skillConfig` is `undefined`/stale, so `Boolean(skillConfig?.homePillsConfigured)` defaults to `false` — the PRD's "defaulting to disabled rather than allowing an unchecked send" NFR is satisfied not by defaulting to blocked, but because `hasHomePills` also depends on the same possibly-stale `skillConfig` and the pre-existing `needsSkillSelection`/`canStartNewChat` gates already fail closed in that state; no new loading-state logic is required.
 
 ---
 
@@ -68,48 +71,45 @@
 
 | Method | Route | Request shape | Response shape | Auth |
 |--------|-------|--------------|----------------|------|
-| POST | `/api/admin/project-settings` | `UpsertProjectSkillConfigRequest` (+ 20 new optional `*Effort`/`defaultEffort` fields) | `201` `ProjectSkillConfigResponse & { approvalModes }` | `requirePermission('admin:roles')` |
-| PUT | `/api/admin/project-settings/:id` | `UpsertProjectSkillConfigRequest` (+ 20 new optional `*Effort`/`defaultEffort` fields) | `200` `ProjectSkillConfigResponse & { approvalModes }` | `requirePermission('admin:roles')` |
-| GET | `/api/admin/project-settings` | — | `200` `Array<ProjectSkillConfig & { approvalModes, ...ApproverCounts }>` (already spreads all columns, effort fields included automatically once the shared type and schema carry them) | `requirePermission('admin:roles')` |
-| GET | `/api/skill-config?project=\|settingsId=` | Query params only | `200` explicit field-by-field JSON (existing handler in `api.ts`) — extended with the 20 new `*Effort`/`defaultEffort` fields | Authenticated session (existing pattern for this endpoint; unchanged by this feature) |
+| GET | `/api/skill-config?project=&settingsId=` | Query params only (unchanged) | Existing explicit-field response, extended: `quickSkillPills`/`quickMcpPills` now contain only the caller's allowed pills with `allowedUserIds`/`allowedGroupIds` omitted from each; new `homePillsConfigured: boolean` field | Authenticated session (existing pattern for this route, unchanged) |
+| POST | `/api/chat/threads` | `StartChatRequest` (unchanged shape) | `201 { threadId }` on success (unchanged); **new:** `403 { error: string }` when the kickoff names a pill the caller isn't allowed on, or is pill-less while the caller is allowed on none of the project's configured pills | `requirePermission('chat:view')` (router-wide, unchanged) + new pill-admission check (not an RBAC permission) |
 
 ### Schema / storage changes
 
 | Target | Change | Reason |
 |--------|--------|--------|
-| `project_skill_settings` | **None in this feature.** Already extended by the FEAT-001 prerequisite with 20 nullable `TEXT` columns (19 per-module `*_effort` columns + `default_effort`). This feature only reads and writes those existing columns through `upsertSkillConfig()`. | Effort defaults must live on the same row as the model override they sit beside, per the PRD's "Project settings configuration (deep module)" decision. |
+| `project_skill_settings.quick_skill_pills` / `quick_mcp_pills` (jsonb) | None — read-only for this Feature | FEAT-001 (dependency) already added `allowedUserIds`/`allowedGroupIds` inside these existing JSON-backed columns; this Feature only evaluates them |
 
 ---
 
 ## Testing Strategy
 
 **Unit tests:**
-- `projectSettingsService.test.ts` — `upsertSkillConfig()` round-trips `interviewEffort` (representative per-module field) and `defaultEffort` through `low`/`medium`/`high`/`null`, extending the existing model-override round-trip test in the same file/`describe` block rather than a new file, per the PRD's testing decision ("extend those same tests in parallel rather than create a new, separate test file per module").
-- `admin.ts` route tests (or equivalent supertest suite) — `PUT /project-settings/:id` and `POST /project-settings`: accept `low`/`medium`/`high`/`null` for `interviewEffort` and `defaultEffort`; reject any other string (e.g. `"urgent"`) with `400` and assert the DB row is unchanged afterward.
-- `isAgentEffort()` — unit-test the guard directly against valid values, invalid strings, `null`, and `undefined`.
+- `homePillAccessResolver.test.ts` (new) — `resolveHomePillAccess()`: empty-allow-list-means-everyone default (both fields absent and both present-but-empty), direct user-ID match, group-ID match, a stale/deleted group reference granting no access, Platform Admin bypass returning every pill unfiltered, and the `canStartPillessChat` truth table across {zero configured pills, configured-and-allowed, configured-and-none-allowed}. `resolveThreadCreationAdmission()`: allowed skill pill accepted, disallowed MCP pill denied, unmatched `skillPath` treated as pill-less, Platform Admin accepted regardless of allow-list.
+- `groupService.test.ts` (extend) — `getUserGroupIds()` returns the caller's current group ID memberships, matching the existing `getUserGroupNames()` coverage shape.
 
 **Integration tests:**
-- Full request → DB → response round trip for one representative module (`interviewEffort`) plus `defaultEffort`: `PUT /project-settings/:id` with a new effort value, then `GET /api/skill-config?project=X` confirms the persisted value is echoed back.
-- `requirePermission('admin:roles')` short-circuit: a session without `admin:roles` calling `PUT /project-settings/:id` with any `*Effort` field gets `403` before `validateEffortFields` or `upsertSkillConfig` ever runs, and the row is unchanged.
+- `apiRoutes.skillConfig.test.ts` (extend) — `GET /api/skill-config` returns only allowed pills and never returns `allowedUserIds`/`allowedGroupIds`, exercised across an Authenticated User (partial access), a Project Admin (no bypass), and a Platform Admin (full access) caller on the same project/pill configuration; `homePillsConfigured` is `true` when the project has pills regardless of caller filtering, and `false` only when the project has none.
+- `chatRoutes.test.ts` (extend, `describe('POST /api/chat/threads', ...)`) — the full accept/deny matrix: allowed skill pill (create), disallowed MCP pill (deny, no thread persisted), unmatched skillPath with zero allowed pills (deny), pill-less with zero configured pills (create, unchanged), pill-less with zero allowed pills on a project with configured pills (deny), pill-less with at least one allowed pill (create), Platform Admin against any pill (create).
 
 **E2E tests (if applicable):**
-- Playwright — extend the existing Admin Project Settings spec (do not create a new spec file): select "Medium" in the Interview module's new Effort override, save, reload the page, and assert the dropdown still shows "Medium." Add one negative-path assertion that selecting an out-of-range value is impossible through the UI (the `<select>` only offers the four valid options), confirming the UI cannot itself produce an invalid request.
+- Playwright, Home page — a pill with a non-empty allow-list is hidden for a user not on it and appears after being added (paired with the companion Feature's admin editor); the Home composer shows the new blocked-start message and disables send when the signed-in user is allowed on none of a project's configured pills.
 
 ---
 
 ## Observability
 
-- **Custom events/metrics:** None beyond standard request telemetry. The existing admin settings save/read path emits no custom metrics for `model`, so `effort` follows that same precedent. Telemetry for the effort value actually resolved and applied at kickoff is FEAT-003 scope, not this feature.
+- **Custom events/metrics:** None beyond standard request telemetry. A denied `POST /api/chat/threads` already surfaces as a `4xx` response and is covered by existing request logging; no new named event is needed to prove the accept/deny behavior, per the PRD's own testing guidance to "assert on the visible pill set and on thread-creation accept/deny outcomes... not on which internal helper was called."
 - **Alerts:** None.
 
 ---
 
 ## Rollback and Deployment
 
-- **Schema changes backward compatible:** Yes. This feature performs no DDL; it only reads/writes the nullable columns FEAT-001 already added, which are backward-compatible by construction (nullable, no backfill, no NOT NULL constraint).
-- **Rollback procedure:** Revert the `admin.ts` / `api.ts` / `projectSettingsService.ts` / `AdminProjectSettings.tsx` changes. Any effort values already persisted by admins during the window this feature was live remain harmlessly stored (nullable columns, unread by any pre-FEAT-003 code path) until FEAT-003 ships and starts resolving them.
-- **Deployment dependencies:** FEAT-001 must be deployed first so the columns and shared `AgentEffort` type exist. No manual provisioning beyond the standard migration deploy step already required for FEAT-001.
-- **Feature flag gates deployment:** No. Per the PRD, no flag is needed — the `admin:roles` write gate plus null/Inherit-by-default columns make this safe to ship ungated; existing behavior is unchanged until a Project Admin opts in.
+- **Schema changes backward compatible:** Not applicable — no schema change in this Feature.
+- **Rollback procedure:** Revert the `api.ts`/`chat.ts`/`ChatAgentPanel.tsx`/`groupService.ts`/`homePillAccessResolver.ts` changes as a single deploy; because FEAT-001's allow-list fields are additive and optional, a rollback of this Feature alone leaves every pill behaving exactly as it does today (empty/absent allow-lists mean everyone), with no data cleanup required.
+- **Deployment dependencies:** FEAT-001 ("Configure Home Pill Allow-Lists") must be deployed first so `allowedUserIds`/`allowedGroupIds` exist on the pill types and are persisted by the admin path before this Feature's resolver has anything meaningful to read.
+- **Feature flag gates deployment:** No — this ships GA directly, per the PRD's explicit "no feature flag" decision.
 
 ---
 
@@ -117,38 +117,56 @@
 
 | ID | Layer | Arrange | Act | Assert | Linked |
 |----|-------|---------|-----|--------|--------|
-| VT-01 | Jest (unit/service) | Seed a `project_skill_settings` row with `interviewEffort: null` | Call `upsertSkillConfig({ id, interviewEffort: 'medium', ... })` | Returned row and re-fetched row both have `interviewEffort: 'medium'` | PBI-001 (a) |
-| VT-02 | Jest (unit/route) | Authenticated admin session, existing config row | `PUT /api/admin/project-settings/:id` with `interviewEffort: 'urgent'` | `400` response with an error message; DB row's `interviewEffort` unchanged | PBI-001 (b) |
-| VT-03 | Jest (unit/service + route) | Row with `interviewEffort: 'high'` | `PUT /api/admin/project-settings/:id` with `interviewEffort: null` | Row updates to `null`; subsequent `GET /api/skill-config?project=X` returns `interviewEffort: null` | PBI-001 (c) |
-| VT-04 | Jest (integration) | Authenticated session **without** `admin:roles` | `PUT /api/admin/project-settings/:id` with any `*Effort` field set | `403` response (via `requirePermission`, short-circuiting before `validateEffortFields` runs); row unchanged | PBI-001 (d) |
-| VT-05 | Jest (unit/service) | `UpsertSkillConfigOptions` with all 20 `*Effort` keys set to a mix of `'low'`/`'medium'`/`'high'`/`null` | `upsertSkillConfig(opts)` | Returned row and DB row match every one of the 20 fields exactly | TBI-004 |
-| VT-06 | RTL/Jest (component) | `AdminProjectSettings` rendered with a loaded config | User selects "High" in Interview's Effort override `<select>` and clicks Save | Mutation payload includes `interviewEffort: 'high'`; card re-renders showing "High" | PBI-001 (a) |
-| VT-07 | Playwright (E2E) | Logged in as Project Admin on `/admin/project-settings` | Select "Medium" effort for Interview, Save, reload page | Effort dropdown for Interview still shows "Medium" after reload | PBI-001 (a) |
+| VT-01 | Jest (unit) | Skill pill with empty/absent `allowedUserIds`/`allowedGroupIds` | `resolveHomePillAccess()` for an arbitrary non-admin caller | Pill is included in the allowed subset | PBI-003 (c) |
+| VT-02 | Jest (unit) | Skill pill with `allowedUserIds: [callerId]`, another pill with `allowedUserIds: [otherId]` | `resolveHomePillAccess()` for `callerId` | Only the first pill is in the allowed subset | PBI-003 (a) |
+| VT-03 | Jest (unit) | MCP pill with `allowedGroupIds: ['stale-group-id']` that does not appear in `callerGroupIds` | `resolveHomePillAccess()` for the caller | MCP pill is excluded from the allowed subset (no error thrown) | PBI-003 (b) |
+| VT-04 | Jest (unit) | Two pills, both with non-empty allow-lists the caller is not on | `resolveHomePillAccess()` with `isSuperAdmin: true` | Both pills are included, unfiltered | PBI-004 (a) |
+| VT-05 | Jest (unit) | Same pill configuration as VT-04 | `resolveHomePillAccess()` with `isSuperAdmin: false` for a Project Admin's `callerId` (not on either allow-list) | Both pills are excluded | PBI-004 (d) |
+| VT-06 | Jest (unit) | Project with zero configured skill/MCP pills | `resolveHomePillAccess()` for any caller | `canStartPillessChat` is `true` | PBI-003 (c), PBI-006 (c) |
+| VT-07 | Jest (unit) | Project with configured pills, caller allowed on zero | `resolveHomePillAccess()` for that caller | `canStartPillessChat` is `false` | PBI-006 (a) |
+| VT-08 | Jest (unit) | Project with configured pills, caller allowed on at least one | `resolveHomePillAccess()` for that caller | `canStartPillessChat` is `true` | PBI-006 (d) |
+| VT-09 | Jest (integration, route) | Project with a skill pill allowed for the caller | `POST /api/chat/threads` naming that pill's `skillPath` | `201`, thread created | PBI-005 (a) |
+| VT-10 | Jest (integration, route) | Project with an MCP pill not allowed for the caller | `POST /api/chat/threads` naming that pill's `mcpServerName` directly (bypassing the composer) | `403`, no thread row persisted | PBI-005 (b) |
+| VT-11 | Jest (integration, route) | Project with configured pills, kickoff `skillPath` matches none of them, caller allowed on zero configured pills | `POST /api/chat/threads` with that `skillPath` | `403` | PBI-005 (c) |
+| VT-12 | Jest (integration, route) | Project with configured pills the caller is not allowed on, caller is Platform Admin | `POST /api/chat/threads` naming any configured pill | `201`, thread created | PBI-005 (d) |
+| VT-13 | Jest (integration, route) | Project with configured pills, caller allowed on zero | `POST /api/chat/threads` with no `skillPath` and no `mcpPill` | `403` | PBI-006 (a), (b) |
+| VT-14 | Jest (integration, route) | Project with zero configured pills | `POST /api/chat/threads` with no `skillPath` and no `mcpPill` | `201`, thread created (unchanged) | PBI-006 (c) |
+| VT-15 | Jest (integration, route) | Existing thread owned by the caller on a pill; admin removes the caller from that pill's allow-list after thread creation | `POST /api/chat/threads/:id/messages` on the existing thread | `202`, message accepted | PBI-007 (a) |
+| VT-16 | Jest (integration, route) | Same setup as VT-15 | `POST /api/chat/threads` for a *new* thread on the same pill | `403` | PBI-007 (c) |
+| VT-17 | Jest (integration, route) | `GET /api/skill-config` for a project with configured pills, caller allowed on some | Inspect response body | `quickSkillPills`/`quickMcpPills` contain only allowed pills; no `allowedUserIds`/`allowedGroupIds` key present anywhere in the response | PBI-003 (a), (d) |
+| VT-18 | Jest (integration, route) | `GET /api/skill-config` for a project with configured pills, caller allowed on zero | Inspect response body | `quickSkillPills: []`, `quickMcpPills: []`, `homePillsConfigured: true` | PBI-003 (d), PBI-006 (a) |
+| VT-19 | Jest (integration, route) | `GET /api/skill-config` for a project with zero configured pills | Inspect response body | `quickSkillPills: []`, `quickMcpPills: []`, `homePillsConfigured: false` | PBI-006 (c) |
+| VT-20 | RTL (component) | `ChatAgentPanel` in Home-compose mode, `skillConfig` = `{ quickSkillPills: [], quickMcpPills: [], homePillsConfigured: true }` | Render, attempt to send a pill-less message | Send is disabled, blocked-state notice with `data-testid="chat-agent-home-blocked-notice"` is rendered | PBI-006 (a) |
+| VT-21 | RTL (component) | Same as VT-20 but `homePillsConfigured: false` | Render, attempt to send a pill-less message | Send proceeds unchanged (existing pill-less behavior) | PBI-006 (c) |
+| VT-22 | Playwright (E2E) | Two users on a project with one allow-listed skill pill; only one user is on the allow-list | Both load `/home` | The allow-listed user sees the pill; the other does not | PBI-003 (a) |
 
 ---
 
 ## Implementation Plan
 
-- [ ] S1 — Extend `src/shared/types/projectSettings.ts`: add the 20 optional `*Effort`/`defaultEffort` fields (typed `AgentEffort | null`) to `ProjectSkillConfig`, `UpsertProjectSkillConfigRequest`, and `ProjectSkillConfigResponse` _(no blockers — assumes the FEAT-001 `AgentEffort` union and columns already exist)_
-  - Covers: `VT-05`
-- [ ] S2 — Extend `src/server/services/projectSettingsService.ts`: add `AGENT_EFFORTS`/`isAgentEffort()`, extend `UpsertSkillConfigOptions` and the `values` object inside `upsertSkillConfig()` with the 20 fields, following the exact `opts.xEffort ?? null` wiring already used for `*Model` fields _(blocked by S1)_
-  - Covers: `VT-05`
-- [ ] S3 — Extend `src/server/routes/admin.ts`: add `validateEffortFields()`, call it from `POST /project-settings` and `PUT /project-settings/:id` before `upsertSkillConfig`, returning `400` on the first invalid field found _(blocked by S2)_
-  - Covers: `VT-01`, `VT-02`, `VT-03`, `VT-04`
-- [ ] S4 — Extend `src/server/routes/api.ts`: add the 20 `*Effort`/`defaultEffort` fields to the `GET /skill-config` response object, alongside the corresponding `*Model` fields already listed there _(blocked by S1; runs in parallel with S3)_
+- [ ] S1 — Add `getUserGroupIds(userId): Promise<string[]>` to `groupService.ts` _(no blockers; requires FEAT-001 merged for `allowedGroupIds` to exist on pill types)_
   - Covers: `VT-03`
-- [ ] S5 — Extend `src/client/components/AdminProjectSettings.tsx`: add `EffortKey` type, `PipelineStageDef.effortKey` on every stage that has a `modelKey`, `EditState` fields, `emptyEdit()`, `handleSave()` payload, the 3-column `PipelineStageCard` render, and the two standalone ADR/Default Effort fields _(blocked by S1; can start once S1 lands)_
-  - Covers: `VT-06`, `VT-07`
-- [ ] S6 — Unit tests: `projectSettingsService` round-trip + `admin.ts` accept/reject/permission-denied cases _(blocked by S2, S3)_
-  - Covers: `VT-01`, `VT-02`, `VT-03`, `VT-04`, `VT-05`
-- [ ] S7 — E2E: extend the existing Playwright Admin Project Settings spec with the Effort-selector save/reload case _(blocked by S3, S5)_
-  - Covers: `VT-07`
+- [ ] S2 — Build `homePillAccessResolver.ts` (`resolveHomePillAccess()`, `resolveThreadCreationAdmission()`) _(blocked by S1)_
+  - Covers: `VT-01`, `VT-02`, `VT-03`, `VT-04`, `VT-05`, `VT-06`, `VT-07`, `VT-08`
+- [ ] S3 — Extend `GET /api/skill-config` in `api.ts`: call the resolver, strip allow-list fields from each returned pill, add `homePillsConfigured` _(blocked by S2)_
+  - Covers: `VT-17`, `VT-18`, `VT-19`
+- [ ] S4 — Add `homePillsConfigured?: boolean` to `ProjectSkillConfigResponse` in `projectSettings.ts` _(no blockers; can run in parallel with S1/S2)_
+- [ ] S5 — Extend `POST /api/chat/threads` in `chat.ts`: call `resolveThreadCreationAdmission()` before `createThread()`, return `403` on denial _(blocked by S2)_
+  - Covers: `VT-09`, `VT-10`, `VT-11`, `VT-12`, `VT-13`, `VT-14`
+- [ ] S6 — Verify no regression on existing-thread read/write and reopen flows (no code change expected — proves TBI-005's "existing-thread paths untouched" NFR) _(blocked by S5)_
+  - Covers: `VT-15`, `VT-16`
+- [ ] S7 — Update `ChatAgentPanel.tsx` Home-compose branch: `blockedNoAllowedPills` gate, blocked-state notice _(blocked by S3, S4)_
+  - Covers: `VT-20`, `VT-21`
+- [ ] S8 — E2E coverage for allow-listed vs. non-allow-listed pill visibility on `/home` _(blocked by S3, S7; also requires the companion Feature's admin editor to configure an allow-list)_
+  - Covers: `VT-22`
 
 **Execution lanes:**
-- Lane 1 (start immediately): S1
-- Lane 2 (after S1): S2, S4, S5 — all three can run in parallel once the shared types exist
-- Lane 3 (after S2): S3
-- Lane 4 (after S3, S5): S6, S7
+- Lane 1 (start immediately): S1, S4
+- Lane 2 (after S1): S2
+- Lane 3 (after S2): S3, S5
+- Lane 4 (after S3 + S4): S7
+- Lane 5 (after S5): S6
+- Lane 6 (after S3 + S7): S8
 
 ---
 
@@ -156,38 +174,34 @@
 
 ```mermaid
 sequenceDiagram
-  actor Admin as Project Admin
-  participant UI as AdminProjectSettings.tsx
-  participant Hook as useUpsertProjectSkillConfig
-  participant Route as admin.ts (PUT /project-settings/:id)
-  participant Service as projectSettingsService.upsertSkillConfig
-  participant DB as project_skill_settings
+  actor User
+  participant Composer as ChatAgentPanel
+  participant Hook as useStartChat
+  participant Route as POST /api/chat/threads
+  participant Resolver as homePillAccessResolver
+  participant Chat as chatAgentService.createThread
+  participant DB as PostgreSQL
 
-  Admin->>UI: select "Medium" for Interview effort, click Save
-  UI->>Hook: mutate({ id, interviewEffort: "medium", ...rest })
-  Hook->>+Route: PUT /api/admin/project-settings/:id
-  Route->>Route: requirePermission('admin:roles')
-  Route->>Route: validateEffortFields(body)
-  Route->>+Service: upsertSkillConfig({ id, interviewEffort: "medium", ... })
-  Service->>+DB: db.update(project_skill_settings).set({ interview_effort: "medium", ... })
-  DB-->>-Service: updated row
-  Service-->>-Route: ProjectSkillConfig (incl. interviewEffort)
-  Route-->>-Hook: 200 OK { ...config, interviewEffort: "medium" }
-  Hook-->>UI: isSuccess=true, cache updated
-  UI-->>Admin: card shows "Medium" next to model
+  User->>Composer: select a pill (or send pill-less)
+  Composer->>Hook: mutate({ kickoff })
+  Hook->>+Route: POST /api/chat/threads
+  Route->>Route: resolveSkillConfig(project, settingsId)
+  Route->>Route: getUserId(req), isSuperAdminRequest(req), getUserGroupIds(userId)
+  Route->>+Resolver: resolveThreadCreationAdmission(pills, caller, kickoff)
+  Resolver-->>-Route: { admitted: true }
+  Route->>+Chat: createThread(userId, kickoff)
+  Chat->>+DB: insert chat_threads row
+  DB-->>-Chat: inserted
+  Chat-->>-Route: thread
+  Route-->>-Hook: 201 { threadId }
+  Hook-->>Composer: isSuccess=true
+  Composer-->>User: conversation opens
 
-  alt invalid effort value
-    Route->>Route: validateEffortFields(body) finds "urgent" is not low/medium/high/null
-    Route-->>Hook: 400 BadRequest { error }
-    Hook-->>UI: isError=true
-    UI-->>Admin: inline error shown, no value persisted
-  end
-
-  alt caller lacks admin:roles
-    Route->>Route: requirePermission('admin:roles') fails
-    Route-->>Hook: 403 Forbidden
-    Hook-->>UI: isError=true
-    UI-->>Admin: access denied, no value persisted
+  alt kickoff denied
+    Resolver-->>Route: { admitted: false, reason }
+    Route-->>Hook: 403 { error }
+    Hook-->>Composer: isError=true
+    Composer-->>User: send stays disabled, explanatory message shown
   end
 ```
 
@@ -197,28 +211,43 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-  S1["S1 — Shared types: 20 Effort fields"]
-  S2["S2 — projectSettingsService: validator + upsert"]
-  S3["S3 — admin.ts: validateEffortFields on write routes"]
-  S4["S4 — api.ts: GET /skill-config effort fields"]
-  S5("S5 — AdminProjectSettings.tsx: effort selectors")
-  S6{{"S6 — Unit tests (VT-01..05)"}}
-  S7(["S7 — E2E test (VT-07)"])
+  S1["S1 — groupService.getUserGroupIds()"]
+  S2["S2 — homePillAccessResolver.ts"]
+  S3["S3 — api.ts: GET /skill-config filter + strip"]
+  S4["S4 — projectSettings.ts: homePillsConfigured field"]
+  S5["S5 — chat.ts: POST /threads admission check"]
+  S6["S6 — verify existing-thread paths untouched"]
+  S7("S7 — ChatAgentPanel.tsx blocked-state gate")
+  S8(["S8 — E2E pill-visibility coverage"])
+  T_unit{{"VT-01..VT-08 — resolver unit tests"}}
+  T_route{{"VT-09..VT-19 — route integration tests"}}
+  T_rtl{{"VT-20, VT-21 — composer component tests"}}
+  T_e2e(["VT-22 — E2E"])
 
   S1 --> S2
-  S1 --> S4
-  S1 --> S5
   S2 --> S3
-  S3 --> S6
-  S2 --> S6
+  S2 --> S5
   S3 --> S7
-  S5 --> S7
+  S4 --> S7
+  S5 --> S6
+  S3 --> S8
+  S7 --> S8
+  S2 -.->|"unit tests"| T_unit
+  S3 -.->|"integration tests"| T_route
+  S5 -.->|"integration tests"| T_route
+  S6 -.->|"integration tests"| T_route
+  S7 -.->|"component tests"| T_rtl
+  S8 --> T_e2e
 
-  subgraph parallel1 ["Can run in parallel after S1"]
-    S2 & S4 & S5
+  subgraph parallel1 ["Can run in parallel"]
+    S1 & S4
+  end
+
+  subgraph parallel2 ["Can run in parallel (after S2)"]
+    S3 & S5
   end
 
   subgraph legend ["Legend"]
-    L1["Backend"] --- L2("Frontend") --- L3{{"Unit Test"}} --- L4(["E2E Test"])
+    L1["Backend"] --- L2("Frontend") --- L3{{"Unit/Integration Test"}} --- L4(["E2E Test"])
   end
 ```

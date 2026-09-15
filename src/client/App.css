@@ -917,6 +917,7 @@ body {
 /* Keep AgentHome mounted off-route without breaking compose vertical centering.
    A plain wrapper (no flex/height) left Home stuck in the top half of the viewport. */
 .agent-home-keepalive {
+  position: relative;
   flex: 1;
   min-height: 0;
   width: 100%;

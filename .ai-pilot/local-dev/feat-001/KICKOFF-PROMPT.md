@@ -1,7 +1,7 @@
 Implement the following work item locally in this repository.
 
-Title: Provide ability to select effort per agent module within project settings — Effort Data Model & Shared Allow-List Foundations
-ID: feature FEAT-001 (PRD f1c5f613-3d5d-4f9c-89fc-ddcf8b1c3e23)
+Title: Permission by skill — Configure Home Pill Allow-Lists
+ID: feature FEAT-001 (PRD 585c4383-51bd-466a-849b-547bf82ded1c)
 Type: Apex Feature
 
 Context files have been extracted under `.ai-pilot/local-dev/feat-001/`. Read them before coding:

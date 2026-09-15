@@ -85,9 +85,8 @@ async function openHomeChat(
   });
   await loginAsPersona('developer');
   await page.goto('/home');
-  await expect(page.getByTestId('home-dashboard-root')).toBeVisible();
-  await page.getByTestId('home-chat-toggle-btn').click();
   await expect(page.getByTestId('agent-slideout-shell')).toBeVisible();
+  await expect(page.getByTestId('home-view-chat')).toHaveAttribute('aria-selected', 'true');
 }
 
 test.describe('Home pill access', () => {

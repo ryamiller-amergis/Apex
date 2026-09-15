@@ -1,32 +1,32 @@
-# Technical Specification — Effort Data Model & Shared Allow-List Foundations
+# Technical Specification — Configure Home Pill Allow-Lists
 
-> **PRD slug:** `per-module-agent-effort-defaults` | **Owning layer:** `src/shared/types/` + `src/server/db/schema.ts` + `migrations/` | **Surface:** Backend/shared types only (no client runtime change)
+> **PRD slug:** `home-pill-access-control` | **Owning layer:** `src/shared/types/` + `src/client/components/AdminProjectSettings.tsx` | **Surface:** Full stack (shared type + existing route/service pass-through + React admin editor)
 > **Verification builds:** `npx tsc -p tsconfig.server.json --noEmit` and `npx tsc -p tsconfig.client.json --noEmit`
-> **Open items:** See [design-doc-assumptions.md](design-doc-assumptions.md) (1 unresolved)
-> **Design doc:** [design-doc-design.md](design-doc-design.md)
+> **Open items:** See [configure-home-pill-allow-lists-assumptions.md](configure-home-pill-allow-lists-assumptions.md) (2 unresolved)
+> **Design doc:** [configure-home-pill-allow-lists-design.md](configure-home-pill-allow-lists-design.md)
 
 ---
 
 ## System Boundary and Owning Layer
 
-**Owning layer:** `src/shared/types/effort.ts` (new), `src/shared/types/projectSettings.ts` (extended), `src/server/db/schema.ts` (extended), `migrations/` (three new files).
+**Owning layer:** `src/shared/types/projectSettings.ts` (extended) and `src/client/components/AdminProjectSettings.tsx` (extended). No new files, no new services, no new routes, no migration.
 
-**Rationale:** This Feature is pure data-model groundwork — it does not resolve, validate at write time, or display effort anywhere. The only code that needs to exist is (1) the closed allow-list type both future client and server code will import, (2) the Drizzle column definitions that make the type queryable, and (3) the DDL that makes the columns exist in Postgres. Every consuming behavior (admin write validation, kickoff resolution, artifact/cost display) is chartered to FEAT-002, FEAT-003, and FEAT-004 respectively, per their own TBI Definition of Done lists — pulling any of that logic into this Feature would duplicate work those features are scoped to do and violate the backlog's `dependsOn` ordering (FEAT-002/003/004 all `dependsOn: ["FEAT-001"]`, not the reverse).
+**Rationale:** The two new fields live inside pill arrays that are already stored as opaque `jsonb` on `project_skill_settings` and already round-trip unchanged through the existing admin read/write path (`admin.ts` spreads the full request body into `projectSettingsService.upsertSkillConfig`, which persists `quickSkillPills`/`quickMcpPills` verbatim). The only code that needs to exist is (1) the shared-type fields so TypeScript and the React editor can see and bind to them, and (2) the picker UI on each pill row. Pulling read-path filtering or thread-creation enforcement into this Feature would duplicate work chartered to **Enforce Home Pill Access** (`FEAT-002`, which `dependsOn: ["FEAT-001"]`) and violate the backlog's own dependency ordering.
 
 **Ownership answers:**
-- New or existing Express service in `src/server/services/`? **No** — no service is created or modified. `projectSettingsService.ts`, `chatAgentService.ts`, and `aiUsageService.ts`-equivalent recording logic are untouched; they gain effort-aware behavior in FEAT-002/003/004.
-- New or existing route in `src/server/routes/`? **No** — no route is created or modified. The admin project-settings write/read endpoints keep accepting/returning exactly what they do today until FEAT-002's TBI-004.
-- New React component in `src/client/components/`? **No** — no UI exists yet. `AdminProjectSettings.tsx` is untouched.
-- New shared type in `src/shared/types/`? **Yes** — a new `effort.ts` file exporting the closed `EffortLevel` union, a runtime `EFFORT_LEVELS` array, and a type-guard function; plus an additive `effort?: EffortLevel | null` field on three existing interfaces in `projectSettings.ts` (`InterviewSkillOption`, `QuickSkillPill`, `QuickMcpPillBase`).
-- Database migration needed? **Yes** — three migrations: one adding 20 columns to `project_skill_settings`, one adding 1 column to each of 5 artifact tables, one adding 1 column to `ai_usage_events`.
+- New or existing Express service in `src/server/services/`? **No** — `projectSettingsService.ts`'s `upsertSkillConfig`/`getSkillConfig`/`getSkillConfigById` already pass `quickSkillPills`/`quickMcpPills` through unchanged (line 301: `quickSkillPills: opts.quickSkillPills ?? null`). No new service, no modified function signature.
+- New or existing route in `src/server/routes/`? **No** — `POST /api/admin/project-settings` and `PUT /api/admin/project-settings/:id` (`admin.ts`) already accept and persist the full pill arrays. `GET /api/admin/project-settings` already spreads `...cfg` (including `quickSkillPills`/`quickMcpPills`) into its response. Zero route code changes.
+- New React component in `src/client/components/`? **No** — reuses `GroupAwarePeoplePicker` (`src/client/components/GroupAwarePeoplePicker.tsx`), the same component `renderApproverSection` already binds for design-doc/PRD/prototype/test-case/ADR reviewer pools. Only `AdminProjectSettings.tsx`'s pill-row JSX is extended, not a new component file.
+- New shared type in `src/shared/types/`? **Yes** — additive-only: `allowedUserIds?: string[] | null` and `allowedGroupIds?: string[] | null` added to `QuickSkillPill` and `QuickMcpPillBase` in `src/shared/types/projectSettings.ts`.
+- Database migration needed? **No** — both fields live inside the existing `quick_skill_pills`/`quick_mcp_pills` `jsonb` columns (`src/server/db/schema.ts`, lines 823–824), which are untyped-at-the-database-level JSON blobs already carrying every other optional pill field (`model`, `effort`, `description`, `bypassScopePolicy`, etc.).
 
 ---
 
 ## Security Enforcement
 
-- **Authorization mechanism:** Not applicable at this layer. No new endpoint or UI action is introduced, so there is no new authorization decision to enforce. The existing `admin:roles` gate on the project-settings write endpoint (`AdminProjectSettings.tsx` → project-settings PUT route) is completely unaffected because this Feature does not touch that route — it only adds columns the route does not yet select or accept. FEAT-002's TBI-004 is where `admin:roles` will be checked against the new fields, exactly as it already is checked for the existing `*Model` fields on the same endpoint.
-- **Layer that enforces scope:** Not applicable — there is no runtime read/write path through these columns yet. Project-scoping of the underlying rows (`project_skill_settings.project`, and each artifact table's existing project/thread linkage) is unchanged; no new enforcement surface is introduced, per the PRD's own "Data scope enforcement: Unchanged" statement.
-- **Sensitive data handling:** Not applicable — effort is non-sensitive operational metadata, the same class of field as the existing `model` identifier (per PRD "Security and Data Sensitivity": no encryption, masking, or redaction required).
+- **Authorization mechanism:** `router.use(requirePermission('admin:roles'))` at the top of `src/server/routes/admin.ts` (line ~87) already gates every route in this router, including `POST /project-settings` and `PUT /project-settings/:id`. No new middleware, no new permission key — satisfies BR-001's write-gate requirement and the PRD's Access Control table ("Configure a Home pill's allow-list — Project Admin (existing `admin:roles` gate)"). This is the identical pattern the `rbac-governance.mdc` catalog documents for `admin:roles`.
+- **Layer that enforces scope:** Route middleware only, at the router level — unchanged by this Feature. Project scoping of the underlying row (`project_skill_settings.project`) is unchanged; the settings ID path param (`/project-settings/:id`) already resolves to a single project's row via existing `upsertSkillConfig`/`getSkillConfigById` lookups.
+- **Sensitive data handling:** `allowedUserIds`/`allowedGroupIds` reference the same internal user/group identifiers a Project Admin can already see via `GET /api/admin/groups` and `GET /api/admin/users` (per the PRD, "the same internal user and group identifiers a Project Admin can already see in Project Settings and the reviewer/approver pools"). **Important boundary this Feature does *not* close:** `GET /api/skill-config` (`api.ts`, ~line 4283) already returns `quickSkillPills`/`quickMcpPills` verbatim to any session-authenticated caller with no field-level filtering. Once TBI-001 ships, the two new fields are exposed on that response until FEAT-002's TBI-004 adds stripping — see the deployment-sequencing risk in the assumptions file and in Rollback and Deployment below.
 
 ---
 
@@ -36,36 +36,31 @@
 
 | Layer | Changed | Notes |
 |-------|---------|-------|
-| Server services (`src/server/services/`) | No | Zero services touched — deferred to FEAT-002/003/004 |
-| Server routes (`src/server/routes/`) | No | Zero routes touched |
-| Server middleware (`src/server/middleware/`) | No | No new authorization surface |
-| Client components (`src/client/components/`) | No | No UI in this Feature |
-| Client hooks (`src/client/hooks/`) | No | No data-fetching hook touches the new columns yet |
-| Shared types (`src/shared/types/`) | Yes | New `effort.ts`; `InterviewSkillOption`, `QuickSkillPill`, `QuickMcpPillBase` in `projectSettings.ts` gain an optional `effort` field |
-| Database (`migrations/`) | Yes | Three new migration files (see Data and Contracts below) |
-| Drizzle schema (`src/server/db/schema.ts`) | Yes | Import `EffortLevel`; add 20 columns to `projectSkillSettings`, 1 column to each of 5 artifact tables, 1 column to `aiUsageEvents` |
+| Server services (`src/server/services/`) | No | `projectSettingsService.ts` already passes pill arrays through unchanged |
+| Server routes (`src/server/routes/`) | No | `admin.ts` project-settings routes already accept/return full pill arrays |
+| Server middleware (`src/server/middleware/`) | No | Reuses the existing `requirePermission('admin:roles')` guard |
+| Client components (`src/client/components/`) | Yes | `AdminProjectSettings.tsx` — add a `GroupAwarePeoplePicker` control to each skill-pill row (~lines 2899–2993) and each MCP-pill row (~lines 3023–3140) |
+| Client hooks (`src/client/hooks/`) | No | No new data-fetching hook — `groupsWithMembers`/`allUsers` are already fetched for the reviewer/approver sections and are reused as-is |
+| Shared types (`src/shared/types/`) | Yes | `QuickSkillPill` and `QuickMcpPillBase` in `projectSettings.ts` gain `allowedUserIds?: string[] | null` and `allowedGroupIds?: string[] | null` |
+| Database (`migrations/`) | No | No migration — additive JSON fields inside existing `jsonb` columns |
+| Drizzle schema (`src/server/db/schema.ts`) | No | `quickSkillPills`/`quickMcpPills` columns are already typed as `$type<QuickSkillPill[]>()`/`$type<QuickMcpPill[]>()`; the interface change flows through automatically with zero schema edits |
 
 ### Per-work-item design decisions
 
-**TBI-001 — Add shared effort allow-list type and per-module effort columns to `project_skill_settings`**
-- Pattern followed: mirrors the existing `*Model` `text()` column precedent on `project_skill_settings` (e.g. `calendarAssistantModel: text('calendar_assistant_model')`, `designModuleScopingModel: text('design_module_scoping_model')`) — plain nullable `TEXT`, no DB `CHECK` constraint.
+**TBI-001 — Add allow-list fields to Home pill storage and shared types**
+- Pattern followed: identical to how `effort?: EffortLevel | null` was added to the same three interfaces (`InterviewSkillOption`, `QuickSkillPill`, `QuickMcpPillBase`) in the prior `per-module-agent-effort-defaults` epic — purely additive optional fields, no schema or route change required because the column is untyped JSON at the database layer.
 - Key decisions:
-  - **New dedicated shared-type file, not colocated in `projectSettings.ts`.** `EffortLevel` lives in `src/shared/types/effort.ts`, following the `ApprovalMode`-in-`approvals.ts` precedent — a small cross-cutting union consumed by multiple domains (project settings, artifact tables, usage events) shouldn't force every consumer to import the full project-settings type surface.
-  - **Every new column gets `.$type<EffortLevel>()`**, unlike the untyped `model` columns. This gives compile-time safety to future readers without adding any runtime cast, Zod validation, or DB constraint — a corrupted legacy string still flows through Drizzle as a plain string at runtime, exactly satisfying BR-005 ("an unknown or corrupted stored effort value at run time is treated as unset ... rather than failing the run"). Alternative rejected: leaving columns untyped like `model` — rejected because BR-003 requires a genuinely *closed* allow-list (model's list is dynamically fetched from the Cursor SDK and deliberately open), and the stronger typing costs nothing at runtime.
-  - **No DB `CHECK` constraint** (unlike `approval_mode`, which does have one). A `CHECK` constraint would make BR-005's own test scenario — a legacy/manually-edited row holding a corrupted value — impossible to construct through normal SQL, and would move the failure mode from "silently treated as unset" (what BR-005 wants) to "write rejected by the database" (a harder failure BR-003 already covers at the *application* layer in FEAT-002). Enforcement stays where the PRD puts it: the admin write endpoint (FEAT-002), not the schema.
-  - **Runtime validator ships alongside the type**, not deferred to FEAT-003: `effort.ts` exports `EFFORT_LEVELS: readonly EffortLevel[]` and `isEffortLevel(value: unknown): value is EffortLevel` so FEAT-002's write-path validation and FEAT-003's runtime resolver both import the *same* guard instead of each hand-rolling their own — avoiding the drift risk of two independent allow-list checks.
+  - **Two separate fields, not one combined "principals" array.** Mirrors `SetApproversRequest`'s existing `designDocApprovers`/`designDocApproverGroups` split (individual user IDs vs. group IDs kept as separate arrays) rather than a single mixed-type array — keeps the resolver FEAT-002 builds (`homePillAccessResolver` or equivalent) able to do a cheap `Set.has(userId)` check and a separate group-membership expansion, exactly like the existing approver-pool read path does.
+  - **`allowedUserIds`/`allowedGroupIds` added only to `QuickMcpPillBase`, not duplicated on `QuickMcpPillHttp`/`QuickMcpPillStdio`.** Both variants extend `QuickMcpPillBase`, so the fields are automatically available on both transports without duplication — same placement `effort` and `systemPromptHint` already use on that base interface.
+  - **No field added to `InterviewSkillOption`.** The PRD and backlog scope allow-lists to Home skill and MCP pills only ("Restricting Interview, ADR, or any other non-Home skill selector" is explicitly out of scope); `InterviewSkillOption` backs the Interview module's skill selector, not Home.
 
-**TBI-002 — Add nullable effort snapshot column to artifact audit tables**
-- Pattern followed: mirrors the existing nullable `model` `TEXT` column already present on `interviews`, `adrs`, `prds`, `design_docs`, and `design_prototypes` — same column shape, same "populated once at creation, then immutable for that artifact" intent that FEAT-004 will implement.
+**TBI-002 — Extend Admin Project Settings pill editor with allow-list controls**
+- Pattern followed: `renderApproverSection` (`AdminProjectSettings.tsx`, ~line 2153) — the existing function that renders a `GroupAwarePeoplePicker` bound to a `userIds`/`setUserIds`/`groupIds`/`setGroupIds` tuple for each reviewer document type (`design_doc`, `prd`, `design_prototype`, `test_case`, `adr`).
 - Key decisions:
-  - **No conditional/partial constraint scoping `design_prototypes.effort` to `prototypeEngine = 'agent'`.** `design_prototypes` has no `prototypeEngine` column of its own (that setting lives on `project_skill_settings`), so there is no row-level value to constrain against even if desired. This exactly mirrors how `design_prototypes.model` is unconstrained by engine today — the Bedrock-path model ID lives on the entirely separate `project_skill_settings.designPrototypeBedrockModelId` column. The "agent-engine path only" rule from the PRD is an application-level write-time decision that FEAT-004 implements, not a schema-level one.
-  - **One migration file for all five tables**, since they share no FK relationship with each other and the change is mechanically identical across all five (add one nullable `TEXT` column) — reviewing five near-identical `ALTER TABLE` statements together is clearer than five separate files.
-
-**TBI-003 — Add nullable effort column to `ai_usage_events`**
-- Pattern followed: mirrors the existing nullable `model_id` `TEXT` column on `ai_usage_events`, which is the row-level audit column every provider/feature already writes into.
-- Key decisions:
-  - **No index**, deliberately diverging from `model_id`'s own `idx_ai_usage_events_model` index — the NFR is explicit ("no new index — effort is not filtered in WHERE clauses at this stage"), and the epic's Out-of-Scope confirms no cost-dashboard filter-by-effort capability is planned yet.
-  - **One universal column on the shared table**, not per-feature columns, so stages with no dedicated artifact table (Standup, Feature Request, Technical, Issue, Calendar Assistant, Load Test Generation, Design Module, Design Module Scoping) get audit coverage without any new table — the same reasoning `ai_usage_events` already applies to `model_id` for exactly those same stages.
+  - **Per-pill-row picker, not a per-module section.** Unlike reviewer pools (one picker per document type, backed by top-level component state), each pill needs its *own* independent allow-list, so the picker is rendered inline inside the existing `edit.quickSkillPills.map((pill, idx) => ...)` / `edit.quickMcpPills.map((pill, idx) => ...)` loops, with `onUserIdsChange`/`onGroupIdsChange` writing directly into `pills[idx].allowedUserIds`/`allowedGroupIds` via the same `[...edit.quickSkillPills]; pills[idx] = { ...pills[idx], ... }; setEdit(...)` pattern every other per-pill field (`description`, `model`, `effort`) already uses.
+  - **Placed in the pill list, not the Add form.** `SkillPillAddForm`/`McpPillAddForm` stay minimal (label, skill/server, model, effort) — consistent with `description` and `bypassScopePolicy`, which are also edit-list-only fields. An admin adds the pill first, then configures its allow-list in the same edit session before saving the form.
+  - **`groupsWithMembers`/`allUsers` are the exact same arrays already loaded for `renderApproverSection`.** No new query, no new hook — the picker's `groups`/`availableUsers` props are wired to the same component-level values.
+  - **No new validation function.** `handleSave`'s existing `upsert` mutation already sends the entire `edit` object (including `quickSkillPills`/`quickMcpPills`) in one `PUT`/`POST`; a failure fails the whole request and leaves the DB row untouched, which already satisfies AC (b) ("previously saved allow-list remains in effect... error indicating the save did not succeed") for free, identical to how a failed save today already protects every other pill field.
 
 ---
 
@@ -75,51 +70,32 @@
 
 | Method | Route | Request shape | Response shape | Auth |
 |--------|-------|--------------|----------------|------|
-| — | — | — | — | **None.** This Feature adds zero endpoints and modifies zero existing endpoints. The admin project-settings write/read endpoints continue to accept/return exactly their current shapes until FEAT-002 (TBI-004) extends them to include the columns this Feature creates. |
+| POST | `/api/admin/project-settings` | `UpsertProjectSkillConfigRequest` — `quickSkillPills[].allowedUserIds`/`allowedGroupIds` and `quickMcpPills[].allowedUserIds`/`allowedGroupIds` now recognized fields inside the existing pill array shape | `201` `ProjectSkillConfigResponse & { approvalModes }` (unchanged shape; new fields flow through automatically as part of the pill objects) | `requirePermission('admin:roles')` |
+| PUT | `/api/admin/project-settings/:id` | Same as above | `200` `ProjectSkillConfigResponse & { approvalModes }` | `requirePermission('admin:roles')` |
+| GET | `/api/admin/project-settings` | — | `200` `Array<ProjectSkillConfig & { approvalModes, ...ApproverCounts }>` — already spreads all columns; allow-list fields included automatically once the shared type and pill objects carry them | `requirePermission('admin:roles')` |
+| GET | `/api/skill-config?project=\|settingsId=` | Query params only | `200` explicit field-by-field JSON (`api.ts`, ~line 4297) — `quickSkillPills`/`quickMcpPills` returned **verbatim**, meaning `allowedUserIds`/`allowedGroupIds` are exposed on this response until FEAT-002's TBI-004 strips them (see Rollback and Deployment) | Session-scoped, unauthenticated-but-logged-in pattern (existing, unchanged by this Feature) |
 
 ### Schema / storage changes
 
 | Target | Change | Reason |
 |--------|--------|--------|
-| `project_skill_settings` | Add 19 nullable `TEXT` columns, one per existing `*_model` stage (`interview_effort`, `prd_effort`, `adr_effort`, `design_doc_effort`, `design_doc_assistant_effort`, `design_prototype_effort`, `test_case_effort`, `design_doc_validation_effort`, `prd_assistant_effort`, `prd_validation_effort`, `development_effort`, `standup_effort`, `feature_request_effort`, `technical_effort`, `issue_effort`, `calendar_assistant_effort`, `load_test_generation_effort`, `design_module_effort`, `design_module_scoping_effort`), plus 1 nullable `TEXT` project-wide `default_effort` column (20 total) | Sibling per-module override + project default, mirroring the existing `*_model` + `default_model` columns exactly, so FEAT-002/FEAT-003 can resolve effort via the identical module-override → project-default → omit chain already used for model |
-| `interviews`, `adrs`, `prds`, `design_docs`, `design_prototypes` | Add 1 nullable `TEXT` `effort` column to each (5 total) | Snapshot target for the resolved effort at artifact-creation time, mirroring each table's existing nullable `model` column; `design_prototypes.effort` is populated only for the agent-engine path once FEAT-004 ships (no schema-level enforcement of that scoping — see Architecture decisions above) |
-| `ai_usage_events` | Add 1 nullable `TEXT` `effort` column | Universal audit column so every Cursor-backed usage/cost row — including the 8 stages with no dedicated artifact table — can record resolved effort once FEAT-004 ships; mirrors the existing nullable `model_id` column's role, but with no matching index (explicit NFR) |
-
-**New shared type (`src/shared/types/effort.ts`, new file):**
-
-```typescript
-/** Closed reasoning-effort allow-list for Cursor-backed modules. null means "inherit" (module override → project default → omit). */
-export type EffortLevel = 'low' | 'medium' | 'high';
-
-export const EFFORT_LEVELS: readonly EffortLevel[] = ['low', 'medium', 'high'] as const;
-
-/** Runtime guard shared by the admin write-path validator (FEAT-002) and the kickoff resolver (FEAT-003), so both check the identical allow-list. */
-export function isEffortLevel(value: unknown): value is EffortLevel {
-  return typeof value === 'string' && (EFFORT_LEVELS as readonly string[]).includes(value);
-}
-```
+| `project_skill_settings.quick_skill_pills` (`jsonb`) | No DDL change — two new optional keys appear inside individual pill objects in the existing array | Column is already untyped JSON at the database layer; only the TypeScript shape changes |
+| `project_skill_settings.quick_mcp_pills` (`jsonb`) | No DDL change — same as above | Same reasoning |
 
 **Extended shared types (`src/shared/types/projectSettings.ts`, additive only):**
 
 ```typescript
-export interface InterviewSkillOption {
-  path: string;
-  friendlyName: string;
-  model?: string | null;
-  /** Effort override for this interview skill; null/undefined uses project default. */
-  effort?: EffortLevel | null;
-  wantsDesignPrototype?: boolean;
-  wantsTestCases?: boolean;
-}
-
 export interface QuickSkillPill {
   label: string;
   skillPath: string;
   model?: string | null;
-  /** Effort override for this pill's kickoff; null/undefined uses project default. */
   effort?: EffortLevel | null;
   description?: string | null;
   bypassScopePolicy?: boolean | null;
+  /** Individual user OIDs allowed to see/start this pill on Home. Empty/omitted means everyone with Home access (BR-001). */
+  allowedUserIds?: string[] | null;
+  /** Group IDs allowed to see/start this pill on Home, expanded to live members at read time (mirrors the reviewer/approver pool pattern). */
+  allowedGroupIds?: string[] | null;
 }
 
 interface QuickMcpPillBase {
@@ -127,80 +103,45 @@ interface QuickMcpPillBase {
   description?: string | null;
   mcpServerName: string;
   model?: string | null;
-  /** Effort override for this MCP pill's kickoff; null/undefined uses project default. */
   effort?: EffortLevel | null;
   systemPromptHint?: string | null;
+  /** Individual user OIDs allowed to see/start this pill on Home. Empty/omitted means everyone with Home access (BR-001). */
+  allowedUserIds?: string[] | null;
+  /** Group IDs allowed to see/start this pill on Home, expanded to live members at read time. */
+  allowedGroupIds?: string[] | null;
 }
 ```
 
-**Drizzle schema additions (`src/server/db/schema.ts`, additive only):**
-
-```typescript
-import type { EffortLevel } from '../../shared/types/effort';
-
-// Inside export const projectSkillSettings = pgTable('project_skill_settings', { ... }):
-interviewEffort: text('interview_effort').$type<EffortLevel>(),
-prdEffort: text('prd_effort').$type<EffortLevel>(),
-adrEffort: text('adr_effort').$type<EffortLevel>(),
-designDocEffort: text('design_doc_effort').$type<EffortLevel>(),
-designDocAssistantEffort: text('design_doc_assistant_effort').$type<EffortLevel>(),
-designPrototypeEffort: text('design_prototype_effort').$type<EffortLevel>(),
-testCaseEffort: text('test_case_effort').$type<EffortLevel>(),
-designDocValidationEffort: text('design_doc_validation_effort').$type<EffortLevel>(),
-prdAssistantEffort: text('prd_assistant_effort').$type<EffortLevel>(),
-prdValidationEffort: text('prd_validation_effort').$type<EffortLevel>(),
-developmentEffort: text('development_effort').$type<EffortLevel>(),
-standupEffort: text('standup_effort').$type<EffortLevel>(),
-featureRequestEffort: text('feature_request_effort').$type<EffortLevel>(),
-technicalEffort: text('technical_effort').$type<EffortLevel>(),
-issueEffort: text('issue_effort').$type<EffortLevel>(),
-calendarAssistantEffort: text('calendar_assistant_effort').$type<EffortLevel>(),
-loadTestGenerationEffort: text('load_test_generation_effort').$type<EffortLevel>(),
-designModuleEffort: text('design_module_effort').$type<EffortLevel>(),
-designModuleScopingEffort: text('design_module_scoping_effort').$type<EffortLevel>(),
-defaultEffort: text('default_effort').$type<EffortLevel>(),
-
-// Inside export const interviews / adrs / prds / designDocs / designPrototypes = pgTable(...):
-effort: text('effort').$type<EffortLevel>(),
-
-// Inside export const aiUsageEvents = pgTable('ai_usage_events', { ... }):
-effort: text('effort').$type<EffortLevel>(),
-```
-
-**Migration files (allocate each with `node scripts/next-migration-timestamp.mjs <slug>` per the `postgresql-migrations` skill — do not hand-write timestamps):**
-
-1. `<ts>_<token>_project-skill-settings-effort-defaults.sql` — 20 `ALTER TABLE project_skill_settings ADD COLUMN IF NOT EXISTS ... TEXT;` statements; down migration drops the same 20 columns.
-2. `<ts>_<token>_artifact-effort-snapshot-columns.sql` — one `ALTER TABLE ... ADD COLUMN IF NOT EXISTS effort TEXT;` per `interviews`, `adrs`, `prds`, `design_docs`, `design_prototypes`; down migration drops `effort` from each.
-3. `<ts>_<token>_ai-usage-events-effort-column.sql` — `ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS effort TEXT;`; down migration drops it. No index statement.
+No changes to `QuickMcpPillHttp`, `QuickMcpPillStdio`, `ProjectSkillConfig`, `UpsertProjectSkillConfigRequest`, or `ProjectSkillConfigResponse` themselves — all four already type `quickSkillPills?: QuickSkillPill[] | null` / `quickMcpPills?: QuickMcpPill[] | null` and inherit the new fields automatically.
 
 ---
 
 ## Testing Strategy
 
 **Unit tests:**
-- New `src/shared/types/__tests__/effort.test.ts` (or colocated with an existing shared-type test) — asserts `EFFORT_LEVELS` equals exactly `['low', 'medium', 'high']` (proves TBI-001's closed union has no 4th value), and asserts `isEffortLevel('low')` is `true` while `isEffortLevel('urgent')` / `isEffortLevel(null)` / `isEffortLevel(undefined)` are all `false` (proves the guard FEAT-002/FEAT-003 will both depend on is correct before either feature is built).
-- A `.test-d.ts`-style compile fixture (or inline `// @ts-expect-error` assertions inside an existing test file) proving `effort: 'high'` and `effort: null` are valid on `InterviewSkillOption`, `QuickSkillPill`, and `QuickMcpPillHttp`/`QuickMcpPillStdio`, and that `effort: 'urgent'` fails to compile — directly exercises TBI-001's DoD line "Optional effort field added to InterviewSkillOption, QuickSkillPill, and QuickMcpPill shared types."
+- `src/server/__tests__/projectSettingsService.test.ts` — extend the existing mocked `upsertSkillConfig` round-trip assertions with a pill object containing `allowedUserIds`/`allowedGroupIds`, proving the fields pass through unchanged (same style as the existing effort-field round-trip coverage in this file).
+- `src/client/components/__tests__/AdminProjectSettings.test.tsx` — extend the existing "reviewer pools and module approval modes" describe block (or add a sibling) to cover: selecting a user/group on a skill-pill row updates `edit.quickSkillPills[idx].allowedUserIds`/`allowedGroupIds`; the same for an MCP-pill row; saving submits the updated pill array through the mocked `upsert` mutation (mirrors the existing `quickMcpPills: [expect.objectContaining({ mcpServerName: 'sendgrid', effort: 'low' })]` assertion pattern at line 322, extended with `allowedUserIds`/`allowedGroupIds`).
 
 **Integration tests:**
-- Extend the existing Drizzle-mock harness in `src/server/__tests__/projectSettingsService.test.ts` (mocked `db.select`/`db.insert`/`db.update` chains, no real database) with an assertion that a mocked row containing all 20 new effort keys still round-trips through the mocked `select().from().where().limit()` chain without the existing test's shape assumptions breaking — proves the schema change is additive and doesn't silently break the current mock contract, even though read/write mapping itself isn't wired until FEAT-002's TBI-004.
-- Migration apply/rollback smoke test (run manually or as a CI step, not a Jest test): `npm run migrate:local:up` then `npm run migrate:local:down` for all three new migration files against a local Postgres instance, confirming clean apply and clean rollback with zero data loss on pre-existing rows — required by the `postgresql-migrations` skill before any migration ships to a shared environment.
+- `src/server/__tests__/apiRoutes.skillConfig.test.ts` — add a case confirming `GET /api/skill-config` currently returns `allowedUserIds`/`allowedGroupIds` verbatim when present (documents the exposure window called out in Rollback and Deployment; this assertion should be updated to assert *stripping* once FEAT-002's TBI-004 ships, not deleted).
+- `src/server/__tests__/rbacMiddleware.test.ts` / `src/server/__tests__/superAdmin.test.ts` pattern — confirm a request without `admin:roles` calling `PUT /project-settings/:id` with an `allowedUserIds` change is rejected before `upsertSkillConfig` runs (AC (d) for both PBI-001 and PBI-002).
 
-**E2E tests:** Not applicable — this Feature has no UI, no endpoint, and no user-visible behavior to exercise end-to-end. End-to-end coverage of effort begins once FEAT-002 ships the admin selector.
+**E2E tests:** Not required for this Feature — no new Home-facing behavior exists yet to exercise end-to-end. E2E coverage of allow-list *effect* (pill visibility, thread-creation denial) belongs to **Enforce Home Pill Access**.
 
 ---
 
 ## Observability
 
-**Custom events/metrics:** None beyond standard telemetry. No new columns are queried, aggregated, or displayed by any code path yet, so there is nothing new to instrument.
+- **Custom events/metrics:** None beyond standard telemetry. Saving a pill's allow-list flows through the same `PUT /api/admin/project-settings/:id` request already logged/traced like every other project-settings edit; no new event is warranted for a data-model-only change with no runtime consumer yet.
 
 ---
 
 ## Rollback and Deployment
 
-- **Schema changes backward compatible:** **Yes.** Every new column across all three migrations is nullable with no `NOT NULL` constraint and no default-value backfill requirement. Existing `INSERT`/`UPDATE` statements that don't mention these columns continue to work unchanged; no existing query breaks.
-- **Rollback procedure:** Run `npm run migrate:down` three times (once per migration, most-recently-applied first) to drop the new columns. Because no code in this Feature — or in the wider codebase before FEAT-002/003/004 ship — ever writes a non-null value into these columns, rollback carries zero data-loss risk within this Feature's scope.
-- **Deployment dependencies:** None. This is pure additive DDL with no data migration, no backfill job, and no coordinated multi-service deploy — the three migrations can apply independently of any application code deploy.
-- **Feature flag gates deployment:** No. Consistent with the epic's "Flag required: No" — every new column defaults to `null`, which is a safe no-op until a Project Admin explicitly sets a value through FEAT-002.
+- **Schema changes backward compatible:** **Yes.** Both new fields are optional and nullable inside an already-untyped JSON column; existing pills with no allow-list fields round-trip unchanged (TBI-001 DoD).
+- **Rollback procedure:** Revert the shared-type and `AdminProjectSettings.tsx` changes. Any `allowedUserIds`/`allowedGroupIds` values already saved on pills remain harmlessly in the JSON blob (ignored by every reader that predates this Feature) — no data cleanup required.
+- **Deployment dependencies:** **This Feature must not ship to production ahead of FEAT-002's TBI-004** (public skill-config filtering) without an explicit, confirmed exception. Because `GET /api/skill-config` already returns `quickSkillPills`/`quickMcpPills` verbatim to any session-authenticated caller, shipping TBI-001 alone creates a live window where `allowedUserIds`/`allowedGroupIds` — private admin configuration data — are visible on an existing public-ish endpoint with no flag to hide behind. Coordinate the FEAT-001/FEAT-002 release train accordingly (see the assumptions file's primary ⚠ item).
+- **Feature flag gates deployment:** **No** — consistent with the epic ("Flag required: No"). The deployment-sequencing risk above is a release-process concern, not something a flag can mitigate cleanly, since the exposure lives in an existing unflagged endpoint.
 
 ---
 
@@ -208,77 +149,75 @@ effort: text('effort').$type<EffortLevel>(),
 
 | ID | Layer | Arrange | Act | Assert | Linked |
 |----|-------|---------|-----|--------|--------|
-| VT-01 | Jest / tsc (compile) | `EffortLevel` import + 20 new columns added to `projectSkillSettings` in `schema.ts` | Run `npx tsc -p tsconfig.server.json --noEmit` | Zero compile errors; existing `ProjectSkillConfig`-adjacent consumers still typecheck unmodified | TBI-001 (a) |
-| VT-02 | Jest (unit) | Import `EFFORT_LEVELS` and `isEffortLevel` from `src/shared/types/effort.ts` | Assert array contents/length and guard behavior on valid/invalid inputs | `EFFORT_LEVELS` equals exactly `['low','medium','high']`; `isEffortLevel` is `true` only for those three strings | TBI-001 (a), (d) |
-| VT-03 | Manual/CI (migration) | Fresh local DB at pre-Feature schema | Run `npm run migrate:local:up` for the `project_skill_settings` migration | All 20 columns exist, all nullable; a pre-existing row reads back with every new column `null` | TBI-001 (a) |
-| VT-04 | Manual/CI (migration) | DB state from VT-03 | Run `npm run migrate:local:down` for the same migration | All 20 columns removed; table returns to its exact pre-migration shape with no error | TBI-001 (b) |
-| VT-05 | Manual/CI (migration) | Fresh local DB at pre-Feature schema | Run the artifact-tables migration | `interviews`, `adrs`, `prds`, `design_docs`, `design_prototypes` each gain one nullable `effort TEXT` column; existing rows in each read back with `effort: null` | TBI-002 (a) |
-| VT-06 | Manual/CI (migration) | DB state from VT-05; a project with `prototypeEngine = 'bedrock'` | Insert a `design_prototypes` row omitting `effort` | Insert succeeds with `effort: null`; no constraint references `prototypeEngine` because none exists on this table | TBI-002 (c) |
-| VT-07 | Manual/CI (migration) | Fresh local DB at pre-Feature schema | Run the `ai_usage_events` migration, then inspect via `\d ai_usage_events` | Table gains one nullable `effort TEXT` column; **no** new index is present | TBI-003 (a), (b) |
-| VT-08 | Jest / tsc (compile) | `effort?: EffortLevel \| null` added to `InterviewSkillOption`, `QuickSkillPill`, `QuickMcpPillBase` | Assign `effort: 'high'`, `effort: null`, and (separately) `effort: 'urgent'` to each type in a test fixture | The first two assignments compile; the third fails `tsc` with a type error | TBI-001 (d) |
+| VT-01 | Jest / tsc (compile) | `allowedUserIds?: string[] \| null` and `allowedGroupIds?: string[] \| null` added to `QuickSkillPill` and `QuickMcpPillBase` | Run `npx tsc -p tsconfig.server.json --noEmit` and `npx tsc -p tsconfig.client.json --noEmit` | Zero compile errors; `schema.ts`'s `$type<QuickSkillPill[]>()`/`$type<QuickMcpPill[]>()` columns typecheck unmodified | TBI-001 (a) |
+| VT-02 | Jest (unit/service) | Mocked `upsertSkillConfig` call with a `quickSkillPills` entry containing `allowedUserIds: ['u1']`, `allowedGroupIds: ['g1']` | Call `upsertSkillConfig(opts)` | Returned/persisted pill object includes both fields unchanged | TBI-001 (a), PBI-001 (a) |
+| VT-03 | Jest (unit/service) | Existing pill row with no allow-list fields (legacy data) | Call `getSkillConfigById`/`getSkillConfig` | Pill round-trips with `allowedUserIds`/`allowedGroupIds` simply absent — no error, no coercion | TBI-001 (a) |
+| VT-04 | Jest / RTL (component) | `AdminProjectSettings` rendered with one existing skill pill and a mocked `groupsWithMembers`/`allUsers` | Select a user and a group via `ps-skill-pill-allowlist-0`'s `GroupAwarePeoplePicker` | `edit.quickSkillPills[0].allowedUserIds`/`allowedGroupIds` update; the picker chip list reflects the selection | PBI-001 (a), TBI-002 |
+| VT-05 | Jest / RTL (component) | Same as VT-04, for an MCP pill row (`ps-mcp-pill-allowlist-0`) | Select a user and a group | `edit.quickMcpPills[0].allowedUserIds`/`allowedGroupIds` update | PBI-002 (a), TBI-002 |
+| VT-06 | Jest / RTL (component) | `edit.quickSkillPills[0]` has `allowedUserIds`/`allowedGroupIds` set; mocked `upsert` mutation | Click Save | Mutation payload's `quickSkillPills[0]` includes `expect.objectContaining({ allowedUserIds: [...], allowedGroupIds: [...] })` | PBI-001 (a) |
+| VT-07 | Jest / RTL (component) | Mocked `upsert` mutation configured to reject | Click Save after editing a pill's allow-list | Form shows the existing save-error state; `edit.quickSkillPills`/`quickMcpPills` in local state are unchanged from before the failed save | PBI-001 (b), PBI-002 (b) |
+| VT-08 | Jest (unit/service) | A skill pill and an MCP pill both with `allowedUserIds`/`allowedGroupIds` omitted | Read the config (any consumer) | Both pills are treated identically to today's pre-Feature shape — no default value is written in, consistent with BR-001's "everyone" default living in the *absence* of the fields | PBI-001 (c), PBI-002 (c) |
+| VT-09 | Jest (route/middleware) | Request without `admin:roles` | `PUT /api/admin/project-settings/:id` with a body changing a pill's `allowedUserIds` | `403`; no DB write occurs (`requirePermission('admin:roles')` short-circuits before `upsertSkillConfig` runs) | PBI-001 (d), PBI-002 (d) |
+| VT-10 | Jest (route) | A pill with `allowedUserIds`/`allowedGroupIds` set, requested via `GET /api/skill-config?project=X` (session-authenticated, non-admin) | Inspect the response body | **Currently** returns `allowedUserIds`/`allowedGroupIds` verbatim (documents the exposure window in Rollback and Deployment; this assertion is expected to change to "stripped" once FEAT-002's TBI-004 ships) | Assumptions ⚠-1 |
 
 ---
 
 ## Implementation Plan
 
-- [ ] S1 — Create `src/shared/types/effort.ts` exporting `EffortLevel`, `EFFORT_LEVELS`, and `isEffortLevel` _(no blockers)_
-  - Covers: `VT-02`, `VT-08`
-- [ ] S2 — Add `effort?: EffortLevel | null` to `InterviewSkillOption`, `QuickSkillPill`, and `QuickMcpPillBase` in `src/shared/types/projectSettings.ts` _(blocked by S1)_
-  - Covers: `VT-08`
-- [ ] S3 — Allocate a migration filename via `node scripts/next-migration-timestamp.mjs project-skill-settings-effort-defaults`; write the 20-column `project_skill_settings` migration (up + down) _(blocked by S1; no blocker on S2)_
-  - Covers: `VT-03`, `VT-04`
-- [ ] S4 — Allocate + write the 5-table artifact-effort-column migration (`interviews`, `adrs`, `prds`, `design_docs`, `design_prototypes`) _(blocked by S1; can run in parallel with S3)_
-  - Covers: `VT-05`, `VT-06`
-- [ ] S5 — Allocate + write the `ai_usage_events` effort-column migration _(blocked by S1; can run in parallel with S3, S4)_
-  - Covers: `VT-07`
-- [ ] S6 — Update `src/server/db/schema.ts`: import `EffortLevel`; add the 20 `projectSkillSettings` columns, the 5 artifact-table columns, and the 1 `aiUsageEvents` column _(blocked by S3, S4, S5)_
+- [ ] S1 — Add `allowedUserIds?: string[] | null` and `allowedGroupIds?: string[] | null` to `QuickSkillPill` and `QuickMcpPillBase` in `src/shared/types/projectSettings.ts` _(no blockers)_
   - Covers: `VT-01`
-- [ ] S7 — Apply all three migrations locally (`npm run migrate:local:up`) and run `npx tsc -p tsconfig.server.json --noEmit` + `npx tsc -p tsconfig.client.json --noEmit` _(blocked by S6)_
-  - Covers: `VT-01`, `VT-03`, `VT-05`, `VT-07`
-- [ ] S8 — Add the Jest unit tests for `EFFORT_LEVELS`/`isEffortLevel` and the shared-type assignability fixture _(blocked by S2, S6)_
-  - Covers: `VT-02`, `VT-08`
+- [ ] S2 — Run `npx tsc -p tsconfig.server.json --noEmit` and `npx tsc -p tsconfig.client.json --noEmit` to confirm the additive fields compile cleanly through `schema.ts` and every existing consumer _(blocked by S1)_
+  - Covers: `VT-01`
+- [ ] S3 — Add a `GroupAwarePeoplePicker`-backed allow-list control to each skill-pill row in `AdminProjectSettings.tsx` (`edit.quickSkillPills.map(...)`, ~lines 2899–2993), wired to `pills[idx].allowedUserIds`/`allowedGroupIds` via the existing `groupsWithMembers`/`allUsers` state; add `data-testid="ps-skill-pill-allowlist-{idx}"` _(blocked by S1; can run in parallel with S4)_
+  - Covers: `VT-04`
+- [ ] S4 — Same for each MCP-pill row (`edit.quickMcpPills.map(...)`, ~lines 3023–3140); add `data-testid="ps-mcp-pill-allowlist-{idx}"` _(blocked by S1; can run in parallel with S3)_
+  - Covers: `VT-05`
+- [ ] S5 — Extend `src/client/components/__tests__/AdminProjectSettings.test.tsx` with allow-list selection, save-payload, and save-failure coverage for both pill types _(blocked by S3, S4)_
+  - Covers: `VT-06`, `VT-07`
+- [ ] S6 — Extend `src/server/__tests__/projectSettingsService.test.ts` with an allow-list round-trip case, and add the legacy-pill-shape regression case _(blocked by S1; can run in parallel with S3, S4)_
+  - Covers: `VT-02`, `VT-03`, `VT-08`
+- [ ] S7 — Add the `admin:roles` rejection case for a pill allow-list write to the existing RBAC middleware test suite, and add the documentation-of-exposure case to `apiRoutes.skillConfig.test.ts` _(blocked by S1; can run in parallel with S3, S4, S6)_
+  - Covers: `VT-09`, `VT-10`
 
 **Execution lanes:**
 - Lane 1 (start immediately): S1
-- Lane 2 (after S1): S2, S3, S4, S5 — all four run in parallel
-- Lane 3 (after S3 + S4 + S5): S6
-- Lane 4 (after S6): S7, S8 — run in parallel
+- Lane 2 (after S1): S2, S3, S4, S6, S7 — all run in parallel
+- Lane 3 (after S3 + S4): S5
 
 ---
 
 ## Diagram 1 — Code Execution Flow
 
-This Feature has no end-user runtime path — its only "execution" is the build/deploy-time flow of applying the migration and compiling the shared type into both bundles. The user-facing runtime flow (server resolving and applying effort on an actual kickoff) does not exist until FEAT-003.
-
 ```mermaid
 sequenceDiagram
-  actor Developer
-  participant SharedType as effort.ts (shared type)
-  participant Schema as schema.ts (Drizzle)
-  participant Migrate as node-pg-migrate
-  participant DB as PostgreSQL
-  participant TSC as tsc (server + client builds)
+  actor ProjectAdmin
+  participant Picker as GroupAwarePeoplePicker
+  participant Settings as AdminProjectSettings.tsx
+  participant Route as PUT /api/admin/project-settings/:id
+  participant Service as projectSettingsService.upsertSkillConfig
+  participant DB as project_skill_settings (jsonb)
 
-  Developer->>SharedType: define EffortLevel, EFFORT_LEVELS, isEffortLevel
-  Developer->>Migrate: node scripts/next-migration-timestamp.mjs <slug>
-  Migrate-->>Developer: allocated migration filename
-  Developer->>Migrate: npm run migrate:local:up
-  Migrate->>+DB: ALTER TABLE ... ADD COLUMN IF NOT EXISTS *_effort / effort TEXT
-  DB-->>-Migrate: columns added (nullable, no backfill, no new index)
-  Developer->>Schema: import EffortLevel; add matching .$type<EffortLevel>() columns
-  Developer->>+TSC: npx tsc -p tsconfig.server.json --noEmit
-  TSC->>SharedType: resolve EffortLevel import from schema.ts
-  TSC-->>-Developer: 0 errors
-  Developer->>+TSC: npx tsc -p tsconfig.client.json --noEmit
-  TSC->>SharedType: resolve EffortLevel import from projectSettings.ts consumers
-  TSC-->>-Developer: 0 errors — shared type usable by both bundles
+  ProjectAdmin->>Picker: select user/group on a pill row
+  Picker->>Settings: onUserIdsChange / onGroupIdsChange
+  Settings->>Settings: setEdit — pills[idx].allowedUserIds/allowedGroupIds updated
+  ProjectAdmin->>Settings: click Save
+  Settings->>+Route: PUT { quickSkillPills / quickMcpPills, ...rest }
+  Route->>Route: requirePermission('admin:roles')
+  Route->>+Service: upsertSkillConfig({ id, quickSkillPills, quickMcpPills, ... })
+  Service->>+DB: UPDATE project_skill_settings SET quick_skill_pills = $1, quick_mcp_pills = $2
+  DB-->>-Service: updated row
+  Service-->>-Route: ProjectSkillConfig
+  Route-->>-Settings: 200 { ...config, approvalModes }
+  Settings-->>ProjectAdmin: form closes / shows saved state
 
-  alt migration fails (e.g. column name collision on re-run)
-    DB-->>Migrate: no-op — IF NOT EXISTS guards prevent duplicate-column errors
+  alt admin:roles missing
+    Route-->>Settings: 403 Forbidden
+    Settings-->>ProjectAdmin: save rejected before reaching Service/DB
   end
 
-  alt tsc fails (e.g. EffortLevel misused as a non-nullable field)
-    TSC-->>Developer: non-zero exit with the specific type error; fix before merge
+  alt save request fails (network/500)
+    Route-->>Settings: non-2xx / mutation error
+    Settings-->>ProjectAdmin: previously saved allow-list unchanged; error message shown (AC PBI-001/002 (b))
   end
 ```
 
@@ -288,35 +227,27 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-  S1["S1 — Create effort.ts shared type"]
-  S2("S2 — Extend InterviewSkillOption/QuickSkillPill/QuickMcpPill")
-  S3["S3 — project_skill_settings migration"]
-  S4["S4 — Artifact tables migration"]
-  S5["S5 — ai_usage_events migration"]
-  S6["S6 — Update schema.ts (all new columns)"]
-  S7["S7 — Apply migrations + tsc verification"]
-  S8(["S8 — Unit tests (EFFORT_LEVELS, guard, type fixtures)"])
-  T_unit{{"VT-01, VT-02, VT-08 — Unit/compile tests"}}
-  T_migration(["VT-03..VT-07 — Migration apply/rollback checks"])
+  S1["S1 — Add allowedUserIds/allowedGroupIds to shared types"]
+  S2["S2 — tsc verification (server + client)"]
+  S3("S3 — Skill-pill row allow-list picker")
+  S4("S4 — MCP-pill row allow-list picker")
+  S5(["S5 — Component tests: selection, save, save-failure"])
+  S6{{"S6 — projectSettingsService round-trip tests"}}
+  S7{{"S7 — RBAC rejection + skill-config exposure test"}}
 
   S1 --> S2
   S1 --> S3
   S1 --> S4
-  S1 --> S5
-  S3 --> S6
-  S4 --> S6
-  S5 --> S6
-  S6 --> S7
-  S2 --> S8
-  S6 --> S8
-  S7 -.->|"verifies"| T_migration
-  S8 -.->|"verifies"| T_unit
+  S1 --> S6
+  S1 --> S7
+  S3 --> S5
+  S4 --> S5
 
   subgraph parallel1 ["Can run in parallel (after S1)"]
-    S2 & S3 & S4 & S5
+    S2 & S3 & S4 & S6 & S7
   end
 
   subgraph legend ["Legend"]
-    L1["Backend/Schema"] --- L2("Shared Type") --- L3{{"Unit Test"}} --- L4(["Migration Test"])
+    L1["Backend/Shared type"] --- L2("Frontend") --- L3{{"Backend test"}} --- L4(["Frontend test"])
   end
 ```

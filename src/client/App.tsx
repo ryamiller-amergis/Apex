@@ -37,7 +37,6 @@ import { resolveAccessibleRoute } from './utils/accessibleRoute';
 import { setInteractiveWsEnabled } from './utils/threadEventStream';
 import { IS_BETA_RELEASE } from './config/release';
 import { RESTRICTED_ACCESS_PROJECT } from '../shared/types/restrictedAccess';
-import type { WorkItem } from './types/workitem';
 import './App.css';
 
 // Lazy-loaded views for code splitting
@@ -134,7 +133,6 @@ function App() {
   const [chatOpen, setChatOpen] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [activeThreadProject, setActiveThreadProject] = useState<string | null>(null);
-  const [homeSelectedItem, setHomeSelectedItem] = useState<WorkItem | null>(null);
   const [pendingProject, setPendingProject] = useState<string | null>(null);
   const [calendarAssistantOpen, setCalendarAssistantOpen] = useState(false);
   const [calendarAssistantAnchor, setCalendarAssistantAnchor] = useState<{
@@ -222,9 +220,12 @@ function App() {
   useEffect(() => {
     if (currentView !== 'home') {
       setChatOpen(false);
-      setHomeSelectedItem(null);
     }
   }, [currentView]);
+
+  const handleHomeViewChange = useCallback((view: 'chat' | 'status') => {
+    setChatOpen(view === 'chat');
+  }, []);
 
   useEffect(() => {
     const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
@@ -243,8 +244,6 @@ function App() {
     isSuperAdmin,
     isRestricted,
     restrictedModules,
-    isAdmin,
-    groups,
     permissionsLoaded,
     workItems,
     workBoardEnabled,
@@ -888,38 +887,36 @@ function App() {
                 <FeatureFlagDemo project={selectedProject} />
                 <AgentHome
                   selectedProject={selectedProject}
-                  selectedAreaPath={selectedAreaPath}
-                  selectedSkillSettingsId={selectedSkillSettingsId}
-                  isAdmin={isSuperAdmin || isAdmin || (groups ?? []).includes('Manager') || (groups ?? []).includes('Product-Owner')}
-                  isChatOpen={chatOpen}
-                  canOpenChat={can('chat:view') && can('chat:create')}
-                  onOpenChatPanel={() => setChatOpen((open) => !open)}
+                  isActive={currentView === 'home'}
+                  onHomeViewChange={handleHomeViewChange}
                   onRestoreThread={(id) => {
                     setActiveThreadId(id);
                     setActiveThreadProject(selectedProject);
                   }}
-                  onSelectWorkItem={(workItem) => {
-                    setChatOpen(false);
-                    setHomeSelectedItem(workItem);
-                  }}
                 />
-                {homeSelectedItem && currentView === 'home' && (
-                  <Suspense fallback={null}>
-                    {/* data-testid-exempt — DetailsPanel owns its panel chrome; no data-testid prop */}
-                    <DetailsPanel
-                      workItem={homeSelectedItem}
-                      onClose={() => setHomeSelectedItem(null)}
-                      onUpdateDueDate={handleDueDateChange}
-                      allWorkItems={workItems}
-                      onUpdateField={handleFieldUpdate}
-                      isSaving={isSaving}
-                      project={selectedProject}
-                      areaPath={selectedAreaPath}
-                      onSelectItem={setHomeSelectedItem}
-                      onOpenAssistant={handleOpenCalendarAssistant}
-                    />
-                  </Suspense>
-                )}
+                {/* data-testid-exempt — ChatAgentPanel API has no data-testid prop */}
+                <ChatAgentPanel
+                  thread={projectScopedActiveThread}
+                  activeThreadId={projectScopedActiveThread?.id ?? null}
+                  isLoadingThread={
+                    Boolean(activeThreadId)
+                    && activeThreadProject === selectedProject
+                    && (isFetchingActiveThread || !projectScopedActiveThread)
+                  }
+                  isOpen={currentView === 'home' && chatOpen}
+                  onClose={() => setChatOpen(false)}
+                  onNewChat={handleStartPanelChat}
+                  onSelectThread={(id) => {
+                    setActiveThreadId(id || null);
+                    setActiveThreadProject(id ? selectedProject : null);
+                  }}
+                  selectedProject={selectedProject}
+                  canStartNewChat={!!panelRepo && !isLoadingSkillRepos && !startChat.isPending}
+                  isStartingNewChat={startChat.isPending}
+                  newChatError={startChat.error?.message}
+                  launchedFromHome
+                  selectedSkillSettingsId={selectedSkillSettingsId}
+                />
               </ErrorBoundary>
             </div>
           ) : currentView === 'home' ? (
@@ -1456,29 +1453,6 @@ function App() {
           />
         )}
 
-        {/* data-testid-exempt — ChatAgentPanel API has no data-testid prop */}
-        <ChatAgentPanel
-          thread={projectScopedActiveThread}
-          activeThreadId={projectScopedActiveThread?.id ?? null}
-          isLoadingThread={
-            Boolean(activeThreadId)
-            && activeThreadProject === selectedProject
-            && (isFetchingActiveThread || !projectScopedActiveThread)
-          }
-          isOpen={currentView === 'home' && chatOpen}
-          onClose={() => setChatOpen(false)}
-          onNewChat={handleStartPanelChat}
-          onSelectThread={(id) => {
-            setActiveThreadId(id || null);
-            setActiveThreadProject(id ? selectedProject : null);
-          }}
-          selectedProject={selectedProject}
-          canStartNewChat={!!panelRepo && !isLoadingSkillRepos && !startChat.isPending}
-          isStartingNewChat={startChat.isPending}
-          newChatError={startChat.error?.message}
-          launchedFromHome={currentView === 'home'}
-          selectedSkillSettingsId={selectedSkillSettingsId}
-        />
       </NotificationWrapper>
       </DndProvider>
     </ErrorBoundary>

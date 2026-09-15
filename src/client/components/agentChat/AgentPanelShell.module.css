@@ -44,6 +44,31 @@
   background: var(--bg-secondary);
 }
 
+/* Page-layout surfaces own the page heading, so the panel keeps only its
+   actions and drops the bar chrome. */
+.header-bare {
+  min-height: 0;
+  padding: 8px 12px 0;
+  justify-content: flex-end;
+  border-bottom: 0;
+  background: transparent;
+}
+
+/* Overlays the content instead of reserving a row. Reserved for the centered
+   hold screen, where nothing sits under the top-right corner. */
+.header-float {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 2;
+  pointer-events: none;
+}
+
+/* Only the controls take clicks, so the actions row cannot block the
+   content underneath it. */
+.header-float > * {
+  pointer-events: auto;
+}
+
 .title {
   margin: 0;
   overflow: hidden;

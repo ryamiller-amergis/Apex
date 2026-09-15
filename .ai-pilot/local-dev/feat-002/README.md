@@ -1,4 +1,4 @@
-# Local Development Context — Provide ability to select effort per agent module within project settings — Admin Per-Module Effort Defaults
+# Local Development Context — Permission by skill — Enforce Home Pill Access
 
 These files belong under your **repository root** at:
 
