@@ -1,63 +1,53 @@
-<!-- apex-grounded-sha:bde02baf46bf988fde9f4a48edeb118be52e8cf4 -->
+<!-- apex-grounded-sha:e61f44bb9a311b601902eb8db3c9f49b42b50f93 -->
 
-> Based on the **Apex** project, **main** branch, as of Sep 8, 2026.
+> Based on the **Apex** project, **main** branch, as of Sep 14, 2026.
 ---
-title: Per-Module Agent Effort Defaults
-slug: per-module-agent-effort-defaults
-created: 2026-09-08
+title: Home Pill Access Control
+slug: home-pill-access-control
+created: 2026-09-14
 triage-status: needs-triage
 glossary-terms-used:
-  - Skill
   - Skill Pill
-  - Project Admin
-  - Interview
-  - PRD
-  - Design Doc
-  - Design Prototype
+  - Agent Home
   - RBAC
+  - Project Admin
+  - Platform Admin
+  - Super Admin
 ---
 
-# Per-Module Agent Effort Defaults
+# Home Pill Access Control
 
 ## Problem Statement
 
-Admin → Project Settings lets a Project Admin choose an AI model for every Cursor-backed agent module — Interview, PRD, ADR, Design Doc, and the rest — but there is no matching control for reasoning effort. Every module always runs at whatever effort the Cursor SDK defaults to, so a Project Admin cannot make a routine module run cheaper and faster, or make a high-stakes module think harder. Once a module runs, nobody can tell which effort actually produced a given artifact or cost row, because artifact audit columns and AI usage events only ever recorded the model.
+Every Home skill and MCP pill is visible and usable by anyone with Home access, with no way to point a user at a single skill without also handing them every other shortcut on the project. A team that wants to give some users a narrow, single-purpose entry point — for example, letting analysts ask the Knowledge skill about measure definitions without exposing PRD generation, design tooling, or any other pill — has no configuration lever today, and admins cannot restrict access by user or group on a per-pill basis.
 
 ## Solution
 
-Every Cursor-backed module gets a sibling effort control next to its existing model override in Project Settings, with an explicit Inherit option. When that module starts a run, the server resolves the configured effort the same way it already resolves the model, passes it to the Cursor SDK, and snapshots the resolved value on the artifact and on the usage/cost record — the same way model is already snapshotted. There is no runtime effort picker: whatever a Project Admin configured is what runs, and it stays fixed for an in-flight conversation even if the default changes later.
+Project Admins can configure an allow-list of users and/or groups on any Home skill pill or MCP pill, for any Apex project. A pill with no allow-list stays visible to everyone with Home access, exactly as it behaves today; a pill with an allow-list is only shown to, and only startable by, the users and groups on that list, evaluated live against current project membership. Home enforces the same rule when a thread is created — including blocking a user from starting a free-form Home chat when a project has pills configured and that user is allowed on none of them — while Platform Admin (Super Admin) always sees and can start every pill, and a user who already has a thread open keeps using it even if their access to that pill changes later.
 
 ## Implementation Decisions
 
-- **Shared effort allow-list.** A closed union of `low` / `medium` / `high` (plus null, meaning inherit) used consistently by client and server — the same pattern already used for the model-ID union. The admin write path rejects any other value; a run-time resolver that encounters an unrecognized or corrupted stored value treats it as unset rather than failing the run.
-
-- **Project settings configuration (deep module).** The configuration store that already holds one model override per module is extended to hold a sibling effort override per module, plus one project-wide default effort. Resolution order — module override → project default → omit (SDK default) — is centralized behind the same configuration-resolution interface every caller already uses for model, so effort and model always travel the same path.
-
-- **Agent kickoff / configuration-resolution service (deep module).** The service that already resolves which model a Cursor-backed run uses is extended to resolve effort the same way and pass it to the Cursor SDK alongside model. This service becomes the single authority for effort: it resolves the value server-side and ignores any effort value a client attempts to supply on kickoff, on a later turn, or on an artifact-create request.
-
-- **Server-set module identity.** Each calling service that builds a kickoff — Interview, PRD, ADR, Design Doc, Standup, Feature Request, and the rest, plus the Agent Home skill-pill handler — sets an internal module identifier on the kickoff object it constructs. The browser never supplies or can override this identifier. The kickoff/configuration-resolution service uses it to select which module's effort override applies, the same way a server-set module identity would be required for model if a client could otherwise spoof it.
-
-- **Artifact creation paths.** Interview, PRD, ADR, Design Doc, and Design Prototype creation already snapshot the resolved model on the artifact row at creation time. Each is extended to snapshot the resolved effort in the same write, using the same value the kickoff/configuration-resolution service passed to the Cursor SDK for that run. Design Prototype snapshotting applies only when the project's prototype engine is the agent path; the Bedrock prototype path is unaffected.
-
-- **Usage/cost recording service (deep module).** The service that already writes one usage/cost row per AI interaction — model, tokens, cost — is extended to include the resolved effort on the same row, for every Cursor-backed module, including modules that have no dedicated artifact table to snapshot onto (Standup, Feature Request, Technical, Issue, Calendar Assistant, Load Test Generation, Design Module, Design Module Scoping).
-
-- **Admin settings UI.** The existing per-module model-override screen gets one additional control per module: an effort selector with an explicit "Inherit" option, saved through the same validate/save path as the model control. No new settings screen.
-
-- **Artifact headers and cost views.** The existing places that already display the snapshotted model — artifact headers and cost-history rows/detail — show effort next to it when present. Nothing new is shown when the value is null.
+- A pill access resolver (deep module) computes, for a given project's configured Home pills and a given caller's identity, (a) the subset of skill and MCP pills that caller may use, and (b) whether that caller may start a Home thread at all given the project's pill configuration. It encapsulates the "empty allow-list means everyone" default, live user and group membership evaluation, and the Platform Admin (Super Admin) bypass in one place so every caller of this logic gets the same answer instead of re-implementing the rule.
+- The existing per-project pill records (skill pills and MCP pills) gain two optional allow-list fields each — one for individual user identifiers and one for group identifiers. These live inside the same JSON-backed pill arrays already stored on the project's skill settings row; no new tables and no new columns are introduced.
+- The public skill-config read path runs every Home pill it would otherwise return through the pill access resolver, keeps only the pills the caller may use, and omits the allow-list fields from each returned pill so a non-admin caller can never see who else is allowed on a pill. Every other field on that response — interview options, model selections, and all non-Home-pill configuration — is unchanged, so Interview, ADR, and other consumers of the same read path are unaffected.
+- The admin project-settings read and write path is intentionally left returning and persisting the full pill list, including allow-list fields, exactly as it does today for every other pill attribute — only the public read path is filtered.
+- Home thread creation runs the same pill access resolver before a thread is persisted: a kickoff is accepted only when it names an allowed configured pill (skill or MCP), or carries no pill and the caller is allowed to start Home chat at all under the project's current pill configuration; every other kickoff is denied with an explicit error. Platform Admin (Super Admin) is exempt from this check. The resolver is invoked only at creation — reopening or continuing a thread the caller already owns, and sending further messages on it, are explicitly untouched, so access changes never interrupt an in-progress conversation.
+- The Admin Project Settings pill editor gains a user/group selection control on each pill row (skill and MCP), following the same picker pattern already used to build reviewer and approver pools elsewhere in project settings, so an admin sets or clears an allow-list without leaving the pill editor.
+- The Home composer reads the already-filtered pill arrays from the skill-config response and mirrors the "project has pills, caller allowed on none" rule client-side, disabling send in that state for a clear experience; the server-side check in thread creation remains the actual enforcement boundary.
 
 ## Testing Decisions
 
-- **What makes a good test here:** Tests should prove observable behavior, not internals: (a) an admin-configured per-module effort is the value that actually reaches the Cursor SDK for that module's run, regardless of any effort value a client attempts to send; (b) the resolved value is snapshotted on the artifact and the usage event, and stays fixed for the rest of an in-flight thread even if the admin default changes mid-conversation; (c) an invalid value is rejected at save time with a clear error, and an unexpected or corrupted stored value is treated as absent at run time without failing the run.
+- **What makes a good test here:** Assert on the visible pill set and on thread-creation accept/deny outcomes for a given caller and allow-list configuration, not on which internal helper was called or in what order.
 - **Modules to test:**
-  - The configuration-resolution path (module override → project default → omit) — this is the single source of truth for what value reaches the SDK, so its branching needs direct coverage.
-  - The kickoff/create paths for at least two representative modules (for example Interview and ADR) — proves the server-set module identifier and effort resolution generalize beyond one caller instead of being special-cased.
-  - The admin settings write path — proves the allow-list validation rejects bad input before it can ever reach a kickoff.
-- **Prior art:** The existing per-module model-override tests (admin settings write/read, and the artifact-model-audit snapshot tests already covering Interview and PRD) assert that a configured value flows unchanged through settings → kickoff → snapshot. The effort case should extend those same tests in parallel rather than create a new, separate test file per module.
+  - Pill access resolver — the empty-list-means-everyone default, live user and group membership evaluation, and the Platform Admin bypass, each exercised directly through its inputs and outputs.
+  - Skill-config read path — that only allowed pills are returned and that allow-list fields never appear on the public response, across Authenticated User, Project Admin, and Platform Admin callers.
+  - Home thread-creation path — the full accept/deny matrix across an allowed pill, a disallowed pill, no pill on a project with no configured pills, and no pill on a project where the caller is allowed on none.
+- **Prior art:** Follows the existing pattern used for reviewer and approver pools, which store group references and expand them to current members at read time rather than snapshotting membership when a pool is saved.
 
 ## Target Surface
 
 - **Primary surface:** Full-stack (both client and server)
-- **Experience notes:** The only new UI is one effort selector per module inside the existing Admin → Project Settings screen. Artifact headers and AI Cost Analytics gain a small "effort" label next to the existing model label; no new pages, routes, or navigation entries.
+- **Experience notes:** Home is the only surface affected; the pill editor in Admin Project Settings and the Home composer both gain visible changes, but Interview, ADR, and other skill-selection surfaces are unchanged.
 
 ---
 
@@ -65,26 +55,26 @@ Every Cursor-backed module gets a sibling effort control next to its existing mo
 
 | Action | Required group(s) / role(s) | Data scope |
 |--------|---------------------------|-----------|
-| Set or change a module's default effort | Project Admin (`admin:roles`) | Project-scoped |
-| Start a module and have its configured default effort applied | Whoever already starts that module — BA, Product-Owner, or Manager (Interview); Developer (ADR, Development); Authenticated User (Agent Home chat, Feature Request); and the other existing create/run permissions per module | Project-scoped |
-| View the snapshotted effort on an artifact | Whoever already opens that Interview, PRD, Design Doc, or Design Prototype | Project-scoped |
-| View effort on cost history | Users with `analytics:ai-cost:view` | Project-scoped |
+| Configure a Home pill's allow-list | Project Admin (existing `admin:roles` gate) | Project-scoped |
+| View Home pills | Authenticated User (`home:view`) | Project-scoped |
+| Start a Home thread | Authenticated User (`chat:create`) | Project-scoped |
+| Bypass Home pill allow-lists on Home | Platform Admin (Super Admin) | Global |
 
 ---
 
 ## Security and Data Sensitivity
 
-- **Sensitive fields:** None. Effort is operational metadata — a short label describing reasoning effort — the same class of field as the existing model identifier.
-- **Handling requirements:** None beyond what already applies to model: no encryption, masking, or redaction. Effort is visible to anyone who can already see the artifact or cost row it is attached to.
-- **Data scope enforcement:** Unchanged. Effort rides on the same project-scoped rows (`project_skill_settings`, artifact tables, `ai_usage_events`) that already enforce project scoping for model; no new enforcement surface is introduced.
+- **Sensitive fields:** None. Allow-lists reference the same internal user and group identifiers a Project Admin can already see in Project Settings and the reviewer/approver pools.
+- **Handling requirements:** Exclude `allowedUserIds` and `allowedGroupIds` from the public `GET /api/skill-config` response for every pill it returns; the admin read/write path keeps the full lists, reachable only through the existing admin gate.
+- **Data scope enforcement:** Pill configuration and allow-list evaluation are always scoped to the selected project's skill settings row, the same scoping already used for every other per-project skill and model setting.
 
 ---
 
 ## Non-Functional Requirements
 
-- **Response time:** Matches the existing model-override envelope — admin settings read/write stay in the current sub-1-second range; kickoff, artifact create, and usage-event recording add one extra field and must not add a user-visible delay beyond today's model pass-through.
-- **Concurrency:** Matches existing Project Settings write concurrency (a handful of Project Admins per project) and existing module kickoff volume. No new fan-out.
-- **Data volume:** One nullable short-text column per module on `project_skill_settings`, one per artifact snapshot, one per `ai_usage_events` row. No backfill. No new index unless cost dashboards later need to filter by effort.
+- **Response time:** Not specified — no new external calls are introduced; the resolver adds only in-memory list checks and existing membership lookups to calls that already run today.
+- **Concurrency:** Not specified — pill counts and allow-list sizes remain small (single digits), consistent with existing Home usage.
+- **Data volume:** Not specified — each pill's allow-lists are expected to hold a handful of user or group identifiers.
 
 ---
 
@@ -94,22 +84,23 @@ Every Cursor-backed module gets a sibling effort control next to its existing mo
 - **Flag name:** None
 - **Rollout sequence:** GA from launch
 - **Kill switch owner:** Not applicable
-- **Behavior when disabled:** Not applicable — null/Inherit is the default for every module until a Project Admin sets a value, so existing behavior is unchanged until an admin opts in.
+- **Behavior when disabled:** Not applicable
 
 ---
 
 ## Out of Scope
 
-- A runtime effort picker for end users on interview start, Agent Home, or any other kickoff surface — defaults are admin-only
-- Effort support for Bedrock-only stages (PRD review, Design Prototype/UI Lab Bedrock generation, Design Plan) — those keep their existing max-tokens/timeout/temperature knobs
-- New skill files, new services, or new SSE event/streaming types for effort-aware runs
-- New RBAC permission keys — writes stay on `admin:roles`; runtime apply and audit/cost reads stay on each module's existing permissions
-- Backfilling effort onto artifacts or usage events created before this feature ships
+- Applying allow-lists to Interview, ADR, or any other skill/model selector outside Home pills.
+- A separate project-level "restricted Home users" list that limits a user to only their explicitly allow-listed pills, independent of any specific pill (considered during the interview and deferred to keep this within one epic and two features).
+- Re-checking pill access on every follow-up message of an existing thread — access is enforced only at thread creation.
+- Hiding or blocking a user's access to their own thread history when their pill access is later removed.
+- A new RBAC permission key — enforcement layers on the existing `home:view` and `chat:create` gates.
+- A feature flag or staged rollout — this ships GA directly.
 
 ## Assumptions Made
 
-- The Cursor SDK effort argument accepts exactly `low`, `medium`, and `high`; if the SDK's actual allow-list differs, the shared effort type must be corrected to match before this ships.
-- ADR already snapshots model on its artifact row in the current schema, so ADR is included in the artifact-snapshot scope alongside Interview, PRD, Design Doc, and Design Prototype.
-- Design Prototype gets an effort default only for the agent-engine path (`prototypeEngine` = `agent`); the Bedrock-engine prototype path is out of scope and keeps its existing knobs.
-- Stages with no dedicated artifact-audit column (Standup, Feature Request, Technical, Issue, Calendar Assistant, Load Test Generation, Design Module, Design Module Scoping) still get a usage-event effort column; there is no artifact row for those to snapshot onto.
-- No feature flag key is needed because Project Settings writes are already gated by `admin:roles` and a null/Inherit default preserves today's behavior until a Project Admin opts in.
+- "Super Admin" in the originating conversation maps to the Platform Admin persona for backlog and persona classification; the bypass behavior described (seeing and starting every Home pill) is scoped to Apex's existing super-admin bypass, and does not extend to every user holding the Project Admin role — Project Admin follows the same allow-lists as any other user on Home.
+- Group allow-list membership reuses the existing project groups membership model; no new group type or membership table is introduced.
+- A configured Home pill "match" for enforcement purposes is a `skillPath` equal to a configured skill pill's `skillPath`, or an MCP kickoff whose server identity equals a configured MCP pill's `mcpServerName`; any other kickoff is treated as pill-less for enforcement purposes.
+- Admin-side allow-list entries are validated only for being well-formed identifiers; validating that a referenced user or group actually belongs to the project being configured is not required by this PRD and should be confirmed with the admin experience owner.
+- No database migration is required — the allow-list fields are added inside the existing JSON-backed pill arrays already stored on the project's skill settings row.

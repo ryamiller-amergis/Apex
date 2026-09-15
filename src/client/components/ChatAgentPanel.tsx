@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useSkillList } from '../hooks/useChatThreads';
 import { DEFAULT_MODEL_ID, modelBadge } from '../config/models';
+import { IS_BETA_RELEASE } from '../config/release';
 import { useAvailableModels, useGlobalDefaultModel, useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
 import { useChatAttachments } from '../hooks/useChatAttachments';
 import { useSpeechInput } from '../hooks/useSpeechInput';
@@ -18,6 +19,7 @@ import type { QuickMcpPill, QuickSkillPill } from '../../shared/types/projectSet
 import { PRDPreviewDrawer } from './PRDPreviewDrawer';
 import { ThreadHistorySidebar } from './ThreadHistorySidebar';
 import { AgentComposer, AgentPanelShell } from './agentChat';
+import { BrandLogo } from './BrandLogo';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { useFocusChatMessage } from '../hooks/useFocusChatMessage';
@@ -779,19 +781,24 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
       onClose={handleClose}
       closeTestId="chat-agent-close-btn"
       width={panelWidth}
-      onResizeMouseDown={onResizeMouseDown}
+      onResizeMouseDown={launchedFromHome ? undefined : onResizeMouseDown}
       className={launchedFromHome ? styles.homePanel : undefined}
+      pageLayout={launchedFromHome}
+      bareHeader={launchedFromHome}
+      floatHeader={launchedFromHome && !inConversation}
       actions={(
         <>
-          <button
-            className={styles.iconBtn}
-            onClick={toggleFullWidth}
-            title={isFullWidth ? 'Shrink panel' : 'Expand panel to full width'}
-            aria-label={isFullWidth ? 'Shrink panel' : 'Expand panel to full width'}
-            {...{ 'data-testid': 'chat-agent-width-toggle-btn' }}
-          >
-            {isFullWidth ? '⇥⇤' : '⇤⇥'}
-          </button>
+          {!launchedFromHome && (
+            <button
+              className={styles.iconBtn}
+              onClick={toggleFullWidth}
+              title={isFullWidth ? 'Shrink panel' : 'Expand panel to full width'}
+              aria-label={isFullWidth ? 'Shrink panel' : 'Expand panel to full width'}
+              {...{ 'data-testid': 'chat-agent-width-toggle-btn' }}
+            >
+              {isFullWidth ? '⇥⇤' : '⇤⇥'}
+            </button>
+          )}
           {onSelectThread && (
             <button
               className={styles.iconBtn}
@@ -802,15 +809,19 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
               {showHistory ? '← Back' : '⏱ History'}
             </button>
           )}
-          <button
-            className={styles.iconBtn}
-            onClick={() => { void onNewChat(); }}
-            title="New chat"
-            disabled={!canStartNewChat || isStartingNewChat || isRunning}
-            {...{ 'data-testid': 'chat-agent-new-chat-btn' }}
-          >
-            {isStartingNewChat ? 'Starting…' : '+ New'}
-          </button>
+          {/* On Home the hold screen already is a fresh chat, so New only
+              earns its place once a conversation is running. */}
+          {(!launchedFromHome || inConversation) && (
+            <button
+              className={styles.iconBtn}
+              onClick={() => { void onNewChat(); }}
+              title="New chat"
+              disabled={!canStartNewChat || isStartingNewChat || isRunning}
+              {...{ 'data-testid': 'chat-agent-new-chat-btn' }}
+            >
+              {isStartingNewChat ? 'Starting…' : '+ New'}
+            </button>
+          )}
         </>
       )}
       status={inConversation ? (
@@ -826,60 +837,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
           </span>
         </div>
       ) : undefined}
-      before={!launchedFromHome ? undefined : isHomeCompose ? (
-        <section className={styles.quickPills} aria-label="Home chat shortcuts">
-          {quickSkillPills.length > 0 && <h3>Skills</h3>}
-          <div className={styles.pillRow}>
-            {quickSkillPills.map((pill) => (
-              <button
-                key={pill.skillPath}
-                type="button"
-                className={`${styles.quickPill} ${selectedQuickSkill?.skillPath === pill.skillPath ? styles.quickPillSelected : ''}`}
-                onClick={() => {
-                  const selected = selectedQuickSkill?.skillPath === pill.skillPath ? null : pill;
-                  setSelectedQuickSkill(selected);
-                  setSelectedMcpPill(null);
-                  setSelectedModel(selected?.model ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID);
-                  if (selected) {
-                    requestAnimationFrame(() => textareaRef.current?.focus());
-                  }
-                }}
-                aria-pressed={selectedQuickSkill?.skillPath === pill.skillPath}
-                {...{ 'data-testid': `chat-agent-skill-pill-${testIdSegment(pill.skillPath)}` }}
-              >
-                {pill.label}
-              </button>
-            ))}
-          </div>
-          {quickMcpPills.length > 0 && <h3>MCP Servers</h3>}
-          <div className={styles.pillRow}>
-            {quickMcpPills.map((pill) => (
-              <button
-                key={pill.mcpServerName}
-                type="button"
-                className={`${styles.quickPill} ${selectedMcpPill?.mcpServerName === pill.mcpServerName ? styles.quickPillSelected : ''}`}
-                onClick={() => {
-                  const selected = selectedMcpPill?.mcpServerName === pill.mcpServerName ? null : pill;
-                  setSelectedMcpPill(selected);
-                  setSelectedQuickSkill(null);
-                  setSelectedModel(selected?.model ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID);
-                  if (selected) {
-                    requestAnimationFrame(() => textareaRef.current?.focus());
-                  }
-                }}
-                {...{ 'data-testid': `chat-agent-mcp-pill-${testIdSegment(pill.mcpServerName)}` }}
-              >
-                {pill.label}
-              </button>
-            ))}
-          </div>
-          {selectedPillDescription && (
-            <p className={styles.pillDescription} {...{ 'data-testid': 'chat-agent-pill-description' }}>
-              {selectedPillDescription}
-            </p>
-          )}
-        </section>
-      ) : selectedPillDescription ? (
+      before={!launchedFromHome || isHomeCompose ? undefined : selectedPillDescription ? (
         // Selection controls belong to a new chat only; an active conversation
         // just names the skill it is already running.
         <section className={styles.quickPills} aria-label="Active chat skill">
@@ -901,101 +859,228 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
         />
       ) : !inConversation ? (
         <>
-          <div className={styles.emptyPane}>
-          <span className={styles.emptyIcon}>AI</span>
-          <h3 className={styles.emptyTitle}>No conversation yet</h3>
-          {blockedNoAllowedPills ? (
-            <p
-              className={styles.emptyHint}
-              role="status"
-              aria-live="polite"
-              {...{ 'data-testid': 'chat-agent-home-blocked-notice' }}
-            >
-              {HOME_NO_ALLOWED_PILLS_MESSAGE}
-            </p>
-          ) : (
-            <p className={styles.emptyHint}>
-              {needsSkillSelection
-                ? 'Select a skill above to get started.'
-                : resolvedQuickSkill
-                  ? `${resolvedQuickSkill.label} is ready — type your question below.`
-                  : resolvedMcpPill
-                    ? `${resolvedMcpPill.label} is ready — type your question below.`
-                    : isHomeCompose && hasHomePills
-                      ? 'Select a skill above, then tell Apex what you need.'
+          {isHomeCompose ? (
+            <div className={styles.homeHold} {...{ 'data-testid': 'chat-agent-home-hold' }}>
+              <div className={styles.homeHoldInner}>
+                <BrandLogo
+                  className={styles.homeHoldLogo}
+                  beta={IS_BETA_RELEASE}
+                  align="center"
+                />
+                <h3 className={styles.homeHoldHeading}>What do you want to work on?</h3>
+                {blockedNoAllowedPills ? (
+                  <p
+                    className={styles.emptyHint}
+                    role="status"
+                    aria-live="polite"
+                    {...{ 'data-testid': 'chat-agent-home-blocked-notice' }}
+                  >
+                    {HOME_NO_ALLOWED_PILLS_MESSAGE}
+                  </p>
+                ) : newChatError ? (
+                  <p className={styles.emptyError}>{newChatError}</p>
+                ) : null}
+                <AgentComposer
+                  className={`${styles.composerEmbed} ${styles.homeHoldComposer}`}
+                  value={input}
+                  onChange={setInput}
+                  onSend={() => { void startFromEmptyComposer(); }}
+                  disabled={needsSkillSelection || homeComposeBlocked || !canStartNewChat || isStartingNewChat}
+                  isSending={isStartingNewChat}
+                  isBusy={needsSkillSelection || skillConfigUnavailable || isStartingNewChat}
+                  shellDisabled={needsSkillSelection || homeComposeBlocked || !canStartNewChat}
+                  canSend={
+                    !needsSkillSelection
+                    && !homeComposeBlocked
+                    && canStartNewChat
+                    && !isStartingNewChat
+                    && (Boolean(input.trim()) || attachments.length > 0)
+                  }
+                  allowEmptySend
+                  attachments={attachments}
+                  attachmentError={attachmentError}
+                  onRemoveAttachment={removeAttachment}
+                  onAttachClick={openFilePicker}
+                  speech={{
+                    isListening: speech.isListening,
+                    isSpeechSupported: speech.isSpeechSupported,
+                    speechError: speech.speechError,
+                    onToggle: () => speech.toggle(input),
+                  }}
+                  fileInput={(
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      multiple
+                      className={styles.fileInput}
+                      onChange={handleAttachmentChange}
+                      disabled={isStartingNewChat || homeComposeBlocked || !canStartNewChat}
+                    />
+                  )}
+                  placeholder={
+                    blockedNoAllowedPills
+                      ? 'Sending is unavailable until you have access to a Home skill'
                       : skillConfigUnavailable
                         ? 'Checking which Home skills you can use…'
-                        : 'Type your first message to start a new thread with Apex.'}
-            </p>
-          )}
-          {newChatError && <p className={styles.emptyError}>{newChatError}</p>}
-          </div>
-          <AgentComposer
-            className={styles.composerEmbed}
-            value={input}
-            onChange={setInput}
-            onSend={() => { void startFromEmptyComposer(); }}
-            disabled={needsSkillSelection || homeComposeBlocked || !canStartNewChat || isStartingNewChat}
-            isSending={isStartingNewChat}
-            isBusy={needsSkillSelection || skillConfigUnavailable || isStartingNewChat}
-            shellDisabled={needsSkillSelection || homeComposeBlocked || !canStartNewChat}
-            canSend={
-              !needsSkillSelection
-              && !homeComposeBlocked
-              && canStartNewChat
-              && !isStartingNewChat
-              && (Boolean(input.trim()) || attachments.length > 0)
-            }
-            allowEmptySend
-            attachments={attachments}
-            attachmentError={attachmentError}
-            onRemoveAttachment={removeAttachment}
-            onAttachClick={openFilePicker}
-            speech={{
-              isListening: speech.isListening,
-              isSpeechSupported: speech.isSpeechSupported,
-              speechError: speech.speechError,
-              onToggle: () => speech.toggle(input),
-            }}
-            fileInput={(
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                className={styles.fileInput}
-                onChange={handleAttachmentChange}
-                disabled={isStartingNewChat || homeComposeBlocked || !canStartNewChat}
+                        : needsSkillSelection
+                          ? 'Select a skill below to get started'
+                          : resolvedQuickSkill
+                            ? `Ask using ${resolvedQuickSkill.label}…`
+                            : resolvedMcpPill
+                              ? `Ask using ${resolvedMcpPill.label}…`
+                              : 'Let Apex know what you need…'
+                  }
+                  autoFocus={!needsSkillSelection && !homeComposeBlocked}
+                  textareaRef={textareaRef}
+                  after={
+                    !needsSkillSelection && (resolvedQuickSkill || resolvedMcpPill) ? (
+                      <p className={styles.composeArmedHint} {...{ 'data-testid': 'chat-agent-compose-armed-hint' }}>
+                        Press Enter to send your question.
+                      </p>
+                    ) : undefined
+                  }
+                  testIdPrefix="chat-agent"
+                  model={selectedModel}
+                  models={availableModels}
+                  modelsLoading={modelsLoading}
+                  onModelChange={setSelectedModel}
+                  {...{ 'data-testid': 'chat-agent-composer' }}
+                />
+                <section
+                  className={`${styles.quickPills} ${styles.homeHoldShortcuts}`}
+                  aria-label="Home chat shortcuts"
+                >
+                  {quickSkillPills.length > 0 && <h3>Skills</h3>}
+                  <div className={styles.pillRow}>
+                    {quickSkillPills.map((pill) => (
+                      <button
+                        key={pill.skillPath}
+                        type="button"
+                        className={`${styles.quickPill} ${selectedQuickSkill?.skillPath === pill.skillPath ? styles.quickPillSelected : ''}`}
+                        onClick={() => {
+                          const selected = selectedQuickSkill?.skillPath === pill.skillPath ? null : pill;
+                          setSelectedQuickSkill(selected);
+                          setSelectedMcpPill(null);
+                          setSelectedModel(selected?.model ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID);
+                          if (selected) {
+                            requestAnimationFrame(() => textareaRef.current?.focus());
+                          }
+                        }}
+                        aria-pressed={selectedQuickSkill?.skillPath === pill.skillPath}
+                        {...{ 'data-testid': `chat-agent-skill-pill-${testIdSegment(pill.skillPath)}` }}
+                      >
+                        {pill.label}
+                      </button>
+                    ))}
+                  </div>
+                  {quickMcpPills.length > 0 && <h3>MCP Servers</h3>}
+                  <div className={styles.pillRow}>
+                    {quickMcpPills.map((pill) => (
+                      <button
+                        key={pill.mcpServerName}
+                        type="button"
+                        className={`${styles.quickPill} ${selectedMcpPill?.mcpServerName === pill.mcpServerName ? styles.quickPillSelected : ''}`}
+                        onClick={() => {
+                          const selected = selectedMcpPill?.mcpServerName === pill.mcpServerName ? null : pill;
+                          setSelectedMcpPill(selected);
+                          setSelectedQuickSkill(null);
+                          setSelectedModel(selected?.model ?? globalDefaultModel?.value ?? DEFAULT_MODEL_ID);
+                          if (selected) {
+                            requestAnimationFrame(() => textareaRef.current?.focus());
+                          }
+                        }}
+                        {...{ 'data-testid': `chat-agent-mcp-pill-${testIdSegment(pill.mcpServerName)}` }}
+                      >
+                        {pill.label}
+                      </button>
+                    ))}
+                  </div>
+                  {selectedPillDescription && (
+                    <p className={styles.pillDescription} {...{ 'data-testid': 'chat-agent-pill-description' }}>
+                      {selectedPillDescription}
+                    </p>
+                  )}
+                </section>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className={styles.emptyPane}>
+                <span className={styles.emptyIcon}>AI</span>
+                <h3 className={styles.emptyTitle}>No conversation yet</h3>
+                {blockedNoAllowedPills ? (
+                  <p
+                    className={styles.emptyHint}
+                    role="status"
+                    aria-live="polite"
+                    {...{ 'data-testid': 'chat-agent-home-blocked-notice' }}
+                  >
+                    {HOME_NO_ALLOWED_PILLS_MESSAGE}
+                  </p>
+                ) : (
+                  <p className={styles.emptyHint}>
+                    {skillConfigUnavailable
+                      ? 'Checking which Home skills you can use…'
+                      : 'Type your first message to start a new thread with Apex.'}
+                  </p>
+                )}
+                {newChatError && <p className={styles.emptyError}>{newChatError}</p>}
+              </div>
+              <AgentComposer
+                className={styles.composerEmbed}
+                value={input}
+                onChange={setInput}
+                onSend={() => { void startFromEmptyComposer(); }}
+                disabled={needsSkillSelection || homeComposeBlocked || !canStartNewChat || isStartingNewChat}
+                isSending={isStartingNewChat}
+                isBusy={needsSkillSelection || skillConfigUnavailable || isStartingNewChat}
+                shellDisabled={needsSkillSelection || homeComposeBlocked || !canStartNewChat}
+                canSend={
+                  !needsSkillSelection
+                  && !homeComposeBlocked
+                  && canStartNewChat
+                  && !isStartingNewChat
+                  && (Boolean(input.trim()) || attachments.length > 0)
+                }
+                allowEmptySend
+                attachments={attachments}
+                attachmentError={attachmentError}
+                onRemoveAttachment={removeAttachment}
+                onAttachClick={openFilePicker}
+                speech={{
+                  isListening: speech.isListening,
+                  isSpeechSupported: speech.isSpeechSupported,
+                  speechError: speech.speechError,
+                  onToggle: () => speech.toggle(input),
+                }}
+                fileInput={(
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    className={styles.fileInput}
+                    onChange={handleAttachmentChange}
+                    disabled={isStartingNewChat || homeComposeBlocked || !canStartNewChat}
+                  />
+                )}
+                placeholder={
+                  blockedNoAllowedPills
+                    ? 'Sending is unavailable until you have access to a Home skill'
+                    : skillConfigUnavailable
+                      ? 'Checking which Home skills you can use…'
+                      : 'Let Apex know what you need…'
+                }
+                autoFocus={!needsSkillSelection && !homeComposeBlocked}
+                textareaRef={textareaRef}
+                testIdPrefix="chat-agent"
+                model={selectedModel}
+                models={availableModels}
+                modelsLoading={modelsLoading}
+                onModelChange={setSelectedModel}
+                {...{ 'data-testid': 'chat-agent-composer' }}
               />
-            )}
-            placeholder={
-              blockedNoAllowedPills
-                ? 'Sending is unavailable until you have access to a Home skill'
-                : skillConfigUnavailable
-                  ? 'Checking which Home skills you can use…'
-                  : needsSkillSelection
-                    ? 'Select an option above to get started'
-                    : resolvedQuickSkill
-                      ? `Ask using ${resolvedQuickSkill.label}…`
-                      : resolvedMcpPill
-                        ? `Ask using ${resolvedMcpPill.label}…`
-                        : 'Let Apex know what you need…'
-            }
-            autoFocus={!needsSkillSelection && !homeComposeBlocked}
-            textareaRef={textareaRef}
-            after={
-              !needsSkillSelection && (resolvedQuickSkill || resolvedMcpPill) ? (
-                <p className={styles.composeArmedHint} {...{ 'data-testid': 'chat-agent-compose-armed-hint' }}>
-                  Press Enter to send your question.
-                </p>
-              ) : undefined
-            }
-            testIdPrefix="chat-agent"
-            model={selectedModel}
-            models={availableModels}
-            modelsLoading={modelsLoading}
-            onModelChange={setSelectedModel}
-            {...{ 'data-testid': 'chat-agent-composer' }}
-          />
+            </>
+          )}
         </>
       ) : (
         <>

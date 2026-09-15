@@ -1,105 +1,114 @@
-# Design — Effort Data Model & Shared Allow-List Foundations
+# Design — Configure Home Pill Allow-Lists
 
-> **PRD slug:** `per-module-agent-effort-defaults` | **Priority:** Must Have | **Feature flag:** `None`
-> **Parent Epic:** Per-Module Agent Effort Defaults | **Affected personas:** Project Admin, Developer
-> **Open items:** See [design-doc-assumptions.md](design-doc-assumptions.md) (1 unresolved)
+> **PRD slug:** `home-pill-access-control` | **Priority:** Must Have | **Feature flag:** `None`
+> **Parent Epic:** Home Pill Access Control | **Affected personas:** Project Admin
+> **Open items:** See [configure-home-pill-allow-lists-assumptions.md](configure-home-pill-allow-lists-assumptions.md) (2 unresolved)
 
 ---
 
 ## Feature Summary
 
-**Description:** Project Admins can already choose an AI model per Cursor-backed module in Project Settings, but there is no matching control for reasoning effort, and nobody can tell after the fact which effort actually produced a given artifact or cost row. This Feature is pure technical groundwork with no visible behavior change: it establishes the closed `low` / `medium` / `high` (+ Inherit) effort allow-list shared by client and server, and adds the nullable database columns — on Project Settings, on every artifact-audit table, and on the AI usage-event table — that the admin configuration UI (FEAT-002), the kickoff resolution service (FEAT-003), and the audit/cost display feature (FEAT-004) all build on. No effort value is set, resolved, or displayed by this Feature; every new column starts and stays `null` until later features populate it.
+**Description:** Today every Home skill pill and MCP pill configured for a project is visible and startable by anyone with Home access — there is no way to hand a narrow group of users a single-purpose entry point without exposing every other shortcut on the project. This Feature gives Project Admins a per-pill allow-list: an optional set of specific users and/or groups on each Home skill pill and MCP pill, configured directly in the existing Admin → Project Settings pill editor. A pill with no allow-list keeps behaving exactly as it does today (visible to everyone with Home access); a pill with an allow-list is scoped to only the listed users and groups once **Enforce Home Pill Access** (the dependent Feature) ships. This Feature covers only the data model and the admin configuration surface — no Home-facing visibility or thread-creation enforcement changes yet.
 
 **Work items:**
 
 | ID | Type | Title | Priority |
 |----|------|-------|----------|
-| TBI-001 | TBI | Add shared effort allow-list type and per-module effort columns to `project_skill_settings` | Must Have |
-| TBI-002 | TBI | Add nullable effort snapshot column to artifact audit tables | Must Have |
-| TBI-003 | TBI | Add nullable effort column to `ai_usage_events` | Must Have |
+| PBI-001 | PBI | Restrict a Home skill pill to specific users or groups | Must Have |
+| PBI-002 | PBI | Restrict a Home MCP pill to specific users or groups | Must Have |
+| TBI-001 | TBI | Add allow-list fields to Home pill storage and shared types | Must Have |
+| TBI-002 | TBI | Extend Admin Project Settings pill editor with allow-list controls | Must Have |
 
 ---
 
 ## Scope and Out-of-Scope
 
 **In scope:**
-- A closed TypeScript union (`low` / `medium` / `high`, with `null` meaning inherit) shared by client and server code, exported from a single canonical location.
-- One nullable effort column per existing `*Model` stage on `project_skill_settings` (19 module-specific columns), plus one project-wide `defaultEffort` column.
-- One nullable effort column on each of `interviews`, `adrs`, `prds`, `design_docs`, and `design_prototypes` — mirroring the existing `model` column already present on each.
-- One nullable effort column on `ai_usage_events`, covering every Cursor-backed module including ones with no dedicated artifact table (Standup, Feature Request, Technical, Issue, Calendar Assistant, Load Test Generation, Design Module, Design Module Scoping).
-- An optional `effort` field added to the shared `InterviewSkillOption`, `QuickSkillPill`, and `QuickMcpPill` types.
-- Matching Drizzle schema (`src/server/db/schema.ts`) definitions for every new column.
+- Two optional fields — individual user identifiers and group identifiers — added to the shared skill-pill and MCP-pill types.
+- The admin project-settings read and write path returning and persisting the full pill list, including these new fields, exactly as it does today for every other pill attribute.
+- A user/group selection control on each skill pill row and each MCP pill row in the Admin Project Settings pill editor, following the existing reviewer/approver pool picker pattern.
+- BR-001 (empty allow-list means everyone with Home access) as a data-model default — enforced by this Feature only in the sense that "no allow-list" and "empty allow-list" persist identically; runtime enforcement of BR-001 ships in **Enforce Home Pill Access**.
 
 **Out of scope:**
-- Populating any effort value — this Feature only adds the columns and shared type; defaults remain `null` until FEAT-002 ships an admin UI to set them.
-- Effort support for Bedrock-only stages (PRD review, Design Prototype/UI Lab Bedrock generation, Design Plan) — those keep their existing max-tokens/timeout/temperature knobs and get no effort column.
-- Any new skill files, new services, or new SSE event/streaming types.
-- New RBAC permission keys.
-- Backfilling effort onto artifacts or usage events created before this Feature ships.
-- Reading or writing the new columns through any service, route, or UI — that begins in FEAT-002 (admin settings), FEAT-003 (kickoff resolution), and FEAT-004 (audit/cost display).
+- Bulk-editing allow-lists across multiple pills at once (PBI-001, PBI-002).
+- Restricting Interview, ADR, or any other non-Home skill selector (Feature-level).
+- Validating that an allow-listed user or group belongs to the project being configured (Feature-level).
+- Filtering the public `GET /api/skill-config` response, evaluating pill access for Home visibility, or enforcing allow-lists on Home thread creation — all of this is **Enforce Home Pill Access** (the dependent Feature, `dependsOn: ["FEAT-001"]`).
+- A new RBAC permission key — this Feature reuses the existing `admin:roles` write gate.
+- A feature flag or staged rollout — ships GA directly, same as the parent epic.
 
 ---
 
 ## Target Surface
 
-**Primary surface:** Shared types only + database migration. No React component, no new or modified Express route, and no user-visible behavior changes anywhere in the product. The Drizzle schema and shared type files are compiled into both the client and server bundles (so later UI/API work can import them), but this Feature ships zero client runtime code and zero new/modified endpoints.
+**Primary surface:** Full-stack (shared types + existing admin read/write path + React admin editor). No new Express service, no new route, and no database migration.
 
-**Experience notes:** Not applicable — there is nothing for any user, including a Project Admin, to see or do differently after this Feature ships. The epic's overall Target Surface (full-stack, one new effort selector per module in Admin → Project Settings) is delivered entirely by FEAT-002 through FEAT-004.
+**Experience notes:** The only visible UI change is inside **Admin → Project Settings → Project Skill Settings**, in the existing "Quick Skill Pills" and "Quick MCP Pills" accordion sections — each already-configured pill row gains a user/group picker. Home itself (the composer, pill visibility, and thread creation) is untouched until **Enforce Home Pill Access** ships; a Project Admin who sets an allow-list in this Feature will not yet see any change in who can use that pill on Home.
 
 ---
 
 ## Access Control
 
-No new endpoint, UI action, or data-read path is introduced by this Feature — the new columns are inert until a later feature opens a path to them. The only "action" that exists at this Feature's layer is applying the schema change itself:
-
 | Action | Who can perform it | Data scope |
 |--------|--------------------|-----------|
-| Merge and apply the migrations adding the new effort columns/type | Developer, via normal repository merge + `npm run migrate:up` deployment step (existing CI/CD gate, not a new one) | Not applicable — DDL change, not a per-project or per-user runtime action |
+| Configure a Home pill's allow-list | Project Admin (existing `admin:roles` gate, enforced by `router.use(requirePermission('admin:roles'))` on `src/server/routes/admin.ts`) | Project-scoped |
+| View a Home pill's allow-list (admin editor) | Project Admin (same `admin:roles` gate — the admin read path is intentionally unfiltered) | Project-scoped |
 
-**Feature flag:** `None` — rollout: `Not applicable` (GA from launch per the epic; a flag is unnecessary because every new column defaults to `null`/inherit, which is a no-op until a Project Admin explicitly opts in via FEAT-002).
-**Behavior when flag is off:** Not applicable — no flag exists for this Feature or the epic.
+**Feature flag:** `None` — rollout: GA from launch, matching the parent epic.
+**Behavior when flag is off:** Not applicable — no flag exists for this Feature.
 
 ---
 
 ## Acceptance Criteria
 
-This Feature contains **no PBIs** — all three work items are TBIs delivering shared-type and schema groundwork with no direct user-facing behavior. The acceptance criteria below are expressed as technical Given/When/Then per TBI, derived from each TBI's Definition of Done and Non-Functional Requirements, covering the same four scenario categories (happy path, error/failure, edge case, negative) the skill requires for PBIs.
-
-### TBI-001 — Add shared effort allow-list type and per-module effort columns to `project_skill_settings`
+### PBI-001 — Restrict a Home skill pill to specific users or groups
 
 | # | Given | When | Then |
 |---|-------|------|------|
-| (a) Happy path | The migration and matching `schema.ts` changes are applied | A developer runs `npm run migrate:local:up` then `npx tsc -p tsconfig.server.json --noEmit` | All 20 nullable columns (19 per-module + `defaultEffort`) exist on `project_skill_settings`, and the server build compiles with zero type errors against the new `EffortLevel`-typed columns |
-| (b) Error/failure | A developer attempts to add one of the new columns as `NOT NULL` with no default | The migration is reviewed against this Feature's NFRs | The migration is rejected in review — every new column must be nullable with no backfill, since existing rows must resolve to inherit/omit until an admin sets a value |
-| (c) Edge case/boundary | `EffortLevel` is imported into both a server file (`schema.ts`) and a client file (a future Project Settings component) | The client bundle (`tsconfig.client.json`) is built | The build succeeds with no server-only dependency pulled into the client bundle, because `effort.ts` contains only a literal type and a small array/guard function with zero imports |
-| (d) Negative scenario | A developer writes `effort: 'urgent'` against a variable typed `EffortLevel` | The code is compiled | `tsc` raises a compile-time type error; this is a compile-time-only guard — it does not and cannot block a raw string written directly to the database outside TypeScript, which is exactly what BR-005 anticipates |
+| (a) Happy path | I am a Project Admin editing a Home skill pill in Project Settings | I add one or more users or groups to the pill's allow-list and save | The allow-list is persisted, and only those users (directly or via group membership) see and can start that pill on Home *(visibility/start enforcement itself ships in Enforce Home Pill Access; this Feature guarantees the persisted allow-list round-trips correctly)* |
+| (b) Error/failure | I am a Project Admin editing a pill's allow-list | I submit the change and the save request fails | The previously saved allow-list remains in effect and I see an error indicating the save did not succeed |
+| (c) Edge case/boundary | A Home skill pill has no users or groups on its allow-list | Any user with Home access loads Home | That pill is visible to them, matching today's behavior |
+| (d) Negative scenario | A caller without Project Admin access to project settings | They call the admin write endpoint directly to change a pill's allow-list | The request is denied and no allow-list change is persisted |
 
-### TBI-002 — Add nullable effort snapshot column to artifact audit tables
-
-| # | Given | When | Then |
-|---|-------|------|------|
-| (a) Happy path | The migration is applied to `interviews`, `adrs`, `prds`, `design_docs`, and `design_prototypes` | An existing row in any of these tables is read | The row returns `effort: null` with no error; the column shape exactly matches the existing nullable `model` column on the same table |
-| (b) Error/failure | A developer attempts to add the column as `NOT NULL` | The migration is reviewed | Rejected — nullable with no backfill is required, matching the existing `model`-column precedent on these five tables |
-| (c) Edge case/boundary | A `design_prototypes` row is inserted for a project whose `prototypeEngine` is `bedrock` (not `agent`) | The insert omits `effort` | The insert succeeds with `effort: null` — the column carries no DB-level constraint tying it to the agent-engine path, because `design_prototypes` has no `prototypeEngine` column of its own to constrain against; that scoping is an application-level rule enforced later, in FEAT-004 |
-| (d) Negative scenario | An `interview` row created before this Feature shipped is read after the migration | The interview header (unchanged in this Feature) renders | Rendering is unaffected — the pre-existing row simply has `effort: null`, and no backfill is attempted or expected |
-
-### TBI-003 — Add nullable effort column to `ai_usage_events`
+### PBI-002 — Restrict a Home MCP pill to specific users or groups
 
 | # | Given | When | Then |
 |---|-------|------|------|
-| (a) Happy path | The migration is applied to `ai_usage_events` | A usage event for a module with no dedicated artifact table (e.g. Standup) is later written by FEAT-004 | The row can carry a non-null `effort` value even though Standup has no artifact table to snapshot onto — the universal column on `ai_usage_events` is the only audit surface for those stages |
-| (b) Error/failure | A developer proposes adding an index on the new `effort` column in the same migration | The migration is reviewed against TBI-003's NFRs | Rejected in review — "no new index" is explicit, since effort is not filtered in `WHERE` clauses at this stage |
-| (c) Edge case/boundary | An existing `ai_usage_events` row (written before this migration) is read after the migration | A cost-analytics query selects `effort` | The column returns `null` for every pre-existing row, with no query error and no special-casing required |
-| (d) Negative scenario | A row is inserted with `effort` omitted entirely (the common case until FEAT-003/FEAT-004 ship) | The insert executes | It succeeds — the column accepts `NULL` for any event where effort was never resolved, including all Bedrock-only stages, which never populate this column at all |
+| (a) Happy path | I am a Project Admin editing a Home MCP pill in Project Settings | I add one or more users or groups to the pill's allow-list and save | The allow-list is persisted, and only those users (directly or via group membership) see and can start that MCP pill on Home |
+| (b) Error/failure | I am a Project Admin editing an MCP pill's allow-list | I submit the change and the save request fails | The previously saved allow-list remains in effect and I see an error indicating the save did not succeed |
+| (c) Edge case/boundary | A Home MCP pill has no users or groups on its allow-list | Any user with Home access loads Home | That MCP pill is visible to them, matching today's behavior |
+| (d) Negative scenario | A caller without Project Admin access to project settings | They call the admin write endpoint directly to change an MCP pill's allow-list | The request is denied and no allow-list change is persisted |
 
 ---
 
 ## UI/UX
 
-Not applicable. This Feature introduces no screens, components, routes, or `data-testid` attributes. The one new UI element the epic eventually needs — an effort dropdown next to each module's model dropdown in Admin → Project Settings — is delivered by FEAT-002 (TBI-004), which extends `AdminProjectSettings.tsx` and the project-settings API to actually read and write the columns this Feature only creates.
+**Routes / screens:**
+
+| Route | Screen | Action | New or extend existing |
+|-------|--------|--------|----------------------|
+| `/admin/project-settings` | Project Skill Settings — "Quick Skill Pills" accordion | Admin sets/clears a skill pill's allow-list | Extend existing |
+| `/admin/project-settings` | Project Skill Settings — "Quick MCP Pills" accordion | Admin sets/clears an MCP pill's allow-list | Extend existing |
+
+**Component breakdown:**
+
+| Component | Purpose | Loading state | Error state | Empty state |
+|-----------|---------|--------------|-------------|-------------|
+| `GroupAwarePeoplePicker` (reused, unmodified) | Search/select users and groups for a pill's allow-list, rendered per pill row | Disabled while `upsert.isPending`, matching every other pill control | Save failure surfaces through the existing form-level error path (AC (b)); the picker itself has no independent error state | "No groups or people selected" (existing built-in empty state — means "everyone with Home access") |
+
+**Validation rules:**
+- No client-side format validation on selected IDs — the picker only ever emits real `oid`/group-`id` values already present in the loaded `allUsers`/`groupsWithMembers` data, so malformed input is not reachable through the UI.
+- No minimum or maximum allow-list size.
+
+**Accessibility:**
+- `GroupAwarePeoplePicker` is already keyboard-navigable (search input, arrow-selectable dropdown options, removable chips with `aria-label`) and this is unchanged by reuse — satisfies PBI-001/PBI-002's NFR "keyboard-navigable and screen-reader labeled, matching the existing pill editor fields."
+
+**data-testid attributes:**
+- `data-testid="ps-skill-pill-allowlist-{idx}"` — the allow-list picker wrapper on skill pill row `idx`.
+- `data-testid="ps-mcp-pill-allowlist-{idx}"` — the allow-list picker wrapper on MCP pill row `idx`.
 
 ---
 
 ## Technical Specification
 
-See [design-doc-tech-spec.md](design-doc-tech-spec.md) for architecture, data contracts, testing strategy, verification test matrix, implementation plan, and diagrams.
+See [configure-home-pill-allow-lists-tech-spec.md](configure-home-pill-allow-lists-tech-spec.md) for architecture, data contracts, testing strategy, verification test matrix, implementation plan, and diagrams.

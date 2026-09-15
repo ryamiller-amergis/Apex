@@ -1,103 +1,117 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import type { HomeDashboardScope } from '../../shared/types/homeDashboard';
 import { useHomeDashboard } from '../hooks/useHomeDashboard';
-import type { WorkItem } from '../types/workitem';
 import { HomeDashboardSection } from './HomeDashboardSection';
 import styles from './AgentHome.module.css';
 
+export type HomeView = 'chat' | 'status';
+
 interface AgentHomeProps {
   selectedProject: string;
-  selectedAreaPath?: string;
-  selectedSkillSettingsId?: string | null;
-  isAdmin?: boolean;
-  isChatOpen?: boolean;
-  canOpenChat?: boolean;
-  onOpenChatPanel?: () => void;
+  isActive?: boolean;
+  onHomeViewChange?: (view: HomeView) => void;
   onRestoreThread?: (threadId: string) => void;
-  onSelectWorkItem?: (workItem: WorkItem) => void;
 }
+
+const storageKey = (project: string) => `apex-home-view:${project}`;
+
+const loadHomeView = (project: string): HomeView => {
+  try {
+    return localStorage.getItem(storageKey(project)) === 'status' ? 'status' : 'chat';
+  } catch {
+    return 'chat';
+  }
+};
 
 export const AgentHome: React.FC<AgentHomeProps> = ({
   selectedProject,
-  selectedAreaPath = '',
-  isChatOpen = false,
-  canOpenChat = false,
-  onOpenChatPanel,
+  isActive = true,
+  onHomeViewChange,
   onRestoreThread,
-  onSelectWorkItem,
 }) => {
-  const [dashboardScope, setDashboardScope] = useState<HomeDashboardScope>('mine');
+  const [projectViews, setProjectViews] = useState<Record<string, HomeView>>({});
   const restoredProjectRef = useRef<string | null>(null);
-  const bugDetails = useMutation({
-    mutationFn: async (pbiId: string): Promise<WorkItem> => {
-      const params = new URLSearchParams({
-        project: selectedProject,
-        areaPath: selectedAreaPath,
-      });
-      const response = await fetch(`/api/workitems/${encodeURIComponent(pbiId)}?${params}`, {
-        credentials: 'include',
-      });
-      if (!response.ok) throw new Error('Could not load this PBI.');
-      return response.json() as Promise<WorkItem>;
-    },
-    onSuccess: (workItem) => onSelectWorkItem?.(workItem),
-  });
-  const dashboard = useHomeDashboard(selectedProject, dashboardScope);
+  const restoredUrlThreadRef = useRef<string | null>(null);
+  const dashboard = useHomeDashboard(selectedProject, 'team');
   const [searchParams] = useSearchParams();
+  const preferredView = projectViews[selectedProject] ?? loadHomeView(selectedProject);
+  const threadFromUrl = searchParams.get('thread');
+  const statusAvailable = dashboard.data === undefined
+    || dashboard.data.incompletePipeline !== null
+    || dashboard.data.artifactCycleTime !== null;
+  const view = threadFromUrl || (!dashboard.isLoading && !statusAvailable)
+    ? 'chat'
+    : preferredView;
+
+  const selectView = (nextView: HomeView) => {
+    setProjectViews((current) => ({ ...current, [selectedProject]: nextView }));
+    try { localStorage.setItem(storageKey(selectedProject), nextView); } catch { /* noop */ }
+    onHomeViewChange?.(nextView);
+  };
 
   useEffect(() => {
+    if (!isActive) return;
+    if (!threadFromUrl) {
+      try { localStorage.setItem(storageKey(selectedProject), view); } catch { /* noop */ }
+    }
+    onHomeViewChange?.(view);
+  }, [isActive, onHomeViewChange, selectedProject, threadFromUrl, view]);
+
+  useEffect(() => {
+    if (threadFromUrl) {
+      if (
+        restoredUrlThreadRef.current === threadFromUrl
+        && restoredProjectRef.current === selectedProject
+      ) {
+        return;
+      }
+      restoredUrlThreadRef.current = threadFromUrl;
+      restoredProjectRef.current = selectedProject;
+      onRestoreThread?.(threadFromUrl);
+      return;
+    }
+
+    restoredUrlThreadRef.current = null;
     if (restoredProjectRef.current === selectedProject) return;
     restoredProjectRef.current = selectedProject;
-    // Restore remembered thread identity without opening the drawer. Only an
-    // explicit Home deep link should open chat on initial load.
-    const threadFromUrl = searchParams.get('thread');
     const storedThreadId = sessionStorage.getItem(`agentHomeThreadId:${selectedProject}`);
-    const threadId = threadFromUrl ?? storedThreadId;
-    if (!threadId) return;
-    onRestoreThread?.(threadId);
-    if (threadFromUrl) onOpenChatPanel?.();
-  }, [onOpenChatPanel, onRestoreThread, searchParams, selectedProject]);
-
-  const showChatToggle = canOpenChat && Boolean(onOpenChatPanel) && !isChatOpen;
+    if (storedThreadId) onRestoreThread?.(storedThreadId);
+  }, [onRestoreThread, selectedProject, threadFromUrl]);
 
   return (
-    <main
-      className={`${styles.dashboardPage} ${showChatToggle ? styles.dashboardPageWithChatToggle : ''}`}
-      {...{ 'data-testid': 'agent-home-dashboard' }}
-    >
-      <HomeDashboardSection
-        payload={dashboard.data}
-        isLoading={dashboard.isLoading}
-        onRetry={() => { void dashboard.refetch(); }}
-        scope={dashboardScope}
-        onScopeChange={setDashboardScope}
-        onSelectBugPbi={(pbiId) => bugDetails.mutate(pbiId)}
-      />
-      {bugDetails.isError && (
-        <div className={styles.dashboardError} role="alert">
-          Could not open that PBI. Retry from the Open Bugs list.
-        </div>
-      )}
-      {showChatToggle && (
+    <main className={styles.dashboardPage} data-testid="agent-home-dashboard">
+      <div className={styles.tabStrip} role="tablist" aria-label="Home view">
         <button
           type="button"
-          className={styles.rightEdgeToggle}
-          onClick={onOpenChatPanel}
-          aria-label="Open chat panel"
-          aria-expanded={false}
-          {...{ 'data-testid': 'home-chat-toggle-btn' }}
+          role="tab"
+          aria-selected={view === 'chat'}
+          className={`${styles.tab} ${view === 'chat' ? styles.activeTab : ''}`}
+          onClick={() => selectView('chat')}
+          data-testid="home-view-chat"
         >
-          <svg className={styles.toggleIcon} viewBox="0 0 20 20" aria-hidden="true" focusable="false">
-            <rect x="2.75" y="3.75" width="14.5" height="10.5" rx="2.75" fill="none" stroke="currentColor" strokeWidth="1.5" />
-            <path d="M6 14.25V17.5L9.75 14.25Z" fill="currentColor" />
-            <circle cx="7" cy="9" r="1" fill="currentColor" />
-            <circle cx="10" cy="9" r="1" fill="currentColor" />
-            <circle cx="13" cy="9" r="1" fill="currentColor" />
-          </svg>
-          <span className={styles.toggleLabel}>Chat</span>
+          Chat
         </button>
+        {statusAvailable && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === 'status'}
+            className={`${styles.tab} ${view === 'status' ? styles.activeTab : ''}`}
+            onClick={() => selectView('status')}
+            data-testid="home-view-status"
+          >
+            Project status
+          </button>
+        )}
+      </div>
+      {view === 'status' && statusAvailable && (
+        <div className={styles.statusView} role="tabpanel" aria-label="Project status">
+          <HomeDashboardSection
+            payload={dashboard.data}
+            isLoading={dashboard.isLoading}
+            onRetry={() => { void dashboard.refetch(); }}
+          />
+        </div>
       )}
     </main>
   );

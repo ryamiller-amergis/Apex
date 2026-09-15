@@ -148,7 +148,7 @@ describe('ChatAgentPanel shared Home shell', () => {
     (global as unknown as { fetch?: typeof fetch }).fetch = undefined;
   });
 
-  it('opens the Home chat at the full viewport width by default', () => {
+  it('renders Home chat as page layout without drawer controls', () => {
     render(
       <ChatAgentPanel
         thread={null}
@@ -161,8 +161,28 @@ describe('ChatAgentPanel shared Home shell', () => {
     );
 
     const shell = screen.getByTestId('agent-slideout-shell');
-    expect(shell).toHaveStyle({ width: `${window.innerWidth}px` });
     expect(shell).toHaveClass('homePanel');
+    expect(shell).not.toHaveAttribute('style');
+    expect(screen.queryByTestId('chat-agent-close-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('chat-agent-width-toggle-btn')).not.toBeInTheDocument();
+    expect(screen.queryByRole('separator', { name: 'Resize panel' })).not.toBeInTheDocument();
+    // The tab strip names the page; the panel keeps no title bar of its own.
+    expect(screen.queryByRole('heading', { name: 'Agent Chat' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('chat-agent-new-chat-btn')).not.toBeInTheDocument();
+  });
+
+  it('offers New on Home only once a conversation is running', () => {
+    render(
+      <ChatAgentPanel
+        thread={thread}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+        launchedFromHome
+        selectedProject="Apex"
+      />,
+    );
+    expect(screen.getByTestId('chat-agent-new-chat-btn')).toBeInTheDocument();
   });
 
   it('TBI-006 DoD-1 shows Home-only pills and opens full history from the header', () => {
@@ -179,6 +199,9 @@ describe('ChatAgentPanel shared Home shell', () => {
     );
 
     expect(screen.getByTestId('agent-slideout-shell')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-agent-home-hold')).toBeInTheDocument();
+    expect(screen.getByText('What do you want to work on?')).toBeInTheDocument();
+    expect(screen.queryByText('No conversation yet')).not.toBeInTheDocument();
     expect(screen.getByText('Write PRD')).toBeInTheDocument();
     expect(screen.getByText('ADO')).toBeInTheDocument();
     expect(screen.queryByLabelText('Recent Threads')).not.toBeInTheDocument();
@@ -421,27 +444,6 @@ describe('ChatAgentPanel shared Home shell', () => {
     // markup that the test environment removes.
     expect(screen.getByText(/\*\*Rendered\*\*/)).toBeInTheDocument();
     expect(screen.getByText('Agent is responding…')).toBeInTheDocument();
-  });
-
-  it('restores a narrower width from the full-width Home panel', () => {
-    render(
-      <ChatAgentPanel
-        thread={null}
-        isOpen
-        onClose={jest.fn()}
-        onNewChat={jest.fn()}
-        launchedFromHome
-        selectedProject="Apex"
-      />,
-    );
-
-    const shell = screen.getByTestId('agent-slideout-shell');
-    expect(shell).toHaveStyle({ width: `${window.innerWidth}px` });
-
-    fireEvent.click(screen.getByTestId('chat-agent-width-toggle-btn'));
-
-    expect(shell).toHaveStyle({ width: '580px' });
-    expect(localStorage.getItem('homeChatPanelWidth')).toBe('580');
   });
 
   it('explains an empty transcript instead of rendering a blank pane', () => {
