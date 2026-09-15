@@ -31,6 +31,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({
 }) => {
   const [projectViews, setProjectViews] = useState<Record<string, HomeView>>({});
   const restoredProjectRef = useRef<string | null>(null);
+  const restoredUrlThreadRef = useRef<string | null>(null);
   const dashboard = useHomeDashboard(selectedProject, 'team');
   const [searchParams] = useSearchParams();
   const preferredView = projectViews[selectedProject] ?? loadHomeView(selectedProject);
@@ -50,16 +51,30 @@ export const AgentHome: React.FC<AgentHomeProps> = ({
 
   useEffect(() => {
     if (!isActive) return;
-    try { localStorage.setItem(storageKey(selectedProject), view); } catch { /* noop */ }
+    if (!threadFromUrl) {
+      try { localStorage.setItem(storageKey(selectedProject), view); } catch { /* noop */ }
+    }
     onHomeViewChange?.(view);
-  }, [isActive, onHomeViewChange, selectedProject, view]);
+  }, [isActive, onHomeViewChange, selectedProject, threadFromUrl, view]);
 
   useEffect(() => {
+    if (threadFromUrl) {
+      if (
+        restoredUrlThreadRef.current === threadFromUrl
+        && restoredProjectRef.current === selectedProject
+      ) {
+        return;
+      }
+      restoredUrlThreadRef.current = threadFromUrl;
+      restoredProjectRef.current = selectedProject;
+      onRestoreThread?.(threadFromUrl);
+      return;
+    }
+
     if (restoredProjectRef.current === selectedProject) return;
     restoredProjectRef.current = selectedProject;
     const storedThreadId = sessionStorage.getItem(`agentHomeThreadId:${selectedProject}`);
-    const threadId = threadFromUrl ?? storedThreadId;
-    if (threadId) onRestoreThread?.(threadId);
+    if (storedThreadId) onRestoreThread?.(storedThreadId);
   }, [onRestoreThread, selectedProject, threadFromUrl]);
 
   return (

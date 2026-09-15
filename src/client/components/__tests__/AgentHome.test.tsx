@@ -1,7 +1,7 @@
 import { type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useNavigate } from 'react-router-dom';
 import { AgentHome } from '../AgentHome';
 
 const mockDashboardData = {
@@ -105,5 +105,31 @@ describe('AgentHome tabs', () => {
     expect(onRestoreThread).toHaveBeenCalledWith('thread-linked');
     expect(screen.getByTestId('home-view-chat')).toHaveAttribute('aria-selected', 'true');
     expect(onHomeViewChange).toHaveBeenLastCalledWith('chat');
+    expect(localStorage.getItem('apex-home-view:Apex')).toBe('status');
+  });
+
+  it('restores a later thread deep link after Home has already mounted', () => {
+    const onRestoreThread = jest.fn();
+    const OpenThreadLink = () => {
+      const navigate = useNavigate();
+      return (
+        <button type="button" onClick={() => navigate('/home?thread=thread-later')}>
+          Open thread
+        </button>
+      );
+    };
+
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter initialEntries={['/home']}>
+          <OpenThreadLink />
+          <AgentHome selectedProject="Apex" onRestoreThread={onRestoreThread} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(onRestoreThread).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Open thread' }));
+    expect(onRestoreThread).toHaveBeenCalledWith('thread-later');
   });
 });
