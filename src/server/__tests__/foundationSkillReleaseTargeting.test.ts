@@ -19,7 +19,7 @@ function makeRelease(targetProjects: string[], skillTargets: Record<string, stri
     artifactPackage: '@apex/skills', artifactVersion: '0.2.0',
     artifactFeed: null, integritySha256: null, contractApiVersion: 1,
     selectedSkills: [], targetProjects, skillTargets, manifestSnapshot: null,
-    releaseNotes: null, breakingChanges: null,
+    releaseNotes: null, breakingChanges: null, projectNotes: {},
     publishedBy: null, publishedAt: null, deprecatedBy: null, deprecatedAt: null,
     createdBy: 'admin', createdAt: '', updatedAt: '',
   };
