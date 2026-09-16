@@ -54,6 +54,7 @@ describe('repoCacheService', () => {
       GITHUB_TOKEN: 'github-secret',
     };
     mockFs.existsSync.mockReturnValue(false);
+    mockFs.readdirSync.mockReturnValue([] as never);
     mockGit.mockImplementation(async (args: string[]) => {
       if (args.includes('rev-parse')) return 'abc123\n';
       return '';
@@ -500,6 +501,33 @@ describe('repoCacheService', () => {
     );
     expect(fetchArgs).not.toContain('origin');
     expect(fetchArgs?.some((arg) => arg.includes('refs/heads/*'))).toBe(false);
+  });
+
+  it('removes stale pack temps before fetching, and leaves in-flight ones alone', async () => {
+    mockFs.existsSync.mockReturnValue(true);
+    mockFs.readdirSync.mockReturnValue(
+      ['tmp_pack_abandoned', 'tmp_pack_inflight', 'pack-real.pack'] as never,
+    );
+    mockFs.statSync.mockImplementation((target) => ({
+      mtimeMs: String(target).endsWith('tmp_pack_abandoned')
+        ? Date.now() - COLD_CACHE_TIMEOUT_MS - 1_000
+        : Date.now(),
+    }) as fs.Stats);
+
+    try {
+      await fetchRepositoryTip({
+        provider: 'ado',
+        project: 'MaxView',
+        repo: 'MaxView',
+        branch: 'development',
+      });
+
+      const removed = mockFs.rmSync.mock.calls.map(([target]) => String(target));
+      expect(removed).toEqual([expect.stringContaining('tmp_pack_abandoned')]);
+    } finally {
+      mockFs.readdirSync.mockReset();
+      mockFs.statSync.mockReset();
+    }
   });
 
   it('writes pin-fetch identity only after taking the cache lease', async () => {

@@ -887,6 +887,8 @@ function App() {
                 <FeatureFlagDemo project={selectedProject} />
                 <AgentHome
                   selectedProject={selectedProject}
+                  selectedSkillSettingsId={selectedSkillSettingsId}
+                  isAdmin={isInAnyGroup(['Manager', 'Product-Owner'])}
                   isActive={currentView === 'home'}
                   onHomeViewChange={handleHomeViewChange}
                   onRestoreThread={(id) => {
