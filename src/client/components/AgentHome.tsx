@@ -1,8 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useHomeDashboard } from '../hooks/useHomeDashboard';
-import { useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
-import { FoundationSkillUpdateBanner } from './FoundationSkillUpdateBanner';
 import { HomeDashboardSection } from './HomeDashboardSection';
 import styles from './AgentHome.module.css';
 
@@ -10,9 +8,6 @@ export type HomeView = 'chat' | 'status';
 
 interface AgentHomeProps {
   selectedProject: string;
-  selectedSkillSettingsId?: string | null;
-  /** Gates the foundation skills banner — only admins act on a skills release. */
-  isAdmin?: boolean;
   isActive?: boolean;
   onHomeViewChange?: (view: HomeView) => void;
   onRestoreThread?: (threadId: string) => void;
@@ -30,8 +25,6 @@ const loadHomeView = (project: string): HomeView => {
 
 export const AgentHome: React.FC<AgentHomeProps> = ({
   selectedProject,
-  selectedSkillSettingsId,
-  isAdmin = false,
   isActive = true,
   onHomeViewChange,
   onRestoreThread,
@@ -40,10 +33,6 @@ export const AgentHome: React.FC<AgentHomeProps> = ({
   const restoredProjectRef = useRef<string | null>(null);
   const restoredUrlThreadRef = useRef<string | null>(null);
   const dashboard = useHomeDashboard(selectedProject, 'team');
-  const { data: skillConfig } = useProjectSkillConfig(
-    selectedProject || null,
-    selectedSkillSettingsId,
-  );
   const [searchParams] = useSearchParams();
   const preferredView = projectViews[selectedProject] ?? loadHomeView(selectedProject);
   const threadFromUrl = searchParams.get('thread');
@@ -91,15 +80,6 @@ export const AgentHome: React.FC<AgentHomeProps> = ({
 
   return (
     <main className={styles.dashboardPage} data-testid="agent-home-dashboard">
-      {isAdmin && skillConfig?.skillRepo && (
-        <FoundationSkillUpdateBanner
-          project={selectedProject || null}
-          repo={skillConfig.skillRepo}
-          provider={skillConfig.skillProvider ?? 'ado'}
-          branch={skillConfig.skillBranch ?? 'main'}
-          {...{ 'data-testid': 'agent-home-foundation-skill-banner' }}
-        />
-      )}
       <div className={styles.tabStrip} role="tablist" aria-label="Home view">
         <button
           type="button"

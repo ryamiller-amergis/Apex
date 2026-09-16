@@ -27,30 +27,6 @@ jest.mock('../../hooks/useHomeDashboard', () => ({
   }),
 }));
 
-const mockSkillConfig = jest.fn(() => ({ data: null }));
-jest.mock('../../hooks/useProjectSkillConfig', () => ({
-  useProjectSkillConfig: () => mockSkillConfig(),
-}));
-
-jest.mock('../../hooks/useFoundationSkillUpdateStatus', () => ({
-  useLatestFoundationSkillRelease: () => ({
-    data: {
-      id: 'rel-1',
-      version: '2.1.0',
-      artifactVersion: '2.1.0',
-      artifactFeed: null,
-      selectedSkills: ['adr-interview'],
-      targetProjects: ['MaxView'],
-      skillTargets: {},
-      projectNotes: {},
-      releaseNotes: null,
-      breakingChanges: null,
-    },
-  }),
-  useFoundationSkillRepoStatus: () => ({
-    data: { installedVersion: null, availableVersion: '2.1.0', updateAvailable: true },
-  }),
-}));
 
 const wrapper = ({ children }: { children: ReactNode }) => (
   <QueryClientProvider client={new QueryClient()}>
@@ -92,21 +68,10 @@ describe('AgentHome tabs', () => {
     expect(localStorage.getItem('apex-home-view:Apex')).toBe('status');
   });
 
-  it('shows the foundation skills banner to an admin once the project has a skill repo', () => {
-    mockSkillConfig.mockReturnValue({
-      data: { skillRepo: 'MaxView', skillBranch: 'development', skillProvider: 'ado' },
-    } as never);
-
-    const { rerender } = render(
-      <AgentHome selectedProject="MaxView" isAdmin />,
-      { wrapper },
-    );
-    expect(screen.getByTestId('agent-home-foundation-skill-banner')).toBeInTheDocument();
-
-    rerender(<AgentHome selectedProject="MaxView" />);
+  it('leaves the foundation skills banner to the page shell, clear of the chat overlay', () => {
+    render(<AgentHome selectedProject="MaxView" />, { wrapper });
     expect(screen.queryByTestId('agent-home-foundation-skill-banner')).not.toBeInTheDocument();
-
-    mockSkillConfig.mockReturnValue({ data: null });
+    expect(screen.getByTestId('home-view-chat')).toBeInTheDocument();
   });
 
   it('does not render the removed edge Chat toggle', () => {

@@ -17,6 +17,7 @@ import { PlanningTabs, type PlanningTab } from './components/PlanningTabs';
 import { ApexLoader } from './components/ApexLoader';
 import { ProjectSelector } from './components/ProjectSelector';
 import { AgentHome } from './components/AgentHome';
+import { FoundationSkillUpdateBanner } from './components/FoundationSkillUpdateBanner';
 import { ChatAgentPanel, type StartPanelChatOptions } from './components/ChatAgentPanel';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { ToastContainer } from './components/ToastContainer';
@@ -872,6 +873,25 @@ function App() {
             </div>
           )}
 
+          {/*
+            Sits outside agent-home-keepalive on purpose: the Home chat panel is an
+            absolute overlay pinned below the tab strip, so a banner inside that
+            container would be covered by it.
+          */}
+          {canAccessHome && currentView === 'home'
+            && isInAnyGroup(['Manager', 'Product-Owner'])
+            && activeSkillConfig?.skillRepo && (
+            <div className="foundation-skill-banner-row">
+              <FoundationSkillUpdateBanner
+                project={selectedProject || null}
+                repo={activeSkillConfig.skillRepo}
+                provider={activeSkillConfig.skillProvider ?? 'ado'}
+                branch={activeSkillConfig.skillBranch ?? 'main'}
+                {...{ 'data-testid': 'agent-home-foundation-skill-banner' }}
+              />
+            </div>
+          )}
+
           {canAccessHome ? (
             <div
               className="agent-home-keepalive"
@@ -887,8 +907,6 @@ function App() {
                 <FeatureFlagDemo project={selectedProject} />
                 <AgentHome
                   selectedProject={selectedProject}
-                  selectedSkillSettingsId={selectedSkillSettingsId}
-                  isAdmin={isInAnyGroup(['Manager', 'Product-Owner'])}
                   isActive={currentView === 'home'}
                   onHomeViewChange={handleHomeViewChange}
                   onRestoreThread={(id) => {
