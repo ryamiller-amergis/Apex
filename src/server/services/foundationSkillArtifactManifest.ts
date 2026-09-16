@@ -5,6 +5,7 @@ import { posix as posixPath } from 'path';
 import type {
   FoundationSkillArtifactManifest,
   FoundationSkillArtifactManifestSkill,
+  FoundationSkillProjectNotes,
   FoundationSkillRelease,
 } from '../../shared/types/foundationSkills';
 import {
@@ -266,16 +267,53 @@ function validatePublishedAudience(
   }
 }
 
+/**
+ * Per-project notes are only reachable by a project that the release targets,
+ * so an entry for any other project would never be shown to anyone.
+ */
+function validateProjectNotes(
+  release: FoundationSkillRelease,
+  input: Record<string, unknown>,
+): void {
+  const projectNotes = input.projectNotes as
+    | Record<string, FoundationSkillProjectNotes>
+    | undefined;
+  if (!projectNotes) return;
+
+  const targetProjects =
+    (input.targetProjects as string[] | undefined) ?? release.targetProjects;
+
+  for (const [project, notes] of Object.entries(projectNotes)) {
+    if (!notes || typeof notes !== 'object' || Array.isArray(notes)) {
+      throw rejectedUpdate(
+        `projectNotes["${project}"] must be an object with releaseNotes and breakingChanges`,
+      );
+    }
+    for (const field of ['releaseNotes', 'breakingChanges'] as const) {
+      const value = notes[field];
+      if (value !== null && value !== undefined && typeof value !== 'string') {
+        throw rejectedUpdate(`projectNotes["${project}"].${field} must be text or null`);
+      }
+    }
+    if (targetProjects.length > 0 && !targetProjects.includes(project)) {
+      throw rejectedUpdate(
+        `projectNotes["${project}"] targets a project outside the release audience`,
+      );
+    }
+  }
+}
+
 export function validateReleaseUpdate(
   release: FoundationSkillRelease,
   input: Record<string, unknown>,
 ): void {
+  validateProjectNotes(release, input);
   if (release.status === 'draft') return;
   if (release.status === 'publishing') {
     throw new Error('Release is publishing and cannot be edited');
   }
 
-  const mutable = new Set(['releaseNotes', 'breakingChanges']);
+  const mutable = new Set(['releaseNotes', 'breakingChanges', 'projectNotes']);
   if (release.status === 'published') {
     mutable.add('targetProjects');
     mutable.add('skillTargets');

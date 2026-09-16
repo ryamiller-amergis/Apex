@@ -202,6 +202,10 @@ router.post('/releases', async (req: Request, res: Response): Promise<void> => {
       res.status(400).json({ error: 'skillTargets must be an object mapping skill names to project arrays' });
       return;
     }
+    if (body.projectNotes !== undefined && (typeof body.projectNotes !== 'object' || Array.isArray(body.projectNotes))) {
+      res.status(400).json({ error: 'projectNotes must be an object mapping project names to notes' });
+      return;
+    }
     const catalog = loadCatalog();
     body.selectedSkills = ensureReleaseAlwaysInstallSkills(body.selectedSkills, catalog);
     const notShippable = rejectNonShippableSkills(body.selectedSkills, catalog);
@@ -305,7 +309,7 @@ router.delete('/releases/:id', async (req: Request, res: Response): Promise<void
 router.patch('/releases/:id', async (req: Request, res: Response): Promise<void> => {
   try {
     const {
-      releaseNotes, breakingChanges, targetProjects, skillTargets, selectedSkills,
+      releaseNotes, breakingChanges, projectNotes, targetProjects, skillTargets, selectedSkills,
       version, artifactVersion, artifactFeed,
     } = req.body;
     if (artifactFeed !== undefined) {
@@ -329,6 +333,15 @@ router.patch('/releases/:id', async (req: Request, res: Response): Promise<void>
       });
       return;
     }
+    if (
+      projectNotes !== undefined &&
+      (typeof projectNotes !== 'object' || Array.isArray(projectNotes))
+    ) {
+      res.status(400).json({
+        error: 'projectNotes must be an object mapping project names to notes',
+      });
+      return;
+    }
     let nextSelectedSkills: string[] | undefined;
     if (Array.isArray(selectedSkills)) {
       const catalog = loadCatalog();
@@ -344,6 +357,7 @@ router.patch('/releases/:id', async (req: Request, res: Response): Promise<void>
     const release = await updateRelease(req.params.id, actor(req), {
       ...(releaseNotes    !== undefined && { releaseNotes }),
       ...(breakingChanges !== undefined && { breakingChanges }),
+      ...(projectNotes    !== undefined && { projectNotes }),
       ...(targetProjects  !== undefined && { targetProjects }),
       ...(skillTargets    !== undefined && { skillTargets }),
       ...(nextSelectedSkills !== undefined && { selectedSkills: nextSelectedSkills }),

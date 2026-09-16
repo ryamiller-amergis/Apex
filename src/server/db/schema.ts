@@ -2501,6 +2501,7 @@ import type {
   FoundationSkillAuditAction,
   FoundationSkillCompatibilityStatus,
   FoundationSkillArtifactManifest,
+  FoundationSkillProjectNotes,
 } from '../../shared/types/foundationSkills';
 
 export const foundationSkillReleases = pgTable('foundation_skill_releases', {
@@ -2518,6 +2519,7 @@ export const foundationSkillReleases = pgTable('foundation_skill_releases', {
   manifestSnapshot:    jsonb('manifest_snapshot').$type<FoundationSkillArtifactManifest>(),
   releaseNotes:        text('release_notes'),
   breakingChanges:     text('breaking_changes'),
+  projectNotes:        jsonb('project_notes').$type<Record<string, FoundationSkillProjectNotes>>().notNull().default({}),
   publishedBy:         text('published_by'),
   publishedAt:         timestamp('published_at', { withTimezone: true, mode: 'string' }),
   deprecatedBy:        text('deprecated_by'),

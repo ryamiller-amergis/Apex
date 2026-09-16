@@ -27,6 +27,7 @@ import type {
   FoundationSkillCatalogEntry,
   FoundationSkillTeamRepo,
   FoundationSkillReleaseValidationIssue,
+  FoundationSkillProjectNotes,
 } from '../../shared/types/foundationSkills';
 import {
   alwaysInstallSkillsFromCatalog,
@@ -1019,6 +1020,103 @@ const ProjectSkillAssignment: React.FC<{
   );
 };
 
+// ── ProjectNotesEditor — per-project release notes ───────────────────────────
+
+const EMPTY_PROJECT_NOTES: FoundationSkillProjectNotes = {
+  releaseNotes: null,
+  breakingChanges: null,
+};
+
+/** Drops blank entries and any project no longer in the audience. */
+function pruneProjectNotes(
+  notes: Record<string, FoundationSkillProjectNotes>,
+  projects: string[]
+): Record<string, FoundationSkillProjectNotes> {
+  const out: Record<string, FoundationSkillProjectNotes> = {};
+  for (const project of projects) {
+    const releaseNotes = notes[project]?.releaseNotes?.trim() || null;
+    const breakingChanges = notes[project]?.breakingChanges?.trim() || null;
+    if (releaseNotes || breakingChanges) {
+      out[project] = { releaseNotes, breakingChanges };
+    }
+  }
+  return out;
+}
+
+const ProjectNotesEditor: React.FC<{
+  projects: string[];
+  projectNotes: Record<string, FoundationSkillProjectNotes>;
+  onChange: (project: string, notes: FoundationSkillProjectNotes) => void;
+  idPrefix: string;
+}> = ({ projects, projectNotes, onChange, idPrefix }) => {
+  if (projects.length === 0) {
+    return (
+      <p className={styles.fieldHint}>
+        Choose specific projects to write notes for each one. Teams never see
+        the release notes above — those stay in Platform Admin.
+      </p>
+    );
+  }
+
+  return (
+    <div className={styles.projectSkillAssignment}>
+      {projects.map((project) => {
+        const notes = projectNotes[project] ?? EMPTY_PROJECT_NOTES;
+        return (
+          <div key={project} className={styles.projectSkillCard}>
+            <div className={styles.projectSkillCardBody}>
+              <div className={styles.formRow}>
+                <label
+                  className={styles.label}
+                  htmlFor={`${idPrefix}-project-notes-${project}`}
+                >
+                  {project} — release notes
+                </label>
+                <textarea
+                  id={`${idPrefix}-project-notes-${project}`}
+                  className={styles.textarea}
+                  rows={3}
+                  value={notes.releaseNotes ?? ''}
+                  onChange={(e) =>
+                    onChange(project, {
+                      ...notes,
+                      releaseNotes: e.target.value || null,
+                    })
+                  }
+                  placeholder={`What changed for ${project}?`}
+                  {...{ 'data-testid': `fs-project-notes-${project}` }}
+                />
+              </div>
+              <div className={styles.formRow}>
+                <label
+                  className={styles.label}
+                  htmlFor={`${idPrefix}-project-breaking-${project}`}
+                >
+                  {project} — breaking changes
+                </label>
+                <textarea
+                  id={`${idPrefix}-project-breaking-${project}`}
+                  className={styles.textarea}
+                  rows={2}
+                  value={notes.breakingChanges ?? ''}
+                  onChange={(e) =>
+                    onChange(project, {
+                      ...notes,
+                      breakingChanges: e.target.value || null,
+                    })
+                  }
+                  placeholder={`Manual work ${project} must do`}
+                  {...{ 'data-testid': `fs-project-breaking-${project}` }}
+                />
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 // ── CreateReleaseWizard ───────────────────────────────────────────────────────
 
 type WizardStep = 'details' | 'audience' | 'skills' | 'review';
@@ -1075,6 +1173,9 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({
   >([]);
   const [projectSkillPicks, setProjectSkillPicks] = useState<
     Record<string, string[]>
+  >({});
+  const [projectNotes, setProjectNotes] = useState<
+    Record<string, FoundationSkillProjectNotes>
   >({});
   const [error, setError] = useState<string | null>(null);
 
@@ -1259,6 +1360,10 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({
         skillTargets: selectedSkillTargets,
         releaseNotes: releaseNotes.trim() || null,
         breakingChanges: breakingChanges.trim() || null,
+        projectNotes: pruneProjectNotes(
+          projectNotes,
+          audienceMode === 'specific' ? selectedProjects : []
+        ),
       });
       const nextCandidate = candidates[0]?.version ?? '';
       setVersion(nextCandidate);
@@ -1270,6 +1375,7 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({
       setSelected([]);
       setExplicitSelectedSkills(catalog.map((s) => s.name));
       setProjectSkillPicks({});
+      setProjectNotes({});
       setStep('details');
       onCreated();
     } catch (err: unknown) {
@@ -1459,8 +1565,8 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({
                 {...{ 'data-testid': 'fs-wizard-breaking' }}
               />
               <p className={styles.fieldHint}>
-                Filling this in flags the release as breaking in every
-                team&apos;s update banner.
+                These notes stay in Platform Admin. Write what each team sees —
+                including breaking changes — on the Audience step.
               </p>
             </div>
           </div>
@@ -1480,6 +1586,19 @@ const CreateReleaseWizard: React.FC<{ onCreated: () => void }> = ({
               idPrefix="fs"
               {...{ 'data-testid': 'fs-wizard-audience-field' }}
             />
+
+            <div className={styles.formRow}>
+              <span className={styles.label}>Notes for each project</span>
+              <ProjectNotesEditor
+                projects={audienceMode === 'specific' ? selectedProjects : []}
+                projectNotes={projectNotes}
+                onChange={(project, notes) =>
+                  setProjectNotes((prev) => ({ ...prev, [project]: notes }))
+                }
+                idPrefix="fs-wizard"
+                {...{ 'data-testid': 'fs-wizard-project-notes' }}
+              />
+            </div>
           </div>
         )}
 
@@ -1899,6 +2018,9 @@ const EditReleasePanel: React.FC<{
   const [projectSkillPicks, setProjectSkillPicks] = useState<
     Record<string, string[]>
   >(() => seedProjectPicksFromRelease(release));
+  const [projectNotes, setProjectNotes] = useState<
+    Record<string, FoundationSkillProjectNotes>
+  >(release.projectNotes ?? {});
 
   const seededRef = useRef(false);
 
@@ -2016,6 +2138,10 @@ const EditReleasePanel: React.FC<{
       }),
       releaseNotes: notes.trim() || null,
       breakingChanges: breaking.trim() || null,
+      projectNotes: pruneProjectNotes(
+        projectNotes,
+        audienceMode === 'specific' ? selectedProjects : []
+      ),
     });
   };
 
@@ -2160,6 +2286,19 @@ const EditReleasePanel: React.FC<{
           onChange={(e) => setBreaking(e.target.value)}
           rows={2}
           {...{ 'data-testid': `fs-edit-breaking-${release.id}` }}
+        />
+      </div>
+
+      <div className={styles.formRow}>
+        <span className={styles.label}>Notes for each project</span>
+        <ProjectNotesEditor
+          projects={audienceMode === 'specific' ? selectedProjects : []}
+          projectNotes={projectNotes}
+          onChange={(project, next) =>
+            setProjectNotes((prev) => ({ ...prev, [project]: next }))
+          }
+          idPrefix={`er-${release.id}`}
+          {...{ 'data-testid': `fs-edit-project-notes-${release.id}` }}
         />
       </div>
 

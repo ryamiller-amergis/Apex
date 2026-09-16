@@ -26,6 +26,7 @@ import type {
   SkillMatrixEntry,
   ProjectAvailableSkill,
   FoundationSkillTier,
+  FoundationSkillProjectNotes,
 } from '../../shared/types/foundationSkills';
 import {
   isReleaseVisibleToProject,
@@ -66,6 +67,7 @@ function mapRow(row: typeof foundationSkillReleases.$inferSelect): FoundationSki
     manifestSnapshot:    row.manifestSnapshot ?? null,
     releaseNotes:        row.releaseNotes ?? null,
     breakingChanges:     row.breakingChanges ?? null,
+    projectNotes:        (row.projectNotes as Record<string, FoundationSkillProjectNotes>) ?? {},
     publishedBy:         row.publishedBy ?? null,
     publishedAt:         row.publishedAt ?? null,
     deprecatedBy:        row.deprecatedBy ?? null,
@@ -304,6 +306,7 @@ export async function createRelease(
         manifestSnapshot:    null,
         releaseNotes:        input.releaseNotes ?? null,
         breakingChanges:     input.breakingChanges ?? null,
+        projectNotes:        input.projectNotes ?? {},
         createdBy:           actor.id,
       })
       .returning();
@@ -543,6 +546,8 @@ export async function deleteDraftRelease(
 export interface UpdateReleaseInput {
   releaseNotes?:    string | null;
   breakingChanges?: string | null;
+  /** Per-project notes; replaces the whole map. Editable on any status. */
+  projectNotes?:    Record<string, FoundationSkillProjectNotes>;
   targetProjects?:  string[];
   /** Per-skill project targeting overrides; updatable on any status. */
   skillTargets?:    Record<string, string[]>;
@@ -568,6 +573,7 @@ export async function updateRelease(
       .set({
         ...(input.releaseNotes    !== undefined && { releaseNotes:    input.releaseNotes    ?? null }),
         ...(input.breakingChanges !== undefined && { breakingChanges: input.breakingChanges ?? null }),
+        ...(input.projectNotes    !== undefined && { projectNotes:    input.projectNotes }),
         ...(input.targetProjects  !== undefined && { targetProjects:  input.targetProjects }),
         ...(input.skillTargets    !== undefined && { skillTargets:    input.skillTargets }),
         ...(input.selectedSkills  !== undefined && { selectedSkills:  input.selectedSkills }),
