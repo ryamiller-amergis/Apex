@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useId } from 'react';
+import React, { useState, useRef, useMemo, useEffect, useId } from 'react';
 import {
   useFoundationSkillReleases,
   useFoundationSkillCandidates,
@@ -1878,6 +1878,8 @@ const EditReleasePanel: React.FC<{
   isSaving: boolean;
 }> = ({ release, onSave, onCancel, isSaving }) => {
   const isDraft = release.status === 'draft';
+  // Audience is DB-only metadata, so a published release can still be retargeted.
+  const canEditAudience = isDraft || release.status === 'published';
 
   const [version, setVersion] = useState(release.version);
   const [artifactVersion, setArtifact] = useState(release.artifactVersion);
@@ -1903,18 +1905,34 @@ const EditReleasePanel: React.FC<{
   const { skills: catalog, isLoading: catalogLoading } =
     useShippableFoundationSkills();
 
+  // A published release ships a fixed skill set, so only those skills can be retargeted.
+  // Skills dropped from the current catalog still need an entry to stay assignable.
+  const editableCatalog = useMemo<FoundationSkillCatalogEntry[]>(() => {
+    if (isDraft) return catalog;
+    const byName = new Map(catalog.map((s) => [s.name, s]));
+    return (release.selectedSkills ?? []).map(
+      (name) =>
+        byName.get(name) ?? {
+          name,
+          summary: '',
+          tier: 'shippable' as const,
+          dependsOn: [],
+        }
+    );
+  }, [catalog, isDraft, release.selectedSkills]);
+
   // Older releases predate per-skill selection; fall back to "everything".
   useEffect(() => {
-    if (seededRef.current || catalog.length === 0) return;
+    if (seededRef.current || editableCatalog.length === 0) return;
     seededRef.current = true;
     if (!release.selectedSkills?.length)
-      setExplicitSelectedSkills(catalog.map((s) => s.name));
-  }, [catalog, release.selectedSkills]);
+      setExplicitSelectedSkills(editableCatalog.map((s) => s.name));
+  }, [editableCatalog, release.selectedSkills]);
 
   // Keep per-project pick maps aligned when the project list changes while editing.
   useEffect(() => {
-    if (audienceMode !== 'specific' || catalog.length === 0) return;
-    const allNames = catalog.map((s) => s.name);
+    if (audienceMode !== 'specific' || editableCatalog.length === 0) return;
+    const allNames = editableCatalog.map((s) => s.name);
     setProjectSkillPicks((prev) => {
       const next: Record<string, string[]> = {};
       let changed = Object.keys(prev).some(
@@ -1932,14 +1950,14 @@ const EditReleasePanel: React.FC<{
         ? next
         : prev;
     });
-  }, [audienceMode, selectedProjects, catalog]);
+  }, [audienceMode, selectedProjects, editableCatalog]);
 
   const allModeSelection = resolveFoundationSkillSelection(
-    catalog,
+    editableCatalog,
     explicitSelectedSkills
   );
   const projectAssignment = resolveProjectAssignment(
-    catalog,
+    editableCatalog,
     selectedProjects,
     projectSkillPicks
   );
@@ -1959,10 +1977,17 @@ const EditReleasePanel: React.FC<{
   const selectedSkillTargets =
     audienceMode === 'specific' ? projectAssignment.skillTargets : {};
 
+  const unassignedSkills =
+    canEditAudience && !isDraft && audienceMode === 'specific'
+      ? (release.selectedSkills ?? []).filter(
+          (name) => !selectionState.effectiveSelectedSkills.includes(name)
+        )
+      : [];
+
   const handleSave = async () => {
     setLocalErr(null);
     if (
-      isDraft &&
+      canEditAudience &&
       audienceMode === 'specific' &&
       selectedProjects.length === 0
     ) {
@@ -1973,12 +1998,20 @@ const EditReleasePanel: React.FC<{
       setLocalErr('At least one skill must be selected.');
       return;
     }
+    if (unassignedSkills.length > 0) {
+      setLocalErr(
+        `A published release keeps its skills: assign ${unassignedSkills.join(', ')} to at least one project, or deprecate this release instead.`
+      );
+      return;
+    }
     await onSave({
       ...(isDraft && {
         version: version.trim(),
         artifactVersion: artifactVersion.trim() || version.trim(),
-        targetProjects: audienceMode === 'specific' ? selectedProjects : [],
         selectedSkills: selectionState.dependencyOrder,
+      }),
+      ...(canEditAudience && {
+        targetProjects: audienceMode === 'specific' ? selectedProjects : [],
         skillTargets: selectedSkillTargets,
       }),
       releaseNotes: notes.trim() || null,
@@ -2028,7 +2061,7 @@ const EditReleasePanel: React.FC<{
         </div>
       )}
 
-      {isDraft && (
+      {canEditAudience && (
         <>
           <AudienceField
             mode={audienceMode}
@@ -2051,8 +2084,8 @@ const EditReleasePanel: React.FC<{
             </span>
             {audienceMode === 'specific' ? (
               <ProjectSkillAssignment
-                catalog={catalog}
-                isCatalogLoading={catalogLoading}
+                catalog={editableCatalog}
+                isCatalogLoading={isDraft && catalogLoading}
                 projects={selectedProjects}
                 projectSkillPicks={projectSkillPicks}
                 onProjectPicksChange={(project, picks) =>
@@ -2068,9 +2101,9 @@ const EditReleasePanel: React.FC<{
                   }))
                 }
               />
-            ) : (
+            ) : isDraft ? (
               <SkillPicker
-                catalog={catalog}
+                catalog={editableCatalog}
                 isCatalogLoading={catalogLoading}
                 explicitSelectedSkills={allModeSelection.explicitSelectedSkills}
                 effectiveSelectedSkills={
@@ -2079,16 +2112,24 @@ const EditReleasePanel: React.FC<{
                 requiredBy={allModeSelection.requiredBy}
                 onSkillToggle={(name) =>
                   setExplicitSelectedSkills((prev) =>
-                    withoutRemovableSkills(catalog, prev, name)
+                    withoutRemovableSkills(editableCatalog, prev, name)
                   )
                 }
                 onSelectAll={() =>
-                  setExplicitSelectedSkills(catalog.map((s) => s.name))
+                  setExplicitSelectedSkills(editableCatalog.map((s) => s.name))
                 }
                 onClearAll={() =>
-                  setExplicitSelectedSkills(lockedAlwaysInstallSkills(catalog))
+                  setExplicitSelectedSkills(
+                    lockedAlwaysInstallSkills(editableCatalog)
+                  )
                 }
               />
+            ) : (
+              <p className={styles.fieldHint}>
+                All {editableCatalog.length} skills in this release are
+                available to every project. Switch to specific projects to
+                narrow the audience.
+              </p>
             )}
           </div>
         </>

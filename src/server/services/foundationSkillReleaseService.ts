@@ -590,7 +590,18 @@ export async function updateRelease(
       action:         'edited',
       actorId:        actor.id,
       actorEmail:     actor.email ?? null,
-      details:        { action: 'release_edited', fields: Object.keys(input) },
+      details:        {
+        action: 'release_edited',
+        fields: Object.keys(input),
+        ...(input.targetProjects !== undefined && {
+          previousTargetProjects: existing.targetProjects,
+          targetProjects:         input.targetProjects,
+        }),
+        ...(input.skillTargets !== undefined && {
+          previousSkillTargets: existing.skillTargets,
+          skillTargets:         input.skillTargets,
+        }),
+      },
     });
     return mapRow(updated);
   });

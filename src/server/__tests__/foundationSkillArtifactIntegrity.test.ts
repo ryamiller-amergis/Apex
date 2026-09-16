@@ -440,16 +440,71 @@ describe('validateReleaseUpdate', () => {
     ).not.toThrow();
   });
 
-  it('rejects audience, skill, and artifact edits after publication', () => {
+  it('rejects skill and artifact edits after publication', () => {
     const published = release({ status: 'published' });
     expect(() =>
       validateReleaseUpdate(published, { selectedSkills: ['to-prd'] }),
     ).toThrow(/immutable/i);
     expect(() =>
-      validateReleaseUpdate(published, { targetProjects: ['MaxView'] }),
-    ).toThrow(/immutable/i);
-    expect(() =>
       validateReleaseUpdate(published, { artifactVersion: '2.0.1' }),
+    ).toThrow(/immutable/i);
+  });
+
+  it('allows a published release to be retargeted at another project', () => {
+    const published = release({
+      status: 'published',
+      manifestSnapshot: manifest,
+      selectedSkills: ['to-prd', 'post-skill-bootstrap'],
+      targetProjects: ['MatterWorx'],
+    });
+
+    expect(() =>
+      validateReleaseUpdate(published, {
+        targetProjects: ['MatterWorx', 'MaxView'],
+      }),
+    ).not.toThrow();
+  });
+
+  it('rejects a retarget that leaves a dependency behind', () => {
+    const published = release({
+      status: 'published',
+      manifestSnapshot: manifest,
+      selectedSkills: ['to-prd', 'post-skill-bootstrap'],
+      targetProjects: ['MatterWorx', 'MaxView'],
+    });
+
+    expect(() =>
+      validateReleaseUpdate(published, {
+        skillTargets: { 'to-prd': ['MatterWorx'] },
+      }),
+    ).toThrow(FoundationSkillReleaseValidationError);
+  });
+
+  it('rejects per-skill targets outside the release skills or audience', () => {
+    const published = release({
+      status: 'published',
+      manifestSnapshot: manifest,
+      selectedSkills: ['to-prd', 'post-skill-bootstrap'],
+      targetProjects: ['MatterWorx'],
+    });
+
+    expect(() =>
+      validateReleaseUpdate(published, {
+        skillTargets: { 'internal-only': ['MatterWorx'] },
+      }),
+    ).toThrow(/not part of release/i);
+    expect(() =>
+      validateReleaseUpdate(published, {
+        skillTargets: { 'to-prd': ['MaxView'] },
+      }),
+    ).toThrow(/outside the release audience/i);
+  });
+
+  it('keeps a deprecated release notes-only', () => {
+    expect(() =>
+      validateReleaseUpdate(release({ status: 'deprecated' }), {
+        targetProjects: ['MaxView'],
+      }),
     ).toThrow(/immutable/i);
   });
 });

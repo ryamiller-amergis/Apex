@@ -135,6 +135,21 @@ function actor(req: Request) {
   return { id: getUserId(req) ?? 'unknown', email: getUserEmail(req) ?? null };
 }
 
+/** Drizzle wraps query failures, so the PostgreSQL error code sits on `cause`. */
+function pgErrorCode(err: unknown): string | undefined {
+  const direct = (err as { code?: unknown })?.code;
+  if (typeof direct === 'string') return direct;
+  const cause = (err as { cause?: { code?: unknown } })?.cause;
+  return typeof cause?.code === 'string' ? cause.code : undefined;
+}
+
+/** A Drizzle failure message embeds the SQL and its bound parameters — never send it to a client. */
+function safeErrorMessage(err: unknown, fallback: string): string {
+  const message = (err as { message?: unknown })?.message;
+  if (typeof message !== 'string' || message.startsWith('Failed query:')) return fallback;
+  return message;
+}
+
 function apexBaseUrl(req: Request): string | null {
   const configured = process.env.APEX_URL?.trim();
   if (configured) return configured;
@@ -160,7 +175,7 @@ router.get('/releases', async (_req: Request, res: Response): Promise<void> => {
     const releases = await listReleases();
     res.json({ releases });
   } catch (err: any) {
-    res.status(500).json({ error: err.message ?? 'Failed to list releases' });
+    res.status(500).json({ error: safeErrorMessage(err, 'Failed to list releases') });
   }
 });
 
@@ -200,11 +215,12 @@ router.post('/releases', async (req: Request, res: Response): Promise<void> => {
     const release = await createRelease(body, actor(req));
     res.status(201).json({ release });
   } catch (err: any) {
-    if (err.message?.includes('unique')) {
+    if (pgErrorCode(err) === '23505' || err.message?.includes('unique')) {
       res.status(409).json({ error: `A release with this version already exists` });
       return;
     }
-    res.status(500).json({ error: err.message ?? 'Failed to create release' });
+    console.error('[foundation-skills] Failed to create release:', err);
+    res.status(500).json({ error: safeErrorMessage(err, 'Failed to create release') });
   }
 });
 
@@ -214,7 +230,7 @@ router.get('/releases/:id', async (req: Request, res: Response): Promise<void> =
     if (!release) { res.status(404).json({ error: 'Release not found' }); return; }
     res.json({ release });
   } catch (err: any) {
-    res.status(500).json({ error: err.message ?? 'Failed to get release' });
+    res.status(500).json({ error: safeErrorMessage(err, 'Failed to get release') });
   }
 });
 
@@ -242,7 +258,7 @@ router.post('/releases/:id/publish', async (req: Request, res: Response): Promis
       res.status(409).json({ error: err.message });
       return;
     }
-    res.status(500).json({ error: err.message ?? 'Failed to publish release' });
+    res.status(500).json({ error: safeErrorMessage(err, 'Failed to publish release') });
   }
 });
 
@@ -262,7 +278,7 @@ router.post('/releases/:id/deprecate', async (req: Request, res: Response): Prom
       res.status(404).json({ error: 'Release not found' });
       return;
     }
-    res.status(500).json({ error: err.message ?? 'Failed to deprecate release' });
+    res.status(500).json({ error: safeErrorMessage(err, 'Failed to deprecate release') });
   }
 });
 
@@ -282,7 +298,7 @@ router.delete('/releases/:id', async (req: Request, res: Response): Promise<void
       res.status(409).json({ error: err.message });
       return;
     }
-    res.status(500).json({ error: err.message ?? 'Failed to delete release' });
+    res.status(500).json({ error: safeErrorMessage(err, 'Failed to delete release') });
   }
 });
 
@@ -336,7 +352,23 @@ router.patch('/releases/:id', async (req: Request, res: Response): Promise<void>
     });
     res.json({ release });
   } catch (err: any) {
+    if (err?.code === 'release_validation_failed' && Array.isArray(err?.issues)) {
+      res.status(422).json({
+        error: err.message ?? 'Release validation failed',
+        code: 'release_validation_failed',
+        issues: err.issues,
+      });
+      return;
+    }
     if (err.message?.includes('not found')) { res.status(404).json({ error: 'Release not found' }); return; }
+    if (typeof err?.status === 'number') {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    if (pgErrorCode(err) === '23505') {
+      res.status(409).json({ error: 'A release with this version already exists' });
+      return;
+    }
     if (
       err.message?.includes('draft') ||
       err.message?.includes('immutable') ||
@@ -346,7 +378,8 @@ router.patch('/releases/:id', async (req: Request, res: Response): Promise<void>
       res.status(409).json({ error: err.message });
       return;
     }
-    res.status(500).json({ error: err.message ?? 'Failed to update release' });
+    console.error('[foundation-skills] Failed to update release:', err);
+    res.status(500).json({ error: safeErrorMessage(err, 'Failed to update release') });
   }
 });
 
@@ -355,7 +388,7 @@ router.get('/releases/:id/audit', async (req: Request, res: Response): Promise<v
     const entries = await getReleaseAudit(req.params.id);
     res.json({ entries });
   } catch (err: any) {
-    res.status(500).json({ error: err.message ?? 'Failed to get audit log' });
+    res.status(500).json({ error: safeErrorMessage(err, 'Failed to get audit log') });
   }
 });
 
