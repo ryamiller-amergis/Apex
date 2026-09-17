@@ -8,7 +8,7 @@
  */
 import { db } from '../db/drizzle';
 import { agentRuns, chatThreads } from '../db/schema';
-import { and, asc, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
 import { randomUUID } from 'crypto';
 import type {
   AgentRunEventEnvelope,
@@ -43,7 +43,6 @@ import {
 
 const REAP_INTERVAL_MS = 60_000;
 export const RETIRE_REAP_INTERVAL_MS = 5 * 60_000;
-export const REAPER_SWEEP_BATCH_SIZE = 200;
 const LONG_RUNNING_PREFIX = 'Long-running agent run';
 const WATCHDOG_SOURCE_INSTANCE = `${RUN_EVENT_SOURCE_INSTANCE}:watchdog`;
 const REAPER_SWEEP_LEASE_KEY = 'agent-run-reaper:sweep';
@@ -181,26 +180,6 @@ export interface ReaperOptions {
   signal?: AbortSignal;
 }
 
-type ReaperSweepPriorityRow = {
-  id: string;
-  threadId: string;
-  status: string;
-  lane?: string | null;
-  eventDriven?: boolean | null;
-  createdAt: string;
-  startedAt: string | null;
-  queuedAt?: string | null;
-  dispatchedAt?: string | null;
-  heartbeatAt: string | null;
-  progressAt?: string | null;
-  progressLabel?: string | null;
-  updatedAt: string;
-  timeoutAt: string | null;
-  dispatchMessageId?: string | null;
-  cancelRequested?: boolean | null;
-  cancelState?: string | null;
-};
-
 function positiveDuration(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -208,126 +187,6 @@ function positiveDuration(value: string | undefined, fallback: number): number {
 
 export function resolveAgentRunHardLimitMs(): number {
   return positiveDuration(process.env.AGENT_RUN_HARD_LIMIT_MS, 2 * 60 * 60_000);
-}
-
-function deadlineFrom(
-  timestamp: string | null | undefined,
-  offsetMs = 0,
-  ifMissing: number = Number.POSITIVE_INFINITY,
-): number {
-  if (!timestamp) return ifMissing;
-  const parsed = Date.parse(timestamp);
-  return Number.isFinite(parsed) ? parsed + offsetMs : ifMissing;
-}
-
-function nextWorkerCancelDeadlineMs(
-  row: Pick<ReaperSweepPriorityRow, 'cancelRequested' | 'cancelState' | 'updatedAt'>,
-  cancelGraceMs: number,
-): number {
-  if (!row.cancelRequested || row.cancelState !== 'requested') {
-    return Number.POSITIVE_INFINITY;
-  }
-  return deadlineFrom(row.updatedAt, cancelGraceMs);
-}
-
-export function resolveReaperNextActionDeadlineMs(
-  row: ReaperSweepPriorityRow,
-  _nowMs: number,
-  config: AgentRunHealthConfig,
-): number {
-  const backgroundQueueTtlMs = config.backgroundQueueTtlMs ?? 30 * 60_000;
-  const workerHeartbeatTimeoutMs =
-    config.workerHeartbeatTimeoutMs ?? DEFAULT_WORKER_HEARTBEAT_TIMEOUT_MS;
-  const dispatchColdStartMs =
-    config.dispatchColdStartMs ?? DEFAULT_DISPATCH_COLD_START_MS;
-  const dispatchTtlMs =
-    config.dispatchTtlMs ?? resolveBackgroundDispatchTtlMs();
-  const workerProgressTimeoutMs =
-    config.workerProgressTimeoutMs ?? DEFAULT_WORKER_PROGRESS_TIMEOUT_MS;
-  const cancelGraceMs = config.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
-
-  if (row.lane === INTERACTIVE_LANE && row.status === 'dispatched') {
-    const dispatchedAt = row.dispatchedAt ?? row.updatedAt ?? row.createdAt;
-    return deadlineFrom(dispatchedAt, dispatchColdStartMs);
-  }
-
-  if (shouldApplyWorkerLifecycle(row)) {
-    if (row.status === 'queued') {
-      const queuedAt = row.queuedAt ?? row.createdAt;
-      return deadlineFrom(queuedAt, backgroundQueueTtlMs);
-    }
-
-    if (
-      (row.status !== 'dispatched' && row.status !== 'running')
-      || !row.dispatchMessageId
-    ) {
-      return Number.POSITIVE_INFINITY;
-    }
-
-    const cancelDeadlineMs = nextWorkerCancelDeadlineMs(row, cancelGraceMs);
-
-    if (row.status === 'dispatched') {
-      const dispatchedAt = row.dispatchedAt ?? row.updatedAt ?? row.createdAt;
-      return Math.min(
-        cancelDeadlineMs,
-        deadlineFrom(dispatchedAt, dispatchColdStartMs),
-        deadlineFrom(dispatchedAt, dispatchTtlMs),
-      );
-    }
-
-    const meaningfulProgressAt =
-      row.progressAt ?? row.startedAt ?? row.dispatchedAt ?? row.createdAt;
-    return Math.min(
-      cancelDeadlineMs,
-      deadlineFrom(row.heartbeatAt, workerHeartbeatTimeoutMs, Number.NEGATIVE_INFINITY),
-      deadlineFrom(meaningfulProgressAt, workerProgressTimeoutMs),
-    );
-  }
-
-  if (row.status === 'dispatched') {
-    return Number.POSITIVE_INFINITY;
-  }
-
-  if (row.eventDriven) {
-    return deadlineFrom(row.timeoutAt);
-  }
-
-  if (row.status === 'queued') {
-    return deadlineFrom(row.createdAt, config.queuedTimeoutMs);
-  }
-
-  if (row.status !== 'running') {
-    return Number.POSITIVE_INFINITY;
-  }
-
-  const runStartedAt = row.startedAt ?? row.createdAt;
-  const meaningfulProgressAt = row.progressAt ?? row.startedAt ?? row.createdAt;
-  const progressTimeoutMs = isInFlightToolProgressLabel(row.progressLabel)
-    ? config.inFlightToolMaxMs
-    : config.progressAbortMs;
-
-  return Math.min(
-    deadlineFrom(runStartedAt, config.hardLimitMs),
-    deadlineFrom(row.timeoutAt),
-    deadlineFrom(row.heartbeatAt, config.heartbeatTimeoutMs, Number.NEGATIVE_INFINITY),
-    deadlineFrom(meaningfulProgressAt, config.progressStaleMs),
-    deadlineFrom(meaningfulProgressAt, progressTimeoutMs),
-    deadlineFrom(runStartedAt, config.longRunMs),
-  );
-}
-
-export function compareReaperSweepPriority(
-  left: ReaperSweepPriorityRow,
-  right: ReaperSweepPriorityRow,
-  nowMs: number,
-  config: AgentRunHealthConfig,
-): number {
-  const leftDeadlineMs = resolveReaperNextActionDeadlineMs(left, nowMs, config);
-  const rightDeadlineMs = resolveReaperNextActionDeadlineMs(right, nowMs, config);
-  if (leftDeadlineMs !== rightDeadlineMs) {
-    return leftDeadlineMs - rightDeadlineMs;
-  }
-  return left.id.localeCompare(right.id);
 }
 
 /**
@@ -475,82 +334,6 @@ function emitWorkerTelemetry(emit: () => void): void {
 export function isInFlightToolProgressLabel(label: string | null | undefined): boolean {
   if (!label) return false;
   return /\brunning$/i.test(label.trim());
-}
-
-function buildReaperSweepOrderBy(config: AgentRunHealthConfig) {
-  const backgroundQueueTtlMs = config.backgroundQueueTtlMs ?? 30 * 60_000;
-  const workerHeartbeatTimeoutMs =
-    config.workerHeartbeatTimeoutMs ?? DEFAULT_WORKER_HEARTBEAT_TIMEOUT_MS;
-  const dispatchColdStartMs =
-    config.dispatchColdStartMs ?? DEFAULT_DISPATCH_COLD_START_MS;
-  const dispatchTtlMs =
-    config.dispatchTtlMs ?? resolveBackgroundDispatchTtlMs();
-  const workerProgressTimeoutMs =
-    config.workerProgressTimeoutMs ?? DEFAULT_WORKER_PROGRESS_TIMEOUT_MS;
-  const cancelGraceMs = config.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
-  const intervalMs = (value: number) => sql`(${value} * interval '1 millisecond')`;
-  const infinity = sql.raw(`timestamp 'infinity'`);
-  const negativeInfinity = sql.raw(`timestamp '-infinity'`);
-  const workerCancelDeadline = sql`case
-    when ${agentRuns.cancelRequested} and ${agentRuns.cancelState} = 'requested'
-      then ${agentRuns.updatedAt} + ${intervalMs(cancelGraceMs)}
-    else ${infinity}
-  end`;
-  const queuedDeadline = sql`coalesce(${agentRuns.queuedAt}, ${agentRuns.createdAt}) + ${intervalMs(backgroundQueueTtlMs)}`;
-  const dispatchedBase = sql`coalesce(${agentRuns.dispatchedAt}, ${agentRuns.updatedAt}, ${agentRuns.createdAt})`;
-  const backgroundDispatchedDeadline = sql`least(
-    ${workerCancelDeadline},
-    ${dispatchedBase} + ${intervalMs(dispatchColdStartMs)},
-    ${dispatchedBase} + ${intervalMs(dispatchTtlMs)}
-  )`;
-  const interactiveDispatchedDeadline = sql`${dispatchedBase} + ${intervalMs(dispatchColdStartMs)}`;
-  const workerProgressBase = sql`coalesce(${agentRuns.progressAt}, ${agentRuns.startedAt}, ${agentRuns.dispatchedAt}, ${agentRuns.createdAt})`;
-  const backgroundRunningDeadline = sql`least(
-    ${workerCancelDeadline},
-    coalesce(${agentRuns.heartbeatAt}, ${negativeInfinity}) + ${intervalMs(workerHeartbeatTimeoutMs)},
-    ${workerProgressBase} + ${intervalMs(workerProgressTimeoutMs)}
-  )`;
-  const legacyProgressBase = sql`coalesce(${agentRuns.progressAt}, ${agentRuns.startedAt}, ${agentRuns.createdAt})`;
-  const legacyProgressTimeoutDeadline = sql`case
-    when ${agentRuns.progressLabel} ~* '\\brunning$'
-      then ${legacyProgressBase} + ${intervalMs(config.inFlightToolMaxMs)}
-    else ${legacyProgressBase} + ${intervalMs(config.progressAbortMs)}
-  end`;
-  const legacyRunningDeadline = sql`least(
-    least(
-      coalesce(${agentRuns.timeoutAt}, ${infinity}),
-      coalesce(${agentRuns.startedAt}, ${agentRuns.createdAt}) + ${intervalMs(config.hardLimitMs)}
-    ),
-    coalesce(${agentRuns.heartbeatAt}, ${negativeInfinity}) + ${intervalMs(config.heartbeatTimeoutMs)},
-    ${legacyProgressBase} + ${intervalMs(config.progressStaleMs)},
-    ${legacyProgressTimeoutDeadline},
-    coalesce(${agentRuns.startedAt}, ${agentRuns.createdAt}) + ${intervalMs(config.longRunMs)}
-  )`;
-  const deadlineOrder = sql`case
-    when ${agentRuns.lane} = 'background' and ${agentRuns.status} = 'queued'
-      then ${queuedDeadline}
-    when ${agentRuns.lane} = 'background'
-      and ${agentRuns.status} = 'dispatched'
-      and ${agentRuns.dispatchMessageId} is not null
-      then ${backgroundDispatchedDeadline}
-    when ${agentRuns.lane} = 'background'
-      and ${agentRuns.status} = 'running'
-      and ${agentRuns.dispatchMessageId} is not null
-      then ${backgroundRunningDeadline}
-    when ${agentRuns.lane} = ${INTERACTIVE_LANE}
-      and ${agentRuns.status} = 'dispatched'
-      then ${interactiveDispatchedDeadline}
-    when ${agentRuns.eventDriven} = true
-      and (${agentRuns.status} = 'queued' or ${agentRuns.status} = 'running')
-      then coalesce(${agentRuns.timeoutAt}, ${infinity})
-    when ${agentRuns.status} = 'queued'
-      then ${agentRuns.createdAt} + ${intervalMs(config.queuedTimeoutMs)}
-    when ${agentRuns.status} = 'running'
-      then ${legacyRunningDeadline}
-    else ${infinity}
-  end`;
-
-  return [asc(deadlineOrder), asc(agentRuns.id)] as const;
 }
 
 export function assessAgentRunHealth(
@@ -1002,27 +785,13 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
     throwIfAborted(signal);
     const rows = await db.query.agentRuns.findMany({
       where: inArray(agentRuns.status, ['queued', 'running', 'dispatched']),
-      orderBy: buildReaperSweepOrderBy(config),
-      limit: REAPER_SWEEP_BATCH_SIZE,
     });
     const eventDrivenTerminationEnabled =
       options.eventDrivenTerminationEnabled ??
       isEventDrivenTerminationEnabledForThread;
-    const prioritizedRows = await Promise.all(rows.map(async (row) => {
-      if (
-        shouldApplyWorkerLifecycle(row)
-        || row.status === 'dispatched'
-        || (row as typeof row & { eventDriven?: boolean }).eventDriven === true
-      ) {
-        return row;
-      }
-      const eventDriven = await eventDrivenTerminationEnabled(row.threadId).catch(() => false);
-      return eventDriven ? { ...row, eventDriven } : row;
-    }));
-    prioritizedRows.sort((left, right) => compareReaperSweepPriority(left, right, nowMs, config));
     let recoverColdStarts = false;
 
-    for (const row of prioritizedRows) {
+    for (const row of rows) {
       throwIfAborted(signal);
       // Interactive dispatch is acknowledged before the Dapr actor invocation
       // finishes. A process crash can therefore bypass the host's rejection

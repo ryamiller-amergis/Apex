@@ -77,9 +77,7 @@ jest.mock('../services/workerTierTelemetry', () => ({
 
 import {
   assessAgentRunHealth,
-  compareReaperSweepPriority,
   resolveAgentRunHealthConfig,
-  resolveReaperNextActionDeadlineMs,
   isThreadRunAlive,
   isTerminalAgentRunStatus,
   isInFlightToolProgressLabel,
@@ -118,29 +116,6 @@ const now = Date.parse('2026-07-14T14:00:00.000Z');
 
 function timestamp(msAgo: number): string {
   return new Date(now - msAgo).toISOString();
-}
-
-function makePriorityRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    id: 'run-default',
-    threadId: 'thread-default',
-    status: 'running',
-    lane: null,
-    eventDriven: false,
-    createdAt: timestamp(10 * 60_000),
-    startedAt: timestamp(10 * 60_000),
-    queuedAt: timestamp(10 * 60_000),
-    dispatchedAt: timestamp(10 * 60_000),
-    heartbeatAt: timestamp(10_000),
-    progressAt: timestamp(10_000),
-    progressLabel: null,
-    updatedAt: timestamp(10_000),
-    timeoutAt: timestamp(-60 * 60_000),
-    dispatchMessageId: null,
-    cancelRequested: false,
-    cancelState: null,
-    ...overrides,
-  };
 }
 
 /**
@@ -654,30 +629,17 @@ describe('reapOrphanedRuns', () => {
     mockWorkerReaperAction.mockReset();
   });
 
-  it('uses the exported reaper batch size and deadline-first deterministic query ordering', async () => {
-    const agentRunReaperModule = jest.requireActual('../services/agentRunReaperService') as {
-      REAPER_SWEEP_BATCH_SIZE?: number;
-    };
+  it('uses the complete non-terminal query without a reaper limit or custom ordering', async () => {
     mockFindMany.mockResolvedValue([]);
 
     await reapOrphanedRuns({ now: () => now, config });
 
-    expect(agentRunReaperModule.REAPER_SWEEP_BATCH_SIZE).toBe(200);
     expect(mockFindMany).toHaveBeenCalledTimes(1);
-    expect(mockFindMany).toHaveBeenCalledWith(expect.objectContaining({
-      limit: 200,
-      orderBy: expect.any(Array),
-    }));
-    expect(mockFindMany.mock.calls[0][0].orderBy).toHaveLength(2);
-    expect(boundStrings(mockFindMany.mock.calls[0][0].orderBy[0])).toEqual(
-      expect.arrayContaining(['queued_at', 'created_at', 'dispatched_at', 'updated_at', 'timeout_at']),
-    );
-    expect(boundStrings(mockFindMany.mock.calls[0][0].orderBy[1])).toEqual(
-      expect.arrayContaining(['id']),
-    );
+    expect(mockFindMany.mock.calls[0][0].limit).toBeUndefined();
+    expect(mockFindMany.mock.calls[0][0].orderBy).toBeUndefined();
   });
 
-  it('leaves row 201 for cycle two, then processes it on the next cycle', async () => {
+  it('processes row 201 in the same full-scan cycle', async () => {
     const rows = Array.from({ length: 201 }, (_, index) => ({
       id: `run-background-${String(index + 1).padStart(3, '0')}`,
       threadId: `thread-background-${String(index + 1).padStart(3, '0')}`,
@@ -688,22 +650,43 @@ describe('reapOrphanedRuns', () => {
       progressPhase: null,
       lastError: null,
     }));
-    mockFindMany
-      .mockResolvedValueOnce(rows.slice(0, 200))
-      .mockResolvedValueOnce(rows.slice(200));
+    mockFindMany.mockResolvedValueOnce(rows);
 
     await reapOrphanedRuns({ now: () => now, config: workerConfig });
-    const firstCycleRunIds = jest.mocked(finalizeReconciledAgentRun).mock.calls
-      .map(([input]) => input.runId);
-    expect(finalizeReconciledAgentRun).toHaveBeenCalledTimes(200);
-    expect(firstCycleRunIds).not.toContain('run-background-201');
-
-    await reapOrphanedRuns({ now: () => now, config: workerConfig });
-
-    const secondCycleRunIds = jest.mocked(finalizeReconciledAgentRun).mock.calls
+    const runIds = jest.mocked(finalizeReconciledAgentRun).mock.calls
       .map(([input]) => input.runId);
     expect(finalizeReconciledAgentRun).toHaveBeenCalledTimes(201);
-    expect(secondCycleRunIds).toContain('run-background-201');
+    expect(runIds).toContain('run-background-201');
+  });
+
+  it('preserves the query return order without in-memory re-sorting', async () => {
+    mockFindMany.mockResolvedValueOnce([
+      {
+        id: 'run-b',
+        threadId: 'thread-b',
+        status: 'queued',
+        lane: 'background',
+        queuedAt: timestamp(31 * 60_000),
+        createdAt: timestamp(31 * 60_000),
+        progressPhase: null,
+        lastError: null,
+      },
+      {
+        id: 'run-a',
+        threadId: 'thread-a',
+        status: 'queued',
+        lane: 'background',
+        queuedAt: timestamp(31 * 60_000),
+        createdAt: timestamp(31 * 60_000),
+        progressPhase: null,
+        lastError: null,
+      },
+    ]);
+
+    await reapOrphanedRuns({ now: () => now, config: workerConfig });
+
+    expect(jest.mocked(finalizeReconciledAgentRun).mock.calls.map(([input]) => input.runId))
+      .toEqual(['run-b', 'run-a']);
   });
 
   it('TBI-005 DoD-3 defaults worker clocks and accepts positive env overrides', () => {
@@ -1566,148 +1549,6 @@ describe('reapOrphanedRuns', () => {
       }),
       { persist: true }
     );
-  });
-});
-
-describe('reaper sweep priority ordering', () => {
-  it('sorts due background queued rows ahead of non-due queued rows', () => {
-    const dueRow = makePriorityRow({
-      id: 'run-due',
-      status: 'queued',
-      lane: 'background',
-      queuedAt: timestamp(31 * 60_000),
-      createdAt: timestamp(31 * 60_000),
-    });
-    const nonDueRow = makePriorityRow({
-      id: 'run-nondue',
-      status: 'queued',
-      lane: 'background',
-      queuedAt: timestamp(29 * 60_000),
-      createdAt: timestamp(29 * 60_000),
-    });
-
-    expect(resolveReaperNextActionDeadlineMs(dueRow as never, now, workerConfig))
-      .toBeLessThan(resolveReaperNextActionDeadlineMs(nonDueRow as never, now, workerConfig));
-  });
-
-  it('sorts due background dispatched rows ahead of non-due dispatched rows', () => {
-    const dueRow = makePriorityRow({
-      id: 'run-due',
-      status: 'dispatched',
-      lane: 'background',
-      dispatchMessageId: 'dispatch-1',
-      dispatchedAt: timestamp(5 * 60_000 + 1),
-      updatedAt: timestamp(5 * 60_000 + 1),
-    });
-    const nonDueRow = makePriorityRow({
-      id: 'run-nondue',
-      status: 'dispatched',
-      lane: 'background',
-      dispatchMessageId: 'dispatch-2',
-      dispatchedAt: timestamp(5 * 60_000 - 1),
-      updatedAt: timestamp(5 * 60_000 - 1),
-    });
-
-    expect(resolveReaperNextActionDeadlineMs(dueRow as never, now, workerConfig))
-      .toBeLessThan(resolveReaperNextActionDeadlineMs(nonDueRow as never, now, workerConfig));
-  });
-
-  it('sorts due background running rows ahead of non-due running rows', () => {
-    const dueRow = makePriorityRow({
-      id: 'run-due',
-      status: 'running',
-      lane: 'background',
-      dispatchMessageId: 'dispatch-1',
-      heartbeatAt: timestamp(90_001),
-      progressAt: timestamp(10_000),
-    });
-    const nonDueRow = makePriorityRow({
-      id: 'run-nondue',
-      status: 'running',
-      lane: 'background',
-      dispatchMessageId: 'dispatch-2',
-      heartbeatAt: timestamp(10_000),
-      progressAt: timestamp(10_000),
-    });
-
-    expect(resolveReaperNextActionDeadlineMs(dueRow as never, now, workerConfig))
-      .toBeLessThan(resolveReaperNextActionDeadlineMs(nonDueRow as never, now, workerConfig));
-  });
-
-  it('sorts due interactive dispatched rows ahead of non-due interactive dispatched rows', () => {
-    const dueRow = makePriorityRow({
-      id: 'run-due',
-      status: 'dispatched',
-      lane: 'ai-runs-interactive',
-      dispatchMessageId: 'dispatch-1',
-      dispatchedAt: timestamp(5 * 60_000 + 1),
-      updatedAt: timestamp(5 * 60_000 + 1),
-    });
-    const nonDueRow = makePriorityRow({
-      id: 'run-nondue',
-      status: 'dispatched',
-      lane: 'ai-runs-interactive',
-      dispatchMessageId: 'dispatch-2',
-      dispatchedAt: timestamp(5 * 60_000 - 1),
-      updatedAt: timestamp(5 * 60_000 - 1),
-    });
-
-    expect(resolveReaperNextActionDeadlineMs(dueRow as never, now, workerConfig))
-      .toBeLessThan(resolveReaperNextActionDeadlineMs(nonDueRow as never, now, workerConfig));
-  });
-
-  it('sorts due event-driven legacy rows ahead of non-due event-driven rows', () => {
-    const dueRow = makePriorityRow({
-      id: 'run-due',
-      status: 'running',
-      lane: null,
-      eventDriven: true,
-      timeoutAt: timestamp(60_000),
-    });
-    const nonDueRow = makePriorityRow({
-      id: 'run-nondue',
-      status: 'running',
-      lane: null,
-      eventDriven: true,
-      timeoutAt: timestamp(-60_000),
-    });
-
-    expect(resolveReaperNextActionDeadlineMs(dueRow as never, now, workerConfig))
-      .toBeLessThan(resolveReaperNextActionDeadlineMs(nonDueRow as never, now, workerConfig));
-  });
-
-  it('sorts by ascending deadline, then deterministic id', () => {
-    const laterRow = makePriorityRow({
-      id: 'run-b',
-      status: 'queued',
-      lane: 'background',
-      queuedAt: timestamp(29 * 60_000),
-      createdAt: timestamp(29 * 60_000),
-    });
-    const earlierRow = makePriorityRow({
-      id: 'run-a',
-      status: 'queued',
-      lane: 'background',
-      queuedAt: timestamp(31 * 60_000),
-      createdAt: timestamp(31 * 60_000),
-    });
-    const tieRowA = makePriorityRow({
-      id: 'run-a',
-      status: 'queued',
-      lane: 'background',
-      queuedAt: timestamp(31 * 60_000),
-      createdAt: timestamp(31 * 60_000),
-    });
-    const tieRowB = makePriorityRow({
-      id: 'run-b',
-      status: 'queued',
-      lane: 'background',
-      queuedAt: timestamp(31 * 60_000),
-      createdAt: timestamp(31 * 60_000),
-    });
-
-    expect(compareReaperSweepPriority(earlierRow as never, laterRow as never, now, workerConfig)).toBeLessThan(0);
-    expect(compareReaperSweepPriority(tieRowA as never, tieRowB as never, now, workerConfig)).toBeLessThan(0);
   });
 });
 
