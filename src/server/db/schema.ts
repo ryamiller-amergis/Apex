@@ -610,6 +610,9 @@ export const designDocs = pgTable('design_docs', {
   directFeatureUq: uniqueIndex('uq_design_docs_prd_direct_feature')
     .on(t.prdId, t.featureIndex)
     .where(sql`${t.designPrototypeId} IS NULL AND ${t.featureIndex} IS NOT NULL`),
+  transientUpdatedIdx: index('idx_design_docs_transient_updated')
+    .on(t.status, t.updatedAt, t.id)
+    .where(sql`${t.status} IN ('generating', 'validating')`),
 }));
 
 // ── Interview Relations ────────────────────────────────────────────────────────
@@ -1657,6 +1660,10 @@ export const agentRuns = pgTable('agent_runs', {
   statusHeartbeatIdx: index('idx_agent_runs_status_heartbeat').on(t.status, t.heartbeatAt),
   statusLaneIdx: index('idx_agent_runs_status_lane').on(t.status, t.lane),
   projectStatusIdx: index('idx_agent_runs_project_status').on(t.projectId, t.status),
+  threadCreatedIdx: index('idx_agent_runs_thread_created').on(t.threadId, t.createdAt),
+  threadActiveIdx: index('idx_agent_runs_thread_active')
+    .on(t.threadId, t.createdAt)
+    .where(sql`${t.status} IN ('queued', 'dispatched', 'running')`),
   queuedWorkerIdx: index('idx_agent_runs_queued_at_worker')
     .on(t.queuedAt)
     .where(sql`${t.lane} = 'background'`),
