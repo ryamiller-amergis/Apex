@@ -68,6 +68,8 @@ describe('requirements-phase Skill content (FEAT-004 / PBI-007 / TBI-004)', () =
 
     expect(preRead).toContain('context.md');
     expect(preRead).toContain('AGENTS.md');
+    expect(preRead).toMatch(/missing/i);
+    expect(preRead).toMatch(/live business systems/i);
   });
 
   it('AC-0 / DoD-2: covers the five feature-level question areas', () => {
@@ -78,6 +80,15 @@ describe('requirements-phase Skill content (FEAT-004 / PBI-007 / TBI-004)', () =
     expect(questions).toMatch(/in-scope behavior/i);
     expect(questions).toMatch(/success criteria/i);
     expect(questions).toMatch(/non-goals/i);
+  });
+
+  it('covers portable PO/BA areas for any product repo (feature or idea)', () => {
+    const questions = sectionBody(skill, '## Question set');
+
+    expect(questions).toMatch(/current work/i);
+    expect(questions).toMatch(/context of use/i);
+    expect(questions).toMatch(/conditions of use/i);
+    expect(skill).toMatch(/unshaped idea|rough idea|feature or an unshaped idea/i);
   });
 
   it('DoD-2 / NFR: asks no question that presupposes a technical implementation', () => {
