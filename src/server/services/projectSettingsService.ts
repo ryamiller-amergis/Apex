@@ -186,6 +186,8 @@ export interface UpsertSkillConfigOptions extends ProjectEffortSettings {
   featureRequestModel?: string | null;
   technicalSkillPath?: string | null;
   technicalModel?: string | null;
+  technicalPhaseSkillPath?: string | null;
+  technicalPhaseModel?: string | null;
   issueSkillPath?: string | null;
   issueModel?: string | null;
   prdValidationScoreThreshold?: number | null;
@@ -278,6 +280,8 @@ export async function upsertSkillConfig(
     featureRequestModel: opts.featureRequestModel ?? null,
     technicalSkillPath: opts.technicalSkillPath ?? null,
     technicalModel: opts.technicalModel ?? null,
+    technicalPhaseSkillPath: opts.technicalPhaseSkillPath ?? null,
+    technicalPhaseModel: opts.technicalPhaseModel ?? null,
     issueSkillPath: opts.issueSkillPath ?? null,
     issueModel: opts.issueModel ?? null,
     prdValidationScoreThreshold: opts.prdValidationScoreThreshold ?? null,
@@ -323,6 +327,7 @@ export async function upsertSkillConfig(
     standupEffort: opts.standupEffort ?? null,
     featureRequestEffort: opts.featureRequestEffort ?? null,
     technicalEffort: opts.technicalEffort ?? null,
+    technicalPhaseEffort: opts.technicalPhaseEffort ?? null,
     issueEffort: opts.issueEffort ?? null,
     calendarAssistantEffort: opts.calendarAssistantEffort ?? null,
     loadTestGenerationEffort: opts.loadTestGenerationEffort ?? null,

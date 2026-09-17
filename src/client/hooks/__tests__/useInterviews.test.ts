@@ -46,6 +46,8 @@ import {
   useRegenerateProposedPrdSection,
   useGenerateTestCases,
   useRecalculateTestCaseCoverage,
+  useTechnicalPhase,
+  useStartTechnicalPhase,
 } from '../useInterviews';
 
 // ── QueryClient wrapper ────────────────────────────────────────────────────────
@@ -200,6 +202,72 @@ describe('useInterview', () => {
     await new Promise((r) => setTimeout(r, 50));
 
     expect(global.fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('FEAT-005 S6 Technical phase hooks', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('TBI-005 DoD-0 fetches state only when the Technical flow is enabled', async () => {
+    mockFetchOk({
+      status: 'ready',
+      canStart: true,
+      technicalPhaseChatThreadId: null,
+      seedContext: null,
+    });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(
+      () => useTechnicalPhase('interview-1', true),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/interview-1/phases/technical',
+      expect.any(Object),
+    );
+  });
+
+  it('TBI-005 DoD-0 does not fetch state when disabled', async () => {
+    mockFetchOk({});
+    const { wrapper } = createWrapper();
+
+    renderHook(() => useTechnicalPhase('interview-1', false), { wrapper });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('TBI-005 DoD-1 starts Technical and caches the authoritative response', async () => {
+    const response = {
+      interviewId: 'interview-1',
+      technicalPhaseChatThreadId: 'thread-technical-1',
+      state: {
+        status: 'in_progress',
+        canStart: false,
+        technicalPhaseChatThreadId: 'thread-technical-1',
+        seedContext: {
+          originalPrompt: 'Build audit exports',
+          requirementsSummary: 'Approved requirements',
+          requirementsApprovedAt: '2026-09-17T12:00:00Z',
+        },
+      },
+    };
+    mockFetchOk(response);
+    const { wrapper, queryClient } = createWrapper();
+    const { result } = renderHook(() => useStartTechnicalPhase(), { wrapper });
+
+    await act(async () => {
+      await result.current.mutateAsync('interview-1');
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/interviews/interview-1/phases/technical/start',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(queryClient.getQueryData(['technical-phase', 'interview-1']))
+      .toEqual(response.state);
   });
 });
 

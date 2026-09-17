@@ -45,6 +45,8 @@ import {
   resolveThreadAccess,
   canWriteThread,
   canCreateDesignDocAssistantThread,
+  resolveRequirementsPhaseMessageWrite,
+  resolveTechnicalPhaseMessageWrite,
 } from '../services/threadAccessService';
 
 const mockLoadFullThread = loadFullThread as jest.Mock;
@@ -179,6 +181,156 @@ describe('canWriteThread', () => {
     });
 
     expect(await canWriteThread('viewer-1', 'thread-1')).toBe(false);
+  });
+});
+
+describe('resolveRequirementsPhaseMessageWrite (FEAT-004 / PBI-007)', () => {
+  const requirementsOnly = {
+    id: 'iv-1',
+    phaseFlow: 'requirements_only',
+    requirementsOwnerId: 'owner-1',
+    requirementsPhaseStatus: 'draft',
+  };
+
+  beforeEach(() => {
+    mockGetUserPermissions.mockResolvedValue(
+      new Set(['interviews:view', 'interviews:manage']),
+    );
+  });
+
+  it('AC-0 / VT-07: allows the assigned Requirements owner who did not start the thread', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(requirementsOnly);
+
+    const result = await resolveRequirementsPhaseMessageWrite('owner-1', 'thread-1');
+
+    expect(result).toEqual({ outcome: 'allowed', thread: baseThread });
+  });
+
+  it('AC-3 / VT-06: denies a reader who is not the assigned Requirements owner', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(requirementsOnly);
+    mockGetUserPermissions.mockResolvedValue(new Set(['interviews:view']));
+
+    expect(await resolveRequirementsPhaseMessageWrite('viewer-1', 'thread-1')).toEqual({
+      outcome: 'not_owner',
+    });
+  });
+
+  it('AC-3: denies the user who started the thread once the phase was reassigned', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(requirementsOnly);
+
+    expect(await resolveRequirementsPhaseMessageWrite('author-1', 'thread-1')).toEqual({
+      outcome: 'not_owner',
+    });
+  });
+
+  it('RBAC NFR: denies the assigned owner who lacks interviews:manage', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(requirementsOnly);
+    mockGetUserPermissions.mockResolvedValue(new Set(['interviews:view']));
+
+    expect(await resolveRequirementsPhaseMessageWrite('owner-1', 'thread-1')).toEqual({
+      outcome: 'missing_manage_permission',
+    });
+  });
+
+  it('AC-3: guards both_sequential until the Requirements summary is approved', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...requirementsOnly,
+      phaseFlow: 'both_sequential',
+    });
+
+    expect(await resolveRequirementsPhaseMessageWrite('viewer-1', 'thread-1')).toEqual({
+      outcome: 'not_owner',
+    });
+
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...requirementsOnly,
+      phaseFlow: 'both_sequential',
+      requirementsPhaseStatus: 'approved',
+    });
+
+    expect(await resolveRequirementsPhaseMessageWrite('viewer-1', 'thread-1')).toEqual({
+      outcome: 'not_applicable',
+    });
+  });
+
+  it('VT-08: leaves technical-only, legacy, and non-interview threads to the existing write rules', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...requirementsOnly,
+      phaseFlow: 'technical_only',
+      requirementsOwnerId: null,
+      requirementsPhaseStatus: null,
+    });
+    expect(await resolveRequirementsPhaseMessageWrite('author-1', 'thread-1')).toEqual({
+      outcome: 'not_applicable',
+    });
+
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...requirementsOnly,
+      phaseFlow: null,
+      requirementsOwnerId: null,
+      requirementsPhaseStatus: null,
+    });
+    expect(await resolveRequirementsPhaseMessageWrite('author-1', 'thread-1')).toEqual({
+      outcome: 'not_applicable',
+    });
+
+    mockDb.query.interviews.findFirst.mockResolvedValue(null);
+    expect(await resolveRequirementsPhaseMessageWrite('author-1', 'thread-1')).toEqual({
+      outcome: 'not_applicable',
+    });
+  });
+
+  it('reports a missing thread instead of allowing the owner through', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(requirementsOnly);
+    mockGetThread.mockResolvedValue(null);
+    mockLoadFullThread.mockResolvedValue(null);
+
+    expect(await resolveRequirementsPhaseMessageWrite('owner-1', 'thread-1')).toEqual({
+      outcome: 'thread_not_found',
+    });
+  });
+});
+
+describe('resolveTechnicalPhaseMessageWrite (FEAT-005 / PBI-008)', () => {
+  beforeEach(() => {
+    mockGetUserPermissions.mockResolvedValue(
+      new Set(['interviews:view', 'interviews:manage']),
+    );
+  });
+
+  it('AC-3 / VT-06 allows only the assigned Technical owner with manage permission', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      id: 'iv-1',
+      technicalOwnerId: 'technical-owner',
+      technicalPhaseChatThreadId: 'thread-1',
+    });
+
+    await expect(
+      resolveTechnicalPhaseMessageWrite('technical-owner', 'thread-1'),
+    ).resolves.toEqual({ outcome: 'allowed', thread: baseThread });
+    await expect(
+      resolveTechnicalPhaseMessageWrite('manager', 'thread-1'),
+    ).resolves.toEqual({ outcome: 'not_owner' });
+  });
+
+  it('NFR denies the assigned Technical owner without interviews:manage', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      id: 'iv-1',
+      technicalOwnerId: 'technical-owner',
+      technicalPhaseChatThreadId: 'thread-1',
+    });
+    mockGetUserPermissions.mockResolvedValue(new Set(['interviews:view']));
+
+    await expect(
+      resolveTechnicalPhaseMessageWrite('technical-owner', 'thread-1'),
+    ).resolves.toEqual({ outcome: 'missing_manage_permission' });
+  });
+
+  it('leaves unrelated threads to the existing message-write rules', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(null);
+    await expect(
+      resolveTechnicalPhaseMessageWrite('technical-owner', 'thread-1'),
+    ).resolves.toEqual({ outcome: 'not_applicable' });
   });
 });
 

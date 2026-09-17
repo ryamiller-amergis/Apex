@@ -11,11 +11,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import interviewRouter from '../routes/interviews';
 import * as interviewService from '../services/interviewService';
+import * as phaseLifecycleService from '../services/phaseLifecycleService';
+import * as technicalPhaseSkillService from '../services/technicalPhaseSkillService';
 import * as prdService from '../services/prdService';
 
 // ── Mocks ──────────────────────────────────────────────────────────────────────
 
 jest.mock('../services/interviewService');
+jest.mock('../services/phaseLifecycleService');
+jest.mock('../services/technicalPhaseSkillService');
 jest.mock('../services/prdService');
 jest.mock('../services/chatAgentService', () => ({
   readOutputPrd: jest.fn().mockReturnValue(null),
@@ -80,6 +84,7 @@ jest.mock('../services/appSettingsService', () => ({
 
 jest.mock('../services/rbacService', () => ({
   getActiveUsers: jest.fn(),
+  getUserPermissions: jest.fn(),
 }));
 
 jest.mock('../services/testCaseService', () => ({
@@ -158,6 +163,10 @@ jest.mock('../utils/requestUser', () => ({
 }));
 
 const mockInterviewService = interviewService as jest.Mocked<typeof interviewService>;
+const mockPhaseLifecycleService =
+  phaseLifecycleService as jest.Mocked<typeof phaseLifecycleService>;
+const mockTechnicalPhaseSkillService =
+  technicalPhaseSkillService as jest.Mocked<typeof technicalPhaseSkillService>;
 const mockPrdService = prdService as jest.Mocked<typeof prdService>;
 
 describe('BR-012 generation route authorization', () => {
@@ -207,6 +216,9 @@ const { getDefaultModel: mockGetDefaultModel } = jest.requireMock(
 
 const { getActiveUsers: mockGetActiveUsers } = jest.requireMock('../services/rbacService') as {
   getActiveUsers: jest.Mock;
+};
+const { getUserPermissions: mockGetUserPermissions } = jest.requireMock('../services/rbacService') as {
+  getUserPermissions: jest.Mock;
 };
 
 const {
@@ -583,6 +595,17 @@ describe('POST /api/interviews', () => {
     expect(res.status).toBe(400);
     expect(mockInterviewService.createInterview).not.toHaveBeenCalled();
   });
+
+  it('PBI-001 AC-3 / VT-04 keeps creation behind interviews:manage before any insert seam', () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), 'src/server/routes/interviews.ts'),
+      'utf8',
+    );
+
+    expect(source).toContain(
+      "router.post('/', requirePermission('interviews:manage')",
+    );
+  });
 });
 
 // ── GET /api/interviews/:id ────────────────────────────────────────────────────
@@ -646,6 +669,320 @@ describe('PATCH /api/interviews/:id', () => {
       .send({ status: 'complete' });
 
     expect(res.status).toBe(404);
+  });
+});
+
+describe('PATCH /api/interviews/:id/phase-owners', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetUserPermissions.mockResolvedValue(new Set(['interviews:manage']));
+  });
+
+  it('PBI-002 AC-0 / VT-05 resolves project permissions and returns the reassigned owner', async () => {
+    mockInterviewService.getInterview.mockResolvedValue(interview);
+    mockInterviewService.reassignPhaseOwner.mockResolvedValue({
+      phase: 'requirements',
+      ownerId: 'req-2',
+      ownerName: 'Requirements Two',
+    });
+
+    const res = await request(buildApp())
+      .patch('/api/interviews/interview-1/phase-owners')
+      .send({ phase: 'requirements', ownerId: 'req-2' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      phase: 'requirements',
+      ownerId: 'req-2',
+      ownerName: 'Requirements Two',
+    });
+    expect(mockGetUserPermissions).toHaveBeenCalledWith('user-test', 'proj-alpha');
+    expect(mockInterviewService.reassignPhaseOwner).toHaveBeenCalledWith(
+      'interview-1',
+      'requirements',
+      'req-2',
+      'user-test',
+      new Set(['interviews:manage']),
+    );
+  });
+
+  it.each([
+    [{ phase: 'invalid', ownerId: 'req-2' }, 'phase must be "requirements" or "technical"'],
+    [{ phase: 'requirements' }, 'ownerId is required'],
+  ])('PBI-002 AC-0 validates request body %p before service mutation', async (body, message) => {
+    const res = await request(buildApp())
+      .patch('/api/interviews/interview-1/phase-owners')
+      .send(body);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: message });
+    expect(mockInterviewService.reassignPhaseOwner).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [403, 'Only the interview creator or an admin can change phase owners.'],
+    [404, 'Interview not found'],
+    [409, 'This phase has already been approved and its owner cannot be changed.'],
+  ])('PBI-002 AC-1/AC-3 propagates service status %s without rewriting its error', async (status, message) => {
+    mockInterviewService.getInterview.mockResolvedValue(interview);
+    mockInterviewService.reassignPhaseOwner.mockRejectedValue(Object.assign(new Error(message), { status }));
+
+    const res = await request(buildApp())
+      .patch('/api/interviews/interview-1/phase-owners')
+      .send({ phase: 'requirements', ownerId: 'req-2' });
+
+    expect(res.status).toBe(status);
+    expect(res.body).toEqual({ error: message });
+  });
+
+  it('PBI-002 AC-0 returns 404 before permission resolution when interview is missing', async () => {
+    mockInterviewService.getInterview.mockResolvedValue(null);
+
+    const res = await request(buildApp())
+      .patch('/api/interviews/missing/phase-owners')
+      .send({ phase: 'requirements', ownerId: 'req-2' });
+
+    expect(res.status).toBe(404);
+    expect(mockGetUserPermissions).not.toHaveBeenCalled();
+    expect(mockInterviewService.reassignPhaseOwner).not.toHaveBeenCalled();
+  });
+
+  it('PBI-002 AC-0 keeps reassignment behind interviews:manage', () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), 'src/server/routes/interviews.ts'),
+      'utf8',
+    );
+    expect(source).toContain(
+      "router.patch('/:id/phase-owners', requirePermission('interviews:manage')",
+    );
+  });
+});
+
+describe('FEAT-002 phase summary lifecycle routes', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('PBI-003 AC-0 gets and edits a valid phase summary', async () => {
+    mockPhaseLifecycleService.getPhaseSummary.mockResolvedValue({
+      phase: 'requirements',
+      status: 'draft',
+      content: 'Summary',
+      ownerId: 'user-test',
+      approvedAt: null,
+      locked: false,
+      amendable: false,
+    });
+    mockPhaseLifecycleService.editPhaseSummary.mockResolvedValue(undefined);
+
+    const getResponse = await request(buildApp())
+      .get('/api/interviews/interview-1/phases/requirements/summary');
+    const putResponse = await request(buildApp())
+      .put('/api/interviews/interview-1/phases/requirements/summary')
+      .send({ content: 'Updated summary' });
+
+    expect(getResponse.status).toBe(200);
+    expect(getResponse.body).toMatchObject({ phase: 'requirements', content: 'Summary' });
+    expect(putResponse.status).toBe(200);
+    expect(mockPhaseLifecycleService.editPhaseSummary).toHaveBeenCalledWith(
+      'interview-1',
+      'requirements',
+      'user-test',
+      'Updated summary',
+    );
+  });
+
+  it('PBI-003 AC-1 / VT-14 returns last-phase approval metadata', async () => {
+    mockPhaseLifecycleService.approvePhaseSummary.mockResolvedValue({
+      ok: true,
+      isLastConfiguredPhase: true,
+    });
+
+    const response = await request(buildApp())
+      .post('/api/interviews/interview-1/phases/requirements/approve');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ ok: true, isLastConfiguredPhase: true });
+    expect(mockPhaseLifecycleService.approvePhaseSummary).toHaveBeenCalledWith(
+      'interview-1',
+      'requirements',
+      'user-test',
+    );
+  });
+
+  it('VT-10 / AC-0 fires PRD generation only after a true-last-phase approval', async () => {
+    mockPhaseLifecycleService.approvePhaseSummary.mockResolvedValue({
+      ok: true,
+      isLastConfiguredPhase: true,
+    });
+
+    const response = await request(buildApp())
+      .post('/api/interviews/interview-1/phases/technical/approve');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(response.status).toBe(200);
+    expect(mockPrdService.triggerPrdGenerationFromPhaseApproval)
+      .toHaveBeenCalledTimes(1);
+    expect(mockPrdService.triggerPrdGenerationFromPhaseApproval)
+      .toHaveBeenCalledWith('interview-1');
+  });
+
+  it('VT-09 / AC-2 does not trigger after Requirements approval in both_sequential', async () => {
+    mockPhaseLifecycleService.approvePhaseSummary.mockResolvedValue({
+      ok: true,
+      isLastConfiguredPhase: false,
+      unlockedTechnicalOwnerId: 'technical-owner',
+    });
+
+    const response = await request(buildApp())
+      .post('/api/interviews/interview-1/phases/requirements/approve');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(response.status).toBe(200);
+    expect(mockPrdService.triggerPrdGenerationFromPhaseApproval)
+      .not.toHaveBeenCalled();
+  });
+
+  it('PBI-004 AC-0 amends Requirements through the dedicated route', async () => {
+    mockPhaseLifecycleService.amendRequirementsSummary.mockResolvedValue({
+      ok: true,
+      notifiedOwnerId: 'requirements-owner',
+    });
+
+    const response = await request(buildApp())
+      .post('/api/interviews/interview-1/phases/requirements/amend')
+      .send({ content: 'Closed gap' });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      ok: true,
+      notifiedOwnerId: 'requirements-owner',
+    });
+    expect(mockPhaseLifecycleService.amendRequirementsSummary).toHaveBeenCalledWith(
+      'interview-1',
+      'user-test',
+      'Closed gap',
+    );
+  });
+
+  it.each([
+    ['GET', '/api/interviews/interview-1/phases/invalid/summary'],
+    ['PUT', '/api/interviews/interview-1/phases/invalid/summary'],
+    ['POST', '/api/interviews/interview-1/phases/invalid/approve'],
+  ])('rejects an invalid phase on %s %s', async (method, url) => {
+    const response = method === 'GET'
+      ? await request(buildApp()).get(url)
+      : method === 'PUT'
+        ? await request(buildApp()).put(url).send({ content: 'x' })
+        : await request(buildApp()).post(url);
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('phase');
+  });
+
+  it('PBI-003 AC-3 propagates ownership errors from the service', async () => {
+    mockPhaseLifecycleService.editPhaseSummary.mockRejectedValue(
+      Object.assign(new Error('Only the assigned phase owner can edit this summary.'), {
+        status: 403,
+      }),
+    );
+
+    const response = await request(buildApp())
+      .put('/api/interviews/interview-1/phases/requirements/summary')
+      .send({ content: 'No access' });
+
+    expect(response.status).toBe(403);
+  });
+
+  it('VT-12/VT-13 keeps reads and mutations behind existing interview permissions', () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), 'src/server/routes/interviews.ts'),
+      'utf8',
+    );
+    expect(source).toContain(
+      "router.get('/:id/phases/:phase/summary', requirePermission('interviews:view')",
+    );
+    expect(source).toContain(
+      "router.put('/:id/phases/:phase/summary', requirePermission('interviews:manage')",
+    );
+    expect(source).toContain(
+      "router.post('/:id/phases/:phase/approve', requirePermission('interviews:manage')",
+    );
+    expect(source).toContain(
+      "router.post('/:id/phases/requirements/amend', requirePermission('interviews:manage')",
+    );
+  });
+});
+
+describe('FEAT-005 Technical phase routes', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('AC-2 / VT-02 GET returns locked state to an interviews:view caller', async () => {
+    mockTechnicalPhaseSkillService.getTechnicalPhaseState.mockResolvedValue({
+      status: 'unavailable',
+      canStart: false,
+      technicalPhaseChatThreadId: null,
+      seedContext: null,
+      unavailableReason: 'Requirements must be approved before Technical can start.',
+    });
+
+    const response = await request(buildApp())
+      .get('/api/interviews/interview-1/phases/technical');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      status: 'unavailable',
+      technicalPhaseChatThreadId: null,
+    });
+  });
+
+  it('AC-2 / VT-03 POST returns 409 when sequential Requirements are not approved', async () => {
+    mockTechnicalPhaseSkillService.startTechnicalPhase.mockRejectedValue(
+      Object.assign(new Error('Requirements must be approved before Technical can start.'), {
+        status: 409,
+      }),
+    );
+
+    const response = await request(buildApp())
+      .post('/api/interviews/interview-1/phases/technical/start');
+
+    expect(response.status).toBe(409);
+    expect(mockTechnicalPhaseSkillService.startTechnicalPhase)
+      .toHaveBeenCalledWith('interview-1', 'user-test');
+  });
+
+  it('AC-0 / VT-01 POST starts the dedicated Technical thread with 201', async () => {
+    mockTechnicalPhaseSkillService.startTechnicalPhase.mockResolvedValue({
+      interviewId: 'interview-1',
+      technicalPhaseChatThreadId: 'technical-thread',
+      state: {
+        status: 'in_progress',
+        canStart: false,
+        technicalPhaseChatThreadId: 'technical-thread',
+        seedContext: {
+          originalPrompt: 'Build phase interviews',
+          requirementsSummary: 'Approved requirements',
+          requirementsApprovedAt: '2026-09-17T12:00:00.000Z',
+        },
+      },
+    });
+
+    const response = await request(buildApp())
+      .post('/api/interviews/interview-1/phases/technical/start');
+
+    expect(response.status).toBe(201);
+    expect(response.body.technicalPhaseChatThreadId).toBe('technical-thread');
+  });
+
+  it('AC-3 / VT-05 POST preserves the service owner-check 403', async () => {
+    mockTechnicalPhaseSkillService.startTechnicalPhase.mockRejectedValue(
+      Object.assign(new Error('Only the assigned Technical owner can start this phase.'), {
+        status: 403,
+      }),
+    );
+
+    const response = await request(buildApp())
+      .post('/api/interviews/interview-1/phases/technical/start');
+
+    expect(response.status).toBe(403);
   });
 });
 
@@ -1041,6 +1378,67 @@ describe('POST /api/interviews/:interviewId/prds', () => {
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ error: 'chatThreadId is required' });
     expect(mockPrdService.createPrd).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/interviews/:interviewId/prds/retry-from-phase', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('VT-06 / AC-2 returns 409 until the configured last phase is approved', async () => {
+    mockInterviewService.getInterview.mockResolvedValue({
+      ...interview,
+      phaseFlow: 'both_sequential',
+      requirementsPhaseStatus: 'approved',
+      technicalPhaseStatus: 'draft',
+    });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/interview-1/prds/retry-from-phase');
+
+    expect(res.status).toBe(409);
+    expect(mockPrdService.triggerPrdGenerationFromPhaseApproval)
+      .not.toHaveBeenCalled();
+  });
+
+  it('VT-08 / TBI-003 NFR retries idempotently after the true last phase', async () => {
+    mockInterviewService.getInterview.mockResolvedValue({
+      ...interview,
+      phaseFlow: 'technical_only',
+      technicalPhaseStatus: 'approved',
+    });
+    mockPrdService.triggerPrdGenerationFromPhaseApproval.mockResolvedValue(undefined);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/interview-1/prds/retry-from-phase');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(mockPrdService.triggerPrdGenerationFromPhaseApproval)
+      .toHaveBeenCalledWith('interview-1');
+  });
+
+  it('returns 404 for a missing interview and 409 for a legacy flow', async () => {
+    mockInterviewService.getInterview
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ ...interview, phaseFlow: null });
+
+    const missing = await request(buildApp())
+      .post('/api/interviews/missing/prds/retry-from-phase');
+    const legacy = await request(buildApp())
+      .post('/api/interviews/interview-1/prds/retry-from-phase');
+
+    expect(missing.status).toBe(404);
+    expect(legacy.status).toBe(409);
+  });
+
+  it('VT-07 / Security requires interviews:manage', () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), 'src/server/routes/interviews.ts'),
+      'utf8',
+    );
+    expect(source).toContain(
+      "router.post('/:interviewId/prds/retry-from-phase', requirePermission('interviews:manage')",
+    );
   });
 });
 
@@ -2118,6 +2516,32 @@ describe('POST /api/interviews — owner field forwarding', () => {
 
     expect(mockInterviewService.createInterview).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'user-test', project: 'proj' }),
+    );
+  });
+
+  it('PBI-001 AC-0 / TBI-001 DoD-0 forwards phase flow and applicable owners', async () => {
+    mockInterviewService.createInterview.mockResolvedValue({
+      interviewId: 'interview-new',
+      threadId: 'thread-new',
+    });
+
+    await request(buildApp())
+      .post('/api/interviews')
+      .send({
+        project: 'proj',
+        repo: 'org/repo',
+        chatThreadId: 'thread-x',
+        phaseFlow: 'both_sequential',
+        requirementsOwnerId: 'req-1',
+        technicalOwnerId: 'tech-1',
+      });
+
+    expect(mockInterviewService.createInterview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        phaseFlow: 'both_sequential',
+        requirementsOwnerId: 'req-1',
+        technicalOwnerId: 'tech-1',
+      }),
     );
   });
 });

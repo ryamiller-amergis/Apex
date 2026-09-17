@@ -6,6 +6,93 @@ export type { PrdReadinessOverride };
 
 export type InterviewStatus = 'in_progress' | 'complete' | 'archived';
 
+export type PrdTriggerDisplayState = 'pending' | 'generating' | 'ready' | 'failed';
+
+export interface RetryPrdFromPhaseResponse {
+  ok: boolean;
+}
+
+/** Per-interview phase configuration. Null on legacy interviews (DoD-2). */
+export type InterviewPhaseFlow = 'requirements_only' | 'technical_only' | 'both_sequential';
+
+export function resolveRequirementsPhaseSkillPath(
+  phaseFlow: InterviewPhaseFlow | null | undefined,
+): string | null {
+  if (phaseFlow === 'requirements_only' || phaseFlow === 'both_sequential') {
+    return '.cursor/skills/requirements-phase/SKILL.md';
+  }
+  return null;
+}
+
+/** FEAT-002 alias; same literals as `InterviewPhaseFlow` (`both_sequential`, not `both_in_sequence`). */
+export type InterviewFlow = InterviewPhaseFlow;
+
+export type PhaseOwnerRole = 'requirements' | 'technical';
+
+/** Phase-lifecycle API name; same literals as `PhaseOwnerRole`. */
+export type PhaseName = PhaseOwnerRole;
+
+/** Minimal phase statuses for FEAT-001. `approved` is written only by FEAT-002. */
+export type InterviewPhaseStatus = 'draft' | 'locked' | 'approved';
+
+/** Derived availability/progress for the Technical Phase interview thread. */
+export type TechnicalPhaseStatus =
+  | 'unavailable'
+  | 'ready'
+  | 'in_progress'
+  | 'complete';
+
+/** Immutable context loaded before the Technical Phase asks its first question. */
+export interface TechnicalPhaseSeedContext {
+  originalPrompt: string;
+  requirementsSummary: string | null;
+  requirementsApprovedAt: string | null;
+}
+
+/** Read model used by Technical Phase start/resume clients. */
+export interface TechnicalPhaseState {
+  status: TechnicalPhaseStatus;
+  canStart: boolean;
+  technicalPhaseChatThreadId: string | null;
+  seedContext: TechnicalPhaseSeedContext | null;
+  unavailableReason?: string;
+}
+
+export interface StartTechnicalPhaseResponse {
+  interviewId: string;
+  technicalPhaseChatThreadId: string;
+  state: TechnicalPhaseState;
+}
+
+export interface PhaseSummary {
+  phase: PhaseName;
+  status: InterviewPhaseStatus;
+  content: string;
+  ownerId: string | null;
+  ownerName?: string;
+  approvedAt: string | null;
+  /** Derived: technical phase on `both_sequential` while Requirements is not approved. */
+  locked: boolean;
+  /** Derived: requirements phase after Technical has unlocked (amend affordance). */
+  amendable: boolean;
+}
+
+export interface EditPhaseSummaryRequest {
+  content: string;
+}
+
+export interface AmendRequirementsSummaryRequest {
+  content: string;
+}
+
+export interface ApprovePhaseSummaryResponse {
+  ok: true;
+  /** Present when this approval just unlocked Technical (`both_sequential` Requirements). */
+  unlockedTechnicalOwnerId?: string;
+  /** True when this was the interview's last configured phase (FEAT-003 PRD trigger seam). */
+  isLastConfiguredPhase: boolean;
+}
+
 export interface InterviewSummary {
   id: string;
   chatThreadId: string;
@@ -26,6 +113,21 @@ export interface InterviewSummary {
   designPrototypeOwnerName?: string;
   testCaseOwnerId?: string;
   testCaseOwnerName?: string;
+  /** Null/omitted on interviews created before phase flow (DoD-2). */
+  phaseFlow?: InterviewPhaseFlow | null;
+  requirementsOwnerId?: string | null;
+  requirementsOwnerName?: string;
+  technicalOwnerId?: string | null;
+  technicalOwnerName?: string;
+  requirementsPhaseStatus?: InterviewPhaseStatus | null;
+  technicalPhaseStatus?: InterviewPhaseStatus | null;
+  /** Null/omitted on legacy interviews and until first edit. */
+  requirementsSummary?: string | null;
+  technicalSummary?: string | null;
+  requirementsApprovedAt?: string | null;
+  technicalApprovedAt?: string | null;
+  /** Dedicated Technical Phase conversation; distinct from the Requirements thread. */
+  technicalPhaseChatThreadId?: string | null;
   /** Kick-off approver selections, inherited at submit-for-review. User OIDs. */
   skillSettingsId?: string | null;
   skillSettingsName?: string | null;
@@ -141,6 +243,9 @@ export interface CreateInterviewRequest {
   designDocOwnerId?: string;
   designPrototypeOwnerId?: string;
   testCaseOwnerId?: string;
+  phaseFlow?: InterviewPhaseFlow;
+  requirementsOwnerId?: string;
+  technicalOwnerId?: string;
   /** Kick-off approver selections (user OIDs); persisted and inherited at submit. */
   prdApproverIds?: string[];
   designDocApproverIds?: string[];

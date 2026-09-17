@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { InterviewChatView } from '../InterviewChatView';
+import { resolveRequirementsPhaseSkillPath } from '../../../shared/types/interview';
 
 // ── Module mocks ───────────────────────────────────────────────────────────────
 
@@ -221,6 +222,23 @@ function renderFeatureRequestCompose(overrides?: {
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
+
+describe('resolveRequirementsPhaseSkillPath', () => {
+  it('VT-01 returns the Requirements skill for Requirements-including flows', () => {
+    expect(resolveRequirementsPhaseSkillPath('requirements_only')).toBe(
+      '.cursor/skills/requirements-phase/SKILL.md',
+    );
+    expect(resolveRequirementsPhaseSkillPath('both_sequential')).toBe(
+      '.cursor/skills/requirements-phase/SKILL.md',
+    );
+  });
+
+  it('VT-02 returns null for technical-only and legacy flows', () => {
+    expect(resolveRequirementsPhaseSkillPath('technical_only')).toBeNull();
+    expect(resolveRequirementsPhaseSkillPath(null)).toBeNull();
+    expect(resolveRequirementsPhaseSkillPath(undefined)).toBeNull();
+  });
+});
 
 describe('NewInterviewCompose — title required', () => {
   let startChatMutateAsync: jest.Mock;
@@ -703,12 +721,18 @@ describe('NewInterviewCompose — section owner modal', () => {
     expect(createInterviewMutateAsync).not.toHaveBeenCalled();
   });
 
-  it('passes selected owner IDs to createInterview when the modal is confirmed', async () => {
+  it('PBI-001 AC-0 Given phase selections, When creation is confirmed, Then the flow and both phase owners are forwarded', async () => {
     MockSectionOwnerModal.mockImplementation(
-      ({ onConfirm }: { onConfirm: (o: { prdOwnerId?: string; designDocOwnerId?: string }) => void }) => (
+      ({ onConfirm }: { onConfirm: (o: Record<string, unknown>) => void }) => (
         <div data-testid="owner-modal">
           <button
-            onClick={() => onConfirm({ prdOwnerId: 'user-prd', designDocOwnerId: 'user-dd' })}
+            onClick={() => onConfirm({
+              prdOwnerId: 'user-prd',
+              designDocOwnerId: 'user-dd',
+              phaseFlow: 'both_sequential',
+              requirementsOwnerId: 'user-ba',
+              technicalOwnerId: 'user-dev',
+            })}
           >
             Confirm
           </button>
@@ -728,7 +752,71 @@ describe('NewInterviewCompose — section owner modal', () => {
 
     await waitFor(() => expect(createInterviewMutateAsync).toHaveBeenCalled());
     expect(createInterviewMutateAsync).toHaveBeenCalledWith(
-      expect.objectContaining({ prdOwnerId: 'user-prd', designDocOwnerId: 'user-dd' }),
+      expect.objectContaining({
+        prdOwnerId: 'user-prd',
+        designDocOwnerId: 'user-dd',
+        phaseFlow: 'both_sequential',
+        requirementsOwnerId: 'user-ba',
+        technicalOwnerId: 'user-dev',
+      }),
+    );
+  });
+
+  it('PBI-007 AC-0 / VT-03 overrides a configured interview skill for a Requirements-including flow', async () => {
+    (useProjectSkillConfig as jest.Mock).mockReturnValue({
+      data: {
+        id: 'settings-1',
+        skillRepo: 'MaxView',
+        skillBranch: 'main',
+        interviewSkillOptions: [
+          {
+            friendlyName: 'Configured Interview',
+            path: '.cursor/skills/configured-interview/SKILL.md',
+          },
+        ],
+      },
+    });
+    (useSkillList as jest.Mock).mockReturnValue({
+      data: [
+        {
+          id: 'configured-skill',
+          name: 'configured-interview',
+          path: '.cursor/skills/configured-interview/SKILL.md',
+        },
+      ],
+    });
+    MockSectionOwnerModal.mockImplementation(
+      ({ onConfirm }: { onConfirm: (o: Record<string, unknown>) => void }) => (
+        <button
+          type="button"
+          onClick={() => onConfirm({
+            phaseFlow: 'both_sequential',
+            requirementsOwnerId: 'user-ba',
+            technicalOwnerId: 'user-dev',
+          })}
+        >
+          Confirm Requirements flow
+        </button>
+      ),
+    );
+
+    renderCompose();
+    fireEvent.change(screen.getByLabelText(/title/i), {
+      target: { value: 'Requirements Interview' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/describe what you'd like/i), {
+      target: { value: 'Clarify the user need and scope' },
+    });
+    fireEvent.click(screen.getByLabelText('Start interview'));
+    fireEvent.click(await screen.findByText('Confirm Requirements flow'));
+
+    await waitFor(() => expect(startChatMutateAsync).toHaveBeenCalled());
+    expect(startChatMutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kickoff: expect.objectContaining({
+          skillPath: '.cursor/skills/requirements-phase/SKILL.md',
+        }),
+      }),
     );
   });
 

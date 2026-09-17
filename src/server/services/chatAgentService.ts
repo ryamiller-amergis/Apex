@@ -628,6 +628,7 @@ export function resolveGroundingCallerKey(
   }
   if (
     skillPath.includes('grill-with-docs') ||
+    skillPath.includes('requirements-phase') ||
     skillPath.includes('grill-design') ||
     skillPath.includes('kick-off') ||
     skillPath.includes('adr-interview') ||
@@ -6618,6 +6619,20 @@ export function readOutputBacklog(threadId: string): unknown | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Read the Requirements Phase Summary ({interview-slug}.requirements-phase-summary.md)
+ * the requirements-phase Skill writes at the end of a session
+ * (FEAT-004 / TBI-004 DoD-1).
+ */
+export function readOutputRequirementsPhaseSummary(
+  threadId: string
+): string | null {
+  const outputDir = resolveOutputDir(threadId);
+  if (!outputDir) return null;
+  const file = findOutputFile(outputDir, /\.requirements-phase-summary\.md$/i);
+  return file ? fs.readFileSync(file, 'utf-8') : null;
 }
 
 /**

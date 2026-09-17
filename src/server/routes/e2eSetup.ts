@@ -13,6 +13,7 @@ import { and, eq, inArray, like, ne, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import {
   adrs,
+  chatMessages,
   chatThreads,
   designDocs,
   designPrototypes,
@@ -35,7 +36,12 @@ const router = express.Router();
 const E2E_PREFIX = '[E2E]';
 
 /** Modules that inherit the legacy `approvalMode` payload; `adr` is always seeded as `any_one`. */
-const LEGACY_APPROVAL_MODE_MODULES = ['prd', 'design_doc', 'design_prototype', 'test_case'] as const;
+const LEGACY_APPROVAL_MODE_MODULES = [
+  'prd',
+  'design_doc',
+  'design_prototype',
+  'test_case',
+] as const;
 
 function e2eTitle(title: string): string {
   return title.startsWith(E2E_PREFIX) ? title : `${E2E_PREFIX} ${title}`;
@@ -54,7 +60,9 @@ const DEFAULT_BACKLOG = {
             {
               id: 'e2e-pbi-1',
               title: 'E2E PBI',
-              acceptanceCriteria: ['Given a seeded PRD, when reviewed, then it is approvable'],
+              acceptanceCriteria: [
+                'Given a seeded PRD, when reviewed, then it is approvable',
+              ],
               testCaseCount: 1,
             },
           ],
@@ -72,7 +80,8 @@ function defaultScorecard(score: number, threshold = 90): ValidationScorecard {
     overall_score: score,
     ready_threshold: threshold,
     is_ready: score >= threshold,
-    verdict: score >= threshold ? 'ready' : score >= 70 ? 'gaps' : 'significant_gaps',
+    verdict:
+      score >= threshold ? 'ready' : score >= 70 ? 'gaps' : 'significant_gaps',
     features: [],
     files: [],
   };
@@ -81,8 +90,12 @@ function defaultScorecard(score: number, threshold = 90): ValidationScorecard {
 // DELETE all records created by E2E tests (idempotent, safe to call repeatedly).
 router.post('/reset', async (_req, res) => {
   try {
-    await db.delete(reviewComments).where(like(reviewComments.body, `${E2E_PREFIX}%`));
-    await db.delete(notifications).where(like(notifications.title, `${E2E_PREFIX}%`));
+    await db
+      .delete(reviewComments)
+      .where(like(reviewComments.body, `${E2E_PREFIX}%`));
+    await db
+      .delete(notifications)
+      .where(like(notifications.title, `${E2E_PREFIX}%`));
 
     const e2ePrds = await db
       .select({ id: prds.id })
@@ -118,24 +131,35 @@ router.post('/reset', async (_req, res) => {
 
     // Orphan prototypes / docs not under an E2E PRD (defensive)
     await db.delete(designDocs).where(like(designDocs.title, `${E2E_PREFIX}%`));
-    await db.delete(designPrototypes).where(like(designPrototypes.featureName, `${E2E_PREFIX}%`));
+    await db
+      .delete(designPrototypes)
+      .where(like(designPrototypes.featureName, `${E2E_PREFIX}%`));
     await db.delete(adrs).where(like(adrs.title, `${E2E_PREFIX}%`));
 
     const e2eInterviews = await db
-      .select({ id: interviews.id, chatThreadId: interviews.chatThreadId })
+      .select({
+        id: interviews.id,
+        chatThreadId: interviews.chatThreadId,
+        technicalPhaseChatThreadId: interviews.technicalPhaseChatThreadId,
+      })
       .from(interviews)
       .where(like(interviews.title, `${E2E_PREFIX}%`));
     await db.delete(interviews).where(like(interviews.title, `${E2E_PREFIX}%`));
 
     const threadIds = [
       ...e2eInterviews.map((i) => i.chatThreadId),
+      ...e2eInterviews.flatMap((i) =>
+        i.technicalPhaseChatThreadId ? [i.technicalPhaseChatThreadId] : []
+      ),
       ...e2eAdrs.map((adr) => adr.chatThreadId),
     ];
     const e2eThreads = await db
       .select({ id: chatThreads.id })
       .from(chatThreads)
       .where(like(chatThreads.title, `${E2E_PREFIX}%`));
-    const allThreadIds = [...new Set([...threadIds, ...e2eThreads.map((t) => t.id)])];
+    const allThreadIds = [
+      ...new Set([...threadIds, ...e2eThreads.map((t) => t.id)]),
+    ];
     if (allThreadIds.length > 0) {
       await db.delete(chatThreads).where(inArray(chatThreads.id, allThreadIds));
     }
@@ -171,6 +195,18 @@ router.post('/seed/interview', async (req, res) => {
       prototypeStageEnabled = true,
       testCasesEnabled = true,
       skillSettingsId,
+      phaseFlow,
+      requirementsOwnerId,
+      technicalOwnerId,
+      requirementsPhaseStatus,
+      technicalPhaseStatus,
+      requirementsSummary,
+      technicalSummary,
+      requirementsApprovedAt,
+      technicalApprovedAt,
+      skillPath = '.cursor/skills/grill-with-docs/SKILL.md',
+      originalPrompt,
+      technicalMessages,
     } = req.body as {
       authorId: string;
       project: string;
@@ -188,9 +224,27 @@ router.post('/seed/interview', async (req, res) => {
       prototypeStageEnabled?: boolean;
       testCasesEnabled?: boolean;
       skillSettingsId?: string;
+      phaseFlow?: 'requirements_only' | 'technical_only' | 'both_sequential';
+      requirementsOwnerId?: string;
+      technicalOwnerId?: string;
+      requirementsPhaseStatus?: 'draft' | 'locked' | 'approved';
+      technicalPhaseStatus?: 'draft' | 'locked' | 'approved';
+      requirementsSummary?: string;
+      technicalSummary?: string;
+      requirementsApprovedAt?: string;
+      technicalApprovedAt?: string;
+      skillPath?: string;
+      originalPrompt?: string;
+      technicalMessages?: Array<{
+        role: 'user' | 'agent' | 'system';
+        text: string;
+        hidden?: boolean;
+      }>;
     };
 
     const threadId = randomUUID();
+    const technicalThreadId =
+      technicalMessages !== undefined ? randomUUID() : null;
     const prefixedTitle = e2eTitle(title);
 
     await db.insert(chatThreads).values({
@@ -201,10 +255,50 @@ router.post('/seed/interview', async (req, res) => {
       kickoff: {
         project,
         repo,
-        skillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+        skillPath,
         pillLabel: 'E2E Interview',
       },
     });
+
+    if (originalPrompt) {
+      await db.insert(chatMessages).values({
+        id: randomUUID(),
+        threadId,
+        role: 'user',
+        text: originalPrompt,
+        hidden: false,
+        ts: '2026-09-17T12:00:00.000Z',
+      });
+    }
+
+    if (technicalThreadId) {
+      await db.insert(chatThreads).values({
+        id: technicalThreadId,
+        userId: technicalOwnerId ?? authorId,
+        status: 'idle',
+        title: `${prefixedTitle} — Technical`,
+        kickoff: {
+          project,
+          repo,
+          skillPath: '.cursor/skills/technical-phase/SKILL.md',
+          pillLabel: 'E2E Technical Phase',
+        },
+      });
+      if (technicalMessages && technicalMessages.length > 0) {
+        await db.insert(chatMessages).values(
+          technicalMessages.map((message, index) => ({
+            id: randomUUID(),
+            threadId: technicalThreadId,
+            role: message.role,
+            text: message.text,
+            hidden: message.hidden ?? false,
+            ts: new Date(
+              Date.parse('2026-09-17T12:10:00.000Z') + index * 1_000
+            ).toISOString(),
+          }))
+        );
+      }
+    }
 
     const [interview] = await db
       .insert(interviews)
@@ -226,6 +320,16 @@ router.post('/seed/interview', async (req, res) => {
         prototypeStageEnabled,
         testCasesEnabled,
         skillSettingsId: skillSettingsId ?? null,
+        phaseFlow: phaseFlow ?? null,
+        requirementsOwnerId: requirementsOwnerId ?? null,
+        technicalOwnerId: technicalOwnerId ?? null,
+        requirementsPhaseStatus: requirementsPhaseStatus ?? null,
+        technicalPhaseStatus: technicalPhaseStatus ?? null,
+        requirementsSummary: requirementsSummary ?? null,
+        technicalSummary: technicalSummary ?? null,
+        requirementsApprovedAt: requirementsApprovedAt ?? null,
+        technicalApprovedAt: technicalApprovedAt ?? null,
+        technicalPhaseChatThreadId: technicalThreadId,
       })
       .returning();
 
@@ -338,7 +442,9 @@ router.post('/seed/prd', async (req, res) => {
 
     const scorecard =
       validationScorecard ??
-      (typeof validationScore === 'number' ? defaultScorecard(validationScore) : null);
+      (typeof validationScore === 'number'
+        ? defaultScorecard(validationScore)
+        : null);
 
     const [prd] = await db
       .insert(prds)
@@ -349,7 +455,9 @@ router.post('/seed/prd', async (req, res) => {
         status,
         reviewerId: reviewerId ?? null,
         interviewId: interviewId ?? null,
-        content: content ?? '# E2E Test PRD\n\nThis document was created by Playwright tests.',
+        content:
+          content ??
+          '# E2E Test PRD\n\nThis document was created by Playwright tests.',
         backlogJson: backlogJson ?? DEFAULT_BACKLOG,
         validationScore: validationScore ?? null,
         validationScorecard: scorecard,
@@ -367,7 +475,9 @@ router.post('/seed/prd', async (req, res) => {
         .values({
           prdId: prd.id,
           status: 'ready',
-          testCasesJson: { cases: [{ id: 'tc-1', title: 'E2E seeded test case' }] },
+          testCasesJson: {
+            cases: [{ id: 'tc-1', title: 'E2E seeded test case' }],
+          },
           testCasesMd: '# E2E Test Cases\n\n- Seeded case',
           coverageSummary: {
             totalCases: 1,
@@ -424,13 +534,18 @@ router.patch('/seed/prd/:id', async (req, res) => {
         ...(validationScore !== undefined && { validationScore }),
         ...(validationScorecard !== undefined && { validationScorecard }),
         ...(validationPhase !== undefined && { validationPhase }),
-        ...(readinessOverride !== undefined && { readinessOverride: readinessOverride as never }),
+        ...(readinessOverride !== undefined && {
+          readinessOverride: readinessOverride as never,
+        }),
         ...(proposedContent !== undefined && { proposedContent }),
       })
       .where(and(eq(prds.id, id), like(prds.title, `${E2E_PREFIX}%`)))
       .returning();
 
-    if (!updated) return res.status(404).json({ error: 'PRD not found or not an E2E record' });
+    if (!updated)
+      return res
+        .status(404)
+        .json({ error: 'PRD not found or not an E2E record' });
     res.json(updated);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
@@ -477,7 +592,9 @@ router.post('/seed/design-prototype', async (req, res) => {
     res.json(proto);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    res.status(500).json({ error: `E2E seed/design-prototype failed: ${message}` });
+    res
+      .status(500)
+      .json({ error: `E2E seed/design-prototype failed: ${message}` });
   }
 });
 
@@ -526,7 +643,9 @@ router.post('/seed/design-doc', async (req, res) => {
 
     const scorecard =
       validationScorecard ??
-      (typeof validationScore === 'number' ? defaultScorecard(validationScore) : null);
+      (typeof validationScore === 'number'
+        ? defaultScorecard(validationScore)
+        : null);
 
     // Validation side-dock only renders when validationThreadId is set.
     const resolvedValidationThreadId =
@@ -545,13 +664,18 @@ router.post('/seed/design-doc', async (req, res) => {
         featureIndex,
         validationScore: validationScore ?? null,
         validationScorecard: scorecard,
-        validationPhase: validationPhase ?? (typeof validationScore === 'number' ? 'final' : null),
+        validationPhase:
+          validationPhase ??
+          (typeof validationScore === 'number' ? 'final' : null),
         validationOverride: (validationOverride as never) ?? null,
         validationThreadId: resolvedValidationThreadId,
         skillSettingsId: skillSettingsId ?? null,
-        designContent: designContent ?? '# E2E Design\n\nSeeded design content.',
-        techSpecContent: techSpecContent ?? '# E2E Tech Spec\n\nSeeded tech spec.',
-        assumptionsContent: assumptionsContent ?? '# E2E Assumptions\n\nSeeded assumptions.',
+        designContent:
+          designContent ?? '# E2E Design\n\nSeeded design content.',
+        techSpecContent:
+          techSpecContent ?? '# E2E Tech Spec\n\nSeeded tech spec.',
+        assumptionsContent:
+          assumptionsContent ?? '# E2E Assumptions\n\nSeeded assumptions.',
         reviewerId: reviewerId ?? null,
         proposedDesignContent: proposedDesignContent ?? null,
       })
@@ -590,7 +714,8 @@ router.post('/seed/review-comment', async (req, res) => {
       selectorEnd?: number;
     };
 
-    const resolvedDocumentId = documentId ?? (req.body as { prdId?: string }).prdId;
+    const resolvedDocumentId =
+      documentId ?? (req.body as { prdId?: string }).prdId;
     if (!resolvedDocumentId) {
       return res.status(400).json({ error: 'documentId is required' });
     }
@@ -598,7 +723,11 @@ router.post('/seed/review-comment', async (req, res) => {
     const resolvedType = documentType ?? 'prd';
     const resolvedSectionKey =
       sectionKey ??
-      (resolvedType === 'design_doc' ? 'design' : resolvedType === 'prd' ? 'prd' : 'e2e-section');
+      (resolvedType === 'design_doc'
+        ? 'design'
+        : resolvedType === 'prd'
+          ? 'prd'
+          : 'e2e-section');
 
     const [comment] = await db
       .insert(reviewComments)
@@ -620,7 +749,9 @@ router.post('/seed/review-comment', async (req, res) => {
     res.json(comment);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    res.status(500).json({ error: `E2E seed/review-comment failed: ${message}` });
+    res
+      .status(500)
+      .json({ error: `E2E seed/review-comment failed: ${message}` });
   }
 });
 
@@ -694,7 +825,7 @@ router.post('/seed/approver-assignments', async (req, res) => {
           assignedBy,
           status,
           respondedAt: status === 'pending' ? null : new Date().toISOString(),
-        })),
+        }))
       )
       .onConflictDoNothing()
       .returning();
@@ -702,7 +833,9 @@ router.post('/seed/approver-assignments', async (req, res) => {
     res.json(rows);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    res.status(500).json({ error: `E2E seed/approver-assignments failed: ${message}` });
+    res
+      .status(500)
+      .json({ error: `E2E seed/approver-assignments failed: ${message}` });
   }
 });
 
@@ -765,8 +898,8 @@ router.post('/seed/project-settings', async (req, res) => {
       .where(
         and(
           eq(projectSkillSettings.project, project),
-          eq(projectSkillSettings.friendlyName, prefixedName),
-        ),
+          eq(projectSkillSettings.friendlyName, prefixedName)
+        )
       )
       .limit(1);
 
@@ -777,16 +910,24 @@ router.post('/seed/project-settings', async (req, res) => {
         .set({
           ...(approvalMode !== undefined && { approvalMode }),
           ...(prototypeStageEnabled !== undefined && { prototypeStageEnabled }),
-          ...(prdValidationSkillPath !== undefined && { prdValidationSkillPath }),
-          ...(designDocValidationSkillPath !== undefined && { designDocValidationSkillPath }),
-          ...(prdValidationScoreThreshold !== undefined && { prdValidationScoreThreshold }),
+          ...(prdValidationSkillPath !== undefined && {
+            prdValidationSkillPath,
+          }),
+          ...(designDocValidationSkillPath !== undefined && {
+            designDocValidationSkillPath,
+          }),
+          ...(prdValidationScoreThreshold !== undefined && {
+            prdValidationScoreThreshold,
+          }),
           ...(designDocValidationScoreThreshold !== undefined && {
             designDocValidationScoreThreshold,
           }),
           ...(interviewSkillPath !== undefined && { interviewSkillPath }),
           ...(prdSkillPath !== undefined && { prdSkillPath }),
           ...(designDocSkillPath !== undefined && { designDocSkillPath }),
-          ...(designPrototypeSkillPath !== undefined && { designPrototypeSkillPath }),
+          ...(designPrototypeSkillPath !== undefined && {
+            designPrototypeSkillPath,
+          }),
           ...(testCaseSkillPath !== undefined && { testCaseSkillPath }),
           ...(updatedBy !== undefined && { updatedBy }),
           ...(isDefault ? { isDefault: true } : {}),
@@ -817,7 +958,8 @@ router.post('/seed/project-settings', async (req, res) => {
           prdValidationSkillPath: prdValidationSkillPath ?? null,
           designDocValidationSkillPath: designDocValidationSkillPath ?? null,
           prdValidationScoreThreshold: prdValidationScoreThreshold ?? 90,
-          designDocValidationScoreThreshold: designDocValidationScoreThreshold ?? 90,
+          designDocValidationScoreThreshold:
+            designDocValidationScoreThreshold ?? 90,
           interviewSkillPath: interviewSkillPath ?? null,
           prdSkillPath: prdSkillPath ?? null,
           designDocSkillPath: designDocSkillPath ?? null,
@@ -850,7 +992,10 @@ router.post('/seed/project-settings', async (req, res) => {
           { settingsId: row.id, documentType: 'adr', mode: 'any_one' as const },
         ])
         .onConflictDoUpdate({
-          target: [projectApprovalModes.settingsId, projectApprovalModes.documentType],
+          target: [
+            projectApprovalModes.settingsId,
+            projectApprovalModes.documentType,
+          ],
           set: { mode: sql`excluded.mode`, updatedAt: sql`now()` },
         });
     }
@@ -878,7 +1023,10 @@ router.post('/seed/project-settings', async (req, res) => {
     const poolEntries: Array<{ documentType: string; userIds: string[] }> = [
       { documentType: 'design_doc', userIds: designDocApprovers ?? [] },
       { documentType: 'prd', userIds: prdApprovers ?? [] },
-      { documentType: 'design_prototype', userIds: designPrototypeApprovers ?? [] },
+      {
+        documentType: 'design_prototype',
+        userIds: designPrototypeApprovers ?? [],
+      },
       { documentType: 'test_case', userIds: testCaseApprovers ?? [] },
       { documentType: 'adr', userIds: adrApprovers ?? [] },
     ];
@@ -893,7 +1041,7 @@ router.post('/seed/project-settings', async (req, res) => {
             userId,
             documentType,
             assignedBy: 'e2e',
-          })),
+          }))
         )
         .onConflictDoNothing();
     }
@@ -913,7 +1061,10 @@ router.post('/seed/project-settings', async (req, res) => {
         .update(projectSkillSettings)
         .set({ isDefault: false })
         .where(
-          and(eq(projectSkillSettings.project, project), ne(projectSkillSettings.id, row.id)),
+          and(
+            eq(projectSkillSettings.project, project),
+            ne(projectSkillSettings.id, row.id)
+          )
         );
       await db
         .update(projectSkillSettings)
@@ -925,7 +1076,9 @@ router.post('/seed/project-settings', async (req, res) => {
     res.json(row);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    res.status(500).json({ error: `E2E seed/project-settings failed: ${message}` });
+    res
+      .status(500)
+      .json({ error: `E2E seed/project-settings failed: ${message}` });
   }
 });
 
@@ -984,7 +1137,9 @@ router.post('/seed/menu-settings', async (req, res) => {
     res.json({ ok: true });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    res.status(500).json({ error: `E2E seed/menu-settings failed: ${message}` });
+    res
+      .status(500)
+      .json({ error: `E2E seed/menu-settings failed: ${message}` });
   }
 });
 

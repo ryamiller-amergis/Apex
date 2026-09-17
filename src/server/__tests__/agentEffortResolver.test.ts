@@ -104,6 +104,19 @@ describe('agentEffortResolver', () => {
         skillConfig: config({ standupEffort: 'low' }),
       })
     ).toBe('low');
+    expect(
+      resolveEffort({
+        kickoff: {
+          project: 'Apex',
+          repo: 'org/apex',
+          agentModule: 'technicalPhase',
+        },
+        skillConfig: config({
+          technicalPhaseEffort: 'high',
+          interviewEffort: 'low',
+        }),
+      })
+    ).toBe('high');
   });
 
   it('DoD-0 / VT-04: derives generic-route identities from server config, not request fields', () => {
@@ -143,6 +156,24 @@ describe('agentEffortResolver', () => {
         skillConfig
       )
     ).toBe('interview');
+    expect(
+      deriveAgentModule(
+        {
+          ...requestKickoff,
+          skillPath: '.cursor/skills/requirements-phase/SKILL.md',
+        },
+        skillConfig
+      )
+    ).toBe('interview');
+    expect(
+      deriveAgentModule(
+        {
+          ...requestKickoff,
+          skillPath: '.cursor/skills/technical-phase/SKILL.md',
+        },
+        skillConfig,
+      ),
+    ).toBe('technicalPhase');
     expect(
       deriveAgentModule(
         {

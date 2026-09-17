@@ -1,4 +1,5 @@
 import fs from 'fs';
+import path from 'path';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { db } from '../db/drizzle';
@@ -9,7 +10,7 @@ const prdOwnerUser = alias(appUsers, 'prd_owner_user');
 import type { Prd, PrdStatus, PrdSummary, PrdValidationBaseline, PrdReadinessOverride, ReviewPrdRequest, TestCaseSummary, ValidationScorecard } from '../../shared/types/interview';
 import type { CreatePrdAdoItemsRequest, CreatePrdAdoItemsResponse, SelectedBacklogEpic, SelectedBacklogFeature, SelectedBacklogPBI, GlobalBusinessRule, DependencyGraphNode } from '../../shared/types/interview';
 import type { EffortLevel } from '../../shared/types/effort';
-import { readOutputPrd, readOutputBacklog, sendMessage, createThread as createChatThread, cancelRun, prepareBackgroundWorkflowTurn, isThreadIdle, hydrateThread } from './chatAgentService';
+import { readOutputPrd, readOutputBacklog, sendMessage, createThread as createChatThread, cancelRun, prepareBackgroundWorkflowTurn, isThreadIdle, hydrateThread, getThreadAsync } from './chatAgentService';
 import { isThreadRunAlive } from './agentRunReaperService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
 import { isPrdGenerationOutputComplete } from '../../shared/utils/prdGenerationOutput';
@@ -53,6 +54,8 @@ import {
 } from './runGroundingService';
 import type { PipelinePinPolicy } from '../../shared/types/runGrounding';
 import { stampGroundingProvenance } from '../../shared/utils/groundingProvenance';
+import { atomicWriteDocument } from './linkedContextMaterializerService';
+import { renderPhaseKickoffTranscript } from './phaseKickoffTranscript';
 
 const VALID_PRD_STATUSES: PrdStatus[] = ['generating', 'draft', 'validating', 'pending_review', 'reviewer_approved', 'approved', 'revision_requested'];
 
@@ -315,6 +318,140 @@ export async function routePrdGenerationKickoff(opts: {
     });
   } catch {
     await reportPreparationFailure();
+  }
+}
+
+/**
+ * Start the existing PRD pipeline from an approved final interview phase.
+ * Failures stay isolated from the already-committed phase approval.
+ */
+export async function triggerPrdGenerationFromPhaseApproval(
+  interviewId: string,
+): Promise<void> {
+  try {
+    const existingPrd = await db.query.prds.findFirst({
+      where: eq(prds.interviewId, interviewId),
+      columns: { id: true },
+    });
+    if (existingPrd) {
+      console.log(
+        `[prdPhaseTrigger] PRD already exists; skipping (interviewId=${interviewId}, prdId=${existingPrd.id})`,
+      );
+      return;
+    }
+
+    const interview = await db.query.interviews.findFirst({
+      where: eq(interviews.id, interviewId),
+      columns: {
+        id: true,
+        title: true,
+        project: true,
+        repo: true,
+        model: true,
+        effort: true,
+        skillSettingsId: true,
+        chatThreadId: true,
+        phaseFlow: true,
+        requirementsOwnerId: true,
+        technicalOwnerId: true,
+        requirementsPhaseStatus: true,
+        technicalPhaseStatus: true,
+        requirementsSummary: true,
+        technicalSummary: true,
+      },
+    });
+    if (!interview) return;
+
+    const finalPhaseApproved =
+      (interview.phaseFlow === 'requirements_only'
+        && interview.requirementsPhaseStatus === 'approved')
+      || ((interview.phaseFlow === 'technical_only'
+          || interview.phaseFlow === 'both_sequential')
+        && interview.technicalPhaseStatus === 'approved');
+    if (!finalPhaseApproved) {
+      console.warn(
+        `[prdPhaseTrigger] Last configured phase is not approved; skipping (interviewId=${interviewId})`,
+      );
+      return;
+    }
+
+    const finalPhaseOwnerId = interview.phaseFlow === 'requirements_only'
+      ? interview.requirementsOwnerId
+      : interview.technicalOwnerId;
+    if (!finalPhaseOwnerId) {
+      throw new Error('The final configured phase has no assigned owner.');
+    }
+
+    const [skillConfig, defaultModel, sourceThread] = await Promise.all([
+      resolveSkillConfig({
+        project: interview.project,
+        settingsId: interview.skillSettingsId ?? undefined,
+      }),
+      getDefaultModel(),
+      getThreadAsync(interview.chatThreadId),
+    ]);
+    const originalPrompt = sourceThread?.messages.find(
+      (message) => message.role === 'user'
+        && message.text?.trim()
+        && message.text.trim() !== 'Begin.',
+    )?.text ?? null;
+    const transcript = renderPhaseKickoffTranscript({
+      interviewTitle: interview.title,
+      originalPrompt,
+      requirementsSummary:
+        interview.phaseFlow === 'technical_only'
+          ? null
+          : interview.requirementsSummary,
+      technicalSummary:
+        interview.phaseFlow === 'requirements_only'
+          ? null
+          : interview.technicalSummary,
+    });
+    const model = skillConfig?.prdModel ?? interview.model ?? defaultModel;
+    const thread = await createChatThread(
+      finalPhaseOwnerId,
+      {
+        project: interview.project,
+        repo: skillConfig?.skillRepo ?? interview.repo,
+        branch: skillConfig?.skillBranch ?? 'main',
+        skillBranch: skillConfig?.skillBranch ?? 'main',
+        skillProvider: skillConfig?.skillProvider ?? undefined,
+        skillPath: skillConfig?.prdSkillPath ?? undefined,
+        model,
+        effort: interview.effort ?? undefined,
+        skillSettingsId: interview.skillSettingsId ?? skillConfig?.id ?? null,
+      },
+      { skipAutoKickoff: true },
+    );
+
+    atomicWriteDocument(
+      path.join(thread.workspaceDir, '.ai-pilot', 'kickoff-transcript.md'),
+      transcript,
+    );
+    const result = await createPrd({
+      interviewId,
+      project: interview.project,
+      userId: finalPhaseOwnerId,
+      chatThreadId: thread.id,
+      title: interview.title,
+      model,
+      effort: interview.effort ?? undefined,
+      skillSettingsId: interview.skillSettingsId ?? skillConfig?.id ?? null,
+    });
+    startPrdWatcher(result.prdId, thread.id);
+    await routePrdGenerationKickoff({
+      prdId: result.prdId,
+      userId: finalPhaseOwnerId,
+      project: interview.project,
+      threadId: thread.id,
+      interviewId,
+      kickoffMessage: 'Begin.',
+    });
+  } catch (err) {
+    console.error(
+      `[prdPhaseTrigger] Failed to start PRD generation (interviewId=${interviewId}):`,
+      err,
+    );
   }
 }
 

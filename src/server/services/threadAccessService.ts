@@ -17,6 +17,7 @@ export interface ThreadAccessResult {
 
 type ThreadLinkKind =
   | 'interview'
+  | 'technical_phase'
   | 'adr'
   | 'adr_assistant'
   | 'prd'
@@ -32,9 +33,19 @@ interface ThreadLink {
 
 async function findThreadLink(threadId: string): Promise<ThreadLink | null> {
   const interview = await db.query.interviews.findFirst({
-    where: eq(interviews.chatThreadId, threadId),
-    columns: { id: true },
+    where: or(
+      eq(interviews.chatThreadId, threadId),
+      eq(interviews.technicalPhaseChatThreadId, threadId),
+    ),
+    columns: {
+      id: true,
+      chatThreadId: true,
+      technicalPhaseChatThreadId: true,
+    },
   });
+  if (interview?.technicalPhaseChatThreadId === threadId) {
+    return { kind: 'technical_phase', documentId: interview.id };
+  }
   if (interview) return { kind: 'interview', documentId: interview.id };
 
   const prd = await db.query.prds.findFirst({
@@ -130,6 +141,95 @@ export async function canWriteThread(userId: string, threadId: string): Promise<
 
   if (await isAdminUser(userId)) return true;
   return isAssignedApprover(link.documentId, 'design_doc', userId);
+}
+
+/**
+ * Outcome of the Requirements-phase check for a single message send.
+ * `not_applicable` means this thread has no open Requirements phase, so the
+ * caller must fall back to the existing thread-write rules.
+ */
+export type RequirementsPhaseMessageWrite =
+  | { outcome: 'not_applicable' }
+  | { outcome: 'allowed'; thread: ChatThread }
+  | { outcome: 'not_owner' }
+  | { outcome: 'missing_manage_permission' }
+  | { outcome: 'thread_not_found' };
+
+export type TechnicalPhaseMessageWrite = RequirementsPhaseMessageWrite;
+
+/** A configured Requirements phase that has not been approved yet. */
+function requirementsPhaseIsOpen(row: {
+  phaseFlow: string | null;
+  requirementsPhaseStatus: string | null;
+}): boolean {
+  if (row.phaseFlow === 'requirements_only') return true;
+  return row.phaseFlow === 'both_sequential'
+    && row.requirementsPhaseStatus !== 'approved';
+}
+
+/**
+ * Who may send a message into an interview thread while its Requirements phase
+ * is still open (FEAT-004 / PBI-007 AC-0, AC-3).
+ *
+ * The assigned Requirements owner is the only writer, and reassignment can move
+ * that owner away from the user who started the chat thread — so this decision
+ * deliberately ignores thread ownership. It applies to the message-send route
+ * only; technical-only flows, legacy interviews without phase fields, and
+ * non-interview threads all report `not_applicable` and keep their existing
+ * rules.
+ */
+export async function resolveRequirementsPhaseMessageWrite(
+  userId: string,
+  threadId: string,
+): Promise<RequirementsPhaseMessageWrite> {
+  const interview = await db.query.interviews.findFirst({
+    where: eq(interviews.chatThreadId, threadId),
+    columns: {
+      phaseFlow: true,
+      requirementsOwnerId: true,
+      requirementsPhaseStatus: true,
+    },
+  });
+  if (!interview || !requirementsPhaseIsOpen(interview)) {
+    return { outcome: 'not_applicable' };
+  }
+
+  if (interview.requirementsOwnerId !== userId) return { outcome: 'not_owner' };
+
+  const perms = await getUserPermissions(userId);
+  if (!perms.has('interviews:manage')) {
+    return { outcome: 'missing_manage_permission' };
+  }
+
+  const thread = (await getThread(threadId)) ?? (await loadFullThread(threadId));
+  if (!thread) return { outcome: 'thread_not_found' };
+  return { outcome: 'allowed', thread };
+}
+
+/**
+ * Dedicated Technical threads stay readable to project viewers, but only the
+ * assigned Technical owner with interviews:manage may add messages.
+ */
+export async function resolveTechnicalPhaseMessageWrite(
+  userId: string,
+  threadId: string,
+): Promise<TechnicalPhaseMessageWrite> {
+  const interview = await db.query.interviews.findFirst({
+    where: eq(interviews.technicalPhaseChatThreadId, threadId),
+    columns: {
+      technicalOwnerId: true,
+    },
+  });
+  if (!interview) return { outcome: 'not_applicable' };
+  if (interview.technicalOwnerId !== userId) return { outcome: 'not_owner' };
+
+  const perms = await getUserPermissions(userId);
+  if (!perms.has('interviews:manage')) {
+    return { outcome: 'missing_manage_permission' };
+  }
+  const thread = (await getThread(threadId)) ?? (await loadFullThread(threadId));
+  if (!thread) return { outcome: 'thread_not_found' };
+  return { outcome: 'allowed', thread };
 }
 
 /** Author, admin, or assigned approver may create / replace doc_assistant_thread_id on a design doc. */

@@ -1,0 +1,177 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { PhaseSummaryCard } from '../PhaseSummaryCard';
+import type { PhaseSummary } from '../../../shared/types/interview';
+
+const mockEdit = jest.fn();
+const mockApprove = jest.fn();
+const mockAmend = jest.fn();
+let summary: PhaseSummary;
+
+jest.mock('../../hooks/useInterviews', () => ({
+  usePhaseSummary: () => ({ data: summary, isLoading: false, isError: false }),
+  useEditPhaseSummary: () => ({ mutateAsync: mockEdit, isPending: false }),
+  useApprovePhaseSummary: () => ({ mutateAsync: mockApprove, isPending: false }),
+  useAmendRequirementsSummary: () => ({ mutateAsync: mockAmend, isPending: false }),
+}));
+
+describe('PhaseSummaryCard', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockEdit.mockResolvedValue({ ok: true });
+    mockApprove.mockResolvedValue({ ok: true, isLastConfiguredPhase: false });
+    mockAmend.mockResolvedValue({ ok: true, notifiedOwnerId: 'requirements-owner' });
+    summary = {
+      phase: 'requirements',
+      status: 'draft',
+      content: 'Draft requirements',
+      ownerId: 'requirements-owner',
+      ownerName: 'Requirements Owner',
+      approvedAt: null,
+      locked: false,
+      amendable: false,
+    };
+  });
+
+  it('PBI-003 AC-0 renders an editable draft for its owner and approves saved content', async () => {
+    render(
+      <PhaseSummaryCard
+        interviewId="interview-1"
+        phase="requirements"
+        currentUserId="requirements-owner"
+        technicalOwnerId="technical-owner"
+        canManage
+      />,
+    );
+
+    const textarea = screen.getByTestId('phase-summary-requirements-content');
+    fireEvent.change(textarea, { target: { value: 'Reviewed requirements' } });
+    fireEvent.click(screen.getByTestId('phase-summary-requirements-approve'));
+
+    await waitFor(() => {
+      expect(mockEdit).toHaveBeenCalledWith({
+        interviewId: 'interview-1',
+        phase: 'requirements',
+        content: 'Reviewed requirements',
+      });
+      expect(mockApprove).toHaveBeenCalledWith({
+        interviewId: 'interview-1',
+        phase: 'requirements',
+      });
+    });
+  });
+
+  it('PBI-003 AC-1 shows inline validation and does not approve empty content', async () => {
+    summary = { ...summary, content: '' };
+    render(
+      <PhaseSummaryCard
+        interviewId="interview-1"
+        phase="requirements"
+        currentUserId="requirements-owner"
+        technicalOwnerId="technical-owner"
+        canManage
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('phase-summary-requirements-approve'));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Please add content to the summary before approving.',
+    );
+    expect(mockApprove).not.toHaveBeenCalled();
+  });
+
+  it('PBI-003 AC-2/AC-3 renders approved or non-owner summaries read-only', () => {
+    summary = {
+      ...summary,
+      status: 'approved',
+      approvedAt: '2026-09-17T12:00:00.000Z',
+    };
+    const { rerender } = render(
+      <PhaseSummaryCard
+        interviewId="interview-1"
+        phase="requirements"
+        currentUserId="requirements-owner"
+        technicalOwnerId="technical-owner"
+        canManage
+      />,
+    );
+
+    expect(screen.getByTestId('phase-summary-requirements-approved')).toBeInTheDocument();
+    expect(screen.queryByTestId('phase-summary-requirements-content')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('phase-summary-requirements-approve')).not.toBeInTheDocument();
+
+    summary = { ...summary, status: 'draft', approvedAt: null };
+    rerender(
+      <PhaseSummaryCard
+        interviewId="interview-1"
+        phase="requirements"
+        currentUserId="other-user"
+        technicalOwnerId="technical-owner"
+        canManage
+      />,
+    );
+    expect(screen.getByTestId('phase-summary-requirements-readonly')).toBeInTheDocument();
+    expect(screen.queryByTestId('phase-summary-requirements-approve')).not.toBeInTheDocument();
+  });
+
+  it('VT-16 / PBI-004 AC-0 exposes Amend only to the Technical owner after unlock', async () => {
+    summary = {
+      ...summary,
+      status: 'approved',
+      approvedAt: '2026-09-17T12:00:00.000Z',
+      amendable: true,
+    };
+    render(
+      <PhaseSummaryCard
+        interviewId="interview-1"
+        phase="requirements"
+        currentUserId="technical-owner"
+        technicalOwnerId="technical-owner"
+        canManage
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('phase-summary-requirements-amend'));
+    const textarea = screen.getByTestId('phase-summary-requirements-amend-content');
+    fireEvent.change(textarea, { target: { value: 'Requirements with gap closed' } });
+    fireEvent.click(screen.getByTestId('phase-summary-requirements-save-amendment'));
+
+    await waitFor(() => {
+      expect(mockAmend).toHaveBeenCalledWith({
+        interviewId: 'interview-1',
+        content: 'Requirements with gap closed',
+      });
+    });
+  });
+
+  it('PBI-004 AC-1 hides Amend before unlock and for non-Technical owners', () => {
+    summary = {
+      ...summary,
+      status: 'approved',
+      approvedAt: '2026-09-17T12:00:00.000Z',
+      amendable: false,
+    };
+    const { rerender } = render(
+      <PhaseSummaryCard
+        interviewId="interview-1"
+        phase="requirements"
+        currentUserId="technical-owner"
+        technicalOwnerId="technical-owner"
+        canManage
+      />,
+    );
+    expect(screen.queryByTestId('phase-summary-requirements-amend')).not.toBeInTheDocument();
+
+    summary = { ...summary, amendable: true };
+    rerender(
+      <PhaseSummaryCard
+        interviewId="interview-1"
+        phase="requirements"
+        currentUserId="other-user"
+        technicalOwnerId="technical-owner"
+        canManage
+      />,
+    );
+    expect(screen.queryByTestId('phase-summary-requirements-amend')).not.toBeInTheDocument();
+  });
+});

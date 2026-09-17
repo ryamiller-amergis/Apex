@@ -17,6 +17,7 @@ export type AgentModuleId =
   | 'standup'
   | 'featureRequest'
   | 'technical'
+  | 'technicalPhase'
   | 'issue'
   | 'calendarAssistant'
   | 'loadTestGeneration'

@@ -584,6 +584,7 @@ const EFFORT_FIELDS = [
   'standupEffort',
   'featureRequestEffort',
   'technicalEffort',
+  'technicalPhaseEffort',
   'issueEffort',
   'calendarAssistantEffort',
   'loadTestGenerationEffort',
@@ -653,7 +654,7 @@ describe('upsertSkillConfig effort levels', () => {
     );
   });
 
-  it('FEAT-002 TBI-004 DoD-0 persists all twenty effort fields', async () => {
+  it('FEAT-002/005 persists every effort field', async () => {
     const valuesMock = mockInsertPath();
     const supplied = Object.fromEntries(
       EFFORT_FIELDS.map((field, index) => [
@@ -676,6 +677,60 @@ describe('upsertSkillConfig effort levels', () => {
       expect.objectContaining(
         Object.fromEntries(EFFORT_FIELDS.map((field) => [field, null]))
       )
+    );
+  });
+});
+
+describe('FEAT-005 S1 technical phase skill config', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsCheckoutReadinessEnabled.mockResolvedValue(false);
+  });
+
+  it('TBI-005 DoD-0 persists independent Technical Phase path, model, and effort fields', async () => {
+    const valuesMock = jest.fn().mockReturnValue({
+      returning: jest.fn().mockResolvedValue([defaultRow]),
+    });
+    const insertMock = jest.fn().mockImplementation((table) =>
+      table === projectSkillSettings
+        ? { values: valuesMock }
+        : {
+            values: jest.fn().mockReturnValue({
+              onConflictDoUpdate: jest.fn().mockResolvedValue(undefined),
+            }),
+          }
+    );
+    mockDb.transaction.mockImplementation(async (fn: any) =>
+      fn({
+        select: jest.fn().mockReturnValue({
+          from: jest.fn().mockReturnThis(),
+          where: jest.fn().mockReturnThis(),
+          limit: jest.fn().mockResolvedValue([]),
+        }),
+        insert: insertMock,
+        update: jest.fn().mockReturnValue({
+          set: jest.fn().mockReturnThis(),
+          where: jest.fn().mockResolvedValue(undefined),
+        }),
+      })
+    );
+
+    await upsertSkillConfig(
+      makeUpsertInput({
+        technicalSkillPath: '.cursor/skills/technical-analysis/SKILL.md',
+        technicalPhaseSkillPath: '.cursor/skills/technical-phase/SKILL.md',
+        technicalPhaseModel: 'claude-opus-4-6',
+        technicalPhaseEffort: 'high',
+      })
+    );
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        technicalSkillPath: '.cursor/skills/technical-analysis/SKILL.md',
+        technicalPhaseSkillPath: '.cursor/skills/technical-phase/SKILL.md',
+        technicalPhaseModel: 'claude-opus-4-6',
+        technicalPhaseEffort: 'high',
+      })
     );
   });
 });

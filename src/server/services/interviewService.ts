@@ -1,7 +1,15 @@
 import { and, count, desc, eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { interviews, prds } from '../db/schema';
-import type { Interview, InterviewStatus, InterviewSummary, PrdSummary } from '../../shared/types/interview';
+import type {
+  Interview,
+  InterviewPhaseFlow,
+  InterviewPhaseStatus,
+  InterviewStatus,
+  InterviewSummary,
+  PhaseOwnerRole,
+  PrdSummary,
+} from '../../shared/types/interview';
 import type { PrdStatus } from '../../shared/types/interview';
 import type { EffortLevel } from '../../shared/types/effort';
 import { cancelRun, markAsInterviewThread } from './chatAgentService';
@@ -9,8 +17,37 @@ import { createNotification } from './notificationService';
 import { getSkillSettingsName } from './projectSettingsService';
 import { runGroundingService } from './runGroundingService';
 import { recordArtifactDoneEvent } from './artifactDoneEventService';
+import { getActiveUsers } from './rbacService';
 
 const VALID_INTERVIEW_STATUSES: InterviewStatus[] = ['in_progress', 'complete', 'archived'];
+const VALID_PHASE_FLOWS: InterviewPhaseFlow[] = ['requirements_only', 'technical_only', 'both_sequential'];
+
+function httpError(status: number, message: string): Error {
+  const err = new Error(message);
+  (err as any).status = status;
+  return err;
+}
+
+function phaseIsConfigured(flow: InterviewPhaseFlow, phase: PhaseOwnerRole): boolean {
+  return flow === 'both_sequential'
+    || (flow === 'requirements_only' && phase === 'requirements')
+    || (flow === 'technical_only' && phase === 'technical');
+}
+
+async function assertActiveOwnerIds(
+  project: string,
+  owners: Array<{ id: string; label: 'Requirements' | 'Technical' }>,
+): Promise<Map<string, string | null>> {
+  if (owners.length === 0) return new Map();
+  const activeUsers = await getActiveUsers(project);
+  const activeUserNames = new Map(activeUsers.map((user) => [user.oid, user.displayName]));
+  for (const owner of owners) {
+    if (!activeUserNames.has(owner.id)) {
+      throw httpError(400, `${owner.label} owner must be an active user in this project.`);
+    }
+  }
+  return activeUserNames;
+}
 
 function assertValidInterviewStatus(status: string): asserts status is InterviewStatus {
   if (!VALID_INTERVIEW_STATUSES.includes(status as InterviewStatus)) {
@@ -39,9 +76,45 @@ export async function createInterview(opts: {
   testCaseApproverIds?: string[];
   prototypeStageEnabled?: boolean;
   testCasesEnabled?: boolean;
+  phaseFlow?: InterviewPhaseFlow;
+  requirementsOwnerId?: string;
+  technicalOwnerId?: string;
 }): Promise<{ interviewId: string; threadId: string }> {
   const prototypeStageEnabled = opts.prototypeStageEnabled !== false;
   const testCasesEnabled = opts.testCasesEnabled !== false;
+  const phaseFlow = opts.phaseFlow ?? null;
+  let requirementsOwnerId: string | null = null;
+  let technicalOwnerId: string | null = null;
+  let requirementsPhaseStatus: InterviewPhaseStatus | null = null;
+  let technicalPhaseStatus: InterviewPhaseStatus | null = null;
+
+  if (phaseFlow !== null) {
+    if (!VALID_PHASE_FLOWS.includes(phaseFlow)) {
+      throw httpError(400, `Invalid phase flow: ${phaseFlow}`);
+    }
+    if (phaseIsConfigured(phaseFlow, 'requirements') && !opts.requirementsOwnerId) {
+      throw httpError(400, 'Requirements owner is required for the configured phase flow.');
+    }
+    if (phaseIsConfigured(phaseFlow, 'technical') && !opts.technicalOwnerId) {
+      throw httpError(400, 'Technical owner is required for the configured phase flow.');
+    }
+
+    requirementsOwnerId = phaseIsConfigured(phaseFlow, 'requirements')
+      ? opts.requirementsOwnerId!
+      : null;
+    technicalOwnerId = phaseIsConfigured(phaseFlow, 'technical')
+      ? opts.technicalOwnerId!
+      : null;
+    await assertActiveOwnerIds(opts.project, [
+      ...(requirementsOwnerId ? [{ id: requirementsOwnerId, label: 'Requirements' as const }] : []),
+      ...(technicalOwnerId ? [{ id: technicalOwnerId, label: 'Technical' as const }] : []),
+    ]);
+
+    requirementsPhaseStatus = requirementsOwnerId ? 'draft' : null;
+    technicalPhaseStatus = technicalOwnerId
+      ? (phaseFlow === 'both_sequential' ? 'locked' : 'draft')
+      : null;
+  }
 
   const [row] = await db
     .insert(interviews)
@@ -59,6 +132,11 @@ export async function createInterview(opts: {
       designDocOwnerId: opts.designDocOwnerId ?? null,
       designPrototypeOwnerId: prototypeStageEnabled ? (opts.designPrototypeOwnerId ?? null) : null,
       testCaseOwnerId: testCasesEnabled ? (opts.testCaseOwnerId ?? null) : null,
+      phaseFlow,
+      requirementsOwnerId,
+      technicalOwnerId,
+      requirementsPhaseStatus,
+      technicalPhaseStatus,
       prdApproverIds: opts.prdApproverIds ?? null,
       designDocApproverIds: opts.designDocApproverIds ?? null,
       designPrototypeApproverIds: prototypeStageEnabled ? (opts.designPrototypeApproverIds ?? null) : null,
@@ -196,6 +274,12 @@ export async function listInterviews(
       designDocOwnerId: interviews.designDocOwnerId,
       designPrototypeOwnerId: interviews.designPrototypeOwnerId,
       testCaseOwnerId: interviews.testCaseOwnerId,
+      phaseFlow: interviews.phaseFlow,
+      requirementsOwnerId: interviews.requirementsOwnerId,
+      technicalOwnerId: interviews.technicalOwnerId,
+      requirementsPhaseStatus: interviews.requirementsPhaseStatus,
+      technicalPhaseStatus: interviews.technicalPhaseStatus,
+      technicalPhaseChatThreadId: interviews.technicalPhaseChatThreadId,
       skillSettingsId: interviews.skillSettingsId,
       prdApproverIds: interviews.prdApproverIds,
       designDocApproverIds: interviews.designDocApproverIds,
@@ -235,6 +319,12 @@ export async function listInterviews(
     designDocOwnerId: row.designDocOwnerId ?? undefined,
     designPrototypeOwnerId: row.designPrototypeOwnerId ?? undefined,
     testCaseOwnerId: row.testCaseOwnerId ?? undefined,
+    phaseFlow: row.phaseFlow as InterviewPhaseFlow | null,
+    requirementsOwnerId: row.requirementsOwnerId ?? null,
+    technicalOwnerId: row.technicalOwnerId ?? null,
+    requirementsPhaseStatus: row.requirementsPhaseStatus as InterviewPhaseStatus | null,
+    technicalPhaseStatus: row.technicalPhaseStatus as InterviewPhaseStatus | null,
+    technicalPhaseChatThreadId: row.technicalPhaseChatThreadId ?? null,
     skillSettingsId: row.skillSettingsId ?? null,
     skillSettingsName: row.skillSettingsId ? settingsNameMap.get(row.skillSettingsId) ?? null : null,
     prdApproverIds: row.prdApproverIds ?? undefined,
@@ -250,7 +340,15 @@ export async function listInterviews(
 export async function getInterview(id: string): Promise<Interview | null> {
   const row = await db.query.interviews.findFirst({
     where: eq(interviews.id, id),
-    with: { prds: true, prdOwner: true, designDocOwner: true, designPrototypeOwner: true, testCaseOwner: true },
+    with: {
+      prds: true,
+      prdOwner: true,
+      designDocOwner: true,
+      designPrototypeOwner: true,
+      testCaseOwner: true,
+      requirementsOwner: true,
+      technicalOwner: true,
+    },
   });
 
   if (!row) return null;
@@ -293,6 +391,14 @@ export async function getInterview(id: string): Promise<Interview | null> {
     designPrototypeOwnerName: row.designPrototypeOwner?.displayName ?? undefined,
     testCaseOwnerId: row.testCaseOwnerId ?? undefined,
     testCaseOwnerName: row.testCaseOwner?.displayName ?? undefined,
+    phaseFlow: row.phaseFlow as InterviewPhaseFlow | null,
+    requirementsOwnerId: row.requirementsOwnerId ?? null,
+    requirementsOwnerName: row.requirementsOwner?.displayName ?? undefined,
+    technicalOwnerId: row.technicalOwnerId ?? null,
+    technicalOwnerName: row.technicalOwner?.displayName ?? undefined,
+    requirementsPhaseStatus: row.requirementsPhaseStatus as InterviewPhaseStatus | null,
+    technicalPhaseStatus: row.technicalPhaseStatus as InterviewPhaseStatus | null,
+    technicalPhaseChatThreadId: row.technicalPhaseChatThreadId ?? null,
     skillSettingsId: row.skillSettingsId ?? null,
     skillSettingsName,
     prdApproverIds: row.prdApproverIds ?? undefined,
@@ -302,6 +408,62 @@ export async function getInterview(id: string): Promise<Interview | null> {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     prds: prdSummaries,
+  };
+}
+
+export async function reassignPhaseOwner(
+  interviewId: string,
+  phase: PhaseOwnerRole,
+  newOwnerId: string,
+  requestingUserId: string,
+  requestingUserPerms: Set<string>,
+): Promise<{ phase: PhaseOwnerRole; ownerId: string; ownerName: string | null }> {
+  const row = await db.query.interviews.findFirst({
+    where: eq(interviews.id, interviewId),
+  });
+  if (!row) {
+    throw httpError(404, 'Interview not found');
+  }
+  if (row.authorId !== requestingUserId && !requestingUserPerms.has('admin:roles')) {
+    throw httpError(403, 'Only the interview creator or an admin can change phase owners.');
+  }
+
+  const phaseFlow = row.phaseFlow as InterviewPhaseFlow | null;
+  if (!phaseFlow || !phaseIsConfigured(phaseFlow, phase)) {
+    throw httpError(400, `The ${phase} phase is not configured for this interview.`);
+  }
+
+  const phaseStatus = phase === 'requirements'
+    ? row.requirementsPhaseStatus
+    : row.technicalPhaseStatus;
+  if (phaseStatus === 'approved') {
+    throw httpError(409, 'This phase has already been approved and its owner cannot be changed.');
+  }
+
+  const label = phase === 'requirements' ? 'Requirements' : 'Technical';
+  const activeUserNames = await assertActiveOwnerIds(row.project, [{ id: newOwnerId, label }]);
+  const updatedAt = new Date().toISOString();
+  const ownerUpdate = phase === 'requirements'
+    ? { requirementsOwnerId: newOwnerId, updatedAt }
+    : { technicalOwnerId: newOwnerId, updatedAt };
+
+  await db.update(interviews).set(ownerUpdate).where(eq(interviews.id, interviewId));
+
+  try {
+    await createNotification(newOwnerId, {
+      type: 'user-action',
+      title: `Assigned as ${label} Owner`,
+      body: `You were assigned as ${label.toLowerCase()} owner for the interview "${row.title}".`,
+      link: `/backlog/interview/${interviewId}`,
+    });
+  } catch (err) {
+    console.error('[interviewService] Phase-owner notification failed:', err);
+  }
+
+  return {
+    phase,
+    ownerId: newOwnerId,
+    ownerName: activeUserNames.get(newOwnerId) ?? null,
   };
 }
 

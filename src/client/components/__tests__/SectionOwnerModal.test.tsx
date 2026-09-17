@@ -29,6 +29,14 @@ const activeUsers = [
   { oid: 'bob', displayName: 'Bob Jones', email: 'bob@example.com' },
 ];
 
+/** Groups covering every preference list the owner pickers narrow toward. */
+const ownerGroups = [
+  { id: 'g-ba', name: 'BA', members: [{ userId: 'ba-1', displayName: 'Bea Analyst', email: 'bea@example.com' }] },
+  { id: 'g-po', name: 'Product-Owner', members: [{ userId: 'po-1', displayName: 'Percy Owner', email: 'percy@example.com' }] },
+  { id: 'g-mgr', name: 'Manager', members: [{ userId: 'mgr-1', displayName: 'Mona Manager', email: 'mona@example.com' }] },
+  { id: 'g-dev', name: 'Developer', members: [{ userId: 'dev-1', displayName: 'Dev Devlin', email: 'dev@example.com' }] },
+];
+
 interface PoolFixture {
   individuals: Array<{ userId: string; displayName: string; email: string }>;
   groups: Array<{
@@ -110,11 +118,22 @@ function selectOwner(labelPattern: RegExp, userName: string) {
   fireEvent.mouseDown(within(field).getByRole('option', { name: new RegExp(userName) }));
 }
 
-function selectAllOwners() {
+function selectDocumentOwners() {
   selectOwner(/PRD Owner/, 'Alice Smith');
   selectOwner(/Design Doc Owner/, 'Bob Jones');
   selectOwner(/Design Prototype Owner/, 'Alice Smith');
   selectOwner(/Test Case Owner/, 'Bob Jones');
+}
+
+/** Both phase owners — valid only under the default `both_sequential` flow. */
+function selectPhaseOwners() {
+  selectOwner(/Requirements Owner/, 'Alice Smith');
+  selectOwner(/Technical Owner/, 'Bob Jones');
+}
+
+function selectAllOwners() {
+  selectPhaseOwners();
+  selectDocumentOwners();
 }
 
 function goToReviewerStep() {
@@ -161,13 +180,14 @@ describe('SectionOwnerModal', () => {
     mockUseActiveUsers.mockReturnValue({ data: [], isLoading: true });
     renderModal();
     const loadingEls = screen.getAllByText('Loading users…');
-    expect(loadingEls).toHaveLength(4);
+    // 4 document owners + the 2 phase owners of the default both_sequential flow.
+    expect(loadingEls).toHaveLength(6);
   });
 
   it('renders combobox inputs when users have loaded', () => {
     renderModal();
     const comboboxes = screen.getAllByRole('combobox');
-    expect(comboboxes).toHaveLength(4);
+    expect(comboboxes).toHaveLength(6);
   });
 
   it('clicking the close button calls onCancel', () => {
@@ -315,6 +335,7 @@ describe('SectionOwnerModal reviewer availability (PBI-004)', () => {
     mockUseReviewerAvailability.mockReturnValue(availabilityFailed());
 
     renderModal({ prototypeStageEnabled: false, testCasesEnabled: false });
+    selectPhaseOwners();
     selectOwner(/PRD Owner/, 'Alice Smith');
     selectOwner(/Design Doc Owner/, 'Bob Jones');
     fireEvent.click(screen.getByTestId('section-owner-next-btn'));
@@ -358,6 +379,7 @@ describe('SectionOwnerModal reviewer availability (PBI-004)', () => {
     mockUseReviewerAvailability.mockReturnValue(availabilityLoaded({}));
 
     const { onConfirm } = renderModal({ prototypeStageEnabled: false, testCasesEnabled: false });
+    selectPhaseOwners();
     selectOwner(/PRD Owner/, 'Alice Smith');
     selectOwner(/Design Doc Owner/, 'Bob Jones');
 
@@ -368,6 +390,9 @@ describe('SectionOwnerModal reviewer availability (PBI-004)', () => {
       designDocOwnerId: 'bob',
       designPrototypeOwnerId: undefined,
       testCaseOwnerId: undefined,
+      phaseFlow: 'both_sequential',
+      requirementsOwnerId: 'alice',
+      technicalOwnerId: 'bob',
       prdApproverIds: [],
       designDocApproverIds: [],
       designPrototypeApproverIds: [],
@@ -448,5 +473,223 @@ describe('SectionOwnerModal reviewer availability (PBI-004)', () => {
     // Back and Close stay reachable — no focus trap while loading.
     expect(screen.getByTestId('section-owner-back-btn')).toBeEnabled();
     expect(screen.getByLabelText('Close')).toBeEnabled();
+  });
+});
+
+// ── PBI-001 phase flow + phase owners ─────────────────────────────────────────
+
+describe('SectionOwnerModal phase flow (PBI-001)', () => {
+  beforeEach(() => {
+    mockUseActiveUsers.mockReturnValue({ data: activeUsers, isLoading: false });
+    mockUseInterviewGroupsWithMembers.mockReturnValue({ data: [], isLoading: false });
+    mockPools({});
+    // No reviewers available → single-step modal, so Confirm is reachable directly.
+    mockUseReviewerAvailability.mockReturnValue(availabilityLoaded({}));
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('defaults to "Both in sequence" and renders all three phase flow options', () => {
+    renderModal();
+
+    const requirementsOnly = screen.getByTestId('phase-flow-radio-requirements-only');
+    const technicalOnly = screen.getByTestId('phase-flow-radio-technical-only');
+    const bothSequential = screen.getByTestId('phase-flow-radio-both-sequential');
+
+    expect(requirementsOnly).not.toBeChecked();
+    expect(technicalOnly).not.toBeChecked();
+    expect(bothSequential).toBeChecked();
+
+    expect(screen.getByText('Requirements only')).toBeInTheDocument();
+    expect(screen.getByText('Technical only')).toBeInTheDocument();
+    expect(screen.getByText('Both in sequence')).toBeInTheDocument();
+    expect(
+      screen.getByText('A single Requirements phase; no Technical review needed.'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Skip Requirements; go straight to the Technical review phase.'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Requirements phase first, then Technical review after it is approved.'),
+    ).toBeInTheDocument();
+  });
+
+  it('NFR a11y groups the phase flow options as native radios in a fieldset/legend', () => {
+    const { container } = renderModal();
+
+    const fieldset = container.querySelector('fieldset');
+    expect(fieldset).toBeInTheDocument();
+    expect(fieldset!.querySelector('legend')).toHaveTextContent('Phase Flow');
+
+    const radios = screen.getAllByRole('radio');
+    expect(radios).toHaveLength(3);
+    for (const radio of radios) {
+      expect(radio.tagName).toBe('INPUT');
+      expect(radio).toHaveAttribute('type', 'radio');
+      expect(fieldset).toContainElement(radio);
+    }
+    // One shared name keeps native arrow-key roving between the options.
+    const names = new Set(radios.map((r) => r.getAttribute('name')));
+    expect(names.size).toBe(1);
+  });
+
+  it('VT-03 (AC-2) renders only the Requirements owner slot for requirements_only', () => {
+    renderModal();
+
+    fireEvent.click(screen.getByTestId('phase-flow-radio-requirements-only'));
+
+    expect(screen.getByTestId('so-requirements-owner-input')).toBeInTheDocument();
+    expect(screen.queryByTestId('so-technical-owner-input')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Technical Owner/)).not.toBeInTheDocument();
+  });
+
+  it('VT-03 (AC-2) renders only the Technical owner slot for technical_only', () => {
+    renderModal();
+
+    fireEvent.click(screen.getByTestId('phase-flow-radio-technical-only'));
+
+    expect(screen.getByTestId('so-technical-owner-input')).toBeInTheDocument();
+    expect(screen.queryByTestId('so-requirements-owner-input')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Requirements Owner/)).not.toBeInTheDocument();
+  });
+
+  it('AC-2 renders both phase owner slots under the default both_sequential flow', () => {
+    renderModal();
+
+    expect(screen.getByTestId('so-requirements-owner-input')).toBeInTheDocument();
+    expect(screen.getByTestId('so-technical-owner-input')).toBeInTheDocument();
+  });
+
+  it('AC-1 keeps Confirm disabled until every configured phase owner is filled', () => {
+    const { onConfirm } = renderModal();
+    selectDocumentOwners();
+
+    const confirmBtn = screen.getByTestId('confirm-start-interview-no-reviewers');
+    expect(confirmBtn).toBeDisabled();
+
+    selectOwner(/Requirements Owner/, 'Alice Smith');
+    expect(screen.getByTestId('confirm-start-interview-no-reviewers')).toBeDisabled();
+
+    selectOwner(/Technical Owner/, 'Bob Jones');
+    expect(screen.getByTestId('confirm-start-interview-no-reviewers')).toBeEnabled();
+
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it('AC-1 keeps Next disabled while the single configured phase owner is empty', () => {
+    mockUseReviewerAvailability.mockReturnValue(
+      availabilityLoaded({ prd: true, design_doc: true, design_prototype: true, test_case: true }),
+    );
+
+    renderModal();
+    fireEvent.click(screen.getByTestId('phase-flow-radio-technical-only'));
+    selectDocumentOwners();
+
+    expect(screen.getByTestId('section-owner-next-btn')).toBeDisabled();
+
+    selectOwner(/Technical Owner/, 'Bob Jones');
+
+    expect(screen.getByTestId('section-owner-next-btn')).toBeEnabled();
+  });
+
+  it('AC-0 confirms the default both_sequential flow with both phase owners', () => {
+    const { onConfirm } = renderModal();
+    selectAllOwners();
+
+    fireEvent.click(screen.getByTestId('confirm-start-interview-no-reviewers'));
+
+    expect(onConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        phaseFlow: 'both_sequential',
+        requirementsOwnerId: 'alice',
+        technicalOwnerId: 'bob',
+      }),
+    );
+  });
+
+  it('AC-2 requirements_only confirm payload clears the technical owner id', () => {
+    const { onConfirm } = renderModal();
+    fireEvent.click(screen.getByTestId('phase-flow-radio-requirements-only'));
+    selectOwner(/Requirements Owner/, 'Alice Smith');
+    selectDocumentOwners();
+
+    fireEvent.click(screen.getByTestId('confirm-start-interview-no-reviewers'));
+
+    expect(onConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        phaseFlow: 'requirements_only',
+        requirementsOwnerId: 'alice',
+        technicalOwnerId: undefined,
+      }),
+    );
+  });
+
+  it('AC-2 technical_only confirm payload clears the requirements owner id', () => {
+    const { onConfirm } = renderModal();
+    fireEvent.click(screen.getByTestId('phase-flow-radio-technical-only'));
+    selectOwner(/Technical Owner/, 'Bob Jones');
+    selectDocumentOwners();
+
+    fireEvent.click(screen.getByTestId('confirm-start-interview-no-reviewers'));
+
+    expect(onConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        phaseFlow: 'technical_only',
+        requirementsOwnerId: undefined,
+        technicalOwnerId: 'bob',
+      }),
+    );
+  });
+
+  it('clears the owner of a phase that the new flow removes', () => {
+    renderModal();
+    selectPhaseOwners();
+
+    expect(screen.getByTestId('so-requirements-owner-clear-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('so-technical-owner-clear-btn')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('phase-flow-radio-requirements-only'));
+    fireEvent.click(screen.getByTestId('phase-flow-radio-both-sequential'));
+
+    // Technical was dropped from the flow, so its pick is gone; Requirements survives.
+    expect(screen.getByTestId('so-technical-owner-input')).toBeInTheDocument();
+    expect(screen.queryByTestId('so-technical-owner-clear-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('so-requirements-owner-clear-btn')).toBeInTheDocument();
+  });
+
+  it('prefers BA/Product-Owner/Manager for Requirements and Developer for Technical', () => {
+    mockUseInterviewGroupsWithMembers.mockReturnValue({ data: ownerGroups, isLoading: false });
+
+    renderModal();
+
+    fireEvent.focus(screen.getByTestId('so-requirements-owner-input'));
+    expect(screen.getByTestId('so-requirements-owner-option-ba-1')).toBeInTheDocument();
+    expect(screen.getByTestId('so-requirements-owner-option-po-1')).toBeInTheDocument();
+    expect(screen.getByTestId('so-requirements-owner-option-mgr-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('so-requirements-owner-option-dev-1')).not.toBeInTheDocument();
+
+    fireEvent.focus(screen.getByTestId('so-technical-owner-input'));
+    expect(screen.getByTestId('so-technical-owner-option-dev-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('so-technical-owner-option-ba-1')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('so-technical-owner-option-mgr-1')).not.toBeInTheDocument();
+  });
+
+  it('falls back to all active users when the preferred groups have no members', () => {
+    mockUseInterviewGroupsWithMembers.mockReturnValue({
+      data: [{ id: 'g-ux', name: 'UI/UX', members: [{ userId: 'ux-1', displayName: 'Uma Ux', email: 'uma@example.com' }] }],
+      isLoading: false,
+    });
+
+    renderModal();
+
+    fireEvent.focus(screen.getByTestId('so-requirements-owner-input'));
+    expect(screen.getByTestId('so-requirements-owner-option-alice')).toBeInTheDocument();
+    expect(screen.getByTestId('so-requirements-owner-option-bob')).toBeInTheDocument();
+
+    fireEvent.focus(screen.getByTestId('so-technical-owner-input'));
+    expect(screen.getByTestId('so-technical-owner-option-alice')).toBeInTheDocument();
+    expect(screen.getByTestId('so-technical-owner-option-bob')).toBeInTheDocument();
   });
 });

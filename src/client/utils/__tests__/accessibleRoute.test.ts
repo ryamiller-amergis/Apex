@@ -53,6 +53,15 @@ describe('resolveAccessibleRoute', () => {
       });
       expect(result).toBe('/backlog');
     });
+
+    it('PBI-009 AC-3 / PBI-010 AC-3 skips backlog when interviews:view is absent', () => {
+      const result = resolveAccessibleRoute({
+        ...base,
+        can: (k) => k === 'adr:view',
+        enabledViews: ['backlog', 'adr'],
+      });
+      expect(result).toBe('/adr');
+    });
   });
 
   describe('Group-restricted modules', () => {

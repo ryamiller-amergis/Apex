@@ -18,6 +18,10 @@ jest.mock('../services/artifactDoneEventService', () => ({
   recordArtifactDoneEvent: jest.fn().mockResolvedValue(undefined),
 }));
 
+jest.mock('../services/rbacService', () => ({
+  getActiveUsers: jest.fn(),
+}));
+
 // ── DB mock ────────────────────────────────────────────────────────────────────
 
 jest.mock('../db/drizzle', () => {
@@ -63,6 +67,7 @@ import {
   updateInterviewStatus,
   updateInterviewTitle,
   deleteInterview,
+  reassignPhaseOwner,
 } from '../services/interviewService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
@@ -70,6 +75,10 @@ const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
 const { createNotification: mockCreateNotification } = jest.requireMock('../services/notificationService') as {
   createNotification: jest.Mock;
 };
+const { getActiveUsers: mockGetActiveUsers } = jest.requireMock('../services/rbacService') as {
+  getActiveUsers: jest.Mock;
+};
+const firstUpdateSetMock = (): jest.Mock => mockDb.update.mock.results[0].value.set;
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
 
@@ -105,7 +114,13 @@ const prdRow = {
 // ── createInterview ────────────────────────────────────────────────────────────
 
 describe('createInterview', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetActiveUsers.mockResolvedValue([
+      { oid: 'req-1', displayName: 'Requirements One' },
+      { oid: 'tech-1', displayName: 'Technical One' },
+    ]);
+  });
 
   it('inserts a new interview and returns interviewId + threadId', async () => {
     const returningMock = jest.fn().mockResolvedValue([{ id: 'interview-new' }]);
@@ -335,6 +350,125 @@ describe('createInterview', () => {
     );
     expect(mockCreateNotification).toHaveBeenCalledTimes(4);
   });
+
+  it('PBI-001 AC-0 / TBI-001 DoD-0 / VT-01 persists both owners and starts Requirements for both_sequential', async () => {
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'interview-phases' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await createInterview({
+      userId: 'user-1',
+      project: 'proj',
+      repo: 'org/repo',
+      chatThreadId: 'thread-phases',
+      phaseFlow: 'both_sequential',
+      requirementsOwnerId: 'req-1',
+      technicalOwnerId: 'tech-1',
+    });
+
+    expect(mockGetActiveUsers).toHaveBeenCalledWith('proj');
+    expect(valuesMock).toHaveBeenCalledWith(expect.objectContaining({
+      phaseFlow: 'both_sequential',
+      requirementsOwnerId: 'req-1',
+      technicalOwnerId: 'tech-1',
+      requirementsPhaseStatus: 'draft',
+      technicalPhaseStatus: 'locked',
+    }));
+  });
+
+  it.each([
+    ['requirements_only', 'req-1', undefined, 'draft', null],
+    ['technical_only', undefined, 'tech-1', null, 'draft'],
+  ] as const)(
+    'TBI-001 DoD-1/DoD-3 persists %s and nulls only the unused phase',
+    async (phaseFlow, requirementsOwnerId, technicalOwnerId, requirementsPhaseStatus, technicalPhaseStatus) => {
+      const returningMock = jest.fn().mockResolvedValue([{ id: `interview-${phaseFlow}` }]);
+      const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+      mockDb.insert.mockReturnValue({ values: valuesMock });
+
+      await createInterview({
+        userId: 'user-1',
+        project: 'proj',
+        repo: 'org/repo',
+        chatThreadId: `thread-${phaseFlow}`,
+        phaseFlow,
+        requirementsOwnerId,
+        technicalOwnerId,
+      });
+
+      expect(valuesMock).toHaveBeenCalledWith(expect.objectContaining({
+        phaseFlow,
+        requirementsOwnerId: requirementsOwnerId ?? null,
+        technicalOwnerId: technicalOwnerId ?? null,
+        requirementsPhaseStatus,
+        technicalPhaseStatus,
+      }));
+    },
+  );
+
+  it('PBI-001 AC-1 / VT-02 rejects a missing configured Requirements owner before insert', async () => {
+    await expect(createInterview({
+      userId: 'user-1',
+      project: 'proj',
+      repo: 'org/repo',
+      chatThreadId: 'thread-missing-owner',
+      phaseFlow: 'both_sequential',
+      technicalOwnerId: 'tech-1',
+    })).rejects.toMatchObject({ status: 400, message: 'Requirements owner is required for the configured phase flow.' });
+
+    expect(mockDb.insert).not.toHaveBeenCalled();
+  });
+
+  it('TBI-001 DoD-1 validates configured owner slots only against active project users', async () => {
+    await expect(createInterview({
+      userId: 'user-1',
+      project: 'proj',
+      repo: 'org/repo',
+      chatThreadId: 'thread-active-user',
+      phaseFlow: 'requirements_only',
+      requirementsOwnerId: 'inactive-user',
+      technicalOwnerId: 'ignored-inactive-user',
+    })).rejects.toMatchObject({ status: 400 });
+
+    expect(mockGetActiveUsers).toHaveBeenCalledWith('proj');
+    expect(mockDb.insert).not.toHaveBeenCalled();
+  });
+
+  it('TBI-001 DoD-2 preserves legacy creation with all phase fields null when phaseFlow is omitted', async () => {
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'interview-legacy' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await createInterview({
+      userId: 'user-1',
+      project: 'proj',
+      repo: 'org/repo',
+      chatThreadId: 'thread-legacy',
+      requirementsOwnerId: 'req-1',
+      technicalOwnerId: 'tech-1',
+    });
+
+    expect(mockGetActiveUsers).not.toHaveBeenCalled();
+    expect(valuesMock).toHaveBeenCalledWith(expect.objectContaining({
+      phaseFlow: null,
+      requirementsOwnerId: null,
+      technicalOwnerId: null,
+      requirementsPhaseStatus: null,
+      technicalPhaseStatus: null,
+    }));
+  });
+
+  it('TBI-001 DoD-1 rejects an invalid phaseFlow before insert', async () => {
+    await expect(createInterview({
+      userId: 'user-1',
+      project: 'proj',
+      repo: 'org/repo',
+      chatThreadId: 'thread-invalid-flow',
+      phaseFlow: 'parallel' as any,
+      requirementsOwnerId: 'req-1',
+    })).rejects.toMatchObject({ status: 400 });
+    expect(mockDb.insert).not.toHaveBeenCalled();
+  });
 });
 
 // ── listInterviews ─────────────────────────────────────────────────────────────
@@ -365,6 +499,28 @@ describe('listInterviews', () => {
       prdCount: 2,
       prototypeStageEnabled: true,
     });
+  });
+
+  it('FEAT-005 S3 includes the dedicated Technical Phase thread id in summaries', async () => {
+    mockDb.select
+      .mockImplementationOnce(() => ({
+        from: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockResolvedValue([
+          {
+            ...interviewRow,
+            technicalPhaseChatThreadId: 'technical-thread-1',
+          },
+        ]),
+      }))
+      .mockImplementationOnce(() => ({
+        from: jest.fn().mockReturnThis(),
+        groupBy: jest.fn().mockResolvedValue([]),
+      }));
+
+    const result = await listInterviews({ authorId: 'user-1' });
+
+    expect(result[0].technicalPhaseChatThreadId).toBe('technical-thread-1');
   });
 
   it('returns 0 prdCount for interviews with no PRDs', async () => {
@@ -557,6 +713,144 @@ describe('getInterview', () => {
     expect(result!.designDocOwnerName).toBeUndefined();
     expect(result!.designPrototypeOwnerId).toBeUndefined();
     expect(result!.designPrototypeOwnerName).toBeUndefined();
+  });
+
+  it('TBI-001 DoD-0 maps phase flow, statuses, and nested phase-owner names', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...interviewRow,
+      prds: [],
+      phaseFlow: 'both_sequential',
+      requirementsOwnerId: 'req-1',
+      requirementsOwner: { displayName: 'Requirements One' },
+      technicalOwnerId: 'tech-1',
+      technicalOwner: { displayName: 'Technical One' },
+      requirementsPhaseStatus: 'draft',
+      technicalPhaseStatus: 'locked',
+    });
+
+    const result = await getInterview('interview-1');
+
+    expect(result).toMatchObject({
+      phaseFlow: 'both_sequential',
+      requirementsOwnerId: 'req-1',
+      requirementsOwnerName: 'Requirements One',
+      technicalOwnerId: 'tech-1',
+      technicalOwnerName: 'Technical One',
+      requirementsPhaseStatus: 'draft',
+      technicalPhaseStatus: 'locked',
+    });
+  });
+});
+
+describe('reassignPhaseOwner', () => {
+  const phaseInterview = {
+    ...interviewRow,
+    phaseFlow: 'both_sequential',
+    requirementsOwnerId: 'req-1',
+    technicalOwnerId: 'tech-1',
+    requirementsPhaseStatus: 'draft',
+    technicalPhaseStatus: 'locked',
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetActiveUsers.mockResolvedValue([
+      { oid: 'req-2', displayName: 'Requirements Two' },
+      { oid: 'tech-2', displayName: 'Technical Two' },
+    ]);
+  });
+
+  it('PBI-002 AC-0 / VT-05 lets the creator reassign draft Requirements and notifies the new owner', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(phaseInterview);
+
+    const result = await reassignPhaseOwner('interview-1', 'requirements', 'req-2', 'user-1', new Set());
+
+    expect(firstUpdateSetMock()).toHaveBeenCalledWith(expect.objectContaining({ requirementsOwnerId: 'req-2' }));
+    expect(mockCreateNotification).toHaveBeenCalledWith('req-2', expect.objectContaining({
+      type: 'user-action',
+      title: 'Assigned as Requirements Owner',
+    }));
+    expect(result).toEqual({ phase: 'requirements', ownerId: 'req-2', ownerName: 'Requirements Two' });
+  });
+
+  it('PBI-002 AC-1 / TBI-001 DoD-3 / VT-06 blocks approved Requirements with the exact conflict and no update', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...phaseInterview,
+      requirementsPhaseStatus: 'approved',
+    });
+
+    await expect(reassignPhaseOwner('interview-1', 'requirements', 'req-2', 'user-1', new Set()))
+      .rejects.toMatchObject({
+        status: 409,
+        message: 'This phase has already been approved and its owner cannot be changed.',
+      });
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it('PBI-002 AC-2 / VT-07 reassigns a draft technical_only Technical owner', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...phaseInterview,
+      phaseFlow: 'technical_only',
+      requirementsOwnerId: null,
+      requirementsPhaseStatus: null,
+      technicalPhaseStatus: 'draft',
+    });
+
+    const result = await reassignPhaseOwner('interview-1', 'technical', 'tech-2', 'user-1', new Set());
+
+    expect(firstUpdateSetMock()).toHaveBeenCalledWith(expect.objectContaining({ technicalOwnerId: 'tech-2' }));
+    expect(result.ownerName).toBe('Technical Two');
+  });
+
+  it('PBI-002 AC-3 / VT-08 rejects a noncreator nonadmin and leaves the row unchanged', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(phaseInterview);
+
+    await expect(reassignPhaseOwner('interview-1', 'requirements', 'req-2', 'other-user', new Set()))
+      .rejects.toMatchObject({ status: 403 });
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it('VT-09 allows the creator to reassign a locked Technical owner', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(phaseInterview);
+
+    await expect(reassignPhaseOwner('interview-1', 'technical', 'tech-2', 'user-1', new Set()))
+      .resolves.toMatchObject({ phase: 'technical', ownerId: 'tech-2' });
+    expect(firstUpdateSetMock()).toHaveBeenCalledWith(expect.objectContaining({ technicalOwnerId: 'tech-2' }));
+  });
+
+  it('PBI-002 AC-0 allows admin:roles to reassign a configured phase', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(phaseInterview);
+
+    await expect(reassignPhaseOwner('interview-1', 'requirements', 'req-2', 'admin-user', new Set(['admin:roles'])))
+      .resolves.toMatchObject({ ownerId: 'req-2' });
+  });
+
+  it('PBI-002 AC-0 rejects an unconfigured phase and an inactive owner before update', async () => {
+    mockDb.query.interviews.findFirst
+      .mockResolvedValueOnce({ ...phaseInterview, phaseFlow: 'requirements_only', technicalOwnerId: null, technicalPhaseStatus: null })
+      .mockResolvedValueOnce(phaseInterview);
+
+    await expect(reassignPhaseOwner('interview-1', 'technical', 'tech-2', 'user-1', new Set()))
+      .rejects.toMatchObject({ status: 400 });
+    await expect(reassignPhaseOwner('interview-1', 'requirements', 'inactive-user', 'user-1', new Set()))
+      .rejects.toMatchObject({ status: 400 });
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it('PBI-002 AC-0 returns 404 for a missing interview and does not update', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(null);
+    await expect(reassignPhaseOwner('missing', 'requirements', 'req-2', 'user-1', new Set()))
+      .rejects.toMatchObject({ status: 404 });
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it('PBI-002 AC-0 keeps a successful reassignment when notification delivery fails', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(phaseInterview);
+    mockCreateNotification.mockRejectedValueOnce(new Error('notification unavailable'));
+
+    await expect(reassignPhaseOwner('interview-1', 'requirements', 'req-2', 'user-1', new Set()))
+      .resolves.toMatchObject({ ownerId: 'req-2' });
+    expect(mockDb.update).toHaveBeenCalled();
   });
 });
 

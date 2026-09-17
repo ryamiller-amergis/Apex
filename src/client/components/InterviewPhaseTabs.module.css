@@ -1,0 +1,86 @@
+.container {
+  position: relative;
+  flex-shrink: 0;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.tabList {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  padding: 0 24px;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 44px;
+  padding: 0 12px;
+  margin-bottom: -1px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.tab:hover:not(.lockedTab) {
+  color: var(--text-primary);
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+
+.activeTab {
+  color: var(--accent-color);
+  border-bottom-color: var(--accent-color);
+  font-weight: 600;
+}
+
+.lockedTab {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.lockIcon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.lockedNotice {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 24px;
+  z-index: 20;
+  padding: 6px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  box-shadow: var(--shadow-sm);
+  font-size: 0.75rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .tabList {
+    padding: 0 12px;
+  }
+
+  .lockedNotice {
+    right: 12px;
+    left: 12px;
+    white-space: normal;
+  }
+}

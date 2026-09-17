@@ -66,6 +66,18 @@ jest.mock('../../hooks/useProjectRepositoryReadiness', () => ({
 }));
 
 const mockUpdateStatus = jest.fn();
+const mockStartTechnicalPhase = jest.fn();
+let mockTechnicalPhaseState: {
+  status: 'unavailable' | 'ready' | 'in_progress' | 'complete';
+  canStart: boolean;
+  technicalPhaseChatThreadId: string | null;
+  seedContext: {
+    originalPrompt: string;
+    requirementsSummary: string | null;
+    requirementsApprovedAt: string | null;
+  } | null;
+  unavailableReason?: string;
+} | undefined;
 jest.mock('../../hooks/useInterviews', () => ({
   useCreateInterview: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useInterview: jest.fn(),
@@ -73,6 +85,34 @@ jest.mock('../../hooks/useInterviews', () => ({
   useUpdateInterviewTitle: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useCreatePrd: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useDeleteInterview: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
+  useActiveUsers: jest.fn(() => ({ data: [], isLoading: false })),
+  useReassignPhaseOwner: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useTechnicalPhase: jest.fn(() => ({
+    data: mockTechnicalPhaseState,
+    isLoading: false,
+    isError: false,
+  })),
+  useStartTechnicalPhase: jest.fn(() => ({
+    mutateAsync: mockStartTechnicalPhase,
+    isPending: false,
+  })),
+  useRetryPrdFromPhase: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
+  usePhaseSummary: jest.fn((_id: string, phase: 'requirements' | 'technical') => ({
+    data: {
+      phase,
+      status: phase === 'technical' ? 'locked' : 'draft',
+      content: '',
+      ownerId: null,
+      approvedAt: null,
+      locked: phase === 'technical',
+      amendable: false,
+    },
+    isLoading: false,
+    isError: false,
+  })),
+  useEditPhaseSummary: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useApprovePhaseSummary: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  useAmendRequirementsSummary: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
 }));
 
 const mockUseAgentChatSession = jest.fn();
@@ -156,6 +196,12 @@ jest.mock('../LinkedContextPicker', () => ({
   },
 }));
 
+jest.mock('../PhaseSummaryCard', () => ({
+  PhaseSummaryCard: ({ phase }: { phase: string }) => (
+    <section data-testid={`mock-phase-summary-${phase}`} />
+  ),
+}));
+
 jest.mock('react-markdown', () => ({
   __esModule: true,
   default: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -190,6 +236,12 @@ jest.mock('../../hooks/useGroundingResumeGate', () => ({
     isUpdating: false,
     error: null,
   }),
+}));
+
+const mockTrackEvent = jest.fn();
+jest.mock('../../services/telemetry', () => ({
+  trackEvent: (...args: unknown[]) => mockTrackEvent(...args),
+  trackException: jest.fn(),
 }));
 
 // ── Imports needed after mocks ─────────────────────────────────────────────────
@@ -328,6 +380,8 @@ beforeEach(() => {
   jest.clearAllMocks();
   HTMLElement.prototype.scrollIntoView = jest.fn();
   mockUseAgentChatSession.mockReturnValue(idleStream);
+  mockTechnicalPhaseState = undefined;
+  mockStartTechnicalPhase.mockReset();
   (useChatThread as jest.Mock).mockReturnValue({ data: null });
   (useInterview as jest.Mock).mockReturnValue({
     data: makeInterview(),
@@ -511,6 +565,391 @@ describe('ExistingInterviewView — PRD link chips', () => {
   });
 });
 
+describe('PBI-006 automatic PRD trigger status', () => {
+  it('AC-0 shows generating after technical-only approval and removes manual Generate PRD', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({
+        status: 'complete',
+        phaseFlow: 'technical_only',
+        technicalPhaseStatus: 'approved',
+        technicalApprovedAt: new Date(Date.now() - 30_000).toISOString(),
+      }),
+      isLoading: false,
+      isError: false,
+    });
+
+    renderExistingInterview();
+
+    expect(screen.getByTestId('interview-prd-trigger-status')).toHaveTextContent('PRD generating');
+    expect(screen.queryByTestId('generate-prd-btn')).not.toBeInTheDocument();
+  });
+
+  it('AC-1 / AC-3 shows a labeled Retry only with interviews:manage', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({
+        status: 'complete',
+        phaseFlow: 'requirements_only',
+        requirementsPhaseStatus: 'approved',
+        requirementsApprovedAt: new Date(Date.now() - 60_000).toISOString(),
+      }),
+      isLoading: false,
+      isError: false,
+    });
+
+    renderExistingInterview();
+
+    expect(screen.getByRole('button', { name: 'Retry automatic PRD generation' })).toBeInTheDocument();
+  });
+
+  it('AC-2 keeps both-sequential pending after Requirements approval alone', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({
+        phaseFlow: 'both_sequential',
+        requirementsPhaseStatus: 'approved',
+        requirementsApprovedAt: new Date(Date.now() - 120_000).toISOString(),
+        technicalPhaseStatus: 'draft',
+      }),
+      isLoading: false,
+      isError: false,
+    });
+
+    renderExistingInterview();
+
+    expect(screen.getByTestId('interview-prd-trigger-status')).toHaveTextContent(
+      'PRD pending final phase approval',
+    );
+  });
+});
+
+describe('FEAT-006 tabbed phase chrome integration', () => {
+  it('PBI-009 AC-0 / TBI-006 DoD-0 Given draft both-sequential, Then Requirements is active and Technical is locked', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({
+        phaseFlow: 'both_sequential',
+        requirementsPhaseStatus: 'draft',
+        technicalPhaseStatus: 'locked',
+      }),
+      isLoading: false,
+      isError: false,
+    });
+
+    renderExistingInterview();
+
+    expect(screen.getByTestId('interview-phase-tabs')).toBeInTheDocument();
+    expect(screen.getByTestId('interview-phase-tab-requirements')).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(screen.getByTestId('interview-phase-tab-technical')).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+    expect(screen.getByTestId('mock-phase-summary-requirements')).toBeInTheDocument();
+    expect(screen.queryByTestId('mock-phase-summary-technical')).not.toBeInTheDocument();
+  });
+
+  it('PBI-009 AC-2 Given server-approved Requirements, Then unlock does not auto-switch and click presents only Technical summary', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({
+        phaseFlow: 'both_sequential',
+        requirementsPhaseStatus: 'approved',
+        technicalPhaseStatus: 'draft',
+      }),
+      isLoading: false,
+      isError: false,
+    });
+
+    renderExistingInterview();
+
+    const requirementsTab = screen.getByTestId('interview-phase-tab-requirements');
+    const technicalTab = screen.getByTestId('interview-phase-tab-technical');
+    expect(requirementsTab).toHaveAttribute('aria-selected', 'true');
+    expect(technicalTab).not.toHaveAttribute('aria-disabled');
+    expect(screen.getByTestId('mock-phase-summary-requirements')).toBeInTheDocument();
+
+    fireEvent.click(technicalTab);
+
+    expect(technicalTab).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByTestId('mock-phase-summary-requirements')).not.toBeInTheDocument();
+    expect(screen.getByTestId('mock-phase-summary-technical')).toBeInTheDocument();
+    expect(screen.getByRole('tabpanel')).toHaveAttribute(
+      'id',
+      'interview-phase-panel-technical',
+    );
+  });
+
+  it.each([
+    ['PBI-010 AC-0 requirements-only', { phaseFlow: 'requirements_only' as const }, 'requirements'],
+    ['PBI-010 AC-1 technical-only', { phaseFlow: 'technical_only' as const }, 'technical'],
+    ['PBI-010 AC-2 legacy', { phaseFlow: undefined }, null],
+  ])(
+    '%s Given a one-phase or legacy interview, Then existing single-pane chrome remains',
+    (_criterion, overrides, expectedSummary) => {
+      (useInterview as jest.Mock).mockReturnValue({
+        data: makeInterview(overrides),
+        isLoading: false,
+        isError: false,
+      });
+
+      renderExistingInterview();
+
+      expect(screen.queryByTestId('interview-phase-tabs')).not.toBeInTheDocument();
+      expect(screen.queryByRole('tabpanel')).not.toBeInTheDocument();
+      expect(screen.getByTestId('interview-title')).toHaveTextContent('Email Resend Feature');
+      if (expectedSummary) {
+        expect(
+          screen.getByTestId(`mock-phase-summary-${expectedSummary}`),
+        ).toBeInTheDocument();
+      } else {
+        expect(screen.queryByTestId('interview-phase-summaries')).not.toBeInTheDocument();
+      }
+    },
+  );
+});
+
+describe('FEAT-005 Wave 3 Technical phase chat', () => {
+  const seedContext = {
+    originalPrompt: 'Add customer audit exports.',
+    requirementsSummary: 'Exports are CSV and limited to account admins.',
+    requirementsApprovedAt: '2026-09-17T12:00:00Z',
+  };
+
+  it('PBI-008 AC-2 / VT-07 shows the locked card and no composer when Technical is unavailable', () => {
+    mockTechnicalPhaseState = {
+      status: 'unavailable',
+      canStart: false,
+      technicalPhaseChatThreadId: null,
+      seedContext: null,
+      unavailableReason: 'Approve the Requirements summary to unlock Technical.',
+    };
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({
+        phaseFlow: 'technical_only',
+        technicalOwnerId: 'user-1',
+      }),
+      isLoading: false,
+      isError: false,
+    });
+
+    renderExistingInterview();
+
+    expect(screen.getByTestId('technical-phase-locked-card')).toHaveAttribute('role', 'status');
+    expect(screen.getByTestId('technical-phase-locked-card')).toHaveTextContent(
+      'Approve the Requirements summary to unlock Technical.',
+    );
+    expect(screen.queryByTestId('interview-chat-composer')).not.toBeInTheDocument();
+  });
+
+  it('PBI-008 AC-3 / VT-08 shows seeded context and Technical read-only notice to a non-owner', () => {
+    mockTechnicalPhaseState = {
+      status: 'in_progress',
+      canStart: false,
+      technicalPhaseChatThreadId: 'thread-technical-1',
+      seedContext,
+    };
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({
+        authorId: 'user-1',
+        phaseFlow: 'technical_only',
+        technicalOwnerId: 'owner-2',
+        technicalPhaseChatThreadId: 'thread-technical-1',
+      }),
+      isLoading: false,
+      isError: false,
+    });
+
+    renderExistingInterview();
+
+    expect(screen.getByTestId('technical-phase-seeded-context')).toBeInTheDocument();
+    expect(screen.getByTestId('technical-phase-readonly-notice')).toHaveAttribute('role', 'status');
+    expect(screen.queryByTestId('interview-phase-readonly-notice')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('interview-chat-composer')).not.toBeInTheDocument();
+    expect(useChatThread).toHaveBeenCalledWith('thread-technical-1');
+    expect(mockUseAgentChatSession).toHaveBeenCalledWith(
+      'thread-technical-1',
+      expect.any(Object),
+    );
+  });
+
+  it('PBI-008 AC-0 / VT-09 gives the owner a badge, collapsed context, and dedicated composer', () => {
+    mockTechnicalPhaseState = {
+      status: 'in_progress',
+      canStart: false,
+      technicalPhaseChatThreadId: 'thread-technical-1',
+      seedContext,
+    };
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({
+        phaseFlow: 'technical_only',
+        technicalOwnerId: 'user-1',
+        technicalPhaseChatThreadId: 'thread-technical-1',
+      }),
+      isLoading: false,
+      isError: false,
+    });
+
+    renderExistingInterview();
+
+    expect(screen.getByTestId('technical-phase-badge')).toHaveTextContent('Technical Phase');
+    expect(screen.getByTestId('technical-phase-seeded-context')).toBeInTheDocument();
+
+    const promptDisclosure = screen.getByTestId('technical-phase-seeded-context-prompt');
+    const requirementsDisclosure = screen.getByTestId(
+      'technical-phase-seeded-context-requirements',
+    );
+    expect(promptDisclosure.tagName).toBe('BUTTON');
+    expect(requirementsDisclosure.tagName).toBe('BUTTON');
+    expect(promptDisclosure).toHaveAttribute('aria-expanded', 'false');
+    expect(requirementsDisclosure).toHaveAttribute('aria-expanded', 'false');
+    expect(promptDisclosure).toHaveAttribute(
+      'aria-controls',
+      'technical-phase-seeded-context-prompt-body',
+    );
+    expect(requirementsDisclosure).toHaveAttribute(
+      'aria-controls',
+      'technical-phase-seeded-context-requirements-body',
+    );
+    expect(document.getElementById('technical-phase-seeded-context-prompt-body'))
+      .not.toBeVisible();
+    expect(document.getElementById('technical-phase-seeded-context-requirements-body'))
+      .not.toBeVisible();
+    expect(screen.getByTestId('interview-chat-composer')).toBeInTheDocument();
+  });
+
+  it('PBI-008 AC-0 Accessibility Given the seeded context, Then each disclosure expands independently', () => {
+    mockTechnicalPhaseState = {
+      status: 'in_progress',
+      canStart: false,
+      technicalPhaseChatThreadId: 'thread-technical-1',
+      seedContext,
+    };
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({
+        phaseFlow: 'technical_only',
+        technicalOwnerId: 'user-1',
+        technicalPhaseChatThreadId: 'thread-technical-1',
+      }),
+      isLoading: false,
+      isError: false,
+    });
+
+    renderExistingInterview();
+
+    const promptDisclosure = screen.getByTestId('technical-phase-seeded-context-prompt');
+    const requirementsDisclosure = screen.getByTestId(
+      'technical-phase-seeded-context-requirements',
+    );
+    const promptBody = document.getElementById(
+      'technical-phase-seeded-context-prompt-body',
+    );
+    const requirementsBody = document.getElementById(
+      'technical-phase-seeded-context-requirements-body',
+    );
+
+    fireEvent.click(promptDisclosure);
+
+    expect(promptDisclosure).toHaveAttribute('aria-expanded', 'true');
+    expect(promptBody).toBeVisible();
+    expect(promptBody).toHaveTextContent('Add customer audit exports.');
+    expect(requirementsDisclosure).toHaveAttribute('aria-expanded', 'false');
+    expect(requirementsBody).not.toBeVisible();
+
+    fireEvent.click(requirementsDisclosure);
+
+    expect(requirementsDisclosure).toHaveAttribute('aria-expanded', 'true');
+    expect(requirementsBody).toBeVisible();
+    expect(requirementsBody).toHaveTextContent(
+      'Exports are CSV and limited to account admins.',
+    );
+
+    fireEvent.click(promptDisclosure);
+
+    expect(promptDisclosure).toHaveAttribute('aria-expanded', 'false');
+    expect(promptBody).not.toBeVisible();
+    expect(requirementsDisclosure).toHaveAttribute('aria-expanded', 'true');
+    expect(requirementsBody).toBeVisible();
+  });
+
+  it('TBI-005 DoD-1 / VT-09 starts Technical and swaps to the returned thread', async () => {
+    mockTechnicalPhaseState = {
+      status: 'ready',
+      canStart: true,
+      technicalPhaseChatThreadId: null,
+      seedContext: null,
+    };
+    mockStartTechnicalPhase.mockResolvedValue({
+      interviewId: 'iv-1',
+      technicalPhaseChatThreadId: 'thread-technical-new',
+      state: {
+        status: 'in_progress',
+        canStart: false,
+        technicalPhaseChatThreadId: 'thread-technical-new',
+        seedContext,
+      },
+    });
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({
+        phaseFlow: 'technical_only',
+        technicalOwnerId: 'user-1',
+      }),
+      isLoading: false,
+      isError: false,
+    });
+
+    renderExistingInterview();
+    fireEvent.click(screen.getByTestId('technical-phase-start'));
+
+    await waitFor(() => {
+      expect(mockStartTechnicalPhase).toHaveBeenCalledWith('iv-1');
+      expect(useChatThread).toHaveBeenLastCalledWith('thread-technical-new');
+      expect(mockUseAgentChatSession).toHaveBeenLastCalledWith(
+        'thread-technical-new',
+        expect.any(Object),
+      );
+    });
+    expect(mockTrackEvent).toHaveBeenCalledWith('technical_phase_started', {
+      interviewId: 'iv-1',
+      project: 'MaxView',
+    });
+  });
+
+  it('PBI-008 AC-1 renders the Technical amendment confirmation as an inline bubble', () => {
+    mockTechnicalPhaseState = {
+      status: 'in_progress',
+      canStart: false,
+      technicalPhaseChatThreadId: 'thread-technical-1',
+      seedContext,
+    };
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({
+        phaseFlow: 'technical_only',
+        technicalOwnerId: 'user-1',
+        technicalPhaseChatThreadId: 'thread-technical-1',
+      }),
+      isLoading: false,
+      isError: false,
+    });
+    mockUseAgentChatSession.mockReturnValue({
+      ...idleStream,
+      messages: [{
+        id: 'amendment-1',
+        role: 'agent' as const,
+        text: 'The amended summary has been handed to Apex for the Requirements owner to see. Continuing with architecture.',
+        ts: '2026-09-17T12:30:00Z',
+      }],
+    });
+
+    renderExistingInterview();
+
+    expect(screen.getByTestId('technical-phase-amendment-bubble')).toHaveTextContent(
+      'Requirements amended',
+    );
+    expect(screen.getByTestId('technical-phase-amendment-bubble')).toHaveTextContent(
+      'Continuing with architecture.',
+    );
+  });
+});
+
 // ── Chat input locked (complete / archived) ────────────────────────────────────
 
 describe('ExistingInterviewView — input locked when not in_progress', () => {
@@ -640,6 +1079,118 @@ describe('ExistingInterviewView — read-only viewer', () => {
     renderExistingInterview();
     expect(screen.queryByPlaceholderText(/Continue the interview/i)).not.toBeInTheDocument();
     expect(screen.getByText(/viewing another user's interview \(read-only\)/i)).toBeInTheDocument();
+  });
+});
+
+describe('PBI-007 Requirements phase context and owner gating', () => {
+  it('VT-04 keeps a legacy interview unchanged with no phase badge and an available composer', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({ phaseFlow: undefined, requirementsOwnerId: undefined }),
+      isLoading: false,
+      isError: false,
+    });
+
+    renderExistingInterview();
+
+    expect(screen.queryByTestId('interview-phase-badge')).not.toBeInTheDocument();
+    expect(screen.getByTestId('interview-chat-composer')).toBeInTheDocument();
+  });
+
+  it('PBI-007 AC-0 shows the Requirements phase badge only for Requirements-including flows', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({
+        phaseFlow: 'requirements_only',
+        requirementsOwnerId: 'user-1',
+      }),
+      isLoading: false,
+      isError: false,
+    });
+
+    const view = renderExistingInterview();
+
+    expect(screen.getByTestId('interview-phase-badge')).toHaveTextContent(
+      'Requirements Phase',
+    );
+
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({
+        phaseFlow: 'technical_only',
+        technicalOwnerId: 'user-1',
+      }),
+      isLoading: false,
+      isError: false,
+    });
+    view.rerender(interviewTree());
+
+    expect(screen.queryByTestId('interview-phase-badge')).not.toBeInTheDocument();
+  });
+
+  it('PBI-007 AC-3 / VT-05 replaces the composer and interactive choices for a configured non-owner', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({
+        authorId: 'user-1',
+        phaseFlow: 'both_sequential',
+        requirementsOwnerId: 'user-2',
+      }),
+      isLoading: false,
+      isError: false,
+    });
+    mockUseAgentChatSession.mockReturnValue({
+      ...idleStream,
+      messages: [{
+        id: 'requirements-question',
+        role: 'agent' as const,
+        text: 'Who needs this?\n\na. Customers\nb. Staff',
+        ts: '2026-01-01T00:00:00Z',
+      }],
+    });
+
+    renderExistingInterview();
+
+    expect(screen.getByTestId('interview-phase-readonly-notice')).toHaveTextContent(
+      'You are not the owner of this phase and cannot send messages here.',
+    );
+    expect(screen.queryByTestId('interview-chat-composer')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('interview-submit-answers')).not.toBeInTheDocument();
+  });
+
+  it('PBI-007 AC-3 / VT-05 lets the assigned owner compose even when they are not the interview author', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({
+        authorId: 'original-author',
+        phaseFlow: 'requirements_only',
+        requirementsOwnerId: 'user-1',
+      }),
+      isLoading: false,
+      isError: false,
+    });
+
+    renderExistingInterview();
+
+    expect(screen.queryByTestId('interview-phase-readonly-notice')).not.toBeInTheDocument();
+    expect(screen.getByTestId('interview-chat-composer')).toBeInTheDocument();
+  });
+
+  it('PBI-007 AC-3 requires interviews:manage even for the assigned Requirements owner', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({
+        phaseFlow: 'requirements_only',
+        requirementsOwnerId: 'user-1',
+      }),
+      isLoading: false,
+      isError: false,
+    });
+    (useAppShell as jest.Mock).mockReturnValue({
+      selectedProject: 'MaxView',
+      can: jest.fn((permission: string) => permission !== 'interviews:manage'),
+      userId: 'user-1',
+      isAdmin: false,
+    });
+
+    renderExistingInterview();
+
+    expect(screen.getByTestId('interview-phase-readonly-notice')).toBeInTheDocument();
+    expect(screen.queryByTestId('interview-chat-composer')).not.toBeInTheDocument();
   });
 });
 

@@ -1,0 +1,63 @@
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.pending {
+  color: var(--text-muted);
+}
+
+.generating {
+  color: var(--accent-color);
+}
+
+.ready {
+  color: var(--success-color);
+}
+
+.failed {
+  color: var(--error-color);
+}
+
+.spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid color-mix(in srgb, var(--accent-color) 30%, transparent);
+  border-top-color: var(--accent-color);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.error {
+  font-weight: 500;
+  color: var(--error-color);
+}
+
+.action {
+  padding: 2px 7px;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.action:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.action:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

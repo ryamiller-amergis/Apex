@@ -358,6 +358,146 @@
   gap: 12px;
 }
 
+.technicalPhaseBadge {
+  background: color-mix(in srgb, var(--accent-color) 14%, var(--bg-secondary));
+  color: var(--accent-color);
+}
+
+.technicalLockedCard,
+.technicalReadyCard,
+.technicalSeedContext {
+  width: min(100%, 760px);
+  box-sizing: border-box;
+  margin: 0 auto;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-secondary);
+}
+
+.technicalLockedCard,
+.technicalReadyCard {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px;
+}
+
+.technicalLockedCard {
+  border-color: var(--border-color-light);
+  background: var(--bg-tertiary);
+}
+
+.technicalLockedCard h2,
+.technicalReadyCard h2 {
+  margin: 0 0 4px;
+  color: var(--text-primary);
+  font-size: 0.95rem;
+}
+
+.technicalLockedCard p,
+.technicalReadyCard p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.technicalLockedIcon {
+  font-size: 1.2rem;
+}
+
+.technicalReadyCard {
+  justify-content: space-between;
+}
+
+.technicalSeedContext {
+  overflow: hidden;
+}
+
+.technicalSeedContextSection + .technicalSeedContextSection {
+  border-top: 1px solid var(--border-color-light);
+}
+
+.technicalSeedContextToggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.technicalSeedContextToggle:hover {
+  color: var(--accent-color);
+}
+
+.technicalSeedContextBody {
+  padding: 0 14px 14px;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.technicalSeedContextBody[hidden] {
+  display: none;
+}
+
+.technicalSeedContextBody p {
+  margin: 0;
+}
+
+.technicalAmendmentBubble {
+  align-self: flex-start;
+  max-width: 75%;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--success-color) 45%, var(--border-color));
+  border-left: 4px solid var(--success-color);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--success-color) 8%, var(--bg-secondary));
+  color: var(--text-primary);
+  font-size: 0.88rem;
+  line-height: 1.6;
+}
+
+.technicalAmendmentBubble strong {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--success-color);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.technicalAmendmentBubble p {
+  margin: 0;
+}
+
+.technicalReadOnlyNotice {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 24px;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  font-size: 0.83rem;
+}
+
+.phaseSummaries {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+  max-width: 1100px;
+  margin: 24px auto 0;
+}
+
 .preparationState {
   align-self: stretch;
   display: flex;

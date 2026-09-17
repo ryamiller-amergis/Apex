@@ -8,8 +8,15 @@ import type { APIRequestContext } from '@playwright/test';
 
 const E2E_API = 'http://127.0.0.1:3001/e2e';
 
-async function post<T>(request: APIRequestContext, path: string, data?: unknown): Promise<T> {
-  const res = await request.post(`${E2E_API}${path}`, data !== undefined ? { data } : undefined);
+async function post<T>(
+  request: APIRequestContext,
+  path: string,
+  data?: unknown
+): Promise<T> {
+  const res = await request.post(
+    `${E2E_API}${path}`,
+    data !== undefined ? { data } : undefined
+  );
   if (!res.ok()) {
     const body = await res.text().catch(() => '');
     throw new Error(`[E2E seed] POST ${path} → ${res.status()}: ${body}`);
@@ -17,7 +24,11 @@ async function post<T>(request: APIRequestContext, path: string, data?: unknown)
   return res.json() as Promise<T>;
 }
 
-async function patch<T>(request: APIRequestContext, path: string, data: unknown): Promise<T> {
+async function patch<T>(
+  request: APIRequestContext,
+  path: string,
+  data: unknown
+): Promise<T> {
   const res = await request.patch(`${E2E_API}${path}`, { data });
   if (!res.ok()) {
     const body = await res.text().catch(() => '');
@@ -61,9 +72,19 @@ export interface SeededInterview {
   authorId: string;
   project: string;
   chatThreadId: string;
+  technicalPhaseChatThreadId: string | null;
   prdOwnerId: string | null;
   designDocOwnerId: string | null;
   designPrototypeOwnerId: string | null;
+  phaseFlow: 'requirements_only' | 'technical_only' | 'both_sequential' | null;
+  requirementsOwnerId: string | null;
+  technicalOwnerId: string | null;
+  requirementsPhaseStatus: 'draft' | 'locked' | 'approved' | null;
+  technicalPhaseStatus: 'draft' | 'locked' | 'approved' | null;
+  requirementsSummary: string | null;
+  technicalSummary: string | null;
+  requirementsApprovedAt: string | null;
+  technicalApprovedAt: string | null;
 }
 
 export interface SeededAdr {
@@ -169,7 +190,23 @@ export const SeedApi = {
       prototypeStageEnabled?: boolean;
       testCasesEnabled?: boolean;
       skillSettingsId?: string;
-    },
+      phaseFlow?: 'requirements_only' | 'technical_only' | 'both_sequential';
+      requirementsOwnerId?: string;
+      technicalOwnerId?: string;
+      requirementsPhaseStatus?: 'draft' | 'locked' | 'approved';
+      technicalPhaseStatus?: 'draft' | 'locked' | 'approved';
+      requirementsSummary?: string;
+      technicalSummary?: string;
+      requirementsApprovedAt?: string;
+      technicalApprovedAt?: string;
+      skillPath?: string;
+      originalPrompt?: string;
+      technicalMessages?: Array<{
+        role: 'user' | 'agent' | 'system';
+        text: string;
+        hidden?: boolean;
+      }>;
+    }
   ): Promise<SeededInterview> {
     return post<SeededInterview>(request, '/seed/interview', opts);
   },
@@ -180,13 +217,18 @@ export const SeedApi = {
       authorId: string;
       project: string;
       title: string;
-      status?: 'in_progress' | 'generating' | 'proposed' | 'accepted' | 'superseded';
+      status?:
+        | 'in_progress'
+        | 'generating'
+        | 'proposed'
+        | 'accepted'
+        | 'superseded';
       repo?: string;
       content?: string;
       reviewerIds?: string[];
       proposedContent?: string | null;
       skillSettingsId?: string;
-    },
+    }
   ): Promise<SeededAdr> {
     return post<SeededAdr>(request, '/seed/adr', opts);
   },
@@ -214,7 +256,7 @@ export const SeedApi = {
       withReadyTestCases?: boolean;
       designDocApproverIds?: string[];
       designPrototypeApproverIds?: string[];
-    },
+    }
   ): Promise<SeededPrd> {
     return post<SeededPrd>(request, '/seed/prd', opts);
   },
@@ -233,7 +275,7 @@ export const SeedApi = {
       validationPhase?: string | null;
       readinessOverride?: unknown;
       proposedContent?: string | null;
-    },
+    }
   ): Promise<SeededPrd> {
     return patch<SeededPrd>(request, `/seed/prd/${prdId}`, patch_);
   },
@@ -248,7 +290,7 @@ export const SeedApi = {
       status?: DesignPrototypeStatus;
       mockHtml?: string;
       reviewerId?: string;
-    },
+    }
   ): Promise<SeededDesignPrototype> {
     return post<SeededDesignPrototype>(request, '/seed/design-prototype', opts);
   },
@@ -272,7 +314,7 @@ export const SeedApi = {
       assumptionsContent?: string;
       reviewerId?: string;
       proposedDesignContent?: string | null;
-    },
+    }
   ): Promise<SeededDesignDoc> {
     return post<SeededDesignDoc>(request, '/seed/design-doc', opts);
   },
@@ -291,7 +333,7 @@ export const SeedApi = {
       status?: 'open' | 'resolved';
       sectionKey?: string;
       selectorExact?: string;
-    },
+    }
   ): Promise<SeededComment> {
     return post<SeededComment>(request, '/seed/review-comment', opts);
   },
@@ -307,7 +349,7 @@ export const SeedApi = {
       authorUserId: string;
       body: string;
       status?: 'open' | 'resolved';
-    },
+    }
   ): Promise<SeededComment> {
     return post<SeededComment>(request, '/seed/prd-comment', opts);
   },
@@ -320,9 +362,13 @@ export const SeedApi = {
       approverUserIds: string[];
       assignedBy: string;
       status?: 'pending' | 'approved' | 'rejected';
-    },
+    }
   ): Promise<SeededApproverAssignment[]> {
-    return post<SeededApproverAssignment[]>(request, '/seed/approver-assignments', opts);
+    return post<SeededApproverAssignment[]>(
+      request,
+      '/seed/approver-assignments',
+      opts
+    );
   },
 
   async seedProjectSettings(
@@ -350,7 +396,7 @@ export const SeedApi = {
       designPrototypeApprovers?: string[];
       testCaseApprovers?: string[];
       adrApprovers?: string[];
-    },
+    }
   ): Promise<SeededProjectSettings> {
     return post<SeededProjectSettings>(request, '/seed/project-settings', opts);
   },
@@ -366,7 +412,7 @@ export const SeedApi = {
       title: string;
       body?: string;
       link?: string;
-    },
+    }
   ): Promise<SeededNotification> {
     return post<SeededNotification>(request, '/seed/notification', opts);
   },
@@ -378,7 +424,7 @@ export const SeedApi = {
   async setMenuSettings(
     request: APIRequestContext,
     project: string,
-    enabledViews: string[],
+    enabledViews: string[]
   ): Promise<void> {
     await post(request, '/seed/menu-settings', { project, enabledViews });
   },

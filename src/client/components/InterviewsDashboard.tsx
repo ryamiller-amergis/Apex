@@ -24,6 +24,7 @@ import {
 } from '../../shared/utils/prdReadiness';
 import { useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
+import { PrdTriggerStatus } from './PrdTriggerStatus';
 import styles from './InterviewsDashboard.module.css';
 
 type TabId = 'interviews' | 'prds' | 'designs';
@@ -281,11 +282,12 @@ function countLabel(count: number, singular: string, plural: string): string {
 interface InterviewCardProps {
   interview: InterviewSummary;
   canDelete: boolean;
+  linkedPrd?: PrdSummary;
   onDelete: (interview: InterviewSummary) => void;
   'data-testid'?: string;
 }
 
-const InterviewCard: React.FC<InterviewCardProps> = ({ interview, canDelete, onDelete }) => {
+const InterviewCard: React.FC<InterviewCardProps> = ({ interview, canDelete, linkedPrd, onDelete }) => {
   const navigate = useNavigate();
   return (
     <div
@@ -313,6 +315,15 @@ const InterviewCard: React.FC<InterviewCardProps> = ({ interview, canDelete, onD
           </button>
         )}
       </div>
+      {interview.phaseFlow && (
+        <PrdTriggerStatus
+          interview={interview}
+          existingPrdStatus={linkedPrd?.status}
+          canManage={canDelete}
+          onOpenPrd={() => navigate(linkedPrd ? `/backlog/prd/${linkedPrd.id}` : '/backlog?tab=prds')}
+          {...{ 'data-testid': `interview-card-prd-trigger-${interview.id}` }}
+        />
+      )}
       <div className={styles.cardFooter}>
         <span className={`${styles.badge} ${interviewBadgeClass(interview.status)}`}>
           {interviewStatusLabel(interview.status)}
@@ -515,6 +526,7 @@ interface DesignPrdGroupCardProps {
   canDelete: boolean;
   onDeleteDoc: (doc: DesignDocSummary) => void;
   onDeletePrototype: (proto: DesignPrototypeSummary) => void;
+  'data-testid'?: string;
 }
 
 const DesignPrdGroupCard: React.FC<DesignPrdGroupCardProps> = ({
@@ -797,6 +809,7 @@ export const InterviewsDashboard: React.FC = () => {
                   key={iv.id}
                   interview={iv}
                   canDelete={canManage}
+                  linkedPrd={prds.find((prd) => prd.interviewId === iv.id)}
                   onDelete={setPendingDeleteInterview}
                   {...{ 'data-testid': 'interview-card' }}
                 />
@@ -937,6 +950,7 @@ export const InterviewsDashboard: React.FC = () => {
                   canDelete={canManage}
                   onDeleteDoc={setPendingDeleteDesignDoc}
                   onDeletePrototype={setPendingDeletePrototype}
+                  {...{ 'data-testid': `design-prd-group-${group.prdId}` }}
                 />
               ))}
             </div>

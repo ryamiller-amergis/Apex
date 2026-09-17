@@ -27,9 +27,20 @@ import {
   deleteInterview,
   getInterview,
   listInterviews,
+  reassignPhaseOwner,
   updateInterviewStatus,
   updateInterviewTitle,
 } from '../services/interviewService';
+import {
+  amendRequirementsSummary,
+  approvePhaseSummary,
+  editPhaseSummary,
+  getPhaseSummary,
+} from '../services/phaseLifecycleService';
+import {
+  getTechnicalPhaseState,
+  startTechnicalPhase,
+} from '../services/technicalPhaseSkillService';
 import {
   addAdrLink,
   addDesignModuleLink,
@@ -45,7 +56,7 @@ import type {
   AddDesignModuleLinkRequest,
   LinkCandidateType,
 } from '../../shared/types/interviewLinks';
-import { getActiveUsers } from '../services/rbacService';
+import { getActiveUsers, getUserPermissions } from '../services/rbacService';
 import { recordArtifactDoneEvent } from '../services/artifactDoneEventService';
 import {
   createPrd,
@@ -71,6 +82,7 @@ import {
   triggerFixPrdValidation,
   acceptFixPrdValidation,
   triggerFixCoverageGaps,
+  triggerPrdGenerationFromPhaseApproval,
   acceptFixCoverageGaps,
   overridePrdReadiness,
   revertPrdSection,
@@ -119,7 +131,7 @@ import {
   assertResolvedProjectRepositoryReady,
   ProjectRepositoryNotReady,
 } from '../services/projectRepositoryReadinessService';
-import type { InterviewStatus, PrdStatus, ReviewPrdRequest, DesignDocStatus, ReviewDesignDocRequest } from '../../shared/types/interview';
+import type { InterviewPhaseFlow, InterviewStatus, PhaseName, PhaseOwnerRole, PrdStatus, ReviewPrdRequest, DesignDocStatus, ReviewDesignDocRequest } from '../../shared/types/interview';
 import type { PipelinePinPolicy } from '../../shared/types/runGrounding';
 import { resolveReviewerAvailability } from '../services/reviewerAvailabilityService';
 
@@ -187,7 +199,7 @@ router.get('/', requirePermission('interviews:view'), async (req, res, next) => 
 router.post('/', requirePermission('interviews:manage'), requireGroupMembership('BA', 'Manager', 'Product-Owner'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
-    const { project, repo, title, chatThreadId, model, skillSettingsId, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds, prototypeStageEnabled, testCasesEnabled } = req.body as {
+    const { project, repo, title, chatThreadId, model, skillSettingsId, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds, prototypeStageEnabled, testCasesEnabled, phaseFlow, requirementsOwnerId, technicalOwnerId } = req.body as {
       project: string;
       repo: string;
       title?: string;
@@ -204,6 +216,9 @@ router.post('/', requirePermission('interviews:manage'), requireGroupMembership(
       testCaseApproverIds?: string[];
       prototypeStageEnabled?: boolean;
       testCasesEnabled?: boolean;
+      phaseFlow?: InterviewPhaseFlow;
+      requirementsOwnerId?: string;
+      technicalOwnerId?: string;
     };
 
     if (!project || !repo || !chatThreadId) {
@@ -237,10 +252,140 @@ router.post('/', requirePermission('interviews:manage'), requireGroupMembership(
     // @feature-flag:project-repository-checkout-readiness end
 
     const sourceThread = await getThreadAsync(chatThreadId);
-    const result = await createInterview({ userId, project, repo, title, chatThreadId, model, effort: sourceThread?.kickoff.effort, skillSettingsId, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds, prototypeStageEnabled, testCasesEnabled });
+    const result = await createInterview({ userId, project, repo, title, chatThreadId, model, effort: sourceThread?.kickoff.effort, skillSettingsId, prdOwnerId, designDocOwnerId, designPrototypeOwnerId, testCaseOwnerId, prdApproverIds, designDocApproverIds, designPrototypeApproverIds, testCaseApproverIds, prototypeStageEnabled, testCasesEnabled, phaseFlow, requirementsOwnerId, technicalOwnerId });
     res.status(201).json(result);
   } catch (err) {
     console.error('[interviews] POST / failed:', err);
+    next(err);
+  }
+});
+
+router.patch('/:id/phase-owners', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { phase, ownerId } = req.body as { phase?: PhaseOwnerRole; ownerId?: string };
+    if (phase !== 'requirements' && phase !== 'technical') {
+      res.status(400).json({ error: 'phase must be "requirements" or "technical"' });
+      return;
+    }
+    if (typeof ownerId !== 'string' || !ownerId.trim()) {
+      res.status(400).json({ error: 'ownerId is required' });
+      return;
+    }
+
+    const interview = await getInterview(id);
+    if (!interview) {
+      res.status(404).json({ error: 'Interview not found' });
+      return;
+    }
+
+    const userId = getUserId(req);
+    const permissions = await getUserPermissions(userId, interview.project);
+    const result = await reassignPhaseOwner(
+      id,
+      phase,
+      ownerId.trim(),
+      userId,
+      permissions,
+    );
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+function parsePhase(value: string): PhaseName | null {
+  return value === 'requirements' || value === 'technical' ? value : null;
+}
+
+router.get('/:id/phases/:phase/summary', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    const phase = parsePhase(req.params.phase);
+    if (!phase) {
+      res.status(400).json({ error: 'phase must be "requirements" or "technical"' });
+      return;
+    }
+    const summary = await getPhaseSummary(req.params.id, phase);
+    if (!summary) {
+      res.status(404).json({ error: 'Phase summary not found' });
+      return;
+    }
+    res.json(summary);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/:id/phases/:phase/summary', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const phase = parsePhase(req.params.phase);
+    if (!phase) {
+      res.status(400).json({ error: 'phase must be "requirements" or "technical"' });
+      return;
+    }
+    const { content } = req.body as { content?: unknown };
+    if (typeof content !== 'string') {
+      res.status(400).json({ error: 'content must be a string' });
+      return;
+    }
+    await editPhaseSummary(req.params.id, phase, getUserId(req), content);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/phases/:phase/approve', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const phase = parsePhase(req.params.phase);
+    if (!phase) {
+      res.status(400).json({ error: 'phase must be "requirements" or "technical"' });
+      return;
+    }
+    const result = await approvePhaseSummary(req.params.id, phase, getUserId(req));
+    if (result.isLastConfiguredPhase) {
+      void Promise.resolve(
+        triggerPrdGenerationFromPhaseApproval(req.params.id),
+      ).catch((err: unknown) => {
+        console.error(
+          `[interviews] Failed to start phase-approved PRD generation (interviewId=${req.params.id}):`,
+          err,
+        );
+      });
+    }
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/phases/requirements/amend', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const { content } = req.body as { content?: unknown };
+    if (typeof content !== 'string') {
+      res.status(400).json({ error: 'content must be a string' });
+      return;
+    }
+    const result = await amendRequirementsSummary(req.params.id, getUserId(req), content);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/:id/phases/technical', requirePermission('interviews:view'), async (req, res, next) => {
+  try {
+    res.json(await getTechnicalPhaseState(req.params.id));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/phases/technical/start', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const result = await startTechnicalPhase(req.params.id, getUserId(req));
+    res.status(201).json(result);
+  } catch (err) {
     next(err);
   }
 });
@@ -280,6 +425,34 @@ router.get('/screen-inventory', requirePermission('interviews:view'), async (_re
 });
 
 // ── PRDs ──────────────────────────────────────────────────────────────────────
+
+router.post('/:interviewId/prds/retry-from-phase', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const interview = await getInterview(req.params.interviewId);
+    if (!interview) {
+      res.status(404).json({ error: 'Interview not found' });
+      return;
+    }
+
+    const finalPhaseApproved =
+      (interview.phaseFlow === 'requirements_only'
+        && interview.requirementsPhaseStatus === 'approved')
+      || ((interview.phaseFlow === 'technical_only'
+          || interview.phaseFlow === 'both_sequential')
+        && interview.technicalPhaseStatus === 'approved');
+    if (!finalPhaseApproved) {
+      res.status(409).json({
+        error: 'The configured last phase must be approved before retrying PRD generation.',
+      });
+      return;
+    }
+
+    await triggerPrdGenerationFromPhaseApproval(req.params.interviewId);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
 
 router.get('/prds', requirePermission('interviews:view'), async (req, res, next) => {
   try {

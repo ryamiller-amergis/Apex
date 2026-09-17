@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { InterviewsDashboard } from '../InterviewsDashboard';
-import type { DesignDocSummary } from '../../../shared/types/interview';
+import type { DesignDocSummary, InterviewSummary } from '../../../shared/types/interview';
 import type { DesignPrototypeSummary } from '../../../shared/types/designPrototype';
 
 jest.mock('react-router-dom', () => ({
@@ -20,6 +20,7 @@ jest.mock('../../hooks/useInterviews', () => ({
   useDeleteInterview: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
   useDeletePrd: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
   useDeleteDesignDoc: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
+  useRetryPrdFromPhase: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
 }));
 
 jest.mock('../../hooks/useDesignPrototypes', () => ({
@@ -39,7 +40,7 @@ jest.mock('../ConfirmDeleteModal', () => ({
 }));
 
 import { useAppShell } from '../../hooks/useAppShell';
-import { useDesignDocList } from '../../hooks/useInterviews';
+import { useDesignDocList, useInterviewList } from '../../hooks/useInterviews';
 import { useDesignPrototypeList } from '../../hooks/useDesignPrototypes';
 
 function makeDoc(overrides: Partial<DesignDocSummary> = {}): DesignDocSummary {
@@ -193,5 +194,36 @@ describe('InterviewsDashboard design grouping', () => {
 
     expect(screen.getByText('Only doc')).toBeInTheDocument();
     expect(screen.getByText('Only proto')).toBeInTheDocument();
+  });
+});
+
+describe('PBI-006 InterviewsDashboard PRD trigger status', () => {
+  it('AC-1 shows failed automatic generation and a keyboard-accessible Retry on the interview card', () => {
+    const interview: InterviewSummary = {
+      id: 'iv-failed',
+      chatThreadId: 'thread-1',
+      authorId: 'user-1',
+      title: 'Failed automatic PRD',
+      project: 'Apex',
+      repo: 'Apex',
+      status: 'complete',
+      prdCount: 0,
+      phaseFlow: 'requirements_only',
+      requirementsPhaseStatus: 'approved',
+      requirementsApprovedAt: new Date(Date.now() - 60_000).toISOString(),
+      createdAt: '2026-09-17T12:00:00Z',
+      updatedAt: '2026-09-17T12:00:00Z',
+    };
+    (useInterviewList as jest.Mock).mockReturnValue({
+      data: [interview],
+      isLoading: false,
+    });
+
+    renderDashboard('/backlog');
+
+    expect(screen.getByTestId('interview-card-prd-trigger-iv-failed')).toHaveTextContent(
+      'PRD generation failed',
+    );
+    expect(screen.getByRole('button', { name: 'Retry automatic PRD generation' })).toBeEnabled();
   });
 });

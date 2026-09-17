@@ -119,10 +119,29 @@ jest.mock('../services/groupService', () => ({
 
 const mockResolveThreadAccess = jest.fn();
 const mockCanWriteThread = jest.fn();
+// Requirements-phase decision for POST /threads/:id/messages (FEAT-004 / PBI-007).
+// Held in a plain variable so every existing suite keeps the legacy path.
+let mockRequirementsPhaseWrite: unknown = { outcome: 'not_applicable' };
+const mockRequirementsPhaseWriteArgs: unknown[][] = [];
+let mockTechnicalPhaseWrite: unknown = { outcome: 'not_applicable' };
+const mockSyncTechnicalPhaseArtifacts = jest.fn().mockResolvedValue({
+  amendedRequirements: false,
+  syncedTechnicalSummary: false,
+});
 
 jest.mock('../services/threadAccessService', () => ({
   resolveThreadAccess: (...args: unknown[]) => mockResolveThreadAccess(...args),
   canWriteThread: (...args: unknown[]) => mockCanWriteThread(...args),
+  resolveRequirementsPhaseMessageWrite: async (...args: unknown[]) => {
+    mockRequirementsPhaseWriteArgs.push(args);
+    return mockRequirementsPhaseWrite;
+  },
+  resolveTechnicalPhaseMessageWrite: async () => mockTechnicalPhaseWrite,
+}));
+
+jest.mock('../services/technicalPhaseSkillService', () => ({
+  syncTechnicalPhaseArtifacts: (...args: unknown[]) =>
+    mockSyncTechnicalPhaseArtifacts(...args),
 }));
 
 import chatRouter, {
@@ -1181,5 +1200,191 @@ describe('POST /api/chat/threads/:id/messages — cached grounding delegation', 
     expect(res.status).toBe(202);
     expect(mockGetAdoTokenForUser).not.toHaveBeenCalled();
     expect(mockRegisterChatAdoWriteTurn).not.toHaveBeenCalled();
+  });
+});
+
+// ── Requirements phase owner guard (FEAT-004 / PBI-007 / TBI-004) ────────────
+
+describe('POST /api/chat/threads/:id/messages — Requirements phase owner guard', () => {
+  const threadId = 'requirements-phase-thread';
+  // The phase was reassigned, so the assigned owner is not the user who
+  // started the chat thread.
+  const reassignedThread = {
+    id: threadId,
+    userId: 'original-author',
+    kickoff: { project: 'Apex', repo: 'AI-Pilot' },
+    messages: [],
+    status: 'idle',
+    workspaceDir: '/tmp/ws',
+    flagged: false,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    lastActivityAt: '2026-01-01T00:00:00.000Z',
+  } as ChatThread;
+
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    jest.clearAllMocks();
+    mockRequirementsPhaseWriteArgs.length = 0;
+    mockRequirementsPhaseWrite = { outcome: 'not_applicable' };
+    mockResolveThreadAccess.mockResolvedValue({ thread: reassignedThread, access: 'read' });
+    mockCanWriteThread.mockResolvedValue(false);
+    mockChatService.sendMessage.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    mockRequirementsPhaseWrite = { outcome: 'not_applicable' };
+  });
+
+  function send() {
+    return request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: 'Here is the feature intent' });
+  }
+
+  it('AC-3 / VT-06: a reader who is not the assigned Requirements owner is refused, not 404', async () => {
+    mockRequirementsPhaseWrite = { outcome: 'not_owner' };
+
+    const res = await send();
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({
+      error: 'Only the assigned Requirements owner can send messages in this phase',
+    });
+    expect(mockChatService.sendMessage).not.toHaveBeenCalled();
+    expect(mockRequirementsPhaseWriteArgs[0]).toEqual(['user-1', threadId]);
+  });
+
+  it('AC-0 / VT-07: the assigned Requirements owner sends even without thread ownership', async () => {
+    mockRequirementsPhaseWrite = { outcome: 'allowed', thread: reassignedThread };
+
+    const res = await send();
+
+    expect(res.status).toBe(202);
+    expect(mockChatService.sendMessage).toHaveBeenCalledWith(
+      threadId,
+      'Here is the feature intent',
+      undefined,
+      [],
+      { turnSkill: undefined },
+    );
+    expect(mockCanWriteThread).not.toHaveBeenCalled();
+  });
+
+  it('RBAC NFR: the assigned owner without interviews:manage is rejected before the send', async () => {
+    mockRequirementsPhaseWrite = { outcome: 'missing_manage_permission' };
+
+    const res = await send();
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ missing: ['interviews:manage'] });
+    expect(mockChatService.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('VT-08: a legacy interview author keeps the existing accepted-message behavior', async () => {
+    mockResolveThreadAccess.mockResolvedValue({ thread: reassignedThread, access: 'owner' });
+    mockCanWriteThread.mockResolvedValue(true);
+
+    const res = await send();
+
+    expect(res.status).toBe(202);
+    expect(mockChatService.sendMessage).toHaveBeenCalled();
+  });
+
+  it('VT-08: a legacy thread the user cannot write still returns 404', async () => {
+    const res = await send();
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Thread not found' });
+    expect(mockChatService.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when the guarded interview thread no longer exists', async () => {
+    mockRequirementsPhaseWrite = { outcome: 'thread_not_found' };
+
+    const res = await send();
+
+    expect(res.status).toBe(404);
+    expect(mockChatService.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('leaves other thread mutation routes on the existing owner rules', async () => {
+    mockRequirementsPhaseWrite = { outcome: 'allowed', thread: reassignedThread };
+
+    const cancelRes = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/cancel`)
+      .send({});
+    const deleteRes = await request(buildApp()).delete(`/api/chat/threads/${threadId}`);
+
+    expect(cancelRes.status).toBe(404);
+    expect(deleteRes.status).toBe(404);
+  });
+});
+
+describe('POST /api/chat/threads/:id/messages — Technical phase owner guard', () => {
+  const threadId = 'technical-phase-thread';
+  const technicalThread = {
+    id: threadId,
+    userId: 'technical-owner',
+    kickoff: { project: 'Apex', repo: 'AI-Pilot' },
+    messages: [],
+    status: 'idle',
+    workspaceDir: '/tmp/ws',
+    flagged: false,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    lastActivityAt: '2026-01-01T00:00:00.000Z',
+  } as ChatThread;
+
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    jest.clearAllMocks();
+    mockRequirementsPhaseWrite = { outcome: 'not_applicable' };
+    mockTechnicalPhaseWrite = { outcome: 'not_applicable' };
+    mockResolveThreadAccess.mockResolvedValue({ thread: technicalThread, access: 'read' });
+    mockCanWriteThread.mockResolvedValue(false);
+    mockChatService.sendMessage.mockResolvedValue(undefined);
+  });
+
+  it('AC-3 / VT-06 rejects a non-owner even if normal thread ownership would allow sending', async () => {
+    mockTechnicalPhaseWrite = { outcome: 'not_owner' };
+    mockCanWriteThread.mockResolvedValue(true);
+
+    const response = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: 'Use a service boundary' });
+
+    expect(response.status).toBe(403);
+    expect(mockChatService.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('AC-1 / DoD-2 / VT-04 syncs artifacts once a successful turn completes', async () => {
+    mockTechnicalPhaseWrite = { outcome: 'allowed', thread: technicalThread };
+
+    const response = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: 'Wrap up' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(response.status).toBe(202);
+    expect(mockSyncTechnicalPhaseArtifacts).toHaveBeenCalledTimes(1);
+    expect(mockSyncTechnicalPhaseArtifacts)
+      .toHaveBeenCalledWith(threadId, 'user-1');
+  });
+
+  it('DoD-2 logs artifact sync failure without changing the accepted transport response', async () => {
+    mockTechnicalPhaseWrite = { outcome: 'allowed', thread: technicalThread };
+    mockSyncTechnicalPhaseArtifacts.mockRejectedValueOnce(new Error('lifecycle write failed'));
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const response = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: 'Wrap up' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(response.status).toBe(202);
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('Technical phase artifact sync failed'),
+      'lifecycle write failed',
+    );
+    consoleError.mockRestore();
   });
 });

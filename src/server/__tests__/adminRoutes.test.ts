@@ -572,6 +572,44 @@ describe('PUT /api/admin/project-settings/:project', () => {
     );
   });
 
+  it('FEAT-005 S1 forwards independent Technical Phase config on PUT', async () => {
+    mockProjectSettings.upsertSkillConfig.mockResolvedValue({
+      ...savedConfig,
+      technicalPhaseSkillPath: '.cursor/skills/technical-phase/SKILL.md',
+      technicalPhaseModel: 'claude-opus-4-6',
+      technicalPhaseEffort: 'high',
+    });
+
+    const res = await request(buildApp())
+      .put('/api/admin/project-settings/cfg-1')
+      .send({
+        project: 'proj-alpha',
+        friendlyName: 'Primary',
+        skillRepo: 'org/updated-skills',
+        skillBranch: 'release',
+        technicalSkillPath: '.cursor/skills/technical-analysis/SKILL.md',
+        technicalPhaseSkillPath: '.cursor/skills/technical-phase/SKILL.md',
+        technicalPhaseModel: 'claude-opus-4-6',
+        technicalPhaseEffort: 'high',
+      });
+
+    expect(res.status).toBe(200);
+    expect(mockProjectSettings.upsertSkillConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'cfg-1',
+        technicalSkillPath: '.cursor/skills/technical-analysis/SKILL.md',
+        technicalPhaseSkillPath: '.cursor/skills/technical-phase/SKILL.md',
+        technicalPhaseModel: 'claude-opus-4-6',
+        technicalPhaseEffort: 'high',
+      }),
+    );
+    expect(res.body).toMatchObject({
+      technicalPhaseSkillPath: '.cursor/skills/technical-phase/SKILL.md',
+      technicalPhaseModel: 'claude-opus-4-6',
+      technicalPhaseEffort: 'high',
+    });
+  });
+
   it('returns 400 when skillRepo is missing', async () => {
     const res = await request(buildApp())
       .put('/api/admin/project-settings/proj-alpha')

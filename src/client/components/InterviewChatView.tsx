@@ -27,14 +27,33 @@ import {
   useCreatePrd,
   useCreateInterview,
   useDeleteInterview,
+  useActiveUsers,
+  useReassignPhaseOwner,
+  useStartTechnicalPhase,
+  useTechnicalPhase,
 } from '../hooks/useInterviews';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { SectionOwnerModal } from './SectionOwnerModal';
+import { PhaseOwnerChip } from './PhaseOwnerChip';
+import { PhaseSummaryCard } from './PhaseSummaryCard';
+import { PhaseContextBadge } from './PhaseContextBadge';
+import { PhaseReadOnlyNotice } from './PhaseReadOnlyNotice';
+import { PrdTriggerStatus } from './PrdTriggerStatus';
+import {
+  InterviewPhaseTabs,
+  type InterviewPhaseTabId,
+} from './InterviewPhaseTabs';
 import { useGroundingResumeGate } from '../hooks/useGroundingResumeGate';
 import type { PipelinePinPolicy } from '../../shared/types/runGrounding';
-import type { InterviewStatus } from '../../shared/types/interview';
+import {
+  resolveRequirementsPhaseSkillPath,
+  type InterviewPhaseFlow,
+  type InterviewStatus,
+  type TechnicalPhaseState,
+} from '../../shared/types/interview';
 import type { InterviewSkillOption } from '../../shared/types/projectSettings';
 import { effortLabel } from '../../shared/utils/effort';
+import { shouldRenderPhaseTabs } from '../utils/interviewPhaseFlow';
 import { parseAgentMessage, isAgentOtherOptionText } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { trackEvent, trackException } from '../services/telemetry';
@@ -63,6 +82,9 @@ function badgeLabel(status: InterviewStatus): string {
     case 'archived': return 'Archived';
   }
 }
+
+const isRequirementsAmendmentConfirmation = (text: string): boolean =>
+  /amended (?:requirements )?summary has been handed to Apex/i.test(text);
 
 // ── Interactive choice block ──────────────────────────────────────────────────
 
@@ -458,7 +480,7 @@ const NewInterviewCompose: React.FC = () => {
     setShowOwnerModal(true);
   }, [input, title, attachments, isSending, resolvedRepoName, speech, repoReadiness.isReady, repoReadiness.message]);
 
-  const handleCreateInterview = useCallback(async (selections: { prdOwnerId?: string; designDocOwnerId?: string; designPrototypeOwnerId?: string; testCaseOwnerId?: string; prdApproverIds?: string[]; designDocApproverIds?: string[]; designPrototypeApproverIds?: string[]; testCaseApproverIds?: string[] }) => {
+  const handleCreateInterview = useCallback(async (selections: { prdOwnerId?: string; designDocOwnerId?: string; designPrototypeOwnerId?: string; testCaseOwnerId?: string; phaseFlow?: InterviewPhaseFlow; requirementsOwnerId?: string; technicalOwnerId?: string; prdApproverIds?: string[]; designDocApproverIds?: string[]; designPrototypeApproverIds?: string[]; testCaseApproverIds?: string[] }) => {
     const text = input.trim();
     const trimmedTitle = title.trim();
     if (!resolvedRepoName || !trimmedTitle) return;
@@ -475,7 +497,9 @@ const NewInterviewCompose: React.FC = () => {
           repo: resolvedRepoName,
           branch: resolvedBranch,
           skillProvider: skillConfig?.skillProvider ?? undefined,
-          skillPath: resolvedSkillPath ?? grillSkill?.path,
+          skillPath: resolveRequirementsPhaseSkillPath(selections.phaseFlow)
+            ?? resolvedSkillPath
+            ?? grillSkill?.path,
           model,
           skillSettingsId: skillConfig?.id ?? undefined,
         },
@@ -492,6 +516,9 @@ const NewInterviewCompose: React.FC = () => {
         designDocOwnerId: selections.designDocOwnerId,
         designPrototypeOwnerId: selections.designPrototypeOwnerId,
         testCaseOwnerId: selections.testCaseOwnerId,
+        phaseFlow: selections.phaseFlow,
+        requirementsOwnerId: selections.requirementsOwnerId,
+        technicalOwnerId: selections.technicalOwnerId,
         prdApproverIds: selections.prdApproverIds,
         designDocApproverIds: selections.designDocApproverIds,
         designPrototypeApproverIds: selections.designPrototypeApproverIds,
@@ -958,6 +985,9 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     location.state as ExistingInterviewLocationState | null;
 
   const { data: interview, isLoading, isError } = useInterview(id);
+  const { data: phaseOwnerUsers = [], isLoading: phaseOwnerUsersLoading } =
+    useActiveUsers(interview?.project);
+  const reassignPhaseOwner = useReassignPhaseOwner();
   const { data: skillConfig } = useProjectSkillConfig(interview?.project ?? null);
   const repoReadiness = useProjectRepositoryReadiness(
     skillConfig?.id ?? interview?.skillSettingsId,
@@ -974,6 +1004,13 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [wrapUpDismissed, setWrapUpDismissed] = useState(false);
   const [showSendConfirm, setShowSendConfirm] = useState(false);
+  const [activePhaseTab, setActivePhaseTab] =
+    useState<InterviewPhaseTabId>('requirements');
+  const [startedTechnicalState, setStartedTechnicalState] =
+    useState<TechnicalPhaseState | null>(null);
+  const [isSeedPromptExpanded, setIsSeedPromptExpanded] = useState(false);
+  const [isSeedRequirementsExpanded, setIsSeedRequirementsExpanded] =
+    useState(false);
   const [showLinkedContext, setShowLinkedContext] = useState(
     Boolean(linkedContextLocationState?.openLinkedContext),
   );
@@ -990,6 +1027,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const startChat = useStartChat();
   const createPrd = useCreatePrd();
   const deleteInterview = useDeleteInterview();
+  const startTechnicalPhase = useStartTechnicalPhase();
 
   const { data: prdRepos = [] } = useSkillRepos(interview?.project ?? null);
   const prdRepoInfo = prdRepos.find((r) => r.name === (skillConfig?.skillRepo ?? interview?.repo));
@@ -1016,13 +1054,33 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
   const speech = useSpeechInput(useCallback((text: string) => setInput(text), []));
 
+  const hasTechnicalPhase = interview?.phaseFlow === 'technical_only'
+    || interview?.phaseFlow === 'both_sequential';
+  const isTechnicalActive = interview?.phaseFlow === 'technical_only'
+    || (interview?.phaseFlow === 'both_sequential'
+      && activePhaseTab === 'technical');
+  const { data: fetchedTechnicalState } = useTechnicalPhase(
+    interview?.id ?? null,
+    hasTechnicalPhase,
+  );
+  const technicalState = startedTechnicalState
+    && fetchedTechnicalState?.technicalPhaseChatThreadId
+      !== startedTechnicalState.technicalPhaseChatThreadId
+    ? startedTechnicalState
+    : fetchedTechnicalState ?? startedTechnicalState;
+  const activeChatThreadId = isTechnicalActive
+    ? technicalState?.technicalPhaseChatThreadId
+      ?? interview?.technicalPhaseChatThreadId
+      ?? null
+    : interview?.chatThreadId ?? null;
+
   const {
     data: chatThread,
     isLoading: isChatThreadLoading,
     isError: isChatThreadError,
-  } = useChatThread(interview?.chatThreadId ?? null);
+  } = useChatThread(activeChatThreadId);
 
-  const session = useAgentChatSession(interview?.chatThreadId ?? null, {
+  const session = useAgentChatSession(activeChatThreadId, {
     initialMessages: chatThread?.messages,
     initialStatus: chatThread?.status,
     initialActiveRunId: chatThread?.activeRunId,
@@ -1059,6 +1117,34 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     interview?.project ?? null,
     isRunning,
   );
+  const canManage = can('interviews:manage');
+  const isAuthor = interview?.authorId === userId;
+  const hasRequirementsPhase = interview?.phaseFlow === 'requirements_only'
+    || interview?.phaseFlow === 'both_sequential';
+  const isRequirementsActive = !isTechnicalActive && hasRequirementsPhase;
+  const isRequirementsPhaseReadOnly = isRequirementsActive
+    && (!canManage || interview?.requirementsOwnerId !== userId);
+  const isTechnicalPhaseReadOnly = isTechnicalActive
+    && (!canManage || interview?.technicalOwnerId !== userId);
+  const isReadOnlyViewer = isTechnicalActive
+    ? isTechnicalPhaseReadOnly
+    : isRequirementsActive
+      ? isRequirementsPhaseReadOnly
+    : !isAuthor && !isAdmin;
+  const isStatusLocked = interview?.status !== 'in_progress';
+  const isTechnicalUnavailable = isTechnicalActive
+    && technicalState?.status === 'unavailable';
+  const isTechnicalReady = isTechnicalActive
+    && technicalState?.status === 'ready';
+  const isTechnicalStatePending = isTechnicalActive && !technicalState;
+  const isTechnicalComplete = isTechnicalActive
+    && technicalState?.status === 'complete';
+  const isChatLocked = isReadOnlyViewer
+    || isStatusLocked
+    || isTechnicalUnavailable
+    || isTechnicalReady
+    || isTechnicalStatePending
+    || isTechnicalComplete;
   const draftAttachmentChars = attachments.reduce((sum, a) => sum + a.content.length, 0);
   const contextEstimate = useContextEstimate(
     visibleMessagesForContext, input, streamingText, model, draftAttachmentChars,
@@ -1070,6 +1156,12 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
       setModel(resolved);
     }
   }, [chatThread?.id, interview?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    setStartedTechnicalState(null);
+    setIsSeedPromptExpanded(false);
+    setIsSeedRequirementsExpanded(false);
+  }, [id]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -1150,8 +1242,9 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     if (
       (!text && outgoingAttachments.length === 0)
       || isInteractionBusy
-      || !interview?.chatThreadId
+      || !activeChatThreadId
       || resumeGate.composerBlocked
+      || isChatLocked
     ) return;
 
     if (speech.isListening) speech.stop();
@@ -1167,7 +1260,8 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     clearAttachments,
     clearSendError,
     isInteractionBusy,
-    interview?.chatThreadId,
+    isChatLocked,
+    activeChatThreadId,
     model,
     resumeGate.composerBlocked,
     session,
@@ -1192,6 +1286,21 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const handleStatusChange = useCallback(async (newStatus: InterviewStatus) => {
     await updateStatus.mutateAsync({ id, status: newStatus });
   }, [id, updateStatus]);
+
+  const handleStartTechnicalPhase = useCallback(async () => {
+    if (!interview || !isTechnicalActive || isTechnicalPhaseReadOnly) return;
+    const response = await startTechnicalPhase.mutateAsync(interview.id);
+    setStartedTechnicalState(response.state);
+    trackEvent('technical_phase_started', {
+      interviewId: interview.id,
+      project: interview.project,
+    });
+  }, [
+    interview,
+    isTechnicalActive,
+    isTechnicalPhaseReadOnly,
+    startTechnicalPhase,
+  ]);
 
   const startTitleEdit = useCallback(() => {
     if (!interview) return;
@@ -1284,11 +1393,8 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     !(m.role === 'user' && m.text === 'Begin.') &&
     m.toolName !== '_reasoning' && m.toolName !== '_thinking'
   );
-  const canManage = can('interviews:manage');
-  const isAuthor = interview.authorId === userId;
-  const isReadOnlyViewer = !isAuthor && !isAdmin;
-  const isStatusLocked = interview.status !== 'in_progress';
-  const isChatLocked = isReadOnlyViewer || isStatusLocked;
+  const canChangePhaseOwners = canManage && (isAuthor || can('admin:roles'));
+  const renderPhaseTabs = shouldRenderPhaseTabs(interview.phaseFlow);
 
   // Pre-compute cumulative question offset for each assistant message so Q-numbers
   // are globally sequential across the whole conversation rather than restarting at 1
@@ -1355,6 +1461,20 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               >
                 {badgeLabel(interview.status)}
               </span>
+              {isRequirementsActive && (
+                <PhaseContextBadge {...{ 'data-testid': 'interview-phase-badge' }} />
+              )}
+              {isTechnicalActive
+                && (technicalState?.status === 'in_progress'
+                  || technicalState?.status === 'complete') && (
+                <span
+                  className={`${styles.badge} ${styles.technicalPhaseBadge}`}
+                  role="status"
+                  {...{ 'data-testid': 'technical-phase-badge' }}
+                >
+                  Technical Phase
+                </span>
+              )}
             </div>
             <div className={styles.titleMeta}>
               <span>{interview.project}</span>
@@ -1377,8 +1497,42 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               endpoint={`/api/interviews/${interview.id}/usage`}
               visible={interview.status === 'complete'}
             />
-            {(interview.prdOwnerName || interview.designDocOwnerName || interview.designPrototypeOwnerName) && (
+            {(interview.prdOwnerName || interview.designDocOwnerName || interview.designPrototypeOwnerName || interview.requirementsOwnerName || interview.technicalOwnerName) && (
               <div className={styles.ownerChips} {...{ 'data-testid': 'interview-owner-chips' }}>
+                {interview.requirementsOwnerId && interview.requirementsOwnerName && (
+                  <PhaseOwnerChip
+                    phase="requirements"
+                    ownerId={interview.requirementsOwnerId}
+                    ownerName={interview.requirementsOwnerName}
+                    status={interview.requirementsPhaseStatus}
+                    canChange={canChangePhaseOwners}
+                    users={phaseOwnerUsers}
+                    usersLoading={phaseOwnerUsersLoading}
+                    {...{ 'data-testid': 'interview-owner-chip-requirements' }}
+                    onSave={(ownerId) => reassignPhaseOwner.mutateAsync({
+                      id,
+                      phase: 'requirements',
+                      ownerId,
+                    })}
+                  />
+                )}
+                {interview.technicalOwnerId && interview.technicalOwnerName && (
+                  <PhaseOwnerChip
+                    phase="technical"
+                    ownerId={interview.technicalOwnerId}
+                    ownerName={interview.technicalOwnerName}
+                    status={interview.technicalPhaseStatus}
+                    canChange={canChangePhaseOwners}
+                    users={phaseOwnerUsers}
+                    usersLoading={phaseOwnerUsersLoading}
+                    {...{ 'data-testid': 'interview-owner-chip-technical' }}
+                    onSave={(ownerId) => reassignPhaseOwner.mutateAsync({
+                      id,
+                      phase: 'technical',
+                      ownerId,
+                    })}
+                  />
+                )}
                 {interview.prdOwnerName && (
                   <span className={styles.ownerChip} {...{ 'data-testid': 'interview-owner-chip-prd' }}>
                     PRD: {interview.prdOwnerName}
@@ -1418,6 +1572,18 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   </button>
                 ))}
               </div>
+            )}
+            {interview.phaseFlow && (
+              <PrdTriggerStatus
+                interview={interview}
+                existingPrdStatus={interview.prds[0]?.status}
+                canManage={canManage}
+                onOpenPrd={() => {
+                  const prd = interview.prds[0];
+                  navigate(prd ? `/backlog/prd/${prd.id}` : '/backlog?tab=prds');
+                }}
+                {...{ 'data-testid': 'interview-prd-trigger-status' }}
+              />
             )}
           </div>
         </div>
@@ -1484,7 +1650,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   Archive
                 </button>
               )}
-              {interview.status === 'complete' && (
+              {interview.status === 'complete' && !interview.phaseFlow && (
                 <button
                   className={styles.actionBtnPrimary}
                   onClick={requestGeneratePrd}
@@ -1549,8 +1715,115 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         </div>
       )}
 
-      <div className={styles.messages}>
+      {renderPhaseTabs && (
+        <InterviewPhaseTabs
+          phaseFlow={interview.phaseFlow}
+          requirementsPhaseStatus={interview.requirementsPhaseStatus}
+          activeTab={activePhaseTab}
+          onTabChange={setActivePhaseTab}
+        />
+      )}
+
+      <div
+        className={styles.messages}
+        {...(renderPhaseTabs
+          ? {
+              id: `interview-phase-panel-${activePhaseTab}`,
+              role: 'tabpanel',
+              'aria-labelledby': `interview-phase-tab-${activePhaseTab}`,
+            }
+          : {})}
+      >
         <div className={styles.messageList}>
+          {isTechnicalUnavailable && (
+            <section
+              className={styles.technicalLockedCard}
+              role="status"
+              {...{ 'data-testid': 'technical-phase-locked-card' }}
+            >
+              <span className={styles.technicalLockedIcon} aria-hidden="true">🔒</span>
+              <div>
+                <h2>Technical phase locked</h2>
+                <p>
+                  {technicalState?.unavailableReason
+                    ?? 'Approve the Requirements summary to unlock Technical.'}
+                </p>
+              </div>
+            </section>
+          )}
+
+          {isTechnicalReady && !isTechnicalPhaseReadOnly && (
+            <section className={styles.technicalReadyCard}>
+              <div>
+                <h2>Technical phase is ready</h2>
+                <p>Start a dedicated Technical conversation using the approved requirements.</p>
+              </div>
+              <button
+                className={styles.actionBtnPrimary}
+                type="button"
+                disabled={!technicalState?.canStart || startTechnicalPhase.isPending}
+                onClick={() => void handleStartTechnicalPhase()}
+                {...{ 'data-testid': 'technical-phase-start' }}
+              >
+                {startTechnicalPhase.isPending ? 'Starting…' : 'Start Technical Phase'}
+              </button>
+            </section>
+          )}
+
+          {isTechnicalActive && technicalState?.seedContext && (
+            <section
+              className={styles.technicalSeedContext}
+              {...{ 'data-testid': 'technical-phase-seeded-context' }}
+            >
+              <div className={styles.technicalSeedContextSection}>
+                <button
+                  className={styles.technicalSeedContextToggle}
+                  type="button"
+                  aria-expanded={isSeedPromptExpanded}
+                  aria-controls="technical-phase-seeded-context-prompt-body"
+                  onClick={() => setIsSeedPromptExpanded((expanded) => !expanded)}
+                  {...{ 'data-testid': 'technical-phase-seeded-context-prompt' }}
+                >
+                  <span>Original Prompt</span>
+                  <span aria-hidden="true">{isSeedPromptExpanded ? '−' : '+'}</span>
+                </button>
+                <div
+                  id="technical-phase-seeded-context-prompt-body"
+                  className={styles.technicalSeedContextBody}
+                  hidden={!isSeedPromptExpanded}
+                >
+                  <p>{technicalState.seedContext.originalPrompt}</p>
+                </div>
+              </div>
+              <div className={styles.technicalSeedContextSection}>
+                <button
+                  className={styles.technicalSeedContextToggle}
+                  type="button"
+                  aria-expanded={isSeedRequirementsExpanded}
+                  aria-controls="technical-phase-seeded-context-requirements-body"
+                  onClick={() =>
+                    setIsSeedRequirementsExpanded((expanded) => !expanded)}
+                  {...{
+                    'data-testid': 'technical-phase-seeded-context-requirements',
+                  }}
+                >
+                  <span>Approved Requirements Summary</span>
+                  <span aria-hidden="true">{isSeedRequirementsExpanded ? '−' : '+'}</span>
+                </button>
+                <div
+                  id="technical-phase-seeded-context-requirements-body"
+                  className={styles.technicalSeedContextBody}
+                  hidden={!isSeedRequirementsExpanded}
+                >
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {technicalState.seedContext.requirementsSummary
+                      ?? 'No Requirements summary was provided for this flow.'}
+                  </ReactMarkdown>
+                </div>
+              </div>
+            </section>
+          )}
+
           {hasPreparationError && (
             <div className={styles.preparationState} role="alert">
               <div className={styles.preparationErrorIcon}>!</div>
@@ -1630,6 +1903,22 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               }
               return <div key={msg.id} className={styles.messageBubbleSystem}>{msg.text}</div>;
             }
+            if (
+              isTechnicalActive
+              && msg.role === 'agent'
+              && isRequirementsAmendmentConfirmation(msg.text)
+            ) {
+              return (
+                <div
+                  key={msg.id}
+                  className={styles.technicalAmendmentBubble}
+                  {...{ 'data-testid': 'technical-phase-amendment-bubble' }}
+                >
+                  <strong>Requirements amended</strong>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+                </div>
+              );
+            }
             if (msg.role === 'user') {
               return (
                 <div key={msg.id} className={`${styles.messageBubble} ${styles.messageBubbleUser}`}>
@@ -1686,9 +1975,55 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
           <div ref={messagesEndRef} />
         </div>
+
+        {interview.phaseFlow && (
+          <section
+            className={styles.phaseSummaries}
+            aria-label="Phase summaries"
+            {...{ 'data-testid': 'interview-phase-summaries' }}
+          >
+            {(interview.phaseFlow === 'requirements_only'
+              || (interview.phaseFlow === 'both_sequential'
+                && activePhaseTab === 'requirements')) && (
+              <PhaseSummaryCard
+                interviewId={interview.id}
+                phase="requirements"
+                currentUserId={userId}
+                technicalOwnerId={interview.technicalOwnerId}
+                canManage={canManage}
+                {...{ 'data-testid': 'phase-summary-requirements-card' }}
+              />
+            )}
+            {(interview.phaseFlow === 'technical_only'
+              || (interview.phaseFlow === 'both_sequential'
+                && activePhaseTab === 'technical')) && (
+              <PhaseSummaryCard
+                interviewId={interview.id}
+                phase="technical"
+                currentUserId={userId}
+                technicalOwnerId={interview.technicalOwnerId}
+                canManage={canManage}
+                {...{ 'data-testid': 'phase-summary-technical-card' }}
+              />
+            )}
+          </section>
+        )}
       </div>
 
-      {isChatLocked ? (
+      {isTechnicalUnavailable || isTechnicalStatePending ? null
+      : isTechnicalPhaseReadOnly && !isStatusLocked ? (
+        <div
+          className={styles.technicalReadOnlyNotice}
+          role="status"
+          {...{ 'data-testid': 'technical-phase-readonly-notice' }}
+        >
+          <span aria-hidden="true">🔒</span>
+          <span>You are not the owner of this phase and cannot send messages here.</span>
+        </div>
+      ) : isRequirementsPhaseReadOnly && !isStatusLocked ? (
+        <PhaseReadOnlyNotice />
+      ) : isTechnicalReady || (isTechnicalComplete && !isStatusLocked) ? null
+      : isChatLocked ? (
         <div className={styles.lockedNotice} {...{ 'data-testid': 'locked-notice' }}>
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
             <rect x="3" y="7" width="10" height="8" rx="1.5" />
@@ -1731,7 +2066,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             </span>
           </div>
 
-          {contextEstimate.isCritical && (
+          {contextEstimate.isCritical && !interview.phaseFlow && (
             <div className={styles.wrapUpBannerCritical}>
               <svg className={styles.wrapUpIcon} viewBox="0 0 20 20" fill="currentColor">
                 <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
@@ -1757,7 +2092,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             </div>
           )}
 
-          {contextEstimate.isNearLimit && !contextEstimate.isCritical && !wrapUpDismissed && (
+          {contextEstimate.isNearLimit && !contextEstimate.isCritical && !wrapUpDismissed && !interview.phaseFlow && (
             <div className={styles.wrapUpBannerWarn}>
               <svg className={styles.wrapUpIcon} viewBox="0 0 20 20" fill="currentColor">
                 <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />

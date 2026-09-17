@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useActiveUsers, useAvailableApproverPool, useInterviewGroupsWithMembers } from '../hooks/useInterviews';
 import { useReviewerAvailability } from '../hooks/useReviewerAvailability';
-import type { ActiveUser } from '../../shared/types/interview';
+import type { ActiveUser, InterviewPhaseFlow } from '../../shared/types/interview';
 import type { ReviewerDocumentType } from '../../shared/types/approvals';
 import type { ApproverPoolResponse } from '../../shared/types/projectSettings';
 import styles from './SectionOwnerModal.module.css';
@@ -21,6 +21,34 @@ interface ReviewerModule {
   selectedIds: string[];
   onToggle: (id: string) => void;
 }
+
+interface PhaseFlowOption {
+  value: InterviewPhaseFlow;
+  testId: string;
+  label: string;
+  description: string;
+}
+
+const PHASE_FLOW_OPTIONS: PhaseFlowOption[] = [
+  {
+    value: 'requirements_only',
+    testId: 'phase-flow-radio-requirements-only',
+    label: 'Requirements only',
+    description: 'A single Requirements phase; no Technical review needed.',
+  },
+  {
+    value: 'technical_only',
+    testId: 'phase-flow-radio-technical-only',
+    label: 'Technical only',
+    description: 'Skip Requirements; go straight to the Technical review phase.',
+  },
+  {
+    value: 'both_sequential',
+    testId: 'phase-flow-radio-both-sequential',
+    label: 'Both in sequence',
+    description: 'Requirements phase first, then Technical review after it is approved.',
+  },
+];
 
 interface UserComboboxProps {
   id: string;
@@ -190,6 +218,9 @@ interface SectionOwnerModalProps {
     designDocOwnerId?: string;
     designPrototypeOwnerId?: string;
     testCaseOwnerId?: string;
+    phaseFlow?: InterviewPhaseFlow;
+    requirementsOwnerId?: string;
+    technicalOwnerId?: string;
     prdApproverIds?: string[];
     designDocApproverIds?: string[];
     designPrototypeApproverIds?: string[];
@@ -290,6 +321,9 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
   testCasesEnabled = true,
 }) => {
   const [step, setStep] = useState<1 | 2>(1);
+  const [phaseFlow, setPhaseFlow] = useState<InterviewPhaseFlow>('both_sequential');
+  const [requirementsOwnerId, setRequirementsOwnerId] = useState('');
+  const [technicalOwnerId, setTechnicalOwnerId] = useState('');
   const [prdOwnerId, setPrdOwnerId] = useState('');
   const [designDocOwnerId, setDesignDocOwnerId] = useState('');
   const [designPrototypeOwnerId, setDesignPrototypeOwnerId] = useState('');
@@ -312,6 +346,8 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
     designDoc: ['Developer'],
     designPrototype: ['UI/UX'],
     testCase: ['QA'],
+    requirements: ['BA', 'Product-Owner', 'Manager'],
+    technical: ['Developer'],
   }), []);
 
   const usersFromGroups = useCallback((groupNames: string[]): ActiveUser[] => {
@@ -334,6 +370,15 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
   const ddOwnerUsers = useMemo(() => usersFromGroups(OWNER_GROUP_MAP.designDoc), [usersFromGroups, OWNER_GROUP_MAP]);
   const protoOwnerUsers = useMemo(() => usersFromGroups(OWNER_GROUP_MAP.designPrototype), [usersFromGroups, OWNER_GROUP_MAP]);
   const qaOwnerUsers = useMemo(() => usersFromGroups(OWNER_GROUP_MAP.testCase), [usersFromGroups, OWNER_GROUP_MAP]);
+  const requirementsOwnerUsers = useMemo(() => usersFromGroups(OWNER_GROUP_MAP.requirements), [usersFromGroups, OWNER_GROUP_MAP]);
+  const technicalOwnerUsers = useMemo(() => usersFromGroups(OWNER_GROUP_MAP.technical), [usersFromGroups, OWNER_GROUP_MAP]);
+
+  /** Dropping a phase from the flow also drops the owner that was picked for it. */
+  const handlePhaseFlowChange = useCallback((next: InterviewPhaseFlow) => {
+    setPhaseFlow(next);
+    if (next === 'technical_only') setRequirementsOwnerId('');
+    if (next === 'requirements_only') setTechnicalOwnerId('');
+  }, []);
 
   const togglePrdApprover = useCallback((id: string) => {
     setPrdApproverIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
@@ -351,11 +396,16 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
     setTestCaseApproverIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
   }, []);
 
+  const requirementsPhaseEnabled = phaseFlow !== 'technical_only';
+  const technicalPhaseEnabled = phaseFlow !== 'requirements_only';
+
   const allOwnersSelected =
     !!prdOwnerId &&
     !!designDocOwnerId &&
     (!prototypeStageEnabled || !!designPrototypeOwnerId) &&
-    (!testCasesEnabled || !!testCaseOwnerId);
+    (!testCasesEnabled || !!testCaseOwnerId) &&
+    (!requirementsPhaseEnabled || !!requirementsOwnerId) &&
+    (!technicalPhaseEnabled || !!technicalOwnerId);
 
   const enabledModules: ReviewerModule[] = useMemo(() => {
     const modules: ReviewerModule[] = [
@@ -447,6 +497,9 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
       designDocOwnerId,
       designPrototypeOwnerId: prototypeStageEnabled ? designPrototypeOwnerId : undefined,
       testCaseOwnerId: testCasesEnabled ? testCaseOwnerId : undefined,
+      phaseFlow,
+      requirementsOwnerId: requirementsPhaseEnabled ? requirementsOwnerId : undefined,
+      technicalOwnerId: technicalPhaseEnabled ? technicalOwnerId : undefined,
       prdApproverIds: prdApproverIds.length > 0 ? prdApproverIds : undefined,
       designDocApproverIds: designDocApproverIds.length > 0 ? designDocApproverIds : undefined,
       designPrototypeApproverIds:
@@ -466,6 +519,9 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
       designDocOwnerId,
       designPrototypeOwnerId: prototypeStageEnabled ? designPrototypeOwnerId : undefined,
       testCaseOwnerId: testCasesEnabled ? testCaseOwnerId : undefined,
+      phaseFlow,
+      requirementsOwnerId: requirementsPhaseEnabled ? requirementsOwnerId : undefined,
+      technicalOwnerId: technicalPhaseEnabled ? technicalOwnerId : undefined,
       prdApproverIds: [],
       designDocApproverIds: [],
       designPrototypeApproverIds: [],
@@ -529,6 +585,71 @@ export const SectionOwnerModal: React.FC<SectionOwnerModalProps> = ({
         <div className={styles.scrollBody}>
           {effectiveStep === 1 && (
             <div className={styles.fields}>
+              <fieldset className={styles.phaseFlowGroup}>
+                <legend className={styles.phaseFlowLegend}>Phase Flow</legend>
+                {PHASE_FLOW_OPTIONS.map((option) => (
+                  <label
+                    key={option.value}
+                    className={`${styles.phaseFlowOption} ${phaseFlow === option.value ? styles.phaseFlowOptionSelected : ''}`}
+                  >
+                    <input
+                      type="radio"
+                      className={styles.phaseFlowRadio}
+                      name="section-owner-phase-flow"
+                      value={option.value}
+                      checked={phaseFlow === option.value}
+                      onChange={() => handlePhaseFlowChange(option.value)}
+                      disabled={isSubmitting}
+                      {...{ 'data-testid': option.testId }}
+                    />
+                    <span className={styles.phaseFlowOptionText}>
+                      <span className={styles.phaseFlowOptionLabel}>{option.label}</span>
+                      <span className={styles.phaseFlowOptionDesc}>{option.description}</span>
+                    </span>
+                  </label>
+                ))}
+              </fieldset>
+
+              {requirementsPhaseEnabled && (
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="so-requirements-owner">
+                    Requirements Owner *
+                  </label>
+                  {isLoading || groupsLoading ? (
+                    <span className={styles.loadingText}>Loading users…</span>
+                  ) : (
+                    <UserCombobox
+                      id="so-requirements-owner"
+                      users={requirementsOwnerUsers}
+                      selectedId={requirementsOwnerId}
+                      onSelect={setRequirementsOwnerId}
+                      placeholder="Search by name or email…"
+                      disabled={isSubmitting}
+                    />
+                  )}
+                </div>
+              )}
+
+              {technicalPhaseEnabled && (
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="so-technical-owner">
+                    Technical Owner *
+                  </label>
+                  {isLoading || groupsLoading ? (
+                    <span className={styles.loadingText}>Loading users…</span>
+                  ) : (
+                    <UserCombobox
+                      id="so-technical-owner"
+                      users={technicalOwnerUsers}
+                      selectedId={technicalOwnerId}
+                      onSelect={setTechnicalOwnerId}
+                      placeholder="Search by name or email…"
+                      disabled={isSubmitting}
+                    />
+                  )}
+                </div>
+              )}
+
               <div className={styles.field}>
                 <label className={styles.label} htmlFor="so-prd-owner">
                   PRD Owner (BA) *

@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   ActiveUser,
+  AmendRequirementsSummaryRequest,
+  ApprovePhaseSummaryResponse,
   CreateDesignDocResponse,
   CreateInterviewResponse,
   CreatePrdAdoItemsRequest,
@@ -10,16 +12,23 @@ import type {
   DesignDocStatus,
   DesignDocSummary,
   Interview,
+  InterviewPhaseFlow,
   InterviewStatus,
   InterviewSummary,
+  PhaseName,
+  PhaseOwnerRole,
+  PhaseSummary,
   Prd,
   PrdStatus,
   PrdSummary,
   ReviewDesignDocRequest,
   ReviewPrdRequest,
   ReviewPrdResponse,
+  RetryPrdFromPhaseResponse,
+  StartTechnicalPhaseResponse,
   TestCaseCoverageSummary,
   TestCaseRecord,
+  TechnicalPhaseState,
 } from '../../shared/types/interview';
 import type {
   DocumentApproverAssignment,
@@ -32,6 +41,7 @@ import type {
 import type { ApproverPoolResponse } from '../../shared/types/projectSettings';
 import type { ScreenInventoryRoute } from '../../shared/types/designSystem';
 import type { GroupWithMembers } from '../../shared/types/groups';
+import { prdTriggerPollInterval } from '../utils/prdTriggerDisplayState';
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: 'include', ...init });
@@ -59,6 +69,7 @@ export function useInterviewList(filters?: {
     queryKey: ['interviews', filters],
     queryFn: () => apiFetch(`/api/interviews${qs}`),
     staleTime: 30_000,
+    refetchInterval: (query) => prdTriggerPollInterval(query.state.data),
   });
 }
 
@@ -68,6 +79,38 @@ export function useInterview(id: string | null) {
     queryFn: () => apiFetch(`/api/interviews/${id}`),
     enabled: !!id,
     staleTime: 30_000,
+    refetchInterval: (query) => prdTriggerPollInterval(query.state.data),
+  });
+}
+
+export function useTechnicalPhase(
+  interviewId: string | null,
+  enabled = true,
+) {
+  return useQuery<TechnicalPhaseState>({
+    queryKey: ['technical-phase', interviewId],
+    queryFn: () =>
+      apiFetch(`/api/interviews/${interviewId}/phases/technical`),
+    enabled: enabled && !!interviewId,
+    staleTime: 30_000,
+  });
+}
+
+export function useStartTechnicalPhase() {
+  const qc = useQueryClient();
+  return useMutation<StartTechnicalPhaseResponse, Error, string>({
+    mutationFn: (interviewId) =>
+      apiFetch(`/api/interviews/${interviewId}/phases/technical/start`, {
+        method: 'POST',
+      }),
+    onSuccess: (response, interviewId) => {
+      qc.setQueryData(
+        ['technical-phase', interviewId],
+        response.state,
+      );
+      void qc.invalidateQueries({ queryKey: ['interview', interviewId] });
+      void qc.invalidateQueries({ queryKey: ['interviews'] });
+    },
   });
 }
 
@@ -399,6 +442,9 @@ export function useCreateInterview() {
       testCaseApproverIds?: string[];
       prototypeStageEnabled?: boolean;
       testCasesEnabled?: boolean;
+      phaseFlow?: InterviewPhaseFlow;
+      requirementsOwnerId?: string;
+      technicalOwnerId?: string;
     }
   >({
     mutationFn: (body) =>
@@ -408,6 +454,101 @@ export function useCreateInterview() {
         body: JSON.stringify(body),
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['interviews'] }),
+  });
+}
+
+export function useReassignPhaseOwner() {
+  const qc = useQueryClient();
+  return useMutation<
+    { phase: PhaseOwnerRole; ownerId: string; ownerName: string | null },
+    Error,
+    { id: string; phase: PhaseOwnerRole; ownerId: string }
+  >({
+    mutationFn: ({ id, phase, ownerId }) =>
+      apiFetch(`/api/interviews/${id}/phase-owners`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phase, ownerId }),
+      }),
+    onSuccess: (_data, { id }) => {
+      void qc.invalidateQueries({ queryKey: ['interview', id] });
+      void qc.invalidateQueries({ queryKey: ['interviews'] });
+    },
+  });
+}
+
+export function usePhaseSummary(
+  interviewId: string | null,
+  phase: PhaseName,
+) {
+  return useQuery<PhaseSummary>({
+    queryKey: ['phase-summary', interviewId, phase],
+    queryFn: () =>
+      apiFetch(`/api/interviews/${interviewId}/phases/${phase}/summary`),
+    enabled: !!interviewId,
+    staleTime: 30_000,
+  });
+}
+
+export function useEditPhaseSummary() {
+  const qc = useQueryClient();
+  return useMutation<
+    { ok: true },
+    Error,
+    { interviewId: string; phase: PhaseName; content: string }
+  >({
+    mutationFn: ({ interviewId, phase, content }) =>
+      apiFetch(`/api/interviews/${interviewId}/phases/${phase}/summary`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      }),
+    onSuccess: (_data, { interviewId, phase }) => {
+      void qc.invalidateQueries({ queryKey: ['phase-summary', interviewId, phase] });
+      void qc.invalidateQueries({ queryKey: ['interview', interviewId] });
+    },
+  });
+}
+
+export function useApprovePhaseSummary() {
+  const qc = useQueryClient();
+  return useMutation<
+    ApprovePhaseSummaryResponse,
+    Error,
+    { interviewId: string; phase: PhaseName }
+  >({
+    mutationFn: ({ interviewId, phase }) =>
+      apiFetch(`/api/interviews/${interviewId}/phases/${phase}/approve`, {
+        method: 'POST',
+      }),
+    onSuccess: (_data, { interviewId, phase }) => {
+      void qc.invalidateQueries({ queryKey: ['phase-summary', interviewId, phase] });
+      void qc.invalidateQueries({ queryKey: ['phase-summary', interviewId] });
+      void qc.invalidateQueries({ queryKey: ['interview', interviewId] });
+      void qc.invalidateQueries({ queryKey: ['interviews'] });
+    },
+  });
+}
+
+export function useAmendRequirementsSummary() {
+  const qc = useQueryClient();
+  return useMutation<
+    { ok: true; notifiedOwnerId: string | null },
+    Error,
+    { interviewId: string } & AmendRequirementsSummaryRequest
+  >({
+    mutationFn: ({ interviewId, content }) =>
+      apiFetch(`/api/interviews/${interviewId}/phases/requirements/amend`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      }),
+    onSuccess: (_data, { interviewId }) => {
+      void qc.invalidateQueries({
+        queryKey: ['phase-summary', interviewId, 'requirements'],
+      });
+      void qc.invalidateQueries({ queryKey: ['interview', interviewId] });
+    },
   });
 }
 
@@ -481,6 +622,21 @@ export function useCreatePrd() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['prds'] });
       qc.invalidateQueries({ queryKey: ['interviews'] });
+    },
+  });
+}
+
+export function useRetryPrdFromPhase() {
+  const qc = useQueryClient();
+  return useMutation<RetryPrdFromPhaseResponse, Error, string>({
+    mutationFn: (interviewId) =>
+      apiFetch(`/api/interviews/${interviewId}/prds/retry-from-phase`, {
+        method: 'POST',
+      }),
+    onSuccess: (_data, interviewId) => {
+      void qc.invalidateQueries({ queryKey: ['interview', interviewId] });
+      void qc.invalidateQueries({ queryKey: ['interviews'] });
+      void qc.invalidateQueries({ queryKey: ['prds'] });
     },
   });
 }

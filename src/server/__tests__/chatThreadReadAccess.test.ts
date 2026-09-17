@@ -96,6 +96,9 @@ const mockCanWriteThread = jest.fn();
 jest.mock('../services/threadAccessService', () => ({
   resolveThreadAccess: (...args: unknown[]) => mockResolveThreadAccess(...args),
   canWriteThread: (...args: unknown[]) => mockCanWriteThread(...args),
+  // No Requirements phase configured on these threads, so the write gate stays
+  // on the existing owner rules (FEAT-004 / PBI-007).
+  resolveRequirementsPhaseMessageWrite: async () => ({ outcome: 'not_applicable' }),
 }));
 
 import chatRouter from '../routes/chat';

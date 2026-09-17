@@ -1441,6 +1441,7 @@ describe('document assistant MCP wiring', () => {
     [{ assistantType: 'prd' as const }, 'prd'],
     [{ assistantType: 'design-doc' as const }, 'design-doc'],
     [{ skillPath: '.cursor/skills/grill-with-docs/SKILL.md' }, 'interview'],
+    [{ skillPath: '.cursor/skills/requirements-phase/SKILL.md' }, 'interview'],
     [{ skillPath: '.cursor/skills/kick-off/SKILL.md' }, 'interview'],
     [{ skillPath: '.cursor/skills/to-prd/SKILL.md' }, 'prd'],
     [{ skillPath: '.cursor/skills/prd-spec-review/SKILL.md' }, 'prd'],

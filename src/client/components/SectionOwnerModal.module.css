@@ -110,6 +110,83 @@
   letter-spacing: 0.04em;
 }
 
+/* ── Phase flow radio group ──────────────────────────────────────── */
+
+.phaseFlowGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.phaseFlowLegend {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0;
+  margin-bottom: 6px;
+}
+
+.phaseFlowOption {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.phaseFlowOption:hover {
+  border-color: var(--accent-color);
+}
+
+.phaseFlowOptionSelected {
+  background: var(--brand-surface);
+  border-color: var(--accent-color);
+}
+
+.phaseFlowRadio {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--accent-color);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.phaseFlowRadio:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.phaseFlowOptionText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.phaseFlowOptionLabel {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+.phaseFlowOptionDesc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
 /* ── Combobox typeahead ───────────────────────────────────────────── */
 
 .comboWrapper {

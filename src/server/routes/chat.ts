@@ -19,7 +19,12 @@ import { db } from '../db/drizzle';
 import { eq, desc } from 'drizzle-orm';
 import { agentRuns, prds } from '../db/schema';
 import { toggleFlag } from '../services/chatThreadRepository';
-import { resolveThreadAccess, canWriteThread } from '../services/threadAccessService';
+import {
+  resolveThreadAccess,
+  canWriteThread,
+  resolveRequirementsPhaseMessageWrite,
+  resolveTechnicalPhaseMessageWrite,
+} from '../services/threadAccessService';
 import { getUserId } from '../utils/requestUser';
 import type {
   AgentRunEventEnvelope,
@@ -35,7 +40,12 @@ import type {
   StartChatRequest,
   SendMessageRequest,
 } from '../../shared/types/chat';
-import type { ThreadAccess } from '../services/threadAccessService';
+import type {
+  ThreadAccess,
+  RequirementsPhaseMessageWrite,
+  TechnicalPhaseMessageWrite,
+} from '../services/threadAccessService';
+import { syncTechnicalPhaseArtifacts } from '../services/technicalPhaseSkillService';
 import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import { requirePermission } from '../middleware/rbac';
 import { writeSseEvent, startSseHeartbeat } from '../utils/sseResponse';
@@ -267,6 +277,91 @@ async function requireThreadWrite(req: Request, res: Response, next: NextFunctio
   treq.thread = result.thread;
   treq.threadAccess = result.access;
   next();
+}
+
+/**
+ * Write gate for POST /threads/:id/messages only.
+ *
+ * While an interview's Requirements phase is open, the assigned Requirements
+ * owner is the only writer (FEAT-004 / PBI-007 AC-0, AC-3) and may not be the
+ * user who started the chat thread, so ownership is not required on this route.
+ * Every other thread — technical-only phases, legacy interviews without phase
+ * fields, and non-interview chats — goes through the unchanged write rules.
+ */
+async function requireMessageSendAccess(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  const userId = getUserId(req);
+  let phase: RequirementsPhaseMessageWrite;
+  try {
+    phase = await resolveRequirementsPhaseMessageWrite(userId, req.params.id);
+  } catch (err: unknown) {
+    console.error(
+      `[chat] Requirements phase write check failed for thread ${req.params.id}:`,
+      errorMessage(err),
+    );
+    res.status(500).json({ error: 'Failed to authorize this message' });
+    return;
+  }
+
+  switch (phase.outcome) {
+    case 'not_applicable':
+      break;
+    case 'not_owner':
+      res.status(403).json({
+        error: 'Only the assigned Requirements owner can send messages in this phase',
+      });
+      return;
+    case 'missing_manage_permission':
+      res.status(403).json({ error: 'Forbidden', missing: ['interviews:manage'] });
+      return;
+    case 'thread_not_found':
+      res.status(404).json({ error: 'Thread not found' });
+      return;
+    default: {
+      const treq = req as ThreadRequest;
+      treq.thread = phase.thread;
+      treq.threadAccess = phase.thread.userId === userId ? 'owner' : 'read';
+      next();
+      return;
+    }
+  }
+
+  let technicalPhase: TechnicalPhaseMessageWrite;
+  try {
+    technicalPhase = await resolveTechnicalPhaseMessageWrite(userId, req.params.id);
+  } catch (err: unknown) {
+    console.error(
+      `[chat] Technical phase write check failed for thread ${req.params.id}:`,
+      errorMessage(err),
+    );
+    res.status(500).json({ error: 'Failed to authorize this message' });
+    return;
+  }
+  switch (technicalPhase.outcome) {
+    case 'not_applicable':
+      await requireThreadWrite(req, res, next);
+      return;
+    case 'not_owner':
+      res.status(403).json({
+        error: 'Only the assigned Technical owner can send messages in this phase',
+      });
+      return;
+    case 'missing_manage_permission':
+      res.status(403).json({ error: 'Forbidden', missing: ['interviews:manage'] });
+      return;
+    case 'thread_not_found':
+      res.status(404).json({ error: 'Thread not found' });
+      return;
+    default: {
+      const treq = req as ThreadRequest;
+      treq.thread = technicalPhase.thread;
+      treq.threadAccess = technicalPhase.thread.userId === userId ? 'owner' : 'read';
+      next();
+    }
+  }
 }
 
 function readAttachments(raw: unknown): ChatAttachment[] {
@@ -609,7 +704,7 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
  * Send a user message. The agent response streams via SSE.
  * Body: SendMessageRequest
  */
-router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, res: Response) => {
+router.post('/threads/:id/messages', requireMessageSendAccess, async (req: Request, res: Response) => {
   const body = req.body as Partial<SendMessageRequest>;
   let attachments: ChatAttachment[];
   let turnSkill: ChatTurnSkill | undefined;
@@ -682,6 +777,16 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
   sendMessage(threadId, body.text ?? '', body.model, attachments, {
     turnSkill,
   })
+    .then(async () => {
+      try {
+        await syncTechnicalPhaseArtifacts(threadId, getUserId(req));
+      } catch (err: unknown) {
+        console.error(
+          `[chat] Technical phase artifact sync failed for thread ${threadId}:`,
+          errorMessage(err),
+        );
+      }
+    })
     .finally(releaseAdoWriteTurn)
     .catch((err: unknown) => {
       console.error(`[chat] sendMessage error for thread ${threadId}:`, errorMessage(err));
