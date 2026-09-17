@@ -94,7 +94,7 @@ Each child plan must be approved before its files are edited.
 
 ### Task 1: Reconcile production database and Terraform ownership
 
-**Status:** Reconciliation complete; old-server decommission pending.
+**Status:** Complete for this branch.
 
 **Files:**
 
@@ -135,8 +135,6 @@ longer owns `psql-apex-eus2`
   the same production host.
 - [x] Confirm the next production deployment passes the hostname guard
   ([run 35265446952](https://github.com/ryamiller-amergis/Apex/actions/runs/35265446952)).
-- [ ] Remove the old server only after state no longer owns it, connections are
-  explained, a backup is retained, and the user separately approves deletion.
 
 **Verification:**
 
@@ -155,7 +153,8 @@ replacement or destroy.
 
 ### Task 2: Make Phase 0 protections durable
 
-**Status:** Implementation complete; deployment/load verification pending.
+**Status:** Complete for this branch; rollout gates remain before any capacity
+increase.
 
 **Files:**
 
@@ -201,10 +200,14 @@ replacement or destroy.
 - [x] Add `AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS=600000` to both slot deployment
   contracts.
 - [x] Mark the heartbeat setting sticky.
-- [ ] Verify staging and production retain the same value through a swap test.
 - [x] Add safe database-pool aggregates to telemetry and agent health.
 - [x] Run the isolated watcher/reaper/publisher/health suites (353 tests passed
   together on 2026-09-17).
+
+**Rollout gates (not branch implementation):**
+
+- [ ] Verify staging and production retain the same heartbeat value through a
+  swap test.
 - [ ] Run a 25-document v1 regression test before increasing any capacity.
 
 ---
