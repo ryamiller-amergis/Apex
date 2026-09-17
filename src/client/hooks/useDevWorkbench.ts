@@ -10,6 +10,7 @@ import type {
   CreatePrResponse,
   StartDevSessionRequest,
 } from '../../shared/types/devWorkbench';
+import type { WorkItemCommentCountResponse } from '../../shared/types/workItemCommentCount';
 
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: 'include', ...options });
@@ -26,6 +27,19 @@ export function useAssignedWorkItems(project: string | null) {
     queryFn: () => apiFetch(`/api/dev-workbench/workitems?project=${encodeURIComponent(project!)}`),
     enabled: !!project,
     staleTime: 60_000,
+  });
+}
+
+export function useWorkItemCommentCount(workItemId: number | null | undefined, project: string | null) {
+  return useQuery<WorkItemCommentCountResponse>({
+    queryKey: ['dev-workbench', 'comment-count', project, workItemId],
+    queryFn: () =>
+      apiFetch(
+        `/api/dev-workbench/work-items/${workItemId}/comment-count?project=${encodeURIComponent(project!)}`,
+      ),
+    enabled: !!project && workItemId != null && workItemId > 0,
+    staleTime: 60_000,
+    retry: false,
   });
 }
 

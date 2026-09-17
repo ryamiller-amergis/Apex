@@ -26,6 +26,7 @@ import {
 } from '../../shared/utils/myWorkStatus';
 import StartLocalDevModal, { type StartLocalDevTarget } from './StartLocalDevModal';
 import FeatureContextModal from './FeatureContextModal';
+import { MyWorkItemTitle } from './my-work/MyWorkItemTitle';
 import styles from './DevWorkbenchView.module.css';
 
 const BoardAssignedSection: React.FC<{ project: string }> = ({ project }) => {
@@ -54,7 +55,11 @@ const BoardAssignedSection: React.FC<{ project: string }> = ({ project }) => {
           {boardItems.map((item: ApexWorkItem) => (
             <div key={item.id} className={styles.item}>
               <div className={styles['item-info']}>
-                <span className={styles['item-title']}>{item.title}</span>
+                <MyWorkItemTitle
+                  title={item.title}
+                  workItemId={item.adoWorkItemId}
+                  project={project}
+                />
                 <div className={styles['item-meta']}>
                   <span className={styles['item-id']}>APX-{item.itemNumber}</span>
                   <span className={styles.badge}>{item.type}</span>
@@ -699,7 +704,11 @@ export const DevWorkbenchView: React.FC = () => {
             return (
               <div key={item.id} className={styles.item}>
                 <div className={styles['item-info']}>
-                  <span className={styles['item-title']}>{item.title}</span>
+                  <MyWorkItemTitle
+                    title={item.title}
+                    workItemId={item.id}
+                    project={selectedProject!}
+                  />
                   <div className={styles['item-meta']}>
                     <span className={styles['item-id']}>#{item.id}</span>
                     <span className={styles.badge}>{item.workItemType}</span>
