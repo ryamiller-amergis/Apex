@@ -176,6 +176,10 @@ resource "azurerm_linux_web_app" "main" {
       # that runs ten at a time, so the legitimate wait scales with the feature
       # count and the default 30m expires runs no worker had reached yet.
       "AI_RUNS_BACKGROUND_QUEUE_TTL_MS",
+      # Temporary v1 safety bound: production observed a healthy worker finish
+      # shortly after the former 90s reaper threshold. Keep this with each slot
+      # until V2 confirms worker loss through checkpoints plus platform status.
+      "AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS",
     ])
   }
 

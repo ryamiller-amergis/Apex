@@ -327,7 +327,7 @@ describe('reapOrphanedRuns', () => {
     try {
       for (const key of keys) delete process.env[key];
       expect(resolveAgentRunHealthConfig()).toEqual(expect.objectContaining({
-        workerHeartbeatTimeoutMs: 90_000,
+        workerHeartbeatTimeoutMs: 600_000,
         dispatchColdStartMs: 5 * 60_000,
         workerProgressTimeoutMs: 10 * 60_000,
         cancelGraceMs: 60_000,
@@ -346,7 +346,7 @@ describe('reapOrphanedRuns', () => {
 
       for (const key of keys) process.env[key] = '0';
       expect(resolveAgentRunHealthConfig()).toEqual(expect.objectContaining({
-        workerHeartbeatTimeoutMs: 90_000,
+        workerHeartbeatTimeoutMs: 600_000,
         dispatchColdStartMs: 5 * 60_000,
         workerProgressTimeoutMs: 10 * 60_000,
         cancelGraceMs: 60_000,
