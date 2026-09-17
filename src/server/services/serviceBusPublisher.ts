@@ -55,12 +55,14 @@ export function createServiceBusCredential(): TokenCredential {
 }
 
 /**
- * One credential for the process lifetime.
+ * Reuse one credential while authentication succeeds.
  *
  * `@azure/identity` caches tokens per credential instance, so building a new
  * one per publish sends an IMDS request every time. The recovery sweep
  * publishes once per cycle per stale run on every instance, which turned into
  * 721 token requests in 48 minutes during the incident this guards against.
+ * A broker 401/403 clears this instance so the next bounded retry cannot reuse
+ * the rejected credential/token cache.
  */
 function getCachedServiceBusCredential(): TokenCredential {
   cachedCredential ??= createServiceBusCredential();
@@ -93,14 +95,6 @@ function createDefaultServiceBusPublisher(): ServiceBusPublisher {
         );
       }
 
-      const token =
-        await getCachedServiceBusCredential().getToken(SERVICE_BUS_SCOPE);
-      if (!token?.token) {
-        throw new Error(
-          'Failed to acquire Service Bus access token for AI run dispatch'
-        );
-      }
-
       const queueName =
         process.env.AI_RUNS_BACKGROUND_QUEUE_NAME?.trim() || DEFAULT_QUEUE_NAME;
       const host = namespace.includes('.')
@@ -112,20 +106,26 @@ function createDefaultServiceBusPublisher(): ServiceBusPublisher {
         dispatchMessageId: message.dispatchMessageId,
       };
 
-      const request: RequestInit = {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token.token}`,
-          'Content-Type': 'application/json',
-          BrokerProperties: JSON.stringify({
-            MessageId: message.dispatchMessageId,
-          }),
-        },
-        body: JSON.stringify(body),
-      };
-
       let lastStatus = 0;
       for (let attempt = 1; attempt <= PUBLISH_MAX_ATTEMPTS; attempt += 1) {
+        const token =
+          await getCachedServiceBusCredential().getToken(SERVICE_BUS_SCOPE);
+        if (!token?.token) {
+          throw new Error(
+            'Failed to acquire Service Bus access token for AI run dispatch'
+          );
+        }
+        const request: RequestInit = {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token.token}`,
+            'Content-Type': 'application/json',
+            BrokerProperties: JSON.stringify({
+              MessageId: message.dispatchMessageId,
+            }),
+          },
+          body: JSON.stringify(body),
+        };
         const response = await fetch(url, request);
         if (response.ok) {
           return;
@@ -135,6 +135,9 @@ function createDefaultServiceBusPublisher(): ServiceBusPublisher {
         const worthRetrying =
           RETRYABLE_PUBLISH_STATUSES.has(response.status)
           && attempt < PUBLISH_MAX_ATTEMPTS;
+        if (response.status === 401 || response.status === 403) {
+          resetServiceBusCredentialCache();
+        }
         if (!worthRetrying) {
           break;
         }

@@ -179,6 +179,15 @@ describe('serviceBusPublisher', () => {
   test('retries an authorization failure so a queue replacement does not strand the run', async () => {
     process.env.NODE_ENV = 'production';
     process.env.AI_RUNS_SERVICEBUS_NAMESPACE = 'sbns-apex-ai-dev';
+    mockGetToken
+      .mockResolvedValueOnce({
+        token: 'stale-token',
+        expiresOnTimestamp: Date.now() + 60_000,
+      })
+      .mockResolvedValue({
+        token: 'refreshed-token',
+        expiresOnTimestamp: Date.now() + 60_000,
+      });
     global.fetch = jest
       .fn()
       .mockResolvedValueOnce({ ok: false, status: 401, statusText: 'Unauthorized' })
@@ -189,6 +198,49 @@ describe('serviceBusPublisher', () => {
     ).resolves.toBeUndefined();
 
     expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(mockGetToken).toHaveBeenCalledTimes(2);
+    expect(mockManagedIdentityCredential).toHaveBeenCalledTimes(2);
+    expect((global.fetch as jest.Mock).mock.calls[0][1].headers).toEqual(
+      expect.objectContaining({ Authorization: 'Bearer stale-token' }),
+    );
+    expect((global.fetch as jest.Mock).mock.calls[1][1].headers).toEqual(
+      expect.objectContaining({ Authorization: 'Bearer refreshed-token' }),
+    );
+    expect((global.fetch as jest.Mock).mock.calls[1][1])
+      .not.toBe((global.fetch as jest.Mock).mock.calls[0][1]);
+  });
+
+  test('rebuilds retry requests while preserving the process credential after a transient failure', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.AI_RUNS_SERVICEBUS_NAMESPACE = 'sbns-apex-ai-dev';
+    mockGetToken
+      .mockResolvedValueOnce({
+        token: 'attempt-one-token',
+        expiresOnTimestamp: Date.now() + 60_000,
+      })
+      .mockResolvedValue({
+        token: 'attempt-two-token',
+        expiresOnTimestamp: Date.now() + 60_000,
+      });
+    global.fetch = jest
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 503, statusText: 'Unavailable' })
+      .mockResolvedValueOnce({ ok: true, status: 201, statusText: 'Created' }) as unknown as typeof fetch;
+
+    await expect(
+      getServiceBusPublisher().publish(sampleMessage)
+    ).resolves.toBeUndefined();
+
+    expect(mockManagedIdentityCredential).toHaveBeenCalledTimes(1);
+    expect(mockGetToken).toHaveBeenCalledTimes(2);
+    expect((global.fetch as jest.Mock).mock.calls[0][1].headers).toEqual(
+      expect.objectContaining({ Authorization: 'Bearer attempt-one-token' }),
+    );
+    expect((global.fetch as jest.Mock).mock.calls[1][1].headers).toEqual(
+      expect.objectContaining({ Authorization: 'Bearer attempt-two-token' }),
+    );
+    expect((global.fetch as jest.Mock).mock.calls[1][1])
+      .not.toBe((global.fetch as jest.Mock).mock.calls[0][1]);
   });
 
   test('gives up after the attempt budget and reports the last status', async () => {
@@ -205,6 +257,15 @@ describe('serviceBusPublisher', () => {
     ).rejects.toThrow('Service Bus publish failed (401)');
 
     expect(global.fetch).toHaveBeenCalledTimes(3);
+
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      statusText: 'Created',
+    }) as unknown as typeof fetch;
+    await getServiceBusPublisher().publish(sampleMessage);
+
+    expect(mockManagedIdentityCredential).toHaveBeenCalledTimes(4);
   });
 
   test('does not retry a status the broker will keep rejecting', async () => {
