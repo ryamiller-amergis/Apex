@@ -1452,8 +1452,8 @@ describe('getThreadRunStateSnapshot', () => {
       updatedAt: timestamp(30_000),
       timeoutAt: timestamp(-60 * 60_000),
       eventDriven: false,
-      lane: null,
-      dispatchMessageId: null,
+      lane: 'background',
+      dispatchMessageId: 'dispatch-queued',
     }]);
 
     await expect(
@@ -1539,6 +1539,44 @@ describe('getThreadRunStateSnapshot', () => {
     });
     expect(mockFindMany).toHaveBeenCalledTimes(1);
     expect(mockChatThreadFindFirst).not.toHaveBeenCalled();
+  });
+
+  it('preserves the live feature-flag fallback for legacy non-worker rows', async () => {
+    const eventDrivenTerminationEnabled = jest.fn().mockResolvedValue(true);
+    mockFindMany.mockResolvedValue([{
+      id: 'run-legacy',
+      threadId: 'thread-1',
+      status: 'running',
+      ownerInstance: 'worker-a',
+      createdAt: timestamp(30_000),
+      startedAt: timestamp(30_000),
+      heartbeatAt: timestamp(30_000),
+      progressAt: timestamp(30_000),
+      updatedAt: timestamp(30_000),
+      timeoutAt: timestamp(-60 * 60_000),
+      eventDriven: false,
+      lane: null,
+      dispatchMessageId: null,
+    }]);
+
+    await expect(
+      getThreadRunStateSnapshot('thread-1', {
+        now: () => now,
+        config,
+        eventDrivenTerminationEnabled,
+      }),
+    ).resolves.toEqual({
+      latestRun: {
+        status: 'running',
+        ownerInstance: 'worker-a',
+        updatedAt: timestamp(30_000),
+        timeoutAt: timestamp(-60 * 60_000),
+      },
+      shouldChargeWorkBudget: true,
+      isAlive: true,
+      canFailGeneration: false,
+    });
+    expect(eventDrivenTerminationEnabled).toHaveBeenCalledWith('thread-1');
   });
 });
 

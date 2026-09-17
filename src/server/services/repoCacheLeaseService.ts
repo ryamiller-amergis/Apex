@@ -34,6 +34,9 @@ export interface RepoCacheLeaseContext {
 }
 
 export interface HeldRepoCacheLease extends RepoCacheLeaseContext {
+  cacheKey: string;
+  ownerId: string;
+  generation: number;
   release(): Promise<void>;
 }
 
@@ -185,7 +188,9 @@ export async function tryAcquireRepoCacheLease(
 
   const renewLease = async (): Promise<void> => {
     if (controller.signal.aborted) throw controller.signal.reason;
-    if (released || heartbeatStopped) return;
+    if (released || heartbeatStopped) {
+      throw new Error('Repository cache lease is no longer held');
+    }
     try {
       const renewed = await runWithTimeout(
         store.renew(cacheKey, ownerId, generation!, leaseMs),
@@ -225,6 +230,9 @@ export async function tryAcquireRepoCacheLease(
   };
 
   return {
+    cacheKey,
+    ownerId,
+    generation: generation!,
     signal: controller.signal,
     assertOwned: renewLease,
     release,
@@ -276,7 +284,9 @@ export async function withRepoCacheLease<T>(
   };
   const renewLease = async (): Promise<void> => {
     if (controller.signal.aborted) throw controller.signal.reason;
-    if (heartbeatStopped) return;
+    if (heartbeatStopped) {
+      throw new Error('Repository cache lease is no longer held');
+    }
     try {
       const renewed = await runWithTimeout(
         store.renew(cacheKey, ownerId, generation!, leaseMs),

@@ -231,4 +231,19 @@ describe('tryAcquireRepoCacheLease', () => {
     await rejection;
     jest.useRealTimers();
   });
+
+  it('throws from assertOwned after the lease has been released', async () => {
+    const store = createStore([true]);
+    const lease = await tryAcquireRepoCacheLease('watcher:doc-5:thread-5', {
+      ownerId: 'instance-5',
+      leaseMs: 30_000,
+      heartbeatMs: 10_000,
+      waitMs: 0,
+      store,
+    });
+
+    expect(lease).not.toBeNull();
+    await lease!.release();
+    await expect(lease!.assertOwned()).rejects.toThrow('Repository cache lease is no longer held');
+  });
 });

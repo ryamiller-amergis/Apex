@@ -1,9 +1,9 @@
 import fs from 'fs';
 import path from 'path';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { db } from '../db/drizzle';
-import { designDocs, appUsers, chatThreads, prds, interviews, designPrototypes, designPlans, agentRuns } from '../db/schema';
+import { designDocs, appUsers, chatThreads, prds, interviews, designPrototypes, designPlans, agentRuns, repoCacheLeases } from '../db/schema';
 
 const authorUser = alias(appUsers, 'author_user');
 const designDocOwnerUser = alias(appUsers, 'design_doc_owner_user');
@@ -14,7 +14,7 @@ import { stampGroundingProvenance } from '../../shared/utils/groundingProvenance
 import { buildOverrideHistory } from '../../shared/utils/validationOverride';
 import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, isOutputWorkspaceReadable, createThread as createChatThread, sendMessage, cancelRun, prepareBackgroundWorkflowTurn, hydrateThread } from './chatAgentService';
 import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
-import { isThreadRunAlive, canThisInstanceFailGeneration, getLatestThreadRun, getThreadRunStateSnapshot } from './agentRunReaperService';
+import { isThreadRunAlive, canThisInstanceFailGeneration, getThreadRunStateSnapshot } from './agentRunReaperService';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete, propagateDesignDocApprovers, notifyApproversDocumentReady } from './documentApprovalService';
 import { getUnresolvedCount } from './reviewCommentService';
@@ -1094,11 +1094,34 @@ async function explainMissingOutput(
   return `Missing output files: ${missing}`;
 }
 
+interface DesignDocLeaseFence {
+  cacheKey: string;
+  ownerId: string;
+  generation: number;
+}
+
+function buildLeaseFenceCondition(leaseFence?: DesignDocLeaseFence) {
+  if (!leaseFence) {
+    return undefined;
+  }
+  return sql`exists (
+    select 1
+    from ${repoCacheLeases}
+    where ${repoCacheLeases.cacheKey} = ${leaseFence.cacheKey}
+      and ${repoCacheLeases.ownerId} = ${leaseFence.ownerId}
+      and ${repoCacheLeases.generation} = ${leaseFence.generation}
+      and ${repoCacheLeases.expiresAt} > now()
+  )`;
+}
+
 export async function finalizeSingleFeatureDoc(
   designDocId: string,
   chatThreadId: string,
   project: string,
-  options?: { assertOwned?: () => Promise<void> },
+  options?: {
+    assertOwned?: () => Promise<void>;
+    leaseFence?: DesignDocLeaseFence;
+  },
 ): Promise<boolean> {
   // Thread guard: skip if the row no longer owns this thread (already completed/retried).
   const guard = await db.query.designDocs.findFirst({
@@ -1133,17 +1156,29 @@ export async function finalizeSingleFeatureDoc(
     const generationError = await explainMissingOutput(chatThreadId, missing);
     console.warn(`[finalizeSingleFeatureDoc] ${generationError} — marking generation_failed (designDocId=${designDocId})`);
     await options?.assertOwned?.();
-    await runGroundingService.persistThenMarkTerminalInactive(
-        { runType: 'chat', runId: chatThreadId, project },
-        () =>
-          db.update(designDocs)
-            .set({ status: 'generation_failed', generationError, updatedAt: new Date().toISOString() })
-            .where(and(
-              eq(designDocs.id, designDocId),
-              eq(designDocs.chatThreadId, chatThreadId),
-              eq(designDocs.status, 'generating'),
-            )),
-      );
+    const leaseFenceCondition = buildLeaseFenceCondition(options?.leaseFence);
+    const updatedRows = await runGroundingService.persistThenMarkTerminalInactive(
+      { runType: 'chat', runId: chatThreadId, project },
+      () => {
+        const conditions = [
+          eq(designDocs.id, designDocId),
+          eq(designDocs.chatThreadId, chatThreadId),
+          eq(designDocs.status, 'generating'),
+          ...(leaseFenceCondition ? [leaseFenceCondition] : []),
+        ];
+        const query = db.update(designDocs)
+          .set({ status: 'generation_failed', generationError, updatedAt: new Date().toISOString() })
+          .where(and(...conditions));
+        return typeof (query as { returning?: unknown }).returning === 'function'
+          ? (query as { returning(input: { id: typeof designDocs.id }): Promise<Array<{ id: string }>> })
+            .returning({ id: designDocs.id })
+          : Promise.resolve([{ id: designDocId }]);
+      },
+    );
+    if ((updatedRows?.length ?? 0) === 0) {
+      console.log(`[finalizeSingleFeatureDoc] Skipped failure finalize — guarded update lost (designDocId=${designDocId})`);
+      return false;
+    }
     releaseDocOutput(designDocId, chatThreadId);
     await options?.assertOwned?.();
     await cleanupWorkspace(chatThreadId);
@@ -1154,24 +1189,36 @@ export async function finalizeSingleFeatureDoc(
   const finalStatus: DesignDocStatus = skillConfig?.designDocValidationSkillPath ? 'validating' : 'pending_review';
 
   await options?.assertOwned?.();
-  await runGroundingService.persistThenMarkTerminalInactive(
-      { runType: 'chat', runId: chatThreadId, project },
-      () =>
-        db.update(designDocs)
-          .set({
-            designContent: design,
-            techSpecContent: techSpec,
-            assumptionsContent: assumptions,
-            status: finalStatus,
-            generationError: null,
-            updatedAt: new Date().toISOString(),
-          })
-          .where(and(
-            eq(designDocs.id, designDocId),
-            eq(designDocs.chatThreadId, chatThreadId),
-            eq(designDocs.status, 'generating'),
-          )),
-    );
+  const leaseFenceCondition = buildLeaseFenceCondition(options?.leaseFence);
+  const updatedRows = await runGroundingService.persistThenMarkTerminalInactive(
+    { runType: 'chat', runId: chatThreadId, project },
+    () => {
+      const conditions = [
+        eq(designDocs.id, designDocId),
+        eq(designDocs.chatThreadId, chatThreadId),
+        eq(designDocs.status, 'generating'),
+        ...(leaseFenceCondition ? [leaseFenceCondition] : []),
+      ];
+      const query = db.update(designDocs)
+        .set({
+          designContent: design,
+          techSpecContent: techSpec,
+          assumptionsContent: assumptions,
+          status: finalStatus,
+          generationError: null,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(and(...conditions));
+      return typeof (query as { returning?: unknown }).returning === 'function'
+        ? (query as { returning(input: { id: typeof designDocs.id }): Promise<Array<{ id: string }>> })
+          .returning({ id: designDocs.id })
+        : Promise.resolve([{ id: designDocId }]);
+    },
+  );
+  if ((updatedRows?.length ?? 0) === 0) {
+    console.log(`[finalizeSingleFeatureDoc] Skipped success finalize — guarded update lost (designDocId=${designDocId})`);
+    return false;
+  }
 
   await options?.assertOwned?.();
   await cleanupWorkspace(chatThreadId);
@@ -1204,11 +1251,6 @@ export async function tryStartSingleFeatureDocWatcher(
   void prdId;
   const pendingKey = docThreadKey(designDocId, chatThreadId);
   if (pendingSingleFeatureDocWatcherStarts.has(pendingKey)) {
-    return false;
-  }
-
-  const activeThreadId = activeDocWatcherThreads.get(designDocId);
-  if (activeThreadId === chatThreadId && isDocWatcherActive(designDocId)) {
     return false;
   }
 
@@ -1257,6 +1299,11 @@ export async function tryStartSingleFeatureDocWatcher(
   }
 
   const watcherToken = nextSingleFeatureDocWatcherToken++;
+  const activeThreadId = activeDocWatcherThreads.get(designDocId);
+  if (activeThreadId === chatThreadId && isDocWatcherActive(designDocId)) {
+    await lease.release();
+    return false;
+  }
   if (activeThreadId && activeThreadId !== chatThreadId) {
     activeSingleFeatureDocWatcherTokens.set(designDocId, watcherToken);
     const hadWatcher = clearDocWatcher(designDocId);
@@ -1364,14 +1411,34 @@ export async function tryStartSingleFeatureDocWatcher(
             return;
           }
           await lease.assertOwned();
+          const leaseFenceCondition = buildLeaseFenceCondition({
+            cacheKey: lease.cacheKey,
+            ownerId: lease.ownerId,
+            generation: lease.generation,
+          });
           console.warn(`[singleFeatureDocWatcher] Timed out — marking generation_failed (designDocId=${designDocId}, threadId=${chatThreadId})`);
-          await runGroundingService.persistThenMarkTerminalInactive(
+          const updatedRows = await runGroundingService.persistThenMarkTerminalInactive(
             { runType: 'chat', runId: chatThreadId, project },
-            () =>
-              db.update(designDocs)
+            () => {
+              const conditions = [
+                eq(designDocs.id, designDocId),
+                eq(designDocs.chatThreadId, chatThreadId),
+                eq(designDocs.status, 'generating'),
+                ...(leaseFenceCondition ? [leaseFenceCondition] : []),
+              ];
+              const query = db.update(designDocs)
                 .set({ status: 'generation_failed', generationError: 'Generation timed out', updatedAt: new Date().toISOString() })
-                .where(and(eq(designDocs.id, designDocId), eq(designDocs.status, 'generating'))),
+                .where(and(...conditions));
+              return typeof (query as { returning?: unknown }).returning === 'function'
+                ? (query as { returning(input: { id: typeof designDocs.id }): Promise<Array<{ id: string }>> })
+                  .returning({ id: designDocs.id })
+                : Promise.resolve([{ id: designDocId }]);
+            },
           );
+          if ((updatedRows?.length ?? 0) === 0) {
+            stopLocalWatcher('normal');
+            return;
+          }
           releaseDocWatcherDeadline(designDocId, chatThreadId);
           releaseDocOutput(designDocId, chatThreadId);
           stopLocalWatcher('normal');
@@ -1393,6 +1460,11 @@ export async function tryStartSingleFeatureDocWatcher(
           }
           await finalizeSingleFeatureDoc(designDocId, chatThreadId, project, {
             assertOwned: lease.assertOwned,
+            leaseFence: {
+              cacheKey: lease.cacheKey,
+              ownerId: lease.ownerId,
+              generation: lease.generation,
+            },
           });
           releaseDocWatcherDeadline(designDocId, chatThreadId);
           stopLocalWatcher('normal');
@@ -1421,6 +1493,11 @@ export async function tryStartSingleFeatureDocWatcher(
           console.warn(`[singleFeatureDocWatcher] Run terminal without complete output — marking generation_failed (designDocId=${designDocId})`);
           await finalizeSingleFeatureDoc(designDocId, chatThreadId, project, {
             assertOwned: lease.assertOwned,
+            leaseFence: {
+              cacheKey: lease.cacheKey,
+              ownerId: lease.ownerId,
+              generation: lease.generation,
+            },
           });
           releaseDocWatcherDeadline(designDocId, chatThreadId);
           stopLocalWatcher('normal');

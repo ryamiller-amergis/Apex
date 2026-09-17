@@ -286,6 +286,14 @@ function makeHeldLease() {
   };
 }
 
+function boundStrings(value: unknown, seen = new Set<unknown>()): string[] {
+  if (typeof value === 'string') return [value];
+  if (!value || typeof value !== 'object' || seen.has(value)) return [];
+  seen.add(value);
+  return Object.values(value as Record<string, unknown>)
+    .flatMap((entry) => boundStrings(entry, seen));
+}
+
 // ── createDesignDoc ────────────────────────────────────────────────────────────
 
 describe('createDesignDoc', () => {
@@ -1825,6 +1833,9 @@ describe('startSingleFeatureDocWatcher', () => {
         generationError: 'Generation timed out',
       }),
     );
+    expect(boundStrings(whereMock.mock.calls[0][0])).toEqual(
+      expect.arrayContaining(['thread-deadline']),
+    );
   });
 
   it('does not spend the budget while the doc is still waiting for a worker', async () => {
@@ -2199,6 +2210,38 @@ describe('startSingleFeatureDocWatcher', () => {
     expect(isDocWatcherActive('doc-replace')).toBe(true);
     expect(mockThreadRunStateSnapshot).toHaveBeenCalledWith('thread-new');
     expect(leaseB.release).not.toHaveBeenCalled();
+  });
+
+  it('releases the previous local generation when two threads start concurrently for one document', async () => {
+    const leaseA = makeHeldLease();
+    const leaseB = makeHeldLease();
+    let resolveHydrateA: (() => void) | null = null;
+    let resolveHydrateB: (() => void) | null = null;
+    mockTryAcquireRepoCacheLease
+      .mockResolvedValueOnce(leaseA)
+      .mockResolvedValueOnce(leaseB);
+    mockHydrateThread
+      .mockImplementationOnce(() => new Promise<boolean>((resolve) => {
+        resolveHydrateA = () => resolve(true);
+      }))
+      .mockImplementationOnce(() => new Promise<boolean>((resolve) => {
+        resolveHydrateB = () => resolve(true);
+      }));
+
+    const startA = tryStartSingleFeatureDocWatcher('doc-concurrent', 'thread-a', 'prd-1', 'proj-alpha');
+    const startB = tryStartSingleFeatureDocWatcher('doc-concurrent', 'thread-b', 'prd-1', 'proj-alpha');
+
+    await Promise.resolve();
+    await Promise.resolve();
+    resolveHydrateA?.();
+    await expect(startA).resolves.toBe(true);
+    expect(isDocWatcherActive('doc-concurrent')).toBe(true);
+
+    resolveHydrateB?.();
+    await expect(startB).resolves.toBe(true);
+
+    expect(leaseA.release).toHaveBeenCalledTimes(1);
+    expect(isDocWatcherActive('doc-concurrent')).toBe(true);
   });
 });
 
@@ -2638,6 +2681,33 @@ describe('finalizeSingleFeatureDoc — idempotency guard', () => {
     expect(setMock).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'generation_failed' }),
     );
+  });
+
+  it('requires the guarded terminal update to win before cleanup and notifications', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'doc-1', skillSettingsId: null });
+    const returningMock = jest.fn().mockResolvedValue([]);
+    const whereMock = jest.fn().mockReturnValue({ returning: returningMock });
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+    mockDb.query.chatThreads = { findFirst: jest.fn().mockResolvedValue(null) };
+
+    const result = await finalizeSingleFeatureDoc(
+      'doc-1',
+      'thread-1',
+      'proj-alpha',
+      {
+        assertOwned: jest.fn().mockResolvedValue(undefined),
+        leaseFence: {
+          cacheKey: 'design-doc-generation-watcher:doc-1:thread-1',
+          ownerId: 'instance-1',
+          generation: 3,
+        },
+      },
+    );
+
+    expect(result).toBe(false);
+    expect(returningMock).toHaveBeenCalled();
+    expect(mockDb.query.chatThreads.findFirst).not.toHaveBeenCalled();
   });
 });
 
