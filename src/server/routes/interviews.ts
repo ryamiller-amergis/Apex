@@ -112,6 +112,9 @@ import {
   recalculateTestCaseCoverage,
   triggerTestCaseGeneration,
 } from '../services/testCaseService';
+import { getTestCasesForWorkItem } from '../services/testCaseLookupService';
+import type { QaLabGenerateRequest } from '../../shared/types/qaLab';
+import type { EffortLevel } from '../../shared/types/effort';
 import { generateFallbackReport as generateFallbackValidationReport } from '../services/documentValidationService';
 import { normalizeValidationScorecard } from '../../shared/utils/validationReport';
 import { isProjectRepositoryCheckoutReadinessEnabled } from '../services/featureFlagService';
@@ -346,6 +349,31 @@ router.get('/prds/:prdId/test-cases', requirePermission('interviews:view'), asyn
   }
 });
 
+/**
+ * QA Lab: generated test cases for an ADO work item, resolved through the
+ * `adoWorkItemId` stamped on the backlog. Selecting a Feature or Epic returns
+ * the suites of every PBI beneath it.
+ */
+router.get('/work-items/:workItemId/test-cases', requirePermission('planning:qa'), async (req, res, next) => {
+  try {
+    const workItemId = Number(req.params.workItemId);
+    if (!Number.isInteger(workItemId) || workItemId <= 0) {
+      res.status(400).json({ error: 'A positive integer work item ID is required' });
+      return;
+    }
+
+    const project = typeof req.query.project === 'string' ? req.query.project.trim() : '';
+    if (!project) {
+      res.status(400).json({ error: 'A project query parameter is required' });
+      return;
+    }
+
+    res.json(await getTestCasesForWorkItem(project, workItemId));
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post('/prds/:prdId/test-cases/generate', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const { prdId } = req.params;
@@ -388,11 +416,18 @@ router.post('/prds/:prdId/test-cases/generate', requirePermission('interviews:ma
     }
     // @feature-flag:project-repository-checkout-readiness end
 
+    const { model, effort } = (req.body ?? {}) as QaLabGenerateRequest;
     const sourceThreadId = prdRow.chatThreadId ?? '';
+    // Only forward overrides when the caller actually picked one, so the
+    // project skill config stays the single source of truth otherwise.
+    const overrides = model || effort
+      ? { model, effort: effort as EffortLevel | undefined }
+      : undefined;
     const started = await triggerTestCaseGeneration(
       prdId,
       sourceThreadId,
       userId,
+      overrides,
     );
     res.json({ started });
   } catch (err) {

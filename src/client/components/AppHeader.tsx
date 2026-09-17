@@ -19,7 +19,7 @@ interface NavItem {
 }
 
 interface AppHeaderProps {
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests' | 'diagrams' | 'work-board';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'qa-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'load-tests' | 'diagrams' | 'work-board';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -49,6 +49,7 @@ interface AppHeaderProps {
   onNavigateMyWork?: () => void;
   onNavigateStandup?: () => void;
   onNavigateUiLab?: () => void;
+  onNavigateQaLab?: () => void;
   onNavigateFeatureRequests?: () => void;
   onNavigateAiCost?: () => void;
   onNavigateDesignModule?: () => void;
@@ -89,6 +90,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigateMyWork,
   onNavigateStandup,
   onNavigateUiLab,
+  onNavigateQaLab,
   onNavigateFeatureRequests,
   onNavigateAiCost,
   onNavigateDesignModule,
@@ -135,6 +137,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'My Work', view: 'my-work', permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
     { label: 'Standup', view: 'standup', permission: 'standup:participate', onNavigate: onNavigateStandup ?? (() => {}) },
     { label: 'UI Lab', view: 'ui-lab', permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
+    { label: 'QA Lab', view: 'qa-lab', permission: 'planning:qa', onNavigate: onNavigateQaLab ?? (() => {}) },
     { label: 'Apex Backlog', view: 'feature-requests', permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
     { label: 'Design Module', view: 'design-module', permission: 'design-module:view', onNavigate: onNavigateDesignModule ?? (() => {}) },
     { label: 'Diagrams', view: 'diagrams', permission: 'diagram:view', onNavigate: onNavigateDiagrams ?? (() => {}) },

@@ -41,6 +41,7 @@ interface AppSidebarProps {
   onNavigateMyWork?: () => void;
   onNavigateStandup?: () => void;
   onNavigateUiLab?: () => void;
+  onNavigateQaLab?: () => void;
   onNavigateFeatureRequests?: () => void;
   onNavigatePdfTools?: () => void;
   onNavigateAiCost?: () => void;
@@ -117,6 +118,14 @@ const IconUiLab: React.FC = () => (
     <path d="M3 8h14" />
     <path d="M6 6h.01" />
     <path d="M7 12l2 2 4-4" />
+  </svg>
+);
+
+const IconQaLab: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M6.5 2.5h7" />
+    <path d="M8 2.5v4l-3.4 8A1.5 1.5 0 006 16.5h8a1.5 1.5 0 001.4-2l-3.4-8v-4" />
+    <path d="M7 11.5h6" />
   </svg>
 );
 
@@ -211,6 +220,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onNavigateMyWork,
   onNavigateStandup,
   onNavigateUiLab,
+  onNavigateQaLab,
   onNavigateFeatureRequests,
   onNavigatePdfTools,
   onNavigateAiCost,
@@ -259,6 +269,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       label: 'Tools',
       items: [
         { label: 'UI Lab', view: 'ui-lab', icon: <IconUiLab />, permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
+        { label: 'QA Lab', view: 'qa-lab', icon: <IconQaLab />, permission: 'planning:qa', onNavigate: onNavigateQaLab ?? (() => {}), testId: 'nav-qa-lab' },
         { label: 'PDF Assembly Tool', view: 'pdf-tools', icon: <IconPdfTools />, permission: 'pdf-assembly:use', onNavigate: onNavigatePdfTools ?? (() => {}) },
         { label: 'Load Tests', view: 'load-tests', icon: <IconLoadTests />, permission: 'load-test:view', onNavigate: onNavigateLoadTests ?? (() => {}), testId: 'nav-load-tests' },
         { label: 'Apex Backlog', view: 'feature-requests', icon: <IconFeatureRequests />, permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
