@@ -389,27 +389,45 @@ router.post('/cycle-time', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/health - Health check endpoint
-router.get('/health', async (req: Request, res: Response) => {
-  try {
-    // Health check uses default project from env
-    const adoService = new AzureDevOpsService();
-    const healthy = await adoService.healthCheck();
-    res.json({ healthy, timestamp: new Date().toISOString() });
-  } catch (error: any) {
-    console.error('Health check error:', error);
-    res.status(503).json({ healthy: false, error: 'Service unavailable' });
-  }
-});
+function sendProcessHealth(res: Response) {
+  return res.json({ healthy: true, timestamp: new Date().toISOString() });
+}
 
-// GET /api/health/db - Database connectivity check
-router.get('/health/db', async (_req: Request, res: Response) => {
+async function sendDatabaseReadinessHealth(res: Response) {
   try {
     const result = await db.execute<{ now: string }>(sql`SELECT NOW() AS now`);
-    res.json({ healthy: true, timestamp: result.rows[0].now });
+    return res.json({ healthy: true, timestamp: result.rows[0].now });
   } catch (error: any) {
     console.error('[db] Health check failed:', error);
-    res.status(503).json({ healthy: false, error: 'Database unavailable' });
+    return res.status(503).json({ healthy: false, error: 'Database unavailable' });
+  }
+}
+
+// GET /api/health - Process-only liveness check
+router.get('/health', (_req: Request, res: Response) => sendProcessHealth(res));
+
+// GET /api/health/live - Explicit process-only liveness check
+router.get('/health/live', (_req: Request, res: Response) => sendProcessHealth(res));
+
+// GET /api/health/ready - Database readiness check
+router.get('/health/ready', (_req: Request, res: Response) => sendDatabaseReadinessHealth(res));
+
+// GET /api/health/db - Database readiness compatibility alias
+router.get('/health/db', (_req: Request, res: Response) => sendDatabaseReadinessHealth(res));
+
+// GET /api/health/dependencies - External dependency health
+router.get('/health/dependencies', async (_req: Request, res: Response) => {
+  try {
+    const adoService = new AzureDevOpsService();
+    const healthy = await adoService.healthCheck();
+    if (!healthy) {
+      return res.status(503).json({ healthy: false, error: 'Dependencies unavailable' });
+    }
+
+    return res.json({ healthy: true, timestamp: new Date().toISOString() });
+  } catch (error: any) {
+    console.error('[dependencies] Health check failed:', error);
+    return res.status(503).json({ healthy: false, error: 'Dependencies unavailable' });
   }
 });
 

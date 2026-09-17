@@ -180,7 +180,14 @@ const internalOnlyPaths = [
 
 // Health check paths are unauthenticated — used by Azure slot-swap warmup and
 // external monitoring. req.path is relative to /api (prefix is stripped by Express).
-const unauthenticatedPaths = ['/health', '/health/db', '/health/agents'];
+const unauthenticatedPaths = [
+  '/health',
+  '/health/live',
+  '/health/ready',
+  '/health/dependencies',
+  '/health/db',
+  '/health/agents',
+];
 
 // Load-test runner ingest/validate — session-free; auth is requireLoadTestRunnerAuth
 // on loadTestRunsInternalRoutes (LT_RUNNER_CALLBACK_TOKEN or runner MI JWT).

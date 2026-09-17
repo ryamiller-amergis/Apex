@@ -2,13 +2,21 @@ import request from 'supertest';
 import express from 'express';
 import apiRouter from '../routes/api';
 import { AzureDevOpsService } from '../services/azureDevOps';
+import { db } from '../db/drizzle';
 import * as userProjectAssignmentService from '../services/userProjectAssignmentService';
 import * as projectCatalogService from '../services/projectCatalogService';
 import * as projectAccessRequestService from '../services/projectAccessRequestService';
 import * as workerTierHealthService from '../services/workerTierHealthService';
+import fs from 'fs';
+import path from 'path';
 
 // Mock the AzureDevOpsService
 jest.mock('../services/azureDevOps');
+jest.mock('../db/drizzle', () => ({
+  db: {
+    execute: jest.fn(),
+  },
+}));
 
 jest.mock('../services/projectSettingsService', () => {
   const getSkillConfig = jest.fn();
@@ -513,9 +521,7 @@ describe('API Routes', () => {
   });
 
   describe('GET /api/health', () => {
-    it('should return healthy status', async () => {
-      mockAdoService.healthCheck.mockResolvedValue(true);
-
+    it('returns 200 process health without calling Azure DevOps or the database', async () => {
       const response = await request(app)
         .get('/api/health')
         .expect(200);
@@ -524,19 +530,80 @@ describe('API Routes', () => {
         healthy: true,
         timestamp: expect.any(String),
       });
+      expect(AzureDevOpsService).not.toHaveBeenCalled();
+      expect(db.execute).not.toHaveBeenCalled();
     });
+  });
 
-    it('should return unhealthy status', async () => {
-      mockAdoService.healthCheck.mockRejectedValue(new Error('Service unavailable'));
-
+  describe('GET /api/health/live', () => {
+    it('returns 200 process health without calling Azure DevOps or the database', async () => {
       const response = await request(app)
-        .get('/api/health')
-        .expect(503);
+        .get('/api/health/live')
+        .expect(200);
 
       expect(response.body).toMatchObject({
-        healthy: false,
-        error: 'Service unavailable',
+        healthy: true,
+        timestamp: expect.any(String),
       });
+      expect(AzureDevOpsService).not.toHaveBeenCalled();
+      expect(db.execute).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /api/health/dependencies', () => {
+    it('returns 200 only when Azure DevOps is healthy', async () => {
+      mockAdoService.healthCheck.mockResolvedValue(true);
+
+      const response = await request(app)
+        .get('/api/health/dependencies')
+        .expect(200);
+
+      expect(response.body).toMatchObject({
+        healthy: true,
+        timestamp: expect.any(String),
+      });
+      expect(mockAdoService.healthCheck).toHaveBeenCalledTimes(1);
+      expect(db.execute).not.toHaveBeenCalled();
+    });
+
+    it('returns 503 when Azure DevOps reports unhealthy', async () => {
+      mockAdoService.healthCheck.mockResolvedValue(false);
+
+      const response = await request(app)
+        .get('/api/health/dependencies')
+        .expect(503);
+
+      expect(response.body).toEqual({
+        healthy: false,
+        error: 'Dependencies unavailable',
+      });
+    });
+
+    it('returns 503 when Azure DevOps throws without exposing details', async () => {
+      mockAdoService.healthCheck.mockRejectedValue(new Error('Azure DevOps PAT expired'));
+
+      const response = await request(app)
+        .get('/api/health/dependencies')
+        .expect(503);
+
+      expect(response.body).toEqual({
+        healthy: false,
+        error: 'Dependencies unavailable',
+      });
+      expect(JSON.stringify(response.body)).not.toMatch(/PAT expired|Azure DevOps/i);
+    });
+  });
+
+  describe('public health allowlist', () => {
+    it('includes the live, ready, dependency, db, and agent health routes', () => {
+      const source = fs.readFileSync(path.join(__dirname, '..', 'index.ts'), 'utf8');
+
+      expect(source).toContain("'/health'");
+      expect(source).toContain("'/health/live'");
+      expect(source).toContain("'/health/ready'");
+      expect(source).toContain("'/health/dependencies'");
+      expect(source).toContain("'/health/db'");
+      expect(source).toContain("'/health/agents'");
     });
   });
 
