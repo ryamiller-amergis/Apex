@@ -353,6 +353,84 @@ export function isTerminalAgentRunStatus(status: string): boolean {
   return TERMINAL_RUN_STATUSES.has(status);
 }
 
+type ThreadRunSnapshotRow = {
+  status: string;
+  ownerInstance: string | null;
+  updatedAt: string;
+  timeoutAt: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  heartbeatAt: string | null;
+  progressAt?: string | null;
+  progressLabel?: string | null;
+  eventDriven?: boolean | null;
+  lane?: string | null;
+  dispatchMessageId?: string | null;
+};
+
+export interface ThreadRunStateSnapshot {
+  latestRun: {
+    status: string;
+    ownerInstance: string | null;
+    updatedAt: string;
+    timeoutAt: string | null;
+  } | null;
+  shouldChargeWorkBudget: boolean;
+  isAlive: boolean;
+  canFailGeneration: boolean;
+}
+
+function isAliveThreadRunSnapshotRow(
+  row: ThreadRunSnapshotRow,
+  nowMs: number,
+  config: AgentRunHealthConfig,
+  eventDrivenEnabled: boolean,
+): boolean {
+  if (!['queued', 'running', 'dispatched'].includes(row.status)) {
+    return false;
+  }
+  if (eventDrivenEnabled) {
+    return shouldApplyWorkerLifecycle(row)
+      || !row.timeoutAt
+      || Date.parse(row.timeoutAt) > nowMs;
+  }
+  if (shouldApplyWorkerLifecycle(row)) {
+    return true;
+  }
+  const health = assessAgentRunHealth({
+    status: row.status,
+    createdAt: row.createdAt,
+    startedAt: row.startedAt,
+    heartbeatAt: row.heartbeatAt,
+    progressAt: row.progressAt ?? null,
+    progressLabel: row.progressLabel ?? null,
+    timeoutAt: row.timeoutAt,
+  }, nowMs, config);
+  return health !== 'worker_lost'
+    && health !== 'hard_timeout'
+    && health !== 'never_claimed';
+}
+
+function canThisInstanceFailLatestRun(
+  latest: Pick<ThreadRunSnapshotRow, 'status' | 'ownerInstance' | 'updatedAt' | 'timeoutAt'> | null,
+  nowMs: number,
+  orphanGraceMs: number,
+): boolean {
+  if (!latest) return false;
+  if (
+    !isTerminalAgentRunStatus(latest.status)
+    && !isRunPastDeadline(latest, nowMs)
+  ) {
+    return false;
+  }
+  if (!latest.ownerInstance || latest.ownerInstance === RUN_EVENT_SOURCE_INSTANCE) {
+    return true;
+  }
+
+  const updatedMs = Date.parse(latest.updatedAt);
+  return Number.isFinite(updatedMs) && nowMs - updatedMs >= orphanGraceMs;
+}
+
 /**
  * How long a non-owner watcher waits after a terminal agent_runs row before
  * taking over finalization. Gives the owning instance a chance to persist
@@ -360,6 +438,59 @@ export function isTerminalAgentRunStatus(status: string): boolean {
  * docs cannot stay stuck in `generating` forever after a crash/deploy.
  */
 export const GENERATION_FAIL_ORPHAN_GRACE_MS = 2 * 60_000;
+
+export async function getThreadRunStateSnapshot(
+  threadId: string,
+  options: ReaperOptions & CanFailGenerationOptions = {},
+): Promise<ThreadRunStateSnapshot> {
+  const config = options.config ?? resolveAgentRunHealthConfig();
+  const nowMs = options.now?.() ?? Date.now();
+  const orphanGraceMs = options.orphanGraceMs ?? GENERATION_FAIL_ORPHAN_GRACE_MS;
+  const eventDrivenTerminationEnabled =
+    options.eventDrivenTerminationEnabled ?? isEventDrivenTerminationEnabledForThread;
+  const rows = await db.query.agentRuns.findMany({
+    where: eq(agentRuns.threadId, threadId),
+    orderBy: [desc(agentRuns.createdAt)],
+    columns: {
+      status: true,
+      ownerInstance: true,
+      updatedAt: true,
+      timeoutAt: true,
+      createdAt: true,
+      startedAt: true,
+      heartbeatAt: true,
+      progressAt: true,
+      progressLabel: true,
+      eventDriven: true,
+      lane: true,
+      dispatchMessageId: true,
+    },
+  });
+
+  const latest = rows[0] ?? null;
+  const activeRows = rows.filter((row) => ['queued', 'running', 'dispatched'].includes(row.status));
+  const rowMarkedEventDriven = activeRows.some((row) => row.eventDriven === true);
+  const eventDrivenEnabled = activeRows.length > 0 && (
+    rowMarkedEventDriven
+    || await eventDrivenTerminationEnabled(threadId).catch(() => false)
+  );
+
+  return {
+    latestRun: latest
+      ? {
+          status: latest.status,
+          ownerInstance: latest.ownerInstance ?? null,
+          updatedAt: latest.updatedAt,
+          timeoutAt: latest.timeoutAt ?? null,
+        }
+      : null,
+    shouldChargeWorkBudget: !latest || !['queued', 'dispatched'].includes(latest.status),
+    isAlive: activeRows.some((row) =>
+      isAliveThreadRunSnapshotRow(row, nowMs, config, eventDrivenEnabled),
+    ),
+    canFailGeneration: canThisInstanceFailLatestRun(latest, nowMs, orphanGraceMs),
+  };
+}
 
 /**
  * Return the most recent agent_runs row for a thread (by createdAt DESC).
@@ -416,28 +547,10 @@ export async function canThisInstanceFailGeneration(
   threadId: string,
   options: CanFailGenerationOptions = {},
 ): Promise<boolean> {
-  const latest = await getLatestThreadRun(threadId);
-  if (!latest) return false;
   const nowMs = options.now?.() ?? Date.now();
-  // A non-terminal run is normally the liveness gate's problem, but a run past
-  // its own deadline is never coming back. Requiring a terminal status here is
-  // what let an abandoned dispatch pin a document in `generating` indefinitely.
-  if (
-    !isTerminalAgentRunStatus(latest.status)
-    && !isRunPastDeadline(latest, nowMs)
-  ) {
-    return false;
-  }
-  if (!latest.ownerInstance || latest.ownerInstance === RUN_EVENT_SOURCE_INSTANCE) {
-    return true;
-  }
-
   const orphanGraceMs = options.orphanGraceMs ?? GENERATION_FAIL_ORPHAN_GRACE_MS;
-  const updatedMs = Date.parse(latest.updatedAt);
-  if (Number.isFinite(updatedMs) && nowMs - updatedMs >= orphanGraceMs) {
-    return true;
-  }
-  return false;
+  const latest = await getLatestThreadRun(threadId);
+  return canThisInstanceFailLatestRun(latest, nowMs, orphanGraceMs);
 }
 
 function warningFor(health: AgentRunHealth, config: AgentRunHealthConfig): string | null {

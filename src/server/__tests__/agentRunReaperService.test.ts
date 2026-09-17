@@ -56,6 +56,7 @@ import {
   isTerminalAgentRunStatus,
   isInFlightToolProgressLabel,
   getLatestThreadRun,
+  getThreadRunStateSnapshot,
   canThisInstanceFailGeneration,
   reapOrphanedRuns,
   shouldRunRetireReconciler,
@@ -1428,6 +1429,76 @@ describe('getLatestThreadRun', () => {
     mockFindFirst.mockResolvedValue(undefined);
     const result = await getLatestThreadRun('thread-1');
     expect(result).toBeNull();
+  });
+});
+
+describe('getThreadRunStateSnapshot', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('loads queued latest-run facts in one query and pauses the watcher budget', async () => {
+    mockFindMany.mockResolvedValue([{
+      id: 'run-queued',
+      threadId: 'thread-1',
+      status: 'queued',
+      ownerInstance: 'worker-a',
+      createdAt: timestamp(30_000),
+      startedAt: timestamp(30_000),
+      heartbeatAt: timestamp(30_000),
+      progressAt: timestamp(30_000),
+      updatedAt: timestamp(30_000),
+      timeoutAt: timestamp(-60 * 60_000),
+      eventDriven: false,
+      lane: null,
+      dispatchMessageId: null,
+    }]);
+
+    await expect(
+      getThreadRunStateSnapshot('thread-1', { now: () => now, config }),
+    ).resolves.toEqual({
+      latestRun: {
+        status: 'queued',
+        ownerInstance: 'worker-a',
+        updatedAt: timestamp(30_000),
+        timeoutAt: timestamp(-60 * 60_000),
+      },
+      shouldChargeWorkBudget: false,
+      isAlive: true,
+      canFailGeneration: false,
+    });
+    expect(mockFindMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows failure takeover after orphan grace without extra liveness queries', async () => {
+    mockFindMany.mockResolvedValue([{
+      id: 'run-terminal',
+      threadId: 'thread-1',
+      status: 'failed',
+      ownerInstance: 'worker-b',
+      createdAt: timestamp(4 * 60_000),
+      startedAt: timestamp(4 * 60_000),
+      heartbeatAt: timestamp(4 * 60_000),
+      progressAt: timestamp(4 * 60_000),
+      updatedAt: timestamp(4 * 60_000),
+      timeoutAt: null,
+      eventDriven: false,
+      lane: null,
+      dispatchMessageId: null,
+    }]);
+
+    await expect(
+      getThreadRunStateSnapshot('thread-1', { now: () => now, config }),
+    ).resolves.toEqual({
+      latestRun: {
+        status: 'failed',
+        ownerInstance: 'worker-b',
+        updatedAt: timestamp(4 * 60_000),
+        timeoutAt: null,
+      },
+      shouldChargeWorkBudget: true,
+      isAlive: false,
+      canFailGeneration: true,
+    });
+    expect(mockFindMany).toHaveBeenCalledTimes(1);
   });
 });
 

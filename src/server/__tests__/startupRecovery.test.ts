@@ -42,6 +42,7 @@ jest.mock('../services/prdService', () => ({
 }));
 jest.mock('../services/designDocService', () => ({
   startSingleFeatureDocWatcher: jest.fn(),
+  tryStartSingleFeatureDocWatcher: jest.fn(),
   startValidationWatcher: jest.fn(),
   isValidationWatcherActive: jest.fn(),
   isDocWatcherActive: jest.fn(),
@@ -97,7 +98,7 @@ import { isThreadRunAlive } from '../services/agentRunReaperService';
 import { finalizeOwnedAgentRun } from '../services/pgNotifyService';
 import {
   routeDesignDocGenerationKickoff,
-  startSingleFeatureDocWatcher,
+  tryStartSingleFeatureDocWatcher,
   isDocWatcherActive,
 } from '../services/designDocService';
 import { routeTestCaseGenerationKickoff } from '../services/testCaseService';
@@ -134,6 +135,9 @@ describe('design-doc generation recovery claim', () => {
   const routeDesignDoc = routeDesignDocGenerationKickoff as jest.MockedFunction<
     typeof routeDesignDocGenerationKickoff
   >;
+  const tryStartDocWatcher = tryStartSingleFeatureDocWatcher as jest.MockedFunction<
+    typeof tryStartSingleFeatureDocWatcher
+  >;
   const mockIsThreadIdle = jest.requireMock('../services/chatAgentService')
     .isThreadIdle as jest.Mock;
 
@@ -165,6 +169,7 @@ describe('design-doc generation recovery claim', () => {
     jest.requireMock('../services/featureRequestAnalysisService')
       .recoverAnalyzingFeatureRequests.mockResolvedValue(0);
     routeDesignDoc.mockResolvedValue();
+    tryStartDocWatcher.mockResolvedValue(true);
   });
 
   it('does not duplicate a slow preparation during the next recovery sweep', async () => {
@@ -188,7 +193,7 @@ describe('design-doc generation recovery claim', () => {
 
     await recoverInFlightWork();
 
-    expect(startSingleFeatureDocWatcher).not.toHaveBeenCalled();
+    expect(tryStartDocWatcher).not.toHaveBeenCalled();
   });
 
   it('adopts a doc whose watcher was lost with the process', async () => {
@@ -198,12 +203,33 @@ describe('design-doc generation recovery claim', () => {
 
     await recoverInFlightWork();
 
-    expect(startSingleFeatureDocWatcher).toHaveBeenCalledWith(
+    expect(tryStartDocWatcher).toHaveBeenCalledWith(
       'doc-1',
       'thread-design',
       'prd-1',
       'Apex',
     );
+  });
+
+  it('counts recovery only when the watcher lease is acquired and started', async () => {
+    (isDocWatcherActive as jest.Mock).mockReturnValue(false);
+    tryStartDocWatcher.mockResolvedValueOnce(false);
+    const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    await recoverInFlightWork();
+
+    expect(tryStartDocWatcher).toHaveBeenCalledWith(
+      'doc-1',
+      'thread-design',
+      'prd-1',
+      'Apex',
+    );
+    expect(mockedHydrate).not.toHaveBeenCalled();
+    expect(consoleSpy).not.toHaveBeenCalledWith(
+      '[recovery] Restarted design doc watcher (designDocId=doc-1)',
+    );
+    expect(consoleSpy).not.toHaveBeenCalledWith('[recovery] Recovered 1 in-flight item(s)');
+    consoleSpy.mockRestore();
   });
 
   it('re-kicks an expired row only after winning the atomic claim', async () => {

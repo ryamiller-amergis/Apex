@@ -32,6 +32,10 @@ export interface RepoCacheLeaseContext {
   assertOwned(): Promise<void>;
 }
 
+export interface HeldRepoCacheLease extends RepoCacheLeaseContext {
+  release(): Promise<void>;
+}
+
 const postgresLeaseStore: RepoCacheLeaseStore = {
   async tryAcquire(cacheKey, ownerId, leaseMs) {
     const [row] = await db
@@ -92,6 +96,81 @@ const postgresLeaseStore: RepoCacheLeaseStore = {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function tryAcquireRepoCacheLease(
+  cacheKey: string,
+  options: RepoCacheLeaseOptions = {},
+): Promise<HeldRepoCacheLease | null> {
+  const ownerId = options.ownerId ?? uuidv4();
+  const leaseMs = options.leaseMs ?? DEFAULT_LEASE_MS;
+  const heartbeatMs = options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
+  const pollMs = options.pollMs ?? DEFAULT_POLL_MS;
+  const waitMs = options.waitMs ?? DEFAULT_WAIT_MS;
+  const store = options.store ?? postgresLeaseStore;
+  const deadline = Date.now() + waitMs;
+
+  let generation: number | null = null;
+  while (generation === null) {
+    generation = await store.tryAcquire(cacheKey, ownerId, leaseMs);
+    if (generation !== null) break;
+    if (Date.now() >= deadline) {
+      return null;
+    }
+    await sleep(pollMs);
+  }
+
+  const controller = new AbortController();
+  let heartbeatPromise: Promise<void> | null = null;
+  let released = false;
+
+  const abortForLostLease = (cause?: unknown) => {
+    if (controller.signal.aborted) return;
+    const detail = cause instanceof Error ? `: ${cause.message}` : '';
+    controller.abort(new Error(`Repository cache lease was lost${detail}`));
+  };
+
+  const renewLease = async (): Promise<void> => {
+    if (released) return;
+    try {
+      const renewed = await store.renew(cacheKey, ownerId, generation!, leaseMs);
+      if (!renewed) abortForLostLease();
+    } catch (err) {
+      console.error('[repo-cache] lease renewal failed:', (err as Error).message);
+      abortForLostLease(err);
+    }
+    if (controller.signal.aborted) throw controller.signal.reason;
+  };
+
+  const heartbeat = setInterval(() => {
+    if (released || heartbeatPromise) return;
+    heartbeatPromise = renewLease()
+      .catch(() => {
+        // The AbortSignal carries the failure to the lease holder.
+      })
+      .finally(() => {
+        heartbeatPromise = null;
+      });
+  }, heartbeatMs);
+  heartbeat.unref?.();
+
+  const release = async (): Promise<void> => {
+    if (released) return;
+    released = true;
+    clearInterval(heartbeat);
+    if (heartbeatPromise) await heartbeatPromise;
+    try {
+      await store.release(cacheKey, ownerId, generation!);
+    } catch (err) {
+      console.error('[repo-cache] lease release failed; expiry will recover it:', (err as Error).message);
+    }
+  };
+
+  return {
+    signal: controller.signal,
+    assertOwned: renewLease,
+    release,
+  };
 }
 
 export async function withRepoCacheLease<T>(

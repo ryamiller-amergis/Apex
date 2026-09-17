@@ -18,7 +18,7 @@ import {
   routePrdGenerationKickoff,
 } from './prdService';
 import {
-  startSingleFeatureDocWatcher,
+  tryStartSingleFeatureDocWatcher,
   startValidationWatcher,
   isValidationWatcherActive,
   isDocWatcherActive,
@@ -304,9 +304,13 @@ export async function recoverInFlightWork(): Promise<void> {
     // only adopt docs that are not already being watched here — as the PRD,
     // test-case, and validation loops do.
     if (isDocWatcherActive(doc.id)) continue;
-    const ok = await hydrateThread(doc.chatThreadId);
-    if (ok) {
-      startSingleFeatureDocWatcher(doc.id, doc.chatThreadId, doc.prdId, doc.project);
+    const started = await tryStartSingleFeatureDocWatcher(
+      doc.id,
+      doc.chatThreadId,
+      doc.prdId,
+      doc.project,
+    );
+    if (started) {
       recovered++;
       console.log(
         `[recovery] Restarted design doc watcher (designDocId=${doc.id})`
@@ -346,10 +350,6 @@ export async function recoverInFlightWork(): Promise<void> {
         });
         console.log(`[recovery] Re-kicked design doc generation (designDocId=${doc.id})`);
       }
-    } else {
-      console.warn(
-        `[recovery] Could not hydrate thread for design doc (designDocId=${doc.id}, threadId=${doc.chatThreadId})`
-      );
     }
   }
 

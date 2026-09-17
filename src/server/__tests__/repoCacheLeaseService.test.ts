@@ -1,5 +1,6 @@
 import {
   type RepoCacheLeaseStore,
+  tryAcquireRepoCacheLease,
   withRepoCacheLease,
 } from '../services/repoCacheLeaseService';
 
@@ -141,5 +142,44 @@ describe('withRepoCacheLease', () => {
       295_000,
     );
     expect(store.release).not.toHaveBeenCalled();
+  });
+});
+
+describe('tryAcquireRepoCacheLease', () => {
+  it('returns null immediately for a non-blocking loser', async () => {
+    const store = createStore([false]);
+
+    await expect(tryAcquireRepoCacheLease('watcher:doc-1:thread-1', {
+      ownerId: 'instance-1',
+      leaseMs: 30_000,
+      heartbeatMs: 10_000,
+      waitMs: 0,
+      store,
+    })).resolves.toBeNull();
+
+    expect(store.tryAcquire).toHaveBeenCalledTimes(1);
+    expect(store.renew).not.toHaveBeenCalled();
+    expect(store.release).not.toHaveBeenCalled();
+  });
+
+  it('renews until released after a successful non-blocking acquire', async () => {
+    jest.useFakeTimers();
+    const store = createStore([true]);
+
+    const lease = await tryAcquireRepoCacheLease('watcher:doc-2:thread-2', {
+      ownerId: 'instance-2',
+      leaseMs: 30,
+      heartbeatMs: 10,
+      waitMs: 0,
+      store,
+    });
+
+    expect(lease).not.toBeNull();
+    await jest.advanceTimersByTimeAsync(11);
+    expect(store.renew).toHaveBeenCalledTimes(1);
+
+    await lease!.release();
+    expect(store.release).toHaveBeenCalledWith('watcher:doc-2:thread-2', 'instance-2', 1);
+    jest.useRealTimers();
   });
 });
