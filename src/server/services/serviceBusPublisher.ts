@@ -15,19 +15,14 @@ const PUBLISH_MAX_ATTEMPTS = 3;
 const PUBLISH_RETRY_BASE_MS = 200;
 
 /**
- * Statuses worth another attempt inside a single publish call.
- *
- * 401 and 403 are here on purpose. Replacing a queue re-creates the role
- * assignments scoped to it, and Service Bus went on refusing a correctly
- * assigned identity for roughly an hour afterwards. Treating authorization
- * failures as permanent stranded every run dispatched during that window.
+ * Transient broker statuses worth another attempt inside a single publish call.
  *
  * Retrying is safe because the queue requires duplicate detection: a repeat
  * carrying the same MessageId inside the history window is dropped by the
  * broker rather than delivered twice.
  */
 const RETRYABLE_PUBLISH_STATUSES = new Set([
-  401, 403, 408, 429, 500, 502, 503, 504,
+  408, 429, 500, 502, 503, 504,
 ]);
 
 export type ServiceBusPublisher = {
@@ -107,6 +102,7 @@ function createDefaultServiceBusPublisher(): ServiceBusPublisher {
       };
 
       let lastStatus = 0;
+      let authorizationRefreshAttempted = false;
       for (let attempt = 1; attempt <= PUBLISH_MAX_ATTEMPTS; attempt += 1) {
         const token =
           await getCachedServiceBusCredential().getToken(SERVICE_BUS_SCOPE);
@@ -132,13 +128,22 @@ function createDefaultServiceBusPublisher(): ServiceBusPublisher {
         }
 
         lastStatus = response.status;
-        const worthRetrying =
-          RETRYABLE_PUBLISH_STATUSES.has(response.status)
-          && attempt < PUBLISH_MAX_ATTEMPTS;
         if (response.status === 401 || response.status === 403) {
           resetServiceBusCredentialCache();
+          if (
+            authorizationRefreshAttempted
+            || attempt >= PUBLISH_MAX_ATTEMPTS
+          ) {
+            break;
+          }
+          authorizationRefreshAttempted = true;
+          await delay(PUBLISH_RETRY_BASE_MS * attempt);
+          continue;
         }
-        if (!worthRetrying) {
+        if (
+          !RETRYABLE_PUBLISH_STATUSES.has(response.status)
+          || attempt >= PUBLISH_MAX_ATTEMPTS
+        ) {
           break;
         }
         await delay(PUBLISH_RETRY_BASE_MS * attempt);

@@ -229,7 +229,6 @@ jobs:
               CURSOR_API_KEY="${{ secrets.CURSOR_API_KEY }}" \
               CURSOR_TEAM_API_KEY="${{ secrets.CURSOR_TEAM_API_KEY }}" \
               AGENT_RUN_HARD_LIMIT_MS="${{ secrets.AGENT_RUN_HARD_LIMIT_MS }}" \
-              AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS="${{ vars.AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS || '600000' }}" \
               PORT=8080 \
               POLL_INTERVAL=30 \
               WEBSITES_ENABLE_APP_SERVICE_STORAGE=true \
@@ -290,6 +289,7 @@ jobs:
               AZURE_REDIRECT_URL="${STAGING_REDIRECT_URL}" \
               APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}" \
               DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+              AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS="${{ vars.AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS || '600000' }}" \
               LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net" \
               APEX_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net"
 
@@ -310,6 +310,7 @@ jobs:
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
             --slot-settings \
               DATABASE_URL="$PROD_DATABASE_URL" \
+              AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS="${{ vars.AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS || '600000' }}" \
               LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net" \
               APEX_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net"
 
@@ -325,7 +326,6 @@ jobs:
               AI_RUNS_SERVICEBUS_NAMESPACE="${{ vars.AI_RUNS_SERVICEBUS_NAMESPACE }}" \
               AI_RUNS_BACKGROUND_QUEUE_NAME="${{ vars.AI_RUNS_BACKGROUND_QUEUE_NAME }}" \
               AI_RUNS_BACKGROUND_INFLIGHT_LIMIT="${{ vars.AI_RUNS_BACKGROUND_INFLIGHT_LIMIT }}" \
-              AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS="${{ vars.AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS || '600000' }}" \
               AI_RUNS_CALLBACK_TOKEN_AUDIENCE="${{ vars.AI_RUNS_CALLBACK_TOKEN_AUDIENCE }}" \
               AI_RUNS_RUNNER_ALLOWED_CLIENT_IDS="${{ vars.AI_RUNS_RUNNER_ALLOWED_CLIENT_IDS }}" \
               AI_RUNS_RUNNER_CALLBACK_TOKEN="${{ secrets.AI_RUNS_RUNNER_CALLBACK_TOKEN }}" \

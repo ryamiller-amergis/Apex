@@ -1146,6 +1146,7 @@ export async function finalizeSingleFeatureDoc(
     columns: { id: true, skillSettingsId: true },
   });
   if (!guard) {
+    releaseDocOutput(designDocId, chatThreadId);
     console.log(`[finalizeSingleFeatureDoc] Skipped — row already finalised or thread replaced (designDocId=${designDocId})`);
     return false;
   }
@@ -1184,6 +1185,7 @@ export async function finalizeSingleFeatureDoc(
         .returning({ id: designDocs.id })
       : Promise.resolve([{ id: designDocId }]));
     if ((updatedRows?.length ?? 0) === 0) {
+      releaseDocOutput(designDocId, chatThreadId);
       console.log(`[finalizeSingleFeatureDoc] Skipped failure finalize — guarded update lost (designDocId=${designDocId})`);
       return false;
     }
@@ -1220,6 +1222,7 @@ export async function finalizeSingleFeatureDoc(
       .returning({ id: designDocs.id })
     : Promise.resolve([{ id: designDocId }]));
   if ((updatedRows?.length ?? 0) === 0) {
+    releaseDocOutput(designDocId, chatThreadId);
     console.log(`[finalizeSingleFeatureDoc] Skipped success finalize — guarded update lost (designDocId=${designDocId})`);
     return false;
   }

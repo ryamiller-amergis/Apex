@@ -64,9 +64,9 @@ resource "azurerm_linux_web_app" "main" {
   site_config {
     always_on = true
 
-    # The plan runs multiple instances, so without this a wedged instance keeps
-    # serving traffic instead of being pulled from rotation. Set live but never
-    # declared here, which meant a full apply would quietly remove it.
+    # Azure's rotation probe is process-only liveness by design. Readiness and
+    # dependency endpoints are observed separately so a shared database outage
+    # does not remove every application instance from rotation.
     health_check_path = "/api/health"
 
     # Required for the FEAT-007 interactive WebSocket gateway (client ↔ gateway
@@ -245,9 +245,9 @@ resource "azurerm_linux_web_app_slot" "staging" {
   site_config {
     always_on = true
 
-    # Azure takes an unhealthy instance out of rotation only when it has a path
-    # to probe. Without this a full apply strips the probe from the slot that
-    # pre-swap validation runs against.
+    # Azure's rotation probe is process-only liveness by design. Readiness and
+    # dependency endpoints are observed separately so a shared database outage
+    # does not remove every staging instance from rotation.
     health_check_path = "/api/health"
 
     # Same as production: keep the WebSocket upgrade enabled so a post-swap

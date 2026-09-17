@@ -166,8 +166,9 @@ function createDeferredCallback<TArgs extends unknown[]>(label: string) {
 }
 
 async function flushAsyncWork(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let hop = 0; hop < 20; hop += 1) {
+    await Promise.resolve();
+  }
 }
 
 /**
@@ -368,6 +369,78 @@ describe('recovery cooperative aborts', () => {
       .expireOldSessions.mockResolvedValue({ expired: 0, errors: 0 });
     jest.requireMock('../services/featureRequestAnalysisService')
       .recoverAnalyzingFeatureRequests.mockResolvedValue(0);
+  });
+
+  it('continues to later categories when generating PRD recovery fails', async () => {
+    const categoryError = new Error('hydrate failed');
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockPrdsFindMany
+      .mockResolvedValueOnce([{
+        id: 'prd-failing',
+        chatThreadId: 'thread-failing',
+        interviewId: 'interview-1',
+        project: 'Apex',
+        authorId: 'user-1',
+        updatedAt: '2026-08-11T05:00:00.000Z',
+      }])
+      .mockResolvedValueOnce([]);
+    mockedHydrate
+      .mockRejectedValueOnce(categoryError)
+      .mockResolvedValue(false);
+
+    try {
+      await expect(recoverInFlightWork()).resolves.toBeUndefined();
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        '[recovery] Failed to recover generating PRDs:',
+        categoryError,
+      );
+      expect(mockDesignDocsFindMany).toHaveBeenCalledTimes(2);
+      expect(mockTestCasesFindMany).toHaveBeenCalledTimes(1);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+
+  it('propagates lease loss from a direct recovery category', async () => {
+    mockPrdsFindMany.mockResolvedValueOnce([{
+      id: 'prd-lease-lost',
+      chatThreadId: 'thread-lease-lost',
+      interviewId: 'interview-1',
+      project: 'Apex',
+      authorId: 'user-1',
+      updatedAt: '2026-08-11T05:00:00.000Z',
+    }]);
+    mockedHydrate.mockRejectedValueOnce(
+      new RepoCacheLeaseLostError('Repository cache lease was lost'),
+    );
+
+    await expect(recoverInFlightWork()).rejects.toBeInstanceOf(RepoCacheLeaseLostError);
+
+    expect(mockDesignDocsFindMany).not.toHaveBeenCalled();
+  });
+
+  it('propagates the AbortSignal reason from a direct recovery category', async () => {
+    const controller = new AbortController();
+    const abortReason = new Error('recovery aborted');
+    mockPrdsFindMany.mockResolvedValueOnce([{
+      id: 'prd-aborted',
+      chatThreadId: 'thread-aborted',
+      interviewId: 'interview-1',
+      project: 'Apex',
+      authorId: 'user-1',
+      updatedAt: '2026-08-11T05:00:00.000Z',
+    }]);
+    mockedHydrate.mockImplementationOnce(async () => {
+      controller.abort(abortReason);
+      throw new Error('hydrate observed abort');
+    });
+
+    await expect(
+      recoverInFlightWork({ signal: controller.signal }),
+    ).rejects.toBe(abortReason);
+
+    expect(mockDesignDocsFindMany).not.toHaveBeenCalled();
   });
 
   it('stops before the next recovery section after lease ownership is lost', async () => {

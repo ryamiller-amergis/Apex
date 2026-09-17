@@ -243,30 +243,82 @@ describe('serviceBusPublisher', () => {
       .not.toBe((global.fetch as jest.Mock).mock.calls[0][1]);
   });
 
-  test('gives up after the attempt budget and reports the last status', async () => {
-    process.env.NODE_ENV = 'production';
-    process.env.AI_RUNS_SERVICEBUS_NAMESPACE = 'sbns-apex-ai-dev';
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: false,
-      status: 401,
-      statusText: 'Unauthorized',
-    }) as unknown as typeof fetch;
+  test.each([
+    { status: 401, statusText: 'Unauthorized' },
+    { status: 403, statusText: 'Forbidden' },
+  ])(
+    'limits persistent $status authorization rejection to one credential refresh',
+    async ({ status, statusText }) => {
+      process.env.NODE_ENV = 'production';
+      process.env.AI_RUNS_SERVICEBUS_NAMESPACE = 'sbns-apex-ai-dev';
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status,
+        statusText,
+      }) as unknown as typeof fetch;
 
-    await expect(
-      getServiceBusPublisher().publish(sampleMessage)
-    ).rejects.toThrow('Service Bus publish failed (401)');
+      await expect(
+        getServiceBusPublisher().publish(sampleMessage)
+      ).rejects.toThrow(`Service Bus publish failed (${status})`);
 
-    expect(global.fetch).toHaveBeenCalledTimes(3);
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+      expect(mockGetToken).toHaveBeenCalledTimes(2);
+      expect(mockManagedIdentityCredential).toHaveBeenCalledTimes(2);
 
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 201,
-      statusText: 'Created',
-    }) as unknown as typeof fetch;
-    await getServiceBusPublisher().publish(sampleMessage);
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 201,
+        statusText: 'Created',
+      }) as unknown as typeof fetch;
+      await getServiceBusPublisher().publish(sampleMessage);
 
-    expect(mockManagedIdentityCredential).toHaveBeenCalledTimes(4);
-  });
+      expect(mockManagedIdentityCredential).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  test.each([
+    { status: 429, statusText: 'Too Many Requests' },
+    { status: 503, statusText: 'Service Unavailable' },
+  ])(
+    'preserves the three-attempt retry budget for $status responses',
+    async ({ status, statusText }) => {
+      process.env.NODE_ENV = 'production';
+      process.env.AI_RUNS_SERVICEBUS_NAMESPACE = 'sbns-apex-ai-dev';
+      mockGetToken
+        .mockResolvedValueOnce({
+          token: 'attempt-one-token',
+          expiresOnTimestamp: Date.now() + 60_000,
+        })
+        .mockResolvedValueOnce({
+          token: 'attempt-two-token',
+          expiresOnTimestamp: Date.now() + 60_000,
+        })
+        .mockResolvedValue({
+          token: 'attempt-three-token',
+          expiresOnTimestamp: Date.now() + 60_000,
+        });
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status,
+        statusText,
+      }) as unknown as typeof fetch;
+
+      await expect(
+        getServiceBusPublisher().publish(sampleMessage)
+      ).rejects.toThrow(`Service Bus publish failed (${status})`);
+
+      expect(global.fetch).toHaveBeenCalledTimes(3);
+      expect(mockGetToken).toHaveBeenCalledTimes(3);
+      expect(mockManagedIdentityCredential).toHaveBeenCalledTimes(1);
+      const requests = (global.fetch as jest.Mock).mock.calls
+        .map(([, request]) => request);
+      expect(requests[1]).not.toBe(requests[0]);
+      expect(requests[2]).not.toBe(requests[1]);
+      expect(requests[2].headers).toEqual(
+        expect.objectContaining({ Authorization: 'Bearer attempt-three-token' }),
+      );
+    },
+  );
 
   test('does not retry a status the broker will keep rejecting', async () => {
     process.env.NODE_ENV = 'production';

@@ -69,6 +69,25 @@ function throwIfAborted(signal?: AbortSignal): void {
   }
 }
 
+async function runRecoveryCategory(
+  category: string,
+  signal: AbortSignal | undefined,
+  recover: () => Promise<void>,
+): Promise<void> {
+  try {
+    throwIfAborted(signal);
+    await recover();
+  } catch (error) {
+    if (signal?.aborted) {
+      throw signal.reason ?? error;
+    }
+    if (error instanceof RepoCacheLeaseLostError) {
+      throw error;
+    }
+    console.error(`[recovery] Failed to recover ${category}:`, error);
+  }
+}
+
 function isExpectedSweepStop(error: unknown): boolean {
   return error instanceof NonblockingRepoCacheLeaseUnavailableError
     || error instanceof RepoCacheLeaseLostError;
@@ -310,7 +329,7 @@ export async function recoverInFlightWork(
     console.error('[recovery] Failed to recover abandoned dev session setups:', err);
   }
 
-  throwIfAborted(signal);
+  await runRecoveryCategory('generating PRDs', signal, async () => {
   const generatingPrds = await db.query.prds.findMany({
     where: eq(prds.status, 'generating'),
     columns: {
@@ -373,8 +392,9 @@ export async function recoverInFlightWork(
       );
     }
   }
+  });
 
-  throwIfAborted(signal);
+  await runRecoveryCategory('generating Design Docs', signal, async () => {
   const generatingDocs = await db.query.designDocs.findMany({
     where: eq(designDocs.status, 'generating'),
     columns: {
@@ -448,8 +468,9 @@ export async function recoverInFlightWork(
       }
     }
   }
+  });
 
-  throwIfAborted(signal);
+  await runRecoveryCategory('validating Design Docs', signal, async () => {
   const validatingDocs = await db.query.designDocs.findMany({
     where: eq(designDocs.status, 'validating'),
     columns: {
@@ -541,17 +562,10 @@ export async function recoverInFlightWork(
       }
     }
   }
-
-  throwIfAborted(signal);
-  const generatingTestCases = await db.query.testCases.findMany({
-    where: eq(testCases.status, 'generating'),
-    columns: { id: true, prdId: true, chatThreadId: true, updatedAt: true },
-    orderBy: [asc(testCases.updatedAt), asc(testCases.id)],
-    limit: RECOVERY_SWEEP_BATCH_SIZE,
   });
 
   // ── PRD validation threads stuck in 'validating' ──────────────────────────
-  throwIfAborted(signal);
+  await runRecoveryCategory('validating PRDs', signal, async () => {
   const validatingPrds = await db.query.prds.findMany({
     where: eq(prds.status, 'validating'),
     columns: {
@@ -635,7 +649,15 @@ export async function recoverInFlightWork(
       }
     }
   }
+  });
 
+  await runRecoveryCategory('generating test cases', signal, async () => {
+  const generatingTestCases = await db.query.testCases.findMany({
+    where: eq(testCases.status, 'generating'),
+    columns: { id: true, prdId: true, chatThreadId: true, updatedAt: true },
+    orderBy: [asc(testCases.updatedAt), asc(testCases.id)],
+    limit: RECOVERY_SWEEP_BATCH_SIZE,
+  });
   for (const testCase of generatingTestCases) {
     throwIfAborted(signal);
     if (!testCase.chatThreadId) continue;
@@ -690,6 +712,7 @@ export async function recoverInFlightWork(
       );
     }
   }
+  });
 
   // ── Interview threads stuck in 'running' ──────────────────────────────────
   try {

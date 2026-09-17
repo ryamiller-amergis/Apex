@@ -2692,11 +2692,17 @@ describe('finalizeSingleFeatureDoc — idempotency guard', () => {
     const whereMock = jest.fn().mockResolvedValue(undefined);
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
     mockDb.update.mockReturnValue({ set: setMock });
+    const snapshotDeleteSpy = jest.spyOn(Map.prototype, 'delete');
 
-    const result = await finalizeSingleFeatureDoc('doc-1', 'thread-old', 'proj-alpha');
+    try {
+      const result = await finalizeSingleFeatureDoc('doc-1', 'thread-old', 'proj-alpha');
 
-    expect(result).toBe(false);
-    expect(setMock).not.toHaveBeenCalled();
+      expect(result).toBe(false);
+      expect(setMock).not.toHaveBeenCalled();
+      expect(snapshotDeleteSpy).toHaveBeenCalledWith('doc-1:thread-old');
+    } finally {
+      snapshotDeleteSpy.mockRestore();
+    }
   });
 
   it('returns true and writes content when all three output files are present', async () => {
@@ -2728,7 +2734,34 @@ describe('finalizeSingleFeatureDoc — idempotency guard', () => {
     );
   });
 
-  it('requires the guarded terminal update to win before cleanup and notifications', async () => {
+  it('releases the snapshot when the guarded failure update loses ownership', async () => {
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'doc-failure', skillSettingsId: null });
+    mockDb.query.agentRuns.findFirst.mockResolvedValue(null);
+    mockDesign.mockReturnValue(null);
+    const returningMock = jest.fn().mockResolvedValue([]);
+    const whereMock = jest.fn().mockReturnValue({ returning: returningMock });
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+    mockRunGroundingService.persistThenMarkTerminalInactive.mockClear();
+    const snapshotDeleteSpy = jest.spyOn(Map.prototype, 'delete');
+
+    try {
+      const result = await finalizeSingleFeatureDoc(
+        'doc-failure',
+        'thread-failure',
+        'proj-alpha',
+      );
+
+      expect(result).toBe(false);
+      expect(returningMock).toHaveBeenCalled();
+      expect(snapshotDeleteSpy).toHaveBeenCalledWith('doc-failure:thread-failure');
+      expect(mockRunGroundingService.persistThenMarkTerminalInactive).not.toHaveBeenCalled();
+    } finally {
+      snapshotDeleteSpy.mockRestore();
+    }
+  });
+
+  it('releases the snapshot when the guarded success update loses ownership', async () => {
     mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'doc-1', skillSettingsId: null });
     const returningMock = jest.fn().mockResolvedValue([]);
     const whereMock = jest.fn().mockReturnValue({ returning: returningMock });
@@ -2736,25 +2769,31 @@ describe('finalizeSingleFeatureDoc — idempotency guard', () => {
     mockDb.update.mockReturnValue({ set: setMock });
     mockDb.query.chatThreads = { findFirst: jest.fn().mockResolvedValue(null) };
     mockRunGroundingService.persistThenMarkTerminalInactive.mockClear();
+    const snapshotDeleteSpy = jest.spyOn(Map.prototype, 'delete');
 
-    const result = await finalizeSingleFeatureDoc(
-      'doc-1',
-      'thread-1',
-      'proj-alpha',
-      {
-        assertOwned: jest.fn().mockResolvedValue(undefined),
-        leaseFence: {
-          cacheKey: 'design-doc-generation-watcher:doc-1:thread-1',
-          ownerId: 'instance-1',
-          generation: 3,
+    try {
+      const result = await finalizeSingleFeatureDoc(
+        'doc-1',
+        'thread-1',
+        'proj-alpha',
+        {
+          assertOwned: jest.fn().mockResolvedValue(undefined),
+          leaseFence: {
+            cacheKey: 'design-doc-generation-watcher:doc-1:thread-1',
+            ownerId: 'instance-1',
+            generation: 3,
+          },
         },
-      },
-    );
+      );
 
-    expect(result).toBe(false);
-    expect(returningMock).toHaveBeenCalled();
-    expect(mockRunGroundingService.persistThenMarkTerminalInactive).not.toHaveBeenCalled();
-    expect(mockDb.query.chatThreads.findFirst).not.toHaveBeenCalled();
+      expect(result).toBe(false);
+      expect(returningMock).toHaveBeenCalled();
+      expect(snapshotDeleteSpy).toHaveBeenCalledWith('doc-1:thread-1');
+      expect(mockRunGroundingService.persistThenMarkTerminalInactive).not.toHaveBeenCalled();
+      expect(mockDb.query.chatThreads.findFirst).not.toHaveBeenCalled();
+    } finally {
+      snapshotDeleteSpy.mockRestore();
+    }
   });
 });
 
