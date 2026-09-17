@@ -180,10 +180,35 @@ Dev and prod **must not share state**. See [Workspaces and environments](#worksp
 | `ado_project` | Azure DevOps project | (required) |
 | `github_org` | GitHub org for checkout (`GITHUB_ORG`; not the Apex product name) | `""` |
 | `github_token` | GitHub PAT for clone/fetch (`GITHUB_TOKEN`; same as App Service) | `null` |
+| `postgresql_location` | PostgreSQL Flexible Server region | `East US 2` |
+| `postgresql_server_name` | PostgreSQL Flexible Server name | `psql-apex-eus2` |
+| `postgresql_sku_name` | PostgreSQL compute SKU | `B_Standard_B1ms` |
+| `postgresql_storage_mb` | Provisioned storage in MiB; cannot be reduced after growth | `32768` |
+| `postgresql_backup_retention_days` | Point-in-time backup retention | `7` |
+| `postgresql_azure_services_firewall_rule_name` | Name of the `0.0.0.0` Azure-services firewall rule | `allow-azure-services` |
 
 The App Service plan uses the fixed `app_service_worker_count`. Production
 autoscaling is intentionally deferred until Interview and other long-running AI
 flows have a multi-instance ownership, cleanup, and scale-in recovery design.
+
+### Importing an existing PostgreSQL server
+
+Before importing a Flexible Server, set its exact name, region, SKU, storage,
+backup retention, availability zone, and managed firewall-rule name in the
+environment's tfvars. Storage cannot shrink, and a mismatched region or name
+produces a replacement plan.
+
+Never change `postgresql_server_name` or `postgresql_location` and apply while
+Terraform state still owns a different server. Back up state, remove the old
+addresses from state without destroying Azure resources, import the active
+server and child resources, then require a refreshed plan with no PostgreSQL
+create, replacement, resize, or destroy. See the approved production
+reconciliation runbook before changing production state. Terraform ignores
+imported administrator credentials after server creation because Azure cannot
+return them with matching state metadata; rotate the password through the
+approved secret process. This credential-ownership rule applies to all
+environments: after a server is created, administrator credentials are managed
+outside Terraform rather than changed through tfvars.
 
 ### Shared async + PDF processing settings
 

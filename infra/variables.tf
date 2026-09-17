@@ -278,6 +278,46 @@ variable "postgresql_sku_name" {
   default     = "B_Standard_B1ms"
 }
 
+variable "postgresql_storage_mb" {
+  description = "Provisioned PostgreSQL storage in MiB. Set this to the existing server size before import because Flexible Server storage cannot shrink."
+  type        = number
+  default     = 32768
+
+  validation {
+    condition = contains(
+      [32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 4193280, 4194304, 8388608, 16777216, 33553408],
+      var.postgresql_storage_mb,
+    )
+    error_message = "postgresql_storage_mb must be a supported Azure PostgreSQL Flexible Server storage size."
+  }
+}
+
+variable "postgresql_backup_retention_days" {
+  description = "PostgreSQL point-in-time backup retention in days."
+  type        = number
+  default     = 7
+
+  validation {
+    condition = (
+      floor(var.postgresql_backup_retention_days) == var.postgresql_backup_retention_days
+      && var.postgresql_backup_retention_days >= 7
+      && var.postgresql_backup_retention_days <= 35
+    )
+    error_message = "postgresql_backup_retention_days must be between 7 and 35."
+  }
+}
+
+variable "postgresql_azure_services_firewall_rule_name" {
+  description = "Name of the PostgreSQL 0.0.0.0 Azure-services firewall rule. Override to match an existing rule before Terraform import."
+  type        = string
+  default     = "allow-azure-services"
+
+  validation {
+    condition     = length(trimspace(var.postgresql_azure_services_firewall_rule_name)) > 0
+    error_message = "postgresql_azure_services_firewall_rule_name must not be empty."
+  }
+}
+
 variable "postgresql_high_availability_mode" {
   description = "PostgreSQL HA mode: ZoneRedundant or SameZone. Requires General Purpose or Memory Optimized SKU."
   type        = string
