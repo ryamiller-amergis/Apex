@@ -178,6 +178,31 @@ describe('technicalPhaseSkillService (FEAT-005 / PBI-008 / TBI-005)', () => {
     );
   });
 
+  it('seeds technical_only from the original thread kickoff transcript when no user message exists', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...approvedInterview,
+      phaseFlow: 'technical_only',
+      requirementsPhaseStatus: null,
+      requirementsApprovedAt: null,
+    });
+    mockLoadFullThread.mockResolvedValue({
+      id: 'requirements-thread',
+      kickoff: { transcript: 'Design the auth service\n\n### notes.txt\n\nUse OIDC.' },
+      messages: [],
+    });
+    mockGetPhaseSummary.mockResolvedValue(null);
+
+    await expect(startTechnicalPhase('interview-1', 'technical-owner')).resolves
+      .toMatchObject({ technicalPhaseChatThreadId: 'technical-thread' });
+    expect(mockCreateThread).toHaveBeenCalledWith(
+      'technical-owner',
+      expect.objectContaining({
+        freeformContext: expect.stringContaining('Use OIDC.'),
+      }),
+      expect.any(Object),
+    );
+  });
+
   it('AC-1 / DoD-2 / DoD-3 / VT-04 applies each completed-turn artifact once through lifecycle APIs', async () => {
     const workspaceDir = fs.mkdtempSync(path.join(process.cwd(), 'tmp-technical-phase-'));
     const outputDir = path.join(workspaceDir, '.ai-pilot', 'output');

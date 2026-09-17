@@ -198,6 +198,28 @@ export async function createInterview(opts: {
       );
     }
 
+    if (requirementsOwnerId) {
+      notificationPromises.push(
+        createNotification(requirementsOwnerId, {
+          type: 'user-action',
+          title: 'Assigned as Requirements Owner',
+          body: `You were assigned as Requirements owner for the interview "${interviewTitle}".`,
+          link: `/backlog/interview/${interviewId}`,
+        }).then(() => undefined),
+      );
+    }
+
+    if (technicalOwnerId) {
+      notificationPromises.push(
+        createNotification(technicalOwnerId, {
+          type: 'user-action',
+          title: 'Assigned as Technical Owner',
+          body: `You were assigned as Technical owner for the interview "${interviewTitle}".`,
+          link: `/backlog/interview/${interviewId}`,
+        }).then(() => undefined),
+      );
+    }
+
     const interviewLink = `/backlog/interview/${interviewId}`;
     const reviewerAssignments: Array<{ userIds: string[] | undefined; title: string; role: string }> = [
       { userIds: opts.prdApproverIds, title: 'Assigned as PRD Reviewer', role: 'PRD reviewer' },

@@ -820,6 +820,46 @@ describe('NewInterviewCompose — section owner modal', () => {
     );
   });
 
+  it('does not start a grill run for technical_only and seeds the unused thread from kickoff transcript', async () => {
+    MockSectionOwnerModal.mockImplementation(
+      ({ onConfirm }: { onConfirm: (o: Record<string, unknown>) => void }) => (
+        <button
+          type="button"
+          onClick={() => onConfirm({
+            phaseFlow: 'technical_only',
+            technicalOwnerId: 'user-dev',
+          })}
+        >
+          Confirm Technical flow
+        </button>
+      ),
+    );
+
+    renderCompose();
+    fireEvent.change(screen.getByLabelText(/title/i), {
+      target: { value: 'Technical Interview' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/describe what you'd like/i), {
+      target: { value: 'Design the auth service' },
+    });
+    fireEvent.click(screen.getByLabelText('Start interview'));
+    fireEvent.click(await screen.findByText('Confirm Technical flow'));
+
+    await waitFor(() => expect(startChatMutateAsync).toHaveBeenCalled());
+    expect(startChatMutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kickoff: expect.objectContaining({
+          skillPath: '.cursor/skills/technical-phase/SKILL.md',
+          transcript: 'Design the auth service',
+        }),
+        skipAutoKickoff: true,
+      }),
+    );
+    expect((global.fetch as jest.Mock).mock.calls.find((c) =>
+      String(c[0]).includes('/api/chat/threads/thread-abc/messages'),
+    )).toBeUndefined();
+  });
+
   it('does NOT create the interview when the modal is cancelled', async () => {
     MockSectionOwnerModal.mockImplementation(
       ({ onCancel }: { onCancel: () => void }) => (

@@ -45,6 +45,7 @@ import {
 } from './InterviewPhaseTabs';
 import { useGroundingResumeGate } from '../hooks/useGroundingResumeGate';
 import type { PipelinePinPolicy } from '../../shared/types/runGrounding';
+import type { ChatAttachment } from '../../shared/types/chat';
 import {
   resolveRequirementsPhaseSkillPath,
   type InterviewPhaseFlow,
@@ -85,6 +86,27 @@ function badgeLabel(status: InterviewStatus): string {
 
 const isRequirementsAmendmentConfirmation = (text: string): boolean =>
   /amended (?:requirements )?summary has been handed to Apex/i.test(text);
+
+const DEFAULT_TECHNICAL_PHASE_SKILL = '.cursor/skills/technical-phase/SKILL.md';
+
+function buildTechnicalOnlySeedTranscript(
+  text: string,
+  files: ChatAttachment[],
+): string {
+  const sections: string[] = [];
+  const trimmed = text.trim();
+  if (trimmed) sections.push(trimmed);
+  for (const file of files) {
+    if (file.encoding === 'base64') {
+      sections.push(`Attached file: ${file.name}`);
+      continue;
+    }
+    if (file.content.trim()) {
+      sections.push(`### ${file.name}\n\n${file.content}`);
+    }
+  }
+  return sections.join('\n\n');
+}
 
 // ── Interactive choice block ──────────────────────────────────────────────────
 
@@ -491,6 +513,8 @@ const NewInterviewCompose: React.FC = () => {
     }
     setIsSending(true);
     try {
+      const isTechnicalOnly = selections.phaseFlow === 'technical_only';
+      const kickoffText = text || 'Please use the attached files as context.';
       const threadResult = await startChat.mutateAsync({
         kickoff: {
           project: selectedProject,
@@ -498,10 +522,14 @@ const NewInterviewCompose: React.FC = () => {
           branch: resolvedBranch,
           skillProvider: skillConfig?.skillProvider ?? undefined,
           skillPath: resolveRequirementsPhaseSkillPath(selections.phaseFlow)
-            ?? resolvedSkillPath
-            ?? grillSkill?.path,
+            ?? (isTechnicalOnly
+              ? DEFAULT_TECHNICAL_PHASE_SKILL
+              : (resolvedSkillPath ?? grillSkill?.path)),
           model,
           skillSettingsId: skillConfig?.id ?? undefined,
+          ...(isTechnicalOnly
+            ? { transcript: buildTechnicalOnlySeedTranscript(kickoffText, attachments) }
+            : {}),
         },
         skipAutoKickoff: true,
       });
@@ -572,12 +600,14 @@ const NewInterviewCompose: React.FC = () => {
           });
         }
       }
-      await fetch(`/api/chat/threads/${threadResult.threadId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ text: text || 'Please use the attached files as context.', attachments, model }),
-      });
+      if (!isTechnicalOnly) {
+        await fetch(`/api/chat/threads/${threadResult.threadId}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ text: kickoffText, attachments, model }),
+        });
+      }
       clearAttachments();
       if (linkedContextInitialErrorText) {
         navigate(`/backlog/interview/${result.interviewId}`, {
@@ -1139,12 +1169,15 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const isTechnicalStatePending = isTechnicalActive && !technicalState;
   const isTechnicalComplete = isTechnicalActive
     && technicalState?.status === 'complete';
+  const isRequirementsComplete = isRequirementsActive
+    && interview?.requirementsPhaseStatus === 'approved';
   const isChatLocked = isReadOnlyViewer
     || isStatusLocked
     || isTechnicalUnavailable
     || isTechnicalReady
     || isTechnicalStatePending
-    || isTechnicalComplete;
+    || isTechnicalComplete
+    || isRequirementsComplete;
   const draftAttachmentChars = attachments.reduce((sum, a) => sum + a.content.length, 0);
   const contextEstimate = useContextEstimate(
     visibleMessagesForContext, input, streamingText, model, draftAttachmentChars,
@@ -2022,7 +2055,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         </div>
       ) : isRequirementsPhaseReadOnly && !isStatusLocked ? (
         <PhaseReadOnlyNotice />
-      ) : isTechnicalReady || (isTechnicalComplete && !isStatusLocked) ? null
+      ) : isTechnicalReady || ((isTechnicalComplete || isRequirementsComplete) && !isStatusLocked) ? null
       : isChatLocked ? (
         <div className={styles.lockedNotice} {...{ 'data-testid': 'locked-notice' }}>
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">

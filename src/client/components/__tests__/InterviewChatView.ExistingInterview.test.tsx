@@ -1171,6 +1171,23 @@ describe('PBI-007 Requirements phase context and owner gating', () => {
     expect(screen.getByTestId('interview-chat-composer')).toBeInTheDocument();
   });
 
+  it('hides the composer after the Requirements summary is approved', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeInterview({
+        phaseFlow: 'requirements_only',
+        requirementsOwnerId: 'user-1',
+        requirementsPhaseStatus: 'approved',
+      }),
+      isLoading: false,
+      isError: false,
+    });
+
+    renderExistingInterview();
+
+    expect(screen.queryByTestId('interview-chat-composer')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('locked-notice')).not.toBeInTheDocument();
+  });
+
   it('PBI-007 AC-3 requires interviews:manage even for the assigned Requirements owner', () => {
     (useInterview as jest.Mock).mockReturnValue({
       data: makeInterview({

@@ -351,6 +351,40 @@ describe('createInterview', () => {
     expect(mockCreateNotification).toHaveBeenCalledTimes(4);
   });
 
+  it('notifies assigned Requirements and Technical owners when a phase-flow interview is created', async () => {
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'interview-phase-owners' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
+    await createInterview({
+      userId: 'user-1',
+      project: 'proj',
+      repo: 'org/repo',
+      title: 'Phase Flow Interview',
+      chatThreadId: 'thread-phases',
+      phaseFlow: 'both_sequential',
+      requirementsOwnerId: 'req-1',
+      technicalOwnerId: 'tech-1',
+    });
+
+    expect(mockCreateNotification).toHaveBeenCalledWith(
+      'req-1',
+      expect.objectContaining({
+        type: 'user-action',
+        title: 'Assigned as Requirements Owner',
+        link: '/backlog/interview/interview-phase-owners',
+      }),
+    );
+    expect(mockCreateNotification).toHaveBeenCalledWith(
+      'tech-1',
+      expect.objectContaining({
+        type: 'user-action',
+        title: 'Assigned as Technical Owner',
+        link: '/backlog/interview/interview-phase-owners',
+      }),
+    );
+  });
+
   it('PBI-001 AC-0 / TBI-001 DoD-0 / VT-01 persists both owners and starts Requirements for both_sequential', async () => {
     const returningMock = jest.fn().mockResolvedValue([{ id: 'interview-phases' }]);
     const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });

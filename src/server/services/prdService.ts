@@ -394,7 +394,9 @@ export async function triggerPrdGenerationFromPhaseApproval(
       (message) => message.role === 'user'
         && message.text?.trim()
         && message.text.trim() !== 'Begin.',
-    )?.text ?? null;
+    )?.text?.trim()
+      || sourceThread?.kickoff.transcript?.trim()
+      || null;
     const transcript = renderPhaseKickoffTranscript({
       interviewTitle: interview.title,
       originalPrompt,

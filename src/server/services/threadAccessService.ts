@@ -162,9 +162,10 @@ function requirementsPhaseIsOpen(row: {
   phaseFlow: string | null;
   requirementsPhaseStatus: string | null;
 }): boolean {
-  if (row.phaseFlow === 'requirements_only') return true;
-  return row.phaseFlow === 'both_sequential'
-    && row.requirementsPhaseStatus !== 'approved';
+  if (row.phaseFlow !== 'requirements_only' && row.phaseFlow !== 'both_sequential') {
+    return false;
+  }
+  return row.requirementsPhaseStatus !== 'approved';
 }
 
 /**

@@ -253,6 +253,17 @@ describe('resolveRequirementsPhaseMessageWrite (FEAT-004 / PBI-007)', () => {
     });
   });
 
+  it('closes Requirements writes after a requirements_only summary is approved', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...requirementsOnly,
+      requirementsPhaseStatus: 'approved',
+    });
+
+    expect(await resolveRequirementsPhaseMessageWrite('owner-1', 'thread-1')).toEqual({
+      outcome: 'not_applicable',
+    });
+  });
+
   it('VT-08: leaves technical-only, legacy, and non-interview threads to the existing write rules', async () => {
     mockDb.query.interviews.findFirst.mockResolvedValue({
       ...requirementsOnly,
