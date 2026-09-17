@@ -446,8 +446,6 @@ export async function getThreadRunStateSnapshot(
   const config = options.config ?? resolveAgentRunHealthConfig();
   const nowMs = options.now?.() ?? Date.now();
   const orphanGraceMs = options.orphanGraceMs ?? GENERATION_FAIL_ORPHAN_GRACE_MS;
-  const eventDrivenTerminationEnabled =
-    options.eventDrivenTerminationEnabled ?? isEventDrivenTerminationEnabledForThread;
   const rows = await db.query.agentRuns.findMany({
     where: eq(agentRuns.threadId, threadId),
     orderBy: [desc(agentRuns.createdAt)],
@@ -469,11 +467,7 @@ export async function getThreadRunStateSnapshot(
 
   const latest = rows[0] ?? null;
   const activeRows = rows.filter((row) => ['queued', 'running', 'dispatched'].includes(row.status));
-  const rowMarkedEventDriven = activeRows.some((row) => row.eventDriven === true);
-  const eventDrivenEnabled = activeRows.length > 0 && (
-    rowMarkedEventDriven
-    || await eventDrivenTerminationEnabled(threadId).catch(() => false)
-  );
+  const eventDrivenEnabled = activeRows.some((row) => row.eventDriven === true);
 
   return {
     latestRun: latest

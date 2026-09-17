@@ -647,15 +647,13 @@ const DOC_WATCHER_BACKOFF_MS = [5_000, 10_000, 20_000, 30_000] as const;
  * still queued and expires on docs the agent never had a chance to write.
  */
 const WATCHER_WORK_BUDGET_MS = WATCHER_MAX_ATTEMPTS * WATCHER_INTERVAL_MS;
-
-/** Statuses meaning no worker has begun, so a tick must not be charged. */
-const PRE_START_RUN_STATUSES: readonly string[] = ['queued', 'dispatched'];
-
 const activeDocWatchers = new Map<string, ReturnType<typeof setInterval>>();
 const activeDocWatcherThreads = new Map<string, string>();
 const activeSingleFeatureDocWatcherReleases = new Map<string, () => Promise<void>>();
+const activeSingleFeatureDocWatcherTokens = new Map<string, number>();
 const pendingSingleFeatureDocWatcherStarts = new Set<string>();
 const activeValidationWatchers = new Map<string, ReturnType<typeof setInterval>>();
+let nextSingleFeatureDocWatcherToken = 1;
 
 /**
  * Working time left per doc + thread.
@@ -681,25 +679,6 @@ function docWatcherDeadlineKey(designDocId: string, chatThreadId: string): strin
 
 function singleFeatureDocWatcherLeaseKey(designDocId: string, chatThreadId: string): string {
   return `design-doc-generation-watcher:${designDocId}:${chatThreadId}`;
-}
-
-/**
- * Whether this tick counts against the work budget, given the latest run row.
- *
- * A missing row is charged: a doc whose run never materialized still has to
- * reach a terminal state rather than hold a watcher open forever.
- */
-async function isAgentWorking(chatThreadId: string): Promise<boolean> {
-  try {
-    const run = await getLatestThreadRun(chatThreadId);
-    return !run || !PRE_START_RUN_STATUSES.includes(run.status);
-  } catch (err) {
-    console.warn(
-      `[singleFeatureDocWatcher] run status lookup failed (threadId=${chatThreadId}):`,
-      (err as Error).message,
-    );
-    return true;
-  }
 }
 
 /**
@@ -743,7 +722,7 @@ function clearDocWatcher(designDocId: string): boolean {
   if (handle === undefined) {
     return false;
   }
-  clearInterval(handle);
+  clearTimeout(handle);
   activeDocWatchers.delete(designDocId);
   activeDocWatcherThreads.delete(designDocId);
   return true;
@@ -752,6 +731,7 @@ function clearDocWatcher(designDocId: string): boolean {
 function stopDocWatcher(designDocId: string): void {
   const hadWatcher = clearDocWatcher(designDocId);
   const releaseLease = activeSingleFeatureDocWatcherReleases.get(designDocId);
+  activeSingleFeatureDocWatcherTokens.delete(designDocId);
   if (releaseLease) {
     activeSingleFeatureDocWatcherReleases.delete(designDocId);
     void releaseLease().catch((err: Error) => {
@@ -1118,6 +1098,7 @@ export async function finalizeSingleFeatureDoc(
   designDocId: string,
   chatThreadId: string,
   project: string,
+  options?: { assertOwned?: () => Promise<void> },
 ): Promise<boolean> {
   // Thread guard: skip if the row no longer owns this thread (already completed/retried).
   const guard = await db.query.designDocs.findFirst({
@@ -1151,6 +1132,7 @@ export async function finalizeSingleFeatureDoc(
     const missing = [!design && 'design', !techSpec && 'tech-spec', !assumptions && 'assumptions'].filter(Boolean).join(', ');
     const generationError = await explainMissingOutput(chatThreadId, missing);
     console.warn(`[finalizeSingleFeatureDoc] ${generationError} — marking generation_failed (designDocId=${designDocId})`);
+    await options?.assertOwned?.();
     await runGroundingService.persistThenMarkTerminalInactive(
         { runType: 'chat', runId: chatThreadId, project },
         () =>
@@ -1163,6 +1145,7 @@ export async function finalizeSingleFeatureDoc(
             )),
       );
     releaseDocOutput(designDocId, chatThreadId);
+    await options?.assertOwned?.();
     await cleanupWorkspace(chatThreadId);
     return false;
   }
@@ -1170,6 +1153,7 @@ export async function finalizeSingleFeatureDoc(
   const skillConfig = await resolveSkillConfig({ project, settingsId: guard.skillSettingsId ?? undefined });
   const finalStatus: DesignDocStatus = skillConfig?.designDocValidationSkillPath ? 'validating' : 'pending_review';
 
+  await options?.assertOwned?.();
   await runGroundingService.persistThenMarkTerminalInactive(
       { runType: 'chat', runId: chatThreadId, project },
       () =>
@@ -1189,6 +1173,7 @@ export async function finalizeSingleFeatureDoc(
           )),
     );
 
+  await options?.assertOwned?.();
   await cleanupWorkspace(chatThreadId);
   console.log(`[finalizeSingleFeatureDoc] Done — status=${finalStatus} (designDocId=${designDocId})`);
 
@@ -1226,9 +1211,6 @@ export async function tryStartSingleFeatureDocWatcher(
   if (activeThreadId === chatThreadId && isDocWatcherActive(designDocId)) {
     return false;
   }
-  if (activeThreadId && activeThreadId !== chatThreadId) {
-    stopDocWatcher(designDocId);
-  }
 
   pendingSingleFeatureDocWatcherStarts.add(pendingKey);
   let lease: Awaited<ReturnType<typeof tryAcquireRepoCacheLease>> | null = null;
@@ -1249,10 +1231,47 @@ export async function tryStartSingleFeatureDocWatcher(
     return false;
   }
 
-  const hydrated = await hydrateThread(chatThreadId);
-  if (!hydrated) {
+  let watcherStopped = false;
+  let stopLocalWatcher: ((reason: 'normal' | 'lease-lost') => void) | null = null;
+  let startAborted = lease.signal.aborted;
+  const startAbortListener = (): void => {
+    startAborted = true;
+    stopLocalWatcher?.('lease-lost');
+  };
+  lease.signal.addEventListener('abort', startAbortListener);
+
+  let hydrated = false;
+  try {
+    hydrated = await hydrateThread(chatThreadId);
+  } catch (err) {
+    await lease.release();
+    console.warn(
+      `[singleFeatureDocWatcher] hydrate failed (threadId=${chatThreadId}):`,
+      (err as Error).message,
+    );
+    return false;
+  }
+  if (startAborted || !hydrated) {
     await lease.release();
     return false;
+  }
+
+  const watcherToken = nextSingleFeatureDocWatcherToken++;
+  if (activeThreadId && activeThreadId !== chatThreadId) {
+    activeSingleFeatureDocWatcherTokens.set(designDocId, watcherToken);
+    const hadWatcher = clearDocWatcher(designDocId);
+    const releaseLease = activeSingleFeatureDocWatcherReleases.get(designDocId);
+    if (releaseLease) {
+      activeSingleFeatureDocWatcherReleases.delete(designDocId);
+      void releaseLease().catch((err: Error) => {
+        console.error(`[singleFeatureDocWatcher] lease release failed (designDocId=${designDocId}):`, err.message);
+      });
+    }
+    if (hadWatcher) {
+      console.log(`[designDocWatcher] Cancelled — designDocId=${designDocId}`);
+    }
+  } else {
+    activeSingleFeatureDocWatcherTokens.set(designDocId, watcherToken);
   }
 
   const deadlineKey = docWatcherDeadlineKey(designDocId, chatThreadId);
@@ -1260,17 +1279,17 @@ export async function tryStartSingleFeatureDocWatcher(
   docWatcherWorkBudgets.set(deadlineKey, budgetLeftMs);
   let attempts = 0;
   let lastTickState = '';
-  let tickInFlight = false;
   let failureCount = 0;
-  let nextEligibleTickAt = 0;
-  let watcherStopped = false;
+  const isCurrentWatcher = (): boolean =>
+    activeSingleFeatureDocWatcherTokens.get(designDocId) === watcherToken;
 
-  const stopLocalWatcher = (reason: 'normal' | 'lease-lost'): void => {
-    if (watcherStopped) return;
+  stopLocalWatcher = (reason: 'normal' | 'lease-lost'): void => {
+    if (watcherStopped || !isCurrentWatcher()) return;
     watcherStopped = true;
     const hadWatcher = clearDocWatcher(designDocId);
     const releaseLease = activeSingleFeatureDocWatcherReleases.get(designDocId);
     activeSingleFeatureDocWatcherReleases.delete(designDocId);
+    activeSingleFeatureDocWatcherTokens.delete(designDocId);
     if (reason === 'normal') {
       void releaseLease?.().catch((err: Error) => {
         console.error(`[singleFeatureDocWatcher] lease release failed (designDocId=${designDocId}):`, err.message);
@@ -1286,40 +1305,53 @@ export async function tryStartSingleFeatureDocWatcher(
   };
 
   console.log(`[singleFeatureDocWatcher] Started — designDocId=${designDocId} threadId=${chatThreadId}`);
-  lease.signal.addEventListener('abort', () => {
+  if (startAborted) {
     stopLocalWatcher('lease-lost');
-  }, { once: true });
+    return false;
+  }
+
+  const scheduleNextTick = (delayMs: number): void => {
+    if (watcherStopped || lease.signal.aborted || !isCurrentWatcher()) {
+      return;
+    }
+    const timeout = setTimeout(() => {
+      void runTick();
+    }, delayMs);
+    timeout.unref?.();
+    activeDocWatchers.set(designDocId, timeout);
+    activeDocWatcherThreads.set(designDocId, chatThreadId);
+  };
 
   const applyTickBackoff = (err: unknown): void => {
-    if (lease.signal.aborted || watcherStopped) {
+    if (lease.signal.aborted || watcherStopped || !isCurrentWatcher()) {
       return;
     }
     const backoffMs = DOC_WATCHER_BACKOFF_MS[Math.min(failureCount, DOC_WATCHER_BACKOFF_MS.length - 1)];
-    failureCount = Math.min(failureCount + 1, DOC_WATCHER_BACKOFF_MS.length - 1);
-    nextEligibleTickAt = Date.now() + backoffMs;
+    failureCount = Math.min(failureCount + 1, DOC_WATCHER_BACKOFF_MS.length);
     console.error(
       `[singleFeatureDocWatcher] Tick failed — backing off ${Math.round(backoffMs / 1000)}s (designDocId=${designDocId}, threadId=${chatThreadId})`,
       err,
     );
+    scheduleNextTick(backoffMs);
   };
 
-  const interval = setInterval(() => {
-    if (watcherStopped || lease.signal.aborted) {
+  const runTick = async (): Promise<void> => {
+    if (watcherStopped || lease.signal.aborted || !isCurrentWatcher()) {
       return;
     }
-    if (tickInFlight) {
-      return;
-    }
-    tickInFlight = true;
-    void (async () => {
-      try {
-        if (Date.now() < nextEligibleTickAt) {
-          return;
+    try {
+        const design = readOutputDesignDoc(chatThreadId);
+        const techSpec = readOutputTechSpec(chatThreadId);
+        const assumptions = readOutputAssumptions(chatThreadId);
+        const filesReady = Boolean(design && techSpec && assumptions);
+        if (design && techSpec && assumptions) {
+          captureDocOutput(designDocId, chatThreadId, { design, techSpec, assumptions });
         }
 
         const runState = await getThreadRunStateSnapshot(chatThreadId);
-        failureCount = 0;
-        nextEligibleTickAt = 0;
+        if (watcherStopped || lease.signal.aborted || !isCurrentWatcher()) {
+          return;
+        }
         attempts += 1;
 
         if (runState.shouldChargeWorkBudget) {
@@ -1328,9 +1360,10 @@ export async function tryStartSingleFeatureDocWatcher(
         }
 
         if (budgetLeftMs <= 0) {
-          if (lease.signal.aborted) {
+          if (lease.signal.aborted || !isCurrentWatcher()) {
             return;
           }
+          await lease.assertOwned();
           console.warn(`[singleFeatureDocWatcher] Timed out — marking generation_failed (designDocId=${designDocId}, threadId=${chatThreadId})`);
           await runGroundingService.persistThenMarkTerminalInactive(
             { runType: 'chat', runId: chatThreadId, project },
@@ -1344,14 +1377,6 @@ export async function tryStartSingleFeatureDocWatcher(
           stopLocalWatcher('normal');
           return;
         }
-
-        const design = readOutputDesignDoc(chatThreadId);
-        const techSpec = readOutputTechSpec(chatThreadId);
-        const assumptions = readOutputAssumptions(chatThreadId);
-        const filesReady = Boolean(design && techSpec && assumptions);
-        if (design && techSpec && assumptions) {
-          captureDocOutput(designDocId, chatThreadId, { design, techSpec, assumptions });
-        }
         const agentFinished = isThreadIdle(chatThreadId) && !runState.isAlive;
 
         const tickState = `${!!design}|${!!techSpec}|${!!assumptions}|${agentFinished}`;
@@ -1363,10 +1388,12 @@ export async function tryStartSingleFeatureDocWatcher(
         }
 
         if (filesReady && agentFinished) {
-          if (lease.signal.aborted) {
+          if (lease.signal.aborted || !isCurrentWatcher()) {
             return;
           }
-          await finalizeSingleFeatureDoc(designDocId, chatThreadId, project);
+          await finalizeSingleFeatureDoc(designDocId, chatThreadId, project, {
+            assertOwned: lease.assertOwned,
+          });
           releaseDocWatcherDeadline(designDocId, chatThreadId);
           stopLocalWatcher('normal');
           return;
@@ -1376,37 +1403,38 @@ export async function tryStartSingleFeatureDocWatcher(
           console.log(
             `[singleFeatureDocWatcher] Output files present but run still alive — waiting (designDocId=${designDocId})`,
           );
+          failureCount = 0;
+          scheduleNextTick(WATCHER_INTERVAL_MS);
           return;
         }
 
         if (agentFinished) {
           if (!runState.canFailGeneration) {
             console.warn(`[singleFeatureDocWatcher] Waiting — not run owner or no terminal run yet (designDocId=${designDocId})`);
+            failureCount = 0;
+            scheduleNextTick(WATCHER_INTERVAL_MS);
             return;
           }
-          if (lease.signal.aborted) {
+          if (lease.signal.aborted || !isCurrentWatcher()) {
             return;
           }
           console.warn(`[singleFeatureDocWatcher] Run terminal without complete output — marking generation_failed (designDocId=${designDocId})`);
-          await finalizeSingleFeatureDoc(designDocId, chatThreadId, project);
+          await finalizeSingleFeatureDoc(designDocId, chatThreadId, project, {
+            assertOwned: lease.assertOwned,
+          });
           releaseDocWatcherDeadline(designDocId, chatThreadId);
           stopLocalWatcher('normal');
+          return;
         }
-      } catch (err) {
-        applyTickBackoff(err);
-      } finally {
-        tickInFlight = false;
-      }
-    })().catch((err) => {
-      tickInFlight = false;
+        failureCount = 0;
+        scheduleNextTick(WATCHER_INTERVAL_MS);
+    } catch (err) {
       applyTickBackoff(err);
-    });
-  }, WATCHER_INTERVAL_MS);
-  interval.unref?.();
+    }
+  };
 
-  activeDocWatchers.set(designDocId, interval);
-  activeDocWatcherThreads.set(designDocId, chatThreadId);
   activeSingleFeatureDocWatcherReleases.set(designDocId, lease.release);
+  scheduleNextTick(WATCHER_INTERVAL_MS);
   return true;
 }
 

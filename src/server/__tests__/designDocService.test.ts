@@ -1517,7 +1517,7 @@ describe('startSingleFeatureDocWatcher', () => {
     mockTryAcquireRepoCacheLease
       .mockResolvedValueOnce(lease)
       .mockResolvedValueOnce(null);
-    const intervalSpy = jest.spyOn(global, 'setInterval');
+    const timeoutSpy = jest.spyOn(global, 'setTimeout');
 
     let processA: typeof import('../services/designDocService');
     let processB: typeof import('../services/designDocService');
@@ -1535,11 +1535,11 @@ describe('startSingleFeatureDocWatcher', () => {
 
     expect(startedA).toBe(true);
     expect(startedB).toBe(false);
-    expect(intervalSpy).toHaveBeenCalledTimes(1);
+    expect(timeoutSpy).toHaveBeenCalledTimes(1);
 
     lease.controller.abort(new Error('cleanup'));
     await flushPendingWork();
-    intervalSpy.mockRestore();
+    timeoutSpy.mockRestore();
   });
 
   it('returns false without hydration or timer creation when another owner holds the lease', async () => {
@@ -1553,6 +1553,18 @@ describe('startSingleFeatureDocWatcher', () => {
     expect(mockHydrateThread).not.toHaveBeenCalled();
     expect(intervalSpy).not.toHaveBeenCalled();
     intervalSpy.mockRestore();
+  });
+
+  it('releases the lease and reports start failure when hydration rejects', async () => {
+    const lease = makeHeldLease();
+    mockTryAcquireRepoCacheLease.mockResolvedValueOnce(lease);
+    mockHydrateThread.mockRejectedValueOnce(new Error('hydrate failed'));
+
+    await expect(
+      tryStartSingleFeatureDocWatcher('doc-hydrate-error', 'thread-hydrate-error', 'prd-1', 'proj-alpha'),
+    ).resolves.toBe(false);
+
+    expect(lease.release).toHaveBeenCalledTimes(1);
   });
 
   it('stops the local timer on lease loss without finalizing or failing the document', async () => {
@@ -1573,6 +1585,34 @@ describe('startSingleFeatureDocWatcher', () => {
     await jest.advanceTimersByTimeAsync(5_000);
 
     expect(isDocWatcherActive('doc-lease-loss')).toBe(false);
+    expect(setMock).not.toHaveBeenCalled();
+    expect(mockDb.query.chatThreads.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('does not mutate or clean up when lease ownership is lost before finalization', async () => {
+    const lease = makeHeldLease();
+    lease.assertOwned.mockRejectedValueOnce(new Error('lease lost'));
+    mockTryAcquireRepoCacheLease.mockResolvedValueOnce(lease);
+    mockDesign.mockReturnValue('# design');
+    mockTech.mockReturnValue('# tech spec');
+    mockAssumptions.mockReturnValue('# assumptions');
+    mockThreadRunStateSnapshot.mockResolvedValueOnce({
+      latestRun: { status: 'completed', ownerInstance: null, updatedAt: '2026-08-06T00:00:00.000Z', timeoutAt: null },
+      shouldChargeWorkBudget: true,
+      isAlive: false,
+      canFailGeneration: true,
+    });
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+    mockDb.query.chatThreads = { findFirst: jest.fn().mockResolvedValue(null) };
+
+    await expect(
+      tryStartSingleFeatureDocWatcher('doc-lease-fence', 'thread-lease-fence', 'prd-1', 'proj-alpha'),
+    ).resolves.toBe(true);
+    await jest.advanceTimersByTimeAsync(5_000);
+
+    expect(lease.assertOwned).toHaveBeenCalled();
     expect(setMock).not.toHaveBeenCalled();
     expect(mockDb.query.chatThreads.findFirst).not.toHaveBeenCalled();
   });
@@ -1970,6 +2010,45 @@ describe('startSingleFeatureDocWatcher', () => {
     await flushPendingWork();
   });
 
+  it('captures output before a run-state lookup failure so the next tick can still persist it', async () => {
+    mockDesign.mockReturnValue('# design');
+    mockTech.mockReturnValue('# tech spec');
+    mockAssumptions.mockReturnValue('# assumptions');
+    mockThreadRunStateSnapshot
+      .mockRejectedValueOnce(new Error('run state unavailable'))
+      .mockResolvedValueOnce({
+        latestRun: { status: 'completed', ownerInstance: null, updatedAt: '2026-08-06T00:00:05.000Z', timeoutAt: null },
+        shouldChargeWorkBudget: true,
+        isAlive: false,
+        canFailGeneration: true,
+      });
+    mockDb.query.designDocs.findFirst.mockResolvedValue({ id: 'doc-1', skillSettingsId: null });
+    mockDb.query.chatThreads = { findFirst: jest.fn().mockResolvedValue(null) };
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await expect(
+      tryStartSingleFeatureDocWatcher('doc-pre-capture', 'thread-pre-capture', 'prd-1', 'proj-alpha'),
+    ).resolves.toBe(true);
+
+    await jest.advanceTimersByTimeAsync(5_000);
+    mockDesign.mockReturnValue(null);
+    mockTech.mockReturnValue(null);
+    mockAssumptions.mockReturnValue(null);
+
+    await jest.advanceTimersByTimeAsync(5_000);
+    await flushPendingWork();
+
+    const written = setMock.mock.calls
+      .map(([values]) => values as Record<string, unknown>)
+      .find((values) => values.designContent !== undefined);
+    expect(written).toBeDefined();
+    expect(written?.designContent).toBe('# design');
+    expect(written?.techSpecContent).toBe('# tech spec');
+    expect(written?.assumptionsContent).toBe('# assumptions');
+  });
+
   it('uses one consolidated run-state helper call per executed tick', async () => {
     mockThreadRunStateSnapshot.mockResolvedValueOnce({
       latestRun: { status: 'queued', ownerInstance: null, updatedAt: '2026-08-06T00:00:00.000Z', timeoutAt: null },
@@ -2035,6 +2114,91 @@ describe('startSingleFeatureDocWatcher', () => {
 
     await jest.advanceTimersByTimeAsync(5_000);
     expect(mockThreadRunStateSnapshot).toHaveBeenCalledTimes(4);
+  });
+
+  it('backs off downstream finalization failures instead of resetting after the run-state read', async () => {
+    mockDesign.mockReturnValue('# Design');
+    mockTech.mockReturnValue('# Tech');
+    mockAssumptions.mockReturnValue('# Assumptions');
+    mockThreadRunStateSnapshot.mockResolvedValue({
+      latestRun: { status: 'completed', ownerInstance: null, updatedAt: '2026-08-06T00:00:00.000Z', timeoutAt: null },
+      shouldChargeWorkBudget: true,
+      isAlive: false,
+      canFailGeneration: true,
+    });
+    mockDb.query.designDocs.findFirst
+      .mockRejectedValueOnce(new Error('db unavailable'))
+      .mockRejectedValueOnce(new Error('db unavailable again'))
+      .mockResolvedValue({ id: 'doc-1', status: 'generating', chatThreadId: 'thread-downstream', skillSettingsId: null });
+    mockDb.query.chatThreads = { findFirst: jest.fn().mockResolvedValue(null) };
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await expect(
+      tryStartSingleFeatureDocWatcher('doc-downstream', 'thread-downstream', 'prd-1', 'proj-alpha'),
+    ).resolves.toBe(true);
+
+    await jest.advanceTimersByTimeAsync(5_000);
+    expect(mockDb.query.designDocs.findFirst).toHaveBeenCalledTimes(1);
+
+    await jest.advanceTimersByTimeAsync(5_000);
+    expect(mockDb.query.designDocs.findFirst).toHaveBeenCalledTimes(2);
+
+    await jest.advanceTimersByTimeAsync(5_000);
+    expect(mockDb.query.designDocs.findFirst).toHaveBeenCalledTimes(2);
+
+    await jest.advanceTimersByTimeAsync(5_000);
+    expect(setMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        designContent: '# Design',
+        techSpecContent: '# Tech',
+        assumptionsContent: '# Assumptions',
+      }),
+    );
+  });
+
+  it('does not let a stale tick stop or release a replacement watcher', async () => {
+    const leaseA = makeHeldLease();
+    const leaseB = makeHeldLease();
+    let resolveA: ((value: unknown) => void) | null = null;
+    const pendingA = new Promise((resolve) => {
+      resolveA = resolve;
+    });
+    mockTryAcquireRepoCacheLease
+      .mockResolvedValueOnce(leaseA)
+      .mockResolvedValueOnce(leaseB);
+    mockThreadRunStateSnapshot
+      .mockReturnValueOnce(pendingA)
+      .mockResolvedValueOnce({
+        latestRun: { status: 'running', ownerInstance: null, updatedAt: '2026-08-06T00:00:05.000Z', timeoutAt: null },
+        shouldChargeWorkBudget: true,
+        isAlive: true,
+        canFailGeneration: false,
+      });
+
+    await expect(
+      tryStartSingleFeatureDocWatcher('doc-replace', 'thread-old', 'prd-1', 'proj-alpha'),
+    ).resolves.toBe(true);
+    await jest.advanceTimersByTimeAsync(5_000);
+
+    await expect(
+      tryStartSingleFeatureDocWatcher('doc-replace', 'thread-new', 'prd-1', 'proj-alpha'),
+    ).resolves.toBe(true);
+    await flushPendingWork();
+
+    resolveA?.({
+      latestRun: { status: 'completed', ownerInstance: null, updatedAt: '2026-08-06T00:00:10.000Z', timeoutAt: null },
+      shouldChargeWorkBudget: true,
+      isAlive: false,
+      canFailGeneration: true,
+    });
+    await flushPendingWork();
+    await jest.advanceTimersByTimeAsync(5_000);
+
+    expect(isDocWatcherActive('doc-replace')).toBe(true);
+    expect(mockThreadRunStateSnapshot).toHaveBeenCalledWith('thread-new');
+    expect(leaseB.release).not.toHaveBeenCalled();
   });
 });
 

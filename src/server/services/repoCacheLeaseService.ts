@@ -20,6 +20,7 @@ export interface RepoCacheLeaseOptions {
   ownerId?: string;
   leaseMs?: number;
   heartbeatMs?: number;
+  renewTimeoutMs?: number;
   pollMs?: number;
   waitMs?: number;
   /** Keep the lease row until expiry instead of releasing after success/failure. */
@@ -98,6 +99,45 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function resolveRenewTimeoutMs(
+  options: RepoCacheLeaseOptions,
+  leaseMs: number,
+  heartbeatMs: number,
+): number {
+  const configured = options.renewTimeoutMs;
+  if (configured && configured > 0) {
+    return Math.min(configured, leaseMs);
+  }
+  return Math.min(leaseMs, heartbeatMs);
+}
+
+function timeoutError(prefix: string, timeoutMs: number): Error {
+  return new Error(`${prefix} timed out after ${timeoutMs}ms`);
+}
+
+async function runWithTimeout<T>(
+  work: Promise<T>,
+  timeoutMs: number,
+  prefix: string,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(timeoutError(prefix, timeoutMs));
+    }, timeoutMs);
+    timer.unref?.();
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 export async function tryAcquireRepoCacheLease(
   cacheKey: string,
   options: RepoCacheLeaseOptions = {},
@@ -105,6 +145,7 @@ export async function tryAcquireRepoCacheLease(
   const ownerId = options.ownerId ?? uuidv4();
   const leaseMs = options.leaseMs ?? DEFAULT_LEASE_MS;
   const heartbeatMs = options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
+  const renewTimeoutMs = resolveRenewTimeoutMs(options, leaseMs, heartbeatMs);
   const pollMs = options.pollMs ?? DEFAULT_POLL_MS;
   const waitMs = options.waitMs ?? DEFAULT_WAIT_MS;
   const store = options.store ?? postgresLeaseStore;
@@ -123,17 +164,34 @@ export async function tryAcquireRepoCacheLease(
   const controller = new AbortController();
   let heartbeatPromise: Promise<void> | null = null;
   let released = false;
+  let heartbeatStopped = false;
+  let heartbeat: ReturnType<typeof setInterval> | null = null;
+
+  const stopHeartbeat = (): void => {
+    if (heartbeatStopped) return;
+    heartbeatStopped = true;
+    if (heartbeat) {
+      clearInterval(heartbeat);
+      heartbeat = null;
+    }
+  };
 
   const abortForLostLease = (cause?: unknown) => {
     if (controller.signal.aborted) return;
+    stopHeartbeat();
     const detail = cause instanceof Error ? `: ${cause.message}` : '';
     controller.abort(new Error(`Repository cache lease was lost${detail}`));
   };
 
   const renewLease = async (): Promise<void> => {
-    if (released) return;
+    if (controller.signal.aborted) throw controller.signal.reason;
+    if (released || heartbeatStopped) return;
     try {
-      const renewed = await store.renew(cacheKey, ownerId, generation!, leaseMs);
+      const renewed = await runWithTimeout(
+        store.renew(cacheKey, ownerId, generation!, leaseMs),
+        renewTimeoutMs,
+        'Repository cache lease renewal',
+      );
       if (!renewed) abortForLostLease();
     } catch (err) {
       console.error('[repo-cache] lease renewal failed:', (err as Error).message);
@@ -142,7 +200,7 @@ export async function tryAcquireRepoCacheLease(
     if (controller.signal.aborted) throw controller.signal.reason;
   };
 
-  const heartbeat = setInterval(() => {
+  heartbeat = setInterval(() => {
     if (released || heartbeatPromise) return;
     heartbeatPromise = renewLease()
       .catch(() => {
@@ -157,7 +215,7 @@ export async function tryAcquireRepoCacheLease(
   const release = async (): Promise<void> => {
     if (released) return;
     released = true;
-    clearInterval(heartbeat);
+    stopHeartbeat();
     if (heartbeatPromise) await heartbeatPromise;
     try {
       await store.release(cacheKey, ownerId, generation!);
@@ -181,6 +239,7 @@ export async function withRepoCacheLease<T>(
   const ownerId = options.ownerId ?? uuidv4();
   const leaseMs = options.leaseMs ?? DEFAULT_LEASE_MS;
   const heartbeatMs = options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
+  const renewTimeoutMs = resolveRenewTimeoutMs(options, leaseMs, heartbeatMs);
   const pollMs = options.pollMs ?? DEFAULT_POLL_MS;
   const waitMs = options.waitMs ?? DEFAULT_WAIT_MS;
   const store = options.store ?? postgresLeaseStore;
@@ -199,14 +258,31 @@ export async function withRepoCacheLease<T>(
 
   const controller = new AbortController();
   let heartbeatPromise: Promise<void> | null = null;
+  let heartbeatStopped = false;
+  let heartbeat: ReturnType<typeof setInterval> | null = null;
+  const stopHeartbeat = (): void => {
+    if (heartbeatStopped) return;
+    heartbeatStopped = true;
+    if (heartbeat) {
+      clearInterval(heartbeat);
+      heartbeat = null;
+    }
+  };
   const abortForLostLease = (cause?: unknown) => {
     if (controller.signal.aborted) return;
+    stopHeartbeat();
     const detail = cause instanceof Error ? `: ${cause.message}` : '';
     controller.abort(new Error(`Repository cache lease was lost${detail}`));
   };
   const renewLease = async (): Promise<void> => {
+    if (controller.signal.aborted) throw controller.signal.reason;
+    if (heartbeatStopped) return;
     try {
-      const renewed = await store.renew(cacheKey, ownerId, generation!, leaseMs);
+      const renewed = await runWithTimeout(
+        store.renew(cacheKey, ownerId, generation!, leaseMs),
+        renewTimeoutMs,
+        'Repository cache lease renewal',
+      );
       if (!renewed) abortForLostLease();
     } catch (err) {
       console.error('[repo-cache] lease renewal failed:', (err as Error).message);
@@ -214,7 +290,7 @@ export async function withRepoCacheLease<T>(
     }
     if (controller.signal.aborted) throw controller.signal.reason;
   };
-  const heartbeat = setInterval(() => {
+  heartbeat = setInterval(() => {
     if (heartbeatPromise) return;
     heartbeatPromise = renewLease()
       .catch(() => {
@@ -234,7 +310,7 @@ export async function withRepoCacheLease<T>(
     if (controller.signal.aborted) throw controller.signal.reason;
     return result;
   } finally {
-    clearInterval(heartbeat);
+    stopHeartbeat();
     if (heartbeatPromise) await heartbeatPromise;
     if (options.releaseOnComplete !== false) {
       try {

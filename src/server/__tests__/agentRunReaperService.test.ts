@@ -1,5 +1,6 @@
 const mockFindMany = jest.fn();
 const mockFindFirst = jest.fn();
+const mockChatThreadFindFirst = jest.fn();
 const mockUpdateWhere = jest.fn();
 const mockUpdateSet = jest.fn(() => ({ where: mockUpdateWhere }));
 const mockMarkTerminal = jest.fn();
@@ -12,6 +13,9 @@ jest.mock('../db/drizzle', () => ({
       agentRuns: {
         findMany: (...args: unknown[]) => mockFindMany(...args),
         findFirst: (...args: unknown[]) => mockFindFirst(...args),
+      },
+      chatThreads: {
+        findFirst: (...args: unknown[]) => mockChatThreadFindFirst(...args),
       },
     },
     update: jest.fn(() => ({ set: mockUpdateSet })),
@@ -1466,6 +1470,7 @@ describe('getThreadRunStateSnapshot', () => {
       canFailGeneration: false,
     });
     expect(mockFindMany).toHaveBeenCalledTimes(1);
+    expect(mockChatThreadFindFirst).not.toHaveBeenCalled();
   });
 
   it('allows failure takeover after orphan grace without extra liveness queries', async () => {
@@ -1499,6 +1504,41 @@ describe('getThreadRunStateSnapshot', () => {
       canFailGeneration: true,
     });
     expect(mockFindMany).toHaveBeenCalledTimes(1);
+    expect(mockChatThreadFindFirst).not.toHaveBeenCalled();
+  });
+
+  it('does not fall back to feature-flag lookups for event-driven classification', async () => {
+    mockFindMany.mockResolvedValue([{
+      id: 'run-dispatched',
+      threadId: 'thread-1',
+      status: 'dispatched',
+      ownerInstance: 'worker-a',
+      createdAt: timestamp(30_000),
+      startedAt: null,
+      heartbeatAt: null,
+      progressAt: null,
+      updatedAt: timestamp(30_000),
+      timeoutAt: timestamp(-60 * 60_000),
+      eventDriven: false,
+      lane: 'background',
+      dispatchMessageId: 'dispatch-1',
+    }]);
+
+    await expect(
+      getThreadRunStateSnapshot('thread-1', { now: () => now, config }),
+    ).resolves.toEqual({
+      latestRun: {
+        status: 'dispatched',
+        ownerInstance: 'worker-a',
+        updatedAt: timestamp(30_000),
+        timeoutAt: timestamp(-60 * 60_000),
+      },
+      shouldChargeWorkBudget: false,
+      isAlive: true,
+      canFailGeneration: false,
+    });
+    expect(mockFindMany).toHaveBeenCalledTimes(1);
+    expect(mockChatThreadFindFirst).not.toHaveBeenCalled();
   });
 });
 
