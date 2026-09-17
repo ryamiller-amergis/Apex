@@ -98,7 +98,10 @@ jest.mock('../services/runGroundingService', () => ({
       updatedAt: '2026-08-06T00:00:00.000Z',
     }]),
     persistThenMarkTerminalInactive: jest.fn().mockImplementation(
-      async (_run: unknown, persist: () => Promise<unknown>) => persist(),
+      async (_run: unknown, persist: () => Promise<unknown>) => ({
+        persisted: await persist(),
+        deactivatedCount: 1,
+      }),
     ),
   },
 }));
@@ -2234,8 +2237,7 @@ describe('startSingleFeatureDocWatcher', () => {
     await Promise.resolve();
     await Promise.resolve();
     resolveHydrateA?.();
-    await expect(startA).resolves.toBe(true);
-    expect(isDocWatcherActive('doc-concurrent')).toBe(true);
+    await expect(startA).resolves.toBe(false);
 
     resolveHydrateB?.();
     await expect(startB).resolves.toBe(true);
@@ -2243,6 +2245,7 @@ describe('startSingleFeatureDocWatcher', () => {
     expect(leaseA.release).toHaveBeenCalledTimes(1);
     expect(isDocWatcherActive('doc-concurrent')).toBe(true);
   });
+
 });
 
 describe('startValidationWatcher', () => {
@@ -2690,6 +2693,7 @@ describe('finalizeSingleFeatureDoc — idempotency guard', () => {
     const setMock = jest.fn().mockReturnValue({ where: whereMock });
     mockDb.update.mockReturnValue({ set: setMock });
     mockDb.query.chatThreads = { findFirst: jest.fn().mockResolvedValue(null) };
+    mockRunGroundingService.persistThenMarkTerminalInactive.mockClear();
 
     const result = await finalizeSingleFeatureDoc(
       'doc-1',
@@ -2707,6 +2711,7 @@ describe('finalizeSingleFeatureDoc — idempotency guard', () => {
 
     expect(result).toBe(false);
     expect(returningMock).toHaveBeenCalled();
+    expect(mockRunGroundingService.persistThenMarkTerminalInactive).not.toHaveBeenCalled();
     expect(mockDb.query.chatThreads.findFirst).not.toHaveBeenCalled();
   });
 });
