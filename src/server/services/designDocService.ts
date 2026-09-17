@@ -1254,12 +1254,12 @@ export async function tryStartSingleFeatureDocWatcher(
   project: string,
 ): Promise<boolean> {
   void prdId;
-  const startToken = nextSingleFeatureDocWatcherToken++;
-  latestSingleFeatureDocStartTokens.set(designDocId, startToken);
   const pendingKey = docThreadKey(designDocId, chatThreadId);
   if (pendingSingleFeatureDocWatcherStarts.has(pendingKey)) {
     return false;
   }
+  const startToken = nextSingleFeatureDocWatcherToken++;
+  latestSingleFeatureDocStartTokens.set(designDocId, startToken);
 
   pendingSingleFeatureDocWatcherStarts.add(pendingKey);
   let lease: Awaited<ReturnType<typeof tryAcquireRepoCacheLease>> | null = null;

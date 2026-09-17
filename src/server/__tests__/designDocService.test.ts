@@ -1555,15 +1555,36 @@ describe('startSingleFeatureDocWatcher', () => {
 
   it('returns false without hydration or timer creation when another owner holds the lease', async () => {
     mockTryAcquireRepoCacheLease.mockResolvedValueOnce(null);
-    const intervalSpy = jest.spyOn(global, 'setInterval');
+    const timeoutSpy = jest.spyOn(global, 'setTimeout');
 
     await expect(
       tryStartSingleFeatureDocWatcher('doc-held', 'thread-held', 'prd-1', 'proj-alpha'),
     ).resolves.toBe(false);
 
     expect(mockHydrateThread).not.toHaveBeenCalled();
-    expect(intervalSpy).not.toHaveBeenCalled();
-    intervalSpy.mockRestore();
+    expect(timeoutSpy).not.toHaveBeenCalled();
+    timeoutSpy.mockRestore();
+  });
+
+  it('coalesces a duplicate same-pair pending start without superseding the original generation', async () => {
+    const lease = makeHeldLease();
+    let resolveHydrate: (() => void) | null = null;
+    mockTryAcquireRepoCacheLease.mockResolvedValueOnce(lease);
+    mockHydrateThread.mockImplementationOnce(() => new Promise<boolean>((resolve) => {
+      resolveHydrate = () => resolve(true);
+    }));
+
+    const originalStart = tryStartSingleFeatureDocWatcher('doc-coalesce', 'thread-coalesce', 'prd-1', 'proj-alpha');
+    const duplicateStart = tryStartSingleFeatureDocWatcher('doc-coalesce', 'thread-coalesce', 'prd-1', 'proj-alpha');
+
+    await Promise.resolve();
+    await Promise.resolve();
+    await expect(duplicateStart).resolves.toBe(false);
+
+    resolveHydrate?.();
+    await expect(originalStart).resolves.toBe(true);
+    expect(mockTryAcquireRepoCacheLease).toHaveBeenCalledTimes(1);
+    expect(isDocWatcherActive('doc-coalesce')).toBe(true);
   });
 
   it('releases the lease and reports start failure when hydration rejects', async () => {
