@@ -8,6 +8,7 @@ const mockAgentRunsFindFirst = jest.fn();
 const mockUpdateReturning = jest.fn();
 const mockUpdateWhere = jest.fn(() => ({ returning: mockUpdateReturning }));
 const mockUpdateSet = jest.fn(() => ({ where: mockUpdateWhere }));
+const mockWithRepoCacheLease = jest.fn();
 
 jest.mock('../db/drizzle', () => ({
   db: {
@@ -26,6 +27,9 @@ jest.mock('../db/drizzle', () => ({
     },
     update: jest.fn(() => ({ set: mockUpdateSet })),
   },
+}));
+jest.mock('../services/repoCacheLeaseService', () => ({
+  withRepoCacheLease: (...args: unknown[]) => mockWithRepoCacheLease(...args),
 }));
 jest.mock('../services/chatAgentService', () => ({
   hydrateThread: jest.fn(),
@@ -87,6 +91,8 @@ import {
   finalizeOwnedRunsForShutdown,
   isGenerationRecoveryStale,
   registerProcessGuards,
+  startRecoveryLoop,
+  stopRecoveryLoop,
 } from '../services/startupRecovery';
 import { findRunningInterviewThreads, clearStaleRun } from '../services/chatThreadRepository';
 import {
@@ -110,6 +116,138 @@ const mockedReevaluateGrounding = reevaluateThreadGroundingForRecovery as jest.M
   typeof reevaluateThreadGroundingForRecovery
 >;
 const mockedIsAlive = isThreadRunAlive as jest.MockedFunction<typeof isThreadRunAlive>;
+
+async function flushAsyncWork(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+describe('startRecoveryLoop leader election', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+    mockWithRepoCacheLease.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    stopRecoveryLoop();
+    jest.useRealTimers();
+  });
+
+  it('routes immediate and periodic recovery cycles through the sweep lease', async () => {
+    startRecoveryLoop();
+    await flushAsyncWork();
+
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
+    expect(mockWithRepoCacheLease).toHaveBeenNthCalledWith(
+      1,
+      'startup-recovery:sweep',
+      expect.any(Function),
+      {
+        leaseMs: 55_000,
+        heartbeatMs: 15_000,
+        waitMs: 0,
+        releaseOnComplete: false,
+      },
+    );
+
+    await jest.advanceTimersByTimeAsync(60_000);
+    await flushAsyncWork();
+
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(2);
+    expect(mockWithRepoCacheLease).toHaveBeenNthCalledWith(
+      2,
+      'startup-recovery:sweep',
+      expect.any(Function),
+      {
+        leaseMs: 55_000,
+        heartbeatMs: 15_000,
+        waitMs: 0,
+        releaseOnComplete: false,
+      },
+    );
+  });
+
+  it('skips quietly when another instance holds the sweep lease', async () => {
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockWithRepoCacheLease.mockRejectedValueOnce(
+      new Error('Timed out waiting for repository cache lease: startup-recovery:sweep'),
+    );
+
+    startRecoveryLoop();
+    await flushAsyncWork();
+
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
+    expect(consoleSpy).not.toHaveBeenCalled();
+    consoleSpy.mockRestore();
+  });
+
+  it('does not overlap local recovery cycles while one is still running', async () => {
+    let resolveLease: (() => void) | null = null;
+    mockWithRepoCacheLease.mockImplementationOnce(
+      () => new Promise<void>((resolve) => {
+        resolveLease = resolve;
+      }),
+    );
+
+    startRecoveryLoop();
+    await flushAsyncWork();
+    await jest.advanceTimersByTimeAsync(120_000);
+    await flushAsyncWork();
+
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
+
+    resolveLease?.();
+    await flushAsyncWork();
+    await jest.advanceTimersByTimeAsync(60_000);
+    await flushAsyncWork();
+
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(2);
+  });
+
+  it('logs unexpected failures and still allows the next cycle to run', async () => {
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockWithRepoCacheLease
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce(undefined);
+
+    startRecoveryLoop();
+    await flushAsyncWork();
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '[recovery] Initial recovery failed:',
+      expect.objectContaining({ message: 'boom' }),
+    );
+
+    await jest.advanceTimersByTimeAsync(60_000);
+    await flushAsyncWork();
+
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(2);
+    consoleSpy.mockRestore();
+  });
+
+  it('clears scheduler state when stopped so a fresh start can run again', async () => {
+    let resolveLease: (() => void) | null = null;
+    mockWithRepoCacheLease.mockImplementationOnce(
+      () => new Promise<void>((resolve) => {
+        resolveLease = resolve;
+      }),
+    );
+
+    startRecoveryLoop();
+    await flushAsyncWork();
+    stopRecoveryLoop();
+
+    mockWithRepoCacheLease.mockResolvedValueOnce(undefined);
+    startRecoveryLoop();
+    await flushAsyncWork();
+
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(2);
+
+    resolveLease?.();
+    await flushAsyncWork();
+  });
+});
 
 describe('generation preparation recovery lease', () => {
   const now = Date.parse('2026-08-11T05:16:37.000Z');

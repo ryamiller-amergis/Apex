@@ -35,11 +35,15 @@ import {
 } from './admissionGovernorService';
 import { workerTierTelemetry } from './workerTierTelemetry';
 import { INTERACTIVE_LANE } from '../../shared/types/interactiveWorkflow';
+import { withRepoCacheLease } from './repoCacheLeaseService';
 
 const REAP_INTERVAL_MS = 60_000;
 export const RETIRE_REAP_INTERVAL_MS = 5 * 60_000;
 const LONG_RUNNING_PREFIX = 'Long-running agent run';
 const WATCHDOG_SOURCE_INSTANCE = `${RUN_EVENT_SOURCE_INSTANCE}:watchdog`;
+const REAPER_SWEEP_LEASE_KEY = 'agent-run-reaper:sweep';
+const REAPER_SWEEP_LEASE_MS = 55_000;
+const REAPER_SWEEP_HEARTBEAT_MS = 15_000;
 const DEFAULT_WORKER_HEARTBEAT_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_DISPATCH_COLD_START_MS = 5 * 60_000;
 const DEFAULT_WORKER_PROGRESS_TIMEOUT_MS = 10 * 60_000;
@@ -47,6 +51,46 @@ const DEFAULT_CANCEL_GRACE_MS = 60_000;
 
 let reaperTimer: ReturnType<typeof setInterval> | null = null;
 let lastRetireReapAt = 0;
+let reaperCycleRunning = false;
+
+function isNonBlockingSweepLeaseMiss(error: unknown, leaseKey: string): boolean {
+  return error instanceof Error
+    && error.message === `Timed out waiting for repository cache lease: ${leaseKey}`;
+}
+
+async function runReaperCycle(errorLabel: string, initialRetireReconcileDue: boolean): Promise<void> {
+  if (reaperCycleRunning) {
+    return;
+  }
+
+  reaperCycleRunning = true;
+  try {
+    await withRepoCacheLease(
+      REAPER_SWEEP_LEASE_KEY,
+      async () => {
+        const nowMs = Date.now();
+        const retireReconcileDue = initialRetireReconcileDue
+          || shouldRunRetireReconciler(lastRetireReapAt, nowMs);
+        if (retireReconcileDue) {
+          lastRetireReapAt = nowMs;
+        }
+        await reapOrphanedRuns({ retireReconcileDue });
+      },
+      {
+        leaseMs: REAPER_SWEEP_LEASE_MS,
+        heartbeatMs: REAPER_SWEEP_HEARTBEAT_MS,
+        waitMs: 0,
+        releaseOnComplete: false,
+      },
+    );
+  } catch (error) {
+    if (!isNonBlockingSweepLeaseMiss(error, REAPER_SWEEP_LEASE_KEY)) {
+      console.error(errorLabel, error);
+    }
+  } finally {
+    reaperCycleRunning = false;
+  }
+}
 
 export interface AgentRunHealthConfig {
   heartbeatTimeoutMs: number;
@@ -1169,19 +1213,15 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
  * Start the reaper: run immediately on startup, then repeat on interval.
  */
 export function startReaper(): void {
-  lastRetireReapAt = Date.now();
-  reapOrphanedRuns({ retireReconcileDue: true }).catch((err) => {
-    console.error('[reaper] Initial reap failed:', err);
-  });
+  if (reaperTimer) {
+    return;
+  }
 
+  void runReaperCycle('[reaper] Initial reap failed:', true);
   reaperTimer = setInterval(() => {
-    const nowMs = Date.now();
-    const retireReconcileDue = shouldRunRetireReconciler(lastRetireReapAt, nowMs);
-    if (retireReconcileDue) lastRetireReapAt = nowMs;
-    reapOrphanedRuns({ retireReconcileDue }).catch((err) => {
-      console.error('[reaper] Periodic reap failed:', err);
-    });
+    void runReaperCycle('[reaper] Periodic reap failed:', false);
   }, REAP_INTERVAL_MS);
+  reaperTimer.unref?.();
 }
 
 /**
@@ -1192,4 +1232,6 @@ export function stopReaper(): void {
     clearInterval(reaperTimer);
     reaperTimer = null;
   }
+  reaperCycleRunning = false;
+  lastRetireReapAt = 0;
 }

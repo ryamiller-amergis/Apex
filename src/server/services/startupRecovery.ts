@@ -38,11 +38,15 @@ import {
   nextRunEventSequence,
   RUN_EVENT_SOURCE_INSTANCE,
 } from './pgNotifyService';
+import { withRepoCacheLease } from './repoCacheLeaseService';
 
 const RECOVERY_INTERVAL_MS = 60_000;
 const SHUTDOWN_GRACE_MS = 10_000;
 const DEFAULT_SETUP_TIMEOUT_MS = 15 * 60_000;
 const GENERATION_RECOVERY_GRACE_MS = DEFAULT_SETUP_TIMEOUT_MS;
+const RECOVERY_SWEEP_LEASE_KEY = 'startup-recovery:sweep';
+const RECOVERY_SWEEP_LEASE_MS = 55_000;
+const RECOVERY_SWEEP_HEARTBEAT_MS = 15_000;
 /**
  * How long a design prototype may sit in `generating`/`regenerating` before the
  * recovery loop treats it as orphaned. Set well above the maximum configurable Bedrock timeout
@@ -51,6 +55,40 @@ const GENERATION_RECOVERY_GRACE_MS = DEFAULT_SETUP_TIMEOUT_MS;
 const STALE_PROTOTYPE_MS = 25 * 60_000;
 
 let recoveryTimer: ReturnType<typeof setInterval> | null = null;
+let recoveryCycleRunning = false;
+
+function isNonBlockingSweepLeaseMiss(error: unknown, leaseKey: string): boolean {
+  return error instanceof Error
+    && error.message === `Timed out waiting for repository cache lease: ${leaseKey}`;
+}
+
+async function runRecoveryCycle(errorLabel: string): Promise<void> {
+  if (recoveryCycleRunning) {
+    return;
+  }
+
+  recoveryCycleRunning = true;
+  try {
+    await withRepoCacheLease(
+      RECOVERY_SWEEP_LEASE_KEY,
+      async () => {
+        await recoverInFlightWork();
+      },
+      {
+        leaseMs: RECOVERY_SWEEP_LEASE_MS,
+        heartbeatMs: RECOVERY_SWEEP_HEARTBEAT_MS,
+        waitMs: 0,
+        releaseOnComplete: false,
+      },
+    );
+  } catch (error) {
+    if (!isNonBlockingSweepLeaseMiss(error, RECOVERY_SWEEP_LEASE_KEY)) {
+      console.error(errorLabel, error);
+    }
+  } finally {
+    recoveryCycleRunning = false;
+  }
+}
 
 function positiveDuration(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
@@ -614,15 +652,23 @@ export async function recoverInFlightWork(): Promise<void> {
  * was orphaned by a previous instance dying after this one started.
  */
 export function startRecoveryLoop(): void {
-  recoverInFlightWork().catch((err) => {
-    console.error('[recovery] Initial recovery failed:', err);
-  });
+  if (recoveryTimer) {
+    return;
+  }
 
+  void runRecoveryCycle('[recovery] Initial recovery failed:');
   recoveryTimer = setInterval(() => {
-    recoverInFlightWork().catch((err) => {
-      console.error('[recovery] Periodic recovery failed:', err);
-    });
+    void runRecoveryCycle('[recovery] Periodic recovery failed:');
   }, RECOVERY_INTERVAL_MS);
+  recoveryTimer.unref?.();
+}
+
+export function stopRecoveryLoop(): void {
+  if (recoveryTimer) {
+    clearInterval(recoveryTimer);
+    recoveryTimer = null;
+  }
+  recoveryCycleRunning = false;
 }
 
 function isPipeClosedError(err: unknown): boolean {
@@ -743,10 +789,7 @@ export function registerGracefulShutdown(server: Server): void {
       `[shutdown] ${signal} received — draining connections (${SHUTDOWN_GRACE_MS / 1000}s grace)…`
     );
 
-    if (recoveryTimer) {
-      clearInterval(recoveryTimer);
-      recoveryTimer = null;
-    }
+    stopRecoveryLoop();
 
     const finalization = finalizeOwnedRunsForShutdown()
       .then((count) => {

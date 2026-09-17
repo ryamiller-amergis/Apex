@@ -6,6 +6,7 @@ const mockUpdateSet = jest.fn(() => ({ where: mockUpdateWhere }));
 const mockMarkTerminal = jest.fn();
 const mockRecoverStaleDispatchedRuns = jest.fn();
 const mockWorkerReaperAction = jest.fn();
+const mockWithRepoCacheLease = jest.fn();
 
 jest.mock('../db/drizzle', () => ({
   db: {
@@ -39,6 +40,9 @@ jest.mock('../services/admissionGovernorService', () => ({
     mockRecoverStaleDispatchedRuns(...args),
   resolveBackgroundDispatchTtlMs: () => 30 * 60_000,
 }));
+jest.mock('../services/repoCacheLeaseService', () => ({
+  withRepoCacheLease: (...args: unknown[]) => mockWithRepoCacheLease(...args),
+}));
 jest.mock('../services/workerTierTelemetry', () => ({
   workerTierTelemetry: {
     inflight: jest.fn(),
@@ -63,6 +67,8 @@ import {
   getThreadRunStateSnapshot,
   canThisInstanceFailGeneration,
   reapOrphanedRuns,
+  startReaper,
+  stopReaper,
   shouldRunRetireReconciler,
   type AgentRunHealthConfig,
 } from '../services/agentRunReaperService';
@@ -101,6 +107,138 @@ function boundStrings(value: unknown, seen = new Set<unknown>()): string[] {
   return Object.values(value as Record<string, unknown>)
     .flatMap((entry) => boundStrings(entry, seen));
 }
+
+async function flushAsyncWork(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+describe('startReaper leader election', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+    mockWithRepoCacheLease.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    stopReaper();
+    jest.useRealTimers();
+  });
+
+  it('routes immediate and periodic reaper cycles through the sweep lease', async () => {
+    startReaper();
+    await flushAsyncWork();
+
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
+    expect(mockWithRepoCacheLease).toHaveBeenNthCalledWith(
+      1,
+      'agent-run-reaper:sweep',
+      expect.any(Function),
+      {
+        leaseMs: 55_000,
+        heartbeatMs: 15_000,
+        waitMs: 0,
+        releaseOnComplete: false,
+      },
+    );
+
+    await jest.advanceTimersByTimeAsync(60_000);
+    await flushAsyncWork();
+
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(2);
+    expect(mockWithRepoCacheLease).toHaveBeenNthCalledWith(
+      2,
+      'agent-run-reaper:sweep',
+      expect.any(Function),
+      {
+        leaseMs: 55_000,
+        heartbeatMs: 15_000,
+        waitMs: 0,
+        releaseOnComplete: false,
+      },
+    );
+  });
+
+  it('skips quietly when another instance holds the reaper lease', async () => {
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockWithRepoCacheLease.mockRejectedValueOnce(
+      new Error('Timed out waiting for repository cache lease: agent-run-reaper:sweep'),
+    );
+
+    startReaper();
+    await flushAsyncWork();
+
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
+    expect(consoleSpy).not.toHaveBeenCalled();
+    consoleSpy.mockRestore();
+  });
+
+  it('does not overlap local reaper cycles while one is still running', async () => {
+    let resolveLease: (() => void) | null = null;
+    mockWithRepoCacheLease.mockImplementationOnce(
+      () => new Promise<void>((resolve) => {
+        resolveLease = resolve;
+      }),
+    );
+
+    startReaper();
+    await flushAsyncWork();
+    await jest.advanceTimersByTimeAsync(120_000);
+    await flushAsyncWork();
+
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
+
+    resolveLease?.();
+    await flushAsyncWork();
+    await jest.advanceTimersByTimeAsync(60_000);
+    await flushAsyncWork();
+
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(2);
+  });
+
+  it('logs unexpected failures and still allows the next cycle to run', async () => {
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockWithRepoCacheLease
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce(undefined);
+
+    startReaper();
+    await flushAsyncWork();
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '[reaper] Initial reap failed:',
+      expect.objectContaining({ message: 'boom' }),
+    );
+
+    await jest.advanceTimersByTimeAsync(60_000);
+    await flushAsyncWork();
+
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(2);
+    consoleSpy.mockRestore();
+  });
+
+  it('clears scheduler state when stopped so a fresh start can run again', async () => {
+    let resolveLease: (() => void) | null = null;
+    mockWithRepoCacheLease.mockImplementationOnce(
+      () => new Promise<void>((resolve) => {
+        resolveLease = resolve;
+      }),
+    );
+
+    startReaper();
+    await flushAsyncWork();
+    stopReaper();
+
+    mockWithRepoCacheLease.mockResolvedValueOnce(undefined);
+    startReaper();
+    await flushAsyncWork();
+
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(2);
+
+    resolveLease?.();
+    await flushAsyncWork();
+  });
+});
 
 describe('assessAgentRunHealth', () => {
   it('TBI-001 DoD-3 uses the env-overridable two-hour hard-run budget', () => {
