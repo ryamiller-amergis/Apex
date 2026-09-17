@@ -61,7 +61,8 @@ Key blockers:
 - Resolved 2026-09-17: Terraform state now owns `psql-apex-cus`, no longer
 owns stopped `psql-apex-eus2`, and the refreshed production plan reports no
 changes.
-- Production has the 600,000 ms heartbeat mitigation; staging and GitHub do not.
+- Resolved 2026-09-17: production and staging use the 600,000 ms heartbeat
+  mitigation, and the deployment workflow owns the same default for both slots.
 - The active database has 859 maximum connections, not 300.
 - Existing Container Apps environments are not zone redundant.
 - Service Bus and shared storage are in East US; App Service and the active
@@ -92,6 +93,8 @@ Each child plan must be approved before its files are edited.
 
 
 ### Task 1: Reconcile production database and Terraform ownership
+
+**Status:** Reconciliation complete; old-server decommission pending.
 
 **Files:**
 
@@ -130,7 +133,8 @@ longer owns `psql-apex-eus2`
 - [x] Confirm production and staging continue using `psql-apex-cus`.
 - [x] Confirm the GitHub production database hostname guard exists and targets
   the same production host.
-- [ ] Confirm the next production deployment passes the hostname guard.
+- [x] Confirm the next production deployment passes the hostname guard
+  ([run 35265446952](https://github.com/ryamiller-amergis/Apex/actions/runs/35265446952)).
 - [ ] Remove the old server only after state no longer owns it, connections are
   explained, a backup is retained, and the user separately approves deletion.
 
