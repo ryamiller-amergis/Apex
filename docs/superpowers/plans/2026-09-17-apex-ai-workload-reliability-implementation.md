@@ -155,6 +155,8 @@ replacement or destroy.
 
 ### Task 2: Make Phase 0 protections durable
 
+**Status:** Implementation complete; deployment/load verification pending.
+
 **Files:**
 
 - Modify: `src/server/services/designDocService.ts`
@@ -163,8 +165,10 @@ replacement or destroy.
 - Modify: `src/server/services/serviceBusPublisher.ts`
 - Modify: `src/server/routes/api.ts`
 - Modify with separate approval: `src/server/index.ts`
+- Modify: `src/server/db.ts`
 - Modify: `src/server/db/schema.ts`
-- Create: `migrations/<timestamp>_agent-run-control-plane-indexes.sql`
+- Create: `src/server/services/dbPoolTelemetry.ts`
+- Create: `migrations/<timestamp>_agent-run-control-plane-indexes.js`
 - Modify with separate approval: `.github/workflows/deploy.yml`
 - Modify with separate approval: `infra/main.tf`
 - Modify with separate approval: `.env.example`
@@ -173,30 +177,34 @@ replacement or destroy.
 - Test: `src/server/__tests__/agentRunReaperService.test.ts`
 - Test: `src/server/__tests__/serviceBusPublisher.test.ts`
 - Test: `src/server/__tests__/healthDb.test.ts`
+- Test: `src/server/__tests__/dbPoolTelemetry.test.ts`
 
 **Interfaces:**
 
 - Consumes: current v1 worker and watcher behavior
 - Produces: bounded v1 behavior safe enough to operate during V2 delivery
 
-- [ ] Write failing tests proving one logical watcher owner across instances.
-- [ ] Replace overlapping async watcher ticks with completion-scheduled ticks.
-- [ ] Add a top-level watcher error boundary and database-failure backoff.
-- [ ] Collapse repeated run-state reads into one snapshot query.
-- [ ] Add the latest-run-by-thread and transient-document indexes.
-- [ ] Leader-elect recovery and reaper sweeps.
-- [ ] Bound sweeps by due time and batch size.
-- [ ] Make `/api/health/live` process-only.
-- [ ] Keep bounded database readiness separate from external-dependency health.
-- [ ] Rebuild the Service Bus publish request and token per retry.
-- [ ] On one 401/403, invalidate the credential once before durable recovery
+- [x] Write failing tests proving one logical watcher owner across instances.
+- [x] Replace overlapping async watcher ticks with completion-scheduled ticks.
+- [x] Add a top-level watcher error boundary and database-failure backoff.
+- [x] Collapse repeated run-state reads into one snapshot query.
+- [x] Add the latest-run-by-thread and transient-document indexes.
+- [x] Leader-elect recovery and reaper sweeps.
+- [x] Bound startup recovery by category and batch size; retain the approved
+  leader-only full V1 reaper scan until V2 adds an indexed `next_action_at`.
+- [x] Make `/api/health/live` process-only.
+- [x] Keep bounded database readiness separate from external-dependency health.
+- [x] Rebuild the Service Bus publish request and token per retry.
+- [x] On one 401/403, invalidate the credential once before durable recovery
   takes over.
-- [ ] Change the code heartbeat fallback from 90,000 to 600,000 ms.
-- [ ] Add `AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS=600000` to both slot deployment
+- [x] Change the code heartbeat fallback from 90,000 to 600,000 ms.
+- [x] Add `AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS=600000` to both slot deployment
   contracts.
-- [ ] Mark the heartbeat setting sticky.
+- [x] Mark the heartbeat setting sticky.
 - [ ] Verify staging and production retain the same value through a swap test.
-- [ ] Run the isolated watcher/reaper/publisher/health suites.
+- [x] Add safe database-pool aggregates to telemetry and agent health.
+- [x] Run the isolated watcher/reaper/publisher/health suites (353 tests passed
+  together on 2026-09-17).
 - [ ] Run a 25-document v1 regression test before increasing any capacity.
 
 ---
