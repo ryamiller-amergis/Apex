@@ -14,7 +14,7 @@ export class NonblockingRepoCacheLeaseUnavailableError extends Error {
   cacheKey: string;
 
   constructor(cacheKey: string) {
-    super(`Nonblocking repository cache lease unavailable: ${cacheKey}`);
+    super(`Timed out waiting for repository cache lease: ${cacheKey}`);
     this.name = 'NonblockingRepoCacheLeaseUnavailableError';
     this.cacheKey = cacheKey;
   }

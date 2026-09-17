@@ -374,6 +374,40 @@ describe('reaper cooperative aborts', () => {
 
     expect(finalizeReconciledAgentRun).toHaveBeenCalledTimes(1);
   });
+
+  it('aborts between publishing health and publishing cancel', async () => {
+    const controller = new AbortController();
+    mockFindMany.mockResolvedValue([
+      {
+        id: 'run-legacy-abort',
+        threadId: 'thread-legacy',
+        status: 'running',
+        createdAt: timestamp(10 * 60_000),
+        startedAt: timestamp(10 * 60_000),
+        heartbeatAt: timestamp(6 * 60_000),
+        progressAt: timestamp(10_000),
+        timeoutAt: timestamp(-60 * 60_000),
+        lastError: null,
+      },
+    ]);
+    jest.mocked(notifyRunEvent).mockImplementationOnce(async () => {
+      controller.abort(new RepoCacheLeaseLostError('Repository cache lease was lost'));
+      return undefined;
+    });
+
+    await expect(
+      reapOrphanedRuns({ now: () => now, config, signal: controller.signal }),
+    ).rejects.toBeInstanceOf(RepoCacheLeaseLostError);
+
+    expect(notifyRunEvent).toHaveBeenCalledTimes(1);
+    expect(notifyRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'health',
+        event: expect.objectContaining({ health: 'worker_lost' }),
+      }),
+      { persist: true },
+    );
+  });
 });
 
 describe('assessAgentRunHealth', () => {

@@ -128,6 +128,7 @@ import {
   tryStartSingleFeatureDocWatcher,
   isDocWatcherActive,
 } from '../services/designDocService';
+import { routeDocumentValidationKickoff } from '../services/documentValidationService';
 import { routeTestCaseGenerationKickoff } from '../services/testCaseService';
 import {
   NonblockingRepoCacheLeaseUnavailableError,
@@ -307,11 +308,26 @@ describe('startRecoveryLoop leader election', () => {
 describe('recovery cooperative aborts', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockFindMany.mockReset();
     mockFindMany.mockResolvedValue([]);
+    mockPrdsFindMany.mockReset();
     mockPrdsFindMany.mockResolvedValue([]);
+    mockDesignDocsFindMany.mockReset();
     mockDesignDocsFindMany.mockResolvedValue([]);
+    mockTestCasesFindMany.mockReset();
     mockTestCasesFindMany.mockResolvedValue([]);
+    mockedFindRunning.mockReset();
     mockedFindRunning.mockResolvedValue([]);
+    mockedHydrate.mockReset();
+    mockedHydrate.mockResolvedValue(true);
+    mockedIsAlive.mockReset();
+    jest.mocked(routeDocumentValidationKickoff).mockResolvedValue(undefined);
+    jest.requireMock('../services/designDocService')
+      .isValidationWatcherActive.mockReturnValue(false);
+    jest.requireMock('../services/prdService')
+      .isPrdValidationWatcherActive.mockReturnValue(false);
+    jest.requireMock('../services/prdService')
+      .rehydratePrdValidationWatcher.mockResolvedValue(undefined);
     jest.requireMock('../services/designPrototypeService')
       .failStalePrototypes.mockResolvedValue(0);
     jest.requireMock('../services/pdfAssemblyService')
@@ -332,6 +348,66 @@ describe('recovery cooperative aborts', () => {
     ).rejects.toBeInstanceOf(RepoCacheLeaseLostError);
 
     expect(mockPrdsFindMany).not.toHaveBeenCalled();
+  });
+
+  it('aborts after validation liveness for design docs before dispatching validation work', async () => {
+    const controller = new AbortController();
+    const mockIsThreadIdle = jest.requireMock('../services/chatAgentService')
+      .isThreadIdle as jest.Mock;
+    mockPrdsFindMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    mockDesignDocsFindMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        id: 'doc-1',
+        validationThreadId: 'thread-validation',
+        chatThreadId: 'thread-source',
+        authorId: 'user-1',
+        project: 'Apex',
+      }]);
+    mockedHydrate.mockResolvedValue(true);
+    mockIsThreadIdle.mockReturnValue(true);
+    mockedIsAlive.mockImplementationOnce(async () => {
+      controller.abort(new RepoCacheLeaseLostError('Repository cache lease was lost'));
+      return false;
+    });
+
+    await expect(
+      recoverInFlightWork({ signal: controller.signal }),
+    ).rejects.toBeInstanceOf(RepoCacheLeaseLostError);
+
+    expect(jest.mocked(routeDocumentValidationKickoff)).not.toHaveBeenCalled();
+  });
+
+  it('aborts after validation liveness for PRDs before dispatching validation work', async () => {
+    const controller = new AbortController();
+    const mockIsThreadIdle = jest.requireMock('../services/chatAgentService')
+      .isThreadIdle as jest.Mock;
+    mockPrdsFindMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        id: 'prd-1',
+        validationThreadId: 'thread-validation',
+        chatThreadId: 'thread-source',
+        authorId: 'user-1',
+        project: 'Apex',
+      }]);
+    mockDesignDocsFindMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    mockedHydrate.mockResolvedValue(true);
+    mockIsThreadIdle.mockReturnValue(true);
+    mockedIsAlive.mockImplementation(async () => {
+      controller.abort(new RepoCacheLeaseLostError('Repository cache lease was lost'));
+      return false;
+    });
+
+    await expect(
+      recoverInFlightWork({ signal: controller.signal }),
+    ).rejects.toBeInstanceOf(RepoCacheLeaseLostError);
+
+    expect(jest.mocked(routeDocumentValidationKickoff)).not.toHaveBeenCalled();
   });
 });
 

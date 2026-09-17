@@ -91,7 +91,7 @@ async function tryRunRetireReconcileDue(signal: AbortSignal): Promise<boolean> {
   }
 }
 
-async function runReaperCycle(errorLabel: string, initialRetireReconcileDue: boolean): Promise<void> {
+async function runReaperCycle(errorLabel: string): Promise<void> {
   if (reaperCyclePromise) {
     await reaperCyclePromise;
     return;
@@ -104,9 +104,6 @@ async function runReaperCycle(errorLabel: string, initialRetireReconcileDue: boo
         async (lease) => {
           throwIfAborted(lease.signal);
           const retireReconcileDue = await tryRunRetireReconcileDue(lease.signal);
-          if (!initialRetireReconcileDue && retireReconcileDue) {
-            throwIfAborted(lease.signal);
-          }
           await reapOrphanedRuns({ retireReconcileDue, signal: lease.signal });
         },
         {
@@ -1153,6 +1150,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
           phase: row.progressPhase,
           status: 'failed',
         }).catch((err) => console.error('[reaper] Failed to publish worker-loss event:', err));
+        throwIfAborted(signal);
         await publishCancelSignal(row.threadId, row.id, updatedAt)
           .catch((err) => console.error('[reaper] Failed to publish cancel after worker-loss:', err));
         console.log(`[reaper] Reaped orphaned run (id=${row.id}, threadId=${row.threadId}) — heartbeat expired`);
@@ -1174,6 +1172,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
           phase: row.progressPhase,
           status: 'failed',
         }).catch((err) => console.error('[reaper] Failed to publish timeout event:', err));
+        throwIfAborted(signal);
         await publishCancelSignal(row.threadId, row.id, updatedAt)
           .catch((err) => console.error('[reaper] Failed to publish cancel after hard timeout:', err));
         console.log(`[reaper] Reaped timed-out run (id=${row.id}, threadId=${row.threadId})`);
@@ -1195,6 +1194,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
           phase: row.progressPhase,
           status: 'failed',
         }).catch((err) => console.error('[reaper] Failed to publish progress-timeout event:', err));
+        throwIfAborted(signal);
         await publishCancelSignal(row.threadId, row.id, updatedAt)
           .catch((err) => console.error('[reaper] Failed to publish cancel after progress timeout:', err));
         console.log(`[reaper] Reaped progress-stalled run (id=${row.id}, threadId=${row.threadId})`);
@@ -1300,9 +1300,9 @@ export function startReaper(): void {
     return;
   }
 
-  void runReaperCycle('[reaper] Initial reap failed:', true);
+  void runReaperCycle('[reaper] Initial reap failed:');
   reaperTimer = setInterval(() => {
-    void runReaperCycle('[reaper] Periodic reap failed:', false);
+    void runReaperCycle('[reaper] Periodic reap failed:');
   }, REAP_INTERVAL_MS);
   reaperTimer.unref?.();
 }

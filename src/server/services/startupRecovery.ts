@@ -483,8 +483,12 @@ export async function recoverInFlightWork(
       // If the agent was killed mid-run (thread is idle after hydration), re-kick
       // it so the validation run actually resumes rather than the watcher polling forever.
       // Skip re-kick when another instance still owns a live run.
-      if (isThreadIdle(doc.validationThreadId) && !(await isThreadRunAlive(doc.validationThreadId))) {
+      const validationRunAlive = await isThreadRunAlive(doc.validationThreadId);
+      throwIfAborted(signal);
+      if (isThreadIdle(doc.validationThreadId) && !validationRunAlive) {
+        throwIfAborted(signal);
         if (doc.authorId && doc.project) {
+          throwIfAborted(signal);
           void routeDocumentValidationKickoff({
             userId: doc.authorId,
             project: doc.project,
@@ -507,21 +511,25 @@ export async function recoverInFlightWork(
           `[recovery] Re-kicked dead validation agent (designDocId=${doc.id})`
         );
       }
-    } else if (!(await isThreadRunAlive(doc.validationThreadId))) {
+    } else {
+      const validationRunAlive = await isThreadRunAlive(doc.validationThreadId);
+      throwIfAborted(signal);
+      if (!validationRunAlive) {
       // Thread is unrecoverable and no other instance owns a live run —
       // reset so the doc is not stuck forever.
-      throwIfAborted(signal);
-      await db.update(designDocs)
-        .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
-        .where(and(eq(designDocs.id, doc.id), eq(designDocs.status, 'validating')));
-      recovered++;
-      console.warn(
-        `[recovery] Could not hydrate validation thread — reset to pending_review (designDocId=${doc.id}, threadId=${doc.validationThreadId})`
-      );
-    } else {
-      console.warn(
-        `[recovery] Could not hydrate validation thread but run is still alive elsewhere — leaving validating (designDocId=${doc.id}, threadId=${doc.validationThreadId})`
-      );
+        throwIfAborted(signal);
+        await db.update(designDocs)
+          .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
+          .where(and(eq(designDocs.id, doc.id), eq(designDocs.status, 'validating')));
+        recovered++;
+        console.warn(
+          `[recovery] Could not hydrate validation thread — reset to pending_review (designDocId=${doc.id}, threadId=${doc.validationThreadId})`
+        );
+      } else {
+        console.warn(
+          `[recovery] Could not hydrate validation thread but run is still alive elsewhere — leaving validating (designDocId=${doc.id}, threadId=${doc.validationThreadId})`
+        );
+      }
     }
   }
 
@@ -567,8 +575,12 @@ export async function recoverInFlightWork(
         `[recovery] Restarted PRD validation watcher (prdId=${prd.id})`
       );
 
-      if (isThreadIdle(prd.validationThreadId) && !(await isThreadRunAlive(prd.validationThreadId))) {
+      const validationRunAlive = await isThreadRunAlive(prd.validationThreadId);
+      throwIfAborted(signal);
+      if (isThreadIdle(prd.validationThreadId) && !validationRunAlive) {
+        throwIfAborted(signal);
         if (prd.authorId && prd.project) {
+          throwIfAborted(signal);
           void routeDocumentValidationKickoff({
             userId: prd.authorId,
             project: prd.project,
@@ -591,19 +603,23 @@ export async function recoverInFlightWork(
           `[recovery] Re-kicked dead PRD validation agent (prdId=${prd.id})`
         );
       }
-    } else if (!(await isThreadRunAlive(prd.validationThreadId))) {
-      throwIfAborted(signal);
-      await db.update(prds)
-        .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
-        .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')));
-      recovered++;
-      console.warn(
-        `[recovery] Could not hydrate PRD validation thread — reset to pending_review (prdId=${prd.id}, threadId=${prd.validationThreadId})`
-      );
     } else {
-      console.warn(
-        `[recovery] Could not hydrate PRD validation thread but run is still alive elsewhere — leaving validating (prdId=${prd.id}, threadId=${prd.validationThreadId})`
-      );
+      const validationRunAlive = await isThreadRunAlive(prd.validationThreadId);
+      throwIfAborted(signal);
+      if (!validationRunAlive) {
+        throwIfAborted(signal);
+        await db.update(prds)
+          .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
+          .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')));
+        recovered++;
+        console.warn(
+          `[recovery] Could not hydrate PRD validation thread — reset to pending_review (prdId=${prd.id}, threadId=${prd.validationThreadId})`
+        );
+      } else {
+        console.warn(
+          `[recovery] Could not hydrate PRD validation thread but run is still alive elsewhere — leaving validating (prdId=${prd.id}, threadId=${prd.validationThreadId})`
+        );
+      }
     }
   }
 

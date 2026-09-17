@@ -81,13 +81,18 @@ describe('withRepoCacheLease', () => {
   it('throws a typed nonholder error for a nonblocking scheduler miss', async () => {
     const store = createStore([false]);
 
-    await expect(withRepoCacheLease('startup-recovery:sweep', async () => 'never', {
+    const result = withRepoCacheLease('startup-recovery:sweep', async () => 'never', {
       ownerId: 'instance-3',
       leaseMs: 1_000,
       heartbeatMs: 500,
       waitMs: 0,
       store,
-    })).rejects.toBeInstanceOf(NonblockingRepoCacheLeaseUnavailableError);
+    });
+
+    await expect(result).rejects.toBeInstanceOf(NonblockingRepoCacheLeaseUnavailableError);
+    await expect(result).rejects.toMatchObject({
+      message: 'Timed out waiting for repository cache lease: startup-recovery:sweep',
+    });
 
     expect(store.release).not.toHaveBeenCalled();
   });
