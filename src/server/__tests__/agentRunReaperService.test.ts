@@ -629,6 +629,49 @@ describe('reapOrphanedRuns', () => {
     mockWorkerReaperAction.mockReset();
   });
 
+  it('uses the exported reaper batch size and oldest-first deterministic ordering', async () => {
+    const agentRunReaperModule = jest.requireActual('../services/agentRunReaperService') as {
+      REAPER_SWEEP_BATCH_SIZE?: number;
+    };
+    mockFindMany.mockResolvedValue([]);
+
+    await reapOrphanedRuns({ now: () => now, config });
+
+    expect(agentRunReaperModule.REAPER_SWEEP_BATCH_SIZE).toBe(200);
+    expect(mockFindMany).toHaveBeenCalledTimes(1);
+    expect(mockFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      limit: 200,
+      orderBy: expect.any(Array),
+    }));
+    expect(mockFindMany.mock.calls[0][0].orderBy).toHaveLength(2);
+    expect(boundStrings(mockFindMany.mock.calls[0][0].orderBy)).toEqual(
+      expect.arrayContaining(['updated_at', 'id']),
+    );
+  });
+
+  it('leaves the 201st reaper row for the next cycle', async () => {
+    const rows = Array.from({ length: 201 }, (_, index) => ({
+      id: `run-background-${String(index + 1).padStart(3, '0')}`,
+      threadId: `thread-background-${String(index + 1).padStart(3, '0')}`,
+      status: 'queued',
+      lane: 'background',
+      queuedAt: timestamp((31 + index) * 60_000),
+      createdAt: timestamp((31 + index) * 60_000),
+      progressPhase: null,
+      lastError: null,
+    }));
+    mockFindMany.mockImplementation(async ({ limit }: { limit?: number }) => (
+      rows.slice(0, limit ?? rows.length)
+    ));
+
+    await reapOrphanedRuns({ now: () => now, config: workerConfig });
+
+    expect(finalizeReconciledAgentRun).toHaveBeenCalledTimes(200);
+    expect(jest.mocked(finalizeReconciledAgentRun).mock.calls).not.toContainEqual([
+      expect.objectContaining({ runId: 'run-background-201' }),
+    ]);
+  });
+
   it('TBI-005 DoD-3 defaults worker clocks and accepts positive env overrides', () => {
     const keys = [
       'AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS',

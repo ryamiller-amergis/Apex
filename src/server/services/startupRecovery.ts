@@ -1,6 +1,6 @@
 import type { Server } from 'http';
 import { randomUUID } from 'crypto';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { prds, designDocs, testCases, devSessions, agentRuns } from '../db/schema';
 import type { AgentRunEventEnvelope } from '../../shared/types/chat';
@@ -49,6 +49,7 @@ const RECOVERY_INTERVAL_MS = 60_000;
 const SHUTDOWN_GRACE_MS = 10_000;
 const DEFAULT_SETUP_TIMEOUT_MS = 15 * 60_000;
 const GENERATION_RECOVERY_GRACE_MS = DEFAULT_SETUP_TIMEOUT_MS;
+export const RECOVERY_SWEEP_BATCH_SIZE = 100;
 const RECOVERY_SWEEP_LEASE_KEY = 'startup-recovery:sweep';
 const RECOVERY_SWEEP_LEASE_MS = 55_000;
 const RECOVERY_SWEEP_HEARTBEAT_MS = 15_000;
@@ -192,6 +193,8 @@ export async function recoverStaleDevSessionSetups(
   const settingUp = await db.query.devSessions.findMany({
     where: eq(devSessions.status, 'setting_up'),
     columns: { id: true, status: true, updatedAt: true },
+    orderBy: [asc(devSessions.updatedAt), asc(devSessions.id)],
+    limit: RECOVERY_SWEEP_BATCH_SIZE,
   });
   let failed = 0;
 
@@ -318,6 +321,8 @@ export async function recoverInFlightWork(
       authorId: true,
       updatedAt: true,
     },
+    orderBy: [asc(prds.updatedAt), asc(prds.id)],
+    limit: RECOVERY_SWEEP_BATCH_SIZE,
   });
   for (const prd of generatingPrds) {
     throwIfAborted(signal);
@@ -381,6 +386,8 @@ export async function recoverInFlightWork(
       authorId: true,
       updatedAt: true,
     },
+    orderBy: [asc(designDocs.updatedAt), asc(designDocs.id)],
+    limit: RECOVERY_SWEEP_BATCH_SIZE,
   });
   for (const doc of generatingDocs) {
     throwIfAborted(signal);
@@ -452,6 +459,8 @@ export async function recoverInFlightWork(
       authorId: true,
       project: true,
     },
+    orderBy: [asc(designDocs.updatedAt), asc(designDocs.id)],
+    limit: RECOVERY_SWEEP_BATCH_SIZE,
   });
   for (const doc of validatingDocs) {
     throwIfAborted(signal);
@@ -537,6 +546,8 @@ export async function recoverInFlightWork(
   const generatingTestCases = await db.query.testCases.findMany({
     where: eq(testCases.status, 'generating'),
     columns: { id: true, prdId: true, chatThreadId: true, updatedAt: true },
+    orderBy: [asc(testCases.updatedAt), asc(testCases.id)],
+    limit: RECOVERY_SWEEP_BATCH_SIZE,
   });
 
   // ── PRD validation threads stuck in 'validating' ──────────────────────────
@@ -550,6 +561,8 @@ export async function recoverInFlightWork(
       authorId: true,
       project: true,
     },
+    orderBy: [asc(prds.updatedAt), asc(prds.id)],
+    limit: RECOVERY_SWEEP_BATCH_SIZE,
   });
   for (const prd of validatingPrds) {
     throwIfAborted(signal);

@@ -8,7 +8,7 @@
  */
 import { db } from '../db/drizzle';
 import { agentRuns, chatThreads } from '../db/schema';
-import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, or } from 'drizzle-orm';
 import { randomUUID } from 'crypto';
 import type {
   AgentRunEventEnvelope,
@@ -43,6 +43,7 @@ import {
 
 const REAP_INTERVAL_MS = 60_000;
 export const RETIRE_REAP_INTERVAL_MS = 5 * 60_000;
+export const REAPER_SWEEP_BATCH_SIZE = 200;
 const LONG_RUNNING_PREFIX = 'Long-running agent run';
 const WATCHDOG_SOURCE_INSTANCE = `${RUN_EVENT_SOURCE_INSTANCE}:watchdog`;
 const REAPER_SWEEP_LEASE_KEY = 'agent-run-reaper:sweep';
@@ -785,6 +786,8 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
     throwIfAborted(signal);
     const rows = await db.query.agentRuns.findMany({
       where: inArray(agentRuns.status, ['queued', 'running', 'dispatched']),
+      orderBy: [asc(agentRuns.updatedAt), asc(agentRuns.id)],
+      limit: REAPER_SWEEP_BATCH_SIZE,
     });
     const eventDrivenTerminationEnabled =
       options.eventDrivenTerminationEnabled ??

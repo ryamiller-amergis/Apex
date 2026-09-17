@@ -148,6 +148,18 @@ async function flushAsyncWork(): Promise<void> {
   await Promise.resolve();
 }
 
+/**
+ * Collect the string literals bound into a Drizzle query option.
+ * These objects are self-referential, so JSON.stringify cannot be used.
+ */
+function boundStrings(value: unknown, seen = new Set<unknown>()): string[] {
+  if (typeof value === 'string') return [value];
+  if (!value || typeof value !== 'object' || seen.has(value)) return [];
+  seen.add(value);
+  return Object.values(value as Record<string, unknown>)
+    .flatMap((entry) => boundStrings(entry, seen));
+}
+
 describe('startRecoveryLoop leader election', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -760,6 +772,25 @@ describe('recoverStaleDevSessionSetups', () => {
     mockUpdateWhere.mockImplementation(() => ({ returning: mockUpdateReturning }));
   });
 
+  it('uses the exported setup batch size and oldest-first deterministic ordering', async () => {
+    const startupRecoveryModule = jest.requireActual('../services/startupRecovery') as {
+      RECOVERY_SWEEP_BATCH_SIZE?: number;
+    };
+    mockFindMany.mockResolvedValue([]);
+
+    await recoverStaleDevSessionSetups();
+
+    expect(startupRecoveryModule.RECOVERY_SWEEP_BATCH_SIZE).toBe(100);
+    expect(mockFindMany).toHaveBeenCalledTimes(1);
+    expect(mockFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      limit: 100,
+      orderBy: expect.any(Array),
+    }));
+    expect(mockFindMany.mock.calls[0][0].orderBy).toHaveLength(2);
+    const orderByStrings = boundStrings(mockFindMany.mock.calls[0][0].orderBy);
+    expect(orderByStrings).toEqual(expect.arrayContaining(['updated_at', 'id']));
+  });
+
   it('fails abandoned setting_up sessions after the bounded setup window', async () => {
     mockFindMany.mockResolvedValue([
       {
@@ -809,6 +840,60 @@ describe('recoverStaleDevSessionSetups', () => {
 
     expect(recovered).toBe(0);
     expect(mockUpdateSet).not.toHaveBeenCalled();
+  });
+});
+
+describe('startup recovery transient query bounds', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockUpdateWhere.mockImplementation(() => ({ returning: mockUpdateReturning }));
+    mockFindMany.mockResolvedValue([]);
+    mockPrdsFindMany.mockResolvedValue([]);
+    mockDesignDocsFindMany.mockResolvedValue([]);
+    mockTestCasesFindMany.mockResolvedValue([]);
+    mockAgentRunsFindFirst.mockResolvedValue(null);
+    mockedFindRunning.mockResolvedValue([]);
+    mockedHydrate.mockResolvedValue(false);
+    mockedIsAlive.mockResolvedValue(false);
+    jest.requireMock('../services/designDocService')
+      .isValidationWatcherActive.mockReturnValue(false);
+    jest.requireMock('../services/prdService')
+      .isPrdValidationWatcherActive.mockReturnValue(false);
+    jest.requireMock('../services/designPrototypeService')
+      .failStalePrototypes.mockResolvedValue(0);
+    jest.requireMock('../services/pdfAssemblyService')
+      .expireOldSessions.mockResolvedValue({ expired: 0, errors: 0 });
+    jest.requireMock('../services/featureRequestAnalysisService')
+      .recoverAnalyzingFeatureRequests.mockResolvedValue(0);
+  });
+
+  it('limits each direct transient-work category to 100 oldest rows per cycle', async () => {
+    await recoverInFlightWork();
+
+    const startupRecoveryModule = jest.requireActual('../services/startupRecovery') as {
+      RECOVERY_SWEEP_BATCH_SIZE?: number;
+    };
+    expect(startupRecoveryModule.RECOVERY_SWEEP_BATCH_SIZE).toBe(100);
+
+    const directQueries = [
+      mockPrdsFindMany.mock.calls[0]?.[0],
+      mockDesignDocsFindMany.mock.calls[0]?.[0],
+      mockDesignDocsFindMany.mock.calls[1]?.[0],
+      mockTestCasesFindMany.mock.calls[0]?.[0],
+      mockPrdsFindMany.mock.calls[1]?.[0],
+    ];
+
+    expect(directQueries).toHaveLength(5);
+    for (const query of directQueries) {
+      expect(query).toEqual(expect.objectContaining({
+        limit: 100,
+        orderBy: expect.any(Array),
+      }));
+      expect(query.orderBy).toHaveLength(2);
+      expect(boundStrings(query.orderBy)).toEqual(
+        expect.arrayContaining(['updated_at', 'id']),
+      );
+    }
   });
 });
 
