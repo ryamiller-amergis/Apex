@@ -39,6 +39,10 @@ import {
   stopObservabilityOperations,
 } from './services/observabilityOperationsService';
 import {
+  startDbPoolTelemetryScheduler,
+  stopDbPoolTelemetryScheduler,
+} from './services/dbPoolTelemetry';
+import {
   startJourneyAggregation,
   stopJourneyAggregation,
 } from './services/journeyAggregationScheduler';
@@ -429,6 +433,9 @@ const server = app.listen(PORT, () => {
 
   groundingMaintenanceScheduler.start();
   console.log('Grounding maintenance scheduler started');
+
+  startDbPoolTelemetryScheduler();
+  server.once('close', stopDbPoolTelemetryScheduler);
 
   workBoardScheduler.start();
   console.log('Work board due-soon scheduler started');

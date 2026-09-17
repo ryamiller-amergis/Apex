@@ -14,6 +14,7 @@ import { getPrResolutionMetricsStats } from '../services/agentEvalsPrResolutionS
 import { getMaxViewEslintBurnDown } from '../services/eslintBurnDownService';
 import { getMaxViewEslintSnapshot } from '../services/eslintMetricsService';
 import { sql, eq as drizzleEq } from 'drizzle-orm';
+import { getDbPoolStats } from '../db';
 import { db } from '../db/drizzle';
 import { getSkillConfig, getSkillConfigById, listSkillConfigsForProject, resolveSkillConfig } from '../services/projectSettingsService';
 import { fetchAvailableModels } from '../services/modelsService';
@@ -446,15 +447,17 @@ router.get('/health/dependencies', async (_req: Request, res: Response) => {
 // GET /api/health/agents - Chat agent system health
 router.get('/health/agents', async (_req: Request, res: Response) => {
   const agentHealth = getAgentHealthStats();
+  const databasePool = getDbPoolStats();
   try {
     const workerHealth = await getWorkerTierHealthStats();
-    res.json({ ...agentHealth, ...workerHealth });
+    res.json({ ...agentHealth, ...workerHealth, databasePool });
   } catch {
     console.error('[health/agents] Worker health query failed');
     res.json({
       ...agentHealth,
       workerTierSaturation: 0,
       oldestQueuedAgeMs: 0,
+      databasePool,
     });
   }
 });

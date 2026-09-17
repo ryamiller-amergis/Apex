@@ -2,6 +2,7 @@ import request from 'supertest';
 import express from 'express';
 import apiRouter, { isPublicHealthPath } from '../routes/api';
 import { AzureDevOpsService } from '../services/azureDevOps';
+import { getDbPoolStats } from '../db';
 import { db } from '../db/drizzle';
 import * as userProjectAssignmentService from '../services/userProjectAssignmentService';
 import * as projectCatalogService from '../services/projectCatalogService';
@@ -48,10 +49,15 @@ jest.mock('../services/workerTierHealthService', () => ({
   getWorkerTierHealthStats: jest.fn(),
 }));
 
+jest.mock('../db', () => ({
+  getDbPoolStats: jest.fn(),
+}));
+
 const mockAssignmentService = userProjectAssignmentService as jest.Mocked<typeof userProjectAssignmentService>;
 const mockProjectCatalogService = projectCatalogService as jest.Mocked<typeof projectCatalogService>;
 const mockProjectAccessRequestService = projectAccessRequestService as jest.Mocked<typeof projectAccessRequestService>;
 const mockWorkerTierHealthService = workerTierHealthService as jest.Mocked<typeof workerTierHealthService>;
+const mockGetDbPoolStats = jest.mocked(getDbPoolStats);
 
 describe('API Routes', () => {
   let app: express.Application;
@@ -62,6 +68,14 @@ describe('API Routes', () => {
     mockWorkerTierHealthService.getWorkerTierHealthStats.mockResolvedValue({
       workerTierSaturation: 0.5,
       oldestQueuedAgeMs: 90_000,
+    });
+    mockGetDbPoolStats.mockReturnValue({
+      max: 5,
+      total: 3,
+      idle: 1,
+      active: 2,
+      waiting: 0,
+      saturation: 0.4,
     });
     
     // Create Express app with the API router
@@ -106,6 +120,14 @@ describe('API Routes', () => {
         uptime: expect.any(Number),
         workerTierSaturation: 0.5,
         oldestQueuedAgeMs: 90_000,
+        databasePool: {
+          max: 5,
+          total: 3,
+          idle: 1,
+          active: 2,
+          waiting: 0,
+          saturation: 0.4,
+        },
       }));
     });
 
@@ -122,6 +144,14 @@ describe('API Routes', () => {
         status: 'ok',
         workerTierSaturation: 0,
         oldestQueuedAgeMs: 0,
+        databasePool: {
+          max: 5,
+          total: 3,
+          idle: 1,
+          active: 2,
+          waiting: 0,
+          saturation: 0.4,
+        },
       }));
       expect(JSON.stringify(response.body)).not.toMatch(
         /password=secret|private-db/i,
