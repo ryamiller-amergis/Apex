@@ -143,6 +143,28 @@ const mockedReevaluateGrounding = reevaluateThreadGroundingForRecovery as jest.M
 >;
 const mockedIsAlive = isThreadRunAlive as jest.MockedFunction<typeof isThreadRunAlive>;
 
+function requireDeferred<T>(value: T | null | undefined, label: string): NonNullable<T> {
+  if (value == null) {
+    throw new Error(`${label} was not set`);
+  }
+  return value;
+}
+
+function createDeferredCallback<TArgs extends unknown[]>(label: string) {
+  let callback: ((...args: TArgs) => void) | null = null;
+  return {
+    set(next: (...args: TArgs) => void): void {
+      callback = next;
+    },
+    call(...args: TArgs): void {
+      if (!callback) {
+        throw new Error(`${label} was not set`);
+      }
+      callback(...args);
+    },
+  };
+}
+
 async function flushAsyncWork(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
@@ -232,10 +254,10 @@ describe('startRecoveryLoop leader election', () => {
   });
 
   it('does not overlap local recovery cycles while one is still running', async () => {
-    let resolveLease: (() => void) | null = null;
+    const leaseGate = createDeferredCallback<[]>('resolveLease');
     mockWithRepoCacheLease.mockImplementationOnce(
       () => new Promise<void>((resolve) => {
-        resolveLease = resolve;
+        leaseGate.set(resolve);
       }),
     );
 
@@ -246,7 +268,7 @@ describe('startRecoveryLoop leader election', () => {
 
     expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
 
-    resolveLease?.();
+    leaseGate.call();
     await flushAsyncWork();
     await jest.advanceTimersByTimeAsync(60_000);
     await flushAsyncWork();
@@ -276,10 +298,10 @@ describe('startRecoveryLoop leader election', () => {
   });
 
   it('clears scheduler state when stopped so a fresh start can run again', async () => {
-    let resolveLease: (() => void) | null = null;
+    const leaseGate = createDeferredCallback<[]>('resolveLease');
     mockWithRepoCacheLease.mockImplementationOnce(
       () => new Promise<void>((resolve) => {
-        resolveLease = resolve;
+        leaseGate.set(resolve);
       }),
     );
 
@@ -293,7 +315,7 @@ describe('startRecoveryLoop leader election', () => {
 
     expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
 
-    resolveLease?.();
+    leaseGate.call();
     await flushAsyncWork();
     await jest.advanceTimersByTimeAsync(60_000);
     await flushAsyncWork();
@@ -473,7 +495,8 @@ describe('graceful shutdown scheduler stop', () => {
     startRecoveryLoop();
     await flushAsyncWork();
     registerGracefulShutdown(server);
-    sigtermHandler?.();
+      const invokeSigterm = requireDeferred(sigtermHandler, 'sigtermHandler');
+      invokeSigterm();
     await flushAsyncWork();
     await jest.advanceTimersByTimeAsync(60_000);
     await flushAsyncWork();

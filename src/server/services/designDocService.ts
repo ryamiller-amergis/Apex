@@ -1279,25 +1279,29 @@ export async function tryStartSingleFeatureDocWatcher(
   if (!lease) {
     return false;
   }
+  const heldLease = lease;
   if (latestSingleFeatureDocStartTokens.get(designDocId) !== startToken) {
-    await lease.release();
+    await heldLease.release();
     return false;
   }
 
   let watcherStopped = false;
-  let stopLocalWatcher: ((reason: 'normal' | 'lease-lost') => void) | null = null;
-  let startAborted = lease.signal.aborted;
+  let stopLocalWatcherImpl: ((reason: 'normal' | 'lease-lost') => void) | null = null;
+  const stopLocalWatcher = (reason: 'normal' | 'lease-lost'): void => {
+    stopLocalWatcherImpl?.(reason);
+  };
+  let startAborted = heldLease.signal.aborted;
   const startAbortListener = (): void => {
     startAborted = true;
-    stopLocalWatcher?.('lease-lost');
+    stopLocalWatcher('lease-lost');
   };
-  lease.signal.addEventListener('abort', startAbortListener);
+  heldLease.signal.addEventListener('abort', startAbortListener);
 
   let hydrated = false;
   try {
     hydrated = await hydrateThread(chatThreadId);
   } catch (err) {
-    await lease.release();
+    await heldLease.release();
     console.warn(
       `[singleFeatureDocWatcher] hydrate failed (threadId=${chatThreadId}):`,
       (err as Error).message,
@@ -1305,17 +1309,17 @@ export async function tryStartSingleFeatureDocWatcher(
     return false;
   }
   if (startAborted || !hydrated) {
-    await lease.release();
+    await heldLease.release();
     return false;
   }
   if (latestSingleFeatureDocStartTokens.get(designDocId) !== startToken) {
-    await lease.release();
+    await heldLease.release();
     return false;
   }
 
   const activeThreadId = activeDocWatcherThreads.get(designDocId);
   if (activeThreadId === chatThreadId && isDocWatcherActive(designDocId)) {
-    await lease.release();
+    await heldLease.release();
     return false;
   }
   if (activeThreadId && activeThreadId !== chatThreadId) {
@@ -1344,7 +1348,7 @@ export async function tryStartSingleFeatureDocWatcher(
   const isCurrentWatcher = (): boolean =>
     activeSingleFeatureDocWatcherTokens.get(designDocId) === startToken;
 
-  stopLocalWatcher = (reason: 'normal' | 'lease-lost'): void => {
+  stopLocalWatcherImpl = (reason: 'normal' | 'lease-lost'): void => {
     if (watcherStopped || !isCurrentWatcher()) return;
     watcherStopped = true;
     const hadWatcher = clearDocWatcher(designDocId);
@@ -1372,7 +1376,7 @@ export async function tryStartSingleFeatureDocWatcher(
   }
 
   const scheduleNextTick = (delayMs: number): void => {
-    if (watcherStopped || lease.signal.aborted || !isCurrentWatcher()) {
+    if (watcherStopped || heldLease.signal.aborted || !isCurrentWatcher()) {
       return;
     }
     const timeout = setTimeout(() => {
@@ -1384,7 +1388,7 @@ export async function tryStartSingleFeatureDocWatcher(
   };
 
   const applyTickBackoff = (err: unknown): void => {
-    if (lease.signal.aborted || watcherStopped || !isCurrentWatcher()) {
+    if (heldLease.signal.aborted || watcherStopped || !isCurrentWatcher()) {
       return;
     }
     const backoffMs = DOC_WATCHER_BACKOFF_MS[Math.min(failureCount, DOC_WATCHER_BACKOFF_MS.length - 1)];
@@ -1397,7 +1401,7 @@ export async function tryStartSingleFeatureDocWatcher(
   };
 
   const runTick = async (): Promise<void> => {
-    if (watcherStopped || lease.signal.aborted || !isCurrentWatcher()) {
+    if (watcherStopped || heldLease.signal.aborted || !isCurrentWatcher()) {
       return;
     }
     try {
@@ -1410,7 +1414,7 @@ export async function tryStartSingleFeatureDocWatcher(
         }
 
         const runState = await getThreadRunStateSnapshot(chatThreadId);
-        if (watcherStopped || lease.signal.aborted || !isCurrentWatcher()) {
+        if (watcherStopped || heldLease.signal.aborted || !isCurrentWatcher()) {
           return;
         }
         attempts += 1;
@@ -1421,14 +1425,14 @@ export async function tryStartSingleFeatureDocWatcher(
         }
 
         if (budgetLeftMs <= 0) {
-          if (lease.signal.aborted || !isCurrentWatcher()) {
+          if (heldLease.signal.aborted || !isCurrentWatcher()) {
             return;
           }
-          await lease.assertOwned();
+          await heldLease.assertOwned();
           const leaseFenceCondition = buildLeaseFenceCondition({
-            cacheKey: lease.cacheKey,
-            ownerId: lease.ownerId,
-            generation: lease.generation,
+            cacheKey: heldLease.cacheKey,
+            ownerId: heldLease.ownerId,
+            generation: heldLease.generation,
           });
           console.warn(`[singleFeatureDocWatcher] Timed out — marking generation_failed (designDocId=${designDocId}, threadId=${chatThreadId})`);
           const conditions = [
@@ -1465,15 +1469,15 @@ export async function tryStartSingleFeatureDocWatcher(
         }
 
         if (filesReady && agentFinished) {
-          if (lease.signal.aborted || !isCurrentWatcher()) {
+          if (heldLease.signal.aborted || !isCurrentWatcher()) {
             return;
           }
           await finalizeSingleFeatureDoc(designDocId, chatThreadId, project, {
-            assertOwned: lease.assertOwned,
+            assertOwned: heldLease.assertOwned,
             leaseFence: {
-              cacheKey: lease.cacheKey,
-              ownerId: lease.ownerId,
-              generation: lease.generation,
+              cacheKey: heldLease.cacheKey,
+              ownerId: heldLease.ownerId,
+              generation: heldLease.generation,
             },
           });
           releaseDocWatcherDeadline(designDocId, chatThreadId);
@@ -1497,16 +1501,16 @@ export async function tryStartSingleFeatureDocWatcher(
             scheduleNextTick(WATCHER_INTERVAL_MS);
             return;
           }
-          if (lease.signal.aborted || !isCurrentWatcher()) {
+          if (heldLease.signal.aborted || !isCurrentWatcher()) {
             return;
           }
           console.warn(`[singleFeatureDocWatcher] Run terminal without complete output — marking generation_failed (designDocId=${designDocId})`);
           await finalizeSingleFeatureDoc(designDocId, chatThreadId, project, {
-            assertOwned: lease.assertOwned,
+            assertOwned: heldLease.assertOwned,
             leaseFence: {
-              cacheKey: lease.cacheKey,
-              ownerId: lease.ownerId,
-              generation: lease.generation,
+              cacheKey: heldLease.cacheKey,
+              ownerId: heldLease.ownerId,
+              generation: heldLease.generation,
             },
           });
           releaseDocWatcherDeadline(designDocId, chatThreadId);
@@ -1520,7 +1524,7 @@ export async function tryStartSingleFeatureDocWatcher(
     }
   };
 
-  activeSingleFeatureDocWatcherReleases.set(designDocId, lease.release);
+  activeSingleFeatureDocWatcherReleases.set(designDocId, heldLease.release);
   scheduleNextTick(WATCHER_INTERVAL_MS);
   return true;
 }

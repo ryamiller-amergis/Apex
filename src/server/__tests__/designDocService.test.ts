@@ -297,6 +297,28 @@ function boundStrings(value: unknown, seen = new Set<unknown>()): string[] {
     .flatMap((entry) => boundStrings(entry, seen));
 }
 
+function requireDeferred<T>(value: T | null | undefined, label: string): NonNullable<T> {
+  if (value == null) {
+    throw new Error(`${label} was not set`);
+  }
+  return value;
+}
+
+function createDeferredCallback<TArgs extends unknown[]>(label: string) {
+  let callback: ((...args: TArgs) => void) | null = null;
+  return {
+    set(next: (...args: TArgs) => void): void {
+      callback = next;
+    },
+    call(...args: TArgs): void {
+      if (!callback) {
+        throw new Error(`${label} was not set`);
+      }
+      callback(...args);
+    },
+  };
+}
+
 // ── createDesignDoc ────────────────────────────────────────────────────────────
 
 describe('createDesignDoc', () => {
@@ -1568,10 +1590,10 @@ describe('startSingleFeatureDocWatcher', () => {
 
   it('coalesces a duplicate same-pair pending start without superseding the original generation', async () => {
     const lease = makeHeldLease();
-    let resolveHydrate: (() => void) | null = null;
+    const hydrateGate = createDeferredCallback<[]>('resolveHydrate');
     mockTryAcquireRepoCacheLease.mockResolvedValueOnce(lease);
     mockHydrateThread.mockImplementationOnce(() => new Promise<boolean>((resolve) => {
-      resolveHydrate = () => resolve(true);
+      hydrateGate.set(() => resolve(true));
     }));
 
     const originalStart = tryStartSingleFeatureDocWatcher('doc-coalesce', 'thread-coalesce', 'prd-1', 'proj-alpha');
@@ -1581,7 +1603,7 @@ describe('startSingleFeatureDocWatcher', () => {
     await Promise.resolve();
     await expect(duplicateStart).resolves.toBe(false);
 
-    resolveHydrate?.();
+    hydrateGate.call();
     await expect(originalStart).resolves.toBe(true);
     expect(mockTryAcquireRepoCacheLease).toHaveBeenCalledTimes(1);
     expect(isDocWatcherActive('doc-coalesce')).toBe(true);
@@ -2022,9 +2044,9 @@ describe('startSingleFeatureDocWatcher', () => {
   });
 
   it('does not overlap ticks while run-state lookup is still pending', async () => {
-    let resolveState: ((value: unknown) => void) | null = null;
+    const stateGate = createDeferredCallback<[unknown]>('resolveState');
     const pendingState = new Promise((resolve) => {
-      resolveState = resolve;
+      stateGate.set(resolve);
     });
     mockThreadRunStateSnapshot.mockReturnValueOnce(pendingState);
 
@@ -2036,7 +2058,7 @@ describe('startSingleFeatureDocWatcher', () => {
 
     expect(mockThreadRunStateSnapshot).toHaveBeenCalledTimes(1);
 
-    resolveState?.({
+    stateGate.call({
       latestRun: null,
       shouldChargeWorkBudget: false,
       isAlive: false,
@@ -2196,9 +2218,9 @@ describe('startSingleFeatureDocWatcher', () => {
   it('does not let a stale tick stop or release a replacement watcher', async () => {
     const leaseA = makeHeldLease();
     const leaseB = makeHeldLease();
-    let resolveA: ((value: unknown) => void) | null = null;
+    const tickGate = createDeferredCallback<[unknown]>('resolveA');
     const pendingA = new Promise((resolve) => {
-      resolveA = resolve;
+      tickGate.set(resolve);
     });
     mockTryAcquireRepoCacheLease
       .mockResolvedValueOnce(leaseA)
@@ -2222,7 +2244,7 @@ describe('startSingleFeatureDocWatcher', () => {
     ).resolves.toBe(true);
     await flushPendingWork();
 
-    resolveA?.({
+    tickGate.call({
       latestRun: { status: 'completed', ownerInstance: null, updatedAt: '2026-08-06T00:00:10.000Z', timeoutAt: null },
       shouldChargeWorkBudget: true,
       isAlive: false,
@@ -2239,17 +2261,13 @@ describe('startSingleFeatureDocWatcher', () => {
   it('releases the previous local generation when two threads start concurrently for one document', async () => {
     const leaseA = makeHeldLease();
     const leaseB = makeHeldLease();
-    let resolveHydrateA: (() => void) | null = null;
-    let resolveHydrateB: (() => void) | null = null;
+    const hydrateQueue: Array<() => void> = [];
     mockTryAcquireRepoCacheLease
       .mockResolvedValueOnce(leaseA)
       .mockResolvedValueOnce(leaseB);
     mockHydrateThread
-      .mockImplementationOnce(() => new Promise<boolean>((resolve) => {
-        resolveHydrateA = () => resolve(true);
-      }))
-      .mockImplementationOnce(() => new Promise<boolean>((resolve) => {
-        resolveHydrateB = () => resolve(true);
+      .mockImplementation(() => new Promise<boolean>((resolve) => {
+        hydrateQueue.push(() => resolve(true));
       }));
 
     const startA = tryStartSingleFeatureDocWatcher('doc-concurrent', 'thread-a', 'prd-1', 'proj-alpha');
@@ -2257,10 +2275,13 @@ describe('startSingleFeatureDocWatcher', () => {
 
     await Promise.resolve();
     await Promise.resolve();
-    resolveHydrateA?.();
+    const firstHydrate = hydrateQueue.shift();
+    if (!firstHydrate) throw new Error('firstHydrate was not set');
+    firstHydrate();
     await expect(startA).resolves.toBe(false);
 
-    resolveHydrateB?.();
+    const secondHydrate = hydrateQueue.shift();
+    secondHydrate?.();
     await expect(startB).resolves.toBe(true);
 
     expect(leaseA.release).toHaveBeenCalledTimes(1);

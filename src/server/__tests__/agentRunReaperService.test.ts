@@ -118,6 +118,28 @@ function timestamp(msAgo: number): string {
   return new Date(now - msAgo).toISOString();
 }
 
+function requireDeferred<T>(value: T | null | undefined, label: string): NonNullable<T> {
+  if (value == null) {
+    throw new Error(`${label} was not set`);
+  }
+  return value;
+}
+
+function createDeferredCallback<TArgs extends unknown[]>(label: string) {
+  let callback: ((...args: TArgs) => void) | null = null;
+  return {
+    set(next: (...args: TArgs) => void): void {
+      callback = next;
+    },
+    call(...args: TArgs): void {
+      if (!callback) {
+        throw new Error(`${label} was not set`);
+      }
+      callback(...args);
+    },
+  };
+}
+
 /**
  * Collect the string literals bound into a Drizzle filter. The table metadata
  * in these objects is self-referential, so JSON.stringify cannot be used.
@@ -198,10 +220,10 @@ describe('startReaper leader election', () => {
   });
 
   it('does not overlap local reaper cycles while one is still running', async () => {
-    let resolveLease: (() => void) | null = null;
+    const leaseGate = createDeferredCallback<[]>('resolveLease');
     mockWithRepoCacheLease.mockImplementationOnce(
       () => new Promise<void>((resolve) => {
-        resolveLease = resolve;
+        leaseGate.set(resolve);
       }),
     );
 
@@ -212,7 +234,7 @@ describe('startReaper leader election', () => {
 
     expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
 
-    resolveLease?.();
+    leaseGate.call();
     await flushAsyncWork();
     await jest.advanceTimersByTimeAsync(60_000);
     await flushAsyncWork();
@@ -242,10 +264,10 @@ describe('startReaper leader election', () => {
   });
 
   it('clears scheduler state when stopped so a fresh start can run again', async () => {
-    let resolveLease: (() => void) | null = null;
+    const leaseGate = createDeferredCallback<[]>('resolveLease');
     mockWithRepoCacheLease.mockImplementationOnce(
       () => new Promise<void>((resolve) => {
-        resolveLease = resolve;
+        leaseGate.set(resolve);
       }),
     );
 
@@ -259,7 +281,7 @@ describe('startReaper leader election', () => {
 
     expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
 
-    resolveLease?.();
+    leaseGate.call();
     await flushAsyncWork();
     await jest.advanceTimersByTimeAsync(60_000);
     await flushAsyncWork();
