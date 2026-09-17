@@ -1,4 +1,4 @@
-import { getDbPoolStats } from '../db';
+import { getDbPoolStats, type DbPoolStats } from '../db';
 import { trackEvent } from './telemetry';
 
 const SNAPSHOT_INTERVAL_MS = 30_000;
@@ -18,6 +18,17 @@ export type DbPoolTelemetryScheduler = {
   stop(): void;
 };
 
+function toMeasurements(stats: DbPoolStats): Record<string, number> {
+  return {
+    max: stats.max,
+    total: stats.total,
+    idle: stats.idle,
+    active: stats.active,
+    waiting: stats.waiting,
+    saturation: stats.saturation,
+  };
+}
+
 export function createDbPoolTelemetryScheduler(
   dependencies: DbPoolTelemetryDependencies = {},
 ): DbPoolTelemetryScheduler {
@@ -32,9 +43,10 @@ export function createDbPoolTelemetryScheduler(
   const emitSnapshot = (): void => {
     try {
       const stats = readStats();
-      emit('database.pool.snapshot', undefined, stats);
+      const measurements = toMeasurements(stats);
+      emit('database.pool.snapshot', undefined, measurements);
       if (stats.waiting > 0) {
-        emit('database.pool.pressure', undefined, stats);
+        emit('database.pool.pressure', undefined, measurements);
       }
     } catch {
       console.error('[db-pool-telemetry] Failed to emit database pool telemetry');

@@ -7,6 +7,25 @@ import { createDbPoolTelemetryScheduler } from '../services/dbPoolTelemetry';
 import { trackEvent } from '../services/telemetry';
 
 type PoolSnapshot = Parameters<typeof getDbPoolStats>[0];
+type TimerHandle = ReturnType<typeof setInterval>;
+
+function createTimerHandle(
+  unref: jest.Mock = jest.fn(),
+): TimerHandle {
+  return { unref } as unknown as TimerHandle;
+}
+
+function createSetIntervalFn(
+  stub: (callback: () => void, delayMs: number) => TimerHandle,
+): typeof setInterval {
+  return ((callback: TimerHandler, delayMs?: number) => {
+    if (typeof callback !== 'function') {
+      throw new TypeError('Expected function callback');
+    }
+    const callbackFn = callback as () => void;
+    return stub(callbackFn, Number(delayMs ?? 0));
+  }) as unknown as typeof setInterval;
+}
 
 describe('database pool telemetry', () => {
   describe('getDbPoolStats', () => {
@@ -74,10 +93,11 @@ describe('database pool telemetry', () => {
 
       const scheduler = createDbPoolTelemetryScheduler({
         getDbPoolStats: getPoolStats,
-        setIntervalFn: ((callback: () => void, _delayMs: number) => {
+        setIntervalFn: createSetIntervalFn((callback, delayMs) => {
           intervalCallback = callback;
-          return { unref } as ReturnType<typeof setInterval>;
-        }) as typeof setInterval,
+          expect(delayMs).toBe(30_000);
+          return createTimerHandle(unref);
+        }),
         clearIntervalFn,
       });
 
@@ -157,19 +177,20 @@ describe('database pool telemetry', () => {
         waiting: 0,
         saturation: 0,
       });
-      const setIntervalFn = jest.fn(() => ({
-        unref: jest.fn(),
-      })) as unknown as typeof setInterval;
+      let intervalStarts = 0;
       const scheduler = createDbPoolTelemetryScheduler({
         getDbPoolStats: getPoolStats,
-        setIntervalFn,
+        setIntervalFn: createSetIntervalFn(() => {
+          intervalStarts += 1;
+          return createTimerHandle();
+        }),
       });
 
       scheduler.start();
       scheduler.start();
 
       expect(getPoolStats).toHaveBeenCalledTimes(1);
-      expect(setIntervalFn).toHaveBeenCalledTimes(1);
+      expect(intervalStarts).toBe(1);
       expect(mockTrackEvent).toHaveBeenCalledTimes(1);
       scheduler.stop();
     });
@@ -193,10 +214,10 @@ describe('database pool telemetry', () => {
 
       const scheduler = createDbPoolTelemetryScheduler({
         getDbPoolStats: getPoolStats,
-        setIntervalFn: ((callback: () => void, _delayMs: number) => {
+        setIntervalFn: createSetIntervalFn((callback) => {
           intervalCallback = callback;
-          return { unref: jest.fn() } as ReturnType<typeof setInterval>;
-        }) as typeof setInterval,
+          return createTimerHandle();
+        }),
         clearIntervalFn,
       });
 
@@ -210,7 +231,7 @@ describe('database pool telemetry', () => {
     });
 
     it('clears the timer and resets state when stopped', () => {
-      const timer = { unref: jest.fn() } as ReturnType<typeof setInterval>;
+      const timer = createTimerHandle();
       const clearIntervalFn = jest.fn();
       const scheduler = createDbPoolTelemetryScheduler({
         getDbPoolStats: () => ({
@@ -221,7 +242,7 @@ describe('database pool telemetry', () => {
           waiting: 0,
           saturation: 0.2,
         }),
-        setIntervalFn: (() => timer) as typeof setInterval,
+        setIntervalFn: createSetIntervalFn(() => timer),
         clearIntervalFn,
       });
 
