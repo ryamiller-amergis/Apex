@@ -10,6 +10,23 @@ const DEFAULT_WAIT_MS = 65 * 60 * 1000;
 /** Bound for chat/generation paths. Must stay below GROUNDING_PREPARATION_TIMEOUT_MS (2 min). */
 export const USER_FACING_REPO_CACHE_LEASE_WAIT_MS = 90 * 1000;
 
+export class NonblockingRepoCacheLeaseUnavailableError extends Error {
+  cacheKey: string;
+
+  constructor(cacheKey: string) {
+    super(`Nonblocking repository cache lease unavailable: ${cacheKey}`);
+    this.name = 'NonblockingRepoCacheLeaseUnavailableError';
+    this.cacheKey = cacheKey;
+  }
+}
+
+export class RepoCacheLeaseLostError extends Error {
+  constructor(detail?: string) {
+    super(detail ?? 'Repository cache lease was lost');
+    this.name = 'RepoCacheLeaseLostError';
+  }
+}
+
 export interface RepoCacheLeaseStore {
   tryAcquire(cacheKey: string, ownerId: string, leaseMs: number): Promise<number | null>;
   renew(cacheKey: string, ownerId: string, generation: number, leaseMs: number): Promise<boolean>;
@@ -182,8 +199,10 @@ export async function tryAcquireRepoCacheLease(
   const abortForLostLease = (cause?: unknown) => {
     if (controller.signal.aborted) return;
     stopHeartbeat();
-    const detail = cause instanceof Error ? `: ${cause.message}` : '';
-    controller.abort(new Error(`Repository cache lease was lost${detail}`));
+    const detail = cause instanceof Error ? `: ${cause.message}` : undefined;
+    controller.abort(new RepoCacheLeaseLostError(
+      detail ? `Repository cache lease was lost${detail}` : undefined,
+    ));
   };
 
   const renewLease = async (): Promise<void> => {
@@ -258,6 +277,9 @@ export async function withRepoCacheLease<T>(
     generation = await store.tryAcquire(cacheKey, ownerId, leaseMs);
     if (generation === null) {
       if (Date.now() >= deadline) {
+        if (waitMs === 0) {
+          throw new NonblockingRepoCacheLeaseUnavailableError(cacheKey);
+        }
         throw new Error(`Timed out waiting for repository cache lease: ${cacheKey}`);
       }
       await sleep(pollMs);
@@ -279,8 +301,10 @@ export async function withRepoCacheLease<T>(
   const abortForLostLease = (cause?: unknown) => {
     if (controller.signal.aborted) return;
     stopHeartbeat();
-    const detail = cause instanceof Error ? `: ${cause.message}` : '';
-    controller.abort(new Error(`Repository cache lease was lost${detail}`));
+    const detail = cause instanceof Error ? `: ${cause.message}` : undefined;
+    controller.abort(new RepoCacheLeaseLostError(
+      detail ? `Repository cache lease was lost${detail}` : undefined,
+    ));
   };
   const renewLease = async (): Promise<void> => {
     if (controller.signal.aborted) throw controller.signal.reason;

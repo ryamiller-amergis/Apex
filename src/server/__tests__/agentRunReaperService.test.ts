@@ -40,9 +40,27 @@ jest.mock('../services/admissionGovernorService', () => ({
     mockRecoverStaleDispatchedRuns(...args),
   resolveBackgroundDispatchTtlMs: () => 30 * 60_000,
 }));
-jest.mock('../services/repoCacheLeaseService', () => ({
-  withRepoCacheLease: (...args: unknown[]) => mockWithRepoCacheLease(...args),
-}));
+jest.mock('../services/repoCacheLeaseService', () => {
+  class NonblockingRepoCacheLeaseUnavailableError extends Error {
+    constructor(cacheKey: string) {
+      super(`Nonblocking repository cache lease unavailable: ${cacheKey}`);
+      this.name = 'NonblockingRepoCacheLeaseUnavailableError';
+    }
+  }
+
+  class RepoCacheLeaseLostError extends Error {
+    constructor(detail = 'Repository cache lease was lost') {
+      super(detail);
+      this.name = 'RepoCacheLeaseLostError';
+    }
+  }
+
+  return {
+    withRepoCacheLease: (...args: unknown[]) => mockWithRepoCacheLease(...args),
+    NonblockingRepoCacheLeaseUnavailableError,
+    RepoCacheLeaseLostError,
+  };
+});
 jest.mock('../services/workerTierTelemetry', () => ({
   workerTierTelemetry: {
     inflight: jest.fn(),
@@ -73,6 +91,10 @@ import {
   type AgentRunHealthConfig,
 } from '../services/agentRunReaperService';
 import { finalizeReconciledAgentRun, notifyRunEvent } from '../services/pgNotifyService';
+import {
+  NonblockingRepoCacheLeaseUnavailableError,
+  RepoCacheLeaseLostError,
+} from '../services/repoCacheLeaseService';
 
 const config: AgentRunHealthConfig = {
   heartbeatTimeoutMs: 5 * 60_000,
@@ -118,10 +140,12 @@ describe('startReaper leader election', () => {
     jest.clearAllMocks();
     jest.useFakeTimers();
     mockWithRepoCacheLease.mockResolvedValue(undefined);
+    mockFindMany.mockResolvedValue([]);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     stopReaper();
+    await flushAsyncWork();
     jest.useRealTimers();
   });
 
@@ -162,7 +186,7 @@ describe('startReaper leader election', () => {
   it('skips quietly when another instance holds the reaper lease', async () => {
     const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     mockWithRepoCacheLease.mockRejectedValueOnce(
-      new Error('Timed out waiting for repository cache lease: agent-run-reaper:sweep'),
+      new NonblockingRepoCacheLeaseUnavailableError('agent-run-reaper:sweep'),
     );
 
     startReaper();
@@ -233,10 +257,122 @@ describe('startReaper leader election', () => {
     startReaper();
     await flushAsyncWork();
 
-    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(2);
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
 
     resolveLease?.();
     await flushAsyncWork();
+    await jest.advanceTimersByTimeAsync(60_000);
+    await flushAsyncWork();
+
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(2);
+  });
+
+  it('runs reaper work exactly once when the lease holder callback executes', async () => {
+    startReaper();
+    await flushAsyncWork();
+
+    const mainOperation = mockWithRepoCacheLease.mock.calls[0]?.[1] as ((lease: {
+      signal: AbortSignal;
+      assertOwned(): Promise<void>;
+    }) => Promise<void>) | undefined;
+
+    expect(mainOperation).toBeDefined();
+    mockWithRepoCacheLease.mockResolvedValue(undefined);
+    await mainOperation?.({
+      signal: new AbortController().signal,
+      assertOwned: jest.fn().mockResolvedValue(undefined),
+    });
+
+    expect(mockFindMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the retire lease handoff rather than process-local cadence', async () => {
+    const expiredEventDrivenRow = {
+      id: 'run-ed-expired',
+      threadId: 'thread-ed',
+      status: 'running',
+      eventDriven: true,
+      createdAt: timestamp(3 * 60 * 60_000),
+      startedAt: timestamp(3 * 60 * 60_000),
+      heartbeatAt: timestamp(3 * 60 * 60_000),
+      progressAt: timestamp(3 * 60 * 60_000),
+      timeoutAt: timestamp(60_000),
+      lastError: null,
+    };
+    startReaper();
+    await flushAsyncWork();
+
+    const mainOperation = mockWithRepoCacheLease.mock.calls[0]?.[1] as ((lease: {
+      signal: AbortSignal;
+      assertOwned(): Promise<void>;
+    }) => Promise<void>) | undefined;
+
+    expect(mainOperation).toBeDefined();
+    mockFindMany.mockResolvedValue([expiredEventDrivenRow]);
+    mockWithRepoCacheLease.mockReset();
+    mockWithRepoCacheLease.mockRejectedValueOnce(
+      new NonblockingRepoCacheLeaseUnavailableError('agent-run-retire-reconciler:sweep'),
+    );
+    await mainOperation?.({
+      signal: new AbortController().signal,
+      assertOwned: jest.fn().mockResolvedValue(undefined),
+    });
+
+    expect(finalizeReconciledAgentRun).not.toHaveBeenCalled();
+    mockWithRepoCacheLease.mockReset();
+    jest.mocked(finalizeReconciledAgentRun).mockResolvedValue(true);
+    mockFindMany.mockResolvedValue([expiredEventDrivenRow]);
+    mockWithRepoCacheLease.mockResolvedValue(undefined);
+    await mainOperation?.({
+      signal: new AbortController().signal,
+      assertOwned: jest.fn().mockResolvedValue(undefined),
+    });
+
+    expect(finalizeReconciledAgentRun).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('reaper cooperative aborts', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockFindMany.mockResolvedValue([]);
+    jest.mocked(finalizeReconciledAgentRun).mockResolvedValue(true);
+  });
+
+  it('stops before the next row after lease ownership is lost', async () => {
+    const controller = new AbortController();
+    mockFindMany.mockResolvedValue([
+      {
+        id: 'run-background-expired-1',
+        threadId: 'thread-background-1',
+        status: 'queued',
+        lane: 'background',
+        queuedAt: timestamp(31 * 60_000),
+        createdAt: timestamp(31 * 60_000),
+        progressPhase: null,
+        lastError: null,
+      },
+      {
+        id: 'run-background-expired-2',
+        threadId: 'thread-background-2',
+        status: 'queued',
+        lane: 'background',
+        queuedAt: timestamp(31 * 60_000),
+        createdAt: timestamp(31 * 60_000),
+        progressPhase: null,
+        lastError: null,
+      },
+    ]);
+    jest.mocked(finalizeReconciledAgentRun).mockImplementationOnce(async () => {
+      controller.abort(new RepoCacheLeaseLostError('Repository cache lease was lost'));
+      return true;
+    });
+
+    await expect(
+      reapOrphanedRuns({ now: () => now, config: workerConfig, signal: controller.signal }),
+    ).rejects.toBeInstanceOf(RepoCacheLeaseLostError);
+
+    expect(finalizeReconciledAgentRun).toHaveBeenCalledTimes(1);
   });
 });
 

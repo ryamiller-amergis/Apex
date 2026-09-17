@@ -35,7 +35,11 @@ import {
 } from './admissionGovernorService';
 import { workerTierTelemetry } from './workerTierTelemetry';
 import { INTERACTIVE_LANE } from '../../shared/types/interactiveWorkflow';
-import { withRepoCacheLease } from './repoCacheLeaseService';
+import {
+  NonblockingRepoCacheLeaseUnavailableError,
+  RepoCacheLeaseLostError,
+  withRepoCacheLease,
+} from './repoCacheLeaseService';
 
 const REAP_INTERVAL_MS = 60_000;
 export const RETIRE_REAP_INTERVAL_MS = 5 * 60_000;
@@ -44,51 +48,87 @@ const WATCHDOG_SOURCE_INSTANCE = `${RUN_EVENT_SOURCE_INSTANCE}:watchdog`;
 const REAPER_SWEEP_LEASE_KEY = 'agent-run-reaper:sweep';
 const REAPER_SWEEP_LEASE_MS = 55_000;
 const REAPER_SWEEP_HEARTBEAT_MS = 15_000;
+const RETIRE_RECONCILER_SWEEP_LEASE_KEY = 'agent-run-retire-reconciler:sweep';
+const RETIRE_RECONCILER_SWEEP_LEASE_MS = RETIRE_REAP_INTERVAL_MS - 5_000;
 const DEFAULT_WORKER_HEARTBEAT_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_DISPATCH_COLD_START_MS = 5 * 60_000;
 const DEFAULT_WORKER_PROGRESS_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_CANCEL_GRACE_MS = 60_000;
 
 let reaperTimer: ReturnType<typeof setInterval> | null = null;
-let lastRetireReapAt = 0;
-let reaperCycleRunning = false;
+let reaperCyclePromise: Promise<void> | null = null;
 
-function isNonBlockingSweepLeaseMiss(error: unknown, leaseKey: string): boolean {
-  return error instanceof Error
-    && error.message === `Timed out waiting for repository cache lease: ${leaseKey}`;
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw signal.reason ?? new RepoCacheLeaseLostError();
+  }
 }
 
-async function runReaperCycle(errorLabel: string, initialRetireReconcileDue: boolean): Promise<void> {
-  if (reaperCycleRunning) {
-    return;
-  }
+function isExpectedSweepStop(error: unknown): boolean {
+  return error instanceof NonblockingRepoCacheLeaseUnavailableError
+    || error instanceof RepoCacheLeaseLostError;
+}
 
-  reaperCycleRunning = true;
+async function tryRunRetireReconcileDue(signal: AbortSignal): Promise<boolean> {
+  throwIfAborted(signal);
   try {
     await withRepoCacheLease(
-      REAPER_SWEEP_LEASE_KEY,
-      async () => {
-        const nowMs = Date.now();
-        const retireReconcileDue = initialRetireReconcileDue
-          || shouldRunRetireReconciler(lastRetireReapAt, nowMs);
-        if (retireReconcileDue) {
-          lastRetireReapAt = nowMs;
-        }
-        await reapOrphanedRuns({ retireReconcileDue });
-      },
+      RETIRE_RECONCILER_SWEEP_LEASE_KEY,
+      async () => undefined,
       {
-        leaseMs: REAPER_SWEEP_LEASE_MS,
+        leaseMs: RETIRE_RECONCILER_SWEEP_LEASE_MS,
         heartbeatMs: REAPER_SWEEP_HEARTBEAT_MS,
         waitMs: 0,
         releaseOnComplete: false,
       },
     );
+    return true;
   } catch (error) {
-    if (!isNonBlockingSweepLeaseMiss(error, REAPER_SWEEP_LEASE_KEY)) {
-      console.error(errorLabel, error);
+    if (error instanceof NonblockingRepoCacheLeaseUnavailableError) {
+      return false;
     }
+    throw error;
+  }
+}
+
+async function runReaperCycle(errorLabel: string, initialRetireReconcileDue: boolean): Promise<void> {
+  if (reaperCyclePromise) {
+    await reaperCyclePromise;
+    return;
+  }
+
+  const cycle = (async () => {
+    try {
+      await withRepoCacheLease(
+        REAPER_SWEEP_LEASE_KEY,
+        async (lease) => {
+          throwIfAborted(lease.signal);
+          const retireReconcileDue = await tryRunRetireReconcileDue(lease.signal);
+          if (!initialRetireReconcileDue && retireReconcileDue) {
+            throwIfAborted(lease.signal);
+          }
+          await reapOrphanedRuns({ retireReconcileDue, signal: lease.signal });
+        },
+        {
+          leaseMs: REAPER_SWEEP_LEASE_MS,
+          heartbeatMs: REAPER_SWEEP_HEARTBEAT_MS,
+          waitMs: 0,
+          releaseOnComplete: false,
+        },
+      );
+    } catch (error) {
+      if (!isExpectedSweepStop(error)) {
+        console.error(errorLabel, error);
+      }
+    }
+  })();
+  reaperCyclePromise = cycle;
+  try {
+    await cycle;
   } finally {
-    reaperCycleRunning = false;
+    if (reaperCyclePromise === cycle) {
+      reaperCyclePromise = null;
+    }
   }
 }
 
@@ -140,6 +180,7 @@ export interface ReaperOptions {
   config?: AgentRunHealthConfig;
   eventDrivenTerminationEnabled?: (threadId: string) => Promise<boolean>;
   retireReconcileDue?: boolean;
+  signal?: AbortSignal;
 }
 
 function positiveDuration(value: string | undefined, fallback: number): number {
@@ -729,7 +770,9 @@ function workerCancelEvent(input: {
  * Reap failed runs and persist non-terminal progress warnings.
  */
 export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<void> {
+  const { signal } = options;
   try {
+    throwIfAborted(signal);
     const config = options.config ?? resolveAgentRunHealthConfig();
     const workerHeartbeatTimeoutMs =
       config.workerHeartbeatTimeoutMs ?? DEFAULT_WORKER_HEARTBEAT_TIMEOUT_MS;
@@ -742,6 +785,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
     const cancelGraceMs = config.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
     const nowMs = options.now?.() ?? Date.now();
     const updatedAt = new Date(nowMs).toISOString();
+    throwIfAborted(signal);
     const rows = await db.query.agentRuns.findMany({
       where: inArray(agentRuns.status, ['queued', 'running', 'dispatched']),
     });
@@ -751,6 +795,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
     let recoverColdStarts = false;
 
     for (const row of rows) {
+      throwIfAborted(signal);
       // Interactive dispatch is acknowledged before the Dapr actor invocation
       // finishes. A process crash can therefore bypass the host's rejection
       // handler and leave the fenced row dispatched forever. Unlike background
@@ -762,6 +807,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
           && ageMs(row.dispatchedAt, nowMs) >= dispatchColdStartMs
         ) {
           const detail = 'Interactive agent did not start. Please retry.';
+          throwIfAborted(signal);
           const terminal = await markTerminal(row.id, {
             status: 'failed',
             terminalReason: 'worker_lost',
@@ -776,6 +822,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
               phase: row.progressPhase,
             })],
           });
+          throwIfAborted(signal);
           console.log(
             `[reaper] Reaped interactive dispatch (id=${row.id}, threadId=${row.threadId}) — actor did not start`,
           );
@@ -811,6 +858,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
               detail,
               event: { type: 'error' as const, error: detail },
             };
+            throwIfAborted(signal);
             const won = await finalizeReconciledAgentRun({
               runId: row.id,
               threadId: row.threadId,
@@ -819,7 +867,9 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
               detail,
               events: [errorEvent],
             });
+            throwIfAborted(signal);
             if (won) {
+              throwIfAborted(signal);
               await db
                 .update(chatThreads)
                 .set({
@@ -866,6 +916,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
           && ageMs(row.updatedAt, nowMs) >= cancelGraceMs
         ) {
           const detail = 'Background worker cancellation grace expired';
+          throwIfAborted(signal);
           const terminal = await markTerminal(row.id, {
             status: 'cancelled',
             terminalReason: 'forced_cancel',
@@ -878,6 +929,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
               timestamp: updatedAt,
             })],
           });
+          throwIfAborted(signal);
           console.log(
             `[reaper] Forced background cancellation (id=${row.id}, threadId=${row.threadId})`,
           );
@@ -901,6 +953,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
           // terminal, and every sweep re-enqueues it.
           if (dispatchAgeMs >= dispatchTtlMs) {
             const detail = 'Background worker never started. Please retry.';
+            throwIfAborted(signal);
             const terminal = await markTerminal(row.id, {
               status: 'failed',
               terminalReason: 'dispatch_ttl',
@@ -915,6 +968,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
                 phase: row.progressPhase,
               })],
             });
+            throwIfAborted(signal);
             console.warn(
               `[reaper] Reaped background run (id=${row.id}, threadId=${row.threadId}) — dispatch TTL expired`,
             );
@@ -942,6 +996,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
 
         if (ageMs(row.heartbeatAt, nowMs) >= workerHeartbeatTimeoutMs) {
           const detail = 'Background worker heartbeat expired';
+          throwIfAborted(signal);
           const terminal = await markTerminal(row.id, {
             status: 'failed',
             terminalReason: 'worker_lost',
@@ -956,6 +1011,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
               phase: row.progressPhase,
             })],
           });
+          throwIfAborted(signal);
           console.log(
             `[reaper] Reaped background run (id=${row.id}, threadId=${row.threadId}) — heartbeat expired`,
           );
@@ -976,6 +1032,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
           >= workerProgressTimeoutMs
         ) {
           const detail = 'Background worker progress expired';
+          throwIfAborted(signal);
           const terminal = await markTerminal(row.id, {
             status: 'failed',
             terminalReason: 'progress_timeout',
@@ -990,6 +1047,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
               phase: row.progressPhase,
             })],
           });
+          throwIfAborted(signal);
           console.log(
             `[reaper] Reaped background run (id=${row.id}, threadId=${row.threadId}) — progress expired`,
           );
@@ -1049,6 +1107,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
             detail: 'Run cancelled by timeout reconciler',
             event: { type: 'cancel' as const },
           };
+          throwIfAborted(signal);
           const won = await finalizeReconciledAgentRun({
             runId: row.id,
             threadId: row.threadId,
@@ -1056,7 +1115,9 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
             detail,
             events: [errorEvent, cancelEvent],
           });
+          throwIfAborted(signal);
           if (won) {
+            throwIfAborted(signal);
             await db
               .update(chatThreads)
               .set({ status: 'idle', activeRunId: null, lastError: detail, lastActivityAt: updatedAt })
@@ -1078,8 +1139,11 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
 
       if (health === 'worker_lost') {
         const detail = 'Worker lost (heartbeat expired)';
+        throwIfAborted(signal);
         await failRun(row.id, row.threadId, detail, updatedAt);
+        throwIfAborted(signal);
         await logMyWorkHealth(row.threadId, row.id, health, detail, 'error');
+        throwIfAborted(signal);
         await publishHealthEvent({
           runId: row.id,
           threadId: row.threadId,
@@ -1096,8 +1160,11 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
       }
       if (health === 'hard_timeout') {
         const detail = 'Run exceeded configured hard limit';
+        throwIfAborted(signal);
         await failRun(row.id, row.threadId, detail, updatedAt);
+        throwIfAborted(signal);
         await logMyWorkHealth(row.threadId, row.id, health, detail, 'error');
+        throwIfAborted(signal);
         await publishHealthEvent({
           runId: row.id,
           threadId: row.threadId,
@@ -1114,8 +1181,11 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
       }
       if (health === 'progress_timeout') {
         const detail = `No meaningful progress for more than ${Math.round(config.progressAbortMs / 60_000)} minutes — run aborted`;
+        throwIfAborted(signal);
         await failRun(row.id, row.threadId, detail, updatedAt);
+        throwIfAborted(signal);
         await logMyWorkHealth(row.threadId, row.id, health, detail, 'error');
+        throwIfAborted(signal);
         await publishHealthEvent({
           runId: row.id,
           threadId: row.threadId,
@@ -1131,6 +1201,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
         continue;
       }
       if (health === 'never_claimed') {
+        throwIfAborted(signal);
         await db
           .update(agentRuns)
           .set({
@@ -1139,6 +1210,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
             updatedAt,
           })
           .where(and(eq(agentRuns.id, row.id), eq(agentRuns.status, 'queued')));
+        throwIfAborted(signal);
         await logMyWorkHealth(
           row.threadId,
           row.id,
@@ -1146,6 +1218,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
           'Never claimed (worker lost before lease)',
           'error',
         );
+        throwIfAborted(signal);
         await publishHealthEvent({
           runId: row.id,
           threadId: row.threadId,
@@ -1161,11 +1234,14 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
 
       const warning = warningFor(health, config);
       if (warning && row.lastError !== warning) {
+        throwIfAborted(signal);
         await db
           .update(agentRuns)
           .set({ lastError: warning, updatedAt })
           .where(and(eq(agentRuns.id, row.id), eq(agentRuns.status, 'running')));
+        throwIfAborted(signal);
         await logMyWorkHealth(row.threadId, row.id, health, warning, 'warn');
+        throwIfAborted(signal);
         await publishHealthEvent({
           runId: row.id,
           threadId: row.threadId,
@@ -1177,11 +1253,14 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
         }).catch((err) => console.error('[reaper] Failed to publish watchdog warning:', err));
         console.warn(`[reaper] ${warning} (id=${row.id}, threadId=${row.threadId})`);
       } else if (!warning && isWatchdogWarning(row.lastError)) {
+        throwIfAborted(signal);
         await db
           .update(agentRuns)
           .set({ lastError: null, updatedAt })
           .where(and(eq(agentRuns.id, row.id), eq(agentRuns.status, 'running')));
+        throwIfAborted(signal);
         await logMyWorkHealth(row.threadId, row.id, 'healthy', 'Meaningful progress resumed', 'info');
+        throwIfAborted(signal);
         await publishHealthEvent({
           runId: row.id,
           threadId: row.threadId,
@@ -1197,6 +1276,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
     }
 
     if (recoverColdStarts) {
+      throwIfAborted(signal);
       const recovery = await recoverStaleDispatchedRuns();
       if (recovery.selected > 0) {
         emitWorkerTelemetry(() => {
@@ -1205,6 +1285,9 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
       }
     }
   } catch (err) {
+    if (signal?.aborted || err instanceof RepoCacheLeaseLostError) {
+      throw err;
+    }
     console.error('[reaper] Failed to reap orphaned runs:', err);
   }
 }
@@ -1232,6 +1315,4 @@ export function stopReaper(): void {
     clearInterval(reaperTimer);
     reaperTimer = null;
   }
-  reaperCycleRunning = false;
-  lastRetireReapAt = 0;
 }

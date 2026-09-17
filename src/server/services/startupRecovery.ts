@@ -38,7 +38,12 @@ import {
   nextRunEventSequence,
   RUN_EVENT_SOURCE_INSTANCE,
 } from './pgNotifyService';
-import { withRepoCacheLease } from './repoCacheLeaseService';
+import { stopReaper } from './agentRunReaperService';
+import {
+  NonblockingRepoCacheLeaseUnavailableError,
+  RepoCacheLeaseLostError,
+  withRepoCacheLease,
+} from './repoCacheLeaseService';
 
 const RECOVERY_INTERVAL_MS = 60_000;
 const SHUTDOWN_GRACE_MS = 10_000;
@@ -55,38 +60,52 @@ const RECOVERY_SWEEP_HEARTBEAT_MS = 15_000;
 const STALE_PROTOTYPE_MS = 25 * 60_000;
 
 let recoveryTimer: ReturnType<typeof setInterval> | null = null;
-let recoveryCycleRunning = false;
+let recoveryCyclePromise: Promise<void> | null = null;
 
-function isNonBlockingSweepLeaseMiss(error: unknown, leaseKey: string): boolean {
-  return error instanceof Error
-    && error.message === `Timed out waiting for repository cache lease: ${leaseKey}`;
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw signal.reason ?? new RepoCacheLeaseLostError();
+  }
+}
+
+function isExpectedSweepStop(error: unknown): boolean {
+  return error instanceof NonblockingRepoCacheLeaseUnavailableError
+    || error instanceof RepoCacheLeaseLostError;
 }
 
 async function runRecoveryCycle(errorLabel: string): Promise<void> {
-  if (recoveryCycleRunning) {
+  if (recoveryCyclePromise) {
+    await recoveryCyclePromise;
     return;
   }
 
-  recoveryCycleRunning = true;
-  try {
-    await withRepoCacheLease(
-      RECOVERY_SWEEP_LEASE_KEY,
-      async () => {
-        await recoverInFlightWork();
-      },
-      {
-        leaseMs: RECOVERY_SWEEP_LEASE_MS,
-        heartbeatMs: RECOVERY_SWEEP_HEARTBEAT_MS,
-        waitMs: 0,
-        releaseOnComplete: false,
-      },
-    );
-  } catch (error) {
-    if (!isNonBlockingSweepLeaseMiss(error, RECOVERY_SWEEP_LEASE_KEY)) {
-      console.error(errorLabel, error);
+  const cycle = (async () => {
+    try {
+      await withRepoCacheLease(
+        RECOVERY_SWEEP_LEASE_KEY,
+        async (lease) => {
+          await recoverInFlightWork({ signal: lease.signal });
+        },
+        {
+          leaseMs: RECOVERY_SWEEP_LEASE_MS,
+          heartbeatMs: RECOVERY_SWEEP_HEARTBEAT_MS,
+          waitMs: 0,
+          releaseOnComplete: false,
+        },
+      );
+    } catch (error) {
+      if (!isExpectedSweepStop(error)) {
+        console.error(errorLabel, error);
+      }
     }
+  })();
+  recoveryCyclePromise = cycle;
+  try {
+    await cycle;
   } finally {
-    recoveryCycleRunning = false;
+    if (recoveryCyclePromise === cycle) {
+      recoveryCyclePromise = null;
+    }
   }
 }
 
@@ -155,6 +174,7 @@ async function claimTestCaseGenerationRecovery(
 export interface StaleSetupRecoveryOptions {
   now?: () => number;
   setupTimeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 /**
@@ -165,6 +185,7 @@ export interface StaleSetupRecoveryOptions {
 export async function recoverStaleDevSessionSetups(
   options: StaleSetupRecoveryOptions = {},
 ): Promise<number> {
+  throwIfAborted(options.signal);
   const nowMs = options.now?.() ?? Date.now();
   const setupTimeoutMs = options.setupTimeoutMs
     ?? positiveDuration(process.env.DEV_SESSION_SETUP_TIMEOUT_MS, DEFAULT_SETUP_TIMEOUT_MS);
@@ -175,11 +196,13 @@ export async function recoverStaleDevSessionSetups(
   let failed = 0;
 
   for (const session of settingUp) {
+    throwIfAborted(options.signal);
     const updatedAtMs = Date.parse(session.updatedAt);
     if (Number.isFinite(updatedAtMs) && nowMs - updatedAtMs < setupTimeoutMs) continue;
 
     const updatedAt = new Date(nowMs).toISOString();
     const setupError = `Setup timed out after ${Math.round(setupTimeoutMs / 60_000)} minutes. The setup worker may have restarted or stopped responding; start a new development session to retry.`;
+    throwIfAborted(options.signal);
     await db
       .update(devSessions)
       .set({
@@ -203,10 +226,18 @@ export async function recoverStaleDevSessionSetups(
  * row remains. Multi-instance deployments otherwise race and clearStaleRun a
  * healthy interview mid-turn (active_run_id wiped while the owner keeps going).
  */
-export async function recoverStuckInterviewThreads(): Promise<number> {
+export interface RecoverStuckInterviewThreadsOptions {
+  signal?: AbortSignal;
+}
+
+export async function recoverStuckInterviewThreads(
+  options: RecoverStuckInterviewThreadsOptions = {},
+): Promise<number> {
+  throwIfAborted(options.signal);
   let recovered = 0;
   const stuckInterviews = await findRunningInterviewThreads();
   for (const row of stuckInterviews) {
+    throwIfAborted(options.signal);
     if (await isThreadRunAlive(row.threadId)) {
       console.log(
         `[recovery] Interview thread still has a live run — leaving running` +
@@ -222,9 +253,12 @@ export async function recoverStuckInterviewThreads(): Promise<number> {
         `, activeRunId=${row.activeRunId ?? 'none'})`,
     );
 
+    throwIfAborted(options.signal);
     const ok = await hydrateThread(row.threadId);
     if (ok) {
+      throwIfAborted(options.signal);
       await reevaluateThreadGroundingForRecovery(row.threadId);
+      throwIfAborted(options.signal);
       await clearStaleRun(row.threadId);
       recovered++;
       console.log(
@@ -255,15 +289,25 @@ export async function recoverStuckInterviewThreads(): Promise<number> {
  * retried manually via POST /design-docs/:id/retry-generate to avoid ENOENT
  * crashes from missing local workspaces.
  */
-export async function recoverInFlightWork(): Promise<void> {
+export interface RecoverInFlightWorkOptions {
+  signal?: AbortSignal;
+}
+
+export async function recoverInFlightWork(
+  options: RecoverInFlightWorkOptions = {},
+): Promise<void> {
+  const { signal } = options;
+  throwIfAborted(signal);
   let recovered = 0;
 
   try {
-    recovered += await recoverStaleDevSessionSetups();
+    recovered += await recoverStaleDevSessionSetups({ signal });
   } catch (err) {
+    if (signal?.aborted || err instanceof RepoCacheLeaseLostError) throw err;
     console.error('[recovery] Failed to recover abandoned dev session setups:', err);
   }
 
+  throwIfAborted(signal);
   const generatingPrds = await db.query.prds.findMany({
     where: eq(prds.status, 'generating'),
     columns: {
@@ -276,10 +320,12 @@ export async function recoverInFlightWork(): Promise<void> {
     },
   });
   for (const prd of generatingPrds) {
+    throwIfAborted(signal);
     if (!prd.chatThreadId) continue;
     if (isPrdWatcherActive(prd.id)) continue;
     const ok = await hydrateThread(prd.chatThreadId);
     if (ok) {
+      throwIfAborted(signal);
       startPrdWatcher(prd.id, prd.chatThreadId);
       recovered++;
       console.log(`[recovery] Restarted PRD watcher (prdId=${prd.id})`);
@@ -287,6 +333,7 @@ export async function recoverInFlightWork(): Promise<void> {
       // A worker run is created only after grounding preparation. Give a live
       // preparation a bounded lease, then atomically claim stale rows so rolling
       // or multi-instance recovery cannot start duplicate materializations.
+      throwIfAborted(signal);
       const existingRun = await db.query.agentRuns.findFirst({
         where: eq(agentRuns.threadId, prd.chatThreadId),
         columns: { id: true },
@@ -322,6 +369,7 @@ export async function recoverInFlightWork(): Promise<void> {
     }
   }
 
+  throwIfAborted(signal);
   const generatingDocs = await db.query.designDocs.findMany({
     where: eq(designDocs.status, 'generating'),
     columns: {
@@ -335,6 +383,7 @@ export async function recoverInFlightWork(): Promise<void> {
     },
   });
   for (const doc of generatingDocs) {
+    throwIfAborted(signal);
     if (!doc.chatThreadId) continue;
     // Restarting a live watcher tears down its interval and builds a new one on
     // every sweep, which is far more often than a doc takes to generate. That
@@ -342,6 +391,7 @@ export async function recoverInFlightWork(): Promise<void> {
     // only adopt docs that are not already being watched here — as the PRD,
     // test-case, and validation loops do.
     if (isDocWatcherActive(doc.id)) continue;
+    throwIfAborted(signal);
     const started = await tryStartSingleFeatureDocWatcher(
       doc.id,
       doc.chatThreadId,
@@ -357,6 +407,7 @@ export async function recoverInFlightWork(): Promise<void> {
       // Do not mistake slow grounding preparation for an orphan. The timestamp
       // grace is the preparation lease; the compare-and-set claim ensures that
       // only one App Service instance may recover an expired lease.
+      throwIfAborted(signal);
       const existingRun = await db.query.agentRuns.findFirst({
         where: eq(agentRuns.threadId, doc.chatThreadId),
         columns: { id: true },
@@ -391,6 +442,7 @@ export async function recoverInFlightWork(): Promise<void> {
     }
   }
 
+  throwIfAborted(signal);
   const validatingDocs = await db.query.designDocs.findMany({
     where: eq(designDocs.status, 'validating'),
     columns: {
@@ -402,8 +454,10 @@ export async function recoverInFlightWork(): Promise<void> {
     },
   });
   for (const doc of validatingDocs) {
+    throwIfAborted(signal);
     if (!doc.validationThreadId) {
       // No thread at all — stuck without any way to resume
+      throwIfAborted(signal);
       await db.update(designDocs)
         .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
         .where(and(eq(designDocs.id, doc.id), eq(designDocs.status, 'validating')));
@@ -416,8 +470,10 @@ export async function recoverInFlightWork(): Promise<void> {
     // Skip docs that already have an active watcher — avoids clobbering a
     // watcher that was just started by autoStartValidation or acceptFixValidation.
     if (isValidationWatcherActive(doc.id)) continue;
+    throwIfAborted(signal);
     const ok = await hydrateThread(doc.validationThreadId);
     if (ok) {
+      throwIfAborted(signal);
       startValidationWatcher(doc.id, doc.validationThreadId);
       recovered++;
       console.log(
@@ -454,6 +510,7 @@ export async function recoverInFlightWork(): Promise<void> {
     } else if (!(await isThreadRunAlive(doc.validationThreadId))) {
       // Thread is unrecoverable and no other instance owns a live run —
       // reset so the doc is not stuck forever.
+      throwIfAborted(signal);
       await db.update(designDocs)
         .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
         .where(and(eq(designDocs.id, doc.id), eq(designDocs.status, 'validating')));
@@ -468,12 +525,14 @@ export async function recoverInFlightWork(): Promise<void> {
     }
   }
 
+  throwIfAborted(signal);
   const generatingTestCases = await db.query.testCases.findMany({
     where: eq(testCases.status, 'generating'),
     columns: { id: true, prdId: true, chatThreadId: true, updatedAt: true },
   });
 
   // ── PRD validation threads stuck in 'validating' ──────────────────────────
+  throwIfAborted(signal);
   const validatingPrds = await db.query.prds.findMany({
     where: eq(prds.status, 'validating'),
     columns: {
@@ -485,7 +544,9 @@ export async function recoverInFlightWork(): Promise<void> {
     },
   });
   for (const prd of validatingPrds) {
+    throwIfAborted(signal);
     if (!prd.validationThreadId) {
+      throwIfAborted(signal);
       await db.update(prds)
         .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
         .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')));
@@ -496,8 +557,10 @@ export async function recoverInFlightWork(): Promise<void> {
       continue;
     }
     if (isPrdValidationWatcherActive(prd.id)) continue;
+    throwIfAborted(signal);
     const ok = await hydrateThread(prd.validationThreadId);
     if (ok) {
+      throwIfAborted(signal);
       await rehydratePrdValidationWatcher(prd.id, prd.validationThreadId);
       recovered++;
       console.log(
@@ -529,6 +592,7 @@ export async function recoverInFlightWork(): Promise<void> {
         );
       }
     } else if (!(await isThreadRunAlive(prd.validationThreadId))) {
+      throwIfAborted(signal);
       await db.update(prds)
         .set({ status: 'pending_review', updatedAt: new Date().toISOString() })
         .where(and(eq(prds.id, prd.id), eq(prds.status, 'validating')));
@@ -544,10 +608,13 @@ export async function recoverInFlightWork(): Promise<void> {
   }
 
   for (const testCase of generatingTestCases) {
+    throwIfAborted(signal);
     if (!testCase.chatThreadId) continue;
     if (isTestCaseWatcherActive(testCase.id)) continue;
+    throwIfAborted(signal);
     const ok = await hydrateThread(testCase.chatThreadId);
     if (ok) {
+      throwIfAborted(signal);
       startTestCaseWatcher(testCase.id, testCase.chatThreadId);
       recovered++;
       console.log(
@@ -560,6 +627,7 @@ export async function recoverInFlightWork(): Promise<void> {
         && isGenerationRecoveryStale(testCase.updatedAt)
         && await claimTestCaseGenerationRecovery(testCase.id, testCase.updatedAt)
       ) {
+        throwIfAborted(signal);
         const prd = await db.query.prds.findFirst({
           where: eq(prds.id, testCase.prdId),
           columns: { authorId: true, project: true, chatThreadId: true },
@@ -596,8 +664,10 @@ export async function recoverInFlightWork(): Promise<void> {
 
   // ── Interview threads stuck in 'running' ──────────────────────────────────
   try {
-    recovered += await recoverStuckInterviewThreads();
+    throwIfAborted(signal);
+    recovered += await recoverStuckInterviewThreads({ signal });
   } catch (err) {
+    if (signal?.aborted || err instanceof RepoCacheLeaseLostError) throw err;
     console.error('[recovery] Failed to recover stuck interview threads:', err);
   }
 
@@ -607,6 +677,7 @@ export async function recoverInFlightWork(): Promise<void> {
   // have been transient for too long to generation_failed so the UI's existing
   // "Retry Generation" affordance unblocks the user.
   try {
+    throwIfAborted(signal);
     const failedPrototypes = await failStalePrototypes(STALE_PROTOTYPE_MS);
     if (failedPrototypes > 0) {
       recovered += failedPrototypes;
@@ -615,10 +686,12 @@ export async function recoverInFlightWork(): Promise<void> {
       );
     }
   } catch (err) {
+    if (signal?.aborted || err instanceof RepoCacheLeaseLostError) throw err;
     console.error('[recovery] Failed to reset stale design prototypes:', err);
   }
 
   try {
+    throwIfAborted(signal);
     const pdfCleanup = await expireOldSessions();
     if (pdfCleanup.expired > 0 || pdfCleanup.errors > 0) {
       console.log(
@@ -627,10 +700,12 @@ export async function recoverInFlightWork(): Promise<void> {
       );
     }
   } catch (err) {
+    if (signal?.aborted || err instanceof RepoCacheLeaseLostError) throw err;
     console.error('[recovery] Failed to clean expired PDF sessions:', err);
   }
 
   try {
+    throwIfAborted(signal);
     const featureRequestRecovered = await recoverAnalyzingFeatureRequests();
     if (featureRequestRecovered > 0) {
       recovered += featureRequestRecovered;
@@ -639,9 +714,11 @@ export async function recoverInFlightWork(): Promise<void> {
       );
     }
   } catch (err) {
+    if (signal?.aborted || err instanceof RepoCacheLeaseLostError) throw err;
     console.error('[recovery] Failed to recover feature-request analysis:', err);
   }
 
+  throwIfAborted(signal);
   if (recovered > 0) {
     console.log(`[recovery] Recovered ${recovered} in-flight item(s)`);
   }
@@ -668,7 +745,6 @@ export function stopRecoveryLoop(): void {
     clearInterval(recoveryTimer);
     recoveryTimer = null;
   }
-  recoveryCycleRunning = false;
 }
 
 function isPipeClosedError(err: unknown): boolean {
@@ -790,6 +866,7 @@ export function registerGracefulShutdown(server: Server): void {
     );
 
     stopRecoveryLoop();
+    stopReaper();
 
     const finalization = finalizeOwnedRunsForShutdown()
       .then((count) => {

@@ -1,4 +1,6 @@
 import {
+  NonblockingRepoCacheLeaseUnavailableError,
+  RepoCacheLeaseLostError,
   type RepoCacheLeaseStore,
   tryAcquireRepoCacheLease,
   withRepoCacheLease,
@@ -76,6 +78,20 @@ describe('withRepoCacheLease', () => {
     expect(store.release).not.toHaveBeenCalled();
   });
 
+  it('throws a typed nonholder error for a nonblocking scheduler miss', async () => {
+    const store = createStore([false]);
+
+    await expect(withRepoCacheLease('startup-recovery:sweep', async () => 'never', {
+      ownerId: 'instance-3',
+      leaseMs: 1_000,
+      heartbeatMs: 500,
+      waitMs: 0,
+      store,
+    })).rejects.toBeInstanceOf(NonblockingRepoCacheLeaseUnavailableError);
+
+    expect(store.release).not.toHaveBeenCalled();
+  });
+
   it('releases the lease when the protected operation fails', async () => {
     const store = createStore();
 
@@ -120,6 +136,7 @@ describe('withRepoCacheLease', () => {
     await jest.advanceTimersByTimeAsync(11);
 
     await rejection;
+    await expect(protectedWork).rejects.toBeInstanceOf(RepoCacheLeaseLostError);
     jest.useRealTimers();
   });
   it('can preserve a scheduler lease until expiry after work completes', async () => {

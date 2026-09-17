@@ -9,6 +9,7 @@ const mockUpdateReturning = jest.fn();
 const mockUpdateWhere = jest.fn(() => ({ returning: mockUpdateReturning }));
 const mockUpdateSet = jest.fn(() => ({ where: mockUpdateWhere }));
 const mockWithRepoCacheLease = jest.fn();
+const mockStopReaper = jest.fn();
 
 jest.mock('../db/drizzle', () => ({
   db: {
@@ -28,9 +29,27 @@ jest.mock('../db/drizzle', () => ({
     update: jest.fn(() => ({ set: mockUpdateSet })),
   },
 }));
-jest.mock('../services/repoCacheLeaseService', () => ({
-  withRepoCacheLease: (...args: unknown[]) => mockWithRepoCacheLease(...args),
-}));
+jest.mock('../services/repoCacheLeaseService', () => {
+  class NonblockingRepoCacheLeaseUnavailableError extends Error {
+    constructor(cacheKey: string) {
+      super(`Nonblocking repository cache lease unavailable: ${cacheKey}`);
+      this.name = 'NonblockingRepoCacheLeaseUnavailableError';
+    }
+  }
+
+  class RepoCacheLeaseLostError extends Error {
+    constructor(detail = 'Repository cache lease was lost') {
+      super(detail);
+      this.name = 'RepoCacheLeaseLostError';
+    }
+  }
+
+  return {
+    withRepoCacheLease: (...args: unknown[]) => mockWithRepoCacheLease(...args),
+    NonblockingRepoCacheLeaseUnavailableError,
+    RepoCacheLeaseLostError,
+  };
+});
 jest.mock('../services/chatAgentService', () => ({
   hydrateThread: jest.fn(),
   isThreadIdle: jest.fn(),
@@ -75,6 +94,7 @@ jest.mock('../services/featureRequestAnalysisService', () => ({
 }));
 jest.mock('../services/agentRunReaperService', () => ({
   isThreadRunAlive: jest.fn(),
+  stopReaper: (...args: unknown[]) => mockStopReaper(...args),
 }));
 jest.mock('../services/pgNotifyService', () => ({
   RUN_EVENT_SOURCE_INSTANCE: 'worker-a',
@@ -90,6 +110,7 @@ import {
   recoverStuckInterviewThreads,
   finalizeOwnedRunsForShutdown,
   isGenerationRecoveryStale,
+  registerGracefulShutdown,
   registerProcessGuards,
   startRecoveryLoop,
   stopRecoveryLoop,
@@ -108,6 +129,10 @@ import {
   isDocWatcherActive,
 } from '../services/designDocService';
 import { routeTestCaseGenerationKickoff } from '../services/testCaseService';
+import {
+  NonblockingRepoCacheLeaseUnavailableError,
+  RepoCacheLeaseLostError,
+} from '../services/repoCacheLeaseService';
 
 const mockedFindRunning = findRunningInterviewThreads as jest.MockedFunction<typeof findRunningInterviewThreads>;
 const mockedClearStale = clearStaleRun as jest.MockedFunction<typeof clearStaleRun>;
@@ -127,6 +152,17 @@ describe('startRecoveryLoop leader election', () => {
     jest.clearAllMocks();
     jest.useFakeTimers();
     mockWithRepoCacheLease.mockResolvedValue(undefined);
+    mockFindMany.mockResolvedValue([]);
+    mockPrdsFindMany.mockResolvedValue([]);
+    mockDesignDocsFindMany.mockResolvedValue([]);
+    mockTestCasesFindMany.mockResolvedValue([]);
+    mockedFindRunning.mockResolvedValue([]);
+    jest.requireMock('../services/designPrototypeService')
+      .failStalePrototypes.mockResolvedValue(0);
+    jest.requireMock('../services/pdfAssemblyService')
+      .expireOldSessions.mockResolvedValue({ expired: 0, errors: 0 });
+    jest.requireMock('../services/featureRequestAnalysisService')
+      .recoverAnalyzingFeatureRequests.mockResolvedValue(0);
   });
 
   afterEach(() => {
@@ -171,7 +207,7 @@ describe('startRecoveryLoop leader election', () => {
   it('skips quietly when another instance holds the sweep lease', async () => {
     const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     mockWithRepoCacheLease.mockRejectedValueOnce(
-      new Error('Timed out waiting for repository cache lease: startup-recovery:sweep'),
+      new NonblockingRepoCacheLeaseUnavailableError('startup-recovery:sweep'),
     );
 
     startRecoveryLoop();
@@ -242,10 +278,124 @@ describe('startRecoveryLoop leader election', () => {
     startRecoveryLoop();
     await flushAsyncWork();
 
-    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(2);
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
 
     resolveLease?.();
     await flushAsyncWork();
+    await jest.advanceTimersByTimeAsync(60_000);
+    await flushAsyncWork();
+
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(2);
+  });
+
+  it('runs recovery work exactly once when the lease holder callback executes', async () => {
+    mockWithRepoCacheLease.mockImplementationOnce(async (_cacheKey, operation) => {
+      await operation({
+        signal: new AbortController().signal,
+        assertOwned: jest.fn().mockResolvedValue(undefined),
+      });
+    });
+
+    startRecoveryLoop();
+    await flushAsyncWork();
+
+    expect(mockFindMany).toHaveBeenCalledTimes(1);
+    expect(mockDesignDocsFindMany).toHaveBeenCalled();
+  });
+});
+
+describe('recovery cooperative aborts', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockFindMany.mockResolvedValue([]);
+    mockPrdsFindMany.mockResolvedValue([]);
+    mockDesignDocsFindMany.mockResolvedValue([]);
+    mockTestCasesFindMany.mockResolvedValue([]);
+    mockedFindRunning.mockResolvedValue([]);
+    jest.requireMock('../services/designPrototypeService')
+      .failStalePrototypes.mockResolvedValue(0);
+    jest.requireMock('../services/pdfAssemblyService')
+      .expireOldSessions.mockResolvedValue({ expired: 0, errors: 0 });
+    jest.requireMock('../services/featureRequestAnalysisService')
+      .recoverAnalyzingFeatureRequests.mockResolvedValue(0);
+  });
+
+  it('stops before the next recovery section after lease ownership is lost', async () => {
+    const controller = new AbortController();
+    mockFindMany.mockImplementationOnce(async () => {
+      controller.abort(new RepoCacheLeaseLostError('Repository cache lease was lost'));
+      return [];
+    });
+
+    await expect(
+      recoverInFlightWork({ signal: controller.signal }),
+    ).rejects.toBeInstanceOf(RepoCacheLeaseLostError);
+
+    expect(mockPrdsFindMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('graceful shutdown scheduler stop', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+    mockWithRepoCacheLease.mockResolvedValue(undefined);
+    mockFindMany.mockResolvedValue([]);
+    mockPrdsFindMany.mockResolvedValue([]);
+    mockDesignDocsFindMany.mockResolvedValue([]);
+    mockTestCasesFindMany.mockResolvedValue([]);
+    mockedFindRunning.mockResolvedValue([]);
+    mockAgentRunsFindMany.mockImplementation(async () => []);
+    jest.requireMock('../services/designPrototypeService')
+      .failStalePrototypes.mockResolvedValue(0);
+    jest.requireMock('../services/pdfAssemblyService')
+      .expireOldSessions.mockResolvedValue({ expired: 0, errors: 0 });
+    jest.requireMock('../services/featureRequestAnalysisService')
+      .recoverAnalyzingFeatureRequests.mockResolvedValue(0);
+  });
+
+  afterEach(() => {
+    stopRecoveryLoop();
+    jest.useRealTimers();
+  });
+
+  it('stops both global schedulers before owned-run finalization', async () => {
+    const events: string[] = [];
+    let sigtermHandler: (() => void) | undefined;
+    const onSpy = jest.spyOn(process, 'on').mockImplementation(
+      ((event: string, handler: () => void) => {
+        if (event === 'SIGTERM') {
+          sigtermHandler = handler;
+        }
+        return process;
+      }) as typeof process.on,
+    );
+    mockStopReaper.mockImplementation(() => {
+      events.push('stopReaper');
+    });
+    mockAgentRunsFindMany.mockImplementation(async () => {
+      events.push('finalizeRuns');
+      return [];
+    });
+    const exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const server = {
+      close: (callback: () => void) => callback(),
+    } as unknown as import('http').Server;
+
+    startRecoveryLoop();
+    await flushAsyncWork();
+    registerGracefulShutdown(server);
+    sigtermHandler?.();
+    await flushAsyncWork();
+    await jest.advanceTimersByTimeAsync(60_000);
+    await flushAsyncWork();
+
+    expect(mockStopReaper).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(['stopReaper', 'finalizeRuns']);
+    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
+
+    onSpy.mockRestore();
+    exitSpy.mockRestore();
   });
 });
 
