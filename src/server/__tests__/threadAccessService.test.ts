@@ -260,7 +260,10 @@ describe('resolveRequirementsPhaseMessageWrite (FEAT-004 / PBI-007)', () => {
     });
 
     expect(await resolveRequirementsPhaseMessageWrite('owner-1', 'thread-1')).toEqual({
-      outcome: 'not_applicable',
+      outcome: 'phase_closed',
+    });
+    expect(await resolveRequirementsPhaseMessageWrite('author-1', 'thread-1')).toEqual({
+      outcome: 'phase_closed',
     });
   });
 

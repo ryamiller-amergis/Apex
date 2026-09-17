@@ -1307,6 +1307,21 @@ describe('POST /api/chat/threads/:id/messages — Requirements phase owner guard
     expect(mockChatService.sendMessage).not.toHaveBeenCalled();
   });
 
+  it('rejects sends after the last configured Requirements phase is approved', async () => {
+    mockRequirementsPhaseWrite = { outcome: 'phase_closed' };
+    mockResolveThreadAccess.mockResolvedValue({ thread: reassignedThread, access: 'owner' });
+    mockCanWriteThread.mockResolvedValue(true);
+
+    const res = await send();
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({
+      error: 'This interview phase is closed and no longer accepts messages',
+    });
+    expect(mockChatService.sendMessage).not.toHaveBeenCalled();
+    expect(mockCanWriteThread).not.toHaveBeenCalled();
+  });
+
   it('leaves other thread mutation routes on the existing owner rules', async () => {
     mockRequirementsPhaseWrite = { outcome: 'allowed', thread: reassignedThread };
 
