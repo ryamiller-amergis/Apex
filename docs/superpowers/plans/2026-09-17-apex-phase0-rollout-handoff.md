@@ -1,6 +1,6 @@
 # Apex AI Reliability Phase 0 — PR and Rollout Handoff
 
-**Branch:** `tbi/infra-changes`  
+**Branch:** `tbi/infra-changes`
 **Status:** Local implementation and verification complete; not pushed or deployed.
 
 ## PR recommendation

@@ -580,4 +580,3 @@ approved.
 - Zone and region claims match live resources.
 - Full mixed test and 48-hour soak pass before legacy retirement.
 - Final Terraform plan contains no unexplained replacement or destroy.
-

@@ -1,10 +1,10 @@
 # Apex AI Reliability R0 — Verified Production Baseline
 
-**Captured:** 2026-09-17  
-**Repository:** `ryamiller-amergis/Apex`  
-**Branch:** `tbi/infra-changes`  
-**Commit:** `417bf8bc` (matches `origin/main`)  
-**Azure subscription:** `MSS-Production`  
+**Captured:** 2026-09-17
+**Repository:** `ryamiller-amergis/Apex`
+**Branch:** `tbi/infra-changes`
+**Commit:** `417bf8bc` (matches `origin/main`)
+**Azure subscription:** `MSS-Production`
 **Terraform workspace:** `prd`
 
 ## Verdict
