@@ -9,6 +9,7 @@ import type {
   PushSessionResponse,
   CreatePrResponse,
   StartDevSessionRequest,
+  WorkItemCommentCountResponse,
 } from '../../shared/types/devWorkbench';
 
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
@@ -26,6 +27,19 @@ export function useAssignedWorkItems(project: string | null) {
     queryFn: () => apiFetch(`/api/dev-workbench/workitems?project=${encodeURIComponent(project!)}`),
     enabled: !!project,
     staleTime: 60_000,
+  });
+}
+
+export function useWorkItemCommentCount(workItemId: number, project: string | null) {
+  return useQuery<WorkItemCommentCountResponse>({
+    queryKey: ['dev-workbench', 'comment-count', project, workItemId],
+    queryFn: () =>
+      apiFetch(
+        `/api/dev-workbench/workitems/${workItemId}/comment-count?project=${encodeURIComponent(project!)}`,
+      ),
+    enabled: !!project && workItemId > 0,
+    staleTime: 60_000,
+    retry: false,
   });
 }
 
