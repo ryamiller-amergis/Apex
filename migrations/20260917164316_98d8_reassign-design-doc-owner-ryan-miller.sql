@@ -11,8 +11,13 @@
 --
 -- That column is interview-scoped: every design doc under the same interview
 -- shares one owner, so reassigning it also moves any sibling docs under the same
--- interviews. That is the approved intent. The NOTICE output below lists every
--- doc in scope before the update lands, so the blast radius stays auditable.
+-- interviews. That is the approved intent.
+--
+-- The NOTICE output below names every doc in scope, but node-pg-migrate does not
+-- forward server notices to stdout, so none of it reaches a deploy log. Treat the
+-- notices as help when running this by hand through psql or
+-- apply-named-migration.js; to confirm what actually moved, run the verification
+-- query in the pull request description afterwards.
 --
 -- design_docs.author_id moves too, for the two named docs only. author_id is a
 -- second permission path in assertAuthorOrOwnerOrAdmin, so leaving it behind
