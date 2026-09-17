@@ -65,6 +65,18 @@ import {
 import runGroundingsRouter from './runGroundings';
 import diagramsRouter from './diagrams';
 const router = express.Router();
+const publicHealthPaths = new Set([
+  '/health',
+  '/health/live',
+  '/health/ready',
+  '/health/dependencies',
+  '/health/db',
+  '/health/agents',
+]);
+
+export function isPublicHealthPath(path: string): boolean {
+  return publicHealthPaths.has(path);
+}
 
 router.use('/run-groundings', runGroundingsRouter);
 router.use('/projects/:projectId/diagrams', diagramsRouter);

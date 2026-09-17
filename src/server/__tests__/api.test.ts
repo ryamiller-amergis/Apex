@@ -1,14 +1,12 @@
 import request from 'supertest';
 import express from 'express';
-import apiRouter from '../routes/api';
+import apiRouter, { isPublicHealthPath } from '../routes/api';
 import { AzureDevOpsService } from '../services/azureDevOps';
 import { db } from '../db/drizzle';
 import * as userProjectAssignmentService from '../services/userProjectAssignmentService';
 import * as projectCatalogService from '../services/projectCatalogService';
 import * as projectAccessRequestService from '../services/projectAccessRequestService';
 import * as workerTierHealthService from '../services/workerTierHealthService';
-import fs from 'fs';
-import path from 'path';
 
 // Mock the AzureDevOpsService
 jest.mock('../services/azureDevOps');
@@ -594,16 +592,22 @@ describe('API Routes', () => {
     });
   });
 
-  describe('public health allowlist', () => {
-    it('includes the live, ready, dependency, db, and agent health routes', () => {
-      const source = fs.readFileSync(path.join(__dirname, '..', 'index.ts'), 'utf8');
+  describe('public health allowlist predicate', () => {
+    it('returns true for each exact public health path', () => {
+      expect(isPublicHealthPath('/health')).toBe(true);
+      expect(isPublicHealthPath('/health/live')).toBe(true);
+      expect(isPublicHealthPath('/health/ready')).toBe(true);
+      expect(isPublicHealthPath('/health/dependencies')).toBe(true);
+      expect(isPublicHealthPath('/health/db')).toBe(true);
+      expect(isPublicHealthPath('/health/agents')).toBe(true);
+    });
 
-      expect(source).toContain("'/health'");
-      expect(source).toContain("'/health/live'");
-      expect(source).toContain("'/health/ready'");
-      expect(source).toContain("'/health/dependencies'");
-      expect(source).toContain("'/health/db'");
-      expect(source).toContain("'/health/agents'");
+    it('returns false for non-exact matches and neighboring paths', () => {
+      expect(isPublicHealthPath('/health/live/extra')).toBe(false);
+      expect(isPublicHealthPath('/healthz')).toBe(false);
+      expect(isPublicHealthPath('/health/dependencies/private')).toBe(false);
+      expect(isPublicHealthPath('/health/agent')).toBe(false);
+      expect(isPublicHealthPath('/status')).toBe(false);
     });
   });
 
