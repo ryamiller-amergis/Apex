@@ -123,7 +123,7 @@ function toV1TerminalReason(
 }
 
 const defaultTransactionRunner: TransactionRunner = async (work) => db.transaction(
-  async (tx) => work({ execute: (query) => tx.execute(query) }),
+  async (tx) => work({ execute: (query) => tx.execute(query as never) }),
 );
 
 export function createRunAttemptRepository(options?: {
