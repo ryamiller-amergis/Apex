@@ -307,8 +307,8 @@ resource "azurerm_postgresql_flexible_server" "main" {
   administrator_login    = var.postgresql_admin_username
   administrator_password = var.postgresql_admin_password
   sku_name               = var.postgresql_sku_name
-  storage_mb             = 32768
-  backup_retention_days  = 7
+  storage_mb             = var.postgresql_storage_mb
+  backup_retention_days  = var.postgresql_backup_retention_days
   zone                   = var.postgresql_availability_zone
   tags                   = merge(var.tags, { Environment = var.environment })
 
@@ -334,9 +334,25 @@ resource "azurerm_postgresql_flexible_server_database" "main" {
   charset   = "utf8"
 }
 
+# Query diagnostics. Both are dynamic parameters, so changing them does not
+# restart the server. Without these the only signal for a pool-exhaustion
+# incident is the client-side "Connection terminated due to connection timeout",
+# which never names the statement holding the connection.
+resource "azurerm_postgresql_flexible_server_configuration" "pg_stat_statements_track" {
+  name      = "pg_stat_statements.track"
+  server_id = azurerm_postgresql_flexible_server.main.id
+  value     = var.postgresql_pg_stat_statements_track
+}
+
+resource "azurerm_postgresql_flexible_server_configuration" "log_min_duration_statement" {
+  name      = "log_min_duration_statement"
+  server_id = azurerm_postgresql_flexible_server.main.id
+  value     = tostring(var.postgresql_log_min_duration_statement_ms)
+}
+
 # Allow Azure services to connect to the PostgreSQL server
 resource "azurerm_postgresql_flexible_server_firewall_rule" "azure_services" {
-  name             = "allow-azure-services"
+  name             = var.postgresql_azure_services_firewall_rule_name
   server_id        = azurerm_postgresql_flexible_server.main.id
   start_ip_address = "0.0.0.0"
   end_ip_address   = "0.0.0.0"

@@ -59,6 +59,6 @@ Query with `query_insights.py --env stg --thread <uuid>`. Last stage before sile
 | stg | `app-apex-prd` | `staging` | `redis-apex-ai-prd-v2` |
 | prd | `app-apex-prd` | production | `redis-apex-ai-prd-v2` |
 
-Staging and prod share Postgres (`psql-apex-eus2`) and App Insights (`appi-app-apex-prd`).
+Staging and prod share Postgres (`psql-apex-cus`) and App Insights (`appi-app-apex-prd`).
 
 Update [environments.json](environments.json) when infra names change (e.g. Redis cutover).
