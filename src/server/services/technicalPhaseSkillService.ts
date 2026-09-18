@@ -221,6 +221,29 @@ export async function startTechnicalPhase(
   };
 }
 
+/**
+ * Start the Technical phase on behalf of its assigned owner, driven by the
+ * Requirements approval instead of a user click. Returns the current state when
+ * the phase is still locked, unowned, or already started.
+ */
+export async function handoffToTechnicalPhase(
+  interviewId: string,
+): Promise<TechnicalPhaseState | null> {
+  const row = await loadInterviewById(interviewId);
+  if (unavailableReason(row)) return null;
+  if (row.technicalPhaseChatThreadId) return stateForRow(row, true);
+  if (!row.technicalOwnerId) return null;
+
+  try {
+    const { state } = await startTechnicalPhase(interviewId, row.technicalOwnerId);
+    return state;
+  } catch (error) {
+    if ((error as { status?: number }).status !== 409) throw error;
+    // Another approval won the race; report whatever it started.
+    return stateForRow(await loadInterviewById(interviewId), true);
+  }
+}
+
 export interface TechnicalPhaseArtifactSyncResult {
   amendedRequirements: boolean;
   syncedTechnicalSummary: boolean;

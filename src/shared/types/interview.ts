@@ -100,6 +100,13 @@ export interface ApprovePhaseSummaryResponse {
   unlockedTechnicalOwnerId?: string;
   /** True when this was the interview's last configured phase (FEAT-003 PRD trigger seam). */
   isLastConfiguredPhase: boolean;
+  /**
+   * Technical Phase state after the approval handed off to it. Carries the new
+   * thread id so the client can attach to the live run without polling.
+   */
+  technicalPhase?: TechnicalPhaseState;
+  /** Set when the handoff could not start Technical; the client offers a manual start. */
+  technicalPhaseHandoffError?: string;
 }
 
 export interface InterviewSummary {

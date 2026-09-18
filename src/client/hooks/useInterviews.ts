@@ -487,12 +487,6 @@ export function usePhaseSummary(
       apiFetch(`/api/interviews/${interviewId}/phases/${phase}/summary`),
     enabled: !!interviewId,
     staleTime: 30_000,
-    refetchInterval: (query) => {
-      const summary = query.state.data;
-      return summary?.status === 'draft' && !summary.content.trim()
-        ? 2_000
-        : false;
-    },
   });
 }
 
@@ -544,7 +538,14 @@ export function useApprovePhaseSummary() {
       apiFetch(`/api/interviews/${interviewId}/phases/${phase}/approve`, {
         method: 'POST',
       }),
-    onSuccess: (_data, { interviewId, phase }) => {
+    onSuccess: (data, { interviewId, phase }) => {
+      // The approval response carries the Technical handoff, so the Technical
+      // tab can attach to the started thread without refetching or polling.
+      if (data.technicalPhase) {
+        qc.setQueryData(['technical-phase', interviewId], data.technicalPhase);
+      } else {
+        void qc.invalidateQueries({ queryKey: ['technical-phase', interviewId] });
+      }
       void qc.invalidateQueries({ queryKey: ['phase-summary', interviewId, phase] });
       void qc.invalidateQueries({ queryKey: ['phase-summary', interviewId] });
       void qc.invalidateQueries({ queryKey: ['interview', interviewId] });

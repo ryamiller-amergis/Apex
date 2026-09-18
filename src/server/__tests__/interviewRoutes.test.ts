@@ -852,6 +852,66 @@ describe('FEAT-002 phase summary lifecycle routes', () => {
       .toHaveBeenCalledWith('interview-1');
   });
 
+  it('starts the Technical phase from the Requirements approval and returns its state', async () => {
+    mockPhaseLifecycleService.approvePhaseSummary.mockResolvedValue({
+      ok: true,
+      isLastConfiguredPhase: false,
+      unlockedTechnicalOwnerId: 'technical-owner',
+    });
+    mockTechnicalPhaseSkillService.handoffToTechnicalPhase.mockResolvedValue({
+      status: 'in_progress',
+      canStart: false,
+      technicalPhaseChatThreadId: 'technical-thread',
+      seedContext: null,
+    });
+
+    const response = await request(buildApp())
+      .post('/api/interviews/interview-1/phases/requirements/approve');
+
+    expect(response.status).toBe(200);
+    expect(response.body.technicalPhase).toMatchObject({
+      status: 'in_progress',
+      technicalPhaseChatThreadId: 'technical-thread',
+    });
+    expect(mockTechnicalPhaseSkillService.handoffToTechnicalPhase)
+      .toHaveBeenCalledWith('interview-1');
+  });
+
+  it('keeps the approval successful and reports a failed Technical handoff', async () => {
+    mockPhaseLifecycleService.approvePhaseSummary.mockResolvedValue({
+      ok: true,
+      isLastConfiguredPhase: false,
+      unlockedTechnicalOwnerId: 'technical-owner',
+    });
+    mockTechnicalPhaseSkillService.handoffToTechnicalPhase.mockRejectedValue(
+      new Error('The original interview prompt is unavailable.'),
+    );
+
+    const response = await request(buildApp())
+      .post('/api/interviews/interview-1/phases/requirements/approve');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      ok: true,
+      technicalPhaseHandoffError: 'The original interview prompt is unavailable.',
+    });
+    expect(response.body.technicalPhase).toBeUndefined();
+  });
+
+  it('does not hand off when the approval did not unlock Technical', async () => {
+    mockPhaseLifecycleService.approvePhaseSummary.mockResolvedValue({
+      ok: true,
+      isLastConfiguredPhase: true,
+    });
+
+    const response = await request(buildApp())
+      .post('/api/interviews/interview-1/phases/requirements/approve');
+
+    expect(response.status).toBe(200);
+    expect(mockTechnicalPhaseSkillService.handoffToTechnicalPhase)
+      .not.toHaveBeenCalled();
+  });
+
   it('VT-09 / AC-2 does not trigger after Requirements approval in both_sequential', async () => {
     mockPhaseLifecycleService.approvePhaseSummary.mockResolvedValue({
       ok: true,

@@ -43,6 +43,7 @@ import {
 } from '../services/requirementsPhaseSkillService';
 import {
   getTechnicalPhaseState,
+  handoffToTechnicalPhase,
   startTechnicalPhase,
 } from '../services/technicalPhaseSkillService';
 import {
@@ -360,6 +361,19 @@ router.post('/:id/phases/:phase/approve', requirePermission('interviews:manage')
       return;
     }
     const result = await approvePhaseSummary(req.params.id, phase, getUserId(req));
+    if (result.unlockedTechnicalOwnerId) {
+      try {
+        const state = await handoffToTechnicalPhase(req.params.id);
+        if (state) result.technicalPhase = state;
+      } catch (err: unknown) {
+        result.technicalPhaseHandoffError =
+          err instanceof Error ? err.message : 'Unable to start the Technical phase.';
+        console.error(
+          `[interviews] Technical phase handoff failed (interviewId=${req.params.id}):`,
+          err,
+        );
+      }
+    }
     if (result.isLastConfiguredPhase) {
       void Promise.resolve(
         triggerPrdGenerationFromPhaseApproval(req.params.id),

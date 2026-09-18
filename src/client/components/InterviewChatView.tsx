@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useLocation, Navigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -48,6 +49,7 @@ import type { PipelinePinPolicy } from '../../shared/types/runGrounding';
 import type { ChatAttachment } from '../../shared/types/chat';
 import {
   resolveRequirementsPhaseSkillPath,
+  type ApprovePhaseSummaryResponse,
   type InterviewPhaseFlow,
   type InterviewStatus,
   type TechnicalPhaseState,
@@ -1127,7 +1129,10 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     initialMessages: chatThread?.messages,
     initialStatus: chatThread?.status,
     initialActiveRunId: chatThread?.activeRunId,
-    enablePreparationState: interview?.status === 'in_progress',
+    // Without a thread there is nothing preparing — a phase that has not been
+    // started must show its own state card, not an endless preparation spinner.
+    enablePreparationState:
+      interview?.status === 'in_progress' && !!activeChatThreadId,
     beforeSend: () => {
       if (!repoReadiness.isReady) {
         throw new Error(repoReadiness.message ?? 'Repository is not ready');
@@ -1154,6 +1159,34 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   } = session;
 
   const isAgentProcessing = isRunning || isSending || session.isAwaitingAgentResponse;
+
+  // A finished turn is the point at which the phase skill has written its
+  // summary artifact and the server has persisted it. Refresh the summaries on
+  // that event rather than polling the read model for content.
+  const queryClient = useQueryClient();
+  const wasTurnActiveRef = useRef(false);
+  useEffect(() => {
+    if (isAgentProcessing) {
+      wasTurnActiveRef.current = true;
+      return;
+    }
+    if (!wasTurnActiveRef.current) return;
+    wasTurnActiveRef.current = false;
+    if (!interview?.id) return;
+    void queryClient.invalidateQueries({
+      queryKey: ['phase-summary', interview.id],
+    });
+  }, [isAgentProcessing, interview?.id, queryClient]);
+
+  const handleRequirementsApproved = useCallback(
+    (response: ApprovePhaseSummaryResponse) => {
+      if (!response.technicalPhase) return;
+      setStartedTechnicalState(response.technicalPhase);
+      setActivePhaseTab('technical');
+    },
+    [],
+  );
+
   const resumeGate = useGroundingResumeGate(
     'interview',
     interview?.id ?? id,
@@ -2037,6 +2070,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 currentUserId={userId}
                 technicalOwnerId={interview.technicalOwnerId}
                 canManage={canManage}
+                onApproved={handleRequirementsApproved}
                 {...{ 'data-testid': 'phase-summary-requirements-card' }}
               />
             )}

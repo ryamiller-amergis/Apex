@@ -38,6 +38,7 @@ import { resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import {
   getTechnicalPhaseState,
+  handoffToTechnicalPhase,
   startTechnicalPhase,
   syncTechnicalPhaseArtifacts,
 } from '../services/technicalPhaseSkillService';
@@ -201,6 +202,44 @@ describe('technicalPhaseSkillService (FEAT-005 / PBI-008 / TBI-005)', () => {
       }),
       expect.any(Object),
     );
+  });
+
+  it('hands off from Requirements approval by starting as the Technical owner', async () => {
+    const state = await handoffToTechnicalPhase('interview-1');
+
+    expect(mockCreateThread).toHaveBeenCalledWith(
+      'technical-owner',
+      expect.objectContaining({ agentModule: 'technicalPhase' }),
+      { skipAutoKickoff: true },
+    );
+    expect(state).toMatchObject({
+      status: 'in_progress',
+      technicalPhaseChatThreadId: 'technical-thread',
+    });
+  });
+
+  it('skips the handoff while the Technical phase is still locked', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...approvedInterview,
+      requirementsPhaseStatus: 'draft',
+      technicalPhaseStatus: 'locked',
+    });
+
+    await expect(handoffToTechnicalPhase('interview-1')).resolves.toBeNull();
+    expect(mockCreateThread).not.toHaveBeenCalled();
+  });
+
+  it('returns the started thread when the handoff runs twice', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...approvedInterview,
+      technicalPhaseChatThreadId: 'technical-thread',
+    });
+
+    await expect(handoffToTechnicalPhase('interview-1')).resolves.toMatchObject({
+      status: 'in_progress',
+      technicalPhaseChatThreadId: 'technical-thread',
+    });
+    expect(mockCreateThread).not.toHaveBeenCalled();
   });
 
   it('AC-1 / DoD-2 / DoD-3 / VT-04 applies each completed-turn artifact once through lifecycle APIs', async () => {

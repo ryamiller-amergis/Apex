@@ -2,7 +2,10 @@ import React, { useEffect, useRef, useState } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
-import type { PhaseName } from '../../shared/types/interview';
+import type {
+  ApprovePhaseSummaryResponse,
+  PhaseName,
+} from '../../shared/types/interview';
 import {
   useAmendRequirementsSummary,
   useApprovePhaseSummary,
@@ -24,6 +27,8 @@ interface PhaseSummaryCardProps {
   currentUserId: string | null | undefined;
   technicalOwnerId: string | null | undefined;
   canManage: boolean;
+  /** Called with the approval response, which carries the Technical handoff. */
+  onApproved?: (response: ApprovePhaseSummaryResponse) => void;
   'data-testid'?: string;
 }
 
@@ -33,6 +38,7 @@ export const PhaseSummaryCard: React.FC<PhaseSummaryCardProps> = ({
   currentUserId,
   technicalOwnerId,
   canManage,
+  onApproved,
   'data-testid': testId,
 }) => {
   const [isAmending, setIsAmending] = useState(false);
@@ -145,7 +151,13 @@ export const PhaseSummaryCard: React.FC<PhaseSummaryCardProps> = ({
           content: submittedContent,
         });
       }
-      await approveSummary.mutateAsync({ interviewId, phase });
+      const response = await approveSummary.mutateAsync({ interviewId, phase });
+      onApproved?.(response);
+      if (response.technicalPhaseHandoffError) {
+        setActionError(
+          `Approved, but the Technical phase did not start: ${response.technicalPhaseHandoffError}`,
+        );
+      }
     } catch (error) {
       setActionError(
         error instanceof Error ? error.message : 'Unable to approve the summary.',

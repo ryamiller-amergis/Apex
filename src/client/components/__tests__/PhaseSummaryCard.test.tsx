@@ -66,6 +66,62 @@ describe('PhaseSummaryCard', () => {
     });
   });
 
+  it('reports the Technical handoff carried by the approval response', async () => {
+    const technicalPhase = {
+      status: 'in_progress' as const,
+      canStart: false,
+      technicalPhaseChatThreadId: 'technical-thread',
+      seedContext: null,
+    };
+    mockApprove.mockResolvedValue({
+      ok: true,
+      isLastConfiguredPhase: false,
+      technicalPhase,
+    });
+    const onApproved = jest.fn();
+    render(
+      <PhaseSummaryCard
+        interviewId="interview-1"
+        phase="requirements"
+        currentUserId="requirements-owner"
+        technicalOwnerId="technical-owner"
+        canManage
+        onApproved={onApproved}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('phase-summary-requirements-approve'));
+
+    await waitFor(() => {
+      expect(onApproved).toHaveBeenCalledWith(
+        expect.objectContaining({ technicalPhase }),
+      );
+    });
+  });
+
+  it('surfaces a failed Technical handoff after a successful approval', async () => {
+    mockApprove.mockResolvedValue({
+      ok: true,
+      isLastConfiguredPhase: false,
+      technicalPhaseHandoffError: 'The original interview prompt is unavailable.',
+    });
+    render(
+      <PhaseSummaryCard
+        interviewId="interview-1"
+        phase="requirements"
+        currentUserId="requirements-owner"
+        technicalOwnerId="technical-owner"
+        canManage
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('phase-summary-requirements-approve'));
+
+    expect(
+      await screen.findByText(/Technical phase did not start/i),
+    ).toBeInTheDocument();
+  });
+
   it('PBI-003 AC-1 disables approval until the summary has content', () => {
     summary = { ...summary, content: '' };
     render(
