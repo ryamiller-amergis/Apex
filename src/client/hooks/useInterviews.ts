@@ -487,6 +487,14 @@ export function usePhaseSummary(
       apiFetch(`/api/interviews/${interviewId}/phases/${phase}/summary`),
     enabled: !!interviewId,
     staleTime: 30_000,
+    // Empty drafts retry until post-turn artifact sync writes content.
+    // Turn-end invalidation can race that persist and cache an empty payload.
+    refetchInterval: (query) => {
+      const summary = query.state.data;
+      return summary?.status === 'draft' && !summary.content.trim()
+        ? 2_000
+        : false;
+    },
   });
 }
 
